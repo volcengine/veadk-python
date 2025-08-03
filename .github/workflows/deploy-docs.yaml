@@ -24,10 +24,14 @@ jobs:
           node-version: '22'
 
       - name: Install dependencies
-        run: npm install
+        run: |
+          cd docs
+          npm install
 
       - name: Build documentation
-        run: npm run docs:build
+        run: |
+          cd docs
+          npm run docs:build
 
       - name: Deploy to GitHub Pages
         run: |
@@ -42,4 +46,4 @@ jobs:
 
           git push --force --quiet \
             "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
-            HEAD:veadk/docs
+            HEAD:docs
