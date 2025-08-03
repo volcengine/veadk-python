@@ -17,4 +17,6 @@ export default defineUserConfig({
   }),
 
   bundler: viteBundler(),
+
+  base: '/veadk-python/', // GitHub Pages required
 })
