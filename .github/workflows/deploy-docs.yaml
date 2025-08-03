@@ -7,7 +7,7 @@ on:
       - feat/docs
     paths:
       - 'docs/**'
-      - '.github/workflows/deploy-docs.yml'
+      - '.github/workflows/deploy-docs.yaml'
 
   workflow_dispatch:
 
