@@ -1,0 +1,45 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Feature Request
+about: Request a new feature in veadk-python
+title: '[Feature] '
+labels: enhancement
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Feature description
+      description: Please provide a detailed description of the feature you want to add.
+      placeholder: I want to add a feature to about ..., because ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Current version
+      description: The version of veadk-python you are using.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I have checked existing feature requests to avoid duplicates.
+          required: true
+        - label: I am willing to help test the feature if implemented.
+          required: false

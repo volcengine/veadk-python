@@ -1,0 +1,67 @@
+[project]
+name = "veadk-python"
+version = "1.0.0"
+description = "Volcengine agent development kit, integrations with Volcengine cloud services."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    {name = "Yaozheng Fang", email = "fangyozheng@gmail.com"},
+    {name = "Guodong Li", email = "cu.eric.lee@gmail.com"},
+    {name = "Zhi Han", email = "sliverydayday@gmail.com"},
+    {name = "Meng Wang", email = "mengwangwm@gmail.com"}
+]
+dependencies = [
+    "pydantic-settings>=2.10.1", # Config management
+    "a2a-sdk>=0.2.12", # For Google Agent2Agent protocol
+    "deprecated>=1.2.18",
+    "google-adk>=1.6.1", # For basic agent architecture
+    "litellm>=1.74.3", # For model inference
+    "loguru>=0.7.3", # For better logging
+    "openinference-instrumentation-google-adk>=0.1.1", # For OpenInference instrumentation
+    "opentelemetry-exporter-otlp>=1.35.0",
+    "opentelemetry-instrumentation-logging>=0.56b0",
+    "wrapt>=1.17.2", # For patching built-in functions
+]
+
+[project.scripts]
+veadk = "veadk.cli.main:app"
+
+[project.optional-dependencies]
+database = [
+    "opensearch-py==2.8.0",         # For OpenSearch database
+    "redis>=6.2.0",                 # For Redis database
+    "pymysql>=1.1.1",               # For MySQL database
+    "volcengine>=1.0.193",          # For Viking DB
+    "tos>=2.8.4",                   # For TOS storage and Viking DB
+]
+eval = [
+    "prometheus-client>=0.22.1",    # For exporting data to Prometheus pushgateway
+    "deepeval>=3.2.6",              # For DeepEval-based evaluation
+    "google-adk[eval]",             # For Google ADK-based evaluation
+]
+cli = [
+    "volcengine-python-sdk==4.0.3", # For Volcengine API
+    "typer>=0.16.0",                # For command-line implementation
+    "streamlit==1.46.1",            # For running VeADK studio app
+    "agent-pilot-sdk>=0.0.9"        # Prompt optimization by Volcengine AgentPilot/PromptPilot toolkits
+]
+dev = [
+    "pre-commit>=4.2.0",            # Format checking
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.0.0",
+    "pytest-xdist>=3.8.0",
+]
+
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.2.0",            # Format checking
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.0.0",
+    "pytest-xdist>=3.8.0",
+]
+
+
+[tool.setuptools.packages.find]
+include = ["veadk*"]
+exclude = ["app*", "assets*", "examples*", "ide*", "tests*",]
