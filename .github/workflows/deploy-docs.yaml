@@ -33,40 +33,6 @@ jobs:
           cd docs
           npm run docs:build
 
-      name: Deploy Docs to GitHub Pages
-
-on:
-  push:
-    branches:
-      - main
-      - feat/docs
-    paths:
-      - 'docs/**'
-      - '.github/workflows/deploy-docs.yaml'
-  workflow_dispatch:
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Install dependencies
-        run: |
-          cd docs
-          npm install
-
-      - name: Build documentation
-        run: |
-          cd docs
-          npm run docs:build
-
       - name: Upload artifact for GitHub Pages
         uses: actions/upload-pages-artifact@v3
         with:
@@ -75,4 +41,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deploy
         uses: actions/deploy-pages@v4
-        
