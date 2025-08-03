@@ -30,7 +30,16 @@ jobs:
         run: npm run docs:build
 
       - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: docs/.vuepress/dist
+        run: |
+          cd docs/.vuepress/dist
+
+          git init
+          git config user.name "GitHub Actions"
+          git config user.email "action@github.com"
+
+          git add .
+          git commit -m "Deploy docs from ${{ github.sha }}"
+
+          git push --force --quiet \
+            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
+            HEAD:veadk/docs
