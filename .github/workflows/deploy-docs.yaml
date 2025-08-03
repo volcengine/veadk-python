@@ -35,7 +35,7 @@ jobs:
 
       - name: Deploy to GitHub Pages
         run: |
-          cd docs/.vuepress/dist
+          cd docs/docs/.vuepress/dist
 
           git init
           git config user.name "GitHub Actions"
