@@ -56,5 +56,3 @@ async def test_runtime_data_collecting():
         assert len(data["eval_cases"]) == 1
 
     os.remove(dump_path)
-    os.remove(dump_path)
-    os.remove(dump_path)
