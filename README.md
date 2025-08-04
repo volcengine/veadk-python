@@ -9,6 +9,8 @@
 
 An open-source kit for agent development, integrated the powerful capabilities of Volcengine.
 
+For more details, see our [documents](https://volcengine.github.io/veadk-python/).
+
 ## Installation
 
 We use `uv` to build this project ([how-to-install-uv](https://docs.astral.sh/uv/getting-started/installation/)).
