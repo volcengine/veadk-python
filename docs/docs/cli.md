@@ -35,8 +35,14 @@ veadk deploy
 可以通过`adk web`或`veadk studio`来启动Web页面，运行智能体：
 
 ```bash
+# basic usage:
 adk web
-# or
+
+# if you need to use long-term memory, you should use `veadk web`.
+# if the `session_service_uri` is not set, it will use `opensearch` as your long-term memory backend
+veadk web --session_service_uri="mysql+pymysql://{user}:{password}@{host}/{database}"
+
+# or, use our own web:
 veadk studio
 ```
 
