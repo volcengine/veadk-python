@@ -1,10 +1,11 @@
 <p align="center">
-    <img src="assets/images/logo.png" alt="Volcengine Agent Development Kit Logo" width="80%">
+    <img src="assets/images/logo.png" alt="Volcengine Agent Development Kit Logo" width="50%">
 </p>
 
-<p align="center">
-    <h1 align="center">Volcengine Agent Development Kit</h1>
-</p>
+# Volcengine Agent Development Kit
+
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Deepwiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/volcengine/veadk-python)
 
 An open-source kit for agent development, integrated the powerful capabilities of Volcengine.
 
@@ -56,13 +57,10 @@ print(res)
 
 ## Command line tools
 
-### Fast deployment
+VeADK provides several useful command line tools for faster deployment and optimization, such as:
 
-Deploy your agent service by the following command:
-
-```bash
-vego deploy --access-key YOUR_ACCESS_KEY --secret-key YOUR_SECRET_KEY --name YOUR_SERVICE_NAME --path YOUR_PROJECT_PATH
-```
+- `veadk deploy`: deploy your project to Volcengine VeFaaS platform
+- `veadk prompt`: otpimize the system prompt of your agent by PromptPilot
 
 ## Contribution
 
@@ -71,6 +69,12 @@ Before making your contribution to our repository, please install and config the
 ```bash
 pip install pre-commit
 pre-commit install
+```
+
+Before commit or push your changes, please make sure the unittests are passed ,otherwise your PR will be rejected by CI/CD workflow. Running the unittests by:
+
+```bash
+pytest -n 16
 ```
 
 ## License
