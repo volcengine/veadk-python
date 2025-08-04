@@ -12,9 +12,9 @@ authors = [
 ]
 dependencies = [
     "pydantic-settings>=2.10.1", # Config management
-    "a2a-sdk>=0.2.12", # For Google Agent2Agent protocol
+    "a2a-sdk==0.2.12", # For Google Agent2Agent protocol
     "deprecated>=1.2.18",
-    "google-adk>=1.6.1", # For basic agent architecture
+    "google-adk==1.8.0", # For basic agent architecture
     "litellm>=1.74.3", # For model inference
     "loguru>=0.7.3", # For better logging
     "openinference-instrumentation-google-adk>=0.1.1", # For OpenInference instrumentation
