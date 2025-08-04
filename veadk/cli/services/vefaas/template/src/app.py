@@ -20,7 +20,7 @@ from veadk.a2a.ve_a2a_server import init_app
 
 SERVER_HOST = os.getenv("SERVER_HOST")
 
-AGENT.tracers = TRACERS
+AGENT.tracers.extend(TRACERS)
 
 app = init_app(
     server_url=SERVER_HOST,
