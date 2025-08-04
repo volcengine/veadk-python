@@ -26,17 +26,17 @@ from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
 TRACERS: list[BaseTracer] = []
 
 exporters = []
-if os.getenv("VEADK_TRACER_APMPLUS") == "true":
+if os.getenv("VEADK_TRACER_APMPLUS", "").lower() == "true":
     from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporter
 
     exporters.append(APMPlusExporter())
 
-if os.getenv("VEADK_TRACER_COZELOOP") == "true":
+if os.getenv("VEADK_TRACER_COZELOOP", "").lower() == "true":
     from veadk.tracing.telemetry.exporters.cozeloop_exporter import CozeloopExporter
 
     exporters.append(CozeloopExporter())
 
-if os.getenv("VEADK_TRACER_TLS") == "true":
+if os.getenv("VEADK_TRACER_TLS", "").lower() == "true":
     from veadk.tracing.telemetry.exporters.tls_exporter import TLSExporter
 
     exporters.append(TLSExporter())
