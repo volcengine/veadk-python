@@ -17,7 +17,7 @@ features:
   - title: 更灵活的功能扩展
     details: 提供Agent各类组件的基础实现，通过插件方式灵活扩展
   - title: 更完备的观测和评估管理
-    details: 运行时数据通过OpenTelemetry协议无缝衔接APMPlus、Cozeloop， TLS；运行时数据生成测试数据集文件，可直接在本地和Cozeloop中进行评估测试。
+    details: 运行时数据通过OpenTelemetry协议无缝衔接APMPlus、Cozeloop、TLS；运行时数据生成测试数据集文件，可直接在本地和Cozeloop中进行评估测试。
   - title: 更强大的知识和记忆管理
     details: 知识库支持火山引擎各类现有数据库，例如关系型数据库、键值数据库、VikingDB知识库，记忆库等。
   - title: 更科学的结果评测
