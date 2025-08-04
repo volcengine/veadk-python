@@ -1,6 +1,6 @@
 # 可观测
 
-VeADK中的可观测（Tracing）能力能够记录运行时关键节点的信息，并且支持无缝上报至火山引擎云平台（例如CozeLoop、APMPlus, TLS等）。
+VeADK中的可观测（Tracing）能力能够记录运行时关键节点的信息，并且支持无缝上报至火山引擎云平台（例如CozeLoop、APMPlus、TLS等）。
 
 ## 本地观测
 
