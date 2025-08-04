@@ -15,6 +15,28 @@ Agent中主要包括如下属性：
 | knowledgebase | Vector database | 知识库，后端通常为一个向量数据库（Vector database），能够检索 |
 | tracers | list | 追踪器列表，能够定义不同的追踪方式，并在Agent执行完毕后对整体Tracing信息保存至本地 |
 
+## A2A智能体
+
+当你的智能体部署到云上后，可以在本地被初始化为一个Remote Agent，也就是能够通过A2A协议来访问的智能体，初始化方法如下：
+
+```python
+remote_agent = RemoteVeAgent(
+    name="a2a_agent",
+    url="..." # <--- url from cloud platform
+)
+
+short_term_memory = ShortTermMemory()
+runner = Runner(
+    agent=remote_agent,
+    short_term_memory=short_term_memory
+    )
+
+res = await runner.run(
+    messages="...",
+    session_id="sample_session"
+    )
+```
+
 ## 运行
 
 在生产环境中，我们推荐您使用`Runner`来进行多租户服务：
@@ -29,6 +51,11 @@ USER_ID = ""
 SESSION_ID = ""
 
 agent = Agent()
-runner = Runner(agent=agent, short_term_memory=ShortTermMemory())
+
+runner = Runner(
+    agent=agent,
+    short_term_memory=ShortTermMemory()
+    )
+
 response = await runner.run(messages=prompt, session_id=session_id)
 ```

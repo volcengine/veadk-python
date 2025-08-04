@@ -19,6 +19,7 @@ from google.adk.runners import Runner as ADKRunner
 from google.genai import types
 from google.genai.types import Blob
 
+from veadk.a2a.remote_ve_agent import RemoteVeAgent
 from veadk.agent import Agent
 from veadk.evaluation import EvalSetRecorder
 from veadk.memory.short_term_memory import ShortTermMemory
@@ -41,7 +42,7 @@ RunnerMessage = Union[
 class Runner:
     def __init__(
         self,
-        agent: Agent,
+        agent: Agent | RemoteVeAgent,
         short_term_memory: ShortTermMemory,
         app_name: str = "veadk_default_app",
         user_id: str = "veadk_default_user",
@@ -56,7 +57,10 @@ class Runner:
         self.short_term_memory = short_term_memory
         self.session_service = short_term_memory.session_service
 
-        self.long_term_memory = self.agent.long_term_memory
+        if isinstance(self.agent, Agent):
+            self.long_term_memory = self.agent.long_term_memory
+        else:
+            self.long_term_memory = None
 
         # maintain a in-memory runner for fast inference
         self.runner = ADKRunner(
@@ -67,13 +71,6 @@ class Runner:
         )
 
     def _convert_messages(self, messages) -> list:
-        # RunnerMessage = Union[
-        #     str,  # single turn text-based prompt
-        #     list[str],  # multiple turn text-based prompt
-        #     dict,  # single turn prompt with media
-        #     list[dict],  # multiple turn prompt with media
-        #     list[dict | str],  # multiple turn prompt with media and text-based prompt
-        # ]
         if isinstance(messages, str):
             messages = [types.Content(role="user", parts=[types.Part(text=messages)])]
         elif isinstance(messages, MediaMessage):
@@ -159,7 +156,8 @@ class Runner:
             final_output = await self._run(session_id, message, stream)
 
         # try to save tracing file
-        self.save_tracing_file(session_id)
+        if isinstance(self.agent, Agent):
+            self.save_tracing_file(session_id)
 
         return final_output
 
