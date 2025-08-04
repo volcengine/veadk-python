@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -28,6 +29,33 @@ from veadk.version import VERSION
 logger = get_logger(__name__)
 
 app = typer.Typer(name="vego")
+
+
+@app.command()
+def init():
+    """Init a veadk project that can be deployed to Volcengine VeFaaS."""
+    from rich.prompt import Confirm, Prompt
+
+    cwd = Path.cwd()
+    template_dir = Path(__file__).parent.resolve() / "services" / "vefaas" / "template"
+
+    name = Prompt.ask("Project name", default="veadk-cloud-agent")
+
+    target_dir = cwd / name
+
+    if target_dir.exists():
+        response = Confirm.ask(
+            f"Target directory '{target_dir}' already exists, do you want to overwrite it?: "
+        )
+        if not response:
+            print("Operation cancelled.")
+            return
+        else:
+            shutil.rmtree(target_dir)  # 删除旧目录
+            print(f"Deleted existing directory: {target_dir}")
+
+    shutil.copytree(template_dir, target_dir)
+    print(f"Created new project: {name}")
 
 
 # @app.command()

@@ -19,7 +19,7 @@ You must export your agent and short-term memory in `src/config.py`.
 
 ## Deploy
 
-We recommand you deploy this project by the `cloud` module of VeADK.
+We recommend you deploy this project by the `cloud` module of VeADK.
 
 ```bash
 python deploy.py
