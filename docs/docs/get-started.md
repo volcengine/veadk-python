@@ -41,20 +41,22 @@ agent = Agent(
 
 VeADK中集成了多个火山引擎提供的工具：
 
-- Web search
-- Web scraper 邀测，代码见MCP server
-- Vesearch
-- Lark
+- web_search （公域搜索）
+- vesearch （联网搜索，头条搜索等）
+- lark （飞书通信和协同）
+- las (数据湖检索）
+- web_scraper 邀测，代码见MCP server （聚合搜索）
 
 此外，还提供多种沙箱工具：
 
-- Computer sandbox
-- Code sandbox
-- Mobile sandbox
+- Computer sandbox (TBD)
+- Browser sandbox (TBD)
+- Code sandbox (TBD)
+  
 
 ### MCP工具
 
-采用如下方式定义一个MCP工具：
+采用如下方式定义一个MCP工具, e.g. LAS 
 
 ```python
 # 以飞书Lark MCP工具为例
@@ -65,6 +67,9 @@ lark_tools = MCPToolset(
         errlog=None,
     ),
 )
+
+remote_mcp_server = MCPToolset(connection_params=SseConnectionParams(url=url))
+
 ```
 
 ### 系统工具
