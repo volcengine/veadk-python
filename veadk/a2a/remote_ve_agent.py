@@ -16,6 +16,4 @@ class RemoteVeAgent(RemoteA2aAgent):
 
         agent_card_object = AgentCard.model_validate_json(str(agent_card_json_str))
 
-        super().__init__(
-            name=name, description="weather reporter", agent_card=agent_card_object
-        )
+        super().__init__(name=name, agent_card=agent_card_object)

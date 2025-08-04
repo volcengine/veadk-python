@@ -59,7 +59,7 @@ print(res)
 
 VeADK provides several useful command line tools for faster deployment and optimization, such as:
 
-- `veadk deploy`: deploy your project to Volcengine VeFaaS platform
+- `veadk deploy`: deploy your project to Volcengine VeFaaS platform (you can use `veadk init` to init a demo project first)
 - `veadk prompt`: otpimize the system prompt of your agent by PromptPilot
 
 ## Contribution
