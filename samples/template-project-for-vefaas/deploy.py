@@ -33,7 +33,7 @@ async def main():
         "How is the weather like in Beijing?", SESSION_ID, USER_ID
     )
 
-    print(f"Message ID: {response_message.message_id}")
+    print(f"Message ID: {response_message.messageId}")
 
     print(f"Response from {cloud_app.endpoint}: {response_message.parts[0].root.text}")
 
