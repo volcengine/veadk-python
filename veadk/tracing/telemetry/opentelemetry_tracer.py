@@ -54,6 +54,7 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
     def model_post_init(self, context: Any, /) -> None:
         self._processors = []
         self._inmemory_exporter: InMemoryExporter = None
+        self._apiserver_exporter: ApiServerExporter = None
 
         # Inmemory & APIServer are the default exporters
         have_inmemory_exporter = False
@@ -61,8 +62,10 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         for exporter in self.exporters:
             if isinstance(exporter, InMemoryExporter):
                 have_inmemory_exporter = True
+                self._inmemory_exporter = exporter
             elif isinstance(exporter, ApiServerExporter):
                 have_apiserver_exporter = True
+                self._apiserver_exporter = exporter
 
         if not have_inmemory_exporter:
             inmemory_exporter = InMemoryExporter()
