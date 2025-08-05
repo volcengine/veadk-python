@@ -16,7 +16,7 @@ import time
 
 from deepeval import evaluate
 from deepeval.evaluate.types import EvaluationResult
-from deepeval.key_handler import KEY_FILE_HANDLER, KeyValues
+from deepeval.key_handler import KEY_FILE_HANDLER, ModelKeyValues
 from deepeval.metrics import BaseMetric
 from deepeval.models import LocalModel
 from deepeval.test_case import LLMTestCase
@@ -75,11 +75,11 @@ class DeepevalEvaluator(BaseEvaluator):
         api_key: str,
         api_base: str,
     ):
-        KEY_FILE_HANDLER.write_key(KeyValues.LOCAL_MODEL_NAME, model_name)
-        KEY_FILE_HANDLER.write_key(KeyValues.LOCAL_MODEL_BASE_URL, api_base)
-        KEY_FILE_HANDLER.write_key(KeyValues.LOCAL_MODEL_API_KEY, api_key)
-        KEY_FILE_HANDLER.write_key(KeyValues.USE_LOCAL_MODEL, "YES")
-        KEY_FILE_HANDLER.write_key(KeyValues.USE_AZURE_OPENAI, "NO")
+        KEY_FILE_HANDLER.write_key(ModelKeyValues.LOCAL_MODEL_NAME, model_name)
+        KEY_FILE_HANDLER.write_key(ModelKeyValues.LOCAL_MODEL_BASE_URL, api_base)
+        KEY_FILE_HANDLER.write_key(ModelKeyValues.LOCAL_MODEL_API_KEY, api_key)
+        KEY_FILE_HANDLER.write_key(ModelKeyValues.USE_LOCAL_MODEL, "YES")
+        KEY_FILE_HANDLER.write_key(ModelKeyValues.USE_AZURE_OPENAI, "NO")
         return LocalModel()
 
     @override
