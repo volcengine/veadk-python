@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib.util
 import json
 import time
 
@@ -58,36 +57,6 @@ class VeFaaS:
         self.apig_client = APIGateway(self.ak, self.sk, self.region)
 
         self.template_id = "6874f3360bdbc40008ecf8c7"
-
-    def _pre_check(self, path: str):
-        if not path.exists():
-            raise ValueError(f"Path {path} does not exist.")
-
-        index_py_path = path / "index.py"
-        if not index_py_path.exists():
-            raise ValueError(
-                "The project directory must include the `index.py` file. See: https://www.volcengine.com/docs/6662/107432"
-            )
-        typer.echo(
-            typer.style(
-                "Check `index.py` file pass.",
-                fg=typer.colors.BRIGHT_BLACK,
-            ),
-        )
-
-        spec = importlib.util.spec_from_file_location("index", index_py_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        if not (hasattr(module, "handler") and callable(module.handler)):
-            raise ValueError(
-                "The `index.py` file must include a `handler` function. See: https://www.volcengine.com/docs/6662/107432"
-            )
-        typer.echo(
-            typer.style(
-                "Check `handler` function pass.",
-                fg=typer.colors.BRIGHT_BLACK,
-            ),
-        )
 
     def _create_function(self, name: str, path: str):
         function_name = f"{name}-fn-{formatted_timestamp()}"
@@ -167,9 +136,6 @@ class VeFaaS:
         )
 
         return function_name, function_id
-
-    def _get_template(self):
-        pass
 
     def _create_application(
         self,
