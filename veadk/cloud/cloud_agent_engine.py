@@ -93,6 +93,7 @@ class CloudAgentEngine(BaseModel):
         gateway_name: str = "",
         gateway_service_name: str = "",
         gateway_upstream_name: str = "",
+        use_studio: bool = False,
     ) -> CloudApp:
         """Deploy local agent project to Volcengine FaaS platform.
 
@@ -103,6 +104,15 @@ class CloudAgentEngine(BaseModel):
         Returns:
             str: Volcengine FaaS function endpoint.
         """
+        if use_studio:
+            import veadk.config
+
+            veadk.config.veadk_environments["USE_STUDIO"] = "True"
+        else:
+            import veadk.config
+
+            veadk.config.veadk_environments["USE_STUDIO"] = "False"
+
         # convert `path` to absolute path
         path = str(Path(path).resolve())
         self._prepare(path, name)
