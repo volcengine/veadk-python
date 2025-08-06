@@ -24,7 +24,6 @@ from pathlib import Path
 import typer
 import uvicorn
 
-from veadk.cli.studio.fast_api import get_fast_api_app
 from veadk.utils.logger import get_logger
 from veadk.version import VERSION
 
@@ -153,6 +152,8 @@ def web(
 def studio(
     path: str = typer.Option(".", "--path", help="Project path"),
 ):
+    from veadk.cli.studio.fast_api import get_fast_api_app
+
     path = Path(path).resolve()
 
     agent_py_path = os.path.join(path, "agent.py")
