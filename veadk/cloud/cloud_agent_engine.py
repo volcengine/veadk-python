@@ -71,6 +71,21 @@ class CloudAgentEngine(BaseModel):
 
             shutil.copy(template_app_py, os.path.join(path, "app.py"))
 
+        if os.path.exists(os.path.join(path, "studio_app.py")):
+            logger.warning(
+                f"Local agent project path `{path}` contains an `studio_app.py` file. Use your own `studio_app.py` file may cause unexpected behavior."
+            )
+        else:
+            logger.info(
+                f"No `studio_app.py` detected in local agent project path `{path}`. Prepare it."
+            )
+            template_studio_app_py = (
+                f"{Path(__file__).resolve().parent.resolve()}/template/studio_app.py"
+            )
+            import shutil
+
+            shutil.copy(template_studio_app_py, os.path.join(path, "studio_app.py"))
+
         if os.path.exists(os.path.join(path, "run.sh")):
             logger.warning(
                 f"Local agent project path `{path}` contains a `run.sh` file. Use your own `run.sh` file may cause unexpected behavior."
