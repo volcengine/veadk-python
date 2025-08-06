@@ -64,4 +64,10 @@ dev = [
 
 [tool.setuptools.packages.find]
 include = ["veadk*"]
-exclude = ["app*", "assets*", "examples*", "ide*", "tests*",]
+exclude = ["assets*", "ide*", "tests*"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-data]
+"veadk.cli.studio.web" = ["_next/**/*"]
