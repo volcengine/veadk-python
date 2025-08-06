@@ -6,16 +6,16 @@ We implement an minimal agent to report weather in terms of the given city.
 
 ## Structure
 
-| File | Illustration |
-| - | - |
-| `src/app.py` | The entrypoint of VeFaaS server. |
-| `src/run.sh` | The launch script of VeFaaS server. |
+| File                   | Illustration |
+|------------------------| - |
+| `src/app.py`           | The entrypoint of VeFaaS server. |
+| `src/run.sh`           | The launch script of VeFaaS server. |
 | `src/requirements.txt` | Dependencies of your project. `VeADK`, `FastAPI`, and `uvicorn` must be included. |
-| `src/config.py` | The agent and memory definitions. **You may edit this file.** |
-| `config.yaml.example` | Envs for your project (e.g., `api_key`, `token`, ...). **You may edit this file.** |
-| `deploy.py` | Local script for deployment. |
+| `src/agent.py`         | The agent and memory definitions. **You may edit this file.** |
+| `config.yaml.example`  | Envs for your project (e.g., `api_key`, `token`, ...). **You may edit this file.** |
+| `deploy.py`            | Local script for deployment. |
 
-You must export your agent and short-term memory in `src/config.py`.
+You must export your agent and short-term memory in `src/agent.py`.
 
 ## Deploy
 

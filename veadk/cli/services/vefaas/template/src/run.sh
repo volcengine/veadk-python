@@ -38,5 +38,22 @@ python3 -m pip install uvicorn[standard]
 
 python3 -m pip install fastapi
 
-# running
-exec python3 -m uvicorn app:app --host $HOST --port $PORT --timeout-graceful-shutdown $TIMEOUT
+USE_STUDIO=${USE_STUDIO:-False}
+
+if [ "$USE_STUDIO" = "True" ]; then
+    echo "USE_STUDIO is True, running veadk studio"
+    # running veadk studio
+    exec python3 -m uvicorn studio_app:app --host $HOST --port $PORT --timeout-graceful-shutdown $TIMEOUT --loop asyncio
+elif [ "$USE_STUDIO" = "False" ]; then
+    echo "USE_STUDIO is False, running a2a server"
+    
+    # running a2a server
+    exec python3 -m uvicorn app:app --host $HOST --port $PORT --timeout-graceful-shutdown $TIMEOUT --loop asyncio
+else
+    echo "USE_STUDIO is an invalid value: $USE_STUDIO, running a2a server."
+
+    # running a2a server
+    exec python3 -m uvicorn app:app --host $HOST --port $PORT --timeout-graceful-shutdown $TIMEOUT --loop asyncio
+fi
+
+    
