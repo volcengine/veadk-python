@@ -94,6 +94,7 @@ class StudioProcessor:
         metrics = [
             GEval(
                 name="Correctness&MatchDegree",
+                model=self.evaluator.judge_model,
                 criteria="Judge the correctness and match degree of the model output with the expected output.",
                 evaluation_params=[
                     LLMTestCaseParams.INPUT,

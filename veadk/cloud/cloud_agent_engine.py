@@ -109,6 +109,7 @@ class CloudAgentEngine(BaseModel):
         gateway_service_name: str = "",
         gateway_upstream_name: str = "",
         use_studio: bool = False,
+        use_adk_web: bool = False,
     ) -> CloudApp:
         """Deploy local agent project to Volcengine FaaS platform.
 
@@ -119,6 +120,9 @@ class CloudAgentEngine(BaseModel):
         Returns:
             str: Volcengine FaaS function endpoint.
         """
+        assert not (use_studio and use_adk_web), (
+            "use_studio and use_adk_web can not be True at the same time."
+        )
         # prevent deepeval writing operations
         import veadk.config
 
@@ -132,6 +136,15 @@ class CloudAgentEngine(BaseModel):
             import veadk.config
 
             veadk.config.veadk_environments["USE_STUDIO"] = "False"
+
+        if use_adk_web:
+            import veadk.config
+
+            veadk.config.veadk_environments["USE_ADK_WEB"] = "True"
+        else:
+            import veadk.config
+
+            veadk.config.veadk_environments["USE_ADK_WEB"] = "False"
 
         # convert `path` to absolute path
         path = str(Path(path).resolve())

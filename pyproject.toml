@@ -70,4 +70,4 @@ exclude = ["assets*", "ide*", "tests*"]
 include-package-data = true
 
 [tool.setuptools.package-data]
-"veadk.cli.studio.web" = ["_next/**/*"]
+"veadk" = ["**/*"]
