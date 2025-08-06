@@ -114,17 +114,23 @@ class Agent(LlmAgent):
 
             self.tools.append(load_memory)
 
-        if self.tracers:
-            self.before_model_callback = []
-            self.after_model_callback = []
-            for tracer in self.tracers:
-                self.before_model_callback.append(tracer.llm_metrics_hook)
-                self.after_model_callback.append(tracer.token_metrics_hook)
+        self.before_model_callback = []
+        self.after_model_callback = []
+        self.update_tracers_callback()
 
         logger.info(f"Agent `{self.name}` init done.")
         logger.debug(
             f"Agent: {self.model_dump(include={'name', 'model_name', 'model_api_base', 'tools', 'serve_url'})}"
         )
+
+    def update_tracers_callback(self) -> None:
+        """Update tracer callbacks with tracers."""
+        for tracer in self.tracers:
+            # Add tracer callbacks if not already added
+            if tracer.llm_metrics_hook not in self.before_model_callback:
+                self.before_model_callback.append(tracer.llm_metrics_hook)
+            if tracer.token_metrics_hook not in self.after_model_callback:
+                self.after_model_callback.append(tracer.token_metrics_hook)
 
     async def _run(
         self,
