@@ -20,24 +20,32 @@ from veadk.cloud.cloud_agent_engine import CloudAgentEngine
 SESSION_ID = "cloud_app_test_session"
 USER_ID = "cloud_app_test_user"
 
+USE_STUDIO = False
+
 
 async def main():
     engine = CloudAgentEngine()
     cloud_app = engine.deploy(
         path=str(Path(__file__).parent / "src"),
-        name="weather-reporter",
-        # gateway_name="",  # <--- your gateway instance name if you have
+        name="weather-reporter",  # <--- set your application name
+        use_studio=USE_STUDIO,
+        # gateway_name="",  # <--- set your gateway instance name if you have one
     )
 
-    response_message = await cloud_app.message_send(
-        "How is the weather like in Beijing?", SESSION_ID, USER_ID
-    )
+    if not USE_STUDIO:
+        response_message = await cloud_app.message_send(
+            "How is the weather like in Beijing?", SESSION_ID, USER_ID
+        )
 
-    print(f"Message ID: {response_message.messageId}")
+        print(f"Message ID: {response_message.messageId}")
 
-    print(f"Response from {cloud_app.endpoint}: {response_message.parts[0].root.text}")
+        print(
+            f"Response from {cloud_app.endpoint}: {response_message.parts[0].root.text}"
+        )
 
-    print(f"App ID: {cloud_app.app_id}")
+        print(f"App ID: {cloud_app.app_id}")
+    else:
+        print(f"VeADK Studio URL: {cloud_app.endpoint}")
 
 
 if __name__ == "__main__":
