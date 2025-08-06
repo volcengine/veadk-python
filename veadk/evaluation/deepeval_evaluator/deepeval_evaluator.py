@@ -21,7 +21,6 @@ from deepeval.metrics import BaseMetric
 from deepeval.models import LocalModel
 from deepeval.test_case import LLMTestCase
 from deepeval.test_case.llm_test_case import ToolCall
-from pydantic import Field
 from typing_extensions import override
 
 from veadk.config import getenv
@@ -43,23 +42,14 @@ class DeepevalEvaluator(BaseEvaluator):
     def __init__(
         self,
         agent,
-        judge_model_api_key: str = Field(
-            ...,
-            default_factory=lambda: getenv("MODEL_JUDGE_API_KEY"),
+        judge_model_api_key: str = getenv("MODEL_JUDGE_API_KEY"),
+        judge_model_name: str = getenv(
+            "MODEL_JUDGE_NAME",
+            "doubao-seed-1-6-250615",
         ),
-        judge_model_name: str = Field(
-            ...,
-            default_factory=lambda: getenv(
-                "MODEL_JUDGE_NAME",
-                "doubao-seed-1-6-250615",
-            ),
-        ),
-        judge_model_api_base: str = Field(
-            ...,
-            default_factory=lambda: getenv(
-                "MODEL_JUDGE_API_BASE",
-                "https://ark.cn-beijing.volces.com/api/v3/",
-            ),
+        judge_model_api_base: str = getenv(
+            "MODEL_JUDGE_API_BASE",
+            "https://ark.cn-beijing.volces.com/api/v3/",
         ),
         name: str = "veadk_deepeval_evaluator",
         prometheus_config: PrometheusPushgatewayConfig = None,
