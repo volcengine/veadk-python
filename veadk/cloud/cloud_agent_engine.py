@@ -119,6 +119,11 @@ class CloudAgentEngine(BaseModel):
         Returns:
             str: Volcengine FaaS function endpoint.
         """
+        # prevent deepeval writing operations
+        import veadk.config
+
+        veadk.config.veadk_environments["DEEPEVAL_TELEMETRY_OPT_OUT"] = "YES"
+
         if use_studio:
             import veadk.config
 
