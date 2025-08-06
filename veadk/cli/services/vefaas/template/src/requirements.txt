@@ -1,3 +1,4 @@
-git+https://github.com/volcengine/veadk-python.git
+veadk-python[eval] @ git+https://github.com/volcengine/veadk-python.git # extra eval for prompt optimization in veadk studio
+agent-pilot-sdk>=0.0.9 # extra dep for prompt optimization in veadk studio
 uvicorn[standard]
 fastapi
