@@ -21,6 +21,7 @@ SESSION_ID = "cloud_app_test_session"
 USER_ID = "cloud_app_test_user"
 
 USE_STUDIO = False
+USE_ADK_WEB = False
 
 
 async def main():
@@ -29,10 +30,11 @@ async def main():
         path=str(Path(__file__).parent / "src"),
         name="weather-reporter",  # <--- set your application name
         use_studio=USE_STUDIO,
+        use_adk_web=USE_ADK_WEB,
         # gateway_name="",  # <--- set your gateway instance name if you have one
     )
 
-    if not USE_STUDIO:
+    if not USE_STUDIO and not USE_ADK_WEB:
         response_message = await cloud_app.message_send(
             "How is the weather like in Beijing?", SESSION_ID, USER_ID
         )

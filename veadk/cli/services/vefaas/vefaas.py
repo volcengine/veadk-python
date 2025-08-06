@@ -26,6 +26,7 @@ from volcenginesdkvefaas.models.tag_for_create_function_input import (
     TagForCreateFunctionInput,
 )
 
+import veadk.config
 from veadk.cli.services.veapig.apig import APIGateway
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp
@@ -58,27 +59,16 @@ class VeFaaS:
 
         self.template_id = "6874f3360bdbc40008ecf8c7"
 
-    def _create_function(self, name: str, path: str):
-        function_name = f"{name}-fn-{formatted_timestamp()}"
-
-        # 1. Create a function instance in cloud
-        typer.echo(
-            typer.style("Runtime: native-python3.10/v1", fg=typer.colors.BRIGHT_BLACK)
-        )
-
+    def _create_function(self, function_name: str, path: str):
+        # 1. Read envs
         envs = []
-
-        import veadk.config
-
         for key, value in veadk.config.veadk_environments.items():
             envs.append(EnvForCreateFunctionInput(key=key, value=value))
-        typer.echo(
-            typer.style(
-                f"Fetch {len(envs)} environment variables.",
-                fg=typer.colors.BRIGHT_BLACK,
-            )
+        logger.info(
+            f"Fetch {len(envs)} environment variables.",
         )
 
+        # 2. Create function
         res = self.client.create_function(
             volcenginesdkvefaas.CreateFunctionRequest(
                 command="./run.sh",
@@ -88,21 +78,17 @@ class VeFaaS:
                 runtime="native-python3.10/v1",
                 request_timeout=1800,
                 envs=envs,
-                # tls_config=TlsConfigForCreateFunctionInput(enable_log=True),
             )
         )
         function_id = res.id
 
-        # 2. Get a temp bucket to store code
-        # proj_path = get_project_path()
+        # 3. Get a temp bucket to store code
         code_zip_data, code_zip_size, error = zip_and_encode_folder(path)
-        typer.echo(
-            typer.style(
-                f"Zipped project size: {code_zip_size / 1024 / 1024:.2f} MB",
-                fg=typer.colors.BRIGHT_BLACK,
-            )
+        logger.info(
+            f"Zipped project size: {code_zip_size / 1024 / 1024:.2f} MB",
         )
 
+        # 4. Upload code to VeFaaS temp bucket
         req = volcenginesdkvefaas.GetCodeUploadAddressRequest(
             function_id=function_id, content_length=code_zip_size
         )
@@ -113,26 +99,16 @@ class VeFaaS:
             "Content-Type": "application/zip",
         }
         response = requests.put(url=upload_url, data=code_zip_data, headers=headers)
-        if 200 <= response.status_code < 300:
-            # print(f"Upload successful! Size: {code_zip_size / 1024 / 1024:.2f} MB")
-            pass
-        else:
+        if not (200 <= response.status_code < 300):
             error_message = f"Upload failed to {upload_url} with status code {response.status_code}: {response.text}"
             raise ValueError(error_message)
 
-        # 3. Mount the TOS bucket to function instance
+        # 5. Mount the TOS bucket to function instance
         res = signed_request(
             ak=self.ak,
             sk=self.sk,
             target="CodeUploadCallback",
             body={"FunctionId": function_id},
-        )
-
-        typer.echo(
-            typer.style(
-                f"Function ID on VeFaaS service: {function_id}",
-                fg=typer.colors.BRIGHT_BLACK,
-            )
         )
 
         return function_name, function_id
@@ -183,23 +159,21 @@ class VeFaaS:
             host="open.volcengineapi.com",
         )
 
+        logger.info(f"Start to release VeFaaS application {app_id}.")
         status, full_response = self._get_application_status(app_id)
         while status not in ["deploy_success", "deploy_fail"]:
             time.sleep(10)
-            typer.echo(
-                typer.style(
-                    f"Current status: {status}",
-                    fg=typer.colors.BRIGHT_BLACK,
-                )
-            )
             status, full_response = self._get_application_status(app_id)
 
         assert status == "deploy_success", (
             f"Release application failed. Response: {full_response}"
         )
+
         cloud_resource = full_response["Result"]["CloudResource"]
         cloud_resource = json.loads(cloud_resource)
+
         url = cloud_resource["framework"]["url"]["system_url"]
+
         return url
 
     def _get_application_status(self, app_id: str):
@@ -257,15 +231,29 @@ class VeFaaS:
 
     def deploy(
         self,
-        name: str,  # application name
+        name: str,
         path: str,
         gateway_name: str = "",
         gateway_service_name: str = "",
         gateway_upstream_name: str = "",
     ) -> tuple[str, str, str]:
+        """Deploy an agent project to VeFaaS service.
+
+        Args:
+            name (str): Application name (warning: not function name).
+            path (str): Project path.
+            gateway_name (str, optional): Gateway name. Defaults to "".
+            gateway_service_name (str, optional): Gateway service name. Defaults to "".
+            gateway_upstream_name (str, optional): Gateway upstream name. Defaults to "".
+
+        Returns:
+            tuple[str, str, str]: (url, app_id, function_id)
+        """
+        # Naming check
         if "_" in name:
             raise ValueError("Function or Application name cannot contain '_'.")
 
+        # Give default names
         if not gateway_name:
             gateway_name = f"{name}-gw-{formatted_timestamp()}"
 
@@ -286,14 +274,15 @@ class VeFaaS:
         if not gateway_upstream_name:
             gateway_upstream_name = f"{name}-gw-us-{formatted_timestamp()}"
 
-        typer.echo(
-            typer.style("[1/3] ", fg=typer.colors.GREEN)
-            + "Create VeFaaS service on cloud."
-        )
-        typer.echo(typer.style(f"Project path: {path}", fg=typer.colors.BRIGHT_BLACK))
-        function_name, function_id = self._create_function(name, path)
+        function_name = f"{name}-fn"
 
-        typer.echo(typer.style("[2/3] ", fg=typer.colors.GREEN) + "Create application.")
+        logger.info(
+            f"Start to create VeFaaS function {function_name} with path {path}. Gateway: {gateway_name}, Gateway Service: {gateway_service_name}, Gateway Upstream: {gateway_upstream_name}."
+        )
+        function_name, function_id = self._create_function(function_name, path)
+        logger.info(f"VeFaaS function {function_name} with ID {function_id} created.")
+
+        logger.info(f"Start to create VeFaaS application {name}.")
         app_id = self._create_application(
             name,
             function_name,
@@ -302,13 +291,11 @@ class VeFaaS:
             gateway_service_name,
         )
 
-        typer.echo(
-            typer.style("[3/3] ", fg=typer.colors.GREEN) + "Release application."
-        )
+        logger.info(f"VeFaaS application {name} with ID {app_id} created.")
+        logger.info(f"Start to release VeFaaS application {app_id}.")
         url = self._release_application(app_id)
+        logger.info(f"VeFaaS application {name} with ID {app_id} released.")
 
-        typer.echo(
-            typer.style(f"\nSuccessfully deployed on:\n\n{url}", fg=typer.colors.BLUE)
-        )
+        logger.info(f"VeFaaS application {name} with ID {app_id} deployed on {url}.")
 
         return url, app_id, function_id

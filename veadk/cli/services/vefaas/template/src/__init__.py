@@ -11,10 +11,4 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from veadk.agent import Agent
-from veadk.memory.short_term_memory import ShortTermMemory
-
-agent: Agent = ...
-app_name: str = ...
-short_term_memory: ShortTermMemory = ...
-root_agent = agent
+from . import agent  # noqa F401
