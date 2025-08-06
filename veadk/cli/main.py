@@ -129,6 +129,10 @@ def web(
         None,
         "--session_service_uri",
     ),
+    host: str = typer.Option(
+        "127.0.0.1",
+        "--host",
+    ),
 ):
     from google.adk.memory import in_memory_memory_service
 
@@ -144,7 +148,7 @@ def web(
         session_service_uri = ""
 
     cli_tools_click.cli_web.main(
-        args=[agents_dir, "--session_service_uri", session_service_uri]
+        args=[agents_dir, "--session_service_uri", session_service_uri, "--host", host]
     )
 
 

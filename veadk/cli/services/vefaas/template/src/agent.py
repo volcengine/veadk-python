@@ -21,3 +21,5 @@ agent: Agent = Agent(tools=[get_city_weather])  # <--- export your agent
 short_term_memory: ShortTermMemory = (
     ShortTermMemory()
 )  # <--- export your short term memory
+
+root_agent = agent

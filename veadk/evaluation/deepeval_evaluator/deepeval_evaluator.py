@@ -15,8 +15,8 @@
 import time
 
 from deepeval import evaluate
+from deepeval.evaluate import CacheConfig
 from deepeval.evaluate.types import EvaluationResult
-from deepeval.key_handler import KEY_FILE_HANDLER, ModelKeyValues
 from deepeval.metrics import BaseMetric
 from deepeval.models import LocalModel
 from deepeval.test_case import LLMTestCase
@@ -57,26 +57,13 @@ class DeepevalEvaluator(BaseEvaluator):
         super().__init__(agent=agent, name=name)
 
         self.judge_model_name = judge_model_name
-        self.judge_model = self.create_judge_model(
-            model_name=judge_model_name,
+        self.judge_model = LocalModel(
+            model=judge_model_name,
+            base_url=judge_model_api_base,
             api_key=judge_model_api_key,
-            api_base=judge_model_api_base,
         )
 
         self.prometheus_config = prometheus_config
-
-    def create_judge_model(
-        self,
-        model_name: str,
-        api_key: str,
-        api_base: str,
-    ):
-        KEY_FILE_HANDLER.write_key(ModelKeyValues.LOCAL_MODEL_NAME, model_name)
-        KEY_FILE_HANDLER.write_key(ModelKeyValues.LOCAL_MODEL_BASE_URL, api_base)
-        KEY_FILE_HANDLER.write_key(ModelKeyValues.LOCAL_MODEL_API_KEY, api_key)
-        KEY_FILE_HANDLER.write_key(ModelKeyValues.USE_LOCAL_MODEL, "YES")
-        KEY_FILE_HANDLER.write_key(ModelKeyValues.USE_AZURE_OPENAI, "NO")
-        return LocalModel()
 
     @override
     async def eval(
@@ -86,7 +73,9 @@ class DeepevalEvaluator(BaseEvaluator):
         eval_id: str = f"test_{formatted_timestamp()}",
     ):
         """Target to Google ADK, we will use the same evaluation case format as Google ADK."""
-
+        for metric in metrics:
+            if not metric.model:
+                metric.model = self.judge_model
         # Get evaluation data by parsing eval set file
         self.generate_eval_data(eval_set_file_path)
         # Get actual data by running agent
@@ -137,7 +126,11 @@ class DeepevalEvaluator(BaseEvaluator):
 
         # Run Deepeval evaluation according to metrics
         logger.info("Start to run Deepeval evaluation according to metrics.")
-        test_results = evaluate(test_cases=test_cases, metrics=metrics)
+        test_results = evaluate(
+            test_cases=test_cases,
+            metrics=metrics,
+            cache_config=CacheConfig(write_cache=False),
+        )
         for test_result in test_results.test_results:
             eval_result_data = EvalResultData(metric_results=[])
             for metrics_data_item in test_result.metrics_data:
