@@ -71,6 +71,7 @@ class DeepevalEvaluator(BaseEvaluator):
         api_key: str,
         api_base: str,
     ):
+        print(model_name, api_key, api_base)
         KEY_FILE_HANDLER.write_key(ModelKeyValues.LOCAL_MODEL_NAME, model_name)
         KEY_FILE_HANDLER.write_key(ModelKeyValues.LOCAL_MODEL_BASE_URL, api_base)
         KEY_FILE_HANDLER.write_key(ModelKeyValues.LOCAL_MODEL_API_KEY, api_key)
