@@ -14,7 +14,7 @@
 
 import os
 
-from agent import AGENT, APP_NAME, SHORT_TERM_MEMORY
+from agent import agent, app_name, short_term_memory
 from veadk.a2a.ve_a2a_server import init_app
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
@@ -44,23 +44,23 @@ if os.getenv("VEADK_TRACER_TLS", "").lower() == "true":
 TRACERS.append(OpentelemetryTracer(exporters=exporters))
 
 
-AGENT.tracers.extend(TRACERS)
-if not getattr(AGENT, "before_model_callback", None):
-    AGENT.before_model_callback = []
-if not getattr(AGENT, "after_model_callback", None):
-    AGENT.after_model_callback = []
+agent.tracers.extend(TRACERS)
+if not getattr(agent, "before_model_callback", None):
+    agent.before_model_callback = []
+if not getattr(agent, "after_model_callback", None):
+    agent.after_model_callback = []
 for tracer in TRACERS:
-    if tracer.llm_metrics_hook not in AGENT.before_model_callback:
-        AGENT.before_model_callback.append(tracer.llm_metrics_hook)
-    if tracer.token_metrics_hook not in AGENT.after_model_callback:
-        AGENT.after_model_callback.append(tracer.token_metrics_hook)
+    if tracer.llm_metrics_hook not in agent.before_model_callback:
+        agent.before_model_callback.append(tracer.llm_metrics_hook)
+    if tracer.token_metrics_hook not in agent.after_model_callback:
+        agent.after_model_callback.append(tracer.token_metrics_hook)
 
 # Tracer Config ================================================================
 # ==============================================================================
 
 app = init_app(
     server_url="0.0.0.0",  # Automatic identification is not supported yet.
-    app_name=APP_NAME,
-    agent=AGENT,
-    short_term_memory=SHORT_TERM_MEMORY,
+    app_name=app_name,
+    agent=agent,
+    short_term_memory=short_term_memory,
 )

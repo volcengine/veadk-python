@@ -16,8 +16,8 @@ from veadk import Agent
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.tools.demo_tools import get_city_weather
 
-APP_NAME: str = "weather-reporter"  # <--- export your app name
-AGENT: Agent = Agent(tools=[get_city_weather])  # <--- export your agent
-SHORT_TERM_MEMORY: ShortTermMemory = (
+app_name: str = "weather-reporter"  # <--- export your app name
+agent: Agent = Agent(tools=[get_city_weather])  # <--- export your agent
+short_term_memory: ShortTermMemory = (
     ShortTermMemory()
 )  # <--- export your short term memory
