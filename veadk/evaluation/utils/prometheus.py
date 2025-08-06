@@ -12,38 +12,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
 
 from prometheus_client import CollectorRegistry, Gauge, push_to_gateway
 from prometheus_client.exposition import basic_auth_handler
+from pydantic import Field
 
 from veadk.config import getenv
-
-
-@dataclass
-class EvalResultCaseData:
-    id: str
-    input: str
-    actual_output: str
-    expected_output: str
-    score: str
-    reason: str
-    status: str  # `PASSED` or `FAILURE`
-    latency: str
-
-
-@dataclass
-class EvalResultMetadata:
-    tested_model: str
-    judge_model: str
+from veadk.evaluation.types import EvalResultCaseData, EvalResultMetadata
 
 
 class PrometheusPushgatewayConfig:
-    url: str = getenv(
-        "OBSERVABILITY_PROMETHEUS_PUSHGATEWAY_URL",
+    url: str = Field(
+        ...,
+        default_factory=lambda: getenv(
+            "OBSERVABILITY_PROMETHEUS_PUSHGATEWAY_URL",
+        ),
     )
-    username: str = getenv("OBSERVABILITY_PROMETHEUS_USERNAME")
-    password: str = getenv("OBSERVABILITY_PROMETHEUS_PASSWORD")
+    username: str = Field(
+        ...,
+        default_factory=lambda: getenv(
+            "OBSERVABILITY_PROMETHEUS_USERNAME",
+        ),
+    )
+    password: str = Field(
+        ...,
+        default_factory=lambda: getenv(
+            "OBSERVABILITY_PROMETHEUS_PASSWORD",
+        ),
+    )
 
 
 registry = CollectorRegistry()
