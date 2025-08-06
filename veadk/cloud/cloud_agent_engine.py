@@ -52,8 +52,8 @@ class CloudAgentEngine(BaseModel):
             f"Local agent project path `{path}` is not a directory."
         )
 
-        assert os.path.exists(os.path.join(path, "config.py")), (
-            f"Local agent project path `{path}` does not contain `config.py` file. Please prepare it according to veadk-python/cloud/template/config.py.example"
+        assert os.path.exists(os.path.join(path, "agent.py")), (
+            f"Local agent project path `{path}` does not contain `agent.py` file. Please prepare it according to veadk-python/cloud/template/agent.py.example"
         )
 
         if os.path.exists(os.path.join(path, "app.py")):

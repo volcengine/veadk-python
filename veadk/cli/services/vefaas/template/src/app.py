@@ -14,17 +14,52 @@
 
 import os
 
-from config import AGENT, APP_NAME, SHORT_TERM_MEMORY, TRACERS
-
+from agent import AGENT, APP_NAME, SHORT_TERM_MEMORY
 from veadk.a2a.ve_a2a_server import init_app
+from veadk.tracing.base_tracer import BaseTracer
+from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
 
-SERVER_HOST = os.getenv("SERVER_HOST")
+
+# ==============================================================================
+# Tracer Config ================================================================
+
+TRACERS: list[BaseTracer] = []
+
+exporters = []
+if os.getenv("VEADK_TRACER_APMPLUS", "").lower() == "true":
+    from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporter
+
+    exporters.append(APMPlusExporter())
+
+if os.getenv("VEADK_TRACER_COZELOOP", "").lower() == "true":
+    from veadk.tracing.telemetry.exporters.cozeloop_exporter import CozeloopExporter
+
+    exporters.append(CozeloopExporter())
+
+if os.getenv("VEADK_TRACER_TLS", "").lower() == "true":
+    from veadk.tracing.telemetry.exporters.tls_exporter import TLSExporter
+
+    exporters.append(TLSExporter())
+
+TRACERS.append(OpentelemetryTracer(exporters=exporters))
+
 
 AGENT.tracers.extend(TRACERS)
-AGENT.update_tracers_callback()
+if not getattr(AGENT, "before_model_callback", None):
+    AGENT.before_model_callback = []
+if not getattr(AGENT, "after_model_callback", None):
+    AGENT.after_model_callback = []
+for tracer in TRACERS:
+    if tracer.llm_metrics_hook not in AGENT.before_model_callback:
+        AGENT.before_model_callback.append(tracer.llm_metrics_hook)
+    if tracer.token_metrics_hook not in AGENT.after_model_callback:
+        AGENT.after_model_callback.append(tracer.token_metrics_hook)
+
+# Tracer Config ================================================================
+# ==============================================================================
 
 app = init_app(
-    server_url=SERVER_HOST,
+    server_url="0.0.0.0",  # Automatic identification is not supported yet.
     app_name=APP_NAME,
     agent=AGENT,
     short_term_memory=SHORT_TERM_MEMORY,
