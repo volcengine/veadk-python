@@ -28,7 +28,6 @@ from volcenginesdkvefaas.models.tag_for_create_function_input import (
 )
 
 from veadk.cli.services.veapig.apig import APIGateway
-from veadk.config import veadk_environments
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp
 from veadk.utils.volcengine_sign import ve_request
@@ -99,7 +98,10 @@ class VeFaaS:
         )
 
         envs = []
-        for key, value in veadk_environments.items():
+
+        import veadk.config
+
+        for key, value in veadk.config.veadk_environments.items():
             envs.append(EnvForCreateFunctionInput(key=key, value=value))
         typer.echo(
             typer.style(
