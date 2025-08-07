@@ -15,6 +15,7 @@
 from typing import Any
 from uuid import uuid4
 
+import json
 import httpx
 from a2a.client import A2ACardResolver, A2AClient
 from a2a.types import AgentCard, Message, MessageSendParams, SendMessageRequest
@@ -36,9 +37,9 @@ class CloudApp:
 
     def __init__(
         self,
-        vefaas_application_name: str,
-        vefaas_endpoint: str,
-        vefaas_application_id: str,
+        vefaas_application_name: str = "",
+        vefaas_endpoint: str = "",
+        vefaas_application_id: str = "",
         use_agent_card: bool = False,
     ):
         self.vefaas_endpoint = vefaas_endpoint
@@ -73,18 +74,24 @@ class CloudApp:
 
         self.httpx_client = httpx.AsyncClient()
 
-    def _get_vefaas_endpoint(self) -> str:
-        vefaas_endpoint = ""
+    def _get_vefaas_endpoint(
+        self,
+        volcengine_ak: str = getenv("VOLCENGINE_ACCESS_KEY"),
+        volcengine_sk: str = getenv("VOLCENGINE_SECRET_KEY"),
+    ) -> str:
+        from veadk.cli.services.vefaas.vefaas import VeFaaS
 
-        if self.vefaas_application_id:
-            # TODO(zakahan): get endpoint from vefaas
-            vefaas_endpoint = ...
-            return vefaas_endpoint
-
-        if self.vefaas_application_name:
-            # TODO(zakahan): get endpoint from vefaas
-            vefaas_endpoint = ...
-            return vefaas_endpoint
+        vefaas_client = VeFaaS(access_key=volcengine_ak, secret_key=volcengine_sk)
+        app = vefaas_client.get_application_details(
+            app_id=self.vefaas_application_id,
+            app_name=self.vefaas_application_name,
+        )
+        cloud_resource = json.loads(app["CloudResource"])
+        try:
+            vefaas_endpoint = cloud_resource["framework"]["url"]["system_url"]
+        except Exception as e:
+            raise ValueError(f"VeFaaS cloudAPP could not get endpoint. Error: {e}")
+        return vefaas_endpoint
 
     def _get_vefaas_application_id_by_name(self) -> str:
         if not self.vefaas_application_name:

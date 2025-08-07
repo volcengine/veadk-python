@@ -202,6 +202,20 @@ class VeFaaS:
         )
         return response["Result"]["Items"]
 
+    def get_application_details(self, app_id: str = None, app_name: str = None):
+        if not app_id and not app_name:
+            raise ValueError("app_id and app_name cannot be both empty.")
+        apps = self._list_application()
+        if app_id:
+            for app in apps:
+                if app["Id"] == app_id:
+                    return app
+            return None
+        else:
+            for app in apps:
+                if app["Name"] == app_name:
+                    return app
+
     def find_app_id_by_name(self, name: str):
         apps = self._list_application()
         for app in apps:
