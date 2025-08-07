@@ -99,7 +99,7 @@ class CloudApp:
         if self.use_agent_card:
             async with self.httpx_client as httpx_client:
                 resolver = A2ACardResolver(
-                    httpx_client=httpx_client, base_url=self.endpoint
+                    httpx_client=httpx_client, base_url=self.vefaas_endpoint
                 )
 
                 final_agent_card_to_use: AgentCard | None = None
@@ -112,7 +112,7 @@ class CloudApp:
                     httpx_client=self.httpx_client, agent_card=final_agent_card_to_use
                 )
         else:
-            return A2AClient(httpx_client=self.httpx_client, url=self.endpoint)
+            return A2AClient(httpx_client=self.httpx_client, url=self.vefaas_endpoint)
 
     def update_self(
         self,
