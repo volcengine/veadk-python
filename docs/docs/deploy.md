@@ -117,5 +117,47 @@ app = CloudApp(name="veadk-agent", endpoint=ENDPOINT)
 cloud_app.invoke(user_id=USER_ID, session_id=SESSION_ID, message=...)
 ```
 
-- 更新自身代码
-- 删除自身
+## 更新云应用
+
+### 通过 CloudAgentEngine 更新
+
+当您需要更新已部署的Agent代码时，可以使用`update_function_code`方法：
+
+```python
+from veadk.cloud.cloud_agent_engine import CloudAgentEngine
+
+engine = CloudAgentEngine()
+
+# 更新现有应用的代码，保持相同的访问端点
+updated_cloud_app = engine.update_function_code(
+    application_name="my-agent-app",  # 现有应用名称
+    path="/my-agent-project"        # 本地项目路径
+)
+
+print(f"应用已更新，访问地址：{updated_cloud_app.vefaas_endpoint}")
+```
+
+**注意事项：**
+- 更新操作会保持相同的访问端点URL
+- 确保项目路径包含`agent.py`文件
+
+
+## 删除云应用
+
+### 通过 CloudAgentEngine 删除
+
+```python
+from veadk.cloud.cloud_agent_engine import CloudAgentEngine
+
+engine = CloudAgentEngine()
+
+# 删除指定的云应用
+engine.remove("my-agent-app")
+```
+
+执行时会提示确认：
+```
+Confirm delete cloud app my-agent-app? (y/N): y
+```
+
+输入`y`确认删除，输入其他任何字符或直接回车则取消删除。
