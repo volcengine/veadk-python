@@ -82,7 +82,7 @@ class CloudApp:
         from veadk.cli.services.vefaas.vefaas import VeFaaS
 
         vefaas_client = VeFaaS(access_key=volcengine_ak, secret_key=volcengine_sk)
-        app = vefaas_client._get_application_details(
+        app = vefaas_client.get_application_details(
             app_id=self.vefaas_application_id,
             app_name=self.vefaas_application_name,
         )
