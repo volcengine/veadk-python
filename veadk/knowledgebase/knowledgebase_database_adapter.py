@@ -35,6 +35,14 @@ def format_collection_name(collection_name: str) -> str:
     return re.sub(r"[^a-z0-9_]", "", replaced_str).lower()
 
 
+def build_index(**kwargs):
+    """
+    Build the index name for the knowledgebase.
+    """
+    # TODO
+    ...
+
+
 def get_knowledgebase_adapter(backend: str):
     if backend == DatabaseBackend.REDIS:
         return KnowledgebaseKVDatabaseAdapter
@@ -55,30 +63,22 @@ class KnowledgebaseKVDatabaseAdapter(BaseModel):
 
     database_client: BaseDatabase
 
-    def add(self, content: list[str], app_name: str, user_id: str, session_id: str):
-        """Add texts to Redis.
-
-        Key: app_name
-        Field: app_name:user_id
-        Value: text in List
-        """
-        # key = f"{app_name}:{user_id}"
+    def add(self, content: list[str], app_name: str, **kwargs):
         key = f"{app_name}"
+        logger.debug(f"Adding documents to Redis database: key={key}")
 
         try:
             for _content in content:
                 self.database_client.add(key, _content)
-            logger.debug(
-                f"Successfully added {len(content)} texts to Redis list key `{key}`."
-            )
+            logger.debug(f"Added {len(content)} texts to Redis database: key={key}")
         except Exception as e:
-            logger.error(f"Failed to add texts to Redis list key `{key}`: {e}")
+            logger.error(f"Failed to add texts to Redis database key `{key}`: {e}")
             raise e
 
-    def query(self, query: str, app_name: str, user_id: str, **kwargs):
-        # key = f"{app_name}:{user_id}"
+    def query(self, query: str, app_name: str, **kwargs):
         key = f"{app_name}"
         top_k = 10
+        logger.debug(f"Querying Redis database: key={key} query={query}")
 
         try:
             result = self.database_client.query(key, query)
@@ -87,9 +87,8 @@ class KnowledgebaseKVDatabaseAdapter(BaseModel):
             logger.error(f"Failed to search from Redis list key '{key}': {e}")
             raise e
 
-    def delete(self, app_name: str, user_id: str, session_id: str):
+    def delete(self, app_name: str, **kwargs):
         try:
-            # key = f"{app_name}:{user_id}:{session_id}"
             key = f"{app_name}"
             self.database_client.delete(key=key)
             logger.info(f"Successfully deleted data for app {app_name}")
@@ -104,6 +103,8 @@ class KnowledgebaseRelationalDatabaseAdapter(BaseModel):
     database_client: BaseDatabase
 
     def create_table(self, table_name: str):
+        logger.debug(f"Creating table for SQL database: table_name={table_name}")
+
         sql = f"""
             CREATE TABLE `{table_name}` (
                 `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -113,8 +114,11 @@ class KnowledgebaseRelationalDatabaseAdapter(BaseModel):
         """
         self.database_client.add(sql)
 
-    def add(self, content: list[str], app_name: str, user_id: str, session_id: str):
+    def add(self, content: list[str], app_name: str, **kwargs):
         table = app_name
+        logger.debug(
+            f"Adding documents to SQL database: table_name={table} content_len={len(content)}"
+        )
 
         if not self.database_client.table_exists(table):
             logger.warning(f"Table {table} does not exist, creating...")
@@ -126,16 +130,19 @@ class KnowledgebaseRelationalDatabaseAdapter(BaseModel):
                 VALUES (%s);
                 """
             self.database_client.add(sql, params=(_content,))
-        logger.info(f"Successfully added {len(content)} texts to table {table}.")
+        logger.debug(f"Added {len(content)} texts to table {table}.")
 
-    def query(self, query: str, app_name: str, user_id: str, **kwargs):
+    def query(self, query: str, app_name: str, **kwargs):
         """Search content from table app_name."""
         table = app_name
         top_k = 10
+        logger.debug(
+            f"Querying SQL database: table_name={table} query={query} top_k={top_k}"
+        )
 
         if not self.database_client.table_exists(table):
             logger.warning(
-                f"querying {query}, but table `{table}` does not exist, returning empty list."
+                f"Querying SQL database, but table `{table}` does not exist, returning empty list."
             )
             return []
 
@@ -145,7 +152,7 @@ class KnowledgebaseRelationalDatabaseAdapter(BaseModel):
         results = self.database_client.query(sql)
         return [item["data"] for item in results]
 
-    def delete(self, app_name: str, user_id: str, session_id: str):
+    def delete(self, app_name: str, **kwargs):
         table = app_name
         try:
             self.database_client.delete(table=table)
@@ -160,23 +167,23 @@ class KnowledgebaseVectorDatabaseAdapter(BaseModel):
 
     database_client: BaseDatabase
 
-    def add(self, content: list[str], app_name: str, user_id: str, session_id: str):
-        # collection_name = format_collection_name(f"{app_name}_{user_id}")
-        # knowledgebase  is application specific
+    def add(self, content: list[str], app_name: str, **kwargs):
+        logger.debug(
+            f"Adding documents to vector database: app_name={app_name} content_len={len(content)}"
+        )
         collection_name = format_collection_name(f"{app_name}")
         self.database_client.add(content, collection_name=collection_name)
 
-    def query(self, query: str, app_name: str, user_id: str, **kwargs):
-        # collection_name = format_collection_name(f"{app_name}_{user_id}")
-        # knowledgebase  is application specific
+    def query(self, query: str, app_name: str, **kwargs):
+        logger.debug(
+            f"Querying vector database: collection_name={app_name} query={query}"
+        )
         collection_name = format_collection_name(f"{app_name}")
         return self.database_client.query(
             query, collection_name=collection_name, **kwargs
         )
 
-    def delete(self, app_name: str, user_id: str, session_id: str):
-        # collection_name = format_collection_name(f"{app_name}_{user_id}")
-        # knowledgebase  is application specific
+    def delete(self, app_name: str, **kwargs):
         collection_name = format_collection_name(f"{app_name}")
         try:
             self.database_client.delete(collection_name=collection_name)
@@ -193,13 +200,13 @@ class KnowledgebaseLocalDatabaseAdapter(BaseModel):
 
     database_client: BaseDatabase
 
-    def add(self, content: list[str], app_name: str, user_id: str, session_id: str):
+    def add(self, content: list[str], **kwargs):
         self.database_client.add(content)
 
     def query(self, query: str, app_name: str, user_id: str, **kwargs):
         return self.database_client.query(query, **kwargs)
 
-    def delete(self, app_name: str, user_id: str, session_id: str):
+    def delete(self, app_name: str, **kwargs):
         try:
             self.database_client.delete()
             logger.info(f"Successfully cleared local database for app {app_name}")
@@ -229,24 +236,30 @@ class KnowledgebaseVikingDatabaseAdapter(BaseModel):
         self,
         content: str | list[str] | TextIO | BinaryIO | bytes,
         app_name: str,
-        user_id: str,
-        session_id: str,
         **kwargs,
     ):
-        # collection_name = format_collection_name(f"{app_name}_{user_id}")
         collection_name = format_collection_name(f"{app_name}")
+        logger.debug(
+            f"Adding documents to Viking database: collection_name={collection_name}"
+        )
         self.get_or_create_collection(collection_name)
         self.database_client.add(content, collection_name=collection_name, **kwargs)
 
-    def query(self, query: str, app_name: str, user_id: str, **kwargs):
+    def query(self, query: str, app_name: str, **kwargs):
         collection_name = format_collection_name(f"{app_name}")
+        logger.debug(
+            f"Querying Viking database: collection_name={collection_name} query={query}"
+        )
+
+        # FIXME(): fix here
         if not self.database_client.collection_exists(collection_name):
             raise ValueError(f"Collection {collection_name} does not exist")
+
         return self.database_client.query(
             query, collection_name=collection_name, **kwargs
         )
 
-    def delete(self, app_name: str, user_id: str, session_id: str):
+    def delete(self, app_name: str, **kwargs):
         # collection_name = format_collection_name(f"{app_name}_{user_id}")
         collection_name = format_collection_name(f"{app_name}")
         try:

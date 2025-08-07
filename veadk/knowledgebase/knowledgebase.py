@@ -26,16 +26,23 @@ class KnowledgeBase:
     def __init__(
         self,
         backend: Literal["local", "opensearch", "viking", "redis", "mysql"] = "local",
-        top_k: int = 5,
+        top_k: int = 10,
         db_config=None,
     ):
-        logger.debug(f"Create knowledgebase, backend is {backend}")
+        logger.info(
+            f"Initializing knowledgebase: backend={backend} top_k={top_k} db_config={db_config}"
+        )
+
         self.backend = backend
         self.top_k = top_k
 
         self.db_client = DatabaseFactory.create(backend=backend, config=db_config)
         self.adapter = get_knowledgebase_adapter(backend)(
             database_client=self.db_client
+        )
+
+        logger.info(
+            f"Initialized knowledgebase: db_client={self.db_client} adapter={self.adapter}"
         )
 
     def add(
@@ -51,9 +58,8 @@ class KnowledgeBase:
             for example, if you read the file stream of a pdf, then you need to pass an additional parameter file_ext = '.pdf'.
         """
         kwargs.pop("session_id", None)  # remove session_id
-        self.adapter.add(
-            data, app_name, user_id="user_id", session_id="session_id", **kwargs
-        )
+        logger.info(f"Adding documents to knowledgebase: app_name={app_name}")
+        self.adapter.add(data, app_name, **kwargs)
 
     def search(self, query: str, app_name: str, top_k: int = None) -> list[str]:
         """Retrieve documents similar to the query text in the vector database.
@@ -66,9 +72,10 @@ class KnowledgeBase:
         """
         top_k = self.top_k if top_k is None else top_k
 
-        result = self.adapter.query(
-            query=query, app_name=app_name, user_id="user_id", top_k=top_k
+        logger.info(
+            f"Searching knowledgebase: app_name={app_name} query={query} top_k={top_k}"
         )
+        result = self.adapter.query(query=query, app_name=app_name, top_k=top_k)
         if len(result) == 0:
             logger.warning(f"No documents found in knowledgebase. Query: {query}")
         return result

@@ -33,6 +33,14 @@ def format_collection_name(collection_name: str) -> str:
     return re.sub(r"[^a-z0-9_]", "", replaced_str).lower()
 
 
+def build_index(**kwargs):
+    """
+    Build the index name for the long-term memory.
+    """
+    # TODO
+    ...
+
+
 def get_memory_adapter(backend: str):
     if backend == DatabaseBackend.REDIS:
         return MemoryKVDatabaseAdapter
