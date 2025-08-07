@@ -51,11 +51,11 @@ class SearchKnowledgebaseResponse(BaseModel):
 
 
 async def search_knowledgebase(
-    self, query: str, app_name: str, user_id: str
+    self, query: str, app_name: str
 ) -> SearchKnowledgebaseResponse:
     """Searches the knowledgebase of the current user."""
     if isinstance(knowledgebase, KnowledgeBase):
-        res = knowledgebase.search(query, app_name=app_name, user_id=user_id)
+        res = knowledgebase.search(query, app_name=app_name)
         entry_list = []
         for r in res:
             entry_list.append(KnowledgebaseEntry(content=r))
@@ -86,9 +86,7 @@ async def load_knowledgebase(
       A list of knowledgebase results.
     """
     search_knowledgebase_response = await tool_context.search_knowledgebase(
-        query,
-        tool_context._invocation_context.app_name,
-        tool_context._invocation_context.user_id,
+        query, tool_context._invocation_context.app_name
     )
     return LoadKnowledgebaseResponse(
         knowledges=search_knowledgebase_response.knowledges
