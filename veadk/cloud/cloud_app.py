@@ -19,6 +19,7 @@ import httpx
 from a2a.client import A2ACardResolver, A2AClient
 from a2a.types import AgentCard, Message, MessageSendParams, SendMessageRequest
 
+from veadk.config import getenv
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -35,19 +36,34 @@ class CloudApp:
 
     def __init__(
         self,
-        name: str,
-        endpoint: str,
-        app_id: str,
+        vefaas_application_name: str,
+        vefaas_endpoint: str,
+        vefaas_application_id: str,
         use_agent_card: bool = False,
     ):
-        self.endpoint = endpoint
-        self.app_id = app_id
-        self.name = name
+        self.vefaas_endpoint = vefaas_endpoint
+        self.vefaas_application_id = vefaas_application_id
+        self.vefaas_application_name = vefaas_application_name
         self.use_agent_card = use_agent_card
 
-        if not endpoint.startswith("http") and not endpoint.startswith("https"):
+        # vefaas must be set one of three
+        if (
+            not vefaas_endpoint
+            and not vefaas_application_id
+            and not vefaas_application_name
+        ):
             raise ValueError(
-                f"Invalid endpoint: {endpoint}. The endpoint must start with `http` or `https`."
+                "VeFaaS CloudAPP must be set one of endpoint, application_id, or application_name."
+            )
+
+        if not vefaas_endpoint:
+            self.vefaas_endpoint = self._get_vefaas_endpoint()
+
+        if not self.vefaas_endpoint.startswith(
+            "http"
+        ) and not self.vefaas_endpoint.startswith("https"):
+            raise ValueError(
+                f"Invalid endpoint: {vefaas_endpoint}. The endpoint must start with `http` or `https`."
             )
 
         if use_agent_card:
@@ -56,6 +72,28 @@ class CloudApp:
             )
 
         self.httpx_client = httpx.AsyncClient()
+
+    def _get_vefaas_endpoint(self) -> str:
+        vefaas_endpoint = ""
+
+        if self.vefaas_application_id:
+            # TODO(zakahan): get endpoint from vefaas
+            vefaas_endpoint = ...
+            return vefaas_endpoint
+
+        if self.vefaas_application_name:
+            # TODO(zakahan): get endpoint from vefaas
+            vefaas_endpoint = ...
+            return vefaas_endpoint
+
+    def _get_vefaas_application_id_by_name(self) -> str:
+        if not self.vefaas_application_name:
+            raise ValueError(
+                "VeFaaS CloudAPP must be set application_name to get application_id."
+            )
+        # TODO(zakahan): get application id from vefaas application name
+        vefaas_application_id = ""
+        return vefaas_application_id
 
     async def _get_a2a_client(self) -> A2AClient:
         if self.use_agent_card:
@@ -76,8 +114,30 @@ class CloudApp:
         else:
             return A2AClient(httpx_client=self.httpx_client, url=self.endpoint)
 
-    def delete_self(self, volcengine_ak: str, volcengine_sk: str):
-        confirm = input(f"Confirm delete cloud app {self.app_id}? (y/N): ")
+    def update_self(
+        self,
+        volcengine_ak: str = getenv("VOLCENGINE_ACCESS_KEY"),
+        volcengine_sk: str = getenv("VOLCENGINE_SECRET_KEY"),
+    ):
+        if not volcengine_ak or not volcengine_sk:
+            raise ValueError("Volcengine access key and secret key must be set.")
+
+        # TODO(floritange): support update cloud app
+
+    def delete_self(
+        self,
+        volcengine_ak: str = getenv("VOLCENGINE_ACCESS_KEY"),
+        volcengine_sk: str = getenv("VOLCENGINE_SECRET_KEY"),
+    ):
+        if not volcengine_ak or not volcengine_sk:
+            raise ValueError("Volcengine access key and secret key must be set.")
+
+        if not self.vefaas_application_id:
+            self.vefaas_application_id = self._get_vefaas_application_id_by_name()
+
+        confirm = input(
+            f"Confirm delete cloud app {self.vefaas_application_id}? (y/N): "
+        )
         if confirm.lower() != "y":
             print("Delete cancelled.")
             return
@@ -85,8 +145,8 @@ class CloudApp:
             from veadk.cli.services.vefaas.vefaas import VeFaaS
 
             vefaas_client = VeFaaS(access_key=volcengine_ak, secret_key=volcengine_sk)
-            vefaas_client.delete(self.app_id)
-            print(f"Cloud app {self.app_id} is deleting...")
+            vefaas_client.delete(self.vefaas_application_id)
+            print(f"Cloud app {self.vefaas_application_id} is deleting...")
 
     async def message_send(
         self, message: str, session_id: str, user_id: str, timeout: float = 600.0
@@ -119,5 +179,6 @@ class CloudApp:
                 )
                 return res.root.result
             except Exception as e:
+                # TODO(floritange): show error log on VeFaaS function
                 print(e)
                 return None

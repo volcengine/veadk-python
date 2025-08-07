@@ -40,71 +40,54 @@ class CloudAgentEngine(BaseModel):
         )
 
     def _prepare(self, path: str, name: str):
-        # VeFaaS path check
-        if "_" in name:
-            raise ValueError(
-                f"Invalid Volcengine FaaS function name `{name}`, please use lowercase letters and numbers, or replace it with a `-` char."
-            )
-
-        # project path check
+        # basic check
         assert os.path.exists(path), f"Local agent project path `{path}` not exists."
         assert os.path.isdir(path), (
             f"Local agent project path `{path}` is not a directory."
         )
 
+        # VeFaaS application/function name check
+        if "_" in name:
+            raise ValueError(
+                f"Invalid Volcengine FaaS function name `{name}`, please use lowercase letters and numbers, or replace it with a `-` char."
+            )
+
+        # project structure check
         assert os.path.exists(os.path.join(path, "agent.py")), (
-            f"Local agent project path `{path}` does not contain `agent.py` file. Please prepare it according to veadk-python/cloud/template/agent.py.example"
+            f"Local agent project path `{path}` does not contain `agent.py` file. Please prepare it according to our document https://volcengine.github.io/veadk-python/deploy.html"
         )
 
-        if os.path.exists(os.path.join(path, "app.py")):
+        if not os.path.exists(os.path.join(path, "config.yaml")):
             logger.warning(
-                f"Local agent project path `{path}` contains an `app.py` file. Use your own `app.py` file may cause unexpected behavior."
+                f"Local agent project path `{path}` does not contain `config.yaml` file. Some important config items may not be set."
             )
-        else:
-            logger.info(
-                f"No `app.py` detected in local agent project path `{path}`. Prepare it."
-            )
-            template_app_py = (
-                f"{Path(__file__).resolve().parent.resolve()}/template/app.py"
-            )
-            import shutil
 
-            shutil.copy(template_app_py, os.path.join(path, "app.py"))
+        # prepare template files if not have
+        template_files = [
+            "app.py",
+            "studio_app.py",
+            "run.sh",
+            "requirements.txt",
+            "__init__.py",
+        ]
+        for template_file in template_files:
+            if os.path.exists(os.path.join(path, template_file)):
+                logger.warning(
+                    f"Local agent project path `{path}` contains a `{template_file}` file. Use your own `{template_file}` file may cause unexpected behavior."
+                )
+            else:
+                logger.info(
+                    f"No `{template_file}` detected in local agent project path `{path}`. Prepare it."
+                )
+                template_file_path = f"{Path(__file__).resolve().parent.resolve().parent.resolve()}/cli/services/vefaas/template/src/{template_file}"
+                import shutil
 
-        if os.path.exists(os.path.join(path, "studio_app.py")):
-            logger.warning(
-                f"Local agent project path `{path}` contains an `studio_app.py` file. Use your own `studio_app.py` file may cause unexpected behavior."
-            )
-        else:
-            logger.info(
-                f"No `studio_app.py` detected in local agent project path `{path}`. Prepare it."
-            )
-            template_studio_app_py = (
-                f"{Path(__file__).resolve().parent.resolve()}/template/studio_app.py"
-            )
-            import shutil
-
-            shutil.copy(template_studio_app_py, os.path.join(path, "studio_app.py"))
-
-        if os.path.exists(os.path.join(path, "run.sh")):
-            logger.warning(
-                f"Local agent project path `{path}` contains a `run.sh` file. Use your own `run.sh` file may cause unexpected behavior."
-            )
-        else:
-            logger.info(
-                f"No `run.sh` detected in local agent project path `{path}`. Prepare it."
-            )
-            template_run_sh = (
-                f"{Path(__file__).resolve().parent.resolve()}/template/run.sh"
-            )
-            import shutil
-
-            shutil.copy(template_run_sh, os.path.join(path, "run.sh"))
+                shutil.copy(template_file_path, os.path.join(path, template_file))
 
     def deploy(
         self,
+        application_name: str,
         path: str,
-        name: str,
         gateway_name: str = "",
         gateway_service_name: str = "",
         gateway_upstream_name: str = "",
@@ -123,14 +106,13 @@ class CloudAgentEngine(BaseModel):
         assert not (use_studio and use_adk_web), (
             "use_studio and use_adk_web can not be True at the same time."
         )
+
         # prevent deepeval writing operations
         import veadk.config
 
         veadk.config.veadk_environments["DEEPEVAL_TELEMETRY_OPT_OUT"] = "YES"
 
         if use_studio:
-            import veadk.config
-
             veadk.config.veadk_environments["USE_STUDIO"] = "True"
         else:
             import veadk.config
@@ -148,19 +130,19 @@ class CloudAgentEngine(BaseModel):
 
         # convert `path` to absolute path
         path = str(Path(path).resolve())
-        self._prepare(path, name)
+        self._prepare(path, application_name)
 
         if not gateway_name:
-            gateway_name = f"{name}-gw-{formatted_timestamp()}"
+            gateway_name = f"{application_name}-gw-{formatted_timestamp()}"
         if not gateway_service_name:
-            gateway_service_name = f"{name}-gw-svr-{formatted_timestamp()}"
+            gateway_service_name = f"{application_name}-gw-svr-{formatted_timestamp()}"
         if not gateway_upstream_name:
-            gateway_upstream_name = f"{name}-gw-us-{formatted_timestamp()}"
+            gateway_upstream_name = f"{application_name}-gw-us-{formatted_timestamp()}"
 
         try:
             vefaas_application_url, app_id, function_id = self._vefaas_service.deploy(
                 path=path,
-                name=name,
+                name=application_name,
                 gateway_name=gateway_name,
                 gateway_service_name=gateway_service_name,
                 gateway_upstream_name=gateway_upstream_name,
@@ -168,9 +150,9 @@ class CloudAgentEngine(BaseModel):
             _ = function_id  # for future use
 
             return CloudApp(
-                name=name,
-                endpoint=vefaas_application_url,
-                app_id=app_id,
+                vefaas_application_name=application_name,
+                vefaas_endpoint=vefaas_application_url,
+                vefaas_application_id=app_id,
             )
         except Exception as e:
             raise ValueError(
