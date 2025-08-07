@@ -59,7 +59,7 @@ class KnowledgeBase:
         """
         kwargs.pop("session_id", None)  # remove session_id
         logger.info(f"Adding documents to knowledgebase: app_name={app_name}")
-        self.adapter.add(data, app_name, **kwargs)
+        self.adapter.add(data, app_name=app_name, **kwargs)
 
     def search(self, query: str, app_name: str, top_k: int = None) -> list[str]:
         """Retrieve documents similar to the query text in the vector database.

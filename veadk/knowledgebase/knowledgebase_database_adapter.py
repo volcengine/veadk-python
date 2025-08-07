@@ -200,10 +200,10 @@ class KnowledgebaseLocalDatabaseAdapter(BaseModel):
 
     database_client: BaseDatabase
 
-    def add(self, content: list[str], **kwargs):
-        self.database_client.add(content)
+    def add(self, data: list[str], **kwargs):
+        self.database_client.add(data)
 
-    def query(self, query: str, app_name: str, user_id: str, **kwargs):
+    def query(self, query: str, **kwargs):
         return self.database_client.query(query, **kwargs)
 
     def delete(self, app_name: str, **kwargs):
