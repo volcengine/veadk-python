@@ -15,9 +15,13 @@
 import os
 import tempfile
 import pytest
+import sys
+
 from unittest.mock import Mock, patch, AsyncMock
 
-from veadk.cloud.cloud_agent_engine import CloudAgentEngine
+sys.modules["typer"] = Mock()
+
+from veadk.cloud.cloud_agent_engine import CloudAgentEngine  # noqa: E402
 
 
 @pytest.mark.asyncio
