@@ -86,8 +86,7 @@ async def load_knowledgebase(
       A list of knowledgebase results.
     """
     search_knowledgebase_response = await tool_context.search_knowledgebase(
-        query,
-        tool_context._invocation_context.app_name
+        query, tool_context._invocation_context.app_name
     )
     return LoadKnowledgebaseResponse(
         knowledges=search_knowledgebase_response.knowledges
