@@ -20,34 +20,38 @@ from veadk.cloud.cloud_agent_engine import CloudAgentEngine
 SESSION_ID = "cloud_app_test_session"
 USER_ID = "cloud_app_test_user"
 
+VEFAAS_APPLICATION_NAME = "weather-reporter"
+GATEWAY_NAME = ""
+GATEWAY_SERVICE_NAME = ""
+GATEWAY_UPSTREAMNAME = ""
 USE_STUDIO = False
 USE_ADK_WEB = False
 
 
 async def main():
     engine = CloudAgentEngine()
+
     cloud_app = engine.deploy(
         path=str(Path(__file__).parent / "src"),
-        name="weather-reporter",  # <--- set your application name
+        application_name=VEFAAS_APPLICATION_NAME,
+        gateway_name=GATEWAY_NAME,
+        gateway_service_name=GATEWAY_SERVICE_NAME,
+        gateway_upstream_name=GATEWAY_UPSTREAMNAME,
         use_studio=USE_STUDIO,
         use_adk_web=USE_ADK_WEB,
-        # gateway_name="",  # <--- set your gateway instance name if you have one
     )
 
     if not USE_STUDIO and not USE_ADK_WEB:
         response_message = await cloud_app.message_send(
             "How is the weather like in Beijing?", SESSION_ID, USER_ID
         )
-
+        print(f"VeFaaS application ID: {cloud_app.vefaas_application_id}")
         print(f"Message ID: {response_message.messageId}")
-
         print(
-            f"Response from {cloud_app.endpoint}: {response_message.parts[0].root.text}"
+            f"Response from {cloud_app.vefaas_endpoint}: {response_message.parts[0].root.text}"
         )
-
-        print(f"App ID: {cloud_app.app_id}")
     else:
-        print(f"VeADK Studio URL: {cloud_app.endpoint}")
+        print(f"Web is running at: {cloud_app.vefaas_endpoint}")
 
 
 if __name__ == "__main__":

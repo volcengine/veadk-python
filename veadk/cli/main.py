@@ -32,6 +32,32 @@ logger = get_logger(__name__)
 app = typer.Typer(name="vego")
 
 
+def set_variable_in_file(file_path: str, setting_values: dict):
+    import ast
+
+    with open(file_path, "r", encoding="utf-8") as f:
+        source_code = f.read()
+
+    tree = ast.parse(source_code)
+
+    class VariableTransformer(ast.NodeTransformer):
+        def visit_Assign(self, node: ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in setting_values:
+                    node.value = ast.Constant(value=setting_values[target.id])
+            return node
+
+    transformer = VariableTransformer()
+    new_tree = transformer.visit(tree)
+    ast.fix_missing_locations(new_tree)
+    new_source_code = ast.unparse(new_tree)
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(new_source_code)
+
+    print("Your project has beed created.")
+
+
 @app.command()
 def init():
     """Init a veadk project that can be deployed to Volcengine VeFaaS."""
@@ -40,9 +66,9 @@ def init():
     cwd = Path.cwd()
     template_dir = Path(__file__).parent.resolve() / "services" / "vefaas" / "template"
 
-    name = Prompt.ask("Project name", default="veadk-cloud-agent")
+    local_dir_name = Prompt.ask("Local directory name", default="veadk-cloud-proj")
 
-    target_dir = cwd / name
+    target_dir = cwd / local_dir_name
 
     if target_dir.exists():
         response = Confirm.ask(
@@ -52,11 +78,57 @@ def init():
             print("Operation cancelled.")
             return
         else:
-            shutil.rmtree(target_dir)  # 删除旧目录
+            shutil.rmtree(target_dir)
             print(f"Deleted existing directory: {target_dir}")
 
+    vefaas_application_name = Prompt.ask(
+        "Volcengine FaaS application name", default="veadk-cloud-agent"
+    )
+
+    gateway_name = Prompt.ask(
+        "Volcengine gateway instance name", default="", show_default=True
+    )
+
+    gateway_service_name = Prompt.ask(
+        "Volcengine gateway service name", default="", show_default=True
+    )
+
+    gateway_upstream_name = Prompt.ask(
+        "Volcengine gateway upstream name", default="", show_default=True
+    )
+
+    deploy_mode_options = {
+        "1": "A2A Server",
+        "2": "VeADK Studio",
+        "3": "VeADK Web / Google ADK Web",
+    }
+
+    deploy_mode = Prompt.ask(
+        """Choose your deploy mode:
+1. A2A Server
+2. VeADK Studio
+3. VeADK Web / Google ADK Web
+""",
+        default="1",
+    )
+
+    if deploy_mode in deploy_mode_options:
+        deploy_mode = deploy_mode_options[deploy_mode]
+    else:
+        print("Invalid deploy mode, set default to A2A Server")
+        deploy_mode = deploy_mode_options["1"]
+
+    setting_values = {
+        "VEFAAS_APPLICATION_NAME": vefaas_application_name,
+        "GATEWAY_NAME": gateway_name,
+        "GATEWAY_SERVICE_NAME": gateway_service_name,
+        "GATEWAY_UPSTREAM_NAME": gateway_upstream_name,
+        "USE_STUDIO": deploy_mode == deploy_mode_options["2"],
+        "USE_ADK_WEB": deploy_mode == deploy_mode_options["3"],
+    }
+
     shutil.copytree(template_dir, target_dir)
-    print(f"Created new project: {name}")
+    set_variable_in_file(target_dir / "deploy.py", setting_values)
 
 
 # @app.command()
