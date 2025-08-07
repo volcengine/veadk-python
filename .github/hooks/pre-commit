@@ -1,0 +1,122 @@
+#!/bin/sh
+
+if git rev-parse --verify HEAD >/dev/null 2>&1
+then
+    against=HEAD
+else
+    # Initial commit: diff against an empty tree object
+    EMPTY_TREE=$(git hash-object -t tree /dev/null)
+    against=$EMPTY_TREE
+fi
+
+# Redirect output to stderr.
+exec 1>&2
+
+echo "======================================================="
+echo "Running Verification for tokens, secret keys, etc..."
+echo "======================================================="
+echo ""
+
+PROJECT_ROOT=$(git rev-parse --show-toplevel)
+PATTERNS_FILE=".secret-key-patterns"
+PATTERNS_PATH="$PROJECT_ROOT/$PATTERNS_FILE"
+
+if [ ! -f "$PATTERNS_PATH" ]; then
+    echo "========================= ERROR ========================="
+    echo "Secret key patterns file not found at: $PATTERNS_PATH"
+    echo "Please create this file in your project root to define the secret patterns."
+    echo "Commit aborted."
+    echo "======================================================="
+    exit 1
+fi
+
+
+source "$PATTERNS_PATH"
+
+#FILES_MODIFIED=$(git diff --cached --name-only -z $against)
+FILES_MODIFIED=$(git diff --cached --name-only)
+
+NUM_FILES_CHECKED=0
+NUM_FILES_OFFENCES=0
+
+exec < /dev/tty
+
+for F in $FILES_MODIFIED
+do
+
+  for i in "${!git_verification_patterns[@]}"; do
+
+    MATCH=$(cat $F | egrep -i --line-number "${git_verification_patterns[$i]}")
+
+    if [ ! -z "$MATCH" ]; then
+      echo "\t   FILE: $F"
+      echo "\tPATTERN: ${git_verification_patterns[$i]}"
+      echo "\t   DESC: ${git_verification_patterns_desc[$i]}"
+      echo "\tLINE(S):"
+      for L in $MATCH; do
+        echo "\t\t$L"
+      done
+
+      while true; do
+          read -p "Commit file anyway? (y/N): " yn
+          case $yn in
+             [Yy] ) break;;
+             [Nn] ) NUM_FILES_OFFENCES=$((NUM_FILES_OFFENCES+1)); break;;
+             * ) echo "Answer y or n."; continue;;
+          esac
+      done
+
+      echo "\t---------------------------"
+    fi
+
+  done
+
+  # Now also do a verification pattern for an SSH private key file
+  MATCH=$(cat $F | egrep -i --line-number "${git_verification_patterns_ssh_key}")
+  NUM_SSH_PK_LINES_FOUND=$(cat $F | egrep -i --line-number ${git_verification_patterns_ssh_key} | wc -l | awk '{print $1}')
+
+  if (( $NUM_SSH_PK_LINES_FOUND >= 3 )); then
+    echo "\t   FILE: $F"
+    echo "\tPATTERN: ${git_verification_patterns_ssh_key}"
+    echo "\t   DESC: ${git_verification_patterns_desc[$i]}"
+    echo "\tLINE(S):"
+    for L in $MATCH; do
+      echo "\t\t$L"
+    done
+
+      while true; do
+          read -p "Commit file anyway? (y/N): " yn
+          case $yn in
+             [Yy] ) break;;
+             [Nn] ) NUM_FILES_OFFENCES=$((NUM_FILES_OFFENCES+1)); break;;
+             * ) echo "Answer y or n."; continue;;
+          esac
+      done
+
+    echo "\t---------------------------"
+  fi
+
+  NUM_FILES_CHECKED=$((NUM_FILES_CHECKED+1))
+
+done
+
+exec <&- # Release input
+
+echo "======================= SUMMARY ======================="
+echo "      Files Checked: $NUM_FILES_CHECKED"
+echo "  Num File Offences: $NUM_FILES_OFFENCES"
+if [ $NUM_FILES_OFFENCES -gt 0 ]; then
+  echo "             Status: FAIL"
+else
+  echo "             Status: OK"
+fi
+echo "-------------------------------------------------------"
+echo ""
+
+
+# Exit code based on if > 0 offences found
+if [ $NUM_FILES_OFFENCES -gt 0 ]; then
+  exit 1
+else
+  exit 0
+fi
