@@ -53,23 +53,22 @@ VeADK中集成了多个火山引擎提供的工具：
 - Browser sandbox (TBD)
 - Code sandbox (TBD)
   
-
 ### MCP工具
 
-采用如下方式定义一个MCP工具, e.g. LAS 
+VeADK支持定义MCP工具来进行功能扩展，例如飞书Lark MCP工具、LAS数据湖MCP工具等。
+
+以飞书Lark MCP工具为例，采用如下方式定义：
 
 ```python
-# 以飞书Lark MCP工具为例
 lark_tools = MCPToolset(
     connection_params=StdioServerParameters(
         command="npx",
-        args=[...],
+        args=[..., "@larksuiteoapi/lark-mcp", ...],
         errlog=None,
     ),
 )
 
 remote_mcp_server = MCPToolset(connection_params=SseConnectionParams(url=url))
-
 ```
 
 ### 系统工具
