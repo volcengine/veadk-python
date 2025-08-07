@@ -167,3 +167,39 @@ class CloudAgentEngine(BaseModel):
         else:
             app_id = self._vefaas_service.find_app_id_by_name(app_name)
             self._vefaas_service.delete(app_id)
+
+    def update_function_code(
+        self,
+        application_name: str,
+        path: str,
+    ) -> CloudApp:
+        """Update existing agent project code while keeping the same URL.
+
+        Args:
+            application_name (str): Existing application name to update.
+            path (str): Local agent project path.
+
+        Returns:
+            CloudApp: Updated cloud app with same endpoint.
+        """
+        # convert `path` to absolute path
+        path = str(Path(path).resolve())
+        self._prepare(path, application_name)
+
+        try:
+            vefaas_application_url, app_id, function_id = (
+                self._vefaas_service._update_function_code(
+                    application_name=application_name,
+                    path=path,
+                )
+            )
+
+            return CloudApp(
+                vefaas_application_name=application_name,
+                vefaas_endpoint=vefaas_application_url,
+                vefaas_application_id=app_id,
+            )
+        except Exception as e:
+            raise ValueError(
+                f"Failed to update agent project on Volcengine FaaS platform. Error: {e}"
+            )
