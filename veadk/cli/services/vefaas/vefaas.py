@@ -27,9 +27,6 @@ from volcenginesdkvefaas.models.tag_for_create_function_input import (
 )
 
 import veadk.config
-from volcenginesdkvefaas.models.tag_for_update_function_input import (
-    TagForUpdateFunctionInput,
-)
 from veadk.cli.services.veapig.apig import APIGateway
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp
@@ -217,6 +214,77 @@ class VeFaaS:
         )
         return response["Result"]["Items"]
 
+    def _update_function_code(
+        self,
+        application_name: str,  # application name
+        path: str,
+    ) -> tuple[str, str, str]:
+        """Update existing application function code while preserving URL.
+
+        Args:
+            application_name (str): Application name to update.
+            path (str): Local project path.
+
+        Returns:
+            tuple[str, str, str]: URL, app_id, function_id
+        """
+        # Naming check
+        if "_" in application_name:
+            raise ValueError("Function or Application name cannot contain '_'.")
+
+        # Find existing application
+        app_id = self.find_app_id_by_name(application_name)
+        if not app_id:
+            raise ValueError(
+                f"Application '{application_name}' not found. Use deploy() for new applications."
+            )
+
+        # Get application status and extract function info
+        status, full_response = self._get_application_status(app_id)
+        if status == "deploy_fail":
+            raise ValueError(
+                f"Cannot update failed application. Current status: {status}"
+            )
+
+        # Extract function name from application config
+        cloud_resource = full_response["Result"]["CloudResource"]
+        cloud_resource = json.loads(cloud_resource)
+        function_name = cloud_resource["framework"]["function"]["Name"]
+        # existing_url = cloud_resource["framework"]["url"]["system_url"]
+        function_id = cloud_resource["framework"]["function"]["Id"]
+        if not function_id:
+            raise ValueError(f"Function '{function_name}' not found for update")
+
+        logger.info(
+            f"Start to update VeFaaS function {function_name} with path {path}."
+        )
+
+        # Upload and mount code using extracted method
+        self._upload_and_mount_code(function_id, path)
+
+        # Use update_function client method to apply changes
+        self.client.update_function(
+            volcenginesdkvefaas.UpdateFunctionRequest(
+                id=function_id,
+                request_timeout=1800,  # Keep same timeout as deploy
+            )
+        )
+
+        logger.info(f"Function updated successfully: {function_id}")
+
+        logger.info(f"VeFaaS function {function_name} with ID {function_id} updated.")
+
+        # Release the application to apply changes
+        url = self._release_application(app_id)
+
+        logger.info(f"VeFaaS application {application_name} with ID {app_id} released.")
+
+        logger.info(
+            f"VeFaaS application {application_name} with ID {app_id} updated on {url}."
+        )
+
+        return url, app_id, function_id
+
     def find_app_id_by_name(self, name: str):
         apps = self._list_application()
         for app in apps:
@@ -312,78 +380,5 @@ class VeFaaS:
         logger.info(f"VeFaaS application {name} with ID {app_id} released.")
 
         logger.info(f"VeFaaS application {name} with ID {app_id} deployed on {url}.")
-
-        return url, app_id, function_id
-
-    def _update_function_code(
-        self,
-        application_name: str,  # application name
-        path: str,
-    ) -> tuple[str, str, str]:
-        """Update existing application function code while preserving URL.
-
-        Args:
-            application_name (str): Application name to update.
-            path (str): Local project path.
-
-        Returns:
-            tuple[str, str, str]: URL, app_id, function_id
-        """
-        # Naming check
-        if "_" in application_name:
-            raise ValueError("Function or Application name cannot contain '_'.")
-
-        # Find existing application
-        app_id = self.find_app_id_by_name(application_name)
-        if not app_id:
-            raise ValueError(
-                f"Application '{application_name}' not found. Use deploy() for new applications."
-            )
-
-        # Get application status and extract function info
-        status, full_response = self._get_application_status(app_id)
-        if status == "deploy_fail":
-            raise ValueError(
-                f"Cannot update failed application. Current status: {status}"
-            )
-
-        # Extract function name from application config
-        cloud_resource = full_response["Result"]["CloudResource"]
-        cloud_resource = json.loads(cloud_resource)
-        function_name = cloud_resource["framework"]["function"]["Name"]
-        # existing_url = cloud_resource["framework"]["url"]["system_url"]
-        function_id = cloud_resource["framework"]["function"]["Id"]
-        if not function_id:
-            raise ValueError(f"Function '{function_name}' not found for update")
-
-        logger.info(
-            f"Start to update VeFaaS function {function_name} with path {path}."
-        )
-
-        # Upload and mount code using extracted method
-        self._upload_and_mount_code(function_id, path)
-
-        # Use update_function client method to apply changes
-        self.client.update_function(
-            volcenginesdkvefaas.UpdateFunctionRequest(
-                id=function_id,
-                description="Updated by VeADK (Volcengine Agent Development Kit)",
-                tags=[TagForUpdateFunctionInput(key="provider", value="veadk")],
-                request_timeout=1800,  # Keep same timeout as deploy
-            )
-        )
-
-        logger.info(f"Function updated successfully: {function_id}")
-
-        logger.info(f"VeFaaS function {function_name} with ID {function_id} updated.")
-
-        # Release the application to apply changes
-        url = self._release_application(app_id)
-
-        logger.info(f"VeFaaS application {application_name} with ID {app_id} released.")
-
-        logger.info(
-            f"VeFaaS application {application_name} with ID {app_id} updated on {url}."
-        )
 
         return url, app_id, function_id
