@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from google.adk.agents.run_config import RunConfig, StreamingMode
 from google.genai import types
+from pydantic import BaseModel
 
 from veadk.cli.studio.models import (
     GetAgentResponse,
@@ -151,6 +152,14 @@ async def runner_run_sse(user_text: str):
             yield f"data: {json.dumps(TOOL_INPUT_AVAILABLE)}\n\n"
 
         for function_response in event.get_function_responses():
+            # for load_memory and load_knowledgebase tools, the output is based BaseModel
+            # we have to convert it
+            for key, value in function_response.response.items():
+                if isinstance(value, BaseModel):
+                    function_response.response[key] = value.model_dump(
+                        exclude_none=False
+                    )
+
             TOOL_OUTPUT_AVAILABLE = {
                 "type": "tool-output-available",
                 "toolCallId": function_response.id,
