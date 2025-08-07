@@ -15,13 +15,13 @@
 import os
 import tempfile
 import pytest
-import sys
 
 from unittest.mock import Mock, patch, AsyncMock
 
-sys.modules["typer"] = Mock()
+os.environ["VOLCENGINE_ACCESS_KEY"] = "test_access_key"
+os.environ["VOLCENGINE_SECRET_KEY"] = "test_secret_key"
 
-from veadk.cloud.cloud_agent_engine import CloudAgentEngine  # noqa: E402
+from veadk.cloud.cloud_agent_engine import CloudAgentEngine
 
 
 @pytest.mark.asyncio
@@ -36,100 +36,90 @@ async def test_cloud():
         with open(os.path.join(temp_dir, "agent.py"), "w") as f:
             f.write(f"# Test agent implementation with {key}")
 
-        with patch.dict(
-            os.environ,
-            {
-                "VOLCENGINE_ACCESS_KEY": "test_access_key",
-                "VOLCENGINE_SECRET_KEY": "test_secret_key",
-            },
-        ):
-            # Mock shutil.copy to avoid template file copying issues
-            with patch("shutil.copy"):
-                with patch(
-                    "veadk.cloud.cloud_agent_engine.VeFaaS"
-                ) as mock_vefaas_class:
-                    # Setup mock VeFaaS service for all operations
-                    mock_vefaas_service = Mock()
-                    mock_vefaas_class.return_value = mock_vefaas_service
+        # 这里不再需要 patch.dict，因为环境变量已经设置
+        # Mock shutil.copy to avoid template file copying issues
+        with patch("shutil.copy"):
+            with patch("veadk.cloud.cloud_agent_engine.VeFaaS") as mock_vefaas_class:
+                # Setup mock VeFaaS service for all operations
+                mock_vefaas_service = Mock()
+                mock_vefaas_class.return_value = mock_vefaas_service
 
-                    # Mock deploy operation
-                    mock_vefaas_service.deploy.return_value = (
-                        test_endpoint,
-                        "app-123",
-                        "func-456",
+                # Mock deploy operation
+                mock_vefaas_service.deploy.return_value = (
+                    test_endpoint,
+                    "app-123",
+                    "func-456",
+                )
+
+                # Mock update operation
+                mock_vefaas_service._update_function_code.return_value = (
+                    test_endpoint,
+                    "app-123",
+                    "func-456",
+                )
+
+                # Mock remove operation
+                mock_vefaas_service.find_app_id_by_name.return_value = "app-123"
+                mock_vefaas_service.delete.return_value = None
+
+                # Test CloudAgentEngine creation and deploy functionality
+                engine = CloudAgentEngine()
+
+                # Test deploy operation
+                cloud_app = engine.deploy(application_name=app_name, path=temp_dir)
+
+                # Verify deployment result contains expected values
+                assert cloud_app.vefaas_application_name == app_name
+                assert cloud_app.vefaas_endpoint == test_endpoint
+                assert cloud_app.vefaas_application_id == "app-123"
+
+                # Test update_function_code operation
+                updated_app = engine.update_function_code(
+                    application_name=app_name, path=temp_dir
+                )
+
+                # Verify update result maintains same endpoint
+                assert updated_app.vefaas_endpoint == test_endpoint
+
+                # Test remove operation with mocked user input
+                with patch("builtins.input", return_value="y"):
+                    engine.remove(app_name)
+                    mock_vefaas_service.find_app_id_by_name.assert_called_with(app_name)
+                    mock_vefaas_service.delete.assert_called_with("app-123")
+
+                # Test CloudApp message_send functionality
+                mock_response = Mock()
+                mock_message = Mock()
+                mock_response.root.result = mock_message
+
+                with patch.object(cloud_app, "_get_a2a_client") as mock_get_client:
+                    mock_client = AsyncMock()
+                    mock_client.send_message = AsyncMock(return_value=mock_response)
+                    mock_get_client.return_value = mock_client
+
+                    # Test message sending to cloud agent
+                    result = await cloud_app.message_send(
+                        message=test_message,
+                        session_id="session-123",
+                        user_id="user-456",
                     )
 
-                    # Mock update operation
-                    mock_vefaas_service._update_function_code.return_value = (
-                        test_endpoint,
-                        "app-123",
-                        "func-456",
-                    )
+                    # Verify message sending result
+                    assert result == mock_message
+                    mock_client.send_message.assert_called_once()
 
-                    # Mock remove operation
-                    mock_vefaas_service.find_app_id_by_name.return_value = "app-123"
-                    mock_vefaas_service.delete.return_value = None
+                # Test CloudApp delete_self functionality
+                with patch("builtins.input", return_value="y"):
+                    with patch(
+                        "veadk.cli.services.vefaas.vefaas.VeFaaS"
+                    ) as mock_vefaas_in_app:
+                        mock_vefaas_client = Mock()
+                        mock_vefaas_in_app.return_value = mock_vefaas_client
+                        mock_vefaas_client.delete.return_value = None
 
-                    # Test CloudAgentEngine creation and deploy functionality
-                    engine = CloudAgentEngine()
+                        cloud_app.delete_self()
+                        mock_vefaas_client.delete.assert_called_with("app-123")
 
-                    # Test deploy operation
-                    cloud_app = engine.deploy(application_name=app_name, path=temp_dir)
-
-                    # Verify deployment result contains expected values
-                    assert cloud_app.vefaas_application_name == app_name
-                    assert cloud_app.vefaas_endpoint == test_endpoint
-                    assert cloud_app.vefaas_application_id == "app-123"
-
-                    # Test update_function_code operation
-                    updated_app = engine.update_function_code(
-                        application_name=app_name, path=temp_dir
-                    )
-
-                    # Verify update result maintains same endpoint
-                    assert updated_app.vefaas_endpoint == test_endpoint
-
-                    # Test remove operation with mocked user input
-                    with patch("builtins.input", return_value="y"):
-                        engine.remove(app_name)
-                        mock_vefaas_service.find_app_id_by_name.assert_called_with(
-                            app_name
-                        )
-                        mock_vefaas_service.delete.assert_called_with("app-123")
-
-                    # Test CloudApp message_send functionality
-                    mock_response = Mock()
-                    mock_message = Mock()
-                    mock_response.root.result = mock_message
-
-                    with patch.object(cloud_app, "_get_a2a_client") as mock_get_client:
-                        mock_client = AsyncMock()
-                        mock_client.send_message = AsyncMock(return_value=mock_response)
-                        mock_get_client.return_value = mock_client
-
-                        # Test message sending to cloud agent
-                        result = await cloud_app.message_send(
-                            message=test_message,
-                            session_id="session-123",
-                            user_id="user-456",
-                        )
-
-                        # Verify message sending result
-                        assert result == mock_message
-                        mock_client.send_message.assert_called_once()
-
-                    # Test CloudApp delete_self functionality
-                    with patch("builtins.input", return_value="y"):
-                        with patch(
-                            "veadk.cli.services.vefaas.vefaas.VeFaaS"
-                        ) as mock_vefaas_in_app:
-                            mock_vefaas_client = Mock()
-                            mock_vefaas_in_app.return_value = mock_vefaas_client
-                            mock_vefaas_client.delete.return_value = None
-
-                            cloud_app.delete_self()
-                            mock_vefaas_client.delete.assert_called_with("app-123")
-
-                    # Verify all mocks were called as expected
-                    mock_vefaas_service.deploy.assert_called_once()
-                    mock_vefaas_service._update_function_code.assert_called_once()
+                # Verify all mocks were called as expected
+                mock_vefaas_service.deploy.assert_called_once()
+                mock_vefaas_service._update_function_code.assert_called_once()
