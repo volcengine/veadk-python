@@ -167,3 +167,67 @@ class CloudAgentEngine(BaseModel):
         else:
             app_id = self._vefaas_service.find_app_id_by_name(app_name)
             self._vefaas_service.delete(app_id)
+
+    def update(
+        self,
+        application_name: str,
+        path: str,
+        use_studio: bool = False,
+        use_adk_web: bool = False,
+    ) -> CloudApp:
+        """Update existing agent project code while keeping the same URL.
+
+        Args:
+            application_name (str): Existing application name to update.
+            path (str): Local agent project path.
+            use_studio (bool): Whether to use studio mode.
+            use_adk_web (bool): Whether to use ADK web mode.
+
+        Returns:
+            CloudApp: Updated cloud app with same endpoint.
+        """
+        assert not (use_studio and use_adk_web), (
+            "use_studio and use_adk_web can not be True at the same time."
+        )
+
+        # prevent deepeval writing operations
+        import veadk.config
+
+        veadk.config.veadk_environments["DEEPEVAL_TELEMETRY_OPT_OUT"] = "YES"
+
+        if use_studio:
+            veadk.config.veadk_environments["USE_STUDIO"] = "True"
+        else:
+            import veadk.config
+
+            veadk.config.veadk_environments["USE_STUDIO"] = "False"
+
+        if use_adk_web:
+            import veadk.config
+
+            veadk.config.veadk_environments["USE_ADK_WEB"] = "True"
+        else:
+            import veadk.config
+
+            veadk.config.veadk_environments["USE_ADK_WEB"] = "False"
+
+        # convert `path` to absolute path
+        path = str(Path(path).resolve())
+        self._prepare(path, application_name)
+
+        try:
+            vefaas_application_url, app_id, function_id = self._vefaas_service.update(
+                name=application_name,
+                path=path,
+            )
+            _ = function_id  # for future use
+
+            return CloudApp(
+                vefaas_application_name=application_name,
+                vefaas_endpoint=vefaas_application_url,
+                vefaas_application_id=app_id,
+            )
+        except Exception as e:
+            raise ValueError(
+                f"Failed to update agent project on Volcengine FaaS platform. Error: {e}"
+            )

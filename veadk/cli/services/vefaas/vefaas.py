@@ -27,6 +27,12 @@ from volcenginesdkvefaas.models.tag_for_create_function_input import (
 )
 
 import veadk.config
+from volcenginesdkvefaas.models.env_for_update_function_input import (
+    EnvForUpdateFunctionInput,
+)
+from volcenginesdkvefaas.models.tag_for_update_function_input import (
+    TagForUpdateFunctionInput,
+)
 from veadk.cli.services.veapig.apig import APIGateway
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp
@@ -299,3 +305,121 @@ class VeFaaS:
         logger.info(f"VeFaaS application {name} with ID {app_id} deployed on {url}.")
 
         return url, app_id, function_id
+
+    def update(
+        self,
+        name: str,  # application name
+        path: str,
+    ) -> tuple[str, str, str]:
+        """Update existing application function code while preserving URL.
+
+        Args:
+            name (str): Application name to update.
+            path (str): Local project path.
+
+        Returns:
+            tuple[str, str, str]: URL, app_id, function_id
+        """
+        # Naming check
+        if "_" in name:
+            raise ValueError("Function or Application name cannot contain '_'.")
+
+        # Find existing application
+        app_id = self.find_app_id_by_name(name)
+        if not app_id:
+            raise ValueError(
+                f"Application '{name}' not found. Use deploy() for new applications."
+            )
+
+        # Get application status and extract function info
+        status, full_response = self._get_application_status(app_id)
+        if status == "deploy_fail":
+            raise ValueError(
+                f"Cannot update failed application. Current status: {status}"
+            )
+
+        # Extract function name from application config
+        cloud_resource = full_response["Result"]["CloudResource"]
+        cloud_resource = json.loads(cloud_resource)
+        function_name = cloud_resource["framework"]["function"]["Name"]
+        # existing_url = cloud_resource["framework"]["url"]["system_url"]
+        function_id = cloud_resource["framework"]["function"]["Id"]
+        if not function_id:
+            raise ValueError(f"Function '{function_name}' not found for update")
+
+        logger.info(
+            f"Start to update VeFaaS function {function_name} with path {path}."
+        )
+
+        # Update function with new code
+        self._update_function_code(function_id, path)
+
+        logger.info(f"VeFaaS function {function_name} with ID {function_id} updated.")
+
+        logger.info(f"Start to release VeFaaS application {app_id}.")
+
+        # Release the application to apply changes
+        url = self._release_application(app_id)
+
+        logger.info(f"VeFaaS application {name} with ID {app_id} released.")
+
+        logger.info(f"VeFaaS application {name} with ID {app_id} updated on {url}.")
+
+        return url, app_id, function_id
+
+    def _update_function_code(self, function_id: str, path: str):
+        """Update function code by copying deploy process and using update_function.
+
+        Args:
+            function_id (str): Target function ID to update.
+            path (str): Local project path.
+        """
+        # 1. Read envs
+        envs = []
+        for key, value in veadk.config.veadk_environments.items():
+            envs.append(EnvForUpdateFunctionInput(key=key, value=value))
+        logger.info(
+            f"Fetch {len(envs)} environment variables.",
+        )
+
+        # 2. Get a temp bucket to store code
+        code_zip_data, code_zip_size, error = zip_and_encode_folder(path)
+        logger.info(
+            f"Zipped project size: {code_zip_size / 1024 / 1024:.2f} MB",
+        )
+
+        # 3. Upload code to VeFaaS temp bucket
+        req = volcenginesdkvefaas.GetCodeUploadAddressRequest(
+            function_id=function_id, content_length=code_zip_size
+        )
+        response = self.client.get_code_upload_address(req)
+        upload_url = response.upload_address
+
+        headers = {
+            "Content-Type": "application/zip",
+        }
+        response = requests.put(url=upload_url, data=code_zip_data, headers=headers)
+        if not (200 <= response.status_code < 300):
+            error_message = f"Upload failed to {upload_url} with status code {response.status_code}: {response.text}"
+            raise ValueError(error_message)
+
+        # 4. Mount the TOS bucket to function instance
+        _ = signed_request(
+            ak=self.ak,
+            sk=self.sk,
+            target="CodeUploadCallback",
+            body={"FunctionId": function_id},
+        )
+
+        # 5. Use update_function client method to apply changes
+        _ = self.client.update_function(
+            volcenginesdkvefaas.UpdateFunctionRequest(
+                id=function_id,
+                description="Updated by VeADK (Volcengine Agent Development Kit)",
+                tags=[TagForUpdateFunctionInput(key="provider", value="veadk")],
+                request_timeout=1800,  # Keep same timeout as deploy
+                envs=envs,
+            )
+        )
+
+        logger.info(f"Function updated successfully: {function_id}")
