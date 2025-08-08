@@ -26,7 +26,7 @@ class KnowledgeBase:
     def __init__(
         self,
         backend: Literal["local", "opensearch", "viking", "redis", "mysql"] = "local",
-        top_k: int = 5,
+        top_k: int = 10,
         db_config=None,
     ):
         logger.debug(f"Create knowledgebase, backend is {backend}")

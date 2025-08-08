@@ -74,7 +74,7 @@ class MemoryKVDatabaseAdapter(BaseModel):
 
     def query(self, query: str, app_name: str, user_id: str):
         key = f"{app_name}:{user_id}"
-        top_k = 10
+        top_k = 3
 
         try:
             result = self.database_client.query(key, query)
@@ -130,7 +130,7 @@ class MemoryRelationalDatabaseAdapter(BaseModel):
 
     def query(self, query: str, app_name: str, user_id: str):
         """Search content from table app_name_user_id."""
-        top_k = 10
+        top_k = 3
         table = f"{app_name}_{user_id}"
 
         if not self.database_client.table_exists(table):
@@ -162,11 +162,13 @@ class MemoryVectorDatabaseAdapter(BaseModel):
 
     def add(self, content: list[str], app_name: str, user_id: str, session_id: str):
         collection_name = format_collection_name(f"{app_name}_{user_id}")
+        logger.info(f"Adding {len(content)} texts to collection {collection_name}")
         self.database_client.add(content, collection_name=collection_name)
 
     def query(self, query: str, app_name: str, user_id: str):
         collection_name = format_collection_name(f"{app_name}_{user_id}")
-        top_k = 10
+        top_k = 3
+        logger.info(f"Querying {query} from collection {collection_name}")
         return self.database_client.query(
             query, collection_name=collection_name, top_k=top_k
         )

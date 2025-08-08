@@ -79,6 +79,9 @@ class LongTermMemory(BaseMemoryService):
 
     @override
     async def search_memory(self, *, app_name: str, user_id: str, query: str):
+        logger.info(
+            f"Long term memory query: {query} app_name: {app_name} user_id: {user_id}"
+        )
         memory_chunks = self.adapter.query(
             query=query,
             app_name=app_name,
