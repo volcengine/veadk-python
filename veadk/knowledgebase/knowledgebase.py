@@ -14,12 +14,15 @@
 
 from typing import BinaryIO, Literal, TextIO
 
+from veadk.database.database_adapter import get_knowledgebase_database_adapter
 from veadk.database.database_factory import DatabaseFactory
 from veadk.utils.logger import get_logger
 
-from .knowledgebase_database_adapter import get_knowledgebase_adapter
-
 logger = get_logger(__name__)
+
+
+def build_knowledgebase_index(app_name: str):
+    return f"{app_name}"
 
 
 class KnowledgeBase:
@@ -37,9 +40,7 @@ class KnowledgeBase:
         self.top_k = top_k
 
         self.db_client = DatabaseFactory.create(backend=backend, config=db_config)
-        self.adapter = get_knowledgebase_adapter(backend)(
-            database_client=self.db_client
-        )
+        self.adapter = get_knowledgebase_database_adapter(self.db_client)
 
         logger.info(
             f"Initialized knowledgebase: db_client={self.db_client} adapter={self.adapter}"
@@ -53,23 +54,18 @@ class KnowledgeBase:
     ):
         """
         Add documents to the vector database.
-        You can only upload files or file characters when the adapter type you use is vikingdb.
+        You can only upload files or file characters when the adapter type used is vikingdb.
         In addition, if you upload data of the bytes type,
             for example, if you read the file stream of a pdf, then you need to pass an additional parameter file_ext = '.pdf'.
         """
-        kwargs.pop("session_id", None)  # remove session_id
-        logger.info(f"Adding documents to knowledgebase: app_name={app_name}")
-        self.adapter.add(data, app_name=app_name, **kwargs)
+        # TODO: add check for data type
+        ...
+
+        index = build_knowledgebase_index(app_name)
+        logger.info(f"Adding documents to knowledgebase: index={index}")
+        self.adapter.add(data=data, index=index)
 
     def search(self, query: str, app_name: str, top_k: int = None) -> list[str]:
-        """Retrieve documents similar to the query text in the vector database.
-
-        Args:
-            query (str): The query text to be retrieved (e.g., "Who proposed the Turing machine model?")
-
-        Returns:
-            list[str]: A list of the top most similar document contents retrieved (sorted by vector similarity)
-        """
         top_k = self.top_k if top_k is None else top_k
 
         logger.info(

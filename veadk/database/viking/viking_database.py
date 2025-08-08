@@ -215,7 +215,12 @@ class VikingDatabase(BaseModel, BaseDatabase):
 
         return doc_id
 
-    def add(self, data: str | list[str] | TextIO | BinaryIO | bytes, **kwargs: Any):
+    def add(
+        self,
+        data: str | list[str] | TextIO | BinaryIO | bytes,
+        collection_name: str,
+        **kwargs,
+    ):
         """
         Args:
             data: str, file path or file stream:  Both file or file.read() are acceptable.
@@ -226,8 +231,6 @@ class VikingDatabase(BaseModel, BaseDatabase):
                 "doc_id": "<doc_id>",
             }
         """
-        collection_name = kwargs.get("collection_name")
-        assert collection_name is not None, "collection_name is required"
 
         status, tos_url = self._upload_to_tos(data=data, **kwargs)
         if status != 200:
