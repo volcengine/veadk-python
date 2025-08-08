@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import re
 import time
 from typing import BinaryIO, TextIO
 
@@ -120,8 +120,19 @@ class VectorDatabaseAdapter(BaseModel):
     client: OpenSearchVectorDatabase
 
     def _validate_index(self, index: str):
-        # TODO
-        pass
+        """
+        Verify whether the string conforms to the naming rules of index_name in OpenSearch.
+        https://docs.opensearch.org/2.8/api-reference/index-apis/create-index/
+        """
+        if not (
+            isinstance(index, str)
+            and not index.startswith(("_", "-"))
+            and index.islower()
+            and re.match(r"^[a-z0-9_\-.]+$", index)
+        ):
+            raise ValueError(
+                "The index name does not conform to the naming rules of OpenSearch"
+            )
 
     def add(self, data: list[str], index: str):
         self._validate_index(index)
@@ -133,9 +144,6 @@ class VectorDatabaseAdapter(BaseModel):
         self.client.add(data, collection_name=index)
 
     def query(self, query: str, index: str, top_k: int) -> list[str]:
-        # FIXME: confirm
-        self._validate_index(index)
-
         logger.debug(
             f"Querying vector database: collection_name={index} query={query} top_k={top_k}"
         )
@@ -153,19 +161,34 @@ class VikingDatabaseAdapter(BaseModel):
     client: VikingDatabase
 
     def _validate_index(self, index: str):
-        # TODO
-        pass
+        """
+        Only English letters, numbers, and underscores (_) are allowed.
+        It must start with an English letter and cannot be empty. Length requirement: [1, 128].
+        For details, please see: https://www.volcengine.com/docs/84313/1254542?lang=zh
+        """
+        if not (
+            isinstance(index, str)
+            and 0 < len(index) <= 128
+            and re.fullmatch(r"^[a-zA-Z][a-zA-Z0-9_]*$", index)
+        ):
+            raise ValueError(
+                "The index name does not conform to the rules: it must start with an English letter, contain only letters, numbers, and underscores, and have a length of 1-128."
+            )
 
     def get_or_create_collection(self, collection_name: str):
         if not self.client.collection_exists(collection_name):
+            logger.warning(
+                f"Collection {collection_name} does not exist, creating a new collection."
+            )
             self.client.create_collection(collection_name)
 
-        # FIXME
+        # After creation, it is necessary to wait for a while.
         count = 0
         while not self.client.collection_exists(collection_name):
+            print("here")
             time.sleep(1)
             count += 1
-            if count > 50:
+            if count > 60:
                 raise TimeoutError(
                     f"Collection {collection_name} not created after 50 seconds"
                 )
@@ -185,9 +208,8 @@ class VikingDatabaseAdapter(BaseModel):
 
         logger.debug(f"Querying Viking database: collection_name={index} query={query}")
 
-        # FIXME(): maybe do not raise, but just return []
         if not self.client.collection_exists(index):
-            raise ValueError(f"Collection {index} does not exist")
+            return []
 
         return self.client.query(query, collection_name=index, top_k=top_k)
 
@@ -198,8 +220,14 @@ class VikingMemoryDatabaseAdapter(BaseModel):
     client: VikingMemoryDatabase
 
     def _validate_index(self, index: str):
-        # TODO
-        pass
+        if not (
+            isinstance(index, str)
+            and 1 <= len(index) <= 128
+            and re.fullmatch(r"^[a-zA-Z][a-zA-Z0-9_]*$", index)
+        ):
+            raise ValueError(
+                "The index name does not conform to the rules: it must start with an English letter, contain only letters, numbers, and underscores, and have a length of 1-128."
+            )
 
     def add(self, data: list[str], index: str, **kwargs):
         self._validate_index(index)
@@ -208,17 +236,16 @@ class VikingMemoryDatabaseAdapter(BaseModel):
             f"Adding documents to Viking database memory: collection_name={index} data_len={len(data)}"
         )
 
-        # TODO: parse user_id
-        self.client.add(data, collection_name=index)
+        self.client.add(data, collection_name=index, **kwargs)
 
-    def query(self, query: str, index: str, top_k: int):
+    def query(self, query: str, index: str, top_k: int, **kwargs):
         self._validate_index(index)
 
         logger.debug(
             f"Querying Viking database memory: collection_name={index} query={query} top_k={top_k}"
         )
 
-        result = self.client.query(query, collection_name=index, top_k=top_k)
+        result = self.client.query(query, collection_name=index, top_k=top_k, **kwargs)
         return result
 
 
@@ -245,8 +272,8 @@ MAPPING = {
 
 
 def get_knowledgebase_database_adapter(database_client: BaseDatabase):
-    return MAPPING[type(database_client)](database_client=database_client)
+    return MAPPING[type(database_client)](client=database_client)
 
 
 def get_long_term_memory_database_adapter(database_client: BaseDatabase):
-    return MAPPING[type(database_client)](database_client=database_client)
+    return MAPPING[type(database_client)](client=database_client)

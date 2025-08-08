@@ -97,7 +97,10 @@ class LongTermMemory(BaseMemoryService):
         )
 
         # check if viking memory database, should give a user id： if/else
-        self.adapter.add(data=event_strings, index=index)
+        if self.backend == "viking_mem":
+            self.adapter.add(data=event_strings, index=index, user_id=session.user_id)
+        else:
+            self.adapter.add(data=event_strings, index=index)
 
         logger.info(
             f"Added {len(event_strings)} events to long term memory: index={index}"
@@ -112,15 +115,14 @@ class LongTermMemory(BaseMemoryService):
         )
 
         # user id if viking memory db
-        memory_chunks = self.adapter.query(query=query, index=index, top_k=self.top_k)
-
-        # if len(memory_chunks) == 0:
-        #     logger.info(f"Found no memory chunks for query: {query} index={index}")
-        #     return SearchMemoryResponse()
-
-        # logger.info(
-        #     f"Found {len(memory_chunks)} memory chunks for query: {query} index={index}"
-        # )
+        if self.backend == "viking_mem":
+            memory_chunks = self.adapter.query(
+                query=query, index=index, top_k=self.top_k, user_id=user_id
+            )
+        else:
+            memory_chunks = self.adapter.query(
+                query=query, index=index, top_k=self.top_k
+            )
 
         memory_events = []
         for memory in memory_chunks:

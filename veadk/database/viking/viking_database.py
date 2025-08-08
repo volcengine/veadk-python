@@ -40,6 +40,7 @@ list_collections_path = "/api/knowledge/collection/list"
 get_collections_path = "/api/knowledge/collection/info"
 doc_add_path = "/api/knowledge/doc/add"
 doc_info_path = "/api/knowledge/doc/info"
+doc_del_path = "/api/collection/drop"
 
 
 class VolcengineTOSConfig(BaseModel):
@@ -246,9 +247,23 @@ class VikingDatabase(BaseModel, BaseDatabase):
         }
 
     def delete(self, **kwargs: Any):
-        # collection_name = kwargs.get("collection_name")
-        # todo: delete vikingdb
-        ...
+        collection_name = kwargs.get("collection_name")
+        resource_id = kwargs.get("resource_id")
+        request_param = {"collection_name": collection_name, "resource_id": resource_id}
+        doc_del_req = prepare_request(
+            method="POST", path=doc_del_path, config=self.config, data=request_param
+        )
+        rsp = requests.request(
+            method=doc_del_req.method,
+            url="http://{}{}".format(g_knowledge_base_domain, doc_del_req.path),
+            headers=doc_del_req.headers,
+            data=doc_del_req.body,
+        )
+        result = rsp.json()
+        if result["code"] != 0:
+            logger.error(f"Error in add_doc: {result['message']}")
+            return {"error": result["message"]}
+        return {}
 
     def query(self, query: str, **kwargs: Any) -> list[str]:
         """

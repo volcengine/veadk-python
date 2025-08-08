@@ -34,7 +34,6 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-# FIXME
 class VikingMemConfig(BaseModel):
     volcengine_ak: Optional[str] = Field(
         default=getenv("VOLCENGINE_ACCESS_KEY"),
@@ -54,8 +53,8 @@ class VikingMemConfig(BaseModel):
     )
 
 
-# ======= adapted from ... =======
-class VikingDBMemoryException(Exception):
+# ======= adapted from https://github.com/volcengine/mcp-server/blob/main/server/mcp_server_vikingdb_memory/src/mcp_server_vikingdb_memory/common/memory_client.py =======
+class VikingMemoryException(Exception):
     def __init__(self, code, request_id, message=None):
         self.code = code
         self.request_id = request_id
@@ -67,15 +66,15 @@ class VikingDBMemoryException(Exception):
         return self.message
 
 
-class VikingDBMemoryService(Service):
+class VikingMemoryService(Service):
     _instance_lock = threading.Lock()
 
     def __new__(cls, *args, **kwargs):
-        if not hasattr(VikingDBMemoryService, "_instance"):
-            with VikingDBMemoryService._instance_lock:
-                if not hasattr(VikingDBMemoryService, "_instance"):
-                    VikingDBMemoryService._instance = object.__new__(cls)
-        return VikingDBMemoryService._instance
+        if not hasattr(VikingMemoryService, "_instance"):
+            with VikingMemoryService._instance_lock:
+                if not hasattr(VikingMemoryService, "_instance"):
+                    VikingMemoryService._instance = object.__new__(cls)
+        return VikingMemoryService._instance
 
     def __init__(
         self,
@@ -88,11 +87,11 @@ class VikingDBMemoryService(Service):
         connection_timeout=30,
         socket_timeout=30,
     ):
-        self.service_info = VikingDBMemoryService.get_service_info(
+        self.service_info = VikingMemoryService.get_service_info(
             host, region, scheme, connection_timeout, socket_timeout
         )
-        self.api_info = VikingDBMemoryService.get_api_info()
-        super(VikingDBMemoryService, self).__init__(self.service_info, self.api_info)
+        self.api_info = VikingMemoryService.get_api_info()
+        super(VikingMemoryService, self).__init__(self.service_info, self.api_info)
         if ak:
             self.set_ak(ak)
         if sk:
@@ -102,12 +101,12 @@ class VikingDBMemoryService(Service):
         try:
             self.get_body("Ping", {}, json.dumps({}))
         except Exception as e:
-            raise VikingDBMemoryException(
+            raise VikingMemoryException(
                 1000028, "missed", "host or region is incorrect: {}".format(str(e))
             ) from None
 
     def setHeader(self, header):
-        api_info = VikingDBMemoryService.get_api_info()
+        api_info = VikingMemoryService.get_api_info()
         for key in api_info:
             for item in header:
                 api_info[key].header[item] = header[item]
@@ -213,17 +212,17 @@ class VikingDBMemoryService(Service):
             try:
                 res_json = json.loads(e.args[0].decode("utf-8"))
             except Exception:
-                raise VikingDBMemoryException(
+                raise VikingMemoryException(
                     1000028, "missed", "json load res error, res:{}".format(str(e))
                 ) from None
             code = res_json.get("code", 1000028)
             request_id = res_json.get("request_id", 1000028)
             message = res_json.get("message", None)
 
-            raise VikingDBMemoryException(code, request_id, message)
+            raise VikingMemoryException(code, request_id, message)
 
         if res == "":
-            raise VikingDBMemoryException(
+            raise VikingMemoryException(
                 1000028,
                 "missed",
                 "empty response due to unknown error, please contact customer service",
@@ -237,15 +236,15 @@ class VikingDBMemoryService(Service):
             try:
                 res_json = json.loads(e.args[0].decode("utf-8"))
             except Exception:
-                raise VikingDBMemoryException(
+                raise VikingMemoryException(
                     1000028, "missed", "json load res error, res:{}".format(str(e))
                 ) from None
             code = res_json.get("code", 1000028)
             request_id = res_json.get("request_id", 1000028)
             message = res_json.get("message", None)
-            raise VikingDBMemoryException(code, request_id, message)
+            raise VikingMemoryException(code, request_id, message)
         if res == "":
-            raise VikingDBMemoryException(
+            raise VikingMemoryException(
                 1000028,
                 "missed",
                 "empty response due to unknown error, please contact customer service",
@@ -365,7 +364,7 @@ def format_milliseconds(timestamp_ms):
     return dt.strftime("%Y%m%d %H:%M:%S")
 
 
-# ======= adapted from ... =======
+# ======= adapted from https://github.com/volcengine/mcp-server/blob/main/server/mcp_server_vikingdb_memory/src/mcp_server_vikingdb_memory/common/memory_client.py =======
 
 
 class VikingMemoryDatabase(BaseModel, BaseDatabase):
@@ -375,7 +374,7 @@ class VikingMemoryDatabase(BaseModel, BaseDatabase):
     )
 
     def model_post_init(self, context: Any, /) -> None:
-        self._vm = VikingDBMemoryService(
+        self._vm = VikingMemoryService(
             ak=self.config.volcengine_ak, sk=self.config.volcengine_sk
         )
 
@@ -516,8 +515,8 @@ class VikingMemoryDatabase(BaseModel, BaseDatabase):
         assert collection_name is not None, "collection_name is required"
         user_id = kwargs.get("user_id")
         assert user_id is not None, "user_id is required"
-
-        resp = self.search_memory(collection_name, query, user_id=user_id)
+        top_k = kwargs.get("top_k", 5)
+        resp = self.search_memory(collection_name, query, user_id=user_id, top_k=top_k)
         return resp
 
     def delete(self, **kwargs: Any):

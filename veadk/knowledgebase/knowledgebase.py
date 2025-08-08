@@ -58,8 +58,12 @@ class KnowledgeBase:
         In addition, if you upload data of the bytes type,
             for example, if you read the file stream of a pdf, then you need to pass an additional parameter file_ext = '.pdf'.
         """
-        # TODO: add check for data type
-        ...
+        if self.backend != "viking" and not (
+            isinstance(data, str) or isinstance(data, list)
+        ):
+            raise ValueError(
+                "Only vikingdb supports uploading files or file characters."
+            )
 
         index = build_knowledgebase_index(app_name)
 
@@ -73,7 +77,8 @@ class KnowledgeBase:
         logger.info(
             f"Searching knowledgebase: app_name={app_name} query={query} top_k={top_k}"
         )
-        result = self.adapter.query(query=query, app_name=app_name, top_k=top_k)
+        index = build_knowledgebase_index(app_name)
+        result = self.adapter.query(query=query, index=index, top_k=top_k)
         if len(result) == 0:
             logger.warning(f"No documents found in knowledgebase. Query: {query}")
         return result
