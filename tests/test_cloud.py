@@ -36,7 +36,6 @@ async def test_cloud():
         with open(os.path.join(temp_dir, "agent.py"), "w") as f:
             f.write(f"# Test agent implementation with {key}")
 
-        # 这里不再需要 patch.dict，因为环境变量已经设置
         # Mock shutil.copy to avoid template file copying issues
         with patch("shutil.copy"):
             with patch("veadk.cloud.cloud_agent_engine.VeFaaS") as mock_vefaas_class:
