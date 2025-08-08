@@ -134,7 +134,7 @@ updated_cloud_app = engine.update_function_code(
     path="/my-agent-project"        # 本地项目路径
 )
 
-print(f"应用已更新，访问地址：{updated_cloud_app.vefaas_endpoint}")
+# 可以使用updated_cloud_app.vefaas_endpoint访问您的项目
 ```
 
 **注意事项：**
@@ -152,7 +152,7 @@ from veadk.cloud.cloud_agent_engine import CloudAgentEngine
 engine = CloudAgentEngine()
 
 # 删除指定的云应用
-engine.remove("my-agent-app")
+engine.remove(app_name="my-agent-app")
 ```
 
 执行时会提示确认：
