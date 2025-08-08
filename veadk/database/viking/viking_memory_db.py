@@ -34,6 +34,7 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+# FIXME
 class VikingMemConfig(BaseModel):
     volcengine_ak: Optional[str] = Field(
         default=getenv("VOLCENGINE_ACCESS_KEY"),
@@ -53,6 +54,7 @@ class VikingMemConfig(BaseModel):
     )
 
 
+# ======= adapted from ... =======
 class VikingDBMemoryException(Exception):
     def __init__(self, code, request_id, message=None):
         self.code = code
@@ -363,7 +365,10 @@ def format_milliseconds(timestamp_ms):
     return dt.strftime("%Y%m%d %H:%M:%S")
 
 
-class VikingDatabaseMemory(BaseModel, BaseDatabase):
+# ======= adapted from ... =======
+
+
+class VikingMemoryDatabase(BaseModel, BaseDatabase):
     config: VikingMemConfig = Field(
         default_factory=VikingMemConfig,
         description="VikingDB configuration",

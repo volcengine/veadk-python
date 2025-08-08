@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 
 
 def build_knowledgebase_index(app_name: str):
-    return f"{app_name}"
+    return f"veadk_kb_{app_name}"
 
 
 class KnowledgeBase:
@@ -62,7 +62,9 @@ class KnowledgeBase:
         ...
 
         index = build_knowledgebase_index(app_name)
+
         logger.info(f"Adding documents to knowledgebase: index={index}")
+
         self.adapter.add(data=data, index=index)
 
     def search(self, query: str, app_name: str, top_k: int = None) -> list[str]:
@@ -75,12 +77,3 @@ class KnowledgeBase:
         if len(result) == 0:
             logger.warning(f"No documents found in knowledgebase. Query: {query}")
         return result
-
-    def delete(self, app_name: str, user_id: str, session_id: str):
-        """Delete documents in the vector database.
-        Args:
-            app_name (str): The name of the application
-            user_id (str): The user ID
-            session_id (str): The session ID
-        """
-        self.adapter.delete(app_name=app_name, user_id=user_id, session_id=session_id)

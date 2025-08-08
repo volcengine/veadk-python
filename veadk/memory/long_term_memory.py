@@ -74,12 +74,13 @@ class LongTermMemory(BaseMemoryService):
             if not event.author == "user":
                 continue
 
-            # filter: discard function call and function_response
+            # filter: discard function call and function response
             if not event.content.parts[0].text:
                 continue
 
             # convert: to string-format for storage
             message = event.content.model_dump(exclude_none=True, mode="json")
+
             final_events.append(json.dumps(message))
         return final_events
 
@@ -95,6 +96,7 @@ class LongTermMemory(BaseMemoryService):
             f"Adding {len(event_strings)} events to long term memory: index={index}"
         )
 
+        # check if viking memory database, should give a user id： if/else
         self.adapter.add(data=event_strings, index=index)
 
         logger.info(
@@ -109,6 +111,7 @@ class LongTermMemory(BaseMemoryService):
             f"Searching long term memory: query={query} index={index} top_k={self.top_k}"
         )
 
+        # user id if viking memory db
         memory_chunks = self.adapter.query(query=query, index=index, top_k=self.top_k)
 
         # if len(memory_chunks) == 0:

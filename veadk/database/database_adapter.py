@@ -23,7 +23,7 @@ from veadk.database.local_database import LocalDataBase
 from veadk.database.relational.mysql_database import MysqlDatabase
 from veadk.database.vector.opensearch_vector_database import OpenSearchVectorDatabase
 from veadk.database.viking.viking_database import VikingDatabase
-from veadk.database.viking.viking_memory_db import VikingDatabaseMemory
+from veadk.database.viking.viking_memory_db import VikingMemoryDatabase
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -39,7 +39,7 @@ class KVDatabaseAdapter(BaseModel):
 
         try:
             for _data in data:
-                self.client.add(key=index, data=_data)
+                self.client.add(key=index, value=_data)
             logger.debug(f"Added {len(data)} texts to Redis database: index={index}")
         except Exception as e:
             logger.error(
@@ -84,7 +84,7 @@ class RelationalDatabaseAdapter(BaseModel):
         )
 
         if not self.client.table_exists(index):
-            logger.warning(f"Table {index} does not exist, creating...")
+            logger.warning(f"Table {index} does not exist, creating a new table.")
             self.create_table(index)
 
         for _data in data:
@@ -133,6 +133,7 @@ class VectorDatabaseAdapter(BaseModel):
         self.client.add(data, collection_name=index)
 
     def query(self, query: str, index: str, top_k: int) -> list[str]:
+        # FIXME: confirm
         self._validate_index(index)
 
         logger.debug(
@@ -159,6 +160,7 @@ class VikingDatabaseAdapter(BaseModel):
         if not self.client.collection_exists(collection_name):
             self.client.create_collection(collection_name)
 
+        # FIXME
         count = 0
         while not self.client.collection_exists(collection_name):
             time.sleep(1)
@@ -174,6 +176,7 @@ class VikingDatabaseAdapter(BaseModel):
         self._validate_index(index)
 
         logger.debug(f"Adding documents to Viking database: collection_name={index}")
+
         self.get_or_create_collection(index)
         self.client.add(data, collection_name=index, **kwargs)
 
@@ -189,22 +192,23 @@ class VikingDatabaseAdapter(BaseModel):
         return self.client.query(query, collection_name=index, top_k=top_k)
 
 
-class VikingDatabaseMemoryAdapter(BaseModel):
+class VikingMemoryDatabaseAdapter(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    client: VikingDatabaseMemory
+    client: VikingMemoryDatabase
 
     def _validate_index(self, index: str):
         # TODO
         pass
 
-    def add(self, data: list[str], index: str):
+    def add(self, data: list[str], index: str, **kwargs):
         self._validate_index(index)
 
         logger.debug(
             f"Adding documents to Viking database memory: collection_name={index} data_len={len(data)}"
         )
 
+        # TODO: parse user_id
         self.client.add(data, collection_name=index)
 
     def query(self, query: str, index: str, top_k: int):
@@ -236,7 +240,7 @@ MAPPING = {
     LocalDataBase: LocalDatabaseAdapter,
     VikingDatabase: VikingDatabaseAdapter,
     OpenSearchVectorDatabase: VectorDatabaseAdapter,
-    VikingDatabaseMemory: VikingDatabaseMemoryAdapter,
+    VikingMemoryDatabase: VikingMemoryDatabaseAdapter,
 }
 
 
