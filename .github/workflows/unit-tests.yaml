@@ -49,7 +49,7 @@ jobs:
       run: |
         uv venv .venv
         source .venv/bin/activate
-        uv sync
+        uv sync --all-extras
         uv pip install -e .
 
     - name: Run unit tests with pytest
