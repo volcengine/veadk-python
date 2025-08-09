@@ -14,28 +14,36 @@
 
 from typing import BinaryIO, Literal, TextIO
 
+from veadk.database.database_adapter import get_knowledgebase_database_adapter
 from veadk.database.database_factory import DatabaseFactory
 from veadk.utils.logger import get_logger
 
-from .knowledgebase_database_adapter import get_knowledgebase_adapter
-
 logger = get_logger(__name__)
+
+
+def build_knowledgebase_index(app_name: str):
+    return f"veadk_kb_{app_name}"
 
 
 class KnowledgeBase:
     def __init__(
         self,
         backend: Literal["local", "opensearch", "viking", "redis", "mysql"] = "local",
-        top_k: int = 5,
+        top_k: int = 10,
         db_config=None,
     ):
-        logger.debug(f"Create knowledgebase, backend is {backend}")
+        logger.info(
+            f"Initializing knowledgebase: backend={backend} top_k={top_k} db_config={db_config}"
+        )
+
         self.backend = backend
         self.top_k = top_k
 
         self.db_client = DatabaseFactory.create(backend=backend, config=db_config)
-        self.adapter = get_knowledgebase_adapter(backend)(
-            database_client=self.db_client
+        self.adapter = get_knowledgebase_database_adapter(self.db_client)
+
+        logger.info(
+            f"Initialized knowledgebase: db_client={self.db_client} adapter={self.adapter}"
         )
 
     def add(
@@ -46,38 +54,31 @@ class KnowledgeBase:
     ):
         """
         Add documents to the vector database.
-        You can only upload files or file characters when the adapter type you use is vikingdb.
+        You can only upload files or file characters when the adapter type used is vikingdb.
         In addition, if you upload data of the bytes type,
             for example, if you read the file stream of a pdf, then you need to pass an additional parameter file_ext = '.pdf'.
         """
-        kwargs.pop("session_id", None)  # remove session_id
-        self.adapter.add(
-            data, app_name, user_id="user_id", session_id="session_id", **kwargs
-        )
+        if self.backend != "viking" and not (
+            isinstance(data, str) or isinstance(data, list)
+        ):
+            raise ValueError(
+                "Only vikingdb supports uploading files or file characters."
+            )
+
+        index = build_knowledgebase_index(app_name)
+
+        logger.info(f"Adding documents to knowledgebase: index={index}")
+
+        self.adapter.add(data=data, index=index)
 
     def search(self, query: str, app_name: str, top_k: int = None) -> list[str]:
-        """Retrieve documents similar to the query text in the vector database.
-
-        Args:
-            query (str): The query text to be retrieved (e.g., "Who proposed the Turing machine model?")
-
-        Returns:
-            list[str]: A list of the top most similar document contents retrieved (sorted by vector similarity)
-        """
         top_k = self.top_k if top_k is None else top_k
 
-        result = self.adapter.query(
-            query=query, app_name=app_name, user_id="user_id", top_k=top_k
+        logger.info(
+            f"Searching knowledgebase: app_name={app_name} query={query} top_k={top_k}"
         )
+        index = build_knowledgebase_index(app_name)
+        result = self.adapter.query(query=query, index=index, top_k=top_k)
         if len(result) == 0:
             logger.warning(f"No documents found in knowledgebase. Query: {query}")
         return result
-
-    def delete(self, app_name: str, user_id: str, session_id: str):
-        """Delete documents in the vector database.
-        Args:
-            app_name (str): The name of the application
-            user_id (str): The user ID
-            session_id (str): The session ID
-        """
-        self.adapter.delete(app_name=app_name, user_id=user_id, session_id=session_id)

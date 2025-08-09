@@ -69,12 +69,12 @@ class DatabaseFactory:
             return VikingDatabase() if config is None else VikingDatabase(config=config)
 
         if backend == DatabaseBackend.VIKING_MEM:
-            from .viking.viking_memory_db import VikingDatabaseMemory
+            from .viking.viking_memory_db import VikingMemoryDatabase
 
             return (
-                VikingDatabaseMemory()
+                VikingMemoryDatabase()
                 if config is None
-                else VikingDatabaseMemory(config=config)
+                else VikingMemoryDatabase(config=config)
             )
         else:
             raise ValueError(f"Unsupported database type: {backend}")

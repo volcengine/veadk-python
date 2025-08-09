@@ -16,6 +16,7 @@
 import json
 from typing import Literal
 
+from google.adk.events.event import Event
 from google.adk.memory.base_memory_service import (
     BaseMemoryService,
     SearchMemoryResponse,
@@ -25,13 +26,15 @@ from google.adk.sessions import Session
 from google.genai import types
 from typing_extensions import override
 
-from veadk.config import getenv
 from veadk.database import DatabaseFactory
+from veadk.database.database_adapter import get_long_term_memory_database_adapter
 from veadk.utils.logger import get_logger
 
-from .memory_database_adapter import get_memory_adapter
-
 logger = get_logger(__name__)
+
+
+def build_long_term_memory_index(app_name: str, user_id: str):
+    return f"{app_name}_{user_id}"
 
 
 class LongTermMemory(BaseMemoryService):
@@ -40,52 +43,86 @@ class LongTermMemory(BaseMemoryService):
         backend: Literal[
             "local", "opensearch", "redis", "mysql", "viking"
         ] = "opensearch",
-        top_k: int = getenv("LONGTERM_MEMORY_TOP_K", 3),
+        top_k: int = 5,
     ):
         if backend == "viking":
             backend = "viking_mem"
         self.top_k = top_k
         self.backend = backend
 
+        logger.info(
+            f"Initializing long term memory: backend={self.backend} top_k={self.top_k}"
+        )
+
         self.db_client = DatabaseFactory.create(
             backend=backend,
         )
-        logger.info(f"Long term memory backend is `{backend}`.")
+        self.adapter = get_long_term_memory_database_adapter(self.db_client)
 
-        self.adapter = get_memory_adapter(backend)(database_client=self.db_client)
+        logger.info(
+            f"Initialized long term memory: db_client={self.db_client} adapter={self.adapter}"
+        )
+
+    def _filter_and_convert_events(self, events: list[Event]) -> list[str]:
+        final_events = []
+        for event in events:
+            # filter: bad event
+            if not event.content or not event.content.parts:
+                continue
+
+            # filter: only add user event to memory to enhance retrieve performance
+            if not event.author == "user":
+                continue
+
+            # filter: discard function call and function response
+            if not event.content.parts[0].text:
+                continue
+
+            # convert: to string-format for storage
+            message = event.content.model_dump(exclude_none=True, mode="json")
+
+            final_events.append(json.dumps(message))
+        return final_events
 
     @override
     async def add_session_to_memory(
         self,
         session: Session,
     ):
-        event_list = []
-        for event in session.events:
-            if not event.content or not event.content.parts:
-                continue
+        event_strings = self._filter_and_convert_events(session.events)
+        index = build_long_term_memory_index(session.app_name, session.user_id)
 
-            message = event.content.model_dump(exclude_none=True, mode="json")
-            if (
-                "text" not in message["parts"][0]
-            ):  # remove function_call & function_resp
-                continue
-            event_list.append(json.dumps(message))
-        self.adapter.add(
-            event_list,
-            app_name=session.app_name,
-            user_id=session.user_id,
-            session_id=session.id,
+        logger.info(
+            f"Adding {len(event_strings)} events to long term memory: index={index}"
+        )
+
+        # check if viking memory database, should give a user id： if/else
+        if self.backend == "viking_mem":
+            self.adapter.add(data=event_strings, index=index, user_id=session.user_id)
+        else:
+            self.adapter.add(data=event_strings, index=index)
+
+        logger.info(
+            f"Added {len(event_strings)} events to long term memory: index={index}"
         )
 
     @override
     async def search_memory(self, *, app_name: str, user_id: str, query: str):
-        memory_chunks = self.adapter.query(
-            query=query,
-            app_name=app_name,
-            user_id=user_id,
+        index = build_long_term_memory_index(app_name, user_id)
+
+        logger.info(
+            f"Searching long term memory: query={query} index={index} top_k={self.top_k}"
         )
-        if len(memory_chunks) == 0:
-            return SearchMemoryResponse()
+
+        # user id if viking memory db
+        if self.backend == "viking_mem":
+            memory_chunks = self.adapter.query(
+                query=query, index=index, top_k=self.top_k, user_id=user_id
+            )
+        else:
+            memory_chunks = self.adapter.query(
+                query=query, index=index, top_k=self.top_k
+            )
 
         memory_events = []
         for memory in memory_chunks:
@@ -94,26 +131,25 @@ class LongTermMemory(BaseMemoryService):
                 try:
                     text = memory_dict["parts"][0]["text"]
                     role = memory_dict["role"]
-                except KeyError as e:
-                    logger.error(
-                        f"Memory content: {memory_dict}. Error parsing memory: {e}"
+                except KeyError as _:
+                    # prevent not a standard text-based event
+                    logger.warning(
+                        f"Memory content: {memory_dict}. Skip return this memory."
                     )
                     continue
             except json.JSONDecodeError:
+                # prevent the memory string is not dumped by `Event` class
                 text = memory
                 role = "user"
+
             memory_events.append(
                 MemoryEntry(
                     author="user",
                     content=types.Content(parts=[types.Part(text=text)], role=role),
                 )
             )
-        return SearchMemoryResponse(memories=memory_events)
 
-    @override
-    async def delete_memory(self, *, app_name: str, user_id: str):
-        self.adapter.delete(
-            app_name=app_name,
-            user_id=user_id,
-            session_id="",  # session_id is not used in the adapter delete method
+        logger.info(
+            f"Return {len(memory_events)} memory events for query: {query} index={index}"
         )
+        return SearchMemoryResponse(memories=memory_events)

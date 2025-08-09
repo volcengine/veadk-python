@@ -40,6 +40,7 @@ list_collections_path = "/api/knowledge/collection/list"
 get_collections_path = "/api/knowledge/collection/info"
 doc_add_path = "/api/knowledge/doc/add"
 doc_info_path = "/api/knowledge/doc/info"
+doc_del_path = "/api/collection/drop"
 
 
 class VolcengineTOSConfig(BaseModel):
@@ -215,7 +216,12 @@ class VikingDatabase(BaseModel, BaseDatabase):
 
         return doc_id
 
-    def add(self, data: str | list[str] | TextIO | BinaryIO | bytes, **kwargs: Any):
+    def add(
+        self,
+        data: str | list[str] | TextIO | BinaryIO | bytes,
+        collection_name: str,
+        **kwargs,
+    ):
         """
         Args:
             data: str, file path or file stream:  Both file or file.read() are acceptable.
@@ -226,8 +232,6 @@ class VikingDatabase(BaseModel, BaseDatabase):
                 "doc_id": "<doc_id>",
             }
         """
-        collection_name = kwargs.get("collection_name")
-        assert collection_name is not None, "collection_name is required"
 
         status, tos_url = self._upload_to_tos(data=data, **kwargs)
         if status != 200:
@@ -243,9 +247,23 @@ class VikingDatabase(BaseModel, BaseDatabase):
         }
 
     def delete(self, **kwargs: Any):
-        # collection_name = kwargs.get("collection_name")
-        # todo: delete vikingdb
-        ...
+        collection_name = kwargs.get("collection_name")
+        resource_id = kwargs.get("resource_id")
+        request_param = {"collection_name": collection_name, "resource_id": resource_id}
+        doc_del_req = prepare_request(
+            method="POST", path=doc_del_path, config=self.config, data=request_param
+        )
+        rsp = requests.request(
+            method=doc_del_req.method,
+            url="http://{}{}".format(g_knowledge_base_domain, doc_del_req.path),
+            headers=doc_del_req.headers,
+            data=doc_del_req.body,
+        )
+        result = rsp.json()
+        if result["code"] != 0:
+            logger.error(f"Error in add_doc: {result['message']}")
+            return {"error": result["message"]}
+        return {}
 
     def query(self, query: str, **kwargs: Any) -> list[str]:
         """

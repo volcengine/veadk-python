@@ -33,5 +33,3 @@ async def test_knowledgebase():
     )
     res = "".join(res_list)
     assert key in res, f"Test failed for backend local res is {res}"
-    assert key in res, f"Test failed for backend local res is {res}"
-    assert key in res, f"Test failed for backend local res is {res}"
