@@ -14,25 +14,18 @@
 import re
 import time
 from typing import BinaryIO, TextIO
-
-from pydantic import BaseModel, ConfigDict
-
 from veadk.database.base_database import BaseDatabase
-from veadk.database.kv.redis_database import RedisDatabase
-from veadk.database.local_database import LocalDataBase
-from veadk.database.relational.mysql_database import MysqlDatabase
-from veadk.database.vector.opensearch_vector_database import OpenSearchVectorDatabase
-from veadk.database.viking.viking_database import VikingDatabase
-from veadk.database.viking.viking_memory_db import VikingMemoryDatabase
+
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-class KVDatabaseAdapter(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+class KVDatabaseAdapter:
+    def __init__(self, client):
+        from veadk.database.kv.redis_database import RedisDatabase
 
-    client: RedisDatabase
+        self.client: RedisDatabase = client
 
     def add(self, data: list[str], index: str):
         logger.debug(f"Adding documents to Redis database: index={index}")
@@ -61,10 +54,11 @@ class KVDatabaseAdapter(BaseModel):
             raise e
 
 
-class RelationalDatabaseAdapter(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+class RelationalDatabaseAdapter:
+    def __init__(self, client):
+        from veadk.database.relational.mysql_database import MysqlDatabase
 
-    client: MysqlDatabase
+        self.client: MysqlDatabase = client
 
     def create_table(self, table_name: str):
         logger.debug(f"Creating table for SQL database: table_name={table_name}")
@@ -114,10 +108,13 @@ class RelationalDatabaseAdapter(BaseModel):
         return [item["data"] for item in results]
 
 
-class VectorDatabaseAdapter(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+class VectorDatabaseAdapter:
+    def __init__(self, client):
+        from veadk.database.vector.opensearch_vector_database import (
+            OpenSearchVectorDatabase,
+        )
 
-    client: OpenSearchVectorDatabase
+        self.client: OpenSearchVectorDatabase = client
 
     def _validate_index(self, index: str):
         """
@@ -155,10 +152,11 @@ class VectorDatabaseAdapter(BaseModel):
         )
 
 
-class VikingDatabaseAdapter(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+class VikingDatabaseAdapter:
+    def __init__(self, client):
+        from veadk.database.viking.viking_database import VikingDatabase
 
-    client: VikingDatabase
+        self.client: VikingDatabase = client
 
     def _validate_index(self, index: str):
         """
@@ -214,10 +212,11 @@ class VikingDatabaseAdapter(BaseModel):
         return self.client.query(query, collection_name=index, top_k=top_k)
 
 
-class VikingMemoryDatabaseAdapter(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+class VikingMemoryDatabaseAdapter:
+    def __init__(self, client):
+        from veadk.database.viking.viking_memory_db import VikingMemoryDatabase
 
-    client: VikingMemoryDatabase
+        self.client: VikingMemoryDatabase = client
 
     def _validate_index(self, index: str):
         if not (
@@ -249,10 +248,11 @@ class VikingMemoryDatabaseAdapter(BaseModel):
         return result
 
 
-class LocalDatabaseAdapter(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+class LocalDatabaseAdapter:
+    def __init__(self, client):
+        from veadk.database.local_database import LocalDataBase
 
-    client: LocalDataBase
+        self.client: LocalDataBase = client
 
     def add(self, data: list[str], **kwargs):
         self.client.add(data)
@@ -262,18 +262,18 @@ class LocalDatabaseAdapter(BaseModel):
 
 
 MAPPING = {
-    RedisDatabase: KVDatabaseAdapter,
-    MysqlDatabase: RelationalDatabaseAdapter,
-    LocalDataBase: LocalDatabaseAdapter,
-    VikingDatabase: VikingDatabaseAdapter,
-    OpenSearchVectorDatabase: VectorDatabaseAdapter,
-    VikingMemoryDatabase: VikingMemoryDatabaseAdapter,
+    "RedisDatabase": KVDatabaseAdapter,
+    "MysqlDatabase": RelationalDatabaseAdapter,
+    "LocalDataBase": LocalDatabaseAdapter,
+    "VikingDatabase": VikingDatabaseAdapter,
+    "OpenSearchVectorDatabase": VectorDatabaseAdapter,
+    "VikingMemoryDatabase": VikingMemoryDatabaseAdapter,
 }
 
 
 def get_knowledgebase_database_adapter(database_client: BaseDatabase):
-    return MAPPING[type(database_client)](client=database_client)
+    return MAPPING[type(database_client).__name__](client=database_client)
 
 
 def get_long_term_memory_database_adapter(database_client: BaseDatabase):
-    return MAPPING[type(database_client)](client=database_client)
+    return MAPPING[type(database_client).__name__](client=database_client)
