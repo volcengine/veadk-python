@@ -49,7 +49,7 @@ async def test_long_term_memory():
         events=[
             Event(
                 invocation_id="test_invocation_id",
-                author=agent.name,
+                author="user",
                 branch=None,
                 content=types.Content(
                     parts=[types.Part(text="My name is Alice.")],
