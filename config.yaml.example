@@ -41,7 +41,7 @@ tool:
     url: #mcp sse url
     dataset_id:  #dataset name
   mcp_router:
-    url: #mcp sse url
+    url: #mcp sse/streamable-http url
 
 
 observability:
