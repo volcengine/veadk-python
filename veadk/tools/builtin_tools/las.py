@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset, SseConnectionParams
+from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
 
 from veadk.config import getenv
+from veadk.utils.mcp_utils import get_mcp_params
 
 url = getenv("TOOL_LAS_URL")
 dataset_id = getenv("TOOL_LAS_DATASET_ID")
 
 
-las = MCPToolset(connection_params=SseConnectionParams(url=url))
+las = MCPToolset(connection_params=get_mcp_params(url=url))
