@@ -16,6 +16,6 @@ from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset, SseConnectionParam
 
 from veadk.config import getenv
 
-url = getenv("TOOL_MCP_Router_URL")
+url = getenv("TOOL_MCP_ROUTER_URL")
 
 mcp_router = MCPToolset(connection_params=SseConnectionParams(url=url))
