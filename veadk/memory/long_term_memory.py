@@ -81,7 +81,7 @@ class LongTermMemory(BaseMemoryService):
             # convert: to string-format for storage
             message = event.content.model_dump(exclude_none=True, mode="json")
 
-            final_events.append(json.dumps(message))
+            final_events.append(json.dumps(message, ensure_ascii=False))
         return final_events
 
     @override
