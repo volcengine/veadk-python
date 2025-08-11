@@ -201,19 +201,19 @@ class OpenSearchVectorDatabase(BaseModel, BaseDatabase):
             raise ValueError(f"Collection {collection_name} does not exist.")
         self._opensearch_client.indices.delete(index=collection_name)
 
-    def is_empty(self, collection_name: str):
+    def is_empty(self, collection_name: str) -> bool:
         response = self._opensearch_client.count(index=collection_name)
         return response["count"] == 0
 
-    def collection_exists(self, collection_name: str):
+    def collection_exists(self, collection_name: str) -> bool:
         return self._opensearch_client.indices.exists(index=collection_name)
 
-    def list_all_collection(self):
+    def list_all_collection(self) -> list:
         """List all index name of OpenSearch."""
         response = self._opensearch_client.indices.get_alias()
         return list(response.keys())
 
-    def get_all_docs(self, collection_name: str, size: int = 10000):
+    def get_all_docs(self, collection_name: str, size: int = 10000) -> list[dict]:
         """Match all docs in one index of OpenSearch"""
         if not self.collection_exists(collection_name):
             logger.warning(
@@ -223,7 +223,13 @@ class OpenSearchVectorDatabase(BaseModel, BaseDatabase):
 
         query = {"size": size, "query": {"match_all": {}}}
         response = self._opensearch_client.search(index=collection_name, body=query)
-        return [hit["_source"]["page_content"] for hit in response["hits"]["hits"]]
+        return [
+            {
+                "id": hit["_id"],
+                "page_content": hit["_source"]["page_content"],
+            }
+            for hit in response["hits"]["hits"]
+        ]
 
     def delete_by_query(self, collection_name: str, query: str):
         """Delete docs by query in one index of OpenSearch"""
@@ -234,5 +240,14 @@ class OpenSearchVectorDatabase(BaseModel, BaseDatabase):
         response = self._opensearch_client.delete_by_query(
             index=collection_name, body=query
         )
+        self._opensearch_client.indices.refresh(index=collection_name)
+        return response
+
+    def delete_by_id(self, collection_name: str, id: str):
+        """Delete docs by id in index of OpenSearch"""
+        if not self.collection_exists(collection_name):
+            raise ValueError(f"Collection {collection_name} does not exist.")
+
+        response = self._opensearch_client.delete(index=collection_name, id=id)
         self._opensearch_client.indices.refresh(index=collection_name)
         return response
