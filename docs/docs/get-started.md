@@ -2,7 +2,22 @@
 
 ## 安装 VeADK
 
-参考[安装](./installation.md)文档进行配置，并将`config.yaml`配置文件放在项目根目录。
+您可参考[安装](./installation.md)文档进行安装。
+
+## 配置项
+
+您需要创建一个`config.yaml`配置文件放在项目根目录。为了运行一个最简 Agent，您只需要在文件中配置写入如下内容：
+
+```yaml
+model:
+  agent:
+    provider: openai
+    name: doubao-seed-1-6-250615
+    api_base: https://ark.cn-beijing.volces.com/api/v3/
+    api_key: # <-- 在此处填充模型访问的密钥（例如火山方舟的 API KEY）
+```
+
+完整的配置项，可参考[这里](https://volcengine.github.io/veadk-python/installation.html#%E9%85%8D%E7%BD%AE)。
 
 ## 构建 Agent
 

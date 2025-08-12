@@ -6,6 +6,30 @@
 
 VeADK 相较于现有的智能体开发框架，具备与火山引擎产品体系深度融合的优势，帮助开发者更高效地构建企业级 AI 智能体应用。
 
+VeADK 各组件与火山引擎相关产品的结合矩阵：
+
+| **组件** | **火山引擎产品** | **说明** |
+| :-- | :-- | :-- |
+| 大模型 | [火山方舟](https://www.volcengine.com/product/ark) | 提供各类语言模型、多模态模型的推理服务 |
+| 提示词工程 | [PromptPilot](https://promptpilot.volcengine.com/) | 提供提示词管理、优化能力 |
+| 工具 | [火山方舟大模型生态广场](https://www.volcengine.com/mcp-marketplace) | 提供各类 MCP Server |
+| | [Web search](https://www.volcengine.com/docs/85508/1650263) | 提供公域数据搜索功能 |
+| | [VeSearch](https://www.volcengine.com/docs/85508/1512748) | 提供信息搜索与云端自动整合功能 |
+| | [Web Scraper](https://www.volcengine.com/docs/84296/1545470) | 定制化内容查询（邀测） |
+| | 飞书 Lark | 进行飞书相关操作 |
+| | [AI 数据湖服务 LAS](https://www.volcengine.com/product/las) | 提供数据湖内的海量数据存储与查询能力 |
+| 短期记忆 | Viking Memory 记忆库 | 提供记忆存储、优化、摘要等功能 |
+| | [火山引擎云数据库 MySQL 版](https://www.volcengine.com/product/rds-mysql) | 记忆存储 |
+| 长期记忆 | [Viking DB](https://www.volcengine.com/docs/84313/1254437) | 记忆向量化存储和检索 |
+| | [云搜索服务](https://www.volcengine.com/product/es)（OpenSearch） | 记忆向量化存储和检索 |
+| 知识库 | [Viking DB](https://www.volcengine.com/docs/84313/1254437) | 知识向量化存储和检索 |
+| | [云搜索服务](https://www.volcengine.com/product/es)（OpenSearch） | 知识向量化存储和检索 |
+| 可观测 | [应用性能监控全链路版](https://www.volcengine.com/product/apmplus)（APMPlus） | 调用链路观测 |
+| |  [扣子罗盘](https://www.coze.cn/loop) （Coze Loop） | 调用链路观测 |
+| | [日志服务](https://www.volcengine.com/product/tls) | 调用链路观测、日志存储与检索 |
+| 评测 | [扣子罗盘](https://www.coze.cn/loop) （Coze Loop） | 在线评测 |
+| 云部署 | [火山引擎函数服务](https://www.volcengine.com/product/vefaas) （VeFaaS） | 提供一键上云能力 |
+
 ## VeADK 核心优势
 
 ### 更快速的企业级部署
