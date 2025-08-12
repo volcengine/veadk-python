@@ -82,12 +82,12 @@ class BaseEvaluator:
         self.result_list: list[EvalResultData] = []
         self.agent_information_list: list[dict] = []
 
-    def load_eval_set(self, eval_set_file: str) -> EvalSet:
+    def _load_eval_set(self, eval_set_file: str) -> EvalSet:
         from .eval_set_file_loader import load_eval_set_from_file
 
         return load_eval_set_from_file(eval_set_file)
 
-    def load_eval_set_from_tracing(self, tracing_file: str) -> EvalSet:
+    def _load_eval_set_from_tracing(self, tracing_file: str) -> EvalSet:
         try:
             with open(tracing_file, "r") as f:
                 tracing_data = json.load(f)
@@ -201,7 +201,7 @@ class BaseEvaluator:
             raise ValueError(f"Error reading file {file_path}: {e}")
 
         if isinstance(file_content, dict) and "eval_cases" in file_content:
-            eval_cases = self.load_eval_set(file_path).eval_cases
+            eval_cases = self._load_eval_set(file_path).eval_cases
         elif (
             isinstance(file_content, list)
             and len(file_content) > 0
@@ -209,7 +209,7 @@ class BaseEvaluator:
                 isinstance(span, dict) and "trace_id" in span for span in file_content
             )
         ):
-            eval_cases = self.load_eval_set_from_tracing(file_path).eval_cases
+            eval_cases = self._load_eval_set_from_tracing(file_path).eval_cases
         else:
             raise ValueError(
                 f"Unsupported file format in {file_path}. Please provide a valid file."
