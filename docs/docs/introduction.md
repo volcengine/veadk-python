@@ -2,15 +2,16 @@
 
 ## 关于VeADK
 
-**VeADK（Volcengine Agent Development Kit）** 是由火山引擎推出的一套面向智能体（Agent）开发的全流程框架，旨在为开发者提供一套面向智能体构建、云端部署、评测与优化的全流程开发框架。
+**VeADK（Volcengine Agent Development Kit）** 是由[火山引擎](https://www.volcengine.com/)推出的一套面向智能体（Agent）开发的全流程框架，旨在为开发者提供一套面向智能体构建、云端部署、评测与优化的全流程开发框架。
 
 VeADK 相较于现有的智能体开发框架，具备与火山引擎产品体系深度融合的优势，帮助开发者更高效地构建企业级 AI 智能体应用。
 
 ## VeADK 核心优势
+
 ### 更快速的企业级部署
 
 - 通过云部署项目模板支持 CloudEngine 的一键部署和发布能力
-- 支持 veFaaS 与 APIG，实现高可用、高弹性的服务托管
+- 支持 [VeFaaS](https://www.volcengine.com/product/vefaas) 与[火山引擎APIG](https://www.volcengine.com/product/apig)，实现高可用、高弹性的服务托管
 - 提供简易的 CLI 工具与编程化发布
 
 ### 更安全的企业级部署
@@ -20,13 +21,13 @@ VeADK 相较于现有的智能体开发框架，具备与火山引擎产品体�
 
 ### 更完备的可观测性和评估能力
 
-- 运行时数据无缝衔接 APMPlus、Cozeloop, TLS 等云观测平台，提供可视化监控
+- 运行时数据无缝衔接 [APMPlus](https://www.volcengine.com/product/apmplus)、[CozeLoop](https://www.coze.cn/loop), [TLS](https://www.volcengine.com/product/tls) 等云观测平台，提供可视化监控
 - 运行时数据直接落地为测试数据集文件， 支持离线和在线的评估能力
 
 ### 更丰富的内置工具
 
 - 内置头条、抖音搜索工具，实现实时信息获取与内容聚合
-- 集成飞书 Lark（协同办公）、LAS（AI 数据湖服务）等工具，增强 Agent 实用性
+- 集成飞书 Lark（协同办公）、[LAS（AI 数据湖服务）](https://www.volcengine.com/product/las)等工具，增强 Agent 实用性
 
 ### 更灵活的功能扩展
 
@@ -34,8 +35,8 @@ VeADK 相较于现有的智能体开发框架，具备与火山引擎产品体�
 
 ### 更强大的知识管理
 
-- 支持连接火山引擎各类现有数据库，包括关系型数据库、键值数据库等
-- 集成 Viking DB 等火山引擎云知识库，实现知识的高效存储、检索与更新
+- 支持连接火山引擎各类现有数据库，包括[关系型数据库](https://www.volcengine.com/product/rds-mysql)、[缓存数据库](https://www.volcengine.com/product/redis)等
+- 集成 [Viking DB](https://www.volcengine.com/docs/84313/1254437) 等火山引擎云知识库，实现知识的高效存储、检索与更新
 
 ### 更友好的最佳实践
 

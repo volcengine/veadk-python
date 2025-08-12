@@ -4,9 +4,17 @@
 
 ## 环境
 
+### PyPI
+
+您可以直接使用`pip`从 [PyPI 平台](https://pypi.org/project/veadk-python/)进行安装：
+
+```bash
+pip install veadk-python
+```
+
 ### 从源码构建
 
-本项目使用`uv`进行构建（[安装`uv`](https://docs.astral.sh/uv/getting-started/installation/))。
+本项目使用`uv`进行构建（[安装`uv`](https://docs.astral.sh/uv/getting-started/installation/)）。
 
 ```bash
 # clone repo first
@@ -35,14 +43,6 @@ uv sync
 uv pip install -e .
 ```
 
-### PyPI
-
-本项目近期将发布在PyPI上，届时您可以使用`pip`进行安装。
-
-```bash
-pip install veadk-python
-```
-
 ## 配置
 
 VeADK 在仓库中提供了一个示例配置文件`config.yaml.example`，其中标明了一个智能体运行的必需（required）配置和可选（optional）配置。您可以基于该示例文件，在项目根目录下创建实际使用的配置文件`config.yaml`。VeADK 中的配置模块将自动查找并加载该文件内容，并将其中的配置项映射为运行时环境变量，从而帮助您省去环境配置的时间。
@@ -50,6 +50,7 @@ VeADK 在仓库中提供了一个示例配置文件`config.yaml.example`，其�
 完整的配置项可以参考[`config.yaml.example`文件](https://github.com/volcengine/veadk-python/blob/main/config.yaml.example)。
 
 ### 说明
+
 下面是详细的配置说明：
 
 ```yaml

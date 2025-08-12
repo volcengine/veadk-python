@@ -13,7 +13,7 @@ knowledgebase = KnowledgeBase(backend=...)
 | backend | 说明 |
 | --- | --- |
 | local | GIGO 模式的内存存储，不具备向量检索功能，仅用于测试 |
-| [viking](https://console.volcengine.com/vikingdb) | 火山引擎 Viking DB 服务 |
+| [viking](https://www.volcengine.com/docs/84313/1254437) | 火山引擎 Viking DB 服务 |
 | opensearch | OpenSearch 数据库 |
 | redis | Redis 数据库，但不具备向量搜索功能 |
 | mysql | MySQL 数据库，但不具备向量搜索功能 |
@@ -39,7 +39,7 @@ agent = Agent(knowledgebase=knowledgebase)
 
 ## 火山知识库
 
-VeADK 中提供了火山引擎支持的知识库 [VikingDB](https://console.volcengine.com/vikingdb)，支持用户直接上传本地文档，文档切片和存储维护均在云上自动执行：
+VeADK 中提供了火山引擎支持的知识库 [VikingDB](https://www.volcengine.com/docs/84313/1254437)，支持用户直接上传本地文档，文档切片和存储维护均在云上自动执行：
 
 ```python
 from veadk import Agent

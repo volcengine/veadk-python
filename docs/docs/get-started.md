@@ -1,6 +1,7 @@
 # 快速开始
 
 ## 安装 VeADK
+
 参考[安装](./installation.md)文档进行配置，并将`config.yaml`配置文件放在项目根目录。
 
 ## 构建 Agent
@@ -13,11 +14,13 @@ from veadk.tools.demo_tools import get_city_weather
 
 agent = Agent(tools=[get_city_weather])
 ```
+
 ## 执行 Agent
 
 由于某些操作是异步的，因此 Agent 的运行需要借助`asyncio`库在异步环境中进行。
 
 Agent 的运行有两种方式，第一种是使用 Agent 自带的 `run` 方法运行：
+
 ```python
 import asyncio
 

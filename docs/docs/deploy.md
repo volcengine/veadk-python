@@ -2,7 +2,7 @@
 
 VeADK提供了一个云引擎，配合命令行脚手架，你可以方便地：
 
-- 将你的本地Agent项目上传到云端
+- 将你的本地Agent项目上传到云端（[火山引擎函数服务平台](https://www.volcengine.com/product/vefaas)）
 - 启动一个新的样例模板项目进行开发
 
 你可以指定部署到云端的项目以三种模式进行对外服务：
@@ -138,9 +138,9 @@ updated_cloud_app = engine.update_function_code(
 ```
 
 **注意事项：**
+
 - 更新操作会保持相同的访问端点URL
 - 确保项目路径包含`agent.py`文件
-
 
 ## 删除云应用
 
@@ -156,7 +156,8 @@ engine.remove(app_name="my-agent-app")
 ```
 
 执行时会提示确认：
-```
+
+```bash
 Confirm delete cloud app my-agent-app? (y/N): y
 ```
 
