@@ -52,7 +52,7 @@ assert dump_path != "", "Dump eval set file failed! Please check runtime logs."
     - `tool_uses`：Agent 使用的工具
     - `intermediate_responses`：Agent 的中间会话
 
-## 评测
+## 开展评测
 
 VeADK 目前支持 [DeepEval](https://deepeval.com/) 评测器和 [ADKEval](https://google.github.io/adk-docs/evaluate/)，通过如下方式定义评测器：
 
@@ -80,7 +80,7 @@ await evaluator.eval(eval_set_file_path=dump_path, metrics=metrics)
 
 ## 数据上报
 
-评测结果可以自动上报至火山引擎的 [VMP](https://console.volcengine.com/prometheus) 平台，只需要在定义评估器的时候传入 Prometheus pushgateway 等相关参数即可，可在 `config.yaml` 中进行配置并从环境变量中自动读取：
+评测结果可以自动上报至火山引擎的[托管 Prometheus (VMP)](https://www.volcengine.com/product/prometheus)平台，只需要在定义评估器的时候传入 Prometheus pushgateway 等相关参数即可，可在 `config.yaml` 中进行配置并从环境变量中自动读取：
 
 ```python
 from veadk.evaluation.utils.prometheus import PrometheusPushgatewayConfig

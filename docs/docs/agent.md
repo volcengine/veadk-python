@@ -22,6 +22,8 @@ Agent 中主要包括如下属性：
 | tracers | list | 追踪器列表，能够定义不同的追踪方式，并在 Agent 执行完毕后将整体 Tracing 信息保存至本地 |
 | serve_url | str | Agent 服务主机的 URL，将显示在 Agent Card 中 |
 
+您可以在[火山引擎方舟平台](https://www.volcengine.com/product/ark)选择适合您的大模型。
+
 ## 运行
 
 在生产环境中，我们推荐您使用 VeADK 的`Runner`执行器来进行多租户服务与 Agent 运行，在多租场景下，`Runner`通过三个属性来确定资源空间：

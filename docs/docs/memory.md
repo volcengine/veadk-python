@@ -67,7 +67,6 @@ response = await runner.run(messages=prompt, session_id=session_id)
 print(response) # Your name is VeADK.
 ```
 
-
 ### 短期记忆的优化
 
 持久化的短期记忆可能过长，占满某些模型的上下文。为解决短期记忆过长的问题，VeADK 中提供了记忆优化器来进行短期记忆的优化，通过在短期记忆类中传入`enable_memory_optimization`参数，开启记忆优化器。
@@ -95,6 +94,7 @@ short_term_memory = ShortTermMemory(
 - 自定义维度（例如结构化信息抽取）
 
 以下示例展示了 VeADK 中短期记忆在开启记忆优化模式（`enable_memory_optimization=True`）后的使用方式。通过该模式，Agent 能够在存储用户对话上下文时自动剔除冗余或无关的信息，从而提高记忆效率与响应准确性。
+
 ```python
 import os
 from sqlalchemy import create_engine
@@ -138,6 +138,7 @@ print(response)
 # clear local database
 os.remove(local_database_path)
 ```
+
 短期记忆优化过程与结果：
 
 ![短期记忆优化结果](/images/memory-optimization.png)
@@ -174,6 +175,7 @@ await self.long_term_memory.add_session_to_memory(session) # 添加
 | mysql | MySQL 数据库，但不具备向量搜索功能 |
 
 以下示例展示了如何在 VeADK 中使用长期记忆实现跨会话的信息保留与调用。开发者可以通过 `save_session_to_long_term_memory` 方法，将某一会话中的知识性信息存入长期记忆存储后端。在新的会话中，即使上下文为空，Agent 依然能够基于长期记忆准确回忆并回答相关问题。
+
 ```python
 from veadk import Agent, Runner
 from veadk.memory.long_term_memory import LongTermMemory
@@ -202,4 +204,3 @@ student_prompt = "..."
 response = await runner.run(messages=student_prompt, session_id=new_session_id)
 print(response)
 ```
-
