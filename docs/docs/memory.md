@@ -67,7 +67,6 @@ response = await runner.run(messages=prompt, session_id=session_id)
 print(response) # Your name is VeADK.
 ```
 
-
 ### 短期记忆的优化
 
 持久化的短期记忆可能过长，占满某些模型的上下文。为解决短期记忆过长的问题，VeADK 中提供了记忆优化器来进行短期记忆的优化，通过在短期记忆类中传入`enable_memory_optimization`参数，开启记忆优化器。
