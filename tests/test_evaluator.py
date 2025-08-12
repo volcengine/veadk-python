@@ -129,7 +129,7 @@ def test_evaluator():
     with open(eval_set_file_path, "w") as f:
         json.dump(EVAL_SET_DATA, f)
 
-    base_evaluator.generate_eval_data(eval_set_file_path=eval_set_file_path)
+    base_evaluator.generate_eval_data(file_path=eval_set_file_path)
 
     assert len(base_evaluator.invocation_list) == 1
     assert len(base_evaluator.invocation_list[0].invocations) == 1
@@ -141,17 +141,15 @@ def test_evaluator():
     os.remove(eval_set_file_path)
 
 
-def test_evaluator_using_tracing():
+def test_tracing_file_to_evalset():
     base_evaluator = BaseEvaluator(agent=None, name="test_evaluator")
 
     # save data to file
-    tracing_set_file_path = "./tracing_set_for_test_evaluator.json"
-    with open(tracing_set_file_path, "w") as f:
+    tracing_file_path = "./tracing_for_test_evaluator.json"
+    with open(tracing_file_path, "w") as f:
         json.dump(TRACE_SET_DATA, f)
 
-    base_evaluator.generate_eval_data_from_tracing(
-        tracing_set_file_path=tracing_set_file_path
-    )
+    base_evaluator.generate_eval_data(file_path=tracing_file_path)
 
     assert len(base_evaluator.invocation_list) == 1
     assert len(base_evaluator.invocation_list[0].invocations) == 1
@@ -160,4 +158,4 @@ def test_evaluator_using_tracing():
         == "e-ea6bb35b-c3f0-4c5c-b127-c71c7d6d6441"
     )
 
-    os.remove(tracing_set_file_path)
+    os.remove(tracing_file_path)

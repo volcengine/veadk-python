@@ -87,14 +87,14 @@ class BaseEvaluator:
 
         return load_eval_set_from_file(eval_set_file)
 
-    def generate_eval_data(self, eval_set_file_path: str):
-        eval_case_data_list: list[EvalCaseData] = []
-        eval_cases = self.load_eval_set(eval_set_file_path).eval_cases
-        self.generate_invocation_data(eval_cases, eval_case_data_list)
-
-    def load_tracing_set(self, tracing_set_file_path: str) -> EvalSet:
-        with open(tracing_set_file_path, "r") as f:
-            tracing_data = json.load(f)
+    def load_eval_set_from_tracing(self, tracing_file: str) -> EvalSet:
+        try:
+            with open(tracing_file, "r") as f:
+                tracing_data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON format in file {tracing_file}: {e}")
+        except Exception as e:
+            raise ValueError(f"Error reading file {tracing_file}: {e}")
 
         # Group spans by trace_id
         trace_groups = {}
@@ -188,14 +188,33 @@ class BaseEvaluator:
 
         return evalset
 
-    def generate_eval_data_from_tracing(self, tracing_set_file_path: str):
+    def generate_eval_data(self, file_path: str):
+        """Generate evaluation data from a given file and assign it to the class attribute `invocation_list`."""
         eval_case_data_list: list[EvalCaseData] = []
-        eval_cases = self.load_tracing_set(tracing_set_file_path).eval_cases
-        self.generate_invocation_data(eval_cases, eval_case_data_list)
 
-    def generate_invocation_data(
-        self, eval_cases: list[EvalSet], eval_case_data_list: list[EvalCaseData]
-    ):
+        try:
+            with open(file_path, "r") as f:
+                file_content = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON format in file {file_path}: {e}")
+        except Exception as e:
+            raise ValueError(f"Error reading file {file_path}: {e}")
+
+        if isinstance(file_content, dict) and "eval_cases" in file_content:
+            eval_cases = self.load_eval_set(file_path).eval_cases
+        elif (
+            isinstance(file_content, list)
+            and len(file_content) > 0
+            and all(
+                isinstance(span, dict) and "trace_id" in span for span in file_content
+            )
+        ):
+            eval_cases = self.load_eval_set_from_tracing(file_path).eval_cases
+        else:
+            raise ValueError(
+                f"Unsupported file format in {file_path}. Please provide a valid file."
+            )
+
         for eval_case in eval_cases:
             eval_case_data = EvalCaseData(invocations=[])
             self.agent_information_list.append(
