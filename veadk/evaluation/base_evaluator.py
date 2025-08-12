@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+import json
 import time
 import uuid
 from abc import abstractmethod
@@ -23,6 +24,8 @@ from google.adk.evaluation.eval_set import EvalSet
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 from pydantic import BaseModel
+
+from veadk.utils.misc import formatted_timestamp
 
 
 class InvocationTestData(BaseModel):
@@ -79,15 +82,139 @@ class BaseEvaluator:
         self.result_list: list[EvalResultData] = []
         self.agent_information_list: list[dict] = []
 
-    def load_eval_set(self, eval_set_file: str) -> list[EvalSet]:
+    def _load_eval_set(self, eval_set_file: str) -> EvalSet:
         from .eval_set_file_loader import load_eval_set_from_file
 
         return load_eval_set_from_file(eval_set_file)
 
-    def generate_eval_data(self, eval_set_file_path: str):
+    def _load_eval_set_from_tracing(self, tracing_file: str) -> EvalSet:
+        try:
+            with open(tracing_file, "r") as f:
+                tracing_data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON format in file {tracing_file}: {e}")
+        except Exception as e:
+            raise ValueError(f"Error reading file {tracing_file}: {e}")
+
+        # Group spans by trace_id
+        trace_groups = {}
+        for span in tracing_data:
+            trace_id = span["trace_id"]
+            if trace_id not in trace_groups:
+                trace_groups[trace_id] = []
+            trace_groups[trace_id].append(span)
+
+        # Convert to evalset format
+        eval_cases, conversation = [], []
+        app_name, user_id = "", ""
+        creation_timestamp = 0
+        for trace_id, spans in trace_groups.items():
+            tool_uses = []
+
+            # Extract tool_uses from spans with name starting with "execute_tool"
+            for span in spans:
+                if span["name"].startswith("execute_tool"):
+                    tool_uses.append(
+                        {
+                            "id": span["attributes"].get("gen_ai.tool.call.id", None),
+                            "args": json.loads(
+                                span["attributes"].get(
+                                    "gcp.vertex.agent.tool_call_args", "{}"
+                                )
+                            ),
+                            "name": span["attributes"].get("gen_ai.tool.name", None),
+                        }
+                    )
+
+            # Extract conversation data from spans with name starting with "invocation"
+            for span in spans:
+                if span["name"].startswith("invocation"):
+                    # Parse input.value and output.value as JSON
+                    input_value = json.loads(
+                        span["attributes"].get("input.value", "{}")
+                    )
+                    output_value = json.loads(
+                        span["attributes"].get("output.value", "{}")
+                    )
+
+                    user_content = json.loads(input_value.get("new_message", {}))
+                    final_response = json.loads(json.dumps(user_content))
+                    final_response["parts"][0]["text"] = (
+                        output_value.get("content", {})
+                        .get("parts", [{}])[0]
+                        .get("text", None)
+                    )
+                    final_response["role"] = None
+                    conversation.append(
+                        {
+                            "invocation_id": output_value.get(
+                                "invocation_id", str(uuid.uuid4())
+                            ),
+                            "user_content": user_content,
+                            "final_response": final_response,
+                            "intermediate_data": {
+                                "tool_uses": tool_uses,
+                                "intermediate_responses": [],
+                            },
+                            "creation_timestamp": span["start_time"] / 1e9,
+                        }
+                    )
+                    user_id = input_value.get("user_id", None)
+                    app_name = (
+                        span["name"].replace("invocation", "").strip().strip("[]")
+                    )
+                    creation_timestamp = span["start_time"] / 1e9
+
+        eval_cases.append(
+            {
+                "eval_id": f"veadk_eval_{formatted_timestamp()}",
+                "conversation": conversation,
+                "session_input": {
+                    "app_name": app_name,
+                    "user_id": user_id,
+                    "state": {},
+                },
+                "creation_timestamp": creation_timestamp,
+            }
+        )
+
+        evalset = EvalSet(
+            eval_set_id="default",
+            name="default",
+            description=None,
+            eval_cases=eval_cases,
+            creation_timestamp=creation_timestamp,
+        )
+
+        return evalset
+
+    def generate_eval_data(self, file_path: str):
+        """Generate evaluation data from a given file and assign it to the class attribute `invocation_list`."""
         eval_case_data_list: list[EvalCaseData] = []
 
-        eval_cases = self.load_eval_set(eval_set_file_path).eval_cases
+        try:
+            with open(file_path, "r") as f:
+                file_content = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON format in file {file_path}: {e}")
+        except Exception as e:
+            raise ValueError(f"Error reading file {file_path}: {e}")
+
+        if isinstance(file_content, dict) and "eval_cases" in file_content:
+            eval_cases = self._load_eval_set(file_path).eval_cases
+        elif (
+            isinstance(file_content, list)
+            and len(file_content) > 0
+            and all(
+                isinstance(span, dict) and "trace_id" in span for span in file_content
+            )
+        ):
+            eval_cases = self._load_eval_set_from_tracing(file_path).eval_cases
+        else:
+            raise ValueError(
+                f"Unsupported file format in {file_path}. Please provide a valid file."
+            )
+
         for eval_case in eval_cases:
             eval_case_data = EvalCaseData(invocations=[])
             self.agent_information_list.append(
