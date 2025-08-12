@@ -23,8 +23,8 @@ print(f"Tracing file path: {tracer._trace_file_path}")
 通过设置不同的云端上报器`exporter`，可以将观测数据上传到对应平台：
 
 - [CozeLoop 平台](https://www.coze.cn/loop)：`CozeLoopExporter`
-- [APMPlus 平台](https://console.volcengine.com/apmplus-server/region:apmplus-server+cn-beijing/console/overview/server)： `APMPlusExporter`
-- [TLS 平台](https://console.volcengine.com/tls/region:tls+cn-beijing/v2/trace-service)：`TLSExporter`
+- [APMPlus 平台](https://www.volcengine.com/product/apmplus)： `APMPlusExporter`
+- [TLS 平台](https://www.volcengine.com/product/tls)：`TLSExporter`
 
 示例：配置多个云端 `exporter`
 

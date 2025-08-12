@@ -62,6 +62,7 @@ VeADK 中集成了多个火山引擎提供的工具：
 - Code sandbox (TBD)
 
 以下示例展示了如何在 VeADK 中集成并调用内置工具 vesearch，用于获取今天的三条热点新闻：
+
 ```python
 from veadk import Agent
 from veadk.tools.builtin_tools.vesearch import vesearch
