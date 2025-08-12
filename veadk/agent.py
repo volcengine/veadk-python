@@ -39,6 +39,7 @@ from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INST
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_asyncio
+from google.adk.agents.base_agent import BaseAgent
 
 patch_asyncio()
 logger = get_logger(__name__)
@@ -77,7 +78,7 @@ class Agent(LlmAgent):
     tools: list[ToolUnion] = []
     """The tools provided to agent."""
 
-    sub_agents: list[Agent] = Field(default_factory=list, exclude=True)
+    sub_agents: list[BaseAgent] = Field(default_factory=list, exclude=True)
     """The sub agents provided to agent."""
 
     knowledgebase: Optional[KnowledgeBase] = None
