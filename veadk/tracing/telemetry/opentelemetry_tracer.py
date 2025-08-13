@@ -111,7 +111,9 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         global_tracer_provider = trace_api.get_tracer_provider()
 
         if not isinstance(global_tracer_provider, TracerProvider):
-            logger.info(f"Global tracer provider has not been set. Create tracer provider and set it now.")
+            logger.info(
+                f"Global tracer provider has not been set. Create tracer provider and set it now."
+            )
             # 1.1 init tracer provider
             tracer_provider = trace_sdk.TracerProvider()
             trace_api.set_tracer_provider(tracer_provider)
@@ -134,7 +136,9 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
                 continue
             processor, resource_attributes = exporter.get_processor()
             if resource_attributes is not None:
-                update_resource_attributions(global_tracer_provider, resource_attributes)
+                update_resource_attributions(
+                    global_tracer_provider, resource_attributes
+                )
             global_tracer_provider.add_span_processor(processor)
             logger.debug(f"Add exporter `{exporter.__class__.__name__}` to tracing.")
             self._processors.append(processor)
