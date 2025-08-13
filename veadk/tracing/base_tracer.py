@@ -14,10 +14,11 @@
 
 import json
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Optional, Any
 
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models import LlmRequest, LlmResponse
+from google.adk.tools import BaseTool, ToolContext
 from opentelemetry import trace
 
 from veadk.utils.logger import get_logger
@@ -27,20 +28,24 @@ logger = get_logger(__name__)
 
 class BaseTracer(ABC):
     def __init__(self, name: str):
+        self.app_name = "veadk_app_name"
         pass
 
     @abstractmethod
     def dump(self) -> str: ...
 
-    def llm_metrics_hook(
+    def tracer_hook_before_model(
         self, callback_context: CallbackContext, llm_request: LlmRequest
     ) -> Optional[LlmResponse]:
+        """agent run stage"""
         trace.get_tracer("gcp.vertex.agent")
         span = trace.get_current_span()
         # logger.debug(f"llm_request: {llm_request}")
 
         req = llm_request.model_dump()
 
+        app_name = getattr(self, "app_name", "veadk_app")
+        agent_name = callback_context.agent_name
         model_name = req.get("model", "unknown")
         max_tokens = (
             None
@@ -59,6 +64,8 @@ class BaseTracer(ABC):
         )
 
         attributes = {}
+        attributes["agent.name"] = agent_name
+        attributes["app.name"] = app_name
         attributes["gen_ai.system"] = "veadk"
         if model_name:
             attributes["gen_ai.request.model"] = model_name
@@ -84,9 +91,10 @@ class BaseTracer(ABC):
             for k, v in attributes.items():
                 span.set_attribute(k, v)
 
-    def token_metrics_hook(
+    def tracer_hook_after_model(
         self, callback_context: CallbackContext, llm_response: LlmResponse
     ) -> Optional[LlmResponse]:
+        """call llm stage"""
         trace.get_tracer("gcp.vertex.agent")
         span = trace.get_current_span()
         # logger.debug(f"llm_response: {llm_response}")
@@ -95,6 +103,10 @@ class BaseTracer(ABC):
         # Refined: collect all attributes, use set_attributes, print for debugging
         attributes = {}
 
+        app_name = getattr(self, "app_name", "veadk_app")
+        agent_name = callback_context.agent_name
+        attributes["agent.name"] = agent_name
+        attributes["app.name"] = app_name
         # prompt
         user_content = callback_context.user_content
         if getattr(user_content, "role", None):
@@ -170,3 +182,32 @@ class BaseTracer(ABC):
             # Fallback for OpenTelemetry versions without set_attributes
             for k, v in attributes.items():
                 span.set_attribute(k, v)
+
+    def tracer_hook_after_tool(
+        self,
+        tool: BaseTool,
+        args: dict[str, Any],
+        tool_context: ToolContext,
+        tool_response: dict,
+    ):
+        trace.get_tracer("gcp.vertex.agent")
+        span = trace.get_current_span()
+        agent_name = tool_context.agent_name
+        tool_name = tool.name
+        app_name = getattr(self, "app_name", "veadk_app")
+        attributes = {
+            "agent.name": agent_name,
+            "app.name": app_name,
+            "tool.name": tool_name,
+        }
+
+        # Set all attributes at once if possible, else fallback to individual
+        if hasattr(span, "set_attributes"):
+            span.set_attributes(attributes)
+        else:
+            # Fallback for OpenTelemetry versions without set_attributes
+            for k, v in attributes.items():
+                span.set_attribute(k, v)
+
+    def set_app_name(self, app_name):
+        self.app_name = app_name

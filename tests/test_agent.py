@@ -49,7 +49,6 @@ def test_agent():
     assert agent.long_term_memory.backend == "local"
     assert load_memory in agent.tools
 
-    assert tracer.llm_metrics_hook in agent.before_model_callback
-    assert tracer.token_metrics_hook in agent.after_model_callback
-    assert tracer.token_metrics_hook in agent.after_model_callback
-    assert tracer.token_metrics_hook in agent.after_model_callback
+    assert tracer.tracer_hook_before_model in agent.before_model_callback
+    assert tracer.tracer_hook_after_model in agent.after_model_callback
+    assert tracer.tracer_hook_after_tool in agent.after_tool_callback

@@ -49,11 +49,15 @@ if not getattr(agent, "before_model_callback", None):
     agent.before_model_callback = []
 if not getattr(agent, "after_model_callback", None):
     agent.after_model_callback = []
+if not getattr(agent, "after_tool_callback", None):
+    agent.after_tool_callback = []
 for tracer in TRACERS:
-    if tracer.llm_metrics_hook not in agent.before_model_callback:
-        agent.before_model_callback.append(tracer.llm_metrics_hook)
-    if tracer.token_metrics_hook not in agent.after_model_callback:
-        agent.after_model_callback.append(tracer.token_metrics_hook)
+    if tracer.tracer_hook_before_model not in agent.before_model_callback:
+        agent.before_model_callback.append(tracer.tracer_hook_before_model)
+    if tracer.tracer_hook_after_model not in agent.after_model_callback:
+        agent.after_model_callback.append(tracer.tracer_hook_after_model)
+    if tracer.tracer_hook_after_tool not in agent.after_tool_callback:
+        agent.after_tool_callback.append(tracer.tracer_hook_after_tool)
 
 # Tracer Config ================================================================
 # ==============================================================================
