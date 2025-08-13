@@ -39,9 +39,18 @@ uv pip install -e .
 
 ## Configuration
 
-We recommand you to create a `config.yaml` file in the root directory of your own project, `VeADK` is able to read it automatically.
+We recommand you to create a `config.yaml` file in the root directory of your own project, `VeADK` is able to read it automatically. For running a minimal agent, you just need to set the following configs in your `config.yaml` file:
 
-You can refer to the [example config file](config.yaml.example) for more details.
+```yaml
+model:
+  agent:
+    provider: openai
+    name: doubao-seed-1-6-250615
+    api_base: https://ark.cn-beijing.volces.com/api/v3/
+    api_key: # <-- set your Volcengine ARK api key here
+```
+
+You can refer to the [config instructions](https://volcengine.github.io/veadk-python/installation.html#%E9%85%8D%E7%BD%AE) for more details.
 
 ## Have a try
 
