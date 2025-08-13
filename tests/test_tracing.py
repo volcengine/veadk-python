@@ -29,13 +29,18 @@ from veadk.tracing.telemetry.exporters.tls_exporter import (
 )
 from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
 
+from opentelemetry import trace as trace_api
+from opentelemetry.sdk import trace as trace_sdk
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+        OTLPSpanExporter,
+    )
+
 APP_NAME = "app"
 USER_ID = "testuser"
 SESSION_ID = "testsession"
 
-
-@pytest.mark.asyncio
-async def test_tracing():
+def init_exporters():
     cozeloop_exporter = CozeloopExporter(
         config=CozeloopExporterConfig(
             endpoint="http://localhost:8000",
@@ -61,8 +66,18 @@ async def test_tracing():
             secret_key="test_secret_key",
         )
     )
+    return [cozeloop_exporter, apmplus_exporter, tls_exporter]
 
-    exporters = [cozeloop_exporter, apmplus_exporter, tls_exporter]
+def gen_span_processor(endpoint: str):
+    otlp_exporter = OTLPSpanExporter(
+        endpoint=endpoint,
+    )
+    span_processor = BatchSpanProcessor(otlp_exporter)
+    return span_processor
+
+@pytest.mark.asyncio
+async def test_tracing():
+    exporters = init_exporters()
     tracer = OpentelemetryTracer(exporters=exporters)
 
     assert len(tracer.exporters) == 5  # with extra 2 built-in exporters
@@ -70,3 +85,33 @@ async def test_tracing():
     # TODO: Ensure the tracing provider is set correctly after loading SDK
     # TODO: Ensure the tracing provider is set correctly after loading SDK
     # TODO: Ensure the tracing provider is set correctly after loading SDK
+
+@pytest.mark.asyncio
+async def test_tracing_with_global_provider():
+    exporters = init_exporters()
+    # set global tracer provider before init OpentelemetryTracer
+    trace_api.set_tracer_provider(trace_sdk.TracerProvider())
+    tracer_provider = trace_api.get_tracer_provider()
+    tracer_provider.add_span_processor(gen_span_processor("http://localhost:8000"))
+    trace_api.set_tracer_provider(tracer_provider)
+    #
+    tracer = OpentelemetryTracer(exporters=exporters)
+
+    assert len(tracer.exporters) == 5  # with extra 2 built-in exporters
+
+
+@pytest.mark.asyncio
+async def test_tracing_with_apmplus_global_provider():
+    exporters = init_exporters()
+    # add apmplus exporter to global tracer provider before init OpentelemetryTracer
+    trace_api.set_tracer_provider(trace_sdk.TracerProvider())
+    tracer_provider = trace_api.get_tracer_provider()
+    tracer_provider.add_span_processor(gen_span_processor("http://apmplus-region.com"))
+
+    # init OpentelemetryTracer
+    tracer = OpentelemetryTracer(exporters=exporters)
+
+    # apmplus exporter won't init again
+    assert len(tracer.exporters) == 4  # with extra 2 built-in exporters
+
+
