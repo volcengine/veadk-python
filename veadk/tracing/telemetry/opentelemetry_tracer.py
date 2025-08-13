@@ -51,6 +51,11 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         DEFAULT_VEADK_TRACER_NAME, description="The identifier of tracer."
     )
 
+    app_name: str = Field(
+        "veadk_app",
+        description="The identifier of app.",
+    )
+
     def model_post_init(self, context: Any, /) -> None:
         self._processors = []
         self._inmemory_exporter: InMemoryExporter = None
