@@ -18,7 +18,7 @@ VeADK 各组件与火山引擎相关产品的结合矩阵：
 | | [Web Scraper](https://www.volcengine.com/docs/84296/1545470) | 定制化内容查询（邀测） |
 | | 飞书 Lark | 进行飞书相关操作 |
 | | [AI 数据湖服务 LAS](https://www.volcengine.com/product/las) | 提供数据湖内的海量数据存储与查询能力 |
-| 短期记忆 | Viking Memory 记忆库 | 提供记忆存储、优化、摘要等功能 |
+| 短期记忆 | [Viking记忆库](https://www.volcengine.com/docs/84313/1783345) | 提供记忆存储、优化、摘要等功能 |
 | | [火山引擎云数据库 MySQL 版](https://www.volcengine.com/product/rds-mysql) | 记忆存储 |
 | 长期记忆 | [Viking DB](https://www.volcengine.com/docs/84313/1254437) | 记忆向量化存储和检索 |
 | | [云搜索服务](https://www.volcengine.com/product/es)（OpenSearch） | 记忆向量化存储和检索 |
@@ -29,6 +29,7 @@ VeADK 各组件与火山引擎相关产品的结合矩阵：
 | | [日志服务](https://www.volcengine.com/product/tls) | 调用链路观测、日志存储与检索 |
 | 评测 | [扣子罗盘](https://www.coze.cn/loop) （Coze Loop） | 在线评测 |
 | 云部署 | [火山引擎函数服务](https://www.volcengine.com/product/vefaas) （VeFaaS） | 提供一键上云能力 |
+| | [火山引擎 API 网关](https://www.volcengine.com/product/apig) | 提供鉴权、路由等能力 |
 
 ## VeADK 核心优势
 

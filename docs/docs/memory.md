@@ -169,7 +169,7 @@ await self.long_term_memory.add_session_to_memory(session) # 添加
 | backend | 说明 |
 | --- | --- |
 | local | GIGO 模式的内存存储，不具备向量检索功能，仅用于测试 |
-| viking | 火山引擎 Viking Memory 服务 |
+| viking | 火山引擎 [Viking 记忆库](https://www.volcengine.com/docs/84313/1783345)服务 |
 | opensearch | OpenSearch 数据库 |
 | redis | Redis 数据库，但不具备向量搜索功能 |
 | mysql | MySQL 数据库，但不具备向量搜索功能 |
