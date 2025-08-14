@@ -1,5 +1,7 @@
 # 快速开始
 
+我们提供了一个供您完整体验 VeADK 核心功能的[教程](https://github.com/volcengine/veadk-python/blob/main/veadk_tutorial.ipynb)（基于 Jupyter Notebook），或者您也可以直接在 [Google Colab](https://colab.research.google.com/github/volcengine/veadk-python/blob/main/veadk_tutorial.ipynb) 中打开。
+
 ## 安装 VeADK
 
 您可参考[安装](./installation.md)文档进行安装。

@@ -11,6 +11,8 @@ An open-source kit for agent development, integrated the powerful capabilities o
 
 For more details, see our [documents](https://volcengine.github.io/veadk-python/).
 
+A [tutorial](https://github.com/volcengine/veadk-python/blob/main/veadk_tutorial.ipynb) is available by Jupyter Notebook, or open it in [Google Colab](https://colab.research.google.com/github/volcengine/veadk-python/blob/main/veadk_tutorial.ipynb) directly.
+
 ## Installation
 
 We use `uv` to build this project ([how-to-install-uv](https://docs.astral.sh/uv/getting-started/installation/)).
