@@ -33,12 +33,13 @@ from opentelemetry import trace as trace_api
 from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
-        OTLPSpanExporter,
-    )
+    OTLPSpanExporter,
+)
 
 APP_NAME = "app"
 USER_ID = "testuser"
 SESSION_ID = "testsession"
+
 
 def init_exporters():
     cozeloop_exporter = CozeloopExporter(
@@ -68,12 +69,14 @@ def init_exporters():
     )
     return [cozeloop_exporter, apmplus_exporter, tls_exporter]
 
+
 def gen_span_processor(endpoint: str):
     otlp_exporter = OTLPSpanExporter(
         endpoint=endpoint,
     )
     span_processor = BatchSpanProcessor(otlp_exporter)
     return span_processor
+
 
 @pytest.mark.asyncio
 async def test_tracing():
@@ -85,6 +88,7 @@ async def test_tracing():
     # TODO: Ensure the tracing provider is set correctly after loading SDK
     # TODO: Ensure the tracing provider is set correctly after loading SDK
     # TODO: Ensure the tracing provider is set correctly after loading SDK
+
 
 @pytest.mark.asyncio
 async def test_tracing_with_global_provider():
@@ -113,5 +117,3 @@ async def test_tracing_with_apmplus_global_provider():
 
     # apmplus exporter won't init again
     assert len(tracer.exporters) == 4  # with extra 2 built-in exporters
-
-

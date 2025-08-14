@@ -38,8 +38,11 @@ python3 -m pip install uvicorn[standard]
 
 python3 -m pip install fastapi
 
+python3 -m pip install fastmcp
+
 USE_STUDIO=${USE_STUDIO:-False}
 USE_ADK_WEB=${USE_ADK_WEB:-False}
+USE_MCP=${USE_MCP:-False}
 
 if [ "$USE_STUDIO" = "True" ]; then
     echo "USE_STUDIO is True, running veadk studio"
@@ -54,10 +57,15 @@ elif [ "$USE_STUDIO" = "False" ]; then
         cd ../
         exec python3 -m veadk.cli.main web --host "0.0.0.0"
     else
-        echo "USE_ADK_WEB is False, running a2a server"
-        exec python3 -m uvicorn app:app --host $HOST --port $PORT --timeout-graceful-shutdown $TIMEOUT --loop asyncio
+        if [ "$USE_MCP" = "True" ]; then
+            echo "USE_MCP is True, running MCP server"
+            exec python3 app_mcp.py --transport http --host $HOST --port $PORT --log-level "INFO"
+        else
+            echo "USE_MCP is False, running a2a server"
+            exec python3 -m uvicorn app:app --host $HOST --port $PORT --timeout-graceful-shutdown $TIMEOUT --loop asyncio
+        fi
     fi
 else
-    # running a2a server
+    # running a2a server (default)
     exec python3 -m uvicorn app:app --host $HOST --port $PORT --timeout-graceful-shutdown $TIMEOUT --loop asyncio
 fi

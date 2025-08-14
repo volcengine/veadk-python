@@ -93,6 +93,7 @@ class CloudAgentEngine(BaseModel):
         gateway_upstream_name: str = "",
         use_studio: bool = False,
         use_adk_web: bool = False,
+        use_mcp: bool = False,
     ) -> CloudApp:
         """Deploy local agent project to Volcengine FaaS platform.
 
@@ -127,6 +128,15 @@ class CloudAgentEngine(BaseModel):
             import veadk.config
 
             veadk.config.veadk_environments["USE_ADK_WEB"] = "False"
+
+        if use_mcp:
+            import veadk.config
+
+            veadk.config.veadk_environments["USE_MCP"] = "True"
+        else:
+            import veadk.config
+
+            veadk.config.veadk_environments["USE_MCP"] = "False"
 
         # convert `path` to absolute path
         path = str(Path(path).resolve())

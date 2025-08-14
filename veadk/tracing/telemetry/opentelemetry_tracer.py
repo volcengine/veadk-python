@@ -112,7 +112,7 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
 
         if not isinstance(global_tracer_provider, TracerProvider):
             logger.info(
-                f"Global tracer provider has not been set. Create tracer provider and set it now."
+                "Global tracer provider has not been set. Create tracer provider and set it now."
             )
             # 1.1 init tracer provider
             tracer_provider = trace_sdk.TracerProvider()
@@ -143,7 +143,6 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
             logger.debug(f"Add exporter `{exporter.__class__.__name__}` to tracing.")
             self._processors.append(processor)
         logger.debug(f"Init OpentelemetryTracer with {len(self.exporters)} exporters.")
-
 
     @override
     def dump(
