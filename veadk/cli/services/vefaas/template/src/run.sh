@@ -58,7 +58,6 @@ elif [ "$USE_STUDIO" = "False" ]; then
     else
         echo "USE_ADK_WEB is False, running a2a server"
         exec python3 -m uvicorn app:app --host $HOST --port $PORT --timeout-graceful-shutdown $TIMEOUT --loop asyncio
-        fi
     fi
 else
     # running a2a server
