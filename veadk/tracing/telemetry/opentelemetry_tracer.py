@@ -19,12 +19,11 @@ import time
 from typing import Any
 
 from openinference.instrumentation.google_adk import GoogleADKInstrumentor
-from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry import trace as trace_api
+from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
-
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import override
 
@@ -112,7 +111,7 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
 
         if not isinstance(global_tracer_provider, TracerProvider):
             logger.info(
-                f"Global tracer provider has not been set. Create tracer provider and set it now."
+                "Global tracer provider has not been set. Create tracer provider and set it now."
             )
             # 1.1 init tracer provider
             tracer_provider = trace_sdk.TracerProvider()
@@ -143,7 +142,6 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
             logger.debug(f"Add exporter `{exporter.__class__.__name__}` to tracing.")
             self._processors.append(processor)
         logger.debug(f"Init OpentelemetryTracer with {len(self.exporters)} exporters.")
-
 
     @override
     def dump(
