@@ -17,9 +17,6 @@ from agent import agent, app_name, short_term_memory
 from veadk.a2a.ve_a2a_server import init_app
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
-from veadk import Agent
-from veadk.memory.short_term_memory import ShortTermMemory
-from veadk.runner import Runner
 from contextlib import asynccontextmanager
 from fastmcp import FastMCP
 from fastapi import FastAPI
@@ -67,52 +64,6 @@ for tracer in TRACERS:
 # Tracer Config ================================================================
 # ==============================================================================
 
-
-# Create VeMCPServer class
-class VeMCPServer:
-    def __init__(self, agent: Agent, app_name: str, short_term_memory: ShortTermMemory):
-        self.agent = agent
-        self.app_name = app_name
-        self.short_term_memory = short_term_memory
-
-        self.runner = Runner(
-            agent=self.agent,
-            short_term_memory=self.short_term_memory,
-            app_name=app_name,
-            user_id="",  # waiting for tool call to provide user_id
-        )
-
-    def build(self) -> FastMCP:
-        # Create MCP server
-        mcp = FastMCP(name=self.app_name)
-
-        @mcp.tool
-        async def run_agent(
-            user_input: str,
-            user_id: str = "unknown_user",
-            session_id: str = "unknown_session",
-        ) -> str:
-            """
-            Execute agent with user input and return final output
-            Args:
-                user_input: str, user_id: str = "unknown_user", session_id: str = "unknown_session"
-            Returns:
-                final_output: str
-            """
-            # Set user_id for runner
-            self.runner.user_id = user_id
-
-            # Running agent and get final output
-            final_output = await self.runner.run(
-                messages=user_input,
-                session_id=session_id,
-            )
-
-            return final_output
-
-        return mcp
-
-
 # Create A2A app
 a2a_app = init_app(
     server_url="0.0.0.0",
@@ -121,13 +72,7 @@ a2a_app = init_app(
     short_term_memory=short_term_memory,
 )
 
-# Create MCP server instance
-mcp_server = VeMCPServer(
-    agent=agent,
-    app_name=app_name,
-    short_term_memory=short_term_memory,
-)
-mcp = mcp_server.build()
+mcp = FastMCP.from_fastapi(app=a2a_app, name=app_name)
 
 # Create MCP ASGI app
 mcp_app = mcp.http_app(path="/")
