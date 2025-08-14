@@ -72,7 +72,7 @@ a2a_app = init_app(
     short_term_memory=short_term_memory,
 )
 
-mcp = FastMCP.from_fastapi(app=a2a_app, name=app_name)
+mcp = FastMCP.from_fastapi(app=a2a_app, name=app_name, include_tags={"mcp"})
 
 # Create MCP ASGI app
 mcp_app = mcp.http_app(path="/")

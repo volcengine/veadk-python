@@ -21,6 +21,7 @@ from veadk import Agent
 from veadk.a2a.agent_card import get_agent_card
 from veadk.a2a.ve_agent_executor import VeAgentExecutor
 from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.runner import Runner
 
 
 class VeA2AServer:
@@ -48,8 +49,39 @@ class VeA2AServer:
         )
         app = app_application.build()  # build routes
 
-        # import uvicorn
-        # uvicorn.run(app, host="127.0.0.1", port=8000)
+        runner = Runner(
+            agent=self.agent_executor.agent,
+            short_term_memory=self.agent_executor.short_term_memory,
+            app_name=self.agent_executor.app_name,
+            user_id="",
+        )
+
+        @app.post("/run_agent", operation_id="run_agent", tags=["mcp"])
+        async def run_agent(
+            user_input: str,
+            user_id: str = "unknown_user",
+            session_id: str = "unknown_session",
+        ) -> str:
+            """
+            Execute agent with user input and return final output
+            Args:
+                user_input: User's input message
+                user_id: User identifier
+                session_id: Session identifier
+            Returns:
+                Final agent response
+            """
+            # Set user_id for runner
+            runner.user_id = user_id
+
+            # Running agent and get final output
+            final_output = await runner.run(
+                messages=user_input,
+                session_id=session_id,
+            )
+
+            return final_output
+
         return app
 
 
