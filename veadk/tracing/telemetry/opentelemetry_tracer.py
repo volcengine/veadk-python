@@ -19,12 +19,11 @@ import time
 from typing import Any
 
 from openinference.instrumentation.google_adk import GoogleADKInstrumentor
-from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry import trace as trace_api
+from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
-
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import override
 

@@ -14,6 +14,12 @@
 
 
 import pytest
+from opentelemetry import trace as trace_api
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+    OTLPSpanExporter,
+)
+from opentelemetry.sdk import trace as trace_sdk
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from veadk.tracing.telemetry.exporters.apmplus_exporter import (
     APMPlusExporter,
@@ -29,12 +35,6 @@ from veadk.tracing.telemetry.exporters.tls_exporter import (
 )
 from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
 
-from opentelemetry import trace as trace_api
-from opentelemetry.sdk import trace as trace_sdk
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
-    OTLPSpanExporter,
-)
 
 APP_NAME = "app"
 USER_ID = "testuser"
