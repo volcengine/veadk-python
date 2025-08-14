@@ -66,6 +66,6 @@ elif [ "$USE_STUDIO" = "False" ]; then
         fi
     fi
 else
-    # running a2a server (default)
+    # running a2a server
     exec python3 -m uvicorn app:app --host $HOST --port $PORT --timeout-graceful-shutdown $TIMEOUT --loop asyncio
 fi
