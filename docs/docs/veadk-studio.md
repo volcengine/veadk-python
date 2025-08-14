@@ -6,12 +6,48 @@ VeADK Studio是我们提供的一站式Agent开发平台，提供本地Agent优�
 
 ## 前置准备
 
+首先安装如下依赖：
+
+```bash
+# 评测功能
+pip install "veadk-python[eval]"
+
+# prompt 优化
+pip install "veadk-python[cli]"
+```
+
 你需要在你的Agent项目中准备一个`agent.py`文件，导出`agent`和`short_term_memory`两个全局变量：
 
 ```python
-agent = ...
+from veadk import Agent
+from veadk.memory.short_term_memory import ShortTermMemory
 
-short_term_memory = ...
+agent = Agent(...)
+
+short_term_memory = ShortTermMemory(...)
+```
+
+此外，还需要在你的`config.yaml`中配置如下变量：
+
+```yaml
+# 基础模型运行
+model:
+  agent:
+    provider: openai
+    name: doubao-1-5-pro-256k-250115
+    api_base: https://ark.cn-beijing.volces.com/api/v3/
+    api_key: 
+  judge:  
+    name: doubao-1-5-pro-256k-250115
+    api_base: https://ark.cn-beijing.volces.com/api/v3/
+    api_key: 
+
+volcengine:
+  access_key: 
+  secret_key: 
+
+agent_pilot:
+  api_key: 
 ```
 
 ## 启动
@@ -19,7 +55,7 @@ short_term_memory = ...
 在你准备好的Agent项目目录下执行以下命令：
 
 ```bash
-veadk-studio
+veadk studio
 ```
 
 Studio将会自动加载你的`agent.py`文件，启动一个本地服务器。注意，服务地址与端口必须固定为`127.0.0.1:8000`。
