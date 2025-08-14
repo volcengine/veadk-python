@@ -17,6 +17,7 @@ from agent import agent, app_name, short_term_memory
 from veadk.a2a.ve_a2a_server import init_app
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
+from veadk.runner import Runner
 from contextlib import asynccontextmanager
 from fastmcp import FastMCP
 from fastapi import FastAPI
@@ -71,6 +72,42 @@ a2a_app = init_app(
     agent=agent,
     short_term_memory=short_term_memory,
 )
+
+# Add a2a app to fastmcp
+runner = Runner(
+    agent=agent,
+    short_term_memory=short_term_memory,
+    app_name=app_name,
+    user_id="",
+)
+
+
+# mcp server
+@a2a_app.post("/run_agent", operation_id="run_agent", tags=["mcp"])
+async def run_agent(
+    user_input: str,
+    user_id: str = "unknown_user",
+    session_id: str = "unknown_session",
+) -> str:
+    """
+    Execute agent with user input and return final output
+    Args:
+        user_input: User's input message
+        user_id: User identifier
+        session_id: Session identifier
+    Returns:
+        Final agent response
+    """
+    # Set user_id for runner
+    runner.user_id = user_id
+
+    # Running agent and get final output
+    final_output = await runner.run(
+        messages=user_input,
+        session_id=session_id,
+    )
+    return final_output
+
 
 mcp = FastMCP.from_fastapi(app=a2a_app, name=app_name, include_tags={"mcp"})
 

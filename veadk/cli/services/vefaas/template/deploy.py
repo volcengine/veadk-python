@@ -63,7 +63,7 @@ async def main():
         async with client:
             # List available tools
             tools = await client.list_tools()
-            print(f"tool_0: {tools[0].__dict__}\n")
+            print(f"tools: {tools}\n")
 
             # Call run_agent tool, pass user input and session information
             res = await client.call_tool(
