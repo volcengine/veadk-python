@@ -20,13 +20,17 @@ from typing import Any
 
 from openinference.instrumentation.google_adk import GoogleADKInstrumentor
 from opentelemetry.sdk import trace as trace_sdk
+from opentelemetry import trace as trace_api
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
+
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import override
 
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.tracing.telemetry.exporters.apiserver_exporter import ApiServerExporter
+from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporter
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
 from veadk.tracing.telemetry.exporters.inmemory_exporter import InMemoryExporter
 from veadk.tracing.telemetry.metrics.opentelemetry_metrics import MeterUploader
@@ -51,11 +55,15 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         DEFAULT_VEADK_TRACER_NAME, description="The identifier of tracer."
     )
 
+    app_name: str = Field(
+        "veadk_app",
+        description="The identifier of app.",
+    )
+
     def model_post_init(self, context: Any, /) -> None:
         self._processors = []
         self._inmemory_exporter: InMemoryExporter = None
         self._apiserver_exporter: ApiServerExporter = None
-
         # Inmemory & APIServer are the default exporters
         have_inmemory_exporter = False
         have_apiserver_exporter = False
@@ -76,17 +84,6 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
             self.exporters.append(apiserver_exporter)
             self._apiserver_exporter = apiserver_exporter
 
-        tracer_provider = trace_sdk.TracerProvider()
-        for exporter in self.exporters:
-            processor, resource_attributes = exporter.get_processor()
-            if resource_attributes is not None:
-                update_resource_attributions(tracer_provider, resource_attributes)
-            tracer_provider.add_span_processor(processor)
-
-            logger.debug(f"Add exporter `{exporter.__class__.__name__}` to tracing.")
-            self._processors.append(processor)
-        logger.debug(f"Init OpentelemetryTracer with {len(self.exporters)} exporters.")
-
         self._meter_contexts = []
         self._meter_uploaders = []
         for exporter in self.exporters:
@@ -98,13 +95,55 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
             meter_uploader = MeterUploader(meter_context)
             self._meter_uploaders.append(meter_uploader)
 
+        # init tracer provider
+        self._init_tracer_provider()
+
         # just for debug
         self._trace_file_path = ""
 
         # patch this before starting instrumentation
         # enable_veadk_tracing(self.dump)
 
-        GoogleADKInstrumentor().instrument(tracer_provider=tracer_provider)
+        GoogleADKInstrumentor().instrument()
+
+    def _init_tracer_provider(self):
+        # 1. get global trace provider
+        global_tracer_provider = trace_api.get_tracer_provider()
+
+        if not isinstance(global_tracer_provider, TracerProvider):
+            logger.info(
+                f"Global tracer provider has not been set. Create tracer provider and set it now."
+            )
+            # 1.1 init tracer provider
+            tracer_provider = trace_sdk.TracerProvider()
+            trace_api.set_tracer_provider(tracer_provider)
+            global_tracer_provider = trace_api.get_tracer_provider()
+
+        have_apmplus_exporter = False
+        # 2. check if apmplus exporter is already exist
+        for processor in global_tracer_provider._active_span_processor._span_processors:
+            if isinstance(processor, (BatchSpanProcessor, SimpleSpanProcessor)):
+                # check exporter endpoint
+                if "apmplus" in processor.span_exporter._endpoint:
+                    have_apmplus_exporter = True
+
+        # 3. add exporters to global tracer_provider
+        # range over a copy of exporters to avoid index issues
+        for exporter in self.exporters[:]:
+            if have_apmplus_exporter and isinstance(exporter, APMPlusExporter):
+                # apmplus exporter has been int in global tracer provider, need to remove from exporters.
+                self.exporters.remove(exporter)
+                continue
+            processor, resource_attributes = exporter.get_processor()
+            if resource_attributes is not None:
+                update_resource_attributions(
+                    global_tracer_provider, resource_attributes
+                )
+            global_tracer_provider.add_span_processor(processor)
+            logger.debug(f"Add exporter `{exporter.__class__.__name__}` to tracing.")
+            self._processors.append(processor)
+        logger.debug(f"Init OpentelemetryTracer with {len(self.exporters)} exporters.")
+
 
     @override
     def dump(

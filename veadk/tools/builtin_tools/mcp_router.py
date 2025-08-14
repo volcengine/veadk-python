@@ -17,8 +17,6 @@ from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
 from veadk.config import getenv
 from veadk.utils.mcp_utils import get_mcp_params
 
-url = getenv("TOOL_LAS_URL")
-dataset_id = getenv("TOOL_LAS_DATASET_ID")
+url = getenv("TOOL_MCP_ROUTER_URL")
 
-
-las = MCPToolset(connection_params=get_mcp_params(url=url))
+mcp_router = MCPToolset(connection_params=get_mcp_params(url=url))

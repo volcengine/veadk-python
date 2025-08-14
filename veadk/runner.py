@@ -70,6 +70,10 @@ class Runner:
             memory_service=self.long_term_memory,
         )
 
+        if getattr(self.agent, "tracers", None):
+            for tracers in self.agent.tracers:
+                tracers.set_app_name(self.app_name)
+
     def _convert_messages(self, messages) -> list:
         if isinstance(messages, str):
             messages = [types.Content(role="user", parts=[types.Part(text=messages)])]

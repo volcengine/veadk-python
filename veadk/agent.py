@@ -39,6 +39,7 @@ from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INST
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_asyncio
+from google.adk.agents.base_agent import BaseAgent
 
 patch_asyncio()
 logger = get_logger(__name__)
@@ -77,7 +78,7 @@ class Agent(LlmAgent):
     tools: list[ToolUnion] = []
     """The tools provided to agent."""
 
-    sub_agents: list[Agent] = Field(default_factory=list, exclude=True)
+    sub_agents: list[BaseAgent] = Field(default_factory=list, exclude=True)
     """The sub agents provided to agent."""
 
     knowledgebase: Optional[KnowledgeBase] = None
@@ -117,9 +118,11 @@ class Agent(LlmAgent):
         if self.tracers:
             self.before_model_callback = []
             self.after_model_callback = []
+            self.after_tool_callback = []
             for tracer in self.tracers:
-                self.before_model_callback.append(tracer.llm_metrics_hook)
-                self.after_model_callback.append(tracer.token_metrics_hook)
+                self.before_model_callback.append(tracer.tracer_hook_before_model)
+                self.after_model_callback.append(tracer.tracer_hook_after_model)
+                self.after_tool_callback.append(tracer.tracer_hook_after_tool)
 
         logger.info(f"Agent `{self.name}` init done.")
         logger.debug(
@@ -220,6 +223,9 @@ class Agent(LlmAgent):
             session_service=session_service,
             memory_service=self.long_term_memory,
         )
+        if getattr(self, "tracers", None):
+            for tracer in self.tracers:
+                tracer.set_app_name(app_name)
 
         logger.info(f"Begin to process prompt {prompt}")
         # run
