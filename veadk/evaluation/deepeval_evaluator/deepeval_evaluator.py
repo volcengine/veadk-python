@@ -52,7 +52,7 @@ class DeepevalEvaluator(BaseEvaluator):
             "https://ark.cn-beijing.volces.com/api/v3/",
         ),
         name: str = "veadk_deepeval_evaluator",
-        prometheus_config: PrometheusPushgatewayConfig = None,
+        prometheus_config: PrometheusPushgatewayConfig | None = None,
     ):
         super().__init__(agent=agent, name=name)
 
@@ -73,11 +73,9 @@ class DeepevalEvaluator(BaseEvaluator):
         eval_id: str = f"test_{formatted_timestamp()}",
     ):
         """Target to Google ADK, we will use the same evaluation case format as Google ADK."""
-        for metric in metrics:
-            if not metric.model:
-                metric.model = self.judge_model
         # Get evaluation data by parsing eval set file
         self.generate_eval_data(eval_set_file_path)
+
         # Get actual data by running agent
         logger.info("Start to run agent for actual data.")
         await self._run_agent_for_actual_data()
