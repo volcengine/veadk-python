@@ -98,14 +98,14 @@ def init():
     )
 
     deploy_mode_options = {
-        "1": "A2A Server",
+        "1": "A2A/MCP Server",
         "2": "VeADK Studio",
         "3": "VeADK Web / Google ADK Web",
     }
 
     deploy_mode = Prompt.ask(
         """Choose your deploy mode:
-1. A2A Server
+1. A2A/MCP Server
 2. VeADK Studio
 3. VeADK Web / Google ADK Web
 """,

@@ -43,7 +43,8 @@ cli = [
     "volcengine-python-sdk==4.0.3", # For Volcengine API
     "typer>=0.16.0",                # For command-line implementation
     "streamlit==1.46.1",            # For running VeADK studio app
-    "agent-pilot-sdk>=0.0.9"        # Prompt optimization by Volcengine AgentPilot/PromptPilot toolkits
+    "agent-pilot-sdk>=0.0.9",       # Prompt optimization by Volcengine AgentPilot/PromptPilot toolkits
+    "fastmcp>=2.11.3",              # For running MCP
 ]
 dev = [
     "pre-commit>=4.2.0",            # Format checking

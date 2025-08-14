@@ -38,6 +38,8 @@ python3 -m pip install uvicorn[standard]
 
 python3 -m pip install fastapi
 
+python3 -m pip install fastmcp
+
 USE_STUDIO=${USE_STUDIO:-False}
 USE_ADK_WEB=${USE_ADK_WEB:-False}
 

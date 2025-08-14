@@ -4,3 +4,4 @@ agent-pilot-sdk>=0.0.9 # extra dep for prompt optimization in veadk studio
 typer>=0.16.0
 uvicorn[standard]
 fastapi
+fastmcp
