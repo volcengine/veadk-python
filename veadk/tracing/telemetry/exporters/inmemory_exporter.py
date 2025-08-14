@@ -83,6 +83,3 @@ class InMemoryExporter(BaseModel, BaseExporter):
         self._real_exporter = self._exporter
         processor = export.SimpleSpanProcessor(self._exporter)
         return processor, None
-
-    def get_meter_context(self) -> Any:
-        return None

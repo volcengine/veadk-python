@@ -82,10 +82,8 @@ async def test_tracing():
     exporters = init_exporters()
     tracer = OpentelemetryTracer(exporters=exporters)
 
-    assert len(tracer.exporters) == 5  # with extra 2 built-in exporters
+    assert len(tracer.exporters) == 4  # with extra 1 built-in exporters
 
-    # TODO: Ensure the tracing provider is set correctly after loading SDK
-    # TODO: Ensure the tracing provider is set correctly after loading SDK
     # TODO: Ensure the tracing provider is set correctly after loading SDK
 
 
@@ -100,7 +98,7 @@ async def test_tracing_with_global_provider():
     #
     tracer = OpentelemetryTracer(exporters=exporters)
 
-    assert len(tracer.exporters) == 5  # with extra 2 built-in exporters
+    assert len(tracer.exporters) == 4  # with extra 1 built-in exporters
 
 
 @pytest.mark.asyncio
@@ -115,4 +113,4 @@ async def test_tracing_with_apmplus_global_provider():
     tracer = OpentelemetryTracer(exporters=exporters)
 
     # apmplus exporter won't init again
-    assert len(tracer.exporters) == 4  # with extra 2 built-in exporters
+    assert len(tracer.exporters) == 3  # with extra 1 built-in exporters
