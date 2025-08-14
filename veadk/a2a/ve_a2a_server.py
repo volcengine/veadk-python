@@ -48,8 +48,6 @@ class VeA2AServer:
         )
         app = app_application.build()  # build routes
 
-        # import uvicorn
-        # uvicorn.run(app, host="127.0.0.1", port=8000)
         return app
 
 
