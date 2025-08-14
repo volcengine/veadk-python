@@ -15,6 +15,7 @@
 import asyncio
 from pathlib import Path
 
+
 from veadk.cloud.cloud_agent_engine import CloudAgentEngine
 from fastmcp.client import Client
 
@@ -27,7 +28,6 @@ GATEWAY_SERVICE_NAME = ""
 GATEWAY_UPSTREAMNAME = ""
 USE_STUDIO = False
 USE_ADK_WEB = False
-USE_MCP = False
 
 
 async def main():
@@ -40,42 +40,42 @@ async def main():
         gateway_upstream_name=GATEWAY_UPSTREAMNAME,
         use_studio=USE_STUDIO,
         use_adk_web=USE_ADK_WEB,
-        use_mcp=USE_MCP,
     )
-
+    query_example = "How is the weather like in Beijing?"
     if not USE_STUDIO and (not USE_ADK_WEB):
-        if not USE_MCP:
-            response_message = await cloud_app.message_send(
-                "How is the weather like in Beijing?", SESSION_ID, USER_ID
+        print("### A2A example ###")
+        response_message = await cloud_app.message_send(
+            query_example, SESSION_ID, USER_ID
+        )
+        print(f"VeFaaS application ID: {cloud_app.vefaas_application_id}")
+        print(f"Message ID: {response_message.messageId}")
+        print(
+            f"Response from {cloud_app.vefaas_endpoint}: {response_message.parts[0].root.text}"
+        )
+
+        print("### MCP example ###")
+        # cloud_app = CloudApp(vefaas_application_name=VEFAAS_APPLICATION_NAME)
+        endpoint = cloud_app._get_vefaas_endpoint()
+        print(f"endpoint:{endpoint}")
+        # Connect to MCP server
+        client = Client(f"{endpoint}/mcp")
+
+        async with client:
+            # List available tools
+            tools = await client.list_tools()
+            print(f"tool_0: {tools[0].__dict__}\n")
+
+            # Call run_agent tool, pass user input and session information
+            res = await client.call_tool(
+                "run_agent",
+                {
+                    "user_input": query_example,
+                    "session_id": SESSION_ID,
+                    "user_id": USER_ID,
+                },
             )
             print(f"VeFaaS application ID: {cloud_app.vefaas_application_id}")
-            print(f"Message ID: {response_message.messageId}")
-            print(
-                f"Response from {cloud_app.vefaas_endpoint}: {response_message.parts[0].root.text}"
-            )
-        else:
-            # cloud_app = CloudApp(vefaas_application_name=VEFAAS_APPLICATION_NAME)
-            endpoint = cloud_app._get_vefaas_endpoint()
-            print(f"endpoint:{endpoint}")
-            # Connect to MCP server
-            client = Client(f"{endpoint}/mcp")
-
-            async with client:
-                # List available tools
-                tools = await client.list_tools()
-                print(f"tool_0: {tools[0].__dict__}\n")
-
-                # Call run_agent tool, pass user input and session information
-                res = await client.call_tool(
-                    "run_agent",
-                    {
-                        "user_input": "How is the weather like in Beijing?",
-                        "session_id": SESSION_ID,
-                        "user_id": USER_ID,
-                    },
-                )
-                print(f"VeFaaS application ID: {cloud_app.vefaas_application_id}")
-                print(f"Response from {cloud_app.vefaas_endpoint}: {res}")
+            print(f"Response from {cloud_app.vefaas_endpoint}: {res}")
 
     else:
         print(f"Web is running at: {cloud_app.vefaas_endpoint}")

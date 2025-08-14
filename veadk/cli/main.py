@@ -118,28 +118,6 @@ def init():
         print("Invalid deploy mode, set default to A2A Server")
         deploy_mode = deploy_mode_options["1"]
 
-    # Sub-choice for A2A/MCP Server
-    server_type = None
-    if deploy_mode == deploy_mode_options["1"]:  # A2A/MCP Server
-        server_type_options = {
-            "1": "A2A Server",
-            "2": "MCP Server",
-        }
-
-        server_type_choice = Prompt.ask(
-            """Choose server type:
-    1. A2A Server
-    2. MCP Server
-    """,
-            default="1",
-        )
-
-        if server_type_choice in server_type_options:
-            server_type = server_type_options[server_type_choice]
-        else:
-            print("Invalid server type, set default to A2A Server")
-            server_type = server_type_options["1"]
-
     setting_values = {
         "VEFAAS_APPLICATION_NAME": vefaas_application_name,
         "GATEWAY_NAME": gateway_name,
@@ -147,7 +125,6 @@ def init():
         "GATEWAY_UPSTREAM_NAME": gateway_upstream_name,
         "USE_STUDIO": deploy_mode == deploy_mode_options["2"],
         "USE_ADK_WEB": deploy_mode == deploy_mode_options["3"],
-        "USE_MCP": server_type == "MCP Server" if server_type else False,
     }
 
     shutil.copytree(template_dir, target_dir)
