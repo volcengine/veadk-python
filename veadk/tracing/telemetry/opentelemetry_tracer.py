@@ -61,28 +61,19 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
 
     def model_post_init(self, context: Any, /) -> None:
         self._processors = []
-        self._inmemory_exporter: InMemoryExporter = None
-        self._apiserver_exporter: ApiServerExporter = None
-        # Inmemory & APIServer are the default exporters
-        have_inmemory_exporter = False
-        have_apiserver_exporter = False
+        self._inmemory_exporter: InMemoryExporter | None = None
+
+        # InMemoryExporter is a default exporter for exporting local tracing file
         for exporter in self.exporters:
             if isinstance(exporter, InMemoryExporter):
-                have_inmemory_exporter = True
                 self._inmemory_exporter = exporter
-            elif isinstance(exporter, ApiServerExporter):
-                have_apiserver_exporter = True
-                self._apiserver_exporter = exporter
 
-        if not have_inmemory_exporter:
-            inmemory_exporter = InMemoryExporter()
-            self.exporters.append(inmemory_exporter)
-            self._inmemory_exporter = inmemory_exporter
-        if not have_apiserver_exporter:
-            apiserver_exporter = ApiServerExporter()
-            self.exporters.append(apiserver_exporter)
-            self._apiserver_exporter = apiserver_exporter
+        if self._inmemory_exporter is None:
+            self._inmemory_exporter = InMemoryExporter()
+            self.exporters.append(self._inmemory_exporter)
+        # ========================================================================
 
+        # Process meter-related attributes
         self._meter_contexts = []
         self._meter_uploaders = []
         for exporter in self.exporters:
@@ -93,19 +84,18 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         for meter_context in self._meter_contexts:
             meter_uploader = MeterUploader(meter_context)
             self._meter_uploaders.append(meter_uploader)
+        # ================================
 
         # init tracer provider
+        # VeADK operates on global OpenTelemetry provider, hence return nothing
         self._init_tracer_provider()
 
         # just for debug
         self._trace_file_path = ""
 
-        # patch this before starting instrumentation
-        # enable_veadk_tracing(self.dump)
-
         GoogleADKInstrumentor().instrument()
 
-    def _init_tracer_provider(self):
+    def _init_tracer_provider(self) -> None:
         # 1. get global trace provider
         global_tracer_provider = trace_api.get_tracer_provider()
 
@@ -122,17 +112,25 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         # 2. check if apmplus exporter is already exist
         for processor in global_tracer_provider._active_span_processor._span_processors:
             if isinstance(processor, (BatchSpanProcessor, SimpleSpanProcessor)):
-                # check exporter endpoint
-                if "apmplus" in processor.span_exporter._endpoint:
-                    have_apmplus_exporter = True
+                # try to get endpoint, in case of exporter has no _endpoint attribute
+                try:
+                    exporter_endpoint = processor.span_exporter._endpoint
+                    if "apmplus" in exporter_endpoint:
+                        have_apmplus_exporter = True
+                except AttributeError:
+                    # log a warning and pass this exporter
+                    logger.warning(
+                        f"Exporter {processor.span_exporter} has no endpoint."
+                    )
 
         # 3. add exporters to global tracer_provider
         # range over a copy of exporters to avoid index issues
+        if have_apmplus_exporter:
+            self.exporters = [
+                e for e in self.exporters if not isinstance(e, APMPlusExporter)
+            ]
+
         for exporter in self.exporters[:]:
-            if have_apmplus_exporter and isinstance(exporter, APMPlusExporter):
-                # apmplus exporter has been int in global tracer provider, need to remove from exporters.
-                self.exporters.remove(exporter)
-                continue
             processor, resource_attributes = exporter.get_processor()
             if resource_attributes is not None:
                 update_resource_attributions(
@@ -150,6 +148,12 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         session_id: str,
         path: str = "/tmp",
     ) -> str:
+        if not self._inmemory_exporter:
+            logger.warning(
+                "InMemoryExporter is not initialized. Please check your tracer exporters."
+            )
+            return ""
+
         prompt_tokens = self._inmemory_exporter._real_exporter.prompt_tokens
         completion_tokens = self._inmemory_exporter._real_exporter.completion_tokens
 
