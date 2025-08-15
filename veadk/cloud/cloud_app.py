@@ -189,3 +189,12 @@ class CloudApp:
                 # TODO(floritange): show error log on VeFaaS function
                 print(e)
                 return None
+
+
+def get_message_id(message: Message):
+    """Get the messageId of the a2a message"""
+    if getattr(message, "messageId", None):
+        # Compatible with the messageId of the old version
+        return message.messageId
+    else:
+        return message.message_id

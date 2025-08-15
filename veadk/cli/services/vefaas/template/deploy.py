@@ -18,6 +18,7 @@ from pathlib import Path
 
 from veadk.cloud.cloud_agent_engine import CloudAgentEngine
 from fastmcp.client import Client
+from veadk.cloud.cloud_app import get_message_id
 
 SESSION_ID = "cloud_app_test_session"
 USER_ID = "cloud_app_test_user"
@@ -48,7 +49,7 @@ async def main():
             query_example, SESSION_ID, USER_ID
         )
         print(f"VeFaaS application ID: {cloud_app.vefaas_application_id}")
-        print(f"Message ID: {response_message.message_id}")
+        print(f"Message ID: {get_message_id(response_message)}")
         print(
             f"Response from {cloud_app.vefaas_endpoint}: {response_message.parts[0].root.text}"
         )
