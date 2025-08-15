@@ -28,6 +28,11 @@ knowledgebase = KnowledgeBase(backend=...)
 from veadk import Agent
 from veadk.knowledgebase.knowledgebase import KnowledgeBase
 
+knowledgebase_file = "knowledgebase.md" # 本地知识文件
+if os.path.exists(knowledgebase_file):
+    with open(knowledgebase_file, "r", encoding="utf-8") as f:
+        knowledgebase_data = [line.strip() for line in f if line.strip()] # 手动切片
+
 knowledgebase = KnowledgeBase(backend="opensearch")
 knowledgebase.add(
     knowledgebase_data, app_name=app_name, user_id=user_id, session_id=session_id
