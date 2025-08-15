@@ -22,7 +22,6 @@ from contextlib import asynccontextmanager
 from fastmcp import FastMCP
 from fastapi import FastAPI
 
-
 # ==============================================================================
 # Tracer Config ================================================================
 
@@ -81,23 +80,21 @@ runner = Runner(
     user_id="",
 )
 
+# Prepare doc string
+run_agent_doc = f"""{agent.description}
+Args:
+    user_input: User's input message (required).
+    user_id: User identifier. Defaults to "mcp_user".
+    session_id: Session identifier. Defaults to "mcp_session".
+Returns:
+    Final agent response as a string."""
 
-# mcp server
-@a2a_app.post("/run_agent", operation_id="run_agent", tags=["mcp"])
+
 async def run_agent(
     user_input: str,
-    user_id: str = "unknown_user",
-    session_id: str = "unknown_session",
+    user_id: str = "mcp_user",
+    session_id: str = "mcp_session",
 ) -> str:
-    """
-    Execute agent with user input and return final output
-    Args:
-        user_input: User's input message
-        user_id: User identifier
-        session_id: Session identifier
-    Returns:
-        Final agent response
-    """
     # Set user_id for runner
     runner.user_id = user_id
 
@@ -109,10 +106,17 @@ async def run_agent(
     return final_output
 
 
+run_agent.__doc__ = run_agent_doc
+
+# Add post route to run_agent
+run_agent = a2a_app.post("/run_agent", operation_id="run_agent", tags=["mcp"])(
+    run_agent
+)
+
 mcp = FastMCP.from_fastapi(app=a2a_app, name=app_name, include_tags={"mcp"})
 
 # Create MCP ASGI app
-mcp_app = mcp.http_app(path="/")
+mcp_app = mcp.http_app(path="/", transport="streamable-http")
 
 
 # Combined lifespan management
