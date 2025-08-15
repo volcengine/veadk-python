@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import time
+import requests
 
 
 def read_file(file_path):
@@ -28,6 +29,14 @@ def formatted_timestamp():
 
 
 def read_png_to_bytes(png_path: str) -> bytes:
-    with open(png_path, "rb") as f:
-        data = f.read()
+    # Determine whether it is a local file or a network file
+    if png_path.startswith(("http://", "https://")):
+        # Network file: Download via URL and return bytes
+        response = requests.get(png_path)
+        response.raise_for_status()  # Check if the HTTP request is successful
+        return response.content
+    else:
+        # Local file
+        with open(png_path, "rb") as f:
+            data = f.read()
     return data
