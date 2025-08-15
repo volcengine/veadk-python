@@ -21,6 +21,7 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.35.0",
     "opentelemetry-instrumentation-logging>=0.56b0",
     "wrapt>=1.17.2", # For patching built-in functions
+    "typer>=0.16.0", # For command-line implementation
 ]
 
 [project.scripts]
@@ -41,8 +42,6 @@ eval = [
 ]
 cli = [
     "volcengine-python-sdk==4.0.3", # For Volcengine API
-    "typer>=0.16.0",                # For command-line implementation
-    "streamlit==1.46.1",            # For running VeADK studio app
     "agent-pilot-sdk>=0.0.9",       # Prompt optimization by Volcengine AgentPilot/PromptPilot toolkits
     "fastmcp>=2.11.3",              # For running MCP
 ]
