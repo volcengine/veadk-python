@@ -20,6 +20,7 @@ import shutil
 import sys
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from typing import Any
 
 import typer
 import uvicorn
@@ -206,22 +207,65 @@ def web(
         "--host",
     ),
 ):
-    from google.adk.memory import in_memory_memory_service
+    from google.adk.cli.utils.shared_value import SharedValue
 
-    from veadk.memory.long_term_memory import LongTermMemory
+    from veadk.memory.short_term_memory import ShortTermMemory
 
-    in_memory_memory_service.InMemoryMemoryService = LongTermMemory
+    def init_for_veadk(
+        self,
+        *,
+        agent_loader: Any,
+        session_service: Any,
+        memory_service: Any,
+        artifact_service: Any,
+        credential_service: Any,
+        eval_sets_manager: Any,
+        eval_set_results_manager: Any,
+        agents_dir: str,
+    ):
+        self.agent_loader = agent_loader
+        self.artifact_service = artifact_service
+        self.credential_service = credential_service
+        self.eval_sets_manager = eval_sets_manager
+        self.eval_set_results_manager = eval_set_results_manager
+        self.agents_dir = agents_dir
+        # Internal propeties we want to allow being modified from callbacks.
+        self.runners_to_clean = set()
+        self.current_app_name_ref = SharedValue(value="")
+        self.runner_dict = {}
 
-    from google.adk.cli import cli_tools_click
+        short_term_memory_backend = os.getenv("SHORT_TERM_MEMORY_BACKEND", "local")
+        logger.info(f"Short term memory: backend={short_term_memory_backend}")
 
-    importlib.reload(cli_tools_click)
+        long_term_memory_backend = os.getenv("LONG_TERM_MEMORY_BACKEND")
+        long_term_memory = None
+
+        if long_term_memory_backend is not None:
+            from veadk.memory.long_term_memory import LongTermMemory
+
+            logger.info(
+                f"Long term memory: backend={os.getenv('LONG_TERM_MEMORY_BACKEND')}"
+            )
+            long_term_memory = LongTermMemory(backend=long_term_memory_backend)
+        else:
+            logger.info("No long term memory backend settings detected.")
+
+        self.session_service = ShortTermMemory(
+            backend=short_term_memory_backend
+        ).session_service
+
+        self.memory_service = long_term_memory
+
+    import google.adk.cli.adk_web_server
+
+    google.adk.cli.adk_web_server.AdkWebServer.__init__ = init_for_veadk
+
+    import google.adk.cli.cli_tools_click as cli_tools_click
+
     agents_dir = os.getcwd()
-    if not session_service_uri:
-        session_service_uri = ""
+    logger.info(f"Load agents from {agents_dir}")
 
-    cli_tools_click.cli_web.main(
-        args=[agents_dir, "--session_service_uri", session_service_uri, "--host", host]
-    )
+    cli_tools_click.cli_web.main(args=[agents_dir, "--host", host])
 
 
 @app.command()
