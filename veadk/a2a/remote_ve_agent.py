@@ -18,7 +18,7 @@ import requests
 from a2a.types import AgentCard
 from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
 
-AGENT_CARD_WELL_KNOWN_PATH = "/.well-known/agent.json"
+AGENT_CARD_WELL_KNOWN_PATH = "/.well-known/agent-card.json"
 
 
 class RemoteVeAgent(RemoteA2aAgent):

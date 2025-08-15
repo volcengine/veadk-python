@@ -48,7 +48,7 @@ async def main():
             query_example, SESSION_ID, USER_ID
         )
         print(f"VeFaaS application ID: {cloud_app.vefaas_application_id}")
-        print(f"Message ID: {response_message.messageId}")
+        print(f"Message ID: {response_message.message_id}")
         print(
             f"Response from {cloud_app.vefaas_endpoint}: {response_message.parts[0].root.text}"
         )
