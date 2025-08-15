@@ -12,15 +12,16 @@ authors = [
 ]
 dependencies = [
     "pydantic-settings>=2.10.1", # Config management
-    "a2a-sdk==0.2.12", # For Google Agent2Agent protocol
+    "a2a-sdk==0.3.1", # For Google Agent2Agent protocol
     "deprecated>=1.2.18",
-    "google-adk==1.8.0", # For basic agent architecture
+    "google-adk==1.11.0", # For basic agent architecture
     "litellm>=1.74.3", # For model inference
     "loguru>=0.7.3", # For better logging
     "openinference-instrumentation-google-adk>=0.1.1", # For OpenInference instrumentation
     "opentelemetry-exporter-otlp>=1.35.0",
     "opentelemetry-instrumentation-logging>=0.56b0",
     "wrapt>=1.17.2", # For patching built-in functions
+    "typer>=0.16.0", # For command-line implementation
 ]
 
 [project.scripts]
@@ -41,8 +42,6 @@ eval = [
 ]
 cli = [
     "volcengine-python-sdk==4.0.3", # For Volcengine API
-    "typer>=0.16.0",                # For command-line implementation
-    "streamlit==1.46.1",            # For running VeADK studio app
     "agent-pilot-sdk>=0.0.9",       # Prompt optimization by Volcengine AgentPilot/PromptPilot toolkits
     "fastmcp>=2.11.3",              # For running MCP
 ]
