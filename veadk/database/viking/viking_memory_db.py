@@ -18,7 +18,7 @@ import string
 import threading
 import time
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 from volcengine.ApiInfo import ApiInfo
@@ -35,20 +35,20 @@ logger = get_logger(__name__)
 
 
 class VikingMemConfig(BaseModel):
-    volcengine_ak: Optional[str] = Field(
-        default=getenv("VOLCENGINE_ACCESS_KEY"),
+    volcengine_ak: str = Field(
+        default_factory=lambda: getenv("VOLCENGINE_ACCESS_KEY"),
         description="VikingDB access key",
     )
-    volcengine_sk: Optional[str] = Field(
-        default=getenv("VOLCENGINE_SECRET_KEY"),
+    volcengine_sk: str = Field(
+        default_factory=lambda: getenv("VOLCENGINE_SECRET_KEY"),
         description="VikingDB secret key",
     )
-    project: Optional[str] = Field(
-        default=getenv("DATABASE_VIKING_PROJECT"),
+    project: str = Field(
+        default_factory=lambda: getenv("DATABASE_VIKING_PROJECT"),
         description="VikingDB project name",
     )
-    region: Optional[str] = Field(
-        default=getenv("DATABASE_VIKING_REGION"),
+    region: str = Field(
+        default_factory=lambda: getenv("DATABASE_VIKING_REGION"),
         description="VikingDB region",
     )
 
