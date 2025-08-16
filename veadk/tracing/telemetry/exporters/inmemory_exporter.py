@@ -20,6 +20,9 @@ from pydantic import BaseModel
 from typing_extensions import override
 
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
+from veadk.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 # ======== Adapted from Google ADK ========
@@ -35,10 +38,16 @@ class _InMemoryExporter(export.SpanExporter):
     @override
     def export(self, spans: typing.Sequence[ReadableSpan]) -> export.SpanExportResult:
         for span in spans:
-            trace_id = span.context.trace_id
-            self.trace_id = trace_id
+            if span.context:
+                trace_id = span.context.trace_id
+                self.trace_id = trace_id
+            else:
+                logger.warning(
+                    f"Span context is missing, failed to get `trace_id`. span: {span}"
+                )
+
             if span.name == "call_llm":
-                attributes = dict(span.attributes)
+                attributes = dict(span.attributes or {})
                 prompt_token = attributes.get("gen_ai.usage.prompt_tokens", None)
                 completion_token = attributes.get(
                     "gen_ai.usage.completion_tokens", None
@@ -48,7 +57,7 @@ class _InMemoryExporter(export.SpanExporter):
                 if completion_token:
                     self.completion_tokens.append(completion_token)
             if span.name == "call_llm":
-                attributes = dict(span.attributes)
+                attributes = dict(span.attributes or {})
                 session_id = attributes.get("gcp.vertex.agent.session_id", None)
                 if session_id:
                     if session_id not in self.session_trace_dict:

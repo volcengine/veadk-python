@@ -19,6 +19,7 @@ from os import path
 from typing import Any, Optional
 
 from google.adk import Runner
+from google.adk.agents.base_agent import BaseAgent
 from google.adk.artifacts import BaseArtifactService, InMemoryArtifactService
 from google.adk.evaluation.agent_evaluator import (
     NUM_RUNS,
@@ -68,7 +69,7 @@ class VeEvaluationGenerator(EvaluationGenerator):
         eval_set: EvalSet,
         agent: Agent,
         repeat_num: int = 3,
-        agent_name: str = None,
+        agent_name: str | None = None,
     ):
         results = []
 
@@ -90,7 +91,7 @@ class VeEvaluationGenerator(EvaluationGenerator):
     @staticmethod
     async def _ve_generate_inferences_from_root_agent(
         invocations: list[Invocation],
-        root_agent: Agent,
+        root_agent: BaseAgent,
         reset_func: Any,
         initial_session: Optional[SessionInput] = None,
         session_id: Optional[str] = None,
@@ -117,21 +118,15 @@ class VeEvaluationGenerator(EvaluationGenerator):
         if not artifact_service:
             artifact_service = InMemoryArtifactService()
 
-        if getattr(root_agent, "long_term_memory", None) is not None:
-            runner = Runner(
-                app_name=app_name,
-                agent=root_agent,
-                artifact_service=artifact_service,
-                session_service=session_service,
-                memory_service=root_agent.long_term_memory,  # add long_term_memory
-            )
-        else:
-            runner = Runner(
-                app_name=app_name,
-                agent=root_agent,
-                artifact_service=artifact_service,
-                session_service=session_service,
-            )
+        runner = Runner(
+            app_name=app_name,
+            agent=root_agent,
+            artifact_service=artifact_service,
+            session_service=session_service,
+            memory_service=root_agent.long_term_memory
+            if isinstance(root_agent, Agent)
+            else None,
+        )
 
         # Reset agent state for each query
         if callable(reset_func):

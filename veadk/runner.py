@@ -57,22 +57,20 @@ class Runner:
         self.short_term_memory = short_term_memory
         self.session_service = short_term_memory.session_service
 
+        # prevent VeRemoteAgent has no long-term memory attr
         if isinstance(self.agent, Agent):
             self.long_term_memory = self.agent.long_term_memory
+            for tracer in self.agent.tracers:
+                tracer.set_app_name(self.app_name)
         else:
             self.long_term_memory = None
 
-        # maintain a in-memory runner for fast inference
         self.runner = ADKRunner(
             app_name=self.app_name,
             agent=self.agent,
             session_service=self.session_service,
             memory_service=self.long_term_memory,
         )
-
-        if getattr(self.agent, "tracers", None):
-            for tracers in self.agent.tracers:
-                tracers.set_app_name(self.app_name)
 
     def _convert_messages(self, messages) -> list:
         if isinstance(messages, str):
@@ -126,6 +124,7 @@ class Runner:
                         logger.debug(f"Function call: {function_call}")
                 elif (
                     event.content is not None
+                    and event.content.parts
                     and event.content.parts[0].text is not None
                     and len(event.content.parts[0].text.strip()) > 0
                 ):
@@ -147,7 +146,7 @@ class Runner:
         session_id: str,
         stream: bool = False,
     ):
-        messages: list = self._convert_messages(messages)
+        converted_messages: list = self._convert_messages(messages)
 
         await self.short_term_memory.create_session(
             app_name=self.app_name, user_id=self.user_id, session_id=session_id
@@ -156,23 +155,30 @@ class Runner:
         logger.info("Begin to process user messages.")
 
         final_output = ""
-        for message in messages:
-            final_output = await self._run(session_id, message, stream)
+        for converted_message in converted_messages:
+            final_output = await self._run(session_id, converted_message, stream)
 
         # try to save tracing file
-        if isinstance(self.agent, Agent):
-            self.save_tracing_file(session_id)
+        self.save_tracing_file(session_id)
 
         return final_output
 
     def save_tracing_file(self, session_id: str) -> str:
+        if not isinstance(self.agent, Agent):
+            logger.warning(
+                (
+                    "The agent is not an instance of VeADK Agent, cannot save tracing file."
+                )
+            )
+            return ""
+
         if not self.agent.tracers:
-            return
+            return ""
 
         try:
             dump_path = ""
             for tracer in self.agent.tracers:
-                dump_path = tracer.dump(self.user_id, session_id)
+                dump_path = tracer.dump(user_id=self.user_id, session_id=session_id)
 
             return dump_path
         except Exception as e:
@@ -196,61 +202,69 @@ class Runner:
             user_id=self.user_id,
             session_id=session_id,
         )
+        if not session:
+            logger.error(
+                f"Session {session_id} not found in session service, cannot save to long-term memory."
+            )
+            return
+
         await self.long_term_memory.add_session_to_memory(session)
-        logger.info(f"Add session `{session.id}` to long-term memory.")
+        logger.info(f"Add session `{session.id}` to long term memory.")
 
-    async def run_with_final_event(
-        self,
-        messages: RunnerMessage,
-        session_id: str,
-    ):
-        """non-streaming run with final event"""
-        messages: list = self._convert_messages(messages)
+    # [deprecated] we will not host a chat-service in VeADK, so the following two methods are deprecated
 
-        await self.short_term_memory.create_session(
-            app_name=self.app_name, user_id=self.user_id, session_id=session_id
-        )
+    # async def run_with_final_event(
+    #     self,
+    #     messages: RunnerMessage,
+    #     session_id: str,
+    # ):
+    #     """non-streaming run with final event"""
+    #     messages: list = self._convert_messages(messages)
 
-        logger.info("Begin to process user messages.")
+    #     await self.short_term_memory.create_session(
+    #         app_name=self.app_name, user_id=self.user_id, session_id=session_id
+    #     )
 
-        final_event = ""
-        async for event in self.runner.run_async(
-            user_id=self.user_id, session_id=session_id, new_message=messages[0]
-        ):
-            if event.get_function_calls():
-                for function_call in event.get_function_calls():
-                    logger.debug(f"Function call: {function_call}")
-            elif (
-                not event.partial
-                and event.content.parts[0].text is not None
-                and len(event.content.parts[0].text.strip()) > 0
-            ):
-                final_event = event.model_dump_json(exclude_none=True, by_alias=True)
+    #     logger.info("Begin to process user messages.")
 
-        return final_event
+    #     final_event = ""
+    #     async for event in self.runner.run_async(
+    #         user_id=self.user_id, session_id=session_id, new_message=messages[0]
+    #     ):
+    #         if event.get_function_calls():
+    #             for function_call in event.get_function_calls():
+    #                 logger.debug(f"Function call: {function_call}")
+    #         elif (
+    #             not event.partial
+    #             and event.content.parts[0].text is not None
+    #             and len(event.content.parts[0].text.strip()) > 0
+    #         ):
+    #             final_event = event.model_dump_json(exclude_none=True, by_alias=True)
 
-    async def run_sse(
-        self,
-        session_id: str,
-        prompt: str,
-    ):
-        message = types.Content(role="user", parts=[types.Part(text=prompt)])
+    #     return final_event
 
-        await self.short_term_memory.create_session(
-            app_name=self.app_name, user_id=self.user_id, session_id=session_id
-        )
+    # async def run_sse(
+    #     self,
+    #     session_id: str,
+    #     prompt: str,
+    # ):
+    #     message = types.Content(role="user", parts=[types.Part(text=prompt)])
 
-        logger.info("Begin to process user messages under SSE method.")
+    #     await self.short_term_memory.create_session(
+    #         app_name=self.app_name, user_id=self.user_id, session_id=session_id
+    #     )
 
-        async for event in self.runner.run_async(
-            user_id=self.user_id,
-            session_id=session_id,
-            new_message=message,
-            run_config=RunConfig(streaming_mode=StreamingMode.SSE),
-        ):
-            # Format as SSE data
-            sse_event = event.model_dump_json(exclude_none=True, by_alias=True)
-            if event.get_function_calls():
-                for function_call in event.get_function_calls():
-                    logger.debug(f"SSE function call event: {sse_event}")
-            yield f"data: {sse_event}\n\n"
+    #     logger.info("Begin to process user messages under SSE method.")
+
+    #     async for event in self.runner.run_async(
+    #         user_id=self.user_id,
+    #         session_id=session_id,
+    #         new_message=message,
+    #         run_config=RunConfig(streaming_mode=StreamingMode.SSE),
+    #     ):
+    #         # Format as SSE data
+    #         sse_event = event.model_dump_json(exclude_none=True, by_alias=True)
+    #         if event.get_function_calls():
+    #             for function_call in event.get_function_calls():
+    #                 logger.debug(f"SSE function call event: {sse_event}")
+    #         yield f"data: {sse_event}\n\n"

@@ -112,33 +112,26 @@ def render_prompt_with_jinja2(agent: Agent):
 
     tools = []
     for tool in agent.tools:
+        _tool_type = ""
+        _tools = []
         if isinstance(tool, Callable):
-            type = "function"
+            _tool_type = "function"
+            _tools = [FunctionTool(tool)]
 
-            _tool = FunctionTool(tool)
-            tools.append(
-                {
-                    "name": _tool.name,
-                    "description": _tool.description,
-                    "arguments": str(
-                        _tool._get_declaration().model_dump()["parameters"]
-                    ),
-                    "type": type,
-                }
-            )
         elif isinstance(tool, MCPToolset):
-            type = "tool"
-
+            _tool_type = "tool"
             _tools = asyncio.run(tool.get_tools())
-            for _tool in _tools:
+
+        for _tool in _tools:
+            if _tool and _tool._get_declaration():
                 tools.append(
                     {
                         "name": _tool.name,
                         "description": _tool.description,
                         "arguments": str(
-                            _tool._get_declaration().model_dump()["parameters"]
+                            _tool._get_declaration().model_dump()["parameters"]  # type: ignore
                         ),
-                        "type": type,
+                        "type": _tool_type,
                     }
                 )
 
@@ -148,7 +141,6 @@ def render_prompt_with_jinja2(agent: Agent):
             "name": agent.name,
             "model": agent.model_name,
             "description": agent.description,
-            # "tools": str(agent.tools),
         },
         "tools": tools,
     }
