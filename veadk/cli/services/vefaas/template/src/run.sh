@@ -43,8 +43,8 @@ python3 -m pip install fastmcp
 USE_STUDIO=${USE_STUDIO:-False}
 USE_ADK_WEB=${USE_ADK_WEB:-False}
 
-export SHORT_TERM_MEMORY_BACKEND=mysql
-export LONG_TERM_MEMORY_BACKEND=opensearch
+export SHORT_TERM_MEMORY_BACKEND= # can be `mysql`
+export LONG_TERM_MEMORY_BACKEND= # can be `opensearch`
 
 if [ "$USE_STUDIO" = "True" ]; then
     echo "USE_STUDIO is True, running veadk studio"

@@ -234,18 +234,18 @@ def web(
         self.current_app_name_ref = SharedValue(value="")
         self.runner_dict = {}
 
-        short_term_memory_backend = os.getenv("SHORT_TERM_MEMORY_BACKEND", "local")
+        short_term_memory_backend = os.getenv("SHORT_TERM_MEMORY_BACKEND")
+        if not short_term_memory_backend:  # prevent None or empty string
+            short_term_memory_backend = "local"
         logger.info(f"Short term memory: backend={short_term_memory_backend}")
 
         long_term_memory_backend = os.getenv("LONG_TERM_MEMORY_BACKEND")
         long_term_memory = None
 
-        if long_term_memory_backend is not None:
+        if long_term_memory_backend:
             from veadk.memory.long_term_memory import LongTermMemory
 
-            logger.info(
-                f"Long term memory: backend={os.getenv('LONG_TERM_MEMORY_BACKEND')}"
-            )
+            logger.info(f"Long term memory: backend={long_term_memory_backend}")
             long_term_memory = LongTermMemory(backend=long_term_memory_backend)
         else:
             logger.info("No long term memory backend settings detected.")
