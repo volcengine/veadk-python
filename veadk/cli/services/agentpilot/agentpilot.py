@@ -25,10 +25,9 @@ logger = get_logger(__name__)
 
 
 class AgentPilot:
-    def __init__(self, api_key: str, path: str = "", task_id: str = None) -> None:
+    def __init__(self, api_key: str, path: str = "") -> None:
         self.api_key = api_key
         self.path = path
-        self.task_id = task_id
 
     def optimize(
         self,
