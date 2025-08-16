@@ -26,7 +26,7 @@ from typing_extensions import override
 from veadk.knowledgebase import KnowledgeBase
 
 if TYPE_CHECKING:
-    from google.adk.models import LlmRequest
+    from google.adk.models.llm_request import LlmRequest
 
 
 knowledgebase: KnowledgeBase | None = None

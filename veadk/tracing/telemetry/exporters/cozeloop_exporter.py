@@ -26,20 +26,17 @@ logger = get_logger(__name__)
 
 class CozeloopExporterConfig(BaseModel):
     endpoint: str = Field(
-        ...,
         default_factory=lambda: getenv(
             "OBSERVABILITY_OPENTELEMETRY_COZELOOP_ENDPOINT",
             "https://api.coze.cn/v1/loop/opentelemetry/v1/traces",
         ),
     )
     space_id: str = Field(
-        ...,
         default_factory=lambda: getenv(
             "OBSERVABILITY_OPENTELEMETRY_COZELOOP_SERVICE_NAME"
         ),
     )
     token: str = Field(
-        ...,
         default_factory=lambda: getenv("OBSERVABILITY_OPENTELEMETRY_COZELOOP_API_KEY"),
     )
 

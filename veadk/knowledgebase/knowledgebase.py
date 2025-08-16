@@ -71,7 +71,7 @@ class KnowledgeBase:
 
         self.adapter.add(data=data, index=index)
 
-    def search(self, query: str, app_name: str, top_k: int = None) -> list[str]:
+    def search(self, query: str, app_name: str, top_k: int | None = None) -> list[str]:
         top_k = self.top_k if top_k is None else top_k
 
         logger.info(

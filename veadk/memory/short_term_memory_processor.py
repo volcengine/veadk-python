@@ -51,13 +51,16 @@ class ShortTermMemoryProcessor:
         messages = []
         for event in session.events:
             content = event.content
+            if not content or not content.parts:
+                continue
             message = {
                 "role": content.role,
                 "content": content.parts[0].text,
             }
             messages.append(message)
 
-        prompt = render_prompt(messages=str(messages))
+        prompt = render_prompt(messages=messages)
+
         res = completion(
             model=getenv("MODEL_AGENT_PROVIDER") + "/" + getenv("MODEL_AGENT_NAME"),
             base_url=getenv("MODEL_AGENT_API_BASE"),
@@ -69,7 +72,9 @@ class ShortTermMemoryProcessor:
                 }
             ],
         )
-        extracted_messages = json.loads(res.choices[0].message.content)
+        logger.debug(f"Response from memory optimization model: {res}")
+
+        extracted_messages = json.loads(res.choices[0].message.content)  # type: ignore
         logger.debug(f"Abstracted messages: {extracted_messages}")
 
         session.events = []

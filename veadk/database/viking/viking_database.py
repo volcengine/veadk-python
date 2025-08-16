@@ -136,13 +136,17 @@ class VikingDatabase(BaseModel, BaseDatabase):
         file_ext = kwargs.get(
             "file_ext", ".pdf"
         )  # when bytes data, file_ext is required
+
         ak = self.config.volcengine_ak
         sk = self.config.volcengine_sk
+
         tos_bucket = self.config.tos.bucket
         tos_endpoint = self.config.tos.endpoint
         tos_region = self.config.tos.region
         tos_key = self.config.tos.base_key
+
         client = tos.TosClientV2(ak, sk, tos_endpoint, tos_region, max_connections=1024)
+
         if isinstance(data, str) and os.path.isfile(data):  # Process file path
             file_ext = os.path.splitext(data)[1]
             new_key = f"{tos_key}/{str(uuid.uuid4())}{file_ext}"

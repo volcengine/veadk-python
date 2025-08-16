@@ -32,18 +32,15 @@ logger = get_logger(__name__)
 
 class APMPlusExporterConfig(BaseModel):
     endpoint: str = Field(
-        ...,
         default_factory=lambda: getenv(
             "OBSERVABILITY_OPENTELEMETRY_APMPLUS_ENDPOINT",
             "http://apmplus-cn-beijing.volces.com:4317",
         ),
     )
     app_key: str = Field(
-        ...,
         default_factory=lambda: getenv("OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY"),
     )
     service_name: str = Field(
-        ...,
         default_factory=lambda: getenv(
             "OBSERVABILITY_OPENTELEMETRY_APMPLUS_SERVICE_NAME",
             "veadk_tracing_service",

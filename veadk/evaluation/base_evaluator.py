@@ -217,15 +217,16 @@ class BaseEvaluator:
 
         for eval_case in eval_cases:
             eval_case_data = EvalCaseData(invocations=[])
-            self.agent_information_list.append(
-                {
-                    "app_name": eval_case.session_input.app_name,
-                    "user_id": eval_case.session_input.user_id,
-                    "session_id": str(
-                        uuid.uuid4()
-                    ),  # random session id for evaluation,
-                }
-            )
+            if eval_case.session_input:
+                self.agent_information_list.append(
+                    {
+                        "app_name": eval_case.session_input.app_name,
+                        "user_id": eval_case.session_input.user_id,
+                        "session_id": str(
+                            uuid.uuid4()
+                        ),  # random session id for evaluation,
+                    }
+                )
 
             for invocation in eval_case.conversation:
                 _input: str = ""

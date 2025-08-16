@@ -32,23 +32,29 @@ logger = get_logger(__name__)
 
 class OpenSearchVectorDatabaseConfig(BaseModel):
     host: str = Field(
-        default=getenv("DATABASE_OPENSEARCH_HOST"),
+        default_factory=lambda: getenv("DATABASE_OPENSEARCH_HOST"),
         description="OpenSearch host",
     )
+
     port: str | int = Field(
-        default=getenv("DATABASE_OPENSEARCH_PORT"),
+        default_factory=lambda: getenv("DATABASE_OPENSEARCH_PORT"),
         description="OpenSearch port",
     )
+
     username: Optional[str] = Field(
-        default=getenv("DATABASE_OPENSEARCH_USERNAME"),
+        default_factory=lambda: getenv("DATABASE_OPENSEARCH_USERNAME"),
         description="OpenSearch username",
     )
+
     password: Optional[str] = Field(
-        default=getenv("DATABASE_OPENSEARCH_PASSWORD"),
+        default_factory=lambda: getenv("DATABASE_OPENSEARCH_PASSWORD"),
         description="OpenSearch password",
     )
+
     secure: bool = Field(default=True, description="Whether enable SSL")
+
     verify_certs: bool = Field(default=False, description="Whether verify SSL certs")
+
     auth_method: Literal["basic", "aws_managed_iam"] = Field(
         default="basic", description="OpenSearch auth method"
     )
@@ -231,15 +237,16 @@ class OpenSearchVectorDatabase(BaseModel, BaseDatabase):
             for hit in response["hits"]["hits"]
         ]
 
-    def delete_by_query(self, collection_name: str, query: str):
+    def delete_by_query(self, collection_name: str, query: str) -> Any:
         """Delete docs by query in one index of OpenSearch"""
         if not self.collection_exists(collection_name):
             raise ValueError(f"Collection {collection_name} does not exist.")
 
-        query = {"query": {"match": {"page_content": query}}}
+        query_payload = {"query": {"match": {"page_content": query}}}
         response = self._opensearch_client.delete_by_query(
-            index=collection_name, body=query
+            index=collection_name, body=query_payload
         )
+
         self._opensearch_client.indices.refresh(index=collection_name)
         return response
 

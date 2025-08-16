@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 import pymysql
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, Field
 from typing_extensions import override
 
 from veadk.config import getenv
@@ -30,31 +30,29 @@ logger = get_logger(__name__)
 
 class MysqlDatabaseConfig(BaseModel):
     host: str = Field(
-        default=getenv("DATABASE_MYSQL_HOST"),
+        default_factory=lambda: getenv("DATABASE_MYSQL_HOST"),
         description="Mysql host",
     )
     user: str = Field(
-        default=getenv("DATABASE_MYSQL_USER"),
+        default_factory=lambda: getenv("DATABASE_MYSQL_USER"),
         description="Mysql user",
     )
     password: str = Field(
-        default=getenv("DATABASE_MYSQL_PASSWORD"),
+        default_factory=lambda: getenv("DATABASE_MYSQL_PASSWORD"),
         description="Mysql password",
     )
     database: str = Field(
-        default=getenv("DATABASE_MYSQL_DATABASE"),
+        default_factory=lambda: getenv("DATABASE_MYSQL_DATABASE"),
         description="Mysql database",
     )
     charset: str = Field(
-        default=getenv("DATABASE_MYSQL_CHARSET", "utf8mb4"),
+        default_factory=lambda: getenv("DATABASE_MYSQL_CHARSET", "utf8mb4"),
         description="Mysql charset",
     )
 
 
 class MysqlDatabase(BaseModel, BaseDatabase):
     config: MysqlDatabaseConfig = Field(default_factory=MysqlDatabaseConfig)
-
-    _connection: pymysql.Connection = PrivateAttr(default=None)
 
     def model_post_init(self, context: Any, /) -> None:
         self._connection = pymysql.connect(
@@ -65,6 +63,9 @@ class MysqlDatabase(BaseModel, BaseDatabase):
             charset=self.config.charset,
             cursorclass=pymysql.cursors.DictCursor,
         )
+        self._connection.ping()
+        logger.info("Connected to MySQL successfully.")
+
         self._type = "mysql"
 
     def table_exists(self, table: str) -> bool:
@@ -83,7 +84,7 @@ class MysqlDatabase(BaseModel, BaseDatabase):
             self._connection.commit()
 
     @override
-    def query(self, sql: str, params=None, **kwargs) -> list[str]:
+    def query(self, sql: str, params=None, **kwargs) -> tuple[dict[str, Any], ...]:
         with self._connection.cursor() as cursor:
             cursor.execute(sql, params)
             return cursor.fetchall()
