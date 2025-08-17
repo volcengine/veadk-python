@@ -79,7 +79,7 @@ class CloudApp:
         volcengine_ak: str = getenv("VOLCENGINE_ACCESS_KEY"),
         volcengine_sk: str = getenv("VOLCENGINE_SECRET_KEY"),
     ) -> str:
-        from veadk.cli.services.vefaas.vefaas import VeFaaS
+        from veadk.integrations.ve_faas.ve_faas import VeFaaS
 
         vefaas_client = VeFaaS(access_key=volcengine_ak, secret_key=volcengine_sk)
 
@@ -156,7 +156,7 @@ class CloudApp:
             print("Delete cancelled.")
             return
         else:
-            from veadk.cli.services.vefaas.vefaas import VeFaaS
+            from veadk.integrations.ve_faas.ve_faas import VeFaaS
 
             vefaas_client = VeFaaS(access_key=volcengine_ak, secret_key=volcengine_sk)
             vefaas_client.delete(self.vefaas_application_id)

@@ -14,9 +14,9 @@
 
 import os
 import tempfile
-import pytest
+from unittest.mock import AsyncMock, Mock, patch
 
-from unittest.mock import Mock, patch, AsyncMock
+import pytest
 
 os.environ["VOLCENGINE_ACCESS_KEY"] = "test_access_key"
 os.environ["VOLCENGINE_SECRET_KEY"] = "test_secret_key"
@@ -110,7 +110,7 @@ async def test_cloud():
                 # Test CloudApp delete_self functionality
                 with patch("builtins.input", return_value="y"):
                     with patch(
-                        "veadk.cli.services.vefaas.vefaas.VeFaaS"
+                        "veadk.integrations.ve_faas.ve_faas.VeFaaS"
                     ) as mock_vefaas_in_app:
                         mock_vefaas_client = Mock()
                         mock_vefaas_in_app.return_value = mock_vefaas_client

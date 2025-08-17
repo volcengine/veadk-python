@@ -27,12 +27,14 @@ from volcenginesdkvefaas.models.tag_for_create_function_input import (
 )
 
 import veadk.config
-from veadk.cli.services.veapig.apig import APIGateway
+from veadk.integrations.ve_apig.ve_apig import APIGateway
+from veadk.integrations.ve_faas.ve_faas_utils import (
+    signed_request,
+    zip_and_encode_folder,
+)
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp
 from veadk.utils.volcengine_sign import ve_request
-
-from .vefaas_utils import signed_request, zip_and_encode_folder
 
 logger = get_logger(__name__)
 
