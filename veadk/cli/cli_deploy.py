@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-=======
->>>>>>> 4d1c08b (resolve conflicts)
 import click
 
 
