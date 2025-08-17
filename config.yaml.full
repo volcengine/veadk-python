@@ -98,7 +98,7 @@ database:
 
 
 # [optional] for prompt optimization in cli/app
-agent_pilot:
+prompt_pilot:
   api_key:
 
 
