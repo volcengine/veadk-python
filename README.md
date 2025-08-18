@@ -90,6 +90,14 @@ Before commit or push your changes, please make sure the unittests are passed ,o
 pytest -n 16
 ```
 
+## Contact with us
+
+Join our discussion group by scanning the QR code below:
+
+<p align="center">
+    <img src="assets/images/veadk_group_qrcode.jpg" alt="Volcengine Agent Development Kit Logo" width="40%">
+</p>
+
 ## License
 
 This project is licensed under the [Apache 2.0 License](./LICENSE).
