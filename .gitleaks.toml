@@ -65,3 +65,9 @@ regex = '''.{0,20}.bytedance\.larkoffice\.com.{0,50}'''
 id = "private-ip-10-range"
 description = "Private IP address pattern (10.x.x.x)"
 regex = '''(10\.\d{1,3}\.\d{1,3}\.\d{1,3})'''
+
+
+[[rules]]
+id = "empty-env-key-pattern"
+description = "Empty environment variables with KEY pattern"
+regex = '''os\.environ\[".*?KEY"\]\s*=\s*".+"'''
