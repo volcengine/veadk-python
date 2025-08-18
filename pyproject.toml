@@ -43,6 +43,7 @@ cli = [
     "volcengine-python-sdk==4.0.3", # For Volcengine API
     "agent-pilot-sdk>=0.0.9",       # Prompt optimization by Volcengine AgentPilot/PromptPilot toolkits
     "fastmcp>=2.11.3",              # For running MCP
+    "cookiecutter>=2.6.0", # For cloud deploy
 ]
 dev = [
     "pre-commit>=4.2.0",            # Format checking
@@ -70,3 +71,8 @@ include-package-data = true
 
 [tool.setuptools.package-data]
 "veadk" = ["**/*"]
+
+[tool.ruff]
+exclude = [
+    "veadk/integrations/ve_faas/template/*"
+]

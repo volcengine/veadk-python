@@ -12,16 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# ruff: noqa
 
-from weather_agent.agent import agent  # import your agent here
+from {{ cookiecutter.app_name|replace('-', '_') }}.agent import agent
 
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.types import AgentRunConfig
 
 # [required] instantiate the agent run configuration
 agent_run_config = AgentRunConfig(
-    app_name="weather-report",
+    app_name="{{ cookiecutter.app_name }}",
     agent=agent,
-    requirement_file_path="./weather_agent/requirements.txt",  # relative path to the requirements file
-    short_term_memory=ShortTermMemory(),  # default is a in-memory short term memory
+    requirement_file_path="{{ cookiecutter.requirement_file_path }}",
+    short_term_memory=ShortTermMemory(backend="{{ cookiecutter.short_term_memory_backend }}"),
 )

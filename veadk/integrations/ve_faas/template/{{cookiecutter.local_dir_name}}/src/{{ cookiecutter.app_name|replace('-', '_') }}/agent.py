@@ -12,18 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Note
-
-Once you put your own agent project in this `src/` directory, you may:
-
-1. remove the template code
-2. update the imports in this file to point to your agent's location (e.g., from demo_agent.agent import root_agent, ...)
-3. MUST export three global variables from this file:
-    - `app_name`
-    - `root_agent`: The root agent instance
-    - `short_term_memory`: The short-term memory instance
-"""
-
 from veadk import Agent
 from veadk.tools.demo_tools import get_city_weather
 

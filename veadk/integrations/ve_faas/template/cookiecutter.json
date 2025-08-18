@@ -1,0 +1,12 @@
+{
+  "local_dir_name": "veadk_vefaas_proj",
+  "app_name": "weather-report",
+  "agent_module_name": "weather_agent",
+  "requirement_file_path": "./weather_agent/requirements.txt",
+  "short_term_memory_backend": "local",
+  "vefaas_application_name": "weather-reporter",
+  "veapig_instance_name": "",
+  "veapig_service_name": "",
+  "veapig_upstream_name": "",
+  "use_adk_web": false
+}

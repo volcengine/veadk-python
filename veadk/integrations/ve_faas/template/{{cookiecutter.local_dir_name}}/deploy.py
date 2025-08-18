@@ -24,12 +24,6 @@ from veadk.cloud.cloud_app import CloudApp, get_message_id
 SESSION_ID = "cloud_app_test_session"
 USER_ID = "cloud_app_test_user"
 
-VEFAAS_APPLICATION_NAME = "weather-reporter"
-GATEWAY_NAME = ""
-GATEWAY_SERVICE_NAME = ""
-GATEWAY_UPSTREAMNAME = ""
-USE_ADK_WEB = False
-
 
 async def _send_msg_with_a2a(cloud_app: CloudApp, message: str) -> None:
     print("===== A2A example =====")
@@ -85,16 +79,16 @@ async def main():
 
     cloud_app = engine.deploy(
         path=str(Path(__file__).parent / "src"),
-        application_name=VEFAAS_APPLICATION_NAME,
-        gateway_name=GATEWAY_NAME,
-        gateway_service_name=GATEWAY_SERVICE_NAME,
-        gateway_upstream_name=GATEWAY_UPSTREAMNAME,
-        use_adk_web=USE_ADK_WEB,
+        application_name="{{cookiecutter.vefaas_application_name}}",
+        gateway_name="{{cookiecutter.veapig_instance_name}}",
+        gateway_service_name="{{cookiecutter.veapig_service_name}}",
+        gateway_upstream_name="{{cookiecutter.veapig_upstream_name}}",
+        use_adk_web={{cookiecutter.use_adk_web}},
         local_test=False,  # Set to True for local testing before deploy to VeFaaS
     )
     print(f"VeFaaS application ID: {cloud_app.vefaas_application_id}")
 
-    if USE_ADK_WEB:
+    if {{cookiecutter.use_adk_web}}:
         print(f"Web is running at: {cloud_app.vefaas_endpoint}")
     else:
         # Test with deployed cloud application

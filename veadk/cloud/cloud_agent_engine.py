@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import shutil
 import socket
 import subprocess
 import time
@@ -66,29 +67,29 @@ class CloudAgentEngine(BaseModel):
             )
 
         # prepare template files if not have
-        template_files = [
-            "app.py",
-            "run.sh",
-            # "requirements.txt",
-            "__init__.py",
-        ]
-        for template_file in template_files:
-            if os.path.exists(os.path.join(path, template_file)):
-                logger.warning(
-                    f"Local agent project path `{path}` contains a `{template_file}` file. Use your own `{template_file}` file may cause unexpected behavior."
-                )
-            else:
-                logger.info(
-                    f"No `{template_file}` detected in local agent project path `{path}`. Prepare it."
-                )
-                import veadk.integrations.ve_faas as vefaas
+        # template_files = [
+        #     "app.py",
+        #     "run.sh",
+        #     # "requirements.txt",
+        #     "__init__.py",
+        # ]
+        # for template_file in template_files:
+        #     if os.path.exists(os.path.join(path, template_file)):
+        #         logger.warning(
+        #             f"Local agent project path `{path}` contains a `{template_file}` file. Use your own `{template_file}` file may cause unexpected behavior."
+        #         )
+        #     else:
+        #         logger.info(
+        #             f"No `{template_file}` detected in local agent project path `{path}`. Prepare it."
+        #         )
+        #         import veadk.integrations.ve_faas as vefaas
 
-                template_file_path = (
-                    Path(vefaas.__file__).parent / "template" / "src" / template_file
-                )
-                import shutil
+        #         template_file_path = (
+        #             Path(vefaas.__file__).parent / "template" / "src" / template_file
+        #         )
+        #         import shutil
 
-                shutil.copy(template_file_path, os.path.join(path, template_file))
+        #         shutil.copy(template_file_path, os.path.join(path, template_file))
 
         # copy user's requirements.txt
         if os.path.exists(os.path.join(path, "requirements.txt")):
