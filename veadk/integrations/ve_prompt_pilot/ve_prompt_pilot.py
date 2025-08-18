@@ -24,8 +24,10 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-class AgentPilot:
-    def __init__(self, api_key: str, path: str = "") -> None:
+class VePromptPilot:
+    def __init__(
+        self, api_key: str, path: str = "", task_id: str | None = None
+    ) -> None:
         self.api_key = api_key
         self.path = path
 
@@ -37,7 +39,7 @@ class AgentPilot:
     ) -> str:
         for idx, agent in enumerate(agents):
             optimized_prompt = ""
-            if feedback == "":
+            if not feedback:
                 logger.info("Optimizing prompt without feedback.")
                 task_description = prompt_optimization.render_prompt_with_jinja2(agent)
             else:
@@ -71,6 +73,4 @@ class AgentPilot:
             print(f"Optimized prompt for agent {agent.name}:\n{optimized_prompt}")
             logger.info(f"Token usage: {usage['total_tokens']}")
 
-        return optimized_prompt
-        return optimized_prompt
         return optimized_prompt

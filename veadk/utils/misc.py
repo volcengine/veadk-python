@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib.util
+import sys
 import time
+import types
+
 import requests
 
 
@@ -40,3 +44,19 @@ def read_png_to_bytes(png_path: str) -> bytes:
         with open(png_path, "rb") as f:
             data = f.read()
     return data
+
+
+def load_module_from_file(module_name: str, file_path: str) -> types.ModuleType:
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    if spec:
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        if spec.loader:
+            spec.loader.exec_module(module)
+            return module
+        else:
+            raise ImportError(
+                f"Could not find loader for module {module_name} from {file_path}"
+            )
+    else:
+        raise ImportError(f"Could not load module {module_name} from {file_path}")

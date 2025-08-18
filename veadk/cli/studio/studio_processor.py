@@ -20,10 +20,10 @@ from google.adk.agents.callback_context import CallbackContext
 from google.adk.models.llm_response import LlmResponse
 
 from veadk import Agent
-from veadk.cli.services.agentpilot.agentpilot import AgentPilot
 from veadk.config import getenv
 from veadk.evaluation.deepeval_evaluator import DeepevalEvaluator
 from veadk.evaluation.eval_set_recorder import EvalSetRecorder
+from veadk.integrations.ve_prompt_pilot.ve_prompt_pilot import VePromptPilot
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.runner import Runner
 from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
@@ -60,7 +60,7 @@ class StudioProcessor:
             user_id=user_id,
         )
         self.session_id = session_id
-        self.agent_pilot = AgentPilot(api_key=getenv("AGENT_PILOT_API_KEY"))
+        self.agent_pilot = VePromptPilot(api_key=getenv("AGENT_PILOT_API_KEY"))
 
         self.eval_set_recorder = EvalSetRecorder(
             session_service=self.short_term_memory.session_service, eval_set_id="studio"

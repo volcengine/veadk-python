@@ -21,11 +21,10 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.35.0",
     "opentelemetry-instrumentation-logging>=0.56b0",
     "wrapt>=1.17.2", # For patching built-in functions
-    "typer>=0.16.0", # For command-line implementation
 ]
 
 [project.scripts]
-veadk = "veadk.cli.main:app"
+veadk = "veadk.cli.cli:veadk"
 
 [project.optional-dependencies]
 database = [
