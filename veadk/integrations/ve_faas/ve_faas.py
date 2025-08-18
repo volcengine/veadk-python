@@ -120,6 +120,8 @@ class VeFaaS:
                 envs=envs,
             )
         )
+        logger.debug(f"Function creation response: {res}")
+
         function_id = res.id
 
         # Upload and mount code using extracted method
@@ -157,9 +159,14 @@ class VeFaaS:
             region="cn-beijing",
             host="open.volcengineapi.com",
         )
-        assert response["Result"]["Status"] == "create_success"
 
-        return response["Result"]["Id"]
+        try:
+            if response["Result"]["Status"] == "create_success":
+                return response["Result"]["Id"]
+            else:
+                raise ValueError(f"Create application failed: {response}")
+        except Exception as _:
+            raise ValueError(f"Create application failed: {response}")
 
     def _release_application(self, app_id: str):
         _ = ve_request(
