@@ -13,6 +13,9 @@
 # limitations under the License.
 
 import os
+import socket
+import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +25,7 @@ from veadk.cloud.cloud_app import CloudApp
 from veadk.config import getenv
 from veadk.integrations.ve_faas.ve_faas import VeFaaS
 from veadk.utils.logger import get_logger
-from veadk.utils.misc import formatted_timestamp
+from veadk.utils.misc import formatted_timestamp, load_module_from_file
 
 logger = get_logger(__name__)
 
@@ -65,9 +68,9 @@ class CloudAgentEngine(BaseModel):
         # prepare template files if not have
         template_files = [
             "app.py",
-            "studio_app.py",
+            # "studio_app.py",
             "run.sh",
-            "requirements.txt",
+            # "requirements.txt",
             "__init__.py",
         ]
         for template_file in template_files:
@@ -88,6 +91,70 @@ class CloudAgentEngine(BaseModel):
 
                 shutil.copy(template_file_path, os.path.join(path, template_file))
 
+        # copy user's requirements.txt
+        if os.path.exists(os.path.join(path, "requirements.txt")):
+            logger.warning(
+                f"Local agent project path `{path}` contains a `requirements.txt` file. Skip copy requirements."
+            )
+            return
+
+        module = load_module_from_file(
+            module_name="agent_source", file_path=f"{path}/agent.py"
+        )
+
+        requirement_file_path = module.agent_run_config.requirement_file_path
+        shutil.copy(requirement_file_path, os.path.join(path, "requirements.txt"))
+
+        logger.info(
+            f"Copy requirement file: from {requirement_file_path} to {path}/requirements.txt"
+        )
+
+    def _try_launch_fastapi_server(self, path: str):
+        """Try to launch a fastapi server for tests according to user's configuration.
+
+        Args:
+            path (str): Local agent project path.
+        """
+        RUN_SH = f"{path}/run.sh"
+
+        HOST = "0.0.0.0"
+        PORT = 8000
+
+        # Prepare environment variables
+        os.environ["_FAAS_FUNC_TIMEOUT"] = "900"
+        env = os.environ.copy()
+
+        process = subprocess.Popen(
+            ["bash", RUN_SH],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env,
+            bufsize=1,
+        )
+
+        timeout = 30
+        start_time = time.time()
+
+        for line in process.stdout:  # type: ignore
+            print(line, end="")
+
+            if time.time() - start_time > timeout:
+                process.terminate()
+                raise RuntimeError(f"FastAPI server failed to start on {HOST}:{PORT}")
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(0.1)
+                    s.connect(("127.0.0.1", PORT))
+                    logger.info(f"FastAPI server is listening on {HOST}:{PORT}")
+                    logger.info("Local deplyment test successfully.")
+                    break
+            except (ConnectionRefusedError, socket.timeout):
+                continue
+
+        process.terminate()
+        process.wait()
+
     def deploy(
         self,
         application_name: str,
@@ -97,15 +164,22 @@ class CloudAgentEngine(BaseModel):
         gateway_upstream_name: str = "",
         use_studio: bool = False,
         use_adk_web: bool = False,
+        local_test: bool = False,
     ) -> CloudApp:
         """Deploy local agent project to Volcengine FaaS platform.
 
         Args:
+            application_name (str): Expected VeFaaS application name.
             path (str): Local agent project path.
-            name (str): Volcengine FaaS function name.
+            gateway_name (str): Gateway name.
+            gateway_service_name (str): Gateway service name.
+            gateway_upstream_name (str): Gateway upstream name.
+            use_studio (bool): Whether to use Studio [deprecated].
+            use_adk_web (bool): Whether to use ADK Web.
+            local_test (bool): Whether to run local test for FastAPI Server.
 
         Returns:
-            str: Volcengine FaaS function endpoint.
+            CloudApp: The deployed cloud application instance.
         """
         assert not (use_studio and use_adk_web), (
             "use_studio and use_adk_web can not be True at the same time."
@@ -135,6 +209,9 @@ class CloudAgentEngine(BaseModel):
         # convert `path` to absolute path
         path = str(Path(path).resolve())
         self._prepare(path, application_name)
+
+        if local_test:
+            self._try_launch_fastapi_server(path)
 
         if not gateway_name:
             gateway_name = f"{application_name}-gw-{formatted_timestamp()}"

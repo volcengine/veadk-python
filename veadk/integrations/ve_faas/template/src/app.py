@@ -13,58 +13,99 @@
 # limitations under the License.
 
 import os
-from agent import agent, app_name, short_term_memory
-from veadk.a2a.ve_a2a_server import init_app
-from veadk.tracing.base_tracer import BaseTracer
-from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
-from veadk.runner import Runner
 from contextlib import asynccontextmanager
-from fastmcp import FastMCP
+from typing import Callable
+
+from agent import agent_run_config
 from fastapi import FastAPI
+from fastmcp import FastMCP
 
-# ==============================================================================
-# Tracer Config ================================================================
+from veadk.a2a.ve_a2a_server import init_app
+from veadk.runner import Runner
+from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporter
+from veadk.tracing.telemetry.exporters.cozeloop_exporter import CozeloopExporter
+from veadk.tracing.telemetry.exporters.tls_exporter import TLSExporter
+from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
+from veadk.types import AgentRunConfig
+from veadk.utils.logger import get_logger
 
-TRACERS: list[BaseTracer] = []
+logger = get_logger(__name__)
 
-exporters = []
-if os.getenv("VEADK_TRACER_APMPLUS", "").lower() == "true":
-    from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporter
+assert isinstance(agent_run_config, AgentRunConfig), (
+    f"Invalid agent_run_config type: {type(agent_run_config)}, expected `AgentRunConfig`"
+)
 
-    exporters.append(APMPlusExporter())
-
-if os.getenv("VEADK_TRACER_COZELOOP", "").lower() == "true":
-    from veadk.tracing.telemetry.exporters.cozeloop_exporter import CozeloopExporter
-
-    exporters.append(CozeloopExporter())
-
-if os.getenv("VEADK_TRACER_TLS", "").lower() == "true":
-    from veadk.tracing.telemetry.exporters.tls_exporter import TLSExporter
-
-    exporters.append(TLSExporter())
-
-TRACERS.append(OpentelemetryTracer(exporters=exporters))
+app_name = agent_run_config.app_name
+agent = agent_run_config.agent
+short_term_memory = agent_run_config.short_term_memory
 
 
-agent.tracers.extend(TRACERS)
-if not getattr(agent, "before_model_callback", None):
-    agent.before_model_callback = []
-if not getattr(agent, "after_model_callback", None):
-    agent.after_model_callback = []
-if not getattr(agent, "after_tool_callback", None):
-    agent.after_tool_callback = []
-for tracer in TRACERS:
-    if tracer.tracer_hook_before_model not in agent.before_model_callback:
-        agent.before_model_callback.append(tracer.tracer_hook_before_model)
-    if tracer.tracer_hook_after_model not in agent.after_model_callback:
-        agent.after_model_callback.append(tracer.tracer_hook_after_model)
-    if tracer.tracer_hook_after_tool not in agent.after_tool_callback:
-        agent.after_tool_callback.append(tracer.tracer_hook_after_tool)
+def load_tracer() -> None:
+    EXPORTER_REGISTRY = {
+        "VEADK_TRACER_APMPLUS": APMPlusExporter,
+        "VEADK_TRACER_COZELOOP": CozeloopExporter,
+        "VEADK_TRACER_TLS": TLSExporter,
+    }
 
-# Tracer Config ================================================================
-# ==============================================================================
+    exporters = []
+    for env_var, exporter_cls in EXPORTER_REGISTRY.items():
+        if os.getenv(env_var, "").lower() == "true":
+            if (
+                agent.tracers
+                and isinstance(agent.tracers[0], OpentelemetryTracer)
+                and any(isinstance(e, exporter_cls) for e in agent.tracers[0].exporters)
+            ):
+                logger.warning(
+                    f"Exporter {exporter_cls.__name__} is already defined in agent.tracers[0].exporters. These two exporters will be used at the same time. As a result, your data may be uploaded twice."
+                )
+            else:
+                exporters.append(exporter_cls())
 
-# Create A2A app
+    tracer = OpentelemetryTracer(
+        name="veadk_tracer", app_name=agent_run_config.app_name, exporters=exporters
+    )
+    agent_run_config.agent.tracers.extend([tracer])
+    tracer.do_hooks(agent=agent_run_config.agent)
+
+
+def build_mcp_run_agent_func() -> Callable:
+    runner = Runner(
+        agent=agent,
+        short_term_memory=short_term_memory,
+        app_name=app_name,
+        user_id="",
+    )
+
+    async def run_agent(
+        user_input: str,
+        user_id: str = "mcp_user",
+        session_id: str = "mcp_session",
+    ) -> str:
+        # Set user_id for runner
+        runner.user_id = user_id
+
+        # Running agent and get final output
+        final_output = await runner.run(
+            messages=user_input,
+            session_id=session_id,
+        )
+        return final_output
+
+    run_agent_doc = f"""{agent.description}
+    Args:
+        user_input: User's input message (required).
+        user_id: User identifier. Defaults to "mcp_user".
+        session_id: Session identifier. Defaults to "mcp_session".
+    Returns:
+        Final agent response as a string."""
+
+    run_agent.__doc__ = run_agent_doc
+
+    return run_agent
+
+
+load_tracer()
+
 a2a_app = init_app(
     server_url="0.0.0.0",
     app_name=app_name,
@@ -72,46 +113,12 @@ a2a_app = init_app(
     short_term_memory=short_term_memory,
 )
 
-# Add a2a app to fastmcp
-runner = Runner(
-    agent=agent,
-    short_term_memory=short_term_memory,
-    app_name=app_name,
-    user_id="",
-)
-
-# Prepare doc string
-run_agent_doc = f"""{agent.description}
-Args:
-    user_input: User's input message (required).
-    user_id: User identifier. Defaults to "mcp_user".
-    session_id: Session identifier. Defaults to "mcp_session".
-Returns:
-    Final agent response as a string."""
+# Build a run_agent function for building MCP server
+run_agent_func = build_mcp_run_agent_func()
+a2a_app.post("/run_agent", operation_id="run_agent", tags=["mcp"])(run_agent_func)
 
 
-async def run_agent(
-    user_input: str,
-    user_id: str = "mcp_user",
-    session_id: str = "mcp_session",
-) -> str:
-    # Set user_id for runner
-    runner.user_id = user_id
-
-    # Running agent and get final output
-    final_output = await runner.run(
-        messages=user_input,
-        session_id=session_id,
-    )
-    return final_output
-
-
-run_agent.__doc__ = run_agent_doc
-
-# Add post route to run_agent
-run_agent = a2a_app.post("/run_agent", operation_id="run_agent", tags=["mcp"])(
-    run_agent
-)
+# === Build mcp server ===
 
 mcp = FastMCP.from_fastapi(app=a2a_app, name=app_name, include_tags={"mcp"})
 
@@ -135,3 +142,5 @@ for route in a2a_app.routes:
 
 # Mount MCP server at /mcp endpoint
 app.mount("/mcp", mcp_app)
+
+# === Build mcp server end ===
