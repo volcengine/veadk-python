@@ -60,18 +60,14 @@ class ShortTermMemory:
             self.session_service = InMemorySessionService()
         elif self.backend == "database":
             if self.db_url == "" or self.db_url is None:
-                logger.warning(
-                    f"The `db_url` {self.db_url} is an empty or None string."
-                )
+                logger.warning("The `db_url` is an empty or None string.")
                 self._use_default_database()
             else:
                 try:
                     self.session_service = DatabaseSessionService(db_url=self.db_url)
-                    logger.info("Connected to database.")
+                    logger.info("Connected to database with db_url.")
                 except Exception as e:
-                    logger.error(
-                        f"Failed to connect to database {self.db_url}, error: {e}."
-                    )
+                    logger.error(f"Failed to connect to database, error: {e}.")
                     self._use_default_database()
         else:
             raise ValueError(f"Unknown short term memory backend: {self.backend}")

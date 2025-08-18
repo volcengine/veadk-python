@@ -32,9 +32,7 @@ class KnowledgeBase:
         top_k: int = 10,
         db_config=None,
     ):
-        logger.info(
-            f"Initializing knowledgebase: backend={backend} top_k={top_k} db_config={db_config}"
-        )
+        logger.info(f"Initializing knowledgebase: backend={backend} top_k={top_k}")
 
         self.backend = backend
         self.top_k = top_k
@@ -43,7 +41,7 @@ class KnowledgeBase:
         self.adapter = get_knowledgebase_database_adapter(self.db_client)
 
         logger.info(
-            f"Initialized knowledgebase: db_client={self.db_client} adapter={self.adapter}"
+            f"Initialized knowledgebase: db_client={self.db_client.__class__.__name__} adapter={self.adapter}"
         )
 
     def add(
