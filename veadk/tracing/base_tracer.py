@@ -14,10 +14,11 @@
 
 import json
 from abc import ABC, abstractmethod
-from typing import Optional, Any
+from typing import Any, Optional
 
 from google.adk.agents.callback_context import CallbackContext
-from google.adk.models import LlmRequest, LlmResponse
+from google.adk.models.llm_request import LlmRequest
+from google.adk.models.llm_response import LlmResponse
 from google.adk.tools import BaseTool, ToolContext
 from opentelemetry import trace
 
@@ -32,7 +33,7 @@ class BaseTracer(ABC):
         pass
 
     @abstractmethod
-    def dump(self) -> str: ...
+    def dump(self, user_id: str, session_id: str, path: str = "/tmp") -> str: ...
 
     def tracer_hook_before_model(
         self, callback_context: CallbackContext, llm_request: LlmRequest
@@ -107,22 +108,18 @@ class BaseTracer(ABC):
         agent_name = callback_context.agent_name
         attributes["agent.name"] = agent_name
         attributes["app.name"] = app_name
+
         # prompt
         user_content = callback_context.user_content
+        role = None
+        content = None
         if getattr(user_content, "role", None):
             role = getattr(user_content, "role", None)
-        else:
-            role = None
-        if getattr(user_content, "parts", None):
-            content = callback_context.user_content.model_dump(exclude_none=True).get(
-                "parts", None
-            )
-            if content:
-                content = json.dumps(content)
-            else:
-                content = None
-        else:
-            content = None
+
+        if user_content and getattr(user_content, "parts", None):
+            content = user_content.model_dump(exclude_none=True).get("parts", None)
+            content = json.dumps(content) if content else None
+
         if role and content:
             attributes["gen_ai.prompt.0.role"] = role
             attributes["gen_ai.prompt.0.content"] = content

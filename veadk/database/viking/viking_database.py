@@ -16,7 +16,7 @@ import io
 import json
 import os
 import uuid
-from typing import Any, BinaryIO, Literal, Optional, TextIO
+from typing import Any, BinaryIO, Literal, TextIO
 
 import requests
 import tos
@@ -44,42 +44,44 @@ doc_del_path = "/api/collection/drop"
 
 
 class VolcengineTOSConfig(BaseModel):
-    endpoint: Optional[str] = Field(
-        default=getenv("DATABASE_TOS_ENDPOINT", "tos-cn-beijing.volces.com"),
+    endpoint: str = Field(
+        default_factory=lambda: getenv(
+            "DATABASE_TOS_ENDPOINT", "tos-cn-beijing.volces.com"
+        ),
         description="VikingDB TOS endpoint",
     )
-    region: Optional[str] = Field(
-        default=getenv("DATABASE_TOS_REGION", "cn-beijing"),
+    region: str = Field(
+        default_factory=lambda: getenv("DATABASE_TOS_REGION", "cn-beijing"),
         description="VikingDB TOS region",
     )
-    bucket: Optional[str] = Field(
-        default=getenv("DATABASE_TOS_BUCKET"),
+    bucket: str = Field(
+        default_factory=lambda: getenv("DATABASE_TOS_BUCKET"),
         description="VikingDB TOS bucket",
     )
-    base_key: Optional[str] = Field(
+    base_key: str = Field(
         default="veadk",
         description="VikingDB TOS base key",
     )
 
 
 class VikingDatabaseConfig(BaseModel):
-    volcengine_ak: Optional[str] = Field(
-        default=getenv("VOLCENGINE_ACCESS_KEY"),
+    volcengine_ak: str = Field(
+        default_factory=lambda: getenv("VOLCENGINE_ACCESS_KEY"),
         description="VikingDB access key",
     )
-    volcengine_sk: Optional[str] = Field(
-        default=getenv("VOLCENGINE_SECRET_KEY"),
+    volcengine_sk: str = Field(
+        default_factory=lambda: getenv("VOLCENGINE_SECRET_KEY"),
         description="VikingDB secret key",
     )
-    project: Optional[str] = Field(
-        default=getenv("DATABASE_VIKING_PROJECT"),
+    project: str = Field(
+        default_factory=lambda: getenv("DATABASE_VIKING_PROJECT"),
         description="VikingDB project name",
     )
-    region: Optional[str] = Field(
-        default=getenv("DATABASE_VIKING_REGION"),
+    region: str = Field(
+        default_factory=lambda: getenv("DATABASE_VIKING_REGION"),
         description="VikingDB region",
     )
-    tos: Optional[VolcengineTOSConfig] = Field(
+    tos: VolcengineTOSConfig = Field(
         default_factory=VolcengineTOSConfig,
         description="VikingDB TOS configuration",
     )
@@ -136,13 +138,17 @@ class VikingDatabase(BaseModel, BaseDatabase):
         file_ext = kwargs.get(
             "file_ext", ".pdf"
         )  # when bytes data, file_ext is required
+
         ak = self.config.volcengine_ak
         sk = self.config.volcengine_sk
+
         tos_bucket = self.config.tos.bucket
         tos_endpoint = self.config.tos.endpoint
         tos_region = self.config.tos.region
         tos_key = self.config.tos.base_key
+
         client = tos.TosClientV2(ak, sk, tos_endpoint, tos_region, max_connections=1024)
+
         if isinstance(data, str) and os.path.isfile(data):  # Process file path
             file_ext = os.path.splitext(data)[1]
             new_key = f"{tos_key}/{str(uuid.uuid4())}{file_ext}"

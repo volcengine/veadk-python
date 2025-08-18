@@ -131,70 +131,6 @@ def init():
     set_variable_in_file(target_dir / "deploy.py", setting_values)
 
 
-# @app.command()
-# def web(
-#     path: str = typer.Option(".", "--path", help="Agent project path"),
-# ):
-#     from google.adk.cli import cli_tools_click
-
-#     def my_decorator(func):
-#         @wraps(func)
-#         def wrapper(*args, **kwargs):
-#             adk_app: FastAPI = func(*args, **kwargs)
-#             import importlib.util
-#             import mimetypes
-
-#             from fastapi.staticfiles import StaticFiles
-
-#             mimetypes.add_type("application/javascript", ".js", True)
-#             mimetypes.add_type("text/javascript", ".js", True)
-
-#             spec = importlib.util.find_spec("veadk.cli.browser")
-#             if spec is not None:
-#                 ANGULAR_DIST_PATH = spec.submodule_search_locations[0]
-#                 logger.info(f"Static source path: {ANGULAR_DIST_PATH}")
-#             else:
-#                 raise Exception("veadk.cli.browser not found")
-
-#             # ----- 8< Unmount app -----
-#             from starlette.routing import Mount
-
-#             for index, route in enumerate(adk_app.routes):
-#                 if isinstance(route, Mount) and route.path == "/dev-ui":
-#                     del adk_app.routes[index]
-#                     break
-#             # ----- 8< Mount our app -----
-
-#             adk_app.mount(
-#                 "/dev-ui/",
-#                 StaticFiles(directory=ANGULAR_DIST_PATH, html=True),
-#                 name="static",
-#             )
-
-#             from fastapi.middleware.cors import CORSMiddleware
-
-#             adk_app.add_middleware(
-#                 CORSMiddleware,
-#                 allow_origins=["*"],
-#                 allow_credentials=True,
-#                 allow_methods=["*"],
-#                 allow_headers=["*"],
-#             )
-#             return adk_app
-
-#         return wrapper
-
-#     # Monkey patch
-#     fast_api.get_fast_api_app = my_decorator(fast_api.get_fast_api_app)
-
-#     # reload cli_tools_click
-#     importlib.reload(cli_tools_click)
-
-#     agents_dir = str(Path(path).resolve())
-#     logger.info(f"Agents dir is {agents_dir}")
-#     cli_tools_click.cli_web.main(args=[agents_dir])
-
-
 @app.command()
 def web(
     session_service_uri: str = typer.Option(
@@ -325,19 +261,6 @@ def prompt(
     ap.optimize(agents=agents, feedback=feedback, model_name=model_name)
 
 
-# @app.command()
-# def studio():
-#     import os
-
-#     # pre-load
-#     from veadk import Agent  # noqa
-
-#     os.environ["VEADK_STUDIO_AGENTS_DIR"] = os.getcwd()
-#     app_path = os.path.join(os.path.dirname(__file__), "../../app/app.py")
-
-#     os.system(f"streamlit run {app_path}")
-
-
 @app.command()
 def deploy(
     access_key: str = typer.Option(..., "--access-key", help="Access Key"),
@@ -350,24 +273,6 @@ def deploy(
     path = Path(path).resolve()
     vefaas = VeFaaS(access_key, secret_key)
     vefaas.deploy(name=name, path=path)
-
-
-@app.command()
-def log(
-    access_key: str = typer.Option(..., "--access-key", help="Access Key"),
-    secret_key: str = typer.Option(..., "--secret-key", help="Secret Key"),
-    query: str = typer.Option(..., "--query", help="Query statement"),
-    topic_id: str = typer.Option(..., "--topic-id", help="Topic ID in VeTLS"),
-    dump_path: str = typer.Option(
-        ".", "--dump-path", help="Local path for log storage file"
-    ),
-):
-    path = Path(dump_path).resolve()
-
-    from veadk.cli.services.vetls import VeTLS
-
-    vetls = VeTLS(access_key, secret_key, dump_path=str(path))
-    vetls.query(topic_id=topic_id, query=query)
 
 
 @app.command()

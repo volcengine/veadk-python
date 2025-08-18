@@ -26,3 +26,6 @@ class BaseExporter(ABC):
 
     def get_meter_context(self) -> Any:
         pass
+
+    def export(self) -> None:
+        pass

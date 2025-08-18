@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 import redis
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, Field
 from typing_extensions import override
 
 from veadk.config import getenv
@@ -30,19 +30,19 @@ logger = get_logger(__name__)
 
 class RedisDatabaseConfig(BaseModel):
     host: str = Field(
-        default=getenv("DATABASE_REDIS_HOST"),
+        default_factory=lambda: getenv("DATABASE_REDIS_HOST"),
         description="Redis host",
     )
     port: int = Field(
-        default=getenv("DATABASE_REDIS_PORT"),
+        default_factory=lambda: int(getenv("DATABASE_REDIS_PORT")),
         description="Redis port",
     )
     db: int = Field(
-        default=getenv("DATABASE_REDIS_DB"),
+        default_factory=lambda: int(getenv("DATABASE_REDIS_DB")),
         description="Redis db",
     )
     password: str = Field(
-        default=getenv("DATABASE_REDIS_PASSWORD"),
+        default_factory=lambda: getenv("DATABASE_REDIS_PASSWORD"),
         description="Redis password",
     )
     decode_responses: bool = Field(
@@ -53,7 +53,6 @@ class RedisDatabaseConfig(BaseModel):
 
 class RedisDatabase(BaseModel, BaseDatabase):
     config: RedisDatabaseConfig = Field(default_factory=RedisDatabaseConfig)
-    _client: redis.Redis = PrivateAttr(default=None)
 
     def model_post_init(self, context: Any, /) -> None:
         try:
@@ -64,6 +63,7 @@ class RedisDatabase(BaseModel, BaseDatabase):
                 password=self.config.password,
                 decode_responses=self.config.decode_responses,
             )
+
             self._client.ping()
             logger.info("Connected to Redis successfully.")
         except Exception as e:
@@ -79,10 +79,10 @@ class RedisDatabase(BaseModel, BaseDatabase):
             raise e
 
     @override
-    def query(self, key: str, query: str = "", **kwargs) -> list[str]:
+    def query(self, key: str, query: str = "", **kwargs) -> list:
         try:
             result = self._client.lrange(key, 0, -1)
-            return result
+            return result  # type: ignore
         except Exception as e:
             logger.error(f"Failed to search from Redis list key '{key}': {e}")
             raise e
@@ -99,8 +99,11 @@ class RedisDatabase(BaseModel, BaseDatabase):
 
         try:
             # For simple key deletion
+            # We use sync Redis client to delete the key
+            # so the result will be `int`
             result = self._client.delete(key)
-            if result > 0:
+
+            if result > 0:  # type: ignore
                 logger.info(f"Deleted key `{key}` from Redis.")
             else:
                 logger.info(f"Key `{key}` not found in Redis. Skipping deletion.")

@@ -53,33 +53,3 @@ def patch_asyncio():
             raise
 
     CancelScope.__exit__ = patched_cancel_scope_exit
-
-
-# def enable_veadk_tracing(tracing_func):
-#     """Enable Veadk tracing by add after_agent_callback to Google ADK Agent.
-
-#     Args:
-#         tracing_func: The tracing function to be called after the Runner.run_async is done.
-#     """
-#     import inspect
-#     from functools import wraps
-
-#     def async_generator_decorator(generator_func):
-#         sig = inspect.signature(generator_func)
-
-#         @wraps(generator_func)
-#         async def wrapper(*args, **kwargs):
-#             bound_args = sig.bind_partial(*args, **kwargs)
-#             user_id = bound_args.arguments.get("user_id", None)
-#             session_id = bound_args.arguments.get("session_id", None)
-#             try:
-#                 async for item in generator_func(*args, **kwargs):
-#                     yield item
-#             finally:
-#                 tracing_func(user_id, session_id)
-
-#         return wrapper
-
-#     from google.adk.runners import Runner
-
-#     Runner.run_async = async_generator_decorator(Runner.run_async)

@@ -20,6 +20,7 @@ from typing import Any
 
 from openinference.instrumentation.google_adk import GoogleADKInstrumentor
 from opentelemetry import trace as trace_api
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
@@ -28,7 +29,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import override
 
 from veadk.tracing.base_tracer import BaseTracer
-from veadk.tracing.telemetry.exporters.apiserver_exporter import ApiServerExporter
 from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporter
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
 from veadk.tracing.telemetry.exporters.inmemory_exporter import InMemoryExporter
@@ -96,48 +96,34 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         GoogleADKInstrumentor().instrument()
 
     def _init_tracer_provider(self) -> None:
-        # 1. get global trace provider
-        global_tracer_provider = trace_api.get_tracer_provider()
-
-        if not isinstance(global_tracer_provider, TracerProvider):
-            logger.info(
-                "Global tracer provider has not been set. Create tracer provider and set it now."
-            )
-            # 1.1 init tracer provider
-            tracer_provider = trace_sdk.TracerProvider()
-            trace_api.set_tracer_provider(tracer_provider)
-            global_tracer_provider = trace_api.get_tracer_provider()
+        # set provider anyway
+        # finally, get global provider
+        tracer_provider = trace_sdk.TracerProvider()
+        trace_api.set_tracer_provider(tracer_provider)
+        global_tracer_provider: TracerProvider = trace_api.get_tracer_provider()  # type: ignore
 
         have_apmplus_exporter = False
-        # 2. check if apmplus exporter is already exist
         for processor in global_tracer_provider._active_span_processor._span_processors:
             if isinstance(processor, (BatchSpanProcessor, SimpleSpanProcessor)):
-                # try to get endpoint, in case of exporter has no _endpoint attribute
-                try:
-                    exporter_endpoint = processor.span_exporter._endpoint
-                    if "apmplus" in exporter_endpoint:
+                if isinstance(processor.span_exporter, OTLPSpanExporter):
+                    if "apmplus" in processor.span_exporter._endpoint:
                         have_apmplus_exporter = True
-                except AttributeError:
-                    # log a warning and pass this exporter
-                    logger.warning(
-                        f"Exporter {processor.span_exporter} has no endpoint."
-                    )
 
-        # 3. add exporters to global tracer_provider
-        # range over a copy of exporters to avoid index issues
         if have_apmplus_exporter:
             self.exporters = [
                 e for e in self.exporters if not isinstance(e, APMPlusExporter)
             ]
 
-        for exporter in self.exporters[:]:
+        for exporter in self.exporters:
             processor, resource_attributes = exporter.get_processor()
             if resource_attributes is not None:
                 update_resource_attributions(
                     global_tracer_provider, resource_attributes
                 )
             global_tracer_provider.add_span_processor(processor)
-            logger.debug(f"Add exporter `{exporter.__class__.__name__}` to tracing.")
+            logger.debug(
+                f"Add exporter `{exporter.__class__.__name__}` to OpentelemetryTracer."
+            )
             self._processors.append(processor)
         logger.debug(f"Init OpentelemetryTracer with {len(self.exporters)} exporters.")
 
@@ -198,9 +184,7 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         self._trace_file_path = file_path
 
         for exporter in self.exporters:
-            if not isinstance(exporter, InMemoryExporter) and not isinstance(
-                exporter, ApiServerExporter
-            ):
+            if not isinstance(exporter, InMemoryExporter):
                 exporter.export()
         logger.info(
             f"OpenTelemetryTracer tracing done, trace id: {self._trace_id} (hex)"

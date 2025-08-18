@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Optional
 
 from google.adk.agents import LlmAgent, RunConfig
+from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.llm_agent import ToolUnion
 from google.adk.agents.run_config import StreamingMode
 from google.adk.models.lite_llm import LiteLlm
@@ -39,7 +40,6 @@ from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INST
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_asyncio
-from google.adk.agents.base_agent import BaseAgent
 
 patch_asyncio()
 logger = get_logger(__name__)
@@ -70,9 +70,7 @@ class Agent(LlmAgent):
     model_api_base: str = getenv("MODEL_AGENT_API_BASE", DEFAULT_MODEL_AGENT_API_BASE)
     """The api base of the model for agent running."""
 
-    model_api_key: str = Field(
-        ..., default_factory=lambda: getenv("MODEL_AGENT_API_KEY")
-    )
+    model_api_key: str = Field(default_factory=lambda: getenv("MODEL_AGENT_API_KEY"))
     """The api key of the model for agent running."""
 
     tools: list[ToolUnion] = []
@@ -244,8 +242,13 @@ class Agent(LlmAgent):
                 user_id=user_id,
                 session_id=session_id,
             )
-            await self.long_term_memory.add_session_to_memory(session)
-            logger.info(f"Add session `{session.id}` to your long-term memory.")
+            if session:
+                await self.long_term_memory.add_session_to_memory(session)
+                logger.info(f"Add session `{session.id}` to your long-term memory.")
+            else:
+                logger.error(
+                    f"Session {session_id} not found in session service, cannot save to long-term memory."
+                )
 
         if collect_runtime_data:
             eval_set_recorder = EvalSetRecorder(session_service, eval_set_id)
@@ -254,6 +257,6 @@ class Agent(LlmAgent):
 
         if self.tracers:
             for tracer in self.tracers:
-                tracer.dump(user_id, session_id)
+                tracer.dump(user_id=user_id, session_id=session_id)
 
         return final_output

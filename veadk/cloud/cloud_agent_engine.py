@@ -166,6 +166,10 @@ class CloudAgentEngine(BaseModel):
             return
         else:
             app_id = self._vefaas_service.find_app_id_by_name(app_name)
+            if not app_id:
+                raise ValueError(
+                    f"Cloud app {app_name} not found, cannot delete it. Please check the app name."
+                )
             self._vefaas_service.delete(app_id)
 
     def update_function_code(

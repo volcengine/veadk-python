@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 from typing import Any
 from uuid import uuid4
 
-import json
 import httpx
 from a2a.client import A2ACardResolver, A2AClient
 from a2a.types import AgentCard, Message, MessageSendParams, SendMessageRequest
@@ -82,11 +82,18 @@ class CloudApp:
         from veadk.cli.services.vefaas.vefaas import VeFaaS
 
         vefaas_client = VeFaaS(access_key=volcengine_ak, secret_key=volcengine_sk)
+
         app = vefaas_client.get_application_details(
             app_id=self.vefaas_application_id,
             app_name=self.vefaas_application_name,
         )
+
+        if not app:
+            raise ValueError(
+                f"VeFaaS CloudAPP with application_id `{self.vefaas_application_id}` or application_name `{self.vefaas_application_name}` not found."
+            )
         cloud_resource = json.loads(app["CloudResource"])
+
         try:
             vefaas_endpoint = cloud_resource["framework"]["url"]["system_url"]
         except Exception as e:
@@ -180,11 +187,19 @@ class CloudApp:
                     id=uuid4().hex,
                     params=MessageSendParams(**send_message_payload),
                 )
+
                 res = await a2a_client.send_message(
                     message_send_request,
                     http_kwargs={"timeout": httpx.Timeout(timeout)},
                 )
-                return res.root.result
+
+                logger.debug(
+                    f"Message sent to cloud app {self.vefaas_application_name} with response: {res}"
+                )
+
+                # we ignore type checking here, because the response
+                # from CloudApp will not be `Task` type
+                return res.root.result  # type: ignore
             except Exception as e:
                 # TODO(floritange): show error log on VeFaaS function
                 print(e)
@@ -194,7 +209,7 @@ class CloudApp:
 def get_message_id(message: Message):
     """Get the messageId of the a2a message"""
     if getattr(message, "messageId", None):
-        # Compatible with the messageId of the old version
-        return message.messageId
+        # Compatible with the messageId of the old a2a-python version (<0.3.0) in cloud app
+        return message.messageId  # type: ignore
     else:
         return message.message_id

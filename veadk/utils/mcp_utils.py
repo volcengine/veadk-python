@@ -14,7 +14,7 @@
 
 from typing import Any
 
-from google.adk.tools.mcp_tool.mcp_toolset import (
+from google.adk.tools.mcp_tool.mcp_session_manager import (
     SseConnectionParams,
     StreamableHTTPConnectionParams,
 )

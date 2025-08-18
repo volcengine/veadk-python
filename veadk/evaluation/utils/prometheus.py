@@ -23,19 +23,16 @@ from veadk.evaluation.types import EvalResultCaseData, EvalResultMetadata
 
 class PrometheusPushgatewayConfig:
     url: str = Field(
-        ...,
         default_factory=lambda: getenv(
             "OBSERVABILITY_PROMETHEUS_PUSHGATEWAY_URL",
         ),
     )
     username: str = Field(
-        ...,
         default_factory=lambda: getenv(
             "OBSERVABILITY_PROMETHEUS_USERNAME",
         ),
     )
     password: str = Field(
-        ...,
         default_factory=lambda: getenv(
             "OBSERVABILITY_PROMETHEUS_PASSWORD",
         ),
@@ -88,7 +85,7 @@ def post_pushgateway(
     password: str,
     job_name: str,
     registry: CollectorRegistry,
-    grouping_key: dict[str, str] = None,
+    grouping_key: dict[str, str] | None = None,
 ):
     def auth_handler(url, method, timeout, headers, data):
         return basic_auth_handler(

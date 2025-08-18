@@ -304,6 +304,7 @@ class VeFaaS:
         for app in apps:
             if app["Name"] == name:
                 return app["Id"]
+        logger.warning(f"Application with name {name} not found.")
         return None
 
     def delete(self, app_id: str):
