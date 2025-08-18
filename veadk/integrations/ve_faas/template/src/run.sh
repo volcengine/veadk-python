@@ -43,6 +43,9 @@ python3 -m pip install fastmcp
 USE_STUDIO=${USE_STUDIO:-False}
 USE_ADK_WEB=${USE_ADK_WEB:-False}
 
+export SHORT_TERM_MEMORY_BACKEND= # can be `mysql`
+export LONG_TERM_MEMORY_BACKEND= # can be `opensearch`
+
 if [ "$USE_STUDIO" = "True" ]; then
     echo "USE_STUDIO is True, running veadk studio"
     # running veadk studio
@@ -54,7 +57,7 @@ elif [ "$USE_STUDIO" = "False" ]; then
         echo "USE_ADK_WEB is True, running veadk web"
         # running veadk web
         cd ../
-        exec python3 -m veadk.cli.main web --host "0.0.0.0"
+        exec python3 -m veadk.cli.cli web --host "0.0.0.0"
     else
         echo "USE_ADK_WEB is False, running a2a server"
         exec python3 -m uvicorn app:app --host $HOST --port $PORT --timeout-graceful-shutdown $TIMEOUT --loop asyncio

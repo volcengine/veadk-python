@@ -18,9 +18,9 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from veadk.cli.services.vefaas import VeFaaS
 from veadk.cloud.cloud_app import CloudApp
 from veadk.config import getenv
+from veadk.integrations.ve_faas.ve_faas import VeFaaS
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp
 
@@ -79,7 +79,11 @@ class CloudAgentEngine(BaseModel):
                 logger.info(
                     f"No `{template_file}` detected in local agent project path `{path}`. Prepare it."
                 )
-                template_file_path = f"{Path(__file__).resolve().parent.resolve().parent.resolve()}/cli/services/vefaas/template/src/{template_file}"
+                import veadk.integrations.ve_faas as vefaas
+
+                template_file_path = (
+                    Path(vefaas.__file__).parent / "template" / "src" / template_file
+                )
                 import shutil
 
                 shutil.copy(template_file_path, os.path.join(path, template_file))
