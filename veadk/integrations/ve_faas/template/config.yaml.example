@@ -4,16 +4,3 @@ model:
     name: doubao-1-5-pro-256k-250115
     api_base: https://ark.cn-beijing.volces.com/api/v3/
     api_key: 
-  judge:
-    name: doubao-1-5-pro-256k-250115
-    api_base: https://ark.cn-beijing.volces.com/api/v3/
-    api_key:
-
-
-agent_pilot:
-  api_key:
-
-
-volcengine:
-  access_key: 
-  secret_key: 

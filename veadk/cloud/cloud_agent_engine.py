@@ -68,7 +68,6 @@ class CloudAgentEngine(BaseModel):
         # prepare template files if not have
         template_files = [
             "app.py",
-            # "studio_app.py",
             "run.sh",
             # "requirements.txt",
             "__init__.py",
@@ -162,7 +161,6 @@ class CloudAgentEngine(BaseModel):
         gateway_name: str = "",
         gateway_service_name: str = "",
         gateway_upstream_name: str = "",
-        use_studio: bool = False,
         use_adk_web: bool = False,
         local_test: bool = False,
     ) -> CloudApp:
@@ -174,28 +172,16 @@ class CloudAgentEngine(BaseModel):
             gateway_name (str): Gateway name.
             gateway_service_name (str): Gateway service name.
             gateway_upstream_name (str): Gateway upstream name.
-            use_studio (bool): Whether to use Studio [deprecated].
             use_adk_web (bool): Whether to use ADK Web.
             local_test (bool): Whether to run local test for FastAPI Server.
 
         Returns:
             CloudApp: The deployed cloud application instance.
         """
-        assert not (use_studio and use_adk_web), (
-            "use_studio and use_adk_web can not be True at the same time."
-        )
-
         # prevent deepeval writing operations
         import veadk.config
 
         veadk.config.veadk_environments["DEEPEVAL_TELEMETRY_OPT_OUT"] = "YES"
-
-        if use_studio:
-            veadk.config.veadk_environments["USE_STUDIO"] = "True"
-        else:
-            import veadk.config
-
-            veadk.config.veadk_environments["USE_STUDIO"] = "False"
 
         if use_adk_web:
             import veadk.config
