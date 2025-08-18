@@ -5,20 +5,33 @@ VeADK提供了一个云引擎，配合命令行脚手架，你可以方便地：
 - 将你的本地Agent项目上传到云端（[火山引擎函数服务平台](https://www.volcengine.com/product/vefaas)）
 - 启动一个新的样例模板项目进行开发
 
-你可以指定部署到云端的项目以三种模式进行对外服务：
+部署到云端时，你可以指定两种部署模式来对外提供服务：
 
-- VeADK Studio
+- A2A与MCP Server（一体化启动）
+  - A2A 提供标准的`message_send`等接口
+  - MCP 提供`run_agent`工具方法
 - VeADK Web（兼容Google ADK Web）
-- A2A Server
 
-前两种将会为你提供一个Web界面，方便你在浏览器中进行测试与可观测实践。
+VeADK Web 将会为你提供一个Web界面，方便你在浏览器中进行体验。
 
 ## 脚手架
+
+### 初始化
 
 你可以运行`init`命令来初始化一个新的Agent项目：
 
 ```bash
-veadk init
+$ veadk init
+Directory name [veadk-cloud-proj]: 
+Volcengine FaaS application name [veadk-cloud-agent]: 
+Volcengine gateway instance name []: 
+Volcengine gateway service name []: 
+Volcengine gateway upstream name []: 
+Choose a deploy mode:
+  1. A2A/MCP Server
+  2. VeADK Web / Google ADK Web
+Enter your choice (1, 2): 1
+Your project has beed created.
 ```
 
 它会提示你输入如下几个参数：
@@ -29,30 +42,55 @@ veadk init
 - 火山引擎网关服务名称
 - 火山引擎网关Upstream名称
 - 部署模式
-  1. A2A Server
-  2. VeADK Studio
-  3. VeADK Web / Google ADK Web
+  1. A2A / MCP Server
+  2. VeADK Web / Google ADK Web
 
 生成后的项目结构如下：
 
 ```bash
 └── veadk-cloud-proj
-    ├── __init__.py
-    ├── config.yaml.example # 需要修改为config.yaml并设置
-    ├── deploy.py # 部署脚本文件
+    ├── config.yaml.example # 环境变量配置文件
+    ├── deploy.py # 部署脚本
     ├── README.md
     └── src
-        ├── __init__.py
-        ├── agent.py # 在其中定义你的Agent和短期记忆
-        ├── app.py # FastAPI应用，用于处理HTTP请求
-        ├── requirements.txt    # 依赖
-        ├── run.sh # VeFaaS服务启动脚本
-        └── studio_app.py # 用于VeADK Studio/Web的应用
+        ├── agent.py # 定义 agent 导出
+        ├── app.py  # 服务端启动脚本
+        ├── run.sh  # 启动脚本
+        └── weather_agent # Agent 实现
+            ├── __init__.py
+            ├── agent.py  # Agent 实例化
+            └── requirements.txt  # 依赖
 ```
 
-别担心，你所创建的`config.yaml`不会被上传到云端，其中的属性值将会以环境变量的形式上传至VeFaaS平台。
+你所创建的`config.yaml`不会被上传到云端，其中的属性值将会以环境变量的形式上传至VeFaaS平台。
 
 只有`src/`路径下的文件才会被上传到云端。
+
+### 自定义项目
+
+在使用脚手架生成模板项目后，你可以做如下操作：
+
+1. 向`src`目录中直接导入一个能够被 ADK Web 识别的目录（例如`weather_agent`目录），主要包括：
+   - 包含`root_agent`这个全局变量的`agent.py`文件
+   - 包含`from . import agent`的`__init__.py`文件
+2. 在`src/agent.py`中实例化`AgentRunConfig`类，主要属性包括：
+   - `app_name`：部署在云上的 Agent 应用名称（与VeFaaS应用名称不一定对应，此处为服务级别）
+   - `agent`：你提供服务的 Agent 实例
+   - `short_term_memory`：短期记忆，为空则默认初始化in-memory短期记忆，重启后即消失
+   - `requirement_file_path`：依赖文件路径，VeADK 能够自动将其移动到`src/requirements.txt`
+3. 使用`python deploy.py`进行云端部署
+
+如果你想在部署到云端前进行本地运行，测试代码问题，可以在`deploy.py`中的`engine.deploy`调用处，添加参数：`local_test=True`。添加后，在部署前将会启动相关服务，测试启动是否正常。
+
+### 云端环境变量
+
+| 环境变量名称 | 说明 | 值 | 备注 |
+| - | - | - | - |
+| VEADK_TRACER_APMPLUS | 是否使用火山 APMPlus Tracing | `true` \| `false` | |
+| VEADK_TRACER_COZELOOP | 是否使用火山 CozeLoop Tracing | `true` \| `false` | |
+| VEADK_TRACER_TLS | 是否使用 TLS Tracing | `true` \| `false` | |
+| SHORT_TERM_MEMORY_BACKEND | 启动 ADK Web 时的短期记忆后端 | `local` \| `mysql` | 优先级低于在`agent.py`中定义的短期记忆 |
+| LONG_TERM_MEMORY_BACKEND | 启动 ADK Web 时的长期记忆后端 | `opensearch` \| `viking` | 优先级低于在`agent.py`中定义的长期记忆 |
 
 ## Cloud Agent Engine
 

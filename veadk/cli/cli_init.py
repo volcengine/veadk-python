@@ -62,8 +62,8 @@ def _render_prompts() -> dict[str, Any]:
 
     deploy_mode_options = {
         "1": "A2A/MCP Server",
-        "2": "VeADK Studio",
-        "3": "VeADK Web / Google ADK Web",
+        # "2": "VeADK Studio",
+        "2": "VeADK Web / Google ADK Web",
     }
 
     click.echo("Choose a deploy mode:")
@@ -79,8 +79,8 @@ def _render_prompts() -> dict[str, Any]:
         "GATEWAY_NAME": gateway_name,
         "GATEWAY_SERVICE_NAME": gateway_service_name,
         "GATEWAY_UPSTREAM_NAME": gateway_upstream_name,
-        "USE_STUDIO": deploy_mode == deploy_mode_options["2"],
-        "USE_ADK_WEB": deploy_mode == deploy_mode_options["3"],
+        "USE_STUDIO": False,
+        "USE_ADK_WEB": deploy_mode == deploy_mode_options["2"],
     }
 
 
