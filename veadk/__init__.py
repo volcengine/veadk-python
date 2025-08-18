@@ -12,17 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .version import VERSION
+from typing import TYPE_CHECKING
+
+from veadk.version import VERSION
+
+if TYPE_CHECKING:
+    from veadk.agent import Agent
+    from veadk.runner import Runner
 
 
 # Lazy loading for `Agent` class
 def __getattr__(name):
     if name == "Agent":
-        from .agent import Agent
+        from veadk.agent import Agent
 
         return Agent
     if name == "Runner":
-        from .runner import Runner
+        from veadk.runner import Runner
 
         return Runner
     raise AttributeError(f"module 'veadk' has no attribute '{name}'")

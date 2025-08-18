@@ -26,7 +26,7 @@ from typing_extensions import override
 from veadk.knowledgebase import KnowledgeBase
 
 if TYPE_CHECKING:
-    from google.adk.models import LlmRequest
+    from google.adk.models.llm_request import LlmRequest
 
 
 knowledgebase: KnowledgeBase | None = None
@@ -85,7 +85,8 @@ async def load_knowledgebase(
     Returns:
       A list of knowledgebase results.
     """
-    search_knowledgebase_response = await tool_context.search_knowledgebase(
+
+    search_knowledgebase_response = await tool_context.search_knowledgebase(  # type: ignore[attr-defined]
         query, tool_context._invocation_context.app_name
     )
     return LoadKnowledgebaseResponse(

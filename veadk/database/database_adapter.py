@@ -15,8 +15,8 @@
 import re
 import time
 from typing import BinaryIO, TextIO
-from veadk.database.base_database import BaseDatabase
 
+from veadk.database.base_database import BaseDatabase
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -41,7 +41,7 @@ class KVDatabaseAdapter:
             )
             raise e
 
-    def query(self, query: str, index: str, top_k: int = 0) -> list[str]:
+    def query(self, query: str, index: str, top_k: int = 0) -> list:
         logger.debug(f"Querying Redis database: index={index} query={query}")
 
         # ignore top_k, as KV search only return one result

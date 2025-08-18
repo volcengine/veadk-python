@@ -41,11 +41,14 @@ class LongTermMemory(BaseMemoryService):
     def __init__(
         self,
         backend: Literal[
-            "local", "opensearch", "redis", "mysql", "viking"
+            "local", "opensearch", "redis", "mysql", "viking", "viking_mem"
         ] = "opensearch",
         top_k: int = 5,
     ):
         if backend == "viking":
+            logger.warning(
+                "`viking` backend is deprecated, switching to `viking_mem` backend."
+            )
             backend = "viking_mem"
         self.top_k = top_k
         self.backend = backend
