@@ -12,7 +12,94 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 import click
+
+from veadk.memory.long_term_memory import LongTermMemory
+from veadk.memory.short_term_memory import ShortTermMemory
+
+
+def _get_stm_from_module(module) -> ShortTermMemory:
+    return module.agent_run_config.short_term_memory
+
+
+def _get_stm_from_env() -> ShortTermMemory:
+    import os
+
+    from veadk.utils.logger import get_logger
+
+    logger = get_logger(__name__)
+
+    short_term_memory_backend = os.getenv("SHORT_TERM_MEMORY_BACKEND")
+    if not short_term_memory_backend:  # prevent None or empty string
+        short_term_memory_backend = "local"
+    logger.info(f"Short term memory: backend={short_term_memory_backend}")
+
+    return ShortTermMemory(backend=short_term_memory_backend)  # type: ignore
+
+
+def _get_ltm_from_module(module) -> LongTermMemory | None:
+    agent = module.agent_run_config.agent
+
+    if not hasattr(agent, "long_term_memory"):
+        return None
+    else:
+        return agent.long_term_memory
+
+
+def _get_ltm_from_env() -> LongTermMemory | None:
+    import os
+
+    from veadk.utils.logger import get_logger
+
+    logger = get_logger(__name__)
+
+    long_term_memory_backend = os.getenv("LONG_TERM_MEMORY_BACKEND")
+
+    if long_term_memory_backend:
+        logger.info(f"Long term memory: backend={long_term_memory_backend}")
+        return LongTermMemory(backend=long_term_memory_backend)  # type: ignore
+    else:
+        logger.warning("No long term memory backend settings detected.")
+        return None
+
+
+def _get_memory(
+    module_path: str,
+) -> tuple[ShortTermMemory, LongTermMemory | None]:
+    from veadk.utils.logger import get_logger
+    from veadk.utils.misc import load_module_from_file
+
+    logger = get_logger(__name__)
+
+    # 1. load user module
+    try:
+        module_file_path = module_path
+        module = load_module_from_file(
+            module_name="agent_and_mem", file_path=f"{module_file_path}/agent.py"
+        )
+    except Exception as e:
+        logger.error(
+            f"Failed to get memory config from `agent.py`: {e}. Fallback to get memory from environment variables."
+        )
+        return _get_stm_from_env(), _get_ltm_from_env()
+
+    if not hasattr(module, "agent_run_config"):
+        logger.error(
+            "You must export `agent_run_config` as a global variable in `agent.py`. Fallback to get memory from environment variables."
+        )
+        return _get_stm_from_env(), _get_ltm_from_env()
+
+    # 2. try to get short term memory
+    # short term memory must exist in user code, as we use `default_factory` to init it
+    short_term_memory = _get_stm_from_module(module)
+
+    # 3. try to get long term memory
+    long_term_memory = _get_ltm_from_module(module)
+    if not long_term_memory:
+        long_term_memory = _get_ltm_from_env()
+
+    return short_term_memory, long_term_memory
 
 
 @click.command()
@@ -24,7 +111,6 @@ def web(host: str) -> None:
 
     from google.adk.cli.utils.shared_value import SharedValue
 
-    from veadk.memory.short_term_memory import ShortTermMemory
     from veadk.utils.logger import get_logger
 
     logger = get_logger(__name__)
@@ -51,26 +137,9 @@ def web(host: str) -> None:
         self.current_app_name_ref = SharedValue(value="")
         self.runner_dict = {}
 
-        short_term_memory_backend = os.getenv("SHORT_TERM_MEMORY_BACKEND")
-        if not short_term_memory_backend:  # prevent None or empty string
-            short_term_memory_backend = "local"
-        logger.info(f"Short term memory: backend={short_term_memory_backend}")
-
-        long_term_memory_backend = os.getenv("LONG_TERM_MEMORY_BACKEND")
-        long_term_memory = None
-
-        if long_term_memory_backend:
-            from veadk.memory.long_term_memory import LongTermMemory
-
-            logger.info(f"Long term memory: backend={long_term_memory_backend}")
-            long_term_memory = LongTermMemory(backend=long_term_memory_backend)  # type: ignore
-        else:
-            logger.info("No long term memory backend settings detected.")
-
-        self.session_service = ShortTermMemory(
-            backend=short_term_memory_backend  # type: ignore
-        ).session_service
-
+        # parse VeADK memories
+        short_term_memory, long_term_memory = _get_memory(module_path=agents_dir)
+        self.session_service = short_term_memory.session_service
         self.memory_service = long_term_memory
 
     import google.adk.cli.adk_web_server

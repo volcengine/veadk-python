@@ -12,14 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from veadk import Agent
+
+from weather_agent.agent import agent  # import your agent here
+
 from veadk.memory.short_term_memory import ShortTermMemory
-from veadk.tools.demo_tools import get_city_weather
+from veadk.types import AgentRunConfig
 
-app_name: str = "weather-reporter"  # <--- export your app name
-agent: Agent = Agent(tools=[get_city_weather])  # <--- export your agent
-short_term_memory: ShortTermMemory = (
-    ShortTermMemory()
-)  # <--- export your short term memory
-
-root_agent = agent
+# [required] instantiate the agent run configuration
+agent_run_config = AgentRunConfig(
+    app_name="weather-report",
+    agent=agent,
+    requirement_file_path="./weather_agent/requirements.txt",  # relative path to the requirements file
+    short_term_memory=ShortTermMemory(),  # default is a in-memory short term memory
+)
