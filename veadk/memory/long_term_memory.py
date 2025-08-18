@@ -63,7 +63,7 @@ class LongTermMemory(BaseMemoryService):
         self.adapter = get_long_term_memory_database_adapter(self.db_client)
 
         logger.info(
-            f"Initialized long term memory: db_client={self.db_client} adapter={self.adapter}"
+            f"Initialized long term memory: db_client={self.db_client.__class__.__name__} adapter={self.adapter}"
         )
 
     def _filter_and_convert_events(self, events: list[Event]) -> list[str]:
