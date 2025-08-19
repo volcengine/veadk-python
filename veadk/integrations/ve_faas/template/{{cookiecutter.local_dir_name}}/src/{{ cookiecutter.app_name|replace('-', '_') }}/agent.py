@@ -12,29 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from veadk import Agent
+from veadk.tools.demo_tools import get_city_weather
 
-import click
-
-from veadk.cli.cli_deploy import deploy
-from veadk.cli.cli_init import init
-from veadk.cli.cli_prompt import prompt
-from veadk.cli.cli_web import web
-from veadk.version import VERSION
-
-
-@click.group()
-@click.version_option(
-    version=VERSION, prog_name="Volcengine Agent Development Kit (VeADK)"
+# define your agent here
+agent: Agent = Agent(
+    name="weather_reporter",
+    description="A reporter for weather updates",
+    instruction="Once user ask you weather of a city, you need to provide the weather report for that city by calling `get_city_weather`.",
+    tools=[get_city_weather],
 )
-def veadk():
-    """Volcengine ADK command line tools"""
-    pass
 
-
-veadk.add_command(deploy)
-veadk.add_command(init)
-veadk.add_command(prompt)
-veadk.add_command(web)
-
-if __name__ == "__main__":
-    veadk()
+# required from Google ADK Web
+root_agent = agent

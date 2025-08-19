@@ -13,7 +13,7 @@ export default defineUserConfig({
 
     navbar: ['/', '/introduction'],
 
-    sidebar: ['introduction', 'installation', 'get-started', 'agent', 'memory', 'tool', 'knowledgebase', 'tracing', 'evaluation', 'deploy', 'cli', 'veadk-studio']
+    sidebar: ['introduction', 'installation', 'get-started', 'agent', 'memory', 'tool', 'knowledgebase', 'tracing', 'evaluation', 'deploy', 'cli']
   }),
 
   bundler: viteBundler(),

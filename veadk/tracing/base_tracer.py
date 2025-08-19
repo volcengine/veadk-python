@@ -208,3 +208,18 @@ class BaseTracer(ABC):
 
     def set_app_name(self, app_name):
         self.app_name = app_name
+
+    def do_hooks(self, agent) -> None:
+        if not getattr(agent, "before_model_callback", None):
+            agent.before_model_callback = []
+        if not getattr(agent, "after_model_callback", None):
+            agent.after_model_callback = []
+        if not getattr(agent, "after_tool_callback", None):
+            agent.after_tool_callback = []
+
+        if self.tracer_hook_before_model not in agent.before_model_callback:
+            agent.before_model_callback.append(self.tracer_hook_before_model)
+        if self.tracer_hook_after_model not in agent.after_model_callback:
+            agent.after_model_callback.append(self.tracer_hook_after_model)
+        if self.tracer_hook_after_tool not in agent.after_tool_callback:
+            agent.after_tool_callback.append(self.tracer_hook_after_tool)

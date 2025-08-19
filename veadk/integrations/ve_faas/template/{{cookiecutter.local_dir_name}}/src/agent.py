@@ -12,29 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from {{ cookiecutter.app_name|replace('-', '_') }}.agent import agent # type: ignore
 
-import click
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.types import AgentRunConfig
 
-from veadk.cli.cli_deploy import deploy
-from veadk.cli.cli_init import init
-from veadk.cli.cli_prompt import prompt
-from veadk.cli.cli_web import web
-from veadk.version import VERSION
-
-
-@click.group()
-@click.version_option(
-    version=VERSION, prog_name="Volcengine Agent Development Kit (VeADK)"
+# [required] instantiate the agent run configuration
+agent_run_config = AgentRunConfig(
+    app_name="{{ cookiecutter.app_name }}",
+    agent=agent, # type: ignore
+    short_term_memory=ShortTermMemory(backend="{{ cookiecutter.short_term_memory_backend }}"), # type: ignore
 )
-def veadk():
-    """Volcengine ADK command line tools"""
-    pass
-
-
-veadk.add_command(deploy)
-veadk.add_command(init)
-veadk.add_command(prompt)
-veadk.add_command(web)
-
-if __name__ == "__main__":
-    veadk()

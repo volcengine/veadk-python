@@ -21,6 +21,7 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.35.0",
     "opentelemetry-instrumentation-logging>=0.56b0",
     "wrapt>=1.17.2", # For patching built-in functions
+    "openai==1.99.9" # For fix https://github.com/BerriAI/litellm/issues/13710
 ]
 
 [project.scripts]
@@ -43,6 +44,7 @@ cli = [
     "volcengine-python-sdk==4.0.3", # For Volcengine API
     "agent-pilot-sdk>=0.0.9",       # Prompt optimization by Volcengine AgentPilot/PromptPilot toolkits
     "fastmcp>=2.11.3",              # For running MCP
+    "cookiecutter>=2.6.0", # For cloud deploy
 ]
 dev = [
     "pre-commit>=4.2.0",            # Format checking
@@ -70,3 +72,8 @@ include-package-data = true
 
 [tool.setuptools.package-data]
 "veadk" = ["**/*"]
+
+[tool.ruff]
+exclude = [
+    "veadk/integrations/ve_faas/template/*"
+]
