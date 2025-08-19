@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 import click
 
 TEMP_PATH = "/tmp"
@@ -29,9 +30,15 @@ TEMP_PATH = "/tmp"
     help="Volcengine secret key",
 )
 @click.option("--vefaas-app-name", help="Expected Volcengine FaaS application name")
-@click.option("--veapig-instance-name", help="Expected Volcengine APIG instance name")
-@click.option("--veapig-service-name", help="Expected Volcengine APIG service name")
-@click.option("--veapig-upstream-name", help="Expected Volcengine APIG upstream name")
+@click.option(
+    "--veapig-instance-name", default="", help="Expected Volcengine APIG instance name"
+)
+@click.option(
+    "--veapig-service-name", default="", help="Expected Volcengine APIG service name"
+)
+@click.option(
+    "--veapig-upstream-name", default="", help="Expected Volcengine APIG upstream name"
+)
 @click.option(
     "--short-term-memory-backend",
     default="local",
@@ -109,6 +116,17 @@ def deploy(
     # copy
     shutil.copytree(user_proj_abs_path, agent_dir, dirs_exist_ok=True)
     logger.debug(f"Remove agent module from {user_proj_abs_path} to {agent_dir}")
+
+    # copy requirements.txt
+    if (user_proj_abs_path / "requirements.txt").exists():
+        shutil.copy(
+            user_proj_abs_path / "requirements.txt",
+            Path(TEMP_PATH) / tmp_dir_name / "src" / "requirements.txt",
+        )
+    else:
+        logger.warning(
+            "No requirements.txt found in the user project, we will use a default one."
+        )
 
     # load
     logger.debug(
