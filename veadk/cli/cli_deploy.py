@@ -52,6 +52,7 @@ def deploy(
     path: str,
 ) -> None:
     """Deploy a user project to Volcengine FaaS application."""
+    import asyncio
     import shutil
     from pathlib import Path
 
@@ -59,7 +60,10 @@ def deploy(
 
     import veadk.integrations.ve_faas as vefaas
     from veadk.config import getenv
-    from veadk.utils.misc import formatted_timestamp
+    from veadk.utils.logger import get_logger
+    from veadk.utils.misc import formatted_timestamp, load_module_from_file
+
+    logger = get_logger(__name__)
 
     if not access_key:
         access_key = getenv("VOLCENGINE_ACCESS_KEY")
@@ -84,14 +88,13 @@ def deploy(
         "use_adk_web": use_adk_web,
     }
 
-    print(settings)
-
     cookiecutter(
         template=str(template_dir_path),
         output_dir=TEMP_PATH,
         no_input=True,
         extra_context=settings,
     )
+    logger.debug(f"Create a template project at {TEMP_PATH}/{tmp_dir_name}")
 
     agent_dir = (
         Path(TEMP_PATH)
@@ -104,20 +107,20 @@ def deploy(
     shutil.rmtree(agent_dir)
     agent_dir.mkdir(parents=True, exist_ok=True)
 
-    # mv
+    # copy
     shutil.copytree(user_proj_abs_path, agent_dir, dirs_exist_ok=True)
+    logger.debug(f"Remove agent module from {user_proj_abs_path} to {agent_dir}")
 
-    # mv requirements.txt and config.yaml if have
-    if (user_proj_abs_path / "requirements.txt").exists():
-        shutil.copy(
-            user_proj_abs_path / "requirements.txt",
-            f"{TEMP_PATH}/{tmp_dir_name}/requirements.txt",
-        )
-        # remove file
+    # load
+    logger.debug(
+        f"Load deploy module from {Path(TEMP_PATH) / tmp_dir_name / 'deploy.py'}"
+    )
+    deploy_module = load_module_from_file(
+        module_name="deploy_module", file_path=str(Path(TEMP_PATH) / tmp_dir_name)
+    )
+    logger.info(f"Begin deploy from {Path(TEMP_PATH) / tmp_dir_name / 'src'}")
+    asyncio.run(deploy_module.main())
 
-    if (user_proj_abs_path / "config.yaml").exists():
-        shutil.copy(
-            user_proj_abs_path / "config.yaml",
-            f"{TEMP_PATH}/{tmp_dir_name}/config.yaml",
-        )
-        # remove file
+    # remove tmp file
+    logger.info("Deploy done. Delete temp dir.")
+    shutil.rmtree(Path(TEMP_PATH) / tmp_dir_name)

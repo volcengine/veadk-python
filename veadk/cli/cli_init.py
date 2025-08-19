@@ -12,12 +12,54 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Any
+
 import click
+
+
+def _render_prompts() -> dict[str, Any]:
+    vefaas_application_name = click.prompt(
+        "Volcengine FaaS application name", default="veadk-cloud-agent"
+    )
+
+    veapig_instance_name = click.prompt(
+        "Volcengine API Gateway instance name", default="", show_default=True
+    )
+
+    veapig_service_name = click.prompt(
+        "Volcengine API Gateway service name", default="", show_default=True
+    )
+
+    veapig_upstream_name = click.prompt(
+        "Volcengine API Gateway upstream name", default="", show_default=True
+    )
+
+    deploy_mode_options = {
+        "1": "A2A/MCP Server",
+        "2": "VeADK Web / Google ADK Web",
+    }
+
+    click.echo("Choose a deploy mode:")
+    for key, value in deploy_mode_options.items():
+        click.echo(f"  {key}. {value}")
+
+    deploy_mode = click.prompt(
+        "Enter your choice", type=click.Choice(deploy_mode_options.keys())
+    )
+
+    return {
+        "vefaas_application_name": vefaas_application_name,
+        "veapig_instance_name": veapig_instance_name,
+        "veapig_service_name": veapig_service_name,
+        "veapig_upstream_name": veapig_upstream_name,
+        "use_adk_web": deploy_mode == "2",
+    }
 
 
 @click.command()
 def init() -> None:
     """Init a veadk project that can be deployed to Volcengine VeFaaS."""
+    import shutil
     from pathlib import Path
 
     from cookiecutter.main import cookiecutter
@@ -25,7 +67,35 @@ def init() -> None:
     import veadk.integrations.ve_faas as vefaas
 
     cwd = Path.cwd()
+    local_dir_name = click.prompt("Local directory name", default="veadk-cloud-proj")
+    target_dir_path = cwd / local_dir_name
+
+    click.echo(
+        "Welcome use VeADK to create your project. We will generate a `weather-reporter` application for you."
+    )
+
+    if target_dir_path.exists():
+        click.confirm(
+            f"Directory '{target_dir_path}' already exists, do you want to overwrite it",
+            abort=True,
+        )
+        shutil.rmtree(target_dir_path)
+
+    settings = _render_prompts()
+    settings["local_dir_name"] = local_dir_name
 
     template_dir_path = Path(vefaas.__file__).parent / "template"
 
-    cookiecutter(template=str(template_dir_path), output_dir=str(cwd))
+    cookiecutter(
+        template=str(template_dir_path),
+        output_dir=str(cwd),
+        extra_context=settings,
+        no_input=True,
+    )
+
+    click.echo(f"Template project has been generated at {target_dir_path}")
+    click.echo(f"Edit {target_dir_path / 'src/'} to define your agents")
+    click.echo(
+        f"Edit {target_dir_path / 'deploy.py'} to define your deployment attributes"
+    )
+    click.echo("Run python `deploy.py` for deployment on Volcengine FaaS platform.")

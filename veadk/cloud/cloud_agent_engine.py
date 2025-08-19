@@ -56,58 +56,22 @@ class CloudAgentEngine(BaseModel):
                 f"Invalid Volcengine FaaS function name `{name}`, please use lowercase letters and numbers, or replace it with a `-` char."
             )
 
-        # project structure check
-        assert os.path.exists(os.path.join(path, "agent.py")), (
-            f"Local agent project path `{path}` does not contain `agent.py` file. Please prepare it according to our document https://volcengine.github.io/veadk-python/deploy.html"
-        )
-
-        if not os.path.exists(os.path.join(path, "config.yaml")):
-            logger.warning(
-                f"Local agent project path `{path}` does not contain `config.yaml` file. Some important config items may not be set."
-            )
-
-        # prepare template files if not have
-        # template_files = [
-        #     "app.py",
-        #     "run.sh",
-        #     # "requirements.txt",
-        #     "__init__.py",
-        # ]
-        # for template_file in template_files:
-        #     if os.path.exists(os.path.join(path, template_file)):
-        #         logger.warning(
-        #             f"Local agent project path `{path}` contains a `{template_file}` file. Use your own `{template_file}` file may cause unexpected behavior."
-        #         )
-        #     else:
-        #         logger.info(
-        #             f"No `{template_file}` detected in local agent project path `{path}`. Prepare it."
-        #         )
-        #         import veadk.integrations.ve_faas as vefaas
-
-        #         template_file_path = (
-        #             Path(vefaas.__file__).parent / "template" / "src" / template_file
-        #         )
-        #         import shutil
-
-        #         shutil.copy(template_file_path, os.path.join(path, template_file))
-
         # copy user's requirements.txt
-        if os.path.exists(os.path.join(path, "requirements.txt")):
-            logger.warning(
-                f"Local agent project path `{path}` contains a `requirements.txt` file. Skip copy requirements."
-            )
-            return
-
         module = load_module_from_file(
             module_name="agent_source", file_path=f"{path}/agent.py"
         )
 
         requirement_file_path = module.agent_run_config.requirement_file_path
-        shutil.copy(requirement_file_path, os.path.join(path, "requirements.txt"))
+        if Path(requirement_file_path).exists():
+            shutil.copy(requirement_file_path, os.path.join(path, "requirements.txt"))
 
-        logger.info(
-            f"Copy requirement file: from {requirement_file_path} to {path}/requirements.txt"
-        )
+            logger.info(
+                f"Copy requirement file: from {requirement_file_path} to {path}/requirements.txt"
+            )
+        else:
+            logger.warning(
+                f"Requirement file: {requirement_file_path} not found or you have no requirement file in your project. Use a default one."
+            )
 
     def _try_launch_fastapi_server(self, path: str):
         """Try to launch a fastapi server for tests according to user's configuration.

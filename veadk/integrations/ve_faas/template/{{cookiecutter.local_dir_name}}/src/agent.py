@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# ruff: noqa
-
-from {{ cookiecutter.app_name|replace('-', '_') }}.agent import agent
+from {{ cookiecutter.app_name|replace('-', '_') }}.agent import agent # type: ignore
 
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.types import AgentRunConfig
@@ -22,7 +20,7 @@ from veadk.types import AgentRunConfig
 # [required] instantiate the agent run configuration
 agent_run_config = AgentRunConfig(
     app_name="{{ cookiecutter.app_name }}",
-    agent=agent,
+    agent=agent, # type: ignore
     requirement_file_path="{{ cookiecutter.requirement_file_path }}",
-    short_term_memory=ShortTermMemory(backend="{{ cookiecutter.short_term_memory_backend }}"),
+    short_term_memory=ShortTermMemory(backend="{{ cookiecutter.short_term_memory_backend }}"), # type: ignore
 )
