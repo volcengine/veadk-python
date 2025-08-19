@@ -13,6 +13,9 @@
 # limitations under the License.
 
 import os
+import socket
+import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -52,41 +55,68 @@ class CloudAgentEngine(BaseModel):
                 f"Invalid Volcengine FaaS function name `{name}`, please use lowercase letters and numbers, or replace it with a `-` char."
             )
 
-        # project structure check
-        assert os.path.exists(os.path.join(path, "agent.py")), (
-            f"Local agent project path `{path}` does not contain `agent.py` file. Please prepare it according to our document https://volcengine.github.io/veadk-python/deploy.html"
+        # # copy user's requirements.txt
+        # module = load_module_from_file(
+        #     module_name="agent_source", file_path=f"{path}/agent.py"
+        # )
+
+        # requirement_file_path = module.agent_run_config.requirement_file_path
+        # if Path(requirement_file_path).exists():
+        #     shutil.copy(requirement_file_path, os.path.join(path, "requirements.txt"))
+
+        #     logger.info(
+        #         f"Copy requirement file: from {requirement_file_path} to {path}/requirements.txt"
+        #     )
+        # else:
+        #     logger.warning(
+        #         f"Requirement file: {requirement_file_path} not found or you have no requirement file in your project. Use a default one."
+        #     )
+
+    def _try_launch_fastapi_server(self, path: str):
+        """Try to launch a fastapi server for tests according to user's configuration.
+
+        Args:
+            path (str): Local agent project path.
+        """
+        RUN_SH = f"{path}/run.sh"
+
+        HOST = "0.0.0.0"
+        PORT = 8000
+
+        # Prepare environment variables
+        os.environ["_FAAS_FUNC_TIMEOUT"] = "900"
+        env = os.environ.copy()
+
+        process = subprocess.Popen(
+            ["bash", RUN_SH],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env,
+            bufsize=1,
         )
 
-        if not os.path.exists(os.path.join(path, "config.yaml")):
-            logger.warning(
-                f"Local agent project path `{path}` does not contain `config.yaml` file. Some important config items may not be set."
-            )
+        timeout = 30
+        start_time = time.time()
 
-        # prepare template files if not have
-        template_files = [
-            "app.py",
-            "studio_app.py",
-            "run.sh",
-            "requirements.txt",
-            "__init__.py",
-        ]
-        for template_file in template_files:
-            if os.path.exists(os.path.join(path, template_file)):
-                logger.warning(
-                    f"Local agent project path `{path}` contains a `{template_file}` file. Use your own `{template_file}` file may cause unexpected behavior."
-                )
-            else:
-                logger.info(
-                    f"No `{template_file}` detected in local agent project path `{path}`. Prepare it."
-                )
-                import veadk.integrations.ve_faas as vefaas
+        for line in process.stdout:  # type: ignore
+            print(line, end="")
 
-                template_file_path = (
-                    Path(vefaas.__file__).parent / "template" / "src" / template_file
-                )
-                import shutil
+            if time.time() - start_time > timeout:
+                process.terminate()
+                raise RuntimeError(f"FastAPI server failed to start on {HOST}:{PORT}")
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(0.1)
+                    s.connect(("127.0.0.1", PORT))
+                    logger.info(f"FastAPI server is listening on {HOST}:{PORT}")
+                    logger.info("Local deplyment test successfully.")
+                    break
+            except (ConnectionRefusedError, socket.timeout):
+                continue
 
-                shutil.copy(template_file_path, os.path.join(path, template_file))
+        process.terminate()
+        process.wait()
 
     def deploy(
         self,
@@ -95,33 +125,27 @@ class CloudAgentEngine(BaseModel):
         gateway_name: str = "",
         gateway_service_name: str = "",
         gateway_upstream_name: str = "",
-        use_studio: bool = False,
         use_adk_web: bool = False,
+        local_test: bool = False,
     ) -> CloudApp:
         """Deploy local agent project to Volcengine FaaS platform.
 
         Args:
+            application_name (str): Expected VeFaaS application name.
             path (str): Local agent project path.
-            name (str): Volcengine FaaS function name.
+            gateway_name (str): Gateway name.
+            gateway_service_name (str): Gateway service name.
+            gateway_upstream_name (str): Gateway upstream name.
+            use_adk_web (bool): Whether to use ADK Web.
+            local_test (bool): Whether to run local test for FastAPI Server.
 
         Returns:
-            str: Volcengine FaaS function endpoint.
+            CloudApp: The deployed cloud application instance.
         """
-        assert not (use_studio and use_adk_web), (
-            "use_studio and use_adk_web can not be True at the same time."
-        )
-
         # prevent deepeval writing operations
         import veadk.config
 
         veadk.config.veadk_environments["DEEPEVAL_TELEMETRY_OPT_OUT"] = "YES"
-
-        if use_studio:
-            veadk.config.veadk_environments["USE_STUDIO"] = "True"
-        else:
-            import veadk.config
-
-            veadk.config.veadk_environments["USE_STUDIO"] = "False"
 
         if use_adk_web:
             import veadk.config
@@ -135,6 +159,9 @@ class CloudAgentEngine(BaseModel):
         # convert `path` to absolute path
         path = str(Path(path).resolve())
         self._prepare(path, application_name)
+
+        if local_test:
+            self._try_launch_fastapi_server(path)
 
         if not gateway_name:
             gateway_name = f"{application_name}-gw-{formatted_timestamp()}"

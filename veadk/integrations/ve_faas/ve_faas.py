@@ -180,7 +180,6 @@ class VeFaaS:
             host="open.volcengineapi.com",
         )
 
-        logger.info(f"Start to release VeFaaS application {app_id}.")
         status, full_response = self._get_application_status(app_id)
         while status not in ["deploy_success", "deploy_fail"]:
             time.sleep(10)

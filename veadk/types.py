@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from veadk.agent import Agent
+from veadk.memory.short_term_memory import ShortTermMemory
 
 
 class MediaMessage(BaseModel):
@@ -21,3 +24,19 @@ class MediaMessage(BaseModel):
 
     media: str
     """Media file (e.g., `.pdf`, `.docx`, `.png`, `.jpg`, `.jpeg`, `.mp4`, `.mp3`, `.wav`, `.txt`) path"""
+
+
+class AgentRunConfig(BaseModel):
+    """Configuration for running an agent on VeFaaS platform."""
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    app_name: str = Field(
+        default="veadk_vefaas_app", description="The name of the application"
+    )
+
+    agent: Agent = Field(..., description="The root agent instance")
+
+    short_term_memory: ShortTermMemory = Field(
+        default_factory=ShortTermMemory, description="The short-term memory instance"
+    )
