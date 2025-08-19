@@ -19,6 +19,7 @@ from google.adk.agents.base_agent import BaseAgent
 from pydantic import ConfigDict, Field
 from typing_extensions import Any
 
+from veadk.agent import Agent
 from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INSTRUCTION
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.logger import get_logger
@@ -29,7 +30,7 @@ logger = get_logger(__name__)
 
 
 class LoopAgent(GoogleADKLoopAgent):
-    """LLM-based Agent with Volcengine capabilities."""
+    """Loop Agent with Volcengine capabilities."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
     """The model config"""
@@ -49,17 +50,21 @@ class LoopAgent(GoogleADKLoopAgent):
     tracers: list[BaseTracer] = []
     """The tracers provided to agent."""
 
+    def set_sub_agents_tracer(self, tracer) -> None:
+        from veadk.agents.parallel_agent import ParallelAgent
+        from veadk.agents.sequential_agent import SequentialAgent
+
+        for sub_agent in self.sub_agents:
+            if isinstance(sub_agent, Agent):
+                tracer.do_hooks(sub_agent)
+            elif isinstance(sub_agent, (SequentialAgent, LoopAgent, ParallelAgent)):
+                sub_agent.set_sub_agents_tracer(tracer)
+
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
 
         if self.tracers:
             for tracer in self.tracers:
-                for sub_agent in self.sub_agents:
-                    try:
-                        tracer.do_hooks(sub_agent)
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to add hooks for sub_agent `{sub_agent.name}`: {e}"
-                        )
+                self.set_sub_agents_tracer(tracer)
 
         logger.info(f"{self.__class__.__name__} `{self.name}` init done.")

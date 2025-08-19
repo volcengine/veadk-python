@@ -19,6 +19,7 @@ from google.adk.agents.base_agent import BaseAgent
 from pydantic import ConfigDict, Field
 from typing_extensions import Any
 
+from veadk.agent import Agent
 from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INSTRUCTION
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.logger import get_logger
@@ -49,17 +50,24 @@ class ParallelAgent(GoogleADKParallelAgent):
     tracers: list[BaseTracer] = []
     """The tracers provided to agent."""
 
+    def set_sub_agents_tracer(self, tracer) -> None:
+        from veadk.agents.loop_agent import LoopAgent
+        from veadk.agents.sequential_agent import SequentialAgent
+
+        for sub_agent in self.sub_agents:
+            if isinstance(sub_agent, Agent):
+                tracer.do_hooks(sub_agent)
+            elif isinstance(sub_agent, (SequentialAgent, LoopAgent, ParallelAgent)):
+                sub_agent.set_sub_agents_tracer(tracer)
+
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
 
         if self.tracers:
+            logger.warning(
+                "Enable tracing in ParallelAgent may cause OpenTelemetry context error. Issue see https://github.com/google/adk-python/issues/1670"
+            )
             for tracer in self.tracers:
-                for sub_agent in self.sub_agents:
-                    try:
-                        tracer.do_hooks(sub_agent)
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to add hooks for sub_agent `{sub_agent.name}`: {e}"
-                        )
+                self.set_sub_agents_tracer(tracer)
 
         logger.info(f"{self.__class__.__name__} `{self.name}` init done.")
