@@ -131,6 +131,17 @@ def deploy(
             "No requirements.txt found in the user project, we will use a default one."
         )
 
+    # avoid upload user's config.yaml
+    if (user_proj_abs_path / "config.yaml").exists():
+        logger.warning(
+            f"Find a config.yaml in {user_proj_abs_path}/config.yaml, we will not upload it by default."
+        )
+        shutil.move(agent_dir / "config.yaml", Path(TEMP_PATH) / tmp_dir_name)
+    else:
+        logger.info(
+            "No config.yaml found in the user project. Some environment variables may not be set."
+        )
+
     # load
     logger.debug(
         f"Load deploy module from {Path(TEMP_PATH) / tmp_dir_name / 'deploy.py'}"

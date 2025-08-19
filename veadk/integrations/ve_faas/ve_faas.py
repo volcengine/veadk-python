@@ -120,7 +120,11 @@ class VeFaaS:
                 envs=envs,
             )
         )
-        logger.debug(f"Function creation response: {res}")
+
+        # avoid print secrets
+        logger.debug(
+            f"Function creation in {res.project_name} project with ID {res.id}"
+        )
 
         function_id = res.id
 
