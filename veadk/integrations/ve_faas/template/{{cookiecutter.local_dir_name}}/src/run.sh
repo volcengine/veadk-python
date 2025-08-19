@@ -33,12 +33,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# in case of uvicorn and fastapi not installed in user's requirements.txt
-python3 -m pip install uvicorn[standard]
-
-python3 -m pip install fastapi
-
-python3 -m pip install fastmcp
+# in case of deployment deps not installed in user's requirements.txt
+python3 -m pip install uvicorn[standard] fastapi fastmcp
 
 USE_ADK_WEB=${USE_ADK_WEB:-False}
 
