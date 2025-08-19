@@ -115,7 +115,8 @@ def deploy(
         f"Load deploy module from {Path(TEMP_PATH) / tmp_dir_name / 'deploy.py'}"
     )
     deploy_module = load_module_from_file(
-        module_name="deploy_module", file_path=str(Path(TEMP_PATH) / tmp_dir_name)
+        module_name="deploy_module",
+        file_path=str(Path(TEMP_PATH) / tmp_dir_name / "deploy.py"),
     )
     logger.info(f"Begin deploy from {Path(TEMP_PATH) / tmp_dir_name / 'src'}")
     asyncio.run(deploy_module.main())
