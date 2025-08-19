@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import os
-import shutil
 import socket
 import subprocess
 import time
@@ -26,7 +25,7 @@ from veadk.cloud.cloud_app import CloudApp
 from veadk.config import getenv
 from veadk.integrations.ve_faas.ve_faas import VeFaaS
 from veadk.utils.logger import get_logger
-from veadk.utils.misc import formatted_timestamp, load_module_from_file
+from veadk.utils.misc import formatted_timestamp
 
 logger = get_logger(__name__)
 
@@ -56,22 +55,22 @@ class CloudAgentEngine(BaseModel):
                 f"Invalid Volcengine FaaS function name `{name}`, please use lowercase letters and numbers, or replace it with a `-` char."
             )
 
-        # copy user's requirements.txt
-        module = load_module_from_file(
-            module_name="agent_source", file_path=f"{path}/agent.py"
-        )
+        # # copy user's requirements.txt
+        # module = load_module_from_file(
+        #     module_name="agent_source", file_path=f"{path}/agent.py"
+        # )
 
-        requirement_file_path = module.agent_run_config.requirement_file_path
-        if Path(requirement_file_path).exists():
-            shutil.copy(requirement_file_path, os.path.join(path, "requirements.txt"))
+        # requirement_file_path = module.agent_run_config.requirement_file_path
+        # if Path(requirement_file_path).exists():
+        #     shutil.copy(requirement_file_path, os.path.join(path, "requirements.txt"))
 
-            logger.info(
-                f"Copy requirement file: from {requirement_file_path} to {path}/requirements.txt"
-            )
-        else:
-            logger.warning(
-                f"Requirement file: {requirement_file_path} not found or you have no requirement file in your project. Use a default one."
-            )
+        #     logger.info(
+        #         f"Copy requirement file: from {requirement_file_path} to {path}/requirements.txt"
+        #     )
+        # else:
+        #     logger.warning(
+        #         f"Requirement file: {requirement_file_path} not found or you have no requirement file in your project. Use a default one."
+        #     )
 
     def _try_launch_fastapi_server(self, path: str):
         """Try to launch a fastapi server for tests according to user's configuration.

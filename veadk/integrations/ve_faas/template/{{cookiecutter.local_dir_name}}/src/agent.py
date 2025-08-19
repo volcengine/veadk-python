@@ -21,6 +21,5 @@ from veadk.types import AgentRunConfig
 agent_run_config = AgentRunConfig(
     app_name="{{ cookiecutter.app_name }}",
     agent=agent, # type: ignore
-    requirement_file_path="{{ cookiecutter.requirement_file_path }}",
     short_term_memory=ShortTermMemory(backend="{{ cookiecutter.short_term_memory_backend }}"), # type: ignore
 )

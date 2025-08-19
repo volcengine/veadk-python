@@ -40,7 +40,3 @@ class AgentRunConfig(BaseModel):
     short_term_memory: ShortTermMemory = Field(
         default_factory=ShortTermMemory, description="The short-term memory instance"
     )
-
-    requirement_file_path: str = Field(
-        ..., description="The relative path to the requirements file"
-    )

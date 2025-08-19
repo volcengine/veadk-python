@@ -79,7 +79,6 @@ def deploy(
         "local_dir_name": tmp_dir_name,
         "app_name": user_proj_abs_path.name,
         "agent_module_name": user_proj_abs_path.name,
-        "requirement_file_path": str(user_proj_abs_path / "requirements.txt"),
         "short_term_memory_backend": short_term_memory_backend,
         "vefaas_application_name": vefaas_app_name,
         "veapig_instance_name": veapig_instance_name,

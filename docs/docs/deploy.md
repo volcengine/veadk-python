@@ -81,7 +81,6 @@ Run python `deploy.py` for deployment on Volcengine FaaS platform.
    - `app_name`：部署在云上的 Agent 应用名称（与VeFaaS应用名称不一定对应，此处为服务级别）
    - `agent`：你提供服务的 Agent 实例
    - `short_term_memory`：短期记忆，为空则默认初始化in-memory短期记忆，重启后即消失
-   - `requirement_file_path`：依赖文件路径，VeADK 能够自动将其移动到 `src/requirements.txt`
 3. 使用`python deploy.py`进行云端部署
 
 如果你想在部署到云端前进行本地运行来测试代码问题，可以在 `deploy.py` 中的 `engine.deploy` 调用处，添加参数：`local_test=True`。添加后，在部署前将会启动相关服务，测试启动是否正常。
