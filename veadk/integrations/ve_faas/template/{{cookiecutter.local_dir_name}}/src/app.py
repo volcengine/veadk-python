@@ -19,7 +19,7 @@ from typing import Callable
 from agent import agent_run_config
 from fastapi import FastAPI
 from fastmcp import FastMCP
-
+from google.adk.a2a.utils.agent_card_builder import AgentCardBuilder
 from veadk.a2a.ve_a2a_server import init_app
 from veadk.runner import Runner
 from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporter
@@ -38,6 +38,8 @@ assert isinstance(agent_run_config, AgentRunConfig), (
 app_name = agent_run_config.app_name
 agent = agent_run_config.agent
 short_term_memory = agent_run_config.short_term_memory
+
+agent_card_builder = AgentCardBuilder(agent=agent)
 
 
 def load_tracer() -> None:
@@ -104,7 +106,15 @@ def build_mcp_run_agent_func() -> Callable:
     return run_agent
 
 
+async def agent_card() -> dict:
+    agent_card = await agent_card_builder.build()
+    return agent_card.model_dump()
+
+
 load_tracer()
+
+# Build a run_agent function for building MCP server
+run_agent_func = build_mcp_run_agent_func()
 
 a2a_app = init_app(
     server_url="0.0.0.0",
@@ -113,9 +123,8 @@ a2a_app = init_app(
     short_term_memory=short_term_memory,
 )
 
-# Build a run_agent function for building MCP server
-run_agent_func = build_mcp_run_agent_func()
 a2a_app.post("/run_agent", operation_id="run_agent", tags=["mcp"])(run_agent_func)
+a2a_app.get("/agent_card", operation_id="agent_card", tags=["mcp"])(agent_card)
 
 
 # === Build mcp server ===
