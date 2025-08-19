@@ -145,6 +145,7 @@ class Runner:
         messages: RunnerMessage,
         session_id: str,
         stream: bool = False,
+        save_tracing_data: bool = False,
     ):
         converted_messages: list = self._convert_messages(messages)
 
@@ -159,7 +160,8 @@ class Runner:
             final_output = await self._run(session_id, converted_message, stream)
 
         # try to save tracing file
-        self.save_tracing_file(session_id)
+        if save_tracing_data:
+            self.save_tracing_file(session_id)
 
         return final_output
 
@@ -173,6 +175,7 @@ class Runner:
             return ""
 
         if not self.agent.tracers:
+            logger.warning("No tracer is configured in the agent.")
             return ""
 
         try:

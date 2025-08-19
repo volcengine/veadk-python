@@ -93,7 +93,7 @@ from veadk.tools.demo_tools import get_city_weather
 session_id = "..."
 prompt = "..."
 
-# define three agents, one for planner, two for write poem and polish
+# 定义三个智能体，分别为天气预报智能体、穿衣建议智能体以及一个Planner智能体
 weather_reporter = Agent(
     name="weather_reporter",
     description="A weather reporter agent to report the weather.",
