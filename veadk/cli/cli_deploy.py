@@ -119,6 +119,9 @@ def deploy(
 
     # copy requirements.txt
     if (user_proj_abs_path / "requirements.txt").exists():
+        logger.debug(
+            f"Find a requirements.txt in {user_proj_abs_path}/requirements.txt, copy it to temp project."
+        )
         shutil.copy(
             user_proj_abs_path / "requirements.txt",
             Path(TEMP_PATH) / tmp_dir_name / "src" / "requirements.txt",
