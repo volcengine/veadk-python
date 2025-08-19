@@ -105,8 +105,15 @@ class CloudApp:
             raise ValueError(
                 "VeFaaS CloudAPP must be set application_name to get application_id."
             )
-        # TODO(zakahan): get application id from vefaas application name
-        vefaas_application_id = ""
+        from veadk.integrations.ve_faas.ve_faas import VeFaaS
+
+        vefaas_client = VeFaaS(
+            access_key=getenv("VOLCENGINE_ACCESS_KEY"),
+            secret_key=getenv("VOLCENGINE_SECRET_KEY"),
+        )
+        vefaas_application_id = vefaas_client.find_app_id_by_name(
+            self.vefaas_application_name
+        )
         return vefaas_application_id
 
     async def _get_a2a_client(self) -> A2AClient:
