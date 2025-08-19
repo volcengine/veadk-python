@@ -12,9 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from typing import Any
 
 import click
+
+warnings.filterwarnings(
+    "ignore", category=UserWarning, module="pydantic._internal._fields"
+)
 
 
 def _render_prompts() -> dict[str, Any]:
@@ -66,13 +71,13 @@ def init() -> None:
 
     import veadk.integrations.ve_faas as vefaas
 
-    cwd = Path.cwd()
-    local_dir_name = click.prompt("Local directory name", default="veadk-cloud-proj")
-    target_dir_path = cwd / local_dir_name
-
     click.echo(
         "Welcome use VeADK to create your project. We will generate a `weather-reporter` application for you."
     )
+
+    cwd = Path.cwd()
+    local_dir_name = click.prompt("Local directory name", default="veadk-cloud-proj")
+    target_dir_path = cwd / local_dir_name
 
     if target_dir_path.exists():
         click.confirm(

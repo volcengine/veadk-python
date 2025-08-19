@@ -12,16 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 import click
 
 from veadk.cli.cli_deploy import deploy
 from veadk.cli.cli_init import init
 from veadk.cli.cli_prompt import prompt
 from veadk.cli.cli_web import web
-from veadk.utils.logger import get_logger
 from veadk.version import VERSION
-
-logger = get_logger(__name__)
 
 
 @click.group()

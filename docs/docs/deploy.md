@@ -2,36 +2,39 @@
 
 VeADK提供了一个云引擎，配合命令行脚手架，你可以方便地：
 
-- 将你的本地Agent项目上传到云端（[火山引擎函数服务平台](https://www.volcengine.com/product/vefaas)）
-- 启动一个新的样例模板项目进行开发
+- 快速开始：启动一个新的样例模板项目进行开发
+- 从已有项目：将你本地的 Agent 项目上传至[火山引擎函数服务平台](https://www.volcengine.com/product/vefaas)
 
-部署到云端时，你可以指定两种部署模式来对外提供服务：
+部署时，你可以指定两种部署模式来对外提供服务：
 
 - A2A与MCP Server（一体化启动）
   - A2A 提供标准的`message_send`等接口
   - MCP 提供`run_agent`工具方法
 - VeADK Web（兼容Google ADK Web）
+  - 提供一个Web界面，方便你在浏览器中进行体验
 
-VeADK Web 将会为你提供一个Web界面，方便你在浏览器中进行体验。
-
-## 脚手架
+## 快速开始
 
 ### 初始化
 
-你可以运行`init`命令来初始化一个新的Agent项目：
+你可以运行`veadk init`命令来初始化一个新的Agent项目：
 
 ```bash
 $ veadk init
-Directory name [veadk-cloud-proj]: 
+Welcome use VeADK to create your project. We will generate a `weather-reporter` application for you.
+Local directory name [veadk-cloud-proj]: 
 Volcengine FaaS application name [veadk-cloud-agent]: 
-Volcengine gateway instance name []: 
-Volcengine gateway service name []: 
-Volcengine gateway upstream name []: 
+Volcengine API Gateway instance name []: 
+Volcengine API Gateway service name []: 
+Volcengine API Gateway upstream name []: 
 Choose a deploy mode:
   1. A2A/MCP Server
   2. VeADK Web / Google ADK Web
 Enter your choice (1, 2): 1
-Your project has beed created.
+Template project has been generated at .../veadk-cloud-proj
+Edit .../veadk-cloud-proj/src to define your agents
+Edit .../veadk-cloud-proj/deploy.py to define your deployment attributes
+Run python `deploy.py` for deployment on Volcengine FaaS platform.
 ```
 
 它会提示你输入如下几个参数：
@@ -49,17 +52,16 @@ Your project has beed created.
 
 ```bash
 └── veadk-cloud-proj
-    ├── config.yaml.example # 环境变量配置文件
+    ├── config.yaml.example # 定义环境变量
     ├── deploy.py # 部署脚本
-    ├── README.md
     └── src
-        ├── agent.py # 定义 agent 导出
-        ├── app.py  # 服务端启动脚本
-        ├── run.sh  # 启动脚本
-        └── weather_agent # Agent 实现
-            ├── __init__.py
-            ├── agent.py  # Agent 实例化
-            └── requirements.txt  # 依赖
+        ├── agent.py # agent 运行时数据导出
+        ├── app.py # Server 定义
+        ├── requirements.txt # 依赖
+        ├── run.sh # 启动脚本
+        └── weather_report # agent module
+            ├── __init__.py # 必须包含`from . import agent`
+            └── agent.py # agent 定义
 ```
 
 你所创建的`config.yaml`不会被上传到云端，其中的属性值将会以环境变量的形式上传至VeFaaS平台。
@@ -92,6 +94,24 @@ Your project has beed created.
 | SHORT_TERM_MEMORY_BACKEND | 启动 ADK Web 时的短期记忆后端 | `local` \| `mysql` | 优先级低于在`agent.py`中定义的短期记忆 |
 | LONG_TERM_MEMORY_BACKEND | 启动 ADK Web 时的长期记忆后端 | `opensearch` \| `viking` | 优先级低于在`agent.py`中定义的长期记忆 |
 
+## 从已有项目
+
+如果你已经在本地有一个 agent 项目，你可以使用`veadk deploy`命令将你当前的项目上传至云端。
+
+`veadk deploy`接收的参数如下：
+
+| 名称 | 类型 | 释义 |
+| - | - | - |
+| `--access-key` | 字符串 | 火山引擎AK |
+| `--secret-key` | 字符串 | 火山引擎SK |
+| `--vefaas-app-name` | 字符串 | 火山引擎 VeFaaS 平台应用名称 |
+| `--veapig-instance-name` | 字符串 | 火山引擎 APIG 实例名称 |
+| `--veapig-service-name` | 字符串 | 火山引擎 APIG 服务名称 |
+| `--veapig-upstream-name` | 字符串 | 火山引擎 APIG Upstream 名称 |
+| `--short-term-memory-backend` | `local` \| `mysql` | 短期记忆后端 |
+| `--use-adk-web` | FLAG | 设置后将会在云端启动 web，否则为 A2A / MCP 模式 |
+| `--path` | 字符串 | 本地项目路径，默认为当前目录 |
+
 ## Cloud Agent Engine
 
 如果你已经有一个较为成熟的Agent项目，你可以通过VeADK中提供的云引擎来部署你的项目。VeFaaS平台所需的部署文件我们将会为你自动生成到你的项目路径中。
@@ -116,10 +136,7 @@ cloud_app = engine.deploy(...)
 | gateway_name | str | 火山引擎网关实例名称 |
 | gateway_service_name | str | 火山引擎网关服务名称 |
 | gateway_upstream_name | str | 火山引擎网关Upstream名称 |
-| use_studio | bool | 是否在云端使用VeADK Studio |
 | use_adk_web | bool | 是否在云端使用VeADK Web / Google Web |
-
-注意：`use_studio`与`use_adk_web`不可同时为`True`。
 
 ## Cloud App
 
