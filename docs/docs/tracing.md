@@ -4,17 +4,28 @@ VeADK 提供可观测（Tracing）的能力，用于记录 Agent 执行过程中
 
 ## 本地观测
 
-通过如下方式开启本地观测，并且将运行时数据保存至本地：
+通过如下方式开启本地观测，并且在 `runner` 的运行函数中指定 `save_tracing_data=True` 来将运行时数据保存至本地：
 
 ```python
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
 
 tracer = OpentelemetryTracer()
 agent = Agent(tracers=[tracer])
 
-# ... run agent ...
 
-# the data will be automatically saved to local
+session_id = "session_id"
+
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory())
+
+prompt = "How is the weather like in Beijing? Besides, tell me which tool you invoked."
+
+# 设置 `save_tracing_data` 来保存运行时的 Tracing 数据
+asyncio.run(runner.run(messages=prompt, session_id=session_id, save_tracing_data=True))
+
 print(f"Tracing file path: {tracer._trace_file_path}")
 ```
 
