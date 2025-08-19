@@ -4,6 +4,7 @@ version = "0.2.2"
 description = "Volcengine agent development kit, integrations with Volcengine cloud services."
 readme = "README.md"
 requires-python = ">=3.10"
+license = { file = "LICENSE" }
 authors = [
     {name = "Yaozheng Fang", email = "fangyozheng@gmail.com"},
     {name = "Guodong Li", email = "cu.eric.lee@gmail.com"},
