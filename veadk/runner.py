@@ -21,6 +21,9 @@ from google.genai.types import Blob
 
 from veadk.a2a.remote_ve_agent import RemoteVeAgent
 from veadk.agent import Agent
+from veadk.agents.loop_agent import LoopAgent
+from veadk.agents.parallel_agent import ParallelAgent
+from veadk.agents.sequential_agent import SequentialAgent
 from veadk.evaluation import EvalSetRecorder
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.types import MediaMessage
@@ -38,11 +41,13 @@ RunnerMessage = Union[
     list[MediaMessage | str],  # multiple turn prompt with media and text-based prompt
 ]
 
+VeAgent = Union[Agent, RemoteVeAgent, SequentialAgent, ParallelAgent, LoopAgent]
+
 
 class Runner:
     def __init__(
         self,
-        agent: Agent | RemoteVeAgent,
+        agent: VeAgent,
         short_term_memory: ShortTermMemory,
         app_name: str = "veadk_default_app",
         user_id: str = "veadk_default_user",
@@ -166,10 +171,12 @@ class Runner:
         return final_output
 
     def save_tracing_file(self, session_id: str) -> str:
-        if not isinstance(self.agent, Agent):
+        if not isinstance(
+            self.agent, (Agent, SequentialAgent, ParallelAgent, LoopAgent)
+        ):
             logger.warning(
                 (
-                    "The agent is not an instance of VeADK Agent, cannot save tracing file."
+                    "The agent is not an instance of Agent, SequentialAgent, ParallelAgent or LoopAgent, cannot save tracing file."
                 )
             )
             return ""

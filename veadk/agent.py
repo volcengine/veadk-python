@@ -60,7 +60,6 @@ class Agent(LlmAgent):
     instruction: str = DEFAULT_INSTRUCTION
     """The instruction for the agent, such as principles of function calling."""
 
-    # factory
     model_name: str = getenv("MODEL_AGENT_NAME", DEFAULT_MODEL_AGENT_NAME)
     """The name of the model for agent running."""
 
@@ -122,7 +121,7 @@ class Agent(LlmAgent):
                 self.after_model_callback.append(tracer.tracer_hook_after_model)
                 self.after_tool_callback.append(tracer.tracer_hook_after_tool)
 
-        logger.info(f"Agent `{self.name}` init done.")
+        logger.info(f"{self.__class__.__name__} `{self.name}` init done.")
         logger.debug(
             f"Agent: {self.model_dump(include={'name', 'model_name', 'model_api_base', 'tools', 'serve_url'})}"
         )
