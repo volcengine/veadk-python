@@ -1,0 +1,73 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from __future__ import annotations
+
+from google.adk.agents import ParallelAgent as GoogleADKParallelAgent
+from google.adk.agents.base_agent import BaseAgent
+from pydantic import ConfigDict, Field
+from typing_extensions import Any
+
+from veadk.agent import Agent
+from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INSTRUCTION
+from veadk.tracing.base_tracer import BaseTracer
+from veadk.utils.logger import get_logger
+from veadk.utils.patches import patch_asyncio
+
+patch_asyncio()
+logger = get_logger(__name__)
+
+
+class ParallelAgent(GoogleADKParallelAgent):
+    """LLM-based Agent with Volcengine capabilities."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
+    """The model config"""
+
+    name: str = "veParallelAgent"
+    """The name of the agent."""
+
+    description: str = DEFAULT_DESCRIPTION
+    """The description of the agent. This will be helpful in A2A scenario."""
+
+    instruction: str = DEFAULT_INSTRUCTION
+    """The instruction for the agent, such as principles of function calling."""
+
+    sub_agents: list[BaseAgent] = Field(default_factory=list, exclude=True)
+    """The sub agents provided to agent."""
+
+    tracers: list[BaseTracer] = []
+    """The tracers provided to agent."""
+
+    def set_sub_agents_tracer(self, tracer) -> None:
+        from veadk.agents.loop_agent import LoopAgent
+        from veadk.agents.sequential_agent import SequentialAgent
+
+        for sub_agent in self.sub_agents:
+            if isinstance(sub_agent, Agent):
+                tracer.do_hooks(sub_agent)
+            elif isinstance(sub_agent, (SequentialAgent, LoopAgent, ParallelAgent)):
+                sub_agent.set_sub_agents_tracer(tracer)
+
+    def model_post_init(self, __context: Any) -> None:
+        super().model_post_init(None)  # for sub_agents init
+
+        if self.tracers:
+            logger.warning(
+                "Enable tracing in ParallelAgent may cause OpenTelemetry context error. Issue see https://github.com/google/adk-python/issues/1670"
+            )
+            for tracer in self.tracers:
+                self.set_sub_agents_tracer(tracer)
+
+        logger.info(f"{self.__class__.__name__} `{self.name}` init done.")

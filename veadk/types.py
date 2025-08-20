@@ -15,6 +15,9 @@
 from pydantic import BaseModel, Field
 
 from veadk.agent import Agent
+from veadk.agents.loop_agent import LoopAgent
+from veadk.agents.parallel_agent import ParallelAgent
+from veadk.agents.sequential_agent import SequentialAgent
 from veadk.memory.short_term_memory import ShortTermMemory
 
 
@@ -35,7 +38,9 @@ class AgentRunConfig(BaseModel):
         default="veadk_vefaas_app", description="The name of the application"
     )
 
-    agent: Agent = Field(..., description="The root agent instance")
+    agent: Agent | SequentialAgent | ParallelAgent | LoopAgent = Field(
+        ..., description="The root agent instance"
+    )
 
     short_term_memory: ShortTermMemory = Field(
         default_factory=ShortTermMemory, description="The short-term memory instance"
