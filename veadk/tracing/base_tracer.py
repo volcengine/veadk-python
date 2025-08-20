@@ -40,7 +40,7 @@ def replace_bytes_with_empty(data):
         return [replace_bytes_with_empty(item) for item in data]
     elif isinstance(data, bytes):
         # When encountering the bytes type, replace it with an empty string
-        return ""
+        return "<image data>"
     else:
         # Keep other types unchanged
         return data
