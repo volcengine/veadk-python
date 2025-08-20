@@ -51,7 +51,7 @@ class Runner:
         self,
         agent: VeAgent,
         short_term_memory: ShortTermMemory,
-        plugins: list[BasePlugin] = [],
+        plugins: list[BasePlugin] | None = None,
         app_name: str = "veadk_default_app",
         user_id: str = "veadk_default_user",
     ):
@@ -77,7 +77,10 @@ class Runner:
         try:
             # try to detect tracer
             _ = self.agent.tracers[0]
-            plugins.extend([UserMessagePlugin(name="user_message_plugin")])
+            if not plugins:
+                plugins = [UserMessagePlugin(name="user_message_plugin")]
+            else:
+                plugins.append(UserMessagePlugin(name="user_message_plugin"))
         except Exception:
             logger.debug("Agent has no tracers, telemetry plugin not added.")
 
