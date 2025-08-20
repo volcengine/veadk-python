@@ -27,6 +27,25 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def replace_bytes_with_empty(data):
+    """
+    Recursively traverse the data structure and replace all bytes types with empty strings.
+    Supports handling any nested structure of lists and dictionaries.
+    """
+    if isinstance(data, dict):
+        # Handle dictionary: Recursively process each value
+        return {k: replace_bytes_with_empty(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        # Handle list: Recursively process each element
+        return [replace_bytes_with_empty(item) for item in data]
+    elif isinstance(data, bytes):
+        # When encountering the bytes type, replace it with an empty string
+        return "<image data>"
+    else:
+        # Keep other types unchanged
+        return data
+
+
 class BaseTracer(ABC):
     def __init__(self, name: str):
         self.app_name = "veadk_app_name"
@@ -117,8 +136,11 @@ class BaseTracer(ABC):
             role = getattr(user_content, "role", None)
 
         if user_content and getattr(user_content, "parts", None):
+            # content = user_content.model_dump_json(exclude_none=True)
             content = user_content.model_dump(exclude_none=True).get("parts", None)
-            content = json.dumps(content) if content else None
+            if content:
+                content = replace_bytes_with_empty(content)
+            content = json.dumps(content, ensure_ascii=False) if content else None
 
         if role and content:
             attributes["gen_ai.prompt.0.role"] = role
