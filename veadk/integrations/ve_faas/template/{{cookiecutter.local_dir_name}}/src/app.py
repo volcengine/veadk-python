@@ -143,7 +143,14 @@ async def combined_lifespan(app: FastAPI):
 
 
 # Create main FastAPI app with combined lifespan
-app = FastAPI(title=a2a_app.title, version=a2a_app.version, lifespan=combined_lifespan)
+app = FastAPI(
+    title=a2a_app.title,
+    version=a2a_app.version,
+    lifespan=combined_lifespan,
+    openapi_url=None,
+    docs_url=None,
+    redoc_url=None
+)
 
 # Mount A2A routes to main app
 for route in a2a_app.routes:
