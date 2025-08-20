@@ -175,7 +175,29 @@ class Runner:
         if save_tracing_data:
             self.save_tracing_file(session_id)
 
+        self._print_trace_id()
+
         return final_output
+
+    def _print_trace_id(self):
+        if not isinstance(self.agent, Agent):
+            logger.warning(
+                ("The agent is not an instance of VeADK Agent, no trace id provided.")
+            )
+            return
+
+        if not self.agent.tracers:
+            logger.warning(
+                "No tracer is configured in the agent, no trace id provided."
+            )
+            return
+
+        try:
+            trace_id = self.agent.tracers[0].get_trace_id()  # type: ignore
+            logger.info(f"Trace id: {trace_id}")
+        except Exception as e:
+            logger.warning(f"Get tracer id failed as {e}")
+            return
 
     def save_tracing_file(self, session_id: str) -> str:
         if not isinstance(self.agent, Agent):

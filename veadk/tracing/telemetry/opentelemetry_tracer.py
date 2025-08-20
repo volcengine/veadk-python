@@ -127,6 +127,16 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
             self._processors.append(processor)
         logger.debug(f"Init OpentelemetryTracer with {len(self.exporters)} exporters.")
 
+    def get_trace_id(self) -> str:
+        if not self._inmemory_exporter:
+            return ""
+        try:
+            trace_id = hex(int(self._inmemory_exporter._real_exporter.trace_id))[2:]
+        except Exception:
+            return ""
+
+        return trace_id
+
     @override
     def dump(
         self,
