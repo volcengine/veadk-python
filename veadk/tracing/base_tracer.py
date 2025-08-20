@@ -66,12 +66,13 @@ class UserMessagePlugin(BasePlugin):
             )
             current_session = invocation_context.session
 
-            span.set_attribute("app_name", current_session.app_name)
-            span.set_attribute("user_id", current_session.user_id)
-            span.set_attribute("session_id", current_session.id)
+            span.set_attribute("app.name", current_session.app_name)
+            span.set_attribute("user.id", current_session.user_id)
+            span.set_attribute("session.id", current_session.id)
 
-            span.set_attribute("agent_name", agent_name)
-            span.set_attribute("invoke_branch", invoke_branch)
+            span.set_attribute("agent.name", agent_name)
+            span.set_attribute("invoke.branch", invoke_branch)
+            span.set_attribute("gen_ai.system", "veadk")
 
             logger.debug(
                 f"Add attributes to {span_name}: app_name={current_session.app_name}, user_id={current_session.user_id}, session_id={current_session.id}, agent_name={agent_name}, invoke_branch={invoke_branch}"
@@ -180,7 +181,7 @@ class BaseTracer(ABC):
         agent_name = callback_context.agent_name
         attributes["agent.name"] = agent_name
         attributes["app.name"] = app_name
-
+        attributes["gen_ai.system"] = "veadk"
         # prompt
         user_content = callback_context.user_content
         role = None
@@ -271,6 +272,7 @@ class BaseTracer(ABC):
             "agent.name": agent_name,
             "app.name": app_name,
             "tool.name": tool_name,
+            "gen_ai.system": "veadk",
         }
 
         # Set all attributes at once if possible, else fallback to individual
