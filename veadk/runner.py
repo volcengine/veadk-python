@@ -15,6 +15,7 @@ from typing import Union
 
 from google.adk.agents import RunConfig
 from google.adk.agents.run_config import StreamingMode
+from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.runners import Runner as ADKRunner
 from google.genai import types
 from google.genai.types import Blob
@@ -23,6 +24,7 @@ from veadk.a2a.remote_ve_agent import RemoteVeAgent
 from veadk.agent import Agent
 from veadk.evaluation import EvalSetRecorder
 from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.tracing.base_tracer import UserMessagePlugin
 from veadk.types import MediaMessage
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import read_png_to_bytes
@@ -44,6 +46,7 @@ class Runner:
         self,
         agent: Agent | RemoteVeAgent,
         short_term_memory: ShortTermMemory,
+        plugins: list[BasePlugin] = [],
         app_name: str = "veadk_default_app",
         user_id: str = "veadk_default_user",
     ):
@@ -65,11 +68,20 @@ class Runner:
         else:
             self.long_term_memory = None
 
+        # process plugins
+        try:
+            # try to detect tracer
+            _ = self.agent.tracers[0]
+            plugins.extend([UserMessagePlugin(name="user_message_plugin")])
+        except Exception:
+            logger.debug("Agent has no tracers, telemetry plugin not added.")
+
         self.runner = ADKRunner(
             app_name=self.app_name,
             agent=self.agent,
             session_service=self.session_service,
             memory_service=self.long_term_memory,
+            plugins=plugins,
         )
 
     def _convert_messages(self, messages) -> list:
@@ -163,7 +175,29 @@ class Runner:
         if save_tracing_data:
             self.save_tracing_file(session_id)
 
+        self._print_trace_id()
+
         return final_output
+
+    def _print_trace_id(self):
+        if not isinstance(self.agent, Agent):
+            logger.warning(
+                ("The agent is not an instance of VeADK Agent, no trace id provided.")
+            )
+            return
+
+        if not self.agent.tracers:
+            logger.warning(
+                "No tracer is configured in the agent, no trace id provided."
+            )
+            return
+
+        try:
+            trace_id = self.agent.tracers[0].get_trace_id()  # type: ignore
+            logger.info(f"Trace id: {trace_id}")
+        except Exception as e:
+            logger.warning(f"Get tracer id failed as {e}")
+            return
 
     def save_tracing_file(self, session_id: str) -> str:
         if not isinstance(self.agent, Agent):
