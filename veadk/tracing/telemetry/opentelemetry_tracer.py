@@ -179,7 +179,9 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         self._trace_id = trace_id
         file_path = f"{path}/{self.name}_{user_id}_{session_id}_{trace_id}.json"
         with open(file_path, "w") as f:
-            json.dump(data, f, indent=4)
+            json.dump(
+                data, f, indent=4, ensure_ascii=False
+            )  # ensure_ascii=False to support Chinese characters
 
         self._trace_file_path = file_path
 
