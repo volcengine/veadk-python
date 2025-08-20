@@ -73,7 +73,7 @@ class UserMessagePlugin(BasePlugin):
 
         return None
 
-      
+
 def replace_bytes_with_empty(data):
     """
     Recursively traverse the data structure and replace all bytes types with empty strings.
