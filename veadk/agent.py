@@ -114,13 +114,8 @@ class Agent(LlmAgent):
             self.tools.append(load_memory)
 
         if self.tracers:
-            self.before_model_callback = []
-            self.after_model_callback = []
-            self.after_tool_callback = []
             for tracer in self.tracers:
-                self.before_model_callback.append(tracer.tracer_hook_before_model)
-                self.after_model_callback.append(tracer.tracer_hook_after_model)
-                self.after_tool_callback.append(tracer.tracer_hook_after_tool)
+                tracer.do_hooks(self)
 
         logger.info(f"Agent `{self.name}` init done.")
         logger.debug(

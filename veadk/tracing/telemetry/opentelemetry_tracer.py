@@ -51,11 +51,11 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         description="The exporters to export spans.",
     )
     name: str = Field(
-        DEFAULT_VEADK_TRACER_NAME, description="The identifier of tracer."
+        default=DEFAULT_VEADK_TRACER_NAME, description="The identifier of tracer."
     )
 
     app_name: str = Field(
-        "veadk_app",
+        default="veadk_app",
         description="The identifier of app.",
     )
 
