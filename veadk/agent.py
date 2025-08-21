@@ -112,9 +112,9 @@ class Agent(LlmAgent):
 
             self.tools.append(load_memory)
 
-        if self.tracers:
-            for tracer in self.tracers:
-                tracer.do_hooks(self)
+        # if self.tracers:
+        #     for tracer in self.tracers:
+        #         tracer.do_hooks(self)
 
         logger.info(f"{self.__class__.__name__} `{self.name}` init done.")
         logger.debug(

@@ -12,20 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from abc import ABC, abstractmethod
-from typing import Any
+from abc import ABC
+
+from opentelemetry.sdk.trace import SpanProcessor
+from opentelemetry.sdk.trace.export import SpanExporter
 
 
 class BaseExporter(ABC):
-    def __init__(self) -> None:
-        pass
+    def __init__(
+        self, resource_attributes: dict | None = None, headers: dict | None = None
+    ) -> None:
+        self.resource_attributes = resource_attributes or {}
+        self.headers = headers or {}
 
-    @abstractmethod
-    def get_processor(self) -> Any:
-        pass
-
-    def get_meter_context(self) -> Any:
-        pass
+        self._exporter: SpanExporter | None = None
+        self.processor: SpanProcessor | None = None
 
     def export(self) -> None:
+        """Force export of telemetry data."""
         pass

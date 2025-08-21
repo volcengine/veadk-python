@@ -12,11 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import typing
-from typing import Any
+from typing import Sequence
 
 from opentelemetry.sdk.trace import ReadableSpan, export
-from pydantic import BaseModel
 from typing_extensions import override
 
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
@@ -27,16 +25,16 @@ logger = get_logger(__name__)
 
 # ======== Adapted from Google ADK ========
 class _InMemoryExporter(export.SpanExporter):
-    def __init__(self, session_trace_dict):
+    def __init__(self):
         super().__init__()
         self._spans = []
-        self.session_trace_dict = session_trace_dict
+        self.session_trace_dict = {}
         self.trace_id = ""
         self.prompt_tokens = []
         self.completion_tokens = []
 
     @override
-    def export(self, spans: typing.Sequence[ReadableSpan]) -> export.SpanExportResult:
+    def export(self, spans: Sequence[ReadableSpan]) -> export.SpanExportResult:
         for span in spans:
             if span.context:
                 trace_id = span.context.trace_id
@@ -56,6 +54,7 @@ class _InMemoryExporter(export.SpanExporter):
                     self.prompt_tokens.append(prompt_token)
                 if completion_token:
                     self.completion_tokens.append(completion_token)
+
             if span.name == "call_llm":
                 attributes = dict(span.attributes or {})
                 session_id = attributes.get("gcp.vertex.agent.session_id", None)
@@ -81,14 +80,13 @@ class _InMemoryExporter(export.SpanExporter):
         self._spans.clear()
 
 
-class InMemoryExporter(BaseModel, BaseExporter):
-    name: str = "inmemory_exporter"
+class InMemoryExporter(BaseExporter):
+    """InMemory Exporter mainly for store spans in memory for debugging / observability purposes."""
 
-    def model_post_init(self, __context: Any) -> None:
-        self._exporter = _InMemoryExporter({})
+    def __init__(self, name: str = "inmemory_exporter") -> None:
+        super().__init__()
 
-    @override
-    def get_processor(self):
-        self._real_exporter = self._exporter
-        processor = export.SimpleSpanProcessor(self._exporter)
-        return processor, None
+        self.name = name
+
+        self._exporter = _InMemoryExporter()
+        self.processor = export.SimpleSpanProcessor(self._exporter)

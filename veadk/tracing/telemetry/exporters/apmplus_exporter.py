@@ -24,7 +24,6 @@ from typing_extensions import override
 
 from veadk.config import getenv
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
-from veadk.tracing.telemetry.metrics.opentelemetry_metrics import MeterContext
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -52,47 +51,38 @@ class APMPlusExporterConfig(BaseModel):
 class APMPlusExporter(BaseModel, BaseExporter):
     config: APMPlusExporterConfig = Field(default_factory=APMPlusExporterConfig)
 
-    @override
-    def get_processor(self):
-        resource_attributes = {
-            "service.name": self.config.service_name,
-        }
-
+    def model_post_init(self) -> None:
         headers = {
             "x-byteapm-appkey": self.config.app_key,
         }
-        exporter = OTLPSpanExporter(
-            endpoint=self.config.endpoint, insecure=True, headers=headers
-        )
-        self._real_exporter = exporter
-        processor = BatchSpanProcessor(exporter)
-        return processor, resource_attributes
+        self.headers |= headers
 
-    def export(self):
-        self._real_exporter.force_flush()
-        logger.info(
-            f"APMPlusExporter exports data to {self.config.endpoint}, service name: {self.config.service_name}"
-        )
-
-    @override
-    def get_meter_context(self) -> MeterContext:
         resource_attributes = {
             "service.name": self.config.service_name,
         }
-        endpoint = self.config.endpoint
-        headers = {
-            "x-byteapm-appkey": self.config.app_key,
-        }
+        self.resource_attributes |= resource_attributes
 
-        resource = Resource.create(resource_attributes)
-        exporter = OTLPMetricExporter(endpoint=endpoint, headers=headers)
+        self._exporter = OTLPSpanExporter(
+            endpoint=self.config.endpoint, insecure=True, headers=self.headers
+        )
+        self.processor = BatchSpanProcessor(self._exporter)
+
+        # init meter
+        resource = Resource.create()
+        exporter = OTLPMetricExporter(endpoint=self.config.endpoint, headers=headers)
         metric_reader = PeriodicExportingMetricReader(exporter)
         provider = MeterProvider(metric_readers=[metric_reader], resource=resource)
         metrics.set_meter_provider(provider)
-        meter = metrics.get_meter("my.meter.name")
-        meter_context = MeterContext(
-            meter=meter,
-            provider=provider,
-            reader=metric_reader,
-        )
-        return meter_context
+
+        # metrics.get_meter("veadk.apmplus.meter")
+
+    @override
+    def export(self) -> None:
+        if self._exporter:
+            self._exporter.force_flush()
+
+            logger.info(
+                f"APMPlusExporter exports data to {self.config.endpoint}, service name: {self.config.service_name}"
+            )
+        else:
+            logger.warning("APMPlusExporter internal exporter is not initialized.")

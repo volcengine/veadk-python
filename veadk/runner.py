@@ -68,8 +68,8 @@ class Runner:
         # prevent VeRemoteAgent has no long-term memory attr
         if isinstance(self.agent, Agent):
             self.long_term_memory = self.agent.long_term_memory
-            for tracer in self.agent.tracers:
-                tracer.set_app_name(self.app_name)
+            # for tracer in self.agent.tracers:
+            #     tracer.set_app_name(self.app_name)
         else:
             self.long_term_memory = None
 
