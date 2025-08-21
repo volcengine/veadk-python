@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Any
+
 from opentelemetry import metrics
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -48,10 +50,10 @@ class APMPlusExporterConfig(BaseModel):
     )
 
 
-class APMPlusExporter(BaseModel, BaseExporter):
+class APMPlusExporter(BaseExporter):
     config: APMPlusExporterConfig = Field(default_factory=APMPlusExporterConfig)
 
-    def model_post_init(self) -> None:
+    def model_post_init(self, context: Any) -> None:
         headers = {
             "x-byteapm-appkey": self.config.app_key,
         }

@@ -6,11 +6,7 @@ from veadk.tracing.telemetry.attributes.extractors.common_attributes_extractors 
     common_gen_ai_user_id,
 )
 from veadk.tracing.telemetry.attributes.extractors.llm_attributes_extrators import (
-    llm_gen_ai_completion,
-    llm_gen_ai_prompt,
-    llm_gen_ai_request_model,
-    llm_gen_ai_request_type,
-    llm_gen_ai_response_model,
+    LLM_ATTRIBUTES,
 )
 
 ATTRIBUTES = {
@@ -21,12 +17,6 @@ ATTRIBUTES = {
         "gen_ai.user.id": common_gen_ai_user_id,
         "gen_ai.session.id": common_gen_ai_session_id,
     },
-    "llm": {
-        "gen_ai.request.model": llm_gen_ai_request_model,
-        "gen_ai.request.type": llm_gen_ai_request_type,
-        "gen_ai.response.model": llm_gen_ai_response_model,
-        "gen_ai.prompt": llm_gen_ai_prompt,
-        "gen_ai.completion": llm_gen_ai_completion,
-    },
+    "llm": LLM_ATTRIBUTES,
     "tool": ...,
 }

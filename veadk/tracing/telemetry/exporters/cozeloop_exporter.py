@@ -41,7 +41,7 @@ class CozeloopExporterConfig(BaseModel):
     )
 
 
-class CozeloopExporter(BaseModel, BaseExporter):
+class CozeloopExporter(BaseExporter):
     config: CozeloopExporterConfig = Field(default_factory=CozeloopExporterConfig)
 
     def model_post_init(self) -> None:

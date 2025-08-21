@@ -9,6 +9,9 @@ from google.genai import types
 from opentelemetry import trace
 
 from veadk.tracing.telemetry.attributes.attributes import ATTRIBUTES
+from veadk.tracing.telemetry.attributes.extractors.llm_attributes_extrators import (
+    LLMAttributesParams,
+)
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -41,25 +44,19 @@ def trace_call_llm(
 ) -> None:
     span = trace.get_current_span()
 
-    # common_attributes = ATTRIBUTES.get("common", {})
     llm_attributes = ATTRIBUTES.get("llm", {})
 
-    # for attr_name, attr_extractor in common_attributes.items():
-    #     # set attribute anyway
-    #     span.set_attribute(
-    #         attr_name,
-    #         attr_extractor(invocation_context, event_id, llm_request, llm_response),
-    #     )
-
     for attr_name, attr_extractor in llm_attributes.items():
+        params = LLMAttributesParams(
+            invocation_context, event_id, llm_request, llm_response
+        )
         # set attribute anyway
-        value = attr_extractor(invocation_context, event_id, llm_request, llm_response)
-        if isinstance(value, dict):
-            for key, val in value.items():
-                # gen_ai. and gen_ai_
-                span.set_attribute(f"{attr_name}{key}", val)
+        value = attr_extractor(params)
+        if isinstance(value, list):
+            for _value in value:
+                for key, val in _value.items():
+                    # gen_ai. and gen_ai_
+                    logger.debug(f"Set attribute {attr_name}{key} = {val}")
+                    span.set_attribute(f"{attr_name}{key}", val)
         else:
-            span.set_attribute(
-                attr_name,
-                attr_extractor(invocation_context, event_id, llm_request, llm_response),
-            )
+            span.set_attribute(attr_name, value)

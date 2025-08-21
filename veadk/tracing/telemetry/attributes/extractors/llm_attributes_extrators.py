@@ -58,8 +58,68 @@ def llm_gen_ai_completion(params: LLMAttributesParams) -> list[dict] | None:
 
 
 def llm_gen_ai_response_stop_reason(params: LLMAttributesParams) -> str | None:
-    return params.llm_response.stop_reason
+    return "<no_stop_reason_provided>"
 
 
 def llm_gen_ai_response_finish_reason(params: LLMAttributesParams) -> str | None:
-    return params.llm_response.finish_reason
+    # TODO: update to google-adk v1.12.0
+    return None
+
+
+def llm_gen_ai_usage_input_tokens(params: LLMAttributesParams) -> int | None:
+    if params.llm_response.usage_metadata:
+        return params.llm_response.usage_metadata.prompt_token_count
+    return None
+
+
+def llm_gen_ai_usage_output_tokens(params: LLMAttributesParams) -> int | None:
+    if params.llm_response.usage_metadata:
+        return params.llm_response.usage_metadata.candidates_token_count
+    return None
+
+
+def llm_gen_ai_usage_total_tokens(params: LLMAttributesParams) -> int | None:
+    if params.llm_response.usage_metadata:
+        return params.llm_response.usage_metadata.total_token_count
+    return None
+
+
+def llm_gen_ai_usage_cache_creation_input_tokens(
+    params: LLMAttributesParams,
+) -> int | None:
+    if params.llm_response.usage_metadata:
+        return None
+        # return params.llm_response.usage_metadata.cached_content_token_count
+    return None
+
+
+def llm_gen_ai_usage_cache_read_input_tokens(params: LLMAttributesParams) -> int | None:
+    if params.llm_response.usage_metadata:
+        return None
+        # return params.llm_response.usage_metadata.prompt_token_count
+    return None
+
+
+def llm_gen_ai_is_streaming(params: LLMAttributesParams) -> bool | None:
+    # return params.llm_request.stream
+    return None
+
+
+LLM_ATTRIBUTES = {
+    "gen_ai.request.model": llm_gen_ai_request_model,
+    "gen_ai.request.type": llm_gen_ai_request_type,
+    "gen_ai.response.model": llm_gen_ai_response_model,
+    "gen_ai.request.max_tokens": llm_gen_ai_request_max_tokens,
+    "gen_ai.request.temperature": llm_gen_ai_request_temperature,
+    "gen_ai.request.top_p": llm_gen_ai_request_top_p,
+    "gen_ai.prompt": llm_gen_ai_prompt,
+    "gen_ai.completion": llm_gen_ai_completion,
+    "gen_ai.response.stop_reason": llm_gen_ai_response_stop_reason,
+    "gen_ai.response.finish_reason": llm_gen_ai_response_finish_reason,
+    "gen_ai.usage.input_tokens": llm_gen_ai_usage_input_tokens,
+    "gen_ai.usage.output_tokens": llm_gen_ai_usage_output_tokens,
+    "gen_ai.usage.total_tokens": llm_gen_ai_usage_total_tokens,
+    "gen_ai.usage.cache_creation_input_tokens": llm_gen_ai_usage_cache_creation_input_tokens,
+    "gen_ai.usage.cache_read_input_tokens": llm_gen_ai_usage_cache_read_input_tokens,
+    "gen_ai.is_streaming": llm_gen_ai_is_streaming,
+}

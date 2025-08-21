@@ -12,21 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from abc import ABC
-
 from opentelemetry.sdk.trace import SpanProcessor
 from opentelemetry.sdk.trace.export import SpanExporter
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class BaseExporter(ABC):
-    def __init__(
-        self, resource_attributes: dict | None = None, headers: dict | None = None
-    ) -> None:
-        self.resource_attributes = resource_attributes or {}
-        self.headers = headers or {}
+class BaseExporter(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
-        self._exporter: SpanExporter | None = None
-        self.processor: SpanProcessor | None = None
+    resource_attributes: dict = Field(default_factory=dict)
+    headers: dict = Field(default_factory=dict)
+
+    _exporter: SpanExporter | None = None
+    processor: SpanProcessor | None = None
 
     def export(self) -> None:
         """Force export of telemetry data."""

@@ -44,7 +44,7 @@ class TLSExporterConfig(BaseModel):
     secret_key: str = Field(default_factory=lambda: getenv("VOLCENGINE_SECRET_KEY"))
 
 
-class TLSExporter(BaseModel, BaseExporter):
+class TLSExporter(BaseExporter):
     config: TLSExporterConfig = Field(default_factory=TLSExporterConfig)
 
     def model_post_init(self) -> None:
