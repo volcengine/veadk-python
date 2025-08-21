@@ -23,46 +23,30 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+in_memory_exporter_instance = None
+
+
 # ======== Adapted from Google ADK ========
 class _InMemoryExporter(export.SpanExporter):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self._spans = []
-        self.session_trace_dict = {}
         self.trace_id = ""
-        self.prompt_tokens = []
-        self.completion_tokens = []
+        self.span_dict = {}
+        self.session_trace_dict = {}
 
     @override
     def export(self, spans: Sequence[ReadableSpan]) -> export.SpanExportResult:
         for span in spans:
             if span.context:
-                trace_id = span.context.trace_id
-                self.trace_id = trace_id
+                self.trace_id = span.context.trace_id
+
+                span_id = span.context.span_id
+                self.span_dict[span_id] = span
             else:
                 logger.warning(
                     f"Span context is missing, failed to get `trace_id`. span: {span}"
                 )
-
-            if span.name == "call_llm":
-                attributes = dict(span.attributes or {})
-                prompt_token = attributes.get("gen_ai.usage.prompt_tokens", None)
-                completion_token = attributes.get(
-                    "gen_ai.usage.completion_tokens", None
-                )
-                if prompt_token:
-                    self.prompt_tokens.append(prompt_token)
-                if completion_token:
-                    self.completion_tokens.append(completion_token)
-
-            if span.name == "call_llm":
-                attributes = dict(span.attributes or {})
-                session_id = attributes.get("gcp.vertex.agent.session_id", None)
-                if session_id:
-                    if session_id not in self.session_trace_dict:
-                        self.session_trace_dict[session_id] = [trace_id]
-                    else:
-                        self.session_trace_dict[session_id] += [trace_id]
         self._spans.extend(spans)
         return export.SpanExportResult.SUCCESS
 

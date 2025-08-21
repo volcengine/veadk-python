@@ -18,7 +18,7 @@ import json
 import time
 from typing import Any
 
-from openinference.instrumentation.google_adk import GoogleADKInstrumentor
+# from openinference.instrumentation.google_adk import GoogleADKInstrumentor
 from opentelemetry import trace as trace_api
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk import trace as trace_sdk
@@ -79,7 +79,7 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         # VeADK operates on global OpenTelemetry provider, return nothing
         self._init_global_tracer_provider()
 
-        GoogleADKInstrumentor().instrument()
+        # GoogleADKInstrumentor().instrument()
 
     def _init_global_tracer_provider(self) -> None:
         # set provider anyway, then get global provider
@@ -132,7 +132,7 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
     @property
     def trace_id(self) -> str:
         try:
-            trace_id = hex(int(self._inmemory_exporter._exporter.trace_id))[2:]
+            trace_id = hex(int(self._inmemory_exporter._exporter.trace_id))[2:]  # type: ignore
             return trace_id
         except Exception as e:
             logger.error(f"Failed to get trace_id from InMemoryExporter: {e}")
@@ -151,23 +151,11 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
             )
             return ""
 
-        prompt_tokens = self._inmemory_exporter._real_exporter.prompt_tokens
-        completion_tokens = self._inmemory_exporter._real_exporter.completion_tokens
-
-        # upload
-        for meter_uploader in self._meter_uploaders:
-            meter_uploader.record(
-                prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
-            )
-        # clear tokens after dump
-        self._inmemory_exporter._real_exporter.completion_tokens = []
-        self._inmemory_exporter._real_exporter.prompt_tokens = []
-
         for processor in self._processors:
             time.sleep(0.05)  # give some time for the exporter to upload spans
             processor.force_flush()
 
-        spans = self._inmemory_exporter._real_exporter.get_finished_spans(
+        spans = self._inmemory_exporter._exporter.get_finished_spans(  # type: ignore
             session_id=session_id
         )
         if not spans:
@@ -186,14 +174,11 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
                 for s in spans
             ]
 
-        trace_id = hex(int(self._inmemory_exporter._real_exporter.trace_id))[2:]
-        self._trace_id = trace_id
-        file_path = f"{path}/{self.name}_{user_id}_{session_id}_{trace_id}.json"
+        file_path = f"{path}/{self.name}_{user_id}_{session_id}_{self.trace_id}.json"
         with open(file_path, "w") as f:
             json.dump(
                 data, f, indent=4, ensure_ascii=False
             )  # ensure_ascii=False to support Chinese characters
-
         self._trace_file_path = file_path
 
         for exporter in self.exporters:
@@ -203,6 +188,6 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
             f"OpenTelemetryTracer tracing done, trace id: {self._trace_id} (hex)"
         )
 
-        self._spans = spans
         logger.info(f"OpenTelemetryTracer dumps {len(spans)} spans to {file_path}")
+
         return file_path

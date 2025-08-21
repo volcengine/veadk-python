@@ -27,7 +27,6 @@ from veadk.agents.parallel_agent import ParallelAgent
 from veadk.agents.sequential_agent import SequentialAgent
 from veadk.evaluation import EvalSetRecorder
 from veadk.memory.short_term_memory import ShortTermMemory
-from veadk.tracing.base_tracer import UserMessagePlugin
 from veadk.types import MediaMessage
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import read_png_to_bytes
@@ -72,17 +71,6 @@ class Runner:
             #     tracer.set_app_name(self.app_name)
         else:
             self.long_term_memory = None
-
-        # process plugins
-        try:
-            # try to detect tracer
-            _ = self.agent.tracers[0]
-            if not plugins:
-                plugins = [UserMessagePlugin(name="user_message_plugin")]
-            else:
-                plugins.append(UserMessagePlugin(name="user_message_plugin"))
-        except Exception:
-            logger.debug("Agent has no tracers, telemetry plugin not added.")
 
         self.runner = ADKRunner(
             app_name=self.app_name,
@@ -201,7 +189,7 @@ class Runner:
             return
 
         try:
-            trace_id = self.agent.tracers[0].get_trace_id()  # type: ignore
+            trace_id = self.agent.tracers[0].trace_id  # type: ignore
             logger.info(f"Trace id: {trace_id}")
         except Exception as e:
             logger.warning(f"Get tracer id failed as {e}")

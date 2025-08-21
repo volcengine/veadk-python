@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Any
+
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pydantic import BaseModel, Field
@@ -41,18 +43,23 @@ class CozeloopExporterConfig(BaseModel):
     )
 
 
+class _CozeloopExporter(OTLPSpanExporter):
+    pass
+
+
 class CozeloopExporter(BaseExporter):
     config: CozeloopExporterConfig = Field(default_factory=CozeloopExporterConfig)
 
-    def model_post_init(self) -> None:
+    def model_post_init(self, context: Any) -> None:
         headers = {
             "cozeloop-workspace-id": self.config.space_id,
+            "authorization": f"Bearer {self.config.token}",
         }
         self.headers |= headers
 
         self._exporter = OTLPSpanExporter(
             endpoint=self.config.endpoint,
-            headers=headers,
+            headers=self.headers,
             timeout=10,
         )
 
