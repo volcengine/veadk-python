@@ -126,7 +126,7 @@ class Runner:
         elif isinstance(messages, list):
             converted_messages = []
             for message in messages:
-                converted_messages.extend(self._convert_messages(message))
+                converted_messages.extend(self._convert_messages(message, session_id))
             messages = converted_messages
         else:
             raise ValueError(f"Unknown message type: {type(messages)}")
