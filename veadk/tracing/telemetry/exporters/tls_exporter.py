@@ -15,6 +15,7 @@
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pydantic import BaseModel, Field
+from typing import Any
 from typing_extensions import override
 
 from veadk.config import getenv
@@ -47,7 +48,7 @@ class TLSExporterConfig(BaseModel):
 class TLSExporter(BaseExporter):
     config: TLSExporterConfig = Field(default_factory=TLSExporterConfig)
 
-    def model_post_init(self) -> None:
+    def model_post_init(self, context: Any) -> None:
         headers = {
             "x-tls-otel-tracetopic": self.config.topic_id,
             "x-tls-otel-ak": self.config.access_key,
