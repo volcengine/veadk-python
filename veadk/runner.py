@@ -106,6 +106,7 @@ class Runner:
                     self.user_id, self.app_name, session_id, messages.media
                 )
                 asyncio.create_task(tos_handler.upload_to_tos(url, data, "bytes"))
+                tos_handler.close_client()
 
             messages = [
                 types.Content(

@@ -1,3 +1,17 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import os
 from veadk.config import getenv
 from veadk.utils.logger import get_logger
@@ -17,6 +31,7 @@ class TOSHandler:
         self.ak = getenv("VOLCENGINE_ACCESS_KEY")
         self.sk = getenv("VOLCENGINE_SECRET_KEY")
         self.bucket_name = getenv("DATABASE_TOS_BUCKET")
+        self.client = self._init_tos_client()
 
     def _init_tos_client(self):
         """initialize TOS client"""
@@ -82,15 +97,15 @@ class TOSHandler:
             raise ValueError("URL format error, it should be: bucket_name/object_key")
         return parts
 
-    def create_bucket(self, client: tos.TosClientV2, bucket_name: str) -> bool:
+    def create_bucket(self, bucket_name: str) -> bool:
         """If the bucket does not exist, create it"""
         try:
-            client.head_bucket(self.bucket_name)
+            self.client.head_bucket(self.bucket_name)
             logger.debug(f"Bucket {bucket_name} already exists")
             return True
         except tos.exceptions.TosServerError as e:
             if e.status_code == 404:
-                client.create_bucket(
+                self.client.create_bucket(
                     bucket=bucket_name,
                     storage_class=tos.StorageClassType.Storage_Class_Standard,
                     acl=tos.ACLType.ACL_Private,
@@ -115,21 +130,17 @@ class TOSHandler:
 
     def _do_upload_bytes(self, url: str, bytes: bytes) -> bool:
         bucket_name, object_key = self.parse_url(url)
-        client = self._init_tos_client()
         try:
-            if not client:
+            if not self.client:
                 return False
-            if not self.create_bucket(client, bucket_name):
+            if not self.create_bucket(bucket_name):
                 return False
 
-            client.put_object(bucket=bucket_name, key=object_key, content=bytes)
+            self.client.put_object(bucket=bucket_name, key=object_key, content=bytes)
             return True
         except Exception as e:
             logger.error(f"Upload failed: {e}")
             return False
-        finally:
-            if client:
-                client.close()
 
     def _do_upload_file(self, url: str, file_path: str) -> bool:
         bucket_name, object_key = self.parse_url(url)
@@ -147,19 +158,13 @@ class TOSHandler:
         except Exception as e:
             logger.error(f"Upload failed: {e}")
             return False
-        finally:
-            if client:
-                client.close()
 
     def download_from_tos(self, url: str, save_path: str) -> bool:
         """download image from TOS"""
         try:
             bucket_name, object_key = self.parse_url(url)
-            client = self._init_tos_client()
-            if not client:
-                return False
 
-            object_stream = client.get_object(bucket_name, object_key)
+            object_stream = self.client.get_object(bucket_name, object_key)
 
             save_dir = os.path.dirname(save_path)
             if save_dir and not os.path.exists(save_dir):
@@ -170,11 +175,13 @@ class TOSHandler:
                     f.write(chunk)
 
             logger.debug(f"Image download success, saved to: {save_path}")
-            client.close()
             return True
 
         except Exception as e:
             logger.error(f"Image download failed: {str(e)}")
-            if "client" in locals():
-                client.close()
+
             return False
+
+    def close_client(self):
+        if self.client:
+            self.client.close()
