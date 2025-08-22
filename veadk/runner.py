@@ -32,7 +32,7 @@ from veadk.tracing.base_tracer import UserMessagePlugin
 from veadk.types import MediaMessage
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import read_png_to_bytes
-from veadk.database.tos.toshandler import TOSHandler
+from veadk.database.tos.tos_handler import TOSHandler
 
 logger = get_logger(__name__)
 
