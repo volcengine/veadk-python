@@ -27,8 +27,11 @@ from veadk.config import getenv
 from veadk.evaluation.types import EvalResultCaseData, EvalResultMetadata
 from veadk.utils.logger import get_logger
 
-from ..base_evaluator import BaseEvaluator, EvalResultData, MetricResult
-from ..utils.prometheus import PrometheusPushgatewayConfig, push_to_prometheus
+from veadk.evaluation.base_evaluator import BaseEvaluator, EvalResultData, MetricResult
+from veadk.evaluation.utils.prometheus import (
+    PrometheusPushgatewayConfig,
+    push_to_prometheus,
+)
 
 logger = get_logger(__name__)
 
@@ -66,7 +69,7 @@ class DeepevalEvaluator(BaseEvaluator):
         self.prometheus_config = prometheus_config
 
     @override
-    async def eval(
+    async def evaluate(
         self,
         eval_set_file_path: str,
         metrics: list[BaseMetric],
@@ -74,11 +77,11 @@ class DeepevalEvaluator(BaseEvaluator):
     ):
         """Target to Google ADK, we will use the same evaluation case format as Google ADK."""
         # Get evaluation data by parsing eval set file
-        self.generate_eval_data(eval_set_file_path)
+        self.build_eval_set(eval_set_file_path)
 
         # Get actual data by running agent
         logger.info("Start to run agent for actual data.")
-        await self._run_agent_for_actual_data()
+        await self.generate_actual_outputs()
         eval_case_data_list = self.invocation_list
 
         # Build test cases in Deepeval format

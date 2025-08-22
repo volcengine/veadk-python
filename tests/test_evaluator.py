@@ -129,7 +129,7 @@ def test_evaluator():
     with open(eval_set_file_path, "w") as f:
         json.dump(EVAL_SET_DATA, f)
 
-    base_evaluator.generate_eval_data(file_path=eval_set_file_path)
+    base_evaluator.build_eval_set(file_path=eval_set_file_path)
 
     assert len(base_evaluator.invocation_list) == 1
     assert len(base_evaluator.invocation_list[0].invocations) == 1
@@ -149,7 +149,7 @@ def test_tracing_file_to_evalset():
     with open(tracing_file_path, "w") as f:
         json.dump(TRACE_SET_DATA, f)
 
-    base_evaluator.generate_eval_data(file_path=tracing_file_path)
+    base_evaluator.build_eval_set(file_path=tracing_file_path)
 
     assert len(base_evaluator.invocation_list) == 1
     assert len(base_evaluator.invocation_list[0].invocations) == 1

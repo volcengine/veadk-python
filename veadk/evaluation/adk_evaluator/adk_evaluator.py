@@ -39,7 +39,7 @@ from typing_extensions import override
 
 from veadk.agent import Agent
 
-from ..base_evaluator import BaseEvaluator
+from veadk.evaluation.base_evaluator import BaseEvaluator
 
 
 def formatted_timestamp():
@@ -238,7 +238,7 @@ class ADKEvaluator(BaseEvaluator):
     # TODO: implement
 
     @override
-    async def eval(
+    async def evaluate(
         self,
         eval_set_file_path: str,
         eval_id: str = f"test_{formatted_timestamp()}",
