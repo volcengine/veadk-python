@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import asyncio
 from typing import Union
 
 from google.adk.agents import RunConfig
@@ -31,6 +32,7 @@ from veadk.tracing.base_tracer import UserMessagePlugin
 from veadk.types import MediaMessage
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import read_png_to_bytes
+from veadk.database.tos.toshandler import TOSHandler
 
 logger = get_logger(__name__)
 
@@ -89,13 +91,22 @@ class Runner:
             plugins=plugins,
         )
 
-    def _convert_messages(self, messages) -> list:
+    def _convert_messages(self, messages, session_id) -> list:
         if isinstance(messages, str):
             messages = [types.Content(role="user", parts=[types.Part(text=messages)])]
         elif isinstance(messages, MediaMessage):
             assert messages.media.endswith(".png"), (
                 "The MediaMessage only supports PNG format file for now."
             )
+            data = read_png_to_bytes(messages.media)
+            url = messages.media
+            if self.agent.tracers:
+                tos_handler = TOSHandler()
+                url = tos_handler.gen_url(
+                    self.user_id, self.app_name, session_id, messages.media
+                )
+                asyncio.create_task(tos_handler.upload_to_tos(url, data, "bytes"))
+
             messages = [
                 types.Content(
                     role="user",
@@ -103,8 +114,8 @@ class Runner:
                         types.Part(text=messages.text),
                         types.Part(
                             inline_data=Blob(
-                                display_name=messages.media,
-                                data=read_png_to_bytes(messages.media),
+                                display_name=url,
+                                data=data,
                                 mime_type="image/png",
                             )
                         ),
@@ -164,7 +175,7 @@ class Runner:
         stream: bool = False,
         save_tracing_data: bool = False,
     ):
-        converted_messages: list = self._convert_messages(messages)
+        converted_messages: list = self._convert_messages(messages, session_id)
 
         await self.short_term_memory.create_session(
             app_name=self.app_name, user_id=self.user_id, session_id=session_id
