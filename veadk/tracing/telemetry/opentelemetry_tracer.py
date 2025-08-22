@@ -25,7 +25,7 @@ from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 from typing_extensions import override
 
 from veadk.tracing.base_tracer import BaseTracer
@@ -37,8 +37,6 @@ from veadk.utils.patches import patch_google_adk_telemetry
 
 logger = get_logger(__name__)
 
-DEFAULT_VEADK_TRACER_NAME = "veadk_global_tracer"
-
 
 def update_resource_attributions(provider: TracerProvider, resource_attributes: dict):
     provider._resource = provider._resource.merge(Resource.create(resource_attributes))
@@ -47,19 +45,36 @@ def update_resource_attributions(provider: TracerProvider, resource_attributes: 
 class OpentelemetryTracer(BaseModel, BaseTracer):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    name: str = Field(
-        default=DEFAULT_VEADK_TRACER_NAME, description="The identifier of tracer."
-    )
-
-    app_name: str = Field(
-        default="veadk_app",
-        description="The identifier of app.",
-    )
+    name: str = Field(default="veadk_tracer", description="The identifier of tracer.")
 
     exporters: list[BaseExporter] = Field(
         default_factory=list,
         description="The exporters to export spans.",
     )
+
+    _app_name: str = PrivateAttr(default="<unknown_app_name>")
+
+    _agent_name: str = PrivateAttr(default="<unknown_agent_name>")
+
+    @property
+    def app_name(self) -> str:
+        return self._app_name
+
+    @app_name.setter
+    def app_name(self, value: str) -> None:
+        self._app_name = value
+        # update_common_attributes(self._tracer_provider, {"app_name": self._app_name})
+
+    @property
+    def agent_name(self) -> str:
+        return self._agent_name
+
+    @agent_name.setter
+    def agent_name(self, value: str) -> None:
+        self._agent_name = value
+        # update_common_attributes(
+        #     self._tracer_provider, {"agent_name": self._agent_name}
+        # )
 
     @field_validator("exporters")
     @classmethod
@@ -73,8 +88,6 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         patch_google_adk_telemetry()
 
         self._processors = []
-        self._inmemory_exporter = InMemoryExporter()
-        self.exporters.append(self._inmemory_exporter)
 
         # VeADK operates on global OpenTelemetry provider, return nothing
         self._init_global_tracer_provider()
@@ -121,9 +134,22 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
                     f"Add span processor for exporter `{exporter.__class__.__name__}` to OpentelemetryTracer failed."
                 )
 
-        logger.debug(
-            f"Init OpentelemetryTracer with {len(self._processors)} exporters."
-        )
+        self._inmemory_exporter = InMemoryExporter()
+        self._inmemory_exporter_processor = self._inmemory_exporter.processor
+
+        # make sure the in memory exporter processor is added at index 0
+        if self._inmemory_exporter_processor:
+            global_tracer_provider._active_span_processor._span_processors = (
+                self._inmemory_exporter_processor,
+            ) + global_tracer_provider._active_span_processor._span_processors
+
+            self._processors.append(self._inmemory_exporter_processor)
+        else:
+            logger.warning(
+                "InMemoryExporter processor is not initialized, cannot add to OpentelemetryTracer."
+            )
+
+        logger.info(f"Init OpentelemetryTracer with {len(self._processors)} exporters.")
 
     @property
     def trace_file_path(self) -> str:

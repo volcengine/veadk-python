@@ -6,7 +6,7 @@ from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.adk.tools import BaseTool
 from opentelemetry import trace
-from opentelemetry.trace.span import Span
+from opentelemetry.sdk.trace import _Span
 
 from veadk.tracing.telemetry.attributes.attributes import ATTRIBUTES
 from veadk.tracing.telemetry.attributes.extractors.llm_attributes_extractors import (
@@ -15,23 +15,32 @@ from veadk.tracing.telemetry.attributes.extractors.llm_attributes_extractors imp
 from veadk.tracing.telemetry.attributes.extractors.tool_attributes_extractors import (
     ToolAttributesParams,
 )
+from veadk.tracing.telemetry.exporters import inmemory_exporter
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-def _set_common_attributes(
-    span: Span, app_name: str, user_id: str, session_id: str
-) -> None:
-    common_attributes = ATTRIBUTES.get("common", {})
-    for attr_name, attr_extractor in common_attributes.items():
-        value = attr_extractor(
-            app_name=app_name, user_id=user_id, session_id=session_id
-        )
-        span.set_attribute(attr_name, value)
-
-
 def trace_send_data(): ...
+
+
+def set_common_attributes(current_span: _Span, **kwargs) -> None:
+    if current_span.context:
+        current_span_id = current_span.context.trace_id
+
+    spans = inmemory_exporter.inmemory_span_processor.spans
+
+    spans_in_current_trace = [
+        span
+        for span in spans
+        if span.context and span.context.trace_id == current_span_id
+    ]
+
+    common_attributes = ATTRIBUTES.get("common", {})
+    for span in spans_in_current_trace:
+        for attr_name, attr_extractor in common_attributes.items():
+            value = attr_extractor(**kwargs)
+            span.set_attribute(attr_name, value)
 
 
 def trace_tool_call(
@@ -63,10 +72,11 @@ def trace_call_llm(
 ) -> None:
     span = trace.get_current_span()
 
-    _set_common_attributes(
-        span=span,
-        app_name=invocation_context.session.app_name,
-        user_id=invocation_context.session.user_id,
+    set_common_attributes(
+        current_span=span,  # type: ignore
+        agent_name=invocation_context.agent.name,
+        app_name=invocation_context.app_name,
+        user_id=invocation_context.user_id,
         session_id=invocation_context.session.id,
     )
 

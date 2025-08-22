@@ -14,6 +14,12 @@
 
 from typing import Sequence
 
+from opentelemetry.context import (
+    _SUPPRESS_INSTRUMENTATION_KEY,
+    attach,
+    detach,
+    set_value,
+)
 from opentelemetry.sdk.trace import ReadableSpan, export
 from typing_extensions import override
 
@@ -23,7 +29,7 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-in_memory_exporter_instance = None
+inmemory_span_processor = None
 
 
 # ======== Adapted from Google ADK ========
@@ -64,6 +70,30 @@ class _InMemoryExporter(export.SpanExporter):
         self._spans.clear()
 
 
+class _InMemorySpanProcessor(export.SimpleSpanProcessor):
+    def __init__(self, exporter: _InMemoryExporter) -> None:
+        super().__init__(exporter)
+        self.spans = []
+
+    def on_start(self, span, parent_context) -> None:
+        if span.context:
+            self.spans.append(span)
+
+    def on_end(self, span: ReadableSpan) -> None:
+        if span.context:
+            if not span.context.trace_flags.sampled:
+                return
+            token = attach(set_value(_SUPPRESS_INSTRUMENTATION_KEY, True))
+            try:
+                self.span_exporter.export((span,))
+            # pylint: disable=broad-exception-caught
+            except Exception:
+                logger.exception("Exception while exporting Span.")
+            detach(token)
+            if span in self.spans:
+                self.spans.remove(span)
+
+
 class InMemoryExporter(BaseExporter):
     """InMemory Exporter mainly for store spans in memory for debugging / observability purposes."""
 
@@ -73,4 +103,7 @@ class InMemoryExporter(BaseExporter):
         self.name = name
 
         self._exporter = _InMemoryExporter()
-        self.processor = export.SimpleSpanProcessor(self._exporter)
+        self.processor = _InMemorySpanProcessor(self._exporter)
+
+        global inmemory_span_processor
+        inmemory_span_processor = self.processor
