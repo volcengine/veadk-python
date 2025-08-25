@@ -17,9 +17,9 @@ from veadk.config import getenv
 from veadk.utils.logger import get_logger
 import tos
 import asyncio
-from typing import Literal, Union
+from typing import Union
 from pydantic import BaseModel, Field
-from typing import Optional, Any
+from typing import Any
 
 logger = get_logger(__name__)
 
@@ -45,21 +45,16 @@ class TOSConfig(BaseModel):
 
 class TOSClient(BaseModel):
     config: TOSConfig = Field(default_factory=TOSConfig)
-    client: Optional[Any] = Field(default=None, description="TOS client instance")
 
-    def __init__(self, **data: Any):
-        super().__init__(**data)
-        self.client = self._init()
-
-    def _init(self):
-        """initialize TOS client"""
+    def model_post_init(self, __context: Any) -> None:
         try:
-            return tos.TosClientV2(
+            self._client = tos.TosClientV2(
                 self.config.ak,
                 self.config.sk,
                 endpoint=f"tos-{self.config.region}.volces.com",
                 region=self.config.region,
             )
+            logger.info("Connected to TOS successfully.")
         except Exception as e:
             logger.error(f"Client initialization failed:{e}")
             return None
@@ -67,12 +62,12 @@ class TOSClient(BaseModel):
     def create_bucket(self) -> bool:
         """If the bucket does not exist, create it"""
         try:
-            self.client.head_bucket(self.config.bucket_name)
+            self._client.head_bucket(self.config.bucket_name)
             logger.info(f"Bucket {self.config.bucket_name} already exists")
             return True
         except tos.exceptions.TosServerError as e:
             if e.status_code == 404:
-                self.client.create_bucket(
+                self._client.create_bucket(
                     bucket=self.config.bucket_name,
                     storage_class=tos.StorageClassType.Storage_Class_Standard,
                     acl=tos.ACLType.ACL_Private,
@@ -87,10 +82,13 @@ class TOSClient(BaseModel):
         self,
         object_key: str,
         data: Union[str, bytes],
-        data_type: Literal["file", "bytes"],
     ):
-        if data_type not in ("file", "bytes"):
-            error_msg = f"Upload failed: data_type error. Only 'file' and 'bytes' are supported, got {data_type}"
+        if isinstance(data, str):
+            data_type = "file"
+        elif isinstance(data, bytes):
+            data_type = "bytes"
+        else:
+            error_msg = f"Upload failed: data type error. Only str (file path) and bytes are supported, got {type(data)}"
             logger.error(error_msg)
             raise ValueError(error_msg)
         if data_type == "file":
@@ -100,30 +98,30 @@ class TOSClient(BaseModel):
 
     def _do_upload_bytes(self, object_key: str, bytes: bytes) -> bool:
         try:
-            if not self.client:
+            if not self._client:
                 return False
             if not self.create_bucket():
                 return False
-
-            self.client.put_object(
+            self._client.put_object(
                 bucket=self.config.bucket_name, key=object_key, content=bytes
             )
+            logger.debug(f"Upload success, object_key: {object_key}")
             return True
         except Exception as e:
             logger.error(f"Upload failed: {e}")
             return False
 
     def _do_upload_file(self, object_key: str, file_path: str) -> bool:
-        client = self._init_tos_client()
         try:
-            if not client:
+            if not self._client:
                 return False
-            if not self.create_bucket(client, self.config.bucket_name):
+            if not self.create_bucket(self._client, self.config.bucket_name):
                 return False
 
-            client.put_object_from_file(
+            self._client.put_object_from_file(
                 bucket=self.config.bucket_name, key=object_key, file_path=file_path
             )
+            logger.debug(f"Upload success, object_key: {object_key}")
             return True
         except Exception as e:
             logger.error(f"Upload failed: {e}")
@@ -132,7 +130,7 @@ class TOSClient(BaseModel):
     def download(self, object_key: str, save_path: str) -> bool:
         """download image from TOS"""
         try:
-            object_stream = self.client.get_object(self.config.bucket_name, object_key)
+            object_stream = self._client.get_object(self.config.bucket_name, object_key)
 
             save_dir = os.path.dirname(save_path)
             if save_dir and not os.path.exists(save_dir):
@@ -150,6 +148,6 @@ class TOSClient(BaseModel):
 
             return False
 
-    def close_client(self):
-        if self.client:
-            self.client.close()
+    def close(self):
+        if self._client:
+            self._client.close()

@@ -123,7 +123,8 @@ class Runner:
                 object_key = self._build_object_key(
                     self.user_id, self.app_name, session_id, messages.media
                 )
-                asyncio.create_task(tos_client.upload(object_key, data, "bytes"))
+                asyncio.create_task(tos_client.upload(object_key, data))
+                tos_client.close()
 
             messages = [
                 types.Content(
