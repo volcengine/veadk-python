@@ -11,33 +11,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-import time
-
+from google.adk.models import LlmResponse
+from opentelemetry import metrics
 from opentelemetry.metrics._internal import Meter
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 
 from veadk.config import getenv
 
-
-class MeterContext:
-    def __init__(
-        self,
-        meter: Meter,
-        provider: MeterProvider,
-        reader: PeriodicExportingMetricReader,
-    ):
-        self.meter = meter
-        self.provider = provider
-        self.reader = reader
+METER_NAME_TEMPLATE = "veadk.{exporter_id}.meter"
 
 
 class MeterUploader:
-    def __init__(self, meter_context: MeterContext):
-        self.meter = meter_context.meter
-        self.provider = meter_context.provider
-        self.reader = meter_context.reader
+    def __init__(self, exporter_id: str):
+        self.meter: Meter = metrics.get_meter(
+            METER_NAME_TEMPLATE.format(exporter_id=exporter_id)
+        )
 
         self.base_attributes = {
             "gen_ai_system": "volcengine",
@@ -57,17 +44,11 @@ class MeterUploader:
             unit="count",
         )
 
-    def record(self, prompt_tokens: list[int], completion_tokens: list[int]):
-        self.llm_invoke_counter.add(len(completion_tokens), self.base_attributes)
-
-        for prompt_token in prompt_tokens:
-            token_attributes = {**self.base_attributes, "gen_ai_token_type": "input"}
-            self.token_usage.record(prompt_token, attributes=token_attributes)
-        for completion_token in completion_tokens:
-            token_attributes = {**self.base_attributes, "gen_ai_token_type": "output"}
-            self.token_usage.record(completion_token, attributes=token_attributes)
-
-    def close(self):
-        time.sleep(0.05)
-        self.reader.force_flush()
-        self.provider.shutdown()
+    def record(self, llm_response: LlmResponse):
+        input_token = llm_response.usage_metadata.prompt_token_count
+        output_token = llm_response.usage_metadata.candidates_token_count
+        self.llm_invoke_counter.add(1, self.base_attributes)
+        token_attributes = {**self.base_attributes, "gen_ai_token_type": "input"}
+        self.token_usage.record(input_token, attributes=token_attributes)
+        token_attributes = {**self.base_attributes, "gen_ai_token_type": "output"}
+        self.token_usage.record(output_token, attributes=token_attributes)

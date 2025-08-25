@@ -14,10 +14,10 @@
 
 from typing import Any
 
-from opentelemetry import metrics
+from opentelemetry import metrics as metrics_api
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk import metrics as metrics_sdk
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -26,6 +26,9 @@ from typing_extensions import override
 
 from veadk.config import getenv
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
+from veadk.tracing.telemetry.metrics.opentelemetry_metrics import MeterUploader
+
+# from veadk.tracing.telemetry.metrics.opentelemetry_metrics import meter_uploader_manager
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -68,15 +71,32 @@ class APMPlusExporter(BaseExporter):
             endpoint=self.config.endpoint, insecure=True, headers=self.headers
         )
         self.processor = BatchSpanProcessor(self._exporter)
+        self.meter_uploader = self._init_meter_uploader(exporter_id="apmplus")
 
+    def _init_meter_uploader(self, exporter_id: str) -> MeterUploader:
         # init meter
-        resource = Resource.create()
-        exporter = OTLPMetricExporter(endpoint=self.config.endpoint, headers=headers)
+        exporter = OTLPMetricExporter(
+            endpoint=self.config.endpoint, headers=self.headers
+        )
         metric_reader = PeriodicExportingMetricReader(exporter)
-        provider = MeterProvider(metric_readers=[metric_reader], resource=resource)
-        metrics.set_meter_provider(provider)
 
-        # metrics.get_meter("veadk.apmplus.meter")
+        global_metrics_provider = metrics_api.get_meter_provider()
+
+        if getattr(global_metrics_provider, "_sdk_config", None):
+            global_resource = getattr(global_metrics_provider, "_sdk_config").resource
+        else:
+            global_resource = Resource.create()
+
+        new_resource = Resource.create(self.resource_attributes)
+        merged_resource = global_resource.merge(new_resource)
+
+        provider = metrics_sdk.MeterProvider(
+            metric_readers=[metric_reader], resource=merged_resource
+        )
+        metrics_api.set_meter_provider(provider)
+
+        meter_uploader = MeterUploader(exporter_id=exporter_id)
+        return meter_uploader
 
     @override
     def export(self) -> None:

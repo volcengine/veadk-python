@@ -19,7 +19,12 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def trace_send_data(): ...
+def trace_send_data(invocation_context: InvocationContext, llm_response: LlmResponse):
+    tracers = invocation_context.agent.tracers
+    for tracer in tracers:
+        for exporter in getattr(tracer, "exporters", []):
+            if getattr(exporter, "meter_uploader", None):
+                exporter.meter_uploader.record(llm_response)
 
 
 def set_common_attributes(
@@ -116,3 +121,6 @@ def trace_call_llm(
     for attr_name, attr_extractor in llm_attributes_mapping.items():
         response: ExtractorResponse = attr_extractor(params)
         ExtractorResponse.update_span(span, attr_name, response)
+
+    # Report meter
+    trace_send_data(invocation_context, llm_response)
