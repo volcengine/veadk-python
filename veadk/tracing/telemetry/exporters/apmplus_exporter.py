@@ -27,8 +27,6 @@ from typing_extensions import override
 from veadk.config import getenv
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
 from veadk.tracing.telemetry.metrics.opentelemetry_metrics import MeterUploader
-
-# from veadk.tracing.telemetry.metrics.opentelemetry_metrics import meter_uploader_manager
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -74,29 +72,22 @@ class APMPlusExporter(BaseExporter):
         self.meter_uploader = self._init_meter_uploader(exporter_id="apmplus")
 
     def _init_meter_uploader(self, exporter_id: str) -> MeterUploader:
-        # init meter
+        global_metrics_provider = metrics_api.get_meter_provider()
+        if hasattr(global_metrics_provider, "_sdk_config"):
+            global_resource = global_metrics_provider._sdk_config.resource
+        else:
+            global_resource = Resource.create()
+        resource = global_resource.merge(Resource.create(self.resource_attributes))
+
         exporter = OTLPMetricExporter(
             endpoint=self.config.endpoint, headers=self.headers
         )
         metric_reader = PeriodicExportingMetricReader(exporter)
-
-        global_metrics_provider = metrics_api.get_meter_provider()
-
-        if getattr(global_metrics_provider, "_sdk_config", None):
-            global_resource = getattr(global_metrics_provider, "_sdk_config").resource
-        else:
-            global_resource = Resource.create()
-
-        new_resource = Resource.create(self.resource_attributes)
-        merged_resource = global_resource.merge(new_resource)
-
-        provider = metrics_sdk.MeterProvider(
-            metric_readers=[metric_reader], resource=merged_resource
+        # set provider
+        metrics_api.set_meter_provider(
+            metrics_sdk.MeterProvider(metric_readers=[metric_reader], resource=resource)
         )
-        metrics_api.set_meter_provider(provider)
-
-        meter_uploader = MeterUploader(exporter_id=exporter_id)
-        return meter_uploader
+        return MeterUploader(exporter_id=exporter_id)
 
     @override
     def export(self) -> None:
