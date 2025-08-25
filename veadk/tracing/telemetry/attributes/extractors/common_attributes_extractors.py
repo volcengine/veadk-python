@@ -2,7 +2,9 @@ from veadk.version import VERSION
 
 
 def common_gen_ai_system(**kwargs) -> str:
-    return "veadk"
+    """This field will be parsed as `model_provider` in Volcengine CozeLoop platform."""
+    model_provider = kwargs.get("model_provider")
+    return model_provider or "<unknown_model_provider>"
 
 
 def common_gen_ai_system_version(**kwargs) -> str:
@@ -33,7 +35,10 @@ COMMON_ATTRIBUTES = {
     "gen_ai.system": common_gen_ai_system,
     "gen_ai.system.version": common_gen_ai_system_version,
     "gen_ai.agent.name": common_gen_ai_agent_name,
-    "gen_ai.app.name": common_gen_ai_app_name,
-    "gen_ai.user.id": common_gen_ai_user_id,
-    "gen_ai.session.id": common_gen_ai_session_id,
+    "gen_ai.app.name": common_gen_ai_app_name,  # APMPlus required
+    "gen_ai.user.id": common_gen_ai_user_id,  # APMPlus required
+    "gen_ai.session.id": common_gen_ai_session_id,  # APMPlus required
+    "app.name": common_gen_ai_app_name,  # CozeLoop required
+    "user.id": common_gen_ai_user_id,  # CozeLoop required
+    "session.id": common_gen_ai_session_id,  # CozeLoop required
 }

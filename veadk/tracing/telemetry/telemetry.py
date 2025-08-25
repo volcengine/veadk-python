@@ -37,6 +37,10 @@ def set_common_attributes(current_span: _Span, **kwargs) -> None:
 
     common_attributes = ATTRIBUTES.get("common", {})
     for span in spans_in_current_trace:
+        if span.name.startswith("invocation"):
+            span.set_attribute("gen_ai.operation.name", "chain")
+        elif span.name.startswith("agent_run"):
+            span.set_attribute("gen_ai.operation.name", "agent")
         for attr_name, attr_extractor in common_attributes.items():
             value = attr_extractor(**kwargs)
             span.set_attribute(attr_name, value)
@@ -65,12 +69,20 @@ def trace_call_llm(
 ) -> None:
     span = trace.get_current_span()
 
+    from veadk.agent import Agent
+
     set_common_attributes(
         current_span=span,  # type: ignore
         agent_name=invocation_context.agent.name,
-        app_name=invocation_context.app_name,
         user_id=invocation_context.user_id,
+        app_name=invocation_context.app_name,
         session_id=invocation_context.session.id,
+        model_provider=invocation_context.agent.model_provider
+        if isinstance(invocation_context.agent, Agent)
+        else "",
+        model_name=invocation_context.agent.model_name
+        if isinstance(invocation_context.agent, Agent)
+        else "",
     )
 
     llm_attributes_mapping = ATTRIBUTES.get("llm", {})
