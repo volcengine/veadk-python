@@ -1,6 +1,5 @@
 import json
 
-
 from veadk.tracing.telemetry.attributes.extractors.types import (
     ExtractorResponse,
     LLMAttributesParams,
@@ -105,7 +104,7 @@ def llm_gen_ai_usage_cache_read_input_tokens(
 
 
 def llm_gen_ai_prompt(params: LLMAttributesParams) -> ExtractorResponse:
-    # a content is a message
+    # a part is a message
     messages: list[dict] = []
 
     for content in params.llm_request.contents:
@@ -119,8 +118,10 @@ def llm_gen_ai_prompt(params: LLMAttributesParams) -> ExtractorResponse:
                 # function response
                 if part.function_response:
                     message[f"gen_ai.prompt.{idx}.role"] = content.role
-                    message[f"gen_ai.prompt.{idx}.content"] = str(
-                        content.parts[0].function_response
+                    message[f"gen_ai.prompt.{idx}.content"] = (
+                        str(content.parts[0].function_response.response)
+                        if content.parts[0].function_response
+                        else "<unknown_function_response>"
                     )
                 # function call
                 if part.function_call:
