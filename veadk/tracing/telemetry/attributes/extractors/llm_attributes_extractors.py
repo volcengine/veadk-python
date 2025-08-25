@@ -119,8 +119,8 @@ def llm_gen_ai_prompt(params: LLMAttributesParams) -> ExtractorResponse:
                 if part.function_response:
                     message[f"gen_ai.prompt.{idx}.role"] = content.role
                     message[f"gen_ai.prompt.{idx}.content"] = (
-                        str(content.parts[0].function_response.response)
-                        if content.parts[0].function_response
+                        str(part.function_response.response)
+                        if part.function_response
                         else "<unknown_function_response>"
                     )
                 # function call
@@ -236,7 +236,7 @@ def llm_gen_ai_user_message(params: LLMAttributesParams) -> ExtractorResponse:
                         if part.function_response:
                             message_part[f"parts.{idx}.type"] = "function"
                             message_part[f"parts.{idx}.content"] = str(
-                                content.parts[0].function_response
+                                part.function_response
                             )
 
                     message_parts.append(message_part)
