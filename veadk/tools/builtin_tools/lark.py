@@ -46,7 +46,7 @@ def check_env():
         ) from e
 
 
-# check_env()
+check_env()
 
 lark_tools = MCPToolset(
     connection_params=StdioServerParameters(

@@ -6,30 +6,12 @@ from veadk.tracing.telemetry.attributes.extractors.types import (
 )
 
 
-def flatten(d, parent_key="", sep="."):
-    items = []
-    if isinstance(d, dict):
-        for k, v in d.items():
-            new_key = f"{parent_key}{sep}{k}" if parent_key else k
-            items.extend(flatten(v, new_key, sep=sep).items())
-    elif isinstance(d, list):
-        if not d:  # empty list
-            items.append((parent_key, ""))
-        else:
-            for i, v in enumerate(d):
-                new_key = f"{parent_key}{sep}{i}" if parent_key else str(i)
-                items.extend(flatten(v, new_key, sep=sep).items())
-    else:
-        items.append((parent_key, d))
-    return dict(items)
-
-
 def llm_gen_ai_request_model(params: LLMAttributesParams) -> ExtractorResponse:
     return ExtractorResponse(content=params.llm_request.model or "<unknown_model_name>")
 
 
 def llm_gen_ai_request_type(params: LLMAttributesParams) -> ExtractorResponse:
-    return ExtractorResponse(content=type or "<unknown_type>")
+    return ExtractorResponse(content="chat" or "<unknown_type>")
 
 
 def llm_gen_ai_response_model(params: LLMAttributesParams) -> ExtractorResponse:

@@ -31,6 +31,10 @@ def common_gen_ai_session_id(**kwargs) -> str:
     return session_id or "<unknown_session_id>"
 
 
+def common_cozeloop_report_source(**kwargs) -> str:
+    return "veadk"
+
+
 COMMON_ATTRIBUTES = {
     "gen_ai.system": common_gen_ai_system,
     "gen_ai.system.version": common_gen_ai_system_version,
@@ -38,7 +42,9 @@ COMMON_ATTRIBUTES = {
     "gen_ai.app.name": common_gen_ai_app_name,  # APMPlus required
     "gen_ai.user.id": common_gen_ai_user_id,  # APMPlus required
     "gen_ai.session.id": common_gen_ai_session_id,  # APMPlus required
-    "app.name": common_gen_ai_app_name,  # CozeLoop required
+    "agent_name": common_gen_ai_agent_name,  # CozeLoop required
+    "app_name": common_gen_ai_app_name,  # CozeLoop required
     "user.id": common_gen_ai_user_id,  # CozeLoop required
     "session.id": common_gen_ai_session_id,  # CozeLoop required
+    "cozeloop.report.source": common_cozeloop_report_source,  # CozeLoop required
 }

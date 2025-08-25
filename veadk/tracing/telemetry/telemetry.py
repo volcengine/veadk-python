@@ -14,7 +14,6 @@ from veadk.tracing.telemetry.attributes.extractors.types import (
     LLMAttributesParams,
     ToolAttributesParams,
 )
-from veadk.tracing.telemetry.exporters import inmemory_exporter
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -23,27 +22,47 @@ logger = get_logger(__name__)
 def trace_send_data(): ...
 
 
-def set_common_attributes(current_span: _Span, **kwargs) -> None:
+def set_common_attributes(
+    invocation_context: InvocationContext, current_span: _Span, **kwargs
+) -> None:
+    from veadk.agent import Agent
+
     if current_span.context:
         current_span_id = current_span.context.trace_id
+    else:
+        logger.warning(
+            "Current span context is missing, failed to get `trace_id` to set common attributes."
+        )
+        return
 
-    spans = inmemory_exporter.inmemory_span_processor.spans
+    if isinstance(invocation_context.agent, Agent):
+        try:
+            from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
 
-    spans_in_current_trace = [
-        span
-        for span in spans
-        if span.context and span.context.trace_id == current_span_id
-    ]
+            tracer: OpentelemetryTracer = invocation_context.agent.tracers[0]  # type: ignore
+            spans = tracer._inmemory_exporter.processor.spans  #  # type: ignore
 
-    common_attributes = ATTRIBUTES.get("common", {})
-    for span in spans_in_current_trace:
-        if span.name.startswith("invocation"):
-            span.set_attribute("gen_ai.operation.name", "chain")
-        elif span.name.startswith("agent_run"):
-            span.set_attribute("gen_ai.operation.name", "agent")
-        for attr_name, attr_extractor in common_attributes.items():
-            value = attr_extractor(**kwargs)
-            span.set_attribute(attr_name, value)
+            spans_in_current_trace = [
+                span
+                for span in spans
+                if span.context and span.context.trace_id == current_span_id
+            ]
+
+            common_attributes = ATTRIBUTES.get("common", {})
+            for span in spans_in_current_trace:
+                if span.name.startswith("invocation"):
+                    span.set_attribute("gen_ai.operation.name", "chain")
+                elif span.name.startswith("agent_run"):
+                    span.set_attribute("gen_ai.operation.name", "agent")
+                for attr_name, attr_extractor in common_attributes.items():
+                    value = attr_extractor(**kwargs)
+                    span.set_attribute(attr_name, value)
+        except Exception as e:
+            logger.error(f"Failed to set common attributes for spans: {e}")
+    else:
+        logger.warning(
+            "Failed to set common attributes for spans as your agent is not VeADK Agent. Skip this."
+        )
 
 
 def trace_tool_call(
@@ -72,6 +91,7 @@ def trace_call_llm(
     from veadk.agent import Agent
 
     set_common_attributes(
+        invocation_context=invocation_context,
         current_span=span,  # type: ignore
         agent_name=invocation_context.agent.name,
         user_id=invocation_context.user_id,

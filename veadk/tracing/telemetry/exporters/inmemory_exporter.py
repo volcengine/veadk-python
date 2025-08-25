@@ -29,9 +29,6 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-inmemory_span_processor = None
-
-
 # ======== Adapted from Google ADK ========
 class _InMemoryExporter(export.SpanExporter):
     def __init__(self) -> None:
@@ -109,6 +106,3 @@ class InMemoryExporter(BaseExporter):
 
         self._exporter = _InMemoryExporter()
         self.processor = _InMemorySpanProcessor(self._exporter)
-
-        global inmemory_span_processor
-        inmemory_span_processor = self.processor
