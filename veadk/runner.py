@@ -11,8 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import os
 import asyncio
 from typing import Union
+from urllib.parse import urlparse
+from datetime import datetime
 
 from google.adk.agents import RunConfig
 from google.adk.agents.run_config import StreamingMode
@@ -32,7 +35,7 @@ from veadk.tracing.base_tracer import UserMessagePlugin
 from veadk.types import MediaMessage
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import read_png_to_bytes
-from veadk.database.tos.tos_handler import TOSHandler
+from veadk.database.tos.tos_client import TOSClient
 
 logger = get_logger(__name__)
 
@@ -91,6 +94,21 @@ class Runner:
             plugins=plugins,
         )
 
+    def _build_object_key(
+        self, user_id: str, app_name: str, session_id: str, data_path: str
+    ) -> str:
+        """generate TOS object key"""
+        parsed_url = urlparse(data_path)
+
+        if parsed_url.scheme and parsed_url.scheme in ("http", "https", "ftp", "ftps"):
+            file_name = os.path.basename(parsed_url.path)
+        else:
+            file_name = os.path.basename(data_path)
+
+        timestamp: str = datetime.now().strftime("%Y%m%d%H%M%S%f")[:-3]
+        object_key: str = f"{app_name}-{user_id}-{session_id}/{timestamp}-{file_name}"
+        return object_key
+
     def _convert_messages(self, messages, session_id) -> list:
         if isinstance(messages, str):
             messages = [types.Content(role="user", parts=[types.Part(text=messages)])]
@@ -99,14 +117,13 @@ class Runner:
                 "The MediaMessage only supports PNG format file for now."
             )
             data = read_png_to_bytes(messages.media)
-            url = messages.media
+            object_key = messages.media
             if self.agent.tracers:
-                tos_handler = TOSHandler()
-                url = tos_handler.gen_url(
+                tos_client = TOSClient()
+                object_key = self._build_object_key(
                     self.user_id, self.app_name, session_id, messages.media
                 )
-                asyncio.create_task(tos_handler.upload_to_tos(url, data, "bytes"))
-                tos_handler.close_client()
+                asyncio.create_task(tos_client.upload(object_key, data, "bytes"))
 
             messages = [
                 types.Content(
@@ -115,7 +132,7 @@ class Runner:
                         types.Part(text=messages.text),
                         types.Part(
                             inline_data=Blob(
-                                display_name=url,
+                                display_name=object_key,
                                 data=data,
                                 mime_type="image/png",
                             )
