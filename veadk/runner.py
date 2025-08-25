@@ -94,7 +94,7 @@ class Runner:
             plugins=plugins,
         )
 
-    def _build_object_key(
+    def _build_tos_object_key(
         self, user_id: str, app_name: str, session_id: str, data_path: str
     ) -> str:
         """generate TOS object key"""
@@ -120,7 +120,7 @@ class Runner:
             object_key = messages.media
             if self.agent.tracers:
                 tos_client = TOSClient()
-                object_key = self._build_object_key(
+                object_key = self._build_tos_object_key(
                     self.user_id, self.app_name, session_id, messages.media
                 )
                 asyncio.create_task(tos_client.upload(object_key, data))
