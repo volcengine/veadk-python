@@ -74,7 +74,6 @@ def load_tracer() -> None:
         name="veadk_tracer", app_name=agent_run_config.app_name, exporters=exporters
     )
     agent_run_config.agent.tracers.extend([tracer])
-    tracer.do_hooks(agent=agent_run_config.agent)
 
 
 def build_mcp_run_agent_func() -> Callable:
