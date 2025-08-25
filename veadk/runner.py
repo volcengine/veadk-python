@@ -67,8 +67,6 @@ class Runner:
         # prevent VeRemoteAgent has no long-term memory attr
         if isinstance(self.agent, Agent):
             self.long_term_memory = self.agent.long_term_memory
-            # for tracer in self.agent.tracers:
-            #     tracer.set_app_name(self.app_name)
         else:
             self.long_term_memory = None
 
@@ -175,7 +173,27 @@ class Runner:
 
         return final_output
 
-    def _print_trace_id(self):
+    def get_trace_id(self) -> str:
+        if not isinstance(self.agent, Agent):
+            logger.warning(
+                ("The agent is not an instance of VeADK Agent, no trace id provided.")
+            )
+            return "<unknown_trace_id>"
+
+        if not self.agent.tracers:
+            logger.warning(
+                "No tracer is configured in the agent, no trace id provided."
+            )
+            return "<unknown_trace_id>"
+
+        try:
+            trace_id = self.agent.tracers[0].trace_id  # type: ignore
+            return trace_id
+        except Exception as e:
+            logger.warning(f"Get tracer id failed as {e}")
+            return "<unknown_trace_id>"
+
+    def _print_trace_id(self) -> None:
         if not isinstance(self.agent, Agent):
             logger.warning(
                 ("The agent is not an instance of VeADK Agent, no trace id provided.")

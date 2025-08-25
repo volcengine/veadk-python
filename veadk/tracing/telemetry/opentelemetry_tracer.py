@@ -18,14 +18,13 @@ import json
 import time
 from typing import Any
 
-# from openinference.instrumentation.google_adk import GoogleADKInstrumentor
 from opentelemetry import trace as trace_api
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing_extensions import override
 
 from veadk.tracing.base_tracer import BaseTracer
@@ -38,43 +37,23 @@ from veadk.utils.patches import patch_google_adk_telemetry
 logger = get_logger(__name__)
 
 
-def update_resource_attributions(provider: TracerProvider, resource_attributes: dict):
+def _update_resource_attributions(
+    provider: TracerProvider, resource_attributes: dict
+) -> None:
     provider._resource = provider._resource.merge(Resource.create(resource_attributes))
 
 
 class OpentelemetryTracer(BaseModel, BaseTracer):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    name: str = Field(default="veadk_tracer", description="The identifier of tracer.")
+    name: str = Field(
+        default="veadk_opentelemetry_tracer", description="The identifier of tracer."
+    )
 
     exporters: list[BaseExporter] = Field(
         default_factory=list,
         description="The exporters to export spans.",
     )
-
-    _app_name: str = PrivateAttr(default="<unknown_app_name>")
-
-    _agent_name: str = PrivateAttr(default="<unknown_agent_name>")
-
-    @property
-    def app_name(self) -> str:
-        return self._app_name
-
-    @app_name.setter
-    def app_name(self, value: str) -> None:
-        self._app_name = value
-        # update_common_attributes(self._tracer_provider, {"app_name": self._app_name})
-
-    @property
-    def agent_name(self) -> str:
-        return self._agent_name
-
-    @agent_name.setter
-    def agent_name(self, value: str) -> None:
-        self._agent_name = value
-        # update_common_attributes(
-        #     self._tracer_provider, {"agent_name": self._agent_name}
-        # )
 
     @field_validator("exporters")
     @classmethod
@@ -86,18 +65,15 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
 
     def model_post_init(self, context: Any) -> None:
         patch_google_adk_telemetry()
-
-        self._processors = []
-
-        # VeADK operates on global OpenTelemetry provider, return nothing
         self._init_global_tracer_provider()
 
-        # GoogleADKInstrumentor().instrument()
+    #  GoogleADKInstrumentor().instrument()
 
     def _init_global_tracer_provider(self) -> None:
+        self._processors = []
+
         # set provider anyway, then get global provider
-        tracer_provider = trace_sdk.TracerProvider()
-        trace_api.set_tracer_provider(tracer_provider)
+        trace_api.set_tracer_provider(trace_sdk.TracerProvider())
         global_tracer_provider: TracerProvider = trace_api.get_tracer_provider()  # type: ignore
 
         span_processors = global_tracer_provider._active_span_processor._span_processors
@@ -118,7 +94,7 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
             resource_attributes = exporter.resource_attributes
 
             if resource_attributes:
-                update_resource_attributions(
+                _update_resource_attributions(
                     global_tracer_provider, resource_attributes
                 )
 
@@ -135,15 +111,14 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
                 )
 
         self._inmemory_exporter = InMemoryExporter()
-        self._inmemory_exporter_processor = self._inmemory_exporter.processor
-
-        # make sure the in memory exporter processor is added at index 0
-        if self._inmemory_exporter_processor:
+        if self._inmemory_exporter.processor:
+            # make sure the in memory exporter processor is added at index 0
+            # because we use this to record all spans
             global_tracer_provider._active_span_processor._span_processors = (
-                self._inmemory_exporter_processor,
+                self._inmemory_exporter.processor,
             ) + global_tracer_provider._active_span_processor._span_processors
 
-            self._processors.append(self._inmemory_exporter_processor)
+            self._processors.append(self._inmemory_exporter.processor)
         else:
             logger.warning(
                 "InMemoryExporter processor is not initialized, cannot add to OpentelemetryTracer."
@@ -164,30 +139,34 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
             logger.error(f"Failed to get trace_id from InMemoryExporter: {e}")
             return self._trace_id
 
+    def force_export(self) -> None:
+        """Force to export spans in all processors."""
+        for processor in self._processors:
+            time.sleep(0.05)
+            processor.force_flush()
+
     @override
     def dump(
         self,
-        user_id: str,
-        session_id: str,
+        user_id: str = "unknown_user_id",
+        session_id: str = "unknown_session_id",
         path: str = "/tmp",
     ) -> str:
+        def _build_trace_file_path(path: str, user_id: str, session_id: str) -> str:
+            return f"{path}/{self.name}_{user_id}_{session_id}_{self.trace_id}.json"
+
         if not self._inmemory_exporter:
             logger.warning(
                 "InMemoryExporter is not initialized. Please check your tracer exporters."
             )
             return ""
-
-        for processor in self._processors:
-            time.sleep(0.05)  # give some time for the exporter to upload spans
-            processor.force_flush()
+        self.force_export()
 
         spans = self._inmemory_exporter._exporter.get_finished_spans(  # type: ignore
             session_id=session_id
         )
-        if not spans:
-            data = []
-        else:
-            data = [
+        data = (
+            [
                 {
                     "name": s.name,
                     "span_id": s.context.span_id,
@@ -199,21 +178,18 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
                 }
                 for s in spans
             ]
+            if spans
+            else []
+        )
 
-        file_path = f"{path}/{self.name}_{user_id}_{session_id}_{self.trace_id}.json"
-        with open(file_path, "w") as f:
+        self._trace_file_path = _build_trace_file_path(path, user_id, session_id)
+        with open(self._trace_file_path, "w") as f:
             json.dump(
                 data, f, indent=4, ensure_ascii=False
             )  # ensure_ascii=False to support Chinese characters
-        self._trace_file_path = file_path
 
-        for exporter in self.exporters:
-            if not isinstance(exporter, InMemoryExporter):
-                exporter.export()
         logger.info(
-            f"OpenTelemetryTracer tracing done, trace id: {self._trace_id} (hex)"
+            f"OpenTelemetryTracer dumps {len(spans)} spans to {self._trace_file_path}. Trace id: {self.trace_id} (hex)"
         )
 
-        logger.info(f"OpenTelemetryTracer dumps {len(spans)} spans to {file_path}")
-
-        return file_path
+        return self._trace_file_path

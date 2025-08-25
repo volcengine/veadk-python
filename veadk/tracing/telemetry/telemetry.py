@@ -9,10 +9,9 @@ from opentelemetry import trace
 from opentelemetry.sdk.trace import _Span
 
 from veadk.tracing.telemetry.attributes.attributes import ATTRIBUTES
-from veadk.tracing.telemetry.attributes.extractors.llm_attributes_extractors import (
+from veadk.tracing.telemetry.attributes.extractors.types import (
+    ExtractorResponse,
     LLMAttributesParams,
-)
-from veadk.tracing.telemetry.attributes.extractors.tool_attributes_extractors import (
     ToolAttributesParams,
 )
 from veadk.tracing.telemetry.exporters import inmemory_exporter
@@ -50,18 +49,12 @@ def trace_tool_call(
 ) -> None:
     span = trace.get_current_span()
 
-    tool_attributes = ATTRIBUTES.get("tool", {})
-    for attr_name, attr_extractor in tool_attributes.items():
-        params = ToolAttributesParams(tool, args, function_response_event)
-        # set attribute anyway
-        value = attr_extractor(params)
-        if isinstance(value, list):
-            for _value in value:
-                for key, val in _value.items():
-                    # gen_ai. and gen_ai_
-                    span.set_attribute(f"{attr_name}{key}", val)
-        else:
-            span.set_attribute(attr_name, value)
+    tool_attributes_mapping = ATTRIBUTES.get("tool", {})
+    params = ToolAttributesParams(tool, args, function_response_event)
+
+    for attr_name, attr_extractor in tool_attributes_mapping.items():
+        response: ExtractorResponse = attr_extractor(params)
+        ExtractorResponse.update_span(span, attr_name, response)
 
 
 def trace_call_llm(
@@ -80,17 +73,14 @@ def trace_call_llm(
         session_id=invocation_context.session.id,
     )
 
-    llm_attributes = ATTRIBUTES.get("llm", {})
-    for attr_name, attr_extractor in llm_attributes.items():
-        params = LLMAttributesParams(
-            invocation_context, event_id, llm_request, llm_response
-        )
-        # set attribute anyway
-        value = attr_extractor(params)
-        if isinstance(value, list):
-            for _value in value:
-                for key, val in _value.items():
-                    # gen_ai. and gen_ai_
-                    span.set_attribute(f"{attr_name}{key}", val)
-        else:
-            span.set_attribute(attr_name, value)
+    llm_attributes_mapping = ATTRIBUTES.get("llm", {})
+    params = LLMAttributesParams(
+        invocation_context=invocation_context,
+        event_id=event_id,
+        llm_request=llm_request,
+        llm_response=llm_response,
+    )
+
+    for attr_name, attr_extractor in llm_attributes_mapping.items():
+        response: ExtractorResponse = attr_extractor(params)
+        ExtractorResponse.update_span(span, attr_name, response)

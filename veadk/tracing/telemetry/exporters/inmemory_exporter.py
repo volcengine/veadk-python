@@ -38,7 +38,6 @@ class _InMemoryExporter(export.SpanExporter):
         super().__init__()
         self._spans = []
         self.trace_id = ""
-        self.span_dict = {}
         self.session_trace_dict = {}
 
     @override
@@ -46,13 +45,19 @@ class _InMemoryExporter(export.SpanExporter):
         for span in spans:
             if span.context:
                 self.trace_id = span.context.trace_id
-
-                span_id = span.context.span_id
-                self.span_dict[span_id] = span
             else:
                 logger.warning(
                     f"Span context is missing, failed to get `trace_id`. span: {span}"
                 )
+
+            if span.name == "call_llm":
+                attributes = dict(span.attributes or {})
+                session_id = attributes.get("gen_ai.session.id", None)
+                if session_id:
+                    if session_id not in self.session_trace_dict:
+                        self.session_trace_dict[session_id] = [self.trace_id]
+                    else:
+                        self.session_trace_dict[session_id] += [self.trace_id]
         self._spans.extend(spans)
         return export.SpanExportResult.SUCCESS
 

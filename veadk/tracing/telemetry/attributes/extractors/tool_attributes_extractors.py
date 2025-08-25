@@ -1,15 +1,13 @@
-from typing import Any
-
-from attr import dataclass
-from google.adk.events import Event
-from google.adk.tools import BaseTool
-
-
-@dataclass
-class ToolAttributesParams:
-    tool: BaseTool
-    args: dict[str, Any]
-    function_response_event: Event
+from veadk.tracing.telemetry.attributes.extractors.types import (
+    ExtractorResponse,
+    ToolAttributesParams,
+)
 
 
-TOOL_ATTRIBUTES = {}
+def tool_gen_ai_operation_name(params: ToolAttributesParams) -> ExtractorResponse:
+    return ExtractorResponse(content="execute_tool")
+
+
+TOOL_ATTRIBUTES = {
+    "gen_ai.operation.name": tool_gen_ai_operation_name,
+}
