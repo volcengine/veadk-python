@@ -40,6 +40,7 @@ from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INST
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_asyncio
+from veadk.version import VERSION
 
 patch_asyncio()
 logger = get_logger(__name__)
@@ -111,6 +112,8 @@ class Agent(LlmAgent):
             from google.adk.tools import load_memory
 
             self.tools.append(load_memory)
+
+        logger.info(f"VeADK version: {VERSION}")
 
         logger.info(f"{self.__class__.__name__} `{self.name}` init done.")
         logger.debug(
