@@ -34,7 +34,9 @@ logger = get_logger(__name__)
 
 
 def upload_metrics(
-    invocation_context: InvocationContext, llm_response: LlmResponse
+    invocation_context: InvocationContext,
+    llm_request: LlmRequest,
+    llm_response: LlmResponse,
 ) -> None:
     from veadk.agent import Agent
 
@@ -43,7 +45,7 @@ def upload_metrics(
         for tracer in tracers:
             for exporter in getattr(tracer, "exporters", []):
                 if getattr(exporter, "meter_uploader", None):
-                    exporter.meter_uploader.record(llm_response)
+                    exporter.meter_uploader.record(llm_request, llm_response)
 
 
 def trace_send_data(): ...
@@ -144,4 +146,4 @@ def trace_call_llm(
         response: ExtractorResponse = attr_extractor(params)
         ExtractorResponse.update_span(span, attr_name, response)
 
-    upload_metrics(invocation_context, llm_response)
+    upload_metrics(invocation_context, llm_request, llm_response)
