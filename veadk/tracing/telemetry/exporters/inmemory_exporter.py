@@ -106,3 +106,6 @@ class InMemoryExporter(BaseExporter):
 
         self._exporter = _InMemoryExporter()
         self.processor = _InMemorySpanProcessor(self._exporter)
+
+
+_INMEMORY_EXPORTER_INSTANCE = InMemoryExporter()

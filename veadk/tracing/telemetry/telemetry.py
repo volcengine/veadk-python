@@ -28,6 +28,7 @@ from veadk.tracing.telemetry.attributes.extractors.types import (
     LLMAttributesParams,
     ToolAttributesParams,
 )
+from veadk.tracing.telemetry.exporters.inmemory_exporter import _INMEMORY_EXPORTER_INSTANCE
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -64,13 +65,10 @@ def set_common_attributes(
         )
         return
 
-    if isinstance(invocation_context.agent, Agent) and invocation_context.agent.tracers:
+    if isinstance(invocation_context.agent, Agent):
         try:
-            from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
-
-            tracer: OpentelemetryTracer = invocation_context.agent.tracers[0]  # type: ignore
-            spans = tracer._inmemory_exporter.processor.spans  #  # type: ignore
-
+            spans = _INMEMORY_EXPORTER_INSTANCE.processor.spans  #  # type: ignore
+            
             spans_in_current_trace = [
                 span
                 for span in spans
