@@ -52,11 +52,13 @@ def tool_gen_ai_tool_name(params: ToolAttributesParams) -> ExtractorResponse:
 
 
 def tool_cozeloop_output(params: ToolAttributesParams) -> ExtractorResponse:
-    function_response = params.function_response_event.get_function_responses()[0]
+    function_response = params.function_response_event.get_function_responses()[
+        0
+    ].model_dump()
     tool_output = {
-        "id": function_response.id,
-        "name": function_response.name,
-        "response": function_response.response,
+        "id": function_response["id"],
+        "name": function_response["name"],
+        "response": function_response["response"],
     }
     return ExtractorResponse(content=json.dumps(tool_output) or "<unknown_tool_output>")
 

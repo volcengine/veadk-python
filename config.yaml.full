@@ -88,7 +88,7 @@ database:
     db: 0       # default 
   # [optional] for knowledgebase (https://console.volcengine.com/vikingdb)
   viking:
-    project:    # user project in Volcengine Viking DB
+    project: default    # user project in Volcengine Viking DB
     region: cn-beijing
   # [optional] for knowledgebase with viking database
   tos:
