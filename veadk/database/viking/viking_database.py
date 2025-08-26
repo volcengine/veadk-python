@@ -387,9 +387,9 @@ class VikingDatabase(BaseModel, BaseDatabase):
             logger.error(f"Error in list_collections: {result['message']}")
             raise ValueError(f"Error in list_collections: {result['message']}")
 
-        collections = result["data"]["collection_list"]
-        if not collections:
-            raise ValueError(f"No collections found in project {self.config.project}.")
+        collections = result["data"].get("collection_list", [])
+        if len(collections) == 0:
+            return False
 
         collection_list = set()
 
