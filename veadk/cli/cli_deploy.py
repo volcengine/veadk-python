@@ -29,7 +29,9 @@ TEMP_PATH = "/tmp"
     default=None,
     help="Volcengine secret key",
 )
-@click.option("--vefaas-app-name", help="Expected Volcengine FaaS application name")
+@click.option(
+    "--vefaas-app-name", required=True, help="Expected Volcengine FaaS application name"
+)
 @click.option(
     "--veapig-instance-name", default="", help="Expected Volcengine APIG instance name"
 )
