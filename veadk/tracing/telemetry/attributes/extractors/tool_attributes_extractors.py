@@ -26,7 +26,6 @@ def tool_gen_ai_operation_name(params: ToolAttributesParams) -> ExtractorRespons
 
 def tool_gen_ai_tool_message(params: ToolAttributesParams) -> ExtractorResponse:
     tool_input = {
-        "id": "123",
         "role": "tool",
         "content": json.dumps(
             {
