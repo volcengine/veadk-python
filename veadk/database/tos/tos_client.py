@@ -115,7 +115,7 @@ class TOSClient(BaseModel):
         try:
             if not self._client:
                 return False
-            if not self.create_bucket(self._client, self.config.bucket_name):
+            if not self.create_bucket():
                 return False
 
             self._client.put_object_from_file(
