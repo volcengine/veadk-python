@@ -62,8 +62,10 @@ COMMON_ATTRIBUTES = {
     "gen_ai.user.id": common_gen_ai_user_id,  # APMPlus required
     "gen_ai.session.id": common_gen_ai_session_id,  # APMPlus required
     "agent_name": common_gen_ai_agent_name,  # CozeLoop required
+    "agent.name": common_gen_ai_agent_name,  # TLS required
     "app_name": common_gen_ai_app_name,  # CozeLoop required
-    "user.id": common_gen_ai_user_id,  # CozeLoop required
-    "session.id": common_gen_ai_session_id,  # CozeLoop required
+    "app.name": common_gen_ai_app_name,  # TLS required
+    "user.id": common_gen_ai_user_id,  # CozeLoop / TLS required
+    "session.id": common_gen_ai_session_id,  # CozeLoop / TLS required
     "cozeloop.report.source": common_cozeloop_report_source,  # CozeLoop required
 }

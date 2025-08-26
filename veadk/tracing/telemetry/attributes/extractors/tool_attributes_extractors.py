@@ -48,6 +48,10 @@ def tool_cozeloop_input(params: ToolAttributesParams) -> ExtractorResponse:
     return ExtractorResponse(content=json.dumps(tool_input) or "<unknown_tool_input>")
 
 
+def tool_gen_ai_tool_name(params: ToolAttributesParams) -> ExtractorResponse:
+    return ExtractorResponse(content=params.tool.name or "<unknown_tool_name>")
+
+
 def tool_cozeloop_output(params: ToolAttributesParams) -> ExtractorResponse:
     function_response = params.function_response_event.get_function_responses()[0]
     tool_output = {
@@ -60,6 +64,7 @@ def tool_cozeloop_output(params: ToolAttributesParams) -> ExtractorResponse:
 
 TOOL_ATTRIBUTES = {
     "gen_ai.operation.name": tool_gen_ai_operation_name,
+    "gen_ai.tool.name": tool_gen_ai_tool_name,  # TLS required
     "cozeloop.input": tool_cozeloop_input,  # CozeLoop required
     "cozeloop.output": tool_cozeloop_output,  # CozeLoop required
 }

@@ -360,25 +360,33 @@ def llm_gen_ai_choice(params: LLMAttributesParams) -> ExtractorResponse:
 
 
 LLM_ATTRIBUTES = {
+    # ===== request attributes =====
     "gen_ai.request.model": llm_gen_ai_request_model,
     "gen_ai.request.type": llm_gen_ai_request_type,
-    "gen_ai.response.model": llm_gen_ai_response_model,
     "gen_ai.request.max_tokens": llm_gen_ai_request_max_tokens,
     "gen_ai.request.temperature": llm_gen_ai_request_temperature,
     "gen_ai.request.top_p": llm_gen_ai_request_top_p,
-    "gen_ai.prompt": llm_gen_ai_prompt,
-    "gen_ai.completion": llm_gen_ai_completion,
+    # ===== response attributes =====
+    "gen_ai.response.model": llm_gen_ai_response_model,
     "gen_ai.response.stop_reason": llm_gen_ai_response_stop_reason,
     "gen_ai.response.finish_reason": llm_gen_ai_response_finish_reason,
+    # ===== streaming =====
+    "gen_ai.is_streaming": llm_gen_ai_is_streaming,
+    # ===== span type =====
+    "gen_ai.operation.name": llm_gen_ai_operation_name,
+    # ===== inputs and outputs =====
+    # events
+    "gen_ai.system.message": llm_gen_ai_system_message,
+    "gen_ai.user.message": llm_gen_ai_user_message,
+    "gen_ai.assistant.message": llm_gen_ai_assistant_message,
+    "gen_ai.choice": llm_gen_ai_choice,
+    # attributes
+    "gen_ai.prompt": llm_gen_ai_prompt,
+    "gen_ai.completion": llm_gen_ai_completion,
+    # ===== usage =====
     "gen_ai.usage.input_tokens": llm_gen_ai_usage_input_tokens,
     "gen_ai.usage.output_tokens": llm_gen_ai_usage_output_tokens,
     "gen_ai.usage.total_tokens": llm_gen_ai_usage_total_tokens,
     "gen_ai.usage.cache_creation_input_tokens": llm_gen_ai_usage_cache_creation_input_tokens,
     "gen_ai.usage.cache_read_input_tokens": llm_gen_ai_usage_cache_read_input_tokens,
-    "gen_ai.is_streaming": llm_gen_ai_is_streaming,
-    "gen_ai.operation.name": llm_gen_ai_operation_name,
-    "gen_ai.system.message": llm_gen_ai_system_message,
-    "gen_ai.user.message": llm_gen_ai_user_message,
-    "gen_ai.assistant.message": llm_gen_ai_assistant_message,
-    "gen_ai.choice": llm_gen_ai_choice,
 }
