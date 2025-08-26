@@ -31,7 +31,9 @@ from veadk.tracing.base_tracer import BaseTracer
 from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporter
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
 from veadk.tracing.telemetry.exporters.inmemory_exporter import InMemoryExporter
-from veadk.tracing.telemetry.exporters.inmemory_exporter import _INMEMORY_EXPORTER_INSTANCE
+from veadk.tracing.telemetry.exporters.inmemory_exporter import (
+    _INMEMORY_EXPORTER_INSTANCE,
+)
 from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_google_adk_telemetry
 
