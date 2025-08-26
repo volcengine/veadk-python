@@ -70,11 +70,8 @@ def load_tracer() -> None:
             else:
                 exporters.append(exporter_cls())
 
-    tracer = OpentelemetryTracer(
-        name="veadk_tracer", app_name=agent_run_config.app_name, exporters=exporters
-    )
+    tracer = OpentelemetryTracer(name="veadk_tracer", exporters=exporters)
     agent_run_config.agent.tracers.extend([tracer])
-    tracer.do_hooks(agent=agent_run_config.agent)
 
 
 def build_mcp_run_agent_func() -> Callable:

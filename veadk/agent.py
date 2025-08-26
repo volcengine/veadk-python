@@ -112,10 +112,6 @@ class Agent(LlmAgent):
 
             self.tools.append(load_memory)
 
-        if self.tracers:
-            for tracer in self.tracers:
-                tracer.do_hooks(self)
-
         logger.info(f"{self.__class__.__name__} `{self.name}` init done.")
         logger.debug(
             f"Agent: {self.model_dump(include={'name', 'model_name', 'model_api_base', 'tools', 'serve_url'})}"
@@ -215,9 +211,6 @@ class Agent(LlmAgent):
             session_service=session_service,
             memory_service=self.long_term_memory,
         )
-        if getattr(self, "tracers", None):
-            for tracer in self.tracers:
-                tracer.set_app_name(app_name)
 
         logger.info(f"Begin to process prompt {prompt}")
         # run

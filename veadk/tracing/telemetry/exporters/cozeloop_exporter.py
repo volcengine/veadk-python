@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Any
+
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pydantic import BaseModel, Field
@@ -41,26 +43,31 @@ class CozeloopExporterConfig(BaseModel):
     )
 
 
-class CozeloopExporter(BaseModel, BaseExporter):
+class CozeloopExporter(BaseExporter):
     config: CozeloopExporterConfig = Field(default_factory=CozeloopExporterConfig)
 
-    @override
-    def get_processor(self):
+    def model_post_init(self, context: Any) -> None:
         headers = {
             "cozeloop-workspace-id": self.config.space_id,
             "authorization": f"Bearer {self.config.token}",
         }
-        exporter = OTLPSpanExporter(
+        self.headers |= headers
+
+        self._exporter = OTLPSpanExporter(
             endpoint=self.config.endpoint,
-            headers=headers,
+            headers=self.headers,
             timeout=10,
         )
-        self._real_exporter = exporter
-        processor = BatchSpanProcessor(exporter)
-        return processor, None
 
-    def export(self):
-        self._real_exporter.force_flush()
-        logger.info(
-            f"CozeloopExporter exports data to {self.config.endpoint}, space id: {self.config.space_id}"
-        )
+        self.processor = BatchSpanProcessor(self._exporter)
+
+    @override
+    def export(self) -> None:
+        """Force export of telemetry data."""
+        if self._exporter:
+            self._exporter.force_flush()
+            logger.info(
+                f"CozeloopExporter exports data to {self.config.endpoint}, space id: {self.config.space_id}"
+            )
+        else:
+            logger.warning("CozeloopExporter internal exporter is not initialized.")
