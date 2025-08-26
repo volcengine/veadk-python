@@ -34,7 +34,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # in case of deployment deps not installed in user's requirements.txt
-python3 -m pip install uvicorn[standard] fastapi fastmcp
+python3 -m pip install uvicorn[standard] fastapi
 
 USE_ADK_WEB=${USE_ADK_WEB:-False}
 
