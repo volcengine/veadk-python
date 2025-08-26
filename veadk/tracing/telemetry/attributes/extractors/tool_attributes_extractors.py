@@ -44,7 +44,9 @@ def tool_cozeloop_input(params: ToolAttributesParams) -> ExtractorResponse:
         "description": params.tool.description,
         "parameters": params.args,
     }
-    return ExtractorResponse(content=json.dumps(tool_input) or "<unknown_tool_input>")
+    return ExtractorResponse(
+        content=json.dumps(tool_input, ensure_ascii=False) or "<unknown_tool_input>"
+    )
 
 
 def tool_gen_ai_tool_name(params: ToolAttributesParams) -> ExtractorResponse:
@@ -60,7 +62,9 @@ def tool_cozeloop_output(params: ToolAttributesParams) -> ExtractorResponse:
         "name": function_response["name"],
         "response": function_response["response"],
     }
-    return ExtractorResponse(content=json.dumps(tool_output) or "<unknown_tool_output>")
+    return ExtractorResponse(
+        content=json.dumps(tool_output, ensure_ascii=False) or "<unknown_tool_output>"
+    )
 
 
 TOOL_ATTRIBUTES = {
