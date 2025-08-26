@@ -14,7 +14,6 @@
 
 from abc import ABC, abstractmethod
 
-
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -46,4 +45,6 @@ class BaseTracer(ABC):
         self._trace_file_path = "<unknown_trace_file_path>"
 
     @abstractmethod
-    def dump(self, user_id: str, session_id: str, path: str = "/tmp") -> str: ...
+    def dump(self, user_id: str, session_id: str, path: str = "/tmp") -> str:
+        """Dump the trace data to a local file."""
+        ...

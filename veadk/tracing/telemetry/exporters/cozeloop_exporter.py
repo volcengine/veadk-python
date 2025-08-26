@@ -43,10 +43,6 @@ class CozeloopExporterConfig(BaseModel):
     )
 
 
-class _CozeloopExporter(OTLPSpanExporter):
-    pass
-
-
 class CozeloopExporter(BaseExporter):
     config: CozeloopExporterConfig = Field(default_factory=CozeloopExporterConfig)
 
