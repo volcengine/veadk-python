@@ -39,7 +39,7 @@ jobs:
           path: dist/
 
       - name: Install Twine
-        run: python3 -m pip install --user --upgrade twine
+        run: python3 -m pip install --user --upgrade twine packaging
 
       - name: Publish to PyPI
         env:
