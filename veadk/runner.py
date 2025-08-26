@@ -98,6 +98,12 @@ class Runner:
         object_key: str = f"{app_name}-{user_id}-{session_id}/{timestamp}-{file_name}"
         return object_key
 
+    def _upload_to_tos(self, data: Union[str, bytes], object_key: str):
+        tos_client = TOSClient()
+        asyncio.create_task(tos_client.upload(object_key, data))
+        tos_client.close()
+        return
+
     def _convert_messages(self, messages, session_id) -> list:
         if isinstance(messages, str):
             messages = [types.Content(role="user", parts=[types.Part(text=messages)])]
@@ -106,14 +112,14 @@ class Runner:
                 "The MediaMessage only supports PNG format file for now."
             )
             data = read_png_to_bytes(messages.media)
-            object_key = messages.media
-            if self.agent.tracers:
-                tos_client = TOSClient()
+            try:
                 object_key = self._build_tos_object_key(
                     self.user_id, self.app_name, session_id, messages.media
                 )
-                asyncio.create_task(tos_client.upload(object_key, data))
-                tos_client.close()
+                self._upload_to_tos(data, object_key)
+            except Exception as e:
+                logger.error(f"Upload to TOS failed: {e}")
+                object_key = None
 
             messages = [
                 types.Content(
