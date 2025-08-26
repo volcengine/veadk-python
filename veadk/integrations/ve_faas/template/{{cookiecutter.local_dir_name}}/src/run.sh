@@ -34,7 +34,17 @@ while [[ $# -gt 0 ]]; do
 done
 
 # in case of deployment deps not installed in user's requirements.txt
-python3 -m pip install uvicorn[standard] fastapi
+if pip list | grep "^fastapi \|^uvicorn "; then
+    echo "fastapi and uvicorn already installed"
+else
+    python3 -m pip install uvicorn[standard] fastapi
+fi
+
+# Check if MODEL_AGENT_API_KEY is set
+if [ -z "$MODEL_AGENT_API_KEY" ]; then
+    echo "MODEL_AGENT_API_KEY is not set. Please set it in your environment variables."
+    exit 1
+fi
 
 USE_ADK_WEB=${USE_ADK_WEB:-False}
 
