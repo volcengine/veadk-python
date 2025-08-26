@@ -34,7 +34,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # in case of deployment deps not installed in user's requirements.txt
-if pip list | grep "^fastapi \|^uvicorn "; then
+if pip list | grep -q "^fastapi \|^uvicorn "; then
     echo "fastapi and uvicorn already installed"
 else
     python3 -m pip install uvicorn[standard] fastapi
