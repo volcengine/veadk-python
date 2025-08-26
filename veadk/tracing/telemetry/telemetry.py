@@ -64,7 +64,7 @@ def set_common_attributes(
         )
         return
 
-    if isinstance(invocation_context.agent, Agent):
+    if isinstance(invocation_context.agent, Agent) and invocation_context.agent.tracers:
         try:
             from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
 

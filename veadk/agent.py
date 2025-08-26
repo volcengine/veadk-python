@@ -31,6 +31,7 @@ from veadk.consts import (
     DEFALUT_MODEL_AGENT_PROVIDER,
     DEFAULT_MODEL_AGENT_API_BASE,
     DEFAULT_MODEL_AGENT_NAME,
+    DEFAULT_MODEL_EXTRA_HEADERS,
 )
 from veadk.evaluation import EvalSetRecorder
 from veadk.knowledgebase import KnowledgeBase
@@ -73,6 +74,9 @@ class Agent(LlmAgent):
     model_api_key: str = Field(default_factory=lambda: getenv("MODEL_AGENT_API_KEY"))
     """The api key of the model for agent running."""
 
+    model_extra_headers: dict = Field(default_factory=dict)
+    """The extra headers to include in the model requests."""
+
     tools: list[ToolUnion] = []
     """The tools provided to agent."""
 
@@ -96,11 +100,23 @@ class Agent(LlmAgent):
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
-        self.model = LiteLlm(
-            model=f"{self.model_provider}/{self.model_name}",
-            api_key=self.model_api_key,
-            api_base=self.model_api_base,
-        )
+
+        self.model_extra_headers |= DEFAULT_MODEL_EXTRA_HEADERS
+
+        if not self.model:
+            self.model = LiteLlm(
+                model=f"{self.model_provider}/{self.model_name}",
+                api_key=self.model_api_key,
+                api_base=self.model_api_base,
+                extra_headers=self.model_extra_headers,
+            )
+            logger.debug(
+                f"LiteLLM client created with extra headers: {self.model_extra_headers}"
+            )
+        else:
+            logger.warning(
+                "You are trying to use your own LiteLLM client, some default request headers may be missing."
+            )
 
         if self.knowledgebase:
             from veadk.tools import load_knowledgebase_tool
