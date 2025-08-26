@@ -11,7 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from google.adk.models import LlmResponse
+
+from google.adk.models.llm_response import LlmResponse
 from opentelemetry import metrics
 from opentelemetry.metrics._internal import Meter
 

@@ -39,17 +39,27 @@ def tool_gen_ai_tool_message(params: ToolAttributesParams) -> ExtractorResponse:
     return ExtractorResponse(type="event", content=tool_input)
 
 
-# def tool_gen_ai_tool_message(params: ToolAttributesParams) -> ExtractorResponse:
-#     # tool_output = {
-#     #     "id": params.function_response_event.,
-#     #     "name": ...,
-#     #     "response": ...,
-#     # }
-#     print(params.function_response_event)
-#     # return ExtractorResponse(content=json.dumps(tool_output) or "<unknown_tool_output>")
+def tool_cozeloop_input(params: ToolAttributesParams) -> ExtractorResponse:
+    tool_input = {
+        "name": params.tool.name,
+        "description": params.tool.description,
+        "parameters": params.args,
+    }
+    return ExtractorResponse(content=json.dumps(tool_input) or "<unknown_tool_input>")
+
+
+def tool_cozeloop_output(params: ToolAttributesParams) -> ExtractorResponse:
+    function_response = params.function_response_event.get_function_responses()[0]
+    tool_output = {
+        "id": function_response.id,
+        "name": function_response.name,
+        "response": function_response.response,
+    }
+    return ExtractorResponse(content=json.dumps(tool_output) or "<unknown_tool_output>")
 
 
 TOOL_ATTRIBUTES = {
     "gen_ai.operation.name": tool_gen_ai_operation_name,
-    "gen_ai.tool.message": tool_gen_ai_tool_message,
+    "cozeloop.input": tool_cozeloop_input,  # CozeLoop required
+    "cozeloop.output": tool_cozeloop_output,  # CozeLoop required
 }

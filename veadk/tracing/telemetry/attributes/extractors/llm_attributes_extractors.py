@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import json
+from xml.etree.ElementTree import VERSION
 
 from veadk.tracing.telemetry.attributes.extractors.types import (
     ExtractorResponse,
@@ -359,6 +360,12 @@ def llm_gen_ai_choice(params: LLMAttributesParams) -> ExtractorResponse:
     return ExtractorResponse(type="event", content=message)
 
 
+def llm_openinference_instrumentation_veadk(
+    params: LLMAttributesParams,
+) -> ExtractorResponse:
+    return ExtractorResponse(content=VERSION)
+
+
 LLM_ATTRIBUTES = {
     "gen_ai.request.model": llm_gen_ai_request_model,
     "gen_ai.request.type": llm_gen_ai_request_type,
@@ -381,4 +388,5 @@ LLM_ATTRIBUTES = {
     "gen_ai.user.message": llm_gen_ai_user_message,
     "gen_ai.assistant.message": llm_gen_ai_assistant_message,
     "gen_ai.choice": llm_gen_ai_choice,
+    "openinference.instrumentation.veadk": llm_openinference_instrumentation_veadk,
 }

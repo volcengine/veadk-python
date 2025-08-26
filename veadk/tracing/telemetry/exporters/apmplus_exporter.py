@@ -83,7 +83,7 @@ class APMPlusExporter(BaseExporter):
             endpoint=self.config.endpoint, headers=self.headers
         )
         metric_reader = PeriodicExportingMetricReader(exporter)
-        # set provider
+
         metrics_api.set_meter_provider(
             metrics_sdk.MeterProvider(metric_readers=[metric_reader], resource=resource)
         )
