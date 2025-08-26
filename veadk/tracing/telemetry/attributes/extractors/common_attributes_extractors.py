@@ -49,10 +49,15 @@ def common_cozeloop_report_source(**kwargs) -> str:
     return "veadk"
 
 
+def llm_openinference_instrumentation_veadk(**kwargs) -> str:
+    return VERSION
+
+
 COMMON_ATTRIBUTES = {
     "gen_ai.system": common_gen_ai_system,
     "gen_ai.system.version": common_gen_ai_system_version,
     "gen_ai.agent.name": common_gen_ai_agent_name,
+    "openinference.instrumentation.veadk": llm_openinference_instrumentation_veadk,
     "gen_ai.app.name": common_gen_ai_app_name,  # APMPlus required
     "gen_ai.user.id": common_gen_ai_user_id,  # APMPlus required
     "gen_ai.session.id": common_gen_ai_session_id,  # APMPlus required
