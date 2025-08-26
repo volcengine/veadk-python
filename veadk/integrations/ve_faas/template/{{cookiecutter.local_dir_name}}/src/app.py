@@ -17,9 +17,16 @@ from contextlib import asynccontextmanager
 from typing import Callable
 
 from agent import agent_run_config
+
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
+
 from fastmcp import FastMCP
+
+from starlette.routing import Route
+
 from google.adk.a2a.utils.agent_card_builder import AgentCardBuilder
+
 from veadk.a2a.ve_a2a_server import init_app
 from veadk.runner import Runner
 from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporter
@@ -63,11 +70,8 @@ def load_tracer() -> None:
             else:
                 exporters.append(exporter_cls())
 
-    tracer = OpentelemetryTracer(
-        name="veadk_tracer", app_name=agent_run_config.app_name, exporters=exporters
-    )
+    tracer = OpentelemetryTracer(name="veadk_tracer", exporters=exporters)
     agent_run_config.agent.tracers.extend([tracer])
-    tracer.do_hooks(agent=agent_run_config.agent)
 
 
 def build_mcp_run_agent_func() -> Callable:
@@ -158,5 +162,15 @@ for route in a2a_app.routes:
 
 # Mount MCP server at /mcp endpoint
 app.mount("/mcp", mcp_app)
+
+
+# remove openapi routes
+paths = ["/openapi.json", "/docs", "/redoc"]
+new_routes = []
+for route in app.router.routes:
+    if isinstance(route, (APIRoute, Route)) and route.path in paths:
+        continue
+    new_routes.append(route)
+app.router.routes = new_routes
 
 # === Build mcp server end ===

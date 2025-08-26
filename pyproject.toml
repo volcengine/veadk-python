@@ -1,6 +1,6 @@
 [project]
 name = "veadk-python"
-version = "0.2.2"
+version = "0.2.4"
 description = "Volcengine agent development kit, integrations with Volcengine cloud services."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -18,11 +18,15 @@ dependencies = [
     "google-adk>=1.10.0", # For basic agent architecture
     "litellm>=1.74.3", # For model inference
     "loguru>=0.7.3", # For better logging
-    "openinference-instrumentation-google-adk>=0.1.1", # For OpenInference instrumentation
     "opentelemetry-exporter-otlp>=1.35.0",
     "opentelemetry-instrumentation-logging>=0.56b0",
     "wrapt>=1.17.2", # For patching built-in functions
-    "openai<1.100" # For fix https://github.com/BerriAI/litellm/issues/13710
+    "openai<1.100", # For fix https://github.com/BerriAI/litellm/issues/13710
+    "volcengine-python-sdk==4.0.3", # For Volcengine API
+    "agent-pilot-sdk>=0.0.9",    # Prompt optimization by Volcengine AgentPilot/PromptPilot toolkits
+    "fastmcp>=2.11.3",    # For running MCP
+    "cookiecutter>=2.6.0", # For cloud deploy
+    "opensearch-py==2.8.0"    # For OpenSearch database
 ]
 
 [project.scripts]
@@ -30,7 +34,6 @@ veadk = "veadk.cli.cli:veadk"
 
 [project.optional-dependencies]
 database = [
-    "opensearch-py==2.8.0",         # For OpenSearch database
     "redis>=6.2.0",                 # For Redis database
     "pymysql>=1.1.1",               # For MySQL database
     "volcengine>=1.0.193",          # For Viking DB
@@ -41,12 +44,7 @@ eval = [
     "deepeval>=3.2.6",              # For DeepEval-based evaluation
     "google-adk[eval]",             # For Google ADK-based evaluation
 ]
-cli = [
-    "volcengine-python-sdk==4.0.3", # For Volcengine API
-    "agent-pilot-sdk>=0.0.9",       # Prompt optimization by Volcengine AgentPilot/PromptPilot toolkits
-    "fastmcp>=2.11.3",              # For running MCP
-    "cookiecutter>=2.6.0", # For cloud deploy
-]
+cli = []
 dev = [
     "pre-commit>=4.2.0",            # Format checking
     "pytest>=8.4.1",

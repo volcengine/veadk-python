@@ -28,7 +28,13 @@ from pydantic import BaseModel
 from veadk.utils.misc import formatted_timestamp
 
 
-class InvocationTestData(BaseModel):
+class ToolInvocation(BaseModel):
+    tool_name: str
+    tool_args: dict[str, Any] = {}
+    tool_result: Any = None
+
+
+class Invocation(BaseModel):
     invocation_id: str = ""
     input: str
     actual_output: str
@@ -38,8 +44,8 @@ class InvocationTestData(BaseModel):
     latency: str = ""  # ms
 
 
-class EvalCaseData(BaseModel):
-    invocations: list[InvocationTestData]
+class EvalTestCase(BaseModel):
+    invocations: list[Invocation]
 
 
 class MetricResult(BaseModel):
@@ -78,23 +84,23 @@ class BaseEvaluator:
     ):
         self.name = name
         self.agent = agent
-        self.invocation_list: list[EvalCaseData] = []
+        self.invocation_list: list[EvalTestCase] = []
         self.result_list: list[EvalResultData] = []
         self.agent_information_list: list[dict] = []
 
-    def _load_eval_set(self, eval_set_file: str) -> EvalSet:
-        from .eval_set_file_loader import load_eval_set_from_file
+    def _build_eval_set_from_eval_json(self, eval_json_path: str) -> EvalSet:
+        from veadk.evaluation.eval_set_file_loader import load_eval_set_from_file
 
-        return load_eval_set_from_file(eval_set_file)
+        return load_eval_set_from_file(eval_json_path)
 
-    def _load_eval_set_from_tracing(self, tracing_file: str) -> EvalSet:
+    def _build_eval_set_from_tracing_json(self, tracing_json_path: str) -> EvalSet:
         try:
-            with open(tracing_file, "r") as f:
+            with open(tracing_json_path, "r") as f:
                 tracing_data = json.load(f)
         except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON format in file {tracing_file}: {e}")
+            raise ValueError(f"Invalid JSON format in file {tracing_json_path}: {e}")
         except Exception as e:
-            raise ValueError(f"Error reading file {tracing_file}: {e}")
+            raise ValueError(f"Error reading file {tracing_json_path}: {e}")
 
         # Group spans by trace_id
         trace_groups = {}
@@ -188,9 +194,9 @@ class BaseEvaluator:
 
         return evalset
 
-    def generate_eval_data(self, file_path: str):
+    def build_eval_set(self, file_path: str):
         """Generate evaluation data from a given file and assign it to the class attribute `invocation_list`."""
-        eval_case_data_list: list[EvalCaseData] = []
+        eval_case_data_list: list[EvalTestCase] = []
 
         try:
             with open(file_path, "r") as f:
@@ -201,7 +207,7 @@ class BaseEvaluator:
             raise ValueError(f"Error reading file {file_path}: {e}")
 
         if isinstance(file_content, dict) and "eval_cases" in file_content:
-            eval_cases = self._load_eval_set(file_path).eval_cases
+            eval_cases = self._build_eval_set_from_eval_json(file_path).eval_cases
         elif (
             isinstance(file_content, list)
             and len(file_content) > 0
@@ -209,14 +215,14 @@ class BaseEvaluator:
                 isinstance(span, dict) and "trace_id" in span for span in file_content
             )
         ):
-            eval_cases = self._load_eval_set_from_tracing(file_path).eval_cases
+            eval_cases = self._build_eval_set_from_tracing_json(file_path).eval_cases
         else:
             raise ValueError(
                 f"Unsupported file format in {file_path}. Please provide a valid file."
             )
 
         for eval_case in eval_cases:
-            eval_case_data = EvalCaseData(invocations=[])
+            eval_case_data = EvalTestCase(invocations=[])
             if eval_case.session_input:
                 self.agent_information_list.append(
                     {
@@ -247,7 +253,7 @@ class BaseEvaluator:
                         )
 
                 eval_case_data.invocations.append(
-                    InvocationTestData(
+                    Invocation(
                         invocation_id=invocation.invocation_id,
                         input=_input,
                         actual_output="",
@@ -261,7 +267,7 @@ class BaseEvaluator:
             eval_case_data_list.append(eval_case_data)
         self.invocation_list = eval_case_data_list
 
-    async def _run_agent_for_actual_data(self):
+    async def generate_actual_outputs(self):
         for eval_case_data, agent_information in zip(
             self.invocation_list, self.agent_information_list
         ):
@@ -333,7 +339,7 @@ class BaseEvaluator:
                 invocation.actual_tool = _actual_tool
                 invocation.latency = _latency
 
-    def get_data(self) -> list[list[dict[str, Any]]]:
+    def get_eval_set_information(self) -> list[list[dict[str, Any]]]:
         """Merge the evaluation data and return it in the format of list[list[dict]]"""
         result = []
         for i, eval_case in enumerate(self.invocation_list):
@@ -360,7 +366,7 @@ class BaseEvaluator:
         return result
 
     @abstractmethod
-    async def eval(
+    async def evaluate(
         self,
         eval_set_file_path: str,
         metrics: list[Any],

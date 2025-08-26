@@ -16,7 +16,7 @@ jobs:
         with:
           python-version: "3.x"
       - name: Install build tool
-        run: python3 -m pip install build --user
+        run: python3 -m pip install build --user --upgrade
       - name: Build wheel and source distribution
         run: python3 -m build
       - name: Upload distributables as artifact
@@ -39,7 +39,7 @@ jobs:
           path: dist/
 
       - name: Install Twine
-        run: python3 -m pip install --user twine
+        run: python3 -m pip install --user --upgrade twine packaging
 
       - name: Publish to PyPI
         env:

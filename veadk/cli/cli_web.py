@@ -102,6 +102,32 @@ def _get_memory(
     return short_term_memory, long_term_memory
 
 
+def patch_adkwebserver_disable_openapi():
+    """
+    Monkey patch AdkWebServer.get_fast_api to remove openapi.json route.
+    """
+    import google.adk.cli.adk_web_server
+    from fastapi.routing import APIRoute
+    from starlette.routing import Route
+
+    original_get_fast_api = google.adk.cli.adk_web_server.AdkWebServer.get_fast_api_app
+
+    def wrapped_get_fast_api(self, *args, **kwargs):
+        app = original_get_fast_api(self, *args, **kwargs)
+
+        paths = ["/openapi.json", "/docs", "/redoc"]
+        new_routes = []
+        for route in app.router.routes:
+            if isinstance(route, (APIRoute, Route)) and route.path in paths:
+                continue
+            new_routes.append(route)
+        app.router.routes = new_routes
+
+        return app
+
+    google.adk.cli.adk_web_server.AdkWebServer.get_fast_api_app = wrapped_get_fast_api
+
+
 @click.command()
 @click.option("--host", default="127.0.0.1", help="Host to run the web server on")
 def web(host: str) -> None:
@@ -145,6 +171,7 @@ def web(host: str) -> None:
     import google.adk.cli.adk_web_server
 
     google.adk.cli.adk_web_server.AdkWebServer.__init__ = init_for_veadk
+    patch_adkwebserver_disable_openapi()
 
     import google.adk.cli.cli_tools_click as cli_tools_click
 

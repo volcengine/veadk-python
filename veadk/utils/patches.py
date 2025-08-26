@@ -13,7 +13,14 @@
 # limitations under the License.
 
 import asyncio
+import sys
+from typing import Callable
 
+from veadk.tracing.telemetry.telemetry import (
+    trace_call_llm,
+    trace_send_data,
+    trace_tool_call,
+)
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -53,3 +60,21 @@ def patch_asyncio():
             raise
 
     CancelScope.__exit__ = patched_cancel_scope_exit
+
+
+def patch_google_adk_telemetry() -> None:
+    trace_functions = {
+        "trace_tool_call": trace_tool_call,
+        "trace_call_llm": trace_call_llm,
+        "trace_send_data": trace_send_data,
+    }
+
+    for mod_name, mod in sys.modules.items():
+        if mod_name.startswith("google.adk"):
+            for var_name in dir(mod):
+                var = getattr(mod, var_name, None)
+                if var_name in trace_functions.keys() and isinstance(var, Callable):
+                    setattr(mod, var_name, trace_functions[var_name])
+                    logger.debug(
+                        f"Patch {mod_name} {var_name} with {trace_functions[var_name]}"
+                    )
