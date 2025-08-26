@@ -12,11 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import typing
-from typing import Any
+from typing import Sequence
 
+from opentelemetry.context import (
+    _SUPPRESS_INSTRUMENTATION_KEY,
+    attach,
+    detach,
+    set_value,
+)
 from opentelemetry.sdk.trace import ReadableSpan, export
-from pydantic import BaseModel
 from typing_extensions import override
 
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
@@ -27,20 +31,17 @@ logger = get_logger(__name__)
 
 # ======== Adapted from Google ADK ========
 class _InMemoryExporter(export.SpanExporter):
-    def __init__(self, session_trace_dict):
+    def __init__(self) -> None:
         super().__init__()
         self._spans = []
-        self.session_trace_dict = session_trace_dict
         self.trace_id = ""
-        self.prompt_tokens = []
-        self.completion_tokens = []
+        self.session_trace_dict = {}
 
     @override
-    def export(self, spans: typing.Sequence[ReadableSpan]) -> export.SpanExportResult:
+    def export(self, spans: Sequence[ReadableSpan]) -> export.SpanExportResult:
         for span in spans:
             if span.context:
-                trace_id = span.context.trace_id
-                self.trace_id = trace_id
+                self.trace_id = span.context.trace_id
             else:
                 logger.warning(
                     f"Span context is missing, failed to get `trace_id`. span: {span}"
@@ -48,22 +49,12 @@ class _InMemoryExporter(export.SpanExporter):
 
             if span.name == "call_llm":
                 attributes = dict(span.attributes or {})
-                prompt_token = attributes.get("gen_ai.usage.prompt_tokens", None)
-                completion_token = attributes.get(
-                    "gen_ai.usage.completion_tokens", None
-                )
-                if prompt_token:
-                    self.prompt_tokens.append(prompt_token)
-                if completion_token:
-                    self.completion_tokens.append(completion_token)
-            if span.name == "call_llm":
-                attributes = dict(span.attributes or {})
-                session_id = attributes.get("gcp.vertex.agent.session_id", None)
+                session_id = attributes.get("gen_ai.session.id", None)
                 if session_id:
                     if session_id not in self.session_trace_dict:
-                        self.session_trace_dict[session_id] = [trace_id]
+                        self.session_trace_dict[session_id] = [self.trace_id]
                     else:
-                        self.session_trace_dict[session_id] += [trace_id]
+                        self.session_trace_dict[session_id] += [self.trace_id]
         self._spans.extend(spans)
         return export.SpanExportResult.SUCCESS
 
@@ -81,14 +72,37 @@ class _InMemoryExporter(export.SpanExporter):
         self._spans.clear()
 
 
-class InMemoryExporter(BaseModel, BaseExporter):
-    name: str = "inmemory_exporter"
+class _InMemorySpanProcessor(export.SimpleSpanProcessor):
+    def __init__(self, exporter: _InMemoryExporter) -> None:
+        super().__init__(exporter)
+        self.spans = []
 
-    def model_post_init(self, __context: Any) -> None:
-        self._exporter = _InMemoryExporter({})
+    def on_start(self, span, parent_context) -> None:
+        if span.context:
+            self.spans.append(span)
 
-    @override
-    def get_processor(self):
-        self._real_exporter = self._exporter
-        processor = export.SimpleSpanProcessor(self._exporter)
-        return processor, None
+    def on_end(self, span: ReadableSpan) -> None:
+        if span.context:
+            if not span.context.trace_flags.sampled:
+                return
+            token = attach(set_value(_SUPPRESS_INSTRUMENTATION_KEY, True))
+            try:
+                self.span_exporter.export((span,))
+            # pylint: disable=broad-exception-caught
+            except Exception:
+                logger.exception("Exception while exporting Span.")
+            detach(token)
+            if span in self.spans:
+                self.spans.remove(span)
+
+
+class InMemoryExporter(BaseExporter):
+    """InMemory Exporter mainly for store spans in memory for debugging / observability purposes."""
+
+    def __init__(self, name: str = "inmemory_exporter") -> None:
+        super().__init__()
+
+        self.name = name
+
+        self._exporter = _InMemoryExporter()
+        self.processor = _InMemorySpanProcessor(self._exporter)

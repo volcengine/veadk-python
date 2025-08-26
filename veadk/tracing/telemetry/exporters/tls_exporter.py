@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Any
+
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pydantic import BaseModel, Field
@@ -44,28 +46,32 @@ class TLSExporterConfig(BaseModel):
     secret_key: str = Field(default_factory=lambda: getenv("VOLCENGINE_SECRET_KEY"))
 
 
-class TLSExporter(BaseModel, BaseExporter):
+class TLSExporter(BaseExporter):
     config: TLSExporterConfig = Field(default_factory=TLSExporterConfig)
 
-    @override
-    def get_processor(self):
+    def model_post_init(self, context: Any) -> None:
         headers = {
             "x-tls-otel-tracetopic": self.config.topic_id,
             "x-tls-otel-ak": self.config.access_key,
             "x-tls-otel-sk": self.config.secret_key,
             "x-tls-otel-region": self.config.region,
         }
-        exporter = OTLPSpanExporter(
+        self.headers |= headers
+
+        self._exporter = OTLPSpanExporter(
             endpoint=self.config.endpoint,
             headers=headers,
             timeout=10,
         )
-        self._real_exporter = exporter
-        processor = BatchSpanProcessor(exporter)
-        return processor, None
 
-    def export(self):
-        self._real_exporter.force_flush()
-        logger.info(
-            f"TLSExporter exports data to {self.config.endpoint}, topic id: {self.config.topic_id}"
-        )
+        self.processor = BatchSpanProcessor(self._exporter)
+
+    @override
+    def export(self) -> None:
+        if self._exporter:
+            self._exporter.force_flush()
+            logger.info(
+                f"TLSExporter exports data to {self.config.endpoint}, topic id: {self.config.topic_id}"
+            )
+        else:
+            logger.warning("TLSExporter internal exporter is not initialized.")

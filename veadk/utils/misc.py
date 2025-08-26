@@ -27,7 +27,7 @@ def read_file(file_path):
     return data
 
 
-def formatted_timestamp():
+def formatted_timestamp() -> str:
     # YYYYMMDDHHMMSS
     return time.strftime("%Y%m%d%H%M%S", time.localtime())
 
