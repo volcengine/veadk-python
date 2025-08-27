@@ -359,6 +359,18 @@ def llm_gen_ai_choice(params: LLMAttributesParams) -> ExtractorResponse:
     return ExtractorResponse(type="event", content=message)
 
 
+def llm_input_value(params: LLMAttributesParams) -> ExtractorResponse:
+    return ExtractorResponse(
+        content=str(params.llm_request.model_dump(exclude_none=True))
+    )
+
+
+def llm_output_value(params: LLMAttributesParams) -> ExtractorResponse:
+    return ExtractorResponse(
+        content=str(params.llm_response.model_dump(exclude_none=True))
+    )
+
+
 LLM_ATTRIBUTES = {
     # ===== request attributes =====
     "gen_ai.request.model": llm_gen_ai_request_model,
@@ -383,6 +395,8 @@ LLM_ATTRIBUTES = {
     # attributes
     "gen_ai.prompt": llm_gen_ai_prompt,
     "gen_ai.completion": llm_gen_ai_completion,
+    "input.value": llm_input_value,  # TLS required
+    "output.value": llm_output_value,  # TLS required
     # ===== usage =====
     "gen_ai.usage.input_tokens": llm_gen_ai_usage_input_tokens,
     "gen_ai.usage.output_tokens": llm_gen_ai_usage_output_tokens,
