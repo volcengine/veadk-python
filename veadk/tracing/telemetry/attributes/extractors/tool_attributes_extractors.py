@@ -38,7 +38,7 @@ def tool_gen_ai_tool_message(params: ToolAttributesParams) -> ExtractorResponse:
     return ExtractorResponse(type="event", content=tool_input)
 
 
-def tool_cozeloop_input(params: ToolAttributesParams) -> ExtractorResponse:
+def tool_gen_ai_tool_input(params: ToolAttributesParams) -> ExtractorResponse:
     tool_input = {
         "name": params.tool.name,
         "description": params.tool.description,
@@ -53,7 +53,7 @@ def tool_gen_ai_tool_name(params: ToolAttributesParams) -> ExtractorResponse:
     return ExtractorResponse(content=params.tool.name or "<unknown_tool_name>")
 
 
-def tool_cozeloop_output(params: ToolAttributesParams) -> ExtractorResponse:
+def tool_gen_ai_tool_output(params: ToolAttributesParams) -> ExtractorResponse:
     function_response = params.function_response_event.get_function_responses()[
         0
     ].model_dump()
@@ -70,6 +70,8 @@ def tool_cozeloop_output(params: ToolAttributesParams) -> ExtractorResponse:
 TOOL_ATTRIBUTES = {
     "gen_ai.operation.name": tool_gen_ai_operation_name,
     "gen_ai.tool.name": tool_gen_ai_tool_name,  # TLS required
-    "cozeloop.input": tool_cozeloop_input,  # CozeLoop required
-    "cozeloop.output": tool_cozeloop_output,  # CozeLoop required
+    "gen_ai.tool.input": tool_gen_ai_tool_input,  # TLS required
+    "gen_ai.tool.output": tool_gen_ai_tool_output,  # TLS required
+    "cozeloop.input": tool_gen_ai_tool_input,  # CozeLoop required
+    "cozeloop.output": tool_gen_ai_tool_output,  # CozeLoop required
 }

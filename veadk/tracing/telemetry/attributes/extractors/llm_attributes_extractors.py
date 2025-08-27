@@ -395,8 +395,8 @@ LLM_ATTRIBUTES = {
     # attributes
     "gen_ai.prompt": llm_gen_ai_prompt,
     "gen_ai.completion": llm_gen_ai_completion,
-    "input.value": llm_input_value,  # TLS required
-    "output.value": llm_output_value,  # TLS required
+    # "input.value": llm_input_value,
+    # "output.value": llm_output_value,
     # ===== usage =====
     "gen_ai.usage.input_tokens": llm_gen_ai_usage_input_tokens,
     "gen_ai.usage.output_tokens": llm_gen_ai_usage_output_tokens,
