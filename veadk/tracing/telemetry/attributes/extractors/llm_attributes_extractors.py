@@ -371,6 +371,30 @@ def llm_output_value(params: LLMAttributesParams) -> ExtractorResponse:
     )
 
 
+def llm_gen_ai_request_functions(params: LLMAttributesParams) -> ExtractorResponse:
+    functions = []
+
+    for idx, (tool_name, tool_instance) in enumerate(
+        params.llm_request.tools_dict.items()
+    ):
+        functions.append(
+            {
+                f"gen_ai.request.functions.{idx}.name": tool_instance.name,
+                f"gen_ai.request.functions.{idx}.description": tool_instance.description,
+                f"gen_ai.request.functions.{idx}.parameters": str(
+                    tool_instance._get_declaration().parameters.model_dump(  # type: ignore
+                        exclude_none=True
+                    )
+                    if tool_instance._get_declaration()
+                    and tool_instance._get_declaration().parameters  # type: ignore
+                    else {}
+                ),
+            }
+        )
+
+    return ExtractorResponse(content=functions)
+
+
 LLM_ATTRIBUTES = {
     # ===== request attributes =====
     "gen_ai.request.model": llm_gen_ai_request_model,
@@ -378,6 +402,7 @@ LLM_ATTRIBUTES = {
     "gen_ai.request.max_tokens": llm_gen_ai_request_max_tokens,
     "gen_ai.request.temperature": llm_gen_ai_request_temperature,
     "gen_ai.request.top_p": llm_gen_ai_request_top_p,
+    "gen_ai.request.functions": llm_gen_ai_request_functions,
     # ===== response attributes =====
     "gen_ai.response.model": llm_gen_ai_response_model,
     "gen_ai.response.stop_reason": llm_gen_ai_response_stop_reason,
