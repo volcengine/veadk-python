@@ -19,25 +19,6 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def replace_bytes_with_empty(data):
-    """
-    Recursively traverse the data structure and replace all bytes types with empty strings.
-    Supports handling any nested structure of lists and dictionaries.
-    """
-    if isinstance(data, dict):
-        # Handle dictionary: Recursively process each value
-        return {k: replace_bytes_with_empty(v) for k, v in data.items()}
-    elif isinstance(data, list):
-        # Handle list: Recursively process each element
-        return [replace_bytes_with_empty(item) for item in data]
-    elif isinstance(data, bytes):
-        # When encountering the bytes type, replace it with an empty string
-        return "<image data>"
-    else:
-        # Keep other types unchanged
-        return data
-
-
 class BaseTracer(ABC):
     def __init__(self, name: str):
         self.name = name
