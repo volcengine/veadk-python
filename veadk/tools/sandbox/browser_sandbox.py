@@ -12,16 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-browser_sandbox = ...
+from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
+
+from veadk.config import getenv
+from veadk.utils.mcp_utils import get_mcp_params
+
+url = getenv("TOOL_BROWSER_SANDBOX_URL")
 
 
-def browser_use(prompt: str) -> str:
-    """Using the remote browser sandbox to according to the prompt.
+browser_sandbox = MCPToolset(connection_params=get_mcp_params(url=url))
 
-    Args:
-        prompt (str): The prompt to be used.
+# browser_sandbox = ...
 
-    Returns:
-        str: The response from the sandbox.
-    """
-    ...
+
+# def browser_use(prompt: str) -> str:
+#     """Using the remote browser sandbox to according to the prompt.
+
+#     Args:
+#         prompt (str): The prompt to be used.
+
+#     Returns:
+#         str: The response from the sandbox.
+#     """
+#     ...
