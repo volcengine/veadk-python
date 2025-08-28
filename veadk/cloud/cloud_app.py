@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import json
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -60,9 +61,11 @@ class CloudApp:
         if not vefaas_endpoint:
             self.vefaas_endpoint = self._get_vefaas_endpoint()
 
-        if not self.vefaas_endpoint.startswith(
-            "http"
-        ) and not self.vefaas_endpoint.startswith("https"):
+        if (
+            self.vefaas_endpoint
+            and not self.vefaas_endpoint.startswith("http")
+            and not self.vefaas_endpoint.startswith("https")
+        ):
             raise ValueError(
                 f"Invalid endpoint: {vefaas_endpoint}. The endpoint must start with `http` or `https`."
             )
@@ -92,12 +95,13 @@ class CloudApp:
             raise ValueError(
                 f"VeFaaS CloudAPP with application_id `{self.vefaas_application_id}` or application_name `{self.vefaas_application_name}` not found."
             )
-        cloud_resource = json.loads(app["CloudResource"])
 
         try:
+            cloud_resource = json.loads(app["CloudResource"])
             vefaas_endpoint = cloud_resource["framework"]["url"]["system_url"]
         except Exception as e:
-            raise ValueError(f"VeFaaS cloudAPP could not get endpoint. Error: {e}")
+            logger.warning(f"VeFaaS cloudAPP could not get endpoint. Error: {e}")
+            vefaas_endpoint = ""
         return vefaas_endpoint
 
     def _get_vefaas_application_id_by_name(self) -> str:
@@ -167,7 +171,18 @@ class CloudApp:
 
             vefaas_client = VeFaaS(access_key=volcengine_ak, secret_key=volcengine_sk)
             vefaas_client.delete(self.vefaas_application_id)
-            print(f"Cloud app {self.vefaas_application_id} is deleting...")
+            print(
+                f"Cloud app {self.vefaas_application_id} delete request has been sent to VeFaaS"
+            )
+            while True:
+                try:
+                    id = self._get_vefaas_application_id_by_name()
+                    if not id:
+                        break
+                    time.sleep(3)
+                except Exception as _:
+                    break
+            print("Delete application done.")
 
     async def message_send(
         self, message: str, session_id: str, user_id: str, timeout: float = 600.0
