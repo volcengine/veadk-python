@@ -51,8 +51,63 @@ def upload_metrics(
                     exporter.meter_uploader.record(llm_request, llm_response)
 
 
+def _set_agent_input_attribute(
+    span: _Span, invocation_context: InvocationContext
+) -> None:
+    # We only save the original user input as the agent input
+    # hence once the `agent.input` has been set, we don't overwrite it
+    event_names = [event.name for event in span.events]
+    if "gen_ai.user.message" in event_names:
+        return
+
+    # input = {
+    #     "agent_name": invocation_context.agent.name,
+    #     "app_name": invocation_context.session.app_name,
+    #     "user_id": invocation_context.user_id,
+    #     "session_id": invocation_context.session.id,
+    #     "input": invocation_context.user_content.model_dump(exclude_none=True)
+    #     if invocation_context.user_content
+    #     else None,
+    # }
+
+    user_content = invocation_context.user_content
+    if user_content and user_content.parts:
+        span.add_event(
+            "gen_ai.user.message",
+            {
+                "agent_name": invocation_context.agent.name,
+                "app_name": invocation_context.session.app_name,
+                "user_id": invocation_context.user_id,
+                "session_id": invocation_context.session.id,
+            },
+        )
+        for idx, part in enumerate(user_content.parts):
+            if part.text:
+                span.add_event(
+                    "gen_ai.user.message",
+                    {f"parts.{idx}.type": "text", f"parts.{idx}.content": part.text},
+                )
+
+
+def _set_agent_output_attribute(span: _Span, llm_response: LlmResponse) -> None:
+    content = llm_response.content
+    if content and content.parts:
+        for idx, part in enumerate(content.parts):
+            if part.text:
+                span.add_event(
+                    "gen_ai.choice",
+                    {
+                        f"message.parts.{idx}.type": "text",
+                        f"message.parts.{idx}.text": part.text,
+                    },
+                )
+
+
 def set_common_attributes_on_model_span(
-    invocation_context: InvocationContext, current_span: _Span, **kwargs
+    invocation_context: InvocationContext,
+    llm_response: LlmResponse,
+    current_span: _Span,
+    **kwargs,
 ) -> None:
     if current_span.context:
         current_span_id = current_span.context.trace_id
@@ -76,8 +131,12 @@ def set_common_attributes_on_model_span(
             if span.is_recording():
                 if span.name.startswith("invocation"):
                     span.set_attribute("gen_ai.operation.name", "chain")
+                    _set_agent_input_attribute(span, invocation_context)
+                    _set_agent_output_attribute(span, llm_response)
                 elif span.name.startswith("agent_run"):
                     span.set_attribute("gen_ai.operation.name", "agent")
+                    _set_agent_input_attribute(span, invocation_context)
+                    _set_agent_output_attribute(span, llm_response)
                 for attr_name, attr_extractor in common_attributes.items():
                     value = attr_extractor(**kwargs)
                     span.set_attribute(attr_name, value)
@@ -139,6 +198,7 @@ def trace_call_llm(
 
     set_common_attributes_on_model_span(
         invocation_context=invocation_context,
+        llm_response=llm_response,
         current_span=span,  # type: ignore
         agent_name=invocation_context.agent.name,
         user_id=invocation_context.user_id,
