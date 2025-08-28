@@ -16,6 +16,7 @@ import importlib.util
 import sys
 import time
 import types
+from typing import Any, Dict, List, MutableMapping, Tuple
 
 import requests
 
@@ -60,3 +61,23 @@ def load_module_from_file(module_name: str, file_path: str) -> types.ModuleType:
             )
     else:
         raise ImportError(f"Could not load module {module_name} from {file_path}")
+
+
+def flatten_dict(
+    d: MutableMapping[str, Any], parent_key: str = "", sep: str = "_"
+) -> Dict[str, Any]:
+    """Flatten a nested dictionary.
+
+    Input:
+        {"a": {"b": 1}}
+    Output:
+        {"a_b": 1}
+    """
+    items: List[Tuple[str, Any]] = []
+    for k, v in d.items():
+        new_key = f"{parent_key}{sep}{k}" if parent_key else k
+        if isinstance(v, MutableMapping):
+            items.extend(flatten_dict(v, new_key, sep=sep).items())
+        else:
+            items.append((new_key, v))
+    return dict(items)
