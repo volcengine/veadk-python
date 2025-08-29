@@ -12,12 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
-
 from veadk.tracing.telemetry.attributes.extractors.types import (
     ExtractorResponse,
     ToolAttributesParams,
 )
+from veadk.utils.misc import safe_json_serialize
 
 
 def tool_gen_ai_operation_name(params: ToolAttributesParams) -> ExtractorResponse:
@@ -27,7 +26,7 @@ def tool_gen_ai_operation_name(params: ToolAttributesParams) -> ExtractorRespons
 def tool_gen_ai_tool_message(params: ToolAttributesParams) -> ExtractorResponse:
     tool_input = {
         "role": "tool",
-        "content": json.dumps(
+        "content": safe_json_serialize(
             {
                 "name": params.tool.name,
                 "description": params.tool.description,
@@ -45,7 +44,7 @@ def tool_gen_ai_tool_input(params: ToolAttributesParams) -> ExtractorResponse:
         "parameters": params.args,
     }
     return ExtractorResponse(
-        content=json.dumps(tool_input, ensure_ascii=False) or "<unknown_tool_input>"
+        content=safe_json_serialize(tool_input) or "<unknown_tool_input>"
     )
 
 
@@ -63,7 +62,7 @@ def tool_gen_ai_tool_output(params: ToolAttributesParams) -> ExtractorResponse:
         "response": function_response["response"],
     }
     return ExtractorResponse(
-        content=json.dumps(tool_output, ensure_ascii=False) or "<unknown_tool_output>"
+        content=safe_json_serialize(tool_output) or "<unknown_tool_output>"
     )
 
 

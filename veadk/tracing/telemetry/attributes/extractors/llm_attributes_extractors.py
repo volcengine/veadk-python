@@ -18,6 +18,7 @@ from veadk.tracing.telemetry.attributes.extractors.types import (
     ExtractorResponse,
     LLMAttributesParams,
 )
+from veadk.utils.misc import safe_json_serialize
 
 
 def llm_gen_ai_request_model(params: LLMAttributesParams) -> ExtractorResponse:
@@ -133,7 +134,7 @@ def llm_gen_ai_prompt(params: LLMAttributesParams) -> ExtractorResponse:
                         else "<unknown_function_name>"
                     )
                     message[f"gen_ai.prompt.{idx}.tool_calls.0.function.arguments"] = (
-                        json.dumps(part.function_call.args)
+                        safe_json_serialize(part.function_call.args)
                         if part.function_call.args
                         else json.dumps({})
                     )
@@ -168,7 +169,7 @@ def llm_gen_ai_completion(params: LLMAttributesParams) -> ExtractorResponse:
                     else "<unknown_function_name>"
                 )
                 message[f"gen_ai.completion.{idx}.tool_calls.0.function.arguments"] = (
-                    json.dumps(part.function_call.args)
+                    safe_json_serialize(part.function_call.args)
                     if part.function_call.args
                     else json.dumps({})
                 )
@@ -289,7 +290,7 @@ def llm_gen_ai_assistant_message(params: LLMAttributesParams) -> ExtractorRespon
                                 else "<unknown_function_name>"
                             )
                             message_part["tool_calls.0.function.arguments"] = (
-                                json.dumps(part.function_call.args)
+                                safe_json_serialize(part.function_call.args)
                                 if part.function_call.args
                                 else json.dumps({})
                             )
@@ -326,7 +327,7 @@ def llm_gen_ai_choice(params: LLMAttributesParams) -> ExtractorResponse:
                     else "<unknown_function_name>"
                 )
                 message["message.tool_calls.0.function.arguments"] = (
-                    json.dumps(part.function_call.args)
+                    safe_json_serialize(part.function_call.args)
                     if part.function_call.args
                     else json.dumps({})
                 )
@@ -351,7 +352,7 @@ def llm_gen_ai_choice(params: LLMAttributesParams) -> ExtractorResponse:
                         else "<unknown_function_name>"
                     )
                     message["message.tool_calls.0.function.arguments"] = (
-                        json.dumps(part.function_call.args)
+                        safe_json_serialize(part.function_call.args)
                         if part.function_call.args
                         else json.dumps({})
                     )

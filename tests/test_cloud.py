@@ -115,9 +115,12 @@ async def test_cloud():
                         mock_vefaas_client = Mock()
                         mock_vefaas_in_app.return_value = mock_vefaas_client
                         mock_vefaas_client.delete.return_value = None
-
-                        cloud_app.delete_self()
-                        mock_vefaas_client.delete.assert_called_with("app-123")
+                        with patch.object(
+                            cloud_app, "_get_vefaas_application_id_by_name"
+                        ) as mock_get_id_by_name:
+                            mock_get_id_by_name.return_value = None
+                            cloud_app.delete_self()
+                            mock_vefaas_client.delete.assert_called_with("app-123")
 
                 # Verify all mocks were called as expected
                 mock_vefaas_service.deploy.assert_called_once()
