@@ -28,7 +28,7 @@ from typing_extensions import Any
 
 from veadk.config import getenv
 from veadk.consts import (
-    DEFALUT_MODEL_AGENT_PROVIDER,
+    DEFAULT_MODEL_AGENT_PROVIDER,
     DEFAULT_MODEL_AGENT_API_BASE,
     DEFAULT_MODEL_AGENT_NAME,
     DEFAULT_MODEL_EXTRA_HEADERS,
@@ -65,7 +65,7 @@ class Agent(LlmAgent):
     model_name: str = getenv("MODEL_AGENT_NAME", DEFAULT_MODEL_AGENT_NAME)
     """The name of the model for agent running."""
 
-    model_provider: str = getenv("MODEL_AGENT_PROVIDER", DEFALUT_MODEL_AGENT_PROVIDER)
+    model_provider: str = getenv("MODEL_AGENT_PROVIDER", DEFAULT_MODEL_AGENT_PROVIDER)
     """The provider of the model for agent running."""
 
     model_api_base: str = getenv("MODEL_AGENT_API_BASE", DEFAULT_MODEL_AGENT_API_BASE)
@@ -74,8 +74,8 @@ class Agent(LlmAgent):
     model_api_key: str = Field(default_factory=lambda: getenv("MODEL_AGENT_API_KEY"))
     """The api key of the model for agent running."""
 
-    model_extra_headers: dict = Field(default_factory=dict)
-    """The extra headers to include in the model requests."""
+    model_extra_config: dict = Field(default_factory=dict)
+    """The extra config to include in the model requests."""
 
     tools: list[ToolUnion] = []
     """The tools provided to agent."""
@@ -101,17 +101,21 @@ class Agent(LlmAgent):
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
 
-        self.model_extra_headers |= DEFAULT_MODEL_EXTRA_HEADERS
+        # add model request source (veadk) in extra headers
+        if self.model_extra_config and "extra_headers" in self.model_extra_config:
+            self.model_extra_config["extra_headers"] |= DEFAULT_MODEL_EXTRA_HEADERS
+        else:
+            self.model_extra_config["extra_headers"] = DEFAULT_MODEL_EXTRA_HEADERS
 
         if not self.model:
             self.model = LiteLlm(
                 model=f"{self.model_provider}/{self.model_name}",
                 api_key=self.model_api_key,
                 api_base=self.model_api_base,
-                extra_headers=self.model_extra_headers,
+                **self.model_extra_config,
             )
             logger.debug(
-                f"LiteLLM client created with extra headers: {self.model_extra_headers}"
+                f"LiteLLM client created with config: {self.model_extra_config}"
             )
         else:
             logger.warning(
@@ -133,7 +137,7 @@ class Agent(LlmAgent):
 
         logger.info(f"{self.__class__.__name__} `{self.name}` init done.")
         logger.debug(
-            f"Agent: {self.model_dump(include={'name', 'model_name', 'model_api_base', 'tools', 'serve_url'})}"
+            f"Agent: {self.model_dump(include={'name', 'model_name', 'model_api_base', 'tools'})}"
         )
 
     async def _run(

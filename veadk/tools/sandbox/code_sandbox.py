@@ -12,19 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-code_sandbox = ...
+from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
+
+from veadk.config import getenv
+from veadk.utils.mcp_utils import get_mcp_params
+
+url = getenv("TOOL_CODE_SANDBOX_URL")
 
 
-def code_execution(code: str, language: str) -> str:
-    """Execute code in sandbox.
+code_sandbox = MCPToolset(connection_params=get_mcp_params(url=url))
 
-    Args:
-        code (str): The code to be executed.
-        language (str): The language of the code.
+# code_sandbox = ...
 
-    Returns:
-        str: The response from the sandbox.
-    """
 
-    res = code_sandbox(code, language)
-    return res
+# def code_execution(code: str, language: str) -> str:
+#     """Execute code in sandbox.
+
+#     Args:
+#         code (str): The code to be executed.
+#         language (str): The language of the code.
+
+#     Returns:
+#         str: The response from the sandbox.
+#     """
+
+#     res = code_sandbox(code, language)
+#     return res

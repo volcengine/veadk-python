@@ -359,6 +359,42 @@ def llm_gen_ai_choice(params: LLMAttributesParams) -> ExtractorResponse:
     return ExtractorResponse(type="event", content=message)
 
 
+def llm_input_value(params: LLMAttributesParams) -> ExtractorResponse:
+    return ExtractorResponse(
+        content=str(params.llm_request.model_dump(exclude_none=True))
+    )
+
+
+def llm_output_value(params: LLMAttributesParams) -> ExtractorResponse:
+    return ExtractorResponse(
+        content=str(params.llm_response.model_dump(exclude_none=True))
+    )
+
+
+def llm_gen_ai_request_functions(params: LLMAttributesParams) -> ExtractorResponse:
+    functions = []
+
+    for idx, (tool_name, tool_instance) in enumerate(
+        params.llm_request.tools_dict.items()
+    ):
+        functions.append(
+            {
+                f"gen_ai.request.functions.{idx}.name": tool_instance.name,
+                f"gen_ai.request.functions.{idx}.description": tool_instance.description,
+                f"gen_ai.request.functions.{idx}.parameters": str(
+                    tool_instance._get_declaration().parameters.model_dump(  # type: ignore
+                        exclude_none=True
+                    )
+                    if tool_instance._get_declaration()
+                    and tool_instance._get_declaration().parameters  # type: ignore
+                    else {}
+                ),
+            }
+        )
+
+    return ExtractorResponse(content=functions)
+
+
 LLM_ATTRIBUTES = {
     # ===== request attributes =====
     "gen_ai.request.model": llm_gen_ai_request_model,
@@ -366,6 +402,7 @@ LLM_ATTRIBUTES = {
     "gen_ai.request.max_tokens": llm_gen_ai_request_max_tokens,
     "gen_ai.request.temperature": llm_gen_ai_request_temperature,
     "gen_ai.request.top_p": llm_gen_ai_request_top_p,
+    "gen_ai.request.functions": llm_gen_ai_request_functions,
     # ===== response attributes =====
     "gen_ai.response.model": llm_gen_ai_response_model,
     "gen_ai.response.stop_reason": llm_gen_ai_response_stop_reason,
@@ -383,6 +420,8 @@ LLM_ATTRIBUTES = {
     # attributes
     "gen_ai.prompt": llm_gen_ai_prompt,
     "gen_ai.completion": llm_gen_ai_completion,
+    # "input.value": llm_input_value,
+    # "output.value": llm_output_value,
     # ===== usage =====
     "gen_ai.usage.input_tokens": llm_gen_ai_usage_input_tokens,
     "gen_ai.usage.output_tokens": llm_gen_ai_usage_output_tokens,

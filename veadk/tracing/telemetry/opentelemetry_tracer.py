@@ -31,6 +31,9 @@ from veadk.tracing.base_tracer import BaseTracer
 from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporter
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
 from veadk.tracing.telemetry.exporters.inmemory_exporter import InMemoryExporter
+from veadk.tracing.telemetry.exporters.inmemory_exporter import (
+    _INMEMORY_EXPORTER_INSTANCE,
+)
 from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_google_adk_telemetry
 
@@ -110,7 +113,7 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
                     f"Add span processor for exporter `{exporter.__class__.__name__}` to OpentelemetryTracer failed."
                 )
 
-        self._inmemory_exporter = InMemoryExporter()
+        self._inmemory_exporter = _INMEMORY_EXPORTER_INSTANCE
         if self._inmemory_exporter.processor:
             # make sure the in memory exporter processor is added at index 0
             # because we use this to record all spans

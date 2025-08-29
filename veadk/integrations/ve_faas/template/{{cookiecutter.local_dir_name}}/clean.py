@@ -12,20 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from abc import ABC, abstractmethod
+from veadk.cloud.cloud_app import CloudApp
 
-from veadk.utils.logger import get_logger
+def main() -> None:
+    cloud_app = CloudApp(vefaas_application_name="{{cookiecutter.vefaas_application_name}}")
+    cloud_app.delete_self()
 
-logger = get_logger(__name__)
 
-
-class BaseTracer(ABC):
-    def __init__(self, name: str):
-        self.name = name
-        self._trace_id = "<unknown_trace_id>"
-        self._trace_file_path = "<unknown_trace_file_path>"
-
-    @abstractmethod
-    def dump(self, user_id: str, session_id: str, path: str = "/tmp") -> str:
-        """Dump the trace data to a local file."""
-        ...
+if __name__ == "__main__":
+    main()
