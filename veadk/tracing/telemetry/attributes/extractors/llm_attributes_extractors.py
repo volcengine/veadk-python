@@ -103,10 +103,11 @@ def llm_gen_ai_usage_cache_read_input_tokens(
 def llm_gen_ai_prompt(params: LLMAttributesParams) -> ExtractorResponse:
     # a part is a message
     messages: list[dict] = []
+    idx = 0
 
     for content in params.llm_request.contents:
         if content.parts:
-            for idx, part in enumerate(content.parts):
+            for part in content.parts:
                 message = {}
                 # text part
                 if part.text:
@@ -141,6 +142,7 @@ def llm_gen_ai_prompt(params: LLMAttributesParams) -> ExtractorResponse:
 
                 if message:
                     messages.append(message)
+                    idx += 1
 
     return ExtractorResponse(content=messages)
 
