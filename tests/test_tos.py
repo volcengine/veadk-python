@@ -14,7 +14,7 @@
 
 import pytest
 from unittest import mock
-import veadk.database.tos.tos_client as tos_mod
+import veadk.integrations.ve_tos.ve_tos as tos_mod
 
 # 使用 pytest-asyncio
 pytest_plugins = ("pytest_asyncio",)
@@ -47,7 +47,7 @@ def mock_client(monkeypatch):
 
 @pytest.fixture
 def tos_client(mock_client):
-    return tos_mod.TOSClient()
+    return tos_mod.VeTOS()
 
 
 def test_create_bucket_exists(tos_client, mock_client):
@@ -75,6 +75,7 @@ async def test_upload_bytes_success(tos_client, mock_client):
     result = await tos_client.upload("obj-key", data)
     assert result is True
     mock_client.put_object.assert_called_once()
+    mock_client.close.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -86,6 +87,7 @@ async def test_upload_file_success(tmp_path, tos_client, mock_client):
     result = await tos_client.upload("obj-key", str(file_path))
     assert result is True
     mock_client.put_object_from_file.assert_called_once()
+    mock_client.close.assert_called_once()
 
 
 def test_download_success(tmp_path, tos_client, mock_client):
@@ -101,8 +103,3 @@ def test_download_fail(tos_client, mock_client):
     mock_client.get_object.side_effect = Exception("boom")
     result = tos_client.download("obj-key", "somewhere.txt")
     assert result is False
-
-
-def test_close(tos_client, mock_client):
-    tos_client.close()
-    mock_client.close.assert_called_once()

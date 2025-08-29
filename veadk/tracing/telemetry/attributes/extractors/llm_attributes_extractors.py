@@ -137,6 +137,15 @@ def llm_gen_ai_prompt(params: LLMAttributesParams) -> ExtractorResponse:
                         if part.function_call.args
                         else json.dumps({})
                     )
+                # image
+                if part.inline_data:
+                    message[f"gen_ai.prompt.{idx}.type"] = "image_url"
+                    message[f"gen_ai.prompt.{idx}.image_url.name"] = (
+                        part.inline_data.display_name.split("/")[-1]
+                    )
+                    message[f"gen_ai.prompt.{idx}.image_url.url"] = (
+                        part.inline_data.display_name
+                    )
 
                 if message:
                     messages.append(message)
@@ -233,6 +242,14 @@ def llm_gen_ai_user_message(params: LLMAttributesParams) -> ExtractorResponse:
                             message_part[f"parts.{idx}.type"] = "function"
                             message_part[f"parts.{idx}.content"] = str(
                                 part.function_response
+                            )
+                        if part.inline_data:
+                            message_part[f"parts.{idx}.type"] = "image_url"
+                            message_part[f"parts.{idx}.image_url.name"] = (
+                                part.inline_data.display_name.split("/")[-1]
+                            )
+                            message_part[f"parts.{idx}.image_url.url"] = (
+                                part.inline_data.display_name
                             )
 
                     message_parts.append(message_part)

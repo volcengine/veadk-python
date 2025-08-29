@@ -20,6 +20,8 @@ import asyncio
 from typing import Union
 from pydantic import BaseModel, Field
 from typing import Any
+from urllib.parse import urlparse
+from datetime import datetime
 
 logger = get_logger(__name__)
 
@@ -43,7 +45,7 @@ class TOSConfig(BaseModel):
     )
 
 
-class TOSClient(BaseModel):
+class VeTOS(BaseModel):
     config: TOSConfig = Field(default_factory=TOSConfig)
 
     def model_post_init(self, __context: Any) -> None:
@@ -78,6 +80,23 @@ class TOSClient(BaseModel):
             logger.error(f"Bucket creation failed: {str(e)}")
             return False
 
+    def build_tos_url(
+        self, user_id: str, app_name: str, session_id: str, data_path: str
+    ) -> tuple[str, str]:
+        """generate TOS object key"""
+        parsed_url = urlparse(data_path)
+
+        if parsed_url.scheme and parsed_url.scheme in ("http", "https", "ftp", "ftps"):
+            file_name = os.path.basename(parsed_url.path)
+        else:
+            file_name = os.path.basename(data_path)
+
+        timestamp: str = datetime.now().strftime("%Y%m%d%H%M%S%f")[:-3]
+        object_key: str = f"{app_name}-{user_id}-{session_id}/{timestamp}-{file_name}"
+        tos_url: str = f"https://{self.config.bucket_name}.tos-{self.config.region}.volces.com/{object_key}"
+
+        return object_key, tos_url
+
     def upload(
         self,
         object_key: str,
@@ -106,9 +125,11 @@ class TOSClient(BaseModel):
                 bucket=self.config.bucket_name, key=object_key, content=bytes
             )
             logger.debug(f"Upload success, object_key: {object_key}")
+            self._close()
             return True
         except Exception as e:
             logger.error(f"Upload failed: {e}")
+            self._close()
             return False
 
     def _do_upload_file(self, object_key: str, file_path: str) -> bool:
@@ -121,10 +142,12 @@ class TOSClient(BaseModel):
             self._client.put_object_from_file(
                 bucket=self.config.bucket_name, key=object_key, file_path=file_path
             )
+            self._close()
             logger.debug(f"Upload success, object_key: {object_key}")
             return True
         except Exception as e:
             logger.error(f"Upload failed: {e}")
+            self._close()
             return False
 
     def download(self, object_key: str, save_path: str) -> bool:
@@ -148,6 +171,6 @@ class TOSClient(BaseModel):
 
             return False
 
-    def close(self):
+    def _close(self):
         if self._client:
             self._client.close()
