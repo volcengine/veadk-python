@@ -12,23 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
+from veadk.cloud.cloud_app import CloudApp
 
-from veadk.config import getenv
-from veadk.utils.mcp_utils import get_mcp_params
+def main() -> None:
+    cloud_app = CloudApp(vefaas_application_name="{{cookiecutter.vefaas_application_name}}")
+    cloud_app.delete_self()
 
-url = getenv("TOOL_COMPUTER_SANDBOX_URL")
 
-
-computer_sandbox = MCPToolset(connection_params=get_mcp_params(url=url))
-
-# def computer_use(prompt: str) -> str:
-#     """Using the remote computer sandbox to according to the prompt.
-
-#     Args:
-#         prompt (str): The prompt to be used.
-
-#     Returns:
-#         str: The response from the sandbox.
-#     """
-#     ...
+if __name__ == "__main__":
+    main()

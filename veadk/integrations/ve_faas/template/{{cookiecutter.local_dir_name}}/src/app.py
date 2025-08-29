@@ -26,6 +26,7 @@ from fastmcp import FastMCP
 from starlette.routing import Route
 
 from google.adk.a2a.utils.agent_card_builder import AgentCardBuilder
+from a2a.types import AgentProvider
 
 from veadk.a2a.ve_a2a_server import init_app
 from veadk.runner import Runner
@@ -46,7 +47,9 @@ app_name = agent_run_config.app_name
 agent = agent_run_config.agent
 short_term_memory = agent_run_config.short_term_memory
 
-agent_card_builder = AgentCardBuilder(agent=agent)
+VEFAAS_REGION = os.getenv("APP_REGION", "cn-beijing")
+VEFAAS_FUNC_ID = os.getenv("_FAAS_FUNC_ID", "")
+agent_card_builder = AgentCardBuilder(agent=agent, provider=AgentProvider(organization="Volcengine Agent Development Kit (VeADK)", url=f"https://console.volcengine.com/vefaas/region:vefaas+{VEFAAS_REGION}/function/detail/{VEFAAS_FUNC_ID}"))
 
 
 def load_tracer() -> None:
