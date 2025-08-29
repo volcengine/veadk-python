@@ -28,7 +28,7 @@ from typing_extensions import Any
 
 from veadk.config import getenv
 from veadk.consts import (
-    DEFALUT_MODEL_AGENT_PROVIDER,
+    DEFAULT_MODEL_AGENT_PROVIDER,
     DEFAULT_MODEL_AGENT_API_BASE,
     DEFAULT_MODEL_AGENT_NAME,
     DEFAULT_MODEL_EXTRA_HEADERS,
@@ -65,7 +65,7 @@ class Agent(LlmAgent):
     model_name: str = getenv("MODEL_AGENT_NAME", DEFAULT_MODEL_AGENT_NAME)
     """The name of the model for agent running."""
 
-    model_provider: str = getenv("MODEL_AGENT_PROVIDER", DEFALUT_MODEL_AGENT_PROVIDER)
+    model_provider: str = getenv("MODEL_AGENT_PROVIDER", DEFAULT_MODEL_AGENT_PROVIDER)
     """The provider of the model for agent running."""
 
     model_api_base: str = getenv("MODEL_AGENT_API_BASE", DEFAULT_MODEL_AGENT_API_BASE)
