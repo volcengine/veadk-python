@@ -24,6 +24,11 @@ pytest_plugins = ("pytest_asyncio",)
 def mock_client(monkeypatch):
     fake_client = mock.Mock()
 
+    monkeypatch.setenv("DATABASE_TOS_REGION", "test-region")
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-access-key")
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-secret-key")
+    monkeypatch.setenv("DATABASE_TOS_BUCKET", "test-bucket")
+
     monkeypatch.setattr(tos_mod.tos, "TosClientV2", lambda *a, **k: fake_client)
 
     class FakeExceptions:
