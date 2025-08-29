@@ -87,6 +87,17 @@ def _set_agent_input_attribute(
                     "gen_ai.user.message",
                     {f"parts.{idx}.type": "text", f"parts.{idx}.content": part.text},
                 )
+            if part.inline_data:
+                span.add_event(
+                    "gen_ai.user.message",
+                    {
+                        f"parts.{idx}.type": "image_url",
+                        f"parts.{idx}.image_url.name": part.inline_data.display_name.split(
+                            "/"
+                        )[-1],
+                        f"parts.{idx}.image_url.url": part.inline_data.display_name,
+                    },
+                )
 
 
 def _set_agent_output_attribute(span: _Span, llm_response: LlmResponse) -> None:

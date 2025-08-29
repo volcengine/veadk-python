@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import asyncio
 from typing import Union
 
 from google.adk.agents import RunConfig
@@ -31,6 +32,7 @@ from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.types import MediaMessage
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import read_png_to_bytes
+from veadk.integrations.ve_tos.ve_tos import VeTOS
 
 logger = get_logger(__name__)
 
@@ -84,13 +86,25 @@ class Runner:
             plugins=plugins,
         )
 
-    def _convert_messages(self, messages) -> list:
+    def _convert_messages(self, messages, session_id) -> list:
         if isinstance(messages, str):
             messages = [types.Content(role="user", parts=[types.Part(text=messages)])]
         elif isinstance(messages, MediaMessage):
             assert messages.media.endswith(".png"), (
                 "The MediaMessage only supports PNG format file for now."
             )
+            data = read_png_to_bytes(messages.media)
+
+            ve_tos = VeTOS()
+            object_key, tos_url = ve_tos.build_tos_url(
+                self.user_id, self.app_name, session_id, messages.media
+            )
+            try:
+                asyncio.create_task(ve_tos.upload(object_key, data))
+            except Exception as e:
+                logger.error(f"Upload to TOS failed: {e}")
+                tos_url = None
+
             messages = [
                 types.Content(
                     role="user",
@@ -98,8 +112,8 @@ class Runner:
                         types.Part(text=messages.text),
                         types.Part(
                             inline_data=Blob(
-                                display_name=messages.media,
-                                data=read_png_to_bytes(messages.media),
+                                display_name=tos_url,
+                                data=data,
                                 mime_type="image/png",
                             )
                         ),
@@ -109,7 +123,7 @@ class Runner:
         elif isinstance(messages, list):
             converted_messages = []
             for message in messages:
-                converted_messages.extend(self._convert_messages(message))
+                converted_messages.extend(self._convert_messages(message, session_id))
             messages = converted_messages
         else:
             raise ValueError(f"Unknown message type: {type(messages)}")
@@ -169,7 +183,7 @@ class Runner:
         run_config: RunConfig | None = None,
         save_tracing_data: bool = False,
     ):
-        converted_messages: list = self._convert_messages(messages)
+        converted_messages: list = self._convert_messages(messages, session_id)
 
         await self.short_term_memory.create_session(
             app_name=self.app_name, user_id=self.user_id, session_id=session_id
