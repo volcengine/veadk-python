@@ -11,17 +11,24 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
 
-computer_sandbox = ...
+from veadk.config import getenv
+from veadk.utils.mcp_utils import get_mcp_params
+
+url = getenv("TOOL_COMPUTER_SANDBOX_URL")
 
 
-def computer_use(prompt: str) -> str:
-    """Using the remote computer sandbox to according to the prompt.
+computer_sandbox = MCPToolset(connection_params=get_mcp_params(url=url))
 
-    Args:
-        prompt (str): The prompt to be used.
 
-    Returns:
-        str: The response from the sandbox.
-    """
-    ...
+# def computer_use(prompt: str) -> str:
+#     """Using the remote computer sandbox to according to the prompt.
+
+#     Args:
+#         prompt (str): The prompt to be used.
+
+#     Returns:
+#         str: The response from the sandbox.
+#     """
+#     ...
