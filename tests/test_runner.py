@@ -28,7 +28,7 @@ def _test_convert_messages(runner):
             role="user",
         )
     ]
-    actual_message = runner._convert_messages(message)
+    actual_message = runner._convert_messages(message, session_id="test_session_id")
     assert actual_message == expected_message
 
     message = ["test message 1", "test message 2"]
@@ -42,7 +42,7 @@ def _test_convert_messages(runner):
             role="user",
         ),
     ]
-    actual_message = runner._convert_messages(message)
+    actual_message = runner._convert_messages(message, session_id="test_session_id")
     assert actual_message == expected_message
 
 
