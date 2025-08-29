@@ -87,15 +87,18 @@ def _set_agent_input_attribute(
                     "gen_ai.user.message",
                     {f"parts.{idx}.type": "text", f"parts.{idx}.content": part.text},
                 )
-            if part.inline_data:
+            if part.inline_data and part.inline_data.display_name:
+                # Ensure all values are not None to avoid type errors
+                image_name = part.inline_data.display_name.split("/")[-1]
+                image_url = part.inline_data.display_name
                 span.add_event(
                     "gen_ai.user.message",
                     {
                         f"parts.{idx}.type": "image_url",
-                        f"parts.{idx}.image_url.name": part.inline_data.display_name.split(
-                            "/"
-                        )[-1],
-                        f"parts.{idx}.image_url.url": part.inline_data.display_name,
+                        f"parts.{idx}.image_url.name": image_name
+                        or "<unknown_image_name>",
+                        f"parts.{idx}.image_url.url": image_url
+                        or "<unknown_image_url>",
                     },
                 )
 
