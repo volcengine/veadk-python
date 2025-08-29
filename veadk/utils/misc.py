@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import importlib.util
+import json
 import sys
 import time
 import types
@@ -81,3 +82,21 @@ def flatten_dict(
         else:
             items.append((new_key, v))
     return dict(items)
+
+
+def safe_json_serialize(obj) -> str:
+    """Convert any Python object to a JSON-serializable type or string.
+
+    Args:
+      obj: The object to serialize.
+
+    Returns:
+      The JSON-serialized object string or <non-serializable> if the object cannot be serialized.
+    """
+
+    try:
+        return json.dumps(
+            obj, ensure_ascii=False, default=lambda o: "<not serializable>"
+        )
+    except (TypeError, OverflowError):
+        return "<not serializable>"
