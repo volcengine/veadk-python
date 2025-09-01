@@ -5,8 +5,9 @@ model:
     name: doubao-seed-1-6-250615
     api_base: https://ark.cn-beijing.volces.com/api/v3/
     api_key: 
-    extra_headers: '{"x-is-encrypted": "true"}'
-    extra_body: '{"caching": {"type": "enabled"}, "thinking": {"type": "disabled"}, "expire_at": 1}' # expire after 1 hour
+    encrypted: true # true | false
+    caching: enabled # enabled | disabled
+    max_llm_calls: 100
   # [optional] for llm-as-a-judge a evaluation
   judge:  
     name: doubao-seed-1-6-250615

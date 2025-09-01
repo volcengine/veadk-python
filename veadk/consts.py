@@ -14,6 +14,7 @@
 
 import time
 
+from veadk.config import getenv
 from veadk.version import VERSION
 
 DEFAULT_MODEL_AGENT_NAME = "doubao-seed-1-6-250615"
@@ -21,13 +22,14 @@ DEFAULT_MODEL_AGENT_PROVIDER = "openai"
 DEFAULT_MODEL_AGENT_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
 DEFAULT_MODEL_EXTRA_CONFIG = {
     "extra_headers": {
-        "x-is-encrypted": "true",
+        "x-is-encrypted": getenv("MODEL_AGENT_ENCRYPTED", "true"),
         "veadk-source": "veadk",
         "veadk-version": VERSION,
     },
     "extra_body": {
-        "caching": {"type": "enabled"},
-        "thinking": {"type": "disabled"},
+        "caching": {
+            "type": getenv("MODEL_AGENT_CACHING", "enabled"),
+        },
         "expire_at": int(time.time()) + 3600,  # expire after 1 hour
     },
 }

@@ -47,29 +47,6 @@ patch_asyncio()
 logger = get_logger(__name__)
 
 
-def _parse_user_model_extra_config() -> dict:
-    import json
-
-    extra_headers = getenv("MODEL_AGENT_EXTRA_HEADERS", {}, allow_false_values=True)
-    extra_body = getenv("MODEL_AGENT_EXTRA_BODY", {}, allow_false_values=True)
-
-    if extra_headers:
-        extra_headers = json.loads(extra_headers)
-    if extra_body:
-        extra_body = json.loads(extra_body)
-        if extra_body.get("expire_at", 0):
-            import time
-
-            extra_body["expire_at"] = (
-                int(time.time()) + int(extra_body["expire_at"]) * 3600
-            )
-
-    return {
-        "extra_headers": extra_headers,
-        "extra_body": extra_body,
-    }
-
-
 class Agent(LlmAgent):
     """LLM-based Agent with Volcengine capabilities."""
 
@@ -97,7 +74,7 @@ class Agent(LlmAgent):
     model_api_key: str = Field(default_factory=lambda: getenv("MODEL_AGENT_API_KEY"))
     """The api key of the model for agent running."""
 
-    model_extra_config: dict = Field(default_factory=_parse_user_model_extra_config)
+    model_extra_config: dict = Field(default_factory=dict)
     """The extra config to include in the model requests."""
 
     tools: list[ToolUnion] = []
@@ -139,6 +116,8 @@ class Agent(LlmAgent):
             "extra_headers": headers,
             "extra_body": body,
         }
+
+        logger.info(f"Model extra config: {self.model_extra_config}")
 
         if not self.model:
             self.model = LiteLlm(
