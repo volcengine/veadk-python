@@ -100,6 +100,8 @@ class Runner:
             tos_url = "<tos_url>"
             if upload_inline_data_to_tos:
                 try:
+                    from veadk.integrations.ve_tos.ve_tos import VeTOS
+
                     ve_tos = VeTOS()
                     object_key, tos_url = ve_tos.build_tos_url(
                         self.user_id, self.app_name, session_id, messages.media
