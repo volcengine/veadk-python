@@ -15,7 +15,6 @@
 import os
 from veadk.config import getenv
 from veadk.utils.logger import get_logger
-import tos
 import asyncio
 from typing import Union
 from pydantic import BaseModel, Field
@@ -23,7 +22,19 @@ from typing import Any
 from urllib.parse import urlparse
 from datetime import datetime
 
+# Initialize logger before using it
 logger = get_logger(__name__)
+
+# Try to import tos module, and provide helpful error message if it fails
+try:
+    import tos
+except ImportError as e:
+    logger.error(
+        "Failed to import 'tos' module. Please install it using: pip install tos\n"
+    )
+    raise ImportError(
+        "Missing 'tos' module. Please install it using: pip install tos\n"
+    ) from e
 
 
 class TOSConfig(BaseModel):
@@ -59,10 +70,13 @@ class VeTOS(BaseModel):
             logger.info("Connected to TOS successfully.")
         except Exception as e:
             logger.error(f"Client initialization failed:{e}")
-            return None
+            self._client = None
 
     def create_bucket(self) -> bool:
         """If the bucket does not exist, create it"""
+        if not self._client:
+            logger.error("TOS client is not initialized")
+            return False
         try:
             self._client.head_bucket(self.config.bucket_name)
             logger.info(f"Bucket {self.config.bucket_name} already exists")
@@ -76,6 +90,9 @@ class VeTOS(BaseModel):
                 )
                 logger.info(f"Bucket {self.config.bucket_name} created successfully")
                 return True
+            else:
+                logger.error(f"Bucket creation failed: {str(e)}")
+                return False
         except Exception as e:
             logger.error(f"Bucket creation failed: {str(e)}")
             return False
@@ -103,26 +120,24 @@ class VeTOS(BaseModel):
         data: Union[str, bytes],
     ):
         if isinstance(data, str):
-            data_type = "file"
+            # data is a file path
+            return asyncio.to_thread(self._do_upload_file, object_key, data)
         elif isinstance(data, bytes):
-            data_type = "bytes"
+            # data is bytes content
+            return asyncio.to_thread(self._do_upload_bytes, object_key, data)
         else:
             error_msg = f"Upload failed: data type error. Only str (file path) and bytes are supported, got {type(data)}"
             logger.error(error_msg)
             raise ValueError(error_msg)
-        if data_type == "file":
-            return asyncio.to_thread(self._do_upload_file, object_key, data)
-        elif data_type == "bytes":
-            return asyncio.to_thread(self._do_upload_bytes, object_key, data)
 
-    def _do_upload_bytes(self, object_key: str, bytes: bytes) -> bool:
+    def _do_upload_bytes(self, object_key: str, data: bytes) -> bool:
         try:
             if not self._client:
                 return False
             if not self.create_bucket():
                 return False
             self._client.put_object(
-                bucket=self.config.bucket_name, key=object_key, content=bytes
+                bucket=self.config.bucket_name, key=object_key, content=data
             )
             logger.debug(f"Upload success, object_key: {object_key}")
             self._close()
@@ -152,6 +167,9 @@ class VeTOS(BaseModel):
 
     def download(self, object_key: str, save_path: str) -> bool:
         """download image from TOS"""
+        if not self._client:
+            logger.error("TOS client is not initialized")
+            return False
         try:
             object_stream = self._client.get_object(self.config.bucket_name, object_key)
 
