@@ -30,9 +30,9 @@ from typing_extensions import override
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporter
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
-from veadk.tracing.telemetry.exporters.inmemory_exporter import InMemoryExporter
 from veadk.tracing.telemetry.exporters.inmemory_exporter import (
     _INMEMORY_EXPORTER_INSTANCE,
+    InMemoryExporter,
 )
 from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_google_adk_telemetry
@@ -58,6 +58,8 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         description="The exporters to export spans.",
     )
 
+    # Forbid InMemoryExporter in exporters list
+    # cause we need to set custom in-memory span processor by VeADK
     @field_validator("exporters")
     @classmethod
     def forbid_inmemory_exporter(cls, v: list[BaseExporter]) -> list[BaseExporter]:
@@ -67,14 +69,18 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         return v
 
     def model_post_init(self, context: Any) -> None:
+        # Replace Google ADK tracing funcs
+        # `trace_call_llm` and `trace_tool_call`
         patch_google_adk_telemetry()
-        self._init_global_tracer_provider()
 
-    #  GoogleADKInstrumentor().instrument()
-
-    def _init_global_tracer_provider(self) -> None:
+        # We save internal processors for tracing data dump
         self._processors = []
 
+        # Initialize global tracer provider to avoid VeFaaS global tracer
+        # provider conflicts
+        self._init_global_tracer_provider()
+
+    def _init_global_tracer_provider(self) -> None:
         # set provider anyway, then get global provider
         trace_api.set_tracer_provider(trace_sdk.TracerProvider())
         global_tracer_provider: TracerProvider = trace_api.get_tracer_provider()  # type: ignore

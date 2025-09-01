@@ -26,13 +26,14 @@ from opentelemetry.trace.span import Span
 
 @dataclass
 class ExtractorResponse:
-    content: list | dict | None | str | int | float
+    content: Any
 
-    type: Literal["attribute", "event"] = "attribute"
+    type: Literal["attribute", "event", "event_list"] = "attribute"
     """Type of extractor response.
     
     `attribute`: span.add_attribute(attr_name, attr_value)
     `event`: span.add_event(...)
+    `event_list`: span.add_event(...) for each event in the list
     """
 
     @staticmethod
@@ -41,7 +42,7 @@ class ExtractorResponse:
     ) -> None:
         if response.type == "attribute":
             res = response.content
-            if isinstance(res, list):  # list[dict]
+            if isinstance(res, list):
                 for _res in res:
                     if isinstance(_res, dict):
                         for k, v in _res.items():
@@ -54,7 +55,17 @@ class ExtractorResponse:
                 span.add_event(attr_name, response.content)
             elif isinstance(response.content, list):
                 for event in response.content:
-                    span.add_event(attr_name, event)
+                    span.add_event(attr_name, event)  # type: ignore
+        elif response.type == "event_list":
+            if isinstance(response.content, list):
+                for event in response.content:
+                    if isinstance(event, dict):
+                        # we ensure this dict only have one key-value pair
+                        key, value = next(iter(event.items()))
+                        span.add_event(key, value)
+                    else:
+                        # Unsupported response type, discard it.
+                        pass
         else:
             # Unsupported response type, discard it.
             pass
