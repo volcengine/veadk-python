@@ -32,7 +32,6 @@ from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.types import MediaMessage
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import read_png_to_bytes
-from veadk.integrations.ve_tos.ve_tos import VeTOS
 
 logger = get_logger(__name__)
 
@@ -99,6 +98,8 @@ class Runner:
             tos_url = "<tos_url>"
             if upload_inline_data_to_tos:
                 try:
+                    from veadk.integrations.ve_tos.ve_tos import VeTOS
+
                     ve_tos = VeTOS()
                     object_key, tos_url = ve_tos.build_tos_url(
                         self.user_id, self.app_name, session_id, messages.media
