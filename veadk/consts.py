@@ -12,12 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import time
+
+from veadk.config import getenv
 from veadk.version import VERSION
 
 DEFAULT_MODEL_AGENT_NAME = "doubao-seed-1-6-250615"
 DEFAULT_MODEL_AGENT_PROVIDER = "openai"
 DEFAULT_MODEL_AGENT_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
-DEFAULT_MODEL_EXTRA_HEADERS = {"veadk-source": "veadk", "veadk-version": VERSION}
+DEFAULT_MODEL_EXTRA_CONFIG = {
+    "extra_headers": {
+        "x-is-encrypted": getenv("MODEL_AGENT_ENCRYPTED", "true"),
+        "veadk-source": "veadk",
+        "veadk-version": VERSION,
+    },
+    "extra_body": {
+        "caching": {
+            "type": getenv("MODEL_AGENT_CACHING", "enabled"),
+        },
+        "expire_at": int(time.time()) + 3600,  # expire after 1 hour
+    },
+}
 
 DEFAULT_APMPLUS_OTEL_EXPORTER_ENDPOINT = "http://apmplus-cn-beijing.volces.com:4317"
 DEFAULT_APMPLUS_OTEL_EXPORTER_SERVICE_NAME = "veadk_tracing"

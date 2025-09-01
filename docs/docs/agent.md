@@ -15,6 +15,7 @@ Agent 中主要包括如下属性：
 | model_provider | str | Agent 中内置模型的提供商，默认从环境变量中获取 |
 | model_api_base | str | Agent 中内置模型的 API Base，默认从环境变量中获取 |
 | model_api_key | str | Agent 中内置模型的 API Key，默认从环境变量中获取 |
+| model_extra_config | dict | Agent 进行模型请求时的额外参数，Key 值为属性名，Value 值为属性值 |
 | tools | list | Function call 中的工具列表，既可以是本地工具，也可以是 MCP 工具 |
 | sub_agents | list | 子 Agent 列表，用于多 Agent 之间交互 |
 | knowledgebase | KnowledgeBase | 知识库，后端支持本地内存（local）和数据库（opensearch、viking、redis、mysql），通常设置为一个能够检索的向量数据库 |
