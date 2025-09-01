@@ -28,10 +28,10 @@ from typing_extensions import Any
 
 from veadk.config import getenv
 from veadk.consts import (
-    DEFAULT_MODEL_AGENT_PROVIDER,
     DEFAULT_MODEL_AGENT_API_BASE,
     DEFAULT_MODEL_AGENT_NAME,
-    DEFAULT_MODEL_EXTRA_HEADERS,
+    DEFAULT_MODEL_AGENT_PROVIDER,
+    DEFAULT_MODEL_EXTRA_CONFIG,
 )
 from veadk.evaluation import EvalSetRecorder
 from veadk.knowledgebase import KnowledgeBase
@@ -45,6 +45,29 @@ from veadk.version import VERSION
 
 patch_asyncio()
 logger = get_logger(__name__)
+
+
+def _parse_user_model_extra_config() -> dict:
+    import json
+
+    extra_headers = getenv("MODEL_AGENT_EXTRA_HEADERS", {}, allow_false_values=True)
+    extra_body = getenv("MODEL_AGENT_EXTRA_BODY", {}, allow_false_values=True)
+
+    if extra_headers:
+        extra_headers = json.loads(extra_headers)
+    if extra_body:
+        extra_body = json.loads(extra_body)
+        if extra_body.get("expire_at", 0):
+            import time
+
+            extra_body["expire_at"] = (
+                int(time.time()) + int(extra_body["expire_at"]) * 3600
+            )
+
+    return {
+        "extra_headers": extra_headers,
+        "extra_body": extra_body,
+    }
 
 
 class Agent(LlmAgent):
@@ -74,7 +97,7 @@ class Agent(LlmAgent):
     model_api_key: str = Field(default_factory=lambda: getenv("MODEL_AGENT_API_KEY"))
     """The api key of the model for agent running."""
 
-    model_extra_config: dict = Field(default_factory=dict)
+    model_extra_config: dict = Field(default_factory=_parse_user_model_extra_config)
     """The extra config to include in the model requests."""
 
     tools: list[ToolUnion] = []
@@ -101,11 +124,21 @@ class Agent(LlmAgent):
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
 
-        # add model request source (veadk) in extra headers
-        if self.model_extra_config and "extra_headers" in self.model_extra_config:
-            self.model_extra_config["extra_headers"] |= DEFAULT_MODEL_EXTRA_HEADERS
-        else:
-            self.model_extra_config["extra_headers"] = DEFAULT_MODEL_EXTRA_HEADERS
+        # combine user model config with VeADK defaults
+        headers = DEFAULT_MODEL_EXTRA_CONFIG["extra_headers"].copy()
+        body = DEFAULT_MODEL_EXTRA_CONFIG["extra_body"].copy()
+
+        if self.model_extra_config:
+            user_headers = self.model_extra_config.get("extra_headers", {})
+            user_body = self.model_extra_config.get("extra_body", {})
+
+            headers |= user_headers
+            body |= user_body
+
+        self.model_extra_config |= {
+            "extra_headers": headers,
+            "extra_body": body,
+        }
 
         if not self.model:
             self.model = LiteLlm(
