@@ -4,3 +4,6 @@ model:
     name: doubao-seed-1-6-250615
     api_base: https://ark.cn-beijing.volces.com/api/v3/
     api_key: 
+    encrypted: true # true | false
+    caching: enabled # enabled | disabled
+    max_llm_calls: 100

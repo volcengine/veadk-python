@@ -27,12 +27,13 @@ from veadk.agent import Agent
 from veadk.agents.loop_agent import LoopAgent
 from veadk.agents.parallel_agent import ParallelAgent
 from veadk.agents.sequential_agent import SequentialAgent
+from veadk.config import getenv
 from veadk.evaluation import EvalSetRecorder
+from veadk.integrations.ve_tos.ve_tos import VeTOS
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.types import MediaMessage
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import read_png_to_bytes
-from veadk.integrations.ve_tos.ve_tos import VeTOS
 
 logger = get_logger(__name__)
 
@@ -142,7 +143,13 @@ class Runner:
         if run_config is not None:
             stream_mode = run_config.streaming_mode
         else:
-            run_config = RunConfig(streaming_mode=stream_mode)
+            run_config = RunConfig(
+                streaming_mode=stream_mode,
+                max_llm_calls=int(getenv("MODEL_AGENT_MAX_LLM_CALLS", 100)),
+            )
+
+        logger.info(f"Run config: {run_config}")
+
         try:
 
             async def event_generator():
@@ -231,7 +238,13 @@ class Runner:
         session_id: str,
         run_config: RunConfig | None = None,
     ):
-        run_config = RunConfig() if not run_config else run_config
+        run_config = (
+            RunConfig(max_llm_calls=int(getenv("MODEL_AGENT_MAX_LLM_CALLS", 100)))
+            if not run_config
+            else run_config
+        )
+
+        logger.info(f"Run config: {run_config}")
 
         await self.short_term_memory.create_session(
             app_name=self.app_name, user_id=self.user_id, session_id=session_id
