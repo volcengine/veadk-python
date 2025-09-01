@@ -279,7 +279,6 @@ def llm_gen_ai_messages(params: LLMAttributesParams) -> ExtractorResponse:
                                 }
                             )
                         if part.function_call:
-                            part.function_call.id
                             event["gen_ai.assistant.message"].update(
                                 {
                                     "tool_calls.0.id": str(part.function_call.id),
