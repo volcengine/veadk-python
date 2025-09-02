@@ -29,7 +29,6 @@ from veadk.agents.parallel_agent import ParallelAgent
 from veadk.agents.sequential_agent import SequentialAgent
 from veadk.config import getenv
 from veadk.evaluation import EvalSetRecorder
-from veadk.integrations.ve_tos.ve_tos import VeTOS
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.types import MediaMessage
 from veadk.utils.logger import get_logger
@@ -87,7 +86,9 @@ class Runner:
             plugins=plugins,
         )
 
-    def _convert_messages(self, messages, session_id) -> list:
+    def _convert_messages(
+        self, messages, session_id, upload_inline_data_to_tos
+    ) -> list:
         if isinstance(messages, str):
             messages = [types.Content(role="user", parts=[types.Part(text=messages)])]
         elif isinstance(messages, MediaMessage):
@@ -95,16 +96,26 @@ class Runner:
                 "The MediaMessage only supports PNG format file for now."
             )
             data = read_png_to_bytes(messages.media)
+            tos_url = "<tos_url>"
+            if upload_inline_data_to_tos:
+                try:
+                    from veadk.integrations.ve_tos.ve_tos import VeTOS
 
-            ve_tos = VeTOS()
-            object_key, tos_url = ve_tos.build_tos_url(
-                self.user_id, self.app_name, session_id, messages.media
-            )
-            try:
-                asyncio.create_task(ve_tos.upload(object_key, data))
-            except Exception as e:
-                logger.error(f"Upload to TOS failed: {e}")
-                tos_url = None
+                    ve_tos = VeTOS()
+                    object_key, tos_url = ve_tos.build_tos_url(
+                        self.user_id, self.app_name, session_id, messages.media
+                    )
+                    upload_task = ve_tos.upload(object_key, data)
+                    if upload_task is not None:
+                        asyncio.create_task(upload_task)
+                except Exception as e:
+                    logger.error(f"Upload to TOS failed: {e}")
+                    tos_url = None
+
+            else:
+                logger.warning(
+                    "Loss of multimodal data may occur in the tracing process."
+                )
 
             messages = [
                 types.Content(
@@ -124,7 +135,11 @@ class Runner:
         elif isinstance(messages, list):
             converted_messages = []
             for message in messages:
-                converted_messages.extend(self._convert_messages(message, session_id))
+                converted_messages.extend(
+                    self._convert_messages(
+                        message, session_id, upload_inline_data_to_tos
+                    )
+                )
             messages = converted_messages
         else:
             raise ValueError(f"Unknown message type: {type(messages)}")
@@ -179,6 +194,7 @@ class Runner:
                 print()  # end with a new line
         except LlmCallsLimitExceededError as e:
             logger.warning(f"Max number of llm calls limit exceeded: {e}")
+            final_output = ""
 
         return final_output
 
@@ -189,8 +205,11 @@ class Runner:
         stream: bool = False,
         run_config: RunConfig | None = None,
         save_tracing_data: bool = False,
+        upload_inline_data_to_tos: bool = False,
     ):
-        converted_messages: list = self._convert_messages(messages, session_id)
+        converted_messages: list = self._convert_messages(
+            messages, session_id, upload_inline_data_to_tos
+        )
 
         await self.short_term_memory.create_session(
             app_name=self.app_name, user_id=self.user_id, session_id=session_id
@@ -276,6 +295,7 @@ class Runner:
                 final_output += chunk
         except LlmCallsLimitExceededError as e:
             logger.warning(f"Max number of llm calls limit exceeded: {e}")
+            final_output = ""
 
         return final_output
 
