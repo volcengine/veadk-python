@@ -29,7 +29,6 @@ from veadk.agents.parallel_agent import ParallelAgent
 from veadk.agents.sequential_agent import SequentialAgent
 from veadk.config import getenv
 from veadk.evaluation import EvalSetRecorder
-from veadk.integrations.ve_tos.ve_tos import VeTOS
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.types import MediaMessage
 from veadk.utils.logger import get_logger
