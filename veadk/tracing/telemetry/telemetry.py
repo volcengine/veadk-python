@@ -227,6 +227,7 @@ def trace_call_llm(
         model_name=invocation_context.agent.model_name
         if isinstance(invocation_context.agent, Agent)
         else "",
+        call_type=span.context.trace_state.get("call_type") or "<unknown_call_type>",
     )
 
     llm_attributes_mapping = ATTRIBUTES.get("llm", {})

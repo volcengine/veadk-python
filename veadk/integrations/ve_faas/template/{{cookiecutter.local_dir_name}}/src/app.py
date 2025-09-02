@@ -36,6 +36,9 @@ from veadk.tracing.telemetry.exporters.tls_exporter import TLSExporter
 from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
 from veadk.types import AgentRunConfig
 from veadk.utils.logger import get_logger
+from volcengine.base.Request import Request
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+from opentelemetry import context
 
 logger = get_logger(__name__)
 
@@ -117,6 +120,8 @@ async def agent_card() -> dict:
     agent_card = await agent_card_builder.build()
     return agent_card.model_dump()
 
+async def get_cozeloop_space_id() -> dict:
+    return {"space_id": os.getenv("OBSERVABILITY_OPENTELEMETRY_COZELOOP_SERVICE_NAME", default="<no_cozeloop_id_provided>")}
 
 load_tracer()
 
@@ -132,7 +137,7 @@ a2a_app = init_app(
 
 a2a_app.post("/run_agent", operation_id="run_agent", tags=["mcp"])(run_agent_func)
 a2a_app.get("/agent_card", operation_id="agent_card", tags=["mcp"])(agent_card)
-
+a2a_app.get("/get_cozeloop_space_id", operation_id="get_cozeloop_space_id", tags=["mcp"])(get_cozeloop_space_id)
 
 # === Build mcp server ===
 
@@ -158,6 +163,25 @@ app = FastAPI(
     docs_url=None,
     redoc_url=None
 )
+
+@app.middleware("http")
+async def otel_context_middleware(request: Request, call_next):
+    carrier = {
+        "traceparent": request.headers.get("Traceparent"),
+        "tracestate": request.headers.get("Tracestate"),
+    }
+    print(carrier)
+    if carrier["traceparent"] is None:
+        return await call_next(request)
+    else:
+        ctx = TraceContextTextMapPropagator().extract(carrier=carrier)
+        print(ctx)
+        token = context.attach(ctx)
+        try:
+            response = await call_next(request)
+        finally:
+            context.detach(token)
+    return response
 
 # Mount A2A routes to main app
 for route in a2a_app.routes:
