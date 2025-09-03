@@ -108,7 +108,7 @@ async def test_upload_bytes_success(tos_client, mock_client):
     data = b"hello world"
 
     result = await tos_client.upload("obj-key", data)
-    assert result is True
+    assert result is None
     mock_client.put_object.assert_called_once()
     mock_client.close.assert_called_once()
 
@@ -121,7 +121,7 @@ async def test_upload_file_success(tmp_path, tos_client, mock_client):
     file_path.write_text("hello file")
 
     result = await tos_client.upload("obj-key", str(file_path))
-    assert result is True
+    assert result is None
     mock_client.put_object_from_file.assert_called_once()
     mock_client.close.assert_called_once()
 
