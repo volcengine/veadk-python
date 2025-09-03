@@ -14,6 +14,7 @@
 
 
 import click
+from veadk.version import VERSION
 
 TEMP_PATH = "/tmp"
 
@@ -94,6 +95,7 @@ def deploy(
         "veapig_service_name": veapig_service_name,
         "veapig_upstream_name": veapig_upstream_name,
         "use_adk_web": use_adk_web,
+        "veadk_version": VERSION,
     }
 
     cookiecutter(
