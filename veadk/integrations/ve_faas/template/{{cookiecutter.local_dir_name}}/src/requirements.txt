@@ -1,1 +1,1 @@
-veadk-python
+veadk-python=={{ cookiecutter.veadk_version }}
