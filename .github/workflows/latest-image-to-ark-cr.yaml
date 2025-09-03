@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-name: Push Lastest Image to ARK Registry
+name: Push Latest Image to ARK Registry
 
 on:
   push:
