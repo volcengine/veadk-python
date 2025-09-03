@@ -170,12 +170,10 @@ async def otel_context_middleware(request: Request, call_next):
         "traceparent": request.headers.get("Traceparent"),
         "tracestate": request.headers.get("Tracestate"),
     }
-    print(carrier)
     if carrier["traceparent"] is None:
         return await call_next(request)
     else:
         ctx = TraceContextTextMapPropagator().extract(carrier=carrier)
-        print(ctx)
         token = context.attach(ctx)
         try:
             response = await call_next(request)
