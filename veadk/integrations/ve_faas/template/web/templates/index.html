@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="posts">
+    {% for post in posts.items %}
+        <article class="post-preview">
+            <h2><a href="{{ url_for('post_detail', post_id=post.id) }}">{{ post.title }}</a></h2>
+            <p class="post-meta">发布于 {{ post.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
+            <p>{{ post.content[:200] }}{% if post.content|length > 200 %}...{% endif %}</p>
+            <a href="{{ url_for('post_detail', post_id=post.id) }}" class="read-more">阅读全文</a>
+        </article>
+    {% else %}
+        <p>暂无文章。</p>
+    {% endfor %}
+</div>
+
+<!-- 分页 -->
+<div class="pagination">
+    {% if posts.has_prev %}
+        <a href="{{ url_for('index', page=posts.prev_num) }}">&laquo; 上一页</a>
+    {% endif %}
+    
+    <span>第 {{ posts.page }} 页，共 {{ posts.pages }} 页</span>
+    
+    {% if posts.has_next %}
+        <a href="{{ url_for('index', page=posts.next_num) }}">下一页 &raquo;</a>
+    {% endif %}
+</div>
+{% endblock %}
