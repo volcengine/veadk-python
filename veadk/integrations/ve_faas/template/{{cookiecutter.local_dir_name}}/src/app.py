@@ -121,7 +121,7 @@ async def agent_card() -> dict:
     return agent_card.model_dump()
 
 async def get_cozeloop_space_id() -> dict:
-    return {"space_id": os.getenv("OBSERVABILITY_OPENTELEMETRY_COZELOOP_SERVICE_NAME", default="<no_cozeloop_id_provided>")}
+    return {"space_id": os.getenv("OBSERVABILITY_OPENTELEMETRY_COZELOOP_SERVICE_NAME", default="")}
 
 load_tracer()
 
@@ -170,10 +170,12 @@ async def otel_context_middleware(request: Request, call_next):
         "traceparent": request.headers.get("Traceparent"),
         "tracestate": request.headers.get("Tracestate"),
     }
+    logger.debug(f"carrier: {carrier}")
     if carrier["traceparent"] is None:
         return await call_next(request)
     else:
         ctx = TraceContextTextMapPropagator().extract(carrier=carrier)
+        logger.debug(f"ctx: {ctx}")
         token = context.attach(ctx)
         try:
             response = await call_next(request)
