@@ -130,40 +130,40 @@ class VeTOS(BaseModel):
             logger.error(error_msg)
             raise ValueError(error_msg)
 
-    def _do_upload_bytes(self, object_key: str, data: bytes) -> bool:
+    def _do_upload_bytes(self, object_key: str, data: bytes) -> None:
         try:
             if not self._client:
-                return False
+                return
             if not self.create_bucket():
-                return False
+                return
             self._client.put_object(
                 bucket=self.config.bucket_name, key=object_key, content=data
             )
             logger.debug(f"Upload success, object_key: {object_key}")
             self._close()
-            return True
+            return
         except Exception as e:
             logger.error(f"Upload failed: {e}")
             self._close()
-            return False
+            return
 
-    def _do_upload_file(self, object_key: str, file_path: str) -> bool:
+    def _do_upload_file(self, object_key: str, file_path: str) -> None:
         try:
             if not self._client:
-                return False
+                return
             if not self.create_bucket():
-                return False
+                return
 
             self._client.put_object_from_file(
                 bucket=self.config.bucket_name, key=object_key, file_path=file_path
             )
             self._close()
             logger.debug(f"Upload success, object_key: {object_key}")
-            return True
+            return
         except Exception as e:
             logger.error(f"Upload failed: {e}")
             self._close()
-            return False
+            return
 
     def download(self, object_key: str, save_path: str) -> bool:
         """download image from TOS"""
