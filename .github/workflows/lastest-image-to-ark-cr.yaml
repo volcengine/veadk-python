@@ -1,4 +1,4 @@
-name: Mirror to Registry
+name: Push Lastest Image to ARK Registry
 
 on:
   push:
