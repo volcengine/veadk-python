@@ -24,9 +24,9 @@ class LocalDataBase(BaseDatabase):
 
     def __init__(self, **kwargs):
         super().__init__()
-        self.data = {}  # 改为字典
+        self.data = {}
         self._type = "local"
-        self._next_id = 0  # 用于生成唯一ID
+        self._next_id = 0  # Used to generate unique IDs
 
     def add_texts(self, texts: list[str], **kwargs):
         for text in texts:
