@@ -152,6 +152,8 @@ class VeFaaS:
                     "GatewayName": gateway_name,
                     "ServiceName": service_name,
                     "UpstreamName": upstream_name,
+                    "EnableKeyAuth": True,
+                    "EnableMcpSession": True,
                 },
                 "TemplateId": self.template_id,
             },

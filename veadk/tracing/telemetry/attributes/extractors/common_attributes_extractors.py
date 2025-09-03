@@ -49,6 +49,10 @@ def common_cozeloop_report_source(**kwargs) -> str:
     return "veadk"
 
 
+def common_cozeloop_call_type(**kwargs) -> str:
+    return kwargs.get("call_type")
+
+
 def llm_openinference_instrumentation_veadk(**kwargs) -> str:
     return VERSION
 
@@ -68,4 +72,5 @@ COMMON_ATTRIBUTES = {
     "user.id": common_gen_ai_user_id,  # CozeLoop / TLS required
     "session.id": common_gen_ai_session_id,  # CozeLoop / TLS required
     "cozeloop.report.source": common_cozeloop_report_source,  # CozeLoop required
+    "cozeloop.call_type": common_cozeloop_call_type,  # CozeLoop required
 }

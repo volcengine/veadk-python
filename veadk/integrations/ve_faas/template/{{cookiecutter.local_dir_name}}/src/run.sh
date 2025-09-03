@@ -33,13 +33,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# in case of deployment deps not installed in user's requirements.txt
-if pip list | grep -q "^fastapi \|^uvicorn "; then
-    echo "fastapi and uvicorn already installed"
-else
-    python3 -m pip install uvicorn[standard] fastapi
-fi
-
 # Check if MODEL_AGENT_API_KEY is set
 if [ -z "$MODEL_AGENT_API_KEY" ]; then
     echo "MODEL_AGENT_API_KEY is not set. Please set it in your environment variables."

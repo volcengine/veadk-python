@@ -1,1 +1,3 @@
 veadk-python
+fastapi
+uvicorn[standard]
