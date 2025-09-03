@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}管理面板{% endblock %}
+
+{% block content %}
+<div class="admin-dashboard">
+    <h2>管理面板</h2>
+    
+    <div class="stats">
+        <div class="stat-card">
+            <h3>文章总数</h3>
+            <p class="stat-number">{{ post_count }}</p>
+        </div>
+    </div>
+    
+    <div class="admin-links">
+        <a href="{{ url_for('admin_posts') }}" class="btn">文章管理</a>
+        <a href="{{ url_for('admin_edit_post') }}" class="btn">新建文章</a>
+    </div>
+</div>
+{% endblock %}

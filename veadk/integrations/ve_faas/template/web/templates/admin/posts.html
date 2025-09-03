@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+
+{% block title %}文章管理{% endblock %}
+
+{% block content %}
+<div class="admin-posts">
+    <div class="admin-header">
+        <h2>文章管理</h2>
+        <a href="{{ url_for('admin_edit_post') }}" class="btn">新建文章</a>
+    </div>
+    
+    <table class="posts-table">
+        <thead>
+            <tr>
+                <th>标题</th>
+                <th>发布时间</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for post in posts.items %}
+            <tr>
+                <td><a href="{{ url_for('post_detail', post_id=post.id) }}">{{ post.title }}</a></td>
+                <td>{{ post.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                <td>
+                    <a href="{{ url_for('admin_edit_post', post_id=post.id) }}">编辑</a>
+                    <form action="{{ url_for('admin_delete_post', post_id=post.id) }}" method="POST" style="display:inline;">
+                        <button type="submit" class="delete-btn" onclick="return confirm('确定要删除这篇文章吗？')">删除</button>
+                    </form>
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="3">暂无文章</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    
+    <!-- 分页 -->
+    <div class="pagination">
+        {% if posts.has_prev %}
+            <a href="{{ url_for('admin_posts', page=posts.prev_num) }}">&laquo; 上一页</a>
+        {% endif %}
+        
+        <span>第 {{ posts.page }} 页，共 {{ posts.pages }} 页</span>
+        
+        {% if posts.has_next %}
+            <a href="{{ url_for('admin_posts', page=posts.next_num) }}">下一页 &raquo;</a>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
