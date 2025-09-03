@@ -1,4 +1,18 @@
-name: Push Lastest Image to ARK Registry
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Push Preview Image to ARK Registry
 
 on:
   push:
@@ -9,7 +23,7 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     # This job is executed only when the repository is the main repository.
-    if: github.repository == 'volcengine/veadk-python'
+    if: github.repository == 'zakahan/veadk-python'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -30,17 +44,15 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: test-veadk-cn-beijing.cr.volces.com/veadk/veadk-python312 
+          images: test-veadk-cn-beijing.cr.volces.com/veadk/veadk-python 
           tags: |
-            type=sha,format=short
-            type=ref,event=branch
-            latest
+            preview
 
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: .github/Dockerfile
+          file: .github/Dockerfile.preview
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
