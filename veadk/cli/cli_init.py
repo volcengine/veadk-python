@@ -16,6 +16,7 @@ import warnings
 from typing import Any
 
 import click
+from veadk.version import VERSION
 
 warnings.filterwarnings(
     "ignore", category=UserWarning, module="pydantic._internal._fields"
@@ -58,6 +59,7 @@ def _render_prompts() -> dict[str, Any]:
         "veapig_service_name": veapig_service_name,
         "veapig_upstream_name": veapig_upstream_name,
         "use_adk_web": deploy_mode == "2",
+        "veadk_version": VERSION,
     }
 
 
