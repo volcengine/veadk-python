@@ -24,20 +24,35 @@ class LocalDataBase(BaseDatabase):
 
     def __init__(self, **kwargs):
         super().__init__()
-        self.data = []
+        self.data = {}  # 改为字典
         self._type = "local"
+        self._next_id = 0  # 用于生成唯一ID
 
     def add_texts(self, texts: list[str], **kwargs):
-        self.data.extend(texts)
+        for text in texts:
+            self.data[str(self._next_id)] = text
+            self._next_id += 1
 
     def is_empty(self):
         return len(self.data) == 0
 
     def query(self, query: str, **kwargs: Any) -> list[str]:
-        return self.data
+        return list(self.data.values())
 
     def delete(self, **kwargs: Any):
-        self.data = []
+        self.data = {}
 
     def add(self, texts: list[str], **kwargs: Any):
         return self.add_texts(texts)
+
+    def list_docs(self, **kwargs: Any) -> list[dict]:
+        return [{"id": id, "content": content} for id, content in self.data.items()]
+
+    def delete_doc(self, id: str, **kwargs: Any):
+        if id not in self.data:
+            raise ValueError(f"id {id} not found")
+        try:
+            del self.data[id]
+            return True
+        except Exception:
+            return False

@@ -80,3 +80,11 @@ class KnowledgeBase:
         if len(result) == 0:
             logger.warning(f"No documents found in knowledgebase. Query: {query}")
         return result
+
+    def delete_doc(self, app_name: str, id: str) -> bool:
+        index = build_knowledgebase_index(app_name)
+        return self.adapter.delete_doc(index=index, id=id)
+
+    def list_docs(self, app_name: str, offset: int = 0, limit: int = 100) -> list[dict]:
+        index = build_knowledgebase_index(app_name)
+        return self.adapter.list_docs(index=index, offset=offset, limit=limit)

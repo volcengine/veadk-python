@@ -54,6 +54,12 @@ class KVDatabaseAdapter:
             logger.error(f"Failed to search from Redis: index={index} error={e}")
             raise e
 
+    def delete_docs(self, index: str, ids: list[int]): ...
+
+    def list_docs(
+        self, index: str, offset: int = 0, limit: int = 100
+    ) -> list[dict]: ...
+
 
 class RelationalDatabaseAdapter:
     def __init__(self, client):
@@ -108,6 +114,12 @@ class RelationalDatabaseAdapter:
 
         return [item["data"] for item in results]
 
+    def delete_docs(self, index: str, ids: list[int]): ...
+
+    def list_docs(
+        self, index: str, offset: int = 0, limit: int = 100
+    ) -> list[dict]: ...
+
 
 class VectorDatabaseAdapter:
     def __init__(self, client):
@@ -151,6 +163,23 @@ class VectorDatabaseAdapter:
             collection_name=index,
             top_k=top_k,
         )
+
+    def delete_doc(self, index: str, id: str) -> bool:
+        self._validate_index(index)
+        logger.debug(f"Deleting documents from vector database: index={index} id={id}")
+        try:
+            self.client.delete_by_id(collection_name=index, id=id)
+            return True
+        except Exception as e:
+            logger.error(
+                f"Failed to delete document from vector database: index={index} id={id} error={e}"
+            )
+            return False
+
+    def list_docs(self, index: str, offset: int = 0, limit: int = 1000) -> list[dict]:
+        self._validate_index(index)
+        logger.debug(f"Listing documents from vector database: index={index}")
+        return self.client.list_docs(collection_name=index, offset=offset, limit=limit)
 
 
 class VikingDatabaseAdapter:
@@ -212,6 +241,16 @@ class VikingDatabaseAdapter:
 
         return self.client.query(query, collection_name=index, top_k=top_k)
 
+    def delete_doc(self, index: str, id: str) -> bool:
+        self._validate_index(index)
+        logger.debug(f"Deleting documents from vector database: index={index} id={id}")
+        return self.client.delete_by_id(collection_name=index, id=id)
+
+    def list_docs(self, index: str, offset: int, limit: int) -> list[dict]:
+        self._validate_index(index)
+        logger.debug(f"Listing documents from vector database: index={index}")
+        return self.client.list_docs(collection_name=index, offset=offset, limit=limit)
+
 
 class VikingMemoryDatabaseAdapter:
     def __init__(self, client):
@@ -248,6 +287,12 @@ class VikingMemoryDatabaseAdapter:
         result = self.client.query(query, collection_name=index, top_k=top_k, **kwargs)
         return result
 
+    def delete_docs(self, index: str, ids: list[int]):
+        raise NotImplementedError("VikingMemoryDatabase does not support delete_docs")
+
+    def list_docs(self, index: str):
+        raise NotImplementedError("VikingMemoryDatabase does not support list_docs")
+
 
 class LocalDatabaseAdapter:
     def __init__(self, client):
@@ -260,6 +305,12 @@ class LocalDatabaseAdapter:
 
     def query(self, query: str, **kwargs):
         return self.client.query(query, **kwargs)
+
+    def delete_doc(self, index: str, id: str) -> bool:
+        return self.client.delete_doc(id)
+
+    def list_docs(self, index: str, offset: int = 0, limit: int = 100) -> list[dict]:
+        return self.client.list_docs(offset=offset, limit=limit)
 
 
 MAPPING = {
