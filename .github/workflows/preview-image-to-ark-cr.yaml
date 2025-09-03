@@ -36,15 +36,15 @@ jobs:
       - name: Login to Volcengine Container Registry
         uses: docker/login-action@v3
         with:
-          registry: test-veadk-cn-beijing.cr.volces.com
-          username: ${{ secrets.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
+          registry: veadk-cn-beijing.cr.volces.com
+          username: ${{ secrets.ARK_CR_USERNAME }}
+          password: ${{ secrets.ARK_CR_PASSWORD }}
 
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: test-veadk-cn-beijing.cr.volces.com/veadk/veadk-python 
+          images: veadk-cn-beijing.cr.volces.com/veadk/veadk-python 
           tags: |
             preview
 
