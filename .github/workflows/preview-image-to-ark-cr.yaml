@@ -23,7 +23,7 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     # This job is executed only when the repository is the main repository.
-    if: github.repository == 'zakahan/veadk-python'
+    if: github.repository == 'volcengine/veadk-python'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
