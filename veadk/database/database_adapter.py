@@ -54,11 +54,32 @@ class KVDatabaseAdapter:
             logger.error(f"Failed to search from Redis: index={index} error={e}")
             raise e
 
-    def delete_docs(self, index: str, ids: list[int]): ...
+    def delete_doc(self, index: str, id: str) -> bool:
+        logger.debug(f"Deleting document from Redis database: index={index} id={id}")
+        try:
+            # For Redis, we need to handle deletion differently since RedisDatabase.delete_doc
+            # takes a key and a single id
+            result = self.client.delete_doc(key=index, id=id)
+            return result
+        except Exception as e:
+            logger.error(
+                f"Failed to delete document from Redis database: index={index} id={id} error={e}"
+            )
+            return False
 
-    def list_docs(
-        self, index: str, offset: int = 0, limit: int = 100
-    ) -> list[dict]: ...
+    def list_docs(self, index: str, offset: int = 0, limit: int = 100) -> list[dict]:
+        logger.debug(f"Listing documents from Redis database: index={index}")
+        try:
+            # Get all documents from Redis
+            docs = self.client.list_docs(key=index)
+
+            # Apply offset and limit for pagination
+            return docs[offset : offset + limit]
+        except Exception as e:
+            logger.error(
+                f"Failed to list documents from Redis database: index={index} error={e}"
+            )
+            return []
 
 
 class RelationalDatabaseAdapter:
@@ -114,11 +135,27 @@ class RelationalDatabaseAdapter:
 
         return [item["data"] for item in results]
 
-    def delete_docs(self, index: str, ids: list[int]): ...
+    def delete_doc(self, index: str, id: str) -> bool:
+        logger.debug(f"Deleting document from SQL database: table_name={index} id={id}")
+        try:
+            # Convert single id to list for the client method
+            result = self.client.delete_doc(table=index, ids=[int(id)])
+            return result
+        except Exception as e:
+            logger.error(
+                f"Failed to delete document from SQL database: table_name={index} id={id} error={e}"
+            )
+            return False
 
-    def list_docs(
-        self, index: str, offset: int = 0, limit: int = 100
-    ) -> list[dict]: ...
+    def list_docs(self, index: str, offset: int = 0, limit: int = 100) -> list[dict]:
+        logger.debug(f"Listing documents from SQL database: table_name={index}")
+        try:
+            return self.client.list_docs(table=index, offset=offset, limit=limit)
+        except Exception as e:
+            logger.error(
+                f"Failed to list documents from SQL database: table_name={index} error={e}"
+            )
+            return []
 
 
 class VectorDatabaseAdapter:
