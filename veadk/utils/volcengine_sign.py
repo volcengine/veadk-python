@@ -153,7 +153,10 @@ def request(method, date, query, header, ak, sk, action, body):
         params=request_param["query"],
         data=request_param["body"],
     )
-    return r.json()
+    try:
+        return r.json()
+    except Exception:
+        raise ValueError(f"Error occurred. Bad response: {r}")
 
 
 def ve_request(
