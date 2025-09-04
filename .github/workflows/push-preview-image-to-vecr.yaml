@@ -1,0 +1,67 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Push Preview Image to Volcengine Container Registry
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    
+    # To avoid forked repo execute this workflow
+    if: github.repository == 'volcengine/veadk-python'
+    
+    # Set global environments
+    env:
+      CR_URL: veadk-cn-beijing.cr.volces.com
+      CR_NAMESPACE: veadk
+      CR_REPO: veadk-python
+      DOCKERFILE: docker/Dockerfile.preview
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Volcengine Container Registry
+        run: |
+          echo "${{ secrets.VE_CR_PASSWORD }}" | \
+          docker login veadk-cn-beijing.cr.volces.com \
+          -u "${{ secrets.VE_CR_USERNAME }}" \
+          --password-stdin
+
+      # Specify a platform, as VeFaaS required `linux/amd64`
+      - name: Build and push
+        run: |
+          IMAGE_TAG=$CR_URL/$CR_NAMESPACE/$CR_REPO:preview
+          docker buildx build \
+            --file $DOCKERFILE \
+            --tag $IMAGE_TAG \
+            --platform linux/amd64 \
+            --push \
+            --cache-from=type=gha \
+            --cache-to=type=gha,mode=max \
+            .
