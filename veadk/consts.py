@@ -49,3 +49,10 @@ DEFAULT_TLS_OTEL_EXPORTER_REGION = "cn-beijing"
 DEFAULT_CR_INSTANCE_NAME = "veadk-user-instance"
 DEFAULT_CR_NAMESPACE_NAME = "veadk-user-namespace"
 DEFAULT_CR_REPO_NAME = "veadk-user-repo"
+
+DEFAULT_TLS_LOG_PROJECT_NAME = "veadk-logs"
+DEFAULT_TLS_TRACING_INSTANCE_NAME = "veadk-tracing"
+
+DEFAULT_TOS_BUCKET_NAME = "veadk-default-bucket"
+
+DEFAULT_COZELOOP_SPACE_NAME = "veadk-space"
