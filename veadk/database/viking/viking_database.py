@@ -41,6 +41,8 @@ get_collections_path = "/api/knowledge/collection/info"
 doc_add_path = "/api/knowledge/doc/add"
 doc_info_path = "/api/knowledge/doc/info"
 doc_del_path = "/api/collection/drop"
+list_docs_path = "/api/knowledge/point/list"
+delete_docs_path = "/api/knowledge/point/delete"
 
 
 class VolcengineTOSConfig(BaseModel):
@@ -400,3 +402,66 @@ class VikingDatabase(BaseModel, BaseDatabase):
             return True
         else:
             return False
+
+    def list_docs(
+        self, collection_name: str, offset: int = 0, limit: int = -1
+    ) -> list[dict]:
+        request_params = {
+            "collection_name": collection_name,
+            "project": self.config.project,
+            "offset": offset,
+            "limit": limit,
+        }
+
+        create_collection_req = prepare_request(
+            method="POST",
+            path=list_docs_path,
+            config=self.config,
+            data=request_params,
+        )
+        resp = requests.request(
+            method=create_collection_req.method,
+            url="https://{}{}".format(
+                g_knowledge_base_domain, create_collection_req.path
+            ),
+            headers=create_collection_req.headers,
+            data=create_collection_req.body,
+        )
+
+        result = resp.json()
+        if result["code"] != 0:
+            logger.error(f"Error in list_docs: {result['message']}")
+            raise ValueError(f"Error in list_docs: {result['message']}")
+
+        data = [
+            {"id": res["point_id"], "content": res["content"]}
+            for res in result["data"]["point_list"]
+        ]
+        return data
+
+    def delete_by_id(self, collection_name: str, id: str) -> bool:
+        request_params = {
+            "collection_name": collection_name,
+            "project": self.config.project,
+            "point_id": id,
+        }
+
+        create_collection_req = prepare_request(
+            method="POST",
+            path=delete_docs_path,
+            config=self.config,
+            data=request_params,
+        )
+        resp = requests.request(
+            method=create_collection_req.method,
+            url="https://{}{}".format(
+                g_knowledge_base_domain, create_collection_req.path
+            ),
+            headers=create_collection_req.headers,
+            data=create_collection_req.body,
+        )
+
+        result = resp.json()
+        if result["code"] != 0:
+            return False
+        return True
