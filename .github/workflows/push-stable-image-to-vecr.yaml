@@ -24,6 +24,8 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     
     # To avoid forked repo execute this workflow
     if: github.repository == 'volcengine/veadk-python'

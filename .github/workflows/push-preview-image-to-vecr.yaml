@@ -14,6 +14,10 @@
 
 name: Push Preview Image to Volcengine Container Registry
 
+
+permissions:
+  contents: read
+
 on:
   push:
     branches:
