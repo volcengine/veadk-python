@@ -111,5 +111,62 @@ class MysqlDatabase(BaseModel, BaseDatabase):
             logger.error(f"Failed to drop table {table}: {e}")
             raise e
 
+    def delete_doc(self, table: str, ids: list[int]) -> bool:
+        """Delete documents by IDs from a MySQL table.
+
+        Args:
+            table: The table name to delete from
+            ids: List of document IDs to delete
+
+        Returns:
+            bool: True if deletion was successful, False otherwise
+        """
+        if not self.table_exists(table):
+            logger.warning(f"Table {table} does not exist. Skipping delete operation.")
+            return False
+
+        if not ids:
+            return True  # Nothing to delete
+
+        try:
+            with self._connection.cursor() as cursor:
+                # Create placeholders for the IDs
+                placeholders = ",".join(["%s"] * len(ids))
+                sql = f"DELETE FROM `{table}` WHERE id IN ({placeholders})"
+                cursor.execute(sql, ids)
+                self._connection.commit()
+                logger.info(f"Deleted {cursor.rowcount} documents from table {table}")
+                return True
+        except Exception as e:
+            logger.error(f"Failed to delete documents from table {table}: {e}")
+            return False
+
+    def list_docs(self, table: str, offset: int = 0, limit: int = 100) -> list[dict]:
+        """List documents from a MySQL table.
+
+        Args:
+            table: The table name to list documents from
+            offset: Offset for pagination
+            limit: Limit for pagination
+
+        Returns:
+            list[dict]: List of documents with id and content
+        """
+        if not self.table_exists(table):
+            logger.warning(f"Table {table} does not exist. Returning empty list.")
+            return []
+
+        try:
+            with self._connection.cursor() as cursor:
+                sql = f"SELECT id, data FROM `{table}` ORDER BY created_at DESC LIMIT %s OFFSET %s"
+                cursor.execute(sql, (limit, offset))
+                results = cursor.fetchall()
+                return [
+                    {"id": str(row["id"]), "content": row["data"]} for row in results
+                ]
+        except Exception as e:
+            logger.error(f"Failed to list documents from table {table}: {e}")
+            return []
+
     def is_empty(self):
         pass

@@ -219,7 +219,9 @@ class OpenSearchVectorDatabase(BaseModel, BaseDatabase):
         response = self._opensearch_client.indices.get_alias()
         return list(response.keys())
 
-    def get_all_docs(self, collection_name: str, size: int = 10000) -> list[dict]:
+    def list_docs(
+        self, collection_name: str, offset: int = 0, limit: int = 10000
+    ) -> list[dict]:
         """Match all docs in one index of OpenSearch"""
         if not self.collection_exists(collection_name):
             logger.warning(
@@ -227,12 +229,12 @@ class OpenSearchVectorDatabase(BaseModel, BaseDatabase):
             )
             return []
 
-        query = {"size": size, "query": {"match_all": {}}}
+        query = {"size": limit, "from": offset, "query": {"match_all": {}}}
         response = self._opensearch_client.search(index=collection_name, body=query)
         return [
             {
                 "id": hit["_id"],
-                "page_content": hit["_source"]["page_content"],
+                "content": hit["_source"]["page_content"],
             }
             for hit in response["hits"]["hits"]
         ]
