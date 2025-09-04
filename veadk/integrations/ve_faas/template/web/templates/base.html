@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}博客系统{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1><a href="{{ url_for('index') }}">我的博客</a></h1>
+            <nav>
+                <a href="{{ url_for('index') }}">首页</a>
+                {% if session.admin_logged_in %}
+                    <a href="{{ url_for('admin_dashboard') }}">管理后台</a>
+                    <a href="{{ url_for('admin_logout') }}">退出</a>
+                {% else %}
+                    <a href="{{ url_for('admin_login') }}">登录</a>
+                {% endif %}
+            </nav>
+        </div>
+    </header>
+    
+    <main class="container">
+        {% with messages = get_flashed_messages() %}
+            {% if messages %}
+                <div class="flash-messages">
+                    {% for message in messages %}
+                        <div class="flash-message">{{ message }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+        
+        {% block content %}{% endblock %}
+    </main>
+    
+    <footer>
+        <div class="container">
+            <p>&copy; 2023 我的博客. All rights reserved.</p>
+        </div>
+    </footer>
+</body>
+</html>
