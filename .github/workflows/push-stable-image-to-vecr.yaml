@@ -34,10 +34,6 @@ jobs:
       CR_NAMESPACE: veadk
       CR_REPO: veadk-python
       DOCKERFILE: docker/Dockerfile.stable
-      # veadk-python:latest
-      LATEST_TAG: ${{ env.CR_URL }}/${{ env.CR_NAMESPACE }}/${{ env.CR_REPO }}:latest
-      # veadk-python:x.x.x
-      VERSION_TAG: ${{ env.CR_URL }}/${{ env.CR_NAMESPACE }}/${{ env.CR_REPO }}:${{ github.ref_name }}
 
     steps:
       - name: Checkout code
@@ -59,6 +55,8 @@ jobs:
       # push 2 tags (x.x.x and latest) in one push
       - name: Build and push
         run: |
+          LATEST_TAG: ${{ env.CR_URL }}/${{ env.CR_NAMESPACE }}/${{ env.CR_REPO }}:latest
+          VERSION_TAG: ${{ env.CR_URL }}/${{ env.CR_NAMESPACE }}/${{ env.CR_REPO }}:${{ github.ref_name }}
           docker buildx build \
             --file $DOCKERFILE \
             --tag $VERSION_TAG \

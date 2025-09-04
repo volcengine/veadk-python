@@ -33,8 +33,6 @@ jobs:
       CR_NAMESPACE: veadk
       CR_REPO: veadk-python
       DOCKERFILE: docker/Dockerfile.preview
-      # veadk-python:preview
-      IMAGE_TAG: ${{ env.CR_URL }}/${{ env.CR_NAMESPACE }}/${{ env.CR_REPO }}:preview
 
     steps:
       - name: Checkout code
@@ -55,6 +53,7 @@ jobs:
       # Specify a platform, as VeFaaS required `linux/amd64`
       - name: Build and push
         run: |
+          IMAGE_TAG=${{ env.CR_URL }}/${{ env.CR_NAMESPACE }}/${{ env.CR_REPO }}:preview
           docker buildx build \
             --file $DOCKERFILE \
             --tag $IMAGE_TAG \
