@@ -16,8 +16,8 @@ import warnings
 from typing import Any
 
 import click
-
 from veadk.version import VERSION
+
 
 warnings.filterwarnings(
     "ignore", category=UserWarning, module="pydantic._internal._fields"
