@@ -434,7 +434,11 @@ class VikingDatabase(BaseModel, BaseDatabase):
             raise ValueError(f"Error in list_docs: {result['message']}")
 
         data = [
-            {"id": res["point_id"], "content": res["content"]}
+            {
+                "id": res["point_id"],
+                "content": res["content"],
+                "metadata": res["doc_info"],
+            }
             for res in result["data"]["point_list"]
         ]
         return data
