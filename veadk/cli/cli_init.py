@@ -16,6 +16,7 @@ import warnings
 from typing import Any
 
 import click
+
 from veadk.version import VERSION
 
 warnings.filterwarnings(
@@ -70,7 +71,10 @@ def _render_prompts() -> dict[str, Any]:
 def init(
     vefaas_template_type: str,
 ) -> None:
-    """Init a veadk project that can be deployed to Volcengine VeFaaS."""
+    """Init a veadk project that can be deployed to Volcengine VeFaaS.
+
+    `template` is A2A/MCP/Web server template, `web_template` is for web applications (i.e., a simple blog).
+    """
     import shutil
     from pathlib import Path
 
@@ -103,8 +107,8 @@ def init(
 
     if not vefaas_template_type:
         vefaas_template_type = "template"
-    
-    template_dir_path = Path(vefaas.__file__).parent / vefaas_template_type    
+
+    template_dir_path = Path(vefaas.__file__).parent / vefaas_template_type
 
     cookiecutter(
         template=str(template_dir_path),
