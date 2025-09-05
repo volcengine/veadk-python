@@ -227,6 +227,15 @@ def trace_call_llm(
         model_name=invocation_context.agent.model_name
         if isinstance(invocation_context.agent, Agent)
         else "",
+        call_type=(
+            span.context.trace_state.get("call_type", "")
+            if (
+                hasattr(span, "context")
+                and hasattr(span.context, "trace_state")
+                and hasattr(span.context.trace_state, "get")
+            )
+            else ""
+        ),
     )
 
     llm_attributes_mapping = ATTRIBUTES.get("llm", {})

@@ -110,3 +110,47 @@ class RedisDatabase(BaseModel, BaseDatabase):
         except Exception as e:
             logger.error(f"Failed to delete key `{key}`: {e}")
             raise e
+
+    def delete_doc(self, key: str, id: str) -> bool:
+        """Delete a specific document by ID from a Redis list.
+
+        Args:
+            key: The Redis key (list) to delete from
+            id: The ID of the document to delete
+
+        Returns:
+            bool: True if deletion was successful, False otherwise
+        """
+        try:
+            # Get all items in the list
+            items = self._client.lrange(key, 0, -1)
+
+            # Find the index of the item to delete
+            for i, item in enumerate(items):
+                # Assuming the item is stored as a JSON string with an 'id' field
+                # If it's just the content, we'll use the list index as ID
+                if str(i) == id:
+                    self._client.lrem(key, 1, item)
+                    return True
+
+            logger.warning(f"Document with id {id} not found in key {key}")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to delete document with id {id} from key {key}: {e}")
+            return False
+
+    def list_docs(self, key: str) -> list[dict]:
+        """List all documents in a Redis list.
+
+        Args:
+            key: The Redis key (list) to list documents from
+
+        Returns:
+            list[dict]: List of documents with id and content
+        """
+        try:
+            items = self._client.lrange(key, 0, -1)
+            return [{"id": str(i), "content": item} for i, item in enumerate(items)]
+        except Exception as e:
+            logger.error(f"Failed to list documents from key {key}: {e}")
+            return []

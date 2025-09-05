@@ -18,6 +18,7 @@ from typing import Any
 import click
 from veadk.version import VERSION
 
+
 warnings.filterwarnings(
     "ignore", category=UserWarning, module="pydantic._internal._fields"
 )
@@ -64,8 +65,16 @@ def _render_prompts() -> dict[str, Any]:
 
 
 @click.command()
-def init() -> None:
-    """Init a veadk project that can be deployed to Volcengine VeFaaS."""
+@click.option(
+    "--vefaas-template-type", default="template", help="Expected template type"
+)
+def init(
+    vefaas_template_type: str,
+) -> None:
+    """Init a veadk project that can be deployed to Volcengine VeFaaS.
+
+    `template` is A2A/MCP/Web server template, `web_template` is for web applications (i.e., a simple blog).
+    """
     import shutil
     from pathlib import Path
 
@@ -73,9 +82,14 @@ def init() -> None:
 
     import veadk.integrations.ve_faas as vefaas
 
-    click.echo(
-        "Welcome use VeADK to create your project. We will generate a `weather-reporter` application for you."
-    )
+    if vefaas_template_type == "web_template":
+        click.echo(
+            "Welcome use VeADK to create your project. We will generate a `simple-blog` web application for you."
+        )
+    else:
+        click.echo(
+            "Welcome use VeADK to create your project. We will generate a `weather-reporter` application for you."
+        )
 
     cwd = Path.cwd()
     local_dir_name = click.prompt("Local directory name", default="veadk-cloud-proj")
@@ -91,7 +105,10 @@ def init() -> None:
     settings = _render_prompts()
     settings["local_dir_name"] = local_dir_name
 
-    template_dir_path = Path(vefaas.__file__).parent / "template"
+    if not vefaas_template_type:
+        vefaas_template_type = "template"
+
+    template_dir_path = Path(vefaas.__file__).parent / vefaas_template_type
 
     cookiecutter(
         template=str(template_dir_path),
