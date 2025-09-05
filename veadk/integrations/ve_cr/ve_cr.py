@@ -18,7 +18,20 @@ class VeCR:
         assert region in ["cn-beijing", "cn-guangzhou", "cn-shanghai"]
         self.version = "2022-05-12"
 
-    def _create_instance(self, instance_name: str = DEFAULT_CR_INSTANCE_NAME):
+    def _create_instance(self, instance_name: str = DEFAULT_CR_INSTANCE_NAME) -> str:
+        """
+        create cr instance
+
+        Args:
+            instance_name: cr instance name
+
+        Returns:
+            cr instance name
+        """
+        status = self._check_instance(instance_name)
+        if status != "NONEXIST":
+            logger.debug(f"cr instance {instance_name} already running")
+            return instance_name
         response = ve_request(
             request_body={
                 "Name": instance_name,
@@ -34,10 +47,30 @@ class VeCR:
             region=self.region,
             host=f"cr.{self.region}.volcengineapi.com",
         )
-        logger.info(f"create cr instance {instance_name}: {response}")
-        return response
+        logger.debug(f"create cr instance {instance_name}: {response}")
 
-    def _check_instance(self, instance_name: str = DEFAULT_CR_INSTANCE_NAME):
+        while True:
+            status = self._check_instance(instance_name)
+            if status == "Running":
+                break
+            elif status == "Failed":
+                raise ValueError(f"cr instance {instance_name} create failed")
+            else:
+                logger.debug(f"cr instance status: {status}")
+                time.sleep(5)
+
+        return instance_name
+
+    def _check_instance(self, instance_name: str) -> str:
+        """
+        check cr instance status
+
+        Args:
+            instance_name: cr instance name
+
+        Returns:
+            cr instance status
+        """
         response = ve_request(
             request_body={
                 "Filter": {
@@ -47,33 +80,112 @@ class VeCR:
             action="ListRegistries",
             ak=self.ak,
             sk=self.sk,
-            service="vecr",
+            service="cr",
             version=self.version,
             region=self.region,
             host=f"cr.{self.region}.volcengineapi.com",
         )
+        logger.debug(f"check cr instance {instance_name}: {response}")
 
         try:
-            return response["Result"]["Items"][0]["Status"]
-        except Exception as e:
-            raise ValueError(f"cr instance {instance_name} not found: {e}")
+            if response["Result"]["TotalCount"] == 0:
+                return "NONEXIST"
+            return response["Result"]["Items"][0]["Status"]["Phase"]
+        except Exception as _:
+            raise ValueError(f"Error check cr instance {instance_name}: {response}")
 
-    def _create_namespace(self, namespace_name: str = DEFAULT_CR_NAMESPACE_NAME):
-        pass
+    def _create_namespace(
+        self,
+        instance_name: str = DEFAULT_CR_INSTANCE_NAME,
+        namespace_name: str = DEFAULT_CR_NAMESPACE_NAME,
+    ) -> str:
+        """
+        create cr namespace
 
-    def _create_repo(self, repo_name: str = DEFAULT_CR_REPO_NAME):
-        pass
+        Args:
+            instance_name: cr instance name
+            namespace_name: cr namespace name
 
+        Returns:
+            cr namespace name
+        """
+        response = ve_request(
+            request_body={
+                "Name": namespace_name,
+                "Registry": instance_name,
+            },
+            action="CreateNamespace",
+            ak=self.ak,
+            sk=self.sk,
+            service="cr",
+            version=self.version,
+            region=self.region,
+            host=f"cr.{self.region}.volcengineapi.com",
+        )
+        logger.debug(f"create cr namespace {namespace_name}: {response}")
 
-if __name__ == "__main__":
-    cr = VeCR("", "")
-    cr._create_instance()
+        if "Error" in response["ResponseMetadata"]:
+            error_code = response["ResponseMetadata"]["Error"]["Code"]
+            error_message = response["ResponseMetadata"]["Error"]["Message"]
+            if error_code == "AlreadyExists.Namespace":
+                logger.debug(f"cr namespace {namespace_name} already exists")
+                return namespace_name
+            else:
+                logger.error(
+                    f"Error create cr namespace {namespace_name}: {error_code} {error_message}"
+                )
+                raise ValueError(
+                    f"Error create cr namespace {namespace_name}: {error_code} {error_message}"
+                )
 
-    while True:
-        status = cr._check_instance()
-        if status["Phase"] == "Running":
-            print("cr instance running")
-            break
-        else:
-            print("cr instance not running")
-            time.sleep(30)
+        return namespace_name
+
+    def _create_repo(
+        self,
+        instance_name: str = DEFAULT_CR_INSTANCE_NAME,
+        namespace_name: str = DEFAULT_CR_NAMESPACE_NAME,
+        repo_name: str = DEFAULT_CR_REPO_NAME,
+    ) -> str:
+        """
+        create cr repo
+
+        Args:
+            instance_name: cr instance name
+            namespace_name: cr namespace name
+            repo_name: cr repo name
+
+        Returns:
+            cr repo name
+        """
+        response = ve_request(
+            request_body={
+                "Name": repo_name,
+                "Registry": instance_name,
+                "Namespace": namespace_name,
+                "Description": "veadk cr repo",
+            },
+            action="CreateRepository",
+            ak=self.ak,
+            sk=self.sk,
+            service="cr",
+            version=self.version,
+            region=self.region,
+            host=f"cr.{self.region}.volcengineapi.com",
+        )
+        logger.debug(f"create cr repo {repo_name}: {response}")
+
+        if "Error" in response["ResponseMetadata"]:
+            error_code = response["ResponseMetadata"]["Error"]["Code"]
+            error_message = response["ResponseMetadata"]["Error"]["Message"]
+            if error_code == "AlreadyExists.Repository":
+                logger.debug(f"cr repo {repo_name} already exists")
+                return repo_name
+            else:
+                logger.error(
+                    f"Error create cr repo {repo_name}: {error_code} {error_message}"
+                )
+                raise ValueError(
+                    f"Error create cr repo {repo_name}: {error_code} {error_message}"
+                )
+
+        return repo_name
