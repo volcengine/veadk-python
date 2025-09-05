@@ -43,3 +43,7 @@ DEFAULT_COZELOOP_OTEL_EXPORTER_ENDPOINT = (
 
 DEFAULT_TLS_OTEL_EXPORTER_ENDPOINT = "https://tls-cn-beijing.volces.com:4318/v1/traces"
 DEFAULT_TLS_OTEL_EXPORTER_REGION = "cn-beijing"
+
+DEFAULT_CR_INSTANCE_NAME = "veadk-user-instance"
+DEFAULT_CR_NAMESPACE_NAME = "veadk-user-namespace"
+DEFAULT_CR_REPO_NAME = "veadk-user-repo"
