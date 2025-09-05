@@ -21,6 +21,8 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key-here'
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///blog.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.instance_path = os.path.join("/tmp", "flask_instance")
+os.makedirs(app.instance_path, exist_ok=True)
 
 db.init_app(app)
 
