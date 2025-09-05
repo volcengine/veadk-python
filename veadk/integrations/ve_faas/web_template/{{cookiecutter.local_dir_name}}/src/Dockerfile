@@ -17,7 +17,7 @@ ENV FLASK_ENV=production
 ENV PYTHONUNBUFFERED=1
 
 # 暴露端口
-EXPOSE 5000
+EXPOSE 8000
 
 # 启动命令
 CMD ["bash", "run.sh"]
