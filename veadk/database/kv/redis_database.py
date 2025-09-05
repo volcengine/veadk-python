@@ -150,7 +150,10 @@ class RedisDatabase(BaseModel, BaseDatabase):
         """
         try:
             items = self._client.lrange(key, 0, -1)
-            return [{"id": str(i), "content": item} for i, item in enumerate(items)]
+            return [
+                {"id": str(i), "content": item, "metadata": {}}
+                for i, item in enumerate(items)
+            ]
         except Exception as e:
             logger.error(f"Failed to list documents from key {key}: {e}")
             return []
