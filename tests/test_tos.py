@@ -67,7 +67,7 @@ def mock_client(monkeypatch):
         type("S", (), {"Storage_Class_Standard": "STANDARD"}),
     )
     monkeypatch.setattr(
-        tos_mod.tos, "ACLType", type("A", (), {"ACL_Private": "private"})
+        tos_mod.tos, "ACLType", type("A", (), {"ACL_Private": "private", "ACL_Public_Read": "public-read"})
     )
 
     return fake_client
