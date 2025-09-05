@@ -162,7 +162,8 @@ class MysqlDatabase(BaseModel, BaseDatabase):
                 cursor.execute(sql, (limit, offset))
                 results = cursor.fetchall()
                 return [
-                    {"id": str(row["id"]), "content": row["data"]} for row in results
+                    {"id": str(row["id"]), "content": row["data"], "metadata": {}}
+                    for row in results
                 ]
         except Exception as e:
             logger.error(f"Failed to list documents from table {table}: {e}")

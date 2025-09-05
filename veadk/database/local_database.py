@@ -46,7 +46,10 @@ class LocalDataBase(BaseDatabase):
         return self.add_texts(texts)
 
     def list_docs(self, **kwargs: Any) -> list[dict]:
-        return [{"id": id, "content": content} for id, content in self.data.items()]
+        return [
+            {"id": id, "content": content, "metadata": {}}
+            for id, content in self.data.items()
+        ]
 
     def delete_doc(self, id: str, **kwargs: Any):
         if id not in self.data:
