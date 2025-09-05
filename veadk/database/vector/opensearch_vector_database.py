@@ -235,6 +235,7 @@ class OpenSearchVectorDatabase(BaseModel, BaseDatabase):
             {
                 "id": hit["_id"],
                 "content": hit["_source"]["page_content"],
+                "metadata": {},
             }
             for hit in response["hits"]["hits"]
         ]
