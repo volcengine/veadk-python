@@ -45,9 +45,9 @@ uv pip install -e .
 
 ## 配置
 
-VeADK 在仓库中提供了一个示例配置文件`config.yaml.example`，其中标明了一个智能体运行的必需（required）配置和可选（optional）配置。您可以基于该示例文件，在项目根目录下创建实际使用的配置文件`config.yaml`。VeADK 中的配置模块将自动查找并加载该文件内容，并将其中的配置项映射为运行时环境变量，从而帮助您省去环境配置的时间。
+VeADK 在仓库中提供了一个示例配置文件`config.yaml.full`，其中标明了一个智能体运行的必需（required）配置和可选（optional）配置。您可以基于该示例文件，在项目根目录下创建实际使用的配置文件`config.yaml`。VeADK 中的配置模块将自动查找并加载该文件内容，并将其中的配置项映射为运行时环境变量，从而帮助您省去环境配置的时间。
 
-完整的配置项可以参考[`config.yaml.example`文件](https://github.com/volcengine/veadk-python/blob/main/config.yaml.example)。
+完整的配置项可以参考[`config.yaml.full`文件](https://github.com/volcengine/veadk-python/blob/main/config.yaml.full)。
 
 ### 说明
 
