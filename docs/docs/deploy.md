@@ -54,7 +54,7 @@ Run python `deploy.py` for deployment on Volcengine FaaS platform.
 
 ```bash
 └── veadk-cloud-proj
-    ├── config.yaml.example # 定义环境变量
+    ├── config.yaml.full # 定义环境变量
     ├── deploy.py # 部署脚本
     └── src
         ├── agent.py # agent 运行时数据导出
