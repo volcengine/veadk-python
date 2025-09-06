@@ -20,7 +20,6 @@ from google.adk.agents import LlmAgent, RunConfig
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.llm_agent import ToolUnion
 from google.adk.agents.run_config import StreamingMode
-from google.adk.models.lite_llm import LiteLlm
 from google.adk.runners import Runner
 from google.genai import types
 from pydantic import ConfigDict, Field
@@ -37,6 +36,7 @@ from veadk.evaluation import EvalSetRecorder
 from veadk.knowledgebase import KnowledgeBase
 from veadk.memory.long_term_memory import LongTermMemory
 from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.models.ark_model import ArkLLM
 from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INSTRUCTION
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.logger import get_logger
@@ -120,12 +120,13 @@ class Agent(LlmAgent):
         logger.info(f"Model extra config: {self.model_extra_config}")
 
         if not self.model:
-            self.model = LiteLlm(
-                model=f"{self.model_provider}/{self.model_name}",
-                api_key=self.model_api_key,
-                api_base=self.model_api_base,
-                **self.model_extra_config,
-            )
+            # self.model = LiteLlm(
+            #     model=f"{self.model_provider}/{self.model_name}",
+            #     api_key=self.model_api_key,
+            #     api_base=self.model_api_base,
+            #     **self.model_extra_config,
+            # )
+            self.model = ArkLLM(model_name=self.model_name, api_key=self.model_api_key)
             logger.debug(
                 f"LiteLLM client created with config: {self.model_extra_config}"
             )
