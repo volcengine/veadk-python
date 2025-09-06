@@ -36,7 +36,6 @@ from veadk.tracing.telemetry.exporters.tls_exporter import TLSExporter
 from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
 from veadk.types import AgentRunConfig
 from veadk.utils.logger import get_logger
-from volcengine.base.Request import Request
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from opentelemetry import context
 
@@ -165,7 +164,7 @@ app = FastAPI(
 )
 
 @app.middleware("http")
-async def otel_context_middleware(request: Request, call_next):
+async def otel_context_middleware(request, call_next):
     carrier = {
         "traceparent": request.headers.get("Traceparent"),
         "tracestate": request.headers.get("Tracestate"),
