@@ -67,7 +67,7 @@ def _create_cr(volcengine_settings: dict[str, str], cr_settings: dict[str, str])
 @click.option(
     "--base-image-tag",
     required=True,
-    help=f"Base VeADK image tag can be 'preview', 'latest', or a VeADK version (e.g., {VERSION}).",
+    help=f"Base VeADK image tag can be 'preview', 'latest', or a VeADK version (e.g., {VERSION})",
 )
 @click.option(
     "--github-url",
@@ -86,48 +86,43 @@ def _create_cr(volcengine_settings: dict[str, str], cr_settings: dict[str, str])
 )
 @click.option(
     "--access-key",
-    default=None,
-    help="Volcengine access key",
+    default=getenv("VOLCENGINE_ACCESS_KEY"),
+    help="Volcengine access key, if not set, will use the value of environment variable VOLCENGINE_ACCESS_KEY",
 )
 @click.option(
     "--secret-key",
-    default=None,
-    help="Volcengine secret key",
+    default=getenv("VOLCENGINE_SECRET_KEY"),
+    help="Volcengine secret key, if not set, will use the value of environment variable VOLCENGINE_SECRET_KEY",
 )
 @click.option(
     "--region",
     default="cn-beijing",
-    help="Volcengine region",
-)
-@click.option(
-    "--cr-domain",
-    default=None,
-    help="Container Registry domain",
-)
-@click.option(
-    "--cr-namespace-name",
-    default=None,
-    help="Container Registry namespace name",
-)
-@click.option(
-    "--cr-region",
-    default=None,
-    help="Container Registry region",
+    help="Volcengine region, default is cn-beijing",
 )
 @click.option(
     "--cr-instance-name",
-    default=None,
-    help="Container Registry instance name",
+    default=DEFAULT_CR_INSTANCE_NAME,
+    help="Container Registry instance name, default is veadk-user-instance",
+)
+@click.option(
+    "--cr-namespace-name",
+    default=DEFAULT_CR_NAMESPACE_NAME,
+    help="Container Registry namespace name, default is veadk-user-namespace",
 )
 @click.option(
     "--cr-repo",
-    default=None,
-    help="Container Registry repo",
+    default=DEFAULT_CR_REPO_NAME,
+    help="Container Registry repo, default is veadk-user-repo",
+)
+@click.option(
+    "--cr-region",
+    default="cn-beijing",
+    help="Container Registry region, default is cn-beijing",
 )
 @click.option(
     "--function-id",
     default=None,
-    help="Volcengine FaaS function ID",
+    help="Volcengine FaaS function ID, if not set, a new function will be created automatically",
 )
 def pipeline(
     base_image_tag: str,
@@ -137,11 +132,10 @@ def pipeline(
     access_key: str,
     secret_key: str,
     region: str,
-    cr_domain: str,
-    cr_namespace_name: str,
-    cr_region: str,
     cr_instance_name: str,
+    cr_namespace_name: str,
     cr_repo: str,
+    cr_region: str,
     function_id: str,
 ) -> None:
     """Integrate a veadk project to volcengine pipeline for CI/CD"""
@@ -150,11 +144,6 @@ def pipeline(
         "Welcome use VeADK to integrate your project to volcengine pipeline for CI/CD."
     )
 
-    if not access_key:
-        access_key = getenv("VOLCENGINE_ACCESS_KEY")
-    if not secret_key:
-        secret_key = getenv("VOLCENGINE_SECRET_KEY")
-
     volcengine_settings = {
         "volcengine_access_key": access_key,
         "volcengine_secret_key": secret_key,
@@ -162,44 +151,21 @@ def pipeline(
     }
 
     cr_settings = {
-        "cr_domain": cr_domain,
-        "cr_namespace_name": cr_namespace_name,
-        "cr_region": cr_region,
+        "cr_domain": f"{cr_instance_name}-{cr_region}.cr.volces.com",
         "cr_instance_name": cr_instance_name,
+        "cr_namespace_name": cr_namespace_name,
         "cr_repo": cr_repo,
+        "cr_region": cr_region,
     }
 
-    if not all(cr_settings.values()):
-        click.echo(
-            "Not all Container Registry (CR) information is specified; it will be auto-completed and created."
-        )
+    _create_cr(volcengine_settings, cr_settings)
 
-        for key, value in cr_settings.items():
-            if key == "cr_domain" and value is None:
-                cr_settings[key] = (
-                    f"{DEFAULT_CR_INSTANCE_NAME}-cn-beijing.cr.volces.com"
-                )
-            elif key == "cr_namespace_name" and value is None:
-                cr_settings[key] = DEFAULT_CR_NAMESPACE_NAME
-            elif key == "cr_region" and value is None:
-                cr_settings[key] = "cn-beijing"
-            elif key == "cr_instance_name" and value is None:
-                cr_settings[key] = DEFAULT_CR_INSTANCE_NAME
-            elif key == "cr_repo" and value is None:
-                cr_settings[key] = DEFAULT_CR_REPO_NAME
-
-        _create_cr(volcengine_settings, cr_settings)
-
-        click.echo("Using the following CR configuration:")
-        click.echo(f"Container Registry domain: {cr_settings['cr_domain']}")
-        click.echo(
-            f"Container Registry namespace name: {cr_settings['cr_namespace_name']}"
-        )
-        click.echo(f"Container Registry region: {cr_settings['cr_region']}")
-        click.echo(
-            f"Container Registry instance name: {cr_settings['cr_instance_name']}"
-        )
-        click.echo(f"Container Registry repo: {cr_settings['cr_repo']}")
+    click.echo("Using the following CR configuration:")
+    click.echo(f"Container Registry domain: {cr_settings['cr_domain']}")
+    click.echo(f"Container Registry namespace name: {cr_settings['cr_namespace_name']}")
+    click.echo(f"Container Registry region: {cr_settings['cr_region']}")
+    click.echo(f"Container Registry instance name: {cr_settings['cr_instance_name']}")
+    click.echo(f"Container Registry repo: {cr_settings['cr_repo']}")
 
     if not function_id:
         click.echo(
