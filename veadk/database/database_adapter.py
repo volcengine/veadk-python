@@ -54,6 +54,17 @@ class KVDatabaseAdapter:
             logger.error(f"Failed to search from Redis: index={index} error={e}")
             raise e
 
+    def delete(self, index: str) -> bool:
+        logger.debug(f"Deleting key from Redis database: index={index}")
+        try:
+            self.client.delete(key=index)
+            return True
+        except Exception as e:
+            logger.error(
+                f"Failed to delete key from Redis database: index={index} error={e}"
+            )
+            return False
+
     def delete_doc(self, index: str, id: str) -> bool:
         logger.debug(f"Deleting document from Redis database: index={index} id={id}")
         try:
@@ -134,6 +145,17 @@ class RelationalDatabaseAdapter:
         results = self.client.query(sql)
 
         return [item["data"] for item in results]
+
+    def delete(self, index: str) -> bool:
+        logger.debug(f"Deleting table from SQL database: table_name={index}")
+        try:
+            self.client.delete(table=index)
+            return True
+        except Exception as e:
+            logger.error(
+                f"Failed to delete table from SQL database: table_name={index} error={e}"
+            )
+            return False
 
     def delete_doc(self, index: str, id: str) -> bool:
         logger.debug(f"Deleting document from SQL database: table_name={index} id={id}")
@@ -293,7 +315,7 @@ class VikingDatabaseAdapter:
     def delete(self, index: str) -> bool:
         self._validate_index(index)
         logger.debug(f"Deleting collection from Viking database: index={index}")
-        return self.client.delete(collection_name=index)
+        return self.client.delete(name=index)
 
     def delete_doc(self, index: str, id: str) -> bool:
         self._validate_index(index)
@@ -341,6 +363,11 @@ class VikingMemoryDatabaseAdapter:
         result = self.client.query(query, collection_name=index, top_k=top_k, **kwargs)
         return result
 
+    def delete(self, index: str) -> bool:
+        self._validate_index(index)
+        logger.debug(f"Deleting collection from Viking database memory: index={index}")
+        raise NotImplementedError("VikingMemoryDatabase does not support delete")
+
     def delete_docs(self, index: str, ids: list[int]):
         raise NotImplementedError("VikingMemoryDatabase does not support delete_docs")
 
@@ -360,8 +387,8 @@ class LocalDatabaseAdapter:
     def query(self, query: str, **kwargs):
         return self.client.query(query, **kwargs)
 
-    def delete(self, index: str):
-        self.client.delete()
+    def delete(self, index: str) -> bool:
+        return self.client.delete()
 
     def delete_doc(self, index: str, id: str) -> bool:
         return self.client.delete_doc(id)

@@ -38,9 +38,9 @@ create_collection_path = "/api/knowledge/collection/create"
 search_knowledge_path = "/api/knowledge/collection/search_knowledge"
 list_collections_path = "/api/knowledge/collection/list"
 get_collections_path = "/api/knowledge/collection/info"
+doc_del_path = "/api/knowledge/collection/delete"
 doc_add_path = "/api/knowledge/doc/add"
 doc_info_path = "/api/knowledge/doc/info"
-doc_del_path = "/api/collection/drop"
 list_docs_path = "/api/knowledge/point/list"
 delete_docs_path = "/api/knowledge/point/delete"
 
@@ -255,9 +255,9 @@ class VikingDatabase(BaseModel, BaseDatabase):
         }
 
     def delete(self, **kwargs: Any):
-        collection_name = kwargs.get("collection_name")
-        resource_id = kwargs.get("resource_id")
-        request_param = {"collection_name": collection_name, "resource_id": resource_id}
+        name = kwargs.get("name")
+        project = kwargs.get("project", self.config.project)
+        request_param = {"name": name, "project": project}
         doc_del_req = prepare_request(
             method="POST", path=doc_del_path, config=self.config, data=request_param
         )
