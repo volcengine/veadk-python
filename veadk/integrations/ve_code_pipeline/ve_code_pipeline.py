@@ -54,7 +54,7 @@ stages:
                 crNamespace: ${cr_namespace_name}
                 crRegion: ${cr_region}
                 crRegistryInstance: ${cr_instance_name}
-                crRepo: ${cr_repo}
+                crRepo: ${cr_repo_name}
                 crTag: $(DATETIME)
                 disableSSLVerify: false
                 dockerfiles:
@@ -190,7 +190,7 @@ class VeCodePipeline:
         cr_namespace_name: str,
         cr_region: str,
         cr_instance_name: str,
-        cr_repo: str,
+        cr_repo_name: str,
         docker_file: str,
         function_id: str,
     ) -> str:
@@ -206,7 +206,7 @@ class VeCodePipeline:
             cr_namespace_name=cr_namespace_name,
             cr_region=cr_region,
             cr_instance_name=cr_instance_name,
-            cr_repo=cr_repo,
+            cr_repo_name=cr_repo_name,
             docker_file=docker_file,
             function_id=function_id,
         )
@@ -388,7 +388,7 @@ class VeCodePipeline:
         cr_namespace_name: str,
         cr_region: str,
         cr_instance_name: str,
-        cr_repo: str,
+        cr_repo_name: str,
         function_id: str,
     ) -> str:
         workspace_id = self._get_default_workspace()
@@ -407,7 +407,7 @@ class VeCodePipeline:
             cr_namespace_name=cr_namespace_name,
             cr_region=cr_region,
             cr_instance_name=cr_instance_name,
-            cr_repo=cr_repo,
+            cr_repo_name=cr_repo_name,
             docker_file=get_dockerfile(tag=base_image_tag),
             function_id=function_id,
         )

@@ -56,7 +56,7 @@ def _create_cr(volcengine_settings: dict[str, str], cr_settings: dict[str, str])
         vecr._create_repo(
             instance_name=cr_settings["cr_instance_name"],
             namespace_name=cr_settings["cr_namespace_name"],
-            repo_name=cr_settings["cr_repo"],
+            repo_name=cr_settings["cr_repo_name"],
         )
     except Exception as e:
         click.echo(f"Failed to create CR repo: {e}")
@@ -110,9 +110,9 @@ def _create_cr(volcengine_settings: dict[str, str], cr_settings: dict[str, str])
     help="Container Registry namespace name, default is veadk-user-namespace",
 )
 @click.option(
-    "--cr-repo",
+    "--cr-repo-name",
     default=DEFAULT_CR_REPO_NAME,
-    help="Container Registry repo, default is veadk-user-repo",
+    help="Container Registry repo name, default is veadk-user-repo",
 )
 @click.option(
     "--cr-region",
@@ -134,7 +134,7 @@ def pipeline(
     region: str,
     cr_instance_name: str,
     cr_namespace_name: str,
-    cr_repo: str,
+    cr_repo_name: str,
     cr_region: str,
     function_id: str,
 ) -> None:
@@ -154,7 +154,7 @@ def pipeline(
         "cr_domain": f"{cr_instance_name}-{cr_region}.cr.volces.com",
         "cr_instance_name": cr_instance_name,
         "cr_namespace_name": cr_namespace_name,
-        "cr_repo": cr_repo,
+        "cr_repo_name": cr_repo_name,
         "cr_region": cr_region,
     }
 
@@ -165,7 +165,7 @@ def pipeline(
     click.echo(f"Container Registry namespace name: {cr_settings['cr_namespace_name']}")
     click.echo(f"Container Registry region: {cr_settings['cr_region']}")
     click.echo(f"Container Registry instance name: {cr_settings['cr_instance_name']}")
-    click.echo(f"Container Registry repo: {cr_settings['cr_repo']}")
+    click.echo(f"Container Registry repo name: {cr_settings['cr_repo_name']}")
 
     if not function_id:
         click.echo(
@@ -200,7 +200,7 @@ def pipeline(
         cr_namespace_name=cr_settings["cr_namespace_name"],
         cr_region=cr_settings["cr_region"],
         cr_instance_name=cr_settings["cr_instance_name"],
-        cr_repo=cr_settings["cr_repo"],
+        cr_repo_name=cr_settings["cr_repo_name"],
         function_id=function_id,
     )
 
