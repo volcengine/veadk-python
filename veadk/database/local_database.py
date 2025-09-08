@@ -41,6 +41,7 @@ class LocalDataBase(BaseDatabase):
 
     def delete(self, **kwargs: Any):
         self.data = {}
+        return True
 
     def add(self, texts: list[str], **kwargs: Any):
         return self.add_texts(texts)
