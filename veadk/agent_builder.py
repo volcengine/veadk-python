@@ -2,6 +2,7 @@ from google.adk.agents import BaseAgent
 from google.adk.agents.llm_agent import ToolUnion
 from omegaconf import OmegaConf
 
+from veadk.a2a.remote_ve_agent import RemoteVeAgent
 from veadk.agent import Agent
 from veadk.agents.loop_agent import LoopAgent
 from veadk.agents.parallel_agent import ParallelAgent
@@ -15,6 +16,7 @@ AGENT_TYPES = {
     "SequentialAgent": SequentialAgent,
     "ParallelAgent": ParallelAgent,
     "LoopAgent": LoopAgent,
+    "RemoteVeAgent": RemoteVeAgent,
 }
 
 
