@@ -30,6 +30,8 @@ VeADK 各组件与火山引擎相关产品的结合矩阵：
 | 评测 | [扣子罗盘](https://www.coze.cn/loop) （Coze Loop） | 在线评测 |
 | 云部署 | [火山引擎函数服务](https://www.volcengine.com/product/vefaas) （VeFaaS） | 提供一键上云能力 |
 | | [火山引擎 API 网关](https://www.volcengine.com/product/apig) | 提供鉴权、路由等能力 |
+| | [火山引擎持续交付](https://www.volcengine.com/product/cp) | 提供用户仓库向 VeFaaS 进行基于镜像的持续交付部署 |
+| | [火山引擎镜像仓库](https://www.volcengine.com/product/cr) | 提供用户代码镜像托管维护 |
 
 ## VeADK 核心优势
 
