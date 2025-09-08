@@ -16,7 +16,7 @@ import json
 from string import Template
 
 import requests
-from veadk.config import getenv
+
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp
 from veadk.utils.volcengine_sign import ve_request
@@ -109,8 +109,8 @@ def get_dockerfile(tag: str = "latest") -> str:
 class VeCodePipeline:
     def __init__(
         self,
-        volcengine_access_key: str = getenv("VOLCENGINE_ACCESS_KEY"),
-        volcengine_secret_key: str = getenv("VOLCENGINE_SECRET_KEY"),
+        volcengine_access_key: str,
+        volcengine_secret_key: str,
         region: str = "cn-beijing",
     ) -> None:
         self.volcengine_access_key = volcengine_access_key

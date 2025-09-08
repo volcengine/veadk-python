@@ -12,14 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from veadk.utils.volcengine_sign import ve_request
-from veadk.utils.logger import get_logger
+import time
+
 from veadk.consts import (
     DEFAULT_CR_INSTANCE_NAME,
     DEFAULT_CR_NAMESPACE_NAME,
     DEFAULT_CR_REPO_NAME,
 )
-import time
+from veadk.utils.logger import get_logger
+from veadk.utils.volcengine_sign import ve_request
 
 logger = get_logger(__name__)
 
@@ -63,6 +64,20 @@ class VeCR:
         )
         logger.debug(f"create cr instance {instance_name}: {response}")
 
+        if "Error" in response["ResponseMetadata"]:
+            error_code = response["ResponseMetadata"]["Error"]["Code"]
+            error_message = response["ResponseMetadata"]["Error"]["Message"]
+            if error_code == "AlreadyExists.Registry":
+                logger.debug(f"cr instance {instance_name} already exists")
+                return instance_name
+            else:
+                logger.error(
+                    f"Error create cr instance {instance_name}: {error_code} {error_message}"
+                )
+                raise ValueError(
+                    f"Error create cr instance {instance_name}: {error_code} {error_message}"
+                )
+
         while True:
             status = self._check_instance(instance_name)
             if status == "Running":
@@ -71,7 +86,7 @@ class VeCR:
                 raise ValueError(f"cr instance {instance_name} create failed")
             else:
                 logger.debug(f"cr instance status: {status}")
-                time.sleep(5)
+                time.sleep(30)
 
         return instance_name
 
@@ -142,7 +157,7 @@ class VeCR:
             error_code = response["ResponseMetadata"]["Error"]["Code"]
             error_message = response["ResponseMetadata"]["Error"]["Message"]
             if error_code == "AlreadyExists.Namespace":
-                logger.debug(f"cr namespace {namespace_name} already exists")
+                logger.warning(f"cr namespace {namespace_name} already exists")
                 return namespace_name
             else:
                 logger.error(
