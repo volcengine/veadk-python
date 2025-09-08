@@ -28,6 +28,7 @@ from typing_extensions import Any
 
 from veadk.config import getenv
 from veadk.consts import (
+    DEFAULT_AGENT_NAME,
     DEFAULT_MODEL_AGENT_API_BASE,
     DEFAULT_MODEL_AGENT_NAME,
     DEFAULT_MODEL_AGENT_PROVIDER,
@@ -53,7 +54,7 @@ class Agent(LlmAgent):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
     """The model config"""
 
-    name: str = "veAgent"
+    name: str = DEFAULT_AGENT_NAME
     """The name of the agent."""
 
     description: str = DEFAULT_DESCRIPTION
@@ -62,13 +63,23 @@ class Agent(LlmAgent):
     instruction: str = DEFAULT_INSTRUCTION
     """The instruction for the agent, such as principles of function calling."""
 
-    model_name: str = getenv("MODEL_AGENT_NAME", DEFAULT_MODEL_AGENT_NAME)
+    model_name: str = Field(
+        default_factory=lambda: getenv("MODEL_AGENT_NAME", DEFAULT_MODEL_AGENT_NAME)
+    )
     """The name of the model for agent running."""
 
-    model_provider: str = getenv("MODEL_AGENT_PROVIDER", DEFAULT_MODEL_AGENT_PROVIDER)
+    model_provider: str = Field(
+        default_factory=lambda: getenv(
+            "MODEL_AGENT_PROVIDER", DEFAULT_MODEL_AGENT_PROVIDER
+        )
+    )
     """The provider of the model for agent running."""
 
-    model_api_base: str = getenv("MODEL_AGENT_API_BASE", DEFAULT_MODEL_AGENT_API_BASE)
+    model_api_base: str = Field(
+        default_factory=lambda: getenv(
+            "MODEL_AGENT_API_BASE", DEFAULT_MODEL_AGENT_API_BASE
+        )
+    )
     """The api base of the model for agent running."""
 
     model_api_key: str = Field(default_factory=lambda: getenv("MODEL_AGENT_API_KEY"))
