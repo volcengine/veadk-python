@@ -11,32 +11,3 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-
-import click
-
-from veadk.cli.cli_deploy import deploy
-from veadk.cli.cli_init import init
-from veadk.cli.cli_prompt import prompt
-from veadk.cli.cli_web import web
-from veadk.cli.cli_pipeline import pipeline
-from veadk.version import VERSION
-
-
-@click.group()
-@click.version_option(
-    version=VERSION, prog_name="Volcengine Agent Development Kit (VeADK)"
-)
-def veadk():
-    """Volcengine ADK command line tools"""
-    pass
-
-
-veadk.add_command(deploy)
-veadk.add_command(init)
-veadk.add_command(prompt)
-veadk.add_command(web)
-veadk.add_command(pipeline)
-
-if __name__ == "__main__":
-    veadk()

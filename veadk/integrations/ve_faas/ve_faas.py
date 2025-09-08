@@ -411,3 +411,262 @@ class VeFaaS:
         logger.info(f"VeFaaS application {name} with ID {app_id} deployed on {url}.")
 
         return url, app_id, function_id
+
+    def _create_image_function(self, function_name: str, image: str):
+        """Create function using container image instead of code upload."""
+        # Read environment variables from veadk configuration
+        envs = []
+        for key, value in veadk.config.veadk_environments.items():
+            envs.append(EnvForCreateFunctionInput(key=key, value=value))
+        logger.info(
+            f"Fetch {len(envs)} environment variables for image function.",
+        )
+
+        # Create function with container image source configuration
+        res = self.client.create_function(
+            volcenginesdkvefaas.CreateFunctionRequest(
+                command="bash ./run.sh",  # Custom startup command
+                name=function_name,
+                description="Created by VeADK (Volcengine Agent Development Kit)",
+                tags=[TagForCreateFunctionInput(key="provider", value="veadk")],
+                runtime="native/v1",  # Native runtime required for container images
+                source_type="image",  # Set source type to container image
+                source=image,  # Container image URL
+                request_timeout=1800,  # Request timeout in seconds
+                envs=envs,  # Environment variables from configuration
+            )
+        )
+
+        # Log function creation success without exposing sensitive information
+        logger.debug(
+            f"Function creation in {res.project_name} project with ID {res.id}"
+        )
+
+        function_id = res.id
+        logger.info(
+            f"Function {function_name} created with image {image} and ID {function_id}"
+        )
+
+        return function_name, function_id
+
+    def query_user_cr_vpc_tunnel(
+        self, registry_name: str, max_attempts: int = 6
+    ) -> bool:
+        """Query and enable CR VPC tunnel for user registry access."""
+        logger.info(f"Setting up CR VPC tunnel for registry: {registry_name}")
+        waiting_times = 30
+
+        try:
+            for attempt in range(max_attempts):
+                # Check current status
+                logger.info(
+                    f"Checking tunnel status (attempt {attempt + 1}/{max_attempts})"
+                )
+                query_resp = ve_request(
+                    request_body={"Registry": registry_name},
+                    action="QueryUserCrVpcTunnel",
+                    ak=self.ak,
+                    sk=self.sk,
+                    service="vefaas",
+                    version="2021-03-03",
+                    region="cn-beijing",
+                    host="open.volcengineapi.com",
+                )
+
+                current_status = query_resp.get("Result", {}).get("Ready", False)
+                logger.info(f"Current tunnel status: {current_status}")
+
+                # Always try to enable
+                logger.info("Enable VPC tunnel")
+                enable_resp = ve_request(
+                    request_body={"Registry": registry_name},
+                    action="EnableUserCrVpcTunnel",
+                    ak=self.ak,
+                    sk=self.sk,
+                    service="vefaas",
+                    version="2021-03-03",
+                    region="cn-beijing",
+                    host="open.volcengineapi.com",
+                )
+
+                # Handle EnableUserCrVpcTunnel response correctly
+                enable_result = enable_resp.get("Result", {})
+                enable_status = enable_result.get("Status", "")
+                enable_message = enable_result.get("Message", "")
+
+                if enable_status == "success":
+                    logger.info("Enable tunnel succeeded")
+                elif enable_status == "failed":
+                    logger.warning(f"Enable tunnel failed: {enable_message}")
+                else:
+                    logger.warning(f"Enable tunnel unknown status: {enable_status}")
+
+                # Verify final status
+                logger.info("Verifying tunnel status")
+                verify_resp = ve_request(
+                    request_body={"Registry": registry_name},
+                    action="QueryUserCrVpcTunnel",
+                    ak=self.ak,
+                    sk=self.sk,
+                    service="vefaas",
+                    version="2021-03-03",
+                    region="cn-beijing",
+                    host="open.volcengineapi.com",
+                )
+
+                final_status = verify_resp.get("Result", {}).get("Ready", False)
+                logger.info(f"Final tunnel status: {final_status}")
+
+                if final_status:
+                    logger.info(
+                        f"CR VPC tunnel successfully enabled for {registry_name}"
+                    )
+                    return True
+
+                # If not ready and not last attempt, wait and retry
+                if attempt < max_attempts - 1:
+                    logger.warning(
+                        f"Tunnel not ready, waiting {waiting_times}s before retry"
+                    )
+                    time.sleep(waiting_times)
+
+        except Exception as e:
+            raise ValueError(f"Failed to setup CR VPC tunnel: {str(e)}")
+
+        return False
+
+    def _create_image_function(self, function_name: str, image: str):
+        """Create function using container image instead of code upload."""
+        # Read environment variables from veadk configuration
+        envs = []
+        for key, value in veadk.config.veadk_environments.items():
+            envs.append(EnvForCreateFunctionInput(key=key, value=value))
+        logger.info(
+            f"Fetch {len(envs)} environment variables for image function.",
+        )
+
+        # Create function with container image source configuration
+        res = self.client.create_function(
+            volcenginesdkvefaas.CreateFunctionRequest(
+                command="bash ./run.sh",  # Custom startup command
+                name=function_name,
+                description="Created by VeADK (Volcengine Agent Development Kit)",
+                tags=[TagForCreateFunctionInput(key="provider", value="veadk")],
+                runtime="native/v1",  # Native runtime required for container images
+                source_type="image",  # Set source type to container image
+                source=image,  # Container image URL
+                request_timeout=1800,  # Request timeout in seconds
+                envs=envs,  # Environment variables from configuration
+            )
+        )
+
+        # Log function creation success without exposing sensitive information
+        logger.debug(
+            f"Function creation in {res.project_name} project with ID {res.id}"
+        )
+
+        function_id = res.id
+        logger.info(
+            f"Function {function_name} created with image {image} and ID {function_id}"
+        )
+
+        return function_name, function_id
+
+    def deploy_image(
+        self,
+        name: str,
+        image: str,
+        registry_name: str,
+        gateway_name: str = "",
+        gateway_service_name: str = "",
+        gateway_upstream_name: str = "",
+    ) -> tuple[str, str, str]:
+        """Deploy application using container image.
+
+        Args:
+            name (str): Application name.
+            image (str): Container image URL.
+            gateway_name (str, optional): Gateway name. Defaults to "".
+            gateway_service_name (str, optional): Gateway service name. Defaults to "".
+            gateway_upstream_name (str, optional): Gateway upstream name. Defaults to "".
+
+        Returns:
+            tuple[str, str, str]: (url, app_id, function_id)
+        """
+        # Validate application name format
+        is_ready = self.query_user_cr_vpc_tunnel(registry_name)
+        if not is_ready:
+            raise ValueError("CR VPC tunnel is not ready")
+
+        if "_" in name:
+            raise ValueError("Function or Application name cannot contain '_'.")
+
+        # Generate default gateway names with timestamp if not provided
+        if not gateway_name:
+            gateway_name = f"{name}-gw-{formatted_timestamp()}"
+
+            # Check for existing serverless gateways to reuse
+            existing_gateways = self.apig_client.list_gateways()
+            for gateway_instance in existing_gateways.items:
+                if (
+                    gateway_instance.type == "serverless"
+                    and gateway_instance.name != gateway_name
+                ):
+                    logger.warning(
+                        f"You have at least one serverless gateway {gateway_instance.name}, but not {gateway_name}. Using {gateway_instance.name} instead."
+                    )
+                    gateway_name = gateway_instance.name
+                    break
+
+        # Set default gateway service and upstream names
+        if not gateway_service_name:
+            gateway_service_name = f"{name}-gw-svr-{formatted_timestamp()}"
+        if not gateway_upstream_name:
+            gateway_upstream_name = f"{name}-gw-us-{formatted_timestamp()}"
+
+        function_name = f"{name}-fn"
+
+        # Log deployment start with image information
+        logger.info(
+            f"Start to create VeFaaS function {function_name} with image {image}. Gateway: {gateway_name}, Gateway Service: {gateway_service_name}, Gateway Upstream: {gateway_upstream_name}."
+        )
+
+        # Create function using container image method
+        function_name, function_id = self._create_image_function(function_name, image)
+        logger.info(f"VeFaaS function {function_name} with ID {function_id} created.")
+
+        # Create application using existing application creation logic
+        logger.info(f"Start to create VeFaaS application {name}.")
+        app_id = self._create_application(
+            name,
+            function_name,
+            gateway_name,
+            gateway_upstream_name,
+            gateway_service_name,
+        )
+
+        # Release application and get deployment URL
+        logger.info(f"VeFaaS application {name} with ID {app_id} created.")
+        logger.info(f"Start to release VeFaaS application {app_id}.")
+        # Release application with retry
+        max_attempts = 5
+        attempt = 0
+        while True:
+            try:
+                url = self._release_application(app_id)
+                logger.info(f"VeFaaS application {name} with ID {app_id} released.")
+                break
+            except Exception:
+                attempt += 1
+                if attempt < max_attempts:
+                    wait_time = 30 * attempt
+                    logger.info(
+                        f"Image sync still in progress. Waiting {wait_time} seconds before retry {attempt}/{max_attempts}."
+                    )
+                    time.sleep(wait_time)
+                else:
+                    raise
+
+        logger.info(f"VeFaaS application {name} with ID {app_id} deployed on {url}.")
+
+        return url, app_id, function_id
