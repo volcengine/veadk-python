@@ -270,8 +270,8 @@ class VikingDatabase(BaseModel, BaseDatabase):
         result = rsp.json()
         if result["code"] != 0:
             logger.error(f"Error in add_doc: {result['message']}")
-            return {"error": result["message"]}
-        return {}
+            return False
+        return True
 
     def query(self, query: str, **kwargs: Any) -> list[str]:
         """
@@ -413,19 +413,17 @@ class VikingDatabase(BaseModel, BaseDatabase):
             "limit": limit,
         }
 
-        create_collection_req = prepare_request(
+        list_doc_req = prepare_request(
             method="POST",
             path=list_docs_path,
             config=self.config,
             data=request_params,
         )
         resp = requests.request(
-            method=create_collection_req.method,
-            url="https://{}{}".format(
-                g_knowledge_base_domain, create_collection_req.path
-            ),
-            headers=create_collection_req.headers,
-            data=create_collection_req.body,
+            method=list_doc_req.method,
+            url="https://{}{}".format(g_knowledge_base_domain, list_doc_req.path),
+            headers=list_doc_req.headers,
+            data=list_doc_req.body,
         )
 
         result = resp.json()
@@ -450,19 +448,17 @@ class VikingDatabase(BaseModel, BaseDatabase):
             "point_id": id,
         }
 
-        create_collection_req = prepare_request(
+        delete_by_id_req = prepare_request(
             method="POST",
             path=delete_docs_path,
             config=self.config,
             data=request_params,
         )
         resp = requests.request(
-            method=create_collection_req.method,
-            url="https://{}{}".format(
-                g_knowledge_base_domain, create_collection_req.path
-            ),
-            headers=create_collection_req.headers,
-            data=create_collection_req.body,
+            method=delete_by_id_req.method,
+            url="https://{}{}".format(g_knowledge_base_domain, delete_by_id_req.path),
+            headers=delete_by_id_req.headers,
+            data=delete_by_id_req.body,
         )
 
         result = resp.json()

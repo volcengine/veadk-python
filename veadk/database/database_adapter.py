@@ -201,6 +201,18 @@ class VectorDatabaseAdapter:
             top_k=top_k,
         )
 
+    def delete(self, index: str) -> bool:
+        self._validate_index(index)
+        logger.debug(f"Deleting collection from vector database: index={index}")
+        try:
+            self.client.delete(collection_name=index)
+            return True
+        except Exception as e:
+            logger.error(
+                f"Failed to delete collection from vector database: index={index} error={e}"
+            )
+            return False
+
     def delete_doc(self, index: str, id: str) -> bool:
         self._validate_index(index)
         logger.debug(f"Deleting documents from vector database: index={index} id={id}")
@@ -278,6 +290,11 @@ class VikingDatabaseAdapter:
 
         return self.client.query(query, collection_name=index, top_k=top_k)
 
+    def delete(self, index: str) -> bool:
+        self._validate_index(index)
+        logger.debug(f"Deleting collection from Viking database: index={index}")
+        return self.client.delete(collection_name=index)
+
     def delete_doc(self, index: str, id: str) -> bool:
         self._validate_index(index)
         logger.debug(f"Deleting documents from vector database: index={index} id={id}")
@@ -342,6 +359,9 @@ class LocalDatabaseAdapter:
 
     def query(self, query: str, **kwargs):
         return self.client.query(query, **kwargs)
+
+    def delete(self, index: str):
+        self.client.delete()
 
     def delete_doc(self, index: str, id: str) -> bool:
         return self.client.delete_doc(id)
