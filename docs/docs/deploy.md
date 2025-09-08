@@ -265,7 +265,7 @@ VeADK 内置了[火山引擎持续交付](https://www.volcengine.com/product/cp)
 | `--github-token` | Github Token，用于管理项目 | **必填** |
 | `--volcengine-access-key` | 火山引擎 Access Key | 使用环境变量 `VOLCENGINE_ACCESS_KEY` |
 | `--volcengine-secret-key` | 火山引擎 Secret Key | 使用环境变量 `VOLCENGINE_SECRET_KEY` |
-| `--pipeline-region` | 火山引擎 CodePipeline 区域 | `cn-beijing` |
+| `--region` | 火山引擎产品区域 | `cn-beijing` |
 | `--cr-instance-name` | 火山引擎容器镜像仓库实例名 | `veadk-user-instance` |
 | `--cr-namespace-name` | 火山引擎容器镜像仓库命名空间 | `veadk-user-namespace` |
 | `--cr-repo-name` | 火山引擎容器镜像仓库 Repo 名称 | `veadk-user-repo` |
