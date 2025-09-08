@@ -15,81 +15,153 @@
 import warnings
 
 import click
+from veadk.version import VERSION
 from veadk.config import getenv
 from veadk.integrations.ve_code_pipeline.ve_code_pipeline import VeCodePipeline
 from veadk.integrations.ve_faas.ve_faas import VeFaaS
+from veadk.integrations.ve_cr.ve_cr import VeCR
+from veadk.consts import (
+    DEFAULT_CR_INSTANCE_NAME,
+    DEFAULT_CR_NAMESPACE_NAME,
+    DEFAULT_CR_REPO_NAME,
+)
 
 warnings.filterwarnings(
     "ignore", category=UserWarning, module="pydantic._internal._fields"
 )
 
 
-def _render_volcengine_prompts() -> dict[str, str]:
-    volcengine_access_key = click.prompt(
-        "Volcengine Access Key", default="", show_default=False
+def _create_cr(volcengine_settings: dict[str, str], cr_settings: dict[str, str]):
+    vecr = VeCR(
+        access_key=volcengine_settings["volcengine_access_key"],
+        secret_key=volcengine_settings["volcengine_secret_key"],
+        region=volcengine_settings["volcengine_region"],
     )
-    if not volcengine_access_key:
-        click.echo(
-            "No Volcengine Access Key provided, will try to get it from environment variable VOLCENGINE_ACCESS_KEY."
-        )
-        volcengine_access_key = getenv("VOLCENGINE_ACCESS_KEY")
+    try:
+        vecr._create_instance(cr_settings["cr_instance_name"])
+    except Exception as e:
+        click.echo(f"Failed to create CR instance: {e}")
+        raise
 
-    volcengine_secret_key = click.prompt(
-        "Volcengine Secret Key", default="", show_default=False
+    try:
+        vecr._create_namespace(
+            instance_name=cr_settings["cr_instance_name"],
+            namespace_name=cr_settings["cr_namespace_name"],
+        )
+    except Exception as e:
+        click.echo(f"Failed to create CR namespace: {e}")
+        raise
+
+    try:
+        vecr._create_repo(
+            instance_name=cr_settings["cr_instance_name"],
+            namespace_name=cr_settings["cr_namespace_name"],
+            repo_name=cr_settings["cr_repo"],
+        )
+    except Exception as e:
+        click.echo(f"Failed to create CR repo: {e}")
+        raise
+
+
+@click.command()
+@click.option(
+    "--base-image-tag",
+    required=True,
+    help=f"Base VeADK image tag can be 'preview', 'latest', or a VeADK version (e.g., {VERSION}).",
+)
+@click.option(
+    "--github-url",
+    required=True,
+    help="The github url of your project",
+)
+@click.option(
+    "--github-branch",
+    default="main",
+    help="The github branch of your project, default is main",
+)
+@click.option(
+    "--github-token",
+    required=True,
+    help="The github token to manage your project",
+)
+@click.option(
+    "--access-key",
+    default=None,
+    help="Volcengine access key",
+)
+@click.option(
+    "--secret-key",
+    default=None,
+    help="Volcengine secret key",
+)
+@click.option(
+    "--region",
+    default="cn-beijing",
+    help="Volcengine region",
+)
+@click.option(
+    "--cr-domain",
+    default=None,
+    help="Container Registry domain",
+)
+@click.option(
+    "--cr-namespace-name",
+    default=None,
+    help="Container Registry namespace name",
+)
+@click.option(
+    "--cr-region",
+    default=None,
+    help="Container Registry region",
+)
+@click.option(
+    "--cr-instance-name",
+    default=None,
+    help="Container Registry instance name",
+)
+@click.option(
+    "--cr-repo",
+    default=None,
+    help="Container Registry repo",
+)
+@click.option(
+    "--function-id",
+    default=None,
+    help="Volcengine FaaS function ID",
+)
+def pipeline(
+    base_image_tag: str,
+    github_url: str,
+    github_branch: str,
+    github_token: str,
+    access_key: str,
+    secret_key: str,
+    region: str,
+    cr_domain: str,
+    cr_namespace_name: str,
+    cr_region: str,
+    cr_instance_name: str,
+    cr_repo: str,
+    function_id: str,
+) -> None:
+    """Integrate a veadk project to volcengine pipeline for CI/CD"""
+
+    click.echo(
+        "Welcome use VeADK to integrate your project to volcengine pipeline for CI/CD."
     )
-    if not volcengine_secret_key:
-        click.echo(
-            "No Volcengine Secret Key provided, will try to get it from environment variable VOLCENGINE_SECRET_KEY."
-        )
-        volcengine_secret_key = getenv("VOLCENGINE_SECRET_KEY")
 
-    volcengine_region = click.prompt("Volcengine Region", default="cn-beijing")
-    return {
-        "volcengine_access_key": volcengine_access_key,
-        "volcengine_secret_key": volcengine_secret_key,
-        "volcengine_region": volcengine_region,
+    if not access_key:
+        access_key = getenv("VOLCENGINE_ACCESS_KEY")
+    if not secret_key:
+        secret_key = getenv("VOLCENGINE_SECRET_KEY")
+
+    volcengine_settings = {
+        "volcengine_access_key": access_key,
+        "volcengine_secret_key": secret_key,
+        "volcengine_region": region,
     }
 
-
-def _render_cr_prompts() -> dict[str, str] | None:
-    cr_domain, cr_namespace_name, cr_region, cr_instance_name, cr_repo = (
-        "",
-        "",
-        "",
-        "",
-        "",
-    )
-    cr_fields = [cr_domain, cr_namespace_name, cr_region, cr_instance_name, cr_repo]
-    filled_fields = [field for field in cr_fields if field.strip()]
-
-    while len(filled_fields) < len(cr_fields):
-        click.echo(
-            "Please provide all the Container Registry (CR) information, "
-            "or press Enter to leave them all blank and let VeADK create the CR automatically."
-        )
-        cr_domain = click.prompt(
-            "Container Registry domain", default="", show_default=False
-        )
-        cr_namespace_name = click.prompt(
-            "Container Registry namespace name", default="", show_default=False
-        )
-        cr_region = click.prompt(
-            "Container Registry region", default="", show_default=False
-        )
-        cr_instance_name = click.prompt(
-            "Container Registry instance name", default="", show_default=False
-        )
-        cr_repo = click.prompt(
-            "Container Registry repo", default="", show_default=False
-        )
-
-        cr_fields = [cr_domain, cr_namespace_name, cr_region, cr_instance_name, cr_repo]
-        filled_fields = [field for field in cr_fields if field.strip()]
-
-        if len(filled_fields) == 0:
-            return None
-
-    return {
+    cr_settings = {
         "cr_domain": cr_domain,
         "cr_namespace_name": cr_namespace_name,
         "cr_region": cr_region,
@@ -97,49 +169,28 @@ def _render_cr_prompts() -> dict[str, str] | None:
         "cr_repo": cr_repo,
     }
 
+    if not all(cr_settings.values()):
+        click.echo(
+            "Not all Container Registry (CR) information is specified; it will be auto-completed and created."
+        )
 
-@click.command()
-def pipeline() -> None:
-    """Integrate a veadk project to volcengine pipeline for CI/CD"""
+        for key, value in cr_settings.items():
+            if key == "cr_domain" and value is None:
+                cr_settings[key] = (
+                    f"{DEFAULT_CR_INSTANCE_NAME}-cn-beijing.cr.volces.com"
+                )
+            elif key == "cr_namespace_name" and value is None:
+                cr_settings[key] = DEFAULT_CR_NAMESPACE_NAME
+            elif key == "cr_region" and value is None:
+                cr_settings[key] = "cn-beijing"
+            elif key == "cr_instance_name" and value is None:
+                cr_settings[key] = DEFAULT_CR_INSTANCE_NAME
+            elif key == "cr_repo" and value is None:
+                cr_settings[key] = DEFAULT_CR_REPO_NAME
 
-    click.echo(
-        "Welcome use VeADK to integrate your project to volcengine pipeline for CI/CD."
-    )
+        _create_cr(volcengine_settings, cr_settings)
 
-    base_image_tag_options = ["preview", "0.0.1", "latest"]
-    base_image_tag = click.prompt(
-        "Choose a base image tag:", type=click.Choice(base_image_tag_options)
-    )
-
-    github_url = click.prompt("Github url", default="", show_default=False)
-    while not github_url:
-        click.echo("Please enter your github url.")
-        github_url = click.prompt("Github url", default="", show_default=False)
-
-    github_branch = click.prompt("Github branch", default="main")
-
-    github_token = click.prompt("Github token", default="", show_default=False)
-    while not github_token:
-        click.echo("Please enter your github token.")
-        github_token = click.prompt("Github token", default="", show_default=False)
-
-    volcengine_settings = _render_volcengine_prompts()
-
-    cr_settings = _render_cr_prompts()
-
-    if cr_settings is None:
-        click.echo("No CR information provided, will auto-create one.")
-        # cr_settings = _auto_create_cr_config() # TODO
-
-        # Using hardcoded values for demonstration
-        cr_settings = {
-            "cr_domain": "test-veadk-cn-beijing.cr.volces.com",
-            "cr_namespace_name": "veadk",
-            "cr_region": "cn-beijing",
-            "cr_instance_name": "test-veadk",
-            "cr_repo": "cicd-weather-test",
-        }
-        click.echo("Using the following auto-created CR configuration:")
+        click.echo("Using the following CR configuration:")
         click.echo(f"Container Registry domain: {cr_settings['cr_domain']}")
         click.echo(
             f"Container Registry namespace name: {cr_settings['cr_namespace_name']}"
@@ -150,12 +201,10 @@ def pipeline() -> None:
         )
         click.echo(f"Container Registry repo: {cr_settings['cr_repo']}")
 
-    function_id = click.prompt(
-        "Volcengine FaaS function ID", default="", show_default=False
-    )
-
     if not function_id:
-        click.echo("Function ID not provided, will auto-create one.")
+        click.echo(
+            "No Function ID specified. The system will create one automatically. Please specify a function name:"
+        )
         function_name = click.prompt(
             "Function name", default="veadk-function", show_default=False
         )
@@ -167,6 +216,7 @@ def pipeline() -> None:
         _, _, function_id = vefaas_client.deploy_image(
             name=function_name,
             image="veadk-cn-beijing.cr.volces.com/veadk/simple-fastapi:0.1",
+            registry_name=cr_settings["cr_instance_name"],
         )
         click.echo(f"Created function {function_name} with ID: {function_id}")
 

@@ -406,6 +406,7 @@ class VeCodePipeline:
             cr_domain=cr_domain,
             cr_namespace_name=cr_namespace_name,
             cr_region=cr_region,
+            cr_instance_name=cr_instance_name,
             cr_repo=cr_repo,
             docker_file=get_dockerfile(tag=base_image_tag),
             function_id=function_id,
