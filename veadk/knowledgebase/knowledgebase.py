@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import BinaryIO, Literal, TextIO
+from typing import Any, BinaryIO, Literal, TextIO
+
+from pydantic import BaseModel
 
 from veadk.database.database_adapter import get_knowledgebase_database_adapter
 from veadk.database.database_factory import DatabaseFactory
@@ -25,23 +27,23 @@ def build_knowledgebase_index(app_name: str):
     return f"veadk_kb_{app_name}"
 
 
-class KnowledgeBase:
-    def __init__(
-        self,
-        backend: Literal["local", "opensearch", "viking", "redis", "mysql"] = "local",
-        top_k: int = 10,
-        db_config=None,
-    ):
-        logger.info(f"Initializing knowledgebase: backend={backend} top_k={top_k}")
+class KnowledgeBase(BaseModel):
+    backend: Literal["local", "opensearch", "viking", "redis", "mysql"] = "local"
+    top_k: int = 10
+    db_config: Any | None = None
 
-        self.backend = backend
-        self.top_k = top_k
+    def model_post_init(self, __context: Any) -> None:
+        logger.info(
+            f"Initializing knowledgebase: backend={self.backend} top_k={self.top_k}"
+        )
 
-        self.db_client = DatabaseFactory.create(backend=backend, config=db_config)
-        self.adapter = get_knowledgebase_database_adapter(self.db_client)
+        self._db_client = DatabaseFactory.create(
+            backend=self.backend, config=self.db_config
+        )
+        self._adapter = get_knowledgebase_database_adapter(self._db_client)
 
         logger.info(
-            f"Initialized knowledgebase: db_client={self.db_client.__class__.__name__} adapter={self.adapter}"
+            f"Initialized knowledgebase: db_client={self._db_client.__class__.__name__} adapter={self._adapter}"
         )
 
     def add(
@@ -67,7 +69,7 @@ class KnowledgeBase:
 
         logger.info(f"Adding documents to knowledgebase: index={index}")
 
-        self.adapter.add(data=data, index=index)
+        self._adapter.add(data=data, index=index)
 
     def search(self, query: str, app_name: str, top_k: int | None = None) -> list[str]:
         top_k = self.top_k if top_k is None else top_k
@@ -76,7 +78,7 @@ class KnowledgeBase:
             f"Searching knowledgebase: app_name={app_name} query={query} top_k={top_k}"
         )
         index = build_knowledgebase_index(app_name)
-        result = self.adapter.query(query=query, index=index, top_k=top_k)
+        result = self._adapter.query(query=query, index=index, top_k=top_k)
         if len(result) == 0:
             logger.warning(f"No documents found in knowledgebase. Query: {query}")
         return result
@@ -87,8 +89,8 @@ class KnowledgeBase:
 
     def delete_doc(self, app_name: str, id: str) -> bool:
         index = build_knowledgebase_index(app_name)
-        return self.adapter.delete_doc(index=index, id=id)
+        return self._adapter.delete_doc(index=index, id=id)
 
     def list_docs(self, app_name: str, offset: int = 0, limit: int = 100) -> list[dict]:
         index = build_knowledgebase_index(app_name)
-        return self.adapter.list_docs(index=index, offset=offset, limit=limit)
+        return self._adapter.list_docs(index=index, offset=offset, limit=limit)

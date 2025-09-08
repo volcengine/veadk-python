@@ -13,8 +13,9 @@
 # limitations under the License.
 
 # adapted from Google ADK memory service adk-python/src/google/adk/memory/vertex_ai_memory_bank_service.py at 0a9e67dbca67789247e882d16b139dbdc76a329a · google/adk-python
+
 import json
-from typing import Literal
+from typing import Any, Literal
 
 from google.adk.events.event import Event
 from google.adk.memory.base_memory_service import (
@@ -24,6 +25,7 @@ from google.adk.memory.base_memory_service import (
 from google.adk.memory.memory_entry import MemoryEntry
 from google.adk.sessions import Session
 from google.genai import types
+from pydantic import BaseModel
 from typing_extensions import override
 
 from veadk.database import DatabaseFactory
@@ -37,33 +39,30 @@ def build_long_term_memory_index(app_name: str, user_id: str):
     return f"{app_name}_{user_id}"
 
 
-class LongTermMemory(BaseMemoryService):
-    def __init__(
-        self,
-        backend: Literal[
-            "local", "opensearch", "redis", "mysql", "viking", "viking_mem"
-        ] = "opensearch",
-        top_k: int = 5,
-    ):
-        if backend == "viking":
+class LongTermMemory(BaseMemoryService, BaseModel):
+    backend: Literal[
+        "local", "opensearch", "redis", "mysql", "viking", "viking_mem"
+    ] = "opensearch"
+    top_k: int = 5
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.backend == "viking":
             logger.warning(
                 "`viking` backend is deprecated, switching to `viking_mem` backend."
             )
-            backend = "viking_mem"
-        self.top_k = top_k
-        self.backend = backend
+            self.backend = "viking_mem"
 
         logger.info(
             f"Initializing long term memory: backend={self.backend} top_k={self.top_k}"
         )
 
-        self.db_client = DatabaseFactory.create(
-            backend=backend,
+        self._db_client = DatabaseFactory.create(
+            backend=self.backend,
         )
-        self.adapter = get_long_term_memory_database_adapter(self.db_client)
+        self._adapter = get_long_term_memory_database_adapter(self._db_client)
 
         logger.info(
-            f"Initialized long term memory: db_client={self.db_client.__class__.__name__} adapter={self.adapter}"
+            f"Initialized long term memory: db_client={self._db_client.__class__.__name__} adapter={self._adapter}"
         )
 
     def _filter_and_convert_events(self, events: list[Event]) -> list[str]:
@@ -101,9 +100,9 @@ class LongTermMemory(BaseMemoryService):
 
         # check if viking memory database, should give a user id： if/else
         if self.backend == "viking_mem":
-            self.adapter.add(data=event_strings, index=index, user_id=session.user_id)
+            self._adapter.add(data=event_strings, index=index, user_id=session.user_id)
         else:
-            self.adapter.add(data=event_strings, index=index)
+            self._adapter.add(data=event_strings, index=index)
 
         logger.info(
             f"Added {len(event_strings)} events to long term memory: index={index}"
@@ -119,11 +118,11 @@ class LongTermMemory(BaseMemoryService):
 
         # user id if viking memory db
         if self.backend == "viking_mem":
-            memory_chunks = self.adapter.query(
+            memory_chunks = self._adapter.query(
                 query=query, index=index, top_k=self.top_k, user_id=user_id
             )
         else:
-            memory_chunks = self.adapter.query(
+            memory_chunks = self._adapter.query(
                 query=query, index=index, top_k=self.top_k
             )
 
