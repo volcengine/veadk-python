@@ -115,3 +115,41 @@ planner_agent = Agent(
 runner = Runner(agent=planner_agent, short_term_memory=ShortTermMemory())
 response = await runner.run(messages=prompt, session_id=session_id)
 ```
+
+## 从 Agent 配置文件构建
+
+你可以通过一个 Agent 配置文件来构建 Agent 运行时实例，例如：
+
+```yaml
+root_agent:
+  type: Agent # Agent | SequencialAgent | LoopAgent | ParallelAgent
+  name: test
+  description: A test agent
+  instruction: A test instruction
+  long_term_memory:
+    backend: local
+  knowledgebase:
+    backend: opensearch
+  sub_agents:
+    - ${sub_agent_1}
+
+sub_agent_1:
+  type: Agent
+  name: agent1
+```
+
+其中，每个`agent`的`type`负责指定 Agent 的类名。
+
+可以通过如下代码来实例化这个 Agent:
+
+```python
+from veadk.agent_builder import AgentBuilder
+
+agent = AgentBuilder().build(path="./agent.yaml")
+```
+
+函数`build`接收3个参数：
+
+- `path`：配置文件路径
+- `root_agent_identifier`：配置文件中主 Agent 的名称，默认为`root_agent`
+- `tools`：主 agent 挂载的工具列表（子 Agent 工具列表暂未推出）
