@@ -17,6 +17,8 @@ import time
 from veadk.config import getenv
 from veadk.version import VERSION
 
+DEFAULT_AGENT_NAME = "veAgent"
+
 DEFAULT_MODEL_AGENT_NAME = "doubao-seed-1-6-250615"
 DEFAULT_MODEL_AGENT_PROVIDER = "openai"
 DEFAULT_MODEL_AGENT_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
