@@ -1,6 +1,6 @@
 {
   "local_dir_name": "veadk_vefaas_proj",
-  "app_name": "weather-report",
+  "app_name": "weather_report",
   "agent_module_name": "weather_agent",
   "short_term_memory_backend": "local",
   "vefaas_application_name": "weather-reporter",

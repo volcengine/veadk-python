@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from {{ cookiecutter.app_name|replace('-', '_') }}.agent import agent # type: ignore
+from {{ cookiecutter.app_name }}.agent import agent # type: ignore
 
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.types import AgentRunConfig
