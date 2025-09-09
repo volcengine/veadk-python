@@ -103,7 +103,7 @@ def init(
         shutil.rmtree(target_dir_path)
 
     settings = _render_prompts()
-    settings["local_dir_name"] = local_dir_name
+    settings["local_dir_name"] = local_dir_name.replace("-", "_")
 
     if not vefaas_template_type:
         vefaas_template_type = "template"
