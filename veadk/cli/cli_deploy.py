@@ -86,8 +86,8 @@ def deploy(
     tmp_dir_name = f"{user_proj_abs_path.name}_{formatted_timestamp()}"
 
     settings = {
-        "local_dir_name": tmp_dir_name,
-        "app_name": user_proj_abs_path.name,
+        "local_dir_name": tmp_dir_name.replace("-", "_"),
+        "app_name": user_proj_abs_path.name.replace("-", "_"),
         "agent_module_name": user_proj_abs_path.name,
         "short_term_memory_backend": short_term_memory_backend,
         "vefaas_application_name": vefaas_app_name,
