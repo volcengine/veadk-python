@@ -16,7 +16,7 @@ import os
 from functools import cached_property
 
 from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from veadk.auth.veauth.apmplus_veauth import APMPlusVeAuth
 from veadk.consts import (
@@ -81,3 +81,13 @@ class TLSConfig(BaseSettings):
             or VeTLS().get_trace_topic_id()
         )
         return _topic_id
+
+
+class PrometheusConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="OBSERVABILITY_PROMETHEUS_")
+
+    pushgateway_url: str = ""
+
+    pushgateway_username: str = ""
+
+    pushgateway_password: str = ""

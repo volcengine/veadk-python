@@ -21,14 +21,18 @@ from pydantic import BaseModel, Field
 from veadk.configs.database_configs import (
     MysqlConfig,
     OpensearchConfig,
-    PrometheusConfig,
     RedisConfig,
     TOSConfig,
     VikingKnowledgebaseConfig,
 )
 from veadk.configs.model_configs import ModelConfig
 from veadk.configs.tool_configs import BuiltinToolConfigs, PromptPilotConfig
-from veadk.configs.tracing_configs import APMPlusConfig, CozeloopConfig, TLSConfig
+from veadk.configs.tracing_configs import (
+    APMPlusConfig,
+    CozeloopConfig,
+    PrometheusConfig,
+    TLSConfig,
+)
 from veadk.utils.misc import set_envs
 
 

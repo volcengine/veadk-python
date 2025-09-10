@@ -15,7 +15,6 @@
 import os
 from functools import cached_property
 
-from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from veadk.consts import DEFAULT_TOS_BUCKET_NAME
@@ -60,15 +59,9 @@ class RedisConfig(BaseSettings):
     db: int = 0
 
 
-class PrometheusConfig(BaseSettings):
-    pushgateway_url: str = ""
+class VikingKnowledgebaseConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="DATABASE_VIKING_")
 
-    pushgateway_username: str = ""
-
-    pushgateway_password: str = ""
-
-
-class VikingKnowledgebaseConfig(BaseModel):
     project: str = "default"
     """User project in Volcengine console web."""
 
