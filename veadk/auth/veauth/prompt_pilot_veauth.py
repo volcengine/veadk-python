@@ -31,7 +31,7 @@ class PromptPilotVeAuth(BaseVeAuth):
     ) -> None:
         super().__init__(access_key, secret_key)
 
-        self._token: str | dict = ""
+        self._token: str = ""
 
     @override
     def _fetch_token(self) -> None:
@@ -53,7 +53,7 @@ class PromptPilotVeAuth(BaseVeAuth):
             raise ValueError(f"Failed to get Prompt Pilot token: {res}")
 
     @property
-    def token(self) -> str | dict:
+    def token(self) -> str:
         if self._token:
             return self._token
         self._fetch_token()

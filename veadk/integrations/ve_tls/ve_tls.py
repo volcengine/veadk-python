@@ -15,11 +15,10 @@
 import asyncio
 import os
 
-from volcengine.tls.TLSService import TLSService
-
 from veadk.consts import DEFAULT_TLS_LOG_PROJECT_NAME, DEFAULT_TLS_TRACING_INSTANCE_NAME
 from veadk.integrations.ve_tls.utils import ve_tls_request
 from veadk.utils.logger import get_logger
+from volcengine.tls.TLSService import TLSService
 
 logger = get_logger(__name__)
 
@@ -27,12 +26,16 @@ logger = get_logger(__name__)
 class VeTLS:
     def __init__(
         self,
-        access_key: str = os.getenv("VOLCENGINE_ACCESS_KEY", ""),
-        secret_key: str = os.getenv("VOLCENGINE_SECRET_KEY", ""),
+        access_key: str | None = None,
+        secret_key: str | None = None,
         region: str = "cn-beijing",
     ):
-        self.access_key = access_key
-        self.secret_key = secret_key
+        self.access_key = (
+            access_key if access_key else os.getenv("VOLCENGINE_ACCESS_KEY", "")
+        )
+        self.secret_key = (
+            secret_key if secret_key else os.getenv("VOLCENGINE_SECRET_KEY", "")
+        )
         self.region = region
 
         self._client = TLSService(
@@ -198,5 +201,8 @@ class VeTLS:
         instance = self.create_tracing_instance(
             log_project_id, DEFAULT_TLS_TRACING_INSTANCE_NAME
         )
+
+        if not instance:
+            raise ValueError("None instance")
 
         return instance["TraceTopicId"]

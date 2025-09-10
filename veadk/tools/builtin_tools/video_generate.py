@@ -12,18 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Dict
-from google.adk.tools import ToolContext
-from volcenginesdkarkruntime import Ark
-from veadk.config import getenv
+import json
 import time
 import traceback
-import json
-from veadk.version import VERSION
+from typing import Dict, cast
+
+from google.adk.tools import ToolContext
 from opentelemetry import trace
 from opentelemetry.trace import Span
+from volcenginesdkarkruntime import Ark
+from volcenginesdkarkruntime.types.content_generation.create_task_content_param import (
+    CreateTaskContentParam,
+)
 
+from veadk.config import getenv
 from veadk.utils.logger import get_logger
+from veadk.version import VERSION
 
 logger = get_logger(__name__)
 
@@ -47,13 +51,16 @@ async def generate(prompt, first_frame_image=None, last_frame_image=None):
             logger.debug("first frame generation")
             response = client.content_generation.tasks.create(
                 model=getenv("MODEL_VIDEO_NAME"),
-                content=[
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": first_frame_image},
-                    },
-                ],
+                content=cast(
+                    list[CreateTaskContentParam],  # avoid IDE warning
+                    [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": first_frame_image},
+                        },
+                    ],
+                ),
             )
         else:
             logger.debug("last frame generation")
@@ -277,13 +284,13 @@ async def video_generate(params: list, tool_context: ToolContext) -> Dict:
 def add_span_attributes(
     span: Span,
     tool_context: ToolContext,
-    input_part: dict = None,
-    output_part: dict = None,
-    input_tokens: int = None,
-    output_tokens: int = None,
-    total_tokens: int = None,
-    request_model: str = None,
-    response_model: str = None,
+    input_part: dict | None = None,
+    output_part: dict | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    total_tokens: int | None = None,
+    request_model: str | None = None,
+    response_model: str | None = None,
 ):
     try:
         # common attributes

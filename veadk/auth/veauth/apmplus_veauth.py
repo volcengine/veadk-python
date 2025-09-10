@@ -28,8 +28,11 @@ class APMPlusVeAuth(BaseVeAuth):
         self,
         access_key: str = os.getenv("VOLCENGINE_ACCESS_KEY", ""),
         secret_key: str = os.getenv("VOLCENGINE_SECRET_KEY", ""),
+        region: str = "cn-beijing",
     ) -> None:
         super().__init__(access_key, secret_key)
+
+        self.region = region
 
         self._token: str = ""
 
@@ -44,8 +47,10 @@ class APMPlusVeAuth(BaseVeAuth):
             sk=self.secret_key,
             service="apmplus_server",
             version="2024-07-30",
-            region="cn-beijing",
+            region=self.region,
             host="open.volcengineapi.com",
+            # APMPlus frontend required
+            header={"X-Apmplus-Region": self.region.replace("-", "_")},
         )
         try:
             self._token = res["data"]["app_key"]

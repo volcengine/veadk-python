@@ -14,7 +14,6 @@
 
 import os
 from abc import ABC, abstractmethod
-from typing import Type
 
 from veadk.auth.base_auth import BaseAuth
 
@@ -49,36 +48,3 @@ class BaseVeAuth(ABC, BaseAuth):
 
     @property
     def token(self) -> str: ...
-
-
-def veauth(auth_token_name: str, auth_cls: Type[BaseVeAuth]):
-    def decorator(cls: Type):
-        # api_key -> _api_key
-        # for cache
-        private_auth_token_name = f"_{auth_token_name}"
-        setattr(cls, private_auth_token_name, "")
-
-        # init a auth cls for fetching token
-        auth_cls_instance = "_auth_cls_instance"
-        setattr(cls, auth_cls_instance, auth_cls())
-
-        def getattribute(self, name: str):
-            if name != auth_token_name:
-                return object.__getattribute__(self, name)
-            if name == auth_token_name:
-                token = object.__getattribute__(self, name)
-
-                if token:
-                    return token
-                elif not token and not getattr(cls, private_auth_token_name):
-                    token = getattr(cls, auth_cls_instance).token
-                    setattr(cls, private_auth_token_name, token)
-                    return token
-                elif not token and getattr(cls, private_auth_token_name):
-                    return getattr(cls, private_auth_token_name)
-            return token
-
-        setattr(cls, "__getattribute__", getattribute)
-        return cls
-
-    return decorator

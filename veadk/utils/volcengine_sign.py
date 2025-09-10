@@ -169,6 +169,7 @@ def ve_request(
     region: str,
     host: str,
     content_type: str = "application/json",
+    header: dict = {},
 ):
     # response_body = request("Get", datetime.datetime.utcnow(), {}, {}, AK, SK, "ListUsers", None)
     # print(response_body)
@@ -195,7 +196,7 @@ def ve_request(
 
     try:
         response_body = request(
-            "POST", now, {}, {}, AK, SK, action, json.dumps(request_body)
+            "POST", now, {}, header, AK, SK, action, json.dumps(request_body)
         )
         return response_body
     except Exception as e:

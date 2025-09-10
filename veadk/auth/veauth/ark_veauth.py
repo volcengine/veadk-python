@@ -35,6 +35,7 @@ class ARKVeAuth(BaseVeAuth):
 
     @override
     def _fetch_token(self) -> None:
+        logger.info("Fetching ARK token...")
         # list api keys
         first_api_key_id = ""
         res = ve_request(
