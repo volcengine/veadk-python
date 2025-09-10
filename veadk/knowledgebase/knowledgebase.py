@@ -131,9 +131,9 @@ class KnowledgeBase(BaseModel):
             # Case6: Unsupported data type
             raise TypeError(f"Unsupported data type: {type(data)}")
 
-        if isinstance(data, list):
+        if not isinstance(data, list):
             raise TypeError(
-                f"Unsupported data type: {type(data)}, Only viking support file_path and file bytes"
+                f"Unsupported data type: {type(data)}. Only viking support file_path and file bytes"
             )
         # not viking
         return self._adapter.add(data=data, index=index, **kwargs)
