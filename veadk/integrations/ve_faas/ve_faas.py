@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import json
+import os
 import time
 
 import requests
@@ -118,6 +119,7 @@ class VeFaaS:
                 runtime="native-python3.10/v1",
                 request_timeout=1800,
                 envs=envs,
+                memory_mb=2048,
             )
         )
 
@@ -141,6 +143,8 @@ class VeFaaS:
         upstream_name: str,
         service_name: str,
     ):
+        enable_key_auth = os.getenv("VEFAAS_ENABLE_KEY_AUTH", "true").lower() == "true"
+
         response = ve_request(
             request_body={
                 "Name": application_name,
@@ -152,7 +156,7 @@ class VeFaaS:
                     "GatewayName": gateway_name,
                     "ServiceName": service_name,
                     "UpstreamName": upstream_name,
-                    "EnableKeyAuth": True,
+                    "EnableKeyAuth": enable_key_auth,
                     "EnableMcpSession": True,
                 },
                 "TemplateId": self.template_id,
