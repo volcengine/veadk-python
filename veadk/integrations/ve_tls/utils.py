@@ -80,7 +80,7 @@ def __prepare_request(
     return request
 
 
-async def ve_tls_request(
+def ve_tls_request(
     client: TLSService,
     api: str,
     params: dict | None = None,
@@ -100,10 +100,10 @@ async def ve_tls_request(
 
     url = request.build()
 
-    async with httpx.AsyncClient() as session:
+    with httpx.Client() as session:
         while True:
             try:
-                response = await session.request(
+                response = session.request(
                     method=method,
                     url=url,
                     headers=request.headers,

@@ -12,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import asyncio
 import os
+
+from volcengine.tls.TLSService import TLSService
 
 from veadk.consts import DEFAULT_TLS_LOG_PROJECT_NAME, DEFAULT_TLS_TRACING_INSTANCE_NAME
 from veadk.integrations.ve_tls.utils import ve_tls_request
 from veadk.utils.logger import get_logger
-from volcengine.tls.TLSService import TLSService
 
 logger = get_logger(__name__)
 
@@ -63,13 +63,11 @@ class VeTLS:
 
         try:
             res = None
-            res = asyncio.run(
-                ve_tls_request(
-                    client=self._client,
-                    api="DescribeProjects",
-                    body=request_body,
-                    method="GET",
-                )
+            res = ve_tls_request(
+                client=self._client,
+                api="DescribeProjects",
+                body=request_body,
+                method="GET",
             )
             projects = res["Projects"]
             for project in projects:
@@ -97,10 +95,8 @@ class VeTLS:
             "Tags": [{"Key": "provider", "Value": "VeADK"}],
         }
         try:
-            res = asyncio.run(
-                ve_tls_request(
-                    client=self._client, api="CreateProject", body=request_body
-                )
+            res = ve_tls_request(
+                client=self._client, api="CreateProject", body=request_body
             )
 
             if res["ErrorCode"] == "ProjectAlreadyExist":
@@ -122,13 +118,11 @@ class VeTLS:
             "TraceInstanceName": trace_instance_name,
         }
         try:
-            res = asyncio.run(
-                ve_tls_request(
-                    client=self._client,
-                    api="DescribeTraceInstances",
-                    body=request_body,
-                    method="GET",
-                )
+            res = ve_tls_request(
+                client=self._client,
+                api="DescribeTraceInstances",
+                body=request_body,
+                method="GET",
             )
 
             for instance in res["TraceInstances"]:
@@ -156,12 +150,10 @@ class VeTLS:
 
         try:
             res = None
-            res = asyncio.run(
-                ve_tls_request(
-                    client=self._client,
-                    api="CreateTraceInstance",
-                    body=request_body,
-                )
+            res = ve_tls_request(
+                client=self._client,
+                api="CreateTraceInstance",
+                body=request_body,
             )
 
             if res["ErrorCode"] == "TopicAlreadyExist":
@@ -173,13 +165,11 @@ class VeTLS:
                 )
 
             # after creation, get the trace instance details
-            res = asyncio.run(
-                ve_tls_request(
-                    client=self._client,
-                    api="DescribeTraceInstance",
-                    body={"TraceInstanceID": res["TraceInstanceID"]},
-                    method="GET",
-                )
+            res = ve_tls_request(
+                client=self._client,
+                api="DescribeTraceInstance",
+                body={"TraceInstanceID": res["TraceInstanceID"]},
+                method="GET",
             )
 
             return res

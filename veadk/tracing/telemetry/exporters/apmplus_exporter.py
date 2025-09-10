@@ -117,7 +117,6 @@ class APMPlusExporter(BaseExporter):
     config: APMPlusExporterConfig = Field(default_factory=APMPlusExporterConfig)
 
     def model_post_init(self, context: Any) -> None:
-        print(self.config)
         headers = {
             "x-byteapm-appkey": self.config.app_key,
         }
