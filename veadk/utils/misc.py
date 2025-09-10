@@ -137,10 +137,10 @@ def set_envs(config_yaml_path: str) -> tuple[dict, dict]:
 
     flatten_config_dict = flatten_dict(config_dict)
 
+    veadk_environments = {}
     for k, v in flatten_config_dict.items():
-        veadk_environments = {}
-
         k = k.upper()
+
         if k in os.environ:
             veadk_environments[k] = os.environ[k]
             continue
