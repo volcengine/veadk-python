@@ -56,9 +56,16 @@ class KnowledgeBase(BaseModel):
     ):
         """
         Add documents to the vector database.
-        You can only upload files or file characters when the adapter type used is vikingdb.
-        In addition, if you upload data of the bytes type,
-            for example, if you read the file stream of a pdf, then you need to pass an additional parameter file_ext = '.pdf'.
+        Args:
+            data (str | list[str] | TextIO | BinaryIO | bytes): The data to be added.
+                - str: A single file path. (viking only)
+                - list[str]: A list of file paths.
+                - TextIO: A file object (TextIO). (viking only) file descriptor
+                - BinaryIO: A file object (BinaryIO). (viking only) file descriptor
+                - bytes: Binary data. (viking only) binary data (f.read())
+            app_name: index name
+            **kwargs: Additional keyword arguments.
+                - file_name (str | list[str]): The file name or a list of file names (including suffix). (viking only)
         """
         if self.backend != "viking" and not (
             isinstance(data, str) or isinstance(data, list)
@@ -73,8 +80,7 @@ class KnowledgeBase(BaseModel):
         if self.backend == "viking":
             # Case 1: Handling file paths or lists of file paths (str)
             if isinstance(data, str) and os.path.isfile(data):
-                # 单个文件路径，直接调用client.add
-                # 获取文件名（包括后缀名）
+                # Get the file name (including the suffix)
                 if "file_name" not in kwargs or not kwargs["file_name"]:
                     kwargs["file_name"] = os.path.basename(data)
                 return self._adapter.add(data=data, index=index, **kwargs)
@@ -125,6 +131,10 @@ class KnowledgeBase(BaseModel):
             # Case6: Unsupported data type
             raise TypeError(f"Unsupported data type: {type(data)}")
 
+        if isinstance(data, list):
+            raise TypeError(
+                f"Unsupported data type: {type(data)}, Only viking support file_path and file bytes"
+            )
         # not viking
         return self._adapter.add(data=data, index=index, **kwargs)
 

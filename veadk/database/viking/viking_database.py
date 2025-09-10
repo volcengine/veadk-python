@@ -136,11 +136,25 @@ class VikingDatabase(BaseModel, BaseDatabase):
         self,
         data: str | list[str] | TextIO | BinaryIO | bytes,
         **kwargs: Any,
-    ):
-        file_ext = kwargs.get(
-            "file_ext", ".pdf"
-        )  # when bytes data, file_ext is required
+    ) -> tuple[int, str]:
+        """
+        Upload data to TOS (Tinder Object Storage).
 
+        Args:
+            data: The data to be uploaded. Can be one of the following types:
+                - str: File path or string data
+                - list[str]: List of strings
+                - TextIO: File object (text)
+                - BinaryIO: File object (binary)
+                - bytes: Binary data
+            **kwargs: Additional keyword arguments.
+                - file_name (str): The file name (including suffix).
+
+        Returns:
+            tuple: A tuple containing the status code and TOS URL.
+                - status_code (int): HTTP status code
+                - tos_url (str): The URL of the uploaded file in TOS
+        """
         ak = self.config.volcengine_ak
         sk = self.config.volcengine_sk
 
@@ -151,21 +165,31 @@ class VikingDatabase(BaseModel, BaseDatabase):
 
         client = tos.TosClientV2(ak, sk, tos_endpoint, tos_region, max_connections=1024)
 
+        # Extract file_name from kwargs - this is now required and includes the extension
+        file_names = kwargs.get("file_name")
+
         if isinstance(data, str) and os.path.isfile(data):  # Process file path
-            file_ext = os.path.splitext(data)[1]
-            new_key = f"{tos_key}/{str(uuid.uuid4())}{file_ext}"
+            # Use provided file_name which includes the extension
+            new_key = f"{tos_key}/{file_names}"
             with open(data, "rb") as f:
                 upload_data = f.read()
+
+        elif (
+            isinstance(data, list)
+            and all(isinstance(item, str) for item in data)
+            and all(os.path.isfile(item) for item in data)
+        ):
+            # Process list of file paths - this should be handled at a higher level
+            raise ValueError(
+                "Uploading multiple files through a list of file paths is not supported in _upload_to_tos directly. Please call this function for each file individually."
+            )
 
         elif isinstance(
             data,
             (io.TextIOWrapper, io.BufferedReader),  # file type: TextIO | BinaryIO
         ):  # Process file stream
-            # Try to get the file extension from the file name, and use the default value if there is none
-            file_ext = ".unknown"
-            if hasattr(data, "name"):
-                _, file_ext = os.path.splitext(data.name)
-            new_key = f"{tos_key}/{str(uuid.uuid4())}{file_ext}"
+            # Use provided file_name which includes the extension
+            new_key = f"{tos_key}/{file_names}"
             if isinstance(data, TextIO):
                 # Encode the text stream content into bytes
                 upload_data = data.read().encode("utf-8")
@@ -174,16 +198,19 @@ class VikingDatabase(BaseModel, BaseDatabase):
                 upload_data = data.read()
 
         elif isinstance(data, str):  # Process ordinary strings
-            new_key = f"{tos_key}/{str(uuid.uuid4())}.txt"
+            # Use provided file_name which includes the extension
+            new_key = f"{tos_key}/{file_names}"
             upload_data = data.encode("utf-8")  # Encode as byte type
 
         elif isinstance(data, list):  # Process list of strings
-            new_key = f"{tos_key}/{str(uuid.uuid4())}.txt"
+            # Use provided file_name which includes the extension
+            new_key = f"{tos_key}/{file_names}"
             # Join the strings in the list with newlines and encode as byte type
             upload_data = "\n".join(data).encode("utf-8")
 
         elif isinstance(data, bytes):  # Process bytes data
-            new_key = f"{tos_key}/{str(uuid.uuid4())}{file_ext}"
+            # Use provided file_name which includes the extension
+            new_key = f"{tos_key}/{file_names}"
             upload_data = data
 
         else:
@@ -231,28 +258,136 @@ class VikingDatabase(BaseModel, BaseDatabase):
         **kwargs,
     ):
         """
+        Add documents to the Viking database.
         Args:
-            data: str, file path or file stream:  Both file or file.read() are acceptable.
-            **kwargs: collection_name(required)
+            data: The data to be added. Can be one of the following types:
+                - str: File path or string data
+                - list[str]: List of file paths or list of strings
+                - TextIO: File object (text)
+                - BinaryIO: File object (binary)
+                - bytes: Binary data
+            collection_name: The name of the collection to add documents to.
+            **kwargs: Additional keyword arguments.
+                - file_name (str | list[str]): The file name or a list of file names (including suffix).
+                - doc_id (str): The document ID. If not provided, a UUID will be generated.
         Returns:
-            {
+            dict or list: A dictionary containing the TOS URL and document ID, or a list of such dictionaries for multiple file uploads.
+            Format: {
                 "tos_url": "tos://<bucket>/<key>",
                 "doc_id": "<doc_id>",
             }
         """
+        # Handle list of file paths (multiple file upload)
+        if (
+            isinstance(data, list)
+            and all(isinstance(item, str) for item in data)
+            and all(os.path.isfile(item) for item in data)
+        ):
+            # Handle multiple file upload
+            file_names = kwargs.get("file_name")
+            if (
+                not file_names
+                or not isinstance(file_names, list)
+                or len(file_names) != len(data)
+            ):
+                raise ValueError(
+                    "For multiple file upload, file_name must be provided as a list with the same length as data"
+                )
 
-        status, tos_url = self._upload_to_tos(data=data, **kwargs)
-        if status != 200:
-            raise ValueError(f"Error in upload_to_tos: {status}")
-        doc_id = self._add_doc(
-            collection_name=collection_name,
-            tos_url=tos_url,
-            doc_id=str(uuid.uuid4()),
-        )
-        return {
-            "tos_url": f"tos://{tos_url}",
-            "doc_id": doc_id,
-        }
+            results = []
+            for i, file_path in enumerate(data):
+                # Create kwargs for this specific file
+                single_kwargs = kwargs.copy()
+                single_kwargs["file_name"] = file_names[i]
+
+                # Generate or use provided doc_id for this file
+                doc_id = single_kwargs.get("doc_id")
+                if not doc_id:
+                    doc_id = str(uuid.uuid4())
+                    single_kwargs["doc_id"] = doc_id
+
+                status, tos_url = self._upload_to_tos(data=file_path, **single_kwargs)
+                if status != 200:
+                    raise ValueError(
+                        f"Error in upload_to_tos for file {file_path}: {status}"
+                    )
+
+                doc_id = self._add_doc(
+                    collection_name=collection_name,
+                    tos_url=tos_url,
+                    doc_id=doc_id,
+                )
+
+                results.append(
+                    {
+                        "tos_url": f"tos://{tos_url}",
+                        "doc_id": doc_id,
+                    }
+                )
+
+            return results
+
+        # Handle list of strings (multiple string upload)
+        elif isinstance(data, list) and all(isinstance(item, str) for item in data):
+            # Handle multiple string upload
+            file_names = kwargs.get("file_name")
+            if (
+                not file_names
+                or not isinstance(file_names, list)
+                or len(file_names) != len(data)
+            ):
+                raise ValueError(
+                    "For multiple string upload, file_name must be provided as a list with the same length as data"
+                )
+
+            results = []
+            for i, content in enumerate(data):
+                # Create kwargs for this specific string
+                single_kwargs = kwargs.copy()
+                single_kwargs["file_name"] = file_names[i]
+
+                # Generate or use provided doc_id for this string
+                doc_id = single_kwargs.get("doc_id")
+                if not doc_id:
+                    doc_id = str(uuid.uuid4())
+                    single_kwargs["doc_id"] = doc_id
+
+                status, tos_url = self._upload_to_tos(data=content, **single_kwargs)
+                if status != 200:
+                    raise ValueError(f"Error in upload_to_tos for string {i}: {status}")
+
+                doc_id = self._add_doc(
+                    collection_name=collection_name,
+                    tos_url=tos_url,
+                    doc_id=doc_id,
+                )
+
+                results.append(
+                    {
+                        "tos_url": f"tos://{tos_url}",
+                        "doc_id": doc_id,
+                    }
+                )
+
+            return results
+
+        # Handle single file upload or other data types
+        else:
+            # Handle doc_id from kwargs or generate a new one
+            doc_id = kwargs.get("doc_id", str(uuid.uuid4()))
+
+            status, tos_url = self._upload_to_tos(data=data, **kwargs)
+            if status != 200:
+                raise ValueError(f"Error in upload_to_tos: {status}")
+            doc_id = self._add_doc(
+                collection_name=collection_name,
+                tos_url=tos_url,
+                doc_id=doc_id,
+            )
+            return {
+                "tos_url": f"tos://{tos_url}",
+                "doc_id": doc_id,
+            }
 
     def delete(self, **kwargs: Any):
         name = kwargs.get("name")
