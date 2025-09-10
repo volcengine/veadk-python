@@ -19,8 +19,8 @@ import click
 @click.option(
     "--path", default=".", help="Agent file path with global variable `agent=...`"
 )
-@click.option("--feedback", default=None, help="Suggestions for prompt optimization")
-@click.option("--api-key", default=None, help="API Key of PromptPilot")
+@click.option("--feedback", default="", help="Suggestions for prompt optimization")
+@click.option("--api-key", default="", help="API Key of PromptPilot")
 @click.option(
     "--model-name",
     default="doubao-1.5-pro-32k-250115",
@@ -31,7 +31,7 @@ def prompt(path: str, feedback: str, api_key: str, model_name: str) -> None:
     from pathlib import Path
 
     from veadk.agent import Agent
-    from veadk.config import getenv
+    from veadk.config import settings
     from veadk.integrations.ve_prompt_pilot.ve_prompt_pilot import VePromptPilot
     from veadk.utils.misc import load_module_from_file
 
@@ -55,7 +55,7 @@ def prompt(path: str, feedback: str, api_key: str, model_name: str) -> None:
         click.echo(f"Found {len(agents)} agents in {module_abs_path}")
 
         if not api_key:
-            api_key = getenv("PROMPT_PILOT_API_KEY")
+            api_key = settings.prompt_pilot.api_key
         ve_prompt_pilot = VePromptPilot(api_key)
         ve_prompt_pilot.optimize(
             agents=agents, feedback=feedback, model_name=model_name

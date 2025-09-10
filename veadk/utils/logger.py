@@ -16,7 +16,7 @@ import sys
 
 from loguru import logger
 
-from veadk.config import getenv
+from veadk.utils.misc import getenv
 
 
 def filter_log():

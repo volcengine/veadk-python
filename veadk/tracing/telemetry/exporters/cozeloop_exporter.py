@@ -19,7 +19,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pydantic import BaseModel, Field
 from typing_extensions import override
 
-from veadk.config import getenv
+from veadk.config import settings
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
 from veadk.utils.logger import get_logger
 
@@ -28,18 +28,13 @@ logger = get_logger(__name__)
 
 class CozeloopExporterConfig(BaseModel):
     endpoint: str = Field(
-        default_factory=lambda: getenv(
-            "OBSERVABILITY_OPENTELEMETRY_COZELOOP_ENDPOINT",
-            "https://api.coze.cn/v1/loop/opentelemetry/v1/traces",
-        ),
+        default_factory=lambda: settings.cozeloop_config.otel_exporter_endpoint,
     )
     space_id: str = Field(
-        default_factory=lambda: getenv(
-            "OBSERVABILITY_OPENTELEMETRY_COZELOOP_SERVICE_NAME"
-        ),
+        default_factory=lambda: settings.cozeloop_config.otel_exporter_space_id,
     )
     token: str = Field(
-        default_factory=lambda: getenv("OBSERVABILITY_OPENTELEMETRY_COZELOOP_API_KEY"),
+        default_factory=lambda: settings.cozeloop_config.otel_exporter_api_key,
     )
 
 

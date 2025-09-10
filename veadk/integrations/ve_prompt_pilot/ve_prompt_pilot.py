@@ -65,12 +65,15 @@ class VePromptPilot:
                 api_key=self.api_key,
             ):  # stream chunks of optimized prompt
                 # Process each chunk as it arrives
-                optimized_prompt += chunk.data.content
+                optimized_prompt += chunk.data.content if chunk.data else ""
                 # print(chunk.data.content, end="", flush=True)
                 if chunk.event == "usage":
-                    usage = chunk.data.usage
+                    usage = chunk.data.usage if chunk.data else 0
             optimized_prompt = optimized_prompt.replace("\\n", "\n")
             print(f"Optimized prompt for agent {agent.name}:\n{optimized_prompt}")
-            logger.info(f"Token usage: {usage['total_tokens']}")
+            if usage:
+                logger.info(f"Token usage: {usage['total_tokens']}")
+            else:
+                logger.warning("No usage data.")
 
         return optimized_prompt

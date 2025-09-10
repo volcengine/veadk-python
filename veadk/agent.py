@@ -26,12 +26,9 @@ from google.genai import types
 from pydantic import ConfigDict, Field
 from typing_extensions import Any
 
-from veadk.config import getenv
+from veadk.config import settings
 from veadk.consts import (
     DEFAULT_AGENT_NAME,
-    DEFAULT_MODEL_AGENT_API_BASE,
-    DEFAULT_MODEL_AGENT_NAME,
-    DEFAULT_MODEL_AGENT_PROVIDER,
     DEFAULT_MODEL_EXTRA_CONFIG,
 )
 from veadk.evaluation import EvalSetRecorder
@@ -63,26 +60,16 @@ class Agent(LlmAgent):
     instruction: str = DEFAULT_INSTRUCTION
     """The instruction for the agent, such as principles of function calling."""
 
-    model_name: str = Field(
-        default_factory=lambda: getenv("MODEL_AGENT_NAME", DEFAULT_MODEL_AGENT_NAME)
-    )
+    model_name: str = Field(default_factory=lambda: settings.model.name)
     """The name of the model for agent running."""
 
-    model_provider: str = Field(
-        default_factory=lambda: getenv(
-            "MODEL_AGENT_PROVIDER", DEFAULT_MODEL_AGENT_PROVIDER
-        )
-    )
+    model_provider: str = Field(default_factory=lambda: settings.model.provider)
     """The provider of the model for agent running."""
 
-    model_api_base: str = Field(
-        default_factory=lambda: getenv(
-            "MODEL_AGENT_API_BASE", DEFAULT_MODEL_AGENT_API_BASE
-        )
-    )
+    model_api_base: str = Field(default_factory=lambda: settings.model.api_base)
     """The api base of the model for agent running."""
 
-    model_api_key: str = Field(default_factory=lambda: getenv("MODEL_AGENT_API_KEY"))
+    model_api_key: str = Field(default_factory=lambda: settings.model.api_key)
     """The api key of the model for agent running."""
 
     model_extra_config: dict = Field(default_factory=dict)

@@ -95,8 +95,8 @@ async def main():
         message = "How is the weather like in Beijing?"
         print(f"Test message: {message}")
 
-        await _send_msg_with_a2a(cloud_app=cloud_app, message=message)
-        await _send_msg_with_mcp(cloud_app=cloud_app, message=message)
+        # await _send_msg_with_a2a(cloud_app=cloud_app, message=message)
+        # await _send_msg_with_mcp(cloud_app=cloud_app, message=message)
 
 
 if __name__ == "__main__":

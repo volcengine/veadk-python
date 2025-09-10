@@ -29,7 +29,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pydantic import BaseModel, Field
 from typing_extensions import override
 
-from veadk.config import getenv
+from veadk.config import settings
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
 from veadk.utils.logger import get_logger
 
@@ -254,19 +254,13 @@ class MeterUploader:
 
 class APMPlusExporterConfig(BaseModel):
     endpoint: str = Field(
-        default_factory=lambda: getenv(
-            "OBSERVABILITY_OPENTELEMETRY_APMPLUS_ENDPOINT",
-            "http://apmplus-cn-beijing.volces.com:4317",
-        ),
+        default_factory=lambda: settings.apmplus_config.otel_exporter_endpoint,
     )
     app_key: str = Field(
-        default_factory=lambda: getenv("OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY"),
+        default_factory=lambda: settings.apmplus_config.otel_exporter_api_key,
     )
     service_name: str = Field(
-        default_factory=lambda: getenv(
-            "OBSERVABILITY_OPENTELEMETRY_APMPLUS_SERVICE_NAME",
-            "veadk_tracing_service",
-        ),
+        default_factory=lambda: settings.apmplus_config.otel_exporter_service_name,
         description="Service name shown in APMPlus frontend.",
     )
 

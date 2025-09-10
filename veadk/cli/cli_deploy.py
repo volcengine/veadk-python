@@ -14,6 +14,7 @@
 
 
 import click
+
 from veadk.version import VERSION
 
 TEMP_PATH = "/tmp"

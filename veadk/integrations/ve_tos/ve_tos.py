@@ -12,75 +12,67 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-from veadk.config import getenv
-from veadk.utils.logger import get_logger
 import asyncio
-from typing import Union
-from pydantic import BaseModel, Field
-from typing import Any
-from urllib.parse import urlparse
+import os
 from datetime import datetime
+from typing import TYPE_CHECKING, Union
+from urllib.parse import urlparse
+
+from veadk.consts import DEFAULT_TOS_BUCKET_NAME
+from veadk.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    import tos
+
 
 # Initialize logger before using it
 logger = get_logger(__name__)
 
-# Try to import tos module, and provide helpful error message if it fails
-try:
-    import tos
-except ImportError as e:
-    logger.error(
-        "Failed to import 'tos' module. Please install it using: pip install tos\n"
-    )
-    raise ImportError(
-        "Missing 'tos' module. Please install it using: pip install tos\n"
-    ) from e
 
+class VeTOS:
+    def __init__(
+        self,
+        ak: str = "",
+        sk: str = "",
+        region: str = "cn-beijing",
+        bucket_name: str = DEFAULT_TOS_BUCKET_NAME,
+    ) -> None:
+        self.ak = ak if ak else os.getenv("VOLCENGINE_ACCESS_KEY", "")
+        self.sk = sk if sk else os.getenv("VOLCENGINE_SECRET_KEY", "")
+        self.region = region
+        self.bucket_name = bucket_name
 
-class TOSConfig(BaseModel):
-    region: str = Field(
-        default_factory=lambda: getenv("DATABASE_TOS_REGION"),
-        description="TOS region",
-    )
-    ak: str = Field(
-        default_factory=lambda: getenv("VOLCENGINE_ACCESS_KEY"),
-        description="Volcengine access key",
-    )
-    sk: str = Field(
-        default_factory=lambda: getenv("VOLCENGINE_SECRET_KEY"),
-        description="Volcengine secret key",
-    )
-    bucket_name: str = Field(
-        default_factory=lambda: getenv("DATABASE_TOS_BUCKET"),
-        description="TOS bucket name",
-    )
+        try:
+            import tos
+        except ImportError as e:
+            logger.error(
+                "Failed to import 'tos' module. Please install it using: pip install tos\n"
+            )
+            raise ImportError(
+                "Missing 'tos' module. Please install it using: pip install tos\n"
+            ) from e
 
-
-class VeTOS(BaseModel):
-    config: TOSConfig = Field(default_factory=TOSConfig)
-
-    def model_post_init(self, __context: Any) -> None:
+        self._client = None
         try:
             self._client = tos.TosClientV2(
-                self.config.ak,
-                self.config.sk,
-                endpoint=f"tos-{self.config.region}.volces.com",
-                region=self.config.region,
+                ak=self.ak,
+                sk=self.sk,
+                endpoint=f"tos-{self.region}.volces.com",
+                region=self.region,
             )
-            logger.info("Connected to TOS successfully.")
+            logger.info("Init TOS client.")
         except Exception as e:
             logger.error(f"Client initialization failed:{e}")
-            self._client = None
 
     def _refresh_client(self):
         try:
             if self._client:
                 self._client.close()
             self._client = tos.TosClientV2(
-                self.config.ak,
-                self.config.sk,
-                endpoint=f"tos-{self.config.region}.volces.com",
-                region=self.config.region,
+                self.ak,
+                self.sk,
+                endpoint=f"tos-{self.region}.volces.com",
+                region=self.region,
             )
             logger.info("refreshed client successfully.")
         except Exception as e:
@@ -93,19 +85,17 @@ class VeTOS(BaseModel):
             logger.error("TOS client is not initialized")
             return False
         try:
-            self._client.head_bucket(self.config.bucket_name)
-            logger.info(f"Bucket {self.config.bucket_name} already exists")
+            self._client.head_bucket(self.bucket_name)
+            logger.info(f"Bucket {self.bucket_name} already exists")
         except tos.exceptions.TosServerError as e:
             if e.status_code == 404:
                 try:
                     self._client.create_bucket(
-                        bucket=self.config.bucket_name,
+                        bucket=self.bucket_name,
                         storage_class=tos.StorageClassType.Storage_Class_Standard,
-                        acl=tos.ACLType.ACL_Public_Read,  # 公开读
+                        acl=tos.ACLType.ACL_Public_Read,
                     )
-                    logger.info(
-                        f"Bucket {self.config.bucket_name} created successfully"
-                    )
+                    logger.info(f"Bucket {self.bucket_name} created successfully")
                     self._refresh_client()
                 except Exception as create_error:
                     logger.error(f"Bucket creation failed: {str(create_error)}")
@@ -117,7 +107,7 @@ class VeTOS(BaseModel):
             logger.error(f"Bucket check failed: {str(e)}")
             return False
 
-        # 确保在所有路径上返回布尔值
+        # ensure return bool type
         return self._set_cors_rules()
 
     def _set_cors_rules(self) -> bool:
@@ -131,14 +121,12 @@ class VeTOS(BaseModel):
                 allowed_headers=["*"],
                 max_age_seconds=1000,
             )
-            self._client.put_bucket_cors(self.config.bucket_name, [rule])
-            logger.info(
-                f"CORS rules for bucket {self.config.bucket_name} set successfully"
-            )
+            self._client.put_bucket_cors(self.bucket_name, [rule])
+            logger.info(f"CORS rules for bucket {self.bucket_name} set successfully")
             return True
         except Exception as e:
             logger.error(
-                f"Failed to set CORS rules for bucket {self.config.bucket_name}: {str(e)}"
+                f"Failed to set CORS rules for bucket {self.bucket_name}: {str(e)}"
             )
             return False
 
@@ -155,7 +143,9 @@ class VeTOS(BaseModel):
 
         timestamp: str = datetime.now().strftime("%Y%m%d%H%M%S%f")[:-3]
         object_key: str = f"{app_name}-{user_id}-{session_id}/{timestamp}-{file_name}"
-        tos_url: str = f"https://{self.config.bucket_name}.tos-{self.config.region}.volces.com/{object_key}"
+        tos_url: str = (
+            f"https://{self.bucket_name}.tos-{self.region}.volces.com/{object_key}"
+        )
 
         return object_key, tos_url
 
@@ -182,7 +172,7 @@ class VeTOS(BaseModel):
             if not self.create_bucket():
                 return
             self._client.put_object(
-                bucket=self.config.bucket_name, key=object_key, content=data
+                bucket=self.bucket_name, key=object_key, content=data
             )
             logger.debug(f"Upload success, object_key: {object_key}")
             self._close()
@@ -199,7 +189,7 @@ class VeTOS(BaseModel):
             if not self.create_bucket():
                 return
             self._client.put_object_from_file(
-                bucket=self.config.bucket_name, key=object_key, file_path=file_path
+                bucket=self.bucket_name, key=object_key, file_path=file_path
             )
             self._close()
             logger.debug(f"Upload success, object_key: {object_key}")
@@ -215,7 +205,7 @@ class VeTOS(BaseModel):
             logger.error("TOS client is not initialized")
             return False
         try:
-            object_stream = self._client.get_object(self.config.bucket_name, object_key)
+            object_stream = self._client.get_object(self.bucket_name, object_key)
 
             save_dir = os.path.dirname(save_path)
             if save_dir and not os.path.exists(save_dir):
