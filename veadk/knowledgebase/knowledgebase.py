@@ -152,7 +152,7 @@ class KnowledgeBase(BaseModel):
 
     def delete(self, app_name: str) -> bool:
         index = build_knowledgebase_index(app_name)
-        return self.adapter.delete(index=index)
+        return self._adapter.delete(index=index)
 
     def delete_doc(self, app_name: str, id: str) -> bool:
         index = build_knowledgebase_index(app_name)
