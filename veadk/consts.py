@@ -14,7 +14,7 @@
 
 import time
 
-from veadk.config import getenv
+from veadk.utils.misc import getenv
 from veadk.version import VERSION
 
 DEFAULT_AGENT_NAME = "veAgent"
@@ -32,6 +32,9 @@ DEFAULT_MODEL_EXTRA_CONFIG = {
         "caching": {
             "type": getenv("MODEL_AGENT_CACHING", "enabled"),
         },
+        "thinking": {
+            "type": "disabled"
+        },  # disable thinking for token saving and shorter TTFT by default
         "expire_at": int(time.time()) + 3600,  # expire after 1 hour
     },
 }
@@ -49,3 +52,10 @@ DEFAULT_TLS_OTEL_EXPORTER_REGION = "cn-beijing"
 DEFAULT_CR_INSTANCE_NAME = "veadk-user-instance"
 DEFAULT_CR_NAMESPACE_NAME = "veadk-user-namespace"
 DEFAULT_CR_REPO_NAME = "veadk-user-repo"
+
+DEFAULT_TLS_LOG_PROJECT_NAME = "veadk-logs"
+DEFAULT_TLS_TRACING_INSTANCE_NAME = "veadk-tracing"
+
+DEFAULT_TOS_BUCKET_NAME = "veadk-default-bucket"
+
+DEFAULT_COZELOOP_SPACE_NAME = "veadk-space"

@@ -14,7 +14,7 @@
 
 import requests
 
-from veadk.config import getenv
+from veadk.config import getenv, settings
 
 
 def vesearch(query: str) -> str:
@@ -26,7 +26,7 @@ def vesearch(query: str) -> str:
     Returns:
         Summarized search results.
     """
-    api_key = getenv("TOOL_VESEARCH_API_KEY")
+    api_key = settings.tool.vesearch.api_key
     bot_id = str(getenv("TOOL_VESEARCH_ENDPOINT"))
 
     if api_key == "":

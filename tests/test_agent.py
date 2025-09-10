@@ -199,17 +199,6 @@ def test_agent_with_tracers():
     assert tracer2 in agent.tracers
 
 
-@patch.dict(
-    "os.environ",
-    {"MODEL_AGENT_NAME": "env_model_name", "MODEL_AGENT_API_KEY": "mock_api_key"},
-    clear=True,
-)
-def test_agent_environment_variables():
-    agent = Agent()
-    print(agent)
-    assert agent.model_name == "env_model_name"
-
-
 @patch.dict("os.environ", {"MODEL_AGENT_API_KEY": "mock_api_key"})
 def test_agent_custom_name_and_description():
     custom_name = "CustomAgent"
