@@ -41,7 +41,8 @@ get_collections_path = "/api/knowledge/collection/info"
 doc_del_path = "/api/knowledge/collection/delete"
 doc_add_path = "/api/knowledge/doc/add"
 doc_info_path = "/api/knowledge/doc/info"
-list_docs_path = "/api/knowledge/point/list"
+list_point_path = "/api/knowledge/point/list"
+list_docs_path = "/api/knowledge/doc/list"
 delete_docs_path = "/api/knowledge/point/delete"
 
 
@@ -550,7 +551,7 @@ class VikingDatabase(BaseModel, BaseDatabase):
 
         list_doc_req = prepare_request(
             method="POST",
-            path=list_docs_path,
+            path=list_point_path,
             config=self.config,
             data=request_params,
         )
@@ -578,6 +579,38 @@ class VikingDatabase(BaseModel, BaseDatabase):
             for res in result["data"]["point_list"]
         ]
         return data
+
+    def list_docs(
+        self, collection_name: str, offset: int = 0, limit: int = -1
+    ) -> list[dict]:
+        request_params = {
+            "collection_name": collection_name,
+            "project": self.config.project,
+            "offset": offset,
+            "limit": limit,
+        }
+
+        list_doc_req = prepare_request(
+            method="POST",
+            path=list_docs_path,
+            config=self.config,
+            data=request_params,
+        )
+        resp = requests.request(
+            method=list_doc_req.method,
+            url="https://{}{}".format(g_knowledge_base_domain, list_doc_req.path),
+            headers=list_doc_req.headers,
+            data=list_doc_req.body,
+        )
+
+        result = resp.json()
+        if result["code"] != 0:
+            logger.error(f"Error in list_docs: {result['message']}")
+            raise ValueError(f"Error in list_docs: {result['message']}")
+
+        if not result["data"]["doc_list"]:
+            return []
+        return result["data"]["doc_list"]
 
     def delete_by_id(self, collection_name: str, id: str) -> bool:
         request_params = {

@@ -28,6 +28,25 @@ class KVDatabaseAdapter:
 
         self.client: RedisDatabase = client
 
+    def index_exists(self, index: str) -> bool:
+        """
+        Check if the index (key) exists in Redis.
+
+        Args:
+            index: The Redis key to check
+
+        Returns:
+            bool: True if the key exists, False otherwise
+        """
+        try:
+            # Use Redis EXISTS command to check if key exists
+            return bool(self.client._client.exists(index))
+        except Exception as e:
+            logger.error(
+                f"Failed to check if key exists in Redis: index={index} error={e}"
+            )
+            return False
+
     def add(self, data: list[str], index: str, **kwargs):
         logger.debug(f"Adding documents to Redis database: index={index}")
 
@@ -98,6 +117,24 @@ class RelationalDatabaseAdapter:
         from veadk.database.relational.mysql_database import MysqlDatabase
 
         self.client: MysqlDatabase = client
+
+    def index_exists(self, index: str) -> bool:
+        """
+        Check if the table (index) exists in MySQL database.
+
+        Args:
+            index: The table name to check
+
+        Returns:
+            bool: True if the table exists, False otherwise
+        """
+        try:
+            return self.client.table_exists(index)
+        except Exception as e:
+            logger.error(
+                f"Failed to check if table exists in MySQL: index={index} error={e}"
+            )
+            return False
 
     def create_table(self, table_name: str):
         logger.debug(f"Creating table for SQL database: table_name={table_name}")
@@ -188,6 +225,25 @@ class VectorDatabaseAdapter:
 
         self.client: OpenSearchVectorDatabase = client
 
+    def index_exists(self, index: str) -> bool:
+        """
+        Check if the collection (index) exists in OpenSearch.
+
+        Args:
+            index: The collection name to check
+
+        Returns:
+            bool: True if the collection exists, False otherwise
+        """
+        try:
+            self._validate_index(index)
+            return self.client.collection_exists(index)
+        except Exception as e:
+            logger.error(
+                f"Failed to check if collection exists in OpenSearch: index={index} error={e}"
+            )
+            return False
+
     def _validate_index(self, index: str):
         """
         Verify whether the string conforms to the naming rules of index_name in OpenSearch.
@@ -258,6 +314,25 @@ class VikingDatabaseAdapter:
         from veadk.database.viking.viking_database import VikingDatabase
 
         self.client: VikingDatabase = client
+
+    def index_exists(self, index: str) -> bool:
+        """
+        Check if the collection (index) exists in VikingDB.
+
+        Args:
+            index: The collection name to check
+
+        Returns:
+            bool: True if the collection exists, False otherwise
+        """
+        try:
+            self._validate_index(index)
+            return self.client.collection_exists(index)
+        except Exception as e:
+            logger.error(
+                f"Failed to check if collection exists in VikingDB: index={index} error={e}"
+            )
+            return False
 
     def _validate_index(self, index: str):
         """
@@ -341,6 +416,25 @@ class VikingMemoryDatabaseAdapter:
 
         self.client: VikingMemoryDatabase = client
 
+    def index_exists(self, index: str) -> bool:
+        """
+        Check if the collection (index) exists in VikingMemoryDB.
+
+        Note:
+            VikingMemoryDatabase does not support checking if a collection exists.
+            This method always returns False.
+
+        Args:
+            index: The collection name to check
+
+        Returns:
+            bool: Always returns False as VikingMemoryDatabase does not support this functionality
+        """
+        logger.warning(
+            "VikingMemoryDatabase does not support checking if a collection exists"
+        )
+        raise NotImplementedError("VikingMemoryDatabase does not support index_exists")
+
     def _validate_index(self, index: str):
         if not (
             isinstance(index, str)
@@ -387,6 +481,23 @@ class LocalDatabaseAdapter:
         from veadk.database.local_database import LocalDataBase
 
         self.client: LocalDataBase = client
+
+    def index_exists(self, index: str) -> bool:
+        """
+        Check if the index exists in LocalDataBase.
+
+        Note:
+            LocalDataBase does not support checking if an index exists.
+            This method always returns False.
+
+        Args:
+            index: The index name to check (not used in LocalDataBase)
+
+        Returns:
+            bool: Always returns False as LocalDataBase does not support this functionality
+        """
+        logger.warning("LocalDataBase does not support checking if an index exists")
+        return True
 
     def add(self, data: list[str], **kwargs):
         self.client.add(data)

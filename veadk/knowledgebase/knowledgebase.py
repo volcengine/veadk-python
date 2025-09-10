@@ -158,6 +158,21 @@ class KnowledgeBase(BaseModel):
         index = build_knowledgebase_index(app_name)
         return self._adapter.delete_doc(index=index, id=id)
 
-    def list_docs(self, app_name: str, offset: int = 0, limit: int = 100) -> list[dict]:
+    def list_chunks(
+        self, app_name: str, offset: int = 0, limit: int = 100
+    ) -> list[dict]:
         index = build_knowledgebase_index(app_name)
         return self._adapter.list_chunks(index=index, offset=offset, limit=limit)
+
+    def list_docs(self, app_name: str, offset: int = 0, limit: int = 100) -> list[dict]:
+        if self.backend == "viking":
+            index = build_knowledgebase_index(app_name)
+            return self._adapter.list_docs(index=index, offset=offset, limit=limit)
+        else:
+            raise NotImplementedError(
+                f"list_docs not supported for {self.backend}, only viking support list_docs"
+            )
+
+    def exists(self, app_name: str) -> bool:
+        index = build_knowledgebase_index(app_name)
+        return self._adapter.index_exists(index=index)
