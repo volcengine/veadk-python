@@ -35,7 +35,7 @@ class VesearchVeAuth(BaseVeAuth):
 
     @override
     def _fetch_token(self):
-        logger.info("Fetching Vesearch token from Volcengine Top Gateway.")
+        logger.info("Fetching VeSearch token ...")
 
         res = ve_request(
             request_body={"biz_scene": "search_agent", "page": 1, "rows": 10},

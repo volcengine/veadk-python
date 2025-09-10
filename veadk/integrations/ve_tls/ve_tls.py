@@ -195,4 +195,6 @@ class VeTLS:
         if not instance:
             raise ValueError("None instance")
 
+        logger.info(f"Fetched trace topic id: {instance['TraceTopicId']}")
+
         return instance["TraceTopicId"]

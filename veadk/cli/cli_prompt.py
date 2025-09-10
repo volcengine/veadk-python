@@ -19,8 +19,8 @@ import click
 @click.option(
     "--path", default=".", help="Agent file path with global variable `agent=...`"
 )
-@click.option("--feedback", default=None, help="Suggestions for prompt optimization")
-@click.option("--api-key", default=None, help="API Key of PromptPilot")
+@click.option("--feedback", default="", help="Suggestions for prompt optimization")
+@click.option("--api-key", default="", help="API Key of PromptPilot")
 @click.option(
     "--model-name",
     default="doubao-1.5-pro-32k-250115",
