@@ -43,7 +43,7 @@ doc_add_path = "/api/knowledge/doc/add"
 doc_info_path = "/api/knowledge/doc/info"
 list_point_path = "/api/knowledge/point/list"
 list_docs_path = "/api/knowledge/doc/list"
-delete_docs_path = "/api/knowledge/point/delete"
+delete_docs_path = "/api/knowledge/doc/delete"
 
 
 class VolcengineTOSConfig(BaseModel):
@@ -616,7 +616,7 @@ class VikingDatabase(BaseModel, BaseDatabase):
         request_params = {
             "collection_name": collection_name,
             "project": self.config.project,
-            "point_id": id,
+            "doc_id": id,
         }
 
         delete_by_id_req = prepare_request(
