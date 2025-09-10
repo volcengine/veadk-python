@@ -567,7 +567,7 @@ class VikingDatabase(BaseModel, BaseDatabase):
             logger.error(f"Error in list_docs: {result['message']}")
             raise ValueError(f"Error in list_docs: {result['message']}")
 
-        if not result["data"]["point_list"]:
+        if not result["data"].get("point_list", []):
             return []
 
         data = [
@@ -608,7 +608,7 @@ class VikingDatabase(BaseModel, BaseDatabase):
             logger.error(f"Error in list_docs: {result['message']}")
             raise ValueError(f"Error in list_docs: {result['message']}")
 
-        if not result["data"]["doc_list"]:
+        if not result["data"].get("doc_list", []):
             return []
         return result["data"]["doc_list"]
 
