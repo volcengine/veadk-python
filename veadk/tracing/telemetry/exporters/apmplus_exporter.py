@@ -14,6 +14,7 @@
 
 from typing import Any
 
+from attr import dataclass
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from opentelemetry import metrics
@@ -33,6 +34,93 @@ from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+_GEN_AI_CLIENT_OPERATION_DURATION_BUCKETS = [
+    0.01,
+    0.02,
+    0.04,
+    0.08,
+    0.16,
+    0.32,
+    0.64,
+    1.28,
+    2.56,
+    5.12,
+    10.24,
+    20.48,
+    40.96,
+    81.92,
+]
+
+_GEN_AI_SERVER_TIME_PER_OUTPUT_TOKEN_BUCKETS = [
+    0.01,
+    0.025,
+    0.05,
+    0.075,
+    0.1,
+    0.15,
+    0.2,
+    0.3,
+    0.4,
+    0.5,
+    0.75,
+    1.0,
+    2.5,
+]
+
+_GEN_AI_SERVER_TIME_TO_FIRST_TOKEN_BUCKETS = [
+    0.001,
+    0.005,
+    0.01,
+    0.02,
+    0.04,
+    0.06,
+    0.08,
+    0.1,
+    0.25,
+    0.5,
+    0.75,
+    1.0,
+    2.5,
+    5.0,
+    7.5,
+    10.0,
+]
+
+_GEN_AI_CLIENT_TOKEN_USAGE_BUCKETS = [
+    1,
+    4,
+    16,
+    64,
+    256,
+    1024,
+    4096,
+    16384,
+    65536,
+    262144,
+    1048576,
+    4194304,
+    16777216,
+    67108864,
+]
+
+
+@dataclass
+class Meters:
+    LLM_CHAT_COUNT = "gen_ai.chat.count"
+    LLM_TOKEN_USAGE = "gen_ai.client.token.usage"
+    LLM_OPERATION_DURATION = "gen_ai.client.operation.duration"
+    LLM_COMPLETIONS_EXCEPTIONS = "gen_ai.chat_completions.exceptions"
+    LLM_STREAMING_TIME_TO_FIRST_TOKEN = (
+        "gen_ai.chat_completions.streaming_time_to_first_token"
+    )
+    LLM_STREAMING_TIME_TO_GENERATE = (
+        "gen_ai.chat_completions.streaming_time_to_generate"
+    )
+    LLM_STREAMING_TIME_PER_OUTPUT_TOKEN = (
+        "gen_ai.chat_completions.streaming_time_per_output_token"
+    )
 
 
 class MeterUploader:
@@ -65,14 +153,44 @@ class MeterUploader:
 
         # create meter attributes
         self.llm_invoke_counter = self.meter.create_counter(
-            name="gen_ai.chat.count",
+            name=Meters.LLM_CHAT_COUNT,
             description="Number of LLM invocations",
             unit="count",
         )
         self.token_usage = self.meter.create_histogram(
-            name="gen_ai.client.token.usage",
+            name=Meters.LLM_TOKEN_USAGE,
             description="Token consumption of LLM invocations",
             unit="count",
+            explicit_bucket_boundaries_advisory=_GEN_AI_CLIENT_TOKEN_USAGE_BUCKETS,
+        )
+        self.duration_histogram = self.meter.create_histogram(
+            name=Meters.LLM_OPERATION_DURATION,
+            unit="s",
+            description="GenAI operation duration",
+            explicit_bucket_boundaries_advisory=_GEN_AI_CLIENT_OPERATION_DURATION_BUCKETS,
+        )
+        self.chat_exception_counter = self.meter.create_counter(
+            name=Meters.LLM_COMPLETIONS_EXCEPTIONS,
+            unit="time",
+            description="Number of exceptions occurred during chat completions",
+        )
+        self.streaming_time_to_first_token = self.meter.create_histogram(
+            name=Meters.LLM_STREAMING_TIME_TO_FIRST_TOKEN,
+            unit="s",
+            description="Time to first token in streaming chat completions",
+            explicit_bucket_boundaries_advisory=_GEN_AI_SERVER_TIME_TO_FIRST_TOKEN_BUCKETS,
+        )
+        self.streaming_time_to_generate = self.meter.create_histogram(
+            name=Meters.LLM_STREAMING_TIME_TO_GENERATE,
+            unit="s",
+            description="Time between first token and completion in streaming chat completions",
+            explicit_bucket_boundaries_advisory=_GEN_AI_CLIENT_OPERATION_DURATION_BUCKETS,
+        )
+        self.streaming_time_per_output_token = self.meter.create_histogram(
+            name=Meters.LLM_STREAMING_TIME_PER_OUTPUT_TOKEN,
+            unit="s",
+            description="Time per output token in streaming chat completions",
+            explicit_bucket_boundaries_advisory=_GEN_AI_SERVER_TIME_PER_OUTPUT_TOKEN_BUCKETS,
         )
 
     def record(self, llm_request: LlmRequest, llm_response: LlmResponse) -> None:
@@ -98,6 +216,40 @@ class MeterUploader:
             if output_token:
                 token_attributes = {**attributes, "gen_ai_token_type": "output"}
                 self.token_usage.record(output_token, attributes=token_attributes)
+
+            # TODO: Get llm duration
+            # duration = 5.0
+            # if self.duration_histogram:
+            #     self.duration_histogram.record(duration, attributes=attributes)
+
+            # Get model request error
+            if llm_response.error_code and self.chat_exception_counter:
+                exception_attributes = {
+                    **attributes,
+                    "error_type": llm_response.error_message,
+                }
+                self.chat_exception_counter.add(1, exception_attributes)
+
+            # TODO: Get streaming time to first token
+            # time_to_frist_token = 0.1
+            # if self.streaming_time_to_first_token:
+            #     self.streaming_time_to_first_token.record(
+            #         time_to_frist_token, attributes=attributes
+            #     )
+
+            # TODO: Get streaming time to generate
+            # time_to_generate = 1.0
+            # if self.streaming_time_to_generate:
+            #     self.streaming_time_to_generate.record(
+            #         time_to_generate, attributes=attributes
+            #     )
+
+            # TODO: Get streaming time per output token
+            # time_per_output_token = 0.01
+            # if self.streaming_time_per_output_token:
+            #     self.streaming_time_per_output_token.record(
+            #         time_per_output_token, attributes=attributes
+            #     )
 
 
 class APMPlusExporterConfig(BaseModel):
