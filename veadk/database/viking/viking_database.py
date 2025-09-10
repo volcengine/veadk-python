@@ -403,7 +403,7 @@ class VikingDatabase(BaseModel, BaseDatabase):
         else:
             return False
 
-    def list_docs(
+    def list_chunks(
         self, collection_name: str, offset: int = 0, limit: int = -1
     ) -> list[dict]:
         request_params = {
@@ -430,6 +430,9 @@ class VikingDatabase(BaseModel, BaseDatabase):
         if result["code"] != 0:
             logger.error(f"Error in list_docs: {result['message']}")
             raise ValueError(f"Error in list_docs: {result['message']}")
+
+        if not result["data"]["point_list"]:
+            return []
 
         data = [
             {

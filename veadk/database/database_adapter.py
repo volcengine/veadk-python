@@ -28,7 +28,7 @@ class KVDatabaseAdapter:
 
         self.client: RedisDatabase = client
 
-    def add(self, data: list[str], index: str):
+    def add(self, data: list[str], index: str, **kwargs):
         logger.debug(f"Adding documents to Redis database: index={index}")
 
         try:
@@ -78,7 +78,7 @@ class KVDatabaseAdapter:
             )
             return False
 
-    def list_docs(self, index: str, offset: int = 0, limit: int = 100) -> list[dict]:
+    def list_chunks(self, index: str, offset: int = 0, limit: int = 100) -> list[dict]:
         logger.debug(f"Listing documents from Redis database: index={index}")
         try:
             # Get all documents from Redis
@@ -111,7 +111,7 @@ class RelationalDatabaseAdapter:
         """
         self.client.add(sql)
 
-    def add(self, data: list[str], index: str):
+    def add(self, data: list[str], index: str, **kwargs):
         logger.debug(
             f"Adding documents to SQL database: table_name={index} data_len={len(data)}"
         )
@@ -203,7 +203,7 @@ class VectorDatabaseAdapter:
                 "The index name does not conform to the naming rules of OpenSearch"
             )
 
-    def add(self, data: list[str], index: str):
+    def add(self, data: list[str], index: str, **kwargs):
         self._validate_index(index)
 
         logger.debug(
@@ -247,7 +247,7 @@ class VectorDatabaseAdapter:
             )
             return False
 
-    def list_docs(self, index: str, offset: int = 0, limit: int = 1000) -> list[dict]:
+    def list_chunks(self, index: str, offset: int = 0, limit: int = 1000) -> list[dict]:
         self._validate_index(index)
         logger.debug(f"Listing documents from vector database: index={index}")
         return self.client.list_docs(collection_name=index, offset=offset, limit=limit)
@@ -322,6 +322,13 @@ class VikingDatabaseAdapter:
         logger.debug(f"Deleting documents from vector database: index={index} id={id}")
         return self.client.delete_by_id(collection_name=index, id=id)
 
+    def list_chunks(self, index: str, offset: int, limit: int) -> list[dict]:
+        self._validate_index(index)
+        logger.debug(f"Listing documents from vector database: index={index}")
+        return self.client.list_chunks(
+            collection_name=index, offset=offset, limit=limit
+        )
+
     def list_docs(self, index: str, offset: int, limit: int) -> list[dict]:
         self._validate_index(index)
         logger.debug(f"Listing documents from vector database: index={index}")
@@ -371,7 +378,7 @@ class VikingMemoryDatabaseAdapter:
     def delete_docs(self, index: str, ids: list[int]):
         raise NotImplementedError("VikingMemoryDatabase does not support delete_docs")
 
-    def list_docs(self, index: str):
+    def list_chunks(self, index: str):
         raise NotImplementedError("VikingMemoryDatabase does not support list_docs")
 
 
@@ -393,7 +400,7 @@ class LocalDatabaseAdapter:
     def delete_doc(self, index: str, id: str) -> bool:
         return self.client.delete_doc(id)
 
-    def list_docs(self, index: str, offset: int = 0, limit: int = 100) -> list[dict]:
+    def list_chunks(self, index: str, offset: int = 0, limit: int = 100) -> list[dict]:
         return self.client.list_docs(offset=offset, limit=limit)
 
 
