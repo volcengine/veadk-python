@@ -118,6 +118,7 @@ class VeFaaS:
                 runtime="native-python3.10/v1",
                 request_timeout=1800,
                 envs=envs,
+                memory_mb=2048,
             )
         )
 
