@@ -225,33 +225,36 @@ class VeFaaS:
         all_items = []
         total_page = None
         while True:
-            request_body = {
-                "PageNumber": page_number,
-                "PageSize": page_size,
-                "Filters": [{"Item": {"Key": "Name", "Value": [app_name]}}],
-                "OrderBy": {"Key": "CreateTime", "Ascend": False},
-            }
-            response = ve_request(
-                request_body=request_body,
-                action="ListApplications",
-                ak=self.ak,
-                sk=self.sk,
-                service="vefaas",
-                version="2021-03-03",
-                region="cn-beijing",
-                host="open.volcengineapi.com",
-            )
-            result = response.get("Result", {})
-            items = result.get("Items", [])
-            all_items.extend(items)
+            try:
+                request_body = {
+                    "PageNumber": page_number,
+                    "PageSize": page_size,
+                    "Filters": [{"Item": {"Key": "Name", "Value": [app_name]}}],
+                    "OrderBy": {"Key": "CreateTime", "Ascend": False},
+                }
+                response = ve_request(
+                    request_body=request_body,
+                    action="ListApplications",
+                    ak=self.ak,
+                    sk=self.sk,
+                    service="vefaas",
+                    version="2021-03-03",
+                    region="cn-beijing",
+                    host="open.volcengineapi.com",
+                )
+                result = response.get("Result", {})
+                items = result.get("Items", [])
+                all_items.extend(items)
 
-            if total_page is None:
-                total = result.get("Total", 0)
-                total_page = (total + page_size - 1) // page_size
+                if total_page is None:
+                    total = result.get("Total", 0)
+                    total_page = (total + page_size - 1) // page_size
 
-            if page_number >= total_page or not items:
-                break
-            page_number += 1
+                if page_number >= total_page or not items:
+                    break
+                page_number += 1
+            except Exception as e:
+                raise ValueError(f"List application failed: {e}")
         return all_items
 
     def _update_function_code(
