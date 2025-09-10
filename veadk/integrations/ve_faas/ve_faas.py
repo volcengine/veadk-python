@@ -219,18 +219,40 @@ class VeFaaS:
         )
         return response["Result"]["Status"], response
 
-    def _list_application(self):
-        response = ve_request(
-            request_body={},
-            action="ListApplications",
-            ak=self.ak,
-            sk=self.sk,
-            service="vefaas",
-            version="2021-03-03",
-            region="cn-beijing",
-            host="open.volcengineapi.com",
-        )
-        return response["Result"]["Items"]
+    def _list_application(self, app_name: str = None):
+        page_size = 50
+        page_number = 1
+        all_items = []
+        total_page = None
+        while True:
+            request_body = {
+                "PageNumber": page_number,
+                "PageSize": page_size,
+                "Filters": [{"Item": {"Key": "Name", "Value": [app_name]}}],
+                "OrderBy": {"Key": "CreateTime", "Ascend": False},
+            }
+            response = ve_request(
+                request_body=request_body,
+                action="ListApplications",
+                ak=self.ak,
+                sk=self.sk,
+                service="vefaas",
+                version="2021-03-03",
+                region="cn-beijing",
+                host="open.volcengineapi.com",
+            )
+            result = response.get("Result", {})
+            items = result.get("Items", [])
+            all_items.extend(items)
+
+            if total_page is None:
+                total = result.get("Total", 0)
+                total_page = (total + page_size - 1) // page_size
+
+            if page_number >= total_page or not items:
+                break
+            page_number += 1
+        return all_items
 
     def _update_function_code(
         self,
@@ -306,7 +328,7 @@ class VeFaaS:
     def get_application_details(self, app_id: str = None, app_name: str = None):
         if not app_id and not app_name:
             raise ValueError("app_id and app_name cannot be both empty.")
-        apps = self._list_application()
+        apps = self._list_application(app_name=app_name)
         if app_id:
             for app in apps:
                 if app["Id"] == app_id:
@@ -318,7 +340,7 @@ class VeFaaS:
                     return app
 
     def find_app_id_by_name(self, name: str):
-        apps = self._list_application()
+        apps = self._list_application(app_name=name)
         for app in apps:
             if app["Name"] == name:
                 return app["Id"]
