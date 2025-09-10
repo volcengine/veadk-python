@@ -254,7 +254,9 @@ class VeFaaS:
                     break
                 page_number += 1
             except Exception as e:
-                raise ValueError(f"List application failed: {e}")
+                raise ValueError(
+                    f"List application failed. Response: {response}. Error: {str(e)}"
+                )
         return all_items
 
     def _update_function_code(
