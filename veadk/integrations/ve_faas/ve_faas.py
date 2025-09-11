@@ -201,11 +201,20 @@ class VeFaaS:
             url = cloud_resource["framework"]["url"]["system_url"]
             return url
         else:
-            logger.error(f"Release application failed: {full_response}")
-            logs = self._get_application_logs(app_id=app_id)
-            log_text = ""
-            for log_line in logs:
-                log_text += log_line.strip() + "\n"
+            logger.error(
+                f"Release application failed. Application ID: {app_id}, Status: {status}"
+            )
+            import re
+
+            logs = "\n".join(self._get_application_logs(app_id=app_id))
+            log_text = re.sub(
+                r'([{"\']?(key|secret|token|pass|auth|credential|access|api|ak|sk|doubao|volces|coze)[^"\'\s]*["\']?\s*[:=]\s*)(["\']?)([^"\'\s]+)(["\']?)|([A-Za-z0-9+/=]{20,})',
+                lambda m: f"{m.group(1)}{m.group(3)}******{m.group(5)}"
+                if m.group(1)
+                else "******",
+                logs,
+                flags=re.IGNORECASE,
+            )
             raise Exception(f"Release application failed. Logs:\n{log_text}")
 
     def _get_application_status(self, app_id: str):
@@ -294,10 +303,6 @@ class VeFaaS:
 
         # Get application status and extract function info
         status, full_response = self._get_application_status(app_id)
-        if status == "deploy_fail":
-            raise ValueError(
-                f"Cannot update failed application. Current status: {status}"
-            )
 
         # Extract function name from application config
         cloud_resource = full_response["Result"]["CloudResource"]
