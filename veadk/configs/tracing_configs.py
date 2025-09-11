@@ -62,6 +62,24 @@ class CozeloopConfig(BaseSettings):
         default="", alias="OBSERVABILITY_OPENTELEMETRY_COZELOOP_SERVICE_NAME"
     )
 
+    # TODO: auto fetching via AK/SK pair
+    # @cached_property
+    # def otel_exporter_api_key(self) -> str:
+    #     pass
+
+    # TODO: auto fetching workspace id
+    # @cached_property
+    # def otel_exporter_space_id(self) -> str:
+    #     workspace_id = os.getenv("OBSERVABILITY_OPENTELEMETRY_COZELOOP_SERVICE_NAME", "")
+
+    #     if not workspace_id:
+    #         # create a default one
+    #         workspace_id = VeCozeloop(self.otel_exporter_api_key).create_workspace(
+    #             workspace_name=DEFAULT_COZELOOP_SPACE_NAME
+    #         )
+
+    #     return workspace_id
+
 
 class TLSConfig(BaseSettings):
     otel_exporter_endpoint: str = Field(
