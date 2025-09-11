@@ -20,7 +20,13 @@ from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.runner import Runner
 
 
+# Import the standalone function instead of accessing as class method
+from veadk.runner import _convert_messages
+
+
 def _test_convert_messages(runner):
+    """Test message conversion logic using standalone _convert_messages function"""
+    # Test single text message conversion
     message = "test message"
     expected_message = [
         types.Content(
@@ -28,11 +34,16 @@ def _test_convert_messages(runner):
             role="user",
         )
     ]
-    actual_message = runner._convert_messages(
-        message, session_id="test_session_id", upload_inline_data_to_tos=True
+    # Modified: Call _convert_messages directly (not as runner method)
+    actual_message = _convert_messages(
+        message,
+        app_name=runner.app_name,
+        user_id=runner.user_id,
+        session_id="test_session_id",
     )
     assert actual_message == expected_message
 
+    # Test multiple text messages conversion
     message = ["test message 1", "test message 2"]
     expected_message = [
         types.Content(
@@ -44,13 +55,18 @@ def _test_convert_messages(runner):
             role="user",
         ),
     ]
-    actual_message = runner._convert_messages(
-        message, session_id="test_session_id", upload_inline_data_to_tos=True
+    # Modified: Call _convert_messages directly (not as runner method)
+    actual_message = _convert_messages(
+        message,
+        app_name=runner.app_name,
+        user_id=runner.user_id,
+        session_id="test_session_id",
     )
     assert actual_message == expected_message
 
 
 def test_runner():
+    """Test Runner class initialization and core properties"""
     short_term_memory = ShortTermMemory()
     long_term_memory = LongTermMemory(backend="local")
     agent = Agent(
@@ -64,10 +80,9 @@ def test_runner():
     runner = Runner(agent=agent, short_term_memory=short_term_memory)
     assert runner.long_term_memory == agent.long_term_memory
 
-    adk_runner = runner.runner
-    assert adk_runner.memory_service == agent.long_term_memory
-    assert adk_runner.session_service == runner.short_term_memory.session_service
+    # Verify inherited ADKRunner properties
+    assert runner.memory_service == agent.long_term_memory
+    assert runner.session_service == runner.short_term_memory.session_service
 
-    _test_convert_messages(runner)
-    _test_convert_messages(runner)
+    # Run message conversion tests
     _test_convert_messages(runner)

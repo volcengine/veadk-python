@@ -22,7 +22,7 @@ from veadk.consts import DEFAULT_TOS_BUCKET_NAME
 from veadk.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    import tos
+    pass
 
 
 # Initialize logger before using it
@@ -41,9 +41,12 @@ class VeTOS:
         self.sk = sk if sk else os.getenv("VOLCENGINE_SECRET_KEY", "")
         self.region = region
         self.bucket_name = bucket_name
+        self._tos_module = None
 
         try:
             import tos
+
+            self._tos_module = tos
         except ImportError as e:
             logger.error(
                 "Failed to import 'tos' module. Please install it using: pip install tos\n"
@@ -54,7 +57,7 @@ class VeTOS:
 
         self._client = None
         try:
-            self._client = tos.TosClientV2(
+            self._client = self._tos_module.TosClientV2(
                 ak=self.ak,
                 sk=self.sk,
                 endpoint=f"tos-{self.region}.volces.com",
@@ -68,7 +71,7 @@ class VeTOS:
         try:
             if self._client:
                 self._client.close()
-            self._client = tos.TosClientV2(
+            self._client = self._tos_module.TosClientV2(
                 self.ak,
                 self.sk,
                 endpoint=f"tos-{self.region}.volces.com",
@@ -87,13 +90,13 @@ class VeTOS:
         try:
             self._client.head_bucket(self.bucket_name)
             logger.info(f"Bucket {self.bucket_name} already exists")
-        except tos.exceptions.TosServerError as e:
+        except self._tos_module.exceptions.TosServerError as e:
             if e.status_code == 404:
                 try:
                     self._client.create_bucket(
                         bucket=self.bucket_name,
-                        storage_class=tos.StorageClassType.Storage_Class_Standard,
-                        acl=tos.ACLType.ACL_Public_Read,
+                        storage_class=self._tos_module.StorageClassType.Storage_Class_Standard,
+                        acl=self._tos_module.ACLType.ACL_Public_Read,
                     )
                     logger.info(f"Bucket {self.bucket_name} created successfully")
                     self._refresh_client()
@@ -115,7 +118,7 @@ class VeTOS:
             logger.error("TOS client is not initialized")
             return False
         try:
-            rule = tos.models2.CORSRule(
+            rule = self._tos_module.models2.CORSRule(
                 allowed_origins=["*"],
                 allowed_methods=["GET", "HEAD"],
                 allowed_headers=["*"],
@@ -174,7 +177,7 @@ class VeTOS:
             self._client.put_object(
                 bucket=self.bucket_name, key=object_key, content=data
             )
-            logger.debug(f"Upload success, object_key: {object_key}")
+            logger.debug(f"Upload success, url: {object_key}")
             self._close()
             return
         except Exception as e:
