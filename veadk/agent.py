@@ -14,11 +14,11 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Union
 
 from google.adk.agents import LlmAgent, RunConfig
 from google.adk.agents.base_agent import BaseAgent
-from google.adk.agents.llm_agent import ToolUnion
+from google.adk.agents.llm_agent import InstructionProvider, ToolUnion
 from google.adk.agents.run_config import StreamingMode
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.runners import Runner
@@ -57,8 +57,8 @@ class Agent(LlmAgent):
     description: str = DEFAULT_DESCRIPTION
     """The description of the agent. This will be helpful in A2A scenario."""
 
-    instruction: str = DEFAULT_INSTRUCTION
-    """The instruction for the agent, such as principles of function calling."""
+    instruction: Union[str, InstructionProvider] = DEFAULT_INSTRUCTION
+    """The instruction for the agent."""
 
     model_name: str = Field(default_factory=lambda: settings.model.name)
     """The name of the model for agent running."""
@@ -92,9 +92,6 @@ class Agent(LlmAgent):
 
     tracers: list[BaseTracer] = []
     """The tracers provided to agent."""
-
-    serve_url: str = ""
-    """The url of agent serving host. Show in agent card."""
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
