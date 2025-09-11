@@ -21,7 +21,6 @@ Agent 中主要包括如下属性：
 | knowledgebase | KnowledgeBase | 知识库，后端支持本地内存（local）和数据库（opensearch、viking、redis、mysql），通常设置为一个能够检索的向量数据库 |
 | long_term_memory | LongTermMemory | 长期记忆，后端支持本地内存（local）和数据库（opensearch、viking、redis、mysql），通常设置为一个能够检索的向量数据库 |
 | tracers | list | 追踪器列表，能够定义不同的追踪方式，并在 Agent 执行完毕后将整体 Tracing 信息保存至本地 |
-| serve_url | str | Agent 服务主机的 URL，将显示在 Agent Card 中 |
 
 您可以在[火山引擎方舟平台](https://www.volcengine.com/product/ark)选择适合您的大模型。
 
