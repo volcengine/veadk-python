@@ -53,7 +53,6 @@ def test_agent():
         knowledgebase=knowledgebase,
         long_term_memory=long_term_memory,
         tracers=[tracer],
-        serve_url="",
     )
 
     assert agent.model.model == f"{agent.model_provider}/{agent.model_name}"  # type: ignore
@@ -88,8 +87,6 @@ def test_agent_default_values():
     assert agent.knowledgebase is None
     assert agent.long_term_memory is None
     assert agent.tracers == []
-
-    assert agent.serve_url == ""
 
 
 @patch.dict("os.environ", {"MODEL_AGENT_API_KEY": "mock_api_key"})
@@ -208,11 +205,3 @@ def test_agent_custom_name_and_description():
 
     assert agent.name == custom_name
     assert agent.description == custom_description
-
-
-@patch.dict("os.environ", {"MODEL_AGENT_API_KEY": "mock_api_key"})
-def test_agent_serve_url():
-    serve_url = "http://localhost:8080"
-    agent = Agent(serve_url=serve_url)
-
-    assert agent.serve_url == serve_url

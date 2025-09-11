@@ -16,8 +16,8 @@ import warnings
 from typing import Any
 
 import click
-from veadk.version import VERSION
 
+from veadk.version import VERSION
 
 warnings.filterwarnings(
     "ignore", category=UserWarning, module="pydantic._internal._fields"
@@ -103,7 +103,7 @@ def init(
         shutil.rmtree(target_dir_path)
 
     settings = _render_prompts()
-    settings["local_dir_name"] = local_dir_name.replace("-", "_")
+    settings["local_dir_name"] = local_dir_name
 
     if not vefaas_template_type:
         vefaas_template_type = "template"
