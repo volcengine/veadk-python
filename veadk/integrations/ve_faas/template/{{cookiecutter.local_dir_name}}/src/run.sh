@@ -15,7 +15,10 @@ TIMEOUT=${_FAAS_FUNC_TIMEOUT}
 export SERVER_HOST=$HOST
 export SERVER_PORT=$PORT
 
-export PYTHONPATH=$PYTHONPATH:./site-packages
+# use cached veadk-python and corresponding deps in VeFaaS
+# `./preinstalled-site-packages` stores veadk-python and its dependencies
+export PYTHONPATH=$PYTHONPATH:./site-packages:./preinstalled-site-packages
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
