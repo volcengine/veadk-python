@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
+
 from google.adk.agents import BaseAgent
-from google.adk.agents.llm_agent import ToolUnion
 from omegaconf import OmegaConf
 
 from veadk.a2a.remote_ve_agent import RemoteVeAgent
@@ -48,8 +49,20 @@ class AgentBuilder:
                 sub_agents.append(agent)
             agent_config.pop("sub_agents")
 
+        tools = []
+        if agent_config.get("tools", []):
+            for tool in agent_config["tools"]:
+                module_name = tool["module"]
+                func_name = tool["func"]
+
+                module = importlib.import_module(module_name)
+                func = getattr(module, func_name)
+
+                tools.append(func)
+            agent_config.pop("tools")
+
         agent_cls = AGENT_TYPES[agent_config["type"]]
-        agent = agent_cls(**agent_config, sub_agents=sub_agents)
+        agent = agent_cls(**agent_config, sub_agents=sub_agents, tools=tools)
 
         logger.debug("Build agent done.")
 
@@ -72,14 +85,10 @@ class AgentBuilder:
         self,
         path: str,
         root_agent_identifier: str = "root_agent",
-        tools: list[ToolUnion] | None = None,
     ) -> BaseAgent:
         config = self._read_config(path)
 
         agent_config = config[root_agent_identifier]
         agent = self._build(agent_config)
-
-        if tools and isinstance(agent, Agent):
-            agent.tools = tools
 
         return agent
