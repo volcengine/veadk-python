@@ -11,30 +11,32 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import asyncio
+import functools
+from types import MethodType
 from typing import Union
 
+from google import genai
 from google.adk.agents import RunConfig
+from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.invocation_context import LlmCallsLimitExceededError
-from google.adk.agents.run_config import StreamingMode
-from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.runners import Runner as ADKRunner
 from google.genai import types
 from google.genai.types import Blob
 
-from veadk.a2a.remote_ve_agent import RemoteVeAgent
 from veadk.agent import Agent
 from veadk.agents.loop_agent import LoopAgent
 from veadk.agents.parallel_agent import ParallelAgent
 from veadk.agents.sequential_agent import SequentialAgent
+from veadk.config import getenv
 from veadk.evaluation import EvalSetRecorder
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.types import MediaMessage
 from veadk.utils.logger import get_logger
-from veadk.utils.misc import getenv, read_png_to_bytes
+from veadk.utils.misc import formatted_timestamp, read_png_to_bytes
 
 logger = get_logger(__name__)
-
 
 RunnerMessage = Union[
     str,  # single turn text-based prompt
@@ -44,133 +46,227 @@ RunnerMessage = Union[
     list[MediaMessage | str],  # multiple turn prompt with media and text-based prompt
 ]
 
-VeAgent = Union[Agent, RemoteVeAgent, SequentialAgent, ParallelAgent, LoopAgent]
+
+def pre_run_process(self, process_func, new_message, user_id, session_id):
+    if new_message.parts:
+        for part in new_message.parts:
+            if (
+                part.inline_data
+                and part.inline_data.mime_type == "image/png"
+                and self.upload_inline_data_to_tos
+            ):
+                process_func(
+                    part,
+                    self.app_name,
+                    user_id,
+                    session_id,
+                )
+    return
 
 
-class Runner:
+def post_run_process(self):
+    return
+
+
+def intercept_new_message(process_func):
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(
+            self,
+            *,
+            user_id: str,
+            session_id: str,
+            new_message: types.Content,
+            **kwargs,
+        ):
+            pre_run_process(self, process_func, new_message, user_id, session_id)
+
+            async for event in func(
+                user_id=user_id,
+                session_id=session_id,
+                new_message=new_message,
+                **kwargs,
+            ):
+                yield event
+
+            post_run_process(self)
+
+        return wrapper
+
+    return decorator
+
+
+def _convert_messages(
+    messages: RunnerMessage,
+    app_name: str,
+    user_id: str,
+    session_id: str,
+) -> list:
+    """Convert VeADK formatted messages to Google ADK formatted messages."""
+    if isinstance(messages, str):
+        _messages = [types.Content(role="user", parts=[types.Part(text=messages)])]
+    elif isinstance(messages, MediaMessage):
+        assert messages.media.endswith(".png"), (
+            "The MediaMessage only supports PNG format file for now."
+        )
+        _messages = [
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part(text=messages.text),
+                    types.Part(
+                        inline_data=Blob(
+                            display_name=messages.media,
+                            data=read_png_to_bytes(messages.media),
+                            mime_type="image/png",
+                        )
+                    ),
+                ],
+            )
+        ]
+    elif isinstance(messages, list):
+        converted_messages = []
+        for message in messages:
+            converted_messages.extend(
+                _convert_messages(message, app_name, user_id, session_id)
+            )
+        _messages = converted_messages
+    else:
+        raise ValueError(f"Unknown message type: {type(messages)}")
+
+    return _messages
+
+
+def _upload_image_to_tos(
+    part: genai.types.Part, app_name: str, user_id: str, session_id: str
+) -> None:
+    try:
+        if part.inline_data and part.inline_data.display_name and part.inline_data.data:
+            from veadk.integrations.ve_tos.ve_tos import VeTOS
+
+            ve_tos = VeTOS()
+
+            object_key, tos_url = ve_tos.build_tos_url(
+                user_id=user_id,
+                app_name=app_name,
+                session_id=session_id,
+                data_path=part.inline_data.display_name,
+            )
+
+            upload_task = ve_tos.upload(object_key, part.inline_data.data)
+
+            if upload_task is not None:
+                asyncio.create_task(upload_task)
+
+            part.inline_data.display_name = tos_url
+    except Exception as e:
+        logger.error(f"Upload to TOS failed: {e}")
+
+
+class Runner(ADKRunner):
     def __init__(
         self,
-        agent: VeAgent,
+        agent: BaseAgent | Agent,
         short_term_memory: ShortTermMemory | None = None,
-        plugins: list[BasePlugin] | None = None,
         app_name: str = "veadk_default_app",
         user_id: str = "veadk_default_user",
-    ):
-        self.app_name = app_name
+        upload_inline_data_to_tos: bool = False,
+        *args,
+        **kwargs,
+    ) -> None:
         self.user_id = user_id
+        self.long_term_memory = None
+        self.short_term_memory = short_term_memory
+        self.upload_inline_data_to_tos = upload_inline_data_to_tos
 
-        self.agent = agent
+        session_service = kwargs.pop("session_service", None)
+        memory_service = kwargs.pop("memory_service", None)
 
-        if not short_term_memory:
-            logger.info(
-                "No short term memory provided, using a in-memory memory by default."
-            )
-            self.short_term_memory = ShortTermMemory()
-        else:
-            self.short_term_memory = short_term_memory
+        if session_service:
+            if short_term_memory:
+                logger.warning(
+                    "Short term memory is enabled, but session service is also provided. We will use session service from runner argument."
+                )
 
-        self.session_service = self.short_term_memory.session_service
-
-        # prevent VeRemoteAgent has no long-term memory attr
-        if isinstance(self.agent, Agent):
-            self.long_term_memory = self.agent.long_term_memory
-        else:
-            self.long_term_memory = None
-
-        self.runner = ADKRunner(
-            app_name=self.app_name,
-            agent=self.agent,
-            session_service=self.session_service,
-            memory_service=self.long_term_memory,
-            plugins=plugins,
-        )
-
-    def _convert_messages(
-        self, messages, session_id, upload_inline_data_to_tos
-    ) -> list:
-        if isinstance(messages, str):
-            messages = [types.Content(role="user", parts=[types.Part(text=messages)])]
-        elif isinstance(messages, MediaMessage):
-            assert messages.media.endswith(".png"), (
-                "The MediaMessage only supports PNG format file for now."
-            )
-            data = read_png_to_bytes(messages.media)
-            tos_url = "<tos_url>"
-            if upload_inline_data_to_tos:
-                try:
-                    from veadk.integrations.ve_tos.ve_tos import VeTOS
-
-                    ve_tos = VeTOS()
-                    object_key, tos_url = ve_tos.build_tos_url(
-                        self.user_id, self.app_name, session_id, messages.media
-                    )
-                    upload_task = ve_tos.upload(object_key, data)
-                    if upload_task is not None:
-                        asyncio.create_task(upload_task)
-                except Exception as e:
-                    logger.error(f"Upload to TOS failed: {e}")
-                    tos_url = None
-
+        if not session_service:
+            if short_term_memory:
+                session_service = short_term_memory.session_service
+                logger.debug(
+                    f"Use session service {session_service} from short term memory."
+                )
             else:
                 logger.warning(
-                    "Loss of multimodal data may occur in the tracing process."
+                    "No short term memory or session service provided, use an in-memory one instead."
+                )
+                short_term_memory = ShortTermMemory()
+                self.short_term_memory = short_term_memory
+                session_service = short_term_memory.session_service
+
+        if memory_service:
+            if hasattr(agent, "long_term_memory") and agent.long_term_memory:  # type: ignore
+                self.long_term_memory = agent.long_term_memory  # type: ignore
+                logger.warning(
+                    "Long term memory in agent is enabled, but memory service is also provided. We will use memory service from runner argument."
                 )
 
-            messages = [
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part(text=messages.text),
-                        types.Part(
-                            inline_data=Blob(
-                                display_name=tos_url,
-                                data=data,
-                                mime_type="image/png",
-                            )
-                        ),
-                    ],
-                )
-            ]
-        elif isinstance(messages, list):
-            converted_messages = []
-            for message in messages:
-                converted_messages.extend(
-                    self._convert_messages(
-                        message, session_id, upload_inline_data_to_tos
-                    )
-                )
-            messages = converted_messages
-        else:
-            raise ValueError(f"Unknown message type: {type(messages)}")
+        if not memory_service:
+            if hasattr(agent, "long_term_memory") and agent.long_term_memory:  # type: ignore
+                self.long_term_memory = agent.long_term_memory  # type: ignore
+                memory_service = agent.long_term_memory  # type: ignore
+            else:
+                logger.info("No long term memory provided.")
 
-        return messages
+        super().__init__(
+            agent=agent,
+            session_service=session_service,
+            memory_service=memory_service,
+            app_name=app_name,
+            *args,
+            **kwargs,
+        )
 
-    async def _run(
+        self.run_async = MethodType(
+            intercept_new_message(_upload_image_to_tos)(self.run_async), self
+        )
+
+    async def run(
         self,
-        session_id: str,
-        message: types.Content,
+        messages: RunnerMessage,
+        user_id: str = "",
+        session_id: str = f"tmp-session-{formatted_timestamp()}",
         run_config: RunConfig | None = None,
-        stream: bool = False,
+        save_tracing_data: bool = False,
+        upload_inline_data_to_tos: bool = False,
     ):
-        stream_mode = StreamingMode.SSE if stream else StreamingMode.NONE
+        if upload_inline_data_to_tos:
+            _upload_inline_data_to_tos = self.upload_inline_data_to_tos
+            self.upload_inline_data_to_tos = upload_inline_data_to_tos
 
-        if run_config is not None:
-            stream_mode = run_config.streaming_mode
-        else:
+        if not run_config:
             run_config = RunConfig(
-                streaming_mode=stream_mode,
+                # streaming_mode=stream_mode,
                 max_llm_calls=int(getenv("MODEL_AGENT_MAX_LLM_CALLS", 100)),
             )
-
         logger.info(f"Run config: {run_config}")
 
-        try:
+        user_id = user_id or self.user_id
 
-            async def event_generator():
-                async for event in self.runner.run_async(
+        converted_messages: list = _convert_messages(
+            messages, self.app_name, user_id, session_id
+        )
+
+        if self.short_term_memory:
+            await self.short_term_memory.create_session(
+                app_name=self.app_name, user_id=self.user_id, session_id=session_id
+            )
+
+        final_output = ""
+        for converted_message in converted_messages:
+            try:
+                async for event in self.run_async(
                     user_id=self.user_id,
                     session_id=session_id,
-                    new_message=message,
+                    new_message=converted_message,
                     run_config=run_config,
                 ):
                     if event.get_function_calls():
@@ -182,51 +278,19 @@ class Runner:
                         and event.content.parts[0].text is not None
                         and len(event.content.parts[0].text.strip()) > 0
                     ):
-                        yield event.content.parts[0].text
-
-            final_output = ""
-            async for chunk in event_generator():
-                if stream:
-                    print(chunk, end="", flush=True)
-                final_output += chunk
-            if stream:
-                print()  # end with a new line
-        except LlmCallsLimitExceededError as e:
-            logger.warning(f"Max number of llm calls limit exceeded: {e}")
-            final_output = ""
-
-        return final_output
-
-    async def run(
-        self,
-        messages: RunnerMessage,
-        session_id: str,
-        stream: bool = False,
-        run_config: RunConfig | None = None,
-        save_tracing_data: bool = False,
-        upload_inline_data_to_tos: bool = False,
-    ):
-        converted_messages: list = self._convert_messages(
-            messages, session_id, upload_inline_data_to_tos
-        )
-
-        await self.short_term_memory.create_session(
-            app_name=self.app_name, user_id=self.user_id, session_id=session_id
-        )
-
-        logger.info("Begin to process user messages.")
-
-        final_output = ""
-        for converted_message in converted_messages:
-            final_output = await self._run(
-                session_id, converted_message, run_config, stream
-            )
+                        final_output += event.content.parts[0].text
+            except LlmCallsLimitExceededError as e:
+                logger.warning(f"Max number of llm calls limit exceeded: {e}")
+                final_output = ""
 
         # try to save tracing file
         if save_tracing_data:
             self.save_tracing_file(session_id)
 
         self._print_trace_id()
+
+        if upload_inline_data_to_tos:
+            self.upload_inline_data_to_tos = _upload_inline_data_to_tos  # type: ignore
 
         return final_output
 
@@ -249,54 +313,6 @@ class Runner:
         except Exception as e:
             logger.warning(f"Get tracer id failed as {e}")
             return "<unknown_trace_id>"
-
-    async def run_with_raw_message(
-        self,
-        message: types.Content,
-        session_id: str,
-        run_config: RunConfig | None = None,
-    ):
-        run_config = (
-            RunConfig(max_llm_calls=int(getenv("MODEL_AGENT_MAX_LLM_CALLS", 100)))
-            if not run_config
-            else run_config
-        )
-
-        logger.info(f"Run config: {run_config}")
-
-        await self.short_term_memory.create_session(
-            app_name=self.app_name, user_id=self.user_id, session_id=session_id
-        )
-
-        try:
-
-            async def event_generator():
-                async for event in self.runner.run_async(
-                    user_id=self.user_id,
-                    session_id=session_id,
-                    new_message=message,
-                    run_config=run_config,
-                ):
-                    if event.get_function_calls():
-                        for function_call in event.get_function_calls():
-                            logger.debug(f"Function call: {function_call}")
-                    elif (
-                        event.content is not None
-                        and event.content.parts
-                        and event.content.parts[0].text is not None
-                        and len(event.content.parts[0].text.strip()) > 0
-                    ):
-                        yield event.content.parts[0].text
-
-            final_output = ""
-
-            async for chunk in event_generator():
-                final_output += chunk
-        except LlmCallsLimitExceededError as e:
-            logger.warning(f"Max number of llm calls limit exceeded: {e}")
-            final_output = ""
-
-        return final_output
 
     def _print_trace_id(self) -> None:
         if not isinstance(self.agent, Agent):
@@ -368,61 +384,3 @@ class Runner:
 
         await self.long_term_memory.add_session_to_memory(session)
         logger.info(f"Add session `{session.id}` to long term memory.")
-
-    # [deprecated] we will not host a chat-service in VeADK, so the following two methods are deprecated
-
-    # async def run_with_final_event(
-    #     self,
-    #     messages: RunnerMessage,
-    #     session_id: str,
-    # ):
-    #     """non-streaming run with final event"""
-    #     messages: list = self._convert_messages(messages)
-
-    #     await self.short_term_memory.create_session(
-    #         app_name=self.app_name, user_id=self.user_id, session_id=session_id
-    #     )
-
-    #     logger.info("Begin to process user messages.")
-
-    #     final_event = ""
-    #     async for event in self.runner.run_async(
-    #         user_id=self.user_id, session_id=session_id, new_message=messages[0]
-    #     ):
-    #         if event.get_function_calls():
-    #             for function_call in event.get_function_calls():
-    #                 logger.debug(f"Function call: {function_call}")
-    #         elif (
-    #             not event.partial
-    #             and event.content.parts[0].text is not None
-    #             and len(event.content.parts[0].text.strip()) > 0
-    #         ):
-    #             final_event = event.model_dump_json(exclude_none=True, by_alias=True)
-
-    #     return final_event
-
-    # async def run_sse(
-    #     self,
-    #     session_id: str,
-    #     prompt: str,
-    # ):
-    #     message = types.Content(role="user", parts=[types.Part(text=prompt)])
-
-    #     await self.short_term_memory.create_session(
-    #         app_name=self.app_name, user_id=self.user_id, session_id=session_id
-    #     )
-
-    #     logger.info("Begin to process user messages under SSE method.")
-
-    #     async for event in self.runner.run_async(
-    #         user_id=self.user_id,
-    #         session_id=session_id,
-    #         new_message=message,
-    #         run_config=RunConfig(streaming_mode=StreamingMode.SSE),
-    #     ):
-    #         # Format as SSE data
-    #         sse_event = event.model_dump_json(exclude_none=True, by_alias=True)
-    #         if event.get_function_calls():
-    #             for function_call in event.get_function_calls():
-    #                 logger.debug(f"SSE function call event: {sse_event}")
-    #         yield f"data: {sse_event}\n\n"
