@@ -13,95 +13,48 @@
 # limitations under the License.
 
 import os
-from typing import Any, Dict, List, MutableMapping, Tuple
+from typing import Any
 
 from dotenv import find_dotenv
-from pydantic_settings import (
-    BaseSettings,
-    InitSettingsSource,
-    PydanticBaseSettingsSource,
-    SettingsConfigDict,
-    YamlConfigSettingsSource,
+from pydantic import BaseModel, Field
+
+from veadk.configs.database_configs import (
+    MysqlConfig,
+    OpensearchConfig,
+    RedisConfig,
+    TOSConfig,
+    VikingKnowledgebaseConfig,
 )
-
-settings = None
-veadk_environments = {}
-
-
-def flatten_dict(
-    d: MutableMapping[str, Any], parent_key: str = "", sep: str = "_"
-) -> Dict[str, Any]:
-    """Flatten a nested dictionary, using a separator in the keys.
-    Useful for pydantic_v1 models with nested fields -- first use
-        dct = mdl.model_dump()
-    to get a nested dictionary, then use this function to flatten it.
-    """
-    items: List[Tuple[str, Any]] = []
-    for k, v in d.items():
-        new_key = f"{parent_key}{sep}{k}" if parent_key else k
-        if isinstance(v, MutableMapping):
-            items.extend(flatten_dict(v, new_key, sep=sep).items())
-        else:
-            items.append((new_key, v))
-    return dict(items)
+from veadk.configs.model_configs import ModelConfig
+from veadk.configs.tool_configs import BuiltinToolConfigs, PromptPilotConfig
+from veadk.configs.tracing_configs import (
+    APMPlusConfig,
+    CozeloopConfig,
+    PrometheusConfig,
+    TLSConfig,
+)
+from veadk.utils.misc import set_envs
 
 
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(
-        yaml_file=find_dotenv(filename="config.yaml", usecwd=True), extra="allow"
+class VeADKConfig(BaseModel):
+    model: ModelConfig = Field(default_factory=ModelConfig)
+    """Config for agent reasoning model."""
+
+    tool: BuiltinToolConfigs = Field(default_factory=BuiltinToolConfigs)
+    prompt_pilot: PromptPilotConfig = Field(default_factory=PromptPilotConfig)
+
+    apmplus_config: APMPlusConfig = Field(default_factory=APMPlusConfig)
+    cozeloop_config: CozeloopConfig = Field(default_factory=CozeloopConfig)
+    tls_config: TLSConfig = Field(default_factory=TLSConfig)
+    prometheus_config: PrometheusConfig = Field(default_factory=PrometheusConfig)
+
+    tos: TOSConfig = Field(default_factory=TOSConfig)
+    opensearch: OpensearchConfig = Field(default_factory=OpensearchConfig)
+    mysql: MysqlConfig = Field(default_factory=MysqlConfig)
+    redis: RedisConfig = Field(default_factory=RedisConfig)
+    viking_knowledgebase: VikingKnowledgebaseConfig = Field(
+        default_factory=VikingKnowledgebaseConfig
     )
-
-    @classmethod
-    def settings_customise_sources(
-        cls,
-        settings_cls: type[BaseSettings],
-        init_settings: PydanticBaseSettingsSource,
-        env_settings: PydanticBaseSettingsSource,
-        dotenv_settings: PydanticBaseSettingsSource,
-        file_secret_settings: PydanticBaseSettingsSource,
-    ) -> tuple[PydanticBaseSettingsSource, ...]:
-        yaml_source = YamlConfigSettingsSource(settings_cls)
-        raw_data = yaml_source()
-        flat_data = flatten_dict(raw_data)
-
-        init_source = InitSettingsSource(settings_cls, flat_data)
-        return (
-            init_source,
-            env_settings,
-            dotenv_settings,
-            file_secret_settings,
-        )
-
-
-def prepare_settings():
-    path = find_dotenv(filename="config.yaml", usecwd=True)
-
-    if path == "" or path is None or not os.path.exists(path):
-        # logger.warning(
-        #     "Default and recommanded config file `config.yaml` not found. Please put it in the root directory of your project."
-        # )
-        pass
-    else:
-        # logger.info(f"Loading config file from {path}")
-        global settings
-        settings = Settings()
-
-        for k, v in settings.model_dump().items():
-            global veadk_environments
-
-            k = k.upper()
-            if k in os.environ:
-                veadk_environments[k] = os.environ[k]
-                continue
-            veadk_environments[k] = str(v)
-            os.environ[k] = str(v)
-
-
-prepare_settings()
-
-
-def get_envlist():
-    return os.environ.keys()
 
 
 def getenv(
@@ -129,3 +82,14 @@ def getenv(
         raise ValueError(
             f"The environment variable `{env_name}` not exists. Please set this in your environment variable or config.yaml."
         )
+
+
+config_yaml_path = find_dotenv(filename="config.yaml", usecwd=True)
+
+veadk_environments = {}
+
+if config_yaml_path:
+    config_dict, _veadk_environments = set_envs(config_yaml_path=config_yaml_path)
+    veadk_environments.update(_veadk_environments)
+
+settings = VeADKConfig()

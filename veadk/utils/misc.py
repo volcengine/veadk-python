@@ -14,12 +14,14 @@
 
 import importlib.util
 import json
+import os
 import sys
 import time
 import types
 from typing import Any, Dict, List, MutableMapping, Tuple
 
 import requests
+from yaml import safe_load
 
 
 def read_file(file_path):
@@ -100,3 +102,49 @@ def safe_json_serialize(obj) -> str:
         )
     except (TypeError, OverflowError):
         return "<not serializable>"
+
+
+def getenv(
+    env_name: str, default_value: Any = "", allow_false_values: bool = False
+) -> str:
+    """
+    Get environment variable.
+
+    Args:
+        env_name (str): The name of the environment variable.
+        default_value (str): The default value of the environment variable.
+        allow_false_values (bool, optional): Whether to allow the environment variable to be None or false values. Defaults to False.
+
+    Returns:
+        str: The value of the environment variable.
+    """
+    value = os.getenv(env_name, default_value)
+
+    if allow_false_values:
+        return value
+
+    if value:
+        return value
+    else:
+        raise ValueError(
+            f"The environment variable `{env_name}` not exists. Please set this in your environment variable or config.yaml."
+        )
+
+
+def set_envs(config_yaml_path: str) -> tuple[dict, dict]:
+    with open(config_yaml_path, "r", encoding="utf-8") as yaml_file:
+        config_dict = safe_load(yaml_file)
+
+    flatten_config_dict = flatten_dict(config_dict)
+
+    veadk_environments = {}
+    for k, v in flatten_config_dict.items():
+        k = k.upper()
+
+        if k in os.environ:
+            veadk_environments[k] = os.environ[k]
+            continue
+        veadk_environments[k] = str(v)
+        os.environ[k] = str(v)
+
+    return config_dict, veadk_environments

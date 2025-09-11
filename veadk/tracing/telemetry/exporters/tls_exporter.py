@@ -19,7 +19,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pydantic import BaseModel, Field
 from typing_extensions import override
 
-from veadk.config import getenv
+from veadk.config import getenv, settings
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
 from veadk.utils.logger import get_logger
 
@@ -28,19 +28,13 @@ logger = get_logger(__name__)
 
 class TLSExporterConfig(BaseModel):
     endpoint: str = Field(
-        default_factory=lambda: getenv(
-            "OBSERVABILITY_OPENTELEMETRY_TLS_ENDPOINT",
-            "https://tls-cn-beijing.volces.com:4318/v1/traces",
-        ),
+        default_factory=lambda: settings.tls_config.otel_exporter_endpoint,
     )
     region: str = Field(
-        default_factory=lambda: getenv(
-            "OBSERVABILITY_OPENTELEMETRY_TLS_REGION",
-            "cn-beijing",
-        ),
+        default_factory=lambda: settings.tls_config.otel_exporter_region,
     )
     topic_id: str = Field(
-        default_factory=lambda: getenv("OBSERVABILITY_OPENTELEMETRY_TLS_SERVICE_NAME"),
+        default_factory=lambda: settings.tls_config.otel_exporter_topic_id,
     )
     access_key: str = Field(default_factory=lambda: getenv("VOLCENGINE_ACCESS_KEY"))
     secret_key: str = Field(default_factory=lambda: getenv("VOLCENGINE_SECRET_KEY"))
