@@ -219,18 +219,51 @@ class VeFaaS:
         )
         return response["Result"]["Status"], response
 
-    def _list_application(self):
-        response = ve_request(
-            request_body={},
-            action="ListApplications",
-            ak=self.ak,
-            sk=self.sk,
-            service="vefaas",
-            version="2021-03-03",
-            region="cn-beijing",
-            host="open.volcengineapi.com",
-        )
-        return response["Result"]["Items"]
+    def _list_application(self, app_id: str = None, app_name: str = None):
+        # firt match app_id. if app_id is None,then match app_name and remove app_id
+        request_body = {
+            "OrderBy": {"Key": "CreateTime", "Ascend": False},
+            "FunctionId": app_id if app_id else None,
+            "Filters": [{"Item": {"Key": "Name", "Value": [app_name]}}]
+            if app_name and not app_id
+            else None,
+        }
+        # remove None
+        request_body = {k: v for k, v in request_body.items() if v is not None}
+
+        page_size = 50
+        page_number = 1
+        all_items = []
+        total_page = None
+        while True:
+            try:
+                request_body.update({"PageNumber": page_number, "PageSize": page_size})
+                response = ve_request(
+                    request_body=request_body,
+                    action="ListApplications",
+                    ak=self.ak,
+                    sk=self.sk,
+                    service="vefaas",
+                    version="2021-03-03",
+                    region="cn-beijing",
+                    host="open.volcengineapi.com",
+                )
+                result = response.get("Result", {})
+                items = result.get("Items", [])
+                all_items.extend(items)
+
+                if total_page is None:
+                    total = result.get("Total", 0)
+                    total_page = (total + page_size - 1) // page_size
+
+                if page_number >= total_page or not items:
+                    break
+                page_number += 1
+            except Exception as e:
+                raise ValueError(
+                    f"List application failed. Error: {str(e)}. Response: {response}."
+                )
+        return all_items
 
     def _update_function_code(
         self,
@@ -306,7 +339,7 @@ class VeFaaS:
     def get_application_details(self, app_id: str = None, app_name: str = None):
         if not app_id and not app_name:
             raise ValueError("app_id and app_name cannot be both empty.")
-        apps = self._list_application()
+        apps = self._list_application(app_id=app_id, app_name=app_name)
         if app_id:
             for app in apps:
                 if app["Id"] == app_id:
@@ -318,7 +351,7 @@ class VeFaaS:
                     return app
 
     def find_app_id_by_name(self, name: str):
-        apps = self._list_application()
+        apps = self._list_application(app_name=name)
         for app in apps:
             if app["Name"] == name:
                 return app["Id"]
