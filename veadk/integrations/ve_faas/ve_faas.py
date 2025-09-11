@@ -195,16 +195,18 @@ class VeFaaS:
             time.sleep(10)
             status, full_response = self._get_application_status(app_id)
 
-        assert status == "deploy_success", (
-            f"Release application failed. Response: {full_response}"
-        )
-
-        cloud_resource = full_response["Result"]["CloudResource"]
-        cloud_resource = json.loads(cloud_resource)
-
-        url = cloud_resource["framework"]["url"]["system_url"]
-
-        return url
+        if status == "deploy_success":
+            cloud_resource = full_response["Result"]["CloudResource"]
+            cloud_resource = json.loads(cloud_resource)
+            url = cloud_resource["framework"]["url"]["system_url"]
+            return url
+        else:
+            logger.error(f"Release application failed: {full_response}")
+            logs = self._get_application_logs(app_id=app_id)
+            log_text = ""
+            for log_line in logs:
+                log_text += log_line.strip() + "\n"
+            raise Exception(f"Release application failed. Logs:\n{log_text}")
 
     def _get_application_status(self, app_id: str):
         response = ve_request(
@@ -707,3 +709,21 @@ class VeFaaS:
         logger.info(f"VeFaaS application {name} with ID {app_id} deployed on {url}.")
 
         return url, app_id, function_id
+
+    def _get_application_logs(self, app_id: str) -> list[str]:
+        response = _ = ve_request(
+            request_body={"Id": app_id, "Limit": 99999, "RevisionNumber": 1},
+            action="GetApplicationRevisionLog",
+            ak=self.ak,
+            sk=self.sk,
+            service="vefaas",
+            version="2021-03-03",
+            region="cn-beijing",
+            host="open.volcengineapi.com",
+        )
+
+        try:
+            logs = response["Result"]["LogLines"]
+            return logs
+        except Exception as _:
+            raise ValueError(f"Get application log failed. Response: {response}")
