@@ -178,4 +178,6 @@ def web(host: str) -> None:
     agents_dir = os.getcwd()
     logger.info(f"Load agents from {agents_dir}")
 
-    cli_tools_click.cli_web.main(args=[agents_dir, "--host", host])
+    cli_tools_click.cli_web.main(
+        args=[agents_dir, "--host", host, "--log_level", "ERROR"]
+    )
