@@ -183,9 +183,7 @@ def set_common_attributes_on_tool_span(current_span: _Span) -> None:
                 if hasattr(span.attributes, attr_name):
                     current_span.set_attribute(attr_name, span.attributes[attr_name])
                 else:
-                    logger.error(
-                        f"Parent span {span.name} does not have attribute {attr_name}"
-                    )
+                    logger.error(f"Parent span does not have attribute {attr_name}")
 
 
 def trace_send_data(): ...
