@@ -31,30 +31,36 @@ class VeCozeloop:
             f"Automatically create Cozeloop workspace with name {workspace_name}"
         )
 
-        URL = "https://api.coze.cn/v1/workspaces"
+        try:
+            workspace_id = self.search_workspace_id(workspace_name=workspace_name)
+            logger.info(f"Get existing Cozeloop workspace ID: {workspace_id}")
 
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        data = {
-            "name": workspace_name,
-            "description": "Created by Volcengine Agent Development Kit (VeADK)",
-        }
-
-        response = requests.post(URL, headers=headers, json=data)
-
-        if response.json().get("code") == 0:
-            workspace_id = response.json().get("data").get("id")
-            logger.info(f"Cozeloop workspace ID: {workspace_id}")
             return workspace_id
-        else:
-            raise Exception(
-                f"Failed to automatically create workspace: {response.json()}"
-            )
+        except Exception as _:
+            URL = "https://api.coze.cn/v1/workspaces"
 
-    def get_workspace_id(
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            }
+
+            data = {
+                "name": workspace_name,
+                "description": "Created by Volcengine Agent Development Kit (VeADK)",
+            }
+
+            response = requests.post(URL, headers=headers, json=data)
+
+            if response.json().get("code") == 0:
+                workspace_id = response.json().get("data").get("id")
+                logger.info(f"New created Cozeloop workspace ID: {workspace_id}")
+                return workspace_id
+            else:
+                raise Exception(
+                    f"Failed to automatically create workspace: {response.json()}"
+                )
+
+    def search_workspace_id(
         self, workspace_name: str = DEFAULT_COZELOOP_SPACE_NAME
     ) -> str:
         logger.info(
@@ -73,7 +79,7 @@ class VeCozeloop:
             "page_size": 50,
         }
 
-        response = requests.post(URL, headers=headers, json=data)
+        response = requests.get(URL, headers=headers, json=data)
 
         if response.json().get("code") == 0:
             workspaces = response.json().get("data").get("workspaces", [])

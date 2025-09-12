@@ -49,6 +49,8 @@ class VesearchVeAuth(BaseVeAuth):
         )
         try:
             self._token = res["Result"]["api_key_vos"][0]["api_key"]
+
+            logger.info("Fetching VeSearch token done.")
         except KeyError:
             raise ValueError(f"Failed to get VeSearch token: {res}")
 

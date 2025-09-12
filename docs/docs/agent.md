@@ -129,6 +129,12 @@ root_agent:
     backend: local
   knowledgebase:
     backend: opensearch
+  tools:
+    - module: demo_tool   # tool 所在的模块
+      func: greeting      # tool 的函数名称
+    - module: tools.tool
+      func: count
+  sub_agents:
   sub_agents:
     - ${sub_agent_1}
 
@@ -147,8 +153,7 @@ from veadk.agent_builder import AgentBuilder
 agent = AgentBuilder().build(path="./agent.yaml")
 ```
 
-函数`build`接收3个参数：
+函数`build`接收 2 个参数：
 
 - `path`：配置文件路径
 - `root_agent_identifier`：配置文件中主 Agent 的名称，默认为`root_agent`
-- `tools`：主 agent 挂载的工具列表（子 Agent 工具列表暂未推出）
