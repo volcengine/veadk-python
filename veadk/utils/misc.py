@@ -148,3 +148,18 @@ def set_envs(config_yaml_path: str) -> tuple[dict, dict]:
         os.environ[k] = str(v)
 
     return config_dict, veadk_environments
+
+
+def get_temp_dir():
+    """
+    Return the corresponding temporary directory based on the operating system
+    - For Windows systems, return the system's default temporary directory
+    - For other systems (macOS, Linux, etc.), return the /tmp directory
+    """
+    # First determine if it is a Windows system
+    if sys.platform.startswith("win"):
+        # Windows systems use the temporary directory from environment variables
+        return os.environ.get("TEMP", os.environ.get("TMP", "/tmp"))
+    else:
+        # Non-Windows systems (macOS, Linux, etc.) uniformly return /tmp
+        return "/tmp"
