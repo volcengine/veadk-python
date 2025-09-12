@@ -17,7 +17,6 @@ import os
 import time
 
 import requests
-import typer
 import volcenginesdkcore
 import volcenginesdkvefaas
 from volcenginesdkvefaas.models.env_for_create_function_input import (
@@ -378,12 +377,7 @@ class VeFaaS:
                 host="open.volcengineapi.com",
             )
         except Exception as e:
-            typer.echo(
-                typer.style(
-                    f"Delete application failed. Response: {e}",
-                    fg=typer.colors.BRIGHT_RED,
-                )
-            )
+            logger.error(f"Delete application failed. Response: {e}")
 
     def deploy(
         self,

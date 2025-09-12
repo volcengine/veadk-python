@@ -180,7 +180,10 @@ def set_common_attributes_on_tool_span(current_span: _Span) -> None:
         if span.context.span_id == parent_span_id:
             common_attributes = ATTRIBUTES.get("common", {})
             for attr_name in common_attributes.keys():
-                current_span.set_attribute(attr_name, span.attributes[attr_name])
+                if hasattr(span.attributes, attr_name):
+                    current_span.set_attribute(attr_name, span.attributes[attr_name])
+                else:
+                    logger.error(f"Parent span does not have attribute {attr_name}")
 
 
 def trace_send_data(): ...

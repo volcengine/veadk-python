@@ -15,7 +15,6 @@
 import os
 
 from veadk.consts import DEFAULT_TLS_LOG_PROJECT_NAME, DEFAULT_TLS_TRACING_INSTANCE_NAME
-from veadk.integrations.ve_tls.utils import ve_tls_request
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -30,10 +29,14 @@ class VeTLS:
     ):
         try:
             from volcengine.tls.TLSService import TLSService
+
+            from veadk.integrations.ve_tls.utils import ve_tls_request
         except ImportError:
             raise ImportError(
                 "Please install volcengine SDK before init VeTLS: pip install volcengine"
             )
+
+        self._ve_tls_request = ve_tls_request
 
         self.access_key = (
             access_key if access_key else os.getenv("VOLCENGINE_ACCESS_KEY", "")
@@ -68,7 +71,7 @@ class VeTLS:
 
         try:
             res = None
-            res = ve_tls_request(
+            res = self._ve_tls_request(
                 client=self._client,
                 api="DescribeProjects",
                 body=request_body,
@@ -100,7 +103,7 @@ class VeTLS:
             "Tags": [{"Key": "provider", "Value": "VeADK"}],
         }
         try:
-            res = ve_tls_request(
+            res = self._ve_tls_request(
                 client=self._client, api="CreateProject", body=request_body
             )
 
@@ -123,7 +126,7 @@ class VeTLS:
             "TraceInstanceName": trace_instance_name,
         }
         try:
-            res = ve_tls_request(
+            res = self._ve_tls_request(
                 client=self._client,
                 api="DescribeTraceInstances",
                 body=request_body,
@@ -155,7 +158,7 @@ class VeTLS:
 
         try:
             res = None
-            res = ve_tls_request(
+            res = self._ve_tls_request(
                 client=self._client,
                 api="CreateTraceInstance",
                 body=request_body,
@@ -170,7 +173,7 @@ class VeTLS:
                 )
 
             # after creation, get the trace instance details
-            res = ve_tls_request(
+            res = self._ve_tls_request(
                 client=self._client,
                 api="DescribeTraceInstance",
                 body={"TraceInstanceID": res["TraceInstanceID"]},
