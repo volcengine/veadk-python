@@ -24,7 +24,7 @@ model:
     api_base: https://ark.cn-beijing.volces.com/api/v3/
     api_key: 
   image:
-    name: doubao-seedream-3-0-t2i-250415
+    name: doubao-seedream-4-0-250828
     api_base: https://ark.cn-beijing.volces.com/api/v3/
     api_key: 
   edit:
