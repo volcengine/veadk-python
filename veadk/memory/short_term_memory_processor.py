@@ -20,7 +20,12 @@ from google.adk.sessions import Session
 from google.genai.types import Content, Part
 from litellm import completion
 
-from veadk.config import getenv
+from veadk.config import settings
+from veadk.consts import (
+    DEFAULT_MODEL_AGENT_API_BASE,
+    DEFAULT_MODEL_AGENT_NAME,
+    DEFAULT_MODEL_AGENT_PROVIDER,
+)
 from veadk.prompts.prompt_memory_processor import render_prompt
 from veadk.utils.logger import get_logger
 
@@ -62,9 +67,9 @@ class ShortTermMemoryProcessor:
         prompt = render_prompt(messages=messages)
 
         res = completion(
-            model=getenv("MODEL_AGENT_PROVIDER") + "/" + getenv("MODEL_AGENT_NAME"),
-            base_url=getenv("MODEL_AGENT_API_BASE"),
-            api_key=getenv("MODEL_AGENT_API_KEY"),
+            model=DEFAULT_MODEL_AGENT_PROVIDER + "/" + DEFAULT_MODEL_AGENT_NAME,
+            base_url=DEFAULT_MODEL_AGENT_API_BASE,
+            api_key=settings.model.api_key,
             messages=[
                 {
                     "role": "user",
