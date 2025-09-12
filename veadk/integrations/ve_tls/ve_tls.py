@@ -14,8 +14,6 @@
 
 import os
 
-from volcengine.tls.TLSService import TLSService
-
 from veadk.consts import DEFAULT_TLS_LOG_PROJECT_NAME, DEFAULT_TLS_TRACING_INSTANCE_NAME
 from veadk.integrations.ve_tls.utils import ve_tls_request
 from veadk.utils.logger import get_logger
@@ -30,6 +28,13 @@ class VeTLS:
         secret_key: str | None = None,
         region: str = "cn-beijing",
     ):
+        try:
+            from volcengine.tls.TLSService import TLSService
+        except ImportError:
+            raise ImportError(
+                "Please install volcengine SDK before init VeTLS: pip install volcengine"
+            )
+
         self.access_key = (
             access_key if access_key else os.getenv("VOLCENGINE_ACCESS_KEY", "")
         )

@@ -15,9 +15,7 @@ TIMEOUT=${_FAAS_FUNC_TIMEOUT}
 export SERVER_HOST=$HOST
 export SERVER_PORT=$PORT
 
-# use cached veadk-python and corresponding deps in VeFaaS
-# `./preinstalled-site-packages` stores veadk-python and its dependencies
-export PYTHONPATH=$PYTHONPATH:./site-packages:./preinstalled-site-packages
+export PYTHONPATH=$PYTHONPATH:./site-packages
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -36,11 +34,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Check if MODEL_AGENT_API_KEY is set
-if [ -z "$MODEL_AGENT_API_KEY" ]; then
-    echo "MODEL_AGENT_API_KEY is not set. Please set it in your environment variables."
-    exit 1
-fi
 
 USE_ADK_WEB=${USE_ADK_WEB:-False}
 
