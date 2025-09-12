@@ -23,9 +23,11 @@ from veadk.consts import (
     DEFAULT_APMPLUS_OTEL_EXPORTER_ENDPOINT,
     DEFAULT_APMPLUS_OTEL_EXPORTER_SERVICE_NAME,
     DEFAULT_COZELOOP_OTEL_EXPORTER_ENDPOINT,
+    DEFAULT_COZELOOP_SPACE_NAME,
     DEFAULT_TLS_OTEL_EXPORTER_ENDPOINT,
     DEFAULT_TLS_OTEL_EXPORTER_REGION,
 )
+from veadk.integrations.ve_cozeloop.ve_cozeloop import VeCozeloop
 from veadk.integrations.ve_tls.ve_tls import VeTLS
 
 
@@ -58,27 +60,24 @@ class CozeloopConfig(BaseSettings):
         default="", alias="OBSERVABILITY_OPENTELEMETRY_COZELOOP_API_KEY"
     )
 
-    otel_exporter_space_id: str = Field(
-        default="", alias="OBSERVABILITY_OPENTELEMETRY_COZELOOP_SERVICE_NAME"
-    )
-
     # TODO: auto fetching via AK/SK pair
     # @cached_property
     # def otel_exporter_api_key(self) -> str:
     #     pass
 
-    # TODO: auto fetching workspace id
-    # @cached_property
-    # def otel_exporter_space_id(self) -> str:
-    #     workspace_id = os.getenv("OBSERVABILITY_OPENTELEMETRY_COZELOOP_SERVICE_NAME", "")
+    @cached_property
+    def otel_exporter_space_id(self) -> str:
+        workspace_id = os.getenv(
+            "OBSERVABILITY_OPENTELEMETRY_COZELOOP_SERVICE_NAME", ""
+        )
 
-    #     if not workspace_id:
-    #         # create a default one
-    #         workspace_id = VeCozeloop(self.otel_exporter_api_key).create_workspace(
-    #             workspace_name=DEFAULT_COZELOOP_SPACE_NAME
-    #         )
+        if not workspace_id:
+            # create a default one
+            workspace_id = VeCozeloop(self.otel_exporter_api_key).create_workspace(
+                workspace_name=DEFAULT_COZELOOP_SPACE_NAME
+            )
 
-    #     return workspace_id
+        return workspace_id
 
 
 class TLSConfig(BaseSettings):
