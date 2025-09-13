@@ -24,31 +24,29 @@ class BaseKnowledgebaseBackend(ABC, BaseModel):
     @abstractmethod
     def add_from_directory(self, directory: str, **kwargs) -> bool:
         """Add knowledge from file path to knowledgebase"""
-        ...
 
     @abstractmethod
     def add_from_files(self, files: list[str], **kwargs) -> bool:
         """Add knowledge (e.g, documents, strings, ...) to knowledgebase"""
-        ...
 
     @abstractmethod
     def add_from_text(self, text: str | list[str], **kwargs) -> bool:
         """Add knowledge from text to knowledgebase"""
-        ...
 
     @abstractmethod
     def search(self, **kwargs) -> list:
         """Search knowledge from knowledgebase"""
-        ...
 
-    def delete(self, **kwargs) -> bool:
-        """Delete knowledge from knowledgebase"""
-        ...
+    # Optional methods for future use:
+    # - `delete`: Delete collection or documents
+    # - `list_docs`: List original documents
+    # - `list_chunks`: List embedded document chunks
 
-    def list_docs(self, **kwargs) -> None:
-        """List original documents in knowledgebase"""
-        pass
+    # def delete(self, **kwargs) -> bool:
+    #     """Delete knowledge from knowledgebase"""
 
-    def list_chunks(self, **kwargs) -> None:
-        """List embeded document chunks in knowledgebase"""
-        pass
+    # def list_docs(self, **kwargs) -> None:
+    #     """List original documents in knowledgebase"""
+
+    # def list_chunks(self, **kwargs) -> None:
+    #     """List embeded document chunks in knowledgebase"""

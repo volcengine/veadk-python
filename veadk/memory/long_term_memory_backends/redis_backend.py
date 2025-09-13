@@ -14,7 +14,6 @@
 
 from llama_index.core import (
     Document,
-    SimpleDirectoryReader,
     StorageContext,
     VectorStoreIndex,
 )
@@ -31,11 +30,13 @@ from typing_extensions import Any, override
 
 from veadk.configs.database_configs import RedisConfig
 from veadk.configs.model_configs import EmbeddingModelConfig
-from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
 from veadk.knowledgebase.backends.utils import get_llama_index_splitter
+from veadk.memory.long_term_memory_backends.base_backend import (
+    BaseLongTermMemoryBackend,
+)
 
 
-class RedisKnowledgeBackend(BaseKnowledgebaseBackend):
+class RedisLTMBackend(BaseLongTermMemoryBackend):
     redis_config: RedisConfig = Field(default_factory=RedisConfig)
     """Redis client configs"""
 
@@ -80,31 +81,15 @@ class RedisKnowledgeBackend(BaseKnowledgebaseBackend):
         self._retriever = self._vector_index.as_retriever()
 
     @override
-    def add_from_directory(self, directory: str) -> bool:
-        documents = SimpleDirectoryReader(input_dir=directory).load_data()
-        nodes = self._split_documents(documents)
-        self._vector_index.insert_nodes(nodes)
+    def save_memory(self, event_strings: list[str], **kwargs) -> bool:
+        for event_string in event_strings:
+            document = Document(text=event_string)
+            nodes = self._split_documents([document])
+            self._vector_index.insert_nodes(nodes)
         return True
 
     @override
-    def add_from_files(self, files: list[str]) -> bool:
-        documents = SimpleDirectoryReader(input_files=files).load_data()
-        nodes = self._split_documents(documents)
-        self._vector_index.insert_nodes(nodes)
-        return True
-
-    @override
-    def add_from_text(self, text: str | list[str]) -> bool:
-        if isinstance(text, str):
-            documents = [Document(text=text)]
-        else:
-            documents = [Document(text=t) for t in text]
-        nodes = self._split_documents(documents)
-        self._vector_index.insert_nodes(nodes)
-        return True
-
-    @override
-    def search(self, query: str, top_k: int = 5) -> list[str]:
+    def search_memory(self, query: str, top_k: int, **kwargs) -> list[str]:
         retrieved_nodes = self._retriever.retrieve(query, top_k=top_k)
         return [node.text for node in retrieved_nodes]
 
