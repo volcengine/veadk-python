@@ -40,3 +40,20 @@ class ModelConfig(BaseSettings):
     @cached_property
     def api_key(self) -> str:
         return os.getenv("MODEL_AGENT_API_KEY") or ARKVeAuth().token
+
+
+class EmbeddingModelConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="MODEL_EMBEDDING_")
+
+    name: str = "doubao-embedding-text-240715"
+    """Model name for embedding."""
+
+    dim: int = 2560
+    """Embedding dim is different from different models."""
+
+    api_base: str = "https://ark.cn-beijing.volces.com/api/v3/embeddings"
+    """The api base of the model for embedding."""
+
+    @cached_property
+    def api_key(self) -> str:
+        return os.getenv("MODEL_EMBEDDING_API_KEY") or ARKVeAuth().token
