@@ -84,24 +84,21 @@ class LongTermMemory(BaseMemoryService, BaseModel):
             logger.info(
                 f"Initialized long term memory with provided backend instance {self._backend.__class__.__name__}"
             )
+        elif self.backend_config:
+            logger.info(
+                f"Initialized long term memory backend {self.backend} with config."
+            )
+            self._backend = BACKEND_CLS[self.backend](**self.backend_config)
+        elif self.app_name and self.user_id:
+            self.index = build_long_term_memory_index(
+                app_name=self.app_name, user_id=self.user_id
+            )
+            logger.info(f"Long term memory index set to {self.index}.")
+            self._backend = BACKEND_CLS[self.backend](index=self.index)
         else:
-            if self.backend_config:
-                logger.info(
-                    f"Initialized long term memory backend {self.backend} with config."
-                )
-                self._backend = BACKEND_CLS[self.backend](**self.backend_config)
-            elif self.app_name and self.user_id:
-                self.index = build_long_term_memory_index(
-                    app_name=self.app_name, user_id=self.user_id
-                )
-                logger.info(f"Long term memory index set to {self.index}.")
-                self._backend = BACKEND_CLS[self.backend](
-                    **self.backend_config, index=self.index
-                )
-            else:
-                logger.warning(
-                    "Neither `backend_instance`, `backend_config`, nor `app_name`/`user_id` is provided, the long term memory storage will initialize when adding a session."
-                )
+            logger.warning(
+                "Neither `backend_instance`, `backend_config`, nor `app_name`/`user_id` is provided, the long term memory storage will initialize when adding a session."
+            )
 
     def _filter_and_convert_events(self, events: list[Event]) -> list[str]:
         final_events = []
