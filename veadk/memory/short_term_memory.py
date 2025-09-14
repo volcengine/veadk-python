@@ -15,8 +15,12 @@
 from functools import wraps
 from typing import Any, Callable, Literal
 
-from google.adk.sessions import DatabaseSessionService, InMemorySessionService
-from pydantic import BaseModel, Field
+from google.adk.sessions import (
+    BaseSessionService,
+    DatabaseSessionService,
+    InMemorySessionService,
+)
+from pydantic import BaseModel, Field, PrivateAttr
 
 from veadk.memory.short_term_memory_backends.mysql_backend import (
     MysqlSTMBackend,
@@ -61,10 +65,12 @@ class ShortTermMemory(BaseModel):
     after_load_memory_callback: Callable | None = None
     """A callback to be called after loading memory from the backend. The callback function should accept `Session` as an input."""
 
+    _session_service: BaseSessionService = PrivateAttr()
+
     def model_post_init(self, __context: Any) -> None:
         if self.db_url:
             logger.info("The `db_url` is set, ignore `backend` option.")
-            self.session_service = DatabaseSessionService(db_url=self.db_url)
+            self._session_service = DatabaseSessionService(db_url=self.db_url)
         else:
             if self.backend == "database":
                 logger.warning(
@@ -73,28 +79,32 @@ class ShortTermMemory(BaseModel):
                 self.backend = "sqlite"
             match self.backend:
                 case "local":
-                    self.session_service = InMemorySessionService()
+                    self._session_service = InMemorySessionService()
                 case "mysql":
-                    self.session_service = MysqlSTMBackend(
+                    self._session_service = MysqlSTMBackend(
                         **self.backend_configs
                     ).session_service
                 case "sqlite":
-                    self.session_service = SQLiteSTMBackend(
+                    self._session_service = SQLiteSTMBackend(
                         local_path=self.local_database_path
                     ).session_service
                 case "redis":
-                    self.session_service = RedisSTMBackend(
+                    self._session_service = RedisSTMBackend(
                         **self.backend_configs
                     ).session_service
                 case "postgresql":
-                    self.session_service = PostgreSqlSTMBackend(
+                    self._session_service = PostgreSqlSTMBackend(
                         **self.backend_configs
                     ).session_service
 
         if self.after_load_memory_callback:
             wrap_get_session_with_callbacks(
-                self.session_service, self.after_load_memory_callback
+                self._session_service, self.after_load_memory_callback
             )
+
+    @property
+    def session_service(self) -> BaseSessionService:
+        return self._session_service
 
     async def create_session(
         self,
@@ -102,8 +112,8 @@ class ShortTermMemory(BaseModel):
         user_id: str,
         session_id: str,
     ) -> None:
-        if isinstance(self.session_service, DatabaseSessionService):
-            list_sessions_response = await self.session_service.list_sessions(
+        if isinstance(self._session_service, DatabaseSessionService):
+            list_sessions_response = await self._session_service.list_sessions(
                 app_name=app_name, user_id=user_id
             )
 
@@ -112,12 +122,12 @@ class ShortTermMemory(BaseModel):
             )
 
         if (
-            await self.session_service.get_session(
+            await self._session_service.get_session(
                 app_name=app_name, user_id=user_id, session_id=session_id
             )
             is None
         ):
             # create a new session for this running
-            await self.session_service.create_session(
+            await self._session_service.create_session(
                 app_name=app_name, user_id=user_id, session_id=session_id
             )

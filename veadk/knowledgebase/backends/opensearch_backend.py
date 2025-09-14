@@ -99,7 +99,12 @@ class OpensearchKnowledgeBackend(BaseKnowledgebaseBackend):
 
     @override
     def search(self, query: str, top_k: int = 5) -> list[str]:
-        retrieved_nodes = self._retriever.retrieve(query, top_k=top_k)
+        _original_top_k = self._retriever.similarity_top_k  # type: ignore
+        self._retriever.similarity_top_k = top_k  # type: ignore
+
+        retrieved_nodes = self._retriever.retrieve(query)
+
+        self._retriever.similarity_top_k = _original_top_k  # type: ignore
         return [node.text for node in retrieved_nodes]
 
     def _split_documents(self, documents: list[Document]) -> list[BaseNode]:

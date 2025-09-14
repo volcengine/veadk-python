@@ -51,7 +51,7 @@ class EmbeddingModelConfig(BaseSettings):
     dim: int = 2560
     """Embedding dim is different from different models."""
 
-    api_base: str = "https://ark.cn-beijing.volces.com/api/v3/embeddings"
+    api_base: str = "https://ark.cn-beijing.volces.com/api/v3/"
     """The api base of the model for embedding."""
 
     @cached_property

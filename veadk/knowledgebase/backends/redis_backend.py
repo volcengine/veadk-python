@@ -39,7 +39,7 @@ class RedisKnowledgeBackend(BaseKnowledgebaseBackend):
     redis_config: RedisConfig = Field(default_factory=RedisConfig)
     """Redis client configs"""
 
-    embedding_config: EmbeddingModelConfig
+    embedding_config: EmbeddingModelConfig = Field(default_factory=EmbeddingModelConfig)
     """Embedding model configs"""
 
     def model_post_init(self, __context: Any) -> None:
@@ -105,7 +105,12 @@ class RedisKnowledgeBackend(BaseKnowledgebaseBackend):
 
     @override
     def search(self, query: str, top_k: int = 5) -> list[str]:
+        _original_top_k = self._retriever.similarity_top_k  # type: ignore
+        self._retriever.similarity_top_k = top_k  # type: ignore
+
         retrieved_nodes = self._retriever.retrieve(query, top_k=top_k)
+
+        self._retriever.similarity_top_k = _original_top_k  # type: ignore
         return [node.text for node in retrieved_nodes]
 
     def _split_documents(self, documents: list[Document]) -> list[BaseNode]:
