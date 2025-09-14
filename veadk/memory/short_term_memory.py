@@ -57,6 +57,9 @@ class ShortTermMemory(BaseModel):
     db_url: str = ""
     """Database connection URL, e.g. `sqlite:///./test.db`. Once set, it will override the `backend` parameter."""
 
+    local_database_path: str = DEFAULT_LOCAL_DATABASE_PATH
+    """Local database path, only used when `backend` is `sqlite`."""
+
     after_load_memory_callback: Callable | None = None
     """A callback to be called after loading memory from the backend. The callback function should accept `Session` as an input."""
 
@@ -79,7 +82,7 @@ class ShortTermMemory(BaseModel):
                     ).session_service
                 case "sqlite":
                     self.session_service = SQLiteSTMBackend(
-                        local_path=DEFAULT_LOCAL_DATABASE_PATH
+                        local_path=self.local_database_path
                     ).session_service
                 case "redis":
                     self.session_service = RedisSTMBackend(
