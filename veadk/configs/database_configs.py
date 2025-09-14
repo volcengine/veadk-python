@@ -32,6 +32,8 @@ class OpensearchConfig(BaseSettings):
 
     password: str = ""
 
+    secret_token: str = ""
+
 
 class MysqlConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="DATABASE_MYSQL_")
@@ -45,6 +47,9 @@ class MysqlConfig(BaseSettings):
     database: str = ""
 
     charset: str = "utf8"
+
+    secret_token: str = ""
+    """STS token for MySQL auth, not supported yet."""
 
 
 class PostgreSqlConfig(BaseSettings):
@@ -60,6 +65,8 @@ class PostgreSqlConfig(BaseSettings):
 
     database: str = ""
 
+    secret_token: str = ""
+
 
 class RedisConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="DATABASE_REDIS_")
@@ -71,6 +78,9 @@ class RedisConfig(BaseSettings):
     password: str = ""
 
     db: int = 0
+
+    secret_token: str = ""
+    """STS token for Redis auth, not supported yet."""
 
 
 class VikingKnowledgebaseConfig(BaseSettings):

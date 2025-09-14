@@ -30,8 +30,6 @@ from veadk.memory.short_term_memory_backends.sqlite_backend import (
 )
 from veadk.utils.logger import get_logger
 
-# from .short_term_memory_processor import ShortTermMemoryProcessor
-
 logger = get_logger(__name__)
 
 DEFAULT_LOCAL_DATABASE_PATH = "/tmp/veadk_local_database.db"
@@ -71,6 +69,7 @@ class ShortTermMemory(BaseModel):
                 logger.warning(
                     "Backend `database` is deprecated, use `sqlite` to create short term memory."
                 )
+                self.backend = "sqlite"
             match self.backend:
                 case "local":
                     self.session_service = InMemorySessionService()
@@ -101,7 +100,7 @@ class ShortTermMemory(BaseModel):
         app_name: str,
         user_id: str,
         session_id: str,
-    ):
+    ) -> None:
         if isinstance(self.session_service, DatabaseSessionService):
             list_sessions_response = await self.session_service.list_sessions(
                 app_name=app_name, user_id=user_id
