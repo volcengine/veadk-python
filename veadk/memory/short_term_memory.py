@@ -32,8 +32,6 @@ from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-DEFAULT_LOCAL_DATABASE_PATH = "/tmp/veadk_local_database.db"
-
 
 def wrap_get_session_with_callbacks(obj, callback_fn: Callable):
     get_session_fn = getattr(obj, "get_session")
@@ -57,8 +55,8 @@ class ShortTermMemory(BaseModel):
     db_url: str = ""
     """Database connection URL, e.g. `sqlite:///./test.db`. Once set, it will override the `backend` parameter."""
 
-    local_database_path: str = DEFAULT_LOCAL_DATABASE_PATH
-    """Local database path, only used when `backend` is `sqlite`."""
+    local_database_path: str = "/tmp/veadk_local_database.db"
+    """Local database path, only used when `backend` is `sqlite`. Default to `/tmp/veadk_local_database.db`."""
 
     after_load_memory_callback: Callable | None = None
     """A callback to be called after loading memory from the backend. The callback function should accept `Session` as an input."""
