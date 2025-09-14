@@ -47,6 +47,20 @@ class MysqlConfig(BaseSettings):
     charset: str = "utf8"
 
 
+class PostgreSqlConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="DATABASE_POSTGRESQL_")
+
+    host: str = ""
+
+    port: int = 5432
+
+    user: str = ""
+
+    password: str = ""
+
+    database: str = ""
+
+
 class RedisConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="DATABASE_REDIS_")
 

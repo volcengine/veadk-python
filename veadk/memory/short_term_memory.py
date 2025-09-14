@@ -12,86 +12,71 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-from typing import Literal
+from typing import Any, Callable, Literal
 
 from google.adk.sessions import DatabaseSessionService, InMemorySessionService
+from pydantic import BaseModel, Field
 
-from veadk.config import getenv
+from veadk.memory.short_term_memory_backends.mysql_backend import (
+    MysqlSTMBackend,
+)
+from veadk.memory.short_term_memory_backends.postgresql_backend import (
+    PostgreSqlSTMBackend,
+)
+from veadk.memory.short_term_memory_backends.redis_backend import RedisSTMBackend
+from veadk.memory.short_term_memory_backends.sqlite_backend import (
+    SQLiteSTMBackend,
+)
 from veadk.utils.logger import get_logger
 
-from .short_term_memory_processor import ShortTermMemoryProcessor
+# from .short_term_memory_processor import ShortTermMemoryProcessor
 
 logger = get_logger(__name__)
 
 DEFAULT_LOCAL_DATABASE_PATH = "/tmp/veadk_local_database.db"
 
 
-class ShortTermMemory:
-    """
-    Short term memory class.
+class ShortTermMemory(BaseModel):
+    backend: Literal["local", "mysql", "sqlite", "redis", "database"] = "local"
+    """Short term memory backend. `Local` for in-memory storage, `redis` for redis storage, `mysql` for mysql / PostgreSQL storage. `sqlite` for sqlite storage."""
 
-    This class is used to store short term memory.
-    """
+    backend_configs: dict = Field(default_factory=dict)
+    """Backend specific configurations."""
 
-    def __init__(
-        self,
-        backend: Literal["local", "database", "mysql"] = "local",
-        db_url: str = "",
-        enable_memory_optimization: bool = False,
-    ):
-        self.backend = backend
-        self.db_url = db_url
+    db_url: str = ""
+    """Database connection URL, e.g. `sqlite:///./test.db`. Once set, it will override the `backend` parameter."""
 
-        if self.backend == "mysql":
-            host = getenv("DATABASE_MYSQL_HOST")
-            user = getenv("DATABASE_MYSQL_USER")
-            password = getenv("DATABASE_MYSQL_PASSWORD")
-            database = getenv("DATABASE_MYSQL_DATABASE")
-            db_url = f"mysql+pymysql://{user}:{password}@{host}/{database}"
+    after_load_memory_callbacks: list[Callable] | None = None
+    """A list of callbacks to be called after loading memory from the backend. The callback function should accept `Session` as an input."""
 
-            self.db_url = db_url
-            self.backend = "database"
-
-        if self.backend == "local":
-            logger.warning(
-                f"Short term memory backend: {self.backend}, the history will be lost after application shutdown."
-            )
-            self.session_service = InMemorySessionService()
-        elif self.backend == "database":
-            if self.db_url == "" or self.db_url is None:
-                logger.warning("The `db_url` is an empty or None string.")
-                self._use_default_database()
-            else:
-                try:
-                    self.session_service = DatabaseSessionService(db_url=self.db_url)
-                    logger.info("Connected to database with db_url.")
-                except Exception as e:
-                    logger.error(f"Failed to connect to database, error: {e}.")
-                    self._use_default_database()
+    def model_post_init(self, __context: Any) -> None:
+        if self.db_url:
+            logger.info("The `db_url` is set, ignore `backend` option.")
+            self.session_service = DatabaseSessionService(db_url=self.db_url)
         else:
-            raise ValueError(f"Unknown short term memory backend: {self.backend}")
-
-        if enable_memory_optimization and backend == "database":
-            self.processor = ShortTermMemoryProcessor()
-            intercept_get_session = self.processor.patch()
-            self.session_service.get_session = intercept_get_session(
-                self.session_service.get_session
-            )
-
-    def _use_default_database(self):
-        self.db_url = DEFAULT_LOCAL_DATABASE_PATH
-        logger.info(f"Using default local database {self.db_url}")
-        if not os.path.exists(self.db_url):
-            self.create_local_sqlite3_db(self.db_url)
-        self.session_service = DatabaseSessionService(db_url="sqlite:///" + self.db_url)
-
-    def create_local_sqlite3_db(self, path: str):
-        import sqlite3
-
-        conn = sqlite3.connect(path)
-        conn.close()
-        logger.debug(f"Create local sqlite3 database {path} done.")
+            if self.backend == "database":
+                logger.warning(
+                    "Backend `database` is deprecated, use `sqlite` to create short term memory."
+                )
+            match self.backend:
+                case "local":
+                    self.session_service = InMemorySessionService()
+                case "mysql":
+                    self.session_service = MysqlSTMBackend(
+                        **self.backend_configs
+                    ).session_service
+                case "sqlite":
+                    self.session_service = SQLiteSTMBackend(
+                        local_path=DEFAULT_LOCAL_DATABASE_PATH
+                    ).session_service
+                case "redis":
+                    self.session_service = RedisSTMBackend(
+                        **self.backend_configs
+                    ).session_service
+                case "postgresql":
+                    self.session_service = PostgreSqlSTMBackend(
+                        **self.backend_configs
+                    ).session_service
 
     async def create_session(
         self,
