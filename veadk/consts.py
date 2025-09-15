@@ -32,9 +32,9 @@ DEFAULT_MODEL_EXTRA_CONFIG = {
         "caching": {
             "type": getenv("MODEL_AGENT_CACHING", "enabled"),
         },
-        "thinking": {
-            "type": "disabled"
-        },  # disable thinking for token saving and shorter TTFT by default
+        # "thinking": {
+        #     "type": "disabled"
+        # },
         "expire_at": int(time.time()) + 3600,  # expire after 1 hour
     },
 }
