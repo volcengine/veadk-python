@@ -33,6 +33,8 @@ dependencies = [
     "llama-index-llms-openai-like>=0.5.1",
     "llama-index-vector-stores-opensearch>=0.6.1",
     "llama-index-vector-stores-redis>=0.6.1",
+    "mcp-server-vikingdb-memory",
+    "psycopg2-binary>=2.9.10",
 ]
 
 [project.scripts]
@@ -83,3 +85,6 @@ exclude = [
     "veadk/integrations/ve_faas/template/*",
     "veadk/integrations/ve_faas/web_template/*"
 ]
+
+[tool.uv.sources]
+mcp-server-vikingdb-memory = { git = "https://github.com/volcengine/mcp-server", subdirectory = "server/mcp_server_vikingdb_memory" }

@@ -28,7 +28,6 @@ from veadk.memory.short_term_memory_backends.mysql_backend import (
 from veadk.memory.short_term_memory_backends.postgresql_backend import (
     PostgreSqlSTMBackend,
 )
-from veadk.memory.short_term_memory_backends.redis_backend import RedisSTMBackend
 from veadk.memory.short_term_memory_backends.sqlite_backend import (
     SQLiteSTMBackend,
 )
@@ -50,10 +49,8 @@ def wrap_get_session_with_callbacks(obj, callback_fn: Callable):
 
 
 class ShortTermMemory(BaseModel):
-    backend: Literal["local", "mysql", "sqlite", "redis", "postgresql", "database"] = (
-        "local"
-    )
-    """Short term memory backend. `Local` for in-memory storage, `redis` for redis storage, `mysql` for mysql / PostgreSQL storage. `sqlite` for sqlite storage."""
+    backend: Literal["local", "mysql", "sqlite", "postgresql", "database"] = "local"
+    """Short term memory backend. `Local` for in-memory storage, `mysql` for mysql / PostgreSQL storage. `sqlite` for sqlite storage."""
 
     backend_configs: dict = Field(default_factory=dict)
     """Backend specific configurations."""
@@ -89,10 +86,6 @@ class ShortTermMemory(BaseModel):
                 case "sqlite":
                     self._session_service = SQLiteSTMBackend(
                         local_path=self.local_database_path
-                    ).session_service
-                case "redis":
-                    self._session_service = RedisSTMBackend(
-                        **self.backend_configs
                     ).session_service
                 case "postgresql":
                     self._session_service = PostgreSqlSTMBackend(
