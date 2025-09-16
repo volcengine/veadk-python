@@ -36,12 +36,12 @@ jobs:
       - name: Build documentation
         run: |
           cd docs
-          npm run docs:build
+          npx nuxt generate --extends docus
 
       - name: Upload artifact for GitHub Pages
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/docs/.vuepress/dist
+          path: docs/.output/public/
 
       - name: Deploy to GitHub Pages
         id: deploy
