@@ -182,8 +182,8 @@ def web_search(query: str) -> list[str]:
     )
     try:
         results: list = response_body["Result"]["WebResults"]
-    except Exception as e:
-        logger.error(f"Web search failed: {e}")
+    except Exception as _:
+        logger.error(f"Web search failed, response body: {response_body}")
         return []
 
     final_results = []
