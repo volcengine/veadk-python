@@ -72,5 +72,5 @@ def web_scraper(query: str) -> dict[str, Any]:
         return results_str
 
     except requests.exceptions.RequestException as e:
-        error_message = f"Error: {str(e)}"
+        error_message = f"Error: {str(e)}, response: {response}"
         raise ValueError(error_message)
