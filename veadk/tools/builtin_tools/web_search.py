@@ -180,13 +180,13 @@ def web_search(query: str) -> list[str]:
         "WebSearch",
         json.dumps(req),
     )
+
     try:
         results: list = response_body["Result"]["WebResults"]
-    except Exception as _:
-        logger.error(f"Web search failed, response body: {response_body}")
-        return []
-
-    final_results = []
-    for result in results:
-        final_results.append(result["Summary"].strip())
-    return final_results
+        final_results = []
+        for result in results:
+            final_results.append(result["Summary"].strip())
+        return final_results
+    except Exception as e:
+        logger.error(f"Web search failed {e}, response body: {response_body}")
+        return [response_body]
