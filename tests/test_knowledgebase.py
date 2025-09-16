@@ -21,15 +21,14 @@ from veadk.knowledgebase import KnowledgeBase
 async def test_knowledgebase():
     app_name = "kb_test_app"
     key = "Supercalifragilisticexpialidocious"
-    kb = KnowledgeBase(backend="local")
+    kb = KnowledgeBase(backend="local", app_name=app_name)
     # Attempt to delete any existing data for the app_name before adding new data
-    kb.add(
-        data=[f"knowledgebase_id is {key}"],
-        app_name=app_name,
+    kb.add_from_text(
+        text=[f"knowledgebase_id is {key}"],
     )
     res_list = kb.search(
         query="knowledgebase_id",
-        app_name=app_name,
+        top_k=1,
     )
     res = "".join(res_list)
     assert key in res, f"Test failed for backend local res is {res}"

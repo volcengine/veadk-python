@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import re
 
 from llama_index.core import (
     Document,
@@ -40,7 +41,19 @@ class OpensearchKnowledgeBackend(BaseKnowledgebaseBackend):
     embedding_config: EmbeddingModelConfig = Field(default_factory=EmbeddingModelConfig)
     """Embedding model configs"""
 
+    def precheck_index_naming(self):
+        if not (
+            isinstance(self.index, str)
+            and not self.index.startswith(("_", "-"))
+            and self.index.islower()
+            and re.match(r"^[a-z0-9_\-.]+$", self.index)
+        ):
+            raise ValueError(
+                "The index name does not conform to the naming rules of OpenSearch"
+            )
+
     def model_post_init(self, __context: Any) -> None:
+        self.precheck_index_naming()
         self._opensearch_client = OpensearchVectorClient(
             endpoint=self.opensearch_config.host,
             port=self.opensearch_config.port,
@@ -71,7 +84,6 @@ class OpensearchKnowledgeBackend(BaseKnowledgebaseBackend):
             storage_context=self._storage_context,
             embed_model=self._embed_model,
         )
-        self._retriever = self._vector_index.as_retriever()
 
     @override
     def add_from_directory(self, directory: str) -> bool:
@@ -99,12 +111,8 @@ class OpensearchKnowledgeBackend(BaseKnowledgebaseBackend):
 
     @override
     def search(self, query: str, top_k: int = 5) -> list[str]:
-        _original_top_k = self._retriever.similarity_top_k  # type: ignore
-        self._retriever.similarity_top_k = top_k  # type: ignore
-
-        retrieved_nodes = self._retriever.retrieve(query)
-
-        self._retriever.similarity_top_k = _original_top_k  # type: ignore
+        _retriever = self._vector_index.as_retriever(similarity_top_k=top_k)
+        retrieved_nodes = _retriever.retrieve(query)
         return [node.text for node in retrieved_nodes]
 
     def _split_documents(self, documents: list[Document]) -> list[BaseNode]:

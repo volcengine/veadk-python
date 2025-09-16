@@ -27,6 +27,10 @@ class InMemoryKnowledgeBackend(BaseKnowledgebaseBackend):
     embedding_config: EmbeddingModelConfig = Field(default_factory=EmbeddingModelConfig)
     """Embedding model configs"""
 
+    def precheck_index_naming(self):
+        # no checking
+        pass
+
     def model_post_init(self, __context: Any) -> None:
         self._embed_model = OpenAILikeEmbedding(
             model_name=self.embedding_config.name,
@@ -34,7 +38,6 @@ class InMemoryKnowledgeBackend(BaseKnowledgebaseBackend):
             api_base=self.embedding_config.api_base,
         )
         self._vector_index = VectorStoreIndex([], embed_model=self._embed_model)
-        self._retriever = self._vector_index.as_retriever()
 
     @override
     def add_from_directory(self, directory: str) -> bool:
@@ -62,7 +65,8 @@ class InMemoryKnowledgeBackend(BaseKnowledgebaseBackend):
 
     @override
     def search(self, query: str, top_k: int = 5) -> list[str]:
-        retrieved_nodes = self._retriever.retrieve(query, top_k=top_k)
+        _retriever = self._vector_index.as_retriever(similarity_top_k=top_k)
+        retrieved_nodes = _retriever.retrieve(query)
         return [node.text for node in retrieved_nodes]
 
     def _split_documents(self, documents: list[Document]) -> list[BaseNode]:

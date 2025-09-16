@@ -21,9 +21,13 @@ class BaseLongTermMemoryBackend(ABC, BaseModel):
     index: str
 
     @abstractmethod
+    def precheck_index_naming(self):
+        """Check the index name is valid or not"""
+
+    @abstractmethod
     def save_memory(self, event_strings: list[str], **kwargs) -> bool:
         """Save memory to long term memory backend"""
 
     @abstractmethod
-    def search_memory(self, query: str, **kwargs) -> list[str]:
+    def search_memory(self, query: str, top_k: int, **kwargs) -> list[str]:
         """Retrieve memory from long term memory backend"""

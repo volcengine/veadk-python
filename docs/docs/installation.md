@@ -70,7 +70,7 @@ model:
   embedding:
     name: doubao-embedding-text-240715
     dim: 2560
-    api_base: https://ark.cn-beijing.volces.com/api/v3/embeddings
+    api_base: https://ark.cn-beijing.volces.com/api/v3/
     api_key:
 
 volcengine:

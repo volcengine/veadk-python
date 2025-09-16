@@ -33,7 +33,7 @@ from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
 
 
 def test_agent():
-    knowledgebase = KnowledgeBase()
+    knowledgebase = KnowledgeBase(index="test_index", backend="local")
     long_term_memory = LongTermMemory(backend="local")
     tracer = OpentelemetryTracer()
 

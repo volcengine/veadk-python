@@ -22,6 +22,10 @@ class BaseKnowledgebaseBackend(ABC, BaseModel):
     """Index or collection name of the vector storage."""
 
     @abstractmethod
+    def precheck_index_naming(self):
+        """Check the index name is valid or not"""
+
+    @abstractmethod
     def add_from_directory(self, directory: str, **kwargs) -> bool:
         """Add knowledge from file path to knowledgebase"""
 

@@ -27,7 +27,9 @@ user_id = "test_user"
 
 @pytest.mark.asyncio
 async def test_long_term_memory():
-    long_term_memory = LongTermMemory(backend="local")
+    long_term_memory = LongTermMemory(
+        backend="local", app_name=app_name, user_id=user_id
+    )
     agent = Agent(
         name="all_name",
         model_name="test_model_name",

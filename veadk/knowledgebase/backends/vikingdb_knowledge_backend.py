@@ -13,22 +13,52 @@
 # limitations under the License.
 
 import asyncio
+import re
+from pathlib import Path
 from typing import Any, Literal
 
 import requests
-from llama_index.core import (
-    SimpleDirectoryReader,
-)
 from pydantic import Field
 from typing_extensions import override
 
 from veadk.config import getenv
+from veadk.consts import DEFAULT_TOS_BUCKET_NAME
 from veadk.integrations.ve_tos.ve_tos import VeTOS
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
 from veadk.knowledgebase.backends.utils import build_vikingdb_knowledgebase_request
 from veadk.utils.logger import get_logger
+from veadk.utils.misc import formatted_timestamp
 
 logger = get_logger(__name__)
+
+
+def _read_file_to_bytes(file_path: str) -> tuple[bytes, str]:
+    """Read file content to bytes, and file name"""
+    with open(file_path, "rb") as f:
+        file_content = f.read()
+    file_name = file_path.split("/")[-1]
+    return file_content, file_name
+
+
+def _extract_tos_attributes(**kwargs) -> tuple[str, str]:
+    """Extract TOS attributes from kwargs"""
+    tos_bucket_name = kwargs.get("tos_bucket_name", DEFAULT_TOS_BUCKET_NAME)
+    tos_bucket_path = kwargs.get("tos_bucket_path", "knowledgebase")
+    return tos_bucket_name, tos_bucket_path
+
+
+def get_files_in_directory(directory: str):
+    dir_path = Path(directory)
+    if not dir_path.is_dir():
+        raise ValueError(f"The directory does not exist: {directory}")
+    file_paths = [str(file) for file in dir_path.iterdir() if file.is_file()]
+    return file_paths
+
+
+def _upload_bytes_to_tos(content: bytes, tos_bucket_name: str, object_key: str) -> str:
+    ve_tos = VeTOS(bucket_name=tos_bucket_name)
+    asyncio.run(ve_tos.upload(object_key=object_key, data=content))
+    return f"{ve_tos.bucket_name}/{object_key}"
 
 
 class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
@@ -46,7 +76,19 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
     region: str = "cn-beijing"
     """VikingDB knowledgebase region"""
 
+    def precheck_index_naming(self):
+        if not (
+            isinstance(self.index, str)
+            and 0 < len(self.index) <= 128
+            and re.fullmatch(r"^[a-zA-Z][a-zA-Z0-9_]*$", self.index)
+        ):
+            raise ValueError(
+                "The index name does not conform to the rules: "
+                "it must start with an English letter, contain only letters, numbers, and underscores, and have a length of 1-128."
+            )
+
     def model_post_init(self, __context: Any) -> None:
+        self.precheck_index_naming()
         # check whether collection exist, if not, create it
         if not self._collection_exist():
             logger.info(
@@ -56,29 +98,74 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
 
     @override
     def add_from_directory(self, directory: str, **kwargs) -> bool:
-        documents = SimpleDirectoryReader(input_dir=directory).load_data()
-        for document in documents:
-            tos_url = self._upload_text_to_tos(document.text)
+        """
+        Args:
+            directory: str, the directory to add to knowledgebase
+            **kwargs:
+                - tos_bucket_name: str, the bucket name of TOS
+                - tos_bucket_path: str, the path of TOS bucket
+        """
+        tos_bucket_name, tos_bucket_path = _extract_tos_attributes(**kwargs)
+        files = get_files_in_directory(directory=directory)
+        for _file in files:
+            content, file_name = _read_file_to_bytes(_file)
+            tos_url = _upload_bytes_to_tos(
+                content,
+                tos_bucket_name=tos_bucket_name,
+                object_key=f"{tos_bucket_path}/{file_name}",
+            )
             self._add_doc(tos_url=tos_url)
         return True
 
     @override
     def add_from_files(self, files: list[str], **kwargs) -> bool:
-        documents = SimpleDirectoryReader(input_files=files).load_data()
-        for document in documents:
-            tos_url = self._upload_text_to_tos(document.text)
+        """
+        Args:
+            files:  list[str], the files to add to knowledgebase
+            **kwargs:
+                - tos_bucket_name: str, the bucket name of TOS
+                - tos_bucket_path: str, the path of TOS bucket
+        """
+        tos_bucket_name, tos_bucket_path = _extract_tos_attributes(**kwargs)
+        for _file in files:
+            content, file_name = _read_file_to_bytes(_file)
+            tos_url = _upload_bytes_to_tos(
+                content,
+                tos_bucket_name=tos_bucket_name,
+                object_key=f"{tos_bucket_path}/{file_name}",
+            )
             self._add_doc(tos_url=tos_url)
         return True
 
     @override
     def add_from_text(self, text: str | list[str], **kwargs) -> bool:
+        """
+        Args:
+            text:   str or list[str], the text to add to knowledgebase
+            **kwargs:
+                - tos_bucket_name: str, the bucket name of TOS
+                - tos_bucket_path: str, the path of TOS bucket
+        """
+        tos_bucket_name, tos_bucket_path = _extract_tos_attributes(**kwargs)
         if isinstance(text, list):
-            for _text in text:
-                tos_url = self._upload_text_to_tos(_text)
+            object_keys = kwargs.get(
+                "tos_object_keys",
+                [
+                    f"{tos_bucket_path}/{formatted_timestamp()}-{i}.txt"
+                    for i, _ in enumerate(text)
+                ],
+            )
+            for _text, _object_key in zip(text, object_keys):
+                _content = _text.encode("utf-8")
+                tos_url = _upload_bytes_to_tos(_content, tos_bucket_name, _object_key)
                 self._add_doc(tos_url=tos_url)
             return True
         elif isinstance(text, str):
-            tos_url = self._upload_text_to_tos(text)
+            content = text.encode("utf-8")
+            object_key = kwargs.get(
+                "object_key", f"veadk/knowledgebase/{formatted_timestamp()}.txt"
+            )
+            tos_url = _upload_bytes_to_tos(content, tos_bucket_name, object_key)
             self._add_doc(tos_url=tos_url)
         else:
             raise ValueError("text must be str or list[str]")
@@ -87,11 +174,6 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
     @override
     def search(self, query: str, top_k: int = 5) -> list:
         return self._search_knowledge(query=query, top_k=top_k)
-
-    def _upload_text_to_tos(self, text: str) -> str:
-        ve_tos = VeTOS()
-        asyncio.run(ve_tos.upload(object_key="", data=text))
-        return "tos://bucket_name/object_key"
 
     def delete_collection(self):
         DELETE_COLLECTION_PATH = "/api/knowledge/collection/delete"

@@ -40,8 +40,12 @@ class RedisLTMBackend(BaseLongTermMemoryBackend):
     redis_config: RedisConfig = Field(default_factory=RedisConfig)
     """Redis client configs"""
 
-    embedding_config: EmbeddingModelConfig
+    embedding_config: EmbeddingModelConfig = Field(default_factory=EmbeddingModelConfig)
     """Embedding model configs"""
+
+    def precheck_index_naming(self):
+        # no checking
+        pass
 
     def model_post_init(self, __context: Any) -> None:
         # We will use `from_url` to init Redis client once the
@@ -64,6 +68,8 @@ class RedisLTMBackend(BaseLongTermMemoryBackend):
         self._schema = RedisVectorStoreSchema(
             index=RedisIndexInfo(name=self.index),
         )
+        if self._schema.fields.get("vector"):
+            self._schema.fields.get("vector").attrs.dims = self.embedding_config.dim
         self._vector_store = RedisVectorStore(
             schema=self._schema,
             redis_client=self._redis_client,
@@ -76,9 +82,10 @@ class RedisLTMBackend(BaseLongTermMemoryBackend):
         )
 
         self._vector_index = VectorStoreIndex.from_documents(
-            documents=[], storage_context=self._storage_context
+            documents=[],
+            storage_context=self._storage_context,
+            embed_model=self._embed_model,
         )
-        self._retriever = self._vector_index.as_retriever()
 
     @override
     def save_memory(self, event_strings: list[str], **kwargs) -> bool:
@@ -90,7 +97,8 @@ class RedisLTMBackend(BaseLongTermMemoryBackend):
 
     @override
     def search_memory(self, query: str, top_k: int, **kwargs) -> list[str]:
-        retrieved_nodes = self._retriever.retrieve(query, top_k=top_k)
+        _retriever = self._vector_index.as_retriever(similarity_top_k=top_k)
+        retrieved_nodes = _retriever.retrieve(query)
         return [node.text for node in retrieved_nodes]
 
     def _split_documents(self, documents: list[Document]) -> list[BaseNode]:

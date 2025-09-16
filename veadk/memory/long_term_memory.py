@@ -37,7 +37,7 @@ from veadk.memory.long_term_memory_backends.opensearch_backend import (
 )
 from veadk.memory.long_term_memory_backends.redis_backend import RedisLTMBackend
 from veadk.memory.long_term_memory_backends.vikingdb_memory_backend import (
-    VikingDBKnowledgeBackend,
+    VikingDBLTMBackend,
 )
 from veadk.utils.logger import get_logger
 
@@ -47,8 +47,7 @@ logger = get_logger(__name__)
 BACKEND_CLS = {
     "local": InMemoryLTMBackend,
     "opensearch": OpensearchLTMBackend,
-    "viking": VikingDBKnowledgeBackend,
-    "viking_mem": VikingDBKnowledgeBackend,
+    "viking": VikingDBLTMBackend,
     "redis": RedisLTMBackend,
 }
 
@@ -90,11 +89,11 @@ class LongTermMemory(BaseMemoryService, BaseModel):
             )
             self._backend = BACKEND_CLS[self.backend](**self.backend_config)
         elif self.app_name and self.user_id:
-            self.index = build_long_term_memory_index(
+            self._index = build_long_term_memory_index(
                 app_name=self.app_name, user_id=self.user_id
             )
-            logger.info(f"Long term memory index set to {self.index}.")
-            self._backend = BACKEND_CLS[self.backend](index=self.index)
+            logger.info(f"Long term memory index set to {self._index}.")
+            self._backend = BACKEND_CLS[self.backend](index=self._index)
         else:
             logger.warning(
                 "Neither `backend_instance`, `backend_config`, nor `app_name`/`user_id` is provided, the long term memory storage will initialize when adding a session."
@@ -129,35 +128,35 @@ class LongTermMemory(BaseMemoryService, BaseModel):
         app_name = session.app_name
         user_id = session.user_id
 
-        if self.index != build_long_term_memory_index(app_name, user_id):
+        if self._index != build_long_term_memory_index(app_name, user_id):
             logger.warning(
-                f"The `app_name` or `user_id` is different from the initialized one, skip add session to memory. Initialized index: {self.index}, current built index: {build_long_term_memory_index(app_name, user_id)}"
+                f"The `app_name` or `user_id` is different from the initialized one, skip add session to memory. Initialized index: {self._index}, current built index: {build_long_term_memory_index(app_name, user_id)}"
             )
             return
 
         if not self._backend:
-            self.index = build_long_term_memory_index(app_name, user_id)
-            self._backend = BACKEND_CLS[self.backend](index=self.index)
+            self._index = build_long_term_memory_index(app_name, user_id)
+            self._backend = BACKEND_CLS[self.backend](index=self._index)
             logger.info(
-                f"Initialize long term memory backend now, index is {self.index}"
+                f"Initialize long term memory backend now, index is {self._index}"
             )
 
         event_strings = self._filter_and_convert_events(session.events)
 
         logger.info(
-            f"Adding {len(event_strings)} events to long term memory: index={self.index}"
+            f"Adding {len(event_strings)} events to long term memory: index={self._index}"
         )
 
-        self._backend.save_memory(event_strings=event_strings)
+        self._backend.save_memory(event_strings=event_strings, user_id=user_id)
 
         logger.info(
-            f"Added {len(event_strings)} events to long term memory: index={self.index}"
+            f"Added {len(event_strings)} events to long term memory: index={self._index}"
         )
 
     @override
     async def search_memory(self, *, app_name: str, user_id: str, query: str):
         logger.info(
-            f"Searching long term memory: query={query} index={self.index} top_k={self.top_k}"
+            f"Searching long term memory: query={query} index={self._index} top_k={self.top_k}"
         )
 
         # prevent model invoke `load_memory` before add session to this memory
@@ -167,7 +166,9 @@ class LongTermMemory(BaseMemoryService, BaseModel):
             )
             return SearchMemoryResponse(memories=[])
 
-        memory_chunks = self._backend.search_memory(query=query, top_k=self.top_k)
+        memory_chunks = self._backend.search_memory(
+            query=query, top_k=self.top_k, user_id=user_id
+        )
 
         memory_events = []
         for memory in memory_chunks:
@@ -195,6 +196,6 @@ class LongTermMemory(BaseMemoryService, BaseModel):
             )
 
         logger.info(
-            f"Return {len(memory_events)} memory events for query: {query} index={self.index}"
+            f"Return {len(memory_events)} memory events for query: {query} index={self._index}"
         )
         return SearchMemoryResponse(memories=memory_events)
