@@ -222,9 +222,11 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             path=LIST_DOCS_PATH,
             method="POST",
         )
-
         if response.get("code") != 0:
             raise ValueError(f"Error during list documents: {response.get('code')}")
+        if not response["data"].get("doc_list", []):
+            return []
+        return response["data"]["doc_list"]
 
     def list_chunks(self, offset: int = 0, limit: int = -1):
         """List chunks in collection.
@@ -238,6 +240,8 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             body={
                 "collection_name": self.index,
                 "project": self.volcengine_project,
+                "offset": offset,
+                "limit": limit,
             },
             path=LIST_CHUNKS_PATH,
             method="POST",
@@ -245,6 +249,30 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
 
         if response.get("code") != 0:
             raise ValueError(f"Error during list chunks: {response}")
+
+        if not response["data"].get("point_list", []):
+            return []
+        data = [
+            {
+                "id": res["point_id"],
+                "content": res["content"],
+                "metadata": res["doc_info"],
+            }
+            for res in response["data"]["point_list"]
+        ]
+        return data
+
+    def collection_status(self):
+        COLLECTION_INFO_PATH = "/api/knowledge/collection/info"
+        response = self._do_request(
+            body={
+                "name": self.index,
+                "project": self.volcengine_project,
+            },
+            path=COLLECTION_INFO_PATH,
+            method="POST",
+        )
+        return response
 
     def _collection_exist(self) -> bool:
         """List docs in collection, error code 0 means collection exist, error code 1000005 means collection not exist"""
