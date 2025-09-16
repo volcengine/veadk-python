@@ -186,3 +186,7 @@ cython_debug/
 
 # 忽略所有 .temp 目录
 **/.temp/
+
+**/.nuxt
+**/.data
+**./output
