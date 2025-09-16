@@ -32,7 +32,7 @@ class PostgreSqlSTMBackend(BaseShortTermMemoryBackend):
     postgresql_config: PostgreSqlConfig = Field(default_factory=PostgreSqlConfig)
 
     def model_post_init(self, context: Any) -> None:
-        self._db_url = f"postgresql://{self.postgresql_config.user}:{self.postgresql_config.password}@{self.postgresql_config.host}:{self.postgresql_config.port}/{self.postgresql_config.database}"
+        self._db_url = f"postgresql+postgresql://{self.postgresql_config.user}:{self.postgresql_config.password}@{self.postgresql_config.host}:{self.postgresql_config.port}/{self.postgresql_config.database}"
 
     @cached_property
     @override

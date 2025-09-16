@@ -50,7 +50,9 @@ def wrap_get_session_with_callbacks(obj, callback_fn: Callable):
 
 
 class ShortTermMemory(BaseModel):
-    backend: Literal["local", "mysql", "sqlite", "redis", "database"] = "local"
+    backend: Literal["local", "mysql", "sqlite", "redis", "postgresql", "database"] = (
+        "local"
+    )
     """Short term memory backend. `Local` for in-memory storage, `redis` for redis storage, `mysql` for mysql / PostgreSQL storage. `sqlite` for sqlite storage."""
 
     backend_configs: dict = Field(default_factory=dict)
