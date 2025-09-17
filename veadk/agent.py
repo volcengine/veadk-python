@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Optional, Union
 
 from google.adk.agents import LlmAgent, RunConfig
 from google.adk.agents.base_agent import BaseAgent
@@ -32,14 +32,16 @@ from veadk.consts import (
     DEFAULT_MODEL_EXTRA_CONFIG,
 )
 from veadk.evaluation import EvalSetRecorder
-from veadk.knowledgebase import KnowledgeBase
-from veadk.memory.long_term_memory import LongTermMemory
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INSTRUCTION
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_asyncio
 from veadk.version import VERSION
+
+if TYPE_CHECKING:
+    from veadk.knowledgebase import KnowledgeBase
+    from veadk.memory.long_term_memory import LongTermMemory
 
 patch_asyncio()
 logger = get_logger(__name__)

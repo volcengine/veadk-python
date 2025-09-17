@@ -90,11 +90,10 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
     def model_post_init(self, __context: Any) -> None:
         self.precheck_index_naming()
         # check whether collection exist, if not, create it
-        if not self._collection_exist():
-            logger.info(
-                f"VikingDB knowledgebase collection {self.index} does not exist, creating it..."
+        if not self.collection_status()["existed"]:
+            logger.warning(
+                f"VikingDB knowledgebase collection {self.index} does not exist, please create it first..."
             )
-            self._create_collection()
 
     @override
     def add_from_directory(self, directory: str, **kwargs) -> bool:
@@ -175,7 +174,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
     def search(self, query: str, top_k: int = 5) -> list:
         return self._search_knowledge(query=query, top_k=top_k)
 
-    def delete_collection(self):
+    def delete_collection(self) -> bool:
         DELETE_COLLECTION_PATH = "/api/knowledge/collection/delete"
 
         response = self._do_request(
@@ -188,21 +187,25 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         )
 
         if response.get("code") != 0:
-            raise ValueError(f"Error during collection deletion: {response}")
+            logger.error(f"Error during collection deletion: {response}")
+            return False
+        return True
 
-    def delete_doc_by_id(self, doc_id: str):
+    def delete_doc_by_id(self, id: str) -> bool:
         DELETE_DOC_PATH = "/api/knowledge/doc/delete"
         response = self._do_request(
             body={
                 "collection_name": self.index,
                 "project": self.volcengine_project,
+                "doc_id": id,
             },
             path=DELETE_DOC_PATH,
             method="POST",
         )
 
         if response.get("code") != 0:
-            raise ValueError(f"Error during document deletion: {response}")
+            return False
+        return True
 
     def list_docs(self, offset: int = 0, limit: int = -1):
         """List documents in collection.
@@ -272,30 +275,21 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             path=COLLECTION_INFO_PATH,
             method="POST",
         )
-        return response
-
-    def _collection_exist(self) -> bool:
-        """List docs in collection, error code 0 means collection exist, error code 1000005 means collection not exist"""
-        LIST_DOC_PATH = "/api/knowledge/doc/list"
-
-        response = self._do_request(
-            body={
-                "collection_name": self.index,
-            },
-            path=LIST_DOC_PATH,
-            method="POST",
-        )
-
-        if response.get("code") == 0:
-            return True
-        elif response.get("code") == 1000005:
-            return False
+        if response["code"] == 0:
+            status = response["data"]["pipeline_list"][0]["index_list"][0]["status"]
+            return {
+                "existed": True,
+                "status": status,
+            }
+        elif response["code"] == 1000005:
+            return {
+                "existed": False,
+                "status": None,
+            }
         else:
-            raise ValueError(
-                f"Error during collection existence check: {response.get('code')}"
-            )
+            raise ValueError(f"Error during collection status: {response}")
 
-    def _create_collection(self) -> None:
+    def create_collection(self) -> None:
         CREATE_COLLECTION_PATH = "/api/knowledge/collection/create"
 
         response = self._do_request(

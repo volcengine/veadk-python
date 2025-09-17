@@ -28,6 +28,17 @@ dependencies = [
     "cookiecutter>=2.6.0", # For cloud deploy # For OpenSearch database
     "opensearch-py==2.8.0",
     "omegaconf>=2.3.0", # For agent builder
+]
+
+[project.scripts]
+veadk = "veadk.cli.cli:veadk"
+
+[project.optional-dependencies]
+extensions = [
+    "redis>=5.0",                 # For Redis database
+    "pymysql>=1.1.1",               # For MySQL database
+    "volcengine>=1.0.193",          # For Viking DB
+    "tos>=2.8.4",                   # For TOS storage and Viking DB
     "llama-index>=0.14.0",
     "llama-index-embeddings-openai-like>=0.2.2",
     "llama-index-llms-openai-like>=0.5.1",
@@ -36,11 +47,6 @@ dependencies = [
     "mcp-server-vikingdb-memory",
     "psycopg2-binary>=2.9.10",
 ]
-
-[project.scripts]
-veadk = "veadk.cli.cli:veadk"
-
-[project.optional-dependencies]
 database = [
     "redis>=5.0",                 # For Redis database
     "pymysql>=1.1.1",               # For MySQL database
