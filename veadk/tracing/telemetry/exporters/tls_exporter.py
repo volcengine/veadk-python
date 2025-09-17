@@ -44,6 +44,8 @@ class TLSExporter(BaseExporter):
     config: TLSExporterConfig = Field(default_factory=TLSExporterConfig)
 
     def model_post_init(self, context: Any) -> None:
+        logger.info(f"TLSExporter topic ID: {self.config.topic_id}")
+
         headers = {
             "x-tls-otel-tracetopic": self.config.topic_id,
             "x-tls-otel-ak": self.config.access_key,

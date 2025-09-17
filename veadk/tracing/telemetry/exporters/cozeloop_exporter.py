@@ -42,6 +42,8 @@ class CozeloopExporter(BaseExporter):
     config: CozeloopExporterConfig = Field(default_factory=CozeloopExporterConfig)
 
     def model_post_init(self, context: Any) -> None:
+        logger.info(f"CozeloopExporter space ID: {self.config.space_id}")
+
         headers = {
             "cozeloop-workspace-id": self.config.space_id,
             "authorization": f"Bearer {self.config.token}",

@@ -12,12 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import time
 from dataclasses import dataclass
 from typing import Any
 
+from google.adk.agents.invocation_context import InvocationContext
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
-from opentelemetry import metrics
+from opentelemetry import metrics, trace
 from opentelemetry import metrics as metrics_api
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -193,7 +195,13 @@ class MeterUploader:
             explicit_bucket_boundaries_advisory=_GEN_AI_SERVER_TIME_PER_OUTPUT_TOKEN_BUCKETS,
         )
 
-    def record(self, llm_request: LlmRequest, llm_response: LlmResponse) -> None:
+    def record(
+        self,
+        invocation_context: InvocationContext,
+        event_id: str,
+        llm_request: LlmRequest,
+        llm_response: LlmResponse,
+    ) -> None:
         attributes = {
             "gen_ai_system": "volcengine",
             "gen_ai_response_model": llm_request.model,
@@ -217,10 +225,18 @@ class MeterUploader:
                 token_attributes = {**attributes, "gen_ai_token_type": "output"}
                 self.token_usage.record(output_token, attributes=token_attributes)
 
-            # TODO: Get llm duration
-            # duration = 5.0
-            # if self.duration_histogram:
-            #     self.duration_histogram.record(duration, attributes=attributes)
+            # Get llm duration
+            span = trace.get_current_span()
+            if span and hasattr(span, "start_time") and self.duration_histogram:
+                # We use span start time as the llm request start time
+                tik = span.start_time  # type: ignore
+                # We use current time as the llm request end time
+                tok = time.time_ns()
+                # Calculate duration in seconds
+                duration = (tok - tik) / 1e9
+                self.duration_histogram.record(
+                    duration, attributes=attributes
+                )  # unit in seconds
 
             # Get model request error
             if llm_response.error_code and self.chat_exception_counter:
@@ -269,6 +285,8 @@ class APMPlusExporter(BaseExporter):
     config: APMPlusExporterConfig = Field(default_factory=APMPlusExporterConfig)
 
     def model_post_init(self, context: Any) -> None:
+        logger.info(f"APMPlusExporter sevice name: {self.config.service_name}")
+
         headers = {
             "x-byteapm-appkey": self.config.app_key,
         }
