@@ -20,10 +20,6 @@ from llama_index.core import (
 )
 from llama_index.core.schema import BaseNode
 from llama_index.embeddings.openai_like import OpenAILikeEmbedding
-from llama_index.vector_stores.opensearch import (
-    OpensearchVectorClient,
-    OpensearchVectorStore,
-)
 from pydantic import Field
 from typing_extensions import Any, override
 
@@ -33,6 +29,16 @@ from veadk.knowledgebase.backends.utils import get_llama_index_splitter
 from veadk.memory.long_term_memory_backends.base_backend import (
     BaseLongTermMemoryBackend,
 )
+
+try:
+    from llama_index.vector_stores.opensearch import (
+        OpensearchVectorClient,
+        OpensearchVectorStore,
+    )
+except ImportError:
+    raise ImportError(
+        "Please install VeADK extensions\npip install veadk-python[extensions]"
+    )
 
 
 class OpensearchLTMBackend(BaseLongTermMemoryBackend):

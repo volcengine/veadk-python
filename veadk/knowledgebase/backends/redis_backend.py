@@ -20,19 +20,26 @@ from llama_index.core import (
 )
 from llama_index.core.schema import BaseNode
 from llama_index.embeddings.openai_like import OpenAILikeEmbedding
-from llama_index.vector_stores.redis import RedisVectorStore
-from llama_index.vector_stores.redis.schema import (
-    RedisIndexInfo,
-    RedisVectorStoreSchema,
-)
 from pydantic import Field
-from redis import Redis
 from typing_extensions import Any, override
 
 from veadk.configs.database_configs import RedisConfig
 from veadk.configs.model_configs import EmbeddingModelConfig
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
 from veadk.knowledgebase.backends.utils import get_llama_index_splitter
+
+try:
+    from llama_index.vector_stores.redis import RedisVectorStore
+    from llama_index.vector_stores.redis.schema import (
+        RedisIndexInfo,
+        RedisVectorStoreSchema,
+    )
+    from redis import Redis
+    from redisvl.schema.fields import BaseVectorFieldAttributes
+except ImportError:
+    raise ImportError(
+        "Please install VeADK extensions\npip install veadk-python[extensions]"
+    )
 
 
 class RedisKnowledgeBackend(BaseKnowledgebaseBackend):
@@ -41,10 +48,6 @@ class RedisKnowledgeBackend(BaseKnowledgebaseBackend):
 
     embedding_config: EmbeddingModelConfig = Field(default_factory=EmbeddingModelConfig)
     """Embedding model configs"""
-
-    def precheck_index_naming(self):
-        # no checking
-        pass
 
     def model_post_init(self, __context: Any) -> None:
         # We will use `from_url` to init Redis client once the
@@ -67,8 +70,15 @@ class RedisKnowledgeBackend(BaseKnowledgebaseBackend):
         self._schema = RedisVectorStoreSchema(
             index=RedisIndexInfo(name=self.index),
         )
-        if self._schema.fields.get("vector"):
-            self._schema.fields.get("vector").attrs.dims = self.embedding_config.dim
+        if "vector" in self._schema.fields:
+            vector_field = self._schema.fields["vector"]
+            if (
+                vector_field
+                and vector_field.attrs
+                and isinstance(vector_field.attrs, BaseVectorFieldAttributes)
+            ):
+                vector_field.attrs.dims = self.embedding_config.dim
+
         self._vector_store = RedisVectorStore(
             schema=self._schema,
             redis_client=self._redis_client,
@@ -85,6 +95,11 @@ class RedisKnowledgeBackend(BaseKnowledgebaseBackend):
             storage_context=self._storage_context,
             embed_model=self._embed_model,
         )
+
+    @override
+    def precheck_index_naming(self) -> None:
+        # Checking is not needed
+        pass
 
     @override
     def add_from_directory(self, directory: str) -> bool:

@@ -21,10 +21,6 @@ from llama_index.core import (
 )
 from llama_index.core.schema import BaseNode
 from llama_index.embeddings.openai_like import OpenAILikeEmbedding
-from llama_index.vector_stores.opensearch import (
-    OpensearchVectorClient,
-    OpensearchVectorStore,
-)
 from pydantic import Field
 from typing_extensions import Any, override
 
@@ -33,6 +29,16 @@ from veadk.configs.model_configs import EmbeddingModelConfig
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
 from veadk.knowledgebase.backends.utils import get_llama_index_splitter
 
+try:
+    from llama_index.vector_stores.opensearch import (
+        OpensearchVectorClient,
+        OpensearchVectorStore,
+    )
+except ImportError:
+    raise ImportError(
+        "Please install VeADK extensions\npip install veadk-python[extensions]"
+    )
+
 
 class OpensearchKnowledgeBackend(BaseKnowledgebaseBackend):
     opensearch_config: OpensearchConfig = Field(default_factory=OpensearchConfig)
@@ -40,17 +46,6 @@ class OpensearchKnowledgeBackend(BaseKnowledgebaseBackend):
 
     embedding_config: EmbeddingModelConfig = Field(default_factory=EmbeddingModelConfig)
     """Embedding model configs"""
-
-    def precheck_index_naming(self):
-        if not (
-            isinstance(self.index, str)
-            and not self.index.startswith(("_", "-"))
-            and self.index.islower()
-            and re.match(r"^[a-z0-9_\-.]+$", self.index)
-        ):
-            raise ValueError(
-                "The index name does not conform to the naming rules of OpenSearch"
-            )
 
     def model_post_init(self, __context: Any) -> None:
         self.precheck_index_naming()
@@ -84,6 +79,18 @@ class OpensearchKnowledgeBackend(BaseKnowledgebaseBackend):
             storage_context=self._storage_context,
             embed_model=self._embed_model,
         )
+
+    @override
+    def precheck_index_naming(self) -> None:
+        if not (
+            isinstance(self.index, str)
+            and not self.index.startswith(("_", "-"))
+            and self.index.islower()
+            and re.match(r"^[a-z0-9_\-.]+$", self.index)
+        ):
+            raise ValueError(
+                "The index name does not conform to the naming rules of OpenSearch"
+            )
 
     @override
     def add_from_directory(self, directory: str) -> bool:

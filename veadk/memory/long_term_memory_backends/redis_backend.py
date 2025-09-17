@@ -19,11 +19,6 @@ from llama_index.core import (
 )
 from llama_index.core.schema import BaseNode
 from llama_index.embeddings.openai_like import OpenAILikeEmbedding
-from llama_index.vector_stores.redis import RedisVectorStore
-from llama_index.vector_stores.redis.schema import (
-    RedisIndexInfo,
-    RedisVectorStoreSchema,
-)
 from pydantic import Field
 from redis import Redis
 from typing_extensions import Any, override
@@ -34,6 +29,19 @@ from veadk.knowledgebase.backends.utils import get_llama_index_splitter
 from veadk.memory.long_term_memory_backends.base_backend import (
     BaseLongTermMemoryBackend,
 )
+
+try:
+    from llama_index.vector_stores.redis import RedisVectorStore
+    from llama_index.vector_stores.redis.schema import (
+        RedisIndexInfo,
+        RedisVectorStoreSchema,
+    )
+    from redis import Redis
+    from redisvl.schema.fields import BaseVectorFieldAttributes
+except ImportError:
+    raise ImportError(
+        "Please install VeADK extensions\npip install veadk-python[extensions]"
+    )
 
 
 class RedisLTMBackend(BaseLongTermMemoryBackend):
@@ -68,8 +76,14 @@ class RedisLTMBackend(BaseLongTermMemoryBackend):
         self._schema = RedisVectorStoreSchema(
             index=RedisIndexInfo(name=self.index),
         )
-        if self._schema.fields.get("vector"):
-            self._schema.fields.get("vector").attrs.dims = self.embedding_config.dim
+        if "vector" in self._schema.fields:
+            vector_field = self._schema.fields["vector"]
+            if (
+                vector_field
+                and vector_field.attrs
+                and isinstance(vector_field.attrs, BaseVectorFieldAttributes)
+            ):
+                vector_field.attrs.dims = self.embedding_config.dim
         self._vector_store = RedisVectorStore(
             schema=self._schema,
             redis_client=self._redis_client,

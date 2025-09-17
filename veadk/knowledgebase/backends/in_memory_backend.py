@@ -27,10 +27,6 @@ class InMemoryKnowledgeBackend(BaseKnowledgebaseBackend):
     embedding_config: EmbeddingModelConfig = Field(default_factory=EmbeddingModelConfig)
     """Embedding model configs"""
 
-    def precheck_index_naming(self):
-        # no checking
-        pass
-
     def model_post_init(self, __context: Any) -> None:
         self._embed_model = OpenAILikeEmbedding(
             model_name=self.embedding_config.name,
@@ -38,6 +34,11 @@ class InMemoryKnowledgeBackend(BaseKnowledgebaseBackend):
             api_base=self.embedding_config.api_base,
         )
         self._vector_index = VectorStoreIndex([], embed_model=self._embed_model)
+
+    @override
+    def precheck_index_naming(self) -> None:
+        # Checking is not needed
+        pass
 
     @override
     def add_from_directory(self, directory: str) -> bool:

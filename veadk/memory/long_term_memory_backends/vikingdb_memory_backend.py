@@ -17,7 +17,6 @@ import time
 import uuid
 from typing import Any
 
-from mcp_server_vikingdb_memory.common.memory_client import VikingDBMemoryService
 from pydantic import Field
 from typing_extensions import override
 
@@ -26,6 +25,13 @@ from veadk.memory.long_term_memory_backends.base_backend import (
     BaseLongTermMemoryBackend,
 )
 from veadk.utils.logger import get_logger
+
+try:
+    from mcp_server_vikingdb_memory.common.memory_client import VikingDBMemoryService
+except ImportError:
+    raise ImportError(
+        "Please install VeADK extensions\npip install veadk-python[extensions]"
+    )
 
 logger = get_logger(__name__)
 

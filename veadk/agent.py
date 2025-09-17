@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional, Union
+from typing import Optional, Union
 
 from google.adk.agents import LlmAgent, RunConfig
 from google.adk.agents.base_agent import BaseAgent
@@ -32,16 +32,14 @@ from veadk.consts import (
     DEFAULT_MODEL_EXTRA_CONFIG,
 )
 from veadk.evaluation import EvalSetRecorder
+from veadk.knowledgebase import KnowledgeBase
+from veadk.memory.long_term_memory import LongTermMemory
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INSTRUCTION
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_asyncio
 from veadk.version import VERSION
-
-if TYPE_CHECKING:
-    from veadk.knowledgebase import KnowledgeBase
-    from veadk.memory.long_term_memory import LongTermMemory
 
 patch_asyncio()
 logger = get_logger(__name__)
@@ -198,7 +196,6 @@ class Agent(LlmAgent):
         collect_runtime_data: bool = False,
         eval_set_id: str = "",
         save_session_to_memory: bool = False,
-        enable_memory_optimization: bool = False,
     ):
         """Running the agent. The runner and session service will be created automatically.
 
@@ -228,7 +225,6 @@ class Agent(LlmAgent):
         # memory service
         short_term_memory = ShortTermMemory(
             backend="database" if load_history_sessions_from_db else "local",
-            enable_memory_optimization=enable_memory_optimization,
             db_url=db_url,
         )
         session_service = short_term_memory.session_service

@@ -26,30 +26,44 @@ from google.adk.memory.memory_entry import MemoryEntry
 from google.adk.sessions import Session
 from google.genai import types
 from pydantic import BaseModel, Field
-from typing_extensions import override
+from typing_extensions import Union, override
 
 from veadk.memory.long_term_memory_backends.base_backend import (
     BaseLongTermMemoryBackend,
-)
-from veadk.memory.long_term_memory_backends.in_memory_backend import InMemoryLTMBackend
-from veadk.memory.long_term_memory_backends.opensearch_backend import (
-    OpensearchLTMBackend,
-)
-from veadk.memory.long_term_memory_backends.redis_backend import RedisLTMBackend
-from veadk.memory.long_term_memory_backends.vikingdb_memory_backend import (
-    VikingDBLTMBackend,
 )
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-BACKEND_CLS = {
-    "local": InMemoryLTMBackend,
-    "opensearch": OpensearchLTMBackend,
-    "viking": VikingDBLTMBackend,
-    "redis": RedisLTMBackend,
-}
+def _get_backend_cls(backend: str) -> type[BaseLongTermMemoryBackend]:
+    match backend:
+        case "local":
+            from veadk.memory.long_term_memory_backends.in_memory_backend import (
+                InMemoryLTMBackend,
+            )
+
+            return InMemoryLTMBackend
+        case "opensearch":
+            from veadk.memory.long_term_memory_backends.opensearch_backend import (
+                OpensearchLTMBackend,
+            )
+
+            return OpensearchLTMBackend
+        case "viking":
+            from veadk.memory.long_term_memory_backends.vikingdb_memory_backend import (
+                VikingDBLTMBackend,
+            )
+
+            return VikingDBLTMBackend
+        case "redis":
+            from veadk.memory.long_term_memory_backends.redis_backend import (
+                RedisLTMBackend,
+            )
+
+            return RedisLTMBackend
+
+    raise ValueError(f"Unsupported long term memory backend: {backend}")
 
 
 def build_long_term_memory_index(app_name: str, user_id: str):
@@ -57,16 +71,14 @@ def build_long_term_memory_index(app_name: str, user_id: str):
 
 
 class LongTermMemory(BaseMemoryService, BaseModel):
-    backend: Literal["local", "opensearch", "redis", "viking", "viking_mem"] = (
-        "opensearch"
-    )
+    backend: Union[
+        Literal["local", "opensearch", "redis", "viking", "viking_mem"],
+        BaseLongTermMemoryBackend,
+    ] = "opensearch"
     """Long term memory backend type"""
 
     backend_config: dict = Field(default_factory=dict)
     """Long term memory backend configuration"""
-
-    backend_instance: BaseLongTermMemoryBackend | None = None
-    """An instance of a long term memory backend that implements the `BaseLongTermMemoryBackend` interface."""
 
     top_k: int = 5
     """Number of top similar documents to retrieve during search."""
@@ -78,25 +90,32 @@ class LongTermMemory(BaseMemoryService, BaseModel):
     def model_post_init(self, __context: Any) -> None:
         self._backend = None
 
-        if self.backend_instance:
-            self._backend = self.backend_instance
+        # Once user define a backend instance, use it directly
+        if isinstance(self.backend, BaseLongTermMemoryBackend):
+            self._backend = self.backend
             logger.info(
                 f"Initialized long term memory with provided backend instance {self._backend.__class__.__name__}"
             )
-        elif self.backend_config:
-            logger.info(
-                f"Initialized long term memory backend {self.backend} with config."
+            return
+
+        if self.backend_config:
+            logger.warning(
+                f"Initialized long term memory backend {self.backend} with config. We will ignore `app_name` and `user_id` if provided."
             )
-            self._backend = BACKEND_CLS[self.backend](**self.backend_config)
-        elif self.app_name and self.user_id:
+            self._backend = _get_backend_cls(self.backend)(**self.backend_config)
+            return
+
+        if self.app_name and self.user_id:
             self._index = build_long_term_memory_index(
                 app_name=self.app_name, user_id=self.user_id
             )
             logger.info(f"Long term memory index set to {self._index}.")
-            self._backend = BACKEND_CLS[self.backend](index=self._index)
+            self._backend = _get_backend_cls(self.backend)(
+                index=self._index, **self.backend_config if self.backend_config else {}
+            )
         else:
             logger.warning(
-                "Neither `backend_instance`, `backend_config`, nor `app_name`/`user_id` is provided, the long term memory storage will initialize when adding a session."
+                "Neither `backend_instance`, `backend_config`, nor (`app_name`/`user_id`) is provided, the long term memory storage will initialize when adding a session."
             )
 
     def _filter_and_convert_events(self, events: list[Event]) -> list[str]:
@@ -134,9 +153,11 @@ class LongTermMemory(BaseMemoryService, BaseModel):
             )
             return
 
-        if not self._backend:
+        if not self._backend and isinstance(self.backend, str):
             self._index = build_long_term_memory_index(app_name, user_id)
-            self._backend = BACKEND_CLS[self.backend](index=self._index)
+            self._backend = _get_backend_cls(self.backend)(
+                index=self._index, **self.backend_config if self.backend_config else {}
+            )
             logger.info(
                 f"Initialize long term memory backend now, index is {self._index}"
             )
@@ -147,11 +168,16 @@ class LongTermMemory(BaseMemoryService, BaseModel):
             f"Adding {len(event_strings)} events to long term memory: index={self._index}"
         )
 
-        self._backend.save_memory(event_strings=event_strings, user_id=user_id)
+        if self._backend:
+            self._backend.save_memory(event_strings=event_strings, user_id=user_id)
 
-        logger.info(
-            f"Added {len(event_strings)} events to long term memory: index={self._index}"
-        )
+            logger.info(
+                f"Added {len(event_strings)} events to long term memory: index={self._index}"
+            )
+        else:
+            logger.error(
+                "Long term memory backend initialize failed, cannot add session to memory."
+            )
 
     @override
     async def search_memory(self, *, app_name: str, user_id: str, query: str):

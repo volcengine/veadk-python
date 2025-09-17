@@ -23,11 +23,17 @@ from typing_extensions import override
 
 from veadk.config import getenv
 from veadk.consts import DEFAULT_TOS_BUCKET_NAME
-from veadk.integrations.ve_tos.ve_tos import VeTOS
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
 from veadk.knowledgebase.backends.utils import build_vikingdb_knowledgebase_request
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp
+
+try:
+    from veadk.integrations.ve_tos.ve_tos import VeTOS
+except ImportError:
+    raise ImportError(
+        "Please install VeADK extensions\npip install veadk-python[extensions]"
+    )
 
 logger = get_logger(__name__)
 
