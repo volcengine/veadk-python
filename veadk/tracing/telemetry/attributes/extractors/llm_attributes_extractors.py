@@ -252,12 +252,14 @@ def llm_gen_ai_messages(params: LLMAttributesParams) -> ExtractorResponse:
                                                 part.inline_data.display_name.split(
                                                     "/"
                                                 )[-1]
-                                                if part.inline_data.display_name
+                                                if part.inline_data
+                                                and part.inline_data.display_name
                                                 else "<unknown_image_name>"
                                             ),
                                             "parts.0.image_url.url": (
                                                 part.inline_data.display_name
-                                                if part.inline_data.display_name
+                                                if part.inline_data
+                                                and part.inline_data.display_name
                                                 else "<unknown_image_url>"
                                             ),
                                         }
