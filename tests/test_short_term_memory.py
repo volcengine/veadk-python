@@ -15,7 +15,6 @@
 import asyncio
 import os
 
-import veadk.memory.short_term_memory
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.utils.misc import formatted_timestamp
 
@@ -35,11 +34,11 @@ def test_short_term_memory():
     )
     assert session is not None
 
-    # database - local
-    veadk.memory.short_term_memory.DEFAULT_LOCAL_DATABASE_PATH = (
-        f"/tmp/tmp_for_test_{formatted_timestamp()}.db"
+    # sqlite
+    memory = ShortTermMemory(
+        backend="sqlite",
+        local_database_path=f"/tmp/tmp_for_test_{formatted_timestamp()}.db",
     )
-    memory = ShortTermMemory(backend="database")
     asyncio.run(
         memory.session_service.create_session(
             app_name="app", user_id="user", session_id="session"
@@ -51,5 +50,5 @@ def test_short_term_memory():
         )
     )
     assert session is not None
-    assert os.path.exists(veadk.memory.short_term_memory.DEFAULT_LOCAL_DATABASE_PATH)
-    os.remove(veadk.memory.short_term_memory.DEFAULT_LOCAL_DATABASE_PATH)
+    assert os.path.exists(memory.local_database_path)
+    os.remove(memory.local_database_path)

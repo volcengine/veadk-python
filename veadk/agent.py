@@ -196,7 +196,6 @@ class Agent(LlmAgent):
         collect_runtime_data: bool = False,
         eval_set_id: str = "",
         save_session_to_memory: bool = False,
-        enable_memory_optimization: bool = False,
     ):
         """Running the agent. The runner and session service will be created automatically.
 
@@ -226,7 +225,6 @@ class Agent(LlmAgent):
         # memory service
         short_term_memory = ShortTermMemory(
             backend="database" if load_history_sessions_from_db else "local",
-            enable_memory_optimization=enable_memory_optimization,
             db_url=db_url,
         )
         session_service = short_term_memory.session_service
