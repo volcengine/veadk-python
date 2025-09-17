@@ -198,7 +198,11 @@ class Runner(ADKRunner):
                 logger.warning(
                     "No short term memory or session service provided, use an in-memory one instead."
                 )
-                short_term_memory = ShortTermMemory()
+                if hasattr(agent, "short_term_memory") and agent.short_term_memory:  # type: ignore
+                    short_term_memory = agent.short_term_memory  # type: ignore
+                else:
+                    short_term_memory = ShortTermMemory()
+
                 self.short_term_memory = short_term_memory
                 session_service = short_term_memory.session_service
 

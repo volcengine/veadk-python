@@ -24,7 +24,12 @@ warnings.filterwarnings(
 )
 
 
-def _render_prompts() -> dict[str, Any]:
+def _render_prompts(attributes: list[str]) -> dict[str, Any]:
+    for attr in attributes:
+        pass
+
+
+def _render_prompts_legacy() -> dict[str, Any]:
     vefaas_application_name = click.prompt(
         "Volcengine FaaS application name", default="veadk-cloud-agent"
     )
@@ -82,44 +87,47 @@ def init(
 
     import veadk.integrations.ve_faas as vefaas
 
+    # copy to local
+    # generate deploy.yaml
+
     if vefaas_template_type == "web_template":
         click.echo(
             "Welcome use VeADK to create your project. We will generate a `simple-blog` web application for you."
         )
-    else:
-        click.echo(
-            "Welcome use VeADK to create your project. We will generate a `weather-reporter` application for you."
+        cwd = Path.cwd()
+        local_dir_name = click.prompt(
+            "Local directory name", default="veadk-cloud-proj"
         )
+        target_dir_path = cwd / local_dir_name
 
-    cwd = Path.cwd()
-    local_dir_name = click.prompt("Local directory name", default="veadk-cloud-proj")
-    target_dir_path = cwd / local_dir_name
+        if target_dir_path.exists():
+            click.confirm(
+                f"Directory '{target_dir_path}' already exists, do you want to overwrite it",
+                abort=True,
+            )
+            shutil.rmtree(target_dir_path)
 
-    if target_dir_path.exists():
-        click.confirm(
-            f"Directory '{target_dir_path}' already exists, do you want to overwrite it",
-            abort=True,
-        )
-        shutil.rmtree(target_dir_path)
+            settings = _render_prompts_legacy()
+            settings["local_dir_name"] = local_dir_name
 
-    settings = _render_prompts()
-    settings["local_dir_name"] = local_dir_name
+            if not vefaas_template_type:
+                vefaas_template_type = "template"
 
-    if not vefaas_template_type:
-        vefaas_template_type = "template"
+            template_dir_path = Path(vefaas.__file__).parent / vefaas_template_type
 
-    template_dir_path = Path(vefaas.__file__).parent / vefaas_template_type
+            cookiecutter(
+                template=str(template_dir_path),
+                output_dir=str(cwd),
+                extra_context=settings,
+                no_input=True,
+            )
 
-    cookiecutter(
-        template=str(template_dir_path),
-        output_dir=str(cwd),
-        extra_context=settings,
-        no_input=True,
-    )
-
-    click.echo(f"Template project has been generated at {target_dir_path}")
-    click.echo(f"Edit {target_dir_path / 'src/'} to define your agents")
-    click.echo(
-        f"Edit {target_dir_path / 'deploy.py'} to define your deployment attributes"
-    )
-    click.echo("Run python `deploy.py` for deployment on Volcengine FaaS platform.")
+            click.echo(f"Template project has been generated at {target_dir_path}")
+            click.echo(f"Edit {target_dir_path / 'src/'} to define your agents")
+            click.echo(
+                f"Edit {target_dir_path / 'deploy.py'} to define your deployment attributes"
+            )
+            click.echo(
+                "Run python `deploy.py` for deployment on Volcengine FaaS platform."
+            )
+        return

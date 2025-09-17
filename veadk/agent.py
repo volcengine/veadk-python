@@ -90,6 +90,9 @@ class Agent(LlmAgent):
     In VeADK, the `long_term_memory` refers to cross-session memory under the same user.
     """
 
+    short_term_memory: Optional[ShortTermMemory] = None
+    """The short term memory provided to agent. This attribute is not used in agent directly, as it will be passed to Runner in VeADK."""
+
     tracers: list[BaseTracer] = []
     """The tracers provided to agent."""
 
