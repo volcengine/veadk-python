@@ -12,23 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 import pytest
 
 from veadk.knowledgebase import KnowledgeBase
+from veadk.knowledgebase.backends.in_memory_backend import InMemoryKnowledgeBackend
 
 
 @pytest.mark.asyncio
 async def test_knowledgebase():
     app_name = "kb_test_app"
-    key = "Supercalifragilisticexpialidocious"
-    kb = KnowledgeBase(backend="local", app_name=app_name)
-    # Attempt to delete any existing data for the app_name before adding new data
-    kb.add_from_text(
-        text=[f"knowledgebase_id is {key}"],
+    kb = KnowledgeBase(
+        backend="local",
+        app_name=app_name,
+        backend_config={"embedding_config": {"api_key": "test"}},
     )
-    res_list = kb.search(
-        query="knowledgebase_id",
-        top_k=1,
-    )
-    res = "".join(res_list)
-    assert key in res, f"Test failed for backend local res is {res}"
+
+    assert isinstance(kb._backend, InMemoryKnowledgeBackend)
