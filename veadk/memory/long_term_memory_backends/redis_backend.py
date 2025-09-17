@@ -24,7 +24,7 @@ from redis import Redis
 from typing_extensions import Any, override
 
 from veadk.configs.database_configs import RedisConfig
-from veadk.configs.model_configs import EmbeddingModelConfig
+from veadk.configs.model_configs import EmbeddingModelConfig, NormalEmbeddingModelConfig
 from veadk.knowledgebase.backends.utils import get_llama_index_splitter
 from veadk.memory.long_term_memory_backends.base_backend import (
     BaseLongTermMemoryBackend,
@@ -48,7 +48,9 @@ class RedisLTMBackend(BaseLongTermMemoryBackend):
     redis_config: RedisConfig = Field(default_factory=RedisConfig)
     """Redis client configs"""
 
-    embedding_config: EmbeddingModelConfig = Field(default_factory=EmbeddingModelConfig)
+    embedding_config: EmbeddingModelConfig | NormalEmbeddingModelConfig = Field(
+        default_factory=EmbeddingModelConfig
+    )
     """Embedding model configs"""
 
     def precheck_index_naming(self):

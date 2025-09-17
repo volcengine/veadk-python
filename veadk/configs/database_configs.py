@@ -105,3 +105,13 @@ class TOSConfig(BaseSettings):
 
         VeTOS(bucket_name=_bucket).create_bucket()
         return _bucket
+
+
+class NormalTOSConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="DATABASE_TOS_")
+
+    endpoint: str = "tos-cn-beijing.volces.com"
+
+    region: str = "cn-beijing"
+
+    bucket: str

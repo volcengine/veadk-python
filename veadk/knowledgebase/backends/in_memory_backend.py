@@ -18,13 +18,15 @@ from llama_index.embeddings.openai_like import OpenAILikeEmbedding
 from pydantic import Field
 from typing_extensions import Any, override
 
-from veadk.configs.model_configs import EmbeddingModelConfig
+from veadk.configs.model_configs import EmbeddingModelConfig, NormalEmbeddingModelConfig
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
 from veadk.knowledgebase.backends.utils import get_llama_index_splitter
 
 
 class InMemoryKnowledgeBackend(BaseKnowledgebaseBackend):
-    embedding_config: EmbeddingModelConfig = Field(default_factory=EmbeddingModelConfig)
+    embedding_config: NormalEmbeddingModelConfig | EmbeddingModelConfig = Field(
+        default_factory=EmbeddingModelConfig
+    )
     """Embedding model configs"""
 
     def model_post_init(self, __context: Any) -> None:
