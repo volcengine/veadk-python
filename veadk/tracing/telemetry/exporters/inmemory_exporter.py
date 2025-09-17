@@ -75,11 +75,22 @@ class _InMemoryExporter(export.SpanExporter):
 class _InMemorySpanProcessor(export.SimpleSpanProcessor):
     def __init__(self, exporter: _InMemoryExporter) -> None:
         super().__init__(exporter)
-        self.spans = []
 
     def on_start(self, span, parent_context) -> None:
-        if span.context:
-            self.spans.append(span)
+        if span.name.startswith("invocation"):
+            span.set_attribute("gen_ai.operation.name", "chain")
+            span.set_attribute("gen_ai.usage.total_tokens", 0)
+
+            ctx = set_value("invocation_span_instance", span, context=parent_context)
+            token = attach(ctx)  # mount context on `invocation` root span in Google ADK
+            setattr(span, "_invocation_token", token)  # for later detach
+
+        if span.name.startswith("agent_run"):
+            span.set_attribute("gen_ai.operation.name", "agent")
+
+            ctx = set_value("agent_run_span_instance", span, context=parent_context)
+            token = attach(ctx)
+            setattr(span, "_agent_run_token", token)  # for later detach
 
     def on_end(self, span: ReadableSpan) -> None:
         if span.context:
@@ -92,8 +103,14 @@ class _InMemorySpanProcessor(export.SimpleSpanProcessor):
             except Exception:
                 logger.exception("Exception while exporting Span.")
             detach(token)
-            if span in self.spans:
-                self.spans.remove(span)
+
+            token = getattr(span, "_invocation_token", None)
+            if token:
+                detach(token)
+
+            token = getattr(span, "_agent_run_token", None)
+            if token:
+                detach(token)
 
 
 class InMemoryExporter(BaseExporter):
@@ -106,6 +123,3 @@ class InMemoryExporter(BaseExporter):
 
         self._exporter = _InMemoryExporter()
         self.processor = _InMemorySpanProcessor(self._exporter)
-
-
-_INMEMORY_EXPORTER_INSTANCE = InMemoryExporter()
