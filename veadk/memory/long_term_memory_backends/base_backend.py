@@ -11,3 +11,23 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from abc import ABC, abstractmethod
+
+from pydantic import BaseModel
+
+
+class BaseLongTermMemoryBackend(ABC, BaseModel):
+    index: str
+
+    @abstractmethod
+    def precheck_index_naming(self):
+        """Check the index name is valid or not"""
+
+    @abstractmethod
+    def save_memory(self, event_strings: list[str], **kwargs) -> bool:
+        """Save memory to long term memory backend"""
+
+    @abstractmethod
+    def search_memory(self, query: str, top_k: int, **kwargs) -> list[str]:
+        """Retrieve memory from long term memory backend"""
