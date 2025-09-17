@@ -135,6 +135,7 @@ root_agent:
     - module: tools.tool
       func: count
   sub_agents:
+  sub_agents:
     - ${sub_agent_1}
 
 sub_agent_1:
