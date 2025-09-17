@@ -129,7 +129,6 @@ root_agent:
     backend: local
   knowledgebase:
     backend: opensearch
-    index: test
   tools:
     - module: demo_tool   # tool 所在的模块
       func: greeting      # tool 的函数名称
