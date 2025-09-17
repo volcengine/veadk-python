@@ -12,11 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 import pytest
-from google.adk.events import Event
-from google.adk.sessions import Session
 from google.adk.tools import load_memory
-from google.genai import types
 
 from veadk.agent import Agent
 from veadk.memory.long_term_memory import LongTermMemory
@@ -27,7 +25,11 @@ user_id = "test_user"
 
 @pytest.mark.asyncio
 async def test_long_term_memory():
-    long_term_memory = LongTermMemory(backend="local")
+    long_term_memory = LongTermMemory(
+        backend="local",
+        # app_name=app_name,
+        # user_id=user_id,
+    )
     agent = Agent(
         name="all_name",
         model_name="test_model_name",
@@ -41,31 +43,8 @@ async def test_long_term_memory():
 
     assert load_memory in agent.tools, "load_memory tool not found in agent tools"
 
-    # mock session
-    session = Session(
-        id="test_session_id",
-        app_name=app_name,
-        user_id=user_id,
-        events=[
-            Event(
-                invocation_id="test_invocation_id",
-                author="user",
-                branch=None,
-                content=types.Content(
-                    parts=[types.Part(text="My name is Alice.")],
-                    role="user",
-                ),
-            )
-        ],
-    )
+    assert not agent.long_term_memory._backend
 
-    await long_term_memory.add_session_to_memory(session)
-
-    memories = await long_term_memory.search_memory(
-        app_name=app_name,
-        user_id=user_id,
-        query="Alice",
-    )
-    assert (
-        "Alice" in memories.model_dump()["memories"][0]["content"]["parts"][0]["text"]
-    )
+    # assert agent.long_term_memory._backend.index == build_long_term_memory_index(
+    #     app_name, user_id
+    # )

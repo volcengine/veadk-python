@@ -12,34 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 from abc import ABC, abstractmethod
-from typing import Any
+from functools import cached_property
+
+from google.adk.sessions import BaseSessionService
+from pydantic import BaseModel
 
 
-class DatabaseType:
-    LOCAL = "local"
-    RELATIONAL = "relational"
-    VECTOR = "vector"
-    KV = "kv"
-
-
-class BaseDatabase(ABC):
-    """Base class for database.
-
-    Args:
-        type: type of the database
-
-    Note:
-        No `update` function support currently.
+class BaseShortTermMemoryBackend(ABC, BaseModel):
+    """
+    Base class for short term memory backend.
     """
 
-    def __init__(self):
-        pass
-
-    def add(self, texts: list[Any], **kwargs: Any): ...
-
+    @cached_property
     @abstractmethod
-    def delete(self, **kwargs: Any): ...
-
-    @abstractmethod
-    def query(self, query: str, **kwargs: Any) -> list[str]: ...
+    def session_service(self) -> BaseSessionService:
+        """Return the session service instance."""
