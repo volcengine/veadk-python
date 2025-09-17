@@ -24,12 +24,7 @@ warnings.filterwarnings(
 )
 
 
-def _render_prompts(attributes: list[str]) -> dict[str, Any]:
-    for attr in attributes:
-        pass
-
-
-def _render_prompts_legacy() -> dict[str, Any]:
+def _render_prompts() -> dict[str, Any]:
     vefaas_application_name = click.prompt(
         "Volcengine FaaS application name", default="veadk-cloud-agent"
     )
@@ -86,48 +81,66 @@ def init(
     from cookiecutter.main import cookiecutter
 
     import veadk.integrations.ve_faas as vefaas
-
-    # copy to local
-    # generate deploy.yaml
+    from veadk.configs.deploy_config import (
+        VeDeployConfig,
+        _VeADKConfig,
+        _VeApigConfig,
+        _VeFaaSConfig,
+    )
 
     if vefaas_template_type == "web_template":
         click.echo(
             "Welcome use VeADK to create your project. We will generate a `simple-blog` web application for you."
         )
-        cwd = Path.cwd()
-        local_dir_name = click.prompt(
-            "Local directory name", default="veadk-cloud-proj"
+    else:
+        click.echo(
+            "Welcome use VeADK to create your project. We will generate a `weather-reporter` application for you."
         )
-        target_dir_path = cwd / local_dir_name
 
-        if target_dir_path.exists():
-            click.confirm(
-                f"Directory '{target_dir_path}' already exists, do you want to overwrite it",
-                abort=True,
-            )
-            shutil.rmtree(target_dir_path)
+    cwd = Path.cwd()
+    local_dir_name = click.prompt("Local directory name", default="veadk-cloud-proj")
+    target_dir_path = cwd / local_dir_name
 
-            settings = _render_prompts_legacy()
-            settings["local_dir_name"] = local_dir_name
+    if target_dir_path.exists():
+        click.confirm(
+            f"Directory '{target_dir_path}' already exists, do you want to overwrite it",
+            abort=True,
+        )
+        shutil.rmtree(target_dir_path)
 
-            if not vefaas_template_type:
-                vefaas_template_type = "template"
+    settings = _render_prompts()
+    settings["local_dir_name"] = local_dir_name
 
-            template_dir_path = Path(vefaas.__file__).parent / vefaas_template_type
+    if not vefaas_template_type:
+        vefaas_template_type = "template"
 
-            cookiecutter(
-                template=str(template_dir_path),
-                output_dir=str(cwd),
-                extra_context=settings,
-                no_input=True,
-            )
+    template_dir_path = Path(vefaas.__file__).parent / vefaas_template_type
 
-            click.echo(f"Template project has been generated at {target_dir_path}")
-            click.echo(f"Edit {target_dir_path / 'src/'} to define your agents")
-            click.echo(
-                f"Edit {target_dir_path / 'deploy.py'} to define your deployment attributes"
-            )
-            click.echo(
-                "Run python `deploy.py` for deployment on Volcengine FaaS platform."
-            )
-        return
+    cookiecutter(
+        template=str(template_dir_path),
+        output_dir=str(cwd),
+        extra_context=settings,
+        no_input=True,
+    )
+
+    ve_deploy_config = VeDeployConfig(
+        vefaas=_VeFaaSConfig(
+            region="cn-beijing",
+            application_name=settings["vefaas_application_name"],
+        ),
+        veapig=_VeApigConfig(
+            instance_name=settings["veapig_instance_name"],
+            service_name=settings["veapig_service_name"],
+            upstream_name=settings["veapig_upstream_name"],
+        ),
+        veadk=_VeADKConfig(
+            deploy_mode="WEB" if settings["use_adk_web"] else "A2A/MCP",
+            entrypoint_agent="weather_reporter.agent:root_agent",
+        ),
+    )
+
+    ve_deploy_config.to_yaml_file(target_dir_path / "deploy.yaml")
+
+    click.echo(f"Template project has been generated at {target_dir_path}")
+
+    click.echo("Run `veadk deploy` for deployment on Volcengine FaaS platform.")

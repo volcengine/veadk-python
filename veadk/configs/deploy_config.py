@@ -8,11 +8,11 @@ from typing_extensions import Literal
 
 
 class _VeFaaSConfig(BaseModel):
-    region: Optional[str] = None
+    region: Optional[str] = ""
 
-    application_name: Optional[str] = None
+    application_name: Optional[str] = ""
 
-    function_name: Optional[str] = None
+    function_name: Optional[str] = ""
 
     enable_key_auth: bool = True
 
@@ -22,15 +22,15 @@ class _VeFaaSConfig(BaseModel):
 
 
 class _VeApigConfig(BaseModel):
-    instance_name: Optional[str] = None
+    instance_name: Optional[str] = ""
 
-    service_name: Optional[str] = None
+    service_name: Optional[str] = ""
 
-    upstream_name: Optional[str] = None
+    upstream_name: Optional[str] = ""
 
 
 class _VeADKConfig(BaseModel):
-    entrypoint_agent: Optional[str] = None
+    entrypoint_agent: Optional[str] = ""
 
     envs: list[dict[str, Any]] = Field(
         default_factory=lambda: [
