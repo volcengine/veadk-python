@@ -22,6 +22,7 @@ from google.adk.sessions import (
 from pydantic import Field
 from typing_extensions import override
 
+import veadk.config  # noqa E401
 from veadk.configs.database_configs import PostgreSqlConfig
 from veadk.memory.short_term_memory_backends.base_backend import (
     BaseShortTermMemoryBackend,

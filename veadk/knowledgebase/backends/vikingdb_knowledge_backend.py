@@ -21,6 +21,7 @@ import requests
 from pydantic import Field
 from typing_extensions import override
 
+import veadk.config  # noqa E401
 from veadk.config import getenv
 from veadk.consts import DEFAULT_TOS_BUCKET_NAME
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend

@@ -23,6 +23,7 @@ dependencies = [
     "wrapt>=1.17.2", # For patching built-in functions
     "openai<1.100", # For fix https://github.com/BerriAI/litellm/issues/13710
     "volcengine-python-sdk>=4.0.3", # For Volcengine API
+    "volcengine>=1.0.193",          # For Volcengine sign
     "agent-pilot-sdk>=0.0.9", # Prompt optimization by Volcengine AgentPilot/PromptPilot toolkits
     "fastmcp>=2.11.3", # For running MCP
     "cookiecutter>=2.6.0", # For cloud deploy
@@ -30,8 +31,10 @@ dependencies = [
     "llama-index>=0.14.0",
     "llama-index-embeddings-openai-like>=0.2.2",
     "llama-index-llms-openai-like>=0.5.1",
+    "llama-index-vector-stores-opensearch>=0.6.1",
     "psycopg2-binary>=2.9.10", # For PostgreSQL database (short term memory)
     "pymysql>=1.1.1", # For MySQL database (short term memory)
+    "opensearch-py==2.8.0",
 ]
 
 [project.scripts]
@@ -40,13 +43,9 @@ veadk = "veadk.cli.cli:veadk"
 [project.optional-dependencies]
 extensions = [
     "redis>=5.0",                 # For Redis database
-    "volcengine>=1.0.193",          # For Viking DB
     "tos>=2.8.4",                   # For TOS storage and Viking DB
-    "llama-index-vector-stores-opensearch>=0.6.1",
     "llama-index-vector-stores-redis>=0.6.1",
     "mcp-server-vikingdb-memory",
-    "opensearch-py==2.8.0",
-
 ]
 database = [
     "redis>=5.0",                 # For Redis database

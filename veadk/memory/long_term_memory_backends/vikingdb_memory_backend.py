@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import json
 import re
 import time
@@ -20,6 +21,7 @@ from typing import Any
 from pydantic import Field
 from typing_extensions import override
 
+import veadk.config  # noqa E401
 from veadk.config import getenv
 from veadk.memory.long_term_memory_backends.base_backend import (
     BaseLongTermMemoryBackend,

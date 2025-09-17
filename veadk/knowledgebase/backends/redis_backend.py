@@ -23,6 +23,7 @@ from llama_index.embeddings.openai_like import OpenAILikeEmbedding
 from pydantic import Field
 from typing_extensions import Any, override
 
+import veadk.config  # noqa E401
 from veadk.configs.database_configs import RedisConfig
 from veadk.configs.model_configs import EmbeddingModelConfig, NormalEmbeddingModelConfig
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend

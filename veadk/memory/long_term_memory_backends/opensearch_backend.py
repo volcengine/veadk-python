@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import re
 
 from llama_index.core import (
@@ -23,6 +24,7 @@ from llama_index.embeddings.openai_like import OpenAILikeEmbedding
 from pydantic import Field
 from typing_extensions import Any, override
 
+import veadk.config  # noqa E401
 from veadk.configs.database_configs import OpensearchConfig
 from veadk.configs.model_configs import EmbeddingModelConfig, NormalEmbeddingModelConfig
 from veadk.knowledgebase.backends.utils import get_llama_index_splitter
