@@ -20,7 +20,8 @@ from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.adk.tools import BaseTool
 from opentelemetry import trace
-from opentelemetry.sdk.trace import _Span
+from opentelemetry.context import get_value
+from opentelemetry.sdk.trace import Span, _Span
 
 from veadk.tracing.telemetry.attributes.attributes import ATTRIBUTES
 from veadk.tracing.telemetry.attributes.extractors.types import (
@@ -28,16 +29,14 @@ from veadk.tracing.telemetry.attributes.extractors.types import (
     LLMAttributesParams,
     ToolAttributesParams,
 )
-from veadk.tracing.telemetry.exporters.inmemory_exporter import (
-    _INMEMORY_EXPORTER_INSTANCE,
-)
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-def upload_metrics(
+def _upload_metrics(
     invocation_context: InvocationContext,
+    event_id: str,
     llm_request: LlmRequest,
     llm_response: LlmResponse,
 ) -> None:
@@ -48,11 +47,13 @@ def upload_metrics(
         for tracer in tracers:
             for exporter in getattr(tracer, "exporters", []):
                 if getattr(exporter, "meter_uploader", None):
-                    exporter.meter_uploader.record(llm_request, llm_response)
+                    exporter.meter_uploader.record(
+                        invocation_context, event_id, llm_request, llm_response
+                    )
 
 
 def _set_agent_input_attribute(
-    span: _Span, invocation_context: InvocationContext
+    span: Span, invocation_context: InvocationContext
 ) -> None:
     # We only save the original user input as the agent input
     # hence once the `agent.input` has been set, we don't overwrite it
@@ -106,7 +107,7 @@ def _set_agent_input_attribute(
                 )
 
 
-def _set_agent_output_attribute(span: _Span, llm_response: LlmResponse) -> None:
+def _set_agent_output_attribute(span: Span, llm_response: LlmResponse) -> None:
     content = llm_response.content
     if content and content.parts:
         for idx, part in enumerate(content.parts):
@@ -126,67 +127,64 @@ def set_common_attributes_on_model_span(
     current_span: _Span,
     **kwargs,
 ) -> None:
-    if current_span.context:
-        current_span_id = current_span.context.trace_id
-    else:
-        logger.warning(
-            "Current span context is missing, failed to get `trace_id` to set common attributes."
-        )
-        return
-
+    common_attributes = ATTRIBUTES.get("common", {})
     try:
-        spans = _INMEMORY_EXPORTER_INSTANCE.processor.spans  # type: ignore
+        invocation_span: Span = get_value("invocation_span_instance")  # type: ignore
+        agent_run_span: Span = get_value("agent_run_span_instance")  # type: ignore
 
-        spans_in_current_trace = [
-            span
-            for span in spans
-            if span.context and span.context.trace_id == current_span_id
-        ]
+        if invocation_span and invocation_span.name.startswith("invocation"):
+            _set_agent_input_attribute(invocation_span, invocation_context)
+            _set_agent_output_attribute(invocation_span, llm_response)
+            for attr_name, attr_extractor in common_attributes.items():
+                value = attr_extractor(**kwargs)
+                invocation_span.set_attribute(attr_name, value)
 
-        common_attributes = ATTRIBUTES.get("common", {})
-        for span in spans_in_current_trace:
-            if span.is_recording():
-                if span.name.startswith("invocation"):
-                    span.set_attribute("gen_ai.operation.name", "chain")
-                    _set_agent_input_attribute(span, invocation_context)
-                    _set_agent_output_attribute(span, llm_response)
-                elif span.name.startswith("agent_run"):
-                    span.set_attribute("gen_ai.operation.name", "agent")
-                    _set_agent_input_attribute(span, invocation_context)
-                    _set_agent_output_attribute(span, llm_response)
-                for attr_name, attr_extractor in common_attributes.items():
-                    value = attr_extractor(**kwargs)
-                    span.set_attribute(attr_name, value)
+            # Calculate the token usage for the whole invocation span
+            current_step_token_usage = (
+                llm_response.usage_metadata.total_token_count
+                if llm_response.usage_metadata
+                and llm_response.usage_metadata.total_token_count
+                else 0
+            )
+            prev_total_token_usage = (
+                invocation_span.attributes["gen_ai.usage.total_tokens"]
+                if invocation_span.attributes
+                else 0
+            )
+            accumulated_total_token_usage = (
+                current_step_token_usage + int(prev_total_token_usage)  # type: ignore
+            )  # we can ignore this warning, cause we manually set the attribute to int before
+            invocation_span.set_attribute(
+                "gen_ai.usage.total_tokens", accumulated_total_token_usage
+            )
+
+        if agent_run_span and agent_run_span.name.startswith("agent_run"):
+            _set_agent_input_attribute(agent_run_span, invocation_context)
+            _set_agent_output_attribute(agent_run_span, llm_response)
+            for attr_name, attr_extractor in common_attributes.items():
+                value = attr_extractor(**kwargs)
+                agent_run_span.set_attribute(attr_name, value)
+
+        for attr_name, attr_extractor in common_attributes.items():
+            value = attr_extractor(**kwargs)
+            current_span.set_attribute(attr_name, value)
     except Exception as e:
         logger.error(f"Failed to set common attributes for spans: {e}")
 
 
 def set_common_attributes_on_tool_span(current_span: _Span) -> None:
-    # find parent span (generally a llm span)
-    if not current_span.context:
-        logger.warning(
-            f"Get tool span's context failed. Skip setting common attributes for span {current_span.name}"
-        )
-        return
+    common_attributes = ATTRIBUTES.get("common", {})
 
-    if not current_span.parent:
-        logger.warning(
-            f"Get tool span's parent failed. Skip setting common attributes for span {current_span.name}"
-        )
-        return
+    invocation_span: Span = get_value("invocation_span_instance")  # type: ignore
 
-    parent_span_id = current_span.parent.span_id
-    for span in _INMEMORY_EXPORTER_INSTANCE.processor.spans:  # type: ignore
-        if span.context.span_id == parent_span_id:
-            common_attributes = ATTRIBUTES.get("common", {})
-            for attr_name in common_attributes.keys():
-                if hasattr(span.attributes, attr_name):
-                    current_span.set_attribute(attr_name, span.attributes[attr_name])
-                else:
-                    logger.error(f"Parent span does not have attribute {attr_name}")
-
-
-def trace_send_data(): ...
+    for attr_name in common_attributes.keys():
+        if (
+            invocation_span
+            and invocation_span.name.startswith("invocation")
+            and invocation_span.attributes
+            and attr_name in invocation_span.attributes
+        ):
+            current_span.set_attribute(attr_name, invocation_span.attributes[attr_name])
 
 
 def trace_tool_call(
@@ -212,7 +210,7 @@ def trace_call_llm(
     llm_request: LlmRequest,
     llm_response: LlmResponse,
 ) -> None:
-    span = trace.get_current_span()
+    span: Span = trace.get_current_span()  # type: ignore
 
     from veadk.agent import Agent
 
@@ -234,6 +232,7 @@ def trace_call_llm(
             span.context.trace_state.get("call_type", "")
             if (
                 hasattr(span, "context")
+                and span.context
                 and hasattr(span.context, "trace_state")
                 and hasattr(span.context.trace_state, "get")
             )
@@ -253,4 +252,8 @@ def trace_call_llm(
         response: ExtractorResponse = attr_extractor(params)
         ExtractorResponse.update_span(span, attr_name, response)
 
-    upload_metrics(invocation_context, llm_request, llm_response)
+    _upload_metrics(invocation_context, event_id, llm_request, llm_response)
+
+
+# Do not modify this function
+def trace_send_data(): ...
