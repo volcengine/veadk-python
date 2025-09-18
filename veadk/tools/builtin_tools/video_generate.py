@@ -202,7 +202,7 @@ async def video_generate(params: list, tool_context: ToolContext) -> Dict:
         for idx, item in enumerate(params):
             input_part[f"parts.{idx}.type"] = "text"
             input_part[f"parts.{idx}.text"] = json.dumps(item, ensure_ascii=False)
-
+        total_tokens = 0
         for start_idx in range(0, len(params), batch_size):
             batch = params[start_idx : start_idx + batch_size]
             task_dict = {}
@@ -223,7 +223,6 @@ async def video_generate(params: list, tool_context: ToolContext) -> Dict:
                     logger.error(f"Error: {e}")
                     error_list.append(video_name)
 
-            total_tokens = 0
             while True:
                 task_list = list(task_dict.keys())
                 if len(task_list) == 0:
