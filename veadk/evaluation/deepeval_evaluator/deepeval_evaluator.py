@@ -24,14 +24,13 @@ from deepeval.test_case.llm_test_case import ToolCall
 from typing_extensions import override
 
 from veadk.config import getenv
-from veadk.evaluation.types import EvalResultCaseData, EvalResultMetadata
-from veadk.utils.logger import get_logger
-
 from veadk.evaluation.base_evaluator import BaseEvaluator, EvalResultData, MetricResult
+from veadk.evaluation.types import EvalResultCaseData, EvalResultMetadata
 from veadk.evaluation.utils.prometheus import (
     PrometheusPushgatewayConfig,
     push_to_prometheus,
 )
+from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -45,19 +44,26 @@ class DeepevalEvaluator(BaseEvaluator):
     def __init__(
         self,
         agent,
-        judge_model_api_key: str = getenv("MODEL_JUDGE_API_KEY"),
-        judge_model_name: str = getenv(
-            "MODEL_JUDGE_NAME",
-            "doubao-seed-1-6-250615",
-        ),
-        judge_model_api_base: str = getenv(
-            "MODEL_JUDGE_API_BASE",
-            "https://ark.cn-beijing.volces.com/api/v3/",
-        ),
+        judge_model_api_key: str = "",
+        judge_model_name: str = "",
+        judge_model_api_base: str = "",
         name: str = "veadk_deepeval_evaluator",
         prometheus_config: PrometheusPushgatewayConfig | None = None,
     ):
         super().__init__(agent=agent, name=name)
+
+        if not judge_model_api_key:
+            judge_model_api_key = getenv("MODEL_JUDGE_API_KEY")
+        if not judge_model_name:
+            judge_model_name = getenv(
+                "MODEL_JUDGE_NAME",
+                "doubao-seed-1-6-250615",
+            )
+        if not judge_model_api_base:
+            judge_model_api_base = getenv(
+                "MODEL_JUDGE_API_BASE",
+                "https://ark.cn-beijing.volces.com/api/v3/",
+            )
 
         self.judge_model_name = judge_model_name
         self.judge_model = LocalModel(
