@@ -17,6 +17,7 @@ from typing import Dict
 from google.genai import types
 from google.adk.tools import ToolContext
 from veadk.config import getenv
+from veadk.consts import DEFAULT_TEXT_TO_IMAGE_MODEL_NAME, DEFAULT_MODEL_AGENT_API_BASE
 import base64
 from volcenginesdkarkruntime import Ark
 from opentelemetry import trace
@@ -29,8 +30,8 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 client = Ark(
-    api_key=getenv("MODEL_IMAGE_API_KEY"),
-    base_url=getenv("MODEL_IMAGE_API_BASE"),
+    api_key=getenv("MODEL_API_KEY"),
+    base_url=DEFAULT_MODEL_AGENT_API_BASE,
 )
 
 
@@ -120,7 +121,7 @@ async def image_generate(
                     "content": json.dumps(inputs, ensure_ascii=False),
                 }
                 response = client.images.generate(
-                    model=getenv("MODEL_IMAGE_NAME"), **inputs
+                    model=DEFAULT_TEXT_TO_IMAGE_MODEL_NAME, **inputs
                 )
                 output_part = None
                 if response.data and len(response.data) > 0:
@@ -161,8 +162,8 @@ async def image_generate(
                     output_part=output_part,
                     output_tokens=response.usage.output_tokens,
                     total_tokens=response.usage.total_tokens,
-                    request_model=getenv("MODEL_IMAGE_NAME"),
-                    response_model=getenv("MODEL_IMAGE_NAME"),
+                    request_model=DEFAULT_TEXT_TO_IMAGE_MODEL_NAME,
+                    response_model=DEFAULT_TEXT_TO_IMAGE_MODEL_NAME,
                 )
 
         except Exception as e:
