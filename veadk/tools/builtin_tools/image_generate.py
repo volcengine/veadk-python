@@ -137,7 +137,7 @@ async def image_generate(
                             image_bytes = base64.b64decode(image)
 
                             tool_context.state[f"{image_name}_url"] = (
-                                f"data:image/jpeg;base64,{image}"
+                                f"data:image/png;base64,{image}"
                             )
 
                             report_artifact = types.Part.from_bytes(
