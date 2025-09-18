@@ -41,7 +41,9 @@ class VeTOS:
         self.ak = ak if ak else os.getenv("VOLCENGINE_ACCESS_KEY", "")
         self.sk = sk if sk else os.getenv("VOLCENGINE_SECRET_KEY", "")
         self.region = region
-        self.bucket_name = bucket_name if bucket_name else getenv("", DEFAULT_TOS_BUCKET_NAME)
+        self.bucket_name = (
+            bucket_name if bucket_name else getenv("", DEFAULT_TOS_BUCKET_NAME)
+        )
         self._tos_module = None
 
         try:
