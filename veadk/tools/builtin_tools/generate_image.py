@@ -25,6 +25,8 @@ from veadk.version import VERSION
 from opentelemetry.trace import Span
 from veadk.utils.logger import get_logger
 from volcenginesdkarkruntime.types.images.images import SequentialImageGenerationOptions
+import json
+
 
 logger = get_logger(__name__)
 
@@ -148,7 +150,9 @@ async def image_generate(
             image = item.get("image", None)
             sequential_image_generation = item.get("sequential_image_generation", None)
             max_images = item.get("max_images", None)
-            print(f"item: {item}")
+
+            input_part[f"parts.{idx}.type"] = "text"
+            input_part[f"parts.{idx}.text"] = json.dumps(item, ensure_ascii=False)
             inputs = {
                 "prompt": prompt,
             }
@@ -160,16 +164,16 @@ async def image_generate(
             if watermark:
                 inputs["watermark"] = watermark
             if image:
-                if task_type == "multi_image_to_single":
+                if task_type.startswith("single"):
                     assert isinstance(image, str), (
-                        f"multi_image_to_single task_type image must be str, got {type(image)}"
+                        f"single_* task_type image must be str, got {type(image)}"
                     )
-                elif task_type == "multi_image_to_multi":
+                elif task_type.startswith("multi"):
                     assert isinstance(image, list), (
-                        f"multi_image_to_multi task_type image must be list, got {type(image)}"
+                        f"multi_* task_type image must be list, got {type(image)}"
                     )
                     assert len(image) <= 10, (
-                        f"multi_image_to_multi task_type image list length must be <= 10, got {len(image)}"
+                        f"multi_* task_type image list length must be <= 10, got {len(image)}"
                     )
 
             if sequential_image_generation:
@@ -194,7 +198,6 @@ async def image_generate(
                     response = client.images.generate(
                         model=getenv("MODEL_IMAGE_NAME"), **inputs
                     )
-                print(f"response: {response}")
                 if not response.error:
                     for i, image_data in enumerate(response.data):
                         image_name = f"task_{idx}_image_{i}"
