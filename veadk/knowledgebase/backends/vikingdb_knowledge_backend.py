@@ -177,6 +177,26 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             raise ValueError("text must be str or list[str]")
         return True
 
+    def add_from_bytes(self, content: bytes, file_name: str, **kwargs) -> bool:
+        """
+        Args:
+            content: bytes, the content to add to knowledgebase, bytes
+            file_name: str, the file name of the content
+            **kwargs:
+                - tos_bucket_name: str, the bucket name of TOS
+                - tos_bucket_path: str, the path of TOS bucket
+        """
+        tos_bucket_name, tos_bucket_path = _extract_tos_attributes(**kwargs)
+        tos_url = _upload_bytes_to_tos(
+            content,
+            tos_bucket_name=tos_bucket_name,
+            object_key=f"{tos_bucket_path}/{file_name}",
+        )
+        response = self._add_doc(tos_url=tos_url)
+        if response["code"] == 0:
+            return True
+        return False
+
     @override
     def search(self, query: str, top_k: int = 5) -> list:
         return self._search_knowledge(query=query, top_k=top_k)
