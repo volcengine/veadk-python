@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import asyncio
 import functools
 from types import MethodType
@@ -137,27 +138,20 @@ def _convert_messages(
     return _messages
 
 
-def _upload_image_to_tos(
+async def _upload_image_to_tos(
     part: genai.types.Part, app_name: str, user_id: str, session_id: str
 ) -> None:
     try:
         if part.inline_data and part.inline_data.display_name and part.inline_data.data:
             from veadk.integrations.ve_tos.ve_tos import VeTOS
-
+            filename = os.path.basename(part.inline_data.display_name)
+            object_key = f"{app_name}/{user_id}-{session_id}-{filename}"
             ve_tos = VeTOS()
-
-            object_key, tos_url = ve_tos.build_tos_url(
-                user_id=user_id,
-                app_name=app_name,
-                session_id=session_id,
-                data_path=part.inline_data.display_name,
+            tos_url = ve_tos.build_tos_url(object_key=object_key)
+            await ve_tos.async_upload_bytes(
+                object_key=object_key,
+                data=part.inline_data.data,
             )
-
-            upload_task = ve_tos.upload(object_key, part.inline_data.data)
-
-            if upload_task is not None:
-                asyncio.create_task(upload_task)
-
             part.inline_data.display_name = tos_url
     except Exception as e:
         logger.error(f"Upload to TOS failed: {e}")
