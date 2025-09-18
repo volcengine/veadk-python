@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 
 from veadk.consts import DEFAULT_TOS_BUCKET_NAME
 from veadk.utils.logger import get_logger
+from veadk.utils.misc import getenv
 
 if TYPE_CHECKING:
     pass
@@ -40,7 +41,9 @@ class VeTOS:
         self.ak = ak if ak else os.getenv("VOLCENGINE_ACCESS_KEY", "")
         self.sk = sk if sk else os.getenv("VOLCENGINE_SECRET_KEY", "")
         self.region = region
-        self.bucket_name = bucket_name
+        self.bucket_name = (
+            bucket_name if bucket_name else getenv("", DEFAULT_TOS_BUCKET_NAME)
+        )
         self._tos_module = None
 
         try:
