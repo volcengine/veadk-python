@@ -17,6 +17,8 @@ from typing import Dict
 from google.genai import types
 from google.adk.tools import ToolContext
 from veadk.config import getenv
+from veadk.consts import DEFAULT_IMAGE_GENERATE_MODEL_NAME, DEFAULT_MODEL_AGENT_API_BASE
+
 import base64
 from volcenginesdkarkruntime import Ark
 from opentelemetry import trace
@@ -31,8 +33,8 @@ import json
 logger = get_logger(__name__)
 
 client = Ark(
-    api_key=getenv("MODEL_IMAGE_API_KEY"),
-    base_url=getenv("MODEL_IMAGE_API_BASE"),
+    api_key=getenv("MODEL_API_KEY"),
+    base_url=DEFAULT_MODEL_AGENT_API_BASE,
 )
 
 
@@ -175,7 +177,7 @@ async def image_generate(
                 ):
                     print(f"generate multi image, max_images: {max_images}")
                     response = client.images.generate(
-                        model=getenv("MODEL_IMAGE_NAME"),
+                        model=DEFAULT_IMAGE_GENERATE_MODEL_NAME,
                         **inputs,
                         sequential_image_generation_options=SequentialImageGenerationOptions(
                             max_images=max_images
@@ -184,7 +186,7 @@ async def image_generate(
                 else:
                     print("generate single image")
                     response = client.images.generate(
-                        model=getenv("MODEL_IMAGE_NAME"), **inputs
+                        model=DEFAULT_IMAGE_GENERATE_MODEL_NAME, **inputs
                     )
                 if not response.error:
                     for i, image_data in enumerate(response.data):
@@ -244,8 +246,8 @@ async def image_generate(
             output_part=output_part,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
-            request_model=getenv("MODEL_IMAGE_NAME"),
-            response_model=getenv("MODEL_IMAGE_NAME"),
+            request_model=DEFAULT_IMAGE_GENERATE_MODEL_NAME,
+            response_model=DEFAULT_IMAGE_GENERATE_MODEL_NAME,
         )
     if len(success_list) == 0:
         return {

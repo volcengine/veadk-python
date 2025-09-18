@@ -17,6 +17,7 @@ from google.adk.tools import ToolContext
 from google.genai import types
 from volcenginesdkarkruntime import Ark
 from veadk.config import getenv
+from veadk.consts import DEFAULT_MODEL_AGENT_API_BASE, DEFAULT_IMAGE_EDIT_MODEL_NAME
 import base64
 from opentelemetry import trace
 import traceback
@@ -28,8 +29,8 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 client = Ark(
-    api_key=getenv("MODEL_EDIT_API_KEY"),
-    base_url=getenv("MODEL_EDIT_API_BASE"),
+    api_key=getenv("MODEL_API_KEY"),
+    base_url=DEFAULT_MODEL_AGENT_API_BASE,
 )
 
 
@@ -119,7 +120,7 @@ async def image_edit(
                     "content": json.dumps(inputs, ensure_ascii=False),
                 }
                 response = client.images.generate(
-                    model=getenv("MODEL_EDIT_NAME"), **inputs
+                    model=DEFAULT_IMAGE_EDIT_MODEL_NAME, **inputs
                 )
                 output_part = None
                 if response.data and len(response.data) > 0:
@@ -160,8 +161,8 @@ async def image_edit(
                     output_part=output_part,
                     output_tokens=response.usage.output_tokens,
                     total_tokens=response.usage.total_tokens,
-                    request_model=getenv("MODEL_EDIT_NAME"),
-                    response_model=getenv("MODEL_EDIT_NAME"),
+                    request_model=DEFAULT_IMAGE_EDIT_MODEL_NAME,
+                    response_model=DEFAULT_IMAGE_EDIT_MODEL_NAME,
                 )
 
         except Exception as e:
