@@ -19,7 +19,6 @@ import time
 from typing import Any
 
 from opentelemetry import trace as trace_api
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
@@ -85,7 +84,7 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         span_processors = global_tracer_provider._active_span_processor._span_processors
         have_apmplus_exporter = any(
             isinstance(p, (BatchSpanProcessor, SimpleSpanProcessor))
-            and isinstance(p.span_exporter, OTLPSpanExporter)
+            and hasattr(p.span_exporter, "_endpoint")
             and "apmplus" in p.span_exporter._endpoint
             for p in span_processors
         )
