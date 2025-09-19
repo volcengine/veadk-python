@@ -55,7 +55,7 @@ async def search_knowledgebase(
 ) -> SearchKnowledgebaseResponse:
     """Searches the knowledgebase of the current user."""
     if isinstance(knowledgebase, KnowledgeBase):
-        res = knowledgebase.search(query, app_name=app_name)
+        res = knowledgebase.search(query)
         entry_list = []
         for r in res:
             entry_list.append(KnowledgebaseEntry(content=r))

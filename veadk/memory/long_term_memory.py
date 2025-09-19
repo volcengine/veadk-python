@@ -181,16 +181,16 @@ class LongTermMemory(BaseMemoryService, BaseModel):
 
     @override
     async def search_memory(self, *, app_name: str, user_id: str, query: str):
-        logger.info(
-            f"Searching long term memory: query={query} index={self._index} top_k={self.top_k}"
-        )
-
         # prevent model invoke `load_memory` before add session to this memory
         if not self._backend:
             logger.error(
                 "Long term memory backend is not initialized, cannot search memory."
             )
             return SearchMemoryResponse(memories=[])
+
+        logger.info(
+            f"Searching long term memory: query={query} index={self._index} top_k={self.top_k}"
+        )
 
         memory_chunks = self._backend.search_memory(
             query=query, top_k=self.top_k, user_id=user_id
