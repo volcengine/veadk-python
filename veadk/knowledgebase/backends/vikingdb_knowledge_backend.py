@@ -23,6 +23,7 @@ from typing_extensions import override
 
 import veadk.config  # noqa E401
 from veadk.config import getenv
+from veadk.configs.database_configs import NormalTOSConfig, TOSConfig
 from veadk.consts import DEFAULT_TOS_BUCKET_NAME
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
 from veadk.knowledgebase.backends.utils import build_vikingdb_knowledgebase_request
@@ -62,12 +63,6 @@ def get_files_in_directory(directory: str):
     return file_paths
 
 
-def _upload_bytes_to_tos(content: bytes, tos_bucket_name: str, object_key: str) -> str:
-    ve_tos = VeTOS(bucket_name=tos_bucket_name)
-    asyncio.run(ve_tos.upload(object_key=object_key, data=content))
-    return f"{ve_tos.bucket_name}/{object_key}"
-
-
 class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
     volcengine_access_key: str = Field(
         default_factory=lambda: getenv("VOLCENGINE_ACCESS_KEY")
@@ -83,6 +78,9 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
     region: str = "cn-beijing"
     """VikingDB knowledgebase region"""
 
+    tos_config: TOSConfig | NormalTOSConfig = Field(default_factory=TOSConfig)
+    """TOS config, used to upload files to TOS"""
+
     def precheck_index_naming(self):
         if not (
             isinstance(self.index, str)
@@ -96,11 +94,19 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
 
     def model_post_init(self, __context: Any) -> None:
         self.precheck_index_naming()
+
         # check whether collection exist, if not, create it
         if not self.collection_status()["existed"]:
             logger.warning(
                 f"VikingDB knowledgebase collection {self.index} does not exist, please create it first..."
             )
+
+        self._tos_client = VeTOS(
+            ak=self.volcengine_access_key,
+            sk=self.volcengine_secret_key,
+            region=self.tos_config.region,
+            bucket_name=self.tos_config.bucket,
+        )
 
     @override
     def add_from_directory(self, directory: str, **kwargs) -> bool:
@@ -115,7 +121,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         files = get_files_in_directory(directory=directory)
         for _file in files:
             content, file_name = _read_file_to_bytes(_file)
-            tos_url = _upload_bytes_to_tos(
+            tos_url = self._upload_bytes_to_tos(
                 content,
                 tos_bucket_name=tos_bucket_name,
                 object_key=f"{tos_bucket_path}/{file_name}",
@@ -135,7 +141,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         tos_bucket_name, tos_bucket_path = _extract_tos_attributes(**kwargs)
         for _file in files:
             content, file_name = _read_file_to_bytes(_file)
-            tos_url = _upload_bytes_to_tos(
+            tos_url = self._upload_bytes_to_tos(
                 content,
                 tos_bucket_name=tos_bucket_name,
                 object_key=f"{tos_bucket_path}/{file_name}",
@@ -163,7 +169,9 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             )
             for _text, _object_key in zip(text, object_keys):
                 _content = _text.encode("utf-8")
-                tos_url = _upload_bytes_to_tos(_content, tos_bucket_name, _object_key)
+                tos_url = self._upload_bytes_to_tos(
+                    _content, tos_bucket_name, _object_key
+                )
                 self._add_doc(tos_url=tos_url)
             return True
         elif isinstance(text, str):
@@ -171,7 +179,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             object_key = kwargs.get(
                 "object_key", f"veadk/knowledgebase/{formatted_timestamp()}.txt"
             )
-            tos_url = _upload_bytes_to_tos(content, tos_bucket_name, object_key)
+            tos_url = self._upload_bytes_to_tos(content, tos_bucket_name, object_key)
             self._add_doc(tos_url=tos_url)
         else:
             raise ValueError("text must be str or list[str]")
@@ -333,6 +341,13 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             raise ValueError(
                 f"Error during collection creation: {response.get('code')}"
             )
+
+    def _upload_bytes_to_tos(
+        self, content: bytes, tos_bucket_name: str, object_key: str
+    ) -> str:
+        self._tos_client.bucket_name = tos_bucket_name
+        asyncio.run(self._tos_client.upload(object_key=object_key, data=content))
+        return f"{self._tos_client.bucket_name}/{object_key}"
 
     def _add_doc(self, tos_url: str) -> Any:
         ADD_DOC_PATH = "/api/knowledge/doc/add"
