@@ -159,7 +159,7 @@ def get_temp_dir():
     # First determine if it is a Windows system
     if sys.platform.startswith("win"):
         # Windows systems use the temporary directory from environment variables
-        return os.environ.get("TEMP", os.environ.get("TMP", "C:\WINDOWS\TEMP"))
+        return os.environ.get("TEMP", os.environ.get("TMP", r"C:\WINDOWS\TEMP"))
     else:
         # Non-Windows systems (macOS, Linux, etc.) uniformly return /tmp
         return "/tmp"
