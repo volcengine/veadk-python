@@ -215,7 +215,7 @@ class BaseEvaluator:
         eval_case_data_list: list[EvalTestCase] = []
 
         try:
-            with open(file_path, "r") as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 file_content = json.load(f)
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON format in file {file_path}: {e}")

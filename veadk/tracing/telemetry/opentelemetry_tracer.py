@@ -32,6 +32,7 @@ from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
 from veadk.tracing.telemetry.exporters.inmemory_exporter import InMemoryExporter
 from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_google_adk_telemetry
+from veadk.utils.misc import get_temp_dir
 
 logger = get_logger(__name__)
 
@@ -155,7 +156,7 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         self,
         user_id: str = "unknown_user_id",
         session_id: str = "unknown_session_id",
-        path: str = "/tmp",
+        path: str = get_temp_dir(),
     ) -> str:
         def _build_trace_file_path(path: str, user_id: str, session_id: str) -> str:
             return f"{path}/{self.name}_{user_id}_{session_id}_{self.trace_id}.json"
