@@ -14,11 +14,14 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 from google.adk.agents import LoopAgent as GoogleADKLoopAgent
 from google.adk.agents.base_agent import BaseAgent
 from pydantic import ConfigDict, Field
 from typing_extensions import Any
 
+from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INSTRUCTION
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.logger import get_logger
@@ -48,6 +51,9 @@ class LoopAgent(GoogleADKLoopAgent):
 
     tracers: list[BaseTracer] = []
     """The tracers provided to agent."""
+
+    short_term_memory: Optional[ShortTermMemory] = None
+    """The short term memory provided to agent. This attribute is not used in agent directly, as it will be passed to Runner in VeADK."""
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
