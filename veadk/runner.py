@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import asyncio
+import os
 import functools
 from types import MethodType
 from typing import Union
@@ -47,7 +47,7 @@ RunnerMessage = Union[
 ]
 
 
-def pre_run_process(self, process_func, new_message, user_id, session_id):
+async def pre_run_process(self, process_func, new_message, user_id, session_id):
     if new_message.parts:
         for part in new_message.parts:
             if (
@@ -55,13 +55,12 @@ def pre_run_process(self, process_func, new_message, user_id, session_id):
                 and part.inline_data.mime_type == "image/png"
                 and self.upload_inline_data_to_tos
             ):
-                process_func(
+                await process_func(
                     part,
                     self.app_name,
                     user_id,
                     session_id,
                 )
-    return
 
 
 def post_run_process(self):
@@ -79,7 +78,7 @@ def intercept_new_message(process_func):
             new_message: types.Content,
             **kwargs,
         ):
-            pre_run_process(self, process_func, new_message, user_id, session_id)
+            await pre_run_process(self, process_func, new_message, user_id, session_id)
 
             async for event in func(
                 user_id=user_id,
@@ -137,27 +136,21 @@ def _convert_messages(
     return _messages
 
 
-def _upload_image_to_tos(
+async def _upload_image_to_tos(
     part: genai.types.Part, app_name: str, user_id: str, session_id: str
 ) -> None:
     try:
         if part.inline_data and part.inline_data.display_name and part.inline_data.data:
             from veadk.integrations.ve_tos.ve_tos import VeTOS
 
+            filename = os.path.basename(part.inline_data.display_name)
+            object_key = f"{app_name}/{user_id}-{session_id}-{filename}"
             ve_tos = VeTOS()
-
-            object_key, tos_url = ve_tos.build_tos_url(
-                user_id=user_id,
-                app_name=app_name,
-                session_id=session_id,
-                data_path=part.inline_data.display_name,
+            tos_url = ve_tos.build_tos_url(object_key=object_key)
+            await ve_tos.async_upload_bytes(
+                object_key=object_key,
+                data=part.inline_data.data,
             )
-
-            upload_task = ve_tos.upload(object_key, part.inline_data.data)
-
-            if upload_task is not None:
-                asyncio.create_task(upload_task)
-
             part.inline_data.display_name = tos_url
     except Exception as e:
         logger.error(f"Upload to TOS failed: {e}")
@@ -226,7 +219,7 @@ class Runner(ADKRunner):
         )
 
         self.run_async = MethodType(
-            intercept_new_message(_upload_image_to_tos)(self.run_async), self
+            intercept_new_message(_upload_image_to_tos)(super().run_async), self
         )
 
     async def run(
