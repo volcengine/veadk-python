@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import os
-import asyncio
 import functools
 from types import MethodType
 from typing import Union
@@ -48,7 +47,7 @@ RunnerMessage = Union[
 ]
 
 
-def pre_run_process(self, process_func, new_message, user_id, session_id):
+async def pre_run_process(self, process_func, new_message, user_id, session_id):
     if new_message.parts:
         for part in new_message.parts:
             if (
@@ -56,13 +55,12 @@ def pre_run_process(self, process_func, new_message, user_id, session_id):
                 and part.inline_data.mime_type == "image/png"
                 and self.upload_inline_data_to_tos
             ):
-                process_func(
+                await process_func(
                     part,
                     self.app_name,
                     user_id,
                     session_id,
                 )
-    return
 
 
 def post_run_process(self):
@@ -80,7 +78,7 @@ def intercept_new_message(process_func):
             new_message: types.Content,
             **kwargs,
         ):
-            pre_run_process(self, process_func, new_message, user_id, session_id)
+            await pre_run_process(self, process_func, new_message, user_id, session_id)
 
             async for event in func(
                 user_id=user_id,
@@ -144,6 +142,7 @@ async def _upload_image_to_tos(
     try:
         if part.inline_data and part.inline_data.display_name and part.inline_data.data:
             from veadk.integrations.ve_tos.ve_tos import VeTOS
+
             filename = os.path.basename(part.inline_data.display_name)
             object_key = f"{app_name}/{user_id}-{session_id}-{filename}"
             ve_tos = VeTOS()
@@ -220,7 +219,7 @@ class Runner(ADKRunner):
         )
 
         self.run_async = MethodType(
-            intercept_new_message(_upload_image_to_tos)(self.run_async), self
+            intercept_new_message(_upload_image_to_tos)(super().run_async), self
         )
 
     async def run(
