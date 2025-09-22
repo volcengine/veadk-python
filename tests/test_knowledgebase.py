@@ -29,3 +29,13 @@ async def test_knowledgebase():
     )
 
     assert isinstance(kb._backend, InMemoryKnowledgeBackend)
+
+
+@pytest.mark.asyncio
+async def test_viking_knowledgebase_add_texts():
+    app_name = "kb_test_app"
+    kb = KnowledgeBase(
+        backend="viking",
+        app_name=app_name,
+    )
+    assert kb.add_from_text(text="test text", tag="tag") is True

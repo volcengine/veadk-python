@@ -24,7 +24,6 @@ from typing_extensions import override
 import veadk.config  # noqa E401
 from veadk.config import getenv
 from veadk.configs.database_configs import NormalTOSConfig, TOSConfig
-from veadk.consts import DEFAULT_TOS_BUCKET_NAME
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
 from veadk.knowledgebase.backends.utils import build_vikingdb_knowledgebase_request
 from veadk.utils.logger import get_logger
@@ -46,13 +45,6 @@ def _read_file_to_bytes(file_path: str) -> tuple[bytes, str]:
         file_content = f.read()
     file_name = file_path.split("/")[-1]
     return file_content, file_name
-
-
-def _extract_tos_attributes(**kwargs) -> tuple[str, str]:
-    """Extract TOS attributes from kwargs"""
-    tos_bucket_name = kwargs.get("tos_bucket_name", DEFAULT_TOS_BUCKET_NAME)
-    tos_bucket_path = kwargs.get("tos_bucket_path", "knowledgebase")
-    return tos_bucket_name, tos_bucket_path
 
 
 def get_files_in_directory(directory: str):
@@ -109,15 +101,24 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         )
 
     @override
-    def add_from_directory(self, directory: str, **kwargs) -> bool:
-        """
+    def add_from_directory(
+        self,
+        directory: str,
+        tos_bucket_name: str | None = None,
+        tos_bucket_path: str = "knowledgebase",
+        **kwargs,
+    ) -> bool:
+        """Add knowledge from a directory to the knowledgebase.
+
         Args:
-            directory: str, the directory to add to knowledgebase
-            **kwargs:
-                - tos_bucket_name: str, the bucket name of TOS
-                - tos_bucket_path: str, the path of TOS bucket
+            directory (str): The directory to add to knowledgebase.
+            tos_bucket_name (str | None, optional): The bucket name of TOS. Defaults to None.
+            tos_bucket_path (str, optional): The path of TOS bucket. Defaults to "knowledgebase".
+
+        Returns:
+            bool: True if successful, False otherwise.
         """
-        tos_bucket_name, tos_bucket_path = _extract_tos_attributes(**kwargs)
+        tos_bucket_name = tos_bucket_name or self.tos_config.bucket
         files = get_files_in_directory(directory=directory)
         for _file in files:
             content, file_name = _read_file_to_bytes(_file)
@@ -130,15 +131,24 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         return True
 
     @override
-    def add_from_files(self, files: list[str], **kwargs) -> bool:
-        """
+    def add_from_files(
+        self,
+        files: list[str],
+        tos_bucket_name: str | None = None,
+        tos_bucket_path: str = "knowledgebase",
+        **kwargs,
+    ) -> bool:
+        """Add knowledge from a directory to the knowledgebase.
+
         Args:
-            files:  list[str], the files to add to knowledgebase
-            **kwargs:
-                - tos_bucket_name: str, the bucket name of TOS
-                - tos_bucket_path: str, the path of TOS bucket
+            files (list[str]): The files to add to knowledgebase.
+            tos_bucket_name (str | None, optional): The bucket name of TOS. Defaults to None.
+            tos_bucket_path (str, optional): The path of TOS bucket. Defaults to "knowledgebase".
+
+        Returns:
+            bool: True if successful, False otherwise.
         """
-        tos_bucket_name, tos_bucket_path = _extract_tos_attributes(**kwargs)
+        tos_bucket_name = tos_bucket_name or self.tos_config.bucket
         for _file in files:
             content, file_name = _read_file_to_bytes(_file)
             tos_url = self._upload_bytes_to_tos(
@@ -150,15 +160,24 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         return True
 
     @override
-    def add_from_text(self, text: str | list[str], **kwargs) -> bool:
-        """
+    def add_from_text(
+        self,
+        text: str | list[str],
+        tos_bucket_name: str | None = None,
+        tos_bucket_path: str = "knowledgebase",
+        **kwargs,
+    ) -> bool:
+        """Add knowledge from text to the knowledgebase.
+
         Args:
-            text:   str or list[str], the text to add to knowledgebase
-            **kwargs:
-                - tos_bucket_name: str, the bucket name of TOS
-                - tos_bucket_path: str, the path of TOS bucket
+            text (str | list[str]): The text to add to knowledgebase.
+            tos_bucket_name (str | None, optional): The bucket name of TOS. Defaults to None.
+            tos_bucket_path (str, optional): The path of TOS bucket. Defaults to "knowledgebase".
+
+        Returns:
+            bool: True if successful, False otherwise.
         """
-        tos_bucket_name, tos_bucket_path = _extract_tos_attributes(**kwargs)
+        tos_bucket_name = tos_bucket_name or self.tos_config.bucket
         if isinstance(text, list):
             object_keys = kwargs.get(
                 "tos_object_keys",
@@ -185,16 +204,26 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             raise ValueError("text must be str or list[str]")
         return True
 
-    def add_from_bytes(self, content: bytes, file_name: str, **kwargs) -> bool:
-        """
+    def add_from_bytes(
+        self,
+        content: bytes,
+        file_name: str,
+        tos_bucket_name: str | None = None,
+        tos_bucket_path: str = "knowledgebase",
+        **kwargs,
+    ) -> bool:
+        """Add knowledge from bytes to the knowledgebase.
+
         Args:
-            content: bytes, the content to add to knowledgebase, bytes
-            file_name: str, the file name of the content
-            **kwargs:
-                - tos_bucket_name: str, the bucket name of TOS
-                - tos_bucket_path: str, the path of TOS bucket
+            content (bytes): The content to add to knowledgebase.
+            file_name (str): The file name of the content.
+            tos_bucket_name (str | None, optional): The bucket name of TOS. Defaults to None.
+            tos_bucket_path (str, optional): The path of TOS bucket. Defaults to "knowledgebase".
+
+        Returns:
+            bool: True if successful, False otherwise.
         """
-        tos_bucket_name, tos_bucket_path = _extract_tos_attributes(**kwargs)
+        tos_bucket_name = tos_bucket_name or self.tos_config.bucket
         tos_url = self._upload_bytes_to_tos(
             content,
             tos_bucket_name=tos_bucket_name,
@@ -346,7 +375,14 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         self, content: bytes, tos_bucket_name: str, object_key: str
     ) -> str:
         self._tos_client.bucket_name = tos_bucket_name
-        asyncio.run(self._tos_client.upload(object_key=object_key, data=content))
+        coro = self._tos_client.upload(object_key=object_key, data=content)
+        try:
+            loop = asyncio.get_running_loop()
+            loop.run_until_complete(
+                coro
+            ) if not loop.is_running() else asyncio.ensure_future(coro)
+        except RuntimeError:
+            asyncio.run(coro)
         return f"{self._tos_client.bucket_name}/{object_key}"
 
     def _add_doc(self, tos_url: str) -> Any:

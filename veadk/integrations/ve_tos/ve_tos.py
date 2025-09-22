@@ -36,14 +36,15 @@ class VeTOS:
         ak: str = "",
         sk: str = "",
         region: str = "cn-beijing",
-        bucket_name: str = DEFAULT_TOS_BUCKET_NAME,
+        bucket_name: str = "",
     ) -> None:
         self.ak = ak if ak else os.getenv("VOLCENGINE_ACCESS_KEY", "")
         self.sk = sk if sk else os.getenv("VOLCENGINE_SECRET_KEY", "")
         self.region = region
-        self.bucket_name = (
-            bucket_name if bucket_name else getenv("", DEFAULT_TOS_BUCKET_NAME)
+        self.bucket_name = bucket_name or getenv(
+            "DATABASE_TOS_BUCKET", DEFAULT_TOS_BUCKET_NAME
         )
+
         self._tos_module = None
 
         try:
