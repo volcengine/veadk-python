@@ -195,7 +195,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
                 - tos_bucket_path: str, the path of TOS bucket
         """
         tos_bucket_name, tos_bucket_path = _extract_tos_attributes(**kwargs)
-        tos_url = _upload_bytes_to_tos(
+        tos_url = self._upload_bytes_to_tos(
             content,
             tos_bucket_name=tos_bucket_name,
             object_key=f"{tos_bucket_path}/{file_name}",
