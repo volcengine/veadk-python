@@ -32,10 +32,18 @@ async def test_knowledgebase():
 
 
 @pytest.mark.asyncio
-async def test_viking_knowledgebase_add_texts():
+async def test_viking_knowledgebase_add_texts(monkeypatch):
     app_name = "kb_test_app"
     kb = KnowledgeBase(
         backend="viking",
         app_name=app_name,
     )
-    assert kb.add_from_text(text="test text", tag="tag") is True
+
+    # Mock the add_from_text method of the backend
+    async def mock_tos_upload(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr(kb._backend._tos_client, "upload", mock_tos_upload)
+
+    result = kb.add_from_text(text="test text", tag="tag")
+    assert result is True
