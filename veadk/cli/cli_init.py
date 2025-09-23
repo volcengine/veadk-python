@@ -81,6 +81,12 @@ def init(
     from cookiecutter.main import cookiecutter
 
     import veadk.integrations.ve_faas as vefaas
+    from veadk.configs.deploy_config import (
+        VeDeployConfig,
+        _VeADKConfig,
+        _VeApigConfig,
+        _VeFaaSConfig,
+    )
 
     if vefaas_template_type == "web_template":
         click.echo(
@@ -117,9 +123,24 @@ def init(
         no_input=True,
     )
 
-    click.echo(f"Template project has been generated at {target_dir_path}")
-    click.echo(f"Edit {target_dir_path / 'src/'} to define your agents")
-    click.echo(
-        f"Edit {target_dir_path / 'deploy.py'} to define your deployment attributes"
+    ve_deploy_config = VeDeployConfig(
+        vefaas=_VeFaaSConfig(
+            region="cn-beijing",
+            application_name=settings["vefaas_application_name"],
+        ),
+        veapig=_VeApigConfig(
+            instance_name=settings["veapig_instance_name"],
+            service_name=settings["veapig_service_name"],
+            upstream_name=settings["veapig_upstream_name"],
+        ),
+        veadk=_VeADKConfig(
+            deploy_mode="WEB" if settings["use_adk_web"] else "A2A/MCP",
+            entrypoint_agent="weather_reporter.agent:root_agent",
+        ),
     )
-    click.echo("Run python `deploy.py` for deployment on Volcengine FaaS platform.")
+
+    ve_deploy_config.to_yaml_file(target_dir_path / "deploy.yaml")
+
+    click.echo(f"Template project has been generated at {target_dir_path}")
+
+    click.echo("Run `veadk deploy` for deployment on Volcengine FaaS platform.")

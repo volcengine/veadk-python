@@ -1,3 +1,0 @@
-veadk-python=={{ cookiecutter.veadk_version }}
-fastapi
-uvicorn[standard]
