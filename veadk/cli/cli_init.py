@@ -11,96 +11,67 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import shutil
 import warnings
-from typing import Any
+from pathlib import Path
 
 import click
+from cookiecutter.main import cookiecutter
+from InquirerPy.resolver import prompt
+from InquirerPy.utils import InquirerPySessionResult
 
+import veadk.integrations.ve_faas as vefaas
 from veadk.version import VERSION
 
 warnings.filterwarnings(
     "ignore", category=UserWarning, module="pydantic._internal._fields"
 )
 
-
-def _render_prompts() -> dict[str, Any]:
-    vefaas_application_name = click.prompt(
-        "Volcengine FaaS application name", default="veadk-cloud-agent"
-    )
-
-    veapig_instance_name = click.prompt(
-        "Volcengine API Gateway instance name", default="", show_default=True
-    )
-
-    veapig_service_name = click.prompt(
-        "Volcengine API Gateway service name", default="", show_default=True
-    )
-
-    veapig_upstream_name = click.prompt(
-        "Volcengine API Gateway upstream name", default="", show_default=True
-    )
-
-    deploy_mode_options = {
-        "1": "A2A/MCP Server",
-        "2": "VeADK Web / Google ADK Web",
-    }
-
-    click.echo("Choose a deploy mode:")
-    for key, value in deploy_mode_options.items():
-        click.echo(f"  {key}. {value}")
-
-    deploy_mode = click.prompt(
-        "Enter your choice", type=click.Choice(deploy_mode_options.keys())
-    )
-
-    return {
-        "vefaas_application_name": vefaas_application_name,
-        "veapig_instance_name": veapig_instance_name,
-        "veapig_service_name": veapig_service_name,
-        "veapig_upstream_name": veapig_upstream_name,
-        "use_adk_web": deploy_mode == "2",
-        "veadk_version": VERSION,
-    }
+DEPLOY_CONFIGS = [
+    {
+        "name": "local_dir_name",
+        "type": "input",
+        "message": "Local project name:",
+        "default": "veadk-cloud-proj",
+    },
+    {
+        "name": "vefaas_application_name",
+        "type": "input",
+        "message": "VeFaaS application name:",
+        "default": "veadk-cloud-application",
+    },
+    {
+        "name": "veapig_instance_name",
+        "type": "input",
+        "message": "VeAPI Gateway instance name:",
+    },
+    {
+        "name": "veapig_service_name",
+        "type": "input",
+        "message": "VeAPI Gateway service name:",
+    },
+    {
+        "name": "veapig_upstream_name",
+        "type": "input",
+        "message": "VeAPI Gateway upstream name:",
+    },
+    {
+        "name": "deploy_mode",
+        "type": "list",
+        "message": "Deploy mode:",
+        "choices": ["A2A/MCP", "Web"],
+    },
+]
 
 
-@click.command()
-@click.option(
-    "--vefaas-template-type", default="template", help="Expected template type"
-)
-def init(
-    vefaas_template_type: str,
-) -> None:
-    """Init a veadk project that can be deployed to Volcengine VeFaaS.
+def _get_user_configs() -> dict:
+    user_configs = prompt(DEPLOY_CONFIGS)
+    user_configs["veadk_version"] = VERSION
+    return user_configs
 
-    `template` is A2A/MCP/Web server template, `web_template` is for web applications (i.e., a simple blog).
-    """
-    import shutil
-    from pathlib import Path
 
-    from cookiecutter.main import cookiecutter
-
-    import veadk.integrations.ve_faas as vefaas
-    from veadk.configs.deploy_config import (
-        VeDeployConfig,
-        _VeADKConfig,
-        _VeApigConfig,
-        _VeFaaSConfig,
-    )
-
-    if vefaas_template_type == "web_template":
-        click.echo(
-            "Welcome use VeADK to create your project. We will generate a `simple-blog` web application for you."
-        )
-    else:
-        click.echo(
-            "Welcome use VeADK to create your project. We will generate a `weather-reporter` application for you."
-        )
-
-    cwd = Path.cwd()
-    local_dir_name = click.prompt("Local directory name", default="veadk-cloud-proj")
-    target_dir_path = cwd / local_dir_name
-
+def _check_local_dir_exists(configs: InquirerPySessionResult) -> None:
+    target_dir_path = Path.cwd() / str(configs["local_dir_name"])
     if target_dir_path.exists():
         click.confirm(
             f"Directory '{target_dir_path}' already exists, do you want to overwrite it",
@@ -108,39 +79,34 @@ def init(
         )
         shutil.rmtree(target_dir_path)
 
-    settings = _render_prompts()
-    settings["local_dir_name"] = local_dir_name
 
-    if not vefaas_template_type:
-        vefaas_template_type = "template"
+@click.command()
+def init() -> None:
+    """Init a veadk project that can be deployed to Volcengine VeFaaS."""
 
-    template_dir_path = Path(vefaas.__file__).parent / vefaas_template_type
+    click.echo(
+        "Welcome use VeADK to create your project. We will generate a `weather-reporter` application for you."
+    )
+
+    # 1. get user configurations by rendering prompts
+    user_configs = _get_user_configs()
+    _check_local_dir_exists(user_configs)
+
+    # 2. copy template files
+    template_path = Path(vefaas.__file__).parent / "template"
 
     cookiecutter(
-        template=str(template_dir_path),
-        output_dir=str(cwd),
-        extra_context=settings,
+        template=str(template_path),
+        output_dir=str(Path.cwd()),
+        extra_context=user_configs,
         no_input=True,
     )
 
-    ve_deploy_config = VeDeployConfig(
-        vefaas=_VeFaaSConfig(
-            region="cn-beijing",
-            application_name=settings["vefaas_application_name"],
-        ),
-        veapig=_VeApigConfig(
-            instance_name=settings["veapig_instance_name"],
-            service_name=settings["veapig_service_name"],
-            upstream_name=settings["veapig_upstream_name"],
-        ),
-        veadk=_VeADKConfig(
-            deploy_mode="WEB" if settings["use_adk_web"] else "A2A/MCP",
-            entrypoint_agent="weather_reporter.agent:root_agent",
-        ),
+    click.echo(
+        f"🎉 Template project has been generated at {Path.cwd() / str(user_configs['local_dir_name'])}"
     )
 
-    ve_deploy_config.to_yaml_file(target_dir_path / "deploy.yaml")
-
-    click.echo(f"Template project has been generated at {target_dir_path}")
-
-    click.echo("Run `veadk deploy` for deployment on Volcengine FaaS platform.")
+    click.echo(f"""Run:
+  - cd {user_configs["local_dir_name"]}
+  - veadk deploy
+for deployment on Volcengine FaaS platform.""")

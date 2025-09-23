@@ -1,0 +1,17 @@
+vefaas:
+  region: cn-beijing
+  application_name: {{ cookiecutter.vefaas_application_name }}
+
+veapig:
+  instance_name: {{ cookiecutter.veapig_instance_name }}
+  service_name: {{ cookiecutter.veapig_service_name }}
+  upstream_name: {{ cookiecutter.veapig_upstream_name }}
+  enable_key_auth: true
+  enable_mcp_session_keepalive: true
+
+ignore_files:
+  - "config.yaml"
+
+entrypoint_agent: {{ cookiecutter.entrypoint_agent }}
+
+deploy_mode: {{ cookiecutter.deploy_mode }} # 0 for `A2A/MCP`, 1 for `Web`

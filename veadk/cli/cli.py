@@ -15,11 +15,12 @@
 
 import click
 
+from veadk.cli.cli_blog import blog
 from veadk.cli.cli_deploy import deploy
 from veadk.cli.cli_init import init
+from veadk.cli.cli_pipeline import pipeline
 from veadk.cli.cli_prompt import prompt
 from veadk.cli.cli_web import web
-from veadk.cli.cli_pipeline import pipeline
 from veadk.version import VERSION
 
 
@@ -37,6 +38,7 @@ veadk.add_command(init)
 veadk.add_command(prompt)
 veadk.add_command(web)
 veadk.add_command(pipeline)
+veadk.add_command(blog)
 
 if __name__ == "__main__":
     veadk()

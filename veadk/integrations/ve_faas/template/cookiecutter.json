@@ -1,4 +1,10 @@
 {
   "local_dir_name": "veadk_vefaas_proj",
+  "vefaas_application_name": "",
+  "veapig_instance_name": "",
+  "veapig_service_name": "",
+  "veapig_upstream_name": "",
+  "entrypoint_agent": "weather_reporter.agent:root_agent",
+  "deploy_mode": "",
   "veadk_version": ""
 }
