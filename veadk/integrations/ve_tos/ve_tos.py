@@ -243,9 +243,9 @@ class VeTOS:
         return tos_url
 
     # deprecated
-    def upload(self, data: Union[str, bytes], bucket_name: str, object_key: str):
-        if not bucket_name:
-            bucket_name = self.bucket_name
+    def upload(
+        self, data: Union[str, bytes], bucket_name: str = "", object_key: str = ""
+    ):
         if isinstance(data, str):
             # data is a file path
             return asyncio.to_thread(self.upload_file, data, bucket_name, object_key)
