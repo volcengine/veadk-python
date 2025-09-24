@@ -88,6 +88,12 @@ class LongTermMemory(BaseMemoryService, BaseModel):
     user_id: str = ""
 
     def model_post_init(self, __context: Any) -> None:
+        if self.backend == "viking_mem":
+            logger.warning(
+                "The `viking_mem` backend is deprecated, please use `viking` instead."
+            )
+            self.backend = "viking"
+
         self._backend = None
 
         # Once user define a backend instance, use it directly

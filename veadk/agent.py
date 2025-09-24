@@ -84,6 +84,9 @@ class Agent(LlmAgent):
     knowledgebase: Optional[KnowledgeBase] = None
     """The knowledgebase provided to agent."""
 
+    short_term_memory: Optional[ShortTermMemory] = None
+    """The short term memory provided to agent."""
+
     long_term_memory: Optional[LongTermMemory] = None
     """The long term memory provided to agent.
 
