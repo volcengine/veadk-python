@@ -18,7 +18,7 @@ Volcengine Agent Development Kit
   ---
   color: neutral
   size: xl
-  to: /introduction/installation
+  to: /introduction/overview
   trailing-icon: i-lucide-arrow-right
   ---
   官方文档
