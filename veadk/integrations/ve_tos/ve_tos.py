@@ -242,6 +242,18 @@ class VeTOS:
         )
         return tos_url
 
+    def build_tos_signed_url(self, object_key: str, bucket_name: str = "") -> str:
+        bucket_name = self._check_bucket_name(bucket_name)
+
+        out = self._client.pre_signed_url(
+            self._tos_module.HttpMethodType.Http_Method_Get,
+            bucket=bucket_name,
+            key=object_key,
+            expires=604800,
+        )
+        tos_url = out.signed_url
+        return tos_url
+
     # deprecated
     def upload(
         self, data: Union[str, bytes], bucket_name: str = "", object_key: str = ""
@@ -347,7 +359,7 @@ class VeTOS:
         bucket_name = self._check_bucket_name(bucket_name)
         if not object_key:
             object_key = self._build_object_key_for_bytes()
-        # Use common function to check client and bucket
+        # Use common function to check lient and bucket
         if not self._ensure_client_and_bucket(bucket_name):
             return
         try:
