@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import json
 import re
 from pathlib import Path
 from typing import Any, Literal
@@ -26,6 +27,7 @@ from veadk.config import getenv
 from veadk.configs.database_configs import NormalTOSConfig, TOSConfig
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
 from veadk.knowledgebase.backends.utils import build_vikingdb_knowledgebase_request
+from veadk.knowledgebase.entry import KnowledgebaseEntry
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp
 
@@ -106,6 +108,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         directory: str,
         tos_bucket_name: str | None = None,
         tos_bucket_path: str = "knowledgebase",
+        metadata: dict | None = None,
         **kwargs,
     ) -> bool:
         """Add knowledge from a directory to the knowledgebase.
@@ -114,6 +117,8 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             directory (str): The directory to add to knowledgebase.
             tos_bucket_name (str | None, optional): The bucket name of TOS. Defaults to None.
             tos_bucket_path (str, optional): The path of TOS bucket. Defaults to "knowledgebase".
+            metadata (dict | None, optional): The metadata of the files. Defaults to None.
+            **kwargs: Additional keyword arguments.
 
         Returns:
             bool: True if successful, False otherwise.
@@ -126,6 +131,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
                 content,
                 tos_bucket_name=tos_bucket_name,
                 object_key=f"{tos_bucket_path}/{file_name}",
+                metadata=metadata,
             )
             self._add_doc(tos_url=tos_url)
         return True
@@ -136,6 +142,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         files: list[str],
         tos_bucket_name: str | None = None,
         tos_bucket_path: str = "knowledgebase",
+        metadata: dict | None = None,
         **kwargs,
     ) -> bool:
         """Add knowledge from a directory to the knowledgebase.
@@ -144,6 +151,8 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             files (list[str]): The files to add to knowledgebase.
             tos_bucket_name (str | None, optional): The bucket name of TOS. Defaults to None.
             tos_bucket_path (str, optional): The path of TOS bucket. Defaults to "knowledgebase".
+            metadata (dict | None, optional): The metadata of the files. Defaults to None.
+            **kwargs: Additional keyword arguments.
 
         Returns:
             bool: True if successful, False otherwise.
@@ -155,6 +164,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
                 content,
                 tos_bucket_name=tos_bucket_name,
                 object_key=f"{tos_bucket_path}/{file_name}",
+                metadata=metadata,
             )
             self._add_doc(tos_url=tos_url)
         return True
@@ -165,6 +175,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         text: str | list[str],
         tos_bucket_name: str | None = None,
         tos_bucket_path: str = "knowledgebase",
+        metadata: dict | None = None,
         **kwargs,
     ) -> bool:
         """Add knowledge from text to the knowledgebase.
@@ -189,7 +200,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             for _text, _object_key in zip(text, object_keys):
                 _content = _text.encode("utf-8")
                 tos_url = self._upload_bytes_to_tos(
-                    _content, tos_bucket_name, _object_key
+                    _content, tos_bucket_name, _object_key, metadata=metadata
                 )
                 self._add_doc(tos_url=tos_url)
             return True
@@ -198,7 +209,9 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             object_key = kwargs.get(
                 "object_key", f"veadk/knowledgebase/{formatted_timestamp()}.txt"
             )
-            tos_url = self._upload_bytes_to_tos(content, tos_bucket_name, object_key)
+            tos_url = self._upload_bytes_to_tos(
+                content, tos_bucket_name, object_key, metadata=metadata
+            )
             self._add_doc(tos_url=tos_url)
         else:
             raise ValueError("text must be str or list[str]")
@@ -210,6 +223,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         file_name: str,
         tos_bucket_name: str | None = None,
         tos_bucket_path: str = "knowledgebase",
+        metadata: dict | None = None,
         **kwargs,
     ) -> bool:
         """Add knowledge from bytes to the knowledgebase.
@@ -219,6 +233,8 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             file_name (str): The file name of the content.
             tos_bucket_name (str | None, optional): The bucket name of TOS. Defaults to None.
             tos_bucket_path (str, optional): The path of TOS bucket. Defaults to "knowledgebase".
+            metadata (dict | None, optional): The metadata of the files. Defaults to None.
+            **kwargs: Additional keyword arguments.
 
         Returns:
             bool: True if successful, False otherwise.
@@ -228,6 +244,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             content,
             tos_bucket_name=tos_bucket_name,
             object_key=f"{tos_bucket_path}/{file_name}",
+            metadata=metadata,
         )
         response = self._add_doc(tos_url=tos_url)
         if response["code"] == 0:
@@ -235,8 +252,16 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         return False
 
     @override
-    def search(self, query: str, top_k: int = 5) -> list:
-        return self._search_knowledge(query=query, top_k=top_k)
+    def search(
+        self,
+        query: str,
+        top_k: int = 5,
+        metadata: dict | None = None,
+        rerank: bool = True,
+    ) -> list:
+        return self._search_knowledge(
+            query=query, top_k=top_k, metadata=metadata, rerank=rerank
+        )
 
     def delete_collection(self) -> bool:
         DELETE_COLLECTION_PATH = "/api/knowledge/collection/delete"
@@ -359,7 +384,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         response = self._do_request(
             body={
                 "name": self.index,
-                "project": "default",
+                "project": self.volcengine_project,
                 "description": "Created by Volcengine Agent Development Kit (VeADK).",
             },
             path=CREATE_COLLECTION_PATH,
@@ -372,10 +397,17 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             )
 
     def _upload_bytes_to_tos(
-        self, content: bytes, tos_bucket_name: str, object_key: str
+        self,
+        content: bytes,
+        tos_bucket_name: str,
+        object_key: str,
+        metadata: dict | None = None,
     ) -> str:
+        # Here, we set the metadata via the TOS object, ref: https://www.volcengine.com/docs/84313/1254624
         self._tos_client.bucket_name = tos_bucket_name
-        coro = self._tos_client.upload(object_key=object_key, data=content)
+        coro = self._tos_client.upload(
+            object_key=object_key, data=content, metadata=metadata
+        )
         try:
             loop = asyncio.get_running_loop()
             loop.run_until_complete(
@@ -391,7 +423,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         response = self._do_request(
             body={
                 "collection_name": self.index,
-                "project": "default",
+                "project": self.volcengine_project,
                 "add_type": "tos",
                 "tos_path": tos_url,
             },
@@ -400,14 +432,43 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         )
         return response
 
-    def _search_knowledge(self, query: str, top_k: int = 5) -> list[str]:
+    def _search_knowledge(
+        self,
+        query: str,
+        top_k: int = 5,
+        metadata: dict | None = None,
+        rerank: bool = True,
+        chunk_diffusion_count: int | None = 3,
+    ) -> list[KnowledgebaseEntry]:
         SEARCH_KNOWLEDGE_PATH = "/api/knowledge/collection/search_knowledge"
+
+        query_param = (
+            {
+                "doc_filter": {
+                    "op": "and",
+                    "conds": [
+                        {"op": "must", "field": str(k), "conds": [str(v)]}
+                        for k, v in metadata.items()
+                    ],
+                }
+            }
+            if metadata
+            else None
+        )
+
+        post_precessing = {
+            "rerank_swich": rerank,
+            "chunk_diffusion_count": chunk_diffusion_count,
+        }
 
         response = self._do_request(
             body={
                 "name": self.index,
+                "project": self.volcengine_project,
                 "query": query,
                 "limit": top_k,
+                "query_param": query_param,
+                "post_processing": post_precessing,
             },
             path=SEARCH_KNOWLEDGE_PATH,
             method="POST",
@@ -418,11 +479,19 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
                 f"Error during knowledge search: {response.get('code')}, message: {response.get('message')}"
             )
 
-        search_result_list = response.get("data", {}).get("result_list", [])
+        entries = []
+        for result in response.get("data", {}).get("result_list", []):
+            doc_meta_raw_str = result.get("doc_info", {}).get("doc_meta")
+            doc_meta_list = json.loads(doc_meta_raw_str) if doc_meta_raw_str else []
+            metadata = {}
+            for meta in doc_meta_list:
+                metadata[meta["field_name"]] = meta["field_value"]
 
-        return [
-            search_result.get("content", "") for search_result in search_result_list
-        ]
+            entries.append(
+                KnowledgebaseEntry(content=result.get("content", ""), metadata=metadata)
+            )
+
+        return entries
 
     def _do_request(
         self,
@@ -445,4 +514,8 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             headers=request.headers,
             data=request.body,
         )
+        if not response.ok:
+            logger.error(
+                f"VikingDBKnowledgeBackend error during request: {response.json()}"
+            )
         return response.json()
