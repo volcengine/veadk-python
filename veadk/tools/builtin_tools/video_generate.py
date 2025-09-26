@@ -33,7 +33,7 @@ from veadk.version import VERSION
 logger = get_logger(__name__)
 
 client = Ark(
-    api_key=getenv("MODEL_API_KEY"),
+    api_key=getenv("MODEL_AGENT_API_KEY"),
     base_url=DEFAULT_MODEL_AGENT_API_BASE,
 )
 
@@ -195,19 +195,19 @@ async def video_generate(params: list, tool_context: ToolContext) -> Dict:
     batch_size = 10
     success_list = []
     error_list = []
-    tracer = trace.get_tracer("gcp.vertex.agent")
-    with tracer.start_as_current_span("call_llm") as span:
-        input_part = {"role": "user"}
-        output_part = {"message.role": "model"}
 
-        for idx, item in enumerate(params):
-            input_part[f"parts.{idx}.type"] = "text"
-            input_part[f"parts.{idx}.text"] = json.dumps(item, ensure_ascii=False)
-        total_tokens = 0
-        for start_idx in range(0, len(params), batch_size):
-            batch = params[start_idx : start_idx + batch_size]
-            task_dict = {}
+    for start_idx in range(0, len(params), batch_size):
+        batch = params[start_idx : start_idx + batch_size]
+        task_dict = {}
+        tracer = trace.get_tracer("gcp.vertex.agent")
+        with tracer.start_as_current_span("call_llm") as span:
+            input_part = {"role": "user"}
+            output_part = {"message.role": "model"}
+            total_tokens = 0
             for idx, item in enumerate(batch):
+                input_part[f"parts.{idx}.type"] = "text"
+                input_part[f"parts.{idx}.text"] = json.dumps(item, ensure_ascii=False)
+
                 video_name = item["video_name"]
                 prompt = item["prompt"]
                 first_frame = item.get("first_frame", None)
@@ -256,29 +256,29 @@ async def video_generate(params: list, tool_context: ToolContext) -> Dict:
                         )
                 time.sleep(10)
 
-        add_span_attributes(
-            span,
-            tool_context,
-            input_part=input_part,
-            output_part=output_part,
-            output_tokens=total_tokens,
-            total_tokens=total_tokens,
-            request_model=DEFAULT_VIDEO_MODEL_NAME,
-            response_model=DEFAULT_VIDEO_MODEL_NAME,
-        )
+            add_span_attributes(
+                span,
+                tool_context,
+                input_part=input_part,
+                output_part=output_part,
+                output_tokens=total_tokens,
+                total_tokens=total_tokens,
+                request_model=DEFAULT_VIDEO_MODEL_NAME,
+                response_model=DEFAULT_VIDEO_MODEL_NAME,
+            )
 
-        if len(success_list) == 0:
-            return {
-                "status": "error",
-                "success_list": success_list,
-                "error_list": error_list,
-            }
-        else:
-            return {
-                "status": "success",
-                "success_list": success_list,
-                "error_list": error_list,
-            }
+    if len(success_list) == 0:
+        return {
+            "status": "error",
+            "success_list": success_list,
+            "error_list": error_list,
+        }
+    else:
+        return {
+            "status": "success",
+            "success_list": success_list,
+            "error_list": error_list,
+        }
 
 
 def add_span_attributes(
