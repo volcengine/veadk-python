@@ -528,7 +528,7 @@ def llm_gen_ai_request_functions(params: LLMAttributesParams) -> ExtractorRespon
                 f"gen_ai.request.functions.{idx}.name": tool_instance.name,
                 f"gen_ai.request.functions.{idx}.description": tool_instance.description,
                 f"gen_ai.request.functions.{idx}.parameters": str(
-                    tool_instance._get_declaration().parameters.model_dump(  # type: ignore
+                    tool_instance._get_declaration().parameters.model_dump_json(  # type: ignore
                         exclude_none=True
                     )
                     if tool_instance._get_declaration()
