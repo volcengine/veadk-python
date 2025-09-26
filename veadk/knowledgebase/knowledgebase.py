@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from typing_extensions import Union
 
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
+from veadk.knowledgebase.entry import KnowledgebaseEntry
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -72,8 +73,8 @@ class KnowledgeBase(BaseModel):
     """Configuration for the backend"""
 
     top_k: int = 10
-    """Number of top similar documents to retrieve during search. 
-    
+    """Number of top similar documents to retrieve during search.
+
     Default is 10."""
 
     app_name: str = ""
@@ -130,11 +131,25 @@ class KnowledgeBase(BaseModel):
         """Add knowledge from text to knowledgebase"""
         return self._backend.add_from_text(text=text, **kwargs)
 
-    def search(self, query: str, top_k: int = 0, **kwargs) -> list[str]:
+    def search(self, query: str, top_k: int = 0, **kwargs) -> list[KnowledgebaseEntry]:
         """Search knowledge from knowledgebase"""
         if top_k == 0:
             top_k = self.top_k
-        return self._backend.search(query=query, top_k=top_k, **kwargs)
+
+        _entries = self._backend.search(query=query, top_k=top_k, **kwargs)
+
+        entries = []
+        for entry in _entries:
+            if isinstance(entry, KnowledgebaseEntry):
+                entries.append(entry)
+            elif isinstance(entry, str):
+                entries.append(KnowledgebaseEntry(content=entry))
+            else:
+                logger.error(
+                    f"Unsupported entry type from backend search method: {type(entry)} with {entry}. Expected `KnowledgebaseEntry` or `str`. Skip for this entry."
+                )
+
+        return entries
 
     def __getattr__(self, name) -> Callable:
         """In case of knowledgebase have no backends' methods (`delete`, `list_chunks`, etc)

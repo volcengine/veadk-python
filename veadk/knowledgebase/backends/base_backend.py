@@ -29,19 +29,19 @@ class BaseKnowledgebaseBackend(ABC, BaseModel):
         """
 
     @abstractmethod
-    def add_from_directory(self, directory: str, **kwargs) -> bool:
+    def add_from_directory(self, directory: str, *args, **kwargs) -> bool:
         """Add knowledge from file path to knowledgebase"""
 
     @abstractmethod
-    def add_from_files(self, files: list[str], **kwargs) -> bool:
+    def add_from_files(self, files: list[str], *args, **kwargs) -> bool:
         """Add knowledge (e.g, documents, strings, ...) to knowledgebase"""
 
     @abstractmethod
-    def add_from_text(self, text: str | list[str], **kwargs) -> bool:
+    def add_from_text(self, text: str | list[str], *args, **kwargs) -> bool:
         """Add knowledge from text to knowledgebase"""
 
     @abstractmethod
-    def search(self, **kwargs) -> list:
+    def search(self, *args, **kwargs) -> list:
         """Search knowledge from knowledgebase"""
 
     # Optional methods for future use:
