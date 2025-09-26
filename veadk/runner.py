@@ -146,7 +146,7 @@ async def _upload_image_to_tos(
             filename = os.path.basename(part.inline_data.display_name)
             object_key = f"{app_name}/{user_id}-{session_id}-{filename}"
             ve_tos = VeTOS()
-            tos_url = ve_tos.build_tos_url(object_key=object_key)
+            tos_url = ve_tos.build_tos_signed_url(object_key=object_key)
             await ve_tos.async_upload_bytes(
                 object_key=object_key,
                 data=part.inline_data.data,
