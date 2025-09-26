@@ -359,7 +359,7 @@ class VeTOS:
         bucket_name = self._check_bucket_name(bucket_name)
         if not object_key:
             object_key = self._build_object_key_for_bytes()
-        # Use common function to check lient and bucket
+        # Use common function to check client and bucket
         if not self._ensure_client_and_bucket(bucket_name):
             return
         try:
