@@ -62,6 +62,12 @@ def _get_backend_cls(backend: str) -> type[BaseLongTermMemoryBackend]:
             )
 
             return RedisLTMBackend
+        case "mem0":
+            from veadk.memory.long_term_memory_backends.mem0_backend import (
+                Mem0LTMBackend,
+            )
+
+            return Mem0LTMBackend
 
     raise ValueError(f"Unsupported long term memory backend: {backend}")
 
@@ -72,7 +78,7 @@ def build_long_term_memory_index(app_name: str, user_id: str):
 
 class LongTermMemory(BaseMemoryService, BaseModel):
     backend: Union[
-        Literal["local", "opensearch", "redis", "viking", "viking_mem"],
+        Literal["local", "opensearch", "redis", "viking", "viking_mem", "mem0"],
         BaseLongTermMemoryBackend,
     ] = "opensearch"
     """Long term memory backend type"""
@@ -153,12 +159,6 @@ class LongTermMemory(BaseMemoryService, BaseModel):
         app_name = session.app_name
         user_id = session.user_id
 
-        if self._index != build_long_term_memory_index(app_name, user_id):
-            logger.warning(
-                f"The `app_name` or `user_id` is different from the initialized one, skip add session to memory. Initialized index: {self._index}, current built index: {build_long_term_memory_index(app_name, user_id)}"
-            )
-            return
-
         if not self._backend and isinstance(self.backend, str):
             self._index = build_long_term_memory_index(app_name, user_id)
             self._backend = _get_backend_cls(self.backend)(
@@ -168,6 +168,13 @@ class LongTermMemory(BaseMemoryService, BaseModel):
                 f"Initialize long term memory backend now, index is {self._index}"
             )
 
+        if not self._index and self._index != build_long_term_memory_index(
+            app_name, user_id
+        ):
+            logger.warning(
+                f"The `app_name` or `user_id` is different from the initialized one, skip add session to memory. Initialized index: {self._index}, current built index: {build_long_term_memory_index(app_name, user_id)}"
+            )
+            return
         event_strings = self._filter_and_convert_events(session.events)
 
         logger.info(

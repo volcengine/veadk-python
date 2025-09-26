@@ -119,6 +119,10 @@ database:
     endpoint: tos-cn-beijing.volces.com # default Volcengine TOS endpoint
     region: cn-beijing                  # default Volcengine TOS region
     bucket:
+  mem0:
+    base_url:
+    api_key:
+    
 
 
 # [optional] for prompt optimization in cli/app
