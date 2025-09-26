@@ -406,7 +406,10 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         # Here, we set the metadata via the TOS object, ref: https://www.volcengine.com/docs/84313/1254624
         self._tos_client.bucket_name = tos_bucket_name
         coro = self._tos_client.upload(
-            object_key=object_key, data=content, metadata=metadata
+            object_key=object_key,
+            bucket_name=tos_bucket_name,
+            data=content,
+            metadata=metadata,
         )
         try:
             loop = asyncio.get_running_loop()
