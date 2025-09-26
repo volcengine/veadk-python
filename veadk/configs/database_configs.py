@@ -83,6 +83,15 @@ class RedisConfig(BaseSettings):
     """STS token for Redis auth, not supported yet."""
 
 
+class Mem0Config(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="DATABASE_MEM0_")
+
+    api_key: str = ""
+    """Mem0 API key"""
+
+    base_url: str = ""  # "https://api.mem0.ai/v1"
+
+
 class VikingKnowledgebaseConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="DATABASE_VIKING_")
 
