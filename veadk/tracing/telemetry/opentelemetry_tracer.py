@@ -21,7 +21,7 @@ from typing import Any
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import TracerProvider, SpanLimits
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing_extensions import override
@@ -79,7 +79,13 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
 
     def _init_global_tracer_provider(self) -> None:
         # set provider anyway, then get global provider
-        trace_api.set_tracer_provider(trace_sdk.TracerProvider())
+        trace_api.set_tracer_provider(
+            trace_sdk.TracerProvider(
+                span_limits=SpanLimits(
+                    max_attributes=4096,
+                )
+            )
+        )
         global_tracer_provider: TracerProvider = trace_api.get_tracer_provider()  # type: ignore
 
         span_processors = global_tracer_provider._active_span_processor._span_processors
