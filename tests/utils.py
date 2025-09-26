@@ -28,7 +28,7 @@ def generate_events(length: int) -> list[Event]:
         )
         event = Event(
             invocation_id=str(uuid.uuid4()),
-            author="test_agent",
+            author="user",
             content=types.Content(
                 parts=[types.Part(text=random_chinese)],
                 role=["user", "model"][i % 2],
