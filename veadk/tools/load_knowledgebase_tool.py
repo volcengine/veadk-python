@@ -24,16 +24,13 @@ from pydantic import BaseModel, Field
 from typing_extensions import override
 
 from veadk.knowledgebase import KnowledgeBase
+from veadk.knowledgebase.entry import KnowledgebaseEntry
 
 if TYPE_CHECKING:
     from google.adk.models.llm_request import LlmRequest
 
 
 knowledgebase: KnowledgeBase | None = None
-
-
-class KnowledgebaseEntry(BaseModel):
-    content: str
 
 
 class LoadKnowledgebaseResponse(BaseModel):
@@ -55,10 +52,7 @@ async def search_knowledgebase(
 ) -> SearchKnowledgebaseResponse:
     """Searches the knowledgebase of the current user."""
     if isinstance(knowledgebase, KnowledgeBase):
-        res = knowledgebase.search(query)
-        entry_list = []
-        for r in res:
-            entry_list.append(KnowledgebaseEntry(content=r))
+        entry_list = knowledgebase.search(query)
         return SearchKnowledgebaseResponse(knowledges=entry_list)
     else:
         return SearchKnowledgebaseResponse(knowledges=[])
