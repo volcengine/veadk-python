@@ -27,6 +27,7 @@ DEFAULT_MODEL_EXTRA_CONFIG = {
         "x-is-encrypted": getenv("MODEL_AGENT_ENCRYPTED", "true"),
         "veadk-source": "veadk",
         "veadk-version": VERSION,
+        "User-Agent": f"VeADK/{VERSION}",
     },
     "extra_body": {
         "caching": {
