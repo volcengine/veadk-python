@@ -51,6 +51,7 @@ class TLSExporter(BaseExporter):
             "x-tls-otel-ak": self.config.access_key,
             "x-tls-otel-sk": self.config.secret_key,
             "x-tls-otel-region": self.config.region,
+            "TraceTag": "veadk",
         }
         self.headers |= headers
 
