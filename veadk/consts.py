@@ -28,6 +28,7 @@ DEFAULT_MODEL_EXTRA_CONFIG = {
         "veadk-source": "veadk",
         "veadk-version": VERSION,
         "User-Agent": f"VeADK/{VERSION}",
+        "X-Client-Request-Id": f"veadk/{VERSION}",
     },
     "extra_body": {
         "caching": {

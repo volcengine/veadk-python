@@ -17,6 +17,7 @@ import json
 from typing import Any, Literal
 
 import httpx
+from veadk.utils.logger import get_logger
 from volcengine.ApiInfo import ApiInfo
 from volcengine.auth.SignerV4 import SignerV4
 from volcengine.tls.const import (
@@ -27,8 +28,6 @@ from volcengine.tls.const import (
     WEB_TRACKS,
 )
 from volcengine.tls.TLSService import TLSService
-
-from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
