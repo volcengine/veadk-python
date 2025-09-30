@@ -22,25 +22,19 @@ from typing import Any
 from pydantic import BaseModel
 
 from veadk.cloud.cloud_app import CloudApp
-from veadk.config import getenv
 from veadk.integrations.ve_faas.ve_faas import VeFaaS
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp
+from veadk.configs.deploy_config import VeDeployConfig
 
 logger = get_logger(__name__)
 
 
 class CloudAgentEngine(BaseModel):
-    volcengine_access_key: str = getenv("VOLCENGINE_ACCESS_KEY")
-    volcengine_secret_key: str = getenv("VOLCENGINE_SECRET_KEY")
-    region: str = "cn-beijing"
+    deploy_config: VeDeployConfig = VeDeployConfig()
 
     def model_post_init(self, context: Any, /) -> None:
-        self._vefaas_service = VeFaaS(
-            access_key=self.volcengine_access_key,
-            secret_key=self.volcengine_secret_key,
-            region=self.region,
-        )
+        self._vefaas_service = VeFaaS(deploy_config=self.deploy_config)
 
     def _prepare(self, path: str, name: str):
         # basic check

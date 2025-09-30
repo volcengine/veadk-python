@@ -20,6 +20,7 @@ from jinja2 import Template
 from yaml import safe_load
 
 import veadk.integrations.ve_faas as vefaas
+from veadk.integrations.ve_faas.ve_faas import VeFaaS
 from veadk.configs.deploy_config import VeDeployConfig
 from veadk.utils.logger import get_logger
 
@@ -84,9 +85,7 @@ def _get_user_configs() -> dict:
     help="Volcengine secret key",
 )
 @click.option("--project-path", default=".", help="Local project path")
-@click.option(
-    "--deploy-config-file", default="./deploy.yaml", help="Deploy config file path"
-)
+@click.option("--deploy-config-file", default=None, help="Deploy config file path")
 def deploy(
     volcengine_access_key: str,
     volcengine_secret_key: str,
@@ -98,6 +97,9 @@ def deploy(
     if not volcengine_access_key or not volcengine_secret_key:
         raise Exception("Volcengine access key and secret key must be set.")
 
+    deploy_config_file = (
+        deploy_config_file if deploy_config_file else Path(project_path) / "deploy.yaml"
+    )
     if not Path(deploy_config_file).exists():
         click.echo(f"Deployment configuration file not found in {deploy_config_file}.")
 
@@ -124,23 +126,16 @@ def deploy(
         click.echo("Deployment configuration file generated.")
 
     # read deploy.yaml
-    with open(output_path, "r", encoding="utf-8") as yaml_file:
+    # with open(output_path, "r", encoding="utf-8") as yaml_file:
+    #     deploy_config_dict = safe_load(yaml_file)
+    with open(deploy_config_file, "r", encoding="utf-8") as yaml_file:
         deploy_config_dict = safe_load(yaml_file)
 
     deploy_config = VeDeployConfig(**deploy_config_dict)
+    import veadk.config
 
-    # vefaas_client = VeFaaS(
-    #     access_key=volcengine_access_key,
-    #     secret_key=volcengine_secret_key,
-    #     region="cn-beijing",
-    # )
+    deploy_config.vefaas.function_envs.update(veadk.config.veadk_environments)
 
-    print(deploy_config)
+    vefaas_client = VeFaaS(deploy_config=deploy_config)
 
-    # vefaas_client.deploy(
-    #     name=deploy_config.vefaas.application_name,
-    #     path=project_path,
-    #     gateway_name=deploy_config.veapig.gateway_name,
-    #     gateway_service_name=deploy_config.veapig.gateway_service_name,
-    #     gateway_upstream_name=deploy_config.veapig.gateway_upstream_name,
-    # )
+    vefaas_client.deploy()

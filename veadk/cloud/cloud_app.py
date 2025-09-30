@@ -14,7 +14,7 @@
 
 import json
 import time
-from typing import Any
+from typing import Any, Optional
 from uuid import uuid4
 
 import httpx
@@ -48,6 +48,12 @@ class CloudApp:
         self.vefaas_application_name = vefaas_application_name
         self.use_agent_card = use_agent_card
 
+        from veadk.configs.deploy_config import VeDeployConfig
+        import veadk.config
+
+        self.deploy_config = VeDeployConfig()
+        self.deploy_config.vefaas.function_envs.update(veadk.config.veadk_environments)
+
         # vefaas must be set one of three
         if (
             not vefaas_endpoint
@@ -79,12 +85,12 @@ class CloudApp:
 
     def _get_vefaas_endpoint(
         self,
-        volcengine_ak: str = getenv("VOLCENGINE_ACCESS_KEY"),
-        volcengine_sk: str = getenv("VOLCENGINE_SECRET_KEY"),
+        volcengine_ak: Optional[str] = getenv("VOLCENGINE_ACCESS_KEY"),
+        volcengine_sk: Optional[str] = getenv("VOLCENGINE_SECRET_KEY"),
     ) -> str:
         from veadk.integrations.ve_faas.ve_faas import VeFaaS
 
-        vefaas_client = VeFaaS(access_key=volcengine_ak, secret_key=volcengine_sk)
+        vefaas_client = VeFaaS(self.deploy_config)
 
         app = vefaas_client.get_application_details(
             app_id=self.vefaas_application_id,
@@ -111,10 +117,7 @@ class CloudApp:
             )
         from veadk.integrations.ve_faas.ve_faas import VeFaaS
 
-        vefaas_client = VeFaaS(
-            access_key=getenv("VOLCENGINE_ACCESS_KEY"),
-            secret_key=getenv("VOLCENGINE_SECRET_KEY"),
-        )
+        vefaas_client = VeFaaS(self.deploy_config)
         vefaas_application_id = vefaas_client.find_app_id_by_name(
             self.vefaas_application_name
         )
@@ -151,8 +154,8 @@ class CloudApp:
 
     def delete_self(
         self,
-        volcengine_ak: str = getenv("VOLCENGINE_ACCESS_KEY"),
-        volcengine_sk: str = getenv("VOLCENGINE_SECRET_KEY"),
+        volcengine_ak: Optional[str] = getenv("VOLCENGINE_ACCESS_KEY"),
+        volcengine_sk: Optional[str] = getenv("VOLCENGINE_SECRET_KEY"),
     ):
         if not volcengine_ak or not volcengine_sk:
             raise ValueError("Volcengine access key and secret key must be set.")
@@ -169,7 +172,7 @@ class CloudApp:
         else:
             from veadk.integrations.ve_faas.ve_faas import VeFaaS
 
-            vefaas_client = VeFaaS(access_key=volcengine_ak, secret_key=volcengine_sk)
+            vefaas_client = VeFaaS(self.deploy_config)
             vefaas_client.delete(self.vefaas_application_id)
             print(
                 f"Cloud app {self.vefaas_application_id} delete request has been sent to VeFaaS"

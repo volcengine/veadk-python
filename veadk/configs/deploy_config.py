@@ -5,7 +5,7 @@ from typing_extensions import Literal
 
 
 class CreateVeFaaSConfig(BaseModel):
-    region: Optional[str] = ""
+    region: Optional[str] = "cn-beijing"
 
     application_name: Optional[str] = ""
 
@@ -15,14 +15,9 @@ class CreateVeFaaSConfig(BaseModel):
         "Created by Volcengine Agent Development Kit (VeADK)"
     )
 
-    function_startup_command: str = "bash ./run.sh"
+    function_startup_command: str = "bash run.sh"
 
-    function_envs: list[dict[str, Any]] = Field(
-        default_factory=lambda: [
-            {"VOLCENGINE_ACCESS_KEY": None},
-            {"VOLCENGINE_SECRET_KEY": None},
-        ]
-    )
+    function_envs: dict[str, Any] = Field(default_factory=dict)
     """Environment variables for the function instance."""
 
     function_tags: dict[str, str] = {"provider": "veadk"}
@@ -55,7 +50,7 @@ class VeDeployConfig(BaseModel):
 
     entrypoint_agent: Optional[str] = ""
 
-    ignore_files: list[str] = Field(default_factory=lambda: ["*.pyc", "__pycache__"])
+    ignore_files: list[str] = Field(default_factory=list)
 
     deploy_mode: Union[Literal["A2A/MCP", "WEB"], int] = "A2A/MCP"
     """0 for `A2A/MCP` mode, 1 for `WEB` mode. Or, use literal to define this attribute."""

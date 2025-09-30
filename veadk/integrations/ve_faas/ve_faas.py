@@ -13,9 +13,8 @@
 # limitations under the License.
 
 import json
-import os
 import time
-
+from typing import Optional
 import requests
 import volcenginesdkcore
 import volcenginesdkvefaas
@@ -35,20 +34,30 @@ from veadk.integrations.ve_faas.ve_faas_utils import (
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp
 from veadk.utils.volcengine_sign import ve_request
+from veadk.configs.deploy_config import VeDeployConfig
 
 logger = get_logger(__name__)
 
 
 class VeFaaS:
-    def __init__(self, access_key: str, secret_key: str, region: str = "cn-beijing"):
-        self.ak = access_key
-        self.sk = secret_key
-        self.region = region
-
+    def __init__(self, deploy_config: VeDeployConfig):
+        self.deploy_config = deploy_config
+        self.ak = (
+            veadk.config.getenv("VOLCENGINE_ACCESS_KEY", "", True)
+            or deploy_config.vefaas.function_envs["VOLCENGINE_ACCESS_KEY"]
+        )
+        self.sk = (
+            veadk.config.getenv("VOLCENGINE_SECRET_KEY", "", True)
+            or deploy_config.vefaas.function_envs["VOLCENGINE_SECRET_KEY"]
+        )
+        self.region = (
+            veadk.config.getenv("VOLCENGINE_REGION", "", True)
+            or deploy_config.vefaas.region
+        )
         configuration = volcenginesdkcore.Configuration()
         configuration.ak = self.ak
         configuration.sk = self.sk
-        configuration.region = region
+        configuration.region = self.region
 
         configuration.client_side_validation = True
         volcenginesdkcore.Configuration.set_default(configuration)
@@ -61,15 +70,18 @@ class VeFaaS:
 
         self.template_id = "6874f3360bdbc40008ecf8c7"
 
-    def _upload_and_mount_code(self, function_id: str, path: str):
+    def _upload_and_mount_code(self, function_id: str, path: Optional[str] = None):
         """Upload code to VeFaaS temp bucket and mount to function instance.
 
         Args:
             function_id (str): Target function ID.
             path (str): Local project path.
         """
+        path = path or self.deploy_config.user_project_path
         # Get zipped code data
-        code_zip_data, code_zip_size, error = zip_and_encode_folder(path)
+        code_zip_data, code_zip_size, error = zip_and_encode_folder(
+            path, self.deploy_config.ignore_files
+        )
         logger.info(
             f"Zipped project size: {code_zip_size / 1024 / 1024:.2f} MB",
         )
@@ -99,11 +111,29 @@ class VeFaaS:
 
         return res
 
-    def _create_function(self, function_name: str, path: str):
+    def _create_function(
+        self, function_name: Optional[str] = None, path: Optional[str] = None
+    ):
+        function_name = function_name or self.deploy_config.vefaas.function_name
+        path = path or self.deploy_config.user_project_path
         # Read envs
-        envs = []
-        for key, value in veadk.config.veadk_environments.items():
-            envs.append(EnvForCreateFunctionInput(key=key, value=value))
+        # first veadk.config.yaml, then deploy.yaml update
+        envs = [
+            EnvForCreateFunctionInput(key=k, value=v)
+            for k, v in {
+                **veadk.config.veadk_environments,
+                **self.deploy_config.vefaas.function_envs,
+                "VEADK_ENTRYPOINT_AGENT": self.deploy_config.entrypoint_agent or "",
+            }.items()
+        ]
+        # first default, then deploy.yaml update
+        tags = [
+            TagForCreateFunctionInput(key=k, value=v)
+            for k, v in {
+                "provider": "veadk",
+                **self.deploy_config.vefaas.function_tags,
+            }.items()
+        ]
         logger.info(
             f"Fetch {len(envs)} environment variables.",
         )
@@ -111,14 +141,14 @@ class VeFaaS:
         # Create function
         res = self.client.create_function(
             volcenginesdkvefaas.CreateFunctionRequest(
-                command="./run.sh",
+                command=self.deploy_config.vefaas.function_startup_command,
                 name=function_name,
-                description="Created by VeADK (Volcengine Agent Development Kit)",
-                tags=[TagForCreateFunctionInput(key="provider", value="veadk")],
-                runtime="native-python3.10/v1",
+                description=self.deploy_config.vefaas.function_description,
+                tags=tags,
+                runtime=self.deploy_config.vefaas.function_runtime,
                 request_timeout=1800,
                 envs=envs,
-                memory_mb=2048,
+                memory_mb=self.deploy_config.vefaas.function_memory_in_mb,
             )
         )
 
@@ -136,13 +166,19 @@ class VeFaaS:
 
     def _create_application(
         self,
-        application_name: str,
-        function_name: str,
-        gateway_name: str,
-        upstream_name: str,
-        service_name: str,
+        application_name: Optional[str] = None,
+        function_name: Optional[str] = None,
+        gateway_name: Optional[str] = None,
+        upstream_name: Optional[str] = None,
+        service_name: Optional[str] = None,
     ):
-        enable_key_auth = os.getenv("VEFAAS_ENABLE_KEY_AUTH", "true").lower() == "true"
+        application_name = (
+            application_name or self.deploy_config.vefaas.application_name
+        )
+        function_name = function_name or self.deploy_config.vefaas.function_name
+        gateway_name = gateway_name or self.deploy_config.veapig.instance_name
+        upstream_name = upstream_name or self.deploy_config.veapig.upstream_name
+        service_name = service_name or self.deploy_config.veapig.service_name
 
         response = ve_request(
             request_body={
@@ -155,8 +191,8 @@ class VeFaaS:
                     "GatewayName": gateway_name,
                     "ServiceName": service_name,
                     "UpstreamName": upstream_name,
-                    "EnableKeyAuth": enable_key_auth,
-                    "EnableMcpSession": True,
+                    "EnableKeyAuth": self.deploy_config.veapig.enable_key_auth,
+                    "EnableMcpSession": self.deploy_config.veapig.enable_mcp_session_keepalive,
                 },
                 "TemplateId": self.template_id,
             },
@@ -165,7 +201,7 @@ class VeFaaS:
             sk=self.sk,
             service="vefaas",
             version="2021-03-03",
-            region="cn-beijing",
+            region=self.deploy_config.vefaas.region,
             host="open.volcengineapi.com",
         )
 
@@ -185,7 +221,7 @@ class VeFaaS:
             sk=self.sk,
             service="vefaas",
             version="2021-03-03",
-            region="cn-beijing",
+            region=self.deploy_config.vefaas.region,
             host="open.volcengineapi.com",
         )
 
@@ -224,7 +260,7 @@ class VeFaaS:
             sk=self.sk,
             service="vefaas",
             version="2021-03-03",
-            region="cn-beijing",
+            region=self.deploy_config.vefaas.region,
             host="open.volcengineapi.com",
         )
         return response["Result"]["Status"], response
@@ -255,7 +291,7 @@ class VeFaaS:
                     sk=self.sk,
                     service="vefaas",
                     version="2021-03-03",
-                    region="cn-beijing",
+                    region=self.deploy_config.vefaas.region,
                     host="open.volcengineapi.com",
                 )
                 result = response.get("Result", {})
@@ -277,8 +313,8 @@ class VeFaaS:
 
     def _update_function_code(
         self,
-        application_name: str,  # application name
-        path: str,
+        application_name: Optional[str] = None,
+        path: Optional[str] = None,
     ) -> tuple[str, str, str]:
         """Update existing application function code while preserving URL.
 
@@ -289,6 +325,10 @@ class VeFaaS:
         Returns:
             tuple[str, str, str]: URL, app_id, function_id
         """
+        application_name = (
+            application_name or self.deploy_config.vefaas.application_name
+        )
+        path = path or self.deploy_config.user_project_path
         # Naming check
         if "_" in application_name:
             raise ValueError("Function or Application name cannot contain '_'.")
@@ -356,7 +396,8 @@ class VeFaaS:
                 if app["Name"] == app_name:
                     return app
 
-    def find_app_id_by_name(self, name: str):
+    def find_app_id_by_name(self, name: Optional[str] = None):
+        name = name or self.deploy_config.vefaas.application_name
         apps = self._list_application(app_name=name)
         for app in apps:
             if app["Name"] == name:
@@ -381,11 +422,11 @@ class VeFaaS:
 
     def deploy(
         self,
-        name: str,
-        path: str,
-        gateway_name: str = "",
-        gateway_service_name: str = "",
-        gateway_upstream_name: str = "",
+        name: Optional[str] = None,
+        path: Optional[str] = None,
+        gateway_name: Optional[str] = None,
+        gateway_service_name: Optional[str] = None,
+        gateway_upstream_name: Optional[str] = None,
     ) -> tuple[str, str, str]:
         """Deploy an agent project to VeFaaS service.
 
@@ -399,6 +440,16 @@ class VeFaaS:
         Returns:
             tuple[str, str, str]: (url, app_id, function_id)
         """
+        name = name or self.deploy_config.vefaas.application_name
+        path = path or self.deploy_config.user_project_path
+        gateway_name = gateway_name or self.deploy_config.veapig.instance_name
+        gateway_service_name = (
+            gateway_service_name or self.deploy_config.veapig.service_name
+        )
+        gateway_upstream_name = (
+            gateway_upstream_name or self.deploy_config.veapig.upstream_name
+        )
+
         # Naming check
         if "_" in name:
             raise ValueError("Function or Application name cannot contain '_'.")
@@ -453,9 +504,21 @@ class VeFaaS:
     def _create_image_function(self, function_name: str, image: str):
         """Create function using container image instead of code upload."""
         # Read environment variables from veadk configuration
-        envs = []
-        for key, value in veadk.config.veadk_environments.items():
-            envs.append(EnvForCreateFunctionInput(key=key, value=value))
+        envs = [
+            EnvForCreateFunctionInput(key=k, value=v)
+            for k, v in {
+                **veadk.config.veadk_environments,
+                **self.deploy_config.vefaas.function_envs,
+                "VEADK_ENTRYPOINT_AGENT": self.deploy_config.entrypoint_agent or "",
+            }.items()
+        ]
+        tags = [
+            TagForCreateFunctionInput(key=k, value=v)
+            for k, v in {
+                "provider": "veadk",
+                **self.deploy_config.vefaas.function_tags,
+            }.items()
+        ]
         logger.info(
             f"Fetch {len(envs)} environment variables for image function.",
         )
@@ -463,10 +526,10 @@ class VeFaaS:
         # Create function with container image source configuration
         res = self.client.create_function(
             volcenginesdkvefaas.CreateFunctionRequest(
-                command="bash ./run.sh",  # Custom startup command
+                command=self.deploy_config.vefaas.function_startup_command,  # Custom startup command
                 name=function_name,
                 description="Created by VeADK (Volcengine Agent Development Kit)",
-                tags=[TagForCreateFunctionInput(key="provider", value="veadk")],
+                tags=tags,
                 runtime="native/v1",  # Native runtime required for container images
                 source_type="image",  # Set source type to container image
                 source=image,  # Container image URL
@@ -573,51 +636,14 @@ class VeFaaS:
 
         return False
 
-    def _create_image_function(self, function_name: str, image: str):
-        """Create function using container image instead of code upload."""
-        # Read environment variables from veadk configuration
-        envs = []
-        for key, value in veadk.config.veadk_environments.items():
-            envs.append(EnvForCreateFunctionInput(key=key, value=value))
-        logger.info(
-            f"Fetch {len(envs)} environment variables for image function.",
-        )
-
-        # Create function with container image source configuration
-        res = self.client.create_function(
-            volcenginesdkvefaas.CreateFunctionRequest(
-                command="bash ./run.sh",  # Custom startup command
-                name=function_name,
-                description="Created by VeADK (Volcengine Agent Development Kit)",
-                tags=[TagForCreateFunctionInput(key="provider", value="veadk")],
-                runtime="native/v1",  # Native runtime required for container images
-                source_type="image",  # Set source type to container image
-                source=image,  # Container image URL
-                request_timeout=1800,  # Request timeout in seconds
-                envs=envs,  # Environment variables from configuration
-            )
-        )
-
-        # Log function creation success without exposing sensitive information
-        logger.debug(
-            f"Function creation in {res.project_name} project with ID {res.id}"
-        )
-
-        function_id = res.id
-        logger.info(
-            f"Function {function_name} created with image {image} and ID {function_id}"
-        )
-
-        return function_name, function_id
-
     def deploy_image(
         self,
-        name: str,
-        image: str,
-        registry_name: str,
-        gateway_name: str = "",
-        gateway_service_name: str = "",
-        gateway_upstream_name: str = "",
+        name: Optional[str] = None,
+        image: str = None,
+        registry_name: str = None,
+        gateway_name: Optional[str] = None,
+        gateway_service_name: Optional[str] = None,
+        gateway_upstream_name: Optional[str] = None,
     ) -> tuple[str, str, str]:
         """Deploy application using container image.
 
@@ -631,6 +657,14 @@ class VeFaaS:
         Returns:
             tuple[str, str, str]: (url, app_id, function_id)
         """
+        name = name or self.deploy_config.vefaas.application_name
+        gateway_name = gateway_name or self.deploy_config.veapig.instance_name
+        gateway_service_name = (
+            gateway_service_name or self.deploy_config.veapig.service_name
+        )
+        gateway_upstream_name = (
+            gateway_upstream_name or self.deploy_config.veapig.upstream_name
+        )
         # Validate application name format
         is_ready = self.query_user_cr_vpc_tunnel(registry_name)
         if not is_ready:

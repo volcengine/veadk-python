@@ -46,10 +46,14 @@ def ensure_executable_permissions(folder_path: str):
                 os.chmod(full_path, 0o755)
 
 
-def python_zip_implementation(folder_path: str) -> bytes:
+def python_zip_implementation(
+    folder_path: str, ignore_files: list[str] = None
+) -> bytes:
     """Pure Python zip implementation with permissions support"""
+    if ignore_files is None:
+        ignore_files = []
     buffer = BytesIO()
-
+    all_ignore_files = [".git", ".venv", "__pycache__", ".pyc"] + ignore_files
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zipf:
         for root, dirs, files in os.walk(folder_path):
             for file in files:
@@ -57,9 +61,7 @@ def python_zip_implementation(folder_path: str) -> bytes:
                 arcname = os.path.relpath(file_path, folder_path)
 
                 # Skip excluded paths and binary/cache files
-                if any(
-                    excl in arcname for excl in [".git", ".venv", "__pycache__", ".pyc"]
-                ):
+                if any(excl in arcname for excl in all_ignore_files):
                     continue
 
                 try:
@@ -87,16 +89,20 @@ def python_zip_implementation(folder_path: str) -> bytes:
     return buffer.getvalue()
 
 
-def zip_and_encode_folder(folder_path: str) -> Tuple[bytes, int, Exception]:
+def zip_and_encode_folder(
+    folder_path: str, ignore_files: list[str] = None
+) -> Tuple[bytes, int, Exception]:
     """
     Zips a folder with system zip command (if available) or falls back to Python implementation.
     Returns (zip_data, size_in_bytes, error) tuple.
     """
+    if ignore_files is None:
+        ignore_files = []
     # Check for system zip first
     if not shutil.which("zip"):
         print("System zip command not found, using Python implementation")
         try:
-            data = python_zip_implementation(folder_path)
+            data = python_zip_implementation(folder_path, ignore_files)
             return data, len(data), None
         except Exception as e:
             return None, 0, e
@@ -104,6 +110,12 @@ def zip_and_encode_folder(folder_path: str) -> Tuple[bytes, int, Exception]:
     # print(f"Zipping folder: {folder_path}")
     try:
         ensure_executable_permissions(folder_path)
+        all_ignore_files = [".git", ".venv", "__pycache__", ".pyc"] + [
+            f"*{pattern}*" for pattern in ignore_files
+        ]
+        exclude_args = []
+        for pattern in all_ignore_files:
+            exclude_args.extend(["-x", pattern])
         # Create zip process with explicit arguments
         proc = subprocess.Popen(
             [
@@ -112,15 +124,8 @@ def zip_and_encode_folder(folder_path: str) -> Tuple[bytes, int, Exception]:
                 "-q",
                 "-",
                 ".",
-                "-x",
-                "*.git*",
-                "-x",
-                "*.venv*",
-                "-x",
-                "*__pycache__*",
-                "-x",
-                "*.pyc",
-            ],
+            ]
+            + exclude_args,
             cwd=folder_path,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
