@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import agent_pilot as ap
 from agent_pilot.models import TaskType
-
 from veadk import Agent
 from veadk.prompts import prompt_optimization
 from veadk.utils.logger import get_logger
@@ -26,9 +25,15 @@ logger = get_logger(__name__)
 
 class VePromptPilot:
     def __init__(
-        self, api_key: str, path: str = "", task_id: str | None = None
+        self,
+        api_key: str,
+        workspace_id: str,
+        path: str = "",
+        task_id: str | None = None,
     ) -> None:
         self.api_key = api_key
+        self.workspace_id = workspace_id
+
         self.path = path
 
     def optimize(
@@ -57,12 +62,13 @@ class VePromptPilot:
             usage = None
             for chunk in ap.generate_prompt_stream(
                 task_description=task_description,
-                current_prompt=agent.instruction,
+                current_prompt=str(agent.instruction),
                 model_name=model_name,
                 task_type=TaskType.DIALOG,
                 temperature=1.0,
                 top_p=0.7,
                 api_key=self.api_key,
+                workspace_id=self.workspace_id,
             ):  # stream chunks of optimized prompt
                 # Process each chunk as it arrives
                 optimized_prompt += chunk.data.content if chunk.data else ""

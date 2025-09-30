@@ -28,9 +28,8 @@ class VeTLS:
         region: str = "cn-beijing",
     ):
         try:
-            from volcengine.tls.TLSService import TLSService
-
             from veadk.integrations.ve_tls.utils import ve_tls_request
+            from volcengine.tls.TLSService import TLSService
         except ImportError:
             raise ImportError(
                 "Please install volcengine SDK before init VeTLS: pip install volcengine"
@@ -162,11 +161,12 @@ class VeTLS:
                 client=self._client,
                 api="CreateTraceInstance",
                 body=request_body,
+                request_headers={"TraceTag": "veadk"},
             )
 
-            if res["ErrorCode"] == "TopicAlreadyExist":
+            if "ErrorCode" in res and res["ErrorCode"] == "TopicAlreadyExist":
                 logger.debug(
-                    f"Log project '{trace_instance_name}' already exists. Check its ID."
+                    f"Tracing instance '{trace_instance_name}' already exists. Check its ID."
                 )
                 return self.get_trace_instance_by_name(
                     log_project_id, trace_instance_name
@@ -176,8 +176,12 @@ class VeTLS:
             res = self._ve_tls_request(
                 client=self._client,
                 api="DescribeTraceInstance",
-                body={"TraceInstanceID": res["TraceInstanceID"]},
+                params={"TraceInstanceId": res["TraceInstanceId"]},
                 method="GET",
+            )
+
+            logger.info(
+                f"Create tracing instance finished, tracing instance ID: {res['TraceInstanceId']}"
             )
 
             return res
