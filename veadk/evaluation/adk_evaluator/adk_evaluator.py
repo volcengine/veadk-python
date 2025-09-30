@@ -24,6 +24,8 @@ from google.adk.evaluation.agent_evaluator import (
 )
 from google.adk.evaluation.eval_case import IntermediateData, Invocation
 from google.adk.evaluation.evaluator import EvalStatus
+from google.adk.evaluation.eval_set import EvalSet
+from typing import Optional
 from typing_extensions import override
 from veadk.evaluation.base_evaluator import BaseEvaluator
 from types import SimpleNamespace
@@ -52,7 +54,8 @@ class ADKEvaluator(BaseEvaluator):
     @override
     async def evaluate(
         self,
-        eval_set_file_path: str,
+        eval_set: Optional[EvalSet] = None,
+        eval_set_file_path: Optional[str] = None,
         eval_id: str = f"test_{formatted_timestamp()}",
         tool_score_threshold: float = 1.0,
         response_match_score_threshold: float = 0.8,
@@ -104,7 +107,7 @@ class ADKEvaluator(BaseEvaluator):
         # Iterate each test file and evaluate per-case, per-metric
         for test_file in test_files:
             # Build in-memory evaluation cases via BaseEvaluator from the provided file
-            self.build_eval_set(test_file)
+            self.build_eval_set(eval_set, test_file)
 
             evaluation_result_list = []
 

@@ -17,7 +17,7 @@ import json
 import time
 import uuid
 from abc import abstractmethod
-from typing import Any
+from typing import Any, Optional
 
 from google.adk import Runner
 from google.adk.evaluation.eval_set import EvalSet
@@ -210,33 +210,43 @@ class BaseEvaluator:
 
         return evalset
 
-    def build_eval_set(self, file_path: str):
+    def build_eval_set(
+        self, eval_set: Optional[EvalSet] = None, file_path: Optional[str] = None
+    ):
         """Generate evaluation data from a given file and assign it to the class attribute `invocation_list`."""
-        eval_case_data_list: list[EvalTestCase] = []
 
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                file_content = json.load(f)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON format in file {file_path}: {e}")
-        except Exception as e:
-            raise ValueError(f"Error reading file {file_path}: {e}")
-
-        if isinstance(file_content, dict) and "eval_cases" in file_content:
-            eval_cases = self._build_eval_set_from_eval_json(file_path).eval_cases
-        elif (
-            isinstance(file_content, list)
-            and len(file_content) > 0
-            and all(
-                isinstance(span, dict) and "trace_id" in span for span in file_content
-            )
-        ):
-            eval_cases = self._build_eval_set_from_tracing_json(file_path).eval_cases
+        if eval_set is None and file_path is None:
+            raise ValueError("eval_set or file_path is required")
+        if eval_set:
+            eval_cases = eval_set.eval_cases
         else:
-            raise ValueError(
-                f"Unsupported file format in {file_path}. Please provide a valid file."
-            )
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    file_content = json.load(f)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid JSON format in file {file_path}: {e}")
+            except Exception as e:
+                raise ValueError(f"Error reading file {file_path}: {e}")
 
+            if isinstance(file_content, dict) and "eval_cases" in file_content:
+                eval_cases = self._build_eval_set_from_eval_json(file_path).eval_cases
+            elif (
+                isinstance(file_content, list)
+                and len(file_content) > 0
+                and all(
+                    isinstance(span, dict) and "trace_id" in span
+                    for span in file_content
+                )
+            ):
+                eval_cases = self._build_eval_set_from_tracing_json(
+                    file_path
+                ).eval_cases
+            else:
+                raise ValueError(
+                    f"Unsupported file format in {file_path}. Please provide a valid file."
+                )
+
+        eval_case_data_list: list[EvalTestCase] = []
         for eval_case in eval_cases:
             eval_case_data = EvalTestCase(invocations=[])
             if eval_case.session_input:
@@ -384,8 +394,9 @@ class BaseEvaluator:
     @abstractmethod
     async def evaluate(
         self,
-        eval_set_file_path: str,
         metrics: list[Any],
+        eval_set: Optional[EvalSet],
+        eval_set_file_path: Optional[str],
         eval_id: str,
     ):
         """An abstract method for evaluation based on metrics。"""
