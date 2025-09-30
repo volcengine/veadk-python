@@ -28,9 +28,8 @@ class VeTLS:
         region: str = "cn-beijing",
     ):
         try:
-            from volcengine.tls.TLSService import TLSService
-
             from veadk.integrations.ve_tls.utils import ve_tls_request
+            from volcengine.tls.TLSService import TLSService
         except ImportError:
             raise ImportError(
                 "Please install volcengine SDK before init VeTLS: pip install volcengine"
@@ -177,8 +176,12 @@ class VeTLS:
             res = self._ve_tls_request(
                 client=self._client,
                 api="DescribeTraceInstance",
-                body={"TraceInstanceID": res["TraceInstanceID"]},
+                body={"TraceInstanceId": res["TraceInstanceId"]},
                 method="GET",
+            )
+
+            logger.info(
+                f"Create tracing instance finished, tracing instance ID: {res['TraceInstanceId']}"
             )
 
             return res
