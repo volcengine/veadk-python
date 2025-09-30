@@ -21,12 +21,15 @@ import click
 )
 @click.option("--feedback", default="", help="Suggestions for prompt optimization")
 @click.option("--api-key", default="", help="API Key of PromptPilot")
+@click.option("--workspace-id", default="", help="Workspace ID of PromptPilot")
 @click.option(
     "--model-name",
     default="doubao-1.5-pro-32k-250115",
     help="Model name for prompt optimization",
 )
-def prompt(path: str, feedback: str, api_key: str, model_name: str) -> None:
+def prompt(
+    path: str, feedback: str, api_key: str, workspace_id: str, model_name: str
+) -> None:
     """Optimize agent system prompt from a local file."""
     from pathlib import Path
 
@@ -56,7 +59,11 @@ def prompt(path: str, feedback: str, api_key: str, model_name: str) -> None:
 
         if not api_key:
             api_key = settings.prompt_pilot.api_key
-        ve_prompt_pilot = VePromptPilot(api_key)
+
+        if not workspace_id:
+            raise ValueError("Please provide workspace_id for PromptPilot service.")
+
+        ve_prompt_pilot = VePromptPilot(api_key=api_key, workspace_id=workspace_id)
         ve_prompt_pilot.optimize(
             agents=agents, feedback=feedback, model_name=model_name
         )
