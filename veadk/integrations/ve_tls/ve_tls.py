@@ -176,7 +176,7 @@ class VeTLS:
             res = self._ve_tls_request(
                 client=self._client,
                 api="DescribeTraceInstance",
-                body={"TraceInstanceId": res["TraceInstanceId"]},
+                params={"TraceInstanceId": res["TraceInstanceId"]},
                 method="GET",
             )
 
