@@ -197,6 +197,21 @@ class MeterUploader:
             explicit_bucket_boundaries_advisory=_GEN_AI_SERVER_TIME_PER_OUTPUT_TOKEN_BUCKETS,
         )
 
+        # apmplus metrics for veadk dashboard
+        self.apmplus_span_latency = self.meter.create_histogram(
+            name=Meters.APMPLUS_SPAN_LATENCY,
+            description="Latency of span",
+            unit="s",
+            explicit_bucket_boundaries_advisory=_GEN_AI_CLIENT_OPERATION_DURATION_BUCKETS,
+        )
+        self.apmplus_tool_token_usage = self.meter.create_histogram(
+            name=Meters.APMPLUS_TOOL_TOKEN_USAGE,
+            description="Token consumption of APMPlus tool token",
+            unit="count",
+            explicit_bucket_boundaries_advisory=_GEN_AI_CLIENT_TOKEN_USAGE_BUCKETS,
+        )
+
+
     def record_call_llm(
         self,
         invocation_context: InvocationContext,
@@ -269,6 +284,33 @@ class MeterUploader:
             #         time_per_output_token, attributes=attributes
             #     )
 
+            # add span name attribute
+
+            span = trace.get_current_span()
+            if not span:
+                return
+            span_name = "excuteTool memory"
+            # span_name_attributes = {**attributes, "name": span.name}
+            span_name_attributes = {**attributes,
+                                   # "name": span.name,
+                                    "gen_ai_kind":"tool",
+                                    "operation":"load_knowledgebase"}
+            if hasattr(span, "start_time") and self.apmplus_span_latency:
+                # span 耗时
+                duration = (time.time_ns() - span.start_time)/1e9  # type: ignore
+                self.apmplus_span_latency.record(
+                    duration, attributes=span_name_attributes
+                )
+            if self.apmplus_tool_token_usage:
+                tool_token_usage = 122 # tool token 数量，使用文本长度/4
+                # TODO: 设置 token_type: input, output
+                tool_token_attributes = {**span_name_attributes, "token_type": "input"}
+
+                self.apmplus_tool_token_usage.record(
+                    tool_token_usage, attributes=tool_token_attributes
+                )
+
+
     def record_tool_call(
         self,
         tool: BaseTool,
@@ -276,7 +318,6 @@ class MeterUploader:
         function_response_event: Event,
     ):
         logger.debug(f"Record tool call work in progress. Tool: {tool.name}")
-
 
 class APMPlusExporterConfig(BaseModel):
     endpoint: str = Field(
