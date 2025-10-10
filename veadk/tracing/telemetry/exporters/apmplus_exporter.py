@@ -14,6 +14,7 @@
 
 import time
 from dataclasses import dataclass
+import random
 from typing import Any
 
 from google.adk.agents.invocation_context import InvocationContext
@@ -285,30 +286,80 @@ class MeterUploader:
             #     )
 
             # add span name attribute
-
             span = trace.get_current_span()
             if not span:
                 return
-            span_name = "excuteTool memory"
-            # span_name_attributes = {**attributes, "name": span.name}
-            span_name_attributes = {**attributes,
-                                   # "name": span.name,
-                                    "gen_ai_kind":"tool",
-                                    "operation":"load_knowledgebase"}
+            # operation = "tool"
+            # operation_type = "load_knowledgebase"
+            # # 能否获取到 backend 信息？
+            # operation_backend = "knowledgebase"
+            # if random.randint(0, 1) == 0:
+            #     operation_type = "load_memory"
+            #     operation_backend = "mem0"
+            # span_name_attributes = {**attributes,
+            # #                        "name": span_name,
+            #                         "gen_ai_kind": "tool",
+            #                         "gen_ai_operation_name": operation,
+            #                         "gen_ai_operation_type": operation_type,
+            #                         "gen_ai_operation_backend": operation_backend,
+
+            #                        }
+
+            # record span latency
             if hasattr(span, "start_time") and self.apmplus_span_latency:
                 # span 耗时
                 duration = (time.time_ns() - span.start_time)/1e9  # type: ignore
                 self.apmplus_span_latency.record(
-                    duration, attributes=span_name_attributes
+                    duration, attributes=attributes
                 )
-            if self.apmplus_tool_token_usage:
-                tool_token_usage = 122 # tool token 数量，使用文本长度/4
-                # TODO: 设置 token_type: input, output
-                tool_token_attributes = {**span_name_attributes, "token_type": "input"}
 
-                self.apmplus_tool_token_usage.record(
-                    tool_token_usage, attributes=tool_token_attributes
-                )
+            # # TODO: trigger with tool record
+            # if self.apmplus_tool_token_usage:
+            #     tool_token_usage = 122 # tool token 数量，使用文本长度/4
+            #     # TODO: 设置 token_type: input, output
+            #     tool_token_attributes = {**span_name_attributes, "token_type": "input"}
+            #
+            #     self.apmplus_tool_token_usage.record(
+            #         tool_token_usage, attributes=tool_token_attributes
+            #     )
+    def record_tool(self):
+        # TODO: trigger with tool record
+        attributes = {
+            "gen_ai_system": "volcengine",
+        }  # required by Volcengine APMPlus
+        # add span name attribute
+        span = trace.get_current_span()
+        if not span:
+            return
+        operation = "tool"
+        operation_type = "load_knowledgebase"
+        # 能否获取到 backend 信息？
+        operation_backend = "knowledgebase"
+        if random.randint(0, 1) == 0:
+            operation_type = "load_memory"
+            operation_backend = "mem0"
+        span_name_attributes = {**attributes,
+                                #                        "name": span_name,
+                                "gen_ai_kind": "tool",
+                                "gen_ai_operation_name": operation,
+                                "gen_ai_operation_type": operation_type,
+                                "gen_ai_operation_backend": operation_backend,
+
+                                }
+        if hasattr(span, "start_time") and self.apmplus_span_latency:
+            # span 耗时
+            duration = (time.time_ns() - span.start_time) / 1e9  # type: ignore
+            self.apmplus_span_latency.record(
+                duration, attributes=span_name_attributes
+            )
+        if self.apmplus_tool_token_usage:
+            tool_token_usage = 122  # tool token 数量，使用文本长度/4
+            # TODO: 设置 token_type: input, output
+            tool_token_attributes = {**span_name_attributes, "token_type": "input"}
+
+            self.apmplus_tool_token_usage.record(
+                tool_token_usage, attributes=tool_token_attributes
+            )
 
 
     def record_tool_call(
