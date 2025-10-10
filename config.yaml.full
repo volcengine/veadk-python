@@ -120,8 +120,8 @@ database:
     region: cn-beijing                  # default Volcengine TOS region
     bucket:
   mem0:
-    base_url:
-    api_key:
+    base_url: # default "https://api.mem0.ai/v1", using full https url including port
+    api_key:  #api_key
     
 
 

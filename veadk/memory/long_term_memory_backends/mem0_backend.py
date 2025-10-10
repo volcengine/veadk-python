@@ -46,12 +46,17 @@ class Mem0LTMBackend(BaseLongTermMemoryBackend):
 
         try:
             self._mem0_client = MemoryClient(
-                # base_url=self.mem0_config.base_url,        # mem0 endpoint
+                host=self.mem0_config.base_url,  # mem0 endpoint
                 api_key=self.mem0_config.api_key,  # mem0 API key
+            )
+            logger.info(
+                f"Initialized Mem0 client for host: {self.mem0_config.base_url}"
             )
             logger.info(f"Initialized Mem0 client for index: {self.index}")
         except Exception as e:
-            logger.error(f"Failed to initialize Mem0 client: {str(e)}")
+            logger.error(
+                f"Failed to initialize Mem0 client for host {self.mem0_config.base_url} : {str(e)}"
+            )
             raise
 
     def precheck_index_naming(self):
