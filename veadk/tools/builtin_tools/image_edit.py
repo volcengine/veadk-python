@@ -14,9 +14,9 @@
 
 from typing import Dict
 from google.adk.tools import ToolContext
-from google.genai import types
 from volcenginesdkarkruntime import Ark
 from veadk.config import getenv
+from veadk.consts import DEFAULT_MODEL_AGENT_API_BASE, DEFAULT_IMAGE_EDIT_MODEL_NAME
 import base64
 from opentelemetry import trace
 import traceback
@@ -28,8 +28,8 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 client = Ark(
-    api_key=getenv("MODEL_EDIT_API_KEY"),
-    base_url=getenv("MODEL_EDIT_API_BASE"),
+    api_key=getenv("MODEL_AGENT_API_KEY"),
+    base_url=DEFAULT_MODEL_AGENT_API_BASE,
 )
 
 
@@ -116,10 +116,14 @@ async def image_edit(
                 }
                 input_part = {
                     "role": "user",
-                    "content": json.dumps(inputs, ensure_ascii=False),
+                    "parts.0.type": "text",
+                    "parts.0.text": json.dumps(inputs, ensure_ascii=False),
+                    "parts.1.type": "image_url",
+                    "parts.1.image_url.name": "origin_image",
+                    "parts.1.image_url.url": origin_image,
                 }
                 response = client.images.generate(
-                    model=getenv("MODEL_EDIT_NAME"), **inputs
+                    model=DEFAULT_IMAGE_EDIT_MODEL_NAME, **inputs
                 )
                 output_part = None
                 if response.data and len(response.data) > 0:
@@ -129,22 +133,33 @@ async def image_edit(
                             tool_context.state[f"{image_name}_url"] = image
                             output_part = {
                                 "message.role": "model",
-                                "message.content": image,
+                                "message.parts.0.type": "image_url",
+                                "message.parts.0.image_url.name": image_name,
+                                "message.parts.0.image_url.url": image,
                             }
                         elif response_format == "b64_json":
                             image = item.b64_json
                             image_bytes = base64.b64decode(image)
 
-                            tool_context.state[f"{image_name}_url"] = (
-                                f"data:image/jpeg;base64,{image}"
+                            tos_url = _upload_image_to_tos(
+                                image_bytes=image_bytes, object_key=f"{image_name}.png"
                             )
+                            if tos_url:
+                                tool_context.state[f"{image_name}_url"] = tos_url
+                                image = tos_url
+                                output_part = {
+                                    "message.role": "model",
+                                    "message.parts.0.type": "image_url",
+                                    "message.parts.0.image_url.name": image_name,
+                                    "message.parts.0.image_url.url": image,
+                                }
+                            else:
+                                logger.error(
+                                    f"Upload image to TOS failed: {image_name}"
+                                )
+                                error_list.append(image_name)
+                                continue
 
-                            report_artifact = types.Part.from_bytes(
-                                data=image_bytes, mime_type="image/png"
-                            )
-                            await tool_context.save_artifact(
-                                image_name, report_artifact
-                            )
                             logger.debug(f"Image saved as ADK artifact: {image_name}")
 
                         success_list.append({image_name: image})
@@ -160,8 +175,8 @@ async def image_edit(
                     output_part=output_part,
                     output_tokens=response.usage.output_tokens,
                     total_tokens=response.usage.total_tokens,
-                    request_model=getenv("MODEL_EDIT_NAME"),
-                    response_model=getenv("MODEL_EDIT_NAME"),
+                    request_model=DEFAULT_IMAGE_EDIT_MODEL_NAME,
+                    response_model=DEFAULT_IMAGE_EDIT_MODEL_NAME,
                 )
 
         except Exception as e:
@@ -234,3 +249,28 @@ def add_span_attributes(
 
     except Exception:
         traceback.print_exc()
+
+
+def _upload_image_to_tos(image_bytes: bytes, object_key: str) -> None:
+    try:
+        from veadk.integrations.ve_tos.ve_tos import VeTOS
+        import os
+        from datetime import datetime
+
+        timestamp: str = datetime.now().strftime("%Y%m%d%H%M%S%f")[:-3]
+        object_key = f"{timestamp}-{object_key}"
+        bucket_name = os.getenv("DATABASE_TOS_BUCKET")
+        ve_tos = VeTOS()
+
+        tos_url = ve_tos.build_tos_signed_url(
+            object_key=object_key, bucket_name=bucket_name
+        )
+
+        ve_tos.upload_bytes(
+            data=image_bytes, object_key=object_key, bucket_name=bucket_name
+        )
+
+        return tos_url
+    except Exception as e:
+        logger.error(f"Upload to TOS failed: {e}")
+        return None

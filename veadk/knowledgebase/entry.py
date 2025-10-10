@@ -12,4 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-VERSION = "0.2.9"
+from pydantic import BaseModel
+
+
+class KnowledgebaseEntry(BaseModel):
+    """Represents a single entry in the knowledgebase."""
+
+    # The main content of the knowledgebase entry.
+    content: str
+
+    # Optional metadata associated with the entry.
+    metadata: dict | None = None

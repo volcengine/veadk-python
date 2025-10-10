@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Optional
 
 import click
 
@@ -152,6 +153,7 @@ def web(host: str) -> None:
         eval_sets_manager: Any,
         eval_set_results_manager: Any,
         agents_dir: str,
+        extra_plugins: Optional[list[str]] = None,
     ):
         self.agent_loader = agent_loader
         self.artifact_service = artifact_service
@@ -162,6 +164,7 @@ def web(host: str) -> None:
         self.runners_to_clean = set()
         self.current_app_name_ref = SharedValue(value="")
         self.runner_dict = {}
+        self.extra_plugins = extra_plugins or []
 
         # parse VeADK memories
         short_term_memory, long_term_memory = _get_memory(module_path=agents_dir)

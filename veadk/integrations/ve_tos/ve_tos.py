@@ -12,15 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from io import StringIO
 import asyncio
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Union, List, Optional
+from io import StringIO
+from typing import TYPE_CHECKING, List, Optional, Union
 from urllib.parse import urlparse
-from veadk.utils.misc import getenv
+
 from veadk.consts import DEFAULT_TOS_BUCKET_NAME
 from veadk.utils.logger import get_logger
+from veadk.utils.misc import getenv
 
 if TYPE_CHECKING:
     pass
@@ -178,7 +179,18 @@ class VeTOS:
             return False
 
     def _build_object_key_for_file(self, data_path: str) -> str:
-        """generate TOS object key"""
+        """Builds the TOS object key and URL for the given parameters.
+
+        Args:
+            user_id (str): User ID
+            app_name (str): App name
+            session_id (str): Session ID
+            data_path (str): Data path
+
+        Returns:
+            tuple[str, str]: Object key and TOS URL.
+        """
+
         parsed_url = urlparse(data_path)
 
         # Generate object key
@@ -242,16 +254,47 @@ class VeTOS:
         )
         return tos_url
 
+    def build_tos_signed_url(self, object_key: str, bucket_name: str = "") -> str:
+        bucket_name = self._check_bucket_name(bucket_name)
+
+        out = self._client.pre_signed_url(
+            self._tos_module.HttpMethodType.Http_Method_Get,
+            bucket=bucket_name,
+            key=object_key,
+            expires=604800,
+        )
+        tos_url = out.signed_url
+        return tos_url
+
     # deprecated
     def upload(
-        self, data: Union[str, bytes], bucket_name: str = "", object_key: str = ""
+        self,
+        data: Union[str, bytes],
+        bucket_name: str = "",
+        object_key: str = "",
+        metadata: dict | None = None,
     ):
+        """Uploads data to TOS.
+
+        Args:
+            data (Union[str, bytes]): The data to upload, either as a file path or raw bytes.
+            bucket_name (str): The name of the TOS bucket to upload to.
+            object_key (str): The object key for the uploaded data.
+            metadata (dict | None, optional): Metadata to associate with the object. Defaults to None.
+
+        Raises:
+            ValueError: If the data type is unsupported.
+        """
         if isinstance(data, str):
             # data is a file path
-            return asyncio.to_thread(self.upload_file, data, bucket_name, object_key)
+            return asyncio.to_thread(
+                self.upload_file, data, bucket_name, object_key, metadata
+            )
         elif isinstance(data, bytes):
             # data is bytes content
-            return asyncio.to_thread(self.upload_bytes, data, bucket_name, object_key)
+            return asyncio.to_thread(
+                self.upload_bytes, data, bucket_name, object_key, metadata
+            )
         else:
             error_msg = f"Upload failed: data type error. Only str (file path) and bytes are supported, got {type(data)}"
             logger.error(error_msg)
@@ -275,7 +318,11 @@ class VeTOS:
         return True
 
     def upload_text(
-        self, text: str, bucket_name: str = "", object_key: str = ""
+        self,
+        text: str,
+        bucket_name: str = "",
+        object_key: str = "",
+        metadata: dict | None = None,
     ) -> None:
         """Upload text content to TOS bucket
 
@@ -283,6 +330,7 @@ class VeTOS:
             text: Text content to upload
             bucket_name: TOS bucket name
             object_key: Object key, auto-generated if None
+            metadata: Metadata to associate with the object
         """
         bucket_name = self._check_bucket_name(bucket_name)
         if not object_key:
@@ -292,7 +340,9 @@ class VeTOS:
             return
         data = StringIO(text)
         try:
-            self._client.put_object(bucket=bucket_name, key=object_key, content=data)
+            self._client.put_object(
+                bucket=bucket_name, key=object_key, content=data, meta=metadata
+            )
             logger.debug(f"Upload success, object_key: {object_key}")
             return
         except Exception as e:
@@ -302,7 +352,11 @@ class VeTOS:
             data.close()
 
     async def async_upload_text(
-        self, text: str, bucket_name: str = "", object_key: str = ""
+        self,
+        text: str,
+        bucket_name: str = "",
+        object_key: str = "",
+        metadata: dict | None = None,
     ) -> None:
         """Asynchronously upload text content to TOS bucket
 
@@ -310,6 +364,7 @@ class VeTOS:
             text: Text content to upload
             bucket_name: TOS bucket name
             object_key: Object key, auto-generated if None
+            metadata: Metadata to associate with the object
         """
         bucket_name = self._check_bucket_name(bucket_name)
         if not object_key:
@@ -325,6 +380,7 @@ class VeTOS:
                 bucket=bucket_name,
                 key=object_key,
                 content=data,
+                meta=metadata,
             )
             logger.debug(f"Async upload success, object_key: {object_key}")
             return
@@ -335,7 +391,11 @@ class VeTOS:
             data.close()
 
     def upload_bytes(
-        self, data: bytes, bucket_name: str = "", object_key: str = ""
+        self,
+        data: bytes,
+        bucket_name: str = "",
+        object_key: str = "",
+        metadata: dict | None = None,
     ) -> None:
         """Upload byte data to TOS bucket
 
@@ -343,6 +403,7 @@ class VeTOS:
             data: Byte data to upload
             bucket_name: TOS bucket name
             object_key: Object key, auto-generated if None
+            metadata: Metadata to associate with the object
         """
         bucket_name = self._check_bucket_name(bucket_name)
         if not object_key:
@@ -351,7 +412,9 @@ class VeTOS:
         if not self._ensure_client_and_bucket(bucket_name):
             return
         try:
-            self._client.put_object(bucket=bucket_name, key=object_key, content=data)
+            self._client.put_object(
+                bucket=bucket_name, key=object_key, content=data, meta=metadata
+            )
             logger.debug(f"Upload success, object_key: {object_key}")
             return
         except Exception as e:
@@ -359,7 +422,11 @@ class VeTOS:
             return
 
     async def async_upload_bytes(
-        self, data: bytes, bucket_name: str = "", object_key: str = ""
+        self,
+        data: bytes,
+        bucket_name: str = "",
+        object_key: str = "",
+        metadata: dict | None = None,
     ) -> None:
         """Asynchronously upload byte data to TOS bucket
 
@@ -367,6 +434,7 @@ class VeTOS:
             data: Byte data to upload
             bucket_name: TOS bucket name
             object_key: Object key, auto-generated if None
+            metadata: Metadata to associate with the object
         """
         bucket_name = self._check_bucket_name(bucket_name)
         if not object_key:
@@ -381,6 +449,7 @@ class VeTOS:
                 bucket=bucket_name,
                 key=object_key,
                 content=data,
+                meta=metadata,
             )
             logger.debug(f"Async upload success, object_key: {object_key}")
             return
@@ -389,7 +458,11 @@ class VeTOS:
             return
 
     def upload_file(
-        self, file_path: str, bucket_name: str = "", object_key: str = ""
+        self,
+        file_path: str,
+        bucket_name: str = "",
+        object_key: str = "",
+        metadata: dict | None = None,
     ) -> None:
         """Upload file to TOS bucket
 
@@ -397,6 +470,7 @@ class VeTOS:
             file_path: Local file path
             bucket_name: TOS bucket name
             object_key: Object key, auto-generated if None
+            metadata: Metadata to associate with the object
         """
         bucket_name = self._check_bucket_name(bucket_name)
         if not object_key:
@@ -406,7 +480,7 @@ class VeTOS:
             return
         try:
             self._client.put_object_from_file(
-                bucket=bucket_name, key=object_key, file_path=file_path
+                bucket=bucket_name, key=object_key, file_path=file_path, meta=metadata
             )
             logger.debug(f"Upload success, object_key: {object_key}")
             return
@@ -415,7 +489,11 @@ class VeTOS:
             return
 
     async def async_upload_file(
-        self, file_path: str, bucket_name: str = "", object_key: str = ""
+        self,
+        file_path: str,
+        bucket_name: str = "",
+        object_key: str = "",
+        metadata: dict | None = None,
     ) -> None:
         """Asynchronously upload file to TOS bucket
 
@@ -423,6 +501,7 @@ class VeTOS:
             file_path: Local file path
             bucket_name: TOS bucket name
             object_key: Object key, auto-generated if None
+            metadata: Metadata to associate with the object
         """
         bucket_name = self._check_bucket_name(bucket_name)
         if not object_key:
@@ -437,6 +516,7 @@ class VeTOS:
                 bucket=bucket_name,
                 key=object_key,
                 file_path=file_path,
+                meta=metadata,
             )
             logger.debug(f"Async upload success, object_key: {object_key}")
             return
@@ -449,6 +529,7 @@ class VeTOS:
         file_paths: List[str],
         bucket_name: str = "",
         object_keys: Optional[List[str]] = None,
+        metadata: dict | None = None,
     ) -> None:
         """Upload multiple files to TOS bucket
 
@@ -456,6 +537,7 @@ class VeTOS:
             file_paths: List of local file paths
             bucket_name: TOS bucket name
             object_keys: List of object keys, auto-generated if empty or length mismatch
+            metadata: Metadata to associate with the object
         """
         bucket_name = self._check_bucket_name(bucket_name)
 
@@ -475,7 +557,7 @@ class VeTOS:
         try:
             for file_path, object_key in zip(file_paths, object_keys):
                 # Note: upload_file method doesn't return value, we use exceptions to determine success
-                self.upload_file(file_path, bucket_name, object_key)
+                self.upload_file(file_path, bucket_name, object_key, metadata=metadata)
             return
         except Exception as e:
             logger.error(f"Upload files failed: {str(e)}")
@@ -486,6 +568,7 @@ class VeTOS:
         file_paths: List[str],
         bucket_name: str = "",
         object_keys: Optional[List[str]] = None,
+        metadata: dict | None = None,
     ) -> None:
         """Asynchronously upload multiple files to TOS bucket
 
@@ -493,6 +576,7 @@ class VeTOS:
             file_paths: List of local file paths
             bucket_name: TOS bucket name
             object_keys: List of object keys, auto-generated if empty or length mismatch
+            metadata: Metadata to associate with the object
         """
         bucket_name = self._check_bucket_name(bucket_name)
 
@@ -517,6 +601,7 @@ class VeTOS:
                     bucket=bucket_name,
                     key=object_key,
                     file_path=file_path,
+                    metadata=metadata,
                 )
                 logger.debug(f"Async upload success, object_key: {object_key}")
             return
@@ -524,12 +609,15 @@ class VeTOS:
             logger.error(f"Async upload files failed: {str(e)}")
             return
 
-    def upload_directory(self, directory_path: str, bucket_name: str = "") -> None:
+    def upload_directory(
+        self, directory_path: str, bucket_name: str = "", metadata: dict | None = None
+    ) -> None:
         """Upload entire directory to TOS bucket
 
         Args:
             directory_path: Local directory path
             bucket_name: TOS bucket name
+            metadata: Metadata to associate with the objects
         """
         bucket_name = self._check_bucket_name(bucket_name)
 
@@ -543,7 +631,7 @@ class VeTOS:
                     # Use relative path of file as object key
                     object_key = os.path.relpath(path, directory_path)
                     # upload_file method doesn't return value, use exceptions to determine success
-                    self.upload_file(path, bucket_name, object_key)
+                    self.upload_file(path, bucket_name, object_key, metadata=metadata)
 
         try:
             _upload_dir(directory_path)
@@ -554,13 +642,14 @@ class VeTOS:
             raise
 
     async def async_upload_directory(
-        self, directory_path: str, bucket_name: str = ""
+        self, directory_path: str, bucket_name: str = "", metadata: dict | None = None
     ) -> None:
         """Asynchronously upload entire directory to TOS bucket
 
         Args:
             directory_path: Local directory path
             bucket_name: TOS bucket name
+            metadata: Metadata to associate with the objects
         """
         bucket_name = self._check_bucket_name(bucket_name)
 
@@ -574,7 +663,9 @@ class VeTOS:
                     # Use relative path of file as object key
                     object_key = os.path.relpath(path, directory_path)
                     # Asynchronously upload single file
-                    await self.async_upload_file(path, bucket_name, object_key)
+                    await self.async_upload_file(
+                        path, bucket_name, object_key, metadata=metadata
+                    )
 
         try:
             await _aupload_dir(directory_path)

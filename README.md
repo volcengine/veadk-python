@@ -15,6 +15,17 @@ A [tutorial](https://github.com/volcengine/veadk-python/blob/main/veadk_tutorial
 
 ## Installation
 
+### From PyPI
+
+```python
+pip install veadk-python
+
+# install extensions
+pip install veadk-python[extensions]
+```
+
+### Build from source
+
 We use `uv` to build this project ([how-to-install-uv](https://docs.astral.sh/uv/getting-started/installation/)).
 
 ```bash
