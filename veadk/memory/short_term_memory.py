@@ -19,6 +19,7 @@ from google.adk.sessions import (
     BaseSessionService,
     DatabaseSessionService,
     InMemorySessionService,
+    Session,
 )
 from pydantic import BaseModel, Field, PrivateAttr
 
@@ -106,7 +107,7 @@ class ShortTermMemory(BaseModel):
         app_name: str,
         user_id: str,
         session_id: str,
-    ) -> None:
+    ) -> Session | None:
         if isinstance(self._session_service, DatabaseSessionService):
             list_sessions_response = await self._session_service.list_sessions(
                 app_name=app_name, user_id=user_id
@@ -122,7 +123,12 @@ class ShortTermMemory(BaseModel):
             )
             is None
         ):
-            # create a new session for this running
-            await self._session_service.create_session(
+            return await self._session_service.create_session(
                 app_name=app_name, user_id=user_id, session_id=session_id
             )
+        else:
+            logger.info(
+                f"Session {session_id} already exists with app_name={app_name} user_id={user_id}."
+            )
+
+            return None
