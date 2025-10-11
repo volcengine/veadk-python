@@ -25,7 +25,7 @@ def __getattr__(name):
         from veadk.memory.short_term_memory import ShortTermMemory
 
         return ShortTermMemory
-    if name == "LongTeremMemory":
+    if name == "LongTermMemory":
         from veadk.memory.long_term_memory import LongTermMemory
 
         return LongTermMemory
