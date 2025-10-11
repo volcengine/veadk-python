@@ -105,6 +105,12 @@ database:
     database: 
     charset: utf8
   # [optional]
+  postgresql:
+    host: # host or ip 
+    user: 
+    password:
+    database: # database with options sinlardb?sslmode=require&channel_binding=require&options=endpoint%3Dcp-great-pearl-0a074332
+  # [optional]
   redis:
     host: 
     port: 6379  # default Redis port
