@@ -42,7 +42,7 @@ DEFAULT_MODEL_EXTRA_CONFIG = {
 }
 
 DEFAULT_APMPLUS_OTEL_EXPORTER_ENDPOINT = "http://apmplus-cn-beijing.volces.com:4317"
-DEFAULT_APMPLUS_OTEL_EXPORTER_SERVICE_NAME = "veadk_tracing"
+DEFAULT_APMPLUS_OTEL_EXPORTER_SERVICE_NAME = "veadk_tracing_demo"
 
 DEFAULT_COZELOOP_OTEL_EXPORTER_ENDPOINT = (
     "https://api.coze.cn/v1/loop/opentelemetry/v1/traces"
