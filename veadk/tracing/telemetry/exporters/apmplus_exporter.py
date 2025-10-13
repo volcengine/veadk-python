@@ -17,8 +17,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from google.adk.agents.invocation_context import InvocationContext
+from google.adk.events import Event
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
+from google.adk.tools import BaseTool
 from opentelemetry import metrics, trace
 from opentelemetry import metrics as metrics_api
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
@@ -195,7 +197,7 @@ class MeterUploader:
             explicit_bucket_boundaries_advisory=_GEN_AI_SERVER_TIME_PER_OUTPUT_TOKEN_BUCKETS,
         )
 
-    def record(
+    def record_call_llm(
         self,
         invocation_context: InvocationContext,
         event_id: str,
@@ -266,6 +268,14 @@ class MeterUploader:
             #     self.streaming_time_per_output_token.record(
             #         time_per_output_token, attributes=attributes
             #     )
+
+    def record_tool_call(
+        self,
+        tool: BaseTool,
+        args: dict[str, Any],
+        function_response_event: Event,
+    ):
+        logger.debug(f"Record tool call work in progress. Tool: {tool.name}")
 
 
 class APMPlusExporterConfig(BaseModel):
