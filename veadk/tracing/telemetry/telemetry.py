@@ -33,8 +33,10 @@ from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+meter_uploader = None
 
-def _upload_metrics(
+
+def _upload_call_llm_metrics(
     invocation_context: InvocationContext,
     event_id: str,
     llm_request: LlmRequest,
@@ -47,9 +49,25 @@ def _upload_metrics(
         for tracer in tracers:
             for exporter in getattr(tracer, "exporters", []):
                 if getattr(exporter, "meter_uploader", None):
-                    exporter.meter_uploader.record(
+                    global meter_uploader
+                    meter_uploader = exporter.meter_uploader
+                    exporter.meter_uploader.record_call_llm(
                         invocation_context, event_id, llm_request, llm_response
                     )
+
+
+def _upload_tool_call_metrics(
+    tool: BaseTool,
+    args: dict[str, Any],
+    function_response_event: Event,
+):
+    global meter_uploader
+    if meter_uploader:
+        meter_uploader.record_tool_call(tool, args, function_response_event)
+    else:
+        logger.warning(
+            "Meter uploader is not initialized yet. Skip recording tool call metrics."
+        )
 
 
 def _set_agent_input_attribute(
@@ -203,6 +221,8 @@ def trace_tool_call(
         response: ExtractorResponse = attr_extractor(params)
         ExtractorResponse.update_span(span, attr_name, response)
 
+    _upload_tool_call_metrics(tool, args, function_response_event)
+
 
 def trace_call_llm(
     invocation_context: InvocationContext,
@@ -252,7 +272,7 @@ def trace_call_llm(
         response: ExtractorResponse = attr_extractor(params)
         ExtractorResponse.update_span(span, attr_name, response)
 
-    _upload_metrics(invocation_context, event_id, llm_request, llm_response)
+    _upload_call_llm_metrics(invocation_context, event_id, llm_request, llm_response)
 
 
 # Do not modify this function
