@@ -154,6 +154,7 @@ def web(host: str) -> None:
         eval_set_results_manager: Any,
         agents_dir: str,
         extra_plugins: Optional[list[str]] = None,
+        **kwargs: Any,
     ):
         self.agent_loader = agent_loader
         self.artifact_service = artifact_service
@@ -165,6 +166,9 @@ def web(host: str) -> None:
         self.current_app_name_ref = SharedValue(value="")
         self.runner_dict = {}
         self.extra_plugins = extra_plugins or []
+
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
         # parse VeADK memories
         short_term_memory, long_term_memory = _get_memory(module_path=agents_dir)
