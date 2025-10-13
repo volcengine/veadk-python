@@ -22,6 +22,9 @@ from veadk.utils.misc import safe_json_serialize
 def tool_gen_ai_operation_name(params: ToolAttributesParams) -> ExtractorResponse:
     return ExtractorResponse(content="execute_tool")
 
+def tool_gen_ai_span_kind(params: ToolAttributesParams) -> ExtractorResponse:
+    return ExtractorResponse(content="tool")
+
 
 def tool_gen_ai_tool_message(params: ToolAttributesParams) -> ExtractorResponse:
     tool_input = {
@@ -73,4 +76,7 @@ TOOL_ATTRIBUTES = {
     "gen_ai.tool.output": tool_gen_ai_tool_output,  # TLS required
     "cozeloop.input": tool_gen_ai_tool_input,  # CozeLoop required
     "cozeloop.output": tool_gen_ai_tool_output,  # CozeLoop required
+    "gen_ai.span.kind": tool_gen_ai_span_kind, # apmplus required
+    "gen_ai.input": tool_gen_ai_tool_input, # apmplus required
+    "gen_ai.output": tool_gen_ai_tool_output, # apmplus required
 }

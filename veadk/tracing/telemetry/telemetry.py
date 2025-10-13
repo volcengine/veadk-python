@@ -20,9 +20,10 @@ from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.adk.tools import BaseTool
 from opentelemetry import trace
-from opentelemetry.context import get_value
+from opentelemetry.context import get_value, set_value
 from opentelemetry.sdk.trace import Span, _Span
 
+from veadk.utils.misc import safe_json_serialize
 from veadk.tracing.telemetry.attributes.attributes import ATTRIBUTES
 from veadk.tracing.telemetry.attributes.extractors.types import (
     ExtractorResponse,
@@ -91,6 +92,10 @@ def _set_agent_input_attribute(
 
     user_content = invocation_context.user_content
     if user_content and user_content.parts:
+        # set gen_ai.input attribute required by APMPlus
+        # TODO: 优化 gen_ai.input，目前无法序列化
+        span.set_attribute("gen_ai.input", safe_json_serialize(user_content.parts))
+
         span.add_event(
             "gen_ai.user.message",
             {
@@ -127,7 +132,15 @@ def _set_agent_input_attribute(
 
 def _set_agent_output_attribute(span: Span, llm_response: LlmResponse) -> None:
     content = llm_response.content
+    print(f"### response:  {llm_response}")
+    print(f"### output_transcription:  {llm_response.output_transcription}")
+    print(f"### input_transcription:  {llm_response.input_transcription}")
+
+
     if content and content.parts:
+        # set gen_ai.output attribute required by APMPlus
+        span.set_attribute("gen_ai.output", safe_json_serialize(content.parts))
+        print("### parts: ", content.parts)
         for idx, part in enumerate(content.parts):
             if part.text:
                 span.add_event(
@@ -150,7 +163,7 @@ def set_common_attributes_on_model_span(
         invocation_span: Span = get_value("invocation_span_instance")  # type: ignore
         agent_run_span: Span = get_value("agent_run_span_instance")  # type: ignore
 
-        if invocation_span and invocation_span.name.startswith("invocation"):
+        if invocation_span and (invocation_span.name.startswith("invocation") or invocation_span.name.startswith("invoke")):
             _set_agent_input_attribute(invocation_span, invocation_context)
             _set_agent_output_attribute(invocation_span, llm_response)
             for attr_name, attr_extractor in common_attributes.items():
@@ -173,6 +186,7 @@ def set_common_attributes_on_model_span(
                 current_step_token_usage + int(prev_total_token_usage)  # type: ignore
             )  # we can ignore this warning, cause we manually set the attribute to int before
             invocation_span.set_attribute(
+                # record input/output token usage?
                 "gen_ai.usage.total_tokens", accumulated_total_token_usage
             )
 

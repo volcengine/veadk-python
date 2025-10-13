@@ -324,6 +324,8 @@ def llm_gen_ai_is_streaming(params: LLMAttributesParams) -> ExtractorResponse:
 def llm_gen_ai_operation_name(params: LLMAttributesParams) -> ExtractorResponse:
     return ExtractorResponse(content="chat")
 
+def llm_gen_ai_span_kind(params: LLMAttributesParams) -> ExtractorResponse:
+    return ExtractorResponse(content="llm")
 
 # def llm_gen_ai_system_message(params: LLMAttributesParams) -> ExtractorResponse:
 #     event_attributes = {
@@ -559,6 +561,7 @@ LLM_ATTRIBUTES = {
     "gen_ai.is_streaming": llm_gen_ai_is_streaming,
     # -> 1.4. span kind
     "gen_ai.operation.name": llm_gen_ai_operation_name,
+    "gen_ai.span.kind": llm_gen_ai_span_kind, # apmplus required
     # -> 1.5. inputs
     "gen_ai.prompt": llm_gen_ai_prompt,
     # -> 1.6. outputs
