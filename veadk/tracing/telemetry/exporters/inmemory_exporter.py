@@ -79,14 +79,20 @@ class _InMemorySpanProcessor(export.SimpleSpanProcessor):
     def on_start(self, span, parent_context) -> None:
         if span.name.startswith("invocation"):
             span.set_attribute("gen_ai.operation.name", "chain")
+            span.set_attribute("gen_ai.span.kind", "workflow")
             span.set_attribute("gen_ai.usage.total_tokens", 0)
-
             ctx = set_value("invocation_span_instance", span, context=parent_context)
+            # suppress instrumentation for llm to avoid auto instrument from apmplus, such as openai
+            ctx = set_value(
+                "suppress_language_model_instrumentation", True, context=ctx
+            )
+
             token = attach(ctx)  # mount context on `invocation` root span in Google ADK
             setattr(span, "_invocation_token", token)  # for later detach
 
-        if span.name.startswith("agent_run"):
+        if span.name.startswith("agent_run") or span.name.startswith("invoke_agent"):
             span.set_attribute("gen_ai.operation.name", "agent")
+            span.set_attribute("gen_ai.span.kind", "agent")
 
             ctx = set_value("agent_run_span_instance", span, context=parent_context)
             token = attach(ctx)
