@@ -23,7 +23,7 @@ dependencies = [
     "wrapt>=1.17.2", # For patching built-in functions
     "openai<1.100", # For fix https://github.com/BerriAI/litellm/issues/13710
     "volcengine-python-sdk>=4.0.18", # For Volcengine API
-    "volcengine>=1.0.193",          # For Volcengine sign
+    "volcengine>=1.0.193", # For Volcengine sign
     "agent-pilot-sdk>=0.1.2", # Prompt optimization by Volcengine AgentPilot/PromptPilot toolkits
     "fastmcp>=2.11.3", # For running MCP
     "cookiecutter>=2.6.0", # For cloud deploy
@@ -35,6 +35,7 @@ dependencies = [
     "psycopg2-binary>=2.9.10", # For PostgreSQL database (short term memory)
     "pymysql>=1.1.1", # For MySQL database (short term memory)
     "opensearch-py==2.8.0",
+    "ipykernel>=7.0.0",
 ]
 
 [project.scripts]
@@ -45,7 +46,7 @@ extensions = [
     "redis>=5.0",                 # For Redis database
     "tos>=2.8.4",                   # For TOS storage and Viking DB
     "llama-index-vector-stores-redis>=0.6.1",
-    "mcp-server-vikingdb-memory",
+    "mcp-server-vikingdb-memory @ git+https://github.com/volcengine/mcp-server@main#subdirectory=server/mcp_server_vikingdb_memory",
 ]
 database = [
     "redis>=5.0",                 # For Redis database
@@ -92,6 +93,3 @@ exclude = [
     "veadk/integrations/ve_faas/template/*",
     "veadk/integrations/ve_faas/web_template/*"
 ]
-
-[tool.uv.sources]
-mcp-server-vikingdb-memory = { git = "https://github.com/volcengine/mcp-server", subdirectory = "server/mcp_server_vikingdb_memory" }
