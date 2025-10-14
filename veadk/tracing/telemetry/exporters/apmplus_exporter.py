@@ -228,7 +228,8 @@ class MeterUploader:
         attributes = {
             "gen_ai_system": "volcengine",
             "gen_ai_response_model": llm_request.model,
-            "gen_ai_operation_name": "chat_completions",
+            "gen_ai_operation_name": "chat",
+            "gen_ai_operation_type": "llm",
             "stream": "false",
             "server_address": "api.volcengine.com",
         }  # required by Volcengine APMPlus
@@ -313,19 +314,18 @@ class MeterUploader:
         span = trace.get_current_span()
         if not span:
             return
-        operation = "tool"
-        operation_type = tool.name
+        operation_type = "tool"
+        operation_name = tool.name
         operation_backend = ""
         if tool.custom_metadata:
             operation_backend = tool.custom_metadata.get("backend", "")
-        # if random.randint(0, 1) == 0:
-        #     operation_type = "load_memory"
-        #     operation_backend = "mem0"
+
         attributes = {
-            "gen_ai_operation_name": operation,
+            "gen_ai_operation_name": operation_name,
             "gen_ai_operation_type": operation_type,
             "gen_ai_operation_backend": operation_backend,
         }
+
         if hasattr(span, "start_time") and self.apmplus_span_latency:
             # span 耗时
             duration = (time.time_ns() - span.start_time) / 1e9  # type: ignore
@@ -347,9 +347,6 @@ class MeterUploader:
             self.apmplus_tool_token_usage.record(
                 tool_token_usage, attributes=output_tool_token_attributes
             )
-
-
-
 
 
 class APMPlusExporterConfig(BaseModel):
