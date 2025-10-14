@@ -91,6 +91,9 @@ def _set_agent_input_attribute(
 
     user_content = invocation_context.user_content
     if user_content and user_content.parts:
+        # set gen_ai.input attribute required by APMPlus
+        span.set_attribute("gen_ai.input", user_content.model_dump(exclude_none=True))
+
         span.add_event(
             "gen_ai.user.message",
             {
@@ -128,6 +131,9 @@ def _set_agent_input_attribute(
 def _set_agent_output_attribute(span: Span, llm_response: LlmResponse) -> None:
     content = llm_response.content
     if content and content.parts:
+        # set gen_ai.output attribute required by APMPlus
+        span.set_attribute("gen_ai.output", content.model_dump(exclude_none=True))
+
         for idx, part in enumerate(content.parts):
             if part.text:
                 span.add_event(
@@ -173,10 +179,15 @@ def set_common_attributes_on_model_span(
                 current_step_token_usage + int(prev_total_token_usage)  # type: ignore
             )  # we can ignore this warning, cause we manually set the attribute to int before
             invocation_span.set_attribute(
-                "gen_ai.usage.total_tokens", accumulated_total_token_usage
+                # record input/output token usage?
+                "gen_ai.usage.total_tokens",
+                accumulated_total_token_usage,
             )
 
-        if agent_run_span and agent_run_span.name.startswith("agent_run"):
+        if agent_run_span and (
+            agent_run_span.name.startswith("agent_run")
+            or agent_run_span.name.startswith("invoke_agent")
+        ):
             _set_agent_input_attribute(agent_run_span, invocation_context)
             _set_agent_output_attribute(agent_run_span, llm_response)
             for attr_name, attr_extractor in common_attributes.items():
