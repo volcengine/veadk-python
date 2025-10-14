@@ -34,7 +34,7 @@ dependencies = [
     "llama-index-vector-stores-opensearch>=0.6.1",
     "psycopg2-binary>=2.9.10", # For PostgreSQL database (short term memory)
     "pymysql>=1.1.1", # For MySQL database (short term memory)
-    "opensearch-py==2.8.0"
+    "opensearch-py==2.8.0",
 ]
 
 [project.scripts]
