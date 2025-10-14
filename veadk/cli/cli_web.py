@@ -154,6 +154,7 @@ def web(host: str) -> None:
         eval_set_results_manager: Any,
         agents_dir: str,
         extra_plugins: Optional[list[str]] = None,
+        logo_text: Optional[str] = None,
         **kwargs: Any,
     ):
         self.agent_loader = agent_loader
@@ -166,6 +167,8 @@ def web(host: str) -> None:
         self.current_app_name_ref = SharedValue(value="")
         self.runner_dict = {}
         self.extra_plugins = extra_plugins or []
+        self.logo_text = logo_text
+        self.logo_image_url = None
 
         for key, value in kwargs.items():
             setattr(self, key, value)
