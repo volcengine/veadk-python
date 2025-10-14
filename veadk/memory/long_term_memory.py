@@ -115,6 +115,14 @@ class LongTermMemory(BaseMemoryService, BaseModel):
                 f"Initialized long term memory backend {self.backend} with config. We will ignore `app_name` and `user_id` if provided."
             )
             self._backend = _get_backend_cls(self.backend)(**self.backend_config)
+            _index = self.backend_config.get("index", None)
+            if _index:
+                self._index = _index
+                logger.info(f"Long term memory index set to {self._index}.")
+            else:
+                logger.warning(
+                    "Cannot find index via backend_config, please set `index` parameter."
+                )
             return
 
         if self.app_name and self.user_id:
