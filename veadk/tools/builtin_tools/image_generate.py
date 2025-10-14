@@ -30,7 +30,7 @@ logger = get_logger(__name__)
 
 client = Ark(
     api_key=getenv("MODEL_AGENT_API_KEY"),
-    base_url=DEFAULT_MODEL_AGENT_API_BASE,
+    base_url=getenv("MODEL_AGENT_API_BASE", DEFAULT_MODEL_AGENT_API_BASE),
 )
 
 
@@ -120,7 +120,8 @@ async def image_generate(
                     "content": json.dumps(inputs, ensure_ascii=False),
                 }
                 response = client.images.generate(
-                    model=DEFAULT_TEXT_TO_IMAGE_MODEL_NAME, **inputs
+                    model=getenv("MODEL_IMAGE_NAME", DEFAULT_TEXT_TO_IMAGE_MODEL_NAME),
+                    **inputs,
                 )
                 output_part = None
                 if response.data and len(response.data) > 0:
@@ -172,8 +173,12 @@ async def image_generate(
                     output_part=output_part,
                     output_tokens=response.usage.output_tokens,
                     total_tokens=response.usage.total_tokens,
-                    request_model=DEFAULT_TEXT_TO_IMAGE_MODEL_NAME,
-                    response_model=DEFAULT_TEXT_TO_IMAGE_MODEL_NAME,
+                    request_model=getenv(
+                        "MODEL_IMAGE_NAME", DEFAULT_TEXT_TO_IMAGE_MODEL_NAME
+                    ),
+                    response_model=getenv(
+                        "MODEL_IMAGE_NAME", DEFAULT_TEXT_TO_IMAGE_MODEL_NAME
+                    ),
                 )
 
         except Exception as e:

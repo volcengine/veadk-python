@@ -33,7 +33,7 @@ logger = get_logger(__name__)
 
 client = Ark(
     api_key=getenv("MODEL_AGENT_API_KEY"),
-    base_url=DEFAULT_MODEL_AGENT_API_BASE,
+    base_url=getenv("MODEL_AGENT_API_BASE", DEFAULT_MODEL_AGENT_API_BASE),
 )
 
 
@@ -184,7 +184,9 @@ async def image_generate(
                     and max_images
                 ):
                     response = client.images.generate(
-                        model=DEFAULT_IMAGE_GENERATE_MODEL_NAME,
+                        model=getenv(
+                            "MODEL_IMAGE_NAME", DEFAULT_IMAGE_GENERATE_MODEL_NAME
+                        ),
                         **inputs,
                         sequential_image_generation_options=SequentialImageGenerationOptions(
                             max_images=max_images
@@ -192,7 +194,10 @@ async def image_generate(
                     )
                 else:
                     response = client.images.generate(
-                        model=DEFAULT_IMAGE_GENERATE_MODEL_NAME, **inputs
+                        model=getenv(
+                            "MODEL_IMAGE_NAME", DEFAULT_IMAGE_GENERATE_MODEL_NAME
+                        ),
+                        **inputs,
                     )
                 if not response.error:
                     for i, image_data in enumerate(response.data):
@@ -261,8 +266,12 @@ async def image_generate(
                 output_part=output_part,
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
-                request_model=DEFAULT_IMAGE_GENERATE_MODEL_NAME,
-                response_model=DEFAULT_IMAGE_GENERATE_MODEL_NAME,
+                request_model=getenv(
+                    "MODEL_IMAGE_NAME", DEFAULT_IMAGE_GENERATE_MODEL_NAME
+                ),
+                response_model=getenv(
+                    "MODEL_IMAGE_NAME", DEFAULT_IMAGE_GENERATE_MODEL_NAME
+                ),
             )
     if len(success_list) == 0:
         return {
