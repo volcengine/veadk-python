@@ -18,6 +18,7 @@ import click
 from veadk.cli.cli_deploy import deploy
 from veadk.cli.cli_eval import eval
 from veadk.cli.cli_init import init
+from veadk.cli.cli_kb import kb
 from veadk.cli.cli_pipeline import pipeline
 from veadk.cli.cli_prompt import prompt
 from veadk.cli.cli_web import web
@@ -39,6 +40,7 @@ veadk.add_command(prompt)
 veadk.add_command(web)
 veadk.add_command(pipeline)
 veadk.add_command(eval)
+veadk.add_command(kb)
 
 if __name__ == "__main__":
     veadk()
