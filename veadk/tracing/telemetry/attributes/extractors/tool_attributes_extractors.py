@@ -76,7 +76,7 @@ TOOL_ATTRIBUTES = {
     "gen_ai.tool.output": tool_gen_ai_tool_output,  # TLS required
     "cozeloop.input": tool_gen_ai_tool_input,  # CozeLoop required
     "cozeloop.output": tool_gen_ai_tool_output,  # CozeLoop required
-    "gen_ai.span.kind": tool_gen_ai_span_kind, # apmplus required
-    "gen_ai.input": tool_gen_ai_tool_input, # apmplus required
-    "gen_ai.output": tool_gen_ai_tool_output, # apmplus required
+    "gen_ai.span.kind": tool_gen_ai_span_kind,  # apmplus required
+    "gen_ai.input": tool_gen_ai_tool_input,  # apmplus required
+    "gen_ai.output": tool_gen_ai_tool_output,  # apmplus required
 }
