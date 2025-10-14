@@ -140,6 +140,7 @@ class Agent(LlmAgent):
 
         if self.long_term_memory is not None:
             from google.adk.tools import load_memory
+
             if not load_memory.custom_metadata:
                 load_memory.custom_metadata = {}
             load_memory.custom_metadata["backend"] = self.long_term_memory.backend

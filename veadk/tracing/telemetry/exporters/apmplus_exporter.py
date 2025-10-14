@@ -14,7 +14,6 @@
 
 import time
 from dataclasses import dataclass
-import random
 from typing import Any
 
 from google.adk.agents.invocation_context import InvocationContext
@@ -133,6 +132,7 @@ class Meters:
     # tool token usage
     APMPLUS_TOOL_TOKEN_USAGE = "apmplus_tool_token_usage"
 
+
 class MeterUploader:
     def __init__(
         self, name: str, endpoint: str, headers: dict, resource_attributes: dict
@@ -217,7 +217,6 @@ class MeterUploader:
             explicit_bucket_boundaries_advisory=_GEN_AI_CLIENT_TOKEN_USAGE_BUCKETS,
         )
 
-
     def record_call_llm(
         self,
         invocation_context: InvocationContext,
@@ -299,16 +298,14 @@ class MeterUploader:
             # record span latency
             if hasattr(span, "start_time") and self.apmplus_span_latency:
                 # span 耗时
-                duration = (time.time_ns() - span.start_time)/1e9  # type: ignore
-                self.apmplus_span_latency.record(
-                    duration, attributes=attributes
-                )
+                duration = (time.time_ns() - span.start_time) / 1e9  # type: ignore
+                self.apmplus_span_latency.record(duration, attributes=attributes)
 
     def record_tool_call(
-            self,
-            tool: BaseTool,
-            args: dict[str, Any],
-            function_response_event: Event,
+        self,
+        tool: BaseTool,
+        args: dict[str, Any],
+        function_response_event: Event,
     ):
         logger.debug(f"Record tool call work in progress. Tool: {tool.name}")
         span = trace.get_current_span()
@@ -329,23 +326,25 @@ class MeterUploader:
         if hasattr(span, "start_time") and self.apmplus_span_latency:
             # span 耗时
             duration = (time.time_ns() - span.start_time) / 1e9  # type: ignore
-            self.apmplus_span_latency.record(
-                duration, attributes=attributes
-            )
+            self.apmplus_span_latency.record(duration, attributes=attributes)
 
         if self.apmplus_tool_token_usage and hasattr(span, "attributes"):
             tool_input = span.attributes["gen_ai.tool.input"]
-            tool_token_usage = len(tool_input) / 4  # tool token 数量，使用文本长度/4 # tool token 数量，使用文本长度/4
+            tool_token_usage_input = (
+                len(tool_input) / 4
+            )  # tool token 数量，使用文本长度/4
             input_tool_token_attributes = {**attributes, "token_type": "input"}
             self.apmplus_tool_token_usage.record(
-                tool_token_usage, attributes=input_tool_token_attributes
+                tool_token_usage_input, attributes=input_tool_token_attributes
             )
 
             tool_output = span.attributes["gen_ai.tool.output"]
-            tool_token_usage = len(tool_output) / 4  # tool token 数量，使用文本长度/4 # tool token 数量，使用文本长度/4
+            tool_token_usage_output = (
+                len(tool_output) / 4
+            )  # tool token 数量，使用文本长度/4
             output_tool_token_attributes = {**attributes, "token_type": "output"}
             self.apmplus_tool_token_usage.record(
-                tool_token_usage, attributes=output_tool_token_attributes
+                tool_token_usage_output, attributes=output_tool_token_attributes
             )
 
 
