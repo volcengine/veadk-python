@@ -29,7 +29,7 @@ logger = get_logger(__name__)
 
 client = Ark(
     api_key=getenv("MODEL_AGENT_API_KEY"),
-    base_url=DEFAULT_MODEL_AGENT_API_BASE,
+    base_url=getenv("MODEL_AGENT_API_BASE", DEFAULT_MODEL_AGENT_API_BASE),
 )
 
 
@@ -123,7 +123,8 @@ async def image_edit(
                     "parts.1.image_url.url": origin_image,
                 }
                 response = client.images.generate(
-                    model=DEFAULT_IMAGE_EDIT_MODEL_NAME, **inputs
+                    model=getenv("MODEL_EDIT_NAME", DEFAULT_IMAGE_EDIT_MODEL_NAME),
+                    **inputs,
                 )
                 output_part = None
                 if response.data and len(response.data) > 0:
@@ -175,8 +176,12 @@ async def image_edit(
                     output_part=output_part,
                     output_tokens=response.usage.output_tokens,
                     total_tokens=response.usage.total_tokens,
-                    request_model=DEFAULT_IMAGE_EDIT_MODEL_NAME,
-                    response_model=DEFAULT_IMAGE_EDIT_MODEL_NAME,
+                    request_model=getenv(
+                        "MODEL_EDIT_NAME", DEFAULT_IMAGE_EDIT_MODEL_NAME
+                    ),
+                    response_model=getenv(
+                        "MODEL_EDIT_NAME", DEFAULT_IMAGE_EDIT_MODEL_NAME
+                    ),
                 )
 
         except Exception as e:

@@ -34,7 +34,7 @@ logger = get_logger(__name__)
 
 client = Ark(
     api_key=getenv("MODEL_AGENT_API_KEY"),
-    base_url=DEFAULT_MODEL_AGENT_API_BASE,
+    base_url=getenv("MODEL_AGENT_API_BASE", DEFAULT_MODEL_AGENT_API_BASE),
 )
 
 
@@ -43,7 +43,7 @@ async def generate(prompt, first_frame_image=None, last_frame_image=None):
         if first_frame_image is None:
             logger.debug("text generation")
             response = client.content_generation.tasks.create(
-                model=DEFAULT_VIDEO_MODEL_NAME,
+                model=getenv("MODEL_VIDEO_NAME", DEFAULT_VIDEO_MODEL_NAME),
                 content=[
                     {"type": "text", "text": prompt},
                 ],
@@ -51,7 +51,7 @@ async def generate(prompt, first_frame_image=None, last_frame_image=None):
         elif last_frame_image is None:
             logger.debug("first frame generation")
             response = client.content_generation.tasks.create(
-                model=DEFAULT_VIDEO_MODEL_NAME,
+                model=getenv("MODEL_VIDEO_NAME", DEFAULT_VIDEO_MODEL_NAME),
                 content=cast(
                     list[CreateTaskContentParam],  # avoid IDE warning
                     [
@@ -66,7 +66,7 @@ async def generate(prompt, first_frame_image=None, last_frame_image=None):
         else:
             logger.debug("last frame generation")
             response = client.content_generation.tasks.create(
-                model=DEFAULT_VIDEO_MODEL_NAME,
+                model=getenv("MODEL_VIDEO_NAME", DEFAULT_VIDEO_MODEL_NAME),
                 content=[
                     {"type": "text", "text": prompt},
                     {
@@ -263,8 +263,8 @@ async def video_generate(params: list, tool_context: ToolContext) -> Dict:
                 output_part=output_part,
                 output_tokens=total_tokens,
                 total_tokens=total_tokens,
-                request_model=DEFAULT_VIDEO_MODEL_NAME,
-                response_model=DEFAULT_VIDEO_MODEL_NAME,
+                request_model=getenv("MODEL_VIDEO_NAME", DEFAULT_VIDEO_MODEL_NAME),
+                response_model=getenv("MODEL_VIDEO_NAME", DEFAULT_VIDEO_MODEL_NAME),
             )
 
     if len(success_list) == 0:
