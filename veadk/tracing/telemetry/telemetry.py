@@ -133,6 +133,7 @@ def _set_agent_output_attribute(span: Span, llm_response: LlmResponse) -> None:
     if content and content.parts:
         # set gen_ai.output attribute required by APMPlus
         span.set_attribute("gen_ai.output", content.model_dump(exclude_none=True))
+
         for idx, part in enumerate(content.parts):
             if part.text:
                 span.add_event(

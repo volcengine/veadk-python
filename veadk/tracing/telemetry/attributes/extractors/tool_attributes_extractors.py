@@ -22,6 +22,7 @@ from veadk.utils.misc import safe_json_serialize
 def tool_gen_ai_operation_name(params: ToolAttributesParams) -> ExtractorResponse:
     return ExtractorResponse(content="execute_tool")
 
+
 def tool_gen_ai_span_kind(params: ToolAttributesParams) -> ExtractorResponse:
     return ExtractorResponse(content="tool")
 

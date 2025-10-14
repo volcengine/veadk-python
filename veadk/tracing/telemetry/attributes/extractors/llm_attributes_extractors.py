@@ -324,8 +324,10 @@ def llm_gen_ai_is_streaming(params: LLMAttributesParams) -> ExtractorResponse:
 def llm_gen_ai_operation_name(params: LLMAttributesParams) -> ExtractorResponse:
     return ExtractorResponse(content="chat")
 
+
 def llm_gen_ai_span_kind(params: LLMAttributesParams) -> ExtractorResponse:
     return ExtractorResponse(content="llm")
+
 
 # def llm_gen_ai_system_message(params: LLMAttributesParams) -> ExtractorResponse:
 #     event_attributes = {
