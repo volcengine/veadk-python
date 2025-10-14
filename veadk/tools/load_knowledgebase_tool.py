@@ -25,6 +25,9 @@ from typing_extensions import override
 
 from veadk.knowledgebase import KnowledgeBase
 from veadk.knowledgebase.entry import KnowledgebaseEntry
+from veadk.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from google.adk.models.llm_request import LlmRequest
@@ -96,6 +99,15 @@ class LoadKnowledgebaseTool(FunctionTool):
 
     def __init__(self):
         super().__init__(load_knowledgebase)
+        global knowledgebase
+        if knowledgebase is None:
+            logger.info(
+                "Get global knowledgebase instance failed, failed to set knowledgebase tool backend."
+            )
+        else:
+            if not self.custom_metadata:
+                self.custom_metadata = {}
+            self.custom_metadata["backend"] = knowledgebase.backend
 
     @override
     def _get_declaration(self) -> types.FunctionDeclaration | None:

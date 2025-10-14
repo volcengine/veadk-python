@@ -126,6 +126,12 @@ class Meters:
         "gen_ai.chat_completions.streaming_time_per_output_token"
     )
 
+    # apmplus metrics
+    # span duration
+    APMPLUS_SPAN_LATENCY = "apmplus_span_latency"
+    # tool token usage
+    APMPLUS_TOOL_TOKEN_USAGE = "apmplus_tool_token_usage"
+
 
 class MeterUploader:
     def __init__(
@@ -197,6 +203,20 @@ class MeterUploader:
             explicit_bucket_boundaries_advisory=_GEN_AI_SERVER_TIME_PER_OUTPUT_TOKEN_BUCKETS,
         )
 
+        # apmplus metrics for veadk dashboard
+        self.apmplus_span_latency = self.meter.create_histogram(
+            name=Meters.APMPLUS_SPAN_LATENCY,
+            description="Latency of span",
+            unit="s",
+            explicit_bucket_boundaries_advisory=_GEN_AI_CLIENT_OPERATION_DURATION_BUCKETS,
+        )
+        self.apmplus_tool_token_usage = self.meter.create_histogram(
+            name=Meters.APMPLUS_TOOL_TOKEN_USAGE,
+            description="Token consumption of APMPlus tool token",
+            unit="count",
+            explicit_bucket_boundaries_advisory=_GEN_AI_CLIENT_TOKEN_USAGE_BUCKETS,
+        )
+
     def record_call_llm(
         self,
         invocation_context: InvocationContext,
@@ -207,7 +227,8 @@ class MeterUploader:
         attributes = {
             "gen_ai_system": "volcengine",
             "gen_ai_response_model": llm_request.model,
-            "gen_ai_operation_name": "chat_completions",
+            "gen_ai_operation_name": "chat",
+            "gen_ai_operation_type": "llm",
             "stream": "false",
             "server_address": "api.volcengine.com",
         }  # required by Volcengine APMPlus
@@ -269,6 +290,17 @@ class MeterUploader:
             #         time_per_output_token, attributes=attributes
             #     )
 
+            # add span name attribute
+            span = trace.get_current_span()
+            if not span:
+                return
+
+            # record span latency
+            if hasattr(span, "start_time") and self.apmplus_span_latency:
+                # span 耗时
+                duration = (time.time_ns() - span.start_time) / 1e9  # type: ignore
+                self.apmplus_span_latency.record(duration, attributes=attributes)
+
     def record_tool_call(
         self,
         tool: BaseTool,
@@ -276,6 +308,44 @@ class MeterUploader:
         function_response_event: Event,
     ):
         logger.debug(f"Record tool call work in progress. Tool: {tool.name}")
+        span = trace.get_current_span()
+        if not span:
+            return
+        operation_type = "tool"
+        operation_name = tool.name
+        operation_backend = ""
+        if tool.custom_metadata:
+            operation_backend = tool.custom_metadata.get("backend", "")
+
+        attributes = {
+            "gen_ai_operation_name": operation_name,
+            "gen_ai_operation_type": operation_type,
+            "gen_ai_operation_backend": operation_backend,
+        }
+
+        if hasattr(span, "start_time") and self.apmplus_span_latency:
+            # span 耗时
+            duration = (time.time_ns() - span.start_time) / 1e9  # type: ignore
+            self.apmplus_span_latency.record(duration, attributes=attributes)
+
+        if self.apmplus_tool_token_usage and hasattr(span, "attributes"):
+            tool_input = span.attributes["gen_ai.tool.input"]
+            tool_token_usage_input = (
+                len(tool_input) / 4
+            )  # tool token 数量，使用文本长度/4
+            input_tool_token_attributes = {**attributes, "token_type": "input"}
+            self.apmplus_tool_token_usage.record(
+                tool_token_usage_input, attributes=input_tool_token_attributes
+            )
+
+            tool_output = span.attributes["gen_ai.tool.output"]
+            tool_token_usage_output = (
+                len(tool_output) / 4
+            )  # tool token 数量，使用文本长度/4
+            output_tool_token_attributes = {**attributes, "token_type": "output"}
+            self.apmplus_tool_token_usage.record(
+                tool_token_usage_output, attributes=output_tool_token_attributes
+            )
 
 
 class APMPlusExporterConfig(BaseModel):
