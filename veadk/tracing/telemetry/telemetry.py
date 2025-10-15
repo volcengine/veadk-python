@@ -30,6 +30,7 @@ from veadk.tracing.telemetry.attributes.extractors.types import (
     ToolAttributesParams,
 )
 from veadk.utils.logger import get_logger
+from veadk.utils.misc import safe_json_serialize
 
 logger = get_logger(__name__)
 
@@ -92,8 +93,10 @@ def _set_agent_input_attribute(
     user_content = invocation_context.user_content
     if user_content and user_content.parts:
         # set gen_ai.input attribute required by APMPlus
-        span.set_attribute("gen_ai.input", user_content.model_dump(exclude_none=True))
-
+        span.set_attribute(
+            "gen_ai.input",
+            safe_json_serialize(user_content.model_dump(exclude_none=True)),
+        )
         span.add_event(
             "gen_ai.user.message",
             {
@@ -132,7 +135,9 @@ def _set_agent_output_attribute(span: Span, llm_response: LlmResponse) -> None:
     content = llm_response.content
     if content and content.parts:
         # set gen_ai.output attribute required by APMPlus
-        span.set_attribute("gen_ai.output", content.model_dump(exclude_none=True))
+        span.set_attribute(
+            "gen_ai.output", safe_json_serialize(content.model_dump(exclude_none=True))
+        )
 
         for idx, part in enumerate(content.parts):
             if part.text:
