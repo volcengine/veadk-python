@@ -89,6 +89,7 @@ class Mem0LTMBackend(BaseLongTermMemoryBackend):
                     [{"role": "user", "content": event_string}],
                     user_id=user_id,
                     output_format="v1.1",
+                    async_mode=True,
                 )
                 logger.debug(f"Saved memory result: {result}")
 
@@ -121,7 +122,16 @@ class Mem0LTMBackend(BaseLongTermMemoryBackend):
                 query, user_id=user_id, output_format="v1.1", top_k=top_k
             )
 
+            logger.debug(f"return relevant memories: {memories}")
+
             memory_list = []
+            # 如果 memories 是列表，直接返回
+            if isinstance(memories, list):
+                for mem in memories:
+                    if "memory" in mem:
+                        memory_list.append(mem["memory"])
+                return memory_list
+
             if memories.get("results", []):
                 for mem in memories["results"]:
                     if "memory" in mem:
