@@ -44,7 +44,7 @@ veadk = "veadk.cli.cli:veadk"
 extensions = [
     "redis>=5.0",                 # For Redis database
     "tos>=2.8.4",                   # For TOS storage and Viking DB
-    "llama-index-vector-stores-redis>=0.6.1"
+    "llama-index-vector-stores-redis>=0.6.1",
 ]
 database = [
     "redis>=5.0",                 # For Redis database
