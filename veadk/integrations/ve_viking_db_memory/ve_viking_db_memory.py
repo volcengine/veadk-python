@@ -148,7 +148,7 @@ class VikingDBMemoryClient(Service):
         return api_info
 
     def get_body(self, api, params, body):
-        if not (api in self.api_info):
+        if api not in self.api_info:
             raise Exception("no such api")
         api_info = self.api_info[api]
         r = self.prepare_request(api_info, params)
