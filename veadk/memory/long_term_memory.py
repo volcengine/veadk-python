@@ -203,6 +203,23 @@ class LongTermMemory(BaseMemoryService, BaseModel):
     @override
     async def search_memory(self, *, app_name: str, user_id: str, query: str):
         # prevent model invoke `load_memory` before add session to this memory
+        if not self._backend and isinstance(self.backend, str):
+            self._index = build_long_term_memory_index(app_name, user_id)
+            self._backend = _get_backend_cls(self.backend)(
+                index=self._index, **self.backend_config if self.backend_config else {}
+            )
+            logger.info(
+                f"Initialize long term memory backend now, index is {self._index}"
+            )
+
+        if not self._index and self._index != build_long_term_memory_index(
+            app_name, user_id
+        ):
+            logger.warning(
+                f"The `app_name` or `user_id` is different from the initialized one. Initialized index: {self._index}, current built index: {build_long_term_memory_index(app_name, user_id)}. Search memory return empty list."
+            )
+            return SearchMemoryResponse(memories=[])
+
         if not self._backend:
             logger.error(
                 "Long term memory backend is not initialized, cannot search memory."
