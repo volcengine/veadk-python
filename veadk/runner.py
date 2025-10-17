@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import functools
+import os
 from types import MethodType
 from typing import Union
 
