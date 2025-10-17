@@ -23,6 +23,7 @@ import json
 from urllib.parse import quote
 
 import requests
+from google.adk.tools import ToolContext
 
 from veadk.config import getenv
 from veadk.utils.logger import get_logger
@@ -151,7 +152,7 @@ def request(method, date, query, header, ak, sk, action, body):
     return r.json()
 
 
-def web_search(query: str) -> list[str]:
+def web_search(query: str, tool_context: ToolContext) -> list[str]:
     """Search a query in websites.
 
     Args:
@@ -166,8 +167,14 @@ def web_search(query: str) -> list[str]:
         "Count": 5,
         "NeedSummary": True,
     }
-    ak = getenv("VOLCENGINE_ACCESS_KEY")
-    sk = getenv("VOLCENGINE_SECRET_KEY")
+
+    ak = tool_context.state.get(
+        "VOLCENGINE_ACCESS_KEY", getenv("VOLCENGINE_ACCESS_KEY")
+    )
+
+    sk = tool_context.state.get(
+        "VOLCENGINE_SECRET_KEY", getenv("VOLCENGINE_SECRET_KEY")
+    )
 
     now = datetime.datetime.utcnow()
     response_body = request(
