@@ -12,22 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import base64
+import json
+import mimetypes
+import traceback
 from typing import Dict
 
 from google.adk.tools import ToolContext
+from google.genai.types import Blob, Part
+from opentelemetry import trace
+from opentelemetry.trace import Span
+from volcenginesdkarkruntime import Ark
+from volcenginesdkarkruntime.types.images.images import SequentialImageGenerationOptions
+
 from veadk.config import getenv
 from veadk.consts import DEFAULT_IMAGE_GENERATE_MODEL_NAME, DEFAULT_MODEL_AGENT_API_BASE
-
-import base64
-from volcenginesdkarkruntime import Ark
-from opentelemetry import trace
-import traceback
-from veadk.version import VERSION
-from opentelemetry.trace import Span
 from veadk.utils.logger import get_logger
-from volcenginesdkarkruntime.types.images.images import SequentialImageGenerationOptions
-import json
-
+from veadk.utils.misc import formatted_timestamp, read_png_to_bytes
+from veadk.version import VERSION
 
 logger = get_logger(__name__)
 
@@ -121,7 +123,7 @@ async def image_generate(
     - size 推荐使用 2048x2048 或表格里的标准比例，确保生成质量。
     """
 
-    success_list = []
+    success_list: list[dict] = []
     error_list = []
 
     for idx, item in enumerate(tasks):
@@ -280,6 +282,28 @@ async def image_generate(
             "error_list": error_list,
         }
     else:
+        app_name = tool_context._invocation_context.app_name
+        user_id = tool_context._invocation_context.user_id
+        session_id = tool_context._invocation_context.session.id
+
+        artifact_service = tool_context._invocation_context.artifact_service
+        if artifact_service:
+            for image in success_list:
+                for _, image_tos_url in image.items():
+                    filename = f"artifact_{formatted_timestamp()}"
+                    await artifact_service.save_artifact(
+                        app_name=app_name,
+                        user_id=user_id,
+                        session_id=session_id,
+                        filename=filename,
+                        artifact=Part(
+                            inline_data=Blob(
+                                display_name=filename,
+                                data=read_png_to_bytes(image_tos_url),
+                                mime_type=mimetypes.guess_type(image_tos_url)[0],
+                            )
+                        ),
+                    )
         return {
             "status": "success",
             "success_list": success_list,
@@ -341,9 +365,10 @@ def add_span_attributes(
 
 def _upload_image_to_tos(image_bytes: bytes, object_key: str) -> None:
     try:
-        from veadk.integrations.ve_tos.ve_tos import VeTOS
         import os
         from datetime import datetime
+
+        from veadk.integrations.ve_tos.ve_tos import VeTOS
 
         timestamp: str = datetime.now().strftime("%Y%m%d%H%M%S%f")[:-3]
         object_key = f"{timestamp}-{object_key}"
