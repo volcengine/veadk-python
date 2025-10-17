@@ -50,11 +50,7 @@ RunnerMessage = Union[
 async def pre_run_process(self, process_func, new_message, user_id, session_id):
     if new_message.parts:
         for part in new_message.parts:
-            if (
-                part.inline_data
-                and part.inline_data.mime_type == "image/png"
-                and self.upload_inline_data_to_tos
-            ):
+            if part.inline_data and self.upload_inline_data_to_tos:
                 await process_func(
                     part,
                     self.app_name,
