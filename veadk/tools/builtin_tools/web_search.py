@@ -168,13 +168,13 @@ def web_search(query: str, tool_context: ToolContext) -> list[str]:
         "NeedSummary": True,
     }
 
-    ak = tool_context.state.get(
-        "VOLCENGINE_ACCESS_KEY", getenv("VOLCENGINE_ACCESS_KEY")
-    )
+    ak = tool_context.state.get("VOLCENGINE_ACCESS_KEY")
+    if not ak:
+        ak = getenv("VOLCENGINE_ACCESS_KEY")
 
-    sk = tool_context.state.get(
-        "VOLCENGINE_SECRET_KEY", getenv("VOLCENGINE_SECRET_KEY")
-    )
+    sk = tool_context.state.get("VOLCENGINE_SECRET_KEY")
+    if not sk:
+        sk = getenv("VOLCENGINE_SECRET_KEY")
 
     now = datetime.datetime.utcnow()
     response_body = request(
