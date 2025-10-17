@@ -249,15 +249,21 @@ class Runner(ADKRunner):
         )
 
         if self.short_term_memory:
-            await self.short_term_memory.create_session(
-                app_name=self.app_name, user_id=self.user_id, session_id=session_id
+            session = await self.short_term_memory.create_session(
+                app_name=self.app_name, user_id=user_id, session_id=session_id
+            )
+            assert session, (
+                f"Failed to create session with app_name={self.app_name}, user_id={user_id}, session_id={session_id}, "
+            )
+            logger.debug(
+                f"Auto create session: {session.id}, user_id: {session.user_id}, app_name: {self.app_name}"
             )
 
         final_output = ""
         for converted_message in converted_messages:
             try:
                 async for event in self.run_async(
-                    user_id=self.user_id,
+                    user_id=user_id,
                     session_id=session_id,
                     new_message=converted_message,
                     run_config=run_config,
@@ -377,9 +383,10 @@ class Runner(ADKRunner):
             user_id=user_id,
             session_id=session_id,
         )
+
         if not session:
             logger.error(
-                f"Session {session_id} not found in session service, cannot save to long-term memory."
+                f"Session {session_id} (app_name={app_name}, user_id={user_id}) not found in session service, cannot save to long-term memory."
             )
             return
 
