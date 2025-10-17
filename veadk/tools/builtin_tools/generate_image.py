@@ -28,7 +28,7 @@ from volcenginesdkarkruntime.types.images.images import SequentialImageGeneratio
 from veadk.config import getenv
 from veadk.consts import DEFAULT_IMAGE_GENERATE_MODEL_NAME, DEFAULT_MODEL_AGENT_API_BASE
 from veadk.utils.logger import get_logger
-from veadk.utils.misc import formatted_timestamp, read_png_to_bytes
+from veadk.utils.misc import formatted_timestamp, read_file_to_bytes
 from veadk.version import VERSION
 
 logger = get_logger(__name__)
@@ -299,7 +299,7 @@ async def image_generate(
                         artifact=Part(
                             inline_data=Blob(
                                 display_name=filename,
-                                data=read_png_to_bytes(image_tos_url),
+                                data=read_file_to_bytes(image_tos_url),
                                 mime_type=mimetypes.guess_type(image_tos_url)[0],
                             )
                         ),
