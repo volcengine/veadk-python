@@ -46,7 +46,6 @@ extensions = [
     "redis>=5.0",                 # For Redis database
     "tos>=2.8.4",                   # For TOS storage and Viking DB
     "llama-index-vector-stores-redis>=0.6.1",
-    "mcp-server-vikingdb-memory @ git+https://github.com/volcengine/mcp-server@main#subdirectory=server/mcp_server_vikingdb_memory",
 ]
 database = [
     "redis>=5.0",                 # For Redis database
