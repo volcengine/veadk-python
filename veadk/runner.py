@@ -249,15 +249,21 @@ class Runner(ADKRunner):
         )
 
         if self.short_term_memory:
-            await self.short_term_memory.create_session(
-                app_name=self.app_name, user_id=self.user_id, session_id=session_id
+            session = await self.short_term_memory.create_session(
+                app_name=self.app_name, user_id=user_id, session_id=session_id
+            )
+            assert session, (
+                f"Failed to create session with app_name={self.app_name}, user_id={user_id}, session_id={session_id}, "
+            )
+            logger.debug(
+                f"Auto create session: {session.id}, user_id: {session.user_id}, app_name: {self.app_name}"
             )
 
         final_output = ""
         for converted_message in converted_messages:
             try:
                 async for event in self.run_async(
-                    user_id=self.user_id,
+                    user_id=user_id,
                     session_id=session_id,
                     new_message=converted_message,
                     run_config=run_config,
@@ -359,19 +365,28 @@ class Runner(ADKRunner):
         )
         return eval_set_path
 
-    async def save_session_to_long_term_memory(self, session_id: str) -> None:
+    async def save_session_to_long_term_memory(
+        self, session_id: str, user_id: str = "", app_name: str = ""
+    ) -> None:
         if not self.long_term_memory:
             logger.warning("Long-term memory is not enabled. Failed to save session.")
             return
 
+        if not user_id:
+            user_id = self.user_id
+
+        if not app_name:
+            app_name = self.app_name
+
         session = await self.session_service.get_session(
-            app_name=self.app_name,
-            user_id=self.user_id,
+            app_name=app_name,
+            user_id=user_id,
             session_id=session_id,
         )
+
         if not session:
             logger.error(
-                f"Session {session_id} not found in session service, cannot save to long-term memory."
+                f"Session {session_id} (app_name={app_name}, user_id={user_id}) not found in session service, cannot save to long-term memory."
             )
             return
 
