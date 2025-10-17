@@ -179,7 +179,7 @@ class VikingDBMemoryClient(Service):
         except Exception as e:
             try:
                 res_json = json.loads(e.args[0].decode("utf-8"))
-            except:
+            except Exception as e:
                 raise VikingDBMemoryException(
                     1000028, "missed", "json load res error, res:{}".format(str(e))
                 ) from None
@@ -203,7 +203,7 @@ class VikingDBMemoryClient(Service):
         except Exception as e:
             try:
                 res_json = json.loads(e.args[0].decode("utf-8"))
-            except:
+            except Exception as e:
                 raise VikingDBMemoryException(
                     1000028, "missed", "json load res error, res:{}".format(str(e))
                 ) from None
