@@ -34,7 +34,7 @@ from veadk.evaluation import EvalSetRecorder
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.types import MediaMessage
 from veadk.utils.logger import get_logger
-from veadk.utils.misc import formatted_timestamp, read_png_to_bytes
+from veadk.utils.misc import formatted_timestamp, read_file_to_bytes
 
 logger = get_logger(__name__)
 
@@ -105,9 +105,23 @@ def _convert_messages(
     if isinstance(messages, str):
         _messages = [types.Content(role="user", parts=[types.Part(text=messages)])]
     elif isinstance(messages, MediaMessage):
-        assert messages.media.endswith(".png"), (
-            "The MediaMessage only supports PNG format file for now."
+        import filetype
+
+        # 读取文件数据
+        file_data = read_file_to_bytes(messages.media)
+
+        # 自动识别 MIME 类型
+        kind = filetype.guess(file_data)
+        if kind is None:
+            raise ValueError("Unsupported or unknown file type.")
+
+        mime_type = kind.mime
+
+        # 检查是否为图片或视频
+        assert mime_type.startswith(("image/", "video/")), (
+            f"Unsupported media type: {mime_type}"
         )
+
         _messages = [
             types.Content(
                 role="user",
@@ -116,8 +130,8 @@ def _convert_messages(
                     types.Part(
                         inline_data=Blob(
                             display_name=messages.media,
-                            data=read_png_to_bytes(messages.media),
-                            mime_type="image/png",
+                            data=file_data,
+                            mime_type=mime_type,
                         )
                     ),
                 ],
@@ -271,7 +285,8 @@ class Runner(ADKRunner):
                         and event.content.parts[0].text is not None
                         and len(event.content.parts[0].text.strip()) > 0
                     ):
-                        final_output += event.content.parts[0].text
+                        final_output = event.content.parts[0].text
+                        logger.debug(f"Output: {final_output}")
             except LlmCallsLimitExceededError as e:
                 logger.warning(f"Max number of llm calls limit exceeded: {e}")
                 final_output = ""
