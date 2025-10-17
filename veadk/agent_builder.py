@@ -52,9 +52,8 @@ class AgentBuilder:
         tools = []
         if agent_config.get("tools", []):
             for tool in agent_config["tools"]:
-                module_name = tool["module"]
-                func_name = tool["func"]
-
+                name = tool["name"]
+                module_name, func_name = name.rsplit(".", 1)
                 module = importlib.import_module(module_name)
                 func = getattr(module, func_name)
 
