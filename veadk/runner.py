@@ -359,14 +359,22 @@ class Runner(ADKRunner):
         )
         return eval_set_path
 
-    async def save_session_to_long_term_memory(self, session_id: str) -> None:
+    async def save_session_to_long_term_memory(
+        self, session_id: str, user_id: str = "", app_name: str = ""
+    ) -> None:
         if not self.long_term_memory:
             logger.warning("Long-term memory is not enabled. Failed to save session.")
             return
 
+        if not user_id:
+            user_id = self.user_id
+
+        if not app_name:
+            app_name = self.app_name
+
         session = await self.session_service.get_session(
-            app_name=self.app_name,
-            user_id=self.user_id,
+            app_name=app_name,
+            user_id=user_id,
             session_id=session_id,
         )
         if not session:
