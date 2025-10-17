@@ -23,17 +23,13 @@ from typing_extensions import override
 
 import veadk.config  # noqa E401
 from veadk.config import getenv
+from veadk.integrations.ve_viking_db_memory.ve_viking_db_memory import (
+    VikingDBMemoryClient,
+)
 from veadk.memory.long_term_memory_backends.base_backend import (
     BaseLongTermMemoryBackend,
 )
 from veadk.utils.logger import get_logger
-
-try:
-    from mcp_server_vikingdb_memory.common.memory_client import VikingDBMemoryService
-except ImportError:
-    raise ImportError(
-        "Please install VeADK extensions\npip install veadk-python[extensions]"
-    )
 
 logger = get_logger(__name__)
 
@@ -61,7 +57,7 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
             )
 
     def model_post_init(self, __context: Any) -> None:
-        self._client = VikingDBMemoryService(
+        self._client = VikingDBMemoryClient(
             ak=self.volcengine_access_key,
             sk=self.volcengine_secret_key,
             region=self.region,
