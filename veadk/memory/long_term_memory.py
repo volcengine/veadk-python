@@ -80,7 +80,7 @@ class LongTermMemory(BaseMemoryService, BaseModel):
     """Long term memory backend type"""
 
     backend_config: dict = Field(default_factory=dict)
-    """Long term memory backend configuration"""
+    """Deprecated. Long term memory backend configuration"""
 
     top_k: int = 5
     """Number of top similar documents to retrieve during search."""
@@ -104,9 +104,10 @@ class LongTermMemory(BaseMemoryService, BaseModel):
         # Check index
         self.index = self.index or self.app_name
         if not self.index:
-            raise ValueError(
-                "Attribute `index` or `app_name` must be provided one of both."
+            logger.warning(
+                "Attribute `index` or `app_name` not provided, use `default_app` instead."
             )
+            self.index = "default_app"
 
         # Forward compliance
         if self.backend == "viking_mem":
@@ -115,9 +116,7 @@ class LongTermMemory(BaseMemoryService, BaseModel):
             )
             self.backend = "viking"
 
-        self._backend = _get_backend_cls(self.backend)(
-            index=self.index, **self.backend_config if self.backend_config else {}
-        )
+        self._backend = _get_backend_cls(self.backend)(index=self.index)
 
     def _filter_and_convert_events(self, events: list[Event]) -> list[str]:
         final_events = []
