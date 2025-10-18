@@ -73,4 +73,4 @@ description = "Empty environment variables with KEY pattern"
 regex = '''os\.environ\[".*?KEY"\]\s*=\s*".+"'''
 
 [allowlist]
-paths = ["requirements.txt"]
+paths = ["requirements.txt", "tests"]

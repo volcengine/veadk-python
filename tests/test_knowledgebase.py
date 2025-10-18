@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 
 import pytest
 
@@ -21,11 +22,9 @@ from veadk.knowledgebase.backends.in_memory_backend import InMemoryKnowledgeBack
 
 @pytest.mark.asyncio
 async def test_knowledgebase():
+    os.environ["MODEL_EMBEDDING_API_KEY"] = "mocked_api_key"
+
     app_name = "kb_test_app"
-    kb = KnowledgeBase(
-        backend="local",
-        app_name=app_name,
-        backend_config={"embedding_config": {"api_key": "test"}},
-    )
+    kb = KnowledgeBase(backend="local", app_name=app_name)
 
     assert isinstance(kb._backend, InMemoryKnowledgeBackend)
