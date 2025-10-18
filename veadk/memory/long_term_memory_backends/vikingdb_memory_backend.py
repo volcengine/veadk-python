@@ -46,16 +46,6 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
     region: str = "cn-beijing"
     """VikingDB memory region"""
 
-    def precheck_index_naming(self):
-        if not (
-            isinstance(self.index, str)
-            and 1 <= len(self.index) <= 128
-            and re.fullmatch(r"^[a-zA-Z][a-zA-Z0-9_]*$", self.index)
-        ):
-            raise ValueError(
-                "The index name does not conform to the rules: it must start with an English letter, contain only letters, numbers, and underscores, and have a length of 1-128."
-            )
-
     def model_post_init(self, __context: Any) -> None:
         self._client = VikingDBMemoryClient(
             ak=self.volcengine_access_key,
@@ -66,6 +56,16 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
         # check whether collection exist, if not, create it
         if not self._collection_exist():
             self._create_collection()
+
+    def precheck_index_naming(self):
+        if not (
+            isinstance(self.index, str)
+            and 1 <= len(self.index) <= 128
+            and re.fullmatch(r"^[a-zA-Z][a-zA-Z0-9_]*$", self.index)
+        ):
+            raise ValueError(
+                "The index name does not conform to the rules: it must start with an English letter, contain only letters, numbers, and underscores, and have a length of 1-128."
+            )
 
     def _collection_exist(self) -> bool:
         try:
@@ -83,10 +83,7 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
         return response
 
     @override
-    def save_memory(self, event_strings: list[str], **kwargs) -> bool:
-        user_id = kwargs.get("user_id")
-        if user_id is None:
-            raise ValueError("user_id is required")
+    def save_memory(self, user_id: str, event_strings: list[str], **kwargs) -> bool:
         session_id = str(uuid.uuid1())
         messages = []
         for raw_events in event_strings:
@@ -114,10 +111,9 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
         return True
 
     @override
-    def search_memory(self, query: str, top_k: int, **kwargs) -> list[str]:
-        user_id = kwargs.get("user_id")
-        if user_id is None:
-            raise ValueError("user_id is required")
+    def search_memory(
+        self, user_id: str, query: str, top_k: int, **kwargs
+    ) -> list[str]:
         filter = {
             "user_id": user_id,
             "memory_type": ["sys_event_v1"],
