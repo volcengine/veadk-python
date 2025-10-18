@@ -12,10 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Callable, Literal
+from __future__ import annotations
+
+from typing import Any, Callable, Literal, Union
 
 from pydantic import BaseModel, Field
-from typing_extensions import Union
 
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
 from veadk.knowledgebase.entry import KnowledgebaseEntry
@@ -54,11 +55,11 @@ def _get_backend_cls(backend: str) -> type[BaseKnowledgebaseBackend]:
     raise ValueError(f"Unsupported knowledgebase backend: {backend}")
 
 
-def build_knowledgebase_index(app_name: str):
-    return f"veadk_kb_{app_name}"
-
-
 class KnowledgeBase(BaseModel):
+    name: str = "user_knowledgebase"
+
+    description: str = "This knowledgebase stores some user-related information."
+
     backend: Union[
         Literal["local", "opensearch", "viking", "redis"], BaseKnowledgebaseBackend
     ] = "local"
