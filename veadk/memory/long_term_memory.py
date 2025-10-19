@@ -80,7 +80,7 @@ class LongTermMemory(BaseMemoryService, BaseModel):
     """Long term memory backend type"""
 
     backend_config: dict = Field(default_factory=dict)
-    """Deprecated. Long term memory backend configuration"""
+    """Long term memory backend configuration"""
 
     top_k: int = 5
     """Number of top similar documents to retrieve during search."""
@@ -99,6 +99,11 @@ class LongTermMemory(BaseMemoryService, BaseModel):
             logger.info(
                 f"Initialized long term memory with provided backend instance {self._backend.__class__.__name__}"
             )
+            return
+
+        # Once user define backend config, use it directly
+        if self.backend_config:
+            self._backend = _get_backend_cls(self.backend)(**self.backend_config)
             return
 
         # Check index

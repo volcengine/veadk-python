@@ -71,7 +71,7 @@ class KnowledgeBase(BaseModel):
     Default is `local`."""
 
     backend_config: dict = Field(default_factory=dict)
-    """Deprecated. Configuration for the backend"""
+    """Configuration for the backend"""
 
     top_k: int = 10
     """Number of top similar documents to retrieve during search"""
@@ -87,6 +87,11 @@ class KnowledgeBase(BaseModel):
             logger.info(
                 f"Initialized knowledgebase with provided backend instance {self._backend.__class__.__name__}"
             )
+            return
+
+        # Once user define backend config, use it directly
+        if self.backend_config:
+            self._backend = _get_backend_cls(self.backend)(**self.backend_config)
             return
 
         self.index = self.index or self.app_name
