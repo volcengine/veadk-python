@@ -144,6 +144,8 @@ def request(method, date, query, header, ak, sk, action, body):
         )
     )
     header = {**header, **sign_result}
+    if "X-Security-Token" in header and header["X-Security-Token"] == "":
+        del header["X-Security-Token"]
     # header = {**header, **{"X-Security-Token": SessionToken}}
     # 第六步：将 Signature 签名写入 HTTP Header 中，并发送 HTTP 请求。
     r = requests.request(

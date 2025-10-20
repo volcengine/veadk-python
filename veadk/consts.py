@@ -66,3 +66,5 @@ DEFAULT_TEXT_TO_IMAGE_MODEL_NAME = "doubao-seedream-3-0-t2i-250415"
 DEFAULT_IMAGE_EDIT_MODEL_NAME = "doubao-seededit-3-0-i2i-250628"
 DEFAULT_VIDEO_MODEL_NAME = "doubao-seedance-1-0-pro-250528"
 DEFAULT_IMAGE_GENERATE_MODEL_NAME = "doubao-seedream-4-0-250828"
+
+VEFAAS_IAM_CRIDENTIAL_PATH = "/var/run/secrets/iam/credential"
