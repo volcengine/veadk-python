@@ -127,8 +127,7 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
         }
 
         logger.debug(
-            f"Request for search memory in VikingDB: filter={filter}, collection_name={self.index}, query={query}",
-            limit={top_k},
+            f"Request for search memory in VikingDB: filter={filter}, collection_name={self.index}, query={query}, limit={top_k}"
         )
 
         response = self._client.search_memory(
