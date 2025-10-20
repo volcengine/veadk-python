@@ -98,7 +98,7 @@ class LongTermMemory(BaseMemoryService, BaseModel):
             self._backend = self.backend
             self.index = self._backend.index
             logger.info(
-                f"Initialized long term memory with provided backend instance {self._backend.__class__.__name__}"
+                f"Initialized long term memory with provided backend instance {self._backend.__class__.__name__}, index={self.index}"
             )
             return
 
@@ -123,6 +123,10 @@ class LongTermMemory(BaseMemoryService, BaseModel):
             self.backend = "viking"
 
         self._backend = _get_backend_cls(self.backend)(index=self.index)
+
+        logger.info(
+            f"Initialized long term memory with provided backend instance {self._backend.__class__.__name__}, index={self.index}"
+        )
 
     def _filter_and_convert_events(self, events: list[Event]) -> list[str]:
         final_events = []
