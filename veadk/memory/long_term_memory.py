@@ -96,6 +96,7 @@ class LongTermMemory(BaseMemoryService, BaseModel):
         # Once user define a backend instance, use it directly
         if isinstance(self.backend, BaseLongTermMemoryBackend):
             self._backend = self.backend
+            self.index = self._backend.index
             logger.info(
                 f"Initialized long term memory with provided backend instance {self._backend.__class__.__name__}"
             )

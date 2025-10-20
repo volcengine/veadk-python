@@ -84,6 +84,7 @@ class KnowledgeBase(BaseModel):
     def model_post_init(self, __context: Any) -> None:
         if isinstance(self.backend, BaseKnowledgebaseBackend):
             self._backend = self.backend
+            self.index = self._backend.index
             logger.info(
                 f"Initialized knowledgebase with provided backend instance {self._backend.__class__.__name__}"
             )
