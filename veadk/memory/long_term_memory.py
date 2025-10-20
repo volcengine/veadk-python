@@ -72,10 +72,6 @@ def _get_backend_cls(backend: str) -> type[BaseLongTermMemoryBackend]:
     raise ValueError(f"Unsupported long term memory backend: {backend}")
 
 
-def build_long_term_memory_index(app_name: str, user_id: str):
-    return f"{app_name}_{user_id}"
-
-
 class LongTermMemory(BaseMemoryService, BaseModel):
     backend: Union[
         Literal["local", "opensearch", "redis", "viking", "viking_mem", "mem0"],
@@ -89,54 +85,48 @@ class LongTermMemory(BaseMemoryService, BaseModel):
     top_k: int = 5
     """Number of top similar documents to retrieve during search."""
 
+    index: str = ""
+
     app_name: str = ""
 
     user_id: str = ""
+    """Deprecated attribute"""
 
     def model_post_init(self, __context: Any) -> None:
-        if self.backend == "viking_mem":
-            logger.warning(
-                "The `viking_mem` backend is deprecated, please use `viking` instead."
-            )
-            self.backend = "viking"
-
-        self._backend = None
-
         # Once user define a backend instance, use it directly
         if isinstance(self.backend, BaseLongTermMemoryBackend):
             self._backend = self.backend
+            self.index = self._backend.index
             logger.info(
-                f"Initialized long term memory with provided backend instance {self._backend.__class__.__name__}"
+                f"Initialized long term memory with provided backend instance {self._backend.__class__.__name__}, index={self.index}"
             )
             return
 
+        # Once user define backend config, use it directly
         if self.backend_config:
-            logger.warning(
-                f"Initialized long term memory backend {self.backend} with config. We will ignore `app_name` and `user_id` if provided."
-            )
             self._backend = _get_backend_cls(self.backend)(**self.backend_config)
-            _index = self.backend_config.get("index", None)
-            if _index:
-                self._index = _index
-                logger.info(f"Long term memory index set to {self._index}.")
-            else:
-                logger.warning(
-                    "Cannot find index via backend_config, please set `index` parameter."
-                )
             return
 
-        if self.app_name and self.user_id:
-            self._index = build_long_term_memory_index(
-                app_name=self.app_name, user_id=self.user_id
-            )
-            logger.info(f"Long term memory index set to {self._index}.")
-            self._backend = _get_backend_cls(self.backend)(
-                index=self._index, **self.backend_config if self.backend_config else {}
-            )
-        else:
+        # Check index
+        self.index = self.index or self.app_name
+        if not self.index:
             logger.warning(
-                "Neither `backend_instance`, `backend_config`, nor (`app_name`/`user_id`) is provided, the long term memory storage will initialize when adding a session."
+                "Attribute `index` or `app_name` not provided, use `default_app` instead."
             )
+            self.index = "default_app"
+
+        # Forward compliance
+        if self.backend == "viking_mem":
+            logger.warning(
+                "The `viking_mem` backend is deprecated, change to `viking` instead."
+            )
+            self.backend = "viking"
+
+        self._backend = _get_backend_cls(self.backend)(index=self.index)
+
+        logger.info(
+            f"Initialized long term memory with provided backend instance {self._backend.__class__.__name__}, index={self.index}"
+        )
 
     def _filter_and_convert_events(self, events: list[Event]) -> list[str]:
         final_events = []
@@ -164,75 +154,32 @@ class LongTermMemory(BaseMemoryService, BaseModel):
         self,
         session: Session,
     ):
-        app_name = session.app_name
         user_id = session.user_id
-
-        if not self._backend and isinstance(self.backend, str):
-            self._index = build_long_term_memory_index(app_name, user_id)
-            self._backend = _get_backend_cls(self.backend)(
-                index=self._index, **self.backend_config if self.backend_config else {}
-            )
-            logger.info(
-                f"Initialize long term memory backend now, index is {self._index}"
-            )
-
-        if not self._index and self._index != build_long_term_memory_index(
-            app_name, user_id
-        ):
-            logger.warning(
-                f"The `app_name` or `user_id` is different from the initialized one, skip add session to memory. Initialized index: {self._index}, current built index: {build_long_term_memory_index(app_name, user_id)}"
-            )
-            return
         event_strings = self._filter_and_convert_events(session.events)
 
         logger.info(
-            f"Adding {len(event_strings)} events to long term memory: index={self._index}"
+            f"Adding {len(event_strings)} events to long term memory: index={self.index}"
         )
-
-        if self._backend:
-            self._backend.save_memory(event_strings=event_strings, user_id=user_id)
-
-            logger.info(
-                f"Added {len(event_strings)} events to long term memory: index={self._index}"
-            )
-        else:
-            logger.error(
-                "Long term memory backend initialize failed, cannot add session to memory."
-            )
+        self._backend.save_memory(user_id=user_id, event_strings=event_strings)
+        logger.info(
+            f"Added {len(event_strings)} events to long term memory: index={self.index}, user_id={user_id}"
+        )
 
     @override
-    async def search_memory(self, *, app_name: str, user_id: str, query: str):
-        # prevent model invoke `load_memory` before add session to this memory
-        if not self._backend and isinstance(self.backend, str):
-            self._index = build_long_term_memory_index(app_name, user_id)
-            self._backend = _get_backend_cls(self.backend)(
-                index=self._index, **self.backend_config if self.backend_config else {}
-            )
-            logger.info(
-                f"Initialize long term memory backend now, index is {self._index}"
-            )
+    async def search_memory(
+        self, *, app_name: str, user_id: str, query: str
+    ) -> SearchMemoryResponse:
+        logger.info(f"Search memory with query={query}")
 
-        if not self._index and self._index != build_long_term_memory_index(
-            app_name, user_id
-        ):
-            logger.warning(
-                f"The `app_name` or `user_id` is different from the initialized one. Initialized index: {self._index}, current built index: {build_long_term_memory_index(app_name, user_id)}. Search memory return empty list."
+        memory_chunks = []
+        try:
+            memory_chunks = self._backend.search_memory(
+                query=query, top_k=self.top_k, user_id=user_id
             )
-            return SearchMemoryResponse(memories=[])
-
-        if not self._backend:
+        except Exception as e:
             logger.error(
-                "Long term memory backend is not initialized, cannot search memory."
+                f"Exception orrcus during memory search: {e}. Return empty memory chunks"
             )
-            return SearchMemoryResponse(memories=[])
-
-        logger.info(
-            f"Searching long term memory: query={query} index={self._index} top_k={self.top_k}"
-        )
-
-        memory_chunks = self._backend.search_memory(
-            query=query, top_k=self.top_k, user_id=user_id
-        )
 
         memory_events = []
         for memory in memory_chunks:
@@ -260,6 +207,6 @@ class LongTermMemory(BaseMemoryService, BaseModel):
             )
 
         logger.info(
-            f"Return {len(memory_events)} memory events for query: {query} index={self._index}"
+            f"Return {len(memory_events)} memory events for query: {query} index={self.index} user_id={user_id}"
         )
         return SearchMemoryResponse(memories=memory_events)

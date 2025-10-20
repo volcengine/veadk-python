@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from unittest.mock import Mock, patch
 
 from google.adk.agents.llm_agent import LlmAgent
@@ -33,11 +34,10 @@ from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
 
 
 def test_agent():
-    knowledgebase = KnowledgeBase(
-        index="test_index",
-        backend="local",
-        backend_config={"embedding_config": {"api_key": "test"}},
-    )
+    os.environ["MODEL_EMBEDDING_API_KEY"] = "mocked_api_key"
+
+    knowledgebase = KnowledgeBase(index="test_index", backend="local")
+
     long_term_memory = LongTermMemory(backend="local")
     tracer = OpentelemetryTracer()
 
@@ -69,8 +69,6 @@ def test_agent():
 
     assert agent.knowledgebase == knowledgebase
     assert agent.knowledgebase.backend == "local"  # type: ignore
-    assert load_knowledgebase_tool.knowledgebase == agent.knowledgebase
-    assert load_knowledgebase_tool.load_knowledgebase_tool in agent.tools
 
     assert agent.long_term_memory.backend == "local"  # type: ignore
     assert load_memory in agent.tools

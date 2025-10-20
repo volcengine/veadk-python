@@ -13,12 +13,11 @@
 # limitations under the License.
 
 from typing import Any
-from typing_extensions import override
+
 from pydantic import Field
+from typing_extensions import override
 
 from veadk.configs.database_configs import Mem0Config
-
-
 from veadk.memory.long_term_memory_backends.base_backend import (
     BaseLongTermMemoryBackend,
 )
@@ -66,7 +65,9 @@ class Mem0LTMBackend(BaseLongTermMemoryBackend):
         pass
 
     @override
-    def save_memory(self, event_strings: list[str], **kwargs) -> bool:
+    def save_memory(
+        self, event_strings: list[str], user_id: str = "default_user", **kwargs
+    ) -> bool:
         """Save memory to Mem0
 
         Args:
@@ -76,8 +77,6 @@ class Mem0LTMBackend(BaseLongTermMemoryBackend):
         Returns:
             bool: True if saved successfully, False otherwise
         """
-        user_id = kwargs.get("user_id", "default_user")
-
         try:
             logger.info(
                 f"Saving {len(event_strings)} events to Mem0 for user: {user_id}"
@@ -100,7 +99,9 @@ class Mem0LTMBackend(BaseLongTermMemoryBackend):
             return False
 
     @override
-    def search_memory(self, query: str, top_k: int, **kwargs) -> list[str]:
+    def search_memory(
+        self, query: str, top_k: int, user_id: str = "default_user", **kwargs
+    ) -> list[str]:
         """Search memory from Mem0
 
         Args:
@@ -111,7 +112,6 @@ class Mem0LTMBackend(BaseLongTermMemoryBackend):
         Returns:
             list[str]: List of memory strings
         """
-        user_id = kwargs.get("user_id", "default_user")
 
         try:
             logger.info(

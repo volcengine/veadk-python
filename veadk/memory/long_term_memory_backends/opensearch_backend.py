@@ -14,11 +14,7 @@
 
 import re
 
-from llama_index.core import (
-    Document,
-    StorageContext,
-    VectorStoreIndex,
-)
+from llama_index.core import Document, VectorStoreIndex
 from llama_index.core.schema import BaseNode
 from llama_index.embeddings.openai_like import OpenAILikeEmbedding
 from pydantic import Field
@@ -31,6 +27,7 @@ from veadk.knowledgebase.backends.utils import get_llama_index_splitter
 from veadk.memory.long_term_memory_backends.base_backend import (
     BaseLongTermMemoryBackend,
 )
+from veadk.utils.logger import get_logger
 
 try:
     from llama_index.vector_stores.opensearch import (
@@ -42,6 +39,8 @@ except ImportError:
         "Please install VeADK extensions\npip install veadk-python[extensions]"
     )
 
+logger = get_logger(__name__)
+
 
 class OpensearchLTMBackend(BaseLongTermMemoryBackend):
     opensearch_config: OpensearchConfig = Field(default_factory=OpensearchConfig)
@@ -52,19 +51,30 @@ class OpensearchLTMBackend(BaseLongTermMemoryBackend):
     )
     """Embedding model configs"""
 
-    def precheck_index_naming(self):
+    def model_post_init(self, __context: Any) -> None:
+        self._embed_model = OpenAILikeEmbedding(
+            model_name=self.embedding_config.name,
+            api_key=self.embedding_config.api_key,
+            api_base=self.embedding_config.api_base,
+        )
+
+    def precheck_index_naming(self, index: str):
         if not (
-            isinstance(self.index, str)
-            and not self.index.startswith(("_", "-"))
-            and self.index.islower()
-            and re.match(r"^[a-z0-9_\-.]+$", self.index)
+            isinstance(index, str)
+            and not index.startswith(("_", "-"))
+            and index.islower()
+            and re.match(r"^[a-z0-9_\-.]+$", index)
         ):
             raise ValueError(
-                "The index name does not conform to the naming rules of OpenSearch"
+                f"The index name {index} does not conform to the naming rules of OpenSearch"
             )
 
-    def model_post_init(self, __context: Any) -> None:
-        self._opensearch_client = OpensearchVectorClient(
+    def _create_vector_index(self, index: str) -> VectorStoreIndex:
+        logger.info(f"Create OpenSearch vector index with index={index}")
+
+        self.precheck_index_naming(index)
+
+        opensearch_client = OpensearchVectorClient(
             endpoint=self.opensearch_config.host,
             port=self.opensearch_config.port,
             http_auth=(
@@ -74,39 +84,33 @@ class OpensearchLTMBackend(BaseLongTermMemoryBackend):
             use_ssl=True,
             verify_certs=False,
             dim=self.embedding_config.dim,
-            index=self.index,  # collection name
+            index=index,
         )
-
-        self._vector_store = OpensearchVectorStore(client=self._opensearch_client)
-
-        self._storage_context = StorageContext.from_defaults(
-            vector_store=self._vector_store
+        vector_store = OpensearchVectorStore(client=opensearch_client)
+        return VectorStoreIndex.from_vector_store(
+            vector_store=vector_store, embed_model=self._embed_model
         )
-
-        self._embed_model = OpenAILikeEmbedding(
-            model_name=self.embedding_config.name,
-            api_key=self.embedding_config.api_key,
-            api_base=self.embedding_config.api_base,
-        )
-
-        self._vector_index = VectorStoreIndex.from_documents(
-            documents=[],
-            storage_context=self._storage_context,
-            embed_model=self._embed_model,
-        )
-        self._retriever = self._vector_index.as_retriever()
 
     @override
-    def save_memory(self, event_strings: list[str], **kwargs) -> bool:
+    def save_memory(self, user_id: str, event_strings: list[str], **kwargs) -> bool:
+        index = f"{self.index}_{user_id}"
+        vector_index = self._create_vector_index(index)
+
         for event_string in event_strings:
             document = Document(text=event_string)
             nodes = self._split_documents([document])
-            self._vector_index.insert_nodes(nodes)
+            vector_index.insert_nodes(nodes)
         return True
 
     @override
-    def search_memory(self, query: str, top_k: int, **kwargs) -> list[str]:
-        _retriever = self._vector_index.as_retriever(similarity_top_k=top_k)
+    def search_memory(
+        self, user_id: str, query: str, top_k: int, **kwargs
+    ) -> list[str]:
+        index = f"{self.index}_{user_id}"
+
+        vector_index = self._create_vector_index(index)
+
+        _retriever = vector_index.as_retriever(similarity_top_k=top_k)
         retrieved_nodes = _retriever.retrieve(query)
         return [node.text for node in retrieved_nodes]
 

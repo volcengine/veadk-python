@@ -133,10 +133,14 @@ class Agent(LlmAgent):
             )
 
         if self.knowledgebase:
-            from veadk.tools import load_knowledgebase_tool
+            from veadk.tools.builtin_tools.load_knowledgebase import (
+                LoadKnowledgebaseTool,
+            )
 
-            load_knowledgebase_tool.knowledgebase = self.knowledgebase
-            self.tools.append(load_knowledgebase_tool.load_knowledgebase_tool)
+            load_knowledgebase_tool = LoadKnowledgebaseTool(
+                knowledgebase=self.knowledgebase
+            )
+            self.tools.append(load_knowledgebase_tool)
 
         if self.long_term_memory is not None:
             from google.adk.tools import load_memory
