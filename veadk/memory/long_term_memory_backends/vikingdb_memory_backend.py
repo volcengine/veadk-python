@@ -115,7 +115,7 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
         logger.debug(
             f"Request for add {len(messages)} memory to VikingDB: collection_name={self.index}, metadata={metadata}, session_id={session_id}"
         )
-        
+
         client = self._get_client()
         response = client.add_messages(
             collection_name=self.index,
@@ -143,7 +143,7 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
         logger.debug(
             f"Request for search memory in VikingDB: filter={filter}, collection_name={self.index}, query={query}, limit={top_k}"
         )
-        
+
         client = self._get_client()
         response = client.search_memory(
             collection_name=self.index, query=query, filter=filter, limit=top_k
