@@ -36,18 +36,14 @@ def formatted_timestamp() -> str:
     return time.strftime("%Y%m%d%H%M%S", time.localtime())
 
 
-def read_png_to_bytes(png_path: str) -> bytes:
-    # Determine whether it is a local file or a network file
-    if png_path.startswith(("http://", "https://")):
-        # Network file: Download via URL and return bytes
-        response = requests.get(png_path)
-        response.raise_for_status()  # Check if the HTTP request is successful
+def read_file_to_bytes(file_path: str) -> bytes:
+    if file_path.startswith(("http://", "https://")):
+        response = requests.get(file_path)
+        response.raise_for_status()
         return response.content
     else:
-        # Local file
-        with open(png_path, "rb") as f:
-            data = f.read()
-    return data
+        with open(file_path, "rb") as f:
+            return f.read()
 
 
 def load_module_from_file(module_name: str, file_path: str) -> types.ModuleType:

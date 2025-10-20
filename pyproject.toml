@@ -35,6 +35,7 @@ dependencies = [
     "psycopg2-binary>=2.9.10", # For PostgreSQL database (short term memory)
     "pymysql>=1.1.1", # For MySQL database (short term memory)
     "opensearch-py==2.8.0",
+    "filetype>=1.2.0",
 ]
 
 [project.scripts]
