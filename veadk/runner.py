@@ -34,7 +34,7 @@ from veadk.evaluation import EvalSetRecorder
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.types import MediaMessage
 from veadk.utils.logger import get_logger
-from veadk.utils.misc import formatted_timestamp, read_png_to_bytes
+from veadk.utils.misc import formatted_timestamp, read_file_to_bytes
 
 logger = get_logger(__name__)
 
@@ -50,11 +50,7 @@ RunnerMessage = Union[
 async def pre_run_process(self, process_func, new_message, user_id, session_id):
     if new_message.parts:
         for part in new_message.parts:
-            if (
-                part.inline_data
-                and part.inline_data.mime_type == "image/png"
-                and self.upload_inline_data_to_tos
-            ):
+            if part.inline_data and self.upload_inline_data_to_tos:
                 await process_func(
                     part,
                     self.app_name,
@@ -105,9 +101,20 @@ def _convert_messages(
     if isinstance(messages, str):
         _messages = [types.Content(role="user", parts=[types.Part(text=messages)])]
     elif isinstance(messages, MediaMessage):
-        assert messages.media.endswith(".png"), (
-            "The MediaMessage only supports PNG format file for now."
+        import filetype
+
+        file_data = read_file_to_bytes(messages.media)
+
+        kind = filetype.guess(file_data)
+        if kind is None:
+            raise ValueError("Unsupported or unknown file type.")
+
+        mime_type = kind.mime
+
+        assert mime_type.startswith(("image/", "video/")), (
+            f"Unsupported media type: {mime_type}"
         )
+
         _messages = [
             types.Content(
                 role="user",
@@ -116,8 +123,8 @@ def _convert_messages(
                     types.Part(
                         inline_data=Blob(
                             display_name=messages.media,
-                            data=read_png_to_bytes(messages.media),
-                            mime_type="image/png",
+                            data=file_data,
+                            mime_type=mime_type,
                         )
                     ),
                 ],

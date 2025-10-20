@@ -13,23 +13,20 @@
 # limitations under the License.
 
 
+import os
+
 import pytest
 from google.adk.tools import load_memory
 
 from veadk.agent import Agent
 from veadk.memory.long_term_memory import LongTermMemory
 
-app_name = "test_ltm"
-user_id = "test_user"
-
 
 @pytest.mark.asyncio
 async def test_long_term_memory():
-    long_term_memory = LongTermMemory(
-        backend="local",
-        # app_name=app_name,
-        # user_id=user_id,
-    )
+    os.environ["MODEL_EMBEDDING_API_KEY"] = "mocked_api_key"
+    long_term_memory = LongTermMemory(backend="local")
+
     agent = Agent(
         name="all_name",
         model_name="test_model_name",
@@ -43,7 +40,8 @@ async def test_long_term_memory():
 
     assert load_memory in agent.tools, "load_memory tool not found in agent tools"
 
-    assert not agent.long_term_memory._backend
+    assert agent.long_term_memory
+    assert agent.long_term_memory._backend
 
     # assert agent.long_term_memory._backend.index == build_long_term_memory_index(
     #     app_name, user_id
