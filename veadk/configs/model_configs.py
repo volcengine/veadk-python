@@ -17,7 +17,7 @@ from functools import cached_property
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from veadk.auth.veauth.ark_veauth import ARKVeAuth
+from veadk.auth.veauth.ark_veauth import get_ark_token
 from veadk.consts import (
     DEFAULT_MODEL_AGENT_API_BASE,
     DEFAULT_MODEL_AGENT_NAME,
@@ -39,7 +39,7 @@ class ModelConfig(BaseSettings):
 
     @cached_property
     def api_key(self) -> str:
-        return os.getenv("MODEL_AGENT_API_KEY") or ARKVeAuth().token
+        return os.getenv("MODEL_AGENT_API_KEY") or get_ark_token()
 
 
 class EmbeddingModelConfig(BaseSettings):
@@ -56,7 +56,7 @@ class EmbeddingModelConfig(BaseSettings):
 
     @cached_property
     def api_key(self) -> str:
-        return os.getenv("MODEL_EMBEDDING_API_KEY") or ARKVeAuth().token
+        return os.getenv("MODEL_EMBEDDING_API_KEY") or get_ark_token()
 
 
 class NormalEmbeddingModelConfig(BaseSettings):

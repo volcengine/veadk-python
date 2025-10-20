@@ -14,64 +14,56 @@
 
 import os
 
-from typing_extensions import override
-
-from veadk.auth.veauth.base_veauth import BaseVeAuth
+from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 from veadk.utils.logger import get_logger
 from veadk.utils.volcengine_sign import ve_request
 
 logger = get_logger(__name__)
 
 
-class ARKVeAuth(BaseVeAuth):
-    def __init__(
-        self,
-        access_key: str = os.getenv("VOLCENGINE_ACCESS_KEY", ""),
-        secret_key: str = os.getenv("VOLCENGINE_SECRET_KEY", ""),
-    ) -> None:
-        super().__init__(access_key, secret_key)
+def get_ark_token(region: str = "cn-beijing") -> str:
+    logger.info("Fetching ARK token...")
 
-        self._token: str = ""
+    access_key = os.getenv("VOLCENGINE_ACCESS_KEY")
+    secret_key = os.getenv("VOLCENGINE_SECRET_KEY")
+    session_token = ""
 
-    @override
-    def _fetch_token(self) -> None:
-        logger.info("Fetching ARK token...")
-        # list api keys
-        first_api_key_id = ""
-        res = ve_request(
-            request_body={"ProjectName": "default", "Filter": {}},
-            action="ListApiKeys",
-            ak=self.access_key,
-            sk=self.secret_key,
-            service="ark",
-            version="2024-01-01",
-            region="cn-beijing",
-            host="open.volcengineapi.com",
-        )
-        try:
-            first_api_key_id = res["Result"]["Items"][0]["Id"]
-        except KeyError:
-            raise ValueError(f"Failed to get ARK api key list: {res}")
+    if not (access_key and secret_key):
+        # try to get from vefaas iam
+        cred = get_credential_from_vefaas_iam()
+        access_key = cred.access_key_id
+        secret_key = cred.secret_access_key
+        session_token = cred.session_token
 
-        # get raw api key
-        res = ve_request(
-            request_body={"Id": first_api_key_id},
-            action="GetRawApiKey",
-            ak=self.access_key,
-            sk=self.secret_key,
-            service="ark",
-            version="2024-01-01",
-            region="cn-beijing",
-            host="open.volcengineapi.com",
-        )
-        try:
-            self._token = res["Result"]["ApiKey"]
-        except KeyError:
-            raise ValueError(f"Failed to get ARK api key: {res}")
+    res = ve_request(
+        request_body={"ProjectName": "default", "Filter": {}},
+        header={"X-Security-Token": session_token},
+        action="ListApiKeys",
+        ak=access_key,
+        sk=secret_key,
+        service="ark",
+        version="2024-01-01",
+        region=region,
+        host="open.volcengineapi.com",
+    )
+    try:
+        first_api_key_id = res["Result"]["Items"][0]["Id"]
+    except KeyError:
+        raise ValueError(f"Failed to get ARK api key list: {res}")
 
-    @property
-    def token(self) -> str:
-        if self._token:
-            return self._token
-        self._fetch_token()
-        return self._token
+    # get raw api key
+    res = ve_request(
+        request_body={"Id": first_api_key_id},
+        header={"X-Security-Token": session_token},
+        action="GetRawApiKey",
+        ak=access_key,
+        sk=secret_key,
+        service="ark",
+        version="2024-01-01",
+        region=region,
+        host="open.volcengineapi.com",
+    )
+    try:
+        return res["Result"]["ApiKey"]
+    except KeyError:
+        raise ValueError(f"Failed to get ARK api key: {res}")
