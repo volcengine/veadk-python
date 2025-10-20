@@ -98,12 +98,19 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
             "default_assistant_id": "assistant",
             "time": int(time.time() * 1000),
         }
+
+        logger.debug(
+            f"Request for add {len(messages)} memory to VikingDB: collection_name={self.index}, metadata={metadata}, session_id={session_id}"
+        )
+
         response = self._client.add_messages(
             collection_name=self.index,
             messages=messages,
             metadata=metadata,
             session_id=session_id,
         )
+
+        logger.debug(f"Response from add memory to VikingDB: {response}")
 
         if not response.get("code") == 0:
             raise ValueError(f"Save VikingDB memory error: {response}")
@@ -118,9 +125,17 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
             "user_id": user_id,
             "memory_type": ["sys_event_v1"],
         }
+
+        logger.debug(
+            f"Request for search memory in VikingDB: filter={filter}, collection_name={self.index}, query={query}",
+            limit={top_k},
+        )
+
         response = self._client.search_memory(
             collection_name=self.index, query=query, filter=filter, limit=top_k
         )
+
+        logger.debug(f"Response from search memory in VikingDB: {response}")
 
         if not response.get("code") == 0:
             raise ValueError(f"Search VikingDB memory error: {response}")
