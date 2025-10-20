@@ -117,18 +117,16 @@ class ShortTermMemory(BaseModel):
                 f"Loaded {len(list_sessions_response.sessions)} sessions from db {self.db_url}."
             )
 
-        if (
-            await self._session_service.get_session(
-                app_name=app_name, user_id=user_id, session_id=session_id
-            )
-            is None
-        ):
-            return await self._session_service.create_session(
-                app_name=app_name, user_id=user_id, session_id=session_id
-            )
-        else:
+        session = await self._session_service.get_session(
+            app_name=app_name, user_id=user_id, session_id=session_id
+        )
+
+        if session:
             logger.info(
                 f"Session {session_id} already exists with app_name={app_name} user_id={user_id}."
             )
-
-            return None
+            return session
+        else:
+            return await self._session_service.create_session(
+                app_name=app_name, user_id=user_id, session_id=session_id
+            )

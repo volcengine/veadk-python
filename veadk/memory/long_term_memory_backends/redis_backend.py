@@ -12,11 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from llama_index.core import (
-    Document,
-    StorageContext,
-    VectorStoreIndex,
-)
+from llama_index.core import Document, VectorStoreIndex
 from llama_index.core.schema import BaseNode
 from llama_index.embeddings.openai_like import OpenAILikeEmbedding
 from pydantic import Field
@@ -29,19 +25,20 @@ from veadk.knowledgebase.backends.utils import get_llama_index_splitter
 from veadk.memory.long_term_memory_backends.base_backend import (
     BaseLongTermMemoryBackend,
 )
+from veadk.utils.logger import get_logger
 
 try:
     from llama_index.vector_stores.redis import RedisVectorStore
-    from llama_index.vector_stores.redis.schema import (
-        RedisIndexInfo,
-        RedisVectorStoreSchema,
-    )
     from redis import Redis
-    from redisvl.schema.fields import BaseVectorFieldAttributes
+    from redisvl.schema import IndexSchema
+
 except ImportError:
     raise ImportError(
         "Please install VeADK extensions\npip install veadk-python[extensions]"
     )
+
+
+logger = get_logger(__name__)
 
 
 class RedisLTMBackend(BaseLongTermMemoryBackend):
@@ -53,67 +50,83 @@ class RedisLTMBackend(BaseLongTermMemoryBackend):
     )
     """Embedding model configs"""
 
-    def precheck_index_naming(self):
-        # no checking
-        pass
-
     def model_post_init(self, __context: Any) -> None:
-        # We will use `from_url` to init Redis client once the
-        # AK/SK -> STS token is ready.
-        # self._redis_client = Redis.from_url(url=...)
-
-        self._redis_client = Redis(
-            host=self.redis_config.host,
-            port=self.redis_config.port,
-            db=self.redis_config.db,
-            password=self.redis_config.password,
-        )
-
         self._embed_model = OpenAILikeEmbedding(
             model_name=self.embedding_config.name,
             api_key=self.embedding_config.api_key,
             api_base=self.embedding_config.api_base,
         )
 
-        self._schema = RedisVectorStoreSchema(
-            index=RedisIndexInfo(name=self.index),
-        )
-        if "vector" in self._schema.fields:
-            vector_field = self._schema.fields["vector"]
-            if (
-                vector_field
-                and vector_field.attrs
-                and isinstance(vector_field.attrs, BaseVectorFieldAttributes)
-            ):
-                vector_field.attrs.dims = self.embedding_config.dim
-        self._vector_store = RedisVectorStore(
-            schema=self._schema,
-            redis_client=self._redis_client,
-            overwrite=True,
-            collection_name=self.index,
+    def precheck_index_naming(self, index: str):
+        # no checking
+        pass
+
+    def _create_vector_index(self, index: str) -> VectorStoreIndex:
+        logger.info(f"Create Redis vector index with index={index}")
+
+        self.precheck_index_naming(index)
+
+        # We will use `from_url` to init Redis client once the
+        # AK/SK -> STS token is ready.
+        # self._redis_client = Redis.from_url(url=...)
+        redis_client = Redis(
+            host=self.redis_config.host,
+            port=self.redis_config.port,
+            db=self.redis_config.db,
+            password=self.redis_config.password,
         )
 
-        self._storage_context = StorageContext.from_defaults(
-            vector_store=self._vector_store
+        # Create an index for each user
+        # Should be Optimized in the future
+        schema = IndexSchema.from_dict(
+            {
+                "index": {"name": index, "prefix": index, "key_separator": "_"},
+                "fields": [
+                    {"name": "id", "type": "tag", "attrs": {"sortable": False}},
+                    {"name": "doc_id", "type": "tag", "attrs": {"sortable": False}},
+                    {"name": "text", "type": "text", "attrs": {"weight": 1.0}},
+                    {
+                        "name": "vector",
+                        "type": "vector",
+                        "attrs": {
+                            "dims": self.embedding_config.dim,
+                            "algorithm": "flat",
+                            "distance_metric": "cosine",
+                        },
+                    },
+                ],
+            }
+        )
+        vector_store = RedisVectorStore(schema=schema, redis_client=redis_client)
+
+        logger.info(
+            f"Create vector store done, index_name={vector_store.index_name} prefix={vector_store.schema.index.prefix}"
         )
 
-        self._vector_index = VectorStoreIndex.from_documents(
-            documents=[],
-            storage_context=self._storage_context,
-            embed_model=self._embed_model,
+        return VectorStoreIndex.from_vector_store(
+            vector_store=vector_store, embed_model=self._embed_model
         )
 
     @override
-    def save_memory(self, event_strings: list[str], **kwargs) -> bool:
+    def save_memory(self, user_id: str, event_strings: list[str], **kwargs) -> bool:
+        index = f"veadk-ltm/{self.index}/{user_id}"
+        vector_index = self._create_vector_index(index)
+
         for event_string in event_strings:
             document = Document(text=event_string)
             nodes = self._split_documents([document])
-            self._vector_index.insert_nodes(nodes)
+            vector_index.insert_nodes(nodes)
+
         return True
 
     @override
-    def search_memory(self, query: str, top_k: int, **kwargs) -> list[str]:
-        _retriever = self._vector_index.as_retriever(similarity_top_k=top_k)
+    def search_memory(
+        self, user_id: str, query: str, top_k: int, **kwargs
+    ) -> list[str]:
+        index = f"veadk-ltm/{self.index}/{user_id}"
+        vector_index = self._create_vector_index(index)
+
+        _retriever = vector_index.as_retriever(similarity_top_k=top_k)
         retrieved_nodes = _retriever.retrieve(query)
         return [node.text for node in retrieved_nodes]
 
