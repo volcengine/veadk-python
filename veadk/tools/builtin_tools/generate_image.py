@@ -26,7 +26,10 @@ from volcenginesdkarkruntime import Ark
 from volcenginesdkarkruntime.types.images.images import SequentialImageGenerationOptions
 
 from veadk.config import getenv
-from veadk.consts import DEFAULT_IMAGE_GENERATE_MODEL_NAME, DEFAULT_MODEL_AGENT_API_BASE
+from veadk.consts import (
+    DEFAULT_IMAGE_GENERATE_MODEL_NAME,
+    DEFAULT_IMAGE_GENERATE_MODEL_API_BASE,
+)
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp, read_file_to_bytes
 from veadk.version import VERSION
@@ -34,8 +37,8 @@ from veadk.version import VERSION
 logger = get_logger(__name__)
 
 client = Ark(
-    api_key=getenv("MODEL_AGENT_API_KEY"),
-    base_url=getenv("MODEL_AGENT_API_BASE", DEFAULT_MODEL_AGENT_API_BASE),
+    api_key=getenv("MODEL_IMAGE_API_KEY", getenv("MODEL_AGENT_API_KEY")),
+    base_url=getenv("MODEL_IMAGE_API_BASE", DEFAULT_IMAGE_GENERATE_MODEL_API_BASE),
 )
 
 

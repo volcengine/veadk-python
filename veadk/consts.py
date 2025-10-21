@@ -63,8 +63,15 @@ DEFAULT_TOS_BUCKET_NAME = "ark-tutorial"
 DEFAULT_COZELOOP_SPACE_NAME = "VeADK Space"
 
 DEFAULT_TEXT_TO_IMAGE_MODEL_NAME = "doubao-seedream-3-0-t2i-250415"
+DEFAULT_TEXT_TO_IMAGE_MODEL_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
+
 DEFAULT_IMAGE_EDIT_MODEL_NAME = "doubao-seededit-3-0-i2i-250628"
+DEFAULT_IMAGE_EDIT_MODEL_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
+
 DEFAULT_VIDEO_MODEL_NAME = "doubao-seedance-1-0-pro-250528"
+DEFAULT_VIDEO_MODEL_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
+
 DEFAULT_IMAGE_GENERATE_MODEL_NAME = "doubao-seedream-4-0-250828"
+DEFAULT_IMAGE_GENERATE_MODEL_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
 
 VEFAAS_IAM_CRIDENTIAL_PATH = "/var/run/secrets/iam/credential"
