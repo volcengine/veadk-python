@@ -25,7 +25,7 @@ from volcenginesdkarkruntime.types.content_generation.create_task_content_param 
     CreateTaskContentParam,
 )
 
-from veadk.config import getenv
+from veadk.config import getenv, settings
 from veadk.consts import DEFAULT_VIDEO_MODEL_API_BASE, DEFAULT_VIDEO_MODEL_NAME
 from veadk.utils.logger import get_logger
 from veadk.version import VERSION
@@ -33,7 +33,9 @@ from veadk.version import VERSION
 logger = get_logger(__name__)
 
 client = Ark(
-    api_key=getenv("MODEL_VIDEO_API_KEY", getenv("MODEL_AGENT_API_KEY")),
+    api_key=getenv(
+        "MODEL_VIDEO_API_KEY", getenv("MODEL_AGENT_API_KEY", settings.model.api_key)
+    ),
     base_url=getenv("MODEL_VIDEO_API_BASE", DEFAULT_VIDEO_MODEL_API_BASE),
 )
 

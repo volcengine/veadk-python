@@ -15,7 +15,7 @@
 from typing import Dict
 
 from google.adk.tools import ToolContext
-from veadk.config import getenv
+from veadk.config import getenv, settings
 from veadk.consts import (
     DEFAULT_TEXT_TO_IMAGE_MODEL_NAME,
     DEFAULT_TEXT_TO_IMAGE_MODEL_API_BASE,
@@ -32,7 +32,9 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 client = Ark(
-    api_key=getenv("MODEL_IMAGE_API_KEY", getenv("MODEL_AGENT_API_KEY")),
+    api_key=getenv(
+        "MODEL_IMAGE_API_KEY", getenv("MODEL_AGENT_API_KEY", settings.model.api_key)
+    ),
     base_url=getenv("MODEL_IMAGE_API_BASE", DEFAULT_TEXT_TO_IMAGE_MODEL_API_BASE),
 )
 
