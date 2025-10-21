@@ -25,7 +25,7 @@ from opentelemetry.trace import Span
 from volcenginesdkarkruntime import Ark
 from volcenginesdkarkruntime.types.images.images import SequentialImageGenerationOptions
 
-from veadk.config import getenv
+from veadk.config import getenv, settings
 from veadk.consts import (
     DEFAULT_IMAGE_GENERATE_MODEL_NAME,
     DEFAULT_IMAGE_GENERATE_MODEL_API_BASE,
@@ -37,7 +37,9 @@ from veadk.version import VERSION
 logger = get_logger(__name__)
 
 client = Ark(
-    api_key=getenv("MODEL_IMAGE_API_KEY", getenv("MODEL_AGENT_API_KEY")),
+    api_key=getenv(
+        "MODEL_IMAGE_API_KEY", getenv("MODEL_AGENT_API_KEY", settings.model.api_key)
+    ),
     base_url=getenv("MODEL_IMAGE_API_BASE", DEFAULT_IMAGE_GENERATE_MODEL_API_BASE),
 )
 
