@@ -12,16 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+
 from google.genai import types
 
 from veadk.agent import Agent
 from veadk.memory.long_term_memory import LongTermMemory
 from veadk.memory.short_term_memory import ShortTermMemory
-from veadk.runner import Runner
-
 
 # Import the standalone function instead of accessing as class method
-from veadk.runner import _convert_messages
+from veadk.runner import Runner, _convert_messages
 
 
 def _test_convert_messages(runner):
@@ -67,6 +67,8 @@ def _test_convert_messages(runner):
 
 def test_runner():
     """Test Runner class initialization and core properties"""
+    os.environ["MODEL_EMBEDDING_API_KEY"] = "mocked_api_key"
+
     short_term_memory = ShortTermMemory()
     long_term_memory = LongTermMemory(backend="local")
     agent = Agent(

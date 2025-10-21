@@ -29,10 +29,6 @@ class InMemoryLTMBackend(BaseLongTermMemoryBackend):
     embedding_config: EmbeddingModelConfig = Field(default_factory=EmbeddingModelConfig)
     """Embedding model configs"""
 
-    def precheck_index_naming(self):
-        # no checking
-        pass
-
     def model_post_init(self, __context: Any) -> None:
         self._embed_model = OpenAILikeEmbedding(
             model_name=self.embedding_config.name,
@@ -41,8 +37,12 @@ class InMemoryLTMBackend(BaseLongTermMemoryBackend):
         )
         self._vector_index = VectorStoreIndex([], embed_model=self._embed_model)
 
+    def precheck_index_naming(self):
+        # no checking
+        pass
+
     @override
-    def save_memory(self, event_strings: list[str], **kwargs) -> bool:
+    def save_memory(self, user_id: str, event_strings: list[str], **kwargs) -> bool:
         for event_string in event_strings:
             document = Document(text=event_string)
             nodes = self._split_documents([document])
@@ -50,7 +50,9 @@ class InMemoryLTMBackend(BaseLongTermMemoryBackend):
         return True
 
     @override
-    def search_memory(self, query: str, top_k: int, **kwargs) -> list[str]:
+    def search_memory(
+        self, user_id: str, query: str, top_k: int, **kwargs
+    ) -> list[str]:
         _retriever = self._vector_index.as_retriever(similarity_top_k=top_k)
         retrieved_nodes = _retriever.retrieve(query)
         return [node.text for node in retrieved_nodes]

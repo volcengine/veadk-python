@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import json
+import os
 import re
 import time
 import uuid
@@ -22,7 +23,7 @@ from pydantic import Field
 from typing_extensions import override
 
 import veadk.config  # noqa E401
-from veadk.config import getenv
+from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 from veadk.integrations.ve_viking_db_memory.ve_viking_db_memory import (
     VikingDBMemoryClient,
 )
@@ -35,16 +36,23 @@ logger = get_logger(__name__)
 
 
 class VikingDBLTMBackend(BaseLongTermMemoryBackend):
-    volcengine_access_key: str = Field(
-        default_factory=lambda: getenv("VOLCENGINE_ACCESS_KEY")
+    volcengine_access_key: str | None = Field(
+        default_factory=lambda: os.getenv("VOLCENGINE_ACCESS_KEY")
     )
 
-    volcengine_secret_key: str = Field(
-        default_factory=lambda: getenv("VOLCENGINE_SECRET_KEY")
+    volcengine_secret_key: str | None = Field(
+        default_factory=lambda: os.getenv("VOLCENGINE_SECRET_KEY")
     )
+
+    session_token: str = ""
 
     region: str = "cn-beijing"
     """VikingDB memory region"""
+
+    def model_post_init(self, __context: Any) -> None:
+        # check whether collection exist, if not, create it
+        if not self._collection_exist():
+            self._create_collection()
 
     def precheck_index_naming(self):
         if not (
@@ -56,37 +64,39 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
                 "The index name does not conform to the rules: it must start with an English letter, contain only letters, numbers, and underscores, and have a length of 1-128."
             )
 
-    def model_post_init(self, __context: Any) -> None:
-        self._client = VikingDBMemoryClient(
-            ak=self.volcengine_access_key,
-            sk=self.volcengine_secret_key,
-            region=self.region,
-        )
-
-        # check whether collection exist, if not, create it
-        if not self._collection_exist():
-            self._create_collection()
-
     def _collection_exist(self) -> bool:
         try:
-            self._client.get_collection(collection_name=self.index)
+            client = self._get_client()
+            client.get_collection(collection_name=self.index)
             return True
         except Exception:
             return False
 
     def _create_collection(self) -> None:
-        response = self._client.create_collection(
+        client = self._get_client()
+        response = client.create_collection(
             collection_name=self.index,
             description="Created by Volcengine Agent Development Kit VeADK",
             builtin_event_types=["sys_event_v1"],
         )
         return response
 
+    def _get_client(self) -> VikingDBMemoryClient:
+        if not (self.volcengine_access_key and self.volcengine_secret_key):
+            cred = get_credential_from_vefaas_iam()
+            self.volcengine_access_key = cred.access_key_id
+            self.volcengine_secret_key = cred.secret_access_key
+            self.session_token = cred.session_token
+
+        return VikingDBMemoryClient(
+            ak=self.volcengine_access_key,
+            sk=self.volcengine_secret_key,
+            sts_token=self.session_token,
+            region=self.region,
+        )
+
     @override
-    def save_memory(self, event_strings: list[str], **kwargs) -> bool:
-        user_id = kwargs.get("user_id")
-        if user_id is None:
-            raise ValueError("user_id is required")
+    def save_memory(self, user_id: str, event_strings: list[str], **kwargs) -> bool:
         session_id = str(uuid.uuid1())
         messages = []
         for raw_events in event_strings:
@@ -101,12 +111,20 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
             "default_assistant_id": "assistant",
             "time": int(time.time() * 1000),
         }
-        response = self._client.add_messages(
+
+        logger.debug(
+            f"Request for add {len(messages)} memory to VikingDB: collection_name={self.index}, metadata={metadata}, session_id={session_id}"
+        )
+
+        client = self._get_client()
+        response = client.add_messages(
             collection_name=self.index,
             messages=messages,
             metadata=metadata,
             session_id=session_id,
         )
+
+        logger.debug(f"Response from add memory to VikingDB: {response}")
 
         if not response.get("code") == 0:
             raise ValueError(f"Save VikingDB memory error: {response}")
@@ -114,17 +132,24 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
         return True
 
     @override
-    def search_memory(self, query: str, top_k: int, **kwargs) -> list[str]:
-        user_id = kwargs.get("user_id")
-        if user_id is None:
-            raise ValueError("user_id is required")
+    def search_memory(
+        self, user_id: str, query: str, top_k: int, **kwargs
+    ) -> list[str]:
         filter = {
             "user_id": user_id,
             "memory_type": ["sys_event_v1"],
         }
-        response = self._client.search_memory(
+
+        logger.debug(
+            f"Request for search memory in VikingDB: filter={filter}, collection_name={self.index}, query={query}, limit={top_k}"
+        )
+
+        client = self._get_client()
+        response = client.search_memory(
             collection_name=self.index, query=query, filter=filter, limit=top_k
         )
+
+        logger.debug(f"Response from search memory in VikingDB: {response}")
 
         if not response.get("code") == 0:
             raise ValueError(f"Search VikingDB memory error: {response}")
