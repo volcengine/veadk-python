@@ -16,7 +16,10 @@ from typing import Dict
 
 from google.adk.tools import ToolContext
 from veadk.config import getenv
-from veadk.consts import DEFAULT_TEXT_TO_IMAGE_MODEL_NAME, DEFAULT_MODEL_AGENT_API_BASE
+from veadk.consts import (
+    DEFAULT_TEXT_TO_IMAGE_MODEL_NAME,
+    DEFAULT_TEXT_TO_IMAGE_MODEL_API_BASE,
+)
 import base64
 from volcenginesdkarkruntime import Ark
 from opentelemetry import trace
@@ -29,8 +32,8 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 client = Ark(
-    api_key=getenv("MODEL_AGENT_API_KEY"),
-    base_url=getenv("MODEL_AGENT_API_BASE", DEFAULT_MODEL_AGENT_API_BASE),
+    api_key=getenv("MODEL_IMAGE_API_KEY", getenv("MODEL_AGENT_API_KEY")),
+    base_url=getenv("MODEL_IMAGE_API_BASE", DEFAULT_TEXT_TO_IMAGE_MODEL_API_BASE),
 )
 
 
