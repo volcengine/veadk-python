@@ -56,10 +56,14 @@ def _get_ltm_from_env() -> LongTermMemory | None:
     logger = get_logger(__name__)
 
     long_term_memory_backend = os.getenv("LONG_TERM_MEMORY_BACKEND")
+    app_name = os.getenv("VEADK_WEB_APP_NAME", "")
+    user_id = os.getenv("VEADK_WEB_USER_ID", "")
 
     if long_term_memory_backend:
         logger.info(f"Long term memory: backend={long_term_memory_backend}")
-        return LongTermMemory(backend=long_term_memory_backend)  # type: ignore
+        return LongTermMemory(
+            backend=long_term_memory_backend, app_name=app_name, user_id=user_id
+        )  # type: ignore
     else:
         logger.warning("No long term memory backend settings detected.")
         return None
@@ -131,7 +135,13 @@ def patch_adkwebserver_disable_openapi():
 
 @click.command()
 @click.option("--host", default="127.0.0.1", help="Host to run the web server on")
-def web(host: str) -> None:
+@click.option(
+    "--app_name", default="", help="The `app_name` for initializing long term memory"
+)
+@click.option(
+    "--user_id", default="", help="The `user_id` for initializing long term memory"
+)
+def web(host: str, app_name: str, user_id: str) -> None:
     """Launch web with long term and short term memory."""
     import os
     from typing import Any
@@ -174,6 +184,9 @@ def web(host: str) -> None:
         short_term_memory, long_term_memory = _get_memory(module_path=agents_dir)
         self.session_service = short_term_memory.session_service
         self.memory_service = long_term_memory
+
+    os.environ["VEADK_WEB_APP_NAME"] = app_name
+    os.environ["VEADK_WEB_USER_ID"] = user_id
 
     import google.adk.cli.adk_web_server
 
