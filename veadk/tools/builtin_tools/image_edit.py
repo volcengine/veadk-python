@@ -97,9 +97,14 @@ async def image_edit(
         - Provide the same `seed` for consistent outputs across runs.
         - A high `guidance_scale` enforces stricter adherence to text prompt.
     """
+    logger.debug(
+        f"Using model: {getenv('MODEL_EDIT_NAME', DEFAULT_IMAGE_EDIT_MODEL_NAME)}"
+    )
     success_list = []
     error_list = []
+    logger.debug(f"image_edit params: {params}")
     for idx, item in enumerate(params):
+        logger.debug(f"image_edit item {idx}: {item}")
         image_name = item.get("image_name", f"generated_image_{idx}")
         prompt = item.get("prompt")
         origin_image = item.get("origin_image")
@@ -133,6 +138,7 @@ async def image_edit(
                 )
                 output_part = None
                 if response.data and len(response.data) > 0:
+                    logger.debug(f"task {idx} Image edit response: {response}")
                     for item in response.data:
                         if response_format == "url":
                             image = item.url
@@ -167,7 +173,9 @@ async def image_edit(
                                 continue
 
                             logger.debug(f"Image saved as ADK artifact: {image_name}")
-
+                        logger.debug(
+                            f"Image {image_name} generated successfully: {image}"
+                        )
                         success_list.append({image_name: image})
                 else:
                     error_details = f"No images returned by Doubao model: {response}"
@@ -196,12 +204,18 @@ async def image_edit(
             error_list.append(image_name)
 
     if len(success_list) == 0:
+        logger.debug(
+            f"image_edit success_list: {success_list}\nerror_list: {error_list}"
+        )
         return {
             "status": "error",
             "success_list": success_list,
             "error_list": error_list,
         }
     else:
+        logger.debug(
+            f"image_edit success_list: {success_list}\nerror_list: {error_list}"
+        )
         return {
             "status": "success",
             "success_list": success_list,

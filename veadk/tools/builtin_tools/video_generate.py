@@ -43,7 +43,6 @@ client = Ark(
 async def generate(prompt, first_frame_image=None, last_frame_image=None):
     try:
         if first_frame_image is None:
-            logger.debug("text generation")
             response = client.content_generation.tasks.create(
                 model=getenv("MODEL_VIDEO_NAME", DEFAULT_VIDEO_MODEL_NAME),
                 content=[
@@ -51,7 +50,6 @@ async def generate(prompt, first_frame_image=None, last_frame_image=None):
                 ],
             )
         elif last_frame_image is None:
-            logger.debug("first frame generation")
             response = client.content_generation.tasks.create(
                 model=getenv("MODEL_VIDEO_NAME", DEFAULT_VIDEO_MODEL_NAME),
                 content=cast(
@@ -66,7 +64,6 @@ async def generate(prompt, first_frame_image=None, last_frame_image=None):
                 ),
             )
         else:
-            logger.debug("last frame generation")
             response = client.content_generation.tasks.create(
                 model=getenv("MODEL_VIDEO_NAME", DEFAULT_VIDEO_MODEL_NAME),
                 content=[
@@ -197,9 +194,13 @@ async def video_generate(params: list, tool_context: ToolContext) -> Dict:
     batch_size = 10
     success_list = []
     error_list = []
+    logger.debug(f"Using model: {getenv('MODEL_VIDEO_NAME', DEFAULT_VIDEO_MODEL_NAME)}")
+    logger.debug(f"video_generate params: {params}")
 
     for start_idx in range(0, len(params), batch_size):
         batch = params[start_idx : start_idx + batch_size]
+        logger.debug(f"video_generate batch {start_idx // batch_size}: {batch}")
+
         task_dict = {}
         tracer = trace.get_tracer("gcp.vertex.agent")
         with tracer.start_as_current_span("call_llm") as span:
@@ -216,15 +217,30 @@ async def video_generate(params: list, tool_context: ToolContext) -> Dict:
                 last_frame = item.get("last_frame", None)
                 try:
                     if not first_frame:
+                        logger.debug(
+                            f"video_generate task_{idx} text generation: prompt={prompt}"
+                        )
                         response = await generate(prompt)
                     elif not last_frame:
+                        logger.debug(
+                            f"video_generate task_{idx} first frame generation: prompt={prompt}, first_frame={first_frame}"
+                        )
                         response = await generate(prompt, first_frame)
                     else:
+                        logger.debug(
+                            f"video_generate task_{idx} first and last frame generation: prompt={prompt}, first_frame={first_frame}, last_frame={last_frame}"
+                        )
                         response = await generate(prompt, first_frame, last_frame)
+                    logger.debug(
+                        f"batch_{start_idx // batch_size} video_generate task_{idx} response: {response}"
+                    )
                     task_dict[response.id] = video_name
                 except Exception as e:
                     logger.error(f"Error: {e}")
                     error_list.append(video_name)
+                    continue
+
+            logger.debug("begin query video_generate task status...")
 
             while True:
                 task_list = list(task_dict.keys())
@@ -234,7 +250,9 @@ async def video_generate(params: list, tool_context: ToolContext) -> Dict:
                     result = client.content_generation.tasks.get(task_id=task_id)
                     status = result.status
                     if status == "succeeded":
-                        logger.debug("----- task succeeded -----")
+                        logger.debug(
+                            f"{task_dict[task_id]} video_generate {status}. Video URL: {result.content.video_url}"
+                        )
                         tool_context.state[f"{task_dict[task_id]}_video_url"] = (
                             result.content.video_url
                         )
@@ -248,13 +266,14 @@ async def video_generate(params: list, tool_context: ToolContext) -> Dict:
                         )
                         task_dict.pop(task_id, None)
                     elif status == "failed":
-                        logger.error("----- task failed -----")
-                        logger.error(f"Error: {result.error}")
+                        logger.error(
+                            f"{task_dict[task_id]} video_generate {status}. Error: {result.error}"
+                        )
                         error_list.append(task_dict[task_id])
                         task_dict.pop(task_id, None)
                     else:
                         logger.debug(
-                            f"Current status: {status}, Retrying after 10 seconds..."
+                            f"{task_dict[task_id]} video_generate current status: {status}, Retrying after 10 seconds..."
                         )
                 time.sleep(10)
 
@@ -270,12 +289,18 @@ async def video_generate(params: list, tool_context: ToolContext) -> Dict:
             )
 
     if len(success_list) == 0:
+        logger.debug(
+            f"video_generate success_list: {success_list}\nerror_list: {error_list}"
+        )
         return {
             "status": "error",
             "success_list": success_list,
             "error_list": error_list,
         }
     else:
+        logger.debug(
+            f"video_generate success_list: {success_list}\nerror_list: {error_list}"
+        )
         return {
             "status": "success",
             "success_list": success_list,

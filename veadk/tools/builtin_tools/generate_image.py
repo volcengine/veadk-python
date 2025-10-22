@@ -83,6 +83,7 @@ def _build_input_parts(item: dict, task_type: str, image_field):
 def handle_single_task_sync(
     idx: int, item: dict, tool_context
 ) -> tuple[list[dict], list[str]]:
+    logger.debug(f"handle_single_task_sync item {idx}: {item}")
     success_list: list[dict] = []
     error_list: list[str] = []
     total_tokens = 0
@@ -131,6 +132,8 @@ def handle_single_task_sync(
                 )
 
             if not response.error:
+                logger.debug(f"task {idx} Image generate response: {response}")
+
                 total_tokens += getattr(response.usage, "total_tokens", 0) or 0
                 output_tokens += getattr(response.usage, "output_tokens", 0) or 0
 
@@ -165,10 +168,14 @@ def handle_single_task_sync(
                     output_part[f"message.parts.{i}.type"] = "image_url"
                     output_part[f"message.parts.{i}.image_url.name"] = image_name
                     output_part[f"message.parts.{i}.image_url.url"] = image_url
-
+                    logger.debug(
+                        f"Image {image_name} generated successfully: {image_url}"
+                    )
                     success_list.append({image_name: image_url})
             else:
-                logger.error(f"No images returned by model: {response.error}")
+                logger.error(
+                    f"Task {idx} No images returned by model: {response.error}"
+                )
                 error_list.append(f"task_{idx}")
 
         except Exception as e:
@@ -191,7 +198,9 @@ def handle_single_task_sync(
                     "MODEL_IMAGE_NAME", DEFAULT_IMAGE_GENERATE_MODEL_NAME
                 ),
             )
-
+    logger.debug(
+        f"task {idx} Image generate success_list: {success_list}\nerror_list: {error_list}"
+    )
     return success_list, error_list
 
 
@@ -275,9 +284,12 @@ async def image_generate(tasks: list[dict], tool_context) -> Dict:
     - 如果想要指定生成组图的数量，请在prompt里添加数量说明，例如："生成3张图片"。
     - size 推荐使用 2048x2048 或表格里的标准比例，确保生成质量。
     """
+    logger.debug(
+        f"Using model: {getenv('MODEL_IMAGE_NAME', DEFAULT_IMAGE_GENERATE_MODEL_NAME)}"
+    )
     success_list: list[dict] = []
     error_list: list[str] = []
-
+    logger.debug(f"image_generate tasks: {tasks}")
     with tracer.start_as_current_span("image_generate"):
         base_ctx = contextvars.copy_context()
 
@@ -303,12 +315,14 @@ async def image_generate(tasks: list[dict], tool_context) -> Dict:
             error_list.extend(e)
 
     if not success_list:
+        logger.debug(
+            f"image_generate success_list: {success_list}\nerror_list: {error_list}"
+        )
         return {
             "status": "error",
             "success_list": success_list,
             "error_list": error_list,
         }
-
     app_name = tool_context._invocation_context.app_name
     user_id = tool_context._invocation_context.user_id
     session_id = tool_context._invocation_context.session.id
@@ -332,6 +346,9 @@ async def image_generate(tasks: list[dict], tool_context) -> Dict:
                     ),
                 )
 
+    logger.debug(
+        f"image_generate success_list: {success_list}\nerror_list: {error_list}"
+    )
     return {"status": "success", "success_list": success_list, "error_list": error_list}
 
 
