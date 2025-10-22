@@ -137,7 +137,7 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
     ) -> list[str]:
         filter = {
             "user_id": user_id,
-            "memory_type": ["sys_event_v1"],
+            "memory_type": ["sys_event_v1", "event_v1"],
         }
 
         logger.debug(
