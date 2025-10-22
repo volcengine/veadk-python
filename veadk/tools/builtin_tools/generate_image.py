@@ -33,6 +33,10 @@ from veadk.consts import (
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp, read_file_to_bytes
 from veadk.version import VERSION
+import asyncio
+import concurrent.futures
+import contextvars
+
 
 logger = get_logger(__name__)
 
@@ -43,11 +47,155 @@ client = Ark(
     base_url=getenv("MODEL_IMAGE_API_BASE", DEFAULT_IMAGE_GENERATE_MODEL_API_BASE),
 )
 
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+tracer = trace.get_tracer("gcp.vertex.agent")
 
-async def image_generate(
-    tasks: list,
-    tool_context: ToolContext,
-) -> Dict:
+
+def _build_input_parts(item: dict, task_type: str, image_field):
+    input_part = {"role": "user"}
+    input_part["parts.0.type"] = "text"
+    input_part["parts.0.text"] = json.dumps(item, ensure_ascii=False)
+
+    if image_field:
+        if task_type.startswith("single"):
+            assert isinstance(image_field, str), (
+                f"single_* task_type image must be str, got {type(image_field)}"
+            )
+            input_part["parts.1.type"] = "image_url"
+            input_part["parts.1.image_url.name"] = "origin_image"
+            input_part["parts.1.image_url.url"] = image_field
+        elif task_type.startswith("multi"):
+            assert isinstance(image_field, list), (
+                f"multi_* task_type image must be list, got {type(image_field)}"
+            )
+            assert len(image_field) <= 10, (
+                f"multi_* task_type image list length must be <= 10, got {len(image_field)}"
+            )
+            for i, image_url in enumerate(image_field):
+                idx = i + 1
+                input_part[f"parts.{idx}.type"] = "image_url"
+                input_part[f"parts.{idx}.image_url.name"] = f"origin_image_{i}"
+                input_part[f"parts.{idx}.image_url.url"] = image_url
+
+    return input_part
+
+
+def handle_single_task_sync(
+    idx: int, item: dict, tool_context
+) -> tuple[list[dict], list[str]]:
+    success_list: list[dict] = []
+    error_list: list[str] = []
+    total_tokens = 0
+    output_tokens = 0
+    output_part = {"message.role": "model"}
+
+    task_type = item.get("task_type", "text_to_single")
+    prompt = item.get("prompt", "")
+    response_format = item.get("response_format", None)
+    size = item.get("size", None)
+    watermark = item.get("watermark", None)
+    image_field = item.get("image", None)
+    sequential_image_generation = item.get("sequential_image_generation", None)
+    max_images = item.get("max_images", None)
+
+    input_part = _build_input_parts(item, task_type, image_field)
+
+    inputs = {"prompt": prompt}
+    if size:
+        inputs["size"] = size
+    if response_format:
+        inputs["response_format"] = response_format
+    if watermark is not None:
+        inputs["watermark"] = watermark
+    if sequential_image_generation:
+        inputs["sequential_image_generation"] = sequential_image_generation
+
+    with tracer.start_as_current_span(f"call_llm_task_{idx}") as span:
+        try:
+            if (
+                sequential_image_generation
+                and sequential_image_generation == "auto"
+                and max_images
+            ):
+                response = client.images.generate(
+                    model=getenv("MODEL_IMAGE_NAME", DEFAULT_IMAGE_GENERATE_MODEL_NAME),
+                    **inputs,
+                    sequential_image_generation_options=SequentialImageGenerationOptions(
+                        max_images=max_images
+                    ),
+                )
+            else:
+                response = client.images.generate(
+                    model=getenv("MODEL_IMAGE_NAME", DEFAULT_IMAGE_GENERATE_MODEL_NAME),
+                    **inputs,
+                )
+
+            if not response.error:
+                total_tokens += getattr(response.usage, "total_tokens", 0) or 0
+                output_tokens += getattr(response.usage, "output_tokens", 0) or 0
+
+                for i, image_data in enumerate(response.data):
+                    image_name = f"task_{idx}_image_{i}"
+                    if "error" in image_data:
+                        logger.error(f"Image {image_name} error: {image_data.error}")
+                        error_list.append(image_name)
+                        continue
+
+                    if getattr(image_data, "url", None):
+                        image_url = image_data.url
+                    else:
+                        b64 = getattr(image_data, "b64_json", None)
+                        if not b64:
+                            logger.error(
+                                f"Image {image_name} missing data (no url/b64)"
+                            )
+                            error_list.append(image_name)
+                            continue
+                        image_bytes = base64.b64decode(b64)
+                        image_url = _upload_image_to_tos(
+                            image_bytes=image_bytes, object_key=f"{image_name}.png"
+                        )
+                        if not image_url:
+                            logger.error(f"Upload image to TOS failed: {image_name}")
+                            error_list.append(image_name)
+                            continue
+                        logger.debug(f"Image saved as ADK artifact: {image_name}")
+
+                    tool_context.state[f"{image_name}_url"] = image_url
+                    output_part[f"message.parts.{i}.type"] = "image_url"
+                    output_part[f"message.parts.{i}.image_url.name"] = image_name
+                    output_part[f"message.parts.{i}.image_url.url"] = image_url
+
+                    success_list.append({image_name: image_url})
+            else:
+                logger.error(f"No images returned by model: {response.error}")
+                error_list.append(f"task_{idx}")
+
+        except Exception as e:
+            logger.error(f"Error in task {idx}: {e}")
+            traceback.print_exc()
+            error_list.append(f"task_{idx}")
+
+        finally:
+            add_span_attributes(
+                span,
+                tool_context,
+                input_part=input_part,
+                output_part=output_part,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+                request_model=getenv(
+                    "MODEL_IMAGE_NAME", DEFAULT_IMAGE_GENERATE_MODEL_NAME
+                ),
+                response_model=getenv(
+                    "MODEL_IMAGE_NAME", DEFAULT_IMAGE_GENERATE_MODEL_NAME
+                ),
+            )
+
+    return success_list, error_list
+
+
+async def image_generate(tasks: list[dict], tool_context) -> Dict:
     """
     Seedream 4.0: batch image generation via tasks.
     Args:
@@ -127,193 +275,64 @@ async def image_generate(
     - 如果想要指定生成组图的数量，请在prompt里添加数量说明，例如："生成3张图片"。
     - size 推荐使用 2048x2048 或表格里的标准比例，确保生成质量。
     """
-
     success_list: list[dict] = []
-    error_list = []
+    error_list: list[str] = []
 
-    for idx, item in enumerate(tasks):
-        input_part = {"role": "user"}
-        output_part = {"message.role": "model"}
-        total_tokens = 0
-        output_tokens = 0
-        tracer = trace.get_tracer("gcp.vertex.agent")
-        with tracer.start_as_current_span("call_llm") as span:
-            task_type = item.get("task_type", "text_to_single")
-            prompt = item.get("prompt", "")
-            response_format = item.get("response_format", None)
-            size = item.get("size", None)
-            watermark = item.get("watermark", None)
-            image = item.get("image", None)
-            sequential_image_generation = item.get("sequential_image_generation", None)
-            max_images = item.get("max_images", None)
+    with tracer.start_as_current_span("image_generate"):
+        base_ctx = contextvars.copy_context()
 
-            input_part["parts.0.type"] = "text"
-            input_part["parts.0.text"] = json.dumps(item, ensure_ascii=False)
-            inputs = {
-                "prompt": prompt,
-            }
+        def make_task(idx, item):
+            ctx = base_ctx.copy()
+            return lambda: ctx.run(handle_single_task_sync, idx, item, tool_context)
 
-            if size:
-                inputs["size"] = size
-            if response_format:
-                inputs["response_format"] = response_format
-            if watermark:
-                inputs["watermark"] = watermark
-            if image:
-                if task_type.startswith("single"):
-                    assert isinstance(image, str), (
-                        f"single_* task_type image must be str, got {type(image)}"
-                    )
-                    input_part["parts.1.type"] = "image_url"
-                    input_part["parts.1.image_url.name"] = "origin_image"
-                    input_part["parts.1.image_url.url"] = image
-                elif task_type.startswith("multi"):
-                    assert isinstance(image, list), (
-                        f"multi_* task_type image must be list, got {type(image)}"
-                    )
-                    assert len(image) <= 10, (
-                        f"multi_* task_type image list length must be <= 10, got {len(image)}"
-                    )
-                    for i, image_url in enumerate(image):
-                        input_part[f"parts.{i + 1}.type"] = "image_url"
-                        input_part[f"parts.{i + 1}.image_url.name"] = (
-                            f"origin_image_{i}"
-                        )
-                        input_part[f"parts.{i + 1}.image_url.url"] = image_url
+        loop = asyncio.get_event_loop()
+        futures = [
+            loop.run_in_executor(executor, make_task(idx, item))
+            for idx, item in enumerate(tasks)
+        ]
 
-            if sequential_image_generation:
-                inputs["sequential_image_generation"] = sequential_image_generation
+        results = await asyncio.gather(*futures, return_exceptions=True)
 
-            try:
-                if (
-                    sequential_image_generation
-                    and sequential_image_generation == "auto"
-                    and max_images
-                ):
-                    response = client.images.generate(
-                        model=getenv(
-                            "MODEL_IMAGE_NAME", DEFAULT_IMAGE_GENERATE_MODEL_NAME
-                        ),
-                        **inputs,
-                        sequential_image_generation_options=SequentialImageGenerationOptions(
-                            max_images=max_images
-                        ),
-                    )
-                else:
-                    response = client.images.generate(
-                        model=getenv(
-                            "MODEL_IMAGE_NAME", DEFAULT_IMAGE_GENERATE_MODEL_NAME
-                        ),
-                        **inputs,
-                    )
-                if not response.error:
-                    for i, image_data in enumerate(response.data):
-                        image_name = f"task_{idx}_image_{i}"
-                        if "error" in image_data:
-                            error_details = (
-                                f"Image {image_name} error: {image_data.error}"
-                            )
-                            logger.error(error_details)
-                            error_list.append(image_name)
-                            continue
-                        if image_data.url:
-                            image = image_data.url
-                            tool_context.state[f"{image_name}_url"] = image
+        for res in results:
+            if isinstance(res, Exception):
+                logger.error(f"Task raised exception: {res}")
+                error_list.append("unknown_task_exception")
+                continue
+            s, e = res
+            success_list.extend(s)
+            error_list.extend(e)
 
-                            output_part[f"message.parts.{i}.type"] = "image_url"
-                            output_part[f"message.parts.{i}.image_url.name"] = (
-                                image_name
-                            )
-                            output_part[f"message.parts.{i}.image_url.url"] = image
-
-                        else:
-                            image = image_data.b64_json
-                            image_bytes = base64.b64decode(image)
-
-                            tos_url = _upload_image_to_tos(
-                                image_bytes=image_bytes, object_key=f"{image_name}.png"
-                            )
-                            if tos_url:
-                                tool_context.state[f"{image_name}_url"] = tos_url
-                                image = tos_url
-                                output_part[f"message.parts.{i}.type"] = "image_url"
-                                output_part[f"message.parts.{i}.image_url.name"] = (
-                                    image_name
-                                )
-                                output_part[f"message.parts.{i}.image_url.url"] = image
-                            else:
-                                logger.error(
-                                    f"Upload image to TOS failed: {image_name}"
-                                )
-                                error_list.append(image_name)
-                                continue
-
-                            logger.debug(f"Image saved as ADK artifact: {image_name}")
-
-                        total_tokens += response.usage.total_tokens
-                        output_tokens += response.usage.output_tokens
-                        success_list.append({image_name: image})
-                else:
-                    error_details = (
-                        f"No images returned by Doubao model: {response.error}"
-                    )
-                    logger.error(error_details)
-                    error_list.append(f"task_{idx}")
-
-            except Exception as e:
-                error_details = f"Error: {e}"
-                logger.error(error_details)
-                traceback.print_exc()
-                error_list.append(f"task_{idx}")
-
-            add_span_attributes(
-                span,
-                tool_context,
-                input_part=input_part,
-                output_part=output_part,
-                output_tokens=output_tokens,
-                total_tokens=total_tokens,
-                request_model=getenv(
-                    "MODEL_IMAGE_NAME", DEFAULT_IMAGE_GENERATE_MODEL_NAME
-                ),
-                response_model=getenv(
-                    "MODEL_IMAGE_NAME", DEFAULT_IMAGE_GENERATE_MODEL_NAME
-                ),
-            )
-    if len(success_list) == 0:
+    if not success_list:
         return {
             "status": "error",
             "success_list": success_list,
             "error_list": error_list,
         }
-    else:
-        app_name = tool_context._invocation_context.app_name
-        user_id = tool_context._invocation_context.user_id
-        session_id = tool_context._invocation_context.session.id
 
-        artifact_service = tool_context._invocation_context.artifact_service
-        if artifact_service:
-            for image in success_list:
-                for _, image_tos_url in image.items():
-                    filename = f"artifact_{formatted_timestamp()}"
-                    await artifact_service.save_artifact(
-                        app_name=app_name,
-                        user_id=user_id,
-                        session_id=session_id,
-                        filename=filename,
-                        artifact=Part(
-                            inline_data=Blob(
-                                display_name=filename,
-                                data=read_file_to_bytes(image_tos_url),
-                                mime_type=mimetypes.guess_type(image_tos_url)[0],
-                            )
-                        ),
-                    )
-        return {
-            "status": "success",
-            "success_list": success_list,
-            "error_list": error_list,
-        }
+    app_name = tool_context._invocation_context.app_name
+    user_id = tool_context._invocation_context.user_id
+    session_id = tool_context._invocation_context.session.id
+    artifact_service = tool_context._invocation_context.artifact_service
+
+    if artifact_service:
+        for image in success_list:
+            for _, image_tos_url in image.items():
+                filename = f"artifact_{formatted_timestamp()}"
+                await artifact_service.save_artifact(
+                    app_name=app_name,
+                    user_id=user_id,
+                    session_id=session_id,
+                    filename=filename,
+                    artifact=Part(
+                        inline_data=Blob(
+                            display_name=filename,
+                            data=read_file_to_bytes(image_tos_url),
+                            mime_type=mimetypes.guess_type(image_tos_url)[0],
+                        )
+                    ),
+                )
+
+    return {"status": "success", "success_list": success_list, "error_list": error_list}
 
 
 def add_span_attributes(
