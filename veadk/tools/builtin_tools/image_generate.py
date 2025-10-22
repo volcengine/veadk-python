@@ -98,9 +98,14 @@ async def image_generate(
         - Use a fixed `seed` for reproducibility.
         - Choose appropriate `size` for desired aspect ratio.
     """
+    logger.debug(
+        f"Using model: {getenv('MODEL_IMAGE_NAME', DEFAULT_TEXT_TO_IMAGE_MODEL_NAME)}"
+    )
     success_list = []
     error_list = []
+    logger.debug(f"image_generate params: {params}")
     for idx, item in enumerate(params):
+        logger.debug(f"image_generate item {idx}: {item}")
         prompt = item.get("prompt", "")
         image_name = item.get("image_name", f"generated_image_{idx}")
         response_format = item.get("response_format", "url")
@@ -130,6 +135,7 @@ async def image_generate(
                 )
                 output_part = None
                 if response.data and len(response.data) > 0:
+                    logger.debug(f"task {idx} Image generate response: {response}")
                     for item in response.data:
                         if response_format == "url":
                             image = item.url
@@ -164,7 +170,9 @@ async def image_generate(
                                 continue
 
                             logger.debug(f"Image saved as ADK artifact: {image_name}")
-
+                        logger.debug(
+                            f"Image {image_name} generated successfully: {image}"
+                        )
                         success_list.append({image_name: image})
                 else:
                     error_details = f"No images returned by Doubao model: {response}"
@@ -192,12 +200,18 @@ async def image_generate(
             error_list.append(image_name)
 
     if len(success_list) == 0:
+        logger.debug(
+            f"image_generate success_list: {success_list}\nerror_list: {error_list}"
+        )
         return {
             "status": "error",
             "success_list": success_list,
             "error_list": error_list,
         }
     else:
+        logger.debug(
+            f"image_generate success_list: {success_list}\nerror_list: {error_list}"
+        )
         return {
             "status": "success",
             "success_list": success_list,
