@@ -46,6 +46,7 @@ def build_vikingdb_knowledgebase_request(
     path: str,
     volcengine_access_key: str,
     volcengine_secret_key: str,
+    session_token: str = "",
     method: Literal["GET", "POST", "PUT", "DELETE"] = "POST",
     region: str = "cn-beijing",
     params=None,
@@ -85,7 +86,7 @@ def build_vikingdb_knowledgebase_request(
         r.set_body(json.dumps(data))
 
     credentials = Credentials(
-        volcengine_access_key, volcengine_secret_key, "air", region
+        volcengine_access_key, volcengine_secret_key, "air", region, session_token
     )
     SignerV4.sign(r, credentials)
     return r
