@@ -104,6 +104,15 @@ class LongTermMemory(BaseMemoryService, BaseModel):
 
         # Once user define backend config, use it directly
         if self.backend_config:
+            if "index" not in self.backend_config:
+                logger.warning(
+                    "Attribute `index` not provided in backend_config, use `index` or `app_name` instead."
+                )
+                self.backend_config["index"] = self.index or self.app_name
+
+            logger.debug(
+                f"Init {self.backend}, Use provided backend config: {self.backend_config}"
+            )
             self._backend = _get_backend_cls(self.backend)(**self.backend_config)
             return
 
