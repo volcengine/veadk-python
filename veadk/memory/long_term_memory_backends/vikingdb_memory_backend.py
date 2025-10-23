@@ -49,7 +49,23 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
     region: str = "cn-beijing"
     """VikingDB memory region"""
 
+    memory_type: list[str] = Field(default_factory=list)
+
     def model_post_init(self, __context: Any) -> None:
+        # We get memory type from:
+        # 1. user input
+        # 2. environment variable
+        # 3. default value
+        if not self.memory_type:
+            env_memory_type = os.getenv("DATABASE_VIKING_MEMORY_TYPE")
+            if env_memory_type:
+                # "event_1, event_2" -> ["event_1", "event_2"]
+                self.memory_type = [x.strip() for x in env_memory_type.split(",")]
+            else:
+                self.memory_type = ["sys_event_v1", "event_v1"]
+
+        logger.info(f"Using memory type: {self.memory_type}")
+
         # check whether collection exist, if not, create it
         if not self._collection_exist():
             self._create_collection()
@@ -135,10 +151,7 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
     def search_memory(
         self, user_id: str, query: str, top_k: int, **kwargs
     ) -> list[str]:
-        filter = {
-            "user_id": user_id,
-            "memory_type": ["sys_event_v1", "event_v1"],
-        }
+        filter = {"user_id": user_id, "memory_type": self.memory_type}
 
         logger.debug(
             f"Request for search memory in VikingDB: filter={filter}, collection_name={self.index}, query={query}, limit={top_k}"

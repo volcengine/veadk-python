@@ -36,9 +36,16 @@ def run_code(code: str, language: str, tool_context: ToolContext) -> str:
 
     tool_id = getenv("AGENTKIT_TOOL_ID")
     host = getenv("AGENTKIT_TOOL_HOST")  # temporary host for code run tool
+    service = getenv(
+        "AGENTKIT_TOOL_SERVICE_CODE"
+    )  # temporary service for code run tool
+    region = getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
+
     session_id = tool_context._invocation_context.session.id
 
-    logger.debug(f"Running code in language: {language}, session_id={session_id}")
+    logger.debug(
+        f"Running code in language: {language}, session_id={session_id}, code={code}, tool_id={tool_id}, host={host}, service={service}, region={region}"
+    )
 
     access_key = getenv("VOLCENGINE_ACCESS_KEY")
     secret_key = getenv("VOLCENGINE_SECRET_KEY")
@@ -59,9 +66,9 @@ def run_code(code: str, language: str, tool_context: ToolContext) -> str:
         action="InvokeTool",
         ak=access_key,
         sk=secret_key,
-        service="agentkit_stg",
+        service=service,
         version="2025-10-30",
-        region="cn-beijing",
+        region=region,
         host=host,
     )
 
