@@ -57,7 +57,7 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
         # 2. environment variable
         # 3. default value
         if not self.memory_type:
-            env_memory_type = os.getenv("DATABASE_VIKING_MEMORY_TYPE")
+            env_memory_type = os.getenv("DATABASE_VIKINGMEM_MEMORY_TYPE")
             if env_memory_type:
                 # "event_1, event_2" -> ["event_1", "event_2"]
                 self.memory_type = [x.strip() for x in env_memory_type.split(",")]
@@ -84,17 +84,23 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
         try:
             client = self._get_client()
             client.get_collection(collection_name=self.index)
+            logger.info(f"Collection {self.index} exist.")
             return True
         except Exception:
+            logger.info(f"Collection {self.index} not exist.")
             return False
 
     def _create_collection(self) -> None:
+        logger.info(
+            f"Create collection with collection_name={self.index}, builtin_event_types={self.memory_type}"
+        )
         client = self._get_client()
         response = client.create_collection(
             collection_name=self.index,
             description="Created by Volcengine Agent Development Kit VeADK",
-            builtin_event_types=["sys_event_v1"],
+            builtin_event_types=self.memory_type,
         )
+        logger.debug(f"Create collection with response {response}")
         return response
 
     def _get_client(self) -> VikingDBMemoryClient:
