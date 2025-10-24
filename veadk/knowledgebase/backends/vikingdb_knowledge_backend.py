@@ -14,6 +14,7 @@
 
 import asyncio
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Literal
@@ -23,7 +24,7 @@ from pydantic import Field
 from typing_extensions import override
 
 import veadk.config  # noqa E401
-from veadk.config import getenv
+from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 from veadk.configs.database_configs import NormalTOSConfig, TOSConfig
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
 from veadk.knowledgebase.backends.utils import build_vikingdb_knowledgebase_request
@@ -58,13 +59,15 @@ def get_files_in_directory(directory: str):
 
 
 class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
-    volcengine_access_key: str = Field(
-        default_factory=lambda: getenv("VOLCENGINE_ACCESS_KEY")
+    volcengine_access_key: str | None = Field(
+        default_factory=lambda: os.getenv("VOLCENGINE_ACCESS_KEY")
     )
 
-    volcengine_secret_key: str = Field(
-        default_factory=lambda: getenv("VOLCENGINE_SECRET_KEY")
+    volcengine_secret_key: str | None = Field(
+        default_factory=lambda: os.getenv("VOLCENGINE_SECRET_KEY")
     )
+
+    session_token: str = ""
 
     volcengine_project: str = "default"
     """VikingDB knowledgebase project in Volcengine console platform. Default by `default`"""
@@ -74,6 +77,15 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
 
     tos_config: TOSConfig | NormalTOSConfig = Field(default_factory=TOSConfig)
     """TOS config, used to upload files to TOS"""
+
+    def model_post_init(self, __context: Any) -> None:
+        self.precheck_index_naming()
+
+        # check whether collection exist, if not, create it
+        if not self.collection_status()["existed"]:
+            logger.warning(
+                f"VikingDB knowledgebase collection {self.index} does not exist, please create it first..."
+            )
 
     def precheck_index_naming(self):
         if not (
@@ -86,18 +98,21 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
                 "it must start with an English letter, contain only letters, numbers, and underscores, and have a length of 1-128."
             )
 
-    def model_post_init(self, __context: Any) -> None:
-        self.precheck_index_naming()
+    def _get_tos_client(self) -> VeTOS:
+        volcengine_access_key = self.volcengine_access_key
+        volcengine_secret_key = self.volcengine_secret_key
+        session_token = self.session_token
 
-        # check whether collection exist, if not, create it
-        if not self.collection_status()["existed"]:
-            logger.warning(
-                f"VikingDB knowledgebase collection {self.index} does not exist, please create it first..."
-            )
+        if not (volcengine_access_key and volcengine_secret_key):
+            cred = get_credential_from_vefaas_iam()
+            volcengine_access_key = cred.access_key_id
+            volcengine_secret_key = cred.secret_access_key
+            session_token = cred.session_token
 
-        self._tos_client = VeTOS(
-            ak=self.volcengine_access_key,
-            sk=self.volcengine_secret_key,
+        return VeTOS(
+            ak=volcengine_access_key,
+            sk=volcengine_secret_key,
+            session_token=session_token,
             region=self.tos_config.region,
             bucket_name=self.tos_config.bucket,
         )
@@ -404,6 +419,8 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         metadata: dict | None = None,
     ) -> str:
         # Here, we set the metadata via the TOS object, ref: https://www.volcengine.com/docs/84313/1254624
+        self._tos_client = self._get_tos_client()
+
         self._tos_client.bucket_name = tos_bucket_name
         coro = self._tos_client.upload(
             object_key=object_key,
@@ -504,10 +521,21 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
     ) -> dict:
         VIKINGDB_KNOWLEDGEBASE_BASE_URL = "api-knowledgebase.mlp.cn-beijing.volces.com"
 
+        volcengine_access_key = self.volcengine_access_key
+        volcengine_secret_key = self.volcengine_secret_key
+        session_token = self.session_token
+
+        if not (volcengine_access_key and volcengine_secret_key):
+            cred = get_credential_from_vefaas_iam()
+            volcengine_access_key = cred.access_key_id
+            volcengine_secret_key = cred.secret_access_key
+            session_token = cred.session_token
+
         request = build_vikingdb_knowledgebase_request(
             path=path,
-            volcengine_access_key=self.volcengine_access_key,
-            volcengine_secret_key=self.volcengine_secret_key,
+            volcengine_access_key=volcengine_access_key,
+            volcengine_secret_key=volcengine_secret_key,
+            session_token=session_token,
             method=method,
             data=body,
         )
