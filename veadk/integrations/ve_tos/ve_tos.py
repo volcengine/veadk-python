@@ -36,11 +36,14 @@ class VeTOS:
         self,
         ak: str = "",
         sk: str = "",
+        session_token: str = "",
         region: str = "cn-beijing",
         bucket_name: str = DEFAULT_TOS_BUCKET_NAME,
     ) -> None:
         self.ak = ak if ak else os.getenv("VOLCENGINE_ACCESS_KEY", "")
         self.sk = sk if sk else os.getenv("VOLCENGINE_SECRET_KEY", "")
+        self.session_token = session_token
+
         # Add empty value validation
         if not self.ak or not self.sk:
             raise ValueError(
@@ -71,6 +74,7 @@ class VeTOS:
             self._client = self._tos_module.TosClientV2(
                 ak=self.ak,
                 sk=self.sk,
+                security_token=self.session_token,
                 endpoint=f"tos-{self.region}.volces.com",
                 region=self.region,
             )
@@ -85,6 +89,7 @@ class VeTOS:
             self._client = self._tos_module.TosClientV2(
                 self.ak,
                 self.sk,
+                security_token=self.session_token,
                 endpoint=f"tos-{self.region}.volces.com",
                 region=self.region,
             )
