@@ -17,6 +17,7 @@ from typing import Any
 from pydantic import Field
 from typing_extensions import override
 
+from veadk.auth.veauth.viking_mem0_veauth import get_viking_mem0_token
 from veadk.configs.database_configs import Mem0Config
 from veadk.memory.long_term_memory_backends.base_backend import (
     BaseLongTermMemoryBackend,
@@ -42,6 +43,16 @@ class Mem0LTMBackend(BaseLongTermMemoryBackend):
 
     def model_post_init(self, __context: Any) -> None:
         """Initialize Mem0 client"""
+
+        if not self.mem0_config.api_key:
+            if not self.mem0_config.api_key_id and not self.mem0_config.project_id:
+                raise ValueError(
+                    "API Key not set, auto fetching api key needs `api_key_id` or `project_id`"
+                )
+            self.mem0_config.api_key = get_viking_mem0_token(
+                api_key_id=self.mem0_config.api_key_id,
+                memory_project_id=self.mem0_config.project_id,
+            )
 
         try:
             self._mem0_client = MemoryClient(

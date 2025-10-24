@@ -89,6 +89,10 @@ class Mem0Config(BaseSettings):
     api_key: str = ""
     """Mem0 API key"""
 
+    api_key_id: str = ""
+
+    project_id: str = ""
+
     base_url: str = ""  # "https://api.mem0.ai/v1"
 
 
