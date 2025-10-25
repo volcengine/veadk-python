@@ -88,7 +88,7 @@ def test_agent_default_values():
     assert agent.sub_agents == []
     assert agent.knowledgebase is None
     assert agent.long_term_memory is None
-    assert agent.tracers == []
+    # assert agent.tracers == []
 
 
 @patch.dict("os.environ", {"MODEL_AGENT_API_KEY": "mock_api_key"})

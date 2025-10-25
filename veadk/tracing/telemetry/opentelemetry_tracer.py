@@ -21,7 +21,7 @@ from typing import Any
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider, SpanLimits
+from opentelemetry.sdk.trace import SpanLimits, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing_extensions import override
@@ -31,8 +31,8 @@ from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporter
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
 from veadk.tracing.telemetry.exporters.inmemory_exporter import InMemoryExporter
 from veadk.utils.logger import get_logger
-from veadk.utils.patches import patch_google_adk_telemetry
 from veadk.utils.misc import get_temp_dir
+from veadk.utils.patches import patch_google_adk_telemetry
 
 logger = get_logger(__name__)
 
@@ -131,12 +131,15 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
             ) + global_tracer_provider._active_span_processor._span_processors
 
             self._processors.append(self._inmemory_exporter.processor)
+            self.exporters.append(self._inmemory_exporter)
         else:
             logger.warning(
                 "InMemoryExporter processor is not initialized, cannot add to OpentelemetryTracer."
             )
 
-        logger.info(f"Init OpentelemetryTracer with {len(self._processors)} exporters.")
+        logger.info(
+            f"Init OpentelemetryTracer with {len(self._processors)} exporter(s)."
+        )
 
     @property
     def trace_file_path(self) -> str:
