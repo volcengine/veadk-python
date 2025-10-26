@@ -62,9 +62,6 @@ DEFAULT_TOS_BUCKET_NAME = "ark-tutorial"
 
 DEFAULT_COZELOOP_SPACE_NAME = "VeADK Space"
 
-DEFAULT_TEXT_TO_IMAGE_MODEL_NAME = "doubao-seedream-3-0-t2i-250415"
-DEFAULT_TEXT_TO_IMAGE_MODEL_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
-
 DEFAULT_IMAGE_EDIT_MODEL_NAME = "doubao-seededit-3-0-i2i-250628"
 DEFAULT_IMAGE_EDIT_MODEL_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
 
