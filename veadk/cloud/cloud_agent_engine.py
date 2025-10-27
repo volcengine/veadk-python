@@ -22,7 +22,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from veadk.cloud.cloud_app import CloudApp
-from veadk.config import getenv
+from veadk.config import getenv, veadk_environments
 from veadk.integrations.ve_faas.ve_faas import VeFaaS
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp
@@ -143,18 +143,12 @@ class CloudAgentEngine(BaseModel):
             CloudApp: The deployed cloud application instance.
         """
         # prevent deepeval writing operations
-        import veadk.config
-
-        veadk.config.veadk_environments["DEEPEVAL_TELEMETRY_OPT_OUT"] = "YES"
+        veadk_environments["DEEPEVAL_TELEMETRY_OPT_OUT"] = "YES"
 
         if use_adk_web:
-            import veadk.config
-
-            veadk.config.veadk_environments["USE_ADK_WEB"] = "True"
+            veadk_environments["USE_ADK_WEB"] = "True"
         else:
-            import veadk.config
-
-            veadk.config.veadk_environments["USE_ADK_WEB"] = "False"
+            veadk_environments["USE_ADK_WEB"] = "False"
 
         # convert `path` to absolute path
         path = str(Path(path).resolve())
