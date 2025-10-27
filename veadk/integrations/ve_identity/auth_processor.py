@@ -25,9 +25,9 @@ from google.adk.auth import AuthConfig
 from google.genai import types
 from google.adk.auth.auth_credential import OAuth2Auth
 
-from .identity_client import IdentityClient
-from .models import AuthRequestConfig, OAuth2AuthPoller
-from .utils import (
+from veadk.integrations.ve_identity.identity_client import IdentityClient
+from veadk.integrations.ve_identity.models import AuthRequestConfig, OAuth2AuthPoller
+from veadk.integrations.ve_identity.utils import (
     get_function_call_auth_config,
     get_function_call_id,
     is_pending_auth_event,
@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from veadk.runner import Runner
 
 
-logger = get_logger("veadk." + __name__)
+logger = get_logger(__name__)
 
 # Default configuration for token polling
 DEFAULT_POLLING_INTERVAL_SECONDS = 5
@@ -102,7 +102,10 @@ class _DefaultOauth2AuthPoller(OAuth2AuthPoller):
     def __init__(
         self,
         auth_url: str,
-        polling_func: Callable[[], Optional[OAuth2Auth]] | Callable[[], Awaitable[Optional[OAuth2Auth]]],
+        polling_func: (
+            Callable[[], Optional[OAuth2Auth]]
+            | Callable[[], Awaitable[Optional[OAuth2Auth]]]
+        ),
     ):
         """Initialize the OAuth2 auth poller.
 
@@ -134,6 +137,7 @@ class _DefaultOauth2AuthPoller(OAuth2AuthPoller):
 
             # Check if polling_func is async or sync
             import inspect
+
             if inspect.iscoroutinefunction(self.polling_func):
                 oauth2auth = await self.polling_func()
             else:
@@ -226,7 +230,9 @@ class AuthRequestProcessor:
         # Use custom poller or default poller
         # Create async token fetcher for default poller
         async def async_token_fetcher():
-            response = await self._identity_client.get_oauth2_token_or_auth_url(**request_dict)
+            response = await self._identity_client.get_oauth2_token_or_auth_url(
+                **request_dict
+            )
             return (
                 OAuth2Auth(access_token=response.access_token)
                 if response.access_token and response.access_token.strip()

@@ -16,13 +16,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional, TYPE_CHECKING, Dict, List
+from typing import Any, Callable, Optional, TYPE_CHECKING, List
 
 from pydantic import BaseModel, model_validator, field_validator
 from google.adk.auth.auth_credential import OAuth2Auth
 
 if TYPE_CHECKING:
-    from .identity_client import IdentityClient
+    from veadk.integrations.ve_identity.identity_client import IdentityClient
 else:
     # For runtime, use Any to avoid circular import issues
     IdentityClient = Any

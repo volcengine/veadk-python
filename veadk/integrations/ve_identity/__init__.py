@@ -22,20 +22,28 @@ Main components:
 - WorkloadTokenManager: Manages workload access tokens with caching
 - AuthRequestProcessor: Handles OAuth2 flows in agent conversations
 
-Example usage:
-    from veadk.integrations.ve_identity import VeIdentityFunctionTool
-
-    @VeIdentityFunctionTool(
-        provider_name="github",
-        scopes=["repo", "user"],
-        auth_flow="USER_FEDERATION",
+Examples:
+    from veadk.integrations.ve_identity import (
+        VeIdentityFunctionTool,
+        oauth2_auth,
     )
+
     async def get_github_repos(access_token: str):
         # Tool implementation
         pass
+
+    tool = VeIdentityFunctionTool(
+        func=get_github_repos,
+        auth_config=oauth2_auth(
+            provider_name="github",
+            scopes=["repo", "user"],
+            auth_flow="USER_FEDERATION",
+        ),
+        into="access_token",
+    )
 """
 
-from .auth_processor import (
+from veadk.integrations.ve_identity.auth_processor import (
     AuthRequestConfig,
     AuthRequestProcessor,
     _NoOpAuthProcessor,
@@ -46,7 +54,7 @@ from .auth_processor import (
 )
 
 # New unified tools
-from .auth_config import (
+from veadk.integrations.ve_identity.auth_config import (
     api_key_auth,
     oauth2_auth,
     workload_auth,
@@ -55,16 +63,19 @@ from .auth_config import (
     WorkloadAuthConfig,
     VeIdentityAuthConfig,
 )
-from .function_tool import VeIdentityFunctionTool
-from .mcp_tool import VeIdentityMcpTool
-from .mcp_toolset import VeIdentityMcpToolset
-from .identity_client import IdentityClient
-from .models import (
+from veadk.integrations.ve_identity.function_tool import VeIdentityFunctionTool
+from veadk.integrations.ve_identity.mcp_tool import VeIdentityMcpTool
+from veadk.integrations.ve_identity.mcp_toolset import VeIdentityMcpToolset
+from veadk.integrations.ve_identity.identity_client import IdentityClient
+from veadk.integrations.ve_identity.models import (
     OAuth2TokenResponse,
     OAuth2AuthPoller,
     WorkloadToken,
 )
-from .token_manager import WorkloadTokenManager, get_workload_token
+from veadk.integrations.ve_identity.token_manager import (
+    WorkloadTokenManager,
+    get_workload_token,
+)
 
 __all__ = [
     # Client

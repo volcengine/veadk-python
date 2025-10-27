@@ -23,8 +23,8 @@ from typing import Any, Callable, List, Literal, Optional, Union
 
 from pydantic import BaseModel, model_validator, field_validator
 
-from .models import OAuth2AuthPoller
-from .identity_client import IdentityClient
+from veadk.integrations.ve_identity.models import OAuth2AuthPoller
+from veadk.integrations.ve_identity.identity_client import IdentityClient
 
 
 class AuthConfig(BaseModel, ABC):
@@ -121,13 +121,13 @@ class OAuth2AuthConfig(AuthConfig):
     def auth_type(self) -> str:
         return "oauth2"
 
+
 class WorkloadAuthConfig(AuthConfig):
     """Workload Access Token authentication configuration."""
 
     @property
     def auth_type(self) -> str:
         return "workload"
-
 
 
 # Type alias for all auth configs
@@ -145,6 +145,7 @@ def api_key_auth(
         provider_name=provider_name, identity_client=identity_client, region=region
     )
 
+
 def workload_auth(
     provider_name: str,
     identity_client: Optional[IdentityClient] = None,
@@ -154,6 +155,7 @@ def workload_auth(
     return WorkloadAuthConfig(
         provider_name=provider_name, identity_client=identity_client, region=region
     )
+
 
 def oauth2_auth(
     provider_name: str,

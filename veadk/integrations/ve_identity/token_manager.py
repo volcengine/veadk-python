@@ -24,10 +24,10 @@ from google.adk.agents.readonly_context import ReadonlyContext
 
 from veadk.utils.logger import get_logger
 
-from .identity_client import IdentityClient
-from .models import WorkloadToken
+from veadk.integrations.ve_identity.identity_client import IdentityClient
+from veadk.integrations.ve_identity.models import WorkloadToken
 
-logger = get_logger("veadk." + __name__)
+logger = get_logger(__name__)
 
 # Token expiration buffer in seconds - tokens will be refreshed this many seconds before actual expiration
 TOKEN_EXPIRATION_BUFFER_SECONDS = 60

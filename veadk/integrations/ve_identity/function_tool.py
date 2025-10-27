@@ -23,17 +23,20 @@ from google.adk.auth.auth_credential import AuthCredential
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.tool_context import ToolContext
 
-from .auth_config import (
+from veadk.integrations.ve_identity.auth_config import (
     VeIdentityAuthConfig,
     ApiKeyAuthConfig,
     OAuth2AuthConfig,
     WorkloadAuthConfig,
 )
-from .auth_mixins import VeIdentityAuthMixin, AuthRequiredException
+from veadk.integrations.ve_identity.auth_mixins import (
+    VeIdentityAuthMixin,
+    AuthRequiredException,
+)
 
 from veadk.utils.logger import get_logger
 
-logger = get_logger("veadk." + __name__)
+logger = get_logger(__name__)
 
 
 class VeIdentityFunctionTool(VeIdentityAuthMixin, FunctionTool):

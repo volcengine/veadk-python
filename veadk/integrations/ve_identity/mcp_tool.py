@@ -29,6 +29,7 @@ try:
     from mcp.types import Tool as McpBaseTool
 except ImportError as e:
     import sys
+
     if sys.version_info < (3, 10):
         raise ImportError(
             "MCP Tool requires Python 3.10 or above. Please upgrade your Python"
@@ -40,13 +41,16 @@ except ImportError as e:
 from google.adk.tools.mcp_tool.mcp_session_manager import MCPSessionManager
 from google.adk.tools.mcp_tool.mcp_session_manager import retry_on_closed_resource
 
-from .auth_config import VeIdentityAuthConfig
-from .auth_mixins import VeIdentityAuthMixin, AuthRequiredException
-from .utils import generate_headers
+from veadk.integrations.ve_identity.auth_config import VeIdentityAuthConfig
+from veadk.integrations.ve_identity.auth_mixins import (
+    VeIdentityAuthMixin,
+    AuthRequiredException,
+)
+from veadk.integrations.ve_identity.utils import generate_headers
 
 from veadk.utils.logger import get_logger
 
-logger = get_logger("veadk." + __name__)
+logger = get_logger(__name__)
 
 
 class VeIdentityMcpTool(VeIdentityAuthMixin, BaseTool):
@@ -149,11 +153,11 @@ class VeIdentityMcpTool(VeIdentityAuthMixin, BaseTool):
             return e.message
 
     async def _execute_with_credential(
-        self, 
-        *, 
-        args: dict[str, Any], 
-        tool_context: ToolContext, 
-        credential: AuthCredential
+        self,
+        *,
+        args: dict[str, Any],
+        tool_context: ToolContext,
+        credential: AuthCredential,
     ) -> Any:
         """Execute the MCP tool with the provided credential.
 

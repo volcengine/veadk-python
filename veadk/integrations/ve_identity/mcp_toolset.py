@@ -25,10 +25,10 @@ from typing import Union
 from pydantic import model_validator, field_validator
 from typing_extensions import override
 
-from .auth_config import VeIdentityAuthConfig
-from .auth_mixins import VeIdentityAuthMixin
-from .mcp_tool import VeIdentityMcpTool
-from .utils import generate_headers
+from veadk.integrations.ve_identity.auth_config import VeIdentityAuthConfig
+from veadk.integrations.ve_identity.auth_mixins import VeIdentityAuthMixin
+from veadk.integrations.ve_identity.mcp_tool import VeIdentityMcpTool
+from veadk.integrations.ve_identity.utils import generate_headers
 
 # Attempt to import MCP Tool from the MCP library, and hints user to upgrade
 # their Python version to 3.10 if it fails.
@@ -58,7 +58,7 @@ from google.adk.tools.base_toolset import BaseToolset, ToolPredicate
 from google.adk.tools.tool_configs import ToolArgsConfig, BaseToolConfig
 from google.adk.agents.readonly_context import ReadonlyContext
 
-logger = logging.getLogger("google_adk." + __name__)
+logger = logging.getLogger(__name__)
 
 
 class VeIdentityMcpToolset(VeIdentityAuthMixin, BaseToolset):
@@ -70,27 +70,51 @@ class VeIdentityMcpToolset(VeIdentityAuthMixin, BaseToolset):
     that can be used by an agent. It properly implements the BaseToolset
     interface for easy integration with the agent framework.
 
-    Usage::
+    Examples:
+        With API Key authentication:
 
-      toolset = VeIdentityMcpToolset(
-          connection_params=StdioServerParameters(
-              command='npx',
-              args=["-y", "@modelcontextprotocol/server-filesystem"],
-          ),
-          tool_filter=['read_file', 'list_directory']  # Optional: filter specific tools
-      )
+            from veadk.integrations.ve_identity import VeIdentityMcpToolset, api_key_auth
+            from mcp import StdioServerParameters
 
-      # Use in an agent
-      agent = LlmAgent(
-          model='gemini-2.0-flash',
-          name='enterprise_assistant',
-          instruction='Help user accessing their file systems',
-          tools=[toolset],
-      )
+            toolset = VeIdentityMcpToolset(
+                auth_config=api_key_auth("my-provider"),
+                connection_params=StdioServerParameters(
+                    command='npx',
+                    args=["-y", "@modelcontextprotocol/server-filesystem"],
+                ),
+                tool_filter=['read_file', 'list_directory']
+            )
 
-      # Cleanup is handled automatically by the agent framework
-      # But you can also manually close if needed:
-      # await toolset.close()
+        With OAuth2 authentication:
+
+            from veadk.integrations.ve_identity import VeIdentityMcpToolset, oauth2_auth
+            from mcp import StdioServerParameters
+
+            toolset = VeIdentityMcpToolset(
+                auth_config=oauth2_auth(
+                    provider_name="github",
+                    scopes=["repo", "user"],
+                    auth_flow="M2M"
+                ),
+                connection_params=StdioServerParameters(
+                    command='npx',
+                    args=["-y", "@modelcontextprotocol/server-filesystem"],
+                ),
+                tool_filter=['read_file', 'list_directory']
+            )
+
+        Using in an agent:
+
+            agent = LlmAgent(
+                model='gemini-2.0-flash',
+                name='enterprise_assistant',
+                instruction='Help user accessing their file systems',
+                tools=[toolset],
+            )
+
+            # Cleanup is handled automatically by the agent framework
+            # But you can also manually close if needed:
+            # await toolset.close()
     """
 
     def __init__(
@@ -364,7 +388,7 @@ class VeIdentityMcpToolsetConfig(BaseToolConfig):
     def _validate_auth_config(cls, v):
         """Convert dict to proper auth config object."""
         if isinstance(v, dict):
-            from .auth_config import api_key_auth, oauth2_auth
+            from veadk.integrations.ve_identity.auth_config import api_key_auth, oauth2_auth
 
             provider_name = v.get("provider_name")
             if not provider_name:

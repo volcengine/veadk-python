@@ -27,7 +27,7 @@ import aiohttp
 import volcenginesdkid
 import volcenginesdkcore
 
-from .models import (
+from veadk.integrations.ve_identity.models import (
     DCRRegistrationRequest,
     DCRRegistrationResponse,
     OAuth2TokenResponse,
@@ -36,7 +36,7 @@ from .models import (
 
 from veadk.utils.logger import get_logger
 
-logger = get_logger("veadk." + __name__)
+logger = get_logger(__name__)
 
 
 def refresh_credentials(func):
@@ -123,9 +123,7 @@ class IdentityClient:
 
         # Use the SDK's built-in async support
         return await self._api_client.create_oauth2_credential_provider(
-            volcenginesdkid.CreateOauth2CredentialProviderRequest(
-                **request_params
-            ),
+            volcenginesdkid.CreateOauth2CredentialProviderRequest(**request_params),
             async_req=True,
         )
 
@@ -145,9 +143,7 @@ class IdentityClient:
 
         # Use the SDK's built-in async support
         return await self._api_client.create_api_key_credential_provider(
-            volcenginesdkid.CreateApiKeyCredentialProviderRequest(
-                **request_params
-            ),
+            volcenginesdkid.CreateApiKeyCredentialProviderRequest(**request_params),
             async_req=True,
         )
 
@@ -229,9 +225,7 @@ class IdentityClient:
             logger.info("Retrieving workload access token...")
             resp: volcenginesdkid.GetWorkloadAccessTokenForUserIdResponse = (
                 await self._api_client.get_workload_access_token(
-                    volcenginesdkid.GetWorkloadAccessTokenRequest(
-                        name=workload_name
-                    ),
+                    volcenginesdkid.GetWorkloadAccessTokenRequest(name=workload_name),
                     async_req=True,
                 )
             )

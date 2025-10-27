@@ -37,19 +37,19 @@ from google.adk.tools.tool_context import ToolContext
 from google.adk.tools.openapi_tool.auth.auth_helpers import dict_to_auth_scheme
 from google.adk.agents.readonly_context import ReadonlyContext
 
-from .models import OAuth2AuthPoller, OAuth2TokenResponse
-from .identity_client import IdentityClient
-from .auth_config import (
+from veadk.integrations.ve_identity.models import OAuth2AuthPoller, OAuth2TokenResponse
+from veadk.integrations.ve_identity.identity_client import IdentityClient
+from veadk.integrations.ve_identity.auth_config import (
     VeIdentityAuthConfig,
     ApiKeyAuthConfig,
     OAuth2AuthConfig,
     WorkloadAuthConfig,
 )
-from .token_manager import get_workload_token
+from veadk.integrations.ve_identity.token_manager import get_workload_token
 
 from veadk.utils.logger import get_logger
 
-logger = get_logger("veadk." + __name__)
+logger = get_logger(__name__)
 
 
 # OAuth2 scheme definition (shared across all OAuth2 tools)
@@ -509,7 +509,7 @@ class OAuth2AuthMixin(BaseAuthMixin):
 
     def _create_default_oauth2_poller(self, auth_uri: str, request_dict: dict):
         """Create a default OAuth2 poller for ReadonlyContext scenarios."""
-        from .auth_processor import _DefaultOauth2AuthPoller
+        from veadk.integrations.ve_identity.auth_processor import _DefaultOauth2AuthPoller
 
         async def async_token_fetcher():
             response = await self._identity_client.get_oauth2_token_or_auth_url(
