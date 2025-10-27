@@ -42,6 +42,10 @@ def run_code(code: str, language: str, tool_context: ToolContext) -> str:
     region = getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
 
     session_id = tool_context._invocation_context.session.id
+    agent_name = tool_context._invocation_context.agent.name
+    user_id = tool_context._invocation_context.user_id
+    tool_user_session_id = agent_name + "_" + user_id + "_" + session_id
+    logger.debug(f"tool_user_session_id: {tool_user_session_id}")
 
     logger.debug(
         f"Running code in language: {language}, session_id={session_id}, code={code}, tool_id={tool_id}, host={host}, service={service}, region={region}"
@@ -53,7 +57,7 @@ def run_code(code: str, language: str, tool_context: ToolContext) -> str:
     res = ve_request(
         request_body={
             "ToolId": tool_id,
-            "UserSessionId": session_id,
+            "UserSessionId": tool_user_session_id,
             "OperationType": "RunCode",
             "OperationPayload": json.dumps(
                 {
