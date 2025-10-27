@@ -42,9 +42,9 @@ def run_code(code: str, language: str, tool_context: ToolContext) -> str:
     region = getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
 
     session_id = tool_context._invocation_context.session.id
-    app_name = tool_context._invocation_context.app_name
+    agent_name = tool_context._invocation_context.agent.name
     user_id = tool_context._invocation_context.user_id
-    tool_user_session_id = app_name + "_" + user_id + "_" + session_id
+    tool_user_session_id = agent_name + "_" + user_id + "_" + session_id
     logger.debug(f"tool_user_session_id: {tool_user_session_id}")
 
     logger.debug(
