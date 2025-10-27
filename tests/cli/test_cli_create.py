@@ -20,23 +20,21 @@ from veadk.cli.cli_create import create, _generate_files
 def test_create_agent_with_options():
     runner = CliRunner()
     with runner.isolated_filesystem() as temp_dir:
-        result = runner.invoke(
-            create, ["--agent-name", "test-agent", "--ark-api-key", "test-key"]
-        )
+        result = runner.invoke(create, ["test-agent", "--ark-api-key", "test-key"])
         assert result.exit_code == 0
 
         agent_folder = Path(temp_dir) / "test-agent"
         assert agent_folder.exists()
 
-        config_path = agent_folder / "config.yaml"
+        config_path = agent_folder / ".env"
         assert config_path.exists()
         config_content = config_path.read_text()
-        assert "api_key: test-key" in config_content
+        assert "MODEL_AGENT_API_KEY=test-key" in config_content
 
-        agent_init_path = agent_folder / "test-agent" / "__init__.py"
+        agent_init_path = agent_folder / "__init__.py"
         assert agent_init_path.exists()
 
-        agent_py_path = agent_folder / "test-agent" / "agent.py"
+        agent_py_path = agent_folder / "agent.py"
         assert agent_py_path.exists()
 
 
@@ -44,14 +42,12 @@ def test_create_agent_overwrite_existing_directory():
     runner = CliRunner()
     with runner.isolated_filesystem() as temp_dir:
         # First, create the agent
-        runner.invoke(
-            create, ["--agent-name", "test-agent", "--ark-api-key", "test-key"]
-        )
+        runner.invoke(create, ["test-agent", "--ark-api-key", "test-key"])
 
         # Attempt to create it again, but cancel the overwrite
         result = runner.invoke(
             create,
-            ["--agent-name", "test-agent", "--ark-api-key", "test-key"],
+            ["test-agent", "--ark-api-key", "test-key"],
             input="n\n",
         )
         assert "Operation cancelled" in result.output
@@ -59,14 +55,14 @@ def test_create_agent_overwrite_existing_directory():
         # Attempt to create it again, and confirm the overwrite
         result = runner.invoke(
             create,
-            ["--agent-name", "test-agent", "--ark-api-key", "new-key"],
+            ["test-agent", "--ark-api-key", "new-key"],
             input="y\n",
         )
         assert result.exit_code == 0
         agent_folder = Path(temp_dir) / "test-agent"
-        config_path = agent_folder / "config.yaml"
+        config_path = agent_folder / ".env"
         config_content = config_path.read_text()
-        assert "api_key: new-key" in config_content
+        assert "MODEL_AGENT_API_KEY=new-key" in config_content
 
 
 def test_generate_files(tmp_path: Path):
@@ -74,20 +70,17 @@ def test_generate_files(tmp_path: Path):
     api_key = "test-key"
     target_dir = tmp_path / agent_name
 
-    _generate_files(agent_name, api_key, target_dir)
+    _generate_files(api_key, target_dir)
 
-    agent_code_dir = target_dir / agent_name
-    assert agent_code_dir.is_dir()
-
-    config_file = target_dir / "config.yaml"
+    config_file = target_dir / ".env"
     assert config_file.is_file()
     content = config_file.read_text()
-    assert f"api_key: {api_key}" in content
+    assert f"MODEL_AGENT_API_KEY={api_key}" in content
 
-    init_file = agent_code_dir / "__init__.py"
+    init_file = target_dir / "__init__.py"
     assert init_file.is_file()
 
-    agent_file = agent_code_dir / "agent.py"
+    agent_file = target_dir / "agent.py"
     assert agent_file.is_file()
 
 
@@ -96,7 +89,7 @@ def test_prompt_for_ark_api_key_enter_now():
     with runner.isolated_filesystem():
         result = runner.invoke(create, input="test-agent\n1\nmy-secret-key\n")
         assert result.exit_code == 0
-        assert "my-secret-key" in (Path("test-agent") / "config.yaml").read_text()
+        assert "my-secret-key" in (Path("test-agent") / ".env").read_text()
 
 
 def test_prompt_for_ark_api_key_configure_later():
@@ -104,7 +97,7 @@ def test_prompt_for_ark_api_key_configure_later():
     with runner.isolated_filesystem():
         result = runner.invoke(create, input="test-agent\n2\n")
         assert result.exit_code == 0
-        assert "api_key: " in (Path("test-agent") / "config.yaml").read_text()
+        assert "MODEL_AGENT_API_KEY=" in (Path("test-agent") / ".env").read_text()
 
 
 def test_create_agent_with_prompts():
@@ -116,13 +109,13 @@ def test_create_agent_with_prompts():
         agent_folder = Path(temp_dir) / "test-agent"
         assert agent_folder.exists()
 
-        config_path = agent_folder / "config.yaml"
+        config_path = agent_folder / ".env"
         assert config_path.exists()
         config_content = config_path.read_text()
-        assert "api_key: test-key" in config_content
+        assert "MODEL_AGENT_API_KEY=test-key" in config_content
 
-        agent_init_path = agent_folder / "test-agent" / "__init__.py"
+        agent_init_path = agent_folder / "__init__.py"
         assert agent_init_path.exists()
 
-        agent_py_path = agent_folder / "test-agent" / "agent.py"
+        agent_py_path = agent_folder / "agent.py"
         assert agent_py_path.exists()
