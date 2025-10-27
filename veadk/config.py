@@ -15,7 +15,7 @@
 import os
 from typing import Any
 
-from dotenv import find_dotenv
+from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel, Field
 
 from veadk.configs.database_configs import (
@@ -33,7 +33,15 @@ from veadk.configs.tracing_configs import (
     PrometheusConfig,
     TLSConfig,
 )
+from veadk.utils.logger import get_logger
 from veadk.utils.misc import set_envs
+
+logger = get_logger(__name__)
+
+if load_dotenv(find_dotenv(usecwd=True)):
+    logger.info(f"Find `.env` file in {find_dotenv(usecwd=True)}, load envs.")
+else:
+    logger.info("No env file found.")
 
 
 class VeADKConfig(BaseModel):
@@ -89,7 +97,10 @@ config_yaml_path = find_dotenv(filename="config.yaml", usecwd=True)
 veadk_environments = {}
 
 if config_yaml_path:
+    logger.info(f"Find `config.yaml` file in {config_yaml_path}")
     config_dict, _veadk_environments = set_envs(config_yaml_path=config_yaml_path)
     veadk_environments.update(_veadk_environments)
+else:
+    logger.warning("No `config.yaml` file found.")
 
 settings = VeADKConfig()
