@@ -128,6 +128,10 @@ def getenv(
 
 
 def set_envs(config_yaml_path: str) -> tuple[dict, dict]:
+    from veadk.utils.logger import get_logger
+
+    logger = get_logger(__name__)
+
     with open(config_yaml_path, "r", encoding="utf-8") as yaml_file:
         config_dict = safe_load(yaml_file)
 
@@ -138,6 +142,9 @@ def set_envs(config_yaml_path: str) -> tuple[dict, dict]:
         k = k.upper()
 
         if k in os.environ:
+            logger.info(
+                f"Environment variable {k} has been set, value in `config.yaml` will be ignored."
+            )
             veadk_environments[k] = os.environ[k]
             continue
         veadk_environments[k] = str(v)
