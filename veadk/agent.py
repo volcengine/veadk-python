@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Optional, Union
 
 from google.adk.agents import LlmAgent, RunConfig
@@ -132,6 +133,8 @@ class Agent(LlmAgent):
                 "You are trying to use your own LiteLLM client, some default request headers may be missing."
             )
 
+        self._prepare_tracers()
+
         if self.knowledgebase:
             from veadk.tools.builtin_tools.load_knowledgebase import (
                 LoadKnowledgebaseTool,
@@ -193,6 +196,42 @@ class Agent(LlmAgent):
             print()  # end with a new line
 
         return final_output
+
+    def _prepare_tracers(self):
+        enable_apmplus_tracer = os.getenv("ENABLE_APMPLUS", "false").lower() == "true"
+        enable_cozeloop_tracer = os.getenv("ENABLE_COZELOOP", "false").lower() == "true"
+        enable_tls_tracer = os.getenv("ENABLE_TLS", "false").lower() == "true"
+
+        if not self.tracers:
+            from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
+
+            self.tracers.append(OpentelemetryTracer())
+
+        exporters = self.tracers[0].exporters  # type: ignore
+
+        from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporter
+        from veadk.tracing.telemetry.exporters.cozeloop_exporter import CozeloopExporter
+        from veadk.tracing.telemetry.exporters.tls_exporter import TLSExporter
+
+        if enable_apmplus_tracer and not any(
+            isinstance(e, APMPlusExporter) for e in exporters
+        ):
+            self.tracers[0].exporters.append(APMPlusExporter())  # type: ignore
+            logger.info("Enable APMPlus exporter by env.")
+
+        if enable_cozeloop_tracer and not any(
+            isinstance(e, CozeloopExporter) for e in exporters
+        ):
+            self.tracers[0].exporters.append(CozeloopExporter())  # type: ignore
+            logger.info("Enable CozeLoop exporter by env.")
+
+        if enable_tls_tracer and not any(isinstance(e, TLSExporter) for e in exporters):
+            self.tracers[0].exporters.append(TLSExporter())  # type: ignore
+            logger.info("Enable TLS exporter by env.")
+
+        logger.debug(
+            f"Opentelemetry Tracer init {len(self.tracers[0].exporters)} exporters"  # type: ignore
+        )
 
     async def run(
         self,
