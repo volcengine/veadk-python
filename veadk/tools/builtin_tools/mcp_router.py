@@ -15,8 +15,15 @@
 from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
 
 from veadk.config import getenv
-from veadk.utils.mcp_utils import get_mcp_params
+from google.adk.tools.mcp_tool.mcp_session_manager import (
+    StreamableHTTPConnectionParams,
+)
 
 url = getenv("TOOL_MCP_ROUTER_URL")
+api_key = getenv("TOOL_MCP_ROUTER_API_KEY")
 
-mcp_router = MCPToolset(connection_params=get_mcp_params(url=url))
+mcp_router = MCPToolset(
+    connection_params=StreamableHTTPConnectionParams(
+        url=url, headers={"Authorization": f"Bearer {api_key}"}
+    ),
+)
