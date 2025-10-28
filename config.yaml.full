@@ -57,6 +57,7 @@ tool:
     dataset_id:  #dataset name
   mcp_router:
     url: #mcp sse/streamable-http url
+    api_key: #mcp api key
   code_sandbox:
     url: #mcp sse/streamable-http url
     api_key: #mcp api key
