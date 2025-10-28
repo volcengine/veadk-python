@@ -22,39 +22,143 @@ from veadk.utils.misc import safe_json_serialize
 
 
 def llm_gen_ai_request_model(params: LLMAttributesParams) -> ExtractorResponse:
+    """Extract the requested language model name.
+
+    Provides the model identifier that was specified in the LLM request
+    for tracking model usage patterns and performance analysis.
+
+    Args:
+        params: LLM execution parameters containing request details
+
+    Returns:
+        ExtractorResponse: Response containing the model name or placeholder
+    """
     return ExtractorResponse(content=params.llm_request.model or "<unknown_model_name>")
 
 
 def llm_gen_ai_request_type(params: LLMAttributesParams) -> ExtractorResponse:
+    """Extract the LLM request type.
+
+    Provides the type of LLM operation being performed, typically "chat"
+    for conversational interactions with language models.
+
+    Args:
+        params: LLM execution parameters (unused in this extractor)
+
+    Returns:
+        ExtractorResponse: Response containing "chat" as the request type
+    """
     return ExtractorResponse(content="chat" or "<unknown_type>")
 
 
 def llm_gen_ai_response_model(params: LLMAttributesParams) -> ExtractorResponse:
+    """Extract the responding language model name.
+
+    Provides the actual model that generated the response, which should
+    match the requested model for verification and tracking purposes.
+
+    Args:
+        params: LLM execution parameters containing request details
+
+    Returns:
+        ExtractorResponse: Response containing the response model name or placeholder
+    """
     return ExtractorResponse(content=params.llm_request.model or "<unknown_model_name>")
 
 
 def llm_gen_ai_request_max_tokens(params: LLMAttributesParams) -> ExtractorResponse:
+    """Extract the maximum output tokens configuration.
+
+    Provides the maximum number of tokens the model is allowed to generate
+    in its response, used for cost prediction and output length control.
+
+    Args:
+        params: LLM execution parameters containing request configuration
+
+    Returns:
+        ExtractorResponse: Response containing max output tokens value
+    """
     return ExtractorResponse(content=params.llm_request.config.max_output_tokens)
 
 
 def llm_gen_ai_request_temperature(params: LLMAttributesParams) -> ExtractorResponse:
+    """Extract the temperature parameter for response randomness.
+
+    Provides the temperature setting that controls randomness in model
+    responses, affecting creativity and consistency of outputs.
+
+    Args:
+        params: LLM execution parameters containing request configuration
+
+    Returns:
+        ExtractorResponse: Response containing temperature value
+    """
     return ExtractorResponse(content=params.llm_request.config.temperature)
 
 
 def llm_gen_ai_request_top_p(params: LLMAttributesParams) -> ExtractorResponse:
+    """Extract the top-p parameter for nucleus sampling.
+
+    Provides the top-p (nucleus sampling) setting that controls the
+    diversity of token sampling in model responses.
+
+    Args:
+        params: LLM execution parameters containing request configuration
+
+    Returns:
+        ExtractorResponse: Response containing top-p value
+    """
     return ExtractorResponse(content=params.llm_request.config.top_p)
 
 
 def llm_gen_ai_response_stop_reason(params: LLMAttributesParams) -> ExtractorResponse:
+    """Extract the stop reason for response completion.
+
+    Provides information about why the model stopped generating tokens,
+    which helps identify truncation or completion patterns.
+
+    Args:
+        params: LLM execution parameters (currently not implemented)
+
+    Returns:
+        ExtractorResponse: Response containing placeholder stop reason
+    """
     return ExtractorResponse(content="<no_stop_reason_provided>")
 
 
 def llm_gen_ai_response_finish_reason(params: LLMAttributesParams) -> ExtractorResponse:
+    """Extract the finish reason for response completion.
+
+    Provides information about how the model completed its response,
+    such as natural completion, token limit, or stop sequence.
+
+    Args:
+        params: LLM execution parameters (currently not implemented)
+
+    Returns:
+        ExtractorResponse: Response containing placeholder finish reason
+
+    Note:
+        - Currently returns placeholder value
+        - TODO: Update implementation for Google ADK v1.12.0
+        - Critical for understanding response quality and completeness
+    """
     # TODO: update to google-adk v1.12.0
     return ExtractorResponse(content="<no_finish_reason_provided>")
 
 
 def llm_gen_ai_usage_input_tokens(params: LLMAttributesParams) -> ExtractorResponse:
+    """Extract the number of input tokens consumed.
+
+    Provides the count of tokens in the prompt and context that were
+    processed by the model, essential for cost tracking and analysis.
+
+    Args:
+        params: LLM execution parameters containing response metadata
+
+    Returns:
+        ExtractorResponse: Response containing input token count or None
+    """
     if params.llm_response.usage_metadata:
         return ExtractorResponse(
             content=params.llm_response.usage_metadata.prompt_token_count
@@ -63,6 +167,17 @@ def llm_gen_ai_usage_input_tokens(params: LLMAttributesParams) -> ExtractorRespo
 
 
 def llm_gen_ai_usage_output_tokens(params: LLMAttributesParams) -> ExtractorResponse:
+    """Extract the number of output tokens generated.
+
+    Provides the count of tokens generated by the model in its response,
+    essential for cost tracking and response length analysis.
+
+    Args:
+        params: LLM execution parameters containing response metadata
+
+    Returns:
+        ExtractorResponse: Response containing output token count or None
+    """
     if params.llm_response.usage_metadata:
         return ExtractorResponse(
             content=params.llm_response.usage_metadata.candidates_token_count,
@@ -71,6 +186,17 @@ def llm_gen_ai_usage_output_tokens(params: LLMAttributesParams) -> ExtractorResp
 
 
 def llm_gen_ai_usage_total_tokens(params: LLMAttributesParams) -> ExtractorResponse:
+    """Extract the total number of tokens consumed.
+
+    Provides the total count of tokens (input + output) consumed by
+    the model interaction, used for overall cost tracking.
+
+    Args:
+        params: LLM execution parameters containing response metadata
+
+    Returns:
+        ExtractorResponse: Response containing total token count or None
+    """
     if params.llm_response.usage_metadata:
         return ExtractorResponse(
             content=params.llm_response.usage_metadata.total_token_count,
@@ -82,6 +208,17 @@ def llm_gen_ai_usage_total_tokens(params: LLMAttributesParams) -> ExtractorRespo
 def llm_gen_ai_usage_cache_creation_input_tokens(
     params: LLMAttributesParams,
 ) -> ExtractorResponse:
+    """Extract the number of tokens used for cache creation.
+
+    Provides the count of tokens used for creating cached content,
+    which affects cost calculation in caching-enabled models.
+
+    Args:
+        params: LLM execution parameters containing response metadata
+
+    Returns:
+        ExtractorResponse: Response containing cache creation token count or None
+    """
     if params.llm_response.usage_metadata:
         return ExtractorResponse(
             content=params.llm_response.usage_metadata.cached_content_token_count,
@@ -93,6 +230,17 @@ def llm_gen_ai_usage_cache_creation_input_tokens(
 def llm_gen_ai_usage_cache_read_input_tokens(
     params: LLMAttributesParams,
 ) -> ExtractorResponse:
+    """Extract the number of tokens used for cache reading.
+
+    Provides the count of tokens read from cached content,
+    which affects cost calculation in caching-enabled models.
+
+    Args:
+        params: LLM execution parameters containing response metadata
+
+    Returns:
+        ExtractorResponse: Response containing cache read token count or None
+    """
     if params.llm_response.usage_metadata:
         return ExtractorResponse(
             content=params.llm_response.usage_metadata.cached_content_token_count,
@@ -101,6 +249,18 @@ def llm_gen_ai_usage_cache_read_input_tokens(
 
 
 def llm_gen_ai_prompt(params: LLMAttributesParams) -> ExtractorResponse:
+    """Extract structured prompt data for span attributes.
+
+    Processes the complete conversation history from the LLM request
+    and structures it into indexed prompt messages with role, content,
+    and metadata information for analysis and debugging.
+
+    Args:
+        params: LLM execution parameters containing request content
+
+    Returns:
+        ExtractorResponse: Response containing list of structured prompt messages
+    """
     # a part is a message
     messages: list[dict] = []
     idx = 0
@@ -159,6 +319,18 @@ def llm_gen_ai_prompt(params: LLMAttributesParams) -> ExtractorResponse:
 
 
 def llm_gen_ai_completion(params: LLMAttributesParams) -> ExtractorResponse:
+    """Extract structured completion data for span attributes.
+
+    Processes the model's response content and structures it into
+    indexed completion messages with role, content, and tool call
+    information for analysis and evaluation.
+
+    Args:
+        params: LLM execution parameters containing response content
+
+    Returns:
+        ExtractorResponse: Response containing list of structured completion messages
+    """
     messages = []
 
     content = params.llm_response.content
@@ -193,6 +365,18 @@ def llm_gen_ai_completion(params: LLMAttributesParams) -> ExtractorResponse:
 
 
 def llm_gen_ai_messages(params: LLMAttributesParams) -> ExtractorResponse:
+    """Extract complete conversation messages as structured events.
+
+    Processes the entire conversation context including system instructions,
+    user messages, tool messages, and assistant responses into structured
+    events for comprehensive conversation flow analysis.
+
+    Args:
+        params: LLM execution parameters containing request content
+
+    Returns:
+        ExtractorResponse: Event list response containing structured conversation events
+    """
     events = []
 
     # system message
@@ -317,15 +501,45 @@ def llm_gen_ai_messages(params: LLMAttributesParams) -> ExtractorResponse:
 
 
 def llm_gen_ai_is_streaming(params: LLMAttributesParams) -> ExtractorResponse:
+    """Extract streaming mode indicator.
+
+    Indicates whether the LLM request was processed in streaming mode
+    for performance analysis and debugging purposes.
+
+    Args:
+        params: LLM execution parameters (currently not implemented)
+
+    Returns:
+        ExtractorResponse: Response containing None (not implemented)
+    """
     # return params.llm_request.stream
     return ExtractorResponse(content=None)
 
 
 def llm_gen_ai_operation_name(params: LLMAttributesParams) -> ExtractorResponse:
+    """Extract the operation name for LLM spans.
+
+    Provides a standardized operation name for LLM interactions,
+    enabling consistent categorization across all model calls.
+
+    Args:
+        params: LLM execution parameters (unused in this extractor)
+
+    Returns:
+        ExtractorResponse: Response containing "chat" as the operation name
+    """
     return ExtractorResponse(content="chat")
 
 
 def llm_gen_ai_span_kind(params: LLMAttributesParams) -> ExtractorResponse:
+    """Extract the span kind for LLM spans.
+
+    Provides span kind classification following OpenTelemetry semantic
+    conventions for generative AI LLM operations.
+
+    Returns:
+        ExtractorResponse: Response containing "llm" as the span kind
+    """
     return ExtractorResponse(content="llm")
 
 
@@ -452,6 +666,18 @@ def llm_gen_ai_span_kind(params: LLMAttributesParams) -> ExtractorResponse:
 
 
 def llm_gen_ai_choice(params: LLMAttributesParams) -> ExtractorResponse:
+    """Extract model choice data as span events.
+
+    Processes the model's response content and creates choice events
+    containing response metadata, content, and tool calls for
+    detailed response analysis.
+
+    Args:
+        params: LLM execution parameters containing response content
+
+    Returns:
+        ExtractorResponse: Event response containing structured choice data
+    """
     message = {}
 
     # parse content to build a message
@@ -510,18 +736,52 @@ def llm_gen_ai_choice(params: LLMAttributesParams) -> ExtractorResponse:
 
 
 def llm_input_value(params: LLMAttributesParams) -> ExtractorResponse:
+    """Extract complete LLM request data for debugging.
+
+    Provides the complete LLM request object in string format
+    for detailed debugging and analysis purposes.
+
+    Args:
+        params: LLM execution parameters containing request details
+
+    Returns:
+        ExtractorResponse: Response containing serialized request data
+    """
     return ExtractorResponse(
         content=str(params.llm_request.model_dump(exclude_none=True))
     )
 
 
 def llm_output_value(params: LLMAttributesParams) -> ExtractorResponse:
+    """Extract complete LLM response data for debugging.
+
+    Provides the complete LLM response object in string format
+    for detailed debugging and analysis purposes.
+
+    Args:
+        params: LLM execution parameters containing response details
+
+    Returns:
+        ExtractorResponse: Response containing serialized response data
+    """
     return ExtractorResponse(
         content=str(params.llm_response.model_dump(exclude_none=True))
     )
 
 
 def llm_gen_ai_request_functions(params: LLMAttributesParams) -> ExtractorResponse:
+    """Extract available functions/tools from the LLM request.
+
+    Processes the tools dictionary from the LLM request and extracts
+    function metadata including names, descriptions, and parameters
+    for tool usage analysis and debugging.
+
+    Args:
+        params: LLM execution parameters containing request tools
+
+    Returns:
+        ExtractorResponse: Response containing list of function metadata
+    """
     functions = []
 
     for idx, (tool_name, tool_instance) in enumerate(
