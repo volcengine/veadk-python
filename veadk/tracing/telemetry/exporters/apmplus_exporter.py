@@ -112,6 +112,25 @@ _GEN_AI_CLIENT_TOKEN_USAGE_BUCKETS = [
 
 @dataclass
 class Meters:
+    """Metric names and identifiers for OpenTelemetry instrumentation.
+
+    This class defines standardized metric names used for LLM and agent
+    observability. The metrics follow OpenTelemetry semantic conventions
+    for generative AI operations and include custom APMPlus metrics for
+    enhanced monitoring capabilities.
+
+    Standard Gen AI Metrics:
+        - LLM_CHAT_COUNT: Counter for LLM invocation frequency
+        - LLM_TOKEN_USAGE: Histogram for token consumption analysis
+        - LLM_OPERATION_DURATION: Histogram for operation latency tracking
+        - LLM_COMPLETIONS_EXCEPTIONS: Counter for error rate monitoring
+        - Streaming metrics: Performance analysis for streaming responses
+
+    APMPlus Custom Metrics:
+        - APMPLUS_SPAN_LATENCY: Span execution time for performance analysis
+        - APMPLUS_TOOL_TOKEN_USAGE: Tool-specific token consumption tracking
+    """
+
     LLM_CHAT_COUNT = "gen_ai.chat.count"
     LLM_TOKEN_USAGE = "gen_ai.client.token.usage"
     LLM_OPERATION_DURATION = "gen_ai.client.operation.duration"
@@ -134,9 +153,42 @@ class Meters:
 
 
 class MeterUploader:
+    """Metrics uploader for APMPlus observability platform integration.
+
+    MeterUploader manages the collection and transmission of telemetry metrics
+    to Volcengine's APMPlus platform. It creates and maintains OpenTelemetry
+    metric instruments for comprehensive agent performance monitoring.
+
+    Key Features:
+    - Automatic metric instrument creation with appropriate buckets
+    - LLM call metrics including token usage and latency
+    - Tool execution metrics for performance analysis
+    - Error tracking and exception monitoring
+    - Integration with OpenTelemetry metrics SDK
+
+    Metrics Collected:
+    - LLM invocation counts and frequencies
+    - Token consumption (input/output) with histogram distribution
+    - Operation latency with performance bucket analysis
+    - Error rates and exception details
+    - Span-level performance metrics for APMPlus dashboards
+    """
+
     def __init__(
         self, name: str, endpoint: str, headers: dict, resource_attributes: dict
     ) -> None:
+        """Initialize the meter uploader with APMPlus configuration.
+
+        Sets up the global metrics provider, creates metric instruments,
+        and configures OTLP export to APMPlus endpoints with proper
+        resource attribution and authentication.
+
+        Args:
+            name: Meter name for identification and organization
+            endpoint: APMPlus OTLP endpoint URL for metric transmission
+            headers: Authentication headers including APMPlus app key
+            resource_attributes: Service metadata for metric attribution
+        """
         # global_metrics_provider -> global_tracer_provider
         # exporter -> exporter
         # metric_reader -> processor
@@ -224,6 +276,26 @@ class MeterUploader:
         llm_request: LlmRequest,
         llm_response: LlmResponse,
     ) -> None:
+        """Record comprehensive metrics for LLM call operations.
+
+        Captures detailed telemetry data for language model invocations
+        including token consumption, latency, and error information.
+        This data enables cost optimization, performance analysis, and
+        reliability monitoring in APMPlus dashboards.
+
+        Metrics Recorded:
+        - Invocation count with model and operation attributes
+        - Input/output token usage with separate tracking
+        - Operation duration from span timing data
+        - Error counts and exception details
+        - Span latency for performance analysis
+
+        Args:
+            invocation_context: Context with agent, session, and user information
+            event_id: Unique identifier for this LLM call event
+            llm_request: Request object with model and parameter details
+            llm_response: Response object with content and usage metadata
+        """
         attributes = {
             "gen_ai_system": "volcengine",
             "gen_ai_response_model": llm_request.model,
@@ -307,6 +379,22 @@ class MeterUploader:
         args: dict[str, Any],
         function_response_event: Event,
     ):
+        """Record metrics for tool execution operations.
+
+        Captures performance and usage metrics for tool invocations
+        including execution latency and estimated token consumption.
+        Enables monitoring of tool performance and resource usage patterns.
+
+        Metrics Recorded:
+        - Tool execution latency from span timing
+        - Input/output token estimation based on text length
+        - Tool-specific attributes for categorization
+
+        Args:
+            tool: Tool instance that was executed
+            args: Arguments passed to the tool function
+            function_response_event: Event containing execution results
+        """
         logger.debug(f"Record tool call work in progress. Tool: {tool.name}")
         span = trace.get_current_span()
         if not span:
@@ -349,6 +437,17 @@ class MeterUploader:
 
 
 class APMPlusExporterConfig(BaseModel):
+    """Configuration model for APMPlus exporter settings.
+
+    Manages connection parameters and authentication details for
+    integrating with Volcengine's APMPlus observability platform.
+
+    Attributes:
+        endpoint: OTLP endpoint URL for APMPlus data ingestion
+        app_key: Authentication key for APMPlus API access
+        service_name: Service identifier displayed in APMPlus interface
+    """
+
     endpoint: str = Field(
         default_factory=lambda: settings.apmplus_config.otel_exporter_endpoint,
     )
@@ -362,9 +461,56 @@ class APMPlusExporterConfig(BaseModel):
 
 
 class APMPlusExporter(BaseExporter):
+    """OpenTelemetry exporter for Volcengine APMPlus observability platform.
+
+    APMPlusExporter provides comprehensive integration with Volcengine's APMPlus
+    platform, enabling advanced observability for VeADK agents. It combines
+    distributed tracing with detailed metrics collection for complete visibility
+    into agent performance, costs, and reliability.
+
+    Key Capabilities:
+    - OTLP-based span export to APMPlus with authentication
+    - Comprehensive metrics collection for LLM and tool operations
+    - Automatic resource attribution with service identification
+    - Cost tracking through detailed token usage metrics
+    - Performance monitoring with latency histograms
+    - Error tracking and exception monitoring
+
+    Configuration:
+    The exporter uses VeADK settings for automatic configuration but
+    can be customized with explicit parameters. Authentication is
+    handled through APMPlus app keys in request headers.
+
+    Examples:
+        Basic usage with default settings:
+        ```python
+        exporter = APMPlusExporter()
+        tracer = OpentelemetryTracer(exporters=[exporter])
+        ```
+
+    Note:
+        - Requires valid APMPlus app key for authentication
+        - Endpoint should point to APMPlus OTLP ingestion service
+        - Service name appears in APMPlus dashboards for identification
+        - Metrics and spans are automatically correlated by trace context
+        - Supports both development and production environments
+    """
+
     config: APMPlusExporterConfig = Field(default_factory=APMPlusExporterConfig)
 
     def model_post_init(self, context: Any) -> None:
+        """Initialize APMPlus exporter components after model construction.
+
+        Sets up OTLP span exporter, batch processor, and meter uploader
+        with proper authentication and resource attribution for APMPlus
+        integration.
+
+        Components Initialized:
+        - OTLP span exporter with APMPlus endpoint and authentication
+        - Batch span processor for efficient data transmission
+        - Meter uploader for comprehensive metrics collection
+        - Resource attributes for service identification
+        """
         logger.info(f"APMPlusExporter sevice name: {self.config.service_name}")
 
         headers = {
@@ -391,6 +537,17 @@ class APMPlusExporter(BaseExporter):
 
     @override
     def export(self) -> None:
+        """Force immediate export of pending telemetry data to APMPlus.
+
+        Triggers force flush on the OTLP span exporter to ensure all
+        buffered span data is immediately transmitted to APMPlus for
+        real-time observability and debugging.
+
+        Operations:
+        - Forces flush of span exporter if initialized
+        - Logs export status and configuration details
+        - Handles cases where exporter is not properly initialized
+        """
         if self._exporter:
             self._exporter.force_flush()
 

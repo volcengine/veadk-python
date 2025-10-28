@@ -23,7 +23,14 @@ logger = get_logger(__name__)
 
 def patch_adkwebserver_disable_openapi():
     """
-    Monkey patch AdkWebServer.get_fast_api to remove openapi.json route.
+    Monkey patch AdkWebServer to disable OpenAPI documentation endpoints.
+
+    This function patches the AdkWebServer.get_fast_api_app method to remove
+    OpenAPI-related routes (/openapi.json, /docs, /redoc) from the FastAPI
+    application for security and simplicity purposes.
+
+    The patch is applied by replacing the original method with a wrapped version
+    that filters out the unwanted routes after the FastAPI app is created.
     """
     import google.adk.cli.adk_web_server
     from fastapi.routing import APIRoute
@@ -52,7 +59,25 @@ def patch_adkwebserver_disable_openapi():
 )
 @click.pass_context
 def web(ctx, *args, **kwargs) -> None:
-    """Launch web with long term and short term memory."""
+    """
+    Launch a web server with VeADK agent support and memory integration.
+
+    This command starts a web server that can serve VeADK agents with both
+    short-term and long-term memory capabilities. It automatically detects
+    the type of agent being loaded and configures the appropriate memory
+    services accordingly.
+
+    The function patches the ADK web server to integrate VeADK-specific
+    functionality, including memory service configuration and workflow
+    agent detection.
+
+    Args:
+        ctx: Click context object containing command line arguments
+
+    Note:
+        For workflow agents (Sequential, Loop, Parallel), individual sub-agent
+        memory configurations are not utilized as warned in the logs.
+    """
     from google.adk.cli import adk_web_server
     from google.adk.runners import Runner as ADKRunner
 

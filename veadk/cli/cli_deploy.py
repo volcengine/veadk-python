@@ -62,7 +62,42 @@ def deploy(
     use_adk_web: bool,
     path: str,
 ) -> None:
-    """Deploy a user project to Volcengine FaaS application."""
+    """Deploy a user project to Volcengine FaaS application.
+
+    This command deploys a VeADK agent project to Volcengine's Function as a Service (FaaS)
+    platform. It creates a deployment package from the local project, configures the necessary
+    cloud resources, and manages the deployment process including template generation,
+    file copying, and cloud resource provisioning.
+
+    The deployment process includes:
+    1. Creating a temporary deployment package using cookiecutter templates
+    2. Copying the user's project files to the deployment structure
+    3. Processing configuration files and requirements
+    4. Executing the deployment to Volcengine FaaS
+    5. Cleaning up temporary files
+
+    Args:
+        access_key: Volcengine access key for API authentication. If not provided,
+            will use VOLCENGINE_ACCESS_KEY environment variable
+        secret_key: Volcengine secret key for API authentication. If not provided,
+            will use VOLCENGINE_SECRET_KEY environment variable
+        vefaas_app_name: Name of the target Volcengine FaaS application where the
+            project will be deployed
+        veapig_instance_name: Optional Volcengine API Gateway instance name for
+            external API access configuration
+        veapig_service_name: Optional Volcengine API Gateway service name
+        veapig_upstream_name: Optional Volcengine API Gateway upstream name
+        short_term_memory_backend: Backend type for short-term memory storage.
+            Choices are 'local' or 'mysql'
+        use_adk_web: Flag to enable ADK Web interface for the deployed agent
+        path: Local directory path containing the VeADK project to deploy
+
+    Note:
+        - The function automatically processes and copies requirements.txt if present in the project
+        - config.yaml files are excluded from deployment for security reasons
+        - Temporary files are created in /tmp and cleaned up after deployment
+        - The deployment uses cookiecutter templates for standardized project structure
+    """
     import asyncio
     import shutil
     from pathlib import Path
