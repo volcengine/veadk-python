@@ -37,11 +37,44 @@ logger = get_logger(__name__)
 
 
 def formatted_timestamp():
+    """Generates a formatted timestamp string in YYYYMMDDHHMMSS format.
+
+    This function creates a string representation of the current time.
+    It uses local time for formatting.
+
+    Returns:
+        str: Timestamp string like '20251028123045'.
+    """
     # YYYYMMDDHHMMSS
     return time.strftime("%Y%m%d%H%M%S", time.localtime())
 
 
 class DeepevalEvaluator(BaseEvaluator):
+    """Evaluates agents using DeepEval metrics with Prometheus export.
+
+    This class uses DeepEval to test agent performance.
+    It runs agents on test cases and scores them.
+    Results can be sent to Prometheus for monitoring.
+
+    Attributes:
+        judge_model_name (str): Name of the model that judges the agent.
+        judge_model (LocalModel): The judge model instance.
+        prometheus_config (PrometheusPushgatewayConfig | None): Settings for
+            Prometheus export. If None, no export happens.
+
+    Note:
+        Needs judge model credentials from environment if not given.
+        Turns off cache to get fresh results each time.
+
+    Examples:
+        ```python
+        agent = Agent(tools=[get_city_weather])
+        evaluator = DeepevalEvaluator(agent=agent)
+        metrics = [GEval(threshold=0.8)]
+        results = await evaluator.evaluate(metrics, eval_set_file_path="test.json")
+        ```
+    """
+
     def __init__(
         self,
         agent,
@@ -51,6 +84,32 @@ class DeepevalEvaluator(BaseEvaluator):
         name: str = "veadk_deepeval_evaluator",
         prometheus_config: PrometheusPushgatewayConfig | None = None,
     ):
+        """Sets up the DeepEval evaluator with agent and judge model.
+
+        Args:
+            agent: The agent to test.
+            judge_model_api_key: API key for the judge model. If empty,
+                gets from MODEL_JUDGE_API_KEY environment variable.
+            judge_model_name: Name of the judge model. If empty,
+                gets from MODEL_JUDGE_NAME environment variable.
+            judge_model_api_base: Base URL for judge model API. If empty,
+                gets from MODEL_JUDGE_API_BASE environment variable.
+            name: Name for this evaluator. Defaults to 'veadk_deepeval_evaluator'.
+            prometheus_config: Settings for Prometheus export. If None,
+                no export happens.
+
+        Raises:
+            ValueError: If model settings are wrong.
+            EnvironmentError: If environment variables are missing.
+
+        Examples:
+            ```python
+            evaluator = DeepevalEvaluator(
+                agent=my_agent,
+                judge_model_api_key="sk-...",
+                prometheus_config=prometheus_config)
+            ```
+        """
         super().__init__(agent=agent, name=name)
 
         if not judge_model_api_key:
@@ -83,7 +142,38 @@ class DeepevalEvaluator(BaseEvaluator):
         eval_set_file_path: Optional[str] = None,
         eval_id: str = f"test_{formatted_timestamp()}",
     ):
-        """Target to Google ADK, we will use the same evaluation case format as Google ADK."""
+        """Tests agent using DeepEval on given test cases.
+
+        This method does these steps:
+        1. Loads test cases from memory or file
+        2. Runs agent to get actual responses
+        3. Converts to DeepEval test format
+        4. Runs metrics evaluation
+        5. Sends results to Prometheus if needed
+
+        Args:
+            metrics: List of DeepEval metrics to use for scoring.
+            eval_set: Test cases in memory. If given, used first.
+            eval_set_file_path: Path to test case file. Used if no eval_set.
+            eval_id: Unique name for this test run. Used for tracking.
+
+        Returns:
+            EvaluationResult: Results from DeepEval with scores and details.
+
+        Raises:
+            ValueError: If no test cases found.
+            FileNotFoundError: If test file not found.
+            EvaluationError: If agent fails or metrics fail.
+
+        Examples:
+            ```python
+            metrics = [GEval(threshold=0.8), ToolCorrectnessMetric(threshold=0.5)]
+            results = await evaluator.evaluate(
+                metrics=metrics,
+                eval_set_file_path="test_cases.json")
+            print(f"Test cases run: {len(results.test_results)}")
+            ```
+        """
         # Get evaluation data by parsing eval set file
         self.build_eval_set(eval_set, eval_set_file_path)
 
@@ -162,6 +252,31 @@ class DeepevalEvaluator(BaseEvaluator):
         return test_results
 
     def export_results(self, eval_id: str, test_results: EvaluationResult):
+        """Sends evaluation results to Prometheus for monitoring.
+
+        This method takes test results, counts passes and failures,
+        and sends metrics to Prometheus.
+
+        Args:
+            eval_id: Unique name for this test. Used as label in Prometheus.
+            test_results: Results from DeepEval evaluation.
+
+        Returns:
+            None: Results are sent directly to Prometheus.
+
+        Raises:
+            PrometheusConnectionError: If cannot connect to Prometheus.
+            PrometheusPushError: If sending data fails.
+
+        Note:
+            Uses fixed thresholds for now: case_threshold=0.5, diff_threshold=0.2.
+            These may change later.
+
+        Examples:
+            ```python
+            evaluator.export_results("test_20240101", test_results)
+            ```
+        """
         # fixed attributions
         test_name = eval_id
         test_cases_total = len(test_results.test_results)

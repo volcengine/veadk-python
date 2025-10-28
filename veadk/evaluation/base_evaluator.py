@@ -29,12 +29,44 @@ from veadk.utils.misc import formatted_timestamp
 
 
 class ToolInvocation(BaseModel):
+    """Represents a single tool invocation in agent execution.
+
+    This model holds tool name, arguments, and result.
+    Used in tracking tool usage during evaluation.
+
+    Attributes:
+        tool_name (str): Name of the tool called.
+        tool_args (dict[str, Any]): Arguments passed to the tool. Defaults to empty dict.
+        tool_result (Any): Result from tool execution. Defaults to None.
+
+    Note:
+        Flexible for various tool types and results.
+    """
+
     tool_name: str
     tool_args: dict[str, Any] = {}
     tool_result: Any = None
 
 
 class Invocation(BaseModel):
+    """Models a single invocation in the evaluation process.
+
+    This class stores input, expected and actual outputs, tools, and latency.
+    Essential for comparing agent behavior.
+
+    Attributes:
+        invocation_id (str): Unique ID for the invocation. Defaults to empty.
+        input (str): User input prompt.
+        actual_output (str): Actual response from agent.
+        expected_output (str): Expected response.
+        actual_tool (list[dict]): List of actual tools called with details.
+        expected_tool (list[dict]): List of expected tools.
+        latency (str): Execution time in ms. Defaults to empty.
+
+    Note:
+        Tools are dicts with 'name' and 'args'.
+    """
+
     invocation_id: str = ""
     input: str
     actual_output: str
@@ -45,10 +77,37 @@ class Invocation(BaseModel):
 
 
 class EvalTestCase(BaseModel):
+    """Groups invocations for a single test case.
+
+    This model contains a list of invocations for one evaluation scenario.
+    Used to structure test data.
+
+    Attributes:
+        invocations (list[Invocation]): List of invocation objects in the case.
+
+    Note:
+        Each case corresponds to one session or conversation.
+    """
+
     invocations: list[Invocation]
 
 
 class MetricResult(BaseModel):
+    """Stores result of a single metric evaluation.
+
+    This model holds the outcome of one metric application.
+    Includes success, score, and reason.
+
+    Attributes:
+        metric_type (str): Type or name of the metric.
+        success (bool): If the metric passed.
+        score (float): Numerical score from evaluation.
+        reason (str): Explanation for the score.
+
+    Note:
+        Score is float between 0 and 1 typically.
+    """
+
     metric_type: str
     success: bool
     score: float
@@ -56,32 +115,102 @@ class MetricResult(BaseModel):
 
 
 class EvalResultData(BaseModel):
+    """Aggregates metric results for an evaluation.
+
+    This class collects multiple metric results and computes averages.
+    Used for overall case scoring.
+
+    Attributes:
+        metric_results (list[MetricResult]): List of individual metric outcomes.
+        average_score (float): Computed average score. Defaults to 0.0.
+        total_reason (str): Combined reasons. Defaults to empty.
+
+    Note:
+        Call call_before_append to compute averages and reasons.
+    """
+
     metric_results: list[MetricResult]
     average_score: float = 0.0
     total_reason: str = ""
 
     def calculate_average_score(self):
+        """Calculates the average score from metric results.
+
+        This method sums scores and divides by count.
+        Updates average_score attribute.
+
+        Returns:
+            None: Updates internal state.
+
+        Raises:
+            ZeroDivisionError: If no metrics.
+        """
         total_score = sum(result.score for result in self.metric_results)
         self.average_score = (
             total_score / len(self.metric_results) if self.metric_results else 0.0
         )
 
     def generate_total_reason(self):
+        """Generates a combined reason string from all metrics.
+
+        This method joins reasons with metric types.
+        Updates total_reason attribute.
+
+        Returns:
+            None: Updates internal state.
+
+        Note:
+            Format: 'metric_type: reason'
+        """
         self.total_reason = "\n".join(
             f"{result.metric_type:}:{result.reason}" for result in self.metric_results
         )
 
     def call_before_append(self):
+        """Computes average score and total reason before adding to list.
+
+        This method calls calculate_average_score and generate_total_reason.
+        Ensures data is ready for storage.
+
+        Returns:
+            None: Updates internal state.
+        """
         self.calculate_average_score()
         self.generate_total_reason()
 
 
 class BaseEvaluator:
+    """Base class for all evaluators in the system.
+
+    This abstract class provides common functionality for evaluation.
+    Handles building eval sets, generating outputs, and abstract evaluate.
+
+    Attributes:
+        name (str): Name of the evaluator.
+        agent: The agent being evaluated.
+        invocation_list (list[EvalTestCase]): List of test cases.
+        result_list (list[EvalResultData]): List of evaluation results.
+        agent_information_list (list[dict]): List of agent config info.
+
+    Note:
+        Subclasses must implement evaluate method.
+        Supports JSON and tracing formats for input.
+    """
+
     def __init__(
         self,
         agent,
         name: str,
     ):
+        """Initializes the base evaluator with agent and name.
+
+        Args:
+            agent: Agent instance to evaluate.
+            name (str): Identifier for the evaluator.
+
+        Raises:
+            ValueError: If agent or name invalid.
+        """
         self.name = name
         self.agent = agent
         self.invocation_list: list[EvalTestCase] = []
@@ -89,11 +218,41 @@ class BaseEvaluator:
         self.agent_information_list: list[dict] = []
 
     def _build_eval_set_from_eval_json(self, eval_json_path: str) -> EvalSet:
+        """Builds eval set from standard eval JSON file.
+
+        This private method loads using file loader.
+
+        Args:
+            eval_json_path (str): Path to JSON file.
+
+        Returns:
+            EvalSet: Loaded set.
+
+        Raises:
+            ValueError: If loading fails.
+        """
         from veadk.evaluation.eval_set_file_loader import load_eval_set_from_file
 
         return load_eval_set_from_file(eval_json_path)
 
     def _build_eval_set_from_tracing_json(self, tracing_json_path: str) -> EvalSet:
+        """Builds eval set from tracing JSON spans.
+
+        This private method parses spans, groups by trace, extracts tools and conversation.
+
+        Args:
+            tracing_json_path (str): Path to tracing JSON.
+
+        Returns:
+            EvalSet: Constructed set from traces.
+
+        Raises:
+            ValueError: If JSON invalid or parsing fails.
+            json.JSONDecodeError: For malformed JSON.
+
+        Note:
+            Assumes spans have gen_ai attributes for tools and content.
+        """
         try:
             with open(tracing_json_path, "r") as f:
                 tracing_data = json.load(f)
@@ -213,7 +372,21 @@ class BaseEvaluator:
     def build_eval_set(
         self, eval_set: Optional[EvalSet] = None, file_path: Optional[str] = None
     ):
-        """Generate evaluation data from a given file and assign it to the class attribute `invocation_list`."""
+        """Builds invocation list from eval set or file.
+
+        This method parses input, extracts invocations with expected data.
+        Supports eval JSON and tracing JSON formats.
+
+        Args:
+            eval_set (Optional[EvalSet]): Direct eval set object.
+            file_path (Optional[str]): Path to file for loading.
+
+        Raises:
+            ValueError: If neither provided or format unsupported.
+
+        Note:
+        Generates random session IDs for isolation.
+        """
 
         if eval_set is None and file_path is None:
             raise ValueError("eval_set or file_path is required")
@@ -294,6 +467,21 @@ class BaseEvaluator:
         self.invocation_list = eval_case_data_list
 
     async def generate_actual_outputs(self):
+        """Generates actual outputs by running the agent on inputs.
+
+        This method uses Runner to execute agent for each invocation.
+        Captures outputs, tools, and latency.
+
+        Returns:
+            None: Updates invocation actual fields.
+
+        Raises:
+            Exception: If runner or execution fails.
+
+        Note:
+        Uses InMemorySessionService for isolation.
+        Supports long-term memory if present.
+        """
         for eval_case_data, agent_information in zip(
             self.invocation_list, self.agent_information_list
         ):
@@ -366,7 +554,17 @@ class BaseEvaluator:
                 invocation.latency = _latency
 
     def get_eval_set_information(self) -> list[list[dict[str, Any]]]:
-        """Merge the evaluation data and return it in the format of list[list[dict]]"""
+        """Retrieves combined evaluation information.
+
+        This method merges invocations and results into dict lists.
+        Useful for reporting.
+
+        Returns:
+            list[list[dict[str, Any]]]: Nested list of case data dicts.
+
+        Note:
+        Defaults to empty results if not evaluated yet.
+        """
         result = []
         for i, eval_case in enumerate(self.invocation_list):
             case_data = []
@@ -399,5 +597,23 @@ class BaseEvaluator:
         eval_set_file_path: Optional[str],
         eval_id: str,
     ):
-        """An abstract method for evaluation based on metrics。"""
+        """Abstract method for performing the evaluation.
+
+        Subclasses implement specific metric evaluation logic.
+
+        Args:
+            metrics (list[Any]): Metrics to apply.
+            eval_set (Optional[EvalSet]): Eval set.
+            eval_set_file_path (Optional[str]): File path.
+            eval_id (str): Evaluation ID.
+
+        Returns:
+            Any: Evaluation results specific to subclass.
+
+        Raises:
+            NotImplementedError: If not overridden.
+
+        Note:
+        Must populate result_list after evaluation.
+        """
         pass
