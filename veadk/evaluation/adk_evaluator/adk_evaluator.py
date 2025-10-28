@@ -39,16 +39,55 @@ import inspect
 
 
 def formatted_timestamp():
+    """Generates a formatted timestamp string in YYYYMMDDHHMMSS format.
+
+    This function creates a string representation of the current time.
+    It uses local time for formatting.
+
+    Returns:
+        str: Timestamp string like '20251028123045'.
+    """
     # YYYYMMDDHHMMSS
     return time.strftime("%Y%m%d%H%M%S", time.localtime())
 
 
 class ADKEvaluator(BaseEvaluator):
+    """Evaluates agents using Google ADK metrics.
+
+    This class uses Google's Agent Development Kit (ADK) to test agents.
+    It checks tool usage and response quality.
+    Runs tests multiple times for reliable results.
+
+    Attributes:
+        name (str): Name of this evaluator. Defaults to 'veadk_adk_evaluator'.
+
+    Note:
+        Works with .test.json files and folders of files.
+        Default thresholds: tool=1.0, response=0.8.
+        Runs each test multiple times (default 2) for average scores.
+
+    Example:
+        >>> agent = Agent(tools=[get_city_weather])
+        >>> evaluator = ADKEvaluator(agent=agent)
+        >>> results, failures = await evaluator.evaluate(
+        ...     eval_set_file_path="test_folder"
+        ... )
+    """
+
     def __init__(
         self,
         agent,
         name: str = "veadk_adk_evaluator",
     ):
+        """Initializes the ADK evaluator with agent and name.
+
+        Args:
+            agent: The agent to evaluate.
+            name (str): Name of the evaluator. Defaults to 'veadk_adk_evaluator'.
+
+        Raises:
+            ValueError: If agent is invalid.
+        """
         super().__init__(agent=agent, name=name)
 
     @override
@@ -62,23 +101,43 @@ class ADKEvaluator(BaseEvaluator):
         num_runs: int = 2,
         print_detailed_results: bool = True,
     ):
-        """
-        End-to-end evaluation flow:
-        1) Discover test files (.test.json) or accept a single path.
-        2) Build metric criteria (metric_name -> threshold).
-        3) For each file, build in-memory eval cases via BaseEvaluator.
-        4) For each eval case, construct expected ADK Invocations from expected data.
-        5) Repeat for num_runs:
-           - Reset all session_ids to isolate state.
-           - Generate actual outputs via BaseEvaluator and convert to ADK Invocations.
-        6) Repeat expected invocations to match num_runs for 1:1 alignment.
-        7) For each metric:
-           - Create EvalMetric and get the evaluator from ADK's registry.
-           - Call evaluate_invocations (await if async) to get EvaluationResult with:
-             overall_score/overall_eval_status + per_invocation_results.
-           - Optionally pretty print via AgentEvaluator._print_details.
-           - Record failure if overall status != PASSED.
-        8) Return (all evaluation_result objects, failures) to the caller.
+        """Tests agent using ADK metrics on test cases.
+
+        This method does these steps:
+        1. Finds test files in folder or single file
+        2. Sets up scoring rules with thresholds
+        3. Runs agent multiple times for each test
+        4. Converts data to ADK format
+        5. Scores tool usage and response quality
+        6. Collects results and failures
+
+        Args:
+            eval_set: Test cases in memory. If given, used first.
+            eval_set_file_path: Path to test file or folder. Used if no eval_set.
+            eval_id: Unique name for this test run.
+            tool_score_threshold: Minimum score for tool usage. 1.0 means perfect.
+            response_match_score_threshold: Minimum score for response match.
+                Uses text similarity. 0.8 is default.
+            num_runs: How many times to run each test. More runs = more reliable.
+            print_detailed_results: If True, shows detailed scores for each test.
+
+        Returns:
+            tuple[list, list]: Two lists:
+                - List of evaluation results with scores
+                - List of failure messages if tests failed
+
+        Raises:
+            ValueError: If no test cases found or thresholds wrong.
+            FileNotFoundError: If test file not found.
+            EvaluationError: If agent fails or scoring fails.
+
+        Example:
+            >>> results, failures = await evaluator.evaluate(
+            ...     eval_set_file_path="tests/",
+            ...     tool_score_threshold=0.9,
+            ...     num_runs=3
+            ... )
+            >>> print(f"Results: {len(results)}, Failures: {len(failures)}")
         """
 
         # Resolve eval files: accept a directory (scan *.test.json) or a single file
