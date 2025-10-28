@@ -17,6 +17,25 @@ from dataclasses import dataclass
 
 @dataclass
 class EvalResultCaseData:
+    """Holds data for a single evaluation case result.
+
+    This dataclass stores input, outputs, score, and status for one test case.
+    Used in evaluation reporting and metrics export.
+
+    Attributes:
+        id (str): Unique ID of the case.
+        input (str): User input for the case.
+        actual_output (str): Actual agent response.
+        expected_output (str): Expected agent response.
+        score (str): Score as string from evaluation.
+        reason (str): Reason for the score.
+        status (str): Status like 'PASSED' or 'FAILURE'.
+        latency (str): Latency in milliseconds as string.
+
+    Note:
+        Score and latency are strings for compatibility with external systems.
+    """
+
     id: str
     input: str
     actual_output: str
@@ -29,5 +48,18 @@ class EvalResultCaseData:
 
 @dataclass
 class EvalResultMetadata:
+    """Stores metadata about the evaluation run.
+
+    This dataclass captures model information for the evaluation.
+    Used in reporting and tracing.
+
+    Attributes:
+        tested_model (str): Name of the model being tested.
+        judge_model (str): Name of the judge model used.
+
+    Note:
+        Simple structure for quick metadata access.
+    """
+
     tested_model: str
     judge_model: str

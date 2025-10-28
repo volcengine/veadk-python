@@ -22,6 +22,23 @@ from veadk.evaluation.types import EvalResultCaseData, EvalResultMetadata
 
 
 class PrometheusPushgatewayConfig:
+    """Configures connection to Prometheus Pushgateway for metrics export.
+
+    This class holds settings for pushing evaluation metrics to Prometheus.
+    It uses environment variables for default values.
+
+    Attributes:
+        url (str): URL of the Prometheus Pushgateway endpoint.
+            Defaults to OBSERVABILITY_PROMETHEUS_PUSHGATEWAY_URL environment variable.
+        username (str): Username for authentication.
+            Defaults to OBSERVABILITY_PROMETHEUS_USERNAME environment variable.
+        password (str): Password for authentication.
+            Defaults to OBSERVABILITY_PROMETHEUS_PASSWORD environment variable.
+
+    Note:
+        All fields are optional and use environment variables if not provided.
+    """
+
     url: str = Field(
         default_factory=lambda: getenv(
             "OBSERVABILITY_PROMETHEUS_PUSHGATEWAY_URL",
@@ -87,6 +104,26 @@ def post_pushgateway(
     registry: CollectorRegistry,
     grouping_key: dict[str, str] | None = None,
 ):
+    """Pushes metrics to Prometheus Pushgateway with authentication.
+
+    This function sends collected metrics to the specified Pushgateway URL.
+    It uses basic authentication and optional grouping keys.
+
+    Args:
+        pushgateway_url (str): URL of the Pushgateway endpoint.
+        username (str): Authentication username.
+        password (str): Authentication password.
+        job_name (str): Name of the job for metrics labeling.
+        registry (CollectorRegistry): Registry containing metrics to push.
+        grouping_key (dict[str, str] | None): Optional key-value pairs for grouping.
+
+    Raises:
+        Exception: If push operation fails due to network or auth issues.
+
+    Note:
+        Authentication handler is created internally using provided credentials.
+    """
+
     def auth_handler(url, method, timeout, headers, data):
         return basic_auth_handler(
             url, method, timeout, headers, data, username, password
@@ -114,6 +151,30 @@ def push_to_prometheus(
     username: str = "",
     password: str = "",
 ):
+    """Sets and pushes evaluation metrics to Prometheus.
+
+    This function updates gauge metrics with evaluation results and pushes them.
+    It handles counts, thresholds, and specific data labels.
+
+    Args:
+        test_name (str): Name of the test for grouping.
+        test_cases_total (int): Total number of test cases.
+        test_cases_failure (int): Number of failed test cases.
+        test_cases_pass (int): Number of passed test cases.
+        test_data_list (list[EvalResultCaseData]): List of case data for labeling.
+        eval_data (EvalResultMetadata): Metadata for evaluation.
+        case_threshold (float): Threshold value for cases. Defaults to 0.5.
+        diff_threshold (float): Diff threshold value. Defaults to 0.2.
+        url (str): Pushgateway URL. Defaults to empty.
+        username (str): Auth username. Defaults to empty.
+        password (str): Auth password. Defaults to empty.
+
+    Returns:
+        None: Metrics are set and pushed directly.
+
+    Raises:
+        ValueError: If required data is invalid.
+    """
     test_cases_total_metric.set(test_cases_total)
     test_cases_failure_metric.set(test_cases_failure)
     test_cases_pass_metric.set(test_cases_pass)
