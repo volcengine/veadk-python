@@ -33,9 +33,11 @@ def load_eval_set_from_file(eval_set_file_path: str) -> EvalSet:
     Raises:
         Exception: If file loading or parsing fails, with details.
 
-    Example:
-        >>> eval_set = load_eval_set_from_file("my_eval.json")
-        >>> print(len(eval_set.eval_cases))
+    Examples:
+        ```python
+        eval_set = load_eval_set_from_file("my_eval.json")
+        print(len(eval_set.eval_cases))
+        ```
     """
     try:
         eval_set = adk_load_eval_set_from_file(eval_set_file_path, eval_set_file_path)

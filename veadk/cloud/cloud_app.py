@@ -46,11 +46,13 @@ class CloudApp:
         At least one of name, endpoint, or ID must be provided during init.
         Agent card mode fetches card from the endpoint's public path.
 
-    Example:
-        >>> from veadk.cloud.cloud_app import CloudApp
-        >>> app = CloudApp(vefaas_endpoint="https://my-agent.volcengine.com")
-        >>> response = await app.message_send("Query", "session-1", "user-123")
-        >>> print(response.message_id)
+    Examples:
+        ```python
+        from veadk.cloud.cloud_app import CloudApp
+        app = CloudApp(vefaas_endpoint="https://my-agent.volcengine.com")
+        response = await app.message_send("Query", "session-1", "user-123")
+        print(response.message_id)
+        ```
     """
 
     def __init__(
@@ -80,8 +82,10 @@ class CloudApp:
             Logs info if agent card mode enabled.
             Endpoint is fetched via _get_vefaas_endpoint if not set.
 
-        Example:
-            >>> app = CloudApp(vefaas_application_id="app-123", use_agent_card=True)
+        Examples:
+            ```python
+            app = CloudApp(vefaas_application_id="app-123", use_agent_card=True)
+            ```
         """
         self.vefaas_endpoint = vefaas_endpoint
         self.vefaas_application_id = vefaas_application_id
@@ -140,8 +144,10 @@ class CloudApp:
             Logs warning if JSON parsing fails; returns empty on error.
             Called during init if endpoint missing.
 
-        Example:
-            >>> endpoint = app._get_vefaas_endpoint("custom-ak", "custom-sk")
+        Examples:
+            ```python
+            endpoint = app._get_vefaas_endpoint("custom-ak", "custom-sk")
+            ```
         """
         from veadk.integrations.ve_faas.ve_faas import VeFaaS
 
@@ -180,9 +186,11 @@ class CloudApp:
             Uses default environment credentials.
             Internal method for ID resolution.
 
-        Example:
-            >>> app.vefaas_application_name = "my-app"
-            >>> id = app._get_vefaas_application_id_by_name()
+        Examples:
+            ```python
+            app.vefaas_application_name = "my-app"
+            id = app._get_vefaas_application_id_by_name()
+            ```
         """
         if not self.vefaas_application_name:
             raise ValueError(
@@ -251,8 +259,10 @@ class CloudApp:
         Raises:
             ValueError: If access key or secret key missing.
 
-        Example:
-            >>> app.update_self("ak", "sk")
+        Examples:
+            ```python
+            app.update_self("ak", "sk")
+            ```
         """
         if not volcengine_ak or not volcengine_sk:
             raise ValueError("Volcengine access key and secret key must be set.")
@@ -283,10 +293,10 @@ class CloudApp:
             Polls every 3 seconds until app no longer exists.
             Prints status messages.
 
-        Example:
-            >>> app.delete_self()
-            Confirm delete cloud app app-123? (y/N): y
-            Delete application done.
+        Examples:
+            ```python
+            app.delete_self()
+            ```
         """
         if not volcengine_ak or not volcengine_sk:
             raise ValueError("Volcengine access key and secret key must be set.")
@@ -343,9 +353,11 @@ class CloudApp:
             Debug logs the full response.
             Ignores type checks for result as it may not be Task.
 
-        Example:
-            >>> response = await app.message_send("What is AI?", "chat-1", "user-1", timeout=300)
-            >>> print(response.content)
+        Examples:
+            ```python
+            response = await app.message_send("What is AI?", "chat-1", "user-1", timeout=300)
+            print(response.content)
+            ```
         """
         a2a_client = await self._get_a2a_client()
 
@@ -400,9 +412,11 @@ def get_message_id(message: Message):
         Ensures compatibility with a2a-python versions before and after 0.3.0.
         Prefers 'message_id' if available, falls back to 'messageId'.
 
-    Example:
-        >>> mid = get_message_id(response_message)
-        >>> print(mid)
+    Examples:
+        ```python
+        mid = get_message_id(response_message)
+        print(mid)
+        ```
     """
     if getattr(message, "messageId", None):
         # Compatible with the messageId of the old a2a-python version (<0.3.0) in cloud app

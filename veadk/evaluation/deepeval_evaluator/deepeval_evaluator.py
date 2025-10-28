@@ -66,11 +66,13 @@ class DeepevalEvaluator(BaseEvaluator):
         Needs judge model credentials from environment if not given.
         Turns off cache to get fresh results each time.
 
-    Example:
-        >>> agent = Agent(tools=[get_city_weather])
-        >>> evaluator = DeepevalEvaluator(agent=agent)
-        >>> metrics = [GEval(threshold=0.8)]
-        >>> results = await evaluator.evaluate(metrics, eval_set_file_path="test.json")
+    Examples:
+        ```python
+        agent = Agent(tools=[get_city_weather])
+        evaluator = DeepevalEvaluator(agent=agent)
+        metrics = [GEval(threshold=0.8)]
+        results = await evaluator.evaluate(metrics, eval_set_file_path="test.json")
+        ```
     """
 
     def __init__(
@@ -100,12 +102,13 @@ class DeepevalEvaluator(BaseEvaluator):
             ValueError: If model settings are wrong.
             EnvironmentError: If environment variables are missing.
 
-        Example:
-            >>> evaluator = DeepevalEvaluator(
-            ...     agent=my_agent,
-            ...     judge_model_api_key="sk-...",
-            ...     prometheus_config=prometheus_config
-            ... )
+        Examples:
+            ```python
+            evaluator = DeepevalEvaluator(
+                agent=my_agent,
+                judge_model_api_key="sk-...",
+                prometheus_config=prometheus_config)
+            ```
         """
         super().__init__(agent=agent, name=name)
 
@@ -162,13 +165,14 @@ class DeepevalEvaluator(BaseEvaluator):
             FileNotFoundError: If test file not found.
             EvaluationError: If agent fails or metrics fail.
 
-        Example:
-            >>> metrics = [GEval(threshold=0.8), ToolCorrectnessMetric(threshold=0.5)]
-            >>> results = await evaluator.evaluate(
-            ...     metrics=metrics,
-            ...     eval_set_file_path="test_cases.json"
-            ... )
-            >>> print(f"Test cases run: {len(results.test_results)}")
+        Examples:
+            ```python
+            metrics = [GEval(threshold=0.8), ToolCorrectnessMetric(threshold=0.5)]
+            results = await evaluator.evaluate(
+                metrics=metrics,
+                eval_set_file_path="test_cases.json")
+            print(f"Test cases run: {len(results.test_results)}")
+            ```
         """
         # Get evaluation data by parsing eval set file
         self.build_eval_set(eval_set, eval_set_file_path)
@@ -268,9 +272,10 @@ class DeepevalEvaluator(BaseEvaluator):
             Uses fixed thresholds for now: case_threshold=0.5, diff_threshold=0.2.
             These may change later.
 
-        Example:
-            >>> evaluator.export_results("test_20240101", test_results)
-            # Results sent to Prometheus
+        Examples:
+            ```python
+            evaluator.export_results("test_20240101", test_results)
+            ```
         """
         # fixed attributions
         test_name = eval_id

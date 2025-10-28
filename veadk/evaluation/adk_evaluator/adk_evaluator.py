@@ -66,12 +66,12 @@ class ADKEvaluator(BaseEvaluator):
         Default thresholds: tool=1.0, response=0.8.
         Runs each test multiple times (default 2) for average scores.
 
-    Example:
-        >>> agent = Agent(tools=[get_city_weather])
-        >>> evaluator = ADKEvaluator(agent=agent)
-        >>> results, failures = await evaluator.evaluate(
-        ...     eval_set_file_path="test_folder"
-        ... )
+    Examples:
+        ```python
+        agent = Agent(tools=[get_city_weather])
+        evaluator = ADKEvaluator(agent=agent)
+        results, failures = await evaluator.evaluate(eval_set_file_path="test_folder")
+        ```
     """
 
     def __init__(
@@ -131,13 +131,14 @@ class ADKEvaluator(BaseEvaluator):
             FileNotFoundError: If test file not found.
             EvaluationError: If agent fails or scoring fails.
 
-        Example:
-            >>> results, failures = await evaluator.evaluate(
-            ...     eval_set_file_path="tests/",
-            ...     tool_score_threshold=0.9,
-            ...     num_runs=3
-            ... )
-            >>> print(f"Results: {len(results)}, Failures: {len(failures)}")
+        Examples:
+            ```python
+            results, failures = await evaluator.evaluate(
+                 eval_set_file_path="tests/",
+                 tool_score_threshold=0.9,
+                 num_runs=3)
+            print(f"Results: {len(results)}, Failures: {len(failures)}")
+            ```
         """
 
         # Resolve eval files: accept a directory (scan *.test.json) or a single file

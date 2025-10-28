@@ -48,11 +48,13 @@ class CloudAgentEngine(BaseModel):
         Credentials must be set via environment variables for default behavior.
         This class performs interactive confirmations for destructive operations like removal.
 
-    Example:
-        >>> from veadk.cloud.cloud_agent_engine import CloudAgentEngine
-        >>> engine = CloudAgentEngine()
-        >>> app = engine.deploy("test-app", "/path/to/local/project")
-        >>> print(app.vefaas_endpoint)
+    Examples:
+        ```python
+        from veadk.cloud.cloud_agent_engine import CloudAgentEngine
+        engine = CloudAgentEngine()
+        app = engine.deploy("test-app", "/path/to/local/project")
+        print(app.vefaas_endpoint)
+        ```
     """
 
     volcengine_access_key: str = getenv("VOLCENGINE_ACCESS_KEY")
@@ -221,9 +223,11 @@ class CloudAgentEngine(BaseModel):
             Converts path to absolute; sets telemetry opt-out and ADK Web env vars.
             Generates default gateway names if not specified.
 
-        Example:
-            >>> app = engine.deploy("my-agent", "./agent-project", local_test=True)
-            >>> print(f"Deployed at: {app.vefaas_endpoint}")
+        Examples:
+            ```python
+            app = engine.deploy("my-agent", "./agent-project", local_test=True)
+            print(f"Deployed at: {app.vefaas_endpoint}")
+            ```
         """
         # prevent deepeval writing operations
         veadk_environments["DEEPEVAL_TELEMETRY_OPT_OUT"] = "YES"
@@ -285,9 +289,10 @@ class CloudAgentEngine(BaseModel):
             Interactive prompt required; cancels on non-'y' input.
             Deletion is processed asynchronously by VeFaaS.
 
-        Example:
-            >>> engine.remove("my-agent")
-            Confirm delete cloud app my-agent? (y/N): y
+        Examples:
+            ```python
+            engine.remove("my-agent")
+            ```
         """
         confirm = input(f"Confirm delete cloud app {app_name}? (y/N): ")
         if confirm.lower() != "y":
@@ -324,9 +329,10 @@ class CloudAgentEngine(BaseModel):
             Preserves gateway and other resources; only function code is updated.
             Path is resolved to absolute before processing.
 
-        Example:
-            >>> updated_app = engine.update_function_code("my-agent", "./updated-project")
-            >>> assert updated_app.vefaas_endpoint == old_endpoint
+        Examples:
+            ```python
+            updated_app = engine.update_function_code("my-agent", "./updated-project")
+            ```
         """
         # convert `path` to absolute path
         path = str(Path(path).resolve())
