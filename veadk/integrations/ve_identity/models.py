@@ -198,7 +198,7 @@ class OAuth2Discovery(BaseModel):
 
 
 class WorkloadToken(BaseModel):
-    """workload access token and expiration time.
+    """Workload access token and expiration time.
 
     Attributes:
         workload_access_token: The workload access token.

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import urllib.parse
 import asyncio
-from typing import Any, Callable, List, Literal, Optional, Union
+from typing import Any, Callable, List, Literal, Optional
 from abc import ABC, abstractmethod
 
 from google.adk.auth.auth_credential import (
@@ -111,7 +111,7 @@ class BaseAuthMixin(ABC):
 
     @abstractmethod
     async def _get_credential(
-        self, *, tool_context: Union[ToolContext | ReadonlyContext]
+        self, *, tool_context: ToolContext | ReadonlyContext
     ) -> AuthCredential:
         """Get or create authentication credential.
 
@@ -128,7 +128,7 @@ class BaseAuthMixin(ABC):
         self,
         *,
         args: dict[str, Any],
-        tool_context: Union[ToolContext | ReadonlyContext],
+        tool_context: ToolContext | ReadonlyContext,
         credential: AuthCredential,
     ) -> Any:
         """Execute the tool with the provided credential.
@@ -147,7 +147,7 @@ class BaseAuthMixin(ABC):
         self,
         *,
         args: dict[str, Any],
-        tool_context: Union[ToolContext | ReadonlyContext],
+        tool_context: ToolContext | ReadonlyContext,
     ) -> Any:
         """Execute the tool with Identity authentication.
 
@@ -177,7 +177,7 @@ class ApiKeyAuthMixin(BaseAuthMixin):
     """
 
     async def _get_credential(
-        self, *, tool_context: Union[ToolContext | ReadonlyContext]
+        self, *, tool_context: ToolContext | ReadonlyContext
     ) -> AuthCredential:
         """Get or create API key credential.
 
@@ -225,7 +225,7 @@ class ApiKeyAuthMixin(BaseAuthMixin):
         self,
         *,
         args: dict[str, Any],
-        tool_context: Union[ToolContext | ReadonlyContext],
+        tool_context: ToolContext | ReadonlyContext,
         credential: AuthCredential,
     ) -> Any:
         """Default implementation - should be overridden by concrete tool classes.
@@ -259,7 +259,7 @@ class WorkloadAuthMixin(BaseAuthMixin):
     """
 
     async def _get_credential(
-        self, *, tool_context: Union[ToolContext | ReadonlyContext]
+        self, *, tool_context: ToolContext | ReadonlyContext
     ) -> AuthCredential:
         """Get or create Workload Access Token credential.
 
@@ -301,7 +301,7 @@ class WorkloadAuthMixin(BaseAuthMixin):
         self,
         *,
         args: dict[str, Any],
-        tool_context: Union[ToolContext | ReadonlyContext],
+        tool_context: ToolContext | ReadonlyContext,
         credential: AuthCredential,
     ) -> Any:
         """Default implementation - should be overridden by concrete tool classes.
@@ -369,7 +369,7 @@ class OAuth2AuthMixin(BaseAuthMixin):
         self._oauth2_auth_poller = oauth2_auth_poller
 
     async def _get_oauth2_token_or_auth_url(
-        self, *, tool_context: Union[ToolContext | ReadonlyContext]
+        self, *, tool_context: ToolContext | ReadonlyContext
     ) -> OAuth2TokenResponse:
         """Retrieve OAuth2 token or authorization URL from identity service.
 
@@ -396,7 +396,7 @@ class OAuth2AuthMixin(BaseAuthMixin):
         )
 
     async def _get_credential(
-        self, *, tool_context: Union[ToolContext | ReadonlyContext]
+        self, *, tool_context: ToolContext | ReadonlyContext
     ) -> AuthCredential:
         """Get or create OAuth2 credential.
 
@@ -527,7 +527,7 @@ class OAuth2AuthMixin(BaseAuthMixin):
         self,
         *,
         args: dict[str, Any],
-        tool_context: Union[ToolContext | ReadonlyContext],
+        tool_context: ToolContext | ReadonlyContext,
         credential: AuthCredential,
     ) -> Any:
         """Default implementation - should be overridden by concrete tool classes.
@@ -611,7 +611,7 @@ class VeIdentityAuthMixin(BaseAuthMixin):
             raise ValueError(f"Unsupported auth config type: {type(self._auth_config)}")
 
     async def _get_credential(
-        self, *, tool_context: Union[ToolContext | ReadonlyContext]
+        self, *, tool_context: ToolContext | ReadonlyContext
     ) -> AuthCredential:
         """Get or create authentication credential using the configured auth type."""
         return await self._auth_delegate._get_credential(tool_context=tool_context)
@@ -620,7 +620,7 @@ class VeIdentityAuthMixin(BaseAuthMixin):
         self,
         *,
         args: dict[str, Any],
-        tool_context: Union[ToolContext | ReadonlyContext],
+        tool_context: ToolContext | ReadonlyContext,
         credential: AuthCredential,
     ) -> Any:
         """Default implementation - should be overridden by concrete tool classes.
