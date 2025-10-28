@@ -286,18 +286,22 @@ class Runner(ADKRunner):
     Examples:
         Create a runner and perform a text-only interaction:
 
-        >>> from veadk.runner import Runner
-        >>> from veadk.agent import Agent  # assume it's properly constructed
-        >>> runner = Runner(agent=my_agent, app_name="demo_app", user_id="u1")
-        >>> output = await runner.run("Hello")
-        >>> print(output)
+        ```python
+        from veadk.runner import Runner
+        from veadk.agent import Agent  # assume it's properly constructed
+        runner = Runner(agent=my_agent, app_name="demo_app", user_id="u1")
+        output = await runner.run("Hello")
+        print(output)
+        ```
 
         Send multimodal (text + image):
 
-        >>> from veadk.types import MediaMessage
-        >>> msg = MediaMessage(text="Describe the image", media="/path/to/image.png")
-        >>> output = await runner.run(msg, upload_inline_data_to_tos=True)
-        >>> print(output)
+        ```python
+        from veadk.types import MediaMessage
+        msg = MediaMessage(text="Describe the image", media="/path/to/image.png")
+        output = await runner.run(msg, upload_inline_data_to_tos=True)
+        print(output)
+        ```
 
     Note:
         This class wraps the parent ``run_async`` at initialization to insert media
