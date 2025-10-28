@@ -18,6 +18,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class BaseExporter(BaseModel):
+    """Abstract base class for OpenTelemetry span exporters in VeADK tracing system.
+
+    BaseExporter provides the foundation for implementing custom telemetry data
+    exporters that send span data to various observability platforms. It defines
+    the common interface and configuration structure that all concrete exporters
+    must follow.
+    """
+
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
     resource_attributes: dict = Field(default_factory=dict)

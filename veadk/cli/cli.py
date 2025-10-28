@@ -32,7 +32,11 @@ from veadk.version import VERSION
     version=VERSION, prog_name="Volcengine Agent Development Kit (VeADK)"
 )
 def veadk():
-    """Volcengine ADK command line tools"""
+    """Volcengine Agent Development Kit (VeADK) command line interface.
+
+    This is the main entry point for all VeADK CLI commands. VeADK provides
+    tools for developing, deploying, and managing AI agents on the Volcengine platform.
+    """
     pass
 
 

@@ -30,7 +30,22 @@ import click
 def prompt(
     path: str, feedback: str, api_key: str, workspace_id: str, model_name: str
 ) -> None:
-    """Optimize agent system prompt from a local file."""
+    """Optimize agent system prompt from a local file.
+
+    This command uses Volcengine PromptPilot service to optimize agent system prompts
+    based on feedback and best practices. It loads agents from a specified file and
+    applies intelligent prompt optimization using the specified model.
+
+    Args:
+        path: Path to the agent file containing global variable `agent=...`
+        feedback: User feedback and suggestions for prompt optimization
+        api_key: API key for accessing PromptPilot service
+        workspace_id: Workspace ID in PromptPilot for organizing prompts
+        model_name: Name of the model to use for prompt optimization
+
+    Raises:
+        ValueError: If workspace_id is not provided when required
+    """
     from pathlib import Path
 
     from veadk.agent import Agent

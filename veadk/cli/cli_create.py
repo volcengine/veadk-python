@@ -46,6 +46,16 @@ You can run the agent by executing: veadk web
 
 
 def _prompt_for_ark_api_key() -> str:
+    """Prompt user to enter ARK API key with guidance and options.
+
+    Displays instructions for obtaining an ARK API key and provides the user
+    with two options: enter the key immediately or configure it later in the
+    generated .env file. Includes helpful documentation links and clear choices.
+
+    Returns:
+        str: The ARK API key entered by the user, or empty string if they
+            choose to configure it later
+    """
     click.secho(
         "An API key is required to run the agent. See https://www.volcengine.com/docs/82379/1541594 for details.",
         fg="green",
@@ -62,6 +72,30 @@ def _prompt_for_ark_api_key() -> str:
 
 
 def _generate_files(ark_api_key: str, target_dir_path: Path) -> None:
+    """Generate agent project files from templates in the target directory.
+
+    Creates the essential files for a new VeADK agent project including
+    environment configuration, Python package initialization, and the main
+    agent definition file. Uses predefined templates to ensure consistent
+    project structure and proper configuration.
+
+    Args:
+        ark_api_key: ARK API key to be written to the .env file for
+            model authentication. Can be empty string if not provided
+        target_dir_path: Path object pointing to the target directory
+            where files should be created
+
+    Files Created:
+        - .env: Environment file with ARK API key configuration
+        - __init__.py: Python package initialization file
+        - agent.py: Main agent definition with default configuration
+
+    Note:
+        - Creates target directory if it doesn't exist
+        - Overwrites existing files without warning
+        - Uses template formatting to inject API key into .env file
+        - Displays success message with project location after completion
+    """
     target_dir_path.mkdir(exist_ok=True)
     env_path = target_dir_path / ".env"
     init_file_path = target_dir_path / "__init__.py"
@@ -82,7 +116,34 @@ def _generate_files(ark_api_key: str, target_dir_path: Path) -> None:
 @click.argument("agent_name", required=False)
 @click.option("--ark-api-key", help="The ARK API key.")
 def create(agent_name: str, ark_api_key: str) -> None:
-    """Creates a new agent in the current folder with prepopulated agent template."""
+    """Create a new VeADK agent project with prepopulated template files.
+
+    This command creates a new agent project directory with all necessary
+    files to get started with VeADK agent development. It sets up a complete
+    project structure including environment configuration, agent definition,
+    and package initialization.
+
+    The command handles interactive prompts for missing parameters and provides
+    safety checks for existing directories to prevent accidental overwrites.
+
+    Project Structure Created:
+        agent_name/
+        ├── .env                 # Environment configuration with API key
+        ├── __init__.py         # Python package initialization
+        └── agent.py            # Main agent definition with default settings
+
+    Args:
+        agent_name: Name of the agent and directory to create. If not provided
+            as an argument, the user will be prompted to enter it interactively
+        ark_api_key: ARK API key for model authentication. If not provided,
+            the user will be prompted with options to enter it or configure later
+
+    Note:
+        - Agent name becomes both the directory name and project identifier
+        - API key can be configured later by editing the .env file
+        - Generated agent is immediately runnable with 'veadk web' command
+        - Template includes comments guiding users to customize model settings
+    """
     if not agent_name:
         agent_name = click.prompt("Enter the agent name")
     if not ark_api_key:

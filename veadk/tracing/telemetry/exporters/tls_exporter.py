@@ -27,6 +27,19 @@ logger = get_logger(__name__)
 
 
 class TLSExporterConfig(BaseModel):
+    """Configuration model for Volcengine TLS exporter settings.
+
+    Manages connection parameters and authentication details for
+    integrating with Volcengine's TLS logging and observability platform.
+
+    Attributes:
+        endpoint: OTLP HTTP endpoint URL for TLS data ingestion
+        region: Volcengine region where the TLS service is deployed
+        topic_id: TLS topic identifier for organizing log data
+        access_key: Volcengine access key for API authentication
+        secret_key: Volcengine secret key for API authentication
+    """
+
     endpoint: str = Field(
         default_factory=lambda: settings.tls_config.otel_exporter_endpoint,
     )
@@ -41,9 +54,51 @@ class TLSExporterConfig(BaseModel):
 
 
 class TLSExporter(BaseExporter):
+    """OpenTelemetry exporter for Volcengine TLS platform.
+
+    TLSExporter provides integration with Volcengine's TLS platform for
+    centralized logging and trace data management. It uses HTTP-based OTLP
+    export to send trace data to TLS topics for storage, analysis, and
+    long-term retention.
+
+    Use Cases:
+    - Centralized trace data storage and archival
+    - Long-term performance trend analysis
+    - Compliance and audit trail requirements
+    - Cross-service trace correlation and analysis
+    - Integration with existing TLS logging infrastructure
+
+    Examples:
+        Basic usage with default settings:
+        ```python
+        exporter = TLSExporter()
+        tracer = OpentelemetryTracer(exporters=[exporter])
+        ```
+
+    Note:
+        - Requires valid Volcengine credentials and TLS topic ID
+        - Data is organized by topics for efficient management
+        - Supports regional deployments for data locality compliance
+        - Integrates with TLS alerting and analysis features
+        - Suitable for production environments requiring data retention
+    """
+
     config: TLSExporterConfig = Field(default_factory=TLSExporterConfig)
 
     def model_post_init(self, context: Any) -> None:
+        """Initialize TLS exporter components after model construction.
+
+        Sets up HTTP-based OTLP span exporter and batch processor with
+        Volcengine authentication headers and TLS topic configuration for
+        centralized trace data management.
+
+        Components Initialized:
+        - HTTP OTLP span exporter with TLS endpoint
+        - Batch span processor for efficient data transmission
+        - Authentication headers with Volcengine credentials
+        - Topic and region configuration for data routing
+        - Timeout configuration for reliable network operations
+        """
         logger.info(f"TLSExporter topic ID: {self.config.topic_id}")
 
         headers = {
@@ -64,6 +119,17 @@ class TLSExporter(BaseExporter):
 
     @override
     def export(self) -> None:
+        """Force immediate export of pending telemetry data to TLS.
+
+        Triggers force flush on the HTTP OTLP span exporter to ensure all
+        buffered span data is immediately transmitted to TLS for centralized
+        logging and analysis.
+
+        Operations:
+        - Forces flush of span exporter if initialized
+        - Logs export status with endpoint and topic details
+        - Handles cases where exporter is not properly initialized
+        """
         if self._exporter:
             self._exporter.force_flush()
             logger.info(

@@ -64,6 +64,61 @@ def eval(
     volcengine_access_key: str,
     volcengine_secret_key: str,
 ) -> None:
+    """Evaluate an agent using specified evaluation datasets and metrics.
+
+    This command provides comprehensive agent evaluation capabilities using either Google ADK
+    or DeepEval frameworks. It supports both local agent evaluation (from source code) and
+    remote agent evaluation (via A2A deployment URLs), making it flexible for different
+    development and deployment scenarios.
+
+    The evaluation process includes:
+    1. Loading the target agent from local directory or remote A2A endpoint
+    2. Configuring the evaluation environment and credentials
+    3. Setting up the chosen evaluator with appropriate metrics
+    4. Running evaluation tests against the provided dataset
+    5. Generating detailed performance reports and scores
+
+    Evaluation Modes:
+    - Local Evaluation: Loads agent code from a local directory containing 'agent.py'
+      with exported 'root_agent' variable. Suitable for development and testing.
+    - Remote Evaluation: Connects to a deployed agent via A2A (Agent-to-Agent) URL.
+      Ideal for evaluating production deployments or distributed agents.
+
+    Evaluator Options:
+    - ADK Evaluator: Uses Google's Agent Development Kit evaluation framework.
+      Provides standardized metrics and comprehensive evaluation reports.
+    - DeepEval: Advanced evaluation framework with customizable metrics including
+      GEval for general performance and ToolCorrectnessMetric for tool usage accuracy.
+
+    Args:
+        agent_dir: Local directory path containing the agent implementation.
+            Must include an 'agent.py' file with exported 'root_agent' variable.
+            Defaults to current directory if not specified
+        agent_a2a_url: Complete URL of the deployed agent in A2A mode.
+            If provided alongside agent_dir, this URL takes precedence
+        evalset_file: Path to the evaluation dataset file in Google ADK format.
+            Should contain test cases with inputs, expected outputs, and metadata
+        evaluator: Evaluation framework to use. Available options:
+            - 'adk': Google ADK evaluator with built-in metrics
+            - 'deepeval': Advanced evaluator with customizable metrics and thresholds
+        judge_model_name: Name of the language model used for evaluation judgment.
+            Defaults to 'doubao-1-5-pro-256k-250115'. Only applicable for DeepEval;
+            ignored when using ADK evaluator
+        volcengine_access_key: Volcengine platform access key for model authentication.
+            If not provided, uses VOLCENGINE_ACCESS_KEY environment variable
+        volcengine_secret_key: Volcengine platform secret key for model authentication.
+            If not provided, uses VOLCENGINE_SECRET_KEY environment variable
+
+    Note:
+        - At least one of --agent-dir or --agent-a2a-url must be provided
+        - If both are provided, --agent-a2a-url takes precedence
+        - Judge model name is ignored when using ADK evaluator
+        - Evaluation results are logged and may be saved to output files
+
+    Raises:
+        ImportError: If DeepEval dependencies are not installed when using DeepEval evaluator.
+        ValueError: If neither agent_dir nor agent_a2a_url is provided.
+    """
     import asyncio
     import os
     from pathlib import Path

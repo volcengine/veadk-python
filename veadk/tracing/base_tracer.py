@@ -20,12 +20,39 @@ logger = get_logger(__name__)
 
 
 class BaseTracer(ABC):
+    """Abstract base class for implementing tracing functionality in VeADK agents.
+
+    BaseTracer provides the foundation for collecting, managing, and exporting
+    trace data from agent execution sessions. It defines the interface that all
+    concrete tracer implementations must follow, enabling pluggable tracing
+    backends for different observability platforms.
+
+    Attributes:
+        name: Unique identifier for this tracer instance
+        _trace_id: Internal trace identifier for current execution context
+        _trace_file_path: Path to the current trace data file
+    """
+
     def __init__(self, name: str):
+        """Initialize a new BaseTracer instance.
+
+        Args:
+            name: Unique identifier for this tracer instance.
+        """
         self.name = name
         self._trace_id = "<unknown_trace_id>"
         self._trace_file_path = "<unknown_trace_file_path>"
 
     @abstractmethod
     def dump(self, user_id: str, session_id: str, path: str = "/tmp") -> str:
-        """Dump the trace data to a local file."""
+        """Dump the collected trace data to a local file.
+
+        This method must be implemented by concrete tracer classes to export
+        trace data in a format suitable for analysis or storage.
+
+        Args:
+            user_id: User identifier for trace organization and file naming
+            session_id: Session identifier for filtering and organizing spans
+            path: Directory path for the output file. Defaults to system temp directory
+        """
         ...

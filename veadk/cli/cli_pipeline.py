@@ -37,6 +37,18 @@ warnings.filterwarnings(
 
 
 def _create_cr(volcengine_settings: dict[str, str], cr_settings: dict[str, str]):
+    """Create Container Registry (CR) resources including instance, namespace, and repository.
+
+    This helper function creates the necessary Container Registry infrastructure
+    on Volcengine cloud platform for storing Docker images used in the CI/CD pipeline.
+
+    Args:
+        volcengine_settings: Dictionary containing Volcengine credentials and region
+        cr_settings: Dictionary containing CR instance, namespace, and repo configuration
+
+    Raises:
+        Exception: If any of the CR resource creation operations fail
+    """
     vecr = VeCR(
         access_key=volcengine_settings["volcengine_access_key"],
         secret_key=volcengine_settings["volcengine_secret_key"],
@@ -137,7 +149,60 @@ def pipeline(
     cr_repo_name: str,
     vefaas_function_id: str,
 ) -> None:
-    """Integrate a veadk project to volcengine pipeline for CI/CD"""
+    """Integrate a VeADK project with Volcengine pipeline for automated CI/CD deployment.
+
+    This command sets up a complete CI/CD pipeline that automatically builds, containerizes,
+    and deploys your VeADK agent project whenever changes are pushed to the specified GitHub
+    repository. It creates all necessary cloud infrastructure including Container Registry
+    resources, FaaS functions, and pipeline configurations.
+
+    The pipeline integration process includes:
+    1. Creating Container Registry (CR) infrastructure (instance, namespace, repository)
+    2. Setting up or using existing VeFaaS function for deployment target
+    3. Configuring Volcengine Code Pipeline with GitHub integration
+    4. Establishing automated build and deployment workflows
+    5. Linking all components for seamless CI/CD operation
+
+    Pipeline Workflow:
+    - Code changes pushed to GitHub trigger the pipeline
+    - Source code is automatically pulled from the specified branch
+    - Docker image is built using the specified VeADK base image
+    - Built image is pushed to Volcengine Container Registry
+    - VeFaaS function is updated with the new container image
+    - Deployment completion notifications are provided
+
+    Args:
+        veadk_version: Base VeADK image version for containerization. Can be:
+            - 'preview': Latest preview/development version
+            - 'latest': Latest stable release
+            - Specific version (e.g., '1.0.0'): Pinned version for consistency
+        github_url: Complete GitHub repository URL containing your VeADK project.
+            Must be accessible with the provided GitHub token
+        github_branch: Target branch to monitor for changes and deploy from.
+            Typically 'main', 'master', or your preferred deployment branch
+        github_token: GitHub personal access token with repository access permissions.
+            Required for pipeline to access and monitor your repository
+        volcengine_access_key: Volcengine cloud platform access key for authentication.
+            If not provided, uses VOLCENGINE_ACCESS_KEY environment variable
+        volcengine_secret_key: Volcengine cloud platform secret key for authentication.
+            If not provided, uses VOLCENGINE_SECRET_KEY environment variable
+        region: Volcengine cloud region for all resources (VeFaaS, CR, Pipeline).
+            Defaults to 'cn-beijing'. Choose region closest to your users
+        cr_instance_name: Name for the Container Registry instance that will store
+            your Docker images. Defaults to 'veadk-user-instance'
+        cr_namespace_name: Namespace within the Container Registry for organizing
+            repositories. Defaults to 'veadk-user-namespace'
+        cr_repo_name: Repository name within the Container Registry namespace
+            for storing your project images. Defaults to 'veadk-user-repo'
+        vefaas_function_id: Existing VeFaaS function ID to update with new deployments.
+            If not provided, a new function will be created automatically
+
+    Note:
+        - GitHub token must have appropriate permissions for repository access
+        - All Volcengine resources will be created in the specified region
+        - The pipeline will be triggered immediately upon creation for initial deployment
+        - Subsequent deployments occur automatically when code is pushed to the monitored branch
+    """
 
     click.echo(
         "Welcome use VeADK to integrate your project to volcengine pipeline for CI/CD."

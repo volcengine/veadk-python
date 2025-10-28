@@ -37,7 +37,21 @@ def uploadevalset(
     cozeloop_evalset_id: str,
     cozeloop_api_key: str,
 ) -> None:
-    """Upload dataset items to CozeLoop evaluation set."""
+    """Upload dataset items to CozeLoop evaluation set.
+
+    This command uploads evaluation dataset items from a JSON file to the CozeLoop
+    platform for agent evaluation and testing. It processes Google ADK formatted
+    evaluation cases and converts them to CozeLoop's expected format.
+
+    Args:
+        file: Path to the JSON file containing dataset items in Google ADK format.
+        cozeloop_workspace_id: CozeLoop workspace identifier for organizing evaluation sets.
+            If not provided, uses OBSERVABILITY_OPENTELEMETRY_COZELOOP_SERVICE_NAME environment variable.
+        cozeloop_evalset_id: Specific evaluation set ID where items will be uploaded.
+            If not provided, uses OBSERVABILITY_OPENTELEMETRY_COZELOOP_EVALSET_ID environment variable.
+        cozeloop_api_key: API key for authenticating with CozeLoop services.
+            If not provided, uses OBSERVABILITY_OPENTELEMETRY_COZELOOP_API_KEY environment variable.
+    """
 
     if not cozeloop_workspace_id:
         cozeloop_workspace_id = getenv(

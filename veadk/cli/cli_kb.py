@@ -48,7 +48,42 @@ def add(
     index: str,
     path: str,
 ):
-    """Add files to knowledgebase"""
+    """Add files to knowledgebase.
+
+    This command adds files or directories to a specified knowledgebase backend.
+    It supports various backend types including local storage, OpenSearch, Viking,
+    and Redis for storing and indexing knowledge content.
+
+    Args:
+        backend: The knowledgebase backend type to use for storing and indexing documents.
+            Available options:
+            - 'local': Local file-based storage using SQLite. Suitable for development
+              and small-scale deployments. No external dependencies required.
+            - 'opensearch': Elasticsearch-compatible search engine with advanced
+              full-text search and vector similarity capabilities. Recommended for
+              production environments with large document collections.
+            - 'viking': Volcengine's managed vector database service optimized for
+              semantic search and RAG applications. Provides high performance and
+              automatic scaling on Volcengine cloud platform.
+            - 'redis': In-memory data structure store with vector search capabilities.
+              Fast retrieval but limited by memory capacity. Good for frequently
+              accessed, smaller knowledge bases.
+        app_name: Application identifier for organizing and isolating knowledgebase
+            data. Used to create logical separation between different applications
+            or environments. Must be consistent across operations for the same knowledge base.
+        index: Knowledgebase index identifier within the application namespace.
+            Acts as a unique name for this specific knowledge collection. Multiple
+            indexes can exist under the same app_name for different knowledge domains.
+            Index names should be descriptive and follow naming conventions of the chosen backend.
+        path: File system path to the knowledge content to be added to the knowledge base.
+            Supported formats:
+            - Single file: Path to a specific document (PDF, TXT, MD, DOCX, etc.)
+            - Directory: Path to a folder containing multiple documents. All supported
+              files in the directory will be processed recursively.
+
+    Raises:
+        RuntimeError: If the file type is not supported
+    """
     _path = Path(path)
     assert _path.exists(), f"Path {path} not exists. Please check your input."
 
