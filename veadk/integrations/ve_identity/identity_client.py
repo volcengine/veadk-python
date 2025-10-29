@@ -33,6 +33,7 @@ from veadk.integrations.ve_identity.models import (
     OAuth2TokenResponse,
     WorkloadToken,
 )
+from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 
 from veadk.utils.logger import get_logger
 
@@ -40,21 +41,39 @@ logger = get_logger(__name__)
 
 
 def refresh_credentials(func):
-    """Decorator to refresh credentials from environment variables before API calls."""
-    # TODO: support get credentials from the file system
+    """Decorator to refresh credentials from environment variables or VeFaaS IAM before API calls.
+
+    This decorator attempts to refresh VolcEngine credentials in the following order:
+    1. Use initial credentials passed to the constructor
+    2. Try to get credentials from environment variables
+    3. Fall back to VeFaaS IAM file if available
+    """
 
     @wraps(func)
     async def wrapper(self: IdentityClient, *args, **kwargs):
-        # Refresh configuration from environment variables
-        self._api_client.api_client.configuration.ak = (
-            self._initial_access_key or os.getenv("VOLCENGINE_ACCESS_KEY", "")
-        )
-        self._api_client.api_client.configuration.sk = (
-            self._initial_secret_key or os.getenv("VOLCENGINE_SECRET_KEY", "")
-        )
-        self._api_client.api_client.configuration.session_token = (
-            self._initial_session_token or os.getenv("VOLCENGINE_SESSION_TOKEN", "")
-        )
+        # Try to get credentials from environment variables first
+        ak = self._initial_access_key or os.getenv("VOLCENGINE_ACCESS_KEY", "")
+        sk = self._initial_secret_key or os.getenv("VOLCENGINE_SECRET_KEY", "")
+        session_token = self._initial_session_token or os.getenv("VOLCENGINE_SESSION_TOKEN", "")
+
+        # If credentials are not available, try to get from VeFaaS IAM
+        if not (ak and sk):
+            try:
+                logger.info("Credentials not found in environment, attempting to fetch from VeFaaS IAM...")
+                ve_iam_cred = get_credential_from_vefaas_iam()
+                ak = ve_iam_cred.access_key_id
+                sk = ve_iam_cred.secret_access_key
+                session_token = ve_iam_cred.session_token
+                logger.info("Successfully retrieved credentials from VeFaaS IAM")
+            except FileNotFoundError as e:
+                logger.warning(f"VeFaaS IAM credentials not available: {e}")
+            except Exception as e:
+                logger.warning(f"Failed to retrieve credentials from VeFaaS IAM: {e}")
+
+        # Update configuration with the credentials
+        self._api_client.api_client.configuration.ak = ak
+        self._api_client.api_client.configuration.sk = sk
+        self._api_client.api_client.configuration.session_token = session_token
 
         # Call the original method
         return await func(self, *args, **kwargs)
@@ -103,7 +122,7 @@ class IdentityClient:
         configuration.sk = self._initial_secret_key
         configuration.session_token = self._initial_session_token
 
-        self._api_client = volcenginesdkid.CISTESTApi(
+        self._api_client = volcenginesdkid.IDApi(
             volcenginesdkcore.ApiClient(configuration)
         )
 
