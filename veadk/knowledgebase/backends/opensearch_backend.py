@@ -43,6 +43,32 @@ except ImportError:
 
 
 class OpensearchKnowledgeBackend(BaseKnowledgebaseBackend):
+    """Opensearch-based backend for knowledgebase.
+
+    Opensearch backend stores embedded text in a opensearch database by Llama-index.
+
+    Attributes:
+        opensearch_config (OpensearchConfig):
+            Opensearch database configurations.
+            Mainly contains opensearch host, port, username, password, etc.
+        embedding_config (EmbeddingModelConfig):
+            Embedding config for text embedding and search.
+            Embedding config contains embedding model name and the corresponding dim.
+
+    Examples:
+        Init a knowledgebase based on opensearch backend.
+
+        ```python
+        knowledgebase = Knowledgebase(backend="opensearch")
+        ```
+
+        With more configurations:
+
+        ```python
+        ...
+        ```
+    """
+
     opensearch_config: OpensearchConfig = Field(default_factory=OpensearchConfig)
     """Opensearch client configs"""
 

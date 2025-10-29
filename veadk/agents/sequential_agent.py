@@ -29,25 +29,34 @@ logger = get_logger(__name__)
 
 
 class SequentialAgent(GoogleADKSequentialAgent):
-    """Sequential Agent with Volcengine capabilities."""
+    """Sequential Agent that executes sub-agents sequentially.
+
+    This agent is designed to execute multiple sub-agents in a predefined sequential order.
+    It ensures that each sub-agent is executed one after the other, making it suitable for
+    workflows where the output of one sub-agent is needed as input for the next. The agent
+    is well-suited for tasks that require a linear progression of steps or operations, ensuring
+    that the execution flow is maintained.
+
+    Attributes:
+        model_config (ConfigDict): Configuration dictionary for the model.
+        name (str): The name of the agent, default is "veSequentialAgent".
+        description (str): A description of the agent, useful in A2A scenarios.
+        instruction (str): Instructions or principles for function calling and agent execution.
+        sub_agents (list[BaseAgent]): A list of sub-agents managed by the sequential agent.
+            Each sub-agent is executed in the order they are listed.
+        tracers (list[BaseTracer]): A list of tracers used for monitoring the agent's performance
+            and behavior during sequential execution.
+    """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
-    """The model config"""
 
     name: str = "veSequentialAgent"
-    """The name of the agent."""
-
     description: str = DEFAULT_DESCRIPTION
-    """The description of the agent. This will be helpful in A2A scenario."""
-
     instruction: str = DEFAULT_INSTRUCTION
-    """The instruction for the agent, such as principles of function calling."""
 
     sub_agents: list[BaseAgent] = Field(default_factory=list, exclude=True)
-    """The sub agents provided to agent."""
 
     tracers: list[BaseTracer] = []
-    """The tracers provided to agent."""
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init

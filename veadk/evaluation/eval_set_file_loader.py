@@ -19,6 +19,26 @@ from google.adk.evaluation.local_eval_sets_manager import (
 
 
 def load_eval_set_from_file(eval_set_file_path: str) -> EvalSet:
+    """Loads an evaluation set from a JSON file.
+
+    This function uses ADK's loader to parse the file into an EvalSet object.
+    It handles errors in file reading or parsing.
+
+    Args:
+        eval_set_file_path (str): Path to the JSON eval set file.
+
+    Returns:
+        EvalSet: Loaded evaluation set object.
+
+    Raises:
+        Exception: If file loading or parsing fails, with details.
+
+    Examples:
+        ```python
+        eval_set = load_eval_set_from_file("my_eval.json")
+        print(len(eval_set.eval_cases))
+        ```
+    """
     try:
         eval_set = adk_load_eval_set_from_file(eval_set_file_path, eval_set_file_path)
     except Exception as e:
