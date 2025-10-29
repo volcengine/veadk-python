@@ -18,8 +18,21 @@ from pydantic import BaseModel
 
 
 class BaseKnowledgebaseBackend(ABC, BaseModel):
+    """Base backend for knowledgebase.
+
+    Attributes:
+        index (str): Index or collection name of the vector storage.
+
+    Examples:
+        You can implement your own knowledgebase backend.
+
+        ```python
+        class CustomKnowledgebaseBackend(BaseKnowledgebaseBackend):
+            pass
+        ```
+    """
+
     index: str
-    """Index or collection name of the vector storage."""
 
     @abstractmethod
     def precheck_index_naming(self) -> None:

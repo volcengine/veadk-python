@@ -47,55 +47,108 @@ logger = get_logger(__name__)
 
 
 class Agent(LlmAgent):
-    """LLM-based Agent with Volcengine capabilities."""
+    """LLM-based Agent with Volcengine capabilities.
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
-    """The model config"""
+    This class represents an intelligent agent powered by LLMs (Large Language Models),
+    integrated with Volcengine's AI framework. It supports memory modules, sub-agents,
+    tracers, knowledge bases, and other advanced features for A2A (Agent-to-Agent)
+    or user-facing scenarios.
 
-    name: str = DEFAULT_AGENT_NAME
-    """The name of the agent."""
+    Attributes:
+        name (str): The name of the agent.
+        description (str): A description of the agent, useful in A2A scenarios.
+        instruction (Union[str, InstructionProvider]): The instruction or instruction provider.
+        model_name (str): Name of the model used by the agent.
+        model_provider (str): Provider of the model (e.g., openai).
+        model_api_base (str): The base URL of the model API.
+        model_api_key (str): The API key for accessing the model.
+        model_extra_config (dict): Extra configurations to include in model requests.
+        tools (list[ToolUnion]): Tools available to the agent.
+        sub_agents (list[BaseAgent]): Sub-agents managed by this agent.
+        knowledgebase (Optional[KnowledgeBase]): Knowledge base attached to the agent.
+        short_term_memory (Optional[ShortTermMemory]): Session-based memory for temporary context.
+        long_term_memory (Optional[LongTermMemory]): Cross-session memory for persistent user context.
+        tracers (list[BaseTracer]): List of tracers used for telemetry and monitoring.
 
-    description: str = DEFAULT_DESCRIPTION
-    """The description of the agent. This will be helpful in A2A scenario."""
+    Notes:
+        Before creating your agent, you should get the API Key for your model.
 
-    instruction: Union[str, InstructionProvider] = DEFAULT_INSTRUCTION
-    """The instruction for the agent."""
+    Examples:
+        ### Simple agent
 
-    model_name: str = Field(default_factory=lambda: settings.model.name)
-    """The name of the model for agent running."""
+        Create a simplest agent without any extra settings. All agent attributes are come from environment variables and default values. Like:
 
-    model_provider: str = Field(default_factory=lambda: settings.model.provider)
-    """The provider of the model for agent running."""
+        ```python
+        import asyncio
 
-    model_api_base: str = Field(default_factory=lambda: settings.model.api_base)
-    """The api base of the model for agent running."""
+        from veadk import Agent, Runner
 
-    model_api_key: str = Field(default_factory=lambda: settings.model.api_key)
-    """The api key of the model for agent running."""
+        root_agent = Agent()
 
-    model_extra_config: dict = Field(default_factory=dict)
-    """The extra config to include in the model requests."""
+        runner = Runner(agent=root_agent)
 
-    tools: list[ToolUnion] = []
-    """The tools provided to agent."""
+        response = asyncio.run(runner.run("hello"))
+        print(response)
+        ```
 
-    sub_agents: list[BaseAgent] = Field(default_factory=list, exclude=True)
-    """The sub agents provided to agent."""
+        You can set some agent metadata attributes by the following code:
 
-    knowledgebase: Optional[KnowledgeBase] = None
-    """The knowledgebase provided to agent."""
+        ```python
+        from veadk import Agent
 
-    short_term_memory: Optional[ShortTermMemory] = None
-    """The short term memory provided to agent."""
+        from veadk import Agent, Runner
 
-    long_term_memory: Optional[LongTermMemory] = None
-    """The long term memory provided to agent.
+        root_agent = Agent(
+            name="meeting_assistant",
+            description="An assistant that helps user to make meetings.",
+            # system prompt
+            instruction="First learn about user's meeting time, location, and other key informations, and give out a meeting plan.",
+        )
+        ```
 
-    In VeADK, the `long_term_memory` refers to cross-session memory under the same user.
+        Or, once you want to use your local-serving model or models from other provider, you can specify some model-related configurations in initiation arguments:
+
+        ```python
+        agent = Agent(model_name="", model_api_key="", model_api_base="")
+        ```
+
+        Besides, you can specify some extra options by ARK requirements, such as:
+
+        ```python
+        # disable thinking
+        model_extra_config = {}
+        ```
+
+        In some systems, mulitple-agent based design is necessary, you can implement a multiple-agent system by `sub_agent` argument:
+
+        ```python
+        from veadk import Agent
+        ```
+
     """
 
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
+
+    name: str = DEFAULT_AGENT_NAME
+    description: str = DEFAULT_DESCRIPTION
+    instruction: Union[str, InstructionProvider] = DEFAULT_INSTRUCTION
+
+    model_name: str = Field(default_factory=lambda: settings.model.name)
+    model_provider: str = Field(default_factory=lambda: settings.model.provider)
+    model_api_base: str = Field(default_factory=lambda: settings.model.api_base)
+    model_api_key: str = Field(default_factory=lambda: settings.model.api_key)
+    model_extra_config: dict = Field(default_factory=dict)
+
+    tools: list[ToolUnion] = []
+
+    sub_agents: list[BaseAgent] = Field(default_factory=list, exclude=True)
+
+    knowledgebase: Optional[KnowledgeBase] = None
+
+    short_term_memory: Optional[ShortTermMemory] = None
+    long_term_memory: Optional[LongTermMemory] = None
+
     tracers: list[BaseTracer] = []
-    """The tracers provided to agent."""
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init

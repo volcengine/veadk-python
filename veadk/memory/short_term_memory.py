@@ -50,20 +50,87 @@ def wrap_get_session_with_callbacks(obj, callback_fn: Callable):
 
 
 class ShortTermMemory(BaseModel):
+    """Short term memory for agent execution.
+
+    The short term memory represents the context of the agent model. All content in the short term memory will be sent to agent model directly, including the system prompt, historical user prompt, and historical model responses.
+
+    Attributes:
+        backend (Literal["local", "mysql", "sqlite", "postgresql", "database"]):
+            The backend of short term memory:
+            - `local` for in-memory storage
+            - `mysql` for mysql / PostgreSQL storage
+            - `sqlite` for locally sqlite storage
+        backend_configs (dict): Configuration dict for init short term memory backend.
+        db_url (str):
+            Database connection url for init short term memory backend.
+            For example, `sqlite:///./test.db`. Once set, it will override the `backend` parameter.
+        local_database_path (str):
+            Local database path, only used when `backend` is `sqlite`.
+            Default to `/tmp/veadk_local_database.db`.
+        after_load_memory_callback (Callable | None):
+            A callback to be called after loading memory from the backend. The callback function should accept `Session` as an input.
+
+    Examples:
+        ### In-memory simple memory
+
+        You can initialize a short term memory with in-memory storage:
+
+        ```python
+        from veadk import Agent, Runner
+        from veadk.memory.short_term_memory import ShortTermMemory
+        import asyncio
+
+        session_id = "veadk_playground_session"
+
+        agent = Agent()
+        short_term_memory = ShortTermMemory(backend="local")
+
+        runner = Runner(
+            agent=agent, short_term_memory=short_term_memory)
+
+        # This invocation will be stored in short-term memory
+        response = asyncio.run(runner.run(
+            messages="My name is VeADK", session_id=session_id
+        ))
+        print(response)
+
+        # The history invocation can be fetched by model
+        response = asyncio.run(runner.run(
+            messages="Do you remember my name?", session_id=session_id # keep the same `session_id`
+        ))
+        print(response)
+        ```
+
+        ### Memory with a Database URL
+
+        Also you can use a databasae connection URL to initialize a short-term memory:
+
+        ```python
+        from veadk.memory.short_term_memory import ShortTermMemory
+
+        short_term_memory = ShortTermMemory(db_url="...")
+        ```
+
+        ### Memory with SQLite
+
+        Once you want to start the short term memory with a local SQLite, you can specify the backend to `sqlite`. It will create a local database in `local_database_path`:
+
+        ```python
+        from veadk.memory.short_term_memory import ShortTermMemory
+
+        short_term_memory = ShortTermMemory(backend="sqlite", local_database_path="")
+        ```
+    """
+
     backend: Literal["local", "mysql", "sqlite", "postgresql", "database"] = "local"
-    """Short term memory backend. `Local` for in-memory storage, `mysql` for mysql / PostgreSQL storage. `sqlite` for sqlite storage."""
 
     backend_configs: dict = Field(default_factory=dict)
-    """Backend specific configurations."""
 
     db_url: str = ""
-    """Database connection URL, e.g. `sqlite:///./test.db`. Once set, it will override the `backend` parameter."""
 
     local_database_path: str = "/tmp/veadk_local_database.db"
-    """Local database path, only used when `backend` is `sqlite`. Default to `/tmp/veadk_local_database.db`."""
 
     after_load_memory_callback: Callable | None = None
-    """A callback to be called after loading memory from the backend. The callback function should accept `Session` as an input."""
 
     _session_service: BaseSessionService = PrivateAttr()
 
@@ -108,6 +175,53 @@ class ShortTermMemory(BaseModel):
         user_id: str,
         session_id: str,
     ) -> Session | None:
+        """Create or retrieve a user session.
+
+        Short term memory can attempt to create a new session for a given application and user. If a session with the same `session_id` already exists, it will be returned instead of creating a new one.
+
+        If the underlying session service is backed by a database (`DatabaseSessionService`), the method first lists all existing sessions for the given `app_name` and `user_id` and logs the number of sessions found. It then checks whether a session with the specified `session_id` already exists:
+        - If it exists → returns the existing session.
+        - If it does not exist → creates and returns a new session.
+
+        Args:
+            app_name (str): The name of the application associated with the session.
+            user_id (str): The unique identifier of the user.
+            session_id (str): The unique identifier of the session to be created or retrieved.
+
+        Returns:
+            Session | None: The retrieved or newly created `Session` object, or `None` if the session creation failed.
+
+        Examples:
+            Create a new session manually:
+
+            ```python
+            import asyncio
+
+            from veadk.memory import ShortTermMemory
+
+            app_name = "app_name"
+            user_id = "user_id"
+            session_id = "session_id"
+
+            short_term_memory = ShortTermMemory()
+
+            session = asyncio.run(
+                short_term_memory.create_session(
+                    app_name=app_name, user_id=user_id, session_id=session_id
+                )
+            )
+
+            print(session)
+
+            session = asyncio.run(
+                short_term_memory.session_service.get_session(
+                    app_name=app_name, user_id=user_id, session_id=session_id
+                )
+            )
+
+            print(session)
+            ```
+        """
         if isinstance(self._session_service, DatabaseSessionService):
             list_sessions_response = await self._session_service.list_sessions(
                 app_name=app_name, user_id=user_id

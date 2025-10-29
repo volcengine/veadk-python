@@ -283,30 +283,132 @@ class Runner(ADKRunner):
         memory_service: Memory service instance (may come from agent's long-term memory).
         app_name (str): Application name used in session management and object pathing.
 
-    Examples:
-        Create a runner and perform a text-only interaction:
-
-        ```python
-        from veadk.runner import Runner
-        from veadk.agent import Agent  # assume it's properly constructed
-        runner = Runner(agent=my_agent, app_name="demo_app", user_id="u1")
-        output = await runner.run("Hello")
-        print(output)
-        ```
-
-        Send multimodal (text + image):
-
-        ```python
-        from veadk.types import MediaMessage
-        msg = MediaMessage(text="Describe the image", media="/path/to/image.png")
-        output = await runner.run(msg, upload_inline_data_to_tos=True)
-        print(output)
-        ```
-
     Note:
         This class wraps the parent ``run_async`` at initialization to insert media
         upload and post-run handling. If you override the underlying ``run_async``,
         ensure it remains compatible with this interception logic.
+
+    Examples:
+        ### Text-only interaction
+
+        ```python
+        import asyncio
+
+        from veadk import Agent, Runner
+
+        agent = Agent()
+
+        runner = Runner(agent=agent)
+
+        response = asyncio.run(runner.run(messages="北京的天气怎么样？"))
+
+        print(response)
+        ```
+
+        ### Send multimodal data to agent
+
+        Currently, VeADK support send multimodal data (i.e., text with images) to agent, and invoke the corresponding model to do tasks.
+
+        !!! info "Note for multimodal running"
+
+            When sending multimodal data to agent, the model of agent must support multimodal data processing. For example, `doubao-1-6`.
+
+        ```python
+        import asyncio
+
+        from veadk import Agent, Runner
+        from veadk.types import MediaMessage
+
+        agent = Agent(model_name="doubao-seed-1-6-250615")
+
+        runner = Runner(agent=agent)
+
+        message = MediaMessage(
+            text="Describe the image",
+            media="https://...", # <-- replace here with an image from web
+        )
+        response = asyncio.run(runner.run(messages=message))
+
+        print(response)
+        ```
+
+        ### Run with run_async
+
+        You are recommand that **using `run_async` in production to invoke agent**. During running, the loop will throw out `event`, you can process each `event` according to your requirements.
+
+        ```python
+        import uuid
+
+        from google.genai import types
+        from veadk import Agent, Runner
+
+        APP_NAME = "app"
+        USER_ID = "user"
+
+        agent = Agent()
+
+        runner = Runner(agent=agent, app_name=APP_NAME)
+
+
+        async def main(message: types.Content, session_id: str):
+            # before running, you should create a session first
+            await runner.short_term_memory.create_session(
+                app_name=APP_NAME, user_id=USER_ID, session_id=session_id
+            )
+
+            async for event in runner.run_async(
+                user_id=USER_ID,
+                session_id=session_id,
+                new_message=message,
+            ):
+                # process event here
+                print(event)
+
+
+        if __name__ == "__main__":
+            import asyncio
+
+            message = types.Content(parts=[types.Part(text="Hello")], role="user")
+            session_id = str(uuid.uuid1())
+            asyncio.run(main(message=message, session_id=session_id))
+        ```
+
+        ### Custom your message
+
+        You can custom your message content, as Google provides some basic types to build and custom agent's input. For example, you can build a message with a text and several images.
+
+        ```python
+        from google.genai import types
+
+        # build message with a text
+        message = types.Content(parts=[types.Part(text="Hello")], role="user")
+
+        # build message with a text and an image
+        message = types.Content(
+            parts=[
+                types.Part(text="Hello!"),
+                types.Part(
+                    inline_data=types.Blob(display_name="foo.png", data=..., mime_type=...)
+                ),
+            ],
+            role="user",
+        )
+
+        # build image with several text and several images
+        message = types.Content(
+            parts=[
+                types.Part(text="Hello!"),
+                types.Part(text="Please help me to describe the following images."),
+                types.Part(
+                    inline_data=types.Blob(display_name="foo.png", data=..., mime_type=...)
+                ),
+                types.Part(
+                    inline_data=types.Blob(display_name="bar.png", data=..., mime_type=...)
+                ),
+            ],
+            role="user",
+        )
+        ```
     """
 
     def __init__(
@@ -572,8 +674,24 @@ class Runner(ADKRunner):
         Returns:
             str: The tracing file path; returns an empty string on failure or when no tracer.
 
-        Raises:
-            None: All errors are logged and an empty string is returned.
+        Examples:
+            You can save the tracing data to a local file.
+
+            ```python
+            import asyncio
+
+            from veadk import Agent, Runner
+
+            agent = Agent()
+
+            runner = Runner(agent=agent)
+
+            session_id = "session"
+            asyncio.run(runner.run(messages="Hi!", session_id=session_id))
+
+            path = runner.save_tracing_file(session_id=session_id)
+            print(path)
+            ```
         """
         if not isinstance(
             self.agent, (Agent, SequentialAgent, ParallelAgent, LoopAgent)
@@ -609,8 +727,24 @@ class Runner(ADKRunner):
         Returns:
             str: The exported evaluation set file path.
 
-        Raises:
-            Exception: Propagated if the underlying export logic raises.
+        Examples:
+            You can save the specific session as a evaluation set in Google ADK format.
+
+            ```python
+            import asyncio
+
+            from veadk import Agent, Runner
+
+            agent = Agent()
+
+            runner = Runner(agent=agent)
+
+            session_id = "session"
+            asyncio.run(runner.run(messages="Hi!", session_id=session_id))
+
+            path = runner.save_eval_set(session_id=session_id)
+            print(path)
+            ```
         """
         eval_set_recorder = EvalSetRecorder(self.session_service, eval_set_id)
         eval_set_path = await eval_set_recorder.dump(
@@ -632,11 +766,26 @@ class Runner(ADKRunner):
             user_id (str): Optional; override default user ID. If empty, uses ``self.user_id``.
             app_name (str): Optional; override default app name. If empty, uses ``self.app_name``.
 
-        Returns:
-            None
+        Examples:
+            You can save a specific session to long-term memory.
 
-        Raises:
-            Exception: May propagate if the underlying memory service raises during write.
+            ```python
+            import asyncio
+
+            from veadk import Agent, Runner
+            from veadk.memory import LongTermMemory
+
+            APP_NAME = "app"
+
+            agent = Agent(long_term_memory=LongTermMemory(backend="local", app_name=APP_NAME))
+
+            session_id = "session"
+            runner = Runner(agent=agent, app_name=APP_NAME)
+
+            asyncio.run(runner.run(messages="Hi!", session_id=session_id))
+
+            asyncio.run(runner.save_session_to_long_term_memory(session_id=session_id))
+            ```
         """
         if not self.long_term_memory:
             logger.warning("Long-term memory is not enabled. Failed to save session.")
