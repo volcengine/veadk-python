@@ -59,24 +59,62 @@ def get_files_in_directory(directory: str):
 
 
 class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
+    """Volcengine Viking DB knowledgebase backend.
+
+    Volcegnine Viking DB knowledgebase provides powerful knowledgebase storage and search.
+
+    Attributes:
+        volcengine_access_key (str | None):
+            Access key for Volcengine. Loaded automatically from the
+            `VOLCENGINE_ACCESS_KEY` environment variable if not provided.
+
+        volcengine_secret_key (str | None):
+            Secret key for Volcengine. Loaded automatically from the
+            `VOLCENGINE_SECRET_KEY` environment variable if not provided.
+
+        session_token (str):
+            Optional session token for temporary credentials. Defaults to an empty string.
+
+        volcengine_project (str):
+            VikingDB knowledgebase project name in the Volcengine console platform.
+            Defaults to `"default"`.
+
+        region (str): Region of the VikingDB knowledgebase. Defaults to `"cn-beijing"`.
+
+        tos_config (TOSConfig | NormalTOSConfig):
+            TOS configuration used for uploading files to TOS (Volcengine’s Object Storage).
+            Defaults to a new instance of `TOSConfig`.
+
+    Notes:
+        Please make sure that you have created a bucket in your TOS.
+
+    Examples:
+        Init a knowledgebase based on VikingDB knowledgebase backend.
+
+        ```python
+        knowledgebase = Knowledgebase(backend="redis")
+        ```
+
+        With more configurations:
+
+        ```python
+        ...
+        ```
+    """
+
     volcengine_access_key: str | None = Field(
         default_factory=lambda: os.getenv("VOLCENGINE_ACCESS_KEY")
     )
-
     volcengine_secret_key: str | None = Field(
         default_factory=lambda: os.getenv("VOLCENGINE_SECRET_KEY")
     )
-
     session_token: str = ""
 
     volcengine_project: str = "default"
-    """VikingDB knowledgebase project in Volcengine console platform. Default by `default`"""
 
     region: str = "cn-beijing"
-    """VikingDB knowledgebase region"""
 
     tos_config: TOSConfig | NormalTOSConfig = Field(default_factory=TOSConfig)
-    """TOS config, used to upload files to TOS"""
 
     def model_post_init(self, __context: Any) -> None:
         self.precheck_index_naming()

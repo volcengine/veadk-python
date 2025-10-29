@@ -73,24 +73,111 @@ def _get_backend_cls(backend: str) -> type[BaseLongTermMemoryBackend]:
 
 
 class LongTermMemory(BaseMemoryService, BaseModel):
+    """Manages long-term memory storage and retrieval for applications.
+
+    This class provides an interface to store, retrieve, and manage long-term
+    contextual information using different backend types (e.g., OpenSearch, Redis).
+    It supports configuration of the backend service and retrieval behavior.
+
+    Attributes:
+        backend (Union[Literal["local", "opensearch", "redis", "viking", "viking_mem", "mem0"], BaseLongTermMemoryBackend]):
+            The type or instance of the long-term memory backend. Defaults to "opensearch".
+
+        backend_config (dict):
+            Configuration parameters for the selected backend. Defaults to an empty dictionary.
+
+        top_k (int):
+            The number of top similar documents to retrieve during search. Defaults to 5.
+
+        index (str):
+            The name of the index or collection used for storing memory items. Defaults to an empty string.
+
+        app_name (str):
+            The name of the application that owns this memory instance. Defaults to an empty string.
+
+        user_id (str):
+            Deprecated attribute. Retained for backward compatibility. Defaults to an empty string.
+
+    Notes:
+        Please ensure that you have set the embedding-related configurations in environment variables.
+
+    Examples:
+        ### Simple long-term memory
+
+        Once create a long-term memory withou any arguments, all configurations are come from **environment variables**.
+
+        ```python
+        import asyncio
+
+        from veadk import Agent, Runner
+        from veadk.memory.long_term_memory import LongTermMemory
+        from veadk.memory.short_term_memory import ShortTermMemory
+
+        app_name = "veadk_playground_app"
+        user_id = "veadk_playground_user"
+
+        long_term_memory = LongTermMemory(backend="local", app_name=app_name)
+
+        agent = Agent(long_term_memory=long_term_memory)
+
+        runner = Runner(
+            agent=agent,
+            app_name=app_name,
+            user_id=user_id,
+            short_term_memory=ShortTermMemory(),
+        )
+
+        # ===== add memory =====
+        session_id = "veadk_playground_session"
+        teaching_prompt = "I brought an ice-cream last week."
+
+        asyncio.run(runner.run(messages=teaching_prompt, session_id=session_id))
+        asyncio.run(
+            runner.save_session_to_long_term_memory(session_id=session_id)
+        )  # save session to long-term memory
+
+
+        # ===== check memory =====
+        session_id = "veadk_playground_session_2"  # use a new session
+        student_prompt = "What I brought last week?"
+
+        response = asyncio.run(runner.run(messages=student_prompt, session_id=session_id))
+
+        print(response)
+        ```
+
+        ### Create with a backend instance
+
+        ```python
+        from veadk.memory.long_term_memory import LongTermMemory
+        from veadk.memory.long_term_memory.backends import LongTermMemory
+
+        long_term_memory = LongTermMemory(backend=...)
+        ```
+
+        ### Create with backend configurations
+
+        ```python
+        from veadk.memory.long_term_memory import LongTermMemory
+
+        long_term_memory = LongTermMemory(backend="", backend_config={})
+        ```
+    """
+
     backend: Union[
         Literal["local", "opensearch", "redis", "viking", "viking_mem", "mem0"],
         BaseLongTermMemoryBackend,
     ] = "opensearch"
-    """Long term memory backend type"""
 
     backend_config: dict = Field(default_factory=dict)
-    """Long term memory backend configuration"""
 
     top_k: int = 5
-    """Number of top similar documents to retrieve during search."""
 
     index: str = ""
 
     app_name: str = ""
 
     user_id: str = ""
-    """Deprecated attribute"""
 
     def model_post_init(self, __context: Any) -> None:
         # Once user define a backend instance, use it directly
@@ -163,6 +250,33 @@ class LongTermMemory(BaseMemoryService, BaseModel):
         self,
         session: Session,
     ):
+        """Add a chat session's events to the long-term memory backend.
+
+        This method extracts and filters the events from a given `Session` object,
+        converts them into serialized strings, and stores them into the long-term
+        memory system. It is typically called after a chat session ends or when
+        important contextual data needs to be persisted for future retrieval.
+
+        Args:
+            session (Session):
+                The session object containing user ID and a list of events to persist.
+
+        Examples:
+            ```python
+            session = Session(
+                user_id="user_123",
+                events=[
+                    Event(role="user", content="I like Go and Rust."),
+                    Event(role="assistant", content="Got it! I'll remember that."),
+                ]
+            )
+
+            await memory_service.add_session_to_memory(session)
+            # Logs:
+            # Adding 2 events to long term memory: index=main
+            # Added 2 events to long term memory: index=main, user_id=user_123
+            ```
+        """
         user_id = session.user_id
         event_strings = self._filter_and_convert_events(session.events)
 
@@ -178,6 +292,36 @@ class LongTermMemory(BaseMemoryService, BaseModel):
     async def search_memory(
         self, *, app_name: str, user_id: str, query: str
     ) -> SearchMemoryResponse:
+        """Search memory entries for a given user and query.
+
+        This method queries the memory backend to retrieve the most relevant stored
+        memory chunks for a given user and text query. It then converts those raw
+        memory chunks into structured `MemoryEntry` objects to be returned to the caller.
+
+        Args:
+            app_name (str): Name of the application requesting the memory search.
+            user_id (str): Unique identifier for the user whose memory is being queried.
+            query (str): The text query to match against stored memory content.
+
+        Returns:
+            SearchMemoryResponse:
+                An object containing a list of `MemoryEntry` items representing
+                the retrieved memory snippets relevant to the query.
+
+        Examples:
+            ```python
+            response = await memory_service.search_memory(
+                app_name="chat_app",
+                user_id="user_123",
+                query="favorite programming language"
+            )
+
+            for memory in response.memories:
+                print(memory.content.parts[0].text)
+            # Output:
+            # User likes Python and TypeScript for backend development.
+            ```
+        """
         logger.info(f"Search memory with query={query}")
 
         memory_chunks = []

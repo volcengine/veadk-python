@@ -56,6 +56,110 @@ def _get_backend_cls(backend: str) -> type[BaseKnowledgebaseBackend]:
 
 
 class KnowledgeBase(BaseModel):
+    """A knowledge base for storing user-related information.
+
+    This class represents a knowledge base used to store and retrieve user-specific data.
+    It supports multiple backend options, including in-memory, OpenSearch, Redis, and Volcengine's
+    VikingDB. The knowledge base allows for efficient document retrieval based on similarity,
+    with the ability to configure backend-specific settings.
+
+    Attributes:
+        name (str): The name of the knowledge base. Default is "user_knowledgebase".
+        description (str): A description of the knowledge base. Default is "This knowledgebase stores some user-related information."
+        backend (Union[Literal["local", "opensearch", "viking", "redis"], BaseKnowledgebaseBackend]):
+            The type of backend to use for storing and querying the knowledge base. Supported options include:
+            - 'local' for in-memory storage (data is lost when the program exits).
+            - 'opensearch' for OpenSearch (requires OpenSearch cluster).
+            - 'viking' for Volcengine VikingDB (requires VikingDB service).
+            - 'redis' for Redis with vector search capability (requires Redis).
+            Default is 'local'.
+        backend_config (dict): Configuration dictionary for the selected backend.
+        top_k (int): The number of top similar documents to retrieve during a search. Default is 10.
+        app_name (str): The name of the application associated with the knowledge base. If index is not provided, this value will be set to `index`.
+        index (str): The name of the knowledge base index.
+
+    Notes:
+        Please ensure that you have set the embedding-related configurations in environment variables.
+
+    Examples:
+        ### Simple backend
+
+        Create a local knowledgebase:
+
+        ```python
+        from veadk import Agent, Runner
+        from veadk.knowledgebase.knowledgebase import KnowledgeBase
+        from veadk.memory.short_term_memory import ShortTermMemory
+
+        app_name = "veadk_playground_app"
+        user_id = "veadk_playground_user"
+        session_id = "veadk_playground_session"
+
+
+        knowledgebase = KnowledgeBase(backend="opensearch", app_name=app_name)
+        knowledgebase.add_from_files(files=[knowledgebase_file])
+
+        agent = Agent(knowledgebase=knowledgebase)
+
+        runner = Runner(
+            agent=agent,
+            short_term_memory=ShortTermMemory(),
+            app_name=app_name,
+            user_id=user_id,
+        )
+
+        response = await runner.run(
+            messages="Tell me the secret of green.", session_id=session_id
+        )
+        print(response)
+        ```
+
+        ### Initialize knowledgebase with metadata
+
+        ```python
+        from veadk.knowledgebase import KnowledgeBase
+
+        knowledgebase = KnowledgeBase(
+            name="user_data",
+            description="A knowledgebase contains user hobbies.",
+            index="my_app",
+        )
+        ```
+
+        ### Initialize knowledgebase with backend instance
+
+        ```python
+        import veadk.config  # noqa
+
+        from veadk.knowledgebase import KnowledgeBase
+        from veadk.knowledgebase.backends.in_memory_backend import InMemoryKnowledgeBackend
+
+        backend = InMemoryKnowledgeBackend(
+            index="my_app",
+            embedding_config=...,
+        )
+
+        knowledgebase = KnowledgeBase(
+            name="user_data",
+            description="A knowledgebase contains user hobbies.",
+            backend=backend,
+        )
+        ```
+
+        ### Initialize knowledgebase with backend config
+
+        ```python
+        from veadk.knowledgebase import KnowledgeBase
+
+        knowledgebase = KnowledgeBase(
+            name="user_data",
+            description="A knowledgebase contains user hobbies.",
+            backend="local",
+            backend_config={"index": "user_app"},
+        )
+        ```
+    """
+
     name: str = "user_knowledgebase"
 
     description: str = "This knowledgebase stores some user-related information."
@@ -63,23 +167,14 @@ class KnowledgeBase(BaseModel):
     backend: Union[
         Literal["local", "opensearch", "viking", "redis"], BaseKnowledgebaseBackend
     ] = "local"
-    """Knowledgebase backend type. Supported backends are:
-    - local: In-memory knowledgebase, data will be lost when the program exits.
-    - opensearch: OpenSearch knowledgebase, requires an OpenSearch cluster.
-    - viking: Volcengine VikingDB knowledgebase, requires VikingDB service.
-    - redis: Redis knowledgebase, requires Redis with vector search capability.
-    Default is `local`."""
 
     backend_config: dict = Field(default_factory=dict)
-    """Configuration for the backend"""
 
     top_k: int = 10
-    """Number of top similar documents to retrieve during search"""
 
     app_name: str = ""
 
     index: str = ""
-    """The name of the knowledgebase index. If not provided, it will be generated based on the `app_name`."""
 
     def model_post_init(self, __context: Any) -> None:
         if isinstance(self.backend, BaseKnowledgebaseBackend):
@@ -108,15 +203,81 @@ class KnowledgeBase(BaseModel):
         )
 
     def add_from_directory(self, directory: str, **kwargs) -> bool:
-        """Add knowledge from file path to knowledgebase"""
+        """Add knowledge from file path to knowledgebase.
+
+        Add the files in the directory to knowledgebase backend.
+
+        Args:
+            directory (str): The directory path that needs to store.
+
+        Returns:
+            bool: True if successfully store the knowledgebase, False otherwise.
+
+        Examples:
+            Store a directory to knowledgebase:
+
+            ```python
+            knowledgebase = Knowledgebase(backend="local")
+
+            if knowledgebase.add_from_directory("./knowledgebase"):
+                # add successfully
+                ...
+            else:
+                raise RuntimeError("Uploaded directory failed.")
+            ```
+        """
         return self._backend.add_from_directory(directory=directory, **kwargs)
 
     def add_from_files(self, files: list[str], **kwargs) -> bool:
-        """Add knowledge (e.g, documents, strings, ...) to knowledgebase"""
+        """Add knowledge files to knowledgebase.
+
+        Add a list of files to knowledgebase backend.
+
+        Args:
+            files (str): The list of files.
+
+        Returns:
+            bool: True if successfully store the knowledgebase, False otherwise.
+
+        Examples:
+            Store files to knowledgebase:
+
+            ```python
+            knowledgebase = Knowledgebase(backend="local")
+
+            if knowledgebase.add_from_files("./knowledgebase"):
+                # add successfully
+                ...
+            else:
+                raise RuntimeError("Uploaded files failed.")
+            ```
+        """
         return self._backend.add_from_files(files=files, **kwargs)
 
     def add_from_text(self, text: str | list[str], **kwargs) -> bool:
-        """Add knowledge from text to knowledgebase"""
+        """Add a piece of text or a list of text to knowledgebase.
+
+        The `text` can be a string or a list of string. The text will be embedded and stored by the corresponding backend.
+
+        Args:
+            text (str | list[str]): The text string or a list of text strings.
+
+        Returns:
+            bool: True if successfully store the knowledgebase, False otherwise.
+
+        Examples:
+            Store a string or a list of string to knowledgebase:
+
+            ```python
+            knowledgebase = Knowledgebase(backend="local")
+
+            if knowledgebase.add_from_text("./knowledgebase"):
+                # add successfully
+                ...
+            else:
+                raise RuntimeError("Uploaded text failed.")
+            ```
+        """
         return self._backend.add_from_text(text=text, **kwargs)
 
     def search(self, query: str, top_k: int = 0, **kwargs) -> list[KnowledgebaseEntry]:

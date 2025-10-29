@@ -44,13 +44,40 @@ except ImportError:
 
 
 class RedisKnowledgeBackend(BaseKnowledgebaseBackend):
+    """Redis based backend for knowledgebase.
+
+    Redis backend stores embedded text in a redis database by Llama-index.
+
+    Attributes:
+        redis_config (RedisConfig):
+            Redis database configurations.
+            Mainly contains redis database host, port, etc.
+        embedding_config (EmbeddingModelConfig):
+            Embedding configurations for text embedding and search.
+            Embedding config contains embedding model name and the corresponding dim.
+
+    Notes:
+        Please ensure that your redis database supports Redisaearch stack.
+
+    Examples:
+        Init a knowledgebase based on redis backend.
+
+        ```python
+        knowledgebase = Knowledgebase(backend="redis")
+        ```
+
+        With more configurations:
+
+        ```python
+        ...
+        ```
+    """
+
     redis_config: RedisConfig = Field(default_factory=RedisConfig)
-    """Redis client configs"""
 
     embedding_config: EmbeddingModelConfig | NormalEmbeddingModelConfig = Field(
         default_factory=EmbeddingModelConfig
     )
-    """Embedding model configs"""
 
     def model_post_init(self, __context: Any) -> None:
         # We will use `from_url` to init Redis client once the

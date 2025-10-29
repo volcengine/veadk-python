@@ -34,7 +34,62 @@ def _convert_agent_card_dict_to_obj(agent_card_dict: dict) -> AgentCard:
 
 
 class RemoteVeAgent(RemoteA2aAgent):
-    """Connect to remote agent on VeFaaS platform."""
+    """Connect to a remote agent on the VeFaaS platform.
+
+    This class provides an interface to remotely connect with an agent deployed on the VeFaaS platform. It automatically fetches the agent card (metadata) and configures an HTTP client for secure communication. Authentication can be handled either via a bearer token in the HTTP header or via a query string parameter.
+
+    The class extends `RemoteA2aAgent` to provide compatibility with the A2A (Agent-to-Agent) communication layer.
+
+    This constructor connects to a remote VeFaaS agent endpoint, retrieves its metadata (`agent_card`), and sets up an asynchronous HTTP client (`httpx.AsyncClient`) for subsequent communication. Depending on the provided authentication parameters, it supports three connection modes:
+    - **No authentication:** Directly fetches the agent card.
+    - **Header authentication:** Sends a bearer token in the `Authorization` header.
+    - **Query string authentication:** Appends the token to the URL query.
+
+    Attributes:
+        name (str):
+            A unique name identifying this remote agent instance.
+        url (str):
+            The base URL of the remote agent on the VeFaaS platform.
+        auth_token (str | None):
+            Optional authentication token used for secure access.
+            If not provided, the agent will be accessed without authentication.
+        auth_method (Literal["header", "querystring"] | None):
+            The method of attaching the authentication token.
+            - `"header"`: Token is passed via HTTP `Authorization` header.
+            - `"querystring"`: Token is passed as a query parameter.
+            - `None`: No authentication used.
+
+    Raises:
+        ValueError:
+            If an unsupported `auth_method` is provided when `auth_token` is set.
+        requests.RequestException:
+            If fetching the agent card from the remote URL fails.
+
+    Examples:
+        ```python
+        # Example 1: No authentication
+        agent = RemoteVeAgent(
+            name="public_agent",
+            url="https://vefaas.example.com/agents/public"
+        )
+
+        # Example 2: Using Bearer token in header
+        agent = RemoteVeAgent(
+            name="secured_agent",
+            url="https://vefaas.example.com/agents/secure",
+            auth_token="my_secret_token",
+            auth_method="header"
+        )
+
+        # Example 3: Using token in query string
+        agent = RemoteVeAgent(
+            name="query_agent",
+            url="https://vefaas.example.com/agents/query",
+            auth_token="my_secret_token",
+            auth_method="querystring"
+        )
+        ```
+    """
 
     def __init__(
         self,

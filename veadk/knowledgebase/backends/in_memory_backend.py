@@ -24,10 +24,19 @@ from veadk.knowledgebase.backends.utils import get_llama_index_splitter
 
 
 class InMemoryKnowledgeBackend(BaseKnowledgebaseBackend):
+    """A in-memory implementation backend for knowledgebase.
+
+    In-memory backend stores embedded text in a vector storage from Llama-index.
+
+    Attributes:
+        embedding_config (EmbeddingModelConfig):
+            Embedding config for text embedding and search.
+            Embedding config contains embedding model name and the corresponding dim.
+    """
+
     embedding_config: NormalEmbeddingModelConfig | EmbeddingModelConfig = Field(
         default_factory=EmbeddingModelConfig
     )
-    """Embedding model configs"""
 
     def model_post_init(self, __context: Any) -> None:
         self._embed_model = OpenAILikeEmbedding(

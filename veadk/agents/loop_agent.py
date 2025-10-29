@@ -29,25 +29,38 @@ logger = get_logger(__name__)
 
 
 class LoopAgent(GoogleADKLoopAgent):
-    """Loop Agent with Volcengine capabilities."""
+    """Loop Agent with several sub agents.
+
+    This agent is capable of looping through and executing all sub-agents sequentially
+    or based on specific conditions. It is designed to operate in environments where
+    multiple agents need to work together in a looped execution flow, such as handling
+    complex, multi-step tasks or workflows. The agent integrates Volcengine’s AI
+    capabilities and supports a variety of tools and tracers for enhanced functionality
+    and performance monitoring.
+
+    Attributes:
+        model_config (ConfigDict): Configuration dictionary for the model.
+        name (str): The name of the agent, default is "veLoopAgent".
+        description (str): A description of the agent, helpful in A2A scenarios.
+        instruction (str): Instructions or principles for function calling and agent execution.
+        sub_agents (list[BaseAgent]): A list of sub-agents managed by the loop agent. Each sub-agent
+            is executed in a looped sequence based on the agent's logic.
+        tracers (list[BaseTracer]): A list of tracers used for monitoring the agent's performance
+            and behavior during execution.
+
+    Examples:
+
+    """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
-    """The model config"""
 
     name: str = "veLoopAgent"
-    """The name of the agent."""
-
     description: str = DEFAULT_DESCRIPTION
-    """The description of the agent. This will be helpful in A2A scenario."""
-
     instruction: str = DEFAULT_INSTRUCTION
-    """The instruction for the agent, such as principles of function calling."""
 
     sub_agents: list[BaseAgent] = Field(default_factory=list, exclude=True)
-    """The sub agents provided to agent."""
 
     tracers: list[BaseTracer] = []
-    """The tracers provided to agent."""
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
