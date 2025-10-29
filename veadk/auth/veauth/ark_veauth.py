@@ -64,6 +64,8 @@ def get_ark_token(region: str = "cn-beijing") -> str:
         host="open.volcengineapi.com",
     )
     try:
-        return res["Result"]["ApiKey"]
+        api_key = res["Result"]["ApiKey"]
+        logger.info("Successfully fetching ARK API Key.")
+        return api_key
     except KeyError:
         raise ValueError(f"Failed to get ARK api key: {res}")

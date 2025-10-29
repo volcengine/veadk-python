@@ -18,7 +18,7 @@ from functools import cached_property
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from veadk.auth.veauth.apmplus_veauth import APMPlusVeAuth
+from veadk.auth.veauth.apmplus_veauth import get_apmplus_token
 from veadk.consts import (
     DEFAULT_APMPLUS_OTEL_EXPORTER_ENDPOINT,
     DEFAULT_APMPLUS_OTEL_EXPORTER_SERVICE_NAME,
@@ -46,7 +46,7 @@ class APMPlusConfig(BaseSettings):
     def otel_exporter_api_key(self) -> str:
         return (
             os.getenv("OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY")
-            or APMPlusVeAuth().token
+            or get_apmplus_token()
         )
 
 

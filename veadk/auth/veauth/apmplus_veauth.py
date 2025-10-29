@@ -14,52 +14,45 @@
 
 import os
 
-from typing_extensions import override
-
-from veadk.auth.veauth.base_veauth import BaseVeAuth
+from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 from veadk.utils.logger import get_logger
 from veadk.utils.volcengine_sign import ve_request
 
 logger = get_logger(__name__)
 
 
-class APMPlusVeAuth(BaseVeAuth):
-    def __init__(
-        self,
-        access_key: str = os.getenv("VOLCENGINE_ACCESS_KEY", ""),
-        secret_key: str = os.getenv("VOLCENGINE_SECRET_KEY", ""),
-        region: str = "cn-beijing",
-    ) -> None:
-        super().__init__(access_key, secret_key)
+def get_apmplus_token(region: str = "cn-beijing") -> str:
+    logger.info("Fetching APMPlus token...")
 
-        self.region = region
+    access_key = os.getenv("VOLCENGINE_ACCESS_KEY")
+    secret_key = os.getenv("VOLCENGINE_SECRET_KEY")
+    session_token = ""
 
-        self._token: str = ""
+    if not (access_key and secret_key):
+        # try to get from vefaas iam
+        cred = get_credential_from_vefaas_iam()
+        access_key = cred.access_key_id
+        secret_key = cred.secret_access_key
+        session_token = cred.session_token
 
-    @override
-    def _fetch_token(self) -> None:
-        logger.info("Fetching APMPlus token...")
-
-        res = ve_request(
-            request_body={},
-            action="GetAppKey",
-            ak=self.access_key,
-            sk=self.secret_key,
-            service="apmplus_server",
-            version="2024-07-30",
-            region=self.region,
-            host="open.volcengineapi.com",
+    res = ve_request(
+        request_body={},
+        header={
+            "X-Security-Token": session_token,
             # APMPlus frontend required
-            header={"X-Apmplus-Region": self.region.replace("-", "_")},
-        )
-        try:
-            self._token = res["data"]["app_key"]
-        except KeyError:
-            raise ValueError(f"Failed to get APMPlus token: {res}")
-
-    @property
-    def token(self) -> str:
-        if self._token:
-            return self._token
-        self._fetch_token()
-        return self._token
+            "X-Apmplus-Region": region.replace("-", "_"),
+        },
+        action="GetAppKey",
+        ak=access_key,
+        sk=secret_key,
+        service="apmplus_server",
+        version="2024-07-30",
+        region=region,
+        host="open.volcengineapi.com",
+    )
+    try:
+        api_key = res["data"]["app_key"]
+        logger.info("Successfully fetching APMPlus API Key.")
+        return api_key
+    except KeyError:
+        raise ValueError(f"Failed to get APMPlus token: {res}")

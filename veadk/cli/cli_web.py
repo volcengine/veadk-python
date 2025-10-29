@@ -132,6 +132,12 @@ def web(ctx, *args, **kwargs) -> None:
 
     from google.adk.cli.cli_tools_click import cli_web
 
-    extra_args = ctx.args
-    logger.debug(f"User args: {ctx.args}")
+    extra_args: list = ctx.args
+    logger.debug(f"User args: {extra_args}")
+
+    # set a default log level to avoid unnecessary outputs
+    # from Google ADK and Litellm
+    if "--log_level" not in extra_args:
+        extra_args.extend(["--log_level", "ERROR"])
+
     cli_web.main(args=extra_args, standalone_mode=False)
