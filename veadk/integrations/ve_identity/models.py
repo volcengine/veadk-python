@@ -64,16 +64,9 @@ class AuthRequestConfig(BaseModel):
     on_auth_url: Optional[Callable[[str], Any]] = None
     # Currently we only use auth_uri to initialize poller, may extend to support other fields like exchanged_auth_credential.
     oauth2_auth_poller: Optional[Callable[[Any], OAuth2AuthPoller]] = None
+    max_auth_cycles: Optional[int] = None
     identity_client: Optional[IdentityClient] = None
-    region: str = "cn-beijing"
-
-    @field_validator('region')
-    @classmethod
-    def validate_region_not_empty(cls, v: str) -> str:
-        """Validate that region is not empty."""
-        if not v or not v.strip():
-            raise ValueError("region cannot be empty")
-        return v.strip()
+    region: Optional[str] = None
 
 
 class OAuth2TokenResponse(BaseModel):
@@ -93,23 +86,27 @@ class OAuth2TokenResponse(BaseModel):
     authorization_url: Optional[str] = None
     resource_ref: Optional[str] = None
 
-    @field_validator('response_type')
+    @field_validator("response_type")
     @classmethod
     def validate_response_type(cls, v: str) -> str:
         """Validate that response_type is either 'token' or 'auth_url'."""
-        if v not in ('token', 'auth_url'):
+        if v not in ("token", "auth_url"):
             raise ValueError("response_type must be either 'token' or 'auth_url'")
         return v
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def validate_response_fields(self):
         """Validate that required fields are present based on response_type."""
-        if self.response_type == 'token':
+        if self.response_type == "token":
             if not self.access_token:
-                raise ValueError("access_token is required when response_type is 'token'")
-        elif self.response_type == 'auth_url':
+                raise ValueError(
+                    "access_token is required when response_type is 'token'"
+                )
+        elif self.response_type == "auth_url":
             if not self.authorization_url:
-                raise ValueError("authorization_url is required when response_type is 'auth_url'")
+                raise ValueError(
+                    "authorization_url is required when response_type is 'auth_url'"
+                )
         return self
 
 
@@ -126,7 +123,7 @@ class DCRRegistrationRequest(BaseModel):
     response_types: Optional[List[str]] = None
     token_endpoint_auth_method: Optional[str] = None
 
-    @field_validator('client_name')
+    @field_validator("client_name")
     @classmethod
     def validate_client_name_not_empty(cls, v: str) -> str:
         """Validate that client_name is not empty."""
@@ -151,7 +148,7 @@ class DCRRegistrationResponse(BaseModel):
     scope: Optional[str] = None
     token_endpoint_auth_method: Optional[str] = None
 
-    @field_validator('client_id')
+    @field_validator("client_id")
     @classmethod
     def validate_client_id_not_empty(cls, v: str) -> str:
         """Validate that client_id is not empty."""
@@ -173,7 +170,7 @@ class AuthorizationServerMetadata(BaseModel):
     register_endpoint: Optional[str] = None  # DCR endpoint
     response_types: Optional[List[str]] = None
 
-    @field_validator('authorization_endpoint', 'token_endpoint', 'issuer')
+    @field_validator("authorization_endpoint", "token_endpoint", "issuer")
     @classmethod
     def validate_url_not_empty(cls, v: str) -> str:
         """Validate that URL fields are not empty."""
@@ -188,7 +185,7 @@ class OAuth2Discovery(BaseModel):
     authorization_server_metadata: AuthorizationServerMetadata
     discovery_url: Optional[str] = None
 
-    @field_validator('discovery_url')
+    @field_validator("discovery_url")
     @classmethod
     def validate_discovery_url(cls, v: Optional[str]) -> Optional[str]:
         """Validate discovery URL if provided."""
@@ -208,7 +205,7 @@ class WorkloadToken(BaseModel):
     workload_access_token: str
     expires_at: int
 
-    @field_validator('workload_access_token')
+    @field_validator("workload_access_token")
     @classmethod
     def validate_token_not_empty(cls, v: str) -> str:
         """Validate that the workload access token is not empty."""
@@ -216,13 +213,10 @@ class WorkloadToken(BaseModel):
             raise ValueError("workload_access_token cannot be empty")
         return v.strip()
 
-    @field_validator('expires_at')
+    @field_validator("expires_at")
     @classmethod
     def validate_expires_at_positive(cls, v: int) -> int:
         """Validate that expires_at is a positive timestamp."""
         if v <= 0:
             raise ValueError("expires_at must be a positive Unix timestamp")
         return v
-
-
-

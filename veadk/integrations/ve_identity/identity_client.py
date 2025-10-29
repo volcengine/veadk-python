@@ -47,10 +47,14 @@ def refresh_credentials(func):
     1. Use initial credentials passed to the constructor
     2. Try to get credentials from environment variables
     3. Fall back to VeFaaS IAM file if available
+
+    Works with both sync and async functions.
     """
+    import asyncio
 
     @wraps(func)
-    async def wrapper(self: IdentityClient, *args, **kwargs):
+    def _refresh_creds(self: IdentityClient):
+        """Helper to refresh credentials."""
         # Try to get credentials from environment variables first
         ak = self._initial_access_key or os.getenv("VOLCENGINE_ACCESS_KEY", "")
         sk = self._initial_secret_key or os.getenv("VOLCENGINE_SECRET_KEY", "")
@@ -75,10 +79,19 @@ def refresh_credentials(func):
         self._api_client.api_client.configuration.sk = sk
         self._api_client.api_client.configuration.session_token = session_token
 
-        # Call the original method
-        return await func(self, *args, **kwargs)
-
-    return wrapper
+    # Check if the function is async
+    if asyncio.iscoroutinefunction(func):
+        @wraps(func)
+        async def async_wrapper(self: IdentityClient, *args, **kwargs):
+            _refresh_creds(self)
+            return await func(self, *args, **kwargs)
+        return async_wrapper
+    else:
+        @wraps(func)
+        def sync_wrapper(self: IdentityClient, *args, **kwargs):
+            _refresh_creds(self)
+            return func(self, *args, **kwargs)
+        return sync_wrapper
 
 
 class IdentityClient:
@@ -127,7 +140,7 @@ class IdentityClient:
         )
 
     @refresh_credentials
-    async def create_oauth2_credential_provider(
+    def create_oauth2_credential_provider(
         self, request_params: Dict[str, Any]
     ) -> volcenginesdkid.CreateOauth2CredentialProviderResponse:
         """Create an OAuth2 credential provider in the identity service.
@@ -140,14 +153,12 @@ class IdentityClient:
         """
         logger.info("Creating OAuth2 credential provider...")
 
-        # Use the SDK's built-in async support
-        return await self._api_client.create_oauth2_credential_provider(
+        return self._api_client.create_oauth2_credential_provider(
             volcenginesdkid.CreateOauth2CredentialProviderRequest(**request_params),
-            async_req=True,
         )
 
     @refresh_credentials
-    async def create_api_key_credential_provider(
+    def create_api_key_credential_provider(
         self, request_params: Dict[str, Any]
     ) -> volcenginesdkid.CreateApiKeyCredentialProviderResponse:
         """Create an API key credential provider in the identity service.
@@ -160,14 +171,12 @@ class IdentityClient:
         """
         logger.info("Creating API key credential provider...")
 
-        # Use the SDK's built-in async support
-        return await self._api_client.create_api_key_credential_provider(
+        return self._api_client.create_api_key_credential_provider(
             volcenginesdkid.CreateApiKeyCredentialProviderRequest(**request_params),
-            async_req=True,
         )
 
     @refresh_credentials
-    async def get_workload_access_token(
+    def get_workload_access_token(
         self,
         workload_name: str,
         user_token: Optional[str] = None,
@@ -214,46 +223,36 @@ class IdentityClient:
                 expires_at=expires_at_timestamp,
             )
 
-        # Use the SDK's built-in async support
         if user_token:
             if user_id is not None:
                 logger.warning("Both user_token and user_id provided, using user_token")
             logger.info("Retrieving workload access token with JWT authentication...")
-            resp: volcenginesdkid.GetWorkloadAccessTokenForJWTResponse = (
-                await self._api_client.get_workload_access_token_for_jwt(
-                    volcenginesdkid.GetWorkloadAccessTokenForJWTRequest(
-                        name=workload_name, user_token=user_token
-                    ),
-                    async_req=True,
-                )
+            resp: volcenginesdkid.GetWorkloadAccessTokenForJWTResponse = self._api_client.get_workload_access_token_for_jwt(
+                volcenginesdkid.GetWorkloadAccessTokenForJWTRequest(
+                    name=workload_name, user_token=user_token
+                ),
             )
 
         elif user_id:
             logger.info(
                 "Retrieving workload access token with user ID authentication..."
             )
-            resp: volcenginesdkid.GetWorkloadAccessTokenForUserIdResponse = (
-                await self._api_client.get_workload_access_token_for_user_id(
-                    volcenginesdkid.GetWorkloadAccessTokenForUserIdRequest(
-                        name=workload_name, user_id=user_id
-                    ),
-                    async_req=True,
-                )
+            resp: volcenginesdkid.GetWorkloadAccessTokenForUserIdResponse = self._api_client.get_workload_access_token_for_user_id(
+                volcenginesdkid.GetWorkloadAccessTokenForUserIdRequest(
+                    name=workload_name, user_id=user_id
+                ),
             )
         else:
             logger.info("Retrieving workload access token...")
-            resp: volcenginesdkid.GetWorkloadAccessTokenForUserIdResponse = (
-                await self._api_client.get_workload_access_token(
-                    volcenginesdkid.GetWorkloadAccessTokenRequest(name=workload_name),
-                    async_req=True,
-                )
+            resp: volcenginesdkid.GetWorkloadAccessTokenResponse = self._api_client.get_workload_access_token(
+                volcenginesdkid.GetWorkloadAccessTokenRequest(name=workload_name),
             )
 
         logger.info("Successfully retrieved workload access token")
         return convert_response(resp)
 
     @refresh_credentials
-    async def create_workload_identity(self, name: Optional[str] = None) -> Dict:
+    def create_workload_identity(self, name: Optional[str] = None) -> Dict:
         """Create a new workload identity.
 
         Args:
@@ -267,14 +266,12 @@ class IdentityClient:
         if not name:
             name = f"workload-{uuid.uuid4().hex[:8]}"
 
-        # Use the SDK's built-in async support
-        return await self._api_client.create_workload_identity(
+        return self._api_client.create_workload_identity(
             volcenginesdkid.CreateWorkloadIdentityRequest(name=name),
-            async_req=True,
         )
 
     @refresh_credentials
-    async def get_oauth2_token_or_auth_url(
+    def get_oauth2_token_or_auth_url(
         self,
         *,
         provider_name: str,
@@ -332,9 +329,7 @@ class IdentityClient:
                 ]
             }
 
-        response: volcenginesdkid.GetResourceOauth2TokenResponse = (
-            await self._api_client.get_resource_oauth2_token(request, async_req=True)
-        )
+        response = self._api_client.get_resource_oauth2_token(request)
 
         # Return token if available
         if response.access_token:
@@ -369,7 +364,7 @@ class IdentityClient:
         )
 
     @refresh_credentials
-    async def get_api_key(
+    def get_api_key(
         self, *, provider_name: str, agent_identity_token: str
     ) -> str:
         """Retrieve an API key from the identity service.
@@ -387,11 +382,7 @@ class IdentityClient:
             identity_token=agent_identity_token,
         )
 
-        # Use the SDK's built-in async support
-
-        response: volcenginesdkid.GetResourceApiKeyResponse = (
-            await self._api_client.get_resource_api_key(request, async_req=True)
-        )
+        response = self._api_client.get_resource_api_key(request)
 
         logger.info("Successfully retrieved API key")
         return response.api_key
@@ -531,4 +522,4 @@ class IdentityClient:
                 raise ValueError(f"DCR registration failed: {e}") from e
 
         # Create the credential provider with updated config
-        return await self.create_oauth2_credential_provider(request_params)
+        return self.create_oauth2_credential_provider(request_params)

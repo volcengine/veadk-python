@@ -33,6 +33,7 @@ from veadk.consts import (
     DEFAULT_MODEL_EXTRA_CONFIG,
 )
 from veadk.evaluation import EvalSetRecorder
+from veadk.integrations.ve_identity import AuthRequestProcessor
 from veadk.knowledgebase import KnowledgeBase
 from veadk.memory.long_term_memory import LongTermMemory
 from veadk.memory.short_term_memory import ShortTermMemory
@@ -167,9 +168,11 @@ class Agent(LlmAgent):
         session_id: str,
         message: types.Content,
         stream: bool,
+        auth_request_processor: AuthRequestProcessor,
     ):
         stream_mode = StreamingMode.SSE if stream else StreamingMode.NONE
 
+        @auth_request_processor.with_auth_loop(runner=runner, message=message)
         async def event_generator():
             async for event in runner.run_async(
                 user_id=user_id,
@@ -245,6 +248,7 @@ class Agent(LlmAgent):
         collect_runtime_data: bool = False,
         eval_set_id: str = "",
         save_session_to_memory: bool = False,
+        auth_request_processor: AuthRequestProcessor = AuthRequestProcessor(),
     ):
         """Running the agent. The runner and session service will be created automatically.
 
@@ -294,13 +298,15 @@ class Agent(LlmAgent):
         final_output = ""
         for _prompt in prompt:
             message = types.Content(role="user", parts=[types.Part(text=_prompt)])
-            final_output = await self._run(runner, user_id, session_id, message, stream)
+            final_output = await self._run(
+                runner, user_id, session_id, message, stream, auth_request_processor
+            )
 
         # VeADK features
         if save_session_to_memory:
-            assert self.long_term_memory is not None, (
-                "Long-term memory is not initialized in agent"
-            )
+            assert (
+                self.long_term_memory is not None
+            ), "Long-term memory is not initialized in agent"
             session = await session_service.get_session(
                 app_name=app_name,
                 user_id=user_id,

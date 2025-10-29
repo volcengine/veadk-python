@@ -142,7 +142,7 @@ class WorkloadTokenManager:
         user_id = None if user_token else tool_context._invocation_context.user_id
 
         # Request new token from identity service
-        workload_token: WorkloadToken = await self._identity_client.get_workload_access_token(
+        workload_token: WorkloadToken = self._identity_client.get_workload_access_token(
             workload_name=workload_name,
             user_token=user_token,
             user_id=user_id,

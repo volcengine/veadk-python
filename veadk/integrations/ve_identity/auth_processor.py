@@ -48,6 +48,8 @@ logger = get_logger(__name__)
 # Default configuration for token polling
 DEFAULT_POLLING_INTERVAL_SECONDS = 5
 DEFAULT_POLLING_TIMEOUT_SECONDS = 600
+# Authentication loop will break after this many cycles
+DEFAULT_MAX_CYCLES = 10
 
 
 class MockOauth2AuthPoller(OAuth2AuthPoller):
@@ -156,7 +158,7 @@ class _DefaultOauth2AuthPoller(OAuth2AuthPoller):
 class _NoOpAuthProcessor:
     """No-op auth processor that doesn't modify the event generator."""
 
-    def with_auth_loop(self, runner, message, max_cycles):
+    def with_auth_loop(self, runner, message):
         """Return a decorator that does nothing."""
 
         def decorator(func):
@@ -230,7 +232,7 @@ class AuthRequestProcessor:
         # Use custom poller or default poller
         # Create async token fetcher for default poller
         async def async_token_fetcher():
-            response = await self._identity_client.get_oauth2_token_or_auth_url(
+            response = self._identity_client.get_oauth2_token_or_auth_url(
                 **request_dict
             )
             return (
@@ -281,7 +283,6 @@ class AuthRequestProcessor:
         self,
         runner: Runner,
         message: types.Content,
-        max_cycles: int,
         task_updater: Optional[TaskUpdater] = None,
     ):
         """Decorator to add authentication loop handling to event generators.
@@ -293,7 +294,6 @@ class AuthRequestProcessor:
             @auth_processor.with_auth_loop(
                 runner=runner,
                 message=message,
-                max_cycles=len(tools) * 2 + 1
             )
             async def event_generator():
                 async for event in runner.run_async(
@@ -321,7 +321,6 @@ class AuthRequestProcessor:
         Args:
             runner: Runner instance (will be wrapped).
             message: Initial message to send.
-            max_cycles: Maximum number of authentication cycles to allow.
 
         Returns:
             Decorated generator function.
@@ -331,7 +330,7 @@ class AuthRequestProcessor:
             async def wrapper():
                 current_message = message
 
-                for _ in range(max_cycles):
+                for _ in range(self.config.max_auth_cycles or DEFAULT_MAX_CYCLES):
                     auth_request_event_id = None
                     auth_config = None
 

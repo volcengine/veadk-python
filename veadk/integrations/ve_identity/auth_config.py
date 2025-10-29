@@ -27,6 +27,20 @@ from veadk.integrations.ve_identity.models import OAuth2AuthPoller
 from veadk.integrations.ve_identity.identity_client import IdentityClient
 
 
+def _get_default_region() -> str:
+    """Get the default region from VeADK configuration.
+
+    Returns:
+        The configured region from VeIdentityConfig, or "cn-beijing" as fallback.
+    """
+    try:
+        from veadk.config import settings
+        return settings.veidentity.region
+    except Exception:
+        # Fallback to default if config loading fails
+        return "cn-beijing"
+
+
 class AuthConfig(BaseModel, ABC):
     """Base authentication configuration."""
 
@@ -34,7 +48,13 @@ class AuthConfig(BaseModel, ABC):
 
     provider_name: str
     identity_client: Optional[IdentityClient] = None
-    region: str = "cn-beijing"
+    region: str = None  # Will be set to default from config if not provided
+
+    def __init__(self, **data):
+        """Initialize AuthConfig with default region from VeADK config if not provided."""
+        if 'region' not in data or data['region'] is None:
+            data['region'] = _get_default_region()
+        super().__init__(**data)
 
     @field_validator("provider_name")
     @classmethod
@@ -138,9 +158,20 @@ VeIdentityAuthConfig = Union[ApiKeyAuthConfig, OAuth2AuthConfig, WorkloadAuthCon
 def api_key_auth(
     provider_name: str,
     identity_client: Optional[IdentityClient] = None,
-    region: str = "cn-beijing",
+    region: Optional[str] = None,
 ) -> ApiKeyAuthConfig:
-    """Create an API key authentication configuration."""
+    """Create an API key authentication configuration.
+
+    Args:
+        provider_name: Name of the credential provider.
+        identity_client: Optional IdentityClient instance.
+        region: VolcEngine region. If not provided, uses the region from VeADK config.
+
+    Returns:
+        ApiKeyAuthConfig instance.
+    """
+    if region is None:
+        region = _get_default_region()
     return ApiKeyAuthConfig(
         provider_name=provider_name, identity_client=identity_client, region=region
     )
@@ -149,9 +180,20 @@ def api_key_auth(
 def workload_auth(
     provider_name: str,
     identity_client: Optional[IdentityClient] = None,
-    region: str = "cn-beijing",
+    region: Optional[str] = None,
 ) -> WorkloadAuthConfig:
-    """Create a workload authentication configuration."""
+    """Create a workload authentication configuration.
+
+    Args:
+        provider_name: Name of the credential provider.
+        identity_client: Optional IdentityClient instance.
+        region: VolcEngine region. If not provided, uses the region from VeADK config.
+
+    Returns:
+        WorkloadAuthConfig instance.
+    """
+    if region is None:
+        region = _get_default_region()
     return WorkloadAuthConfig(
         provider_name=provider_name, identity_client=identity_client, region=region
     )
@@ -167,9 +209,27 @@ def oauth2_auth(
     on_auth_url: Optional[Callable[[str], Any]] = None,
     oauth2_auth_poller: Optional[Callable[[Any], OAuth2AuthPoller]] = None,
     identity_client: Optional[IdentityClient] = None,
-    region: str = "cn-beijing",
+    region: Optional[str] = None,
 ) -> OAuth2AuthConfig:
-    """Create an OAuth2 authentication configuration."""
+    """Create an OAuth2 authentication configuration.
+
+    Args:
+        provider_name: Name of the credential provider.
+        scopes: List of OAuth2 scopes.
+        auth_flow: Authentication flow type ("M2M" or "USER_FEDERATION").
+        callback_url: Optional callback URL for OAuth2.
+        force_authentication: Whether to force authentication.
+        response_for_auth_required: Response to return when auth is required.
+        on_auth_url: Callback function for auth URL.
+        oauth2_auth_poller: Callback function for auth polling.
+        identity_client: Optional IdentityClient instance.
+        region: VolcEngine region. If not provided, uses the region from VeADK config.
+
+    Returns:
+        OAuth2AuthConfig instance.
+    """
+    if region is None:
+        region = _get_default_region()
     return OAuth2AuthConfig(
         provider_name=provider_name,
         scopes=scopes,

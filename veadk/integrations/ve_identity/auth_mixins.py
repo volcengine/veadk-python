@@ -44,6 +44,7 @@ from veadk.integrations.ve_identity.auth_config import (
     ApiKeyAuthConfig,
     OAuth2AuthConfig,
     WorkloadAuthConfig,
+    _get_default_region,
 )
 from veadk.integrations.ve_identity.token_manager import get_workload_token
 
@@ -86,7 +87,7 @@ class BaseAuthMixin(ABC):
         *,
         provider_name: str,
         identity_client: Optional[IdentityClient] = None,
-        region: str = "cn-beijing",
+        region: Optional[str] = None,
         **kwargs,
     ):
         """Initialize the Identity authentication mixin.
@@ -94,7 +95,8 @@ class BaseAuthMixin(ABC):
         Args:
             provider_name: Name of the credential provider configured in identity service.
             identity_client: Optional IdentityClient instance. If not provided, creates a new one.
-            region: VolcEngine region for the identity client. Defaults to "cn-beijing".
+            region: VolcEngine region for the identity client. If not provided, uses the region
+                   from VeADK config. Defaults to "cn-beijing" if config is not available.
             **kwargs: Additional arguments passed to parent classes.
         """
         # Only pass kwargs to super() if we're in a multiple inheritance scenario
@@ -105,6 +107,10 @@ class BaseAuthMixin(ABC):
             # If super().__init__() doesn't accept kwargs (e.g., object.__init__),
             # call it without arguments
             super().__init__()
+
+        # Use provided region or get from config
+        if region is None:
+            region = _get_default_region()
 
         self._identity_client = identity_client or IdentityClient(region=region)
         self._provider_name = provider_name
@@ -207,7 +213,7 @@ class ApiKeyAuthMixin(BaseAuthMixin):
             )
 
             # Fetch API key from identity service
-            api_key = await self._identity_client.get_api_key(
+            api_key = self._identity_client.get_api_key(
                 provider_name=self._provider_name,
                 agent_identity_token=workload_token,
             )
@@ -386,7 +392,7 @@ class OAuth2AuthMixin(BaseAuthMixin):
         )
 
         # Request OAuth2 token or auth URL
-        return await self._identity_client.get_oauth2_token_or_auth_url(
+        return self._identity_client.get_oauth2_token_or_auth_url(
             provider_name=self._provider_name,
             agent_identity_token=workload_token,
             auth_flow=self._auth_flow,
@@ -512,7 +518,7 @@ class OAuth2AuthMixin(BaseAuthMixin):
         from veadk.integrations.ve_identity.auth_processor import _DefaultOauth2AuthPoller
 
         async def async_token_fetcher():
-            response = await self._identity_client.get_oauth2_token_or_auth_url(
+            response = self._identity_client.get_oauth2_token_or_auth_url(
                 **request_dict
             )
             return (
