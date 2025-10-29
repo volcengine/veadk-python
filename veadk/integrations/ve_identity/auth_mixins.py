@@ -343,8 +343,8 @@ class OAuth2AuthMixin(BaseAuthMixin):
     def __init__(
         self,
         *,
-        scopes: List[str],
-        auth_flow: Literal["M2M", "USER_FEDERATION"],
+        scopes: Optional[List[str]] = None,
+        auth_flow: Optional[Literal["M2M", "USER_FEDERATION"]] = None,
         callback_url: Optional[str] = None,
         force_authentication: bool = False,
         response_for_auth_required: Optional[str] = None,
@@ -356,9 +356,11 @@ class OAuth2AuthMixin(BaseAuthMixin):
         """Initialize the OAuth2 authentication mixin.
 
         Args:
-            scopes: List of OAuth2 scopes to request.
-            auth_flow: Authentication flow type - "M2M" for machine-to-machine or
-                      "USER_FEDERATION" for user-delegated access.
+            scopes: Optional list of OAuth2 scopes to request. If not provided,
+                   the control plane will use the default configured scopes.
+            auth_flow: Optional authentication flow type - "M2M" for machine-to-machine or
+                      "USER_FEDERATION" for user-delegated access. If not provided,
+                      the control plane will use the default configured flow.
             callback_url: OAuth2 redirect URL (must be pre-registered).
             force_authentication: If True, forces re-authentication even if cached token exists.
             response_for_auth_required: Custom response to return when user authorization is needed.

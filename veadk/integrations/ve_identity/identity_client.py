@@ -58,12 +58,16 @@ def refresh_credentials(func):
         # Try to get credentials from environment variables first
         ak = self._initial_access_key or os.getenv("VOLCENGINE_ACCESS_KEY", "")
         sk = self._initial_secret_key or os.getenv("VOLCENGINE_SECRET_KEY", "")
-        session_token = self._initial_session_token or os.getenv("VOLCENGINE_SESSION_TOKEN", "")
+        session_token = self._initial_session_token or os.getenv(
+            "VOLCENGINE_SESSION_TOKEN", ""
+        )
 
         # If credentials are not available, try to get from VeFaaS IAM
         if not (ak and sk):
             try:
-                logger.info("Credentials not found in environment, attempting to fetch from VeFaaS IAM...")
+                logger.info(
+                    "Credentials not found in environment, attempting to fetch from VeFaaS IAM..."
+                )
                 ve_iam_cred = get_credential_from_vefaas_iam()
                 ak = ve_iam_cred.access_key_id
                 sk = ve_iam_cred.secret_access_key
@@ -81,16 +85,20 @@ def refresh_credentials(func):
 
     # Check if the function is async
     if asyncio.iscoroutinefunction(func):
+
         @wraps(func)
         async def async_wrapper(self: IdentityClient, *args, **kwargs):
             _refresh_creds(self)
             return await func(self, *args, **kwargs)
+
         return async_wrapper
     else:
+
         @wraps(func)
         def sync_wrapper(self: IdentityClient, *args, **kwargs):
             _refresh_creds(self)
             return func(self, *args, **kwargs)
+
         return sync_wrapper
 
 
@@ -227,32 +235,40 @@ class IdentityClient:
             if user_id is not None:
                 logger.warning("Both user_token and user_id provided, using user_token")
             logger.info("Retrieving workload access token with JWT authentication...")
-            resp: volcenginesdkid.GetWorkloadAccessTokenForJWTResponse = self._api_client.get_workload_access_token_for_jwt(
-                volcenginesdkid.GetWorkloadAccessTokenForJWTRequest(
-                    name=workload_name, user_token=user_token
-                ),
+            resp: volcenginesdkid.GetWorkloadAccessTokenForJWTResponse = (
+                self._api_client.get_workload_access_token_for_jwt(
+                    volcenginesdkid.GetWorkloadAccessTokenForJWTRequest(
+                        name=workload_name, user_token=user_token
+                    ),
+                )
             )
 
         elif user_id:
             logger.info(
                 "Retrieving workload access token with user ID authentication..."
             )
-            resp: volcenginesdkid.GetWorkloadAccessTokenForUserIdResponse = self._api_client.get_workload_access_token_for_user_id(
-                volcenginesdkid.GetWorkloadAccessTokenForUserIdRequest(
-                    name=workload_name, user_id=user_id
-                ),
+            resp: volcenginesdkid.GetWorkloadAccessTokenForUserIdResponse = (
+                self._api_client.get_workload_access_token_for_user_id(
+                    volcenginesdkid.GetWorkloadAccessTokenForUserIdRequest(
+                        name=workload_name, user_id=user_id
+                    ),
+                )
             )
         else:
             logger.info("Retrieving workload access token...")
-            resp: volcenginesdkid.GetWorkloadAccessTokenResponse = self._api_client.get_workload_access_token(
-                volcenginesdkid.GetWorkloadAccessTokenRequest(name=workload_name),
+            resp: volcenginesdkid.GetWorkloadAccessTokenResponse = (
+                self._api_client.get_workload_access_token(
+                    volcenginesdkid.GetWorkloadAccessTokenRequest(name=workload_name),
+                )
             )
 
         logger.info("Successfully retrieved workload access token")
         return convert_response(resp)
 
     @refresh_credentials
-    def create_workload_identity(self, name: Optional[str] = None) -> Dict:
+    def create_workload_identity(
+        self, name: Optional[str] = None
+    ) -> volcenginesdkid.CreateWorkloadIdentityResponse:
         """Create a new workload identity.
 
         Args:
@@ -276,7 +292,7 @@ class IdentityClient:
         *,
         provider_name: str,
         agent_identity_token: str,
-        auth_flow: Literal["M2M", "USER_FEDERATION"],
+        auth_flow: Optional[Literal["M2M", "USER_FEDERATION"]] = None,
         scopes: Optional[List[str]] = None,
         callback_url: Optional[str] = None,
         force_authentication: bool = False,
@@ -291,9 +307,11 @@ class IdentityClient:
         Args:
             provider_name: Name of the credential provider configured in the identity service.
             agent_identity_token: Agent's workload access token for authentication.
-            auth_flow: OAuth2 flow type - "M2M" for machine-to-machine or
-                      "USER_FEDERATION" for user-delegated access.
-            scopes: Optional list of OAuth2 scopes to request.
+            auth_flow: Optional OAuth2 flow type - "M2M" for machine-to-machine or
+                      "USER_FEDERATION" for user-delegated access. If not provided,
+                      the control plane will use the default configured value.
+            scopes: Optional list of OAuth2 scopes to request. If not provided,
+                   the control plane will use the default configured scopes.
             callback_url: OAuth2 redirect URL (must be pre-registered with the provider).
             force_authentication: If True, forces re-authentication even if a valid
                                  token exists in the token vault.
@@ -307,8 +325,6 @@ class IdentityClient:
         Raises:
             RuntimeError: If the identity service returns neither a token nor an auth URL.
         """
-        logger.info("Requesting OAuth2 token or authorization URL...")
-
         # Build request parameters
         request = volcenginesdkid.GetResourceOauth2TokenRequest(
             provider_name=provider_name,
@@ -329,18 +345,18 @@ class IdentityClient:
                 ]
             }
 
-        response = self._api_client.get_resource_oauth2_token(request)
+        response: volcenginesdkid.GetResourceOauth2TokenResponse = (
+            self._api_client.get_resource_oauth2_token(request)
+        )
 
         # Return token if available
         if response.access_token:
-            logging.info("Successfully retrieved OAuth2 token")
             return OAuth2TokenResponse(
                 response_type="token", access_token=response.access_token
             )
 
         # Return authorization URL if token not available
         if response.authorization_url:
-            logger.info("Successfully retrieved authorization URL")
             return OAuth2TokenResponse(
                 response_type="auth_url",
                 authorization_url=response.authorization_url,
@@ -364,9 +380,7 @@ class IdentityClient:
         )
 
     @refresh_credentials
-    def get_api_key(
-        self, *, provider_name: str, agent_identity_token: str
-    ) -> str:
+    def get_api_key(self, *, provider_name: str, agent_identity_token: str) -> str:
         """Retrieve an API key from the identity service.
 
         Args:
@@ -382,7 +396,9 @@ class IdentityClient:
             identity_token=agent_identity_token,
         )
 
-        response = self._api_client.get_resource_api_key(request)
+        response: volcenginesdkid.GetResourceApiKeyResponse = (
+            self._api_client.get_resource_api_key(request)
+        )
 
         logger.info("Successfully retrieved API key")
         return response.api_key
@@ -504,15 +520,16 @@ class IdentityClient:
                 )
 
                 # Update config with DCR results
-                config["client_id"] = dcr_response.client_id
+                config["ClientId"] = dcr_response.client_id
                 if dcr_response.client_secret:
-                    config["client_secret"] = dcr_response.client_secret
+                    config["ClientSecret"] = dcr_response.client_secret
                 else:
-                    config["client_secret"] = "__EMPTY__"
+                    config["ClientSecret"] = "__EMPTY__"
 
                 # Update request params
                 request_params["config"] = config
 
+                print(request_params)
                 logger.info(
                     f"DCR registration successful, using client_id: {dcr_response.client_id}"
                 )

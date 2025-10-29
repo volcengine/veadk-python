@@ -103,7 +103,7 @@ class TestOAuth2Auth:
 
     def test_oauth2_auth_empty_scopes(self):
         """Test that empty scopes raises ValueError."""
-        with pytest.raises(ValueError, match="scopes cannot be empty"):
+        with pytest.raises(ValueError, match="scopes cannot be an empty list"):
             oauth2_auth(
                 provider_name="github",
                 scopes=[],

@@ -120,9 +120,6 @@ class WorkloadTokenManager:
         if cached_data and isinstance(cached_data, WorkloadToken):
             if cached_data.workload_access_token and cached_data.expires_at:
                 if not self._is_token_expired(cached_data.expires_at):
-                    logger.info(
-                        f"Using cached workload token for agent '{tool_context.agent_name}'"
-                    )
                     return cached_data.workload_access_token
                 else:
                     logger.info(

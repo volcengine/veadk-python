@@ -15,29 +15,14 @@
 from __future__ import annotations
 
 from typing import Any
-
 from typing_extensions import override
 
+from mcp.types import Tool as McpBaseTool
 from google.genai.types import FunctionDeclaration
 from google.adk.auth.auth_credential import AuthCredential
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.tool_context import ToolContext
 from google.adk.tools._gemini_schema_util import _to_gemini_schema
-
-# Attempt to import MCP Tool from the MCP library
-try:
-    from mcp.types import Tool as McpBaseTool
-except ImportError as e:
-    import sys
-
-    if sys.version_info < (3, 10):
-        raise ImportError(
-            "MCP Tool requires Python 3.10 or above. Please upgrade your Python"
-            " version."
-        ) from e
-    else:
-        raise e
-
 from google.adk.tools.mcp_tool.mcp_session_manager import MCPSessionManager
 from google.adk.tools.mcp_tool.mcp_session_manager import retry_on_closed_resource
 
@@ -47,7 +32,6 @@ from veadk.integrations.ve_identity.auth_mixins import (
     AuthRequiredException,
 )
 from veadk.integrations.ve_identity.utils import generate_headers
-
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)

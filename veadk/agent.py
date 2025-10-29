@@ -298,15 +298,13 @@ class Agent(LlmAgent):
         final_output = ""
         for _prompt in prompt:
             message = types.Content(role="user", parts=[types.Part(text=_prompt)])
-            final_output = await self._run(
-                runner, user_id, session_id, message, stream, auth_request_processor
-            )
+            final_output = await self._run(runner, user_id, session_id, message, stream, auth_request_processor)
 
         # VeADK features
         if save_session_to_memory:
-            assert (
-                self.long_term_memory is not None
-            ), "Long-term memory is not initialized in agent"
+            assert self.long_term_memory is not None, (
+                "Long-term memory is not initialized in agent"
+            )
             session = await session_service.get_session(
                 app_name=app_name,
                 user_id=user_id,

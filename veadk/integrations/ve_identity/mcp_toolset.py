@@ -25,26 +25,8 @@ from typing import Union
 from pydantic import model_validator, field_validator
 from typing_extensions import override
 
-from veadk.integrations.ve_identity.auth_config import VeIdentityAuthConfig
-from veadk.integrations.ve_identity.auth_mixins import VeIdentityAuthMixin
-from veadk.integrations.ve_identity.mcp_tool import VeIdentityMcpTool
-from veadk.integrations.ve_identity.utils import generate_headers
-
-# Attempt to import MCP Tool from the MCP library, and hints user to upgrade
-# their Python version to 3.10 if it fails.
-try:
-    from mcp import StdioServerParameters, ClientSession
-    from mcp.types import ListToolsResult
-except ImportError as e:
-    import sys
-
-    if sys.version_info < (3, 10):
-        raise ImportError(
-            "MCP Tool requires Python 3.10 or above. Please upgrade your Python"
-            " version."
-        ) from e
-    else:
-        raise e
+from mcp import StdioServerParameters, ClientSession
+from mcp.types import ListToolsResult
 
 from google.adk.tools.mcp_tool.mcp_session_manager import (
     retry_on_closed_resource,
@@ -57,6 +39,11 @@ from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.base_toolset import BaseToolset, ToolPredicate
 from google.adk.tools.tool_configs import ToolArgsConfig, BaseToolConfig
 from google.adk.agents.readonly_context import ReadonlyContext
+
+from veadk.integrations.ve_identity.auth_config import VeIdentityAuthConfig
+from veadk.integrations.ve_identity.auth_mixins import VeIdentityAuthMixin
+from veadk.integrations.ve_identity.mcp_tool import VeIdentityMcpTool
+from veadk.integrations.ve_identity.utils import generate_headers
 
 logger = logging.getLogger(__name__)
 
@@ -388,7 +375,10 @@ class VeIdentityMcpToolsetConfig(BaseToolConfig):
     def _validate_auth_config(cls, v):
         """Convert dict to proper auth config object."""
         if isinstance(v, dict):
-            from veadk.integrations.ve_identity.auth_config import api_key_auth, oauth2_auth
+            from veadk.integrations.ve_identity.auth_config import (
+                api_key_auth,
+                oauth2_auth,
+            )
 
             provider_name = v.get("provider_name")
             if not provider_name:

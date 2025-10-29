@@ -21,7 +21,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Callable, List, Literal, Optional, Union
 
-from pydantic import BaseModel, model_validator, field_validator
+from pydantic import BaseModel, field_validator
 
 from veadk.integrations.ve_identity.models import OAuth2AuthPoller
 from veadk.integrations.ve_identity.identity_client import IdentityClient
@@ -35,6 +35,7 @@ def _get_default_region() -> str:
     """
     try:
         from veadk.config import settings
+
         return settings.veidentity.region
     except Exception:
         # Fallback to default if config loading fails
@@ -52,8 +53,8 @@ class AuthConfig(BaseModel, ABC):
 
     def __init__(self, **data):
         """Initialize AuthConfig with default region from VeADK config if not provided."""
-        if 'region' not in data or data['region'] is None:
-            data['region'] = _get_default_region()
+        if "region" not in data or data["region"] is None:
+            data["region"] = _get_default_region()
         super().__init__(**data)
 
     @field_validator("provider_name")
@@ -82,10 +83,10 @@ class ApiKeyAuthConfig(AuthConfig):
 class OAuth2AuthConfig(AuthConfig):
     """OAuth2 authentication configuration."""
 
-    # Required fields
-    scopes: List[str]
-    auth_flow: Literal["M2M", "USER_FEDERATION"]
-    # Optional fields
+    # Optional fields - control plane will use defaults if not provided
+    scopes: Optional[List[str]] = None
+    auth_flow: Optional[Literal["M2M", "USER_FEDERATION"]] = None
+    # Additional optional fields
     callback_url: Optional[str] = None
     force_authentication: bool = False
     response_for_auth_required: Optional[Union[dict, str]] = None
@@ -94,10 +95,18 @@ class OAuth2AuthConfig(AuthConfig):
 
     @field_validator("scopes")
     @classmethod
-    def validate_scopes_not_empty(cls, v: List[str]) -> List[str]:
-        """Validate that scopes list is not empty and contains valid scope strings."""
+    def validate_scopes_not_empty(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        """Validate that scopes list is not empty and contains valid scope strings.
+
+        If scopes is None, the control plane will use default scopes.
+        """
+        if v is None:
+            return None
+
         if not v:
-            raise ValueError("scopes cannot be empty")
+            raise ValueError(
+                "scopes cannot be an empty list; use None to use control plane defaults"
+            )
 
         # Validate each scope is not empty
         for scope in v:
@@ -127,15 +136,6 @@ class OAuth2AuthConfig(AuthConfig):
             if not (v.startswith("http://") or v.startswith("https://")):
                 raise ValueError("callback_url must be a valid HTTP/HTTPS URL")
         return v
-
-    @model_validator(mode="after")
-    def _validate_required_fields(self):
-        """Validate required fields."""
-        if not self.scopes:
-            raise ValueError("scopes is required for OAuth2AuthConfig")
-        if not self.auth_flow:
-            raise ValueError("auth_flow is required for OAuth2AuthConfig")
-        return self
 
     @property
     def auth_type(self) -> str:
@@ -201,8 +201,8 @@ def workload_auth(
 
 def oauth2_auth(
     provider_name: str,
-    scopes: List[str],
-    auth_flow: Literal["M2M", "USER_FEDERATION"],
+    scopes: Optional[List[str]] = None,
+    auth_flow: Optional[Literal["M2M", "USER_FEDERATION"]] = None,
     callback_url: Optional[str] = None,
     force_authentication: bool = False,
     response_for_auth_required: Optional[Union[dict, str]] = None,
@@ -215,8 +215,10 @@ def oauth2_auth(
 
     Args:
         provider_name: Name of the credential provider.
-        scopes: List of OAuth2 scopes.
-        auth_flow: Authentication flow type ("M2M" or "USER_FEDERATION").
+        scopes: Optional list of OAuth2 scopes. If not provided, the control plane
+               will use the default configured scopes for the provider.
+        auth_flow: Optional authentication flow type ("M2M" or "USER_FEDERATION").
+                  If not provided, the control plane will use the default configured flow.
         callback_url: Optional callback URL for OAuth2.
         force_authentication: Whether to force authentication.
         response_for_auth_required: Response to return when auth is required.

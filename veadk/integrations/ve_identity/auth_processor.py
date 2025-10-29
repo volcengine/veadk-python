@@ -230,21 +230,19 @@ class AuthRequestProcessor:
                 on_auth_url(auth_uri)
 
         # Use custom poller or default poller
-        # Create async token fetcher for default poller
-        async def async_token_fetcher():
-            response = self._identity_client.get_oauth2_token_or_auth_url(
-                **request_dict
-            )
-            return (
-                OAuth2Auth(access_token=response.access_token)
-                if response.access_token and response.access_token.strip()
-                else None
-            )
-
         active_poller = (
             self.config.oauth2_auth_poller(auth_uri, request_dict)
             if self.config.oauth2_auth_poller
-            else _DefaultOauth2AuthPoller(auth_uri, async_token_fetcher)
+            else _DefaultOauth2AuthPoller(
+                auth_uri,
+                lambda: (
+                    lambda response: (
+                        OAuth2Auth(access_token=response.access_token)
+                        if response.access_token and response.access_token.strip()
+                        else None
+                    )
+                )(self._identity_client.get_oauth2_token_or_auth_url(**request_dict)),
+            )
         )
 
         # Poll for the oauth2 auth
