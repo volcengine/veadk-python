@@ -56,7 +56,11 @@ class EmbeddingModelConfig(BaseSettings):
 
     @cached_property
     def api_key(self) -> str:
-        return os.getenv("MODEL_EMBEDDING_API_KEY") or get_ark_token()
+        return (
+            os.getenv("MODEL_EMBEDDING_API_KEY")
+            or os.getenv("MODEL_AGENT_API_KEY")  # try to use agent's model api key
+            or get_ark_token()
+        )
 
 
 class NormalEmbeddingModelConfig(BaseSettings):

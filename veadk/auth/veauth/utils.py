@@ -50,6 +50,9 @@ def get_credential_from_vefaas_iam() -> VeIAMCredential:
         access_key = cred_dict["access_key_id"]
         secret_key = cred_dict["secret_access_key"]
         session_token = cred_dict["session_token"]
+
+        logger.info("Get credential from IAM file successfully.")
+
         return VeIAMCredential(
             access_key_id=access_key,
             secret_access_key=secret_key,
