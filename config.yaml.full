@@ -67,6 +67,9 @@ tool:
   computer_sandbox:
     url: #mcp sse/streamable-http url
     api_key: #mcp api key
+  # [optional] for Volcengine LLM Firewall https://www.volcengine.com/product/LLM-FW
+  llm_firewall:
+    app_id:
 
 
 observability:
