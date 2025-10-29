@@ -29,25 +29,37 @@ logger = get_logger(__name__)
 
 
 class ParallelAgent(GoogleADKParallelAgent):
-    """LLM-based Agent with Volcengine capabilities."""
+    """LLM-based Agent that can execute sub-agents in parallel.
+
+    This agent is capable of executing multiple sub-agents concurrently, making it suitable
+    for scenarios that require parallel execution of multiple tasks or operations. By leveraging
+    parallelism, the agent can handle more complex workflows and improve efficiency by performing
+    independent tasks simultaneously. This design is ideal for scenarios where tasks are independent
+    and can benefit from reduced execution time.
+
+    Attributes:
+        model_config (ConfigDict): Configuration dictionary for the model.
+        name (str): The name of the agent, default is "veParallelAgent".
+        description (str): A description of the agent, useful in A2A scenarios.
+        instruction (str): Instructions or principles for function calling and agent execution.
+        sub_agents (list[BaseAgent]): A list of sub-agents managed by the parallel agent.
+            Each sub-agent is executed concurrently.
+        tracers (list[BaseTracer]): A list of tracers used for monitoring the agent's performance
+            and behavior during parallel execution.
+
+    Examples:
+
+    """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
-    """The model config"""
 
     name: str = "veParallelAgent"
-    """The name of the agent."""
-
     description: str = DEFAULT_DESCRIPTION
-    """The description of the agent. This will be helpful in A2A scenario."""
-
     instruction: str = DEFAULT_INSTRUCTION
-    """The instruction for the agent, such as principles of function calling."""
 
     sub_agents: list[BaseAgent] = Field(default_factory=list, exclude=True)
-    """The sub agents provided to agent."""
 
     tracers: list[BaseTracer] = []
-    """The tracers provided to agent."""
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
