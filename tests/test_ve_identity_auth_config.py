@@ -31,7 +31,7 @@ class TestApiKeyAuth:
     def test_api_key_auth_basic(self):
         """Test creating basic API key auth config."""
         config = api_key_auth("test-provider")
-        
+
         assert isinstance(config, ApiKeyAuthConfig)
         assert config.provider_name == "test-provider"
         assert config.auth_type == "api_key"
@@ -41,7 +41,7 @@ class TestApiKeyAuth:
     def test_api_key_auth_with_region(self):
         """Test creating API key auth config with custom region."""
         config = api_key_auth("test-provider", region="us-east-1")
-        
+
         assert config.provider_name == "test-provider"
         assert config.region == "us-east-1"
         assert config.auth_type == "api_key"
@@ -63,11 +63,9 @@ class TestOAuth2Auth:
     def test_oauth2_auth_basic(self):
         """Test creating basic OAuth2 auth config."""
         config = oauth2_auth(
-            provider_name="github",
-            scopes=["repo", "user"],
-            auth_flow="M2M"
+            provider_name="github", scopes=["repo", "user"], auth_flow="M2M"
         )
-        
+
         assert isinstance(config, OAuth2AuthConfig)
         assert config.provider_name == "github"
         assert config.scopes == ["repo", "user"]
@@ -78,9 +76,10 @@ class TestOAuth2Auth:
 
     def test_oauth2_auth_with_all_params(self):
         """Test creating OAuth2 auth config with all parameters."""
+
         def on_auth_url_callback(url: str):
             pass
-        
+
         config = oauth2_auth(
             provider_name="github",
             scopes=["repo", "user"],
@@ -89,9 +88,9 @@ class TestOAuth2Auth:
             force_authentication=True,
             response_for_auth_required="Please authorize",
             on_auth_url=on_auth_url_callback,
-            region="us-west-2"
+            region="us-west-2",
         )
-        
+
         assert config.provider_name == "github"
         assert config.scopes == ["repo", "user"]
         assert config.auth_flow == "USER_FEDERATION"
@@ -104,39 +103,33 @@ class TestOAuth2Auth:
     def test_oauth2_auth_empty_scopes(self):
         """Test that empty scopes raises ValueError."""
         with pytest.raises(ValueError, match="scopes cannot be an empty list"):
-            oauth2_auth(
-                provider_name="github",
-                scopes=[],
-                auth_flow="M2M"
-            )
+            oauth2_auth(provider_name="github", scopes=[], auth_flow="M2M")
 
     def test_oauth2_auth_empty_scope_value(self):
         """Test that empty scope value raises ValueError."""
         with pytest.raises(ValueError, match="scope values cannot be empty"):
-            oauth2_auth(
-                provider_name="github",
-                scopes=["repo", ""],
-                auth_flow="M2M"
-            )
+            oauth2_auth(provider_name="github", scopes=["repo", ""], auth_flow="M2M")
 
     def test_oauth2_auth_duplicate_scopes_removed(self):
         """Test that duplicate scopes are removed."""
         config = oauth2_auth(
             provider_name="github",
             scopes=["repo", "user", "repo", "user"],
-            auth_flow="M2M"
+            auth_flow="M2M",
         )
-        
+
         assert config.scopes == ["repo", "user"]
 
     def test_oauth2_auth_invalid_callback_url(self):
         """Test that invalid callback URL raises ValueError."""
-        with pytest.raises(ValueError, match="callback_url must be a valid HTTP/HTTPS URL"):
+        with pytest.raises(
+            ValueError, match="callback_url must be a valid HTTP/HTTPS URL"
+        ):
             oauth2_auth(
                 provider_name="github",
                 scopes=["repo"],
                 auth_flow="M2M",
-                callback_url="invalid-url"
+                callback_url="invalid-url",
             )
 
     def test_oauth2_auth_valid_https_callback_url(self):
@@ -145,9 +138,9 @@ class TestOAuth2Auth:
             provider_name="github",
             scopes=["repo"],
             auth_flow="M2M",
-            callback_url="https://example.com/callback"
+            callback_url="https://example.com/callback",
         )
-        
+
         assert config.callback_url == "https://example.com/callback"
 
     def test_oauth2_auth_valid_http_callback_url(self):
@@ -156,9 +149,9 @@ class TestOAuth2Auth:
             provider_name="github",
             scopes=["repo"],
             auth_flow="M2M",
-            callback_url="http://localhost:8080/callback"
+            callback_url="http://localhost:8080/callback",
         )
-        
+
         assert config.callback_url == "http://localhost:8080/callback"
 
 
@@ -168,7 +161,7 @@ class TestWorkloadAuth:
     def test_workload_auth_basic(self):
         """Test creating basic workload auth config."""
         config = workload_auth("test-provider")
-        
+
         assert isinstance(config, WorkloadAuthConfig)
         assert config.provider_name == "test-provider"
         assert config.auth_type == "workload"
@@ -178,7 +171,7 @@ class TestWorkloadAuth:
     def test_workload_auth_with_region(self):
         """Test creating workload auth config with custom region."""
         config = workload_auth("test-provider", region="eu-west-1")
-        
+
         assert config.provider_name == "test-provider"
         assert config.region == "eu-west-1"
         assert config.auth_type == "workload"
@@ -187,4 +180,3 @@ class TestWorkloadAuth:
         """Test that empty provider_name raises ValueError."""
         with pytest.raises(ValueError, match="provider_name cannot be empty"):
             workload_auth("")
-

@@ -22,6 +22,7 @@ from google.adk.events import Event
 from google.adk.auth import AuthConfig
 from google.adk.auth.auth_credential import AuthCredential
 
+
 def is_pending_auth_event(event: Event) -> bool:
     """Check if an ADK event represents a pending authentication request.
 
@@ -102,9 +103,7 @@ def get_function_call_auth_config(event: Event) -> AuthConfig:
     raise ValueError(f"Cannot extract auth config from event: {event}")
 
 
-def generate_headers(
- credential: AuthCredential
-) -> Optional[dict[str, str]]:
+def generate_headers(credential: AuthCredential) -> Optional[dict[str, str]]:
     """Extracts authentication headers from credentials.
 
     Args:
@@ -132,7 +131,6 @@ def generate_headers(
                     credential.http.credentials.username
                     and credential.http.credentials.password
                 ):
-
                     credentials = f"{credential.http.credentials.username}:{credential.http.credentials.password}"
                     encoded_credentials = base64.b64encode(
                         credentials.encode()

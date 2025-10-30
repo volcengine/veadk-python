@@ -17,42 +17,41 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class VeIdentityConfig(BaseSettings):
     """Configuration for VolcEngine Identity Service.
-    
+
     This configuration class manages settings for Agent Identity service,
     including region and endpoint information.
-    
+
     Attributes:
         region: The VolcEngine region for Identity service.
         endpoint: The endpoint URL for Identity service API.
                   If not provided, will be auto-generated based on region.
     """
-    
+
     model_config = SettingsConfigDict(env_prefix="VEIDENTITY_")
-    
+
     region: str = "cn-beijing"
     """The VolcEngine region for Identity service.
     """
-    
+
     endpoint: str = ""
     """The endpoint URL for Identity service API.
     
     If not provided, the endpoint will be auto-generated based on the region.
     """
-    
+
     def get_endpoint(self) -> str:
         """Get the endpoint URL for Identity service.
-        
+
         Returns the configured endpoint if provided, otherwise generates
         the endpoint based on the region.
-        
+
         Returns:
             The endpoint URL for Identity service API.
-            
+
         Raises:
             ValueError: If region is not supported.
         """
         if self.endpoint:
             return self.endpoint
-        
-        return f"id.{self.region}.volces.com"
 
+        return f"id.{self.region}.volces.com"

@@ -85,7 +85,7 @@ class WaitInputOauth2AuthPoller(OAuth2AuthPoller):
         logger.info(
             f"Please open this URL in your browser to authorize: {self.auth_uri}"
         )
-        auth_response_uri = await get_user_input(f"Please enter the callback URL:\n> ")
+        auth_response_uri = await get_user_input("Please enter the callback URL:\n> ")
         auth_response_uri = auth_response_uri.strip()
 
         if not auth_response_uri:

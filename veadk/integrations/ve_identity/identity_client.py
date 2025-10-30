@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import uuid
 from functools import wraps
@@ -234,7 +233,6 @@ class IdentityClient:
         if user_token:
             if user_id is not None:
                 logger.warning("Both user_token and user_id provided, using user_token")
-            logger.info("Retrieving workload access token with JWT authentication...")
             resp: volcenginesdkid.GetWorkloadAccessTokenForJWTResponse = (
                 self._api_client.get_workload_access_token_for_jwt(
                     volcenginesdkid.GetWorkloadAccessTokenForJWTRequest(
@@ -244,9 +242,6 @@ class IdentityClient:
             )
 
         elif user_id:
-            logger.info(
-                "Retrieving workload access token with user ID authentication..."
-            )
             resp: volcenginesdkid.GetWorkloadAccessTokenForUserIdResponse = (
                 self._api_client.get_workload_access_token_for_user_id(
                     volcenginesdkid.GetWorkloadAccessTokenForUserIdRequest(
@@ -255,14 +250,12 @@ class IdentityClient:
                 )
             )
         else:
-            logger.info("Retrieving workload access token...")
             resp: volcenginesdkid.GetWorkloadAccessTokenResponse = (
                 self._api_client.get_workload_access_token(
                     volcenginesdkid.GetWorkloadAccessTokenRequest(name=workload_name),
                 )
             )
 
-        logger.info("Successfully retrieved workload access token")
         return convert_response(resp)
 
     @refresh_credentials

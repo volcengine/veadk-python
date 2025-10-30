@@ -517,7 +517,9 @@ class OAuth2AuthMixin(BaseAuthMixin):
 
     def _create_default_oauth2_poller(self, auth_uri: str, request_dict: dict):
         """Create a default OAuth2 poller for ReadonlyContext scenarios."""
-        from veadk.integrations.ve_identity.auth_processor import _DefaultOauth2AuthPoller
+        from veadk.integrations.ve_identity.auth_processor import (
+            _DefaultOauth2AuthPoller,
+        )
 
         async def async_token_fetcher():
             response = self._identity_client.get_oauth2_token_or_auth_url(

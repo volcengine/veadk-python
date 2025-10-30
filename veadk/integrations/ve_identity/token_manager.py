@@ -58,7 +58,9 @@ class WorkloadTokenManager:
         """
         self._identity_client = identity_client or IdentityClient(region=region)
 
-    def _build_cache_key(self, tool_context: Union[ToolContext|ReadonlyContext]) -> str:
+    def _build_cache_key(
+        self, tool_context: Union[ToolContext | ReadonlyContext]
+    ) -> str:
         """Build a unique cache key for storing the workload token.
 
         The cache key is composed of the agent name and user ID to ensure
@@ -87,7 +89,7 @@ class WorkloadTokenManager:
 
     async def get_workload_token(
         self,
-        tool_context: Union[ToolContext|ReadonlyContext],
+        tool_context: Union[ToolContext | ReadonlyContext],
         workload_name: Optional[str] = None,
         user_token: Optional[str] = None,
     ) -> str:
@@ -126,11 +128,6 @@ class WorkloadTokenManager:
                         f"Cached workload token expired for agent '{tool_context.agent_name}', refreshing..."
                     )
 
-        # Token not cached or expired - fetch a new one
-        logger.info(
-            f"Fetching new workload token for agent '{tool_context.agent_name}'..."
-        )
-
         # Default to agent_name if workload_name not specified
         if not workload_name:
             workload_name = tool_context.agent_name
@@ -147,15 +144,11 @@ class WorkloadTokenManager:
 
         tool_context._invocation_context.session.state[cache_key] = workload_token
 
-        logger.info(
-            f"Successfully cached new workload token for agent '{tool_context.agent_name}'",
-        )
-
         return workload_token.workload_access_token
 
 
 async def get_workload_token(
-    tool_context: Union[ToolContext|ReadonlyContext],
+    tool_context: Union[ToolContext | ReadonlyContext],
     identity_client: Optional[IdentityClient] = None,
     workload_name: Optional[str] = None,
     user_token: Optional[str] = None,

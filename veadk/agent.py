@@ -298,7 +298,9 @@ class Agent(LlmAgent):
         final_output = ""
         for _prompt in prompt:
             message = types.Content(role="user", parts=[types.Part(text=_prompt)])
-            final_output = await self._run(runner, user_id, session_id, message, stream, auth_request_processor)
+            final_output = await self._run(
+                runner, user_id, session_id, message, stream, auth_request_processor
+            )
 
         # VeADK features
         if save_session_to_memory:
