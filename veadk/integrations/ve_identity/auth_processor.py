@@ -19,12 +19,13 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import Awaitable, Callable, Optional, TYPE_CHECKING
+from typing import Any, Awaitable, Callable, Optional, TYPE_CHECKING
 
 from google.adk.auth import AuthConfig
 from google.genai import types
 from google.adk.auth.auth_credential import OAuth2Auth
 
+from veadk.processors.base_run_processor import BaseRunProcessor
 from veadk.integrations.ve_identity.identity_client import IdentityClient
 from veadk.integrations.ve_identity.models import AuthRequestConfig, OAuth2AuthPoller
 from veadk.integrations.ve_identity.utils import (
@@ -155,19 +156,7 @@ class _DefaultOauth2AuthPoller(OAuth2AuthPoller):
         )
 
 
-class _NoOpAuthProcessor:
-    """No-op auth processor that doesn't modify the event generator."""
-
-    def with_auth_loop(self, runner, message):
-        """Return a decorator that does nothing."""
-
-        def decorator(func):
-            return func
-
-        return decorator
-
-
-class AuthRequestProcessor:
+class AuthRequestProcessor(BaseRunProcessor):
     """Processor for handling authentication requests in agent conversations.
 
     This class manages the OAuth2 authentication flow when tools require user authorization.
@@ -277,19 +266,22 @@ class AuthRequestProcessor:
         logger.info(f"Auth request {auth_request_event_id} processed successfully")
         return auth_content
 
-    def with_auth_loop(
+    def process_run(
         self,
         runner: Runner,
         message: types.Content,
-        task_updater: Optional[TaskUpdater] = None,
+        **kwargs: Any,
     ):
-        """Decorator to add authentication loop handling to event generators.
+        """Process the agent run by wrapping the event generator with authentication loop.
+
+        This method implements the BaseRunProcessor interface and adds authentication
+        loop handling to event generators.
 
         This decorator intercepts runner.run_async calls and automatically handles
         authentication loops. The event_generator code can remain completely unchanged!
 
         Usage example:
-            @auth_processor.with_auth_loop(
+            @auth_processor.process_run(
                 runner=runner,
                 message=message,
             )
@@ -319,10 +311,14 @@ class AuthRequestProcessor:
         Args:
             runner: Runner instance (will be wrapped).
             message: Initial message to send.
+            **kwargs: Additional keyword arguments. Supports:
+                     - task_updater: Optional TaskUpdater for status updates.
 
         Returns:
             Decorated generator function.
         """
+        # Extract task_updater from kwargs
+        task_updater = kwargs.get("task_updater")
 
         def decorator(event_generator_func):
             async def wrapper():
@@ -338,13 +334,13 @@ class AuthRequestProcessor:
                     # Create a wrapped runner to intercept run_async calls
                     original_run_async = runner.run_async
 
-                    async def wrapped_run_async(**kwargs):
+                    async def wrapped_run_async(**run_kwargs):
                         nonlocal auth_request_event_id, auth_config
 
                         # Override the message with the current message
-                        kwargs["new_message"] = current_message
+                        run_kwargs["new_message"] = current_message
 
-                        async for event in original_run_async(**kwargs):
+                        async for event in original_run_async(**run_kwargs):
                             # Detect authentication events
                             if is_pending_auth_event(event):
                                 auth_request_event_id = get_function_call_id(event)
