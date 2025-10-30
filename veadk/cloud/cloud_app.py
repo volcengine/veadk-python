@@ -23,6 +23,7 @@ from a2a.types import AgentCard, Message, MessageSendParams, SendMessageRequest
 
 from veadk.config import getenv
 from veadk.utils.logger import get_logger
+from veadk.integrations.ve_faas.ve_faas import VeFaaS
 
 logger = get_logger(__name__)
 
@@ -242,6 +243,7 @@ class CloudApp:
 
     def update_self(
         self,
+        path: str,
         volcengine_ak: str = getenv("VOLCENGINE_ACCESS_KEY"),
         volcengine_sk: str = getenv("VOLCENGINE_SECRET_KEY"),
     ):
@@ -267,7 +269,25 @@ class CloudApp:
         if not volcengine_ak or not volcengine_sk:
             raise ValueError("Volcengine access key and secret key must be set.")
 
-        # TODO(floritange): support update cloud app
+        if not self.vefaas_application_id:
+            self.vefaas_application_id = self._get_vefaas_application_id_by_name()
+
+        vefaas_client = VeFaaS(access_key=volcengine_ak, secret_key=volcengine_sk)
+
+        try:
+            vefaas_application_url, app_id, function_id = (
+                vefaas_client._update_function_code(
+                    application_name=self.vefaas_application_name,
+                    path=path,
+                )
+            )
+            self.vefaas_endpoint = vefaas_application_url
+            self.vefaas_application_id = app_id
+            logger.info(
+                f"Cloud app {self.vefaas_application_name} updated successfully."
+            )
+        except Exception as e:
+            raise ValueError(f"Failed to update cloud app. Error: {e}")
 
     def delete_self(
         self,
@@ -392,8 +412,7 @@ class CloudApp:
                 # from CloudApp will not be `Task` type
                 return res.root.result  # type: ignore
             except Exception as e:
-                # TODO(floritange): show error log on VeFaaS function
-                print(e)
+                logger.error(f"Failed to send message to cloud app. Error: {e}")
                 return None
 
 
