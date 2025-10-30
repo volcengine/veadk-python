@@ -45,12 +45,10 @@ class LLMShieldPlugin(BasePlugin):
         ```python
         from veadk.tools.builtin_tools.llm_shield import content_safety
         agent = Agent(
-            before_agent_callback=content_safety.before_agent_callback,
             before_model_callback=content_safety.before_model_callback,
             after_model_callback=content_safety.after_model_callback,
             before_tool_callback=content_safety.before_tool_callback,
             after_tool_callback=content_safety.after_tool_callback,
-            after_agent_callback=content_safety.after_agent_callback
         )
         ```
     """
@@ -205,33 +203,11 @@ class LLMShieldPlugin(BasePlugin):
     def before_agent_callback(
         self, callback_context: CallbackContext, **kwargs
     ) -> None:
-        """
-        Callback executed before agent processing.
-
-        Currently implements no specific logic for pre-agent processing.
-
-        Args:
-            callback_context (CallbackContext): The callback execution context
-            **kwargs: Additional keyword arguments
-
-        Returns:
-            None
-        """
+        # TODO: Implement agent-level input validation and context analysis
         return None
 
     def after_agent_callback(self, callback_context: CallbackContext, **kwargs) -> None:
-        """
-        Callback executed after agent processing.
-
-        Currently implements no specific logic for post-agent processing.
-
-        Args:
-            callback_context (CallbackContext): The callback execution context
-            **kwargs: Additional keyword arguments
-
-        Returns:
-            None
-        """
+        # TODO: Implement post-agent analysis and context analysis
         return None
 
     def before_model_callback(
