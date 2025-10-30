@@ -13,12 +13,14 @@
 # limitations under the License.
 
 import json
+import os
 
 from google.adk.tools import ToolContext
 
 from veadk.config import getenv
 from veadk.utils.logger import get_logger
 from veadk.utils.volcengine_sign import ve_request
+from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 
 logger = get_logger(__name__)
 
@@ -51,8 +53,26 @@ def run_code(code: str, language: str, tool_context: ToolContext) -> str:
         f"Running code in language: {language}, session_id={session_id}, code={code}, tool_id={tool_id}, host={host}, service={service}, region={region}"
     )
 
-    access_key = getenv("VOLCENGINE_ACCESS_KEY")
-    secret_key = getenv("VOLCENGINE_SECRET_KEY")
+    ak = tool_context.state.get("VOLCENGINE_ACCESS_KEY")
+    sk = tool_context.state.get("VOLCENGINE_SECRET_KEY")
+    header = {}
+
+    if not (ak and sk):
+        logger.debug("Get AK/SK from tool context failed.")
+        ak = os.getenv("VOLCENGINE_ACCESS_KEY")
+        sk = os.getenv("VOLCENGINE_SECRET_KEY")
+        if not (ak and sk):
+            logger.debug(
+                "Get AK/SK from environment variables failed. Try to use credential from Iam."
+            )
+            credential = get_credential_from_vefaas_iam()
+            ak = credential.access_key_id
+            sk = credential.secret_access_key
+            header = {"X-Security-Token": credential.session_token}
+        else:
+            logger.debug("Successfully get AK/SK from environment variables.")
+    else:
+        logger.debug("Successfully get AK/SK from tool context.")
 
     res = ve_request(
         request_body={
@@ -68,14 +88,14 @@ def run_code(code: str, language: str, tool_context: ToolContext) -> str:
             ),
         },
         action="InvokeTool",
-        ak=access_key,
-        sk=secret_key,
+        ak=ak,
+        sk=sk,
         service=service,
         version="2025-10-30",
         region=region,
         host=host,
+        header=header,
     )
-
     logger.debug(f"Invoke run code response: {res}")
 
     try:
