@@ -113,7 +113,7 @@ class NoOpRunProcessor(BaseRunProcessor):
         """
 
         def decorator(
-            event_generator_func: Callable[[], AsyncGenerator]
+            event_generator_func: Callable[[], AsyncGenerator],
         ) -> Callable[[], AsyncGenerator]:
             return event_generator_func
 

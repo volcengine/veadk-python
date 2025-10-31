@@ -46,7 +46,6 @@ Examples:
 from veadk.integrations.ve_identity.auth_processor import (
     AuthRequestConfig,
     AuthRequestProcessor,
-    _NoOpAuthProcessor,
     MockOauth2AuthPoller,
     get_function_call_auth_config,
     get_function_call_id,
@@ -96,7 +95,6 @@ __all__ = [
     "VeIdentityAuthConfig",
     # Auth processor
     "AuthRequestProcessor",
-    "_NoOpAuthProcessor",
     "AuthRequestConfig",
     "is_pending_auth_event",
     "get_function_call_id",
