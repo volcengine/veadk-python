@@ -18,6 +18,7 @@ from typing import Any
 from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel, Field
 
+from veadk.configs.auth_configs import VeIdentityConfig
 from veadk.configs.database_configs import (
     MysqlConfig,
     OpensearchConfig,
@@ -63,6 +64,8 @@ class VeADKConfig(BaseModel):
     viking_knowledgebase: VikingKnowledgebaseConfig = Field(
         default_factory=VikingKnowledgebaseConfig
     )
+
+    veidentity: VeIdentityConfig = Field(default_factory=VeIdentityConfig)
 
 
 def getenv(
