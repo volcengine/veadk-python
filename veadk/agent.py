@@ -33,6 +33,7 @@ from veadk.consts import (
     DEFAULT_MODEL_EXTRA_CONFIG,
 )
 from veadk.evaluation import EvalSetRecorder
+from veadk.processors import BaseRunProcessor, NoOpRunProcessor
 from veadk.knowledgebase import KnowledgeBase
 from veadk.memory.long_term_memory import LongTermMemory
 from veadk.memory.short_term_memory import ShortTermMemory
@@ -150,8 +151,32 @@ class Agent(LlmAgent):
 
     tracers: list[BaseTracer] = []
 
+    run_processor: Optional[BaseRunProcessor] = Field(default=None, exclude=True)
+    """Optional run processor for intercepting and processing agent execution flows.
+
+    The run processor can be used to implement cross-cutting concerns such as:
+    - Authentication flows (e.g., OAuth2 via VeIdentity)
+    - Request/response logging
+    - Error handling and retry logic
+    - Performance monitoring
+
+    If not provided, a NoOpRunProcessor will be used by default.
+
+    Example:
+        from veadk.integrations.ve_identity import AuthRequestProcessor
+
+        agent = Agent(
+            name="my-agent",
+            run_processor=AuthRequestProcessor()
+        )
+    """
+
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
+
+        # Initialize run_processor if not provided
+        if self.run_processor is None:
+            self.run_processor = NoOpRunProcessor()
 
         # combine user model config with VeADK defaults
         headers = DEFAULT_MODEL_EXTRA_CONFIG["extra_headers"].copy()
@@ -220,9 +245,27 @@ class Agent(LlmAgent):
         session_id: str,
         message: types.Content,
         stream: bool,
+        run_processor: Optional[BaseRunProcessor] = None,
     ):
+        """Internal run method with run processor support.
+
+        Args:
+            runner: The Runner instance.
+            user_id: User ID for the session.
+            session_id: Session ID.
+            message: The message to send.
+            stream: Whether to stream the output.
+            run_processor: Optional run processor to use. If not provided, uses self.run_processor.
+
+        Returns:
+            The final output string.
+        """
         stream_mode = StreamingMode.SSE if stream else StreamingMode.NONE
 
+        # Use provided run_processor or fall back to instance's run_processor
+        processor = run_processor or self.run_processor
+
+        @processor.process_run(runner=runner, message=message)
         async def event_generator():
             async for event in runner.run_async(
                 user_id=user_id,
@@ -298,6 +341,7 @@ class Agent(LlmAgent):
         collect_runtime_data: bool = False,
         eval_set_id: str = "",
         save_session_to_memory: bool = False,
+        run_processor: Optional[BaseRunProcessor] = None,
     ):
         """Running the agent. The runner and session service will be created automatically.
 
@@ -314,6 +358,8 @@ class Agent(LlmAgent):
             collect_runtime_data (bool, optional): Whether to collect runtime data. Defaults to False.
             eval_set_id (str, optional): The id of the eval set. Defaults to "".
             save_session_to_memory (bool, optional): Whether to save this turn session to memory. Defaults to False.
+            run_processor (Optional[BaseRunProcessor], optional): Optional run processor to use for this run.
+                If not provided, uses the agent's default run_processor. Defaults to None.
         """
 
         logger.warning(
@@ -347,7 +393,9 @@ class Agent(LlmAgent):
         final_output = ""
         for _prompt in prompt:
             message = types.Content(role="user", parts=[types.Part(text=_prompt)])
-            final_output = await self._run(runner, user_id, session_id, message, stream)
+            final_output = await self._run(
+                runner, user_id, session_id, message, stream, run_processor
+            )
 
         # VeADK features
         if save_session_to_memory:
