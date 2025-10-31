@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import time
+from typing import Optional
 
 from deepeval import evaluate
 from deepeval.evaluate import CacheConfig
@@ -21,9 +22,9 @@ from deepeval.metrics import BaseMetric
 from deepeval.models import LocalModel
 from deepeval.test_case import LLMTestCase
 from deepeval.test_case.llm_test_case import ToolCall
-from typing_extensions import override
-from typing import Optional
 from google.adk.evaluation.eval_set import EvalSet
+from typing_extensions import override
+
 from veadk.config import getenv
 from veadk.evaluation.base_evaluator import BaseEvaluator, EvalResultData, MetricResult
 from veadk.evaluation.types import EvalResultCaseData, EvalResultMetadata
@@ -113,7 +114,9 @@ class DeepevalEvaluator(BaseEvaluator):
         super().__init__(agent=agent, name=name)
 
         if not judge_model_api_key:
-            judge_model_api_key = getenv("MODEL_JUDGE_API_KEY")
+            judge_model_api_key = getenv("MODEL_JUDGE_API_KEY") or getenv(
+                "MODEL_AGENT_API_KEY"
+            )
         if not judge_model_name:
             judge_model_name = getenv(
                 "MODEL_JUDGE_NAME",
