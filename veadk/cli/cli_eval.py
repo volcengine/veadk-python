@@ -205,7 +205,7 @@ def eval(
                 ],
                 model=judge_model,
             ),
-            ToolCorrectnessMetric(threshold=0.5),
+            ToolCorrectnessMetric(threshold=0.5, model=judge_model),
         ]
 
         asyncio.run(
