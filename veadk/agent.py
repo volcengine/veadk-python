@@ -33,10 +33,10 @@ from veadk.consts import (
     DEFAULT_MODEL_EXTRA_CONFIG,
 )
 from veadk.evaluation import EvalSetRecorder
-from veadk.processors import BaseRunProcessor, NoOpRunProcessor
 from veadk.knowledgebase import KnowledgeBase
 from veadk.memory.long_term_memory import LongTermMemory
 from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.processors import BaseRunProcessor, NoOpRunProcessor
 from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INSTRUCTION
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.logger import get_logger
@@ -297,6 +297,10 @@ class Agent(LlmAgent):
         enable_apmplus_tracer = os.getenv("ENABLE_APMPLUS", "false").lower() == "true"
         enable_cozeloop_tracer = os.getenv("ENABLE_COZELOOP", "false").lower() == "true"
         enable_tls_tracer = os.getenv("ENABLE_TLS", "false").lower() == "true"
+
+        if not (enable_apmplus_tracer or enable_cozeloop_tracer or enable_tls_tracer):
+            logger.info("No exporter enabled by env, skip prepare tracers.")
+            return
 
         if not self.tracers:
             from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
