@@ -16,7 +16,7 @@ import json
 import os
 
 import pytest
-from utils import generate_events, generate_session
+from .utils import generate_events, generate_session
 
 from veadk.evaluation.eval_set_recorder import EvalSetRecorder
 from veadk.memory.short_term_memory import ShortTermMemory
