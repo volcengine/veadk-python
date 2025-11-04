@@ -37,11 +37,15 @@ def run_code(code: str, language: str, tool_context: ToolContext) -> str:
     """
 
     tool_id = getenv("AGENTKIT_TOOL_ID")
-    host = getenv("AGENTKIT_TOOL_HOST")  # temporary host for code run tool
+
     service = getenv(
-        "AGENTKIT_TOOL_SERVICE_CODE"
+        "AGENTKIT_TOOL_SERVICE_CODE", "agentkit"
     )  # temporary service for code run tool
     region = getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
+    host = getenv(
+        "AGENTKIT_TOOL_HOST", service + "." + region + ".volces.com "
+    )  # temporary host for code run tool
+    logger.debug(f"tools endpoint: {host}")
 
     session_id = tool_context._invocation_context.session.id
     agent_name = tool_context._invocation_context.agent.name
