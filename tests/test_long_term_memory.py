@@ -101,6 +101,12 @@ class TestLongTermMemory:
             "Mocked VeFaaS IAM file not found"
         )
 
+        # Clear any cached embedding config to ensure fresh initialization
+        import importlib
+        import veadk.configs.model_configs
+
+        importlib.reload(veadk.configs.model_configs)
+
         # In this case, we expect an exception to be raised during initialization
         # because the embedding model requires an API key
         with pytest.raises((ValueError, FileNotFoundError)):
