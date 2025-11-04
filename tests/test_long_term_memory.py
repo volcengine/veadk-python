@@ -30,11 +30,11 @@ from veadk.memory.long_term_memory_backends.base_backend import (
 
 
 class TestLongTermMemory:
-    """测试LongTermMemory类"""
+    """Test LongTermMemory class"""
 
     @pytest.mark.asyncio
     async def test_long_term_memory_creation(self):
-        """测试LongTermMemory基本创建"""
+        """Test basic LongTermMemory creation"""
         os.environ["MODEL_EMBEDDING_API_KEY"] = "mocked_api_key"
         long_term_memory = LongTermMemory(backend="local")
 
@@ -56,10 +56,10 @@ class TestLongTermMemory:
 
     @pytest.mark.asyncio
     async def test_long_term_memory_with_custom_backend(self):
-        """测试LongTermMemory使用自定义backend实例"""
+        """Test LongTermMemory with custom backend instance"""
         os.environ["MODEL_EMBEDDING_API_KEY"] = "mocked_api_key"
 
-        # 创建模拟backend实例
+        # Create mock backend instance
         mock_backend = Mock(spec=BaseLongTermMemoryBackend)
         mock_backend.index = "test_index"
 
@@ -69,21 +69,21 @@ class TestLongTermMemory:
 
     @pytest.mark.asyncio
     async def test_long_term_memory_with_invalid_backend(self):
-        """测试LongTermMemory使用无效backend类型"""
+        """Test LongTermMemory with invalid backend type"""
         os.environ["MODEL_EMBEDDING_API_KEY"] = "mocked_api_key"
 
-        # 测试无效backend类型
+        # Test invalid backend type
         with pytest.raises(ValueError):
             LongTermMemory(backend="invalid_backend")
 
     @pytest.mark.asyncio
     async def test_long_term_memory_properties(self):
-        """测试LongTermMemory属性"""
+        """Test LongTermMemory properties"""
         os.environ["MODEL_EMBEDDING_API_KEY"] = "mocked_api_key"
 
         long_term_memory = LongTermMemory(backend="local")
 
-        # 测试基本属性
+        # Test basic properties
         assert hasattr(long_term_memory, "backend")
 
     @pytest.mark.asyncio
@@ -93,10 +93,10 @@ class TestLongTermMemory:
     async def test_long_term_memory_without_embedding_api_key(
         self, mock_get_credential, mock_get_ark_token
     ):
-        """测试在没有embedding api key时初始化LongTermMemory"""
-        # Mock get_ark_token函数来抛出ValueError异常，模拟无法获取ARK token的情况
+        """Test LongTermMemory initialization without embedding API key"""
+        # Mock get_ark_token function to throw ValueError exception, simulating inability to get ARK token
         mock_get_ark_token.side_effect = ValueError("Failed to get ARK api key")
-        # Mock get_credential_from_vefaas_iam函数来抛出FileNotFoundError异常，模拟无法从IAM文件获取凭证的情况
+        # Mock get_credential_from_vefaas_iam function to throw FileNotFoundError exception, simulating inability to get credentials from IAM file
         mock_get_credential.side_effect = FileNotFoundError(
             "Mocked VeFaaS IAM file not found"
         )
@@ -110,31 +110,31 @@ class TestLongTermMemory:
 
     @pytest.mark.asyncio
     async def test_long_term_memory_backend_initialization(self):
-        """测试LongTermMemory backend初始化过程"""
+        """Test LongTermMemory backend initialization process"""
         os.environ["MODEL_EMBEDDING_API_KEY"] = "mocked_api_key"
 
         long_term_memory = LongTermMemory(backend="local")
 
-        # 验证backend已正确初始化
+        # Verify backend is correctly initialized
         assert long_term_memory._backend is not None
         assert isinstance(long_term_memory._backend, InMemoryLongTermMemoryBackend)
 
     @pytest.mark.asyncio
     async def test_long_term_memory_string_representation(self):
-        """测试LongTermMemory的字符串表示"""
+        """Test LongTermMemory string representation"""
         os.environ["MODEL_EMBEDDING_API_KEY"] = "mocked_api_key"
 
         long_term_memory = LongTermMemory(backend="local")
 
-        # 测试字符串表示
+        # Test string representation
         str_repr = str(long_term_memory)
-        # 检查是否包含关键信息
+        # Check if contains key information
         assert "backend" in str_repr
         assert "local" in str_repr
 
     @pytest.mark.asyncio
     async def test_long_term_memory_with_app_name(self):
-        """测试LongTermMemory使用app_name参数"""
+        """Test LongTermMemory with app_name parameter"""
         os.environ["MODEL_EMBEDDING_API_KEY"] = "mocked_api_key"
 
         app_name = "test_app"
@@ -146,12 +146,12 @@ class TestLongTermMemory:
 
     @pytest.mark.asyncio
     async def test_long_term_memory_tool_integration(self):
-        """测试LongTermMemory与Agent工具的集成"""
+        """Test LongTermMemory integration with Agent tools"""
         os.environ["MODEL_EMBEDDING_API_KEY"] = "mocked_api_key"
 
         long_term_memory = LongTermMemory(backend="local")
 
-        # 创建多个Agent实例测试工具集成
+        # Create multiple Agent instances to test tool integration
         agents = []
         for i in range(3):
             agent = Agent(
@@ -166,18 +166,18 @@ class TestLongTermMemory:
             )
             agents.append(agent)
 
-        # 验证每个Agent都有正确的工具集成
+        # Verify each Agent has correct tool integration
         for agent in agents:
             assert load_memory in agent.tools
             assert agent.long_term_memory == long_term_memory
 
     @pytest.mark.asyncio
     async def test_long_term_memory_backend_types(self):
-        """测试LongTermMemory支持的不同backend类型"""
+        """Test different backend types supported by LongTermMemory"""
         os.environ["MODEL_EMBEDDING_API_KEY"] = "mocked_api_key"
 
-        # 测试支持的backend类型
-        supported_backends = ["local"]  # 目前只支持local
+        # Test supported backend types
+        supported_backends = ["local"]  # Currently only supports local
 
         for backend_type in supported_backends:
             long_term_memory = LongTermMemory(backend=backend_type)

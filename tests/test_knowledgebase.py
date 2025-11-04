@@ -22,12 +22,12 @@ from veadk.knowledgebase.backends.in_memory_backend import InMemoryKnowledgeBack
 
 
 class TestKnowledgeBase:
-    """测试KnowledgeBase类"""
+    """Test KnowledgeBase class"""
 
     @pytest.mark.asyncio
     async def test_knowledgebase_creation(self):
-        """测试KnowledgeBase基本创建"""
-        # Mock get_ark_token函数来避免实际的认证调用
+        """Test basic KnowledgeBase creation"""
+        # Mock get_ark_token function to avoid actual authentication calls
         with patch("veadk.auth.veauth.ark_veauth.get_ark_token") as mock_get_ark_token:
             mock_get_ark_token.return_value = "mocked_token"
 
@@ -41,14 +41,14 @@ class TestKnowledgeBase:
 
     @pytest.mark.asyncio
     async def test_knowledgebase_with_custom_backend(self):
-        """测试KnowledgeBase使用自定义backend实例"""
-        # Mock get_ark_token函数来避免实际的认证调用
+        """Test KnowledgeBase with custom backend instance"""
+        # Mock get_ark_token function to avoid actual authentication calls
         with patch("veadk.auth.veauth.ark_veauth.get_ark_token") as mock_get_ark_token:
             mock_get_ark_token.return_value = "mocked_token"
 
             os.environ["MODEL_EMBEDDING_API_KEY"] = "mocked_api_key"
 
-            # 创建实际的backend实例而不是Mock对象
+            # Create actual backend instance instead of Mock object
             from veadk.knowledgebase.backends.in_memory_backend import (
                 InMemoryKnowledgeBackend,
             )
@@ -60,18 +60,18 @@ class TestKnowledgeBase:
 
             assert kb._backend == custom_backend
             assert kb.app_name == app_name
-            assert kb.index == "test_index"  # index应该来自backend
+            assert kb.index == "test_index"  # index should come from backend
 
     @pytest.mark.asyncio
     async def test_knowledgebase_with_invalid_backend(self):
-        """测试KnowledgeBase使用无效backend类型"""
-        # Mock get_ark_token函数来避免实际的认证调用
+        """Test KnowledgeBase with invalid backend type"""
+        # Mock get_ark_token function to avoid actual authentication calls
         with patch("veadk.auth.veauth.ark_veauth.get_ark_token") as mock_get_ark_token:
             mock_get_ark_token.return_value = "mocked_token"
 
             os.environ["MODEL_EMBEDDING_API_KEY"] = "mocked_api_key"
 
-            # 测试无效backend类型
+            # Test invalid backend type
             with pytest.raises(ValueError):
                 KnowledgeBase(backend="invalid_backend", app_name="test_app")
 
