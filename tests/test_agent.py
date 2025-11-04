@@ -30,33 +30,29 @@ from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
 from veadk.evaluation import EvalSetRecorder
 
 
-@patch.dict("os.environ", {"MODEL_AGENT_API_KEY": "mock_api_key"})
-def test_agent():
-    """Test agent initialization and configuration merging."""
-    with patch.dict(
-        os.environ,
-        {
-            "MODEL_AGENT_NAME": "test_model",
-            "MODEL_AGENT_PROVIDER": "test_provider",
-            "MODEL_AGENT_API_BASE": "test_api_base",
-        },
-    ):
-        agent = Agent()
-        assert agent.name == DEFAULT_AGENT_NAME
-        # Model name might have default values, so we don't assert specific values
-        assert agent.model_name is not None
-        assert agent.model_provider is not None
-        assert agent.model_api_base is not None
-        assert isinstance(agent.model, LiteLlm)
-        assert agent.model.model == f"{agent.model_provider}/{agent.model_name}"
-        # extra_config might not be available on the model object
-        assert agent.knowledgebase is None
-        assert agent.long_term_memory is None
-        assert agent.short_term_memory is None
-        assert len(agent.tracers) == 1
-        assert isinstance(agent.tracers[0], OpentelemetryTracer)
-        assert agent.tools == []
-        assert agent.sub_agents == []
+def test_agent(monkeypatch):
+    monkeypatch.setenv("MODEL_AGENT_API_KEY", "mock_api_key")
+    monkeypatch.setenv("TRACING_EXPORTER_TYPE", "in-memory")
+    monkeypatch.setenv("MODEL_AGENT_NAME", "test_model")
+    monkeypatch.setenv("MODEL_AGENT_PROVIDER", "test_provider")
+    monkeypatch.setenv("MODEL_AGENT_API_BASE", "test_api_base")
+
+    agent = Agent(tracers=[OpentelemetryTracer()])
+    assert agent.name == DEFAULT_AGENT_NAME
+    # Model name might have default values, so we don't assert specific values
+    assert agent.model_name is not None
+    assert agent.model_provider is not None
+    assert agent.model_api_base is not None
+    assert isinstance(agent.model, LiteLlm)
+    assert agent.model.model == f"{agent.model_provider}/{agent.model_name}"
+    # extra_config might not be available on the model object
+    assert agent.knowledgebase is None
+    assert agent.long_term_memory is None
+    assert agent.short_term_memory is None
+    assert len(agent.tracers) == 1
+    assert isinstance(agent.tracers[0], OpentelemetryTracer)
+    assert agent.tools == []
+    assert agent.sub_agents == []
 
 
 # @patch.dict("os.environ", {"MODEL_AGENT_API_KEY": "mock_api_key"})
