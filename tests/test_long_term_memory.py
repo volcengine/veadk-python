@@ -101,12 +101,10 @@ class TestLongTermMemory:
             "Mocked VeFaaS IAM file not found"
         )
 
-        # In this case, no exception should be raised during initialization,
-        # as the key is only required when the embedding model is actually used.
-        try:
-            LongTermMemory()
-        except (ValueError, FileNotFoundError) as e:
-            pytest.fail(f"Initialization failed unexpectedly: {e}")
+        # In this case, we expect an exception to be raised during initialization
+        # because the embedding model requires an API key
+        with pytest.raises((ValueError, FileNotFoundError)):
+            LongTermMemory(backend="local")
 
     @pytest.mark.asyncio
     async def test_long_term_memory_backend_initialization(self):
