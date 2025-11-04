@@ -75,10 +75,16 @@ class TestShortTermMemoryProcessor:
 
     @patch("veadk.memory.short_term_memory_processor.completion")
     @patch("veadk.memory.short_term_memory_processor.render_prompt")
-    def test_after_load_session(self, mock_render_prompt, mock_completion, processor):
+    @patch("veadk.memory.short_term_memory_processor.settings")
+    def test_after_load_session(
+        self, mock_settings, mock_render_prompt, mock_completion, processor
+    ):
         """Test the core AI summarization logic in after_load_session."""
         # 1. Setup Mocks
         mock_render_prompt.return_value = "This is the generated prompt."
+
+        # Mock settings to avoid API key access issues
+        mock_settings.model.api_key = "mocked_api_key"
 
         # Mock the response from the LLM
         mock_llm_response = MagicMock()

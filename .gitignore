@@ -196,4 +196,4 @@ cython_debug/
 
 **/.nuxt
 **/.data
-**./output
+**./outputdebug_*.py
