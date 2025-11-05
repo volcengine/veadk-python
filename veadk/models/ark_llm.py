@@ -60,68 +60,29 @@ class ArkLlmClient(LiteLLMClient):
     async def acompletion(
         self, model, messages, tools, **kwargs
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-        # 1.1. Get optional_params using get_optional_params function
-        optional_params = get_optional_params(model=model, tools=tools, **kwargs)
-
-        # 1.2. Get litellm_params using get_litellm_params function
-        litellm_params = get_litellm_params(**kwargs)
-
-        # 1.3. Get headers by merging kwargs headers and extra_headers
-        headers = kwargs.get("headers", None) or kwargs.get("extra_headers", None)
-        if headers is None:
-            headers = {}
-        if kwargs.get("extra_headers") is not None:
-            headers.update(kwargs.get("extra_headers"))
-
-        # 1.4. Get logging_obj from kwargs or create new LiteLLMLoggingObj
-        logging_obj = kwargs.get("litellm_logging_obj", None)
-        if logging_obj is None:
-            logging_obj = Logging(
-                model=model,
-                messages=messages,
-                stream=kwargs.get("stream", False),
-                call_type="acompletion",
-                litellm_call_id=str(uuid.uuid4()),
-                function_id=str(uuid.uuid4()),
-                start_time=datetime.now(),
-                kwargs=kwargs,
-            )
-        # 1.5. Convert Message to `llm_provider` format
-        _, custom_llm_provider, _, _ = get_llm_provider(model=model)
-        if custom_llm_provider is not None and custom_llm_provider in [
-            provider.value for provider in LlmProviders
-        ]:
-            provider_config = ProviderConfigManager.get_provider_chat_config(
-                model=model, provider=LlmProviders(custom_llm_provider)
-            )
-            if provider_config is not None:
-                messages = provider_config.translate_developer_role_to_system_role(
-                    messages=messages
-                )
-        # 1.6 Add response_id to llm_response
+        # 1 Modify messages
         # Keep the header system-prompt and the user's messages
         messages = messages[:1] + messages[-1:]
-        # 1.7 Transform request to responses api format
-        request_data = self.transformation_handler.transform_request(
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            headers=headers,
-            litellm_logging_obj=logging_obj,
-            client=kwargs.get("client"),
-        )
 
-        # 2. Call litellm.aresponses with the transformed request data
+        # 2 Get request params
+        (
+            request_data,
+            optional_params,
+            litellm_params,
+            logging_obj,
+            custom_llm_provider,
+        ) = self._get_request_data(model, messages, tools, **kwargs)
+
+        # 3. Call litellm.aresponses with the transformed request data
         raw_response = await aresponses(
             **request_data,
         )
-
-        # 3.1 Create model_response object
+        # 4. Transform ResponsesAPIResponse
+        # 4.1 Create model_response object
         model_response = ModelResponse()
         setattr(model_response, "usage", litellm.Usage())
 
-        # 3.2 Transform ResponsesAPIResponse to ModelResponses
+        # 4.2 Transform ResponsesAPIResponse to ModelResponses
         if isinstance(raw_response, ResponsesAPIResponse):
             response = self.transformation_handler.transform_response(
                 model=model,
@@ -136,7 +97,7 @@ class ArkLlmClient(LiteLLMClient):
                 api_key=kwargs.get("api_key"),
                 json_mode=kwargs.get("json_mode"),
             )
-            # 3.2.1 Modify ModelResponse id
+            # 4.2.1 Modify ModelResponse id
             if raw_response and hasattr(raw_response, "id"):
                 response.id = raw_response.id
             return response
@@ -154,6 +115,73 @@ class ArkLlmClient(LiteLLMClient):
                 logging_obj=logging_obj,
             )
             return streamwrapper
+
+    def _get_request_data(self, model, messages, tools, **kwargs) -> tuple:
+        # 1. Get optional_params using get_optional_params function
+        optional_params = get_optional_params(model=model, tools=tools, **kwargs)
+
+        # 2. Get litellm_params using get_litellm_params function
+        litellm_params = get_litellm_params(**kwargs)
+
+        # 3. Get headers by merging kwargs headers and extra_headers
+        headers = kwargs.get("headers", None) or kwargs.get("extra_headers", None)
+        if headers is None:
+            headers = {}
+        if kwargs.get("extra_headers") is not None:
+            headers.update(kwargs.get("extra_headers"))
+
+        # 4. Get logging_obj from kwargs or create new LiteLLMLoggingObj
+        logging_obj = kwargs.get("litellm_logging_obj", None)
+        if logging_obj is None:
+            logging_obj = Logging(
+                model=model,
+                messages=messages,
+                stream=kwargs.get("stream", False),
+                call_type="acompletion",
+                litellm_call_id=str(uuid.uuid4()),
+                function_id=str(uuid.uuid4()),
+                start_time=datetime.now(),
+                kwargs=kwargs,
+            )
+        # 4. Convert Message to `llm_provider` format
+        _, custom_llm_provider, _, _ = get_llm_provider(model=model)
+        if custom_llm_provider is not None and custom_llm_provider in [
+            provider.value for provider in LlmProviders
+        ]:
+            provider_config = ProviderConfigManager.get_provider_chat_config(
+                model=model, provider=LlmProviders(custom_llm_provider)
+            )
+            if provider_config is not None:
+                messages = provider_config.translate_developer_role_to_system_role(
+                    messages=messages
+                )
+
+        # 5 Transform request to responses api format
+        request_data = self.transformation_handler.transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+            litellm_logging_obj=logging_obj,
+            client=kwargs.get("client"),
+        )
+
+        # 6 handler Missing field supply
+        if "extra_body" not in request_data and kwargs.get("extra_body"):
+            request_data["extra_body"] = kwargs.get("extra_body")
+        if "extra_query" not in request_data and kwargs.get("extra_query"):
+            request_data["extra_query"] = kwargs.get("extra_query")
+        if "extra_headers" not in request_data and kwargs.get("extra_headers"):
+            request_data["extra_headers"] = kwargs.get("extra_headers")
+
+        return (
+            request_data,
+            optional_params,
+            litellm_params,
+            logging_obj,
+            custom_llm_provider,
+        )
 
 
 class ArkLlm(LiteLlm):
