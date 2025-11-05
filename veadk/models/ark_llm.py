@@ -108,8 +108,18 @@ async def openai_response_async(request_data: dict):
     )
     filtered_request_data["model"] = model_name  # remove custom_llm_provider
 
+    # Remove tools in subsequent rounds (when previous_response_id is present)
     if (
         "tools" in filtered_request_data
+        and "previous_response_id" in filtered_request_data
+        and filtered_request_data["previous_response_id"] is not None
+    ):
+        # Remove tools in subsequent rounds regardless of caching status
+        del filtered_request_data["tools"]
+
+    # Ensure thinking field consistency for cache usage
+    if (
+        "thinking" in filtered_request_data
         and "extra_body" in filtered_request_data
         and isinstance(filtered_request_data["extra_body"], dict)
         and "caching" in filtered_request_data["extra_body"]
@@ -118,20 +128,37 @@ async def openai_response_async(request_data: dict):
         and "previous_response_id" in filtered_request_data
         and filtered_request_data["previous_response_id"] is not None
     ):
-        # Remove tools when caching is enabled and previous_response_id is present
-        del filtered_request_data["tools"]
+        # For cache usage, thinking should be consistent with previous round
+        # If thinking is present but inconsistent, remove it to avoid cache miss
+        # Note: This is a placeholder - actual consistency check requires state tracking
+        pass
 
-    # Remove instructions when caching is enabled with specific configuration
+    # Ensure store field is true or default when caching is enabled
     if (
-        "instructions" in filtered_request_data
-        and "extra_body" in filtered_request_data
+        "extra_body" in filtered_request_data
         and isinstance(filtered_request_data["extra_body"], dict)
         and "caching" in filtered_request_data["extra_body"]
         and isinstance(filtered_request_data["extra_body"]["caching"], dict)
         and filtered_request_data["extra_body"]["caching"].get("type") == "enabled"
     ):
-        # Remove instructions when caching is enabled
-        del filtered_request_data["instructions"]
+        # Set store to true when caching is enabled for writing
+        if "store" not in filtered_request_data:
+            filtered_request_data["store"] = True
+        elif filtered_request_data["store"] is False:
+            # Override false to true for cache writing
+            filtered_request_data["store"] = True
+
+    # [NOTE] Due to the Volcano Ark settings, there is a conflict between the cache and the instructions field.
+    # If a system prompt is needed, it should be placed in the system role message within the input, instead of using the instructions parameter.
+    # https://www.volcengine.com/docs/82379/1585128
+    instructions = filtered_request_data.pop("instructions", None)
+    filtered_request_data["input"] = [
+        {
+            "content": [{"text": instructions, "type": "input_text"}],
+            "role": "system",
+            "type": "message",
+        }
+    ] + filtered_request_data["input"]
 
     client = OpenAI(
         base_url=request_data["api_base"],
@@ -164,7 +191,8 @@ class ArkLlmClient(LiteLLMClient):
         ) = self._get_request_data(model, messages, tools, **kwargs)
 
         # 3. Call litellm.aresponses with the transformed request data
-        # Cannot be called directly; there is a litellm bug :
+        # [NOTE] Cannot be called directly; there is a litellm bug,
+        # Therefore, we cannot directly call litellm.aresponses:
         #      https://github.com/BerriAI/litellm/issues/16267
         # raw_response = await aresponses(
         #     **request_data,

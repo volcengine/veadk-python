@@ -201,10 +201,8 @@ class Agent(LlmAgent):
 
         if not self.model:
             if self.enable_responses:
-                # from veadk.utils.patches import patch_google_adk_call_llm_async
                 from veadk.models.ark_llm import ArkLlm
 
-                # patch_google_adk_call_llm_async()
                 self.model = ArkLlm(
                     model=f"{self.model_provider}/{self.model_name}",
                     api_key=self.model_api_key,
