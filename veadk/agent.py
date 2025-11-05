@@ -151,6 +151,8 @@ class Agent(LlmAgent):
 
     tracers: list[BaseTracer] = []
 
+    enable_responses: bool = False
+
     run_processor: Optional[BaseRunProcessor] = Field(default=None, exclude=True)
     """Optional run processor for intercepting and processing agent execution flows.
 
@@ -197,12 +199,22 @@ class Agent(LlmAgent):
         logger.info(f"Model extra config: {self.model_extra_config}")
 
         if not self.model:
-            self.model = LiteLlm(
-                model=f"{self.model_provider}/{self.model_name}",
-                api_key=self.model_api_key,
-                api_base=self.model_api_base,
-                **self.model_extra_config,
-            )
+            if self.enable_responses:
+                from veadk.models.ark_llm import ArkLlm
+
+                self.model = ArkLlm(
+                    model=f"{self.model_provider}/{self.model_name}",
+                    api_key=self.model_api_key,
+                    api_base=self.model_api_base,
+                    **self.model_extra_config,
+                )
+            else:
+                self.model = LiteLlm(
+                    model=f"{self.model_provider}/{self.model_name}",
+                    api_key=self.model_api_key,
+                    api_base=self.model_api_base,
+                    **self.model_extra_config,
+                )
             logger.debug(
                 f"LiteLLM client created with config: {self.model_extra_config}"
             )
