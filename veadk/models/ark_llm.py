@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Dict, Union, AsyncGenerator
 
 import litellm
+from openai import OpenAI
 from google.adk.models import LlmRequest, LlmResponse
 from google.adk.models.lite_llm import (
     LiteLlm,
@@ -17,7 +18,7 @@ from google.adk.models.lite_llm import (
     _model_response_to_generate_content_response,
 )
 from google.genai import types
-from litellm import Logging, aresponses, ChatCompletionAssistantMessage
+from litellm import Logging, ChatCompletionAssistantMessage
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
 )
@@ -41,6 +42,40 @@ litellm.add_function_to_prompt = True
 
 logger = get_logger(__name__)
 
+openai_supported_fields = [
+    "stream",
+    "background",
+    "include",
+    "input",
+    "instructions",
+    "max_output_tokens",
+    "max_tool_calls",
+    "metadata",
+    "model",
+    "parallel_tool_calls",
+    "previous_response_id",
+    "prompt",
+    "prompt_cache_key",
+    "reasoning",
+    "safety_identifier",
+    "service_tier",
+    "store",
+    "stream",
+    "stream_options",
+    "temperature",
+    "text",
+    "tool_choice",
+    "tools",
+    "top_logprobs",
+    "top_p",
+    "truncation",
+    "user",
+    "extra_headers",
+    "extra_query",
+    "extra_body",
+    "timeout",
+]
+
 
 def _add_response_id_to_llm_response(
     llm_response: LlmResponse, response: ModelResponse
@@ -50,6 +85,52 @@ def _add_response_id_to_llm_response(
             llm_response.custom_metadata = {}
         llm_response.custom_metadata["response_id"] = response["id"]
     return llm_response
+
+
+async def openai_response_async(request_data: dict):
+    # Filter out fields that are not supported by OpenAI SDK
+    filtered_request_data = {
+        key: value
+        for key, value in request_data.items()
+        if key in openai_supported_fields and value is not None
+    }
+    model_name, custom_llm_provider, _, _ = get_llm_provider(
+        model=request_data["model"]
+    )
+    filtered_request_data["model"] = model_name  # remove custom_llm_provider
+
+    if (
+        "tools" in filtered_request_data
+        and "extra_body" in filtered_request_data
+        and isinstance(filtered_request_data["extra_body"], dict)
+        and "caching" in filtered_request_data["extra_body"]
+        and isinstance(filtered_request_data["extra_body"]["caching"], dict)
+        and filtered_request_data["extra_body"]["caching"].get("type") == "enabled"
+        and "previous_response_id" in filtered_request_data
+        and filtered_request_data["previous_response_id"] is not None
+    ):
+        # Remove tools when caching is enabled and previous_response_id is present
+        del filtered_request_data["tools"]
+
+    # Remove instructions when caching is enabled with specific configuration
+    if (
+        "instructions" in filtered_request_data
+        and "extra_body" in filtered_request_data
+        and isinstance(filtered_request_data["extra_body"], dict)
+        and "caching" in filtered_request_data["extra_body"]
+        and isinstance(filtered_request_data["extra_body"]["caching"], dict)
+        and filtered_request_data["extra_body"]["caching"].get("type") == "enabled"
+    ):
+        # Remove instructions when caching is enabled
+        del filtered_request_data["instructions"]
+
+    client = OpenAI(
+        base_url=request_data["api_base"],
+        api_key=request_data["api_key"],
+    )
+    openai_response = client.responses.create(**filtered_request_data)
+    raw_response = ResponsesAPIResponse(**openai_response.model_dump())
+    return raw_response
 
 
 class ArkLlmClient(LiteLLMClient):
@@ -74,9 +155,13 @@ class ArkLlmClient(LiteLLMClient):
         ) = self._get_request_data(model, messages, tools, **kwargs)
 
         # 3. Call litellm.aresponses with the transformed request data
-        raw_response = await aresponses(
-            **request_data,
-        )
+        # Cannot be called directly; there is a litellm bug :
+        #      https://github.com/BerriAI/litellm/issues/16267
+        # raw_response = await aresponses(
+        #     **request_data,
+        # )
+        raw_response = await openai_response_async(request_data)
+
         # 4. Transform ResponsesAPIResponse
         # 4.1 Create model_response object
         model_response = ModelResponse()
