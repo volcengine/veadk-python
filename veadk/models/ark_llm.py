@@ -1,9 +1,11 @@
 import json
 import uuid
 from datetime import datetime
-from typing import Any, Dict, Union, AsyncGenerator
+from typing import Any, Dict, Union, AsyncGenerator, Optional
 
 import litellm
+from google.adk.agents.callback_context import CallbackContext
+from google.adk.models.cache_metadata import CacheMetadata
 from openai import OpenAI
 from google.adk.models import LlmRequest, LlmResponse
 from google.adk.models.lite_llm import (
@@ -77,13 +79,20 @@ openai_supported_fields = [
 ]
 
 
-def _add_response_id_to_llm_response(
+def _add_response_data_to_llm_response(
     llm_response: LlmResponse, response: ModelResponse
 ) -> LlmResponse:
+    # add responses id
     if not response.id.startswith("chatcmpl"):
         if llm_response.custom_metadata is None:
             llm_response.custom_metadata = {}
         llm_response.custom_metadata["response_id"] = response["id"]
+    # add responses cache data
+    if response.get("usage", {}).get("prompt_tokens_details"):
+        if llm_response.usage_metadata:
+            llm_response.usage_metadata.cached_content_token_count = (
+                response.get("usage", {}).get("prompt_tokens_details").cached_tokens
+            )
     return llm_response
 
 
@@ -423,5 +432,27 @@ class ArkLlm(LiteLlm):
             # Transport response id
             # yield _model_response_to_generate_content_response(response)
             llm_response = _model_response_to_generate_content_response(response)
-            yield _add_response_id_to_llm_response(llm_response, response)
+            yield _add_response_data_to_llm_response(llm_response, response)
             # ------------------------------------------------------ #
+
+
+def add_previous_response_id(
+    callback_context: CallbackContext, llm_request: LlmRequest
+) -> Optional[LlmResponse]:
+    invocation_context = callback_context._invocation_context
+    events = invocation_context.session.events
+    if (
+        events
+        and len(events) >= 2
+        and events[-2].custom_metadata
+        and "response_id" in events[-2].custom_metadata
+    ):
+        previous_response_id = events[-2].custom_metadata["response_id"]
+        llm_request.cache_metadata = CacheMetadata(
+            cache_name=previous_response_id,
+            expire_time=0,
+            fingerprint="",
+            invocations_used=0,
+            cached_contents_count=0,
+        )
+    return

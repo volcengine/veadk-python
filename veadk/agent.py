@@ -36,6 +36,7 @@ from veadk.evaluation import EvalSetRecorder
 from veadk.knowledgebase import KnowledgeBase
 from veadk.memory.long_term_memory import LongTermMemory
 from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.models.ark_llm import add_previous_response_id
 from veadk.processors import BaseRunProcessor, NoOpRunProcessor
 from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INSTRUCTION
 from veadk.tracing.base_tracer import BaseTracer
@@ -200,16 +201,20 @@ class Agent(LlmAgent):
 
         if not self.model:
             if self.enable_responses:
-                from veadk.utils.patches import patch_google_adk_call_llm_async
+                # from veadk.utils.patches import patch_google_adk_call_llm_async
                 from veadk.models.ark_llm import ArkLlm
 
-                patch_google_adk_call_llm_async()
+                # patch_google_adk_call_llm_async()
                 self.model = ArkLlm(
                     model=f"{self.model_provider}/{self.model_name}",
                     api_key=self.model_api_key,
                     api_base=self.model_api_base,
                     **self.model_extra_config,
                 )
+                if not self.before_model_callback:
+                    self.before_model_callback = add_previous_response_id
+                else:
+                    self.before_model_callback.append(add_previous_response_id)
             else:
                 self.model = LiteLlm(
                     model=f"{self.model_provider}/{self.model_name}",
