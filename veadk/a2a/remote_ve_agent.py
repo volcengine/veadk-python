@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import json
-from typing import Literal
+from typing import Literal, Optional
 
 import httpx
 import requests
@@ -97,49 +97,50 @@ class RemoteVeAgent(RemoteA2aAgent):
         url: str,
         auth_token: str | None = None,
         auth_method: Literal["header", "querystring"] | None = None,
+        httpx_client: Optional[httpx.AsyncClient] = None,
     ):
-        if not auth_token:
-            agent_card_dict = requests.get(url + AGENT_CARD_WELL_KNOWN_PATH).json()
-            # replace agent_card_url with actual host
-            agent_card_dict["url"] = url
+        req_headers = {}
+        req_params = {}
 
-            agent_card_object = _convert_agent_card_dict_to_obj(agent_card_dict)
-
-            logger.debug(f"Agent card of {name}: {agent_card_object}")
-            super().__init__(name=name, agent_card=agent_card_object)
-        else:
+        if auth_token:
             if auth_method == "header":
-                headers = {"Authorization": f"Bearer {auth_token}"}
-                agent_card_dict = requests.get(
-                    url + AGENT_CARD_WELL_KNOWN_PATH, headers=headers
-                ).json()
-                agent_card_dict["url"] = url
-
-                agent_card_object = _convert_agent_card_dict_to_obj(agent_card_dict)
-                httpx_client = httpx.AsyncClient(
-                    base_url=url, headers=headers, timeout=600
-                )
-
-                logger.debug(f"Agent card of {name}: {agent_card_object}")
-                super().__init__(
-                    name=name, agent_card=agent_card_object, httpx_client=httpx_client
-                )
+                req_headers = {"Authorization": f"Bearer {auth_token}"}
             elif auth_method == "querystring":
-                agent_card_dict = requests.get(
-                    url + AGENT_CARD_WELL_KNOWN_PATH + f"?token={auth_token}"
-                ).json()
-                agent_card_dict["url"] = url
-
-                agent_card_object = _convert_agent_card_dict_to_obj(agent_card_dict)
-                httpx_client = httpx.AsyncClient(
-                    base_url=url, params={"token": auth_token}, timeout=600
-                )
-
-                logger.debug(f"Agent card of {name}: {agent_card_object}")
-                super().__init__(
-                    name=name, agent_card=agent_card_object, httpx_client=httpx_client
-                )
+                req_params = {"token": auth_token}
             else:
                 raise ValueError(
                     f"Unsupported auth method {auth_method}, use `header` or `querystring` instead."
                 )
+
+        agent_card_dict = requests.get(
+            url + AGENT_CARD_WELL_KNOWN_PATH, headers=req_headers, params=req_params
+        ).json()
+        # replace agent_card_url with actual host
+        agent_card_dict["url"] = url
+
+        agent_card_object = _convert_agent_card_dict_to_obj(agent_card_dict)
+
+        logger.debug(f"Agent card of {name}: {agent_card_object}")
+
+        client_to_use = httpx_client
+        if auth_token:
+            if client_to_use:
+                if auth_method == "header":
+                    client_to_use.headers.update(req_headers)
+                elif auth_method == "querystring":
+                    new_params = dict(client_to_use.params)
+                    new_params.update(req_params)
+                    client_to_use.params = new_params
+            else:
+                if auth_method == "header":
+                    client_to_use = httpx.AsyncClient(
+                        base_url=url, headers=req_headers, timeout=600
+                    )
+                elif auth_method == "querystring":
+                    client_to_use = httpx.AsyncClient(
+                        base_url=url, params=req_params, timeout=600
+                    )
+
+        super().__init__(
+            name=name, agent_card=agent_card_object, httpx_client=client_to_use
+        )
