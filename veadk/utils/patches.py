@@ -16,7 +16,6 @@ import asyncio
 import sys
 from typing import Callable
 
-
 from veadk.tracing.telemetry.telemetry import (
     trace_call_llm,
     trace_send_data,
