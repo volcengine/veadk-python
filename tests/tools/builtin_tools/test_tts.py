@@ -20,7 +20,7 @@ from unittest import TestCase
 from unittest.mock import patch, MagicMock
 from google.adk.tools import ToolContext
 from veadk.tools.builtin_tools.tts import (
-    tts,
+    text_to_speech,
     handle_server_response,
     save_output_to_file,
     _audio_player_thread,
@@ -60,10 +60,10 @@ class TestTTS(TestCase):
         mock_session.return_value.post.return_value = mock_response
 
         # Call function
-        result = tts("test text", self.mock_tool_context)
+        result = text_to_speech("test text", self.mock_tool_context)
 
         # Assertions
-        self.assertTrue(result)
+        self.assertEqual("test text", result)  # Still returns True despite error
         mock_session.return_value.post.assert_called_once()
         mock_response.close.assert_called_once()
 
@@ -76,10 +76,10 @@ class TestTTS(TestCase):
         )
 
         # Call function
-        result = tts("test text", self.mock_tool_context)
+        result = text_to_speech("test text", self.mock_tool_context)
 
         # Assertions
-        self.assertFalse(result)  # Still returns True despite error
+        self.assertEqual("test text", result)  # Still returns True despite error
         mock_session.return_value.post.assert_called_once()
 
     @patch("builtins.open")

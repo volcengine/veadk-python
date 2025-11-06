@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import requests
 import json
 import base64
@@ -44,7 +45,7 @@ output_audio_config = {
 }
 
 
-def tts(text: str, tool_context: ToolContext) -> bool:
+def text_to_speech(text: str, tool_context: ToolContext) -> str:
     """TTS provides users with the ability to convert text to speech, turning the text content of LLM into audio.
     Use this tool when you need to convert text content into audible speech.
     It transforms plain text into natural-sounding speech, and supports customizations including voice timbre
@@ -55,15 +56,16 @@ def tts(text: str, tool_context: ToolContext) -> bool:
         text: The text to convert.
 
     Returns:
-        True if the TTS conversion is successful, False otherwise.
+        The original text.
     """
     url = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
     audio_save_path = ""
-    success = True
 
     app_id = getenv("TOOL_TTS_APP_ID")
     api_key = getenv("TOOL_TTS_API_KEY")
-    speaker = getenv("TOOL_TTS_SPEAKER")  # e.g. zh_female_vv_mars_bigtts
+    speaker = getenv(
+        "TOOL_TTS_SPEAKER", "zh_female_vv_mars_bigtts"
+    )  # e.g. zh_female_vv_mars_bigtts
     if not all([app_id, api_key, speaker]):
         raise ValueError(
             "Missing required env vars: TOOL_TTS_APP_ID, TOOL_TTS_API_KEY, TOOL_TTS_SPEAKER"
@@ -115,12 +117,14 @@ def tts(text: str, tool_context: ToolContext) -> bool:
 
     except Exception as e:
         logger.error(f"Failed to convert text to speech: {e}")
-        success = False
     finally:
+        if audio_save_path and os.path.exists(audio_save_path):
+            os.remove(audio_save_path)
         if response:
             response.close()
         session.close()
-    return success
+    logger.debug("Finish convert text to speech")
+    return text
 
 
 def handle_server_response(
