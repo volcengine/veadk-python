@@ -6,7 +6,8 @@ from typing import Any, Dict, Union, AsyncGenerator, Optional
 import litellm
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models.cache_metadata import CacheMetadata
-from openai import OpenAI
+from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+from openai import AsyncOpenAI
 from google.adk.models import LlmRequest, LlmResponse
 from google.adk.models.lite_llm import (
     LiteLlm,
@@ -96,7 +97,9 @@ def _add_response_data_to_llm_response(
     return llm_response
 
 
-async def openai_response_async(request_data: dict):
+async def openai_response_async(
+    request_data: dict,
+) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
     # Filter out fields that are not supported by OpenAI SDK
     filtered_request_data = {
         key: value
@@ -108,7 +111,7 @@ async def openai_response_async(request_data: dict):
     )
     filtered_request_data["model"] = model_name  # remove custom_llm_provider
 
-    # Remove tools in subsequent rounds (when previous_response_id is present)
+    # [Note: Ark Limitations] Remove tools in subsequent rounds (when previous_response_id is present)
     if (
         "tools" in filtered_request_data
         and "previous_response_id" in filtered_request_data
@@ -117,7 +120,7 @@ async def openai_response_async(request_data: dict):
         # Remove tools in subsequent rounds regardless of caching status
         del filtered_request_data["tools"]
 
-    # Ensure thinking field consistency for cache usage
+    # [Note: Ark Limitations] Ensure thinking field consistency for cache usage
     if (
         "thinking" in filtered_request_data
         and "extra_body" in filtered_request_data
@@ -133,7 +136,7 @@ async def openai_response_async(request_data: dict):
         # Note: This is a placeholder - actual consistency check requires state tracking
         pass
 
-    # Ensure store field is true or default when caching is enabled
+    # [Note: Ark Limitations] Ensure store field is true or default when caching is enabled
     if (
         "extra_body" in filtered_request_data
         and isinstance(filtered_request_data["extra_body"], dict)
@@ -160,13 +163,20 @@ async def openai_response_async(request_data: dict):
         }
     ] + filtered_request_data["input"]
 
-    client = OpenAI(
+    client = AsyncOpenAI(
         base_url=request_data["api_base"],
         api_key=request_data["api_key"],
     )
-    openai_response = client.responses.create(**filtered_request_data)
-    raw_response = ResponsesAPIResponse(**openai_response.model_dump())
-    return raw_response
+    if "stream" in filtered_request_data and filtered_request_data["stream"]:
+        # For streaming responses, return the streaming iterator directly
+        # stream_response = await client.responses.create(**filtered_request_data)
+        # return stream_response
+        raise NotImplementedError("Not implemented streaming responses api")
+    else:
+        # For non-streaming responses, return the ResponsesAPIResponse
+        openai_response = await client.responses.create(**filtered_request_data)
+        raw_response = ResponsesAPIResponse(**openai_response.model_dump())
+        return raw_response
 
 
 class ArkLlmClient(LiteLLMClient):
@@ -194,18 +204,17 @@ class ArkLlmClient(LiteLLMClient):
         # [NOTE] Cannot be called directly; there is a litellm bug,
         # Therefore, we cannot directly call litellm.aresponses:
         #      https://github.com/BerriAI/litellm/issues/16267
-        # raw_response = await aresponses(
+        # raw_response = await litellm.aresponses(
         #     **request_data,
         # )
         raw_response = await openai_response_async(request_data)
 
         # 4. Transform ResponsesAPIResponse
-        # 4.1 Create model_response object
-        model_response = ModelResponse()
-        setattr(model_response, "usage", litellm.Usage())
-
-        # 4.2 Transform ResponsesAPIResponse to ModelResponses
+        # 4.1 Transform ResponsesAPIResponse to ModelResponses
         if isinstance(raw_response, ResponsesAPIResponse):
+            # 4.2 Create model_response object
+            model_response = ModelResponse()
+            setattr(model_response, "usage", litellm.Usage())
             response = self.transformation_handler.transform_response(
                 model=model,
                 raw_response=raw_response,
