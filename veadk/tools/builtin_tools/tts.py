@@ -64,12 +64,22 @@ def tts(text: str, tool_context: ToolContext) -> bool:
     app_id = getenv("TOOL_TTS_APP_ID")
     api_key = getenv("TOOL_TTS_API_KEY")
     speaker = getenv("TOOL_TTS_SPEAKER")  # e.g. zh_female_vv_mars_bigtts
+    if not all([app_id, api_key, speaker]):
+        raise ValueError(
+            "Missing required env vars: TOOL_TTS_APP_ID, TOOL_TTS_API_KEY, TOOL_TTS_SPEAKER"
+        )
+
     headers = {
         "X-Api-App-Id": app_id,
         "X-Api-Access-Key": api_key,
         "X-Api-Resource-Id": "seed-tts-1.0",  # seed-tts-1.0 or seed-tts-2.0
         "Content-Type": "application/json",
         "Connection": "keep-alive",
+    }
+    additions = {
+        "explicit_language": "zh",
+        "disable_markdown_filter": True,
+        "enable_timestamp": True,
     }
     payload = {
         "user": {"uid": tool_context._invocation_context.user_id},
@@ -82,7 +92,7 @@ def tts(text: str, tool_context: ToolContext) -> bool:
                 "sample_rate": 24000,
                 "enable_timestamp": True,
             },
-            "additions": '{"explicit_language":"zh","disable_markdown_filter":true, "enable_timestamp":true}"}',
+            "additions": json.dumps(additions),
         },
     }
 
@@ -104,7 +114,7 @@ def tts(text: str, tool_context: ToolContext) -> bool:
         handle_server_response(response, audio_save_path)
 
     except Exception as e:
-        logger.debug(f"Failed to convert text to speech: {e}")
+        logger.error(f"Failed to convert text to speech: {e}")
         success = False
     finally:
         if response:
@@ -120,7 +130,7 @@ def handle_server_response(
     Handle the server response for TTS.
 
     Args:
-        response: The server response as a dictionary.
+        response: The server response as a requests.models.Response object.
 
     Returns:
         None
@@ -167,13 +177,14 @@ def handle_server_response(
                 )
                 break
             if data.get("code", 0) > 0:
-                logger.debug(f"error response:{data}")
+                logger.debug(f"tts response error:{data}")
                 break
 
         # save audio data to file
         save_output_to_file(audio_data, audio_save_path)
     except Exception as e:
         logger.error(f"handle tts failed: {e}, response: {response}")
+        raise
     finally:
         audio_queue.join()
         stop_event.set()
@@ -203,12 +214,12 @@ def _audio_player_thread(audio_queue, output_stream, stop_event):
             # if queue is empty, sleep for a while
             time.sleep(0.1)
         except Exception as e:
-            logger.debug(f"Failed to play audio data: {e}")
+            logger.error(f"Failed to play audio data: {e}")
             time.sleep(0.1)
     logger.debug("audio player thread exited")
 
 
-def save_output_to_file(audio_data: bytearray, filename: str):
+def save_output_to_file(audio_data: bytearray, filename: str) -> None:
     """
     Save audio data to file.
 
@@ -234,4 +245,4 @@ def save_output_to_file(audio_data: bytearray, filename: str):
                 f"Successfully save audio file to {filename},file size: {len(audio_data) / 1024:.2f} KB"
             )
     except IOError as e:
-        logger.debug(f"Failed to save pcm file: {e}")
+        logger.error(f"Failed to save pcm file: {e}")
