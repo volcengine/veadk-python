@@ -12,15 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import queue
 import json
 import base64
 import requests
-from unittest import TestCase, mock
+from unittest import TestCase
 from unittest.mock import patch, MagicMock
 from google.adk.tools import ToolContext
-from veadk.tools.builtin_tools.tts import tts, handle_server_response, save_output_to_file, _audio_player_thread
+from veadk.tools.builtin_tools.tts import (
+    tts,
+    handle_server_response,
+    save_output_to_file,
+    _audio_player_thread,
+)
 
 
 class TestTTS(TestCase):
@@ -30,24 +34,28 @@ class TestTTS(TestCase):
         self.mock_tool_context._invocation_context.user_id = "test_user"
 
         # Mock environment variables
-        self.patcher_env = patch.dict('os.environ', {
-            'TOOL_TTS_APP_ID': 'test_app_id',
-            'TOOL_TTS_API_KEY': 'test_api_key'
-        })
+        self.patcher_env = patch.dict(
+            "os.environ",
+            {
+                "TOOL_TTS_APP_ID": "test_app_id",
+                "TOOL_TTS_API_KEY": "test_api_key",
+                "TOOL_TTS_SPEAKER": "test_speaker",
+            },
+        )
         self.patcher_env.start()
 
     def tearDown(self):
         self.patcher_env.stop()
 
-    @patch('requests.Session')
+    @patch("requests.Session")
     def test_tts_success(self, mock_session):
         """Test successful TTS request"""
         # Setup mock response
         mock_response = MagicMock()
-        mock_response.headers = {'X-Tt-Logid': 'test_log_id'}
+        mock_response.headers = {"X-Tt-Logid": "test_log_id"}
         mock_response.iter_lines.return_value = [
             json.dumps({"code": 0, "data": base64.b64encode(b"audio_chunk").decode()}),
-            json.dumps({"code": 20000000})
+            json.dumps({"code": 20000000}),
         ]
         mock_session.return_value.post.return_value = mock_response
 
@@ -59,11 +67,13 @@ class TestTTS(TestCase):
         mock_session.return_value.post.assert_called_once()
         mock_response.close.assert_called_once()
 
-    @patch('requests.Session')
+    @patch("requests.Session")
     def test_tts_failure(self, mock_session):
         """Test TTS request failure"""
         # Setup mock to raise exception
-        mock_session.return_value.post.side_effect = requests.exceptions.RequestException("Test error")
+        mock_session.return_value.post.side_effect = (
+            requests.exceptions.RequestException("Test error")
+        )
 
         # Call function
         result = tts("test text", self.mock_tool_context)
@@ -72,15 +82,15 @@ class TestTTS(TestCase):
         self.assertFalse(result)  # Still returns True despite error
         mock_session.return_value.post.assert_called_once()
 
-    @patch('builtins.open')
-    @patch('pyaudio.PyAudio')
+    @patch("builtins.open")
+    @patch("pyaudio.PyAudio")
     def test_handle_server_response_success(self, mock_pyaudio, mock_open):
         """Test successful response handling"""
         # Setup mock response
         mock_response = MagicMock()
         mock_response.iter_lines.return_value = [
             json.dumps({"code": 0, "data": base64.b64encode(b"audio_chunk").decode()}),
-            json.dumps({"code": 20000000})
+            json.dumps({"code": 20000000}),
         ]
 
         # Setup mock audio stream
@@ -92,9 +102,9 @@ class TestTTS(TestCase):
 
         # Assertions
         mock_stream.write.assert_called_with(b"audio_chunk")
-        mock_open.assert_called_once_with("test.pcm", 'wb')
+        mock_open.assert_called_once_with("test.pcm", "wb")
 
-    @patch('builtins.open')
+    @patch("builtins.open")
     def test_save_output_to_file_success(self, mock_open):
         """Test successful audio file save"""
         # Setup mock file handler
@@ -105,11 +115,10 @@ class TestTTS(TestCase):
         save_output_to_file(b"audio_data", "test.pcm")
 
         # Assertions
-        mock_open.assert_called_once_with("test.pcm", 'wb')
+        mock_open.assert_called_once_with("test.pcm", "wb")
         mock_file.write.assert_called_once_with(b"audio_data")
 
-
-    @patch('time.sleep')
+    @patch("time.sleep")
     def test_audio_player_thread(self, mock_sleep):
         """Test audio player thread"""
         # Setup test data

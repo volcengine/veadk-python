@@ -19,8 +19,9 @@ import time
 import queue
 import pyaudio
 import threading
+import tempfile
 from google.adk.tools import ToolContext
-from veadk.config import getenv, settings
+from veadk.config import getenv
 from veadk.utils.logger import get_logger
 from veadk.utils.audio_manager import AudioDeviceManager, AudioConfig
 
@@ -31,7 +32,7 @@ input_audio_config = {
     "format": "pcm",
     "channels": 1,
     "sample_rate": 16000,
-    "bit_size": pyaudio.paInt16
+    "bit_size": pyaudio.paInt16,
 }
 
 output_audio_config = {
@@ -39,25 +40,25 @@ output_audio_config = {
     "format": "pcm",
     "channels": 1,
     "sample_rate": 24000,
-    "bit_size": pyaudio.paInt16
+    "bit_size": pyaudio.paInt16,
 }
 
 
 def tts(text: str, tool_context: ToolContext) -> bool:
     """TTS provides users with the ability to convert text to speech, turning the text content of LLM into audio.
-        Use this tool when you need to convert text content into audible speech.
-        It transforms plain text into natural-sounding speech, and supports customizations including voice timbre
-        selection (e.g., male/female/neutral), speech speed and volume adjustment, as well as exporting the generated
-        audio in common formats (e.g., MP3, WAV).
+    Use this tool when you need to convert text content into audible speech.
+    It transforms plain text into natural-sounding speech, and supports customizations including voice timbre
+    selection (e.g., male/female/neutral), speech speed and volume adjustment, as well as exporting the generated
+    audio in common formats (e.g., MP3, WAV).
 
-        Args:
-            text: The text to convert.
+    Args:
+        text: The text to convert.
 
-        Returns:
-            True if the TTS conversion is successful, False otherwise.
-        """
+    Returns:
+        True if the TTS conversion is successful, False otherwise.
+    """
     url = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
-    audio_save_path = "tts.pcm"
+    audio_save_path = ""
     success = True
 
     app_id = getenv("TOOL_TTS_APP_ID")
@@ -68,12 +69,10 @@ def tts(text: str, tool_context: ToolContext) -> bool:
         "X-Api-Access-Key": api_key,
         "X-Api-Resource-Id": "seed-tts-1.0",  # seed-tts-1.0 or seed-tts-2.0
         "Content-Type": "application/json",
-        "Connection": "keep-alive"
+        "Connection": "keep-alive",
     }
     payload = {
-        "user": {
-            "uid": tool_context._invocation_context.user_id
-        },
+        "user": {"uid": tool_context._invocation_context.user_id},
         "req_params": {
             "text": text,
             "speaker": speaker,
@@ -81,10 +80,10 @@ def tts(text: str, tool_context: ToolContext) -> bool:
                 "format": "pcm",
                 "bit_rate": 16000,
                 "sample_rate": 24000,
-                "enable_timestamp": True
+                "enable_timestamp": True,
             },
-            "additions": "{\"explicit_language\":\"zh\",\"disable_markdown_filter\":true, \"enable_timestamp\":true}\"}"
-        }
+            "additions": '{"explicit_language":"zh","disable_markdown_filter":true, "enable_timestamp":true}"}',
+        },
     }
 
     session = requests.Session()
@@ -93,8 +92,15 @@ def tts(text: str, tool_context: ToolContext) -> bool:
     try:
         logger.debug(f"Request TTS server with payload: {payload}.")
         response = session.post(url, headers=headers, json=payload, stream=True)
-        log_id = response.headers.get('X-Tt-Logid')
-        logger.debug(f"Response from TTS server with logid: {log_id}, and response body {response}")
+        log_id = response.headers.get("X-Tt-Logid")
+        logger.debug(
+            f"Response from TTS server with logid: {log_id}, and response body {response}"
+        )
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".pcm", delete=False, dir=tempfile.gettempdir()
+        ) as tmp:
+            audio_save_path = tmp.name  # e.g. /tmp/tts_12345.pcm
         handle_server_response(response, audio_save_path)
 
     except Exception as e:
@@ -107,7 +113,9 @@ def tts(text: str, tool_context: ToolContext) -> bool:
     return success
 
 
-def handle_server_response(response: requests.models.Response, audio_save_path: str) -> None:
+def handle_server_response(
+    response: requests.models.Response, audio_save_path: str
+) -> None:
     """
     Handle the server response for TTS.
 
@@ -125,14 +133,15 @@ def handle_server_response(response: requests.models.Response, audio_save_path: 
     total_audio_size = 0
 
     audio_device = AudioDeviceManager(
-        AudioConfig(**input_audio_config),
-        AudioConfig(**output_audio_config)
+        AudioConfig(**input_audio_config), AudioConfig(**output_audio_config)
     )
 
     # init output stream
     output_stream = audio_device.open_output_stream()
     stop_event = threading.Event()
-    player_thread = threading.Thread(target=_audio_player_thread, args=(audio_queue, output_stream, stop_event))
+    player_thread = threading.Thread(
+        target=_audio_player_thread, args=(audio_queue, output_stream, stop_event)
+    )
     player_thread.daemon = True
     player_thread.start()
 
@@ -153,7 +162,9 @@ def handle_server_response(response: requests.models.Response, audio_save_path: 
                 logger.debug(f"sentence_data: {data}")
                 continue
             if data.get("code", 0) == 20000000:
-                logger.debug(f"successfully get audio data, total size: {total_audio_size / 1024:.2f} KB")
+                logger.debug(
+                    f"successfully get audio data, total size: {total_audio_size / 1024:.2f} KB"
+                )
                 break
             if data.get("code", 0) > 0:
                 logger.debug(f"error response:{data}")
@@ -212,10 +223,15 @@ def save_output_to_file(audio_data: bytearray, filename: str):
     if not audio_data:
         logger.debug("No audio data to save.")
         return
+    if not filename:
+        logger.debug("No filename to save audio data.")
+        return
+
     try:
-        with open(filename, 'wb') as f:
+        with open(filename, "wb") as f:
             f.write(audio_data)
             logger.debug(
-                f"Successfully save audio file to {filename},file size: {len(audio_data) / 1024:.2f} KB")
+                f"Successfully save audio file to {filename},file size: {len(audio_data) / 1024:.2f} KB"
+            )
     except IOError as e:
         logger.debug(f"Failed to save pcm file: {e}")
