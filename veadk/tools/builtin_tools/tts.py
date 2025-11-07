@@ -49,9 +49,7 @@ output_audio_config = {
 def text_to_speech(text: str, tool_context: ToolContext) -> Dict[str, Any]:
     """TTS provides users with the ability to convert text to speech, turning the text content of LLM into audio.
     Use this tool when you need to convert text content into audible speech.
-    It transforms plain text into natural-sounding speech, and supports customizations including voice timbre
-    selection (e.g., male/female/neutral), speech speed and volume adjustment, as well as exporting the generated
-    audio in common formats (e.g., MP3, WAV).
+    It transforms plain text into natural-sounding speech, as well as exporting the generated audio in pcm format.
 
     Args:
         text: The text to convert.
@@ -122,7 +120,9 @@ def text_to_speech(text: str, tool_context: ToolContext) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Failed to convert text to speech: {e}")
         return {
-            "error": (f"Tool text_to_speech execution failed. Execution Error: {e}")
+            "error": f"Tool text_to_speech execution failed. "
+            f"Response content: {response}"
+            f"Execution Error: {e}"
         }
     finally:
         if audio_save_path and os.path.exists(audio_save_path):
