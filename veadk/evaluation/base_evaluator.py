@@ -442,7 +442,10 @@ class BaseEvaluator:
                 _input = user_content.parts[0].text
                 _expected_output = invocation.final_response.parts[0].text
 
-                if invocation.intermediate_data.tool_uses:
+                if (
+                    hasattr(invocation.intermediate_data, "tool_uses")
+                    and invocation.intermediate_data.tool_uses
+                ):
                     for expected_tool_use in invocation.intermediate_data.tool_uses:
                         _expected_tool.append(
                             {
@@ -450,6 +453,26 @@ class BaseEvaluator:
                                 "args": expected_tool_use.args,
                             }
                         )
+
+                elif (
+                    hasattr(invocation.intermediate_data, "invocation_events")
+                    and invocation.intermediate_data.invocation_events
+                ):
+                    for event in invocation.intermediate_data.invocation_events:
+                        if hasattr(event, "content") and hasattr(
+                            event.content, "parts"
+                        ):
+                            for part in event.content.parts:
+                                if (
+                                    hasattr(part, "function_call")
+                                    and part.function_call is not None
+                                ):
+                                    _expected_tool.append(
+                                        {
+                                            "name": part.function_call.name,
+                                            "args": part.function_call.args,
+                                        }
+                                    )
 
                 eval_case_data.invocations.append(
                     Invocation(
