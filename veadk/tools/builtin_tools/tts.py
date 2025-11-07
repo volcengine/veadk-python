@@ -63,7 +63,7 @@ def text_to_speech(text: str, tool_context: ToolContext) -> Dict[str, Any]:
     app_id = getenv("TOOL_TTS_APP_ID")
     api_key = getenv("TOOL_TTS_API_KEY")
     speaker = getenv(
-        "TOOL_TTS_SPEAKER", "zh_female_vv_mars_bigtts"
+        "TOOL_TTS_SPEAKER", "zh_female_vv_uranus_bigtts"
     )  # e.g. zh_female_vv_mars_bigtts
     if not all([app_id, api_key, speaker]):
         return {
@@ -75,8 +75,8 @@ def text_to_speech(text: str, tool_context: ToolContext) -> Dict[str, Any]:
 
     headers = {
         "X-Api-App-Id": app_id,
-        "X-Api-Access-Key": api_key,
-        "X-Api-Resource-Id": "seed-tts-1.0",  # seed-tts-1.0 or seed-tts-2.0
+        "X-Api-Key": api_key,
+        "X-Api-Resource-Id": "seed-tts-2.0",  # seed-tts-1.0 or seed-tts-2.0
         "Content-Type": "application/json",
         "Connection": "keep-alive",
     }

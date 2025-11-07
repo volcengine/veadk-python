@@ -21,8 +21,8 @@ from veadk.utils.volcengine_sign import ve_request
 logger = get_logger(__name__)
 
 
-def get_tts_token(region: str = "cn-beijing") -> str:
-    logger.info("Fetching TTS token...")
+def get_speech_token(region: str = "cn-beijing") -> str:
+    logger.info("Fetching speech token...")
 
     access_key = os.getenv("VOLCENGINE_ACCESS_KEY")
     secret_key = os.getenv("VOLCENGINE_SECRET_KEY")
@@ -36,36 +36,19 @@ def get_tts_token(region: str = "cn-beijing") -> str:
         session_token = cred.session_token
 
     res = ve_request(
-        request_body={"ProjectName": "default", "Filter": {}},
+        request_body={"ProjectName": "default", "OnlyAvailable": True, "Filter": {}},
         header={"X-Security-Token": session_token},
         action="ListApiKeys",
         ak=access_key,
         sk=secret_key,
-        service="ark",
-        version="2024-01-01",
+        service="speech_saas_prod",
+        version="2025-05-20",
         region=region,
         host="open.volcengineapi.com",
     )
     try:
-        first_api_key_id = res["Result"]["Items"][0]["Id"]
+        first_api_key_id = res["Result"]["APIKeys"][0]["APIKey"]
+        logger.info("Successfully fetching speech API Key.")
+        return first_api_key_id
     except KeyError:
-        raise ValueError(f"Failed to get ARK api key list: {res}")
-
-    # get raw api key
-    res = ve_request(
-        request_body={"Id": first_api_key_id},
-        header={"X-Security-Token": session_token},
-        action="GetRawApiKey",
-        ak=access_key,
-        sk=secret_key,
-        service="ark",
-        version="2024-01-01",
-        region=region,
-        host="open.volcengineapi.com",
-    )
-    try:
-        api_key = res["Result"]["ApiKey"]
-        logger.info("Successfully fetching ARK API Key.")
-        return api_key
-    except KeyError:
-        raise ValueError(f"Failed to get ARK api key: {res}")
+        raise ValueError(f"Failed to get speech api key list: {res}")
