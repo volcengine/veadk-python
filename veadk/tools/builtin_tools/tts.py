@@ -21,6 +21,7 @@ import queue
 import pyaudio
 import threading
 import tempfile
+from typing import Dict, Any
 from google.adk.tools import ToolContext
 from veadk.config import getenv
 from veadk.utils.logger import get_logger
@@ -45,7 +46,7 @@ output_audio_config = {
 }
 
 
-def text_to_speech(text: str, tool_context: ToolContext) -> str:
+def text_to_speech(text: str, tool_context: ToolContext) -> Dict[str, Any]:
     """TTS provides users with the ability to convert text to speech, turning the text content of LLM into audio.
     Use this tool when you need to convert text content into audible speech.
     It transforms plain text into natural-sounding speech, and supports customizations including voice timbre
@@ -56,7 +57,7 @@ def text_to_speech(text: str, tool_context: ToolContext) -> str:
         text: The text to convert.
 
     Returns:
-        The original text.
+        A dict with the saved audio path.
     """
     url = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
     audio_save_path = ""
@@ -67,9 +68,12 @@ def text_to_speech(text: str, tool_context: ToolContext) -> str:
         "TOOL_TTS_SPEAKER", "zh_female_vv_mars_bigtts"
     )  # e.g. zh_female_vv_mars_bigtts
     if not all([app_id, api_key, speaker]):
-        raise ValueError(
-            "Missing required env vars: TOOL_TTS_APP_ID, TOOL_TTS_API_KEY, TOOL_TTS_SPEAKER"
-        )
+        return {
+            "error": (
+                "Tool text_to_speech execution failed. Missing required env vars: "
+                "TOOL_TTS_APP_ID, TOOL_TTS_API_KEY, TOOL_TTS_SPEAKER"
+            )
+        }
 
     headers = {
         "X-Api-App-Id": app_id,
@@ -117,6 +121,9 @@ def text_to_speech(text: str, tool_context: ToolContext) -> str:
 
     except Exception as e:
         logger.error(f"Failed to convert text to speech: {e}")
+        return {
+            "error": (f"Tool text_to_speech execution failed. Execution Error: {e}")
+        }
     finally:
         if audio_save_path and os.path.exists(audio_save_path):
             os.remove(audio_save_path)
@@ -124,7 +131,7 @@ def text_to_speech(text: str, tool_context: ToolContext) -> str:
             response.close()
         session.close()
     logger.debug("Finish convert text to speech")
-    return text
+    return {"saved_audio_path": audio_save_path}
 
 
 def handle_server_response(

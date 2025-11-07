@@ -63,7 +63,9 @@ class TestTTS(TestCase):
         result = text_to_speech("test text", self.mock_tool_context)
 
         # Assertions
-        self.assertEqual("test text", result)  # Still returns True despite error
+        self.assertIsInstance(result, dict)
+        self.assertIn("text", result)
+        self.assertIn("audio_path", result)
         mock_session.return_value.post.assert_called_once()
         mock_response.close.assert_called_once()
 
@@ -79,7 +81,9 @@ class TestTTS(TestCase):
         result = text_to_speech("test text", self.mock_tool_context)
 
         # Assertions
-        self.assertEqual("test text", result)  # Still returns True despite error
+        self.assertIsInstance(result, dict)
+        self.assertIn("error", result)
+        self.assertIn("Test error", result["error"])
         mock_session.return_value.post.assert_called_once()
 
     @patch("builtins.open")
