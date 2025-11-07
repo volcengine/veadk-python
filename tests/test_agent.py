@@ -107,7 +107,7 @@ def test_agent_without_long_term_memory():
     assert load_memory not in agent.tools
 
 
-@patch("google.adk.models.lite_llm.LiteLlm")
+@patch("veadk.agent.LiteLlm")
 def test_agent_model_creation(mock_lite_llm):
     mock_model = Mock()
     mock_lite_llm.return_value = mock_model
