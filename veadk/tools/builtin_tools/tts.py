@@ -106,10 +106,6 @@ def text_to_speech(text: str, tool_context: ToolContext) -> Dict[str, Any]:
     try:
         logger.debug(f"Request TTS server with payload: {payload}.")
         response = session.post(url, headers=headers, json=payload, stream=True)
-        log_id = response.headers.get("X-Tt-Logid")
-        logger.debug(
-            f"Response from TTS server with logid: {log_id}, and response body {response}"
-        )
 
         with tempfile.NamedTemporaryFile(
             suffix=".pcm", delete=False, dir=tempfile.gettempdir()
@@ -118,7 +114,9 @@ def text_to_speech(text: str, tool_context: ToolContext) -> Dict[str, Any]:
         handle_server_response(response, audio_save_path)
 
     except Exception as e:
-        logger.error(f"Failed to convert text to speech: {e}")
+        logger.error(
+            f"Failed to convert text to speech: {e}Response content: {response}"
+        )
         return {
             "error": f"Tool text_to_speech execution failed. "
             f"Response content: {response}"
