@@ -584,7 +584,10 @@ class Runner(ADKRunner):
         final_output = ""
         for converted_message in converted_messages:
             try:
-                @(run_processor or self.run_processor).process_run(runner=self, message=converted_message)
+
+                @(run_processor or self.run_processor).process_run(
+                    runner=self, message=converted_message
+                )
                 async def event_generator():
                     async for event in self.run_async(
                         user_id=user_id,
@@ -593,6 +596,7 @@ class Runner(ADKRunner):
                         run_config=run_config,
                     ):
                         yield event
+
                 async for event in event_generator():
                     if event.get_function_calls():
                         for function_call in event.get_function_calls():
