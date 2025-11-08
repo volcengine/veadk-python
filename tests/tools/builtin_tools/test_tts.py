@@ -37,9 +37,9 @@ class TestTTS(TestCase):
         self.patcher_env = patch.dict(
             "os.environ",
             {
-                "TOOL_TTS_APP_ID": "test_app_id",
-                "TOOL_TTS_API_KEY": "test_api_key",
-                "TOOL_TTS_SPEAKER": "test_speaker",
+                "TOOL_VESPEECH_APP_ID": "test_app_id",
+                "TOOL_VESPEECH_API_KEY": "test_api_key",
+                "TOOL_VESPEECH_SPEAKER": "test_speaker",
             },
         )
         self.patcher_env.start()
@@ -64,8 +64,7 @@ class TestTTS(TestCase):
 
         # Assertions
         self.assertIsInstance(result, dict)
-        self.assertIn("text", result)
-        self.assertIn("audio_path", result)
+        self.assertIn("saved_audio_path", result)
         mock_session.return_value.post.assert_called_once()
         mock_response.close.assert_called_once()
 

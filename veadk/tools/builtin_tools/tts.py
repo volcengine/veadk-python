@@ -23,7 +23,7 @@ import threading
 import tempfile
 from typing import Dict, Any
 from google.adk.tools import ToolContext
-from veadk.config import getenv
+from veadk.config import getenv, settings
 from veadk.utils.logger import get_logger
 from veadk.utils.audio_manager import AudioDeviceManager, AudioConfig
 
@@ -60,16 +60,16 @@ def text_to_speech(text: str, tool_context: ToolContext) -> Dict[str, Any]:
     url = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
     audio_save_path = ""
 
-    app_id = getenv("TOOL_TTS_APP_ID")
-    api_key = getenv("TOOL_TTS_API_KEY")
+    app_id = getenv("TOOL_VESPEECH_APP_ID")
     speaker = getenv(
-        "TOOL_TTS_SPEAKER", "zh_female_vv_uranus_bigtts"
+        "TOOL_VESPEECH_SPEAKER", "zh_female_vv_uranus_bigtts"
     )  # e.g. zh_female_vv_mars_bigtts
+    api_key = settings.tool.vespeech.api_key
     if not all([app_id, api_key, speaker]):
         return {
             "error": (
                 "Tool text_to_speech execution failed. Missing required env vars: "
-                "TOOL_TTS_APP_ID, TOOL_TTS_API_KEY, TOOL_TTS_SPEAKER"
+                "TOOL_VESPEECH_APP_ID, TOOL_VESPEECH_API_KEY, TOOL_VESPEECH_SPEAKER"
             )
         }
 

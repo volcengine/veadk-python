@@ -36,9 +36,9 @@ def get_speech_token(region: str = "cn-beijing") -> str:
         session_token = cred.session_token
 
     res = ve_request(
-        request_body={"ProjectName": "default", "OnlyAvailable": True, "Filter": {}},
+        request_body={"ProjectName": "default", "OnlyAvailable": True},
         header={"X-Security-Token": session_token},
-        action="ListApiKeys",
+        action="ListAPIKeys",
         ak=access_key,
         sk=secret_key,
         service="speech_saas_prod",

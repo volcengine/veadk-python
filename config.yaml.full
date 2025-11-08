@@ -46,6 +46,11 @@ tool:
   web_scraper: 
     endpoint: 
     api_key:    # `token`
+  # [optional] https://console.volcengine.com/speech/new/experience/tts
+  lark:
+    app_id:     # `app_id`
+    api_key:    # `app_secret`
+    speaker:    # `speaker`
   # [optional] https://open.larkoffice.com/app
   lark: 
     endpoint:   # `app_id`
