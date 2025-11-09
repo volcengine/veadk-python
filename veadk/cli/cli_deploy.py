@@ -49,6 +49,12 @@ TEMP_PATH = "/tmp"
     type=click.Choice(["local", "mysql"]),
     help="Backend for short-term memory",
 )
+@click.option(
+    "--auth-method",
+    default="none",
+    type=click.Choice(["none", "api-key"]),
+    help="=Authentication method for agent",
+)
 @click.option("--use-adk-web", is_flag=True, help="Whether to use ADK Web")
 @click.option("--path", default=".", help="Local project path")
 def deploy(
@@ -60,6 +66,7 @@ def deploy(
     veapig_upstream_name: str,
     short_term_memory_backend: str,
     use_adk_web: bool,
+    auth_method: str,
     path: str,
 ) -> None:
     """Deploy a user project to Volcengine FaaS application.
@@ -90,6 +97,8 @@ def deploy(
         short_term_memory_backend: Backend type for short-term memory storage.
             Choices are 'local' or 'mysql'
         use_adk_web: Flag to enable ADK Web interface for the deployed agent
+        auth_method: Authentication for the agent.
+            Choices are 'none', 'api-key' or 'oauth2'.
         path: Local directory path containing the VeADK project to deploy
 
     Note:
@@ -131,6 +140,7 @@ def deploy(
         "veapig_service_name": veapig_service_name,
         "veapig_upstream_name": veapig_upstream_name,
         "use_adk_web": use_adk_web,
+        "auth_method": auth_method,
         "veadk_version": VERSION,
     }
 

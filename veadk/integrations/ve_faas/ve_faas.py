@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import json
-import os
 import time
 
 import requests
@@ -141,9 +140,8 @@ class VeFaaS:
         gateway_name: str,
         upstream_name: str,
         service_name: str,
+        enable_key_auth: bool = False,
     ):
-        enable_key_auth = os.getenv("VEFAAS_ENABLE_KEY_AUTH", "true").lower() == "true"
-
         response = ve_request(
             request_body={
                 "Name": application_name,
@@ -386,6 +384,7 @@ class VeFaaS:
         gateway_name: str = "",
         gateway_service_name: str = "",
         gateway_upstream_name: str = "",
+        enable_key_auth: bool = False,
     ) -> tuple[str, str, str]:
         """Deploy an agent project to VeFaaS service.
 
@@ -395,6 +394,7 @@ class VeFaaS:
             gateway_name (str, optional): Gateway name. Defaults to "".
             gateway_service_name (str, optional): Gateway service name. Defaults to "".
             gateway_upstream_name (str, optional): Gateway upstream name. Defaults to "".
+            enable_key_auth (bool, optional): Enable key auth. Defaults to False.
 
         Returns:
             tuple[str, str, str]: (url, app_id, function_id)
@@ -439,6 +439,7 @@ class VeFaaS:
             gateway_name,
             gateway_upstream_name,
             gateway_service_name,
+            enable_key_auth,
         )
 
         logger.info(f"VeFaaS application {name} with ID {app_id} created.")

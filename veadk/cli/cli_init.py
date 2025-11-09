@@ -61,13 +61,33 @@ def _render_prompts() -> dict[str, Any]:
     deploy_mode = click.prompt(
         "Enter your choice", type=click.Choice(deploy_mode_options.keys())
     )
+    use_adk_web = deploy_mode == "2"
+
+    auth_method_options = {
+        "1": "None",
+        "2": "API key",
+    }
+    auth_methods = {
+        "1": "none",
+        "2": "api-key",
+    }
+
+    click.echo("Choose an authentication method:")
+    for key, value in auth_method_options.items():
+        click.echo(f"  {key}. {value}")
+
+    auth_method_idx = click.prompt(
+        "Enter your choice", type=click.Choice(auth_method_options.keys())
+    )
+    auth_method = auth_methods[auth_method_idx]
 
     return {
         "vefaas_application_name": vefaas_application_name,
         "veapig_instance_name": veapig_instance_name,
         "veapig_service_name": veapig_service_name,
         "veapig_upstream_name": veapig_upstream_name,
-        "use_adk_web": deploy_mode == "2",
+        "use_adk_web": use_adk_web,
+        "auth_method": auth_method,
         "veadk_version": VERSION,
     }
 
