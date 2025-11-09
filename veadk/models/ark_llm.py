@@ -10,7 +10,6 @@ from google.adk.models import LlmRequest, LlmResponse
 from google.adk.models.lite_llm import (
     LiteLlm,
     _get_completion_inputs,
-    _model_response_to_chunk,
     FunctionChunk,
     TextChunk,
     _message_to_generate_content_response,
@@ -25,7 +24,7 @@ from litellm.types.utils import (
 )
 from pydantic import Field
 
-from veadk.models.transform import (
+from veadk.models.ark_transform import (
     CompletionToResponsesAPIHandler,
 )
 from veadk.utils.logger import get_logger
@@ -116,11 +115,13 @@ class ArkLlm(LiteLlm):
             usage_metadata = None
             fallback_index = 0
             raw_response = await self.llm_client.aresponse(**response_args)
-            stream_events = self.transform_handler.transform_streamable_response(
-                raw_response, model=self.model
-            )
-            async for part in stream_events:
-                for chunk, finish_reason in _model_response_to_chunk(part):
+            async for part in raw_response:
+                for (
+                    chunk,
+                    finish_reason,
+                ) in self.transform_handler.stream_event_to_chunk(
+                    part, model=self.model
+                ):
                     if isinstance(chunk, FunctionChunk):
                         index = chunk.index or fallback_index
                         if index not in function_calls:
@@ -221,7 +222,7 @@ class ArkLlm(LiteLlm):
         OpenAITypeResponse -> litellm.ModelResponse -> LlmResponse
         """
         model_response = self.transform_handler.transform_response(
-            openai_response=raw_response,
+            openai_response=raw_response, stream=False
         )
         llm_response = _model_response_to_generate_content_response(model_response)
 

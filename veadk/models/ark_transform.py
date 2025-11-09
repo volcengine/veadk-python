@@ -1,18 +1,31 @@
 import uuid
-from datetime import datetime
-from typing import Any, Dict, Optional, cast, List
+from typing import Any, Dict, Optional, cast, List, Generator, Tuple, Union
 
 import litellm
-from openai.types.responses import Response as OpenAITypeResponse
+from google.adk.models.lite_llm import (
+    TextChunk,
+    FunctionChunk,
+    UsageMetadataChunk,
+    _model_response_to_chunk,
+)
+from openai.types.responses import (
+    Response as OpenAITypeResponse,
+    ResponseStreamEvent,
+    ResponseTextDeltaEvent,
+)
+from openai.types.responses import (
+    ResponseCompletedEvent,
+)
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import (
     ModelResponse,
     LlmProviders,
+    Choices,
+    Message,
 )
 from litellm.utils import ProviderConfigManager
 
@@ -156,12 +169,13 @@ class CompletionToResponsesAPIHandler:
         # Filter and reorganize scenarios that are not supported by some arks
         return ark_field_reorganization(result)
 
-    def transform_response(self, openai_response: OpenAITypeResponse) -> ModelResponse:
-        # responses api response to completion response
-        # get message
+    def transform_response(
+        self, openai_response: OpenAITypeResponse, stream: bool = False
+    ) -> ModelResponse:
+        # openai_type_response -> responses_api_response  ->  completion_response
         raw_response = ResponsesAPIResponse(**openai_response.model_dump())
 
-        model_response = ModelResponse()
+        model_response = ModelResponse(stream=stream)
         setattr(model_response, "usage", litellm.Usage())
         response = self.litellm_handler.transform_response(
             model=raw_response.model,
@@ -178,25 +192,48 @@ class CompletionToResponsesAPIHandler:
             response.id = raw_response.id
         return response
 
-    def transform_streamable_response(self, result, model: str):
-        logging_obj = litellm.Logging(
-            model="doubao",
-            messages=None,
-            stream=True,
-            call_type="acompletion",
-            litellm_call_id=str(uuid.uuid4()),
-            function_id=str(uuid.uuid4()),
-            start_time=datetime.now(),
-        )
-        completion_stream = self.litellm_handler.get_model_response_iterator(
-            streaming_response=result,
-            sync_stream=True,
-            json_mode=False,
-        )
-        streamwrapper = CustomStreamWrapper(
-            completion_stream=completion_stream,
-            model=model,
-            custom_llm_provider="openai",
-            logging_obj=logging_obj,
-        )
-        return streamwrapper
+    def stream_event_to_chunk(
+        self, event: ResponseStreamEvent, model: str
+    ) -> Generator[
+        Tuple[
+            Optional[Union[TextChunk, FunctionChunk, UsageMetadataChunk]],
+            Optional[str],
+        ],
+        None,
+        None,
+    ]:
+        choices = []
+        model_response = None
+
+        if isinstance(event, ResponseTextDeltaEvent):
+            delta = Message(content=event.delta)
+            choices.append(
+                Choices(delta=delta, index=event.output_index, finish_reason=None)
+            )
+            model_response = ModelResponse(
+                stream=True, choices=choices, model=model, id=str(uuid.uuid4())
+            )
+        elif isinstance(event, ResponseCompletedEvent):
+            pass
+            response = event.response
+            model_response = self.transform_response(response, stream=True)
+            model_response = fix_response(model_response)
+        else:
+            # Ignore other event types like ResponseOutputItemAddedEvent, etc.
+            pass
+
+        if model_response:
+            yield from _model_response_to_chunk(model_response)
+
+
+def fix_response(model_response: ModelResponse) -> ModelResponse:
+    """
+    Fix the response to ensure some fields that cannot be transferred through direct conversion.
+    """
+    for i, choice in enumerate(model_response.choices):
+        if choice.message.tool_calls:
+            for idx, tool_call in enumerate(choice.message.tool_calls):
+                if not tool_call.get("index"):
+                    model_response.choices[i].message.tool_calls[idx].index = 0
+
+    return model_response
