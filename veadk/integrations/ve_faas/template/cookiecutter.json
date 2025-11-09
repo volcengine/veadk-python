@@ -8,5 +8,6 @@
   "veapig_service_name": "",
   "veapig_upstream_name": "",
   "use_adk_web": false,
+  "auth_method": "none",
   "veadk_version": ""
 }

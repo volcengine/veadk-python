@@ -197,6 +197,7 @@ class CloudAgentEngine(BaseModel):
         gateway_name: str = "",
         gateway_service_name: str = "",
         gateway_upstream_name: str = "",
+        auth_method: str = "none",
         use_adk_web: bool = False,
         local_test: bool = False,
     ) -> CloudApp:
@@ -210,6 +211,7 @@ class CloudAgentEngine(BaseModel):
             gateway_name (str, optional): Custom gateway resource name. Defaults to timestamped.
             gateway_service_name (str, optional): Custom service name. Defaults to timestamped.
             gateway_upstream_name (str, optional): Custom upstream name. Defaults to timestamped.
+            auth_method (str, optional): Authentication for the agent. Defaults to none.
             use_adk_web (bool): Enable ADK Web configuration. Defaults to False.
             local_test (bool): Perform FastAPI server test before deploy. Defaults to False.
 
@@ -231,6 +233,10 @@ class CloudAgentEngine(BaseModel):
         """
         # prevent deepeval writing operations
         veadk_environments["DEEPEVAL_TELEMETRY_OPT_OUT"] = "YES"
+
+        enable_key_auth = False
+        if auth_method == "api-key":
+            enable_key_auth = True
 
         if use_adk_web:
             veadk_environments["USE_ADK_WEB"] = "True"
@@ -258,6 +264,7 @@ class CloudAgentEngine(BaseModel):
                 gateway_name=gateway_name,
                 gateway_service_name=gateway_service_name,
                 gateway_upstream_name=gateway_upstream_name,
+                enable_key_auth=enable_key_auth,
             )
             _ = function_id  # for future use
 
