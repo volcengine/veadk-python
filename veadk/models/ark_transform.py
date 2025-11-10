@@ -269,7 +269,6 @@ class CompletionToResponsesAPIHandler:
         we use our own implementation to support the responses api.
         """
         choices = []
-        model_response = None
 
         if isinstance(event, ResponseTextDeltaEvent):
             delta = Message(content=event.delta)
@@ -279,17 +278,22 @@ class CompletionToResponsesAPIHandler:
             model_response = ModelResponse(
                 stream=True, choices=choices, model=model, id=str(uuid.uuid4())
             )
+            for chunk, _ in _model_response_to_chunk(model_response):
+                # delta text, not finish
+                yield model_response, chunk, None
         elif isinstance(event, ResponseCompletedEvent):
             response = event.response
             model_response = self.transform_response(response, stream=True)
             model_response = fix_model_response(model_response)
+
+            for chunk, finish_reason in _model_response_to_chunk(model_response):
+                if isinstance(chunk, TextChunk):
+                    yield model_response, None, finish_reason
+                else:
+                    yield model_response, chunk, finish_reason
         else:
             # Ignore other event types like ResponseOutputItemAddedEvent, etc.
             pass
-
-        if model_response:
-            for chunk, finish_reason in _model_response_to_chunk(model_response):
-                yield model_response, chunk, finish_reason
 
 
 def fix_model_response(model_response: ModelResponse) -> ModelResponse:
