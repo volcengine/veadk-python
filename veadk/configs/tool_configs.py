@@ -20,6 +20,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from veadk.auth.veauth.prompt_pilot_veauth import PromptPilotVeAuth
 from veadk.auth.veauth.vesearch_veauth import VesearchVeAuth
+from veadk.auth.veauth.speech_veauth import get_speech_token
 
 
 class PromptPilotConfig(BaseModel):
@@ -38,5 +39,16 @@ class VeSearchConfig(BaseSettings):
         return os.getenv("TOOL_VESEARCH_API_KEY") or VesearchVeAuth().token
 
 
+class VeSpeechConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="TOOL_VESPEECH_")
+
+    endpoint: int | str = ""
+
+    @cached_property
+    def api_key(self) -> str:
+        return os.getenv("TOOL_VESPEECH_API_KEY") or get_speech_token()
+
+
 class BuiltinToolConfigs(BaseModel):
     vesearch: VeSearchConfig = Field(default_factory=VeSearchConfig)
+    vespeech: VeSpeechConfig = Field(default_factory=VeSpeechConfig)
