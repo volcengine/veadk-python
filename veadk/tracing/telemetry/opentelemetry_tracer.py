@@ -31,7 +31,7 @@ from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporter
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
 from veadk.tracing.telemetry.exporters.inmemory_exporter import InMemoryExporter
 from veadk.utils.logger import get_logger
-from veadk.utils.misc import get_temp_dir
+from veadk.utils.misc import get_agent_dir
 from veadk.utils.patches import patch_google_adk_telemetry
 
 logger = get_logger(__name__)
@@ -254,7 +254,7 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         self,
         user_id: str = "unknown_user_id",
         session_id: str = "unknown_session_id",
-        path: str = get_temp_dir(),
+        path: str = get_agent_dir(),
     ) -> str:
         """Dump collected trace data to a local JSON file.
 
@@ -265,7 +265,7 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         Args:
             user_id: User identifier for trace organization and file naming
             session_id: Session identifier for filtering and organizing spans
-            path: Directory path for the output file. Defaults to system temp directory
+            path: Directory path for the output file. Defaults to agents directory
 
         Returns:
             str: Full path to the created trace file, or empty string if export fails
