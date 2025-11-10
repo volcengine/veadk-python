@@ -263,11 +263,20 @@ def add_previous_response_id(
         and "response_id" in events[-2].custom_metadata
     ):
         previous_response_id = events[-2].custom_metadata["response_id"]
-        llm_request.cache_metadata = CacheMetadata(
-            cache_name=previous_response_id,
-            expire_time=0,
-            fingerprint="",
-            invocations_used=0,
-            cached_contents_count=0,
-        )
+        if "contents_count" in CacheMetadata.model_fields:  # adk >= 1.17
+            llm_request.cache_metadata = CacheMetadata(
+                cache_name=previous_response_id,
+                expire_time=0,
+                fingerprint="",
+                invocations_used=0,
+                contents_count=0,
+            )
+        else:  # 1.15 <= adk < 1.17
+            llm_request.cache_metadata = CacheMetadata(
+                cache_name=previous_response_id,
+                expire_time=0,
+                fingerprint="",
+                invocations_used=0,
+                cached_contents_count=0,
+            )
     return
