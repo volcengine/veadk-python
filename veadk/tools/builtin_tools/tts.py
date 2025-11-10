@@ -24,25 +24,8 @@ from typing import Dict, Any
 from google.adk.tools import ToolContext
 from veadk.config import getenv, settings
 from veadk.utils.logger import get_logger
-from veadk.utils.audio_manager import AudioDeviceManager, AudioConfig
 
 logger = get_logger(__name__)
-
-input_audio_config = {
-    "chunk": 3200,
-    "format": "pcm",
-    "channels": 1,
-    "sample_rate": 16000,
-    "bit_size": 8,
-}
-
-output_audio_config = {
-    "chunk": 3200,
-    "format": "pcm",
-    "channels": 1,
-    "sample_rate": 24000,
-    "bit_size": 8,
-}
 
 
 def text_to_speech(text: str, tool_context: ToolContext) -> Dict[str, Any]:
@@ -57,7 +40,7 @@ def text_to_speech(text: str, tool_context: ToolContext) -> Dict[str, Any]:
         A dict with the saved audio path.
     """
     url = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
-    audio_save_path = ""
+    temp_dir = getenv("TOOL_VESPEECH_AUDIO_OUTPUT_PATH", tempfile.gettempdir())
 
     app_id = getenv("TOOL_VESPEECH_APP_ID")
     speaker = getenv(
@@ -106,10 +89,13 @@ def text_to_speech(text: str, tool_context: ToolContext) -> Dict[str, Any]:
         logger.debug(f"Request TTS server with payload: {payload}.")
         response = session.post(url, headers=headers, json=payload, stream=True)
 
+        os.makedirs(temp_dir, exist_ok=True)
         with tempfile.NamedTemporaryFile(
-            suffix=".pcm", delete=False, dir=tempfile.gettempdir()
+            suffix=".pcm", delete=False, dir=temp_dir
         ) as tmp:
             audio_save_path = tmp.name  # e.g. /tmp/tts_12345.pcm
+            logger.debug(f"Created temporary file: {audio_save_path}")
+
         handle_server_response(response, audio_save_path)
 
     except Exception as e:
@@ -122,8 +108,6 @@ def text_to_speech(text: str, tool_context: ToolContext) -> Dict[str, Any]:
             f"Execution Error: {e}"
         }
     finally:
-        if audio_save_path and os.path.exists(audio_save_path):
-            os.remove(audio_save_path)
         if response:
             response.close()
         session.close()
@@ -150,18 +134,29 @@ def handle_server_response(
     audio_queue = queue.Queue()
     total_audio_size = 0
 
-    audio_device = AudioDeviceManager(
-        AudioConfig(**input_audio_config), AudioConfig(**output_audio_config)
-    )
-
-    # init output stream
-    output_stream = audio_device.open_output_stream()
+    output_stream, player_thread = None, None
     stop_event = threading.Event()
-    player_thread = threading.Thread(
-        target=_audio_player_thread, args=(audio_queue, output_stream, stop_event)
-    )
-    player_thread.daemon = True
-    player_thread.start()
+    try:
+        from veadk.utils.audio_manager import (
+            AudioDeviceManager,
+            AudioConfig,
+            input_audio_config,
+            output_audio_config,
+        )
+
+        audio_device = AudioDeviceManager(
+            AudioConfig(**input_audio_config), AudioConfig(**output_audio_config)
+        )
+
+        # init output stream
+        output_stream = audio_device.open_output_stream()
+        player_thread = threading.Thread(
+            target=_audio_player_thread, args=(audio_queue, output_stream, stop_event)
+        )
+        player_thread.daemon = True
+        player_thread.start()
+    except Exception as e:
+        logger.error(f"Failed to initialize audio device: {e}")
 
     try:
         for chunk in response.iter_lines(decode_unicode=True):
@@ -194,10 +189,12 @@ def handle_server_response(
         logger.error(f"handle tts failed: {e}, response: {response}")
         raise
     finally:
-        audio_queue.join()
-        stop_event.set()
-        player_thread.join()
-        output_stream.close()
+        if output_stream:
+            audio_queue.join()
+            stop_event.set()
+            if player_thread and player_thread.is_alive():
+                player_thread.join()
+            output_stream.close()
 
 
 def _audio_player_thread(audio_queue, output_stream, stop_event):

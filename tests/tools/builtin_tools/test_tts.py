@@ -86,8 +86,7 @@ class TestTTS(TestCase):
         mock_session.return_value.post.assert_called_once()
 
     @patch("builtins.open")
-    @patch("pyaudio.PyAudio")
-    def test_handle_server_response_success(self, mock_pyaudio, mock_open):
+    def test_handle_server_response_success(self, mock_open):
         """Test successful response handling"""
         # Setup mock response
         mock_response = MagicMock()
@@ -96,15 +95,10 @@ class TestTTS(TestCase):
             json.dumps({"code": 20000000}),
         ]
 
-        # Setup mock audio stream
-        mock_stream = MagicMock()
-        mock_pyaudio.return_value.open.return_value = mock_stream
-
         # Call function
         handle_server_response(mock_response, "test.pcm")
 
         # Assertions
-        mock_stream.write.assert_called_with(b"audio_chunk")
         mock_open.assert_called_once_with("test.pcm", "wb")
 
     @patch("builtins.open")

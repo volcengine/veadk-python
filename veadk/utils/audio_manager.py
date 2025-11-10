@@ -15,7 +15,29 @@
 from dataclasses import dataclass
 from typing import Optional
 
-import pyaudio
+try:
+    import pyaudio
+
+    PYAUDIO_AVAILABLE = True
+except ImportError:
+    pyaudio = None
+    PYAUDIO_AVAILABLE = False
+
+input_audio_config = {
+    "chunk": 3200,
+    "format": "pcm",
+    "channels": 1,
+    "sample_rate": 16000,
+    "bit_size": pyaudio.paInt16,
+}
+
+output_audio_config = {
+    "chunk": 3200,
+    "format": "pcm",
+    "channels": 1,
+    "sample_rate": 24000,
+    "bit_size": pyaudio.paInt16,
+}
 
 
 @dataclass
@@ -33,6 +55,11 @@ class AudioDeviceManager:
     """audio device manager, handle audio input/output"""
 
     def __init__(self, input_config: AudioConfig, output_config: AudioConfig):
+        if not PYAUDIO_AVAILABLE:
+            raise RuntimeError(
+                "pyaudio is not installed. Please install it via: "
+                "pip install veadk-python[speech]"
+            )
         self.input_config = input_config
         self.output_config = output_config
         self.pyaudio = pyaudio.PyAudio()
