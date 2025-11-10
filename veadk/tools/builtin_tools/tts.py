@@ -18,7 +18,6 @@ import json
 import base64
 import time
 import queue
-import pyaudio
 import threading
 import tempfile
 from typing import Dict, Any
@@ -34,7 +33,7 @@ input_audio_config = {
     "format": "pcm",
     "channels": 1,
     "sample_rate": 16000,
-    "bit_size": pyaudio.paInt16,
+    "bit_size": 8,
 }
 
 output_audio_config = {
@@ -42,7 +41,7 @@ output_audio_config = {
     "format": "pcm",
     "channels": 1,
     "sample_rate": 24000,
-    "bit_size": pyaudio.paInt16,
+    "bit_size": 8,
 }
 
 

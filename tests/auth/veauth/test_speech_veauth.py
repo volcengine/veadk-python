@@ -40,10 +40,9 @@ def test_get_speech_token_with_env_vars(monkeypatch):
             request_body={
                 "ProjectName": "default",
                 "OnlyAvailable": True,
-                "Filter": {},
             },
             header={"X-Security-Token": ""},
-            action="ListApiKeys",
+            action="ListAPIKeys",
             ak="test_access_key",
             sk="test_secret_key",
             service="speech_saas_prod",
@@ -85,10 +84,9 @@ def test_get_speech_token_with_vefaas_iam(monkeypatch):
             request_body={
                 "ProjectName": "default",
                 "OnlyAvailable": True,
-                "Filter": {},
             },
             header={"X-Security-Token": "vefaas_session_token"},
-            action="ListApiKeys",
+            action="ListAPIKeys",
             ak="vefaas_access_key",
             sk="vefaas_secret_key",
             service="speech_saas_prod",

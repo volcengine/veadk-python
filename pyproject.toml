@@ -36,7 +36,6 @@ dependencies = [
     "pymysql>=1.1.1", # For MySQL database (short term memory)
     "opensearch-py==2.8.0",
     "filetype>=1.2.0",
-    "pyaudio>=0.2.14",
 ]
 
 [project.scripts]
@@ -54,6 +53,9 @@ database = [
     "volcengine>=1.0.193",          # For Viking DB
     "tos>=2.8.4",                   # For TOS storage and Viking DB
     "mem0ai==0.1.118",              # For mem0
+]
+tts = [
+    "pyaudio>=0.2.14",
 ]
 eval = [
     "prometheus-client>=0.22.1",    # For exporting data to Prometheus pushgateway

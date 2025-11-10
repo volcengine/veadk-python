@@ -1,5 +1,19 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from typing import Optional
 
 import pyaudio
 
@@ -7,6 +21,7 @@ import pyaudio
 @dataclass
 class AudioConfig:
     """audio config"""
+
     format: str
     bit_size: int
     channels: int
@@ -31,7 +46,7 @@ class AudioDeviceManager:
             channels=self.input_config.channels,
             rate=self.input_config.sample_rate,
             input=True,
-            frames_per_buffer=self.input_config.chunk
+            frames_per_buffer=self.input_config.chunk,
         )
         return self.input_stream
 
@@ -41,7 +56,7 @@ class AudioDeviceManager:
             channels=self.output_config.channels,
             rate=self.output_config.sample_rate,
             output=True,
-            frames_per_buffer=self.output_config.chunk
+            frames_per_buffer=self.output_config.chunk,
         )
         return self.output_stream
 
@@ -51,4 +66,3 @@ class AudioDeviceManager:
                 stream.stop_stream()
                 stream.close()
         self.pyaudio.terminate()
-
