@@ -14,7 +14,6 @@ from google.adk.models.lite_llm import (
     TextChunk,
     _message_to_generate_content_response,
     UsageMetadataChunk,
-    _model_response_to_generate_content_response,
 )
 from google.genai import types
 from litellm import ChatCompletionAssistantMessage
@@ -91,7 +90,6 @@ class ArkLlm(LiteLlm):
         previous_response_id = None
         if llm_request.cache_metadata and llm_request.cache_metadata.cache_name:
             previous_response_id = llm_request.cache_metadata.cache_name
-        # ------------------------------------------------------ #
         completion_args = {
             "model": self.model,
             "messages": messages,
@@ -99,6 +97,7 @@ class ArkLlm(LiteLlm):
             "response_format": response_format,
             "previous_response_id": previous_response_id,  # supply previous_response_id
         }
+        # ------------------------------------------------------ #
         completion_args.update(self._additional_args)
 
         if generation_params:
@@ -117,6 +116,7 @@ class ArkLlm(LiteLlm):
             raw_response = await self.llm_client.aresponse(**response_args)
             async for part in raw_response:
                 for (
+                    model_response,
                     chunk,
                     finish_reason,
                 ) in self.transform_handler.stream_event_to_chunk(
@@ -158,6 +158,14 @@ class ArkLlm(LiteLlm):
                             candidates_token_count=chunk.completion_tokens,
                             total_token_count=chunk.total_tokens,
                         )
+                        # ------------------------------------------------------ #
+                        if model_response.get("usage", {}).get("prompt_tokens_details"):
+                            usage_metadata.cached_content_token_count = (
+                                model_response.get("usage", {})
+                                .get("prompt_tokens_details")
+                                .cached_tokens
+                            )
+                        # ------------------------------------------------------ #
 
                     if (
                         finish_reason == "tool_calls" or finish_reason == "stop"
@@ -185,6 +193,11 @@ class ArkLlm(LiteLlm):
                                 )
                             )
                         )
+                        self.transform_handler.adapt_responses_api(
+                            model_response,
+                            aggregated_llm_response_with_tool_call,
+                            stream=True,
+                        )
                         text = ""
                         function_calls.clear()
                     elif finish_reason == "stop" and text:
@@ -192,6 +205,9 @@ class ArkLlm(LiteLlm):
                             ChatCompletionAssistantMessage(
                                 role="assistant", content=text
                             )
+                        )
+                        self.transform_handler.adapt_responses_api(
+                            model_response, aggregated_llm_response, stream=True
                         )
                         text = ""
 
@@ -213,32 +229,9 @@ class ArkLlm(LiteLlm):
 
         else:
             raw_response = await self.llm_client.aresponse(**response_args)
-            yield self._openai_response_to_generate_content_response(raw_response)
-
-    def _openai_response_to_generate_content_response(
-        self, raw_response: OpenAITypeResponse
-    ) -> LlmResponse:
-        """
-        OpenAITypeResponse -> litellm.ModelResponse -> LlmResponse
-        """
-        model_response = self.transform_handler.transform_response(
-            openai_response=raw_response, stream=False
-        )
-        llm_response = _model_response_to_generate_content_response(model_response)
-
-        if not model_response.id.startswith("chatcmpl"):
-            if llm_response.custom_metadata is None:
-                llm_response.custom_metadata = {}
-            llm_response.custom_metadata["response_id"] = model_response["id"]
-        # add responses cache data
-        if model_response.get("usage", {}).get("prompt_tokens_details"):
-            if llm_response.usage_metadata:
-                llm_response.usage_metadata.cached_content_token_count = (
-                    model_response.get("usage", {})
-                    .get("prompt_tokens_details")
-                    .cached_tokens
-                )
-        return llm_response
+            yield self.transform_handler.openai_response_to_generate_content_response(
+                raw_response
+            )
 
 
 # before_model_callback

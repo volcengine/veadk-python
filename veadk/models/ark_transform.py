@@ -2,11 +2,13 @@ import uuid
 from typing import Any, Dict, Optional, cast, List, Generator, Tuple, Union
 
 import litellm
+from google.adk.models import LlmResponse
 from google.adk.models.lite_llm import (
     TextChunk,
     FunctionChunk,
     UsageMetadataChunk,
     _model_response_to_chunk,
+    _model_response_to_generate_content_response,
 )
 from openai.types.responses import (
     Response as OpenAITypeResponse,
@@ -192,16 +194,64 @@ class CompletionToResponsesAPIHandler:
             response.id = raw_response.id
         return response
 
+    def openai_response_to_generate_content_response(
+        self, raw_response: OpenAITypeResponse
+    ) -> LlmResponse:
+        """
+        OpenAITypeResponse -> litellm.ModelResponse -> LlmResponse
+        instead of `_model_response_to_generate_content_response`,
+        """
+        # no stream response
+        model_response = self.transform_response(
+            openai_response=raw_response, stream=False
+        )
+        llm_response = _model_response_to_generate_content_response(model_response)
+
+        llm_response = self.adapt_responses_api(
+            model_response,
+            llm_response,
+        )
+        return llm_response
+
+    def adapt_responses_api(
+        self,
+        model_response: ModelResponse,
+        llm_response: LlmResponse,
+        stream: bool = False,
+    ):
+        """
+        Adapt responses api.
+        """
+        if not model_response.id.startswith("chatcmpl"):
+            if llm_response.custom_metadata is None:
+                llm_response.custom_metadata = {}
+            llm_response.custom_metadata["response_id"] = model_response["id"]
+        # add responses cache data
+        if not stream:
+            if model_response.get("usage", {}).get("prompt_tokens_details"):
+                if llm_response.usage_metadata:
+                    llm_response.usage_metadata.cached_content_token_count = (
+                        model_response.get("usage", {})
+                        .get("prompt_tokens_details")
+                        .cached_tokens
+                    )
+        return llm_response
+
     def stream_event_to_chunk(
         self, event: ResponseStreamEvent, model: str
     ) -> Generator[
         Tuple[
+            ModelResponse,
             Optional[Union[TextChunk, FunctionChunk, UsageMetadataChunk]],
             Optional[str],
         ],
         None,
         None,
     ]:
+        """
+        instead of using `_model_response_to_chunk`,
+        we use our own implementation to support the responses api.
+        """
         choices = []
         model_response = None
 
@@ -214,21 +264,21 @@ class CompletionToResponsesAPIHandler:
                 stream=True, choices=choices, model=model, id=str(uuid.uuid4())
             )
         elif isinstance(event, ResponseCompletedEvent):
-            pass
             response = event.response
             model_response = self.transform_response(response, stream=True)
-            model_response = fix_response(model_response)
+            model_response = fix_model_response(model_response)
         else:
             # Ignore other event types like ResponseOutputItemAddedEvent, etc.
             pass
 
         if model_response:
-            yield from _model_response_to_chunk(model_response)
+            for chunk, finish_reason in _model_response_to_chunk(model_response):
+                yield model_response, chunk, finish_reason
 
 
-def fix_response(model_response: ModelResponse) -> ModelResponse:
+def fix_model_response(model_response: ModelResponse) -> ModelResponse:
     """
-    Fix the response to ensure some fields that cannot be transferred through direct conversion.
+    fix: tool_call has no attribute `index` in `_model_response_to_chunk`
     """
     for i, choice in enumerate(model_response.choices):
         if choice.message.tool_calls:
