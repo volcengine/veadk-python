@@ -25,6 +25,7 @@ from google.adk.auth import AuthConfig
 from google.genai import types
 from google.adk.auth.auth_credential import OAuth2Auth
 
+from veadk.integrations.ve_identity.auth_config import _get_default_region
 from veadk.processors.base_run_processor import BaseRunProcessor
 from veadk.integrations.ve_identity.identity_client import IdentityClient
 from veadk.integrations.ve_identity.models import AuthRequestConfig, OAuth2AuthPoller
@@ -178,6 +179,10 @@ class AuthRequestProcessor(BaseRunProcessor):
                 f"Please open this URL in your browser to authorize: {url}"
             )
         )
+        # Use provided region or get from config
+        if self.config.region is None:
+            self.config.region = _get_default_region()
+
         self._identity_client = self.config.identity_client or IdentityClient(
             region=self.config.region
         )
