@@ -125,13 +125,14 @@ def ark_field_reorganization(request_data: dict) -> dict:
     # If a system prompt is needed, it should be placed in the system role message within the input, instead of using the instructions parameter.
     # https://www.volcengine.com/docs/82379/1585128
     instructions = request_data.pop("instructions", None)
-    request_data["input"] = [
-        {
-            "content": [{"text": instructions, "type": "input_text"}],
-            "role": "system",
-            "type": "message",
-        }
-    ] + request_data["input"]
+    if instructions:
+        request_data["input"] = [
+            {
+                "content": [{"text": instructions, "type": "input_text"}],
+                "role": "system",
+                "type": "message",
+            }
+        ] + request_data["input"]
 
     return request_data
 
