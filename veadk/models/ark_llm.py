@@ -259,13 +259,18 @@ def add_previous_response_id(
 ) -> Optional[LlmResponse]:
     invocation_context = callback_context._invocation_context
     events = invocation_context.session.events
+    agent_name = callback_context.agent_name
+    # read response_id
     if (
         events
         and len(events) >= 2
         and events[-2].custom_metadata
         and "response_id" in events[-2].custom_metadata
     ):
-        previous_response_id = events[-2].custom_metadata["response_id"]
+        previous_response_id = callback_context.state.get(
+            f"agent:{agent_name}:response_id"
+        )
+        # previous_response_id = events[-2].custom_metadata["response_id"]
         if "contents_count" in CacheMetadata.model_fields:  # adk >= 1.17
             llm_request.cache_metadata = CacheMetadata(
                 cache_name=previous_response_id,
@@ -282,4 +287,15 @@ def add_previous_response_id(
                 invocations_used=0,
                 cached_contents_count=0,
             )
+    return
+
+
+# after_model_callback
+def add_response_id(
+    callback_context: CallbackContext, llm_response: LlmResponse
+) -> Optional[LlmResponse]:
+    agent_name = callback_context.agent_name
+
+    response_id = llm_response.custom_metadata["response_id"]
+    callback_context.state[f"agent:{agent_name}:response_id"] = response_id
     return
