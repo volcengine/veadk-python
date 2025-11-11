@@ -43,6 +43,7 @@ from veadk.evaluation import EvalSetRecorder
 from veadk.knowledgebase import KnowledgeBase
 from veadk.memory.long_term_memory import LongTermMemory
 from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.models.ark_llm import add_previous_response_id, add_response_id
 from veadk.processors import BaseRunProcessor, NoOpRunProcessor
 from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INSTRUCTION
 from veadk.tracing.base_tracer import BaseTracer
@@ -103,6 +104,8 @@ class Agent(LlmAgent):
 
     tracers: list[BaseTracer] = []
 
+    enable_responses: bool = False
+
     run_processor: Optional[BaseRunProcessor] = Field(default=None, exclude=True)
     """Optional run processor for intercepting and processing agent execution flows.
 
@@ -149,12 +152,30 @@ class Agent(LlmAgent):
         logger.info(f"Model extra config: {self.model_extra_config}")
 
         if not self.model:
-            self.model = LiteLlm(
-                model=f"{self.model_provider}/{self.model_name}",
-                api_key=self.model_api_key,
-                api_base=self.model_api_base,
-                **self.model_extra_config,
-            )
+            if self.enable_responses:
+                from veadk.models.ark_llm import ArkLlm
+
+                self.model = ArkLlm(
+                    model=f"{self.model_provider}/{self.model_name}",
+                    api_key=self.model_api_key,
+                    api_base=self.model_api_base,
+                    **self.model_extra_config,
+                )
+                if not self.before_model_callback:
+                    self.before_model_callback = add_previous_response_id
+                else:
+                    self.before_model_callback.append(add_previous_response_id)
+                if not self.after_tool_callback:
+                    self.after_model_callback = add_response_id
+                else:
+                    self.after_model_callback.append(add_response_id)
+            else:
+                self.model = LiteLlm(
+                    model=f"{self.model_provider}/{self.model_name}",
+                    api_key=self.model_api_key,
+                    api_base=self.model_api_base,
+                    **self.model_extra_config,
+                )
             logger.debug(
                 f"LiteLLM client created with config: {self.model_extra_config}"
             )
