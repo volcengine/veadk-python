@@ -86,7 +86,9 @@ async def generate(prompt, first_frame_image=None, last_frame_image=None):
     return response
 
 
-async def video_generate(params: list, tool_context: ToolContext) -> Dict:
+async def video_generate(
+    params: list, tool_context: ToolContext, batch_size: int = 10
+) -> Dict:
     """
     Generate videos in **batch** from text prompts, optionally guided by a first/last frame,
     and fine-tuned via *model text commands* (a.k.a. `parameters` appended to the prompt).
@@ -97,6 +99,8 @@ async def video_generate(params: list, tool_context: ToolContext) -> Dict:
     Args:
         params (list[dict]):
             A list of video generation requests. Each item supports the fields below.
+        batch_size (int):
+            The number of videos to generate in a batch. Defaults to 10.
 
             Required per item:
                 - video_name (str):
@@ -191,7 +195,6 @@ async def video_generate(params: list, tool_context: ToolContext) -> Dict:
                 }
             ]
     """
-    batch_size = 10
     success_list = []
     error_list = []
     logger.debug(f"Using model: {getenv('MODEL_VIDEO_NAME', DEFAULT_VIDEO_MODEL_NAME)}")
