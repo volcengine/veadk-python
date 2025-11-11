@@ -86,7 +86,9 @@ async def generate(prompt, first_frame_image=None, last_frame_image=None):
     return response
 
 
-async def video_generate(params: list, tool_context: ToolContext, batch_size: int = 10) -> Dict:
+async def video_generate(
+    params: list, tool_context: ToolContext, batch_size: int = 10
+) -> Dict:
     """
     Generate videos in **batch** from text prompts, optionally guided by a first/last frame,
     and fine-tuned via *model text commands* (a.k.a. `parameters` appended to the prompt).
