@@ -75,6 +75,8 @@ class RedisConfig(BaseSettings):
 
     port: int = 6379
 
+    username: str | None = None
+
     password: str = ""
 
     db: int = 0
