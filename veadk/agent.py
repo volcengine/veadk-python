@@ -48,6 +48,7 @@ from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INST
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_asyncio, patch_tracer
+from veadk.tools.builtin_tools.agent_identity import check_agent_authorization
 from veadk.version import VERSION
 
 patch_tracer()
@@ -123,6 +124,8 @@ class Agent(LlmAgent):
         )
     """
 
+    enable_authz: bool = False
+
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
 
@@ -183,6 +186,12 @@ class Agent(LlmAgent):
                     load_memory.custom_metadata = {}
                 load_memory.custom_metadata["backend"] = self.long_term_memory.backend
             self.tools.append(load_memory)
+
+        if self.enable_authz:
+            if self.before_agent_callback:
+                self.before_agent_callback.append(check_agent_authorization)
+            else:
+                self.before_agent_callback = check_agent_authorization
 
         logger.info(f"VeADK version: {VERSION}")
 
