@@ -27,6 +27,7 @@ logger = get_logger(__name__)
 
 def run_code(code: str, language: str, tool_context: ToolContext) -> str:
     """Run code in a code sandbox and return the output.
+    For C++ code, don't execute it directly, compile and execute via Python; write sources and object files to /tmp.
 
     Args:
         code (str): The code to run.
