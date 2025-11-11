@@ -30,6 +30,8 @@ from openai.types.responses import (
     Response as OpenAITypeResponse,
     ResponseStreamEvent,
     ResponseTextDeltaEvent,
+    ResponseOutputMessage,
+    ResponseFunctionToolCall,
 )
 from openai.types.responses import (
     ResponseCompletedEvent,
@@ -144,7 +146,21 @@ class CompletionToResponsesAPIHandler:
     def transform_request(
         self, model: str, messages: list, tools: Optional[list], **kwargs
     ):
-        messages = messages[:1] + messages[-1:]
+        # Keep the first message and all consecutive user messages from the end
+        filtered_messages = messages[:1]
+
+        # Collect all consecutive user messages from the end
+        user_messages_from_end = []
+        for message in reversed(messages[1:]):  # Skip the first message
+            if message.get("role") and message.get("role") in {"user", "tool"}:
+                user_messages_from_end.append(message)
+            else:
+                break  # Stop when we encounter a non-user message
+
+        # Reverse to maintain original order and add to filtered messages
+        filtered_messages.extend(reversed(user_messages_from_end))
+
+        messages = filtered_messages
         # completion_request to responses api request
         # 1. model and llm_custom_provider
         model, custom_llm_provider, _, _ = get_llm_provider(model=model)
@@ -190,45 +206,51 @@ class CompletionToResponsesAPIHandler:
 
     def transform_response(
         self, openai_response: OpenAITypeResponse, stream: bool = False
-    ) -> ModelResponse:
+    ) -> list[ModelResponse]:
         # openai_type_response -> responses_api_response  ->  completion_response
-        raw_response = ResponsesAPIResponse(**openai_response.model_dump())
+        result_list = []
+        raw_response_list = construct_responses_api_response(openai_response)
+        for raw_response in raw_response_list:
+            model_response = ModelResponse(stream=stream)
+            setattr(model_response, "usage", litellm.Usage())
+            response = self.litellm_handler.transform_response(
+                model=raw_response.model,
+                raw_response=raw_response,
+                model_response=model_response,
+                logging_obj=None,
+                request_data={},
+                messages=[],
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+            )
+            if raw_response and hasattr(raw_response, "id"):
+                response.id = raw_response.id
+            result_list.append(response)
 
-        model_response = ModelResponse(stream=stream)
-        setattr(model_response, "usage", litellm.Usage())
-        response = self.litellm_handler.transform_response(
-            model=raw_response.model,
-            raw_response=raw_response,
-            model_response=model_response,
-            logging_obj=None,
-            request_data={},
-            messages=[],
-            optional_params={},
-            litellm_params={},
-            encoding=None,
-        )
-        if raw_response and hasattr(raw_response, "id"):
-            response.id = raw_response.id
-        return response
+        return result_list
 
     def openai_response_to_generate_content_response(
         self, raw_response: OpenAITypeResponse
-    ) -> LlmResponse:
+    ) -> list[LlmResponse]:
         """
         OpenAITypeResponse -> litellm.ModelResponse -> LlmResponse
         instead of `_model_response_to_generate_content_response`,
         """
         # no stream response
-        model_response = self.transform_response(
+        model_response_list = self.transform_response(
             openai_response=raw_response, stream=False
         )
-        llm_response = _model_response_to_generate_content_response(model_response)
+        llm_response_list = []
+        for model_response in model_response_list:
+            llm_response = _model_response_to_generate_content_response(model_response)
 
-        llm_response = self.adapt_responses_api(
-            model_response,
-            llm_response,
-        )
-        return llm_response
+            llm_response = self.adapt_responses_api(
+                model_response,
+                llm_response,
+            )
+            llm_response_list.append(llm_response)
+        return llm_response_list
 
     def adapt_responses_api(
         self,
@@ -284,14 +306,15 @@ class CompletionToResponsesAPIHandler:
                 yield model_response, chunk, None
         elif isinstance(event, ResponseCompletedEvent):
             response = event.response
-            model_response = self.transform_response(response, stream=True)
-            model_response = fix_model_response(model_response)
+            model_response_list = self.transform_response(response, stream=True)
+            for model_response in model_response_list:
+                model_response = fix_model_response(model_response)
 
-            for chunk, finish_reason in _model_response_to_chunk(model_response):
-                if isinstance(chunk, TextChunk):
-                    yield model_response, None, finish_reason
-                else:
-                    yield model_response, chunk, finish_reason
+                for chunk, finish_reason in _model_response_to_chunk(model_response):
+                    if isinstance(chunk, TextChunk):
+                        yield model_response, None, finish_reason
+                    else:
+                        yield model_response, chunk, finish_reason
         else:
             # Ignore other event types like ResponseOutputItemAddedEvent, etc.
             pass
@@ -308,3 +331,37 @@ def fix_model_response(model_response: ModelResponse) -> ModelResponse:
                     model_response.choices[i].message.tool_calls[idx].index = 0
 
     return model_response
+
+
+def construct_responses_api_response(
+    openai_response: OpenAITypeResponse,
+) -> list[ResponsesAPIResponse]:
+    output = openai_response.output
+
+    # Check if we need to split the response
+    if len(output) >= 2:
+        # Check if output contains both ResponseOutputMessage and ResponseFunctionToolCall types
+        has_message = any(isinstance(item, ResponseOutputMessage) for item in output)
+        has_tool_call = any(
+            isinstance(item, ResponseFunctionToolCall) for item in output
+        )
+
+        if has_message and has_tool_call:
+            # Split into separate responses for each item
+            raw_response_list = []
+            for item in output:
+                if isinstance(item, (ResponseOutputMessage, ResponseFunctionToolCall)):
+                    raw_response_list.append(
+                        ResponsesAPIResponse(
+                            **{
+                                k: v
+                                for k, v in openai_response.model_dump().items()
+                                if k != "output"
+                            },
+                            output=[item],
+                        )
+                    )
+            return raw_response_list
+
+    # Otherwise, return the original response structure
+    return [ResponsesAPIResponse(**openai_response.model_dump())]

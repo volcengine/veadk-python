@@ -245,9 +245,12 @@ class ArkLlm(LiteLlm):
 
         else:
             raw_response = await self.llm_client.aresponse(**response_args)
-            yield self.transform_handler.openai_response_to_generate_content_response(
+            for (
+                llm_response
+            ) in self.transform_handler.openai_response_to_generate_content_response(
                 raw_response
-            )
+            ):
+                yield llm_response
 
 
 # before_model_callback
