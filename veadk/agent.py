@@ -15,12 +15,13 @@
 from __future__ import annotations
 
 import os
-from typing import Optional, Union
+from typing import Optional, Union, AsyncGenerator
 
-from google.adk.agents import LlmAgent, RunConfig
+from google.adk.agents import LlmAgent, RunConfig, InvocationContext
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.llm_agent import InstructionProvider, ToolUnion
 from google.adk.agents.run_config import StreamingMode
+from google.adk.events import Event, EventActions
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.runners import Runner
 from google.genai import types
@@ -36,7 +37,7 @@ from veadk.evaluation import EvalSetRecorder
 from veadk.knowledgebase import KnowledgeBase
 from veadk.memory.long_term_memory import LongTermMemory
 from veadk.memory.short_term_memory import ShortTermMemory
-from veadk.models.ark_llm import add_previous_response_id, add_response_id
+from veadk.models.ark_llm import add_previous_response_id
 from veadk.processors import BaseRunProcessor, NoOpRunProcessor
 from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INSTRUCTION
 from veadk.tracing.base_tracer import BaseTracer
@@ -212,11 +213,13 @@ class Agent(LlmAgent):
                 if not self.before_model_callback:
                     self.before_model_callback = add_previous_response_id
                 else:
-                    self.before_model_callback.append(add_previous_response_id)
-                if not self.after_tool_callback:
-                    self.after_model_callback = add_response_id
-                else:
-                    self.after_model_callback.append(add_response_id)
+                    if isinstance(self.before_model_callback, list):
+                        self.before_model_callback.append(add_previous_response_id)
+                    else:
+                        self.before_model_callback = [
+                            self.before_model_callback,
+                            add_previous_response_id,
+                        ]
             else:
                 self.model = LiteLlm(
                     model=f"{self.model_provider}/{self.model_name}",
@@ -258,6 +261,27 @@ class Agent(LlmAgent):
         logger.debug(
             f"Agent: {self.model_dump(include={'name', 'model_name', 'model_api_base', 'tools'})}"
         )
+
+    async def _run_async_impl(
+        self, ctx: InvocationContext
+    ) -> AsyncGenerator[Event, None]:
+        async for event in super()._run_async_impl(ctx):
+            agent_name = self.name
+            if (
+                self.enable_responses
+                and event.custom_metadata
+                and event.custom_metadata.get("response_id")
+            ):
+                response_id = event.custom_metadata["response_id"]
+                yield Event(
+                    invocation_id=ctx.invocation_id,
+                    author=self.name,
+                    actions=EventActions(
+                        state_delta={f"agent:{agent_name}:response_id": response_id}
+                    ),
+                    branch=ctx.branch,
+                )
+            yield event
 
     async def _run(
         self,
