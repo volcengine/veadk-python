@@ -13,10 +13,10 @@
 # limitations under the License.
 
 import click
-import os
 
 from veadk.cloud.cloud_agent_engine import CloudAgentEngine
 from veadk.utils.logger import get_logger
+from veadk.config import getenv
 
 logger = get_logger(__name__)
 
@@ -79,13 +79,16 @@ def update(
         FileNotFoundError: If local path does not exist.
     """
     # Set environment variables if provided
-    if volcengine_access_key and "VOLCENGINE_ACCESS_KEY" not in os.environ:
-        os.environ["VOLCENGINE_ACCESS_KEY"] = volcengine_access_key
-    if volcengine_secret_key and "VOLCENGINE_SECRET_KEY" not in os.environ:
-        os.environ["VOLCENGINE_SECRET_KEY"] = volcengine_secret_key
+    if not volcengine_access_key:
+        volcengine_access_key = getenv("VOLCENGINE_ACCESS_KEY")
+    if not volcengine_secret_key:
+        volcengine_secret_key = getenv("VOLCENGINE_SECRET_KEY")
 
     # Initialize cloud agent engine
-    engine = CloudAgentEngine()
+    engine = CloudAgentEngine(
+        volcengine_access_key=volcengine_access_key,
+        volcengine_secret_key=volcengine_secret_key,
+    )
 
     try:
         # Update function code

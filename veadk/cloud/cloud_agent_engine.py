@@ -57,8 +57,12 @@ class CloudAgentEngine(BaseModel):
         ```
     """
 
-    volcengine_access_key: str = getenv("VOLCENGINE_ACCESS_KEY")
-    volcengine_secret_key: str = getenv("VOLCENGINE_SECRET_KEY")
+    volcengine_access_key: str = getenv(
+        "VOLCENGINE_ACCESS_KEY", "", allow_false_values=True
+    )
+    volcengine_secret_key: str = getenv(
+        "VOLCENGINE_SECRET_KEY", "", allow_false_values=True
+    )
     region: str = "cn-beijing"
 
     def model_post_init(self, context: Any, /) -> None:
