@@ -17,10 +17,10 @@ import os
 
 from google.adk.tools import ToolContext
 
+from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 from veadk.config import getenv
 from veadk.utils.logger import get_logger
 from veadk.utils.volcengine_sign import ve_request
-from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 
 logger = get_logger(__name__)
 
@@ -30,7 +30,7 @@ def run_code(code: str, language: str, tool_context: ToolContext) -> str:
 
     Args:
         code (str): The code to run.
-        language (str): The programming language of the code. Language must be one of the supported languages: python3.
+        language (str): The programming language of the code. Language must be one of the supported languages: ["python3", "cpp"].
 
     Returns:
         str: The output of the code execution.
