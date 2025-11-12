@@ -25,14 +25,17 @@ from typing import Any, Dict, List, Literal, Optional
 import aiohttp
 import volcenginesdkid
 import volcenginesdkcore
+import volcenginesdksts
 
 from veadk.integrations.ve_identity.models import (
+    AssumeRoleCredential,
     DCRRegistrationRequest,
     DCRRegistrationResponse,
     OAuth2TokenResponse,
     WorkloadToken,
 )
 from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
+from veadk.configs.auth_configs import VeIdentityConfig
 
 from veadk.utils.logger import get_logger
 
@@ -77,6 +80,20 @@ def refresh_credentials(func):
             except Exception as e:
                 logger.warning(f"Failed to retrieve credentials from VeFaaS IAM: {e}")
 
+        # If there is no session_token and role_trn is configured, execute AssumeRole
+        if not session_token and self._identity_config.role_trn and ak and sk:
+            try:
+                logger.info(
+                    f"No session token found, attempting AssumeRole with role: {self._identity_config.role_trn}"
+                )
+                sts_credentials = self._assume_role(ak, sk)
+                ak = sts_credentials.access_key_id
+                sk = sts_credentials.secret_access_key
+                session_token = sts_credentials.session_token
+                logger.info("Successfully assumed role and obtained STS credentials")
+            except Exception as e:
+                logger.warning(f"Failed to assume role: {e}")
+
         # Update configuration with the credentials
         self._api_client.api_client.configuration.ak = ak
         self._api_client.api_client.configuration.sk = sk
@@ -115,6 +132,7 @@ class IdentityClient:
         secret_key: Optional[str] = None,
         session_token: Optional[str] = None,
         region: str = "cn-beijing",
+        identity_config: Optional[VeIdentityConfig] = None,
     ):
         """Initialize the identity client.
 
@@ -128,6 +146,8 @@ class IdentityClient:
             KeyError: If required environment variables are not set.
         """
         self.region = region
+        self._identity_config = identity_config or VeIdentityConfig()
+
         # Store initial credentials for fallback
         self._initial_access_key = access_key or os.getenv("VOLCENGINE_ACCESS_KEY", "")
         self._initial_secret_key = secret_key or os.getenv("VOLCENGINE_SECRET_KEY", "")
@@ -144,6 +164,56 @@ class IdentityClient:
 
         self._api_client = volcenginesdkid.IDApi(
             volcenginesdkcore.ApiClient(configuration)
+        )
+
+    def _assume_role(self, access_key: str, secret_key: str) -> AssumeRoleCredential:
+        """Execute AssumeRole to get STS temporary credentials.
+
+        Args:
+            access_key: VolcEngine access key
+            secret_key: VolcEngine secret key
+
+        Returns:
+            AssumeRoleResponseResult containing temporary credentials
+
+        Raises:
+            Exception: If AssumeRole fails
+        """
+        # Create STS client configuration
+        sts_config = volcenginesdkcore.Configuration()
+        sts_config.region = self.region
+        sts_config.ak = access_key
+        sts_config.sk = secret_key
+
+        # Create an STS API client
+        sts_client = volcenginesdksts.STSApi(volcenginesdkcore.ApiClient(sts_config))
+
+        # Construct an AssumeRole request
+        assume_role_request = volcenginesdksts.AssumeRoleRequest(
+            role_trn=self._identity_config.role_trn,
+            role_session_name=self._identity_config.role_session_name,
+        )
+
+        logger.info(
+            f"Executing AssumeRole for role: {self._identity_config.role_trn}, "
+            f"session: {self._identity_config.role_session_name}"
+        )
+
+        response: volcenginesdksts.AssumeRoleResponse = sts_client.assume_role(
+            assume_role_request
+        )
+
+        if not response.credentials:
+            raise Exception("AssumeRole returned no credentials")
+
+        access_key = response["access_key_id"]
+        secret_key = response["secret_access_key"]
+        session_token = response["session_token"]
+
+        return AssumeRoleCredential(
+            access_key_id=access_key,
+            secret_access_key=secret_key,
+            session_token=session_token,
         )
 
     @refresh_credentials
@@ -533,3 +603,38 @@ class IdentityClient:
 
         # Create the credential provider with updated config
         return self.create_oauth2_credential_provider(request_params)
+
+    @refresh_credentials
+    def check_permission(
+        self, principal_id, operation, resource_id, namespace="default"
+    ) -> bool:
+        """Check if the principal has permission to perform the operation on the resource.
+
+        Args:
+            principal_id: The ID of the principal (user or service).
+            operation: The operation to check permission for.
+            resource_id: The ID of the resource.
+            namespace: The namespace of the resource. Defaults to "default".
+
+        Returns:
+            True if the principal has permission, False otherwise.
+        """
+        logger.info(
+            f"Checking permission for principal {principal_id} on resource {resource_id} for operation {operation}..."
+        )
+
+        request = volcenginesdkid.CheckPermissionRequest(
+            principal_id=principal_id,
+            operation=operation,
+            resource_id=resource_id,
+            namespace=namespace,
+        )
+
+        response: volcenginesdkid.CheckPermissionResponse = (
+            self._api_client.check_permission(request)
+        )
+
+        logger.info(
+            f"Permission check result for principal {principal_id} on resource {resource_id}: {response.allowed}"
+        )
+        return response.allowed
