@@ -39,7 +39,6 @@ from pydantic import Field
 
 from veadk.models.ark_transform import (
     CompletionToResponsesAPIHandler,
-    get_previous_response_id,
 )
 from veadk.utils.logger import get_logger
 
@@ -89,7 +88,6 @@ class ArkLlm(LiteLlm):
         Yields:
           LlmResponse: The model response.
         """
-        agent_name = llm_request.config.labels["adk_agent_name"]
         self._maybe_append_user_content(llm_request)
         # logger.debug(_build_request_log(llm_request))
 
@@ -104,10 +102,7 @@ class ArkLlm(LiteLlm):
         # get previous_response_id
         previous_response_id = None
         if llm_request.cache_metadata and llm_request.cache_metadata.cache_name:
-            previous_response_id = get_previous_response_id(
-                llm_request.cache_metadata,
-                agent_name,
-            )
+            previous_response_id = llm_request.cache_metadata.cache_name
         completion_args = {
             "model": self.model,
             "messages": messages,
@@ -212,7 +207,6 @@ class ArkLlm(LiteLlm):
                             )
                         )
                         self.transform_handler.adapt_responses_api(
-                            llm_request,
                             model_response,
                             aggregated_llm_response_with_tool_call,
                             stream=True,
@@ -226,7 +220,6 @@ class ArkLlm(LiteLlm):
                             )
                         )
                         self.transform_handler.adapt_responses_api(
-                            llm_request,
                             model_response,
                             aggregated_llm_response,
                             stream=True,
