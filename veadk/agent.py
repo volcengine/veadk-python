@@ -19,9 +19,10 @@ from typing import Optional, Union, AsyncGenerator
 
 from google.adk.agents import LlmAgent, RunConfig, InvocationContext
 from google.adk.agents.base_agent import BaseAgent
+from google.adk.agents.context_cache_config import ContextCacheConfig
 from google.adk.agents.llm_agent import InstructionProvider, ToolUnion
 from google.adk.agents.run_config import StreamingMode
-from google.adk.events import Event, EventActions
+from google.adk.events import Event
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.runners import Runner
 from google.genai import types
@@ -37,7 +38,6 @@ from veadk.evaluation import EvalSetRecorder
 from veadk.knowledgebase import KnowledgeBase
 from veadk.memory.long_term_memory import LongTermMemory
 from veadk.memory.short_term_memory import ShortTermMemory
-from veadk.models.ark_llm import add_previous_response_id
 from veadk.processors import BaseRunProcessor, NoOpRunProcessor
 from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INSTRUCTION
 from veadk.tracing.base_tracer import BaseTracer
@@ -155,6 +155,8 @@ class Agent(LlmAgent):
 
     enable_responses: bool = False
 
+    context_cache_config: Optional[ContextCacheConfig] = None
+
     run_processor: Optional[BaseRunProcessor] = Field(default=None, exclude=True)
     """Optional run processor for intercepting and processing agent execution flows.
 
@@ -210,16 +212,12 @@ class Agent(LlmAgent):
                     api_base=self.model_api_base,
                     **self.model_extra_config,
                 )
-                if not self.before_model_callback:
-                    self.before_model_callback = add_previous_response_id
-                else:
-                    if isinstance(self.before_model_callback, list):
-                        self.before_model_callback.append(add_previous_response_id)
-                    else:
-                        self.before_model_callback = [
-                            self.before_model_callback,
-                            add_previous_response_id,
-                        ]
+                if not self.context_cache_config:
+                    self.context_cache_config = ContextCacheConfig(
+                        cache_intervals=100,  # maximum number
+                        ttl_seconds=315360000,
+                        min_tokens=0,
+                    )
             else:
                 self.model = LiteLlm(
                     model=f"{self.model_provider}/{self.model_name}",
@@ -265,22 +263,11 @@ class Agent(LlmAgent):
     async def _run_async_impl(
         self, ctx: InvocationContext
     ) -> AsyncGenerator[Event, None]:
+        if self.enable_responses:
+            if not ctx.context_cache_config:
+                ctx.context_cache_config = self.context_cache_config
+
         async for event in super()._run_async_impl(ctx):
-            agent_name = self.name
-            if (
-                self.enable_responses
-                and event.custom_metadata
-                and event.custom_metadata.get("response_id")
-            ):
-                response_id = event.custom_metadata["response_id"]
-                yield Event(
-                    invocation_id=ctx.invocation_id,
-                    author=self.name,
-                    actions=EventActions(
-                        state_delta={f"agent:{agent_name}:response_id": response_id}
-                    ),
-                    branch=ctx.branch,
-                )
             yield event
 
     async def _run(

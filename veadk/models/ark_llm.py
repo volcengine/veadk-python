@@ -15,13 +15,11 @@
 # adapted from Google ADK models adk-python/blob/main/src/google/adk/models/lite_llm.py at f1f44675e4a86b75e72cfd838efd8a0399f23e24 · google/adk-python
 
 import json
-from typing import Any, Dict, Union, AsyncGenerator, Optional
+from typing import Any, Dict, Union, AsyncGenerator
 
 import litellm
 import openai
 from openai.types.responses import Response as OpenAITypeResponse, ResponseStreamEvent
-from google.adk.agents.callback_context import CallbackContext
-from google.adk.models.cache_metadata import CacheMetadata
 from google.adk.models import LlmRequest, LlmResponse
 from google.adk.models.lite_llm import (
     LiteLlm,
@@ -41,6 +39,7 @@ from pydantic import Field
 
 from veadk.models.ark_transform import (
     CompletionToResponsesAPIHandler,
+    get_previous_response_id,
 )
 from veadk.utils.logger import get_logger
 
@@ -90,7 +89,7 @@ class ArkLlm(LiteLlm):
         Yields:
           LlmResponse: The model response.
         """
-
+        agent_name = llm_request.config.labels["adk_agent_name"]
         self._maybe_append_user_content(llm_request)
         # logger.debug(_build_request_log(llm_request))
 
@@ -105,7 +104,10 @@ class ArkLlm(LiteLlm):
         # get previous_response_id
         previous_response_id = None
         if llm_request.cache_metadata and llm_request.cache_metadata.cache_name:
-            previous_response_id = llm_request.cache_metadata.cache_name
+            previous_response_id = get_previous_response_id(
+                llm_request.cache_metadata,
+                agent_name,
+            )
         completion_args = {
             "model": self.model,
             "messages": messages,
@@ -210,6 +212,7 @@ class ArkLlm(LiteLlm):
                             )
                         )
                         self.transform_handler.adapt_responses_api(
+                            llm_request,
                             model_response,
                             aggregated_llm_response_with_tool_call,
                             stream=True,
@@ -223,7 +226,10 @@ class ArkLlm(LiteLlm):
                             )
                         )
                         self.transform_handler.adapt_responses_api(
-                            model_response, aggregated_llm_response, stream=True
+                            llm_request,
+                            model_response,
+                            aggregated_llm_response,
+                            stream=True,
                         )
                         text = ""
 
@@ -248,32 +254,6 @@ class ArkLlm(LiteLlm):
             for (
                 llm_response
             ) in self.transform_handler.openai_response_to_generate_content_response(
-                raw_response
+                llm_request, raw_response
             ):
                 yield llm_response
-
-
-# before_model_callback
-def add_previous_response_id(
-    callback_context: CallbackContext, llm_request: LlmRequest
-) -> Optional[LlmResponse]:
-    agent_name = callback_context.agent_name
-    # read response_id
-    previous_response_id = callback_context.state.get(f"agent:{agent_name}:response_id")
-    if "contents_count" in CacheMetadata.model_fields:  # adk >= 1.17
-        llm_request.cache_metadata = CacheMetadata(
-            cache_name=previous_response_id,
-            expire_time=0,
-            fingerprint="",
-            invocations_used=0,
-            contents_count=0,
-        )
-    else:  # 1.15 <= adk < 1.17
-        llm_request.cache_metadata = CacheMetadata(
-            cache_name=previous_response_id,
-            expire_time=0,
-            fingerprint="",
-            invocations_used=0,
-            cached_contents_count=0,
-        )
-    return

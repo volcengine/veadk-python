@@ -14,11 +14,13 @@
 
 # adapted from Google ADK models adk-python/blob/main/src/google/adk/models/lite_llm.py at f1f44675e4a86b75e72cfd838efd8a0399f23e24 · google/adk-python
 
+import json
 import uuid
 from typing import Any, Dict, Optional, cast, List, Generator, Tuple, Union
 
 import litellm
-from google.adk.models import LlmResponse
+from google.adk.models import LlmResponse, LlmRequest
+from google.adk.models.cache_metadata import CacheMetadata
 from google.adk.models.lite_llm import (
     TextChunk,
     FunctionChunk,
@@ -139,6 +141,74 @@ def ark_field_reorganization(request_data: dict) -> dict:
     return request_data
 
 
+def build_cache_metadata(agent_response_id: dict) -> CacheMetadata:
+    """Create a new CacheMetadata instance for agent response tracking.
+
+    Args:
+        agent_name: Name of the agent
+        response_id: Response ID to track
+
+    Returns:
+        A new CacheMetadata instance with the agent-response mapping
+    """
+    cache_name = json.dumps(agent_response_id)
+    if "contents_count" in CacheMetadata.model_fields:  # adk >= 1.17
+        cache_metadata = CacheMetadata(
+            cache_name=cache_name,
+            expire_time=0,
+            fingerprint="",
+            invocations_used=0,
+            contents_count=0,
+        )
+    else:  # 1.15 <= adk < 1.17
+        cache_metadata = CacheMetadata(
+            cache_name=cache_name,
+            expire_time=0,
+            fingerprint="",
+            invocations_used=0,
+            cached_contents_count=0,
+        )
+    return cache_metadata
+
+
+def update_cache_metadata(
+    cache_metadata: CacheMetadata,
+    agent_name: str,
+    response_id: str,
+) -> CacheMetadata:
+    """Update cache metadata by creating a new instance with updated cache_name.
+
+    Since CacheMetadata is frozen, we cannot modify it directly. Instead,
+    we create a new instance with the updated cache_name field.
+    """
+    try:
+        agent_response_id = json.loads(cache_metadata.cache_name)
+        agent_response_id[agent_name] = response_id
+        updated_cache_name = agent_response_id
+
+        # Create a new CacheMetadata instance with updated cache_name
+        return build_cache_metadata(updated_cache_name)
+    except json.JSONDecodeError as e:
+        logger.warning(
+            f"Failed to update cache metadata. The cache_name is not a valid JSON string., {str(e)}"
+        )
+        return cache_metadata
+
+
+def get_previous_response_id(
+    cache_metadata: CacheMetadata,
+    agent_name: str,
+):
+    try:
+        agent_response_id = json.loads(cache_metadata.cache_name)
+        return agent_response_id.get(agent_name, None)
+    except json.JSONDecodeError as e:
+        logger.warning(
+            f"Failed to get previous response id. The cache_name is not a valid JSON string., {str(e)}"
+        )
+        return None
+
+
 class CompletionToResponsesAPIHandler:
     def __init__(self):
         self.litellm_handler = LiteLLMResponsesTransformationHandler()
@@ -231,7 +301,7 @@ class CompletionToResponsesAPIHandler:
         return result_list
 
     def openai_response_to_generate_content_response(
-        self, raw_response: OpenAITypeResponse
+        self, llm_request: LlmRequest, raw_response: OpenAITypeResponse
     ) -> list[LlmResponse]:
         """
         OpenAITypeResponse -> litellm.ModelResponse -> LlmResponse
@@ -246,6 +316,7 @@ class CompletionToResponsesAPIHandler:
             llm_response = _model_response_to_generate_content_response(model_response)
 
             llm_response = self.adapt_responses_api(
+                llm_request,
                 model_response,
                 llm_response,
             )
@@ -254,6 +325,7 @@ class CompletionToResponsesAPIHandler:
 
     def adapt_responses_api(
         self,
+        llm_request: LlmRequest,
         model_response: ModelResponse,
         llm_response: LlmResponse,
         stream: bool = False,
@@ -262,9 +334,21 @@ class CompletionToResponsesAPIHandler:
         Adapt responses api.
         """
         if not model_response.id.startswith("chatcmpl"):
-            if llm_response.custom_metadata is None:
-                llm_response.custom_metadata = {}
-            llm_response.custom_metadata["response_id"] = model_response["id"]
+            # if llm_response.custom_metadata is None:
+            #     llm_response.custom_metadata = {}
+            # llm_response.custom_metadata["response_id"] = model_response["id"]
+            previous_response_id = model_response["id"]
+            if not llm_request.cache_metadata:
+                llm_response.cache_metadata = build_cache_metadata(
+                    {llm_request.config.labels["adk_agent_name"]: previous_response_id}
+                )
+            else:
+                llm_response.cache_metadata = update_cache_metadata(
+                    llm_request.cache_metadata,
+                    llm_request.config.labels["adk_agent_name"],
+                    previous_response_id,
+                )
+
         # add responses cache data
         if not stream:
             if model_response.get("usage", {}).get("prompt_tokens_details"):
