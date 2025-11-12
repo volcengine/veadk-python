@@ -174,7 +174,7 @@ class IdentityClient:
             secret_key: VolcEngine secret key
 
         Returns:
-            AssumeRoleResponseResult containing temporary credentials
+            AssumeRoleCredential containing temporary credentials
 
         Raises:
             Exception: If AssumeRole fails

@@ -32,6 +32,7 @@ identity_client = IdentityClient(region=region)
 async def check_agent_authorization(
     callback_context: CallbackContext,
 ) -> Optional[types.Content]:
+    """Check if the agent is authorized to run using VeIdentity."""
     workload_token = await get_workload_token(
         tool_context=callback_context,
         identity_client=identity_client,
