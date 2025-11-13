@@ -14,15 +14,15 @@
 
 import json
 from typing import AsyncGenerator, Literal, Optional
-from pydantic import Field
 
 from a2a.client.base_client import BaseClient
 import httpx
 import requests
-from a2a.client.auth import CredentialService
 from a2a.types import AgentCard
 from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
 
+from veadk.integrations.ve_identity.utils import generate_headers
+from veadk.utils.auth import VE_TIP_TOKEN_CREDENTIAL_KEY, VE_TIP_TOKEN_HEADER
 from veadk.utils.logger import get_logger
 from google.adk.utils.context_utils import Aclosing
 from google.adk.events.event import Event
@@ -67,18 +67,20 @@ class RemoteVeAgent(RemoteA2aAgent):
             with a configured `base_url` is provided. If both are given, they must
             not conflict.
         auth_token (Optional[str]):
-            Optional authentication token used for secure access. If not provided,
-            the agent will be accessed without authentication.
+            Optional authentication token used for secure access during initialization.
+            If not provided, the agent will be accessed without authentication.
+            Note: For runtime authentication, use the credential service in InvocationContext.
         auth_method (Literal["header", "querystring"] | None):
-            The method of attaching the authentication token.
-            - `"header"`: Token is passed via HTTP `Authorization` header.
-            - `"querystring"`: Token is passed as a query parameter.
+            The method of attaching the authentication token at runtime.
+            - `"header"`: Token is retrieved from credential service and passed via HTTP `Authorization` header.
+            - `"querystring"`: Token is retrieved from credential service and passed as a query parameter.
+            - `None`: No runtime authentication injection (default).
+            The credential is loaded from `InvocationContext.credential_service` using the
+            app_name and user_id from the context.
         httpx_client (Optional[httpx.AsyncClient]):
             An optional, pre-configured `httpx.AsyncClient` to use for communication.
             This allows for client sharing and advanced configurations (e.g., proxies).
             If its `base_url` is set, it will be used as the agent's location.
-        credential_service (Optional[CredentialService]):
-            Optional credential service for injecting auth token.
 
     Raises:
         ValueError:
@@ -90,13 +92,13 @@ class RemoteVeAgent(RemoteA2aAgent):
 
     Examples:
         ```python
-        # Example 1: Connect using a URL
+        # Example 1: Connect using a URL (no authentication)
         agent = RemoteVeAgent(
             name="public_agent",
             url="https://vefaas.example.com/agents/public"
         )
 
-        # Example 2: Using Bearer token in header
+        # Example 2: Using static Bearer token in header for initialization
         agent = RemoteVeAgent(
             name="secured_agent",
             url="https://vefaas.example.com/agents/secure",
@@ -104,7 +106,15 @@ class RemoteVeAgent(RemoteA2aAgent):
             auth_method="header"
         )
 
-        # Example 3: Using a pre-configured httpx_client
+        # Example 3: Using runtime authentication with credential service
+        # The auth token will be automatically injected from InvocationContext.credential_service
+        agent = RemoteVeAgent(
+            name="dynamic_auth_agent",
+            url="https://vefaas.example.com/agents/secure",
+            auth_method="header"  # Will load credential at runtime
+        )
+
+        # Example 4: Using a pre-configured httpx_client
         import httpx
         client = httpx.AsyncClient(
             base_url="https://vefaas.example.com/agents/query",
@@ -112,30 +122,13 @@ class RemoteVeAgent(RemoteA2aAgent):
         )
         agent = RemoteVeAgent(
             name="query_agent",
-            auth_token="my_secret_token",
-            auth_method="querystring",
+            auth_method="querystring",  # Will load credential at runtime
             httpx_client=client
-        )
-
-        # Example 4: Using a credential service
-        from veadk.a2a.credentials import VeCredentialStore
-        credential_service = VeCredentialStore()
-        credential_service.set_credentials(
-            session_id="session_123",
-            security_scheme_name="inbound_auth",
-            credential="bearer_token_xyz"
-        )
-        agent = RemoteVeAgent(
-            name="secured_agent",
-            url="https://vefaas.example.com/agents/secure",
-            credential_service=credential_service
         )
         ```
     """
 
-    credential_service: Optional[CredentialService] = Field(
-        None, description="Optional credential service for injecting auth token."
-    )
+    auth_method: Literal["header", "querystring"] | None = None
 
     def __init__(
         self,
@@ -144,7 +137,6 @@ class RemoteVeAgent(RemoteA2aAgent):
         auth_token: Optional[str] = None,
         auth_method: Literal["header", "querystring"] | None = None,
         httpx_client: Optional[httpx.AsyncClient] = None,
-        credential_service: Optional[CredentialService] = None,
     ):
         # Determine the effective URL for the agent and handle conflicts.
         effective_url = url
@@ -225,9 +217,9 @@ class RemoteVeAgent(RemoteA2aAgent):
         if not client_was_provided:
             self._httpx_client_needs_cleanup = True
 
-        # Set credential service if provided
-        if credential_service:
-            self.credential_service = credential_service
+        # Set auth_method if provided
+        if auth_method:
+            self.auth_method = auth_method
 
     async def _run_async_impl(
         self, ctx: InvocationContext
@@ -268,14 +260,17 @@ class RemoteVeAgent(RemoteA2aAgent):
         """Inject authentication token from credential service into the HTTP client.
 
         This method retrieves the authentication token from the credential service
-        using the session ID and updates the HTTP client headers to include the
-        Bearer token for subsequent requests.
+        in the InvocationContext and updates the HTTP client headers or query params
+        based on the configured auth_method.
 
         Args:
-            ctx: Invocation context containing session information
+            ctx: Invocation context containing credential service and user information
         """
-        # Skip if no credential service configured
-        if not self.credential_service:
+        # Skip if no credential service in context
+        if not ctx.credential_service:
+            logger.debug(
+                "No credential service in InvocationContext, skipping auth token injection"
+            )
             return
 
         # Skip if client is not initialized or not a BaseClient
@@ -302,30 +297,64 @@ class RemoteVeAgent(RemoteA2aAgent):
             return
 
         try:
-            from a2a.client import ClientCallContext
+            from veadk.utils.auth import build_auth_config
+            from google.adk.agents.callback_context import CallbackContext
 
-            # Get credentials from credential service using session ID
-            token = await self.credential_service.get_credentials(
-                security_scheme_name="inbound_auth",
-                context=ClientCallContext(
-                    state={"userId": ctx.user_id, "sessionId": ctx.session.id}
-                ),
+            # Inject TIP token via header
+            workload_auth_config = build_auth_config(
+                auth_method="apikey",
+                credential_key=VE_TIP_TOKEN_CREDENTIAL_KEY,
+                header_name=VE_TIP_TOKEN_HEADER,
             )
 
-            if not token:
+            tip_credential = await ctx.credential_service.load_credential(
+                auth_config=workload_auth_config,
+                callback_context=CallbackContext(ctx),
+            )
+
+            if tip_credential:
+                self._a2a_client._transport.httpx_client.headers.update(
+                    {VE_TIP_TOKEN_HEADER: tip_credential.api_key}
+                )
+                logger.debug(
+                    f"Injected TIP token via header for app={ctx.app_name}, user={ctx.user_id}"
+                )
+
+            # Build auth config based on auth_method
+            auth_config = build_auth_config(
+                credential_key="inbound_auth",
+                auth_method=self.auth_method or "header",
+                header_scheme="bearer",
+            )
+
+            # Load credential from credential service
+            credential = await ctx.credential_service.load_credential(
+                auth_config=auth_config,
+                callback_context=CallbackContext(ctx),
+            )
+
+            if not credential:
+                logger.debug(
+                    f"No credential loaded, skipping auth token injection for app={ctx.app_name}, user={ctx.user_id}"
+                )
                 return
 
-            # Add "Bearer " prefix if not already present
-            if not token.startswith("Bearer "):
-                token = f"Bearer {token}"
-
-            # Update HTTP client headers
-            self._a2a_client._transport.httpx_client.headers.update(
-                {"Authorization": token}
-            )
-            logger.debug(
-                f"Injected auth token for user {ctx.user_id} and session {ctx.session.id}"
-            )
+            # Inject credential based on auth_method
+            if self.auth_method == "querystring":
+                # Extract API key
+                api_key = credential.api_key
+                new_params = dict(self._a2a_client._transport.httpx_client.params)
+                new_params.update({"token": api_key})
+                self._a2a_client._transport.httpx_client.params = new_params
+                logger.debug(
+                    f"Injected auth token via querystring for app={ctx.app_name}, user={ctx.user_id}"
+                )
+            else:
+                if headers := generate_headers(credential):
+                    self._a2a_client._transport.httpx_client.headers.update(headers)
+                    logger.debug(
+                        f"Injected auth token via header for app={ctx.app_name}, user={ctx.user_id}"
+                    )
 
         except Exception as e:
             logger.warning(f"Failed to inject auth token: {e}", exc_info=True)

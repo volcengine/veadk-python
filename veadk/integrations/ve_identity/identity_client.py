@@ -27,6 +27,7 @@ import aiohttp
 import volcenginesdkid
 import volcenginesdkcore
 import volcenginesdksts
+from volcenginesdkcore.rest import ApiException
 
 from veadk.consts import VEFAAS_IAM_CRIDENTIAL_PATH
 from veadk.integrations.ve_identity.models import (
@@ -96,8 +97,8 @@ def refresh_credentials(func):
                     ak = sts_credentials.access_key_id
                     sk = sts_credentials.secret_access_key
                     session_token = sts_credentials.session_token
-                except Exception as e:
-                    logger.warning(f"Failed to assume role: {e}")
+                except ApiException as e:
+                    logger.warning(f"Failed to assume role: {e.reason}")
 
         # Update configuration with the credentials
         self._api_client.api_client.configuration.ak = ak
@@ -164,6 +165,7 @@ class IdentityClient:
         configuration.ak = self._initial_access_key
         configuration.sk = self._initial_secret_key
         configuration.session_token = self._initial_session_token
+        configuration.logger = {}
 
         self._api_client = volcenginesdkid.IDApi(
             volcenginesdkcore.ApiClient(configuration)
@@ -243,6 +245,7 @@ class IdentityClient:
         sts_config.region = self.region
         sts_config.ak = access_key
         sts_config.sk = secret_key
+        sts_config.logger = {}
 
         # Create an STS API client
         sts_client = volcenginesdksts.STSApi(volcenginesdkcore.ApiClient(sts_config))
@@ -695,6 +698,7 @@ class IdentityClient:
         principal: Dict[str, str],
         operation: Dict[str, str],
         resource: Dict[str, str],
+        original_callers: Optional[List[Dict[str, str]]] = None,
         namespace: str = "default",
     ) -> bool:
         """Check if the principal has permission to perform the operation on the resource.
@@ -703,6 +707,7 @@ class IdentityClient:
             principal: Principal information, e.g., {"Type": "User", "Id": "user123"}
             operation: Operation to check, e.g., {"Type": "Action", "Id": "invoke"}
             resource: Resource information, e.g., {"Type": "Agent", "Id": "agent456"}
+            original_callers: Optional list of original callers.
             namespace: Namespace of the resource. Defaults to "default".
 
         Returns:
@@ -721,6 +726,7 @@ class IdentityClient:
             operation=operation,
             principal=principal,
             resource=resource,
+            original_callers=original_callers,
         )
 
         response: volcenginesdkid.CheckPermissionResponse = (
