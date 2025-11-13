@@ -132,10 +132,6 @@ class WorkloadTokenManager:
                         f"Cached workload token expired for agent '{tool_context.agent_name}', refreshing..."
                     )
 
-        # Default to agent_name if workload_name not specified
-        if not workload_name:
-            workload_name = tool_context.agent_name
-
         # Determine user_id based on authentication mode
         user_id = None if user_token else tool_context._invocation_context.user_id
 
