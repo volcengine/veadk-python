@@ -19,8 +19,10 @@ from fastapi import FastAPI
 
 from veadk import Agent
 from veadk.a2a.agent_card import get_agent_card
-from veadk.a2a.ve_agent_executor import VeAgentExecutor
+from veadk.runner import Runner
 from veadk.memory.short_term_memory import ShortTermMemory
+
+from google.adk.a2a.executor.a2a_agent_executor import A2aAgentExecutor
 
 
 class VeA2AServer:
@@ -29,10 +31,12 @@ class VeA2AServer:
     ):
         self.agent_card = get_agent_card(agent, url)
 
-        self.agent_executor = VeAgentExecutor(
-            app_name=app_name,
-            agent=agent,
-            short_term_memory=short_term_memory,
+        self.agent_executor = A2aAgentExecutor(
+            runner=Runner(
+                agent=agent,
+                app_name=app_name,
+                short_term_memory=short_term_memory,
+            ),
         )
 
         self.task_store = InMemoryTaskStore()

@@ -22,6 +22,7 @@ from typing import Optional, Union
 from google.adk.tools.tool_context import ToolContext
 from google.adk.agents.readonly_context import ReadonlyContext
 
+from veadk.integrations.ve_identity.auth_config import _get_default_region
 from veadk.utils.logger import get_logger
 
 from veadk.integrations.ve_identity.identity_client import IdentityClient
@@ -49,13 +50,16 @@ class WorkloadTokenManager:
     def __init__(
         self,
         identity_client: IdentityClient = None,
-        region: Optional[str] = "cn-beijing",
+        region: Optional[str] = None,
     ):
         """Initialize the token manager.
 
         Args:
             identity_client: The IdentityClient instance to use for token requests.
         """
+        if region is None:
+            region = _get_default_region()
+
         self._identity_client = identity_client or IdentityClient(region=region)
 
     def _build_cache_key(

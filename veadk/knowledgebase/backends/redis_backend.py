@@ -88,6 +88,7 @@ class RedisKnowledgeBackend(BaseKnowledgebaseBackend):
             host=self.redis_config.host,
             port=self.redis_config.port,
             db=self.redis_config.db,
+            username=self.redis_config.username,
             password=self.redis_config.password,
         )
 
@@ -112,7 +113,7 @@ class RedisKnowledgeBackend(BaseKnowledgebaseBackend):
         self._vector_store = RedisVectorStore(
             schema=self._schema,
             redis_client=self._redis_client,
-            overwrite=True,
+            overwrite=False,
             collection_name=self.index,
         )
 
@@ -120,8 +121,8 @@ class RedisKnowledgeBackend(BaseKnowledgebaseBackend):
             vector_store=self._vector_store
         )
 
-        self._vector_index = VectorStoreIndex.from_documents(
-            documents=[],
+        self._vector_index = VectorStoreIndex(
+            nodes=[],
             storage_context=self._storage_context,
             embed_model=self._embed_model,
         )

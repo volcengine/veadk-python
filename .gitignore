@@ -197,3 +197,7 @@ cython_debug/
 **/.nuxt
 **/.data
 **./outputdebug_*.py
+**./output
+
+*.mp3
+*.pcm

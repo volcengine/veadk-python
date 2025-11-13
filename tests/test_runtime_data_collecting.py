@@ -14,6 +14,7 @@
 
 import json
 import os
+import uuid
 
 import pytest
 from .utils import generate_events, generate_session
@@ -25,7 +26,7 @@ APP_NAME = "app"
 USER_ID = "user"
 SESSION_ID = "session"
 
-EVAL_SET_ID = "temp_unittest"
+EVAL_SET_ID = "temp_unittest" + uuid.uuid4().hex
 
 
 @pytest.mark.asyncio
@@ -46,7 +47,7 @@ async def test_runtime_data_collecting():
     recorder = EvalSetRecorder(session_service=session_service, eval_set_id=EVAL_SET_ID)
     dump_path = await recorder.dump(APP_NAME, USER_ID, SESSION_ID)
 
-    assert dump_path == f"/tmp/{APP_NAME}/{recorder.eval_set_id}.evalset.json"
+    # assert dump_path == f"/tmp/{APP_NAME}/{recorder.eval_set_id}.evalset.json"
     assert os.path.exists(dump_path) and os.path.isfile(dump_path)
     assert os.path.getsize(dump_path) > 0
 

@@ -144,7 +144,7 @@ def generate_headers(credential: AuthCredential) -> Optional[dict[str, str]]:
                     )
                 }
         elif credential.api_key:
-            headers = {"Authorization": f"Bearer {credential.api_key}"}
+            headers = {"Authorization": credential.api_key}
         elif credential.service_account:
             pass
 
