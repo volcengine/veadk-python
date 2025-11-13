@@ -19,25 +19,15 @@ from fastapi import FastAPI
 
 from veadk import Agent
 from veadk.a2a.agent_card import get_agent_card
-from veadk.a2a.ve_request_converter import AuthenticatedA2ARequestConverter
-from veadk.a2a.credentials import VeCredentialStore
 from veadk.runner import Runner
 from veadk.memory.short_term_memory import ShortTermMemory
 
-from google.adk.a2a.executor.a2a_agent_executor import (
-    A2aAgentExecutor,
-    A2aAgentExecutorConfig,
-)
+from google.adk.a2a.executor.a2a_agent_executor import A2aAgentExecutor
 
 
 class VeA2AServer:
     def __init__(
-        self,
-        agent: Agent,
-        url: str,
-        app_name: str,
-        short_term_memory: ShortTermMemory,
-        credential_service: VeCredentialStore,
+        self, agent: Agent, url: str, app_name: str, short_term_memory: ShortTermMemory
     ):
         self.agent_card = get_agent_card(agent, url)
 
@@ -46,15 +36,6 @@ class VeA2AServer:
                 agent=agent,
                 app_name=app_name,
             ),
-            config=(
-                A2aAgentExecutorConfig(
-                    request_converter=AuthenticatedA2ARequestConverter(
-                        credential_service=credential_service
-                    ).build_converter(),
-                )
-                if credential_service
-                else None
-            ),  # If no credential_service, no need to use AuthenticatedA2ARequestConverter
         )
 
         self.task_store = InMemoryTaskStore()
@@ -74,11 +55,7 @@ class VeA2AServer:
 
 
 def init_app(
-    server_url: str,
-    app_name: str,
-    agent: Agent,
-    short_term_memory: ShortTermMemory,
-    credential_service: VeCredentialStore | None = None,
+    server_url: str, app_name: str, agent: Agent, short_term_memory: ShortTermMemory
 ) -> FastAPI:
     """Init the fastapi application in terms of VeADK agent.
 
@@ -87,7 +64,6 @@ def init_app(
         app_name: str, the name of the app
         agent: Agent, the agent of the app
         short_term_memory: ShortTermMemory, the short term memory of the app
-        credential_service: VeCredentialStore, the credential service of the app
 
     Returns:
         FastAPI, the fastapi app
@@ -98,6 +74,5 @@ def init_app(
         url=server_url,
         app_name=app_name,
         short_term_memory=short_term_memory,
-        credential_service=credential_service,
     )
     return server.build()
