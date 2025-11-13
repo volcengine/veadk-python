@@ -89,7 +89,9 @@ class TestVeCredentialService:
         assert credential_service._credentials == {}
 
     @pytest.mark.asyncio
-    async def test_set_and_get_credential(self, credential_service, sample_auth_credential):
+    async def test_set_and_get_credential(
+        self, credential_service, sample_auth_credential
+    ):
         """Test setting and getting credentials."""
         # Set credential
         await credential_service.set_credential(
@@ -234,7 +236,11 @@ class TestVeCredentialService:
 
     @pytest.mark.asyncio
     async def test_load_credential_via_adk_interface(
-        self, credential_service, mock_callback_context, mock_auth_config, sample_auth_credential
+        self,
+        credential_service,
+        mock_callback_context,
+        mock_auth_config,
+        sample_auth_credential,
     ):
         """Test loading credential via ADK BaseCredentialService interface."""
         # First set a credential
@@ -356,4 +362,3 @@ class TestVeCredentialService:
 
         assert retrieved1.http.credentials.token == "app1_token"
         assert retrieved2.http.credentials.token == "app2_token"
-

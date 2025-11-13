@@ -58,7 +58,7 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
     Examples:
         ```python
         from fastapi import FastAPI
-        from veadk.a2a.ve_a2a_middlewares import build_a2a_auth_middleware
+        from veadk.a2a.ve_middlewares import build_a2a_auth_middleware
         from veadk.auth.credential_service import VeCredentialService
 
         app = FastAPI()
@@ -273,7 +273,7 @@ def build_a2a_auth_middleware(
     Examples:
         ```python
         from fastapi import FastAPI, Request
-        from veadk.a2a.ve_a2a_middlewares import build_a2a_auth_middleware
+        from veadk.a2a.ve_middlewares import build_a2a_auth_middleware
         from veadk.auth.credential_service import VeCredentialService
         from veadk.integrations.ve_identity import IdentityClient
 
