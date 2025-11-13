@@ -57,12 +57,12 @@ TEMP_PATH = "/tmp"
     help="=Authentication method for agent",
 )
 @click.option(
-    "--veidentity-user-pool-name",
+    "--user-pool-name",
     default="",
     help="Expected Volcengine Identity user pool name",
 )
 @click.option(
-    "--veidentity-client-name",
+    "--client-name",
     default="",
     help="Expected Volcengine Identity client name",
 )
@@ -77,8 +77,8 @@ def deploy(
     short_term_memory_backend: str,
     use_adk_web: bool,
     auth_method: str,
-    veidentity_user_pool_name: str,
-    veidentity_client_name: str,
+    user_pool_name: str,
+    client_name: str,
     path: str,
 ) -> None:
     """Deploy a user project to Volcengine FaaS application.
@@ -155,8 +155,8 @@ def deploy(
         "veapig_upstream_name": veapig_upstream_name,
         "use_adk_web": use_adk_web,
         "auth_method": auth_method,
-        "veidentity_user_pool_name": veidentity_user_pool_name,
-        "veidentity_client_name": veidentity_client_name,
+        "veidentity_user_pool_name": user_pool_name,
+        "veidentity_client_name": client_name,
         "veadk_version": VERSION,
     }
 
