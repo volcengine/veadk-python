@@ -39,14 +39,7 @@ class VeIdentityConfig(BaseSettings):
     If not provided, the endpoint will be auto-generated based on the region.
     """
 
-    role_trn: str = ""
-    """The TRN of the role, in the format: trn:iam::${AccountId}:role/${RoleName}
-    
-    When accessing with AK/SK (without session_token), this role will be automatically assumed to obtain temporary credentials.
-    For example: trn:iam::2000012345:role/MyWorkloadRole
-    """
-
-    role_session_name: str = "veadk_assume_role_session"
+    role_session_name: str = "veadk_default_assume_role_session"
     """Role session name, used to distinguish different sessions in audit logs.
     """
 
