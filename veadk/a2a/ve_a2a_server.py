@@ -35,6 +35,7 @@ class VeA2AServer:
             runner=Runner(
                 agent=agent,
                 app_name=app_name,
+                short_term_memory=short_term_memory,
             ),
         )
 
