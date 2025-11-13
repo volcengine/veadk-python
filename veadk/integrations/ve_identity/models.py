@@ -220,3 +220,9 @@ class WorkloadToken(BaseModel):
         if v <= 0:
             raise ValueError("expires_at must be a positive Unix timestamp")
         return v
+
+
+class AssumeRoleCredential(BaseModel):
+    access_key_id: str
+    secret_access_key: str
+    session_token: str

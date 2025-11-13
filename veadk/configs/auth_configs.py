@@ -39,6 +39,10 @@ class VeIdentityConfig(BaseSettings):
     If not provided, the endpoint will be auto-generated based on the region.
     """
 
+    role_session_name: str = "veadk_default_assume_role_session"
+    """Role session name, used to distinguish different sessions in audit logs.
+    """
+
     def get_endpoint(self) -> str:
         """Get the endpoint URL for Identity service.
 
