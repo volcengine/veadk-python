@@ -273,7 +273,7 @@ class TestA2AAuthMiddleware:
                 mock_auth_config.exchanged_auth_credential = Mock()
                 mock_build_config.return_value = mock_auth_config
 
-                response = await middleware.dispatch(mock_request, mock_call_next)
+                _ = await middleware.dispatch(mock_request, mock_call_next)
 
         # Verify TIP token was used for workload token exchange
         mock_identity_client.get_workload_access_token.assert_called_once_with(
