@@ -24,7 +24,7 @@ logger = get_logger(__name__)
 
 @click.command()
 @click.option(
-    "--vefaas-application-name",
+    "--vefaas-app-name",
     required=True,
     help="VeFaaS application name to clean",
 )
@@ -39,7 +39,7 @@ logger = get_logger(__name__)
     help="Volcengine secret key, if not set, will use the value of environment variable VOLCENGINE_SECRET_KEY",
 )
 def clean(
-    vefaas_application_name: str, volcengine_access_key: str, volcengine_secret_key: str
+    vefaas_app_name: str, volcengine_access_key: str, volcengine_secret_key: str
 ) -> None:
     """
     Clean and delete a VeFaaS application from the cloud.
@@ -49,7 +49,7 @@ def clean(
     and monitor the deletion process until completion.
 
     Args:
-        vefaas_application_name (str): The name of the VeFaaS application to delete
+        vefaas_app_name (str): The name of the VeFaaS application to delete
         volcengine_access_key (str): Volcengine access key for authentication.
             If None, will use VOLCENGINE_ACCESS_KEY environment variable
         volcengine_secret_key (str): Volcengine secret key for authentication.
@@ -63,7 +63,7 @@ def clean(
     if not volcengine_secret_key:
         volcengine_secret_key = getenv("VOLCENGINE_SECRET_KEY")
 
-    confirm = input(f"Confirm delete cloud app {vefaas_application_name}? (y/N): ")
+    confirm = input(f"Confirm delete cloud app {vefaas_app_name}? (y/N): ")
     if confirm.lower() != "y":
         click.echo("Delete cancelled.")
         return
@@ -71,16 +71,14 @@ def clean(
         vefaas_client = VeFaaS(
             access_key=volcengine_access_key, secret_key=volcengine_secret_key
         )
-        vefaas_application_id = vefaas_client.find_app_id_by_name(
-            vefaas_application_name
-        )
+        vefaas_application_id = vefaas_client.find_app_id_by_name(vefaas_app_name)
         vefaas_client.delete(vefaas_application_id)
         click.echo(
-            f"Cloud app {vefaas_application_name} delete request has been sent to VeFaaS"
+            f"Cloud app {vefaas_app_name} delete request has been sent to VeFaaS"
         )
         while True:
             try:
-                id = vefaas_client.find_app_id_by_name(vefaas_application_name)
+                id = vefaas_client.find_app_id_by_name(vefaas_app_name)
                 if not id:
                     break
                 time.sleep(3)
