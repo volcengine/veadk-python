@@ -199,7 +199,7 @@ class KnowledgeBase(BaseModel):
         )
         self._backend = _get_backend_cls(self.backend)(index=self.index)
         logger.info(
-            f"Initialized knowledgebase with backend {self.backend.__class__.__name__}"
+            f"Initialized knowledgebase with backend {self._backend.__class__.__name__}"
         )
 
     def add_from_directory(self, directory: str, **kwargs) -> bool:

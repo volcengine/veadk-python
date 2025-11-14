@@ -21,7 +21,7 @@ from google.adk.evaluation.local_eval_sets_manager import LocalEvalSetsManager
 from google.adk.sessions import BaseSessionService
 
 from veadk.utils.logger import get_logger
-from veadk.utils.misc import formatted_timestamp, get_temp_dir
+from veadk.utils.misc import formatted_timestamp, get_agents_dir
 
 logger = get_logger(__name__)
 
@@ -53,7 +53,7 @@ class EvalSetRecorder(LocalEvalSetsManager):
         Raises:
             ValueError: If eval_set_id is invalid.
         """
-        super().__init__(agents_dir=get_temp_dir())
+        super().__init__(agents_dir=get_agents_dir())
         self.eval_set_id = eval_set_id if eval_set_id != "" else "default"
         self.session_service: BaseSessionService = session_service
 

@@ -1,6 +1,6 @@
 [project]
 name = "veadk-python"
-version = "0.2.21"
+version = "0.2.22"
 description = "Volcengine agent development kit, integrations with Volcengine cloud services."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -54,6 +54,7 @@ database = [
     "tos>=2.8.4",                   # For TOS storage and Viking DB
     "mem0ai==0.1.118",              # For mem0
 ]
+speech = []
 eval = [
     "prometheus-client>=0.22.1",    # For exporting data to Prometheus pushgateway
     "deepeval>=3.2.6",              # For DeepEval-based evaluation
