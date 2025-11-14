@@ -206,6 +206,8 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
             The extracted token, or None if not found
         """
         has_prefix = False
+        token = None
+        
         if self.auth_method == "header":
             # Extract from Authorization header
             auth_header = request.headers.get("Authorization") or request.headers.get(
