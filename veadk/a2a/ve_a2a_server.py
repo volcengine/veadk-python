@@ -35,7 +35,7 @@ class VeA2AServer:
         url: str,
         app_name: str,
         short_term_memory: ShortTermMemory,
-        credential_service: BaseCredentialService,
+        credential_service: BaseCredentialService | None = None,
     ):
         self.agent_card = get_agent_card(agent, url)
 
@@ -69,7 +69,7 @@ def init_app(
     app_name: str,
     agent: Agent,
     short_term_memory: ShortTermMemory,
-    credential_service: BaseCredentialService,
+    credential_service: BaseCredentialService | None = None,
 ) -> FastAPI:
     """Init the fastapi application in terms of VeADK agent.
 
