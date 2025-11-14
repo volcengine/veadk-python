@@ -704,9 +704,9 @@ class IdentityClient:
         """Check if the principal has permission to perform the operation on the resource.
 
         Args:
-            principal: Principal information, e.g., {"Type": "User", "Id": "user123"}
-            operation: Operation to check, e.g., {"Type": "Action", "Id": "invoke"}
-            resource: Resource information, e.g., {"Type": "Agent", "Id": "agent456"}
+            principal: Principal information, e.g., {"Type": "user", "Id": "user123"}
+            operation: Operation to check, e.g., {"Type": "action", "Id": "invoke"}
+            resource: Resource information, e.g., {"Type": "agent", "Id": "agent456"}
             original_callers: Optional list of original callers.
             namespace: Namespace of the resource. Defaults to "default".
 
