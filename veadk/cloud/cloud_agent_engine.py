@@ -26,7 +26,7 @@ from veadk.cloud.cloud_app import CloudApp
 from veadk.config import getenv, veadk_environments
 from veadk.integrations.ve_apig.ve_apig import APIGateway
 from veadk.integrations.ve_faas.ve_faas import VeFaaS
-from veadk.integrations.ve_identity.ve_identity import Identity
+from veadk.integrations.ve_identity.identity_client import IdentityClient
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp
 
@@ -47,7 +47,7 @@ class CloudAgentEngine(BaseModel):
         region (str): Region for Volcengine services. Defaults to "cn-beijing".
         _vefaas_service (VeFaaS): Internal VeFaaS client instance, initialized post-creation.
         _veapig_service (APIGateway): Internal VeAPIG client instance, initialized post-creation.
-        _veidentity_service (Identity): Internal Identity client instance, initialized post-creation.
+        _veidentity_service (IdentityClient): Internal Identity client instance, initialized post-creation.
 
     Note:
         Credentials must be set via environment variables for default behavior.
@@ -91,7 +91,7 @@ class CloudAgentEngine(BaseModel):
             secret_key=self.volcengine_secret_key,
             region=self.region,
         )
-        self._veidentity_service = Identity(
+        self._veidentity_service = IdentityClient(
             access_key=self.volcengine_access_key,
             secret_key=self.volcengine_secret_key,
             region=self.region,
@@ -293,14 +293,9 @@ class CloudAgentEngine(BaseModel):
             )
             _ = function_id  # for future use
 
-            app = self._vefaas_service.get_application_details(app_id=app_id)
-            cloud_resource = json.loads(app["CloudResource"])
-            veapig_gateway_id = cloud_resource["framework"]["triggers"][0][
-                "DetailedConfig"
-            ]["GatewayId"]
-            veapig_route_id = cloud_resource["framework"]["triggers"][0]["Routes"][0][
-                "Id"
-            ]
+            veapig_gateway_id, _, veapig_route_id = (
+                self._vefaas_service.get_application_route(app_id=app_id)
+            )
 
             if auth_method == "oauth2":
                 # Get or create the Identity user pool.
@@ -311,6 +306,7 @@ class CloudAgentEngine(BaseModel):
                     identity_user_pool_id = self._veidentity_service.create_user_pool(
                         name=identity_user_pool_name,
                     )
+                issuer = f"https://auth.id.{self.region}.volces.com/userpool/{identity_user_pool_id}"
 
                 # Create APIG upstream for Identity.
                 identity_domain = f"auth.id.{self.region}.volces.com"
@@ -364,9 +360,9 @@ class CloudAgentEngine(BaseModel):
 
                     plugin_name = "wasm-oauth2-sso"
                     plugin_config = {
-                        "AuthorizationUrl": f"https://auth.id.{self.region}.volces.com/userpool/{identity_user_pool_id}/authorize",
+                        "AuthorizationUrl": f"{issuer}/authorize",
                         "UpstreamId": veapig_identity_upstream_id,
-                        "TokenUrl": f"https://auth.id.{self.region}.volces.com/userpool/{identity_user_pool_id}/oauth/token",
+                        "TokenUrl": f"{issuer}/oauth/token",
                         "RedirectPath": "/callback",
                         "SignoutPath": "/signout",
                         "ClientId": identity_client_id,
@@ -377,12 +373,11 @@ class CloudAgentEngine(BaseModel):
                     plugin_config = {
                         "RemoteJwks": {
                             "UpstreamId": veapig_identity_upstream_id,
-                            "Url": f"auth.id.{self.region}.volces.com/userpool/{identity_user_pool_id}/keys",
+                            "Url": f"{issuer}/keys",
                         },
-                        "Issuer": f"https://auth.id.{self.region}.volces.com/userpool/{identity_user_pool_id}",
+                        "Issuer": issuer,
                         "ValidateConsumer": False,
                     }
-
                 self._vefaas_service.apig_client.create_plugin_binding(
                     scope="ROUTE",
                     target=veapig_route_id,

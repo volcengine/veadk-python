@@ -533,3 +533,133 @@ class IdentityClient:
 
         # Create the credential provider with updated config
         return self.create_oauth2_credential_provider(request_params)
+
+    def create_user_pool(self, name: str) -> str:
+        from volcenginesdkid import CreateUserPoolRequest, CreateUserPoolResponse
+
+        request = CreateUserPoolRequest(
+            name=name,
+        )
+        response: CreateUserPoolResponse = self._api_client.create_user_pool(request)
+
+        return response.uid
+
+    def get_user_pool(self, name: str) -> str | None:
+        from volcenginesdkid import (
+            ListUserPoolsRequest,
+            ListUserPoolsResponse,
+            FilterForListUserPoolsInput,
+            DataForListUsersOutput,
+        )
+
+        request = ListUserPoolsRequest(
+            page_number=1,
+            page_size=1,
+            filter=FilterForListUserPoolsInput(
+                name=name,
+            ),
+        )
+        response: ListUserPoolsResponse = self._api_client.list_user_pools(request)
+        if response.total_count == 0:
+            return None
+
+        user_pool: DataForListUsersOutput = response.data[0]
+        return user_pool.uid
+
+    def create_user_pool_client(
+        self, user_pool_uid: str, name: str, client_type: str
+    ) -> tuple[str, str]:
+        from volcenginesdkid import (
+            CreateUserPoolClientRequest,
+            CreateUserPoolClientResponse,
+        )
+
+        request = CreateUserPoolClientRequest(
+            user_pool_uid=user_pool_uid,
+            name=name,
+            client_type=client_type,
+        )
+        response: CreateUserPoolClientResponse = (
+            self._api_client.create_user_pool_client(request)
+        )
+        return response.uid, response.client_secret
+
+    def register_callback_for_user_pool_client(
+        self,
+        user_pool_uid: str,
+        client_uid: str,
+        callback_url: str,
+        web_origin: str,
+    ):
+        from volcenginesdkid import (
+            GetUserPoolClientRequest,
+            GetUserPoolClientResponse,
+            UpdateUserPoolClientRequest,
+        )
+
+        request = GetUserPoolClientRequest(
+            user_pool_uid=user_pool_uid,
+            client_uid=client_uid,
+        )
+        response: GetUserPoolClientResponse = self._api_client.get_user_pool_client(
+            request
+        )
+
+        allowed_callback_urls = response.allowed_callback_urls
+        if not allowed_callback_urls:
+            allowed_callback_urls = []
+        allowed_callback_urls.append(callback_url)
+        allowed_web_origins = response.allowed_web_origins
+        if not allowed_web_origins:
+            allowed_web_origins = []
+        allowed_web_origins.append(web_origin)
+
+        request2 = UpdateUserPoolClientRequest(
+            user_pool_uid=user_pool_uid,
+            client_uid=client_uid,
+            name=response.name,
+            description=response.description,
+            allowed_callback_urls=allowed_callback_urls,
+            allowed_logout_urls=response.allowed_logout_urls,
+            allowed_web_origins=allowed_web_origins,
+            allowed_cors=response.allowed_cors,
+            id_token=response.id_token,
+            refresh_token=response.refresh_token,
+        )
+        self._api_client.update_user_pool_client(request2)
+
+    def get_user_pool_client(
+        self, user_pool_uid: str, name: str
+    ) -> tuple[str, str] | None:
+        from volcenginesdkid import (
+            ListUserPoolClientsRequest,
+            ListUserPoolClientsResponse,
+            FilterForListUserPoolClientsInput,
+            DataForListUserPoolClientsOutput,
+            GetUserPoolClientRequest,
+            GetUserPoolClientResponse,
+        )
+
+        request = ListUserPoolClientsRequest(
+            user_pool_uid=user_pool_uid,
+            page_number=1,
+            page_size=1,
+            filter=FilterForListUserPoolClientsInput(
+                name=name,
+            ),
+        )
+        response: ListUserPoolClientsResponse = self._api_client.list_user_pool_clients(
+            request
+        )
+        if response.total_count == 0:
+            return None
+
+        client: DataForListUserPoolClientsOutput = response.data[0]
+        request2 = GetUserPoolClientRequest(
+            user_pool_uid=user_pool_uid,
+            client_uid=client.uid,
+        )
+        response2: GetUserPoolClientResponse = self._api_client.get_user_pool_client(
+            request2
+        )
+        return response2.uid, response2.client_secret
