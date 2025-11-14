@@ -147,7 +147,7 @@ class VeCredentialService(BaseCredentialService):
             ```python
             from google.adk.auth.auth_credential import AuthCredential, AuthCredentialTypes
 
-            service = VeA2ACredentialService()
+            service = VeCredentialService()
             await service.set_credential(
                 app_name="my_app",
                 user_id="user123",
@@ -190,7 +190,7 @@ class VeCredentialService(BaseCredentialService):
 
         Examples:
             ```python
-            service = VeA2ACredentialService()
+            service = VeCredentialService()
             credential = await service.get_credential(
                 app_name="my_app",
                 user_id="user123",
