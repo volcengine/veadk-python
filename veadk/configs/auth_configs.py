@@ -56,7 +56,7 @@ class VeIdentityConfig(BaseSettings):
     """
 
     # Global singleton IdentityClient instance
-    _identity_client: "IdentityClient|None" = None
+    _identity_client: Optional["IdentityClient"] = None
 
     def get_endpoint(self) -> str:
         """Get the endpoint URL for Identity service.
