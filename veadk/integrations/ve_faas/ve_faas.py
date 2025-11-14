@@ -206,9 +206,11 @@ class VeFaaS:
             logs = "\n".join(self._get_application_logs(app_id=app_id))
             log_text = re.sub(
                 r'([{"\']?(key|secret|token|pass|auth|credential|access|api|ak|sk|doubao|volces|coze)[^"\'\s]*["\']?\s*[:=]\s*)(["\']?)([^"\'\s]+)(["\']?)|([A-Za-z0-9+/=]{20,})',
-                lambda m: f"{m.group(1)}{m.group(3)}******{m.group(5)}"
-                if m.group(1)
-                else "******",
+                lambda m: (
+                    f"{m.group(1)}{m.group(3)}******{m.group(5)}"
+                    if m.group(1)
+                    else "******"
+                ),
                 logs,
                 flags=re.IGNORECASE,
             )
@@ -232,9 +234,11 @@ class VeFaaS:
         request_body = {
             "OrderBy": {"Key": "CreateTime", "Ascend": False},
             "FunctionId": app_id if app_id else None,
-            "Filters": [{"Item": {"Key": "Name", "Value": [app_name]}}]
-            if app_name and not app_id
-            else None,
+            "Filters": (
+                [{"Item": {"Key": "Name", "Value": [app_name]}}]
+                if app_name and not app_id
+                else None
+            ),
         }
         # remove None
         request_body = {k: v for k, v in request_body.items() if v is not None}
@@ -353,6 +357,26 @@ class VeFaaS:
             for app in apps:
                 if app["Name"] == app_name:
                     return app
+
+    def get_application_route(
+        self, app_id: str = None, app_name: str = None
+    ) -> tuple[str, str, str] | None:
+        app = self.get_application_details(
+            app_id=app_id,
+            app_name=app_name,
+        )
+        if not app:
+            return None
+
+        cloud_resource = json.loads(app["CloudResource"])
+        gateway_id = cloud_resource["framework"]["triggers"][0]["DetailedConfig"][
+            "GatewayId"
+        ]
+        service_id = cloud_resource["framework"]["triggers"][0]["Routes"][0][
+            "ServiceId"
+        ]
+        route_id = cloud_resource["framework"]["triggers"][0]["Routes"][0]["Id"]
+        return gateway_id, service_id, route_id
 
     def find_app_id_by_name(self, name: str):
         apps = self._list_application(app_name=name)
