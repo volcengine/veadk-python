@@ -61,6 +61,12 @@ async def test_cloud():
                 mock_vefaas_service.find_app_id_by_name.return_value = "app-123"
                 mock_vefaas_service.delete.return_value = None
 
+                mock_vefaas_service.get_application_route.return_value = (
+                    "gw-123",
+                    "svc-456",
+                    "route-789",
+                )
+
                 # Test CloudAgentEngine creation and deploy functionality
                 engine = CloudAgentEngine()
 
