@@ -149,7 +149,7 @@ def intercept_new_message(process_func):
                 ):
                     final_output = event.content.parts[0].text
                     logger.debug(f"Event output: {final_output}")
-                    
+
             post_run_process(self)
 
         return wrapper
