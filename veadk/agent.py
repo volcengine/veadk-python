@@ -48,7 +48,6 @@ from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INST
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_asyncio, patch_tracer
-from veadk.tools.builtin_tools.agent_authorization import check_agent_authorization
 from veadk.version import VERSION
 
 patch_tracer()
@@ -188,6 +187,10 @@ class Agent(LlmAgent):
             self.tools.append(load_memory)
 
         if self.enable_authz:
+            from veadk.tools.builtin_tools.agent_authorization import (
+                check_agent_authorization,
+            )
+
             if self.before_agent_callback:
                 if isinstance(self.before_agent_callback, list):
                     self.before_agent_callback.append(check_agent_authorization)
