@@ -13,10 +13,10 @@
 # limitations under the License.
 
 import click
-import os
 
 from veadk.cloud.cloud_agent_engine import CloudAgentEngine
 from veadk.utils.logger import get_logger
+from veadk.config import getenv
 
 logger = get_logger(__name__)
 
@@ -33,7 +33,7 @@ logger = get_logger(__name__)
     help="Volcengine secret key for authentication. Defaults to VOLCENGINE_SECRET_KEY environment variable.",
 )
 @click.option(
-    "--application-name",
+    "--vefaas-app-name",
     required=True,
     help="Name of the cloud application to update.",
 )
@@ -45,7 +45,7 @@ logger = get_logger(__name__)
 def update(
     volcengine_access_key: str,
     volcengine_secret_key: str,
-    application_name: str,
+    vefaas_app_name: str,
     path: str,
 ) -> None:
     """Update function code of a deployed cloud application on Volcengine FaaS.
@@ -65,7 +65,7 @@ def update(
             If not provided, uses VOLCENGINE_ACCESS_KEY environment variable.
         volcengine_secret_key: Volcengine platform secret key for authentication.
             If not provided, uses VOLCENGINE_SECRET_KEY environment variable.
-        application_name: Name of the existing cloud application to update.
+        vefaas_app_name: Name of the existing cloud application to update.
         path: Local directory path containing the updated agent project.
             Defaults to current directory if not specified.
 
@@ -79,22 +79,25 @@ def update(
         FileNotFoundError: If local path does not exist.
     """
     # Set environment variables if provided
-    if volcengine_access_key and "VOLCENGINE_ACCESS_KEY" not in os.environ:
-        os.environ["VOLCENGINE_ACCESS_KEY"] = volcengine_access_key
-    if volcengine_secret_key and "VOLCENGINE_SECRET_KEY" not in os.environ:
-        os.environ["VOLCENGINE_SECRET_KEY"] = volcengine_secret_key
+    if not volcengine_access_key:
+        volcengine_access_key = getenv("VOLCENGINE_ACCESS_KEY")
+    if not volcengine_secret_key:
+        volcengine_secret_key = getenv("VOLCENGINE_SECRET_KEY")
 
     # Initialize cloud agent engine
-    engine = CloudAgentEngine()
+    engine = CloudAgentEngine(
+        volcengine_access_key=volcengine_access_key,
+        volcengine_secret_key=volcengine_secret_key,
+    )
 
     try:
         # Update function code
         updated_app = engine.update_function_code(
-            application_name=application_name,
+            application_name=vefaas_app_name,
             path=path,
         )
 
-        logger.info(f"Successfully updated cloud application '{application_name}'")
+        logger.info(f"Successfully updated cloud application '{vefaas_app_name}'")
         logger.info(f"Endpoint: {updated_app.vefaas_endpoint}")
         logger.info(f"Application ID: {updated_app.vefaas_application_id}")
 

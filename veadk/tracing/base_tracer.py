@@ -44,7 +44,7 @@ class BaseTracer(ABC):
         self._trace_file_path = "<unknown_trace_file_path>"
 
     @abstractmethod
-    def dump(self, user_id: str, session_id: str, path: str = "/tmp") -> str:
+    def dump(self, user_id: str, session_id: str, path: str) -> str:
         """Dump the collected trace data to a local file.
 
         This method must be implemented by concrete tracer classes to export
@@ -53,6 +53,6 @@ class BaseTracer(ABC):
         Args:
             user_id: User identifier for trace organization and file naming
             session_id: Session identifier for filtering and organizing spans
-            path: Directory path for the output file. Defaults to system temp directory
+            path: Directory path for the output file
         """
         ...

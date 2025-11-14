@@ -22,12 +22,12 @@ TEMP_PATH = "/tmp"
 
 @click.command()
 @click.option(
-    "--access-key",
+    "--volcengine-access-key",
     default=None,
     help="Volcengine access key",
 )
 @click.option(
-    "--secret-key",
+    "--volcengine-secret-key",
     default=None,
     help="Volcengine secret key",
 )
@@ -68,8 +68,8 @@ TEMP_PATH = "/tmp"
 )
 @click.option("--path", default=".", help="Local project path")
 def deploy(
-    access_key: str,
-    secret_key: str,
+    volcengine_access_key: str,
+    volcengine_secret_key: str,
     vefaas_app_name: str,
     veapig_instance_name: str,
     veapig_service_name: str,
@@ -96,9 +96,9 @@ def deploy(
     5. Cleaning up temporary files
 
     Args:
-        access_key: Volcengine access key for API authentication. If not provided,
+        volcengine_access_key: Volcengine access key for API authentication. If not provided,
             will use VOLCENGINE_ACCESS_KEY environment variable
-        secret_key: Volcengine secret key for API authentication. If not provided,
+        volcengine_secret_key: Volcengine secret key for API authentication. If not provided,
             will use VOLCENGINE_SECRET_KEY environment variable
         vefaas_app_name: Name of the target Volcengine FaaS application where the
             project will be deployed
@@ -134,10 +134,10 @@ def deploy(
 
     logger = get_logger(__name__)
 
-    if not access_key:
-        access_key = getenv("VOLCENGINE_ACCESS_KEY")
-    if not secret_key:
-        secret_key = getenv("VOLCENGINE_SECRET_KEY")
+    if not volcengine_access_key:
+        volcengine_access_key = getenv("VOLCENGINE_ACCESS_KEY")
+    if not volcengine_secret_key:
+        volcengine_secret_key = getenv("VOLCENGINE_SECRET_KEY")
 
     user_proj_abs_path = Path(path).resolve()
     template_dir_path = Path(vefaas.__file__).parent / "template"

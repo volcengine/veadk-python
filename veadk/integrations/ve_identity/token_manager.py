@@ -22,6 +22,7 @@ from typing import Optional, Union
 from google.adk.tools.tool_context import ToolContext
 from google.adk.agents.readonly_context import ReadonlyContext
 
+from veadk.integrations.ve_identity.auth_config import _get_default_region
 from veadk.utils.logger import get_logger
 
 from veadk.integrations.ve_identity.identity_client import IdentityClient
@@ -49,13 +50,16 @@ class WorkloadTokenManager:
     def __init__(
         self,
         identity_client: IdentityClient = None,
-        region: Optional[str] = "cn-beijing",
+        region: Optional[str] = None,
     ):
         """Initialize the token manager.
 
         Args:
             identity_client: The IdentityClient instance to use for token requests.
         """
+        if region is None:
+            region = _get_default_region()
+
         self._identity_client = identity_client or IdentityClient(region=region)
 
     def _build_cache_key(
@@ -127,10 +131,6 @@ class WorkloadTokenManager:
                     logger.info(
                         f"Cached workload token expired for agent '{tool_context.agent_name}', refreshing..."
                     )
-
-        # Default to agent_name if workload_name not specified
-        if not workload_name:
-            workload_name = tool_context.agent_name
 
         # Determine user_id based on authentication mode
         user_id = None if user_token else tool_context._invocation_context.user_id
