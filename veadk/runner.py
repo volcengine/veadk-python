@@ -138,6 +138,17 @@ def intercept_new_message(process_func):
                 **kwargs,
             ):
                 yield event
+                if event.get_function_calls():
+                    for function_call in event.get_function_calls():
+                        logger.debug(f"Function call: {function_call}")
+                elif (
+                    event.content is not None
+                    and event.content.parts
+                    and event.content.parts[0].text is not None
+                    and len(event.content.parts[0].text.strip()) > 0
+                ):
+                    final_output = event.content.parts[0].text
+                    logger.debug(f"Event output: {final_output}")
 
             post_run_process(self)
 
