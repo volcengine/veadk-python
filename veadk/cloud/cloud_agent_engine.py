@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 import socket
 import subprocess
@@ -23,7 +24,9 @@ from pydantic import BaseModel
 
 from veadk.cloud.cloud_app import CloudApp
 from veadk.config import getenv, veadk_environments
+from veadk.integrations.ve_apig.ve_apig import APIGateway
 from veadk.integrations.ve_faas.ve_faas import VeFaaS
+from veadk.integrations.ve_identity.identity_client import IdentityClient
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp
 
@@ -43,6 +46,8 @@ class CloudAgentEngine(BaseModel):
             Defaults to VOLCENGINE_SECRET_KEY environment variable.
         region (str): Region for Volcengine services. Defaults to "cn-beijing".
         _vefaas_service (VeFaaS): Internal VeFaaS client instance, initialized post-creation.
+        _veapig_service (APIGateway): Internal VeAPIG client instance, initialized post-creation.
+        _veidentity_service (IdentityClient): Internal Identity client instance, initialized post-creation.
 
     Note:
         Credentials must be set via environment variables for default behavior.
@@ -81,6 +86,16 @@ class CloudAgentEngine(BaseModel):
             This is a Pydantic lifecycle method, ensuring service readiness after init.
         """
         self._vefaas_service = VeFaaS(
+            access_key=self.volcengine_access_key,
+            secret_key=self.volcengine_secret_key,
+            region=self.region,
+        )
+        self._veapig_service = APIGateway(
+            access_key=self.volcengine_access_key,
+            secret_key=self.volcengine_secret_key,
+            region=self.region,
+        )
+        self._veidentity_service = IdentityClient(
             access_key=self.volcengine_access_key,
             secret_key=self.volcengine_secret_key,
             region=self.region,
@@ -202,6 +217,9 @@ class CloudAgentEngine(BaseModel):
         gateway_service_name: str = "",
         gateway_upstream_name: str = "",
         use_adk_web: bool = False,
+        auth_method: str = "none",
+        identity_user_pool_name: str = "",
+        identity_client_name: str = "",
         local_test: bool = False,
     ) -> CloudApp:
         """Deploys a local agent project to Volcengine FaaS, creating necessary resources.
@@ -215,6 +233,9 @@ class CloudAgentEngine(BaseModel):
             gateway_service_name (str, optional): Custom service name. Defaults to timestamped.
             gateway_upstream_name (str, optional): Custom upstream name. Defaults to timestamped.
             use_adk_web (bool): Enable ADK Web configuration. Defaults to False.
+            auth_method (str, optional): Authentication for the agent. Defaults to none.
+            identity_user_pool_name (str, optional): Custom user pool name. Defaults to timestamped.
+            identity_client_name (str, optional): Custom client name. Defaults to timestamped.
             local_test (bool): Perform FastAPI server test before deploy. Defaults to False.
 
         Returns:
@@ -236,6 +257,10 @@ class CloudAgentEngine(BaseModel):
         # prevent deepeval writing operations
         veadk_environments["DEEPEVAL_TELEMETRY_OPT_OUT"] = "YES"
 
+        enable_key_auth = False
+        if auth_method == "api-key":
+            enable_key_auth = True
+
         if use_adk_web:
             veadk_environments["USE_ADK_WEB"] = "True"
         else:
@@ -254,6 +279,12 @@ class CloudAgentEngine(BaseModel):
             gateway_service_name = f"{application_name}-gw-svr-{formatted_timestamp()}"
         if not gateway_upstream_name:
             gateway_upstream_name = f"{application_name}-gw-us-{formatted_timestamp()}"
+        if not identity_user_pool_name:
+            identity_user_pool_name = (
+                f"{application_name}-id-up-{formatted_timestamp()}"
+            )
+        if not identity_client_name:
+            identity_client_name = f"{application_name}-id-cli-{formatted_timestamp()}"
 
         try:
             vefaas_application_url, app_id, function_id = self._vefaas_service.deploy(
@@ -262,8 +293,101 @@ class CloudAgentEngine(BaseModel):
                 gateway_name=gateway_name,
                 gateway_service_name=gateway_service_name,
                 gateway_upstream_name=gateway_upstream_name,
+                enable_key_auth=enable_key_auth,
             )
             _ = function_id  # for future use
+
+            veapig_gateway_id, _, veapig_route_id = (
+                self._vefaas_service.get_application_route(app_id=app_id)
+            )
+
+            if auth_method == "oauth2":
+                # Get or create the Identity user pool.
+                identity_user_pool_id = self._veidentity_service.get_user_pool(
+                    name=identity_user_pool_name,
+                )
+                if not identity_user_pool_id:
+                    identity_user_pool_id = self._veidentity_service.create_user_pool(
+                        name=identity_user_pool_name,
+                    )
+                issuer = f"https://auth.id.{self.region}.volces.com/userpool/{identity_user_pool_id}"
+
+                # Create APIG upstream for Identity.
+                identity_domain = f"auth.id.{self.region}.volces.com"
+                veapig_identity_upstream_id = (
+                    self._veapig_service.check_domain_upstream_exist(
+                        domain=identity_domain,
+                        port=443,
+                        gateway_id=veapig_gateway_id,
+                    )
+                )
+                if not veapig_identity_upstream_id:
+                    veapig_identity_upstream_id = (
+                        self._veapig_service.create_domain_upstream(
+                            domain=f"auth.id.{self.region}.volces.com",
+                            port=443,
+                            is_https=True,
+                            gateway_id=veapig_gateway_id,
+                            upstream_name=f"id-{formatted_timestamp()}",
+                        )
+                    )
+
+                # Create plugin binding.
+                plugin_name = ""
+                plugin_config = {}
+                if use_adk_web:
+                    # Get or create the Identity client.
+                    identity_client_id = ""
+                    identity_client_secret = ""
+                    identity_client = self._veidentity_service.get_user_pool_client(
+                        user_pool_uid=identity_user_pool_id,
+                        name=identity_client_name,
+                    )
+                    if identity_client:
+                        identity_client_id = identity_client[0]
+                        identity_client_secret = identity_client[1]
+                    else:
+                        identity_client_id, identity_client_secret = (
+                            self._veidentity_service.create_user_pool_client(
+                                user_pool_uid=identity_user_pool_id,
+                                name=identity_client_name,
+                                client_type="WEB_APPLICATION",
+                            )
+                        )
+
+                    self._veidentity_service.register_callback_for_user_pool_client(
+                        user_pool_uid=identity_user_pool_id,
+                        client_uid=identity_client_id,
+                        callback_url=f"{vefaas_application_url}/callback",
+                        web_origin=vefaas_application_url,
+                    )
+
+                    plugin_name = "wasm-oauth2-sso"
+                    plugin_config = {
+                        "AuthorizationUrl": f"{issuer}/authorize",
+                        "UpstreamId": veapig_identity_upstream_id,
+                        "TokenUrl": f"{issuer}/oauth/token",
+                        "RedirectPath": "/callback",
+                        "SignoutPath": "/signout",
+                        "ClientId": identity_client_id,
+                        "ClientSecret": identity_client_secret,
+                    }
+                else:
+                    plugin_name = "wasm-jwt-auth"
+                    plugin_config = {
+                        "RemoteJwks": {
+                            "UpstreamId": veapig_identity_upstream_id,
+                            "Url": f"{issuer}/keys",
+                        },
+                        "Issuer": issuer,
+                        "ValidateConsumer": False,
+                    }
+                self._vefaas_service.apig_client.create_plugin_binding(
+                    scope="ROUTE",
+                    target=veapig_route_id,
+                    plugin_name=plugin_name,
+                    plugin_config=json.dumps(plugin_config),
+                )
 
             return CloudApp(
                 vefaas_application_name=application_name,
