@@ -84,6 +84,9 @@ async def main():
         gateway_service_name="{{cookiecutter.veapig_service_name}}",
         gateway_upstream_name="{{cookiecutter.veapig_upstream_name}}",
         use_adk_web={{cookiecutter.use_adk_web}},
+        auth_method="{{cookiecutter.auth_method}}",
+        identity_user_pool_name="{{cookiecutter.veidentity_user_pool_name}}",
+        identity_client_name="{{cookiecutter.veidentity_client_name}}",
         local_test=False,  # Set to True for local testing before deploy to VeFaaS
     )
     print(f"VeFaaS application ID: {cloud_app.vefaas_application_id}")
