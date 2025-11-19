@@ -70,6 +70,12 @@ class ShortTermMemory(BaseModel):
     def model_post_init(self, __context: Any) -> None:
         if self.db_url:
             logger.info("The `db_url` is set, ignore `backend` option.")
+            if self.db_url.count("@") > 1:
+                logger.warning(
+                    "Multiple @ symbols detected in the database URL. "
+                    "Please encode `username/password` with `urllib.parse.quote_plus`. "
+                    "Examples: p@ssword→p%40ssword."
+                )
             self._session_service = DatabaseSessionService(db_url=self.db_url)
         else:
             if self.backend == "database":
