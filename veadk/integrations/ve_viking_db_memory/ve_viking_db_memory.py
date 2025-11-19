@@ -55,21 +55,9 @@ class VikingDBMemoryClient(Service):
         connection_timeout=30,
         socket_timeout=30,
     ):
-        env_host = getenv(
-            "DATABASE_VIKINGMEM_BASE_URL", "api-knowledgebase.mlp.cn-beijing.volces.com"
-        )
-        # check if the environment variable contains protocol
+        env_host = getenv("DATABASE_VIKINGMEM_BASE_URL", host)
         if env_host.startswith("http://"):
-            host = env_host.replace("http://", "")
-            scheme = "http"
-        elif env_host.startswith("https://"):
-            host = env_host.replace("https://", "")
-            scheme = "https"
-        else:
-            # default http
-            host = env_host
-            scheme = "http"
-
+            env_host = env_host.replace("http://", "")
         self.service_info = VikingDBMemoryClient.get_service_info(
             host, region, scheme, connection_timeout, socket_timeout
         )

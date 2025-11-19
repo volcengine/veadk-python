@@ -58,23 +58,6 @@ def get_files_in_directory(directory: str):
     return file_paths
 
 
-def _normalize_base_url(base_url: str) -> str:
-    """Normalize base URL: if already has scheme, return as-is; otherwise add http://
-
-    Args:
-        base_url: Base URL string
-
-    Returns:
-        Normalized URL with scheme
-    """
-    if not base_url:
-        return base_url
-    if base_url.startswith(("http://", "https://")):
-        return base_url
-    # PrivateLink URLs use http only
-    return f"http://{base_url}"
-
-
 class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
     """Volcengine Viking DB knowledgebase backend.
 
@@ -574,18 +557,16 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         path: str,
         method: Literal["GET", "POST", "PUT", "DELETE"] = "POST",
     ) -> dict:
-        base_url = getenv(
+        VIKINGDB_KNOWLEDGEBASE_BASE_URL = getenv(
             "DATABASE_VIKING_BASE_URL", "api-knowledgebase.mlp.cn-beijing.volces.com"
         )
-        if base_url.startswith(("http://", "https://")):
-            full_url = f"{base_url}{path}"
-        else:
-            scheme = (
-                "https"
-                if base_url == "api-knowledgebase.mlp.cn-beijing.volces.com"
-                else "http"
+        if VIKINGDB_KNOWLEDGEBASE_BASE_URL.startswith("http://"):
+            VIKINGDB_KNOWLEDGEBASE_BASE_URL = VIKINGDB_KNOWLEDGEBASE_BASE_URL.replace(
+                "http://", ""
             )
-            full_url = f"{scheme}://{base_url}{path}"
+            full_path = f"http://{VIKINGDB_KNOWLEDGEBASE_BASE_URL}{path}"
+        else:
+            full_path = f"https://{VIKINGDB_KNOWLEDGEBASE_BASE_URL}{path}"
 
         volcengine_access_key = self.volcengine_access_key
         volcengine_secret_key = self.volcengine_secret_key
@@ -605,10 +586,9 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             method=method,
             data=body,
         )
-
         response = requests.request(
             method=method,
-            url=full_url,
+            url=full_path,
             headers=request.headers,
             data=request.body,
         )
