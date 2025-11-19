@@ -14,7 +14,7 @@
 
 import json
 import threading
-
+from veadk.utils.misc import getenv
 from volcengine.ApiInfo import ApiInfo
 from volcengine.auth.SignerV4 import SignerV4
 from volcengine.base.Service import Service
@@ -55,6 +55,21 @@ class VikingDBMemoryClient(Service):
         connection_timeout=30,
         socket_timeout=30,
     ):
+        env_host = getenv(
+            "DATABASE_VIKINGMEM_BASE_URL", "api-knowledgebase.mlp.cn-beijing.volces.com"
+        )
+        # check if the environment variable contains protocol
+        if env_host.startswith("http://"):
+            host = env_host.replace("http://", "")
+            scheme = "http"
+        elif env_host.startswith("https://"):
+            host = env_host.replace("https://", "")
+            scheme = "https"
+        else:
+            # default http
+            host = env_host
+            scheme = "http"
+
         self.service_info = VikingDBMemoryClient.get_service_info(
             host, region, scheme, connection_timeout, socket_timeout
         )

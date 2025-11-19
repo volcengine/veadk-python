@@ -22,7 +22,7 @@ from typing import Any, Literal
 import requests
 from pydantic import Field
 from typing_extensions import override
-
+from veadk.utils.misc import getenv
 import veadk.config  # noqa E401
 from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 from veadk.configs.database_configs import NormalTOSConfig, TOSConfig
@@ -56,6 +56,23 @@ def get_files_in_directory(directory: str):
         raise ValueError(f"The directory does not exist: {directory}")
     file_paths = [str(file) for file in dir_path.iterdir() if file.is_file()]
     return file_paths
+
+
+def _normalize_base_url(base_url: str) -> str:
+    """Normalize base URL: if already has scheme, return as-is; otherwise add http://
+
+    Args:
+        base_url: Base URL string
+
+    Returns:
+        Normalized URL with scheme
+    """
+    if not base_url:
+        return base_url
+    if base_url.startswith(("http://", "https://")):
+        return base_url
+    # PrivateLink URLs use http only
+    return f"http://{base_url}"
 
 
 class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
@@ -557,7 +574,18 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         path: str,
         method: Literal["GET", "POST", "PUT", "DELETE"] = "POST",
     ) -> dict:
-        VIKINGDB_KNOWLEDGEBASE_BASE_URL = "api-knowledgebase.mlp.cn-beijing.volces.com"
+        base_url = getenv(
+            "DATABASE_VIKING_BASE_URL", "api-knowledgebase.mlp.cn-beijing.volces.com"
+        )
+        if base_url.startswith(("http://", "https://")):
+            full_url = f"{base_url}{path}"
+        else:
+            scheme = (
+                "https"
+                if base_url == "api-knowledgebase.mlp.cn-beijing.volces.com"
+                else "http"
+            )
+            full_url = f"{scheme}://{base_url}{path}"
 
         volcengine_access_key = self.volcengine_access_key
         volcengine_secret_key = self.volcengine_secret_key
@@ -577,9 +605,10 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             method=method,
             data=body,
         )
+
         response = requests.request(
             method=method,
-            url=f"https://{VIKINGDB_KNOWLEDGEBASE_BASE_URL}{path}",
+            url=full_url,
             headers=request.headers,
             data=request.body,
         )

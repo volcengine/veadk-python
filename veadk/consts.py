@@ -72,3 +72,6 @@ DEFAULT_IMAGE_GENERATE_MODEL_NAME = "doubao-seedream-4-0-250828"
 DEFAULT_IMAGE_GENERATE_MODEL_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
 
 VEFAAS_IAM_CRIDENTIAL_PATH = "/var/run/secrets/iam/credential"
+
+DEFAULT_VIKING_BASE_URL = "api-knowledgebase.mlp.cn-beijing.volces.com"
+DEFAULT_VIKINGMEM_BASE_URL = "api-knowledgebase.mlp.cn-beijing.volces.com"
