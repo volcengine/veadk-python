@@ -22,7 +22,7 @@ from typing import Any, Literal
 import requests
 from pydantic import Field
 from typing_extensions import override
-
+from veadk.utils.misc import getenv
 import veadk.config  # noqa E401
 from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 from veadk.configs.database_configs import NormalTOSConfig, TOSConfig
@@ -557,7 +557,21 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         path: str,
         method: Literal["GET", "POST", "PUT", "DELETE"] = "POST",
     ) -> dict:
-        VIKINGDB_KNOWLEDGEBASE_BASE_URL = "api-knowledgebase.mlp.cn-beijing.volces.com"
+        VIKINGDB_KNOWLEDGEBASE_BASE_URL = (
+            "https://api-knowledgebase.mlp.cn-beijing.volces.com"
+        )
+        full_path = f"{VIKINGDB_KNOWLEDGEBASE_BASE_URL}{path}"
+
+        env_host = getenv(
+            "DATABASE_VIKING_BASE_URL", default_value=None, allow_false_values=True
+        )
+        if env_host:
+            if env_host.startswith("http://") or env_host.startswith("https://"):
+                full_path = f"{env_host}{path}"
+            else:
+                raise ValueError(
+                    "DATABASE_VIKING_BASE_URL must start with http:// or https://"
+                )
 
         volcengine_access_key = self.volcengine_access_key
         volcengine_secret_key = self.volcengine_secret_key
@@ -579,7 +593,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         )
         response = requests.request(
             method=method,
-            url=f"https://{VIKINGDB_KNOWLEDGEBASE_BASE_URL}{path}",
+            url=full_path,
             headers=request.headers,
             data=request.body,
         )
