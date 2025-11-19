@@ -58,12 +58,17 @@ class VikingDBMemoryClient(Service):
         env_host = getenv(
             "DATABASE_VIKINGMEM_BASE_URL", default_value=None, allow_false_values=True
         )
-        if env_host is not None:
+        if env_host:
             if env_host.startswith("http://"):
                 host = env_host.replace("http://", "")
                 scheme = "http"
+            elif env_host.startswith("https://"):
+                host = env_host.replace("https://", "")
+                scheme = "https"
             else:
-                raise ValueError("DATABASE_VIKINGMEM_BASE_URL must start with http://")
+                raise ValueError(
+                    "DATABASE_VIKINGMEM_BASE_URL must start with http:// or https://"
+                )
 
         self.service_info = VikingDBMemoryClient.get_service_info(
             host, region, scheme, connection_timeout, socket_timeout

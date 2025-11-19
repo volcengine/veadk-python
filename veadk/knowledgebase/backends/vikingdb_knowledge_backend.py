@@ -557,18 +557,21 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         path: str,
         method: Literal["GET", "POST", "PUT", "DELETE"] = "POST",
     ) -> dict:
-        VIKINGDB_KNOWLEDGEBASE_BASE_URL = "api-knowledgebase.mlp.cn-beijing.volces.com"
-        full_path = f"https://{VIKINGDB_KNOWLEDGEBASE_BASE_URL}{path}"
+        VIKINGDB_KNOWLEDGEBASE_BASE_URL = (
+            "https://api-knowledgebase.mlp.cn-beijing.volces.com"
+        )
+        full_path = f"{VIKINGDB_KNOWLEDGEBASE_BASE_URL}{path}"
 
         env_host = getenv(
             "DATABASE_VIKING_BASE_URL", default_value=None, allow_false_values=True
         )
-        if env_host is not None:
-            if env_host.startswith("http://"):
-                VIKINGDB_KNOWLEDGEBASE_BASE_URL = env_host.replace("http://", "")
-                full_path = f"http://{VIKINGDB_KNOWLEDGEBASE_BASE_URL}{path}"
+        if env_host:
+            if env_host.startswith("http://") or env_host.startswith("https://"):
+                full_path = f"{env_host}{path}"
             else:
-                raise ValueError("DATABASE_VIKING_BASE_URL must start with http://")
+                raise ValueError(
+                    "DATABASE_VIKING_BASE_URL must start with http:// or https://"
+                )
 
         volcengine_access_key = self.volcengine_access_key
         volcengine_secret_key = self.volcengine_secret_key
