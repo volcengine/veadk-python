@@ -22,6 +22,7 @@ from google.adk.sessions import (
 )
 from pydantic import Field
 from typing_extensions import override
+from urllib.parse import quote_plus
 
 import veadk.config  # noqa E401
 from veadk.configs.database_configs import PostgreSqlConfig
@@ -34,7 +35,9 @@ class PostgreSqlSTMBackend(BaseShortTermMemoryBackend):
     postgresql_config: PostgreSqlConfig = Field(default_factory=PostgreSqlConfig)
 
     def model_post_init(self, context: Any) -> None:
-        self._db_url = f"postgresql://{self.postgresql_config.user}:{self.postgresql_config.password}@{self.postgresql_config.host}:{self.postgresql_config.port}/{self.postgresql_config.database}"
+        encoded_username = quote_plus(self.postgresql_config.user)
+        encoded_password = quote_plus(self.postgresql_config.password)
+        self._db_url = f"postgresql://{encoded_username}:{encoded_password}@{self.postgresql_config.host}:{self.postgresql_config.port}/{self.postgresql_config.database}"
         logger.debug(self._db_url)
 
     @cached_property
