@@ -51,13 +51,20 @@ class VikingDBMemoryClient(Service):
         ak="",
         sk="",
         sts_token="",
-        scheme="http",
+        scheme="https",
         connection_timeout=30,
         socket_timeout=30,
     ):
-        env_host = getenv("DATABASE_VIKINGMEM_BASE_URL", host)
-        if env_host.startswith("http://"):
-            env_host = env_host.replace("http://", "")
+        env_host = getenv(
+            "DATABASE_VIKINGMEM_BASE_URL", default_value=None, allow_false_values=True
+        )
+        if env_host is not None:
+            if env_host.startswith("http://"):
+                host = env_host.replace("http://", "")
+                scheme = "http"
+            else:
+                raise ValueError("DATABASE_VIKINGMEM_BASE_URL must start with http://")
+
         self.service_info = VikingDBMemoryClient.get_service_info(
             host, region, scheme, connection_timeout, socket_timeout
         )
