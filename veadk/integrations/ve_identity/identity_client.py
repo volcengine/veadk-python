@@ -27,7 +27,6 @@ import aiohttp
 import volcenginesdkid
 import volcenginesdkcore
 import volcenginesdksts
-from volcenginesdkcore.rest import ApiException
 
 from veadk.consts import VEFAAS_IAM_CRIDENTIAL_PATH
 from veadk.integrations.ve_identity.models import (

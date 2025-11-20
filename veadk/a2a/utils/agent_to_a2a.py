@@ -116,7 +116,7 @@ def to_a2a(
         ```
     """
     app_name = agent.name or DEFAULT_AGENT_NAME
-    middleware = None # May need support multiple middlewares in the future
+    middleware = None  # May need support multiple middlewares in the future
 
     # Handle VeADK authentication setup
     if enable_auth:

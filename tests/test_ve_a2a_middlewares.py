@@ -21,7 +21,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from veadk.a2a.ve_middlewares import A2AAuthMiddleware, build_a2a_auth_middleware
-from veadk.auth.ve_credential_service  import VeCredentialService
+from veadk.auth.ve_credential_service import VeCredentialService
 from veadk.utils.auth import VE_TIP_TOKEN_HEADER
 
 

@@ -27,7 +27,7 @@ from starlette.responses import Response
 from volcenginesdkcore.rest import ApiException
 
 
-from veadk.auth.ve_credential_service  import VeCredentialService
+from veadk.auth.ve_credential_service import VeCredentialService
 from veadk.utils.auth import (
     extract_delegation_chain_from_jwt,
     build_auth_config,
