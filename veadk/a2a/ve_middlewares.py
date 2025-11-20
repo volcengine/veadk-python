@@ -27,7 +27,7 @@ from starlette.responses import Response
 from volcenginesdkcore.rest import ApiException
 
 
-from veadk.auth.credential_service import VeCredentialService
+from veadk.auth.ve_credential_service  import VeCredentialService
 from veadk.utils.auth import (
     extract_delegation_chain_from_jwt,
     build_auth_config,
@@ -59,7 +59,7 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
         ```python
         from fastapi import FastAPI
         from veadk.a2a.ve_middlewares import build_a2a_auth_middleware
-        from veadk.auth.credential_service import VeCredentialService
+        from veadk.auth.ve_credential_service  import VeCredentialService
 
         app = FastAPI()
         credential_service = VeCredentialService()
@@ -276,7 +276,7 @@ def build_a2a_auth_middleware(
         ```python
         from fastapi import FastAPI, Request
         from veadk.a2a.ve_middlewares import build_a2a_auth_middleware
-        from veadk.auth.credential_service import VeCredentialService
+        from veadk.auth.ve_credential_service  import VeCredentialService
         from veadk.integrations.ve_identity import IdentityClient
 
         app = FastAPI()

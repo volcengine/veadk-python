@@ -26,7 +26,7 @@ from google.adk.auth.auth_credential import (
 from google.adk.auth.auth_tool import AuthConfig
 from google.adk.agents.callback_context import CallbackContext
 
-from veadk.auth.credential_service import VeCredentialService
+from veadk.auth.ve_credential_service  import VeCredentialService
 
 
 @pytest.fixture

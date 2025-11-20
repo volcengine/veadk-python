@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import json
+import functools
 from typing import AsyncGenerator, Literal, Optional
 
 from a2a.client.base_client import BaseClient
@@ -221,40 +222,69 @@ class RemoteVeAgent(RemoteA2aAgent):
         if auth_method:
             self.auth_method = auth_method
 
-    async def _run_async_impl(
-        self, ctx: InvocationContext
-    ) -> AsyncGenerator[Event, None]:
-        """Run the remote agent with credential injection support.
+        # Wrap _run_async_impl with pre-run hook to ensure initialization
+        # and authentication logic always executes, even if users override _run_async_impl
+        self._wrap_run_async_impl()
 
-        This method:
-        1. Ensures the agent is resolved (agent card fetched, client initialized)
-        2. Injects authentication token from credential service if available
-        3. Delegates to parent class for actual execution
+    def _wrap_run_async_impl(self) -> None:
+        """Wrap _run_async_impl with a decorator that ensures pre-run logic executes.
+
+        This method wraps the _run_async_impl method with a decorator that:
+        1. Executes _pre_run before the actual implementation
+        2. Handles errors from _pre_run and yields error events
+        3. Ensures the wrapper works even if users override _run_async_impl
+
+        The wrapper is applied by replacing the bound method on the instance.
+        """
+        # Store the original _run_async_impl method
+        original_run_async_impl = self._run_async_impl
+
+        @functools.wraps(original_run_async_impl)
+        async def wrapped_run_async_impl(
+            ctx: InvocationContext,
+        ) -> AsyncGenerator[Event, None]:
+            """Wrapped version of _run_async_impl with pre-run hook."""
+            # Execute pre-run initialization
+            try:
+                await self._pre_run(ctx)
+            except Exception as e:
+                yield Event(
+                    author=self.name,
+                    error_message=f"Failed to initialize remote A2A agent: {e}",
+                    invocation_id=ctx.invocation_id,
+                    branch=ctx.branch,
+                )
+                return
+
+            # Call the original (or overridden) _run_async_impl
+            async with Aclosing(original_run_async_impl(ctx)) as agen:
+                async for event in agen:
+                    yield event
+
+        # Replace the instance method with the wrapped version
+        self._run_async_impl = wrapped_run_async_impl
+
+    async def _pre_run(self, ctx: InvocationContext) -> None:
+        """Pre-run initialization and authentication setup.
+
+        This method is called before the actual agent execution to:
+        1. Ensure the agent is resolved (agent card fetched, client initialized)
+        2. Inject authentication token from credential service if available
+
+        This method is separated from _run_async_impl to ensure these critical
+        initialization steps are always executed, even if users override _run_async_impl.
 
         Args:
             ctx: Invocation context containing session and user information
 
-        Yields:
-            Events from the remote agent execution
+        Raises:
+            Exception: If agent initialization fails
         """
-        try:
-            await self._ensure_resolved()
-        except Exception as e:
-            yield Event(
-                author=self.name,
-                error_message=f"Failed to initialize remote A2A agent: {e}",
-                invocation_id=ctx.invocation_id,
-                branch=ctx.branch,
-            )
-            return
+        # Ensure agent is resolved
+        await self._ensure_resolved()
 
         # Inject auth token if credential service is available
         await self._inject_auth_token(ctx)
-
-        # Delegate to parent class for execution
-        async with Aclosing(super()._run_async_impl(ctx)) as agen:
-            async for event in agen:
-                yield event
 
     async def _inject_auth_token(self, ctx: InvocationContext) -> None:
         """Inject authentication token from credential service into the HTTP client.
