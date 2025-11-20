@@ -82,9 +82,9 @@ def patch_google_adk_telemetry() -> None:
 
 
 def patch_tracer() -> None:
-    for mod_name, mod in sys.modules.items():
-        from opentelemetry import trace
+    from opentelemetry import trace
 
+    for mod_name, mod in tuple(sys.modules.items()):
         if mod_name.startswith("google.adk"):
             for var_name in dir(mod):
                 var = getattr(mod, var_name, None)
