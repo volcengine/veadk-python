@@ -423,7 +423,10 @@ class CloudApp:
                 # we ignore type checking here, because the response
                 # from CloudApp will not be `Task` type
                 result = res.root.result  # type: ignore
-                from a2a.types import Task
+                try:
+                    from a2a.types import Task
+                except ImportError:
+                    return result
 
                 if isinstance(result, Task):
                     if result.history:
