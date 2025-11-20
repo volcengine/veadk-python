@@ -425,15 +425,17 @@ class CloudApp:
                 result = res.root.result  # type: ignore
                 try:
                     from a2a.types import Task
-                except ImportError:
-                    return result
 
-                if isinstance(result, Task):
-                    if result.history:
+                    is_task = isinstance(result, Task)
+                except ImportError:
+                    is_task = False
+
+                if is_task:
+                    if result.history:  # type: ignore
                         return next(
                             (
                                 msg
-                                for msg in reversed(result.history)
+                                for msg in reversed(result.history)  # type: ignore
                                 if msg.role == "agent"
                             ),
                             None,
