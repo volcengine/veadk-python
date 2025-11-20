@@ -21,7 +21,6 @@ from llama_index.core import (
 from llama_index.core.schema import BaseNode
 from llama_index.embeddings.openai_like import OpenAILikeEmbedding
 from pydantic import Field
-from tos.models2 import Vector, VectorData
 from typing_extensions import Any, override
 
 import veadk.config  # noqa E401
@@ -33,6 +32,8 @@ from veadk.knowledgebase.backends.utils import get_llama_index_splitter
 try:
     from tos.vector_client import VectorClient
     from tos import DataType, DistanceMetricType
+    from tos.exceptions import TosServerError
+    from tos.models2 import Vector, VectorData
 except ImportError:
     raise ImportError(
         "Please install VeADK extensions\npip install veadk-python[extensions]"
@@ -76,25 +77,40 @@ class TosVectorKnowledgeBackend(BaseKnowledgebaseBackend):
         )
 
     def _bucket_exists(self) -> bool:
-        bucket_list_resp = self._tos_client.list_vector_buckets()
-        bucket_list = [
-            bucket.vector_bucket_name for bucket in bucket_list_resp.vector_buckets
-        ]
-        if self.tos_vector_bucket_name in bucket_list:
-            return True
-        else:
-            return False
+        try:
+            bucket_exist = self._tos_client.get_vector_bucket(
+                vector_bucket_name=self.tos_vector_bucket_name,
+                account_id=self.tos_vector_account_id,
+            )
+            return bucket_exist.status_code == 200
+        except TosServerError as e:
+            if e.status_code == 404:
+                return False
+            else:
+                raise e
 
     def _index_exists(self) -> bool:
-        index_list_resp = self._tos_client.list_indexes(
-            vector_bucket_name=self.tos_vector_bucket_name,
-            account_id=self.tos_vector_account_id,
-        )
-        index_list = [index.index_name for index in index_list_resp.indexes]
-        if self.index in index_list:
-            return True
-        else:
-            return False
+        try:
+            index_exist = self._tos_client.get_index(
+                vector_bucket_name=self.tos_vector_bucket_name,
+                account_id=self.tos_vector_account_id,
+                index_name=self.index,
+            )
+            return index_exist.status_code == 200
+        except TosServerError as e:
+            if e.status_code == 404:
+                return False
+            else:
+                raise e
+
+    def _split_documents(self, documents: list[Document]) -> list[BaseNode]:
+        """Split document into chunks"""
+        nodes = []
+        for document in documents:
+            splitter = get_llama_index_splitter(document.metadata.get("file_path", ""))
+            _nodes = splitter.get_nodes_from_documents([document])
+            nodes.extend(_nodes)
+        return nodes
 
     def _create_index(self):
         if not self._bucket_exists():
@@ -118,6 +134,8 @@ class TosVectorKnowledgeBackend(BaseKnowledgebaseBackend):
         nodes = self._split_documents(documents)
         vectors = []
         for node in nodes:
+            if not node.text:
+                continue
             embedding = self._embed_model.get_text_embedding(node.text)
             vectors.append(
                 Vector(
@@ -163,15 +181,7 @@ class TosVectorKnowledgeBackend(BaseKnowledgebaseBackend):
             index_name=self.index,
             query_vector=VectorData(float32=query_vector),
             top_k=top_k,
+            return_metadata=True,
         )
 
         return [vector.metadata["text"] for vector in search_result.vectors]
-
-    def _split_documents(self, documents: list[Document]) -> list[BaseNode]:
-        """Split document into chunks"""
-        nodes = []
-        for document in documents:
-            splitter = get_llama_index_splitter(document.metadata.get("file_path", ""))
-            _nodes = splitter.get_nodes_from_documents([document])
-            nodes.extend(_nodes)
-        return nodes
