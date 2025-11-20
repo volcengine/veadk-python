@@ -422,7 +422,23 @@ class CloudApp:
 
                 # we ignore type checking here, because the response
                 # from CloudApp will not be `Task` type
-                return res.root.result  # type: ignore
+                result = res.root.result  # type: ignore
+                from a2a.types import Task
+
+                if isinstance(result, Task):
+                    if result.history:
+                        return next(
+                            (
+                                msg
+                                for msg in reversed(result.history)
+                                if msg.role == "agent"
+                            ),
+                            None,
+                        )
+                    else:
+                        return None
+                else:
+                    return result
             except Exception as e:
                 logger.error(f"Failed to send message to cloud app. Error: {e}")
                 return None
