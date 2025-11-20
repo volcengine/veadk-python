@@ -72,13 +72,11 @@ def refresh_credentials(func):
             try:
                 logger.info("Attempting to fetch credentials from VeFaaS IAM...")
                 ve_iam_cred = get_credential_from_vefaas_iam()
-                if ve_iam_cred.access_key_id and ve_iam_cred.secret_access_key:
-                    logger.info("Successfully retrieved credentials from VeFaaS IAM")
-                    return (
-                        ve_iam_cred.access_key_id,
-                        ve_iam_cred.secret_access_key,
-                        ve_iam_cred.session_token or "",
-                    )
+                return (
+                    ve_iam_cred.access_key_id,
+                    ve_iam_cred.secret_access_key,
+                    ve_iam_cred.session_token,
+                )
             except FileNotFoundError as e:
                 logger.warning(f"VeFaaS IAM credentials not available: {e}")
             except Exception as e:
@@ -87,6 +85,9 @@ def refresh_credentials(func):
 
         # If no AK/SK, try to get from VeFaaS IAM
         if not (ak and sk):
+            logger.info(
+                "Credentials not found in environment, attempting to fetch from VeFaaS IAM..."
+            )
             credentials = try_get_vefaas_credentials()
             if credentials:
                 ak, sk, session_token = credentials
