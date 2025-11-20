@@ -14,12 +14,14 @@
 
 from functools import cached_property
 from typing import Any
-from venv import logger
+from urllib.parse import quote_plus
 
+from google.adk import version as adk_version
 from google.adk.sessions import (
     BaseSessionService,
     DatabaseSessionService,
 )
+from packaging.version import parse as parse_version
 from pydantic import Field
 from typing_extensions import override
 
@@ -34,8 +36,12 @@ class PostgreSqlSTMBackend(BaseShortTermMemoryBackend):
     postgresql_config: PostgreSqlConfig = Field(default_factory=PostgreSqlConfig)
 
     def model_post_init(self, context: Any) -> None:
-        self._db_url = f"postgresql://{self.postgresql_config.user}:{self.postgresql_config.password}@{self.postgresql_config.host}:{self.postgresql_config.port}/{self.postgresql_config.database}"
-        logger.debug(self._db_url)
+        encoded_username = quote_plus(self.postgresql_config.user)
+        encoded_password = quote_plus(self.postgresql_config.password)
+        if parse_version(adk_version.__version__) < parse_version("1.19.0"):
+            self._db_url = f"postgresql://{encoded_username}:{encoded_password}@{self.postgresql_config.host}:{self.postgresql_config.port}/{self.postgresql_config.database}"
+        else:
+            self._db_url = f"postgresql+asyncpg://{encoded_username}:{encoded_password}@{self.postgresql_config.host}:{self.postgresql_config.port}/{self.postgresql_config.database}"
 
     @cached_property
     @override
