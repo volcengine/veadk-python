@@ -425,12 +425,10 @@ class CloudApp:
                 result = res.root.result  # type: ignore
                 try:
                     from a2a.types import Task
-
-                    is_task = isinstance(result, Task)
                 except ImportError:
-                    is_task = False
+                    return result
 
-                if is_task:
+                if isinstance(result, Task):
                     if result.history:  # type: ignore
                         return next(
                             (
