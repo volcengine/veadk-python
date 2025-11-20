@@ -19,7 +19,7 @@ from uuid import uuid4
 
 import httpx
 from a2a.client import A2ACardResolver, A2AClient
-from a2a.types import AgentCard, Message, MessageSendParams, SendMessageRequest
+from a2a.types import AgentCard, Message, MessageSendParams, SendMessageRequest, Task
 
 from veadk.config import getenv
 from veadk.utils.logger import get_logger
@@ -422,7 +422,23 @@ class CloudApp:
 
                 # we ignore type checking here, because the response
                 # from CloudApp will not be `Task` type
-                return res.root.result  # type: ignore
+                result = res.root.result  # type: ignore
+                if isinstance(result, Task):
+                    if result.history:
+                        return next(
+                            (
+                                msg
+                                for msg in reversed(result.history)
+                                if msg.role == "agent"
+                            ),
+                            None,
+                        )
+                    else:
+                        return None
+                elif isinstance(result, Message):
+                    return result
+                else:
+                    return None
             except Exception as e:
                 logger.error(f"Failed to send message to cloud app. Error: {e}")
                 return None
