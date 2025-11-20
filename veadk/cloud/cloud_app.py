@@ -435,10 +435,8 @@ class CloudApp:
                         )
                     else:
                         return None
-                elif isinstance(result, Message):
-                    return result
                 else:
-                    return None
+                    return result
             except Exception as e:
                 logger.error(f"Failed to send message to cloud app. Error: {e}")
                 return None
