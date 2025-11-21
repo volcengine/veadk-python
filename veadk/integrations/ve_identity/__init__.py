@@ -61,6 +61,7 @@ from veadk.integrations.ve_identity.auth_config import (
     OAuth2AuthConfig,
     WorkloadAuthConfig,
     VeIdentityAuthConfig,
+    get_default_identity_client,
 )
 from veadk.integrations.ve_identity.function_tool import VeIdentityFunctionTool
 from veadk.integrations.ve_identity.mcp_tool import VeIdentityMcpTool
@@ -104,4 +105,6 @@ __all__ = [
     "WorkloadToken",
     "OAuth2AuthPoller",
     "MockOauth2AuthPoller",
+    # Utils
+    "get_default_identity_client",
 ]

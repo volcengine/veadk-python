@@ -345,7 +345,7 @@ class Runner(ADKRunner):
         self.long_term_memory = None
         self.short_term_memory = short_term_memory
         self.upload_inline_data_to_tos = upload_inline_data_to_tos
-
+        credential_service = kwargs.pop("credential_service", None)
         session_service = kwargs.pop("session_service", None)
         memory_service = kwargs.pop("memory_service", None)
 
@@ -397,6 +397,7 @@ class Runner(ADKRunner):
             agent=agent,
             session_service=session_service,
             memory_service=memory_service,
+            credential_service=credential_service,
             app_name=app_name,
             *args,
             **kwargs,

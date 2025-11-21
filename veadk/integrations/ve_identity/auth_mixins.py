@@ -44,7 +44,7 @@ from veadk.integrations.ve_identity.auth_config import (
     ApiKeyAuthConfig,
     OAuth2AuthConfig,
     WorkloadAuthConfig,
-    _get_default_region,
+    get_default_identity_client,
 )
 from veadk.integrations.ve_identity.token_manager import get_workload_token
 
@@ -108,11 +108,7 @@ class BaseAuthMixin(ABC):
             # call it without arguments
             super().__init__()
 
-        # Use provided region or get from config
-        if region is None:
-            region = _get_default_region()
-
-        self._identity_client = identity_client or IdentityClient(region=region)
+        self._identity_client = identity_client or get_default_identity_client(region)
         self._provider_name = provider_name
 
     @abstractmethod

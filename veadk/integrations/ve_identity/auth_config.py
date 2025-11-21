@@ -42,6 +42,21 @@ def _get_default_region() -> str:
         return "cn-beijing"
 
 
+def get_default_identity_client(region: Optional[str] = None) -> IdentityClient:
+    """Get the default IdentityClient from VeADK configuration.
+
+    Returns:
+        The configured IdentityClient from VeIdentityConfig, or a new instance as fallback.
+    """
+    try:
+        from veadk.config import settings
+
+        return settings.veidentity.get_identity_client()
+    except Exception:
+        # Fallback to new instance if config loading fails
+        return IdentityClient(region=region or _get_default_region())
+
+
 class AuthConfig(BaseModel, ABC):
     """Base authentication configuration."""
 

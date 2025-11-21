@@ -12,104 +12,78 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import base64
-import json
 from typing import Optional
 
 from google.genai import types
 from google.adk.agents.callback_context import CallbackContext
 
-from veadk.integrations.ve_identity.auth_config import _get_default_region
-from veadk.integrations.ve_identity.identity_client import IdentityClient
-from veadk.integrations.ve_identity.token_manager import get_workload_token
+from veadk.integrations.ve_identity import (
+    get_default_identity_client,
+    get_workload_token,
+)
 from veadk.utils.logger import get_logger
+from veadk.utils.auth import extract_delegation_chain_from_jwt
 
 logger = get_logger(__name__)
 
-
-region = _get_default_region()
-identity_client = IdentityClient(region=region)
-
-
-def _strip_bearer_prefix(token: str) -> str:
-    """Remove 'Bearer ' prefix from token if present.
-    Args:
-        token: Token string that may contain "Bearer " prefix
-    Returns:
-        Token without "Bearer " prefix
-    """
-    return token[7:] if token.lower().startswith("bearer ") else token
-
-
-def _extract_role_id_from_jwt(token: str) -> Optional[str]:
-    """Extract role_id (sub field) from JWT token.
-    Args:
-        token: JWT token string (with or without "Bearer " prefix)
-    Returns:
-        Role ID from sub field, or None if parsing fails
-    """
-    try:
-        # Remove "Bearer " prefix if present
-        token = _strip_bearer_prefix(token)
-
-        # JWT token has 3 parts separated by dots: header.payload.signature
-        parts = token.split(".")
-        if len(parts) != 3:
-            logger.error("Invalid JWT format: expected 3 parts")
-            return None
-
-        # Decode payload (second part)
-        payload_part = parts[1]
-
-        # Add padding for base64url decoding (JWT doesn't use padding)
-        missing_padding = len(payload_part) % 4
-        if missing_padding:
-            payload_part += "=" * (4 - missing_padding)
-
-        # Decode base64 and parse JSON
-        decoded_bytes = base64.urlsafe_b64decode(payload_part)
-        payload = json.loads(decoded_bytes.decode("utf-8"))
-
-        # Extract sub field as role_id
-        return payload.get("act").get("sub")
-
-    except (ValueError, json.JSONDecodeError) as e:
-        logger.error(f"Failed to parse JWT token: {e}")
-        return None
-    except Exception as e:
-        logger.error(f"Unexpected error parsing JWT: {e}")
-        return None
+identity_client = get_default_identity_client()
 
 
 async def check_agent_authorization(
     callback_context: CallbackContext,
 ) -> Optional[types.Content]:
-    """Check if the agent is authorized to run using VeIdentity."""
-    user_id = callback_context._invocation_context.user_id
-
+    """Check if the agent is authorized to run using Agent Identity."""
     try:
         workload_token = await get_workload_token(
             tool_context=callback_context, identity_client=identity_client
         )
 
-        # Parse role_id from workload_token
-        role_id = _extract_role_id_from_jwt(workload_token)
+        # Parse user_id and actors from workload_token
+        user_id, actors = extract_delegation_chain_from_jwt(workload_token)
 
-        principal = {"Type": "User", "Id": user_id}
-        operation = {"Type": "Action", "Id": "invoke"}
-        resource = {"Type": "Agent", "Id": role_id}
+        if not user_id:
+            logger.warning("Failed to extract user_id from JWT token")
+            return types.Content(
+                parts=[types.Part(text="Failed to verify agent authorization.")],
+                role="model",
+            )
+
+        if len(actors) == 0:
+            logger.warning("Failed to extract actors from JWT token")
+            return types.Content(
+                parts=[types.Part(text="Failed to verify agent authorization.")],
+                role="model",
+            )
+
+        # The first actor in the chain is the agent itself
+        role_id = actors[0]
+
+        principal = {"Type": "user", "Id": user_id}
+        operation = {"Type": "action", "Id": "invoke"}
+        resource = {"Type": "agent", "Id": role_id}
+        original_callers = [{"Type": "agent", "Id": actor} for actor in actors[1:]]
 
         allowed = identity_client.check_permission(
-            principal=principal, operation=operation, resource=resource
+            principal=principal,
+            operation=operation,
+            resource=resource,
+            original_callers=original_callers,
         )
 
         if allowed:
-            logger.info("Agent is authorized to run.")
+            logger.info(f"Agent {role_id} is authorized to run by user {user_id}.")
             return None
         else:
-            logger.warning("Agent is not authorized to run.")
+            logger.warning(
+                f"Agent {role_id} is not authorized to run by user {user_id}."
+            )
             return types.Content(
-                parts=[types.Part(text="Agent is not authorized to run.")], role="model"
+                parts=[
+                    types.Part(
+                        text=f"Agent {role_id} is not authorized to run by user {user_id}."
+                    )
+                ],
+                role="model",
             )
 
     except Exception as e:
