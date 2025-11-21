@@ -63,16 +63,28 @@ def _render_prompts() -> dict[str, Any]:
     )
     use_adk_web = deploy_mode == "2"
 
-    auth_method_options = {
-        "1": "None",
-        "2": "API key",
-        "3": "OAuth2",
-    }
-    auth_methods = {
-        "1": "none",
-        "2": "api-key",
-        "3": "oauth2",
-    }
+    auth_method_options = {}
+    auth_methods = {}
+    if use_adk_web:
+        auth_method_options = {
+            "1": "None",
+            "2": "OAuth2",
+        }
+        auth_methods = {
+            "1": "none",
+            "2": "oauth2",
+        }
+    else:
+        auth_method_options = {
+            "1": "None",
+            "2": "API key",
+            "3": "OAuth2",
+        }
+        auth_methods = {
+            "1": "none",
+            "2": "api-key",
+            "3": "oauth2",
+        }
 
     click.echo("Choose an authentication method:")
     for key, value in auth_method_options.items():
