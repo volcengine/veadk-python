@@ -181,6 +181,7 @@ class IdentityClient:
         configuration.ak = self._initial_access_key
         configuration.sk = self._initial_secret_key
         configuration.session_token = self._initial_session_token
+        configuration.logger = {}
 
         self._api_client = volcenginesdkid.IDApi(
             volcenginesdkcore.ApiClient(configuration)
@@ -260,6 +261,7 @@ class IdentityClient:
         sts_config.region = self.region
         sts_config.ak = access_key
         sts_config.sk = secret_key
+        sts_config.logger = {}
 
         # Create an STS API client
         sts_client = volcenginesdksts.STSApi(volcenginesdkcore.ApiClient(sts_config))
@@ -712,14 +714,16 @@ class IdentityClient:
         principal: Dict[str, str],
         operation: Dict[str, str],
         resource: Dict[str, str],
+        original_callers: Optional[List[Dict[str, str]]] = None,
         namespace: str = "default",
     ) -> bool:
         """Check if the principal has permission to perform the operation on the resource.
 
         Args:
-            principal: Principal information, e.g., {"Type": "User", "Id": "user123"}
-            operation: Operation to check, e.g., {"Type": "Action", "Id": "invoke"}
-            resource: Resource information, e.g., {"Type": "Agent", "Id": "agent456"}
+            principal: Principal information, e.g., {"Type": "user", "Id": "user123"}
+            operation: Operation to check, e.g., {"Type": "action", "Id": "invoke"}
+            resource: Resource information, e.g., {"Type": "agent", "Id": "agent456"}
+            original_callers: Optional list of original callers.
             namespace: Namespace of the resource. Defaults to "default".
 
         Returns:
@@ -738,6 +742,7 @@ class IdentityClient:
             operation=operation,
             principal=principal,
             resource=resource,
+            original_callers=original_callers,
         )
 
         response: volcenginesdkid.CheckPermissionResponse = (
