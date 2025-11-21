@@ -15,7 +15,7 @@
 import os
 from typing import Any
 
-from dotenv import find_dotenv, load_dotenv
+from dotenv import find_dotenv, load_dotenv, dotenv_values
 from pydantic import BaseModel, Field
 
 from veadk.configs.auth_configs import VeIdentityConfig
@@ -39,10 +39,14 @@ from veadk.utils.misc import set_envs
 
 logger = get_logger(__name__)
 
-if load_dotenv(find_dotenv(usecwd=True)):
-    logger.info(f"Find `.env` file in {find_dotenv(usecwd=True)}, load envs.")
+env_file_path = os.path.join(os.getcwd(), ".env")
+if os.path.isfile(env_file_path):
+    load_dotenv(env_file_path)
+    env_from_dotenv = dotenv_values(env_file_path)
+    logger.info(f"Find `.env` file in {env_file_path}, load envs.")
 else:
-    logger.info("No env file found.")
+    env_from_dotenv = {}
+    logger.info("No `.env` file found.")
 
 
 class VeADKConfig(BaseModel):
@@ -97,11 +101,13 @@ def getenv(
 
 config_yaml_path = find_dotenv(filename="config.yaml", usecwd=True)
 
-veadk_environments = {}
+veadk_environments = dict(env_from_dotenv)
 
 if config_yaml_path:
     logger.info(f"Find `config.yaml` file in {config_yaml_path}")
-    config_dict, _veadk_environments = set_envs(config_yaml_path=config_yaml_path)
+    config_dict, _veadk_environments = set_envs(
+        config_yaml_path=config_yaml_path, env_from_dotenv=env_from_dotenv
+    )
     veadk_environments.update(_veadk_environments)
 else:
     logger.warning("No `config.yaml` file found.")
