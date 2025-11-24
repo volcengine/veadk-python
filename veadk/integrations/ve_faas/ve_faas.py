@@ -114,7 +114,7 @@ class VeFaaS:
                 name=function_name,
                 description="Created by VeADK (Volcengine Agent Development Kit)",
                 tags=[TagForCreateFunctionInput(key="provider", value="veadk")],
-                runtime="native-python3.10/v1",
+                runtime="native-python3.12/v1",
                 request_timeout=1800,
                 envs=envs,
                 memory_mb=2048,
