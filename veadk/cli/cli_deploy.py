@@ -67,6 +67,7 @@ TEMP_PATH = "/tmp"
     help="Expected Volcengine Identity client name",
 )
 @click.option("--path", default=".", help="Local project path")
+@click.option("--iam-role", default=None, help="iam role for the vefaas function")
 def deploy(
     volcengine_access_key: str,
     volcengine_secret_key: str,
@@ -80,6 +81,7 @@ def deploy(
     user_pool_name: str,
     client_name: str,
     path: str,
+    iam_role: str,
 ) -> None:
     """Deploy a user project to Volcengine FaaS application.
 
@@ -131,6 +133,8 @@ def deploy(
     from veadk.config import getenv
     from veadk.utils.logger import get_logger
     from veadk.utils.misc import formatted_timestamp, load_module_from_file
+    import os
+    from veadk.config import veadk_environments
 
     logger = get_logger(__name__)
 
@@ -138,6 +142,11 @@ def deploy(
         volcengine_access_key = getenv("VOLCENGINE_ACCESS_KEY")
     if not volcengine_secret_key:
         volcengine_secret_key = getenv("VOLCENGINE_SECRET_KEY")
+    if not iam_role:
+        iam_role = getenv("IAM_ROLE", None, allow_false_values=True)
+    else:
+        os.environ["IAM_ROLE"] = iam_role
+        veadk_environments["IAM_ROLE"] = iam_role
 
     user_proj_abs_path = Path(path).resolve()
     template_dir_path = Path(vefaas.__file__).parent / "template"
