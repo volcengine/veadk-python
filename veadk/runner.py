@@ -303,9 +303,9 @@ class Runner(ADKRunner):
 
     def __init__(
         self,
-        agent: BaseAgent | Agent,
+        agent: BaseAgent | Agent | None = None,
         short_term_memory: ShortTermMemory | None = None,
-        app_name: str = "veadk_default_app",
+        app_name: str | None = None,
         user_id: str = "veadk_default_user",
         upload_inline_data_to_tos: bool = False,
         run_processor: "BaseRunProcessor | None" = None,
@@ -324,15 +324,15 @@ class Runner(ADKRunner):
             agent (google.adk.agents.base_agent.BaseAgent | veadk.agent.Agent):
                 The agent instance used to run interactions.
             short_term_memory (ShortTermMemory | None): Optional short-term memory; if
-                not provided and no external ``session_service`` is supplied, an in-memory
+                not provided and no external `session_service` is supplied, an in-memory
                 session service will be created.
-            app_name (str): Application name. Defaults to ``"veadk_default_app"``.
-            user_id (str): Default user ID. Defaults to ``"veadk_default_user"``.
-            upload_inline_data_to_tos (bool): Whether to enable inline media upload. Defaults to ``False``.
+            app_name (str): Application name. Defaults to `veadk_default_app`.
+            user_id (str): Default user ID. Defaults to `veadk_default_user`.
+            upload_inline_data_to_tos (bool): Whether to enable inline media upload. Defaults to `False`.
             run_processor (BaseRunProcessor | None): Optional run processor for intercepting agent execution.
                 If not provided, will try to get from agent. If agent doesn't have one, uses NoOpRunProcessor.
-            *args: Positional args passed through to ``ADKRunner``.
-            **kwargs: Keyword args passed through to ``ADKRunner``; may include
+            *args: Positional args passed through to `ADKRunner`.
+            **kwargs: Keyword args passed through to `ADKRunner`; may include
                 ``session_service`` and ``memory_service`` to override defaults.
 
         Returns:
@@ -392,6 +392,10 @@ class Runner(ADKRunner):
                 memory_service = agent.long_term_memory  # type: ignore
             else:
                 logger.info("No long term memory provided.")
+
+        # For forward compatibility, we pass app_name to ADKRunner.
+        if not kwargs.get("app") and not app_name:
+            app_name = "veadk_default_app"
 
         super().__init__(
             agent=agent,
