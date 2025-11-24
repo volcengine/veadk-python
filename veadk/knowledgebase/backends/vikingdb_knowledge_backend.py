@@ -124,6 +124,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             logger.warning(
                 f"VikingDB knowledgebase collection {self.index} does not exist, please create it first..."
             )
+            self.create_collection()
 
     def precheck_index_naming(self):
         if not (
@@ -442,6 +443,9 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             },
             path=CREATE_COLLECTION_PATH,
             method="POST",
+        )
+        logger.debug(
+            f"Create collection {self.index} using project {self.volcengine_project} response: {response}"
         )
 
         if response.get("code") != 0:

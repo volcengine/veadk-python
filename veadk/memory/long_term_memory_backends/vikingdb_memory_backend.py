@@ -62,7 +62,8 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
                 # "event_1, event_2" -> ["event_1", "event_2"]
                 self.memory_type = [x.strip() for x in env_memory_type.split(",")]
             else:
-                self.memory_type = ["sys_event_v1", "event_v1"]
+                # self.memory_type = ["sys_event_v1", "event_v1"]
+                self.memory_type = ["sys_event_v1"]
 
         logger.info(f"Using memory type: {self.memory_type}")
 
