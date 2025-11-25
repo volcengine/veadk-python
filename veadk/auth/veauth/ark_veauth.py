@@ -48,6 +48,10 @@ def get_ark_token(region: str = "cn-beijing") -> str:
     )
     try:
         first_api_key_id = res["Result"]["Items"][0]["Id"]
+        logger.warning("By default, VeADK fetches the first API Key in the list.")
+        logger.info(
+            f"Try to fetch ARK API Key with id={first_api_key_id}, name={res['Result']['Items'][0]['Name']}"
+        )
     except KeyError:
         raise ValueError(f"Failed to get ARK api key list: {res}")
 
@@ -65,7 +69,7 @@ def get_ark_token(region: str = "cn-beijing") -> str:
     )
     try:
         api_key = res["Result"]["ApiKey"]
-        logger.info("Successfully fetching ARK API Key.")
+        logger.info(f"Successfully fetched ARK API Key (starts with {api_key[:8]}).")
         return api_key
     except KeyError:
         raise ValueError(f"Failed to get ARK api key: {res}")
