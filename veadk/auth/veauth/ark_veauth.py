@@ -36,7 +36,7 @@ def get_ark_token(region: str = "cn-beijing") -> str:
         session_token = cred.session_token
 
     res = ve_request(
-        request_body={"ProjectName": "default", "Filter": {}},
+        request_body={"ProjectName": "default", "Filter": {"AllowAll": True}},
         header={"X-Security-Token": session_token},
         action="ListApiKeys",
         ak=access_key,
