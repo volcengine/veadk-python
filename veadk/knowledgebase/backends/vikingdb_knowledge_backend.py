@@ -137,7 +137,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
                 "it must start with an English letter, contain only letters, numbers, and underscores, and have a length of 1-128."
             )
 
-    def _get_tos_client(self) -> VeTOS:
+    def _get_tos_client(self, tos_bucket_name: str) -> VeTOS:
         volcengine_access_key = self.volcengine_access_key
         volcengine_secret_key = self.volcengine_secret_key
         session_token = self.session_token
@@ -153,7 +153,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             sk=volcengine_secret_key,
             session_token=session_token,
             region=self.tos_config.region,
-            bucket_name=self.tos_config.bucket,
+            bucket_name=tos_bucket_name or self.tos_config.bucket,
         )
 
     @override
@@ -461,7 +461,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         metadata: dict | None = None,
     ) -> str:
         # Here, we set the metadata via the TOS object, ref: https://www.volcengine.com/docs/84313/1254624
-        self._tos_client = self._get_tos_client()
+        self._tos_client = self._get_tos_client(tos_bucket_name)
 
         self._tos_client.bucket_name = tos_bucket_name
         coro = self._tos_client.upload(
