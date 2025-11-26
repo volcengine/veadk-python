@@ -24,8 +24,10 @@ from pydantic import Field
 from typing_extensions import Any, override
 
 import veadk.config  # noqa E401
+from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 from veadk.configs.database_configs import TOSVectorConfig
 from veadk.configs.model_configs import EmbeddingModelConfig, NormalEmbeddingModelConfig
+from veadk.integrations.ve_tos.ve_tos import VeTOS
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
 from veadk.knowledgebase.backends.utils import get_llama_index_splitter
 
@@ -56,19 +58,24 @@ class TosVectorKnowledgeBackend(BaseKnowledgebaseBackend):
         default_factory=lambda: os.getenv("DATABASE_TOS_VECTOR_ACCOUNT_ID")
     )
     tos_vector_config: TOSVectorConfig = Field(default_factory=TOSVectorConfig)
+
+    session_token: str = ""
+
     embedding_config: EmbeddingModelConfig | NormalEmbeddingModelConfig = Field(
         default_factory=EmbeddingModelConfig
     )
 
     def model_post_init(self, __context: Any) -> None:
         self.precheck_index_naming()
-        self._tos_client = VectorClient(
+        self._tos_vector_client = VectorClient(
             ak=self.volcengine_access_key,
             sk=self.volcengine_secret_key,
             **self.tos_vector_config.model_dump(),
         )
         # create_bucket and index if not exist
         self._create_index()
+
+        self._tos_client = self._get_tos_client()
 
         self._embed_model = OpenAILikeEmbedding(
             model_name=self.embedding_config.name,
@@ -78,7 +85,7 @@ class TosVectorKnowledgeBackend(BaseKnowledgebaseBackend):
 
     def _bucket_exists(self) -> bool:
         try:
-            bucket_exist = self._tos_client.get_vector_bucket(
+            bucket_exist = self._tos_vector_client.get_vector_bucket(
                 vector_bucket_name=self.tos_vector_bucket_name,
                 account_id=self.tos_vector_account_id,
             )
@@ -91,7 +98,7 @@ class TosVectorKnowledgeBackend(BaseKnowledgebaseBackend):
 
     def _index_exists(self) -> bool:
         try:
-            index_exist = self._tos_client.get_index(
+            index_exist = self._tos_vector_client.get_index(
                 vector_bucket_name=self.tos_vector_bucket_name,
                 account_id=self.tos_vector_account_id,
                 index_name=self.index,
@@ -114,11 +121,11 @@ class TosVectorKnowledgeBackend(BaseKnowledgebaseBackend):
 
     def _create_index(self):
         if not self._bucket_exists():
-            self._tos_client.create_vector_bucket(
+            self._tos_vector_client.create_vector_bucket(
                 vector_bucket_name=self.tos_vector_bucket_name,
             )
         if not self._index_exists():
-            self._tos_client.create_index(
+            self._tos_vector_client.create_index(
                 vector_bucket_name=self.tos_vector_bucket_name,
                 account_id=self.tos_vector_account_id,
                 index_name=self.index,
@@ -126,6 +133,25 @@ class TosVectorKnowledgeBackend(BaseKnowledgebaseBackend):
                 dimension=self.embedding_config.dim,
                 distance_metric=DistanceMetricType.DistanceMetricCosine,
             )
+
+    def _get_tos_client(self) -> VeTOS:
+        volcengine_access_key = self.volcengine_access_key
+        volcengine_secret_key = self.volcengine_secret_key
+        session_token = self.session_token
+
+        if not (volcengine_access_key and volcengine_secret_key):
+            cred = get_credential_from_vefaas_iam()
+            volcengine_access_key = cred.access_key_id
+            volcengine_secret_key = cred.secret_access_key
+            session_token = cred.session_token
+
+        return VeTOS(
+            ak=volcengine_access_key,
+            sk=volcengine_secret_key,
+            session_token=session_token,
+            region=self.tos_vector_config.region,
+            bucket_name=self.tos_vector_bucket_name,
+        )
 
     def precheck_index_naming(self) -> None:
         pass
@@ -144,7 +170,7 @@ class TosVectorKnowledgeBackend(BaseKnowledgebaseBackend):
                     metadata={"text": node.text, "metadata": json.dumps(node.metadata)},
                 )
             )
-        result = self._tos_client.put_vectors(
+        result = self._tos_vector_client.put_vectors(
             vector_bucket_name=self.tos_vector_bucket_name,
             account_id=self.tos_vector_account_id,
             index_name=self.index,
@@ -175,7 +201,7 @@ class TosVectorKnowledgeBackend(BaseKnowledgebaseBackend):
     def search(self, query: str, top_k: int = 5) -> list[str]:
         query_vector = self._embed_model.get_text_embedding(query)
 
-        search_result = self._tos_client.query_vectors(
+        search_result = self._tos_vector_client.query_vectors(
             vector_bucket_name=self.tos_vector_bucket_name,
             account_id=self.tos_vector_account_id,
             index_name=self.index,
