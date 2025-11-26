@@ -505,7 +505,6 @@ class Runner(ADKRunner):
                         and len(event.content.parts[0].text.strip()) > 0
                     ):
                         final_output = event.content.parts[0].text
-                        logger.debug(f"Event output: {final_output}")
             except LlmCallsLimitExceededError as e:
                 logger.warning(f"Max number of llm calls limit exceeded: {e}")
                 final_output = ""
