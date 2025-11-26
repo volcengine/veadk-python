@@ -14,9 +14,8 @@
 
 import click
 
-from veadk.cloud.cloud_agent_engine import CloudAgentEngine
 from veadk.utils.logger import get_logger
-from veadk.config import getenv
+
 
 logger = get_logger(__name__)
 
@@ -78,6 +77,9 @@ def update(
         ValueError: If authentication fails or application not found.
         FileNotFoundError: If local path does not exist.
     """
+    from veadk.cloud.cloud_agent_engine import CloudAgentEngine
+    from veadk.config import getenv
+
     # Set environment variables if provided
     if not volcengine_access_key:
         volcengine_access_key = getenv("VOLCENGINE_ACCESS_KEY")

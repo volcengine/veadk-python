@@ -13,11 +13,8 @@
 # limitations under the License.
 
 import click
-import json
-import requests
 from veadk.utils.logger import get_logger
-from veadk.config import getenv
-from pathlib import Path
+
 
 logger = get_logger(__name__)
 
@@ -52,6 +49,10 @@ def uploadevalset(
         cozeloop_api_key: API key for authenticating with CozeLoop services.
             If not provided, uses OBSERVABILITY_OPENTELEMETRY_COZELOOP_API_KEY environment variable.
     """
+    import json
+    import requests
+    from veadk.config import getenv
+    from pathlib import Path
 
     if not cozeloop_workspace_id:
         cozeloop_workspace_id = getenv(

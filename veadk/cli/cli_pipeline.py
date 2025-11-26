@@ -22,9 +22,6 @@ from veadk.consts import (
     DEFAULT_CR_NAMESPACE_NAME,
     DEFAULT_CR_REPO_NAME,
 )
-from veadk.integrations.ve_code_pipeline.ve_code_pipeline import VeCodePipeline
-from veadk.integrations.ve_cr.ve_cr import VeCR
-from veadk.integrations.ve_faas.ve_faas import VeFaaS
 from veadk.utils.logger import get_logger
 from veadk.version import VERSION
 
@@ -49,6 +46,8 @@ def _create_cr(volcengine_settings: dict[str, str], cr_settings: dict[str, str])
     Raises:
         Exception: If any of the CR resource creation operations fail
     """
+    from veadk.integrations.ve_cr.ve_cr import VeCR
+
     vecr = VeCR(
         access_key=volcengine_settings["volcengine_access_key"],
         secret_key=volcengine_settings["volcengine_secret_key"],
@@ -203,6 +202,8 @@ def pipeline(
         - The pipeline will be triggered immediately upon creation for initial deployment
         - Subsequent deployments occur automatically when code is pushed to the monitored branch
     """
+    from veadk.integrations.ve_code_pipeline.ve_code_pipeline import VeCodePipeline
+    from veadk.integrations.ve_faas.ve_faas import VeFaaS
 
     click.echo(
         "Welcome use VeADK to integrate your project to volcengine pipeline for CI/CD."
