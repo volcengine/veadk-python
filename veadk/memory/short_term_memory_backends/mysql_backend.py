@@ -34,6 +34,7 @@ from veadk.memory.short_term_memory_backends.base_backend import (
 
 class MysqlSTMBackend(BaseShortTermMemoryBackend):
     mysql_config: MysqlConfig = Field(default_factory=MysqlConfig)
+    db_kwargs: dict = Field(default_factory=dict)
 
     def model_post_init(self, context: Any) -> None:
         encoded_username = quote_plus(self.mysql_config.user)
@@ -46,4 +47,4 @@ class MysqlSTMBackend(BaseShortTermMemoryBackend):
     @cached_property
     @override
     def session_service(self) -> BaseSessionService:
-        return DatabaseSessionService(db_url=self._db_url)
+        return DatabaseSessionService(db_url=self._db_url, **self.db_kwargs)
