@@ -34,6 +34,7 @@ from veadk.memory.short_term_memory_backends.base_backend import (
 
 class PostgreSqlSTMBackend(BaseShortTermMemoryBackend):
     postgresql_config: PostgreSqlConfig = Field(default_factory=PostgreSqlConfig)
+    db_kwargs: dict = Field(default_factory=dict)
 
     def model_post_init(self, context: Any) -> None:
         encoded_username = quote_plus(self.postgresql_config.user)
@@ -46,4 +47,4 @@ class PostgreSqlSTMBackend(BaseShortTermMemoryBackend):
     @cached_property
     @override
     def session_service(self) -> BaseSessionService:
-        return DatabaseSessionService(db_url=self._db_url)
+        return DatabaseSessionService(db_url=self._db_url, **self.db_kwargs)
