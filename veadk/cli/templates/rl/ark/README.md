@@ -4,13 +4,13 @@ VeADK 与方舟平台 Agent RL 集成，用户使用 VeADK 提供的脚手架，
 ## 准备工作
 在你的终端中运行以下命令，初始化一个强化学习项目：
 ```shell
-veadk rl ark init workspace veadk_ark_rl_project
+veadk rl init --platform ark --workspace veadk_rl_ark_project
 ```
-该命令会在当前目录下创建一个名为 `veadk_ark_rl_project` 的文件夹，其中包含了一个基本的强化学习项目结构。
+该命令会在当前目录下创建一个名为 `veadk_rl_ark_project` 的文件夹，其中包含了一个基本的强化学习项目结构。
 然后在终端中运行以下命令，提交任务到方舟平台：
 ```shell
-cd veadk_ark_rl_project
-veadk rl ark submit
+cd veadk_rl_ark_project
+veadk rl submit --platform ark
 ```
 ## 原理说明
 生成后的项目结构如下，其中核心文件包括：
@@ -20,7 +20,7 @@ veadk rl ark submit
   - reward：给出强化学习所需的奖励值，在`random_reward.py`给出了示例
 - `job.py`或`job.yaml`：用以配置训练参数，并指定需要使用的rollout和reward
 ```shell
-veadk_ark_rl_project
+veadk_rl_ark_project
 ├── data
     ├── *.jsonl # 训练数据
 └── plugins
@@ -35,7 +35,6 @@ veadk_ark_rl_project
 ├── job.yaml # 任务配置
 ├── test_agent.py # VeFaaS 测试脚本
 ```
-
 ## 运行
 ```bash
 ark create mcj -f job.yaml
