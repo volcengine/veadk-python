@@ -1,0 +1,44 @@
+name: sdk-job
+customization_type: GRPO
+model_reference:
+  foundation_model:
+    name: doubao-seed-1-6-flash
+    model_version: '250615'
+hyperparameters:
+  batch_size: '128'
+  clip_ratio_high: '0.2'
+  clip_ratio_low: '0.2'
+  kl_coefficient: '0.001'
+  loss_agg_mode: seq-mean-token-mean
+  lr: '0.000001'
+  lr_warmup_steps: '5'
+  max_new_tokens: '1024'
+  num_generations: '8'
+  num_iterations_per_batch: '2'
+  save_every_n_steps: '10'
+  temperature: '1.0'
+  test_every_n_steps: '5'
+  test_num_generations: '1'
+  test_top_p: '1'
+  top_p: '1'
+  num_steps: '20'
+custom_rl_pipeline:
+  graders:
+  - plugin:
+      name: random_reward
+      python_func: plugins.random_reward:random_reward_fn
+      envs:
+        foo: bar
+    weight: 0.5
+  rollout:
+    plugin:
+      name: demo_veadk_rollout
+      python_func: plugins.async_weather_rollout:demo_rollout
+      envs:
+        foo: bar
+
+data:
+  training_set:
+    local_files:
+    - ./data/mcj_rollout_test_dataset.jsonl
+save_model_limit: 1
