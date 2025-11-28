@@ -1,0 +1,9 @@
+https://ark-public-example-cn-beijing.tos-cn-beijing.volces.com/ark-sdk/ark_sdk-0.2.5.tar.gz
+cozeloop==0.1.18
+veadk-python==0.2.16
+google-adk==1.17.0
+# only of bytedance fornax
+# bytedance.fornax==1.0.2
+# langchain==0.3.27
+# tiktoken==0.12.0
+# bytedlogger==0.15.2
