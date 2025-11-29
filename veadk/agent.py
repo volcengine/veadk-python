@@ -29,7 +29,7 @@ from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.context_cache_config import ContextCacheConfig
 from google.adk.agents.llm_agent import InstructionProvider, ToolUnion
 from google.adk.agents.run_config import StreamingMode
-from google.adk.events import Event
+from google.adk.events import Event, EventActions
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.runners import Runner
 from google.genai import types
@@ -240,6 +240,18 @@ class Agent(LlmAgent):
 
         async for event in super()._run_async_impl(ctx):
             yield event
+            if self.enable_responses and event.cache_metadata:
+                # for persistent short-term memory with response api
+                session_state_event = Event(
+                    invocation_id=event.invocation_id,
+                    author=event.author,
+                    actions=EventActions(
+                        state_delta={
+                            "response_id": event.cache_metadata.cache_name,
+                        }
+                    ),
+                )
+                yield session_state_event
 
     async def _run(
         self,
