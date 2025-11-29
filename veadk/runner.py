@@ -32,6 +32,7 @@ from veadk.agents.sequential_agent import SequentialAgent
 from veadk.config import getenv
 from veadk.evaluation import EvalSetRecorder
 from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.processors.base_run_processor import BaseRunProcessor
 from veadk.types import MediaMessage
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp, read_file_to_bytes
@@ -137,6 +138,23 @@ def intercept_new_message(process_func):
                 **kwargs,
             ):
                 yield event
+                event_metadata = f"| agent_name: {event.author} , user_id: {user_id} , session_id: {session_id} , invocation_id: {event.invocation_id}"
+                if event.get_function_calls():
+                    for function_call in event.get_function_calls():
+                        logger.debug(f"Function call: {function_call} {event_metadata}")
+                elif event.get_function_responses():
+                    for function_response in event.get_function_responses():
+                        logger.debug(
+                            f"Function response: {function_response} {event_metadata}"
+                        )
+                elif (
+                    event.content is not None
+                    and event.content.parts
+                    and event.content.parts[0].text is not None
+                    and len(event.content.parts[0].text.strip()) > 0
+                ):
+                    final_output = event.content.parts[0].text
+                    logger.debug(f"Event output: {final_output} {event_metadata}")
 
             post_run_process(self)
 
@@ -287,137 +305,16 @@ class Runner(ADKRunner):
         This class wraps the parent ``run_async`` at initialization to insert media
         upload and post-run handling. If you override the underlying ``run_async``,
         ensure it remains compatible with this interception logic.
-
-    Examples:
-        ### Text-only interaction
-
-        ```python
-        import asyncio
-
-        from veadk import Agent, Runner
-
-        agent = Agent()
-
-        runner = Runner(agent=agent)
-
-        response = asyncio.run(runner.run(messages="北京的天气怎么样？"))
-
-        print(response)
-        ```
-
-        ### Send multimodal data to agent
-
-        Currently, VeADK support send multimodal data (i.e., text with images) to agent, and invoke the corresponding model to do tasks.
-
-        !!! info "Note for multimodal running"
-
-            When sending multimodal data to agent, the model of agent must support multimodal data processing. For example, `doubao-1-6`.
-
-        ```python
-        import asyncio
-
-        from veadk import Agent, Runner
-        from veadk.types import MediaMessage
-
-        agent = Agent(model_name="doubao-seed-1-6-250615")
-
-        runner = Runner(agent=agent)
-
-        message = MediaMessage(
-            text="Describe the image",
-            media="https://...", # <-- replace here with an image from web
-        )
-        response = asyncio.run(runner.run(messages=message))
-
-        print(response)
-        ```
-
-        ### Run with run_async
-
-        You are recommand that **using `run_async` in production to invoke agent**. During running, the loop will throw out `event`, you can process each `event` according to your requirements.
-
-        ```python
-        import uuid
-
-        from google.genai import types
-        from veadk import Agent, Runner
-
-        APP_NAME = "app"
-        USER_ID = "user"
-
-        agent = Agent()
-
-        runner = Runner(agent=agent, app_name=APP_NAME)
-
-
-        async def main(message: types.Content, session_id: str):
-            # before running, you should create a session first
-            await runner.short_term_memory.create_session(
-                app_name=APP_NAME, user_id=USER_ID, session_id=session_id
-            )
-
-            async for event in runner.run_async(
-                user_id=USER_ID,
-                session_id=session_id,
-                new_message=message,
-            ):
-                # process event here
-                print(event)
-
-
-        if __name__ == "__main__":
-            import asyncio
-
-            message = types.Content(parts=[types.Part(text="Hello")], role="user")
-            session_id = str(uuid.uuid1())
-            asyncio.run(main(message=message, session_id=session_id))
-        ```
-
-        ### Custom your message
-
-        You can custom your message content, as Google provides some basic types to build and custom agent's input. For example, you can build a message with a text and several images.
-
-        ```python
-        from google.genai import types
-
-        # build message with a text
-        message = types.Content(parts=[types.Part(text="Hello")], role="user")
-
-        # build message with a text and an image
-        message = types.Content(
-            parts=[
-                types.Part(text="Hello!"),
-                types.Part(
-                    inline_data=types.Blob(display_name="foo.png", data=..., mime_type=...)
-                ),
-            ],
-            role="user",
-        )
-
-        # build image with several text and several images
-        message = types.Content(
-            parts=[
-                types.Part(text="Hello!"),
-                types.Part(text="Please help me to describe the following images."),
-                types.Part(
-                    inline_data=types.Blob(display_name="foo.png", data=..., mime_type=...)
-                ),
-                types.Part(
-                    inline_data=types.Blob(display_name="bar.png", data=..., mime_type=...)
-                ),
-            ],
-            role="user",
-        )
-        ```
     """
 
     def __init__(
         self,
-        agent: BaseAgent | Agent,
+        agent: BaseAgent | Agent | None = None,
         short_term_memory: ShortTermMemory | None = None,
-        app_name: str = "veadk_default_app",
+        app_name: str | None = None,
         user_id: str = "veadk_default_user",
         upload_inline_data_to_tos: bool = False,
+        run_processor: "BaseRunProcessor | None" = None,
         *args,
         **kwargs,
     ) -> None:
@@ -433,13 +330,15 @@ class Runner(ADKRunner):
             agent (google.adk.agents.base_agent.BaseAgent | veadk.agent.Agent):
                 The agent instance used to run interactions.
             short_term_memory (ShortTermMemory | None): Optional short-term memory; if
-                not provided and no external ``session_service`` is supplied, an in-memory
+                not provided and no external `session_service` is supplied, an in-memory
                 session service will be created.
-            app_name (str): Application name. Defaults to ``"veadk_default_app"``.
-            user_id (str): Default user ID. Defaults to ``"veadk_default_user"``.
-            upload_inline_data_to_tos (bool): Whether to enable inline media upload. Defaults to ``False``.
-            *args: Positional args passed through to ``ADKRunner``.
-            **kwargs: Keyword args passed through to ``ADKRunner``; may include
+            app_name (str): Application name. Defaults to `veadk_default_app`.
+            user_id (str): Default user ID. Defaults to `veadk_default_user`.
+            upload_inline_data_to_tos (bool): Whether to enable inline media upload. Defaults to `False`.
+            run_processor (BaseRunProcessor | None): Optional run processor for intercepting agent execution.
+                If not provided, will try to get from agent. If agent doesn't have one, uses NoOpRunProcessor.
+            *args: Positional args passed through to `ADKRunner`.
+            **kwargs: Keyword args passed through to `ADKRunner`; may include
                 ``session_service`` and ``memory_service`` to override defaults.
 
         Returns:
@@ -452,9 +351,19 @@ class Runner(ADKRunner):
         self.long_term_memory = None
         self.short_term_memory = short_term_memory
         self.upload_inline_data_to_tos = upload_inline_data_to_tos
-
+        credential_service = kwargs.pop("credential_service", None)
         session_service = kwargs.pop("session_service", None)
         memory_service = kwargs.pop("memory_service", None)
+
+        # Handle run_processor: priority is runner arg > agent.run_processor > NoOpRunProcessor
+        if run_processor is not None:
+            self.run_processor = run_processor
+        elif hasattr(agent, "run_processor") and agent.run_processor is not None:  # type: ignore
+            self.run_processor = agent.run_processor  # type: ignore
+        else:
+            from veadk.processors import NoOpRunProcessor
+
+            self.run_processor = NoOpRunProcessor()
 
         if session_service:
             if short_term_memory:
@@ -490,10 +399,15 @@ class Runner(ADKRunner):
             else:
                 logger.info("No long term memory provided.")
 
+        # For forward compatibility, we pass app_name to ADKRunner.
+        if not kwargs.get("app") and not app_name:
+            app_name = "veadk_default_app"
+
         super().__init__(
             agent=agent,
             session_service=session_service,
             memory_service=memory_service,
+            credential_service=credential_service,
             app_name=app_name,
             *args,
             **kwargs,
@@ -511,6 +425,7 @@ class Runner(ADKRunner):
         run_config: RunConfig | None = None,
         save_tracing_data: bool = False,
         upload_inline_data_to_tos: bool = False,
+        run_processor: "BaseRunProcessor | None" = None,
     ):
         """Run a conversation with multi-turn text and multimodal inputs.
 
@@ -527,6 +442,8 @@ class Runner(ADKRunner):
                 config is created using the environment var ``MODEL_AGENT_MAX_LLM_CALLS``.
             save_tracing_data (bool): Whether to dump tracing data to disk after the run. Defaults to ``False``.
             upload_inline_data_to_tos (bool): Whether to enable media upload only for this run. Defaults to ``False``.
+            run_processor (BaseRunProcessor | None): Optional run processor to use for this run.
+                If not provided, uses the runner's default run_processor. Defaults to None.
 
         Returns:
             str: The textual output from the last event, if present; otherwise an empty string.
@@ -567,23 +484,27 @@ class Runner(ADKRunner):
         final_output = ""
         for converted_message in converted_messages:
             try:
-                async for event in self.run_async(
-                    user_id=user_id,
-                    session_id=session_id,
-                    new_message=converted_message,
-                    run_config=run_config,
-                ):
-                    if event.get_function_calls():
-                        for function_call in event.get_function_calls():
-                            logger.debug(f"Function call: {function_call}")
-                    elif (
+
+                @(run_processor or self.run_processor).process_run(
+                    runner=self, message=converted_message
+                )
+                async def event_generator():
+                    async for event in self.run_async(
+                        user_id=user_id,
+                        session_id=session_id,
+                        new_message=converted_message,
+                        run_config=run_config,
+                    ):
+                        yield event
+
+                async for event in event_generator():
+                    if (
                         event.content is not None
                         and event.content.parts
                         and event.content.parts[0].text is not None
                         and len(event.content.parts[0].text.strip()) > 0
                     ):
                         final_output = event.content.parts[0].text
-                        logger.debug(f"Event output: {final_output}")
             except LlmCallsLimitExceededError as e:
                 logger.warning(f"Max number of llm calls limit exceeded: {e}")
                 final_output = ""
@@ -753,7 +674,7 @@ class Runner(ADKRunner):
         return eval_set_path
 
     async def save_session_to_long_term_memory(
-        self, session_id: str, user_id: str = "", app_name: str = ""
+        self, session_id: str, user_id: str = "", app_name: str = "", **kwargs
     ) -> None:
         """Save the specified session to long-term memory.
 
@@ -809,5 +730,5 @@ class Runner(ADKRunner):
             )
             return
 
-        await self.long_term_memory.add_session_to_memory(session)
+        await self.long_term_memory.add_session_to_memory(session, kwargs=kwargs)
         logger.info(f"Add session `{session.id}` to long term memory.")

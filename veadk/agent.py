@@ -17,6 +17,13 @@ from __future__ import annotations
 import os
 from typing import Optional, Union, AsyncGenerator
 
+# If user didn't set LITELLM_LOCAL_MODEL_COST_MAP, set it to True
+# to enable local model cost map.
+# This value is `false` by default, which brings heavy performance burden,
+# for instance, importing `Litellm` needs about 10s latency.
+if not os.getenv("LITELLM_LOCAL_MODEL_COST_MAP"):
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+
 from google.adk.agents import LlmAgent, RunConfig, InvocationContext
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.context_cache_config import ContextCacheConfig
@@ -42,9 +49,10 @@ from veadk.processors import BaseRunProcessor, NoOpRunProcessor
 from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INSTRUCTION
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.logger import get_logger
-from veadk.utils.patches import patch_asyncio
+from veadk.utils.patches import patch_asyncio, patch_tracer
 from veadk.version import VERSION
 
+patch_tracer()
 patch_asyncio()
 logger = get_logger(__name__)
 
@@ -72,62 +80,6 @@ class Agent(LlmAgent):
         short_term_memory (Optional[ShortTermMemory]): Session-based memory for temporary context.
         long_term_memory (Optional[LongTermMemory]): Cross-session memory for persistent user context.
         tracers (list[BaseTracer]): List of tracers used for telemetry and monitoring.
-
-    Notes:
-        Before creating your agent, you should get the API Key for your model.
-
-    Examples:
-        ### Simple agent
-
-        Create a simplest agent without any extra settings. All agent attributes are come from environment variables and default values. Like:
-
-        ```python
-        import asyncio
-
-        from veadk import Agent, Runner
-
-        root_agent = Agent()
-
-        runner = Runner(agent=root_agent)
-
-        response = asyncio.run(runner.run("hello"))
-        print(response)
-        ```
-
-        You can set some agent metadata attributes by the following code:
-
-        ```python
-        from veadk import Agent
-
-        from veadk import Agent, Runner
-
-        root_agent = Agent(
-            name="meeting_assistant",
-            description="An assistant that helps user to make meetings.",
-            # system prompt
-            instruction="First learn about user's meeting time, location, and other key informations, and give out a meeting plan.",
-        )
-        ```
-
-        Or, once you want to use your local-serving model or models from other provider, you can specify some model-related configurations in initiation arguments:
-
-        ```python
-        agent = Agent(model_name="", model_api_key="", model_api_base="")
-        ```
-
-        Besides, you can specify some extra options by ARK requirements, such as:
-
-        ```python
-        # disable thinking
-        model_extra_config = {}
-        ```
-
-        In some systems, mulitple-agent based design is necessary, you can implement a multiple-agent system by `sub_agent` argument:
-
-        ```python
-        from veadk import Agent
-        ```
-
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
@@ -176,6 +128,8 @@ class Agent(LlmAgent):
             run_processor=AuthRequestProcessor()
         )
     """
+
+    enable_authz: bool = False
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
@@ -248,10 +202,27 @@ class Agent(LlmAgent):
         if self.long_term_memory is not None:
             from google.adk.tools import load_memory
 
-            if not load_memory.custom_metadata:
-                load_memory.custom_metadata = {}
-            load_memory.custom_metadata["backend"] = self.long_term_memory.backend
+            if hasattr(load_memory, "custom_metadata"):
+                if not load_memory.custom_metadata:
+                    load_memory.custom_metadata = {}
+                load_memory.custom_metadata["backend"] = self.long_term_memory.backend
             self.tools.append(load_memory)
+
+        if self.enable_authz:
+            from veadk.tools.builtin_tools.agent_authorization import (
+                check_agent_authorization,
+            )
+
+            if self.before_agent_callback:
+                if isinstance(self.before_agent_callback, list):
+                    self.before_agent_callback.append(check_agent_authorization)
+                else:
+                    self.before_agent_callback = [
+                        self.before_agent_callback,
+                        check_agent_authorization,
+                    ]
+            else:
+                self.before_agent_callback = check_agent_authorization
 
         logger.info(f"VeADK version: {VERSION}")
 

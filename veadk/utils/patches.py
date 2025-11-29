@@ -22,6 +22,7 @@ from veadk.tracing.telemetry.telemetry import (
     trace_tool_call,
 )
 from veadk.utils.logger import get_logger
+from veadk.version import VERSION
 
 logger = get_logger(__name__)
 
@@ -78,3 +79,23 @@ def patch_google_adk_telemetry() -> None:
                     logger.debug(
                         f"Patch {mod_name} {var_name} with {trace_functions[var_name]}"
                     )
+
+
+def patch_tracer() -> None:
+    from opentelemetry import trace
+
+    for mod_name, mod in tuple(sys.modules.items()):
+        if mod_name.startswith("google.adk"):
+            for var_name in dir(mod):
+                var = getattr(mod, var_name, None)
+                if var_name == "tracer" and isinstance(var, trace.Tracer):
+                    setattr(
+                        mod,
+                        var_name,
+                        trace.get_tracer(
+                            instrumenting_module_name="veadk",
+                            instrumenting_library_version=VERSION,
+                            schema_url="https://opentelemetry.io/schemas/1.37.0",
+                        ),
+                    )
+                    logger.debug(f"Patch {mod_name} {var_name} with VeADK tracer.")

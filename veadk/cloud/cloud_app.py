@@ -124,8 +124,12 @@ class CloudApp:
 
     def _get_vefaas_endpoint(
         self,
-        volcengine_ak: str = getenv("VOLCENGINE_ACCESS_KEY"),
-        volcengine_sk: str = getenv("VOLCENGINE_SECRET_KEY"),
+        volcengine_ak: str = getenv(
+            "VOLCENGINE_ACCESS_KEY", "", allow_false_values=True
+        ),
+        volcengine_sk: str = getenv(
+            "VOLCENGINE_SECRET_KEY", "", allow_false_values=True
+        ),
     ) -> str:
         """Fetches the application endpoint from VeFaaS details if not directly provided.
 
@@ -244,8 +248,12 @@ class CloudApp:
     def update_self(
         self,
         path: str,
-        volcengine_ak: str = getenv("VOLCENGINE_ACCESS_KEY"),
-        volcengine_sk: str = getenv("VOLCENGINE_SECRET_KEY"),
+        volcengine_ak: str = getenv(
+            "VOLCENGINE_ACCESS_KEY", "", allow_false_values=True
+        ),
+        volcengine_sk: str = getenv(
+            "VOLCENGINE_SECRET_KEY", "", allow_false_values=True
+        ),
     ):
         """Updates the configuration of this cloud application.
 
@@ -291,8 +299,12 @@ class CloudApp:
 
     def delete_self(
         self,
-        volcengine_ak: str = getenv("VOLCENGINE_ACCESS_KEY"),
-        volcengine_sk: str = getenv("VOLCENGINE_SECRET_KEY"),
+        volcengine_ak: str = getenv(
+            "VOLCENGINE_ACCESS_KEY", "", allow_false_values=True
+        ),
+        volcengine_sk: str = getenv(
+            "VOLCENGINE_SECRET_KEY", "", allow_false_values=True
+        ),
     ):
         """Deletes this cloud application after interactive confirmation.
 
@@ -410,7 +422,26 @@ class CloudApp:
 
                 # we ignore type checking here, because the response
                 # from CloudApp will not be `Task` type
-                return res.root.result  # type: ignore
+                result = res.root.result  # type: ignore
+                try:
+                    from a2a.types import Task
+                except ImportError:
+                    return result
+
+                if isinstance(result, Task):
+                    if result.history:  # type: ignore
+                        return next(
+                            (
+                                msg
+                                for msg in reversed(result.history)  # type: ignore
+                                if msg.role == "agent"
+                            ),
+                            None,
+                        )
+                    else:
+                        return None
+                else:
+                    return result
             except Exception as e:
                 logger.error(f"Failed to send message to cloud app. Error: {e}")
                 return None

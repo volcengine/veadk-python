@@ -20,8 +20,12 @@ import time
 from typing import Optional, Union
 
 from google.adk.tools.tool_context import ToolContext
+from google.adk.agents.callback_context import CallbackContext
 from google.adk.agents.readonly_context import ReadonlyContext
 
+from veadk.integrations.ve_identity.auth_config import (
+    get_default_identity_client,
+)
 from veadk.utils.logger import get_logger
 
 from veadk.integrations.ve_identity.identity_client import IdentityClient
@@ -48,18 +52,25 @@ class WorkloadTokenManager:
 
     def __init__(
         self,
-        identity_client: IdentityClient = None,
-        region: Optional[str] = "cn-beijing",
+        identity_client: Optional[IdentityClient] = None,
+        region: Optional[str] = None,
     ):
         """Initialize the token manager.
 
         Args:
-            identity_client: The IdentityClient instance to use for token requests.
+            identity_client: Optional IdentityClient instance to use for token requests.
+                If not provided and use_global_client is True, uses the global client
+                from VeIdentityConfig.
+            region: Optional region for creating a new IdentityClient.
+                Only used if identity_client is not provided and use_global_client is False.
         """
-        self._identity_client = identity_client or IdentityClient(region=region)
+
+        self._identity_client = identity_client or get_default_identity_client(
+            region=region
+        )
 
     def _build_cache_key(
-        self, tool_context: Union[ToolContext | ReadonlyContext]
+        self, tool_context: Union[ToolContext | CallbackContext | ReadonlyContext]
     ) -> str:
         """Build a unique cache key for storing the workload token.
 
@@ -89,7 +100,7 @@ class WorkloadTokenManager:
 
     async def get_workload_token(
         self,
-        tool_context: Union[ToolContext | ReadonlyContext],
+        tool_context: Union[ToolContext | CallbackContext | ReadonlyContext],
         workload_name: Optional[str] = None,
         user_token: Optional[str] = None,
     ) -> str:
@@ -128,10 +139,6 @@ class WorkloadTokenManager:
                         f"Cached workload token expired for agent '{tool_context.agent_name}', refreshing..."
                     )
 
-        # Default to agent_name if workload_name not specified
-        if not workload_name:
-            workload_name = tool_context.agent_name
-
         # Determine user_id based on authentication mode
         user_id = None if user_token else tool_context._invocation_context.user_id
 
@@ -148,7 +155,7 @@ class WorkloadTokenManager:
 
 
 async def get_workload_token(
-    tool_context: Union[ToolContext | ReadonlyContext],
+    tool_context: Union[ToolContext | CallbackContext | ReadonlyContext],
     identity_client: Optional[IdentityClient] = None,
     workload_name: Optional[str] = None,
     user_token: Optional[str] = None,

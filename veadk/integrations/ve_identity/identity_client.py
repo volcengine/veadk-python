@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import uuid
 from functools import wraps
 from typing import Any, Dict, List, Literal, Optional
@@ -25,14 +26,18 @@ from typing import Any, Dict, List, Literal, Optional
 import aiohttp
 import volcenginesdkid
 import volcenginesdkcore
+import volcenginesdksts
 
+from veadk.consts import VEFAAS_IAM_CRIDENTIAL_PATH
 from veadk.integrations.ve_identity.models import (
+    AssumeRoleCredential,
     DCRRegistrationRequest,
     DCRRegistrationResponse,
     OAuth2TokenResponse,
     WorkloadToken,
 )
 from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
+from veadk.config import settings
 
 from veadk.utils.logger import get_logger
 
@@ -51,33 +56,56 @@ def refresh_credentials(func):
     """
     import asyncio
 
+    def _try_get_vefaas_credentials():
+        """Attempt to retrieve credentials from VeFaaS IAM."""
+        try:
+            ve_iam_cred = get_credential_from_vefaas_iam()
+            return (
+                ve_iam_cred.access_key_id,
+                ve_iam_cred.secret_access_key,
+                ve_iam_cred.session_token,
+            )
+        except FileNotFoundError:
+            pass  # VeFaaS IAM file not found, ignore
+        except Exception as e:
+            logger.warning(f"Failed to retrieve credentials from VeFaaS IAM: {e}")
+        return None
+
     @wraps(func)
     def _refresh_creds(self: IdentityClient):
         """Helper to refresh credentials."""
-        # Try to get credentials from environment variables first
+        # Step 1: Get initial credentials from constructor or environment variables
         ak = self._initial_access_key or os.getenv("VOLCENGINE_ACCESS_KEY", "")
         sk = self._initial_secret_key or os.getenv("VOLCENGINE_SECRET_KEY", "")
         session_token = self._initial_session_token or os.getenv(
             "VOLCENGINE_SESSION_TOKEN", ""
         )
 
-        # If credentials are not available, try to get from VeFaaS IAM
-        if not (ak and sk):
-            try:
-                logger.info(
-                    "Credentials not found in environment, attempting to fetch from VeFaaS IAM..."
-                )
-                ve_iam_cred = get_credential_from_vefaas_iam()
-                ak = ve_iam_cred.access_key_id
-                sk = ve_iam_cred.secret_access_key
-                session_token = ve_iam_cred.session_token
-                logger.info("Successfully retrieved credentials from VeFaaS IAM")
-            except FileNotFoundError as e:
-                logger.warning(f"VeFaaS IAM credentials not available: {e}")
-            except Exception as e:
-                logger.warning(f"Failed to retrieve credentials from VeFaaS IAM: {e}")
+        # Step 2: Clear expired session_token
+        if self._is_sts_credential_expired():
+            logger.info("STS credentials expired, clearing...")
+            session_token = ""
 
-        # Update configuration with the credentials
+        # Step 3: Try VeFaaS IAM if no credentials or no session_token
+        # VeFaaS IAM provides complete credentials (ak, sk, session_token)
+        if not (ak and sk) or (ak and sk and not session_token):
+            if credentials := _try_get_vefaas_credentials():
+                ak, sk, session_token = credentials
+
+        # Step 4: If still no session_token, try AssumeRole
+        if ak and sk and not session_token:
+            if role_trn := self._get_iam_role_trn_from_vefaas_iam() or os.getenv(
+                "RUNTIME_IAM_ROLE_TRN", ""
+            ):
+                try:
+                    sts_cred = self._assume_role(ak, sk, role_trn)
+                    ak = sts_cred.access_key_id
+                    sk = sts_cred.secret_access_key
+                    session_token = sts_cred.session_token
+                except Exception as e:
+                    logger.warning(f"Failed to assume role: {e}")
+
+        # Step 5: Update configuration with the credentials
         self._api_client.api_client.configuration.ak = ak
         self._api_client.api_client.configuration.sk = sk
         self._api_client.api_client.configuration.session_token = session_token
@@ -128,6 +156,7 @@ class IdentityClient:
             KeyError: If required environment variables are not set.
         """
         self.region = region
+
         # Store initial credentials for fallback
         self._initial_access_key = access_key or os.getenv("VOLCENGINE_ACCESS_KEY", "")
         self._initial_secret_key = secret_key or os.getenv("VOLCENGINE_SECRET_KEY", "")
@@ -141,10 +170,130 @@ class IdentityClient:
         configuration.ak = self._initial_access_key
         configuration.sk = self._initial_secret_key
         configuration.session_token = self._initial_session_token
+        configuration.logger = {}
 
         self._api_client = volcenginesdkid.IDApi(
             volcenginesdkcore.ApiClient(configuration)
         )
+
+        # STS credential cache
+        self._cached_sts_credential: Optional[AssumeRoleCredential] = None
+        self._sts_credential_expires_at: Optional[int] = None
+
+    def _get_iam_role_trn_from_vefaas_iam(self) -> Optional[str]:
+        path = Path(VEFAAS_IAM_CRIDENTIAL_PATH)
+
+        if not path.exists():
+            return None
+
+        with open(VEFAAS_IAM_CRIDENTIAL_PATH, "r") as f:
+            cred_dict = json.load(f)
+            role_trn = cred_dict["role_trn"]
+
+            logger.info("Get IAM Role TRN from IAM file successfully.")
+
+            return role_trn
+
+    def _is_sts_credential_expired(self) -> bool:
+        """Check if cached STS credential is expired or will expire soon.
+
+        Returns:
+            True if credential is expired or will expire within 5 minutes, False otherwise.
+        """
+        if self._sts_credential_expires_at is None:
+            return True
+
+        import time
+
+        current_time = int(time.time())
+        # Refresh 5 minutes in advance to avoid expiration during use.
+        buffer_seconds = 300
+        return current_time >= (self._sts_credential_expires_at - buffer_seconds)
+
+    def _assume_role(
+        self, access_key: str, secret_key: str, role_trn: str
+    ) -> AssumeRoleCredential:
+        """Execute AssumeRole to get STS temporary credentials.
+
+        This method performs the AssumeRole operation and caches the result.
+        Cache validation is handled by the caller (refresh_credentials decorator).
+
+        Args:
+            access_key: VolcEngine access key
+            secret_key: VolcEngine secret key
+            role_trn: The role TRN to assume
+
+        Returns:
+            AssumeRoleCredential containing temporary credentials
+
+        Raises:
+            Exception: If AssumeRole fails
+        """
+        logger.info(
+            f"Requesting new STS credentials for role: {role_trn}, "
+            f"session: {settings.veidentity.role_session_name}"
+        )
+
+        # Create STS client configuration
+        sts_config = volcenginesdkcore.Configuration()
+        sts_config.region = self.region
+        sts_config.ak = access_key
+        sts_config.sk = secret_key
+        sts_config.logger = {}
+
+        # Create an STS API client
+        sts_client = volcenginesdksts.STSApi(volcenginesdkcore.ApiClient(sts_config))
+
+        # Construct an AssumeRole request
+        assume_role_request = volcenginesdksts.AssumeRoleRequest(
+            role_trn=role_trn,
+            role_session_name=settings.veidentity.role_session_name,
+        )
+
+        # Execute AssumeRole
+        response: volcenginesdksts.AssumeRoleResponse = sts_client.assume_role(
+            assume_role_request
+        )
+
+        if not response.credentials:
+            raise Exception("AssumeRole returned no credentials")
+
+        credentials = response.credentials
+
+        # Parse expiration time
+        from datetime import datetime
+        import calendar
+
+        try:
+            # ExpiredTime format: "2021-04-12T11:57:09+08:00"
+            dt = datetime.strptime(
+                credentials.expired_time.replace("+08:00", ""), "%Y-%m-%dT%H:%M:%S"
+            )
+            expires_at_timestamp = calendar.timegm(dt.timetuple())
+        except Exception as e:
+            logger.warning(f"Failed to parse STS credential expiration time: {e}")
+            # Default to 1 hour expiration
+            import time
+
+            expires_at_timestamp = int(time.time()) + 3600
+
+        # Create credential object
+        sts_credential = AssumeRoleCredential(
+            access_key_id=credentials.access_key_id,
+            secret_access_key=credentials.secret_access_key,
+            session_token=credentials.session_token,
+        )
+
+        # Cache credentials and expiration time
+        self._cached_sts_credential = sts_credential
+        self._sts_credential_expires_at = expires_at_timestamp
+
+        logger.info(
+            f"Successfully obtained and cached STS credentials, "
+            f"expires at {datetime.fromtimestamp(expires_at_timestamp).isoformat()}"
+        )
+
+        return sts_credential
 
     @refresh_credentials
     def create_oauth2_credential_provider(
@@ -185,7 +334,7 @@ class IdentityClient:
     @refresh_credentials
     def get_workload_access_token(
         self,
-        workload_name: str,
+        workload_name: Optional[str] = None,
         user_token: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> WorkloadToken:
@@ -533,3 +682,183 @@ class IdentityClient:
 
         # Create the credential provider with updated config
         return self.create_oauth2_credential_provider(request_params)
+
+    @refresh_credentials
+    def check_permission(
+        self,
+        principal: Dict[str, str],
+        operation: Dict[str, str],
+        resource: Dict[str, str],
+        original_callers: Optional[List[Dict[str, str]]] = None,
+        namespace: str = "default",
+    ) -> bool:
+        """Check if the principal has permission to perform the operation on the resource.
+
+        Args:
+            principal: Principal information, e.g., {"Type": "user", "Id": "user123"}
+            operation: Operation to check, e.g., {"Type": "action", "Id": "invoke"}
+            resource: Resource information, e.g., {"Type": "agent", "Id": "agent456"}
+            original_callers: Optional list of original callers.
+            namespace: Namespace of the resource. Defaults to "default".
+
+        Returns:
+            True if the principal has permission, False otherwise.
+
+        Raises:
+            ValueError: If input parameters are invalid
+            RuntimeError: If the permission check API call fails
+        """
+        logger.info(
+            f"Checking permission for principal {principal['Id']} on resource {resource['Id']} for operation {operation['Id']}..."
+        )
+
+        request = volcenginesdkid.CheckPermissionRequest(
+            namespace_name=namespace,
+            operation=operation,
+            principal=principal,
+            resource=resource,
+            original_callers=original_callers,
+        )
+
+        response: volcenginesdkid.CheckPermissionResponse = (
+            self._api_client.check_permission(request)
+        )
+
+        if not hasattr(response, "allowed"):
+            logger.error("Permission check failed")
+            return False
+
+        logger.info(
+            f"Permission check result for principal {principal['Id']} on resource {resource['Id']}: {response.allowed}"
+        )
+        return response.allowed
+
+    def create_user_pool(self, name: str) -> str:
+        from volcenginesdkid import CreateUserPoolRequest, CreateUserPoolResponse
+
+        request = CreateUserPoolRequest(
+            name=name,
+        )
+        response: CreateUserPoolResponse = self._api_client.create_user_pool(request)
+
+        return response.uid
+
+    def get_user_pool(self, name: str) -> str | None:
+        from volcenginesdkid import (
+            ListUserPoolsRequest,
+            ListUserPoolsResponse,
+            FilterForListUserPoolsInput,
+            DataForListUsersOutput,
+        )
+
+        request = ListUserPoolsRequest(
+            page_number=1,
+            page_size=1,
+            filter=FilterForListUserPoolsInput(
+                name=name,
+            ),
+        )
+        response: ListUserPoolsResponse = self._api_client.list_user_pools(request)
+        if response.total_count == 0:
+            return None
+
+        user_pool: DataForListUsersOutput = response.data[0]
+        return user_pool.uid
+
+    def create_user_pool_client(
+        self, user_pool_uid: str, name: str, client_type: str
+    ) -> tuple[str, str]:
+        from volcenginesdkid import (
+            CreateUserPoolClientRequest,
+            CreateUserPoolClientResponse,
+        )
+
+        request = CreateUserPoolClientRequest(
+            user_pool_uid=user_pool_uid,
+            name=name,
+            client_type=client_type,
+        )
+        response: CreateUserPoolClientResponse = (
+            self._api_client.create_user_pool_client(request)
+        )
+        return response.uid, response.client_secret
+
+    def register_callback_for_user_pool_client(
+        self,
+        user_pool_uid: str,
+        client_uid: str,
+        callback_url: str,
+        web_origin: str,
+    ):
+        from volcenginesdkid import (
+            GetUserPoolClientRequest,
+            GetUserPoolClientResponse,
+            UpdateUserPoolClientRequest,
+        )
+
+        request = GetUserPoolClientRequest(
+            user_pool_uid=user_pool_uid,
+            client_uid=client_uid,
+        )
+        response: GetUserPoolClientResponse = self._api_client.get_user_pool_client(
+            request
+        )
+
+        allowed_callback_urls = response.allowed_callback_urls
+        if not allowed_callback_urls:
+            allowed_callback_urls = []
+        allowed_callback_urls.append(callback_url)
+        allowed_web_origins = response.allowed_web_origins
+        if not allowed_web_origins:
+            allowed_web_origins = []
+        allowed_web_origins.append(web_origin)
+
+        request2 = UpdateUserPoolClientRequest(
+            user_pool_uid=user_pool_uid,
+            client_uid=client_uid,
+            name=response.name,
+            description=response.description,
+            allowed_callback_urls=allowed_callback_urls,
+            allowed_logout_urls=response.allowed_logout_urls,
+            allowed_web_origins=allowed_web_origins,
+            allowed_cors=response.allowed_cors,
+            id_token=response.id_token,
+            refresh_token=response.refresh_token,
+        )
+        self._api_client.update_user_pool_client(request2)
+
+    def get_user_pool_client(
+        self, user_pool_uid: str, name: str
+    ) -> tuple[str, str] | None:
+        from volcenginesdkid import (
+            ListUserPoolClientsRequest,
+            ListUserPoolClientsResponse,
+            FilterForListUserPoolClientsInput,
+            DataForListUserPoolClientsOutput,
+            GetUserPoolClientRequest,
+            GetUserPoolClientResponse,
+        )
+
+        request = ListUserPoolClientsRequest(
+            user_pool_uid=user_pool_uid,
+            page_number=1,
+            page_size=1,
+            filter=FilterForListUserPoolClientsInput(
+                name=name,
+            ),
+        )
+        response: ListUserPoolClientsResponse = self._api_client.list_user_pool_clients(
+            request
+        )
+        if response.total_count == 0:
+            return None
+
+        client: DataForListUserPoolClientsOutput = response.data[0]
+        request2 = GetUserPoolClientRequest(
+            user_pool_uid=user_pool_uid,
+            client_uid=client.uid,
+        )
+        response2: GetUserPoolClientResponse = self._api_client.get_user_pool_client(
+            request2
+        )
+        return response2.uid, response2.client_secret

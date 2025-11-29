@@ -24,6 +24,8 @@ from veadk.cli.cli_pipeline import pipeline
 from veadk.cli.cli_prompt import prompt
 from veadk.cli.cli_web import web
 from veadk.cli.cli_uploadevalset import uploadevalset
+from veadk.cli.cli_update import update
+from veadk.cli.cli_clean import clean
 from veadk.version import VERSION
 
 
@@ -49,6 +51,8 @@ veadk.add_command(pipeline)
 veadk.add_command(eval)
 veadk.add_command(kb)
 veadk.add_command(uploadevalset)
+veadk.add_command(update)
+veadk.add_command(clean)
 
 if __name__ == "__main__":
     veadk()

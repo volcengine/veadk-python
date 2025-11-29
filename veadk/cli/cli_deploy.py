@@ -22,12 +22,12 @@ TEMP_PATH = "/tmp"
 
 @click.command()
 @click.option(
-    "--access-key",
+    "--volcengine-access-key",
     default=None,
     help="Volcengine access key",
 )
 @click.option(
-    "--secret-key",
+    "--volcengine-secret-key",
     default=None,
     help="Volcengine secret key",
 )
@@ -50,17 +50,38 @@ TEMP_PATH = "/tmp"
     help="Backend for short-term memory",
 )
 @click.option("--use-adk-web", is_flag=True, help="Whether to use ADK Web")
+@click.option(
+    "--auth-method",
+    default="none",
+    type=click.Choice(["none", "api-key", "oauth2"]),
+    help="=Authentication method for agent",
+)
+@click.option(
+    "--user-pool-name",
+    default="",
+    help="Expected Volcengine Identity user pool name",
+)
+@click.option(
+    "--client-name",
+    default="",
+    help="Expected Volcengine Identity client name",
+)
 @click.option("--path", default=".", help="Local project path")
+@click.option("--iam-role", default=None, help="iam role for the vefaas function")
 def deploy(
-    access_key: str,
-    secret_key: str,
+    volcengine_access_key: str,
+    volcengine_secret_key: str,
     vefaas_app_name: str,
     veapig_instance_name: str,
     veapig_service_name: str,
     veapig_upstream_name: str,
     short_term_memory_backend: str,
     use_adk_web: bool,
+    auth_method: str,
+    user_pool_name: str,
+    client_name: str,
     path: str,
+    iam_role: str,
 ) -> None:
     """Deploy a user project to Volcengine FaaS application.
 
@@ -77,9 +98,9 @@ def deploy(
     5. Cleaning up temporary files
 
     Args:
-        access_key: Volcengine access key for API authentication. If not provided,
+        volcengine_access_key: Volcengine access key for API authentication. If not provided,
             will use VOLCENGINE_ACCESS_KEY environment variable
-        secret_key: Volcengine secret key for API authentication. If not provided,
+        volcengine_secret_key: Volcengine secret key for API authentication. If not provided,
             will use VOLCENGINE_SECRET_KEY environment variable
         vefaas_app_name: Name of the target Volcengine FaaS application where the
             project will be deployed
@@ -90,6 +111,10 @@ def deploy(
         short_term_memory_backend: Backend type for short-term memory storage.
             Choices are 'local' or 'mysql'
         use_adk_web: Flag to enable ADK Web interface for the deployed agent
+        auth_method: Authentication for the agent.
+            Choices are 'none', 'api-key' or 'oauth2'.
+        veidentity_user_pool_name: Optional Volcengine Identity user pool name
+        veidentity_client_name: Optional Volcengine Identity client name
         path: Local directory path containing the VeADK project to deploy
 
     Note:
@@ -108,13 +133,20 @@ def deploy(
     from veadk.config import getenv
     from veadk.utils.logger import get_logger
     from veadk.utils.misc import formatted_timestamp, load_module_from_file
+    import os
+    from veadk.config import veadk_environments
 
     logger = get_logger(__name__)
 
-    if not access_key:
-        access_key = getenv("VOLCENGINE_ACCESS_KEY")
-    if not secret_key:
-        secret_key = getenv("VOLCENGINE_SECRET_KEY")
+    if not volcengine_access_key:
+        volcengine_access_key = getenv("VOLCENGINE_ACCESS_KEY")
+    if not volcengine_secret_key:
+        volcengine_secret_key = getenv("VOLCENGINE_SECRET_KEY")
+    if not iam_role:
+        iam_role = getenv("IAM_ROLE", None, allow_false_values=True)
+    else:
+        os.environ["IAM_ROLE"] = iam_role
+        veadk_environments["IAM_ROLE"] = iam_role
 
     user_proj_abs_path = Path(path).resolve()
     template_dir_path = Path(vefaas.__file__).parent / "template"
@@ -131,6 +163,9 @@ def deploy(
         "veapig_service_name": veapig_service_name,
         "veapig_upstream_name": veapig_upstream_name,
         "use_adk_web": use_adk_web,
+        "auth_method": auth_method,
+        "veidentity_user_pool_name": user_pool_name,
+        "veidentity_client_name": client_name,
         "veadk_version": VERSION,
     }
 

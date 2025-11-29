@@ -6,6 +6,9 @@
   "veapig_service_name": "",
   "veapig_upstream_name": "",
   "use_adk_web": false,
+  "auth_method": "none",
+  "veidentity_user_pool_name": "",
+  "veidentity_client_name": "",
   "veadk_version": "",
   "_copy_without_render": [
     "*.html",

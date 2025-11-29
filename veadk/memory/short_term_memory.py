@@ -126,6 +126,8 @@ class ShortTermMemory(BaseModel):
 
     backend_configs: dict = Field(default_factory=dict)
 
+    db_kwargs: dict = Field(default_factory=dict)
+
     db_url: str = ""
 
     local_database_path: str = "/tmp/veadk_local_database.db"
@@ -137,7 +139,15 @@ class ShortTermMemory(BaseModel):
     def model_post_init(self, __context: Any) -> None:
         if self.db_url:
             logger.info("The `db_url` is set, ignore `backend` option.")
-            self._session_service = DatabaseSessionService(db_url=self.db_url)
+            if self.db_url.count("@") > 1 or self.db_url.count(":") > 2:
+                logger.warning(
+                    "Multiple `@` or `:` symbols detected in the database URL. "
+                    "Please encode `username` or `password` with `urllib.parse.quote_plus`. "
+                    "Examples: p@ssword→p%40ssword."
+                )
+            self._session_service = DatabaseSessionService(
+                db_url=self.db_url, **self.db_kwargs
+            )
         else:
             if self.backend == "database":
                 logger.warning(
@@ -149,7 +159,7 @@ class ShortTermMemory(BaseModel):
                     self._session_service = InMemorySessionService()
                 case "mysql":
                     self._session_service = MysqlSTMBackend(
-                        **self.backend_configs
+                        db_kwargs=self.db_kwargs, **self.backend_configs
                     ).session_service
                 case "sqlite":
                     self._session_service = SQLiteSTMBackend(
@@ -157,7 +167,7 @@ class ShortTermMemory(BaseModel):
                     ).session_service
                 case "postgresql":
                     self._session_service = PostgreSqlSTMBackend(
-                        **self.backend_configs
+                        db_kwargs=self.db_kwargs, **self.backend_configs
                     ).session_service
 
         if self.after_load_memory_callback:

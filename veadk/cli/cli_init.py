@@ -61,13 +61,61 @@ def _render_prompts() -> dict[str, Any]:
     deploy_mode = click.prompt(
         "Enter your choice", type=click.Choice(deploy_mode_options.keys())
     )
+    use_adk_web = deploy_mode == "2"
+
+    auth_method_options = {}
+    auth_methods = {}
+    if use_adk_web:
+        auth_method_options = {
+            "1": "None",
+            "2": "OAuth2",
+        }
+        auth_methods = {
+            "1": "none",
+            "2": "oauth2",
+        }
+    else:
+        auth_method_options = {
+            "1": "None",
+            "2": "API key",
+            "3": "OAuth2",
+        }
+        auth_methods = {
+            "1": "none",
+            "2": "api-key",
+            "3": "oauth2",
+        }
+
+    click.echo("Choose an authentication method:")
+    for key, value in auth_method_options.items():
+        click.echo(f"  {key}. {value}")
+
+    auth_method_idx = click.prompt(
+        "Enter your choice", type=click.Choice(auth_method_options.keys())
+    )
+    auth_method = auth_methods[auth_method_idx]
+
+    veidentity_user_pool_name = ""
+    veidentity_client_name = ""
+    if auth_method == "oauth2":
+        veidentity_user_pool_name = click.prompt(
+            "Volcengine Identity user pool name", default="", show_default=True
+        )
+
+        if use_adk_web:
+            veidentity_client_name = click.prompt(
+                "Volcengine Identity client name", default="", show_default=True
+            )
 
     return {
         "vefaas_application_name": vefaas_application_name,
         "veapig_instance_name": veapig_instance_name,
         "veapig_service_name": veapig_service_name,
         "veapig_upstream_name": veapig_upstream_name,
-        "use_adk_web": deploy_mode == "2",
+        "use_adk_web": use_adk_web,
+        "auth_method": auth_method,
+        "veidentity_user_pool_name": veidentity_user_pool_name,
+        "veidentity_client_name": veidentity_client_name,
         "veadk_version": VERSION,
     }
 

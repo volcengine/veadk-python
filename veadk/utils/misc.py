@@ -22,6 +22,7 @@ from typing import Any, Dict, List, MutableMapping, Tuple
 
 import requests
 from yaml import safe_load
+import __main__
 
 
 def read_file(file_path):
@@ -127,7 +128,7 @@ def getenv(
         )
 
 
-def set_envs(config_yaml_path: str) -> tuple[dict, dict]:
+def set_envs(config_yaml_path: str, env_from_dotenv: dict = None) -> tuple[dict, dict]:
     from veadk.utils.logger import get_logger
 
     logger = get_logger(__name__)
@@ -136,33 +137,48 @@ def set_envs(config_yaml_path: str) -> tuple[dict, dict]:
         config_dict = safe_load(yaml_file)
 
     flatten_config_dict = flatten_dict(config_dict)
-
+    config_upper_map = {k.upper(): v for k, v in flatten_config_dict.items()}
+    all_keys = {k.upper() for k in flatten_config_dict.keys()} | set(
+        env_from_dotenv.keys() if env_from_dotenv else []
+    )
     veadk_environments = {}
-    for k, v in flatten_config_dict.items():
-        k = k.upper()
-
+    for k in all_keys:
         if k in os.environ:
             logger.info(
                 f"Environment variable {k} has been set, value in `config.yaml` will be ignored."
             )
             veadk_environments[k] = os.environ[k]
             continue
-        veadk_environments[k] = str(v)
-        os.environ[k] = str(v)
-
+        veadk_environments[k] = str(config_upper_map.get(k))
+        os.environ[k] = str(config_upper_map.get(k))
     return config_dict, veadk_environments
 
 
-def get_temp_dir():
+def get_agents_dir():
     """
-    Return the corresponding temporary directory based on the operating system
-    - For Windows systems, return the system's default temporary directory
-    - For other systems (macOS, Linux, etc.), return the /tmp directory
+    Get the directory of agents.
+
+    Returns:
+        str: The agents directory (parent directory of the app)
     """
-    # First determine if it is a Windows system
-    if sys.platform.startswith("win"):
-        # Windows systems use the temporary directory from environment variables
-        return os.environ.get("TEMP", os.environ.get("TMP", r"C:\WINDOWS\TEMP"))
+    return os.path.dirname(get_agent_dir())
+
+
+def get_agent_dir():
+    """
+    Get the directory of the currently executed entry script.
+
+    Returns:
+        str: The agent directory
+    """
+    # Try using __main__.__file__ (works for most CLI scripts and uv run environments)
+    if hasattr(__main__, "__file__"):
+        full_path = os.path.dirname(os.path.abspath(__main__.__file__))
+    # Fallback to sys.argv[0] (usually gives the entry script path)
+    elif len(sys.argv) > 0 and sys.argv[0]:
+        full_path = os.path.dirname(os.path.abspath(sys.argv[0]))
+    # Fallback to current working directory (for REPL / Jupyter Notebook)
     else:
-        # Non-Windows systems (macOS, Linux, etc.) uniformly return /tmp
-        return "/tmp"
+        full_path = os.getcwd()
+
+    return full_path

@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import json
-import os
 import time
 
 import requests
@@ -33,7 +32,7 @@ from veadk.integrations.ve_faas.ve_faas_utils import (
     zip_and_encode_folder,
 )
 from veadk.utils.logger import get_logger
-from veadk.utils.misc import formatted_timestamp
+from veadk.utils.misc import formatted_timestamp, getenv
 from veadk.utils.volcengine_sign import ve_request
 
 logger = get_logger(__name__)
@@ -115,10 +114,11 @@ class VeFaaS:
                 name=function_name,
                 description="Created by VeADK (Volcengine Agent Development Kit)",
                 tags=[TagForCreateFunctionInput(key="provider", value="veadk")],
-                runtime="native-python3.10/v1",
+                runtime="native-python3.12/v1",
                 request_timeout=1800,
                 envs=envs,
                 memory_mb=2048,
+                role=getenv("IAM_ROLE", None, allow_false_values=True),
             )
         )
 
@@ -141,9 +141,8 @@ class VeFaaS:
         gateway_name: str,
         upstream_name: str,
         service_name: str,
+        enable_key_auth: bool = False,
     ):
-        enable_key_auth = os.getenv("VEFAAS_ENABLE_KEY_AUTH", "true").lower() == "true"
-
         response = ve_request(
             request_body={
                 "Name": application_name,
@@ -208,9 +207,11 @@ class VeFaaS:
             logs = "\n".join(self._get_application_logs(app_id=app_id))
             log_text = re.sub(
                 r'([{"\']?(key|secret|token|pass|auth|credential|access|api|ak|sk|doubao|volces|coze)[^"\'\s]*["\']?\s*[:=]\s*)(["\']?)([^"\'\s]+)(["\']?)|([A-Za-z0-9+/=]{20,})',
-                lambda m: f"{m.group(1)}{m.group(3)}******{m.group(5)}"
-                if m.group(1)
-                else "******",
+                lambda m: (
+                    f"{m.group(1)}{m.group(3)}******{m.group(5)}"
+                    if m.group(1)
+                    else "******"
+                ),
                 logs,
                 flags=re.IGNORECASE,
             )
@@ -234,9 +235,11 @@ class VeFaaS:
         request_body = {
             "OrderBy": {"Key": "CreateTime", "Ascend": False},
             "FunctionId": app_id if app_id else None,
-            "Filters": [{"Item": {"Key": "Name", "Value": [app_name]}}]
-            if app_name and not app_id
-            else None,
+            "Filters": (
+                [{"Item": {"Key": "Name", "Value": [app_name]}}]
+                if app_name and not app_id
+                else None
+            ),
         }
         # remove None
         request_body = {k: v for k, v in request_body.items() if v is not None}
@@ -356,6 +359,26 @@ class VeFaaS:
                 if app["Name"] == app_name:
                     return app
 
+    def get_application_route(
+        self, app_id: str = None, app_name: str = None
+    ) -> tuple[str, str, str] | None:
+        app = self.get_application_details(
+            app_id=app_id,
+            app_name=app_name,
+        )
+        if not app:
+            return None
+
+        cloud_resource = json.loads(app["CloudResource"])
+        gateway_id = cloud_resource["framework"]["triggers"][0]["DetailedConfig"][
+            "GatewayId"
+        ]
+        service_id = cloud_resource["framework"]["triggers"][0]["Routes"][0][
+            "ServiceId"
+        ]
+        route_id = cloud_resource["framework"]["triggers"][0]["Routes"][0]["Id"]
+        return gateway_id, service_id, route_id
+
     def find_app_id_by_name(self, name: str):
         apps = self._list_application(app_name=name)
         for app in apps:
@@ -386,6 +409,7 @@ class VeFaaS:
         gateway_name: str = "",
         gateway_service_name: str = "",
         gateway_upstream_name: str = "",
+        enable_key_auth: bool = False,
     ) -> tuple[str, str, str]:
         """Deploy an agent project to VeFaaS service.
 
@@ -395,6 +419,7 @@ class VeFaaS:
             gateway_name (str, optional): Gateway name. Defaults to "".
             gateway_service_name (str, optional): Gateway service name. Defaults to "".
             gateway_upstream_name (str, optional): Gateway upstream name. Defaults to "".
+            enable_key_auth (bool, optional): Enable key auth. Defaults to False.
 
         Returns:
             tuple[str, str, str]: (url, app_id, function_id)
@@ -439,6 +464,7 @@ class VeFaaS:
             gateway_name,
             gateway_upstream_name,
             gateway_service_name,
+            enable_key_auth,
         )
 
         logger.info(f"VeFaaS application {name} with ID {app_id} created.")

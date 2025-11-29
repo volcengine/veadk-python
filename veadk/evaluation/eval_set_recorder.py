@@ -14,14 +14,14 @@
 
 import time
 from pathlib import Path
-
+import os
 from google.adk.cli.utils import evals
 from google.adk.evaluation.eval_case import EvalCase, SessionInput
 from google.adk.evaluation.local_eval_sets_manager import LocalEvalSetsManager
 from google.adk.sessions import BaseSessionService
 
 from veadk.utils.logger import get_logger
-from veadk.utils.misc import formatted_timestamp, get_temp_dir
+from veadk.utils.misc import formatted_timestamp, get_agents_dir
 
 logger = get_logger(__name__)
 
@@ -53,7 +53,7 @@ class EvalSetRecorder(LocalEvalSetsManager):
         Raises:
             ValueError: If eval_set_id is invalid.
         """
-        super().__init__(agents_dir=get_temp_dir())
+        super().__init__(agents_dir=get_agents_dir())
         self.eval_set_id = eval_set_id if eval_set_id != "" else "default"
         self.session_service: BaseSessionService = session_service
 
@@ -131,7 +131,8 @@ class EvalSetRecorder(LocalEvalSetsManager):
         dump_path = self._get_eval_set_file_path(app_name, self.eval_set_id)
         Path(dump_path).parent.mkdir(parents=True, exist_ok=True)
 
-        self.create_eval_set(app_name=app_name, eval_set_id=self.eval_set_id)
+        if not os.path.exists(dump_path):
+            self.create_eval_set(app_name=app_name, eval_set_id=self.eval_set_id)
 
         await self.add_session_to_eval_set(
             app_name=app_name,

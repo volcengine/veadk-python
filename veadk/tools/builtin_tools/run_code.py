@@ -25,12 +25,16 @@ from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 logger = get_logger(__name__)
 
 
-def run_code(code: str, language: str, tool_context: ToolContext) -> str:
+def run_code(
+    code: str, language: str, tool_context: ToolContext, timeout: int = 30
+) -> str:
     """Run code in a code sandbox and return the output.
+    For C++ code, don't execute it directly, compile and execute via Python; write sources and object files to /tmp.
 
     Args:
         code (str): The code to run.
         language (str): The programming language of the code. Language must be one of the supported languages: python3.
+        timeout (int, optional): The timeout in seconds for the code execution. Defaults to 30.
 
     Returns:
         str: The output of the code execution.
@@ -43,7 +47,7 @@ def run_code(code: str, language: str, tool_context: ToolContext) -> str:
     )  # temporary service for code run tool
     region = getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
     host = getenv(
-        "AGENTKIT_TOOL_HOST", service + "." + region + ".volces.com "
+        "AGENTKIT_TOOL_HOST", service + "." + region + ".volces.com"
     )  # temporary host for code run tool
     logger.debug(f"tools endpoint: {host}")
 
@@ -54,7 +58,7 @@ def run_code(code: str, language: str, tool_context: ToolContext) -> str:
     logger.debug(f"tool_user_session_id: {tool_user_session_id}")
 
     logger.debug(
-        f"Running code in language: {language}, session_id={session_id}, code={code}, tool_id={tool_id}, host={host}, service={service}, region={region}"
+        f"Running code in language: {language}, session_id={session_id}, code={code}, tool_id={tool_id}, host={host}, service={service}, region={region}, timeout={timeout}"
     )
 
     ak = tool_context.state.get("VOLCENGINE_ACCESS_KEY")
@@ -86,7 +90,7 @@ def run_code(code: str, language: str, tool_context: ToolContext) -> str:
             "OperationPayload": json.dumps(
                 {
                     "code": code,
-                    "timeout": 30,
+                    "timeout": timeout,
                     "kernel_name": language,
                 }
             ),

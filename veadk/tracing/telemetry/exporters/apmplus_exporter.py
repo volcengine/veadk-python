@@ -402,7 +402,7 @@ class MeterUploader:
         operation_type = "tool"
         operation_name = tool.name
         operation_backend = ""
-        if tool.custom_metadata:
+        if hasattr(tool, "custom_metadata") and tool.custom_metadata:
             operation_backend = tool.custom_metadata.get("backend", "")
 
         attributes = {

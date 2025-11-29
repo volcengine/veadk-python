@@ -62,7 +62,8 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
                 # "event_1, event_2" -> ["event_1", "event_2"]
                 self.memory_type = [x.strip() for x in env_memory_type.split(",")]
             else:
-                self.memory_type = ["sys_event_v1", "event_v1"]
+                # self.memory_type = ["sys_event_v1", "event_v1"]
+                self.memory_type = ["sys_event_v1"]
 
         logger.info(f"Using memory type: {self.memory_type}")
 
@@ -119,6 +120,7 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
 
     @override
     def save_memory(self, user_id: str, event_strings: list[str], **kwargs) -> bool:
+        assistant_id = kwargs.get("assistant_id", "assistant")
         session_id = str(uuid.uuid1())
         messages = []
         for raw_events in event_strings:
@@ -130,7 +132,7 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
             messages.append({"role": role, "content": content})
         metadata = {
             "default_user_id": user_id,
-            "default_assistant_id": "assistant",
+            "default_assistant_id": assistant_id,
             "time": int(time.time() * 1000),
         }
 

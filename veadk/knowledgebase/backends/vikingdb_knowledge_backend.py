@@ -22,7 +22,7 @@ from typing import Any, Literal
 import requests
 from pydantic import Field
 from typing_extensions import override
-
+from veadk.utils.misc import getenv
 import veadk.config  # noqa E401
 from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 from veadk.configs.database_configs import NormalTOSConfig, TOSConfig
@@ -124,6 +124,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             logger.warning(
                 f"VikingDB knowledgebase collection {self.index} does not exist, please create it first..."
             )
+            self.create_collection()
 
     def precheck_index_naming(self):
         if not (
@@ -136,7 +137,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
                 "it must start with an English letter, contain only letters, numbers, and underscores, and have a length of 1-128."
             )
 
-    def _get_tos_client(self) -> VeTOS:
+    def _get_tos_client(self, tos_bucket_name: str) -> VeTOS:
         volcengine_access_key = self.volcengine_access_key
         volcengine_secret_key = self.volcengine_secret_key
         session_token = self.session_token
@@ -152,7 +153,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             sk=volcengine_secret_key,
             session_token=session_token,
             region=self.tos_config.region,
-            bucket_name=self.tos_config.bucket,
+            bucket_name=tos_bucket_name or self.tos_config.bucket,
         )
 
     @override
@@ -443,6 +444,9 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             path=CREATE_COLLECTION_PATH,
             method="POST",
         )
+        logger.debug(
+            f"Create collection {self.index} using project {self.volcengine_project} response: {response}"
+        )
 
         if response.get("code") != 0:
             raise ValueError(
@@ -457,7 +461,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         metadata: dict | None = None,
     ) -> str:
         # Here, we set the metadata via the TOS object, ref: https://www.volcengine.com/docs/84313/1254624
-        self._tos_client = self._get_tos_client()
+        self._tos_client = self._get_tos_client(tos_bucket_name)
 
         self._tos_client.bucket_name = tos_bucket_name
         coro = self._tos_client.upload(
@@ -557,7 +561,21 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         path: str,
         method: Literal["GET", "POST", "PUT", "DELETE"] = "POST",
     ) -> dict:
-        VIKINGDB_KNOWLEDGEBASE_BASE_URL = "api-knowledgebase.mlp.cn-beijing.volces.com"
+        VIKINGDB_KNOWLEDGEBASE_BASE_URL = (
+            "https://api-knowledgebase.mlp.cn-beijing.volces.com"
+        )
+        full_path = f"{VIKINGDB_KNOWLEDGEBASE_BASE_URL}{path}"
+
+        env_host = getenv(
+            "DATABASE_VIKING_BASE_URL", default_value=None, allow_false_values=True
+        )
+        if env_host:
+            if env_host.startswith("http://") or env_host.startswith("https://"):
+                full_path = f"{env_host}{path}"
+            else:
+                raise ValueError(
+                    "DATABASE_VIKING_BASE_URL must start with http:// or https://"
+                )
 
         volcengine_access_key = self.volcengine_access_key
         volcengine_secret_key = self.volcengine_secret_key
@@ -579,7 +597,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         )
         response = requests.request(
             method=method,
-            url=f"https://{VIKINGDB_KNOWLEDGEBASE_BASE_URL}{path}",
+            url=full_path,
             headers=request.headers,
             data=request.body,
         )
