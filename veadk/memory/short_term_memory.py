@@ -32,6 +32,7 @@ from veadk.memory.short_term_memory_backends.postgresql_backend import (
 from veadk.memory.short_term_memory_backends.sqlite_backend import (
     SQLiteSTMBackend,
 )
+from veadk.models.ark_transform import build_cache_metadata
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -41,12 +42,27 @@ def wrap_get_session_with_callbacks(obj, callback_fn: Callable):
     get_session_fn = getattr(obj, "get_session")
 
     @wraps(get_session_fn)
-    def wrapper(*args, **kwargs):
-        result = get_session_fn(*args, **kwargs)
+    async def wrapper(*args, **kwargs):
+        result = await get_session_fn(*args, **kwargs)
         callback_fn(result, *args, **kwargs)
         return result
 
     setattr(obj, "get_session", wrapper)
+
+
+def enable_responses_api_for_session_service(result, *args, **kwargs):
+    if result and isinstance(result, Session):
+        if result.events:
+            for event in result.events:
+                if (
+                    event.actions
+                    and event.actions.state_delta
+                    and not event.cache_metadata
+                    and "response_id" in event.actions.state_delta
+                ):
+                    event.cache_metadata = build_cache_metadata(
+                        response_id=event.actions.state_delta.get("response_id"),
+                    )
 
 
 class ShortTermMemory(BaseModel):
@@ -169,6 +185,11 @@ class ShortTermMemory(BaseModel):
                     self._session_service = PostgreSqlSTMBackend(
                         db_kwargs=self.db_kwargs, **self.backend_configs
                     ).session_service
+
+        if self.backend != "local":
+            wrap_get_session_with_callbacks(
+                self._session_service, enable_responses_api_for_session_service
+            )
 
         if self.after_load_memory_callback:
             wrap_get_session_with_callbacks(
