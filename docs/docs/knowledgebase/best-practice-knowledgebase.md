@@ -179,8 +179,8 @@ runner = Runner(agent=root_agent, app_name="itops_demo_app", user_id="demo_user"
 
 ### 通过 VeADK Web
 
-![image-2.png](./assets/images/knowledge/kb-bp-1.jpeg)
+![image-2.jpeg](../assets/images/knowledge/kb-bp-1.jpeg)
 
 ### 通过终端运行
 
-![image.png](./assets/images/knowledge/kb-bp-2.jpeg)
+![image.jpeg](../assets/images/knowledge/kb-bp-2.jpeg)
