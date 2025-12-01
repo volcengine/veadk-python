@@ -27,7 +27,7 @@ from veadk.utils.volcengine_sign import ve_request
 logger = get_logger(__name__)
 
 
-def web_search(query: str, tool_context: ToolContext) -> list[str]:
+def web_search(query: str, tool_context: ToolContext | None = None) -> list[str]:
     """Search a query in websites.
 
     Args:
@@ -36,8 +36,11 @@ def web_search(query: str, tool_context: ToolContext) -> list[str]:
     Returns:
         A list of result documents.
     """
-    ak = tool_context.state.get("VOLCENGINE_ACCESS_KEY")
-    sk = tool_context.state.get("VOLCENGINE_SECRET_KEY")
+    ak = None
+    sk = None
+    if tool_context:
+        ak = tool_context.state.get("VOLCENGINE_ACCESS_KEY")
+        sk = tool_context.state.get("VOLCENGINE_SECRET_KEY")
     session_token = ""
 
     if not (ak and sk):
