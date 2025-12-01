@@ -52,7 +52,7 @@ uv pip install -e .
 
 ## Configuration
 
-We recommand you to create a `config.yaml` file in the root directory of your own project, `VeADK` is able to read it automatically. For running a minimal agent, you just need to set the following configs in your `config.yaml` file:
+We recommend you to create a `config.yaml` file in the root directory of your own project, `VeADK` is able to read it automatically. For running a minimal agent, you just need to set the following configs in your `config.yaml` file:
 
 ```yaml
 model:
@@ -84,7 +84,7 @@ print(res)
 VeADK provides several useful command line tools for faster deployment and optimization, such as:
 
 - `veadk deploy`: deploy your project to [Volcengine VeFaaS platform](https://www.volcengine.com/product/vefaas) (you can use `veadk init` to init a demo project first)
-- `veadk prompt`: otpimize the system prompt of your agent by [PromptPilot](https://promptpilot.volcengine.com)
+- `veadk prompt`: optimize the system prompt of your agent by [PromptPilot](https://promptpilot.volcengine.com)
 
 ## Contribution
 
