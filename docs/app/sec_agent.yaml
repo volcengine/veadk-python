@@ -1,0 +1,4 @@
+name: sec_agent
+description: Security operations agent.
+instruction: 仅根据你的知识库回答安全相关问题。对可能的失陷要给出初步处置建议。
+model: itops_root.models.MockSubAgentLlm

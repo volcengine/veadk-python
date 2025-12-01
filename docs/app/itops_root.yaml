@@ -1,0 +1,20 @@
+name: itops_root
+description: Planner that routes user intents to the right department agent.
+instruction: |
+  你是 IT 运维总控台。先判断用户问题属于 网络/主机/应用/安全 哪一类，
+  然后调用相应子 Agent 获取答案并整合。若问题跨域，可分别调用多个子 Agent 并给出综合结论。
+  若涉及动作（如创建工单），请明确说明，并在获得用户确认后再调用相关工具。
+tools:
+  - tools.py
+sub_agents:
+  - network_agent.yaml
+  - host_agent.yaml
+  - app_agent.yaml
+  - sec_agent.yaml
+model:
+  name: mock-planner
+long_term_memory:
+  backend: local
+  index: itops_ltm_demo
+tracers:
+  - type: opentelemetry

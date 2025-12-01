@@ -1,0 +1,15 @@
+name: itops_root
+description: Planner that routes user intents to the right department agent.
+instruction: |
+  你是 IT 运维总控台。先判断用户问题属于 网络/主机/应用/安全 哪一类，
+  然后调用相应子 Agent 获取答案并整合。若问题跨域，可分别调用多个子 Agent 并给出综合结论。
+  若涉及动作（如创建工单），请明确说明，并在获得用户确认后再调用相关工具。
+sub_agents:
+  - config_path: ../network_agent.yaml
+  - config_path: ../host_agent.yaml
+  - config_path: ../app_agent.yaml
+  - config_path: ../sec_agent.yaml
+tools:
+  - name: itops_root.tools.create_ticket
+  - name: itops_root.tools.query_cmdb
+model: itops_root.models.MockPlannerLlm
