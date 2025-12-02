@@ -41,8 +41,8 @@ def wrap_get_session_with_callbacks(obj, callback_fn: Callable):
     get_session_fn = getattr(obj, "get_session")
 
     @wraps(get_session_fn)
-    def wrapper(*args, **kwargs):
-        result = get_session_fn(*args, **kwargs)
+    async def wrapper(*args, **kwargs):
+        result = await get_session_fn(*args, **kwargs)
         callback_fn(result, *args, **kwargs)
         return result
 
