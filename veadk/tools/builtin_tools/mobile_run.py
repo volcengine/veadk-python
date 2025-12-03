@@ -65,7 +65,7 @@ system_prompt = '''
 mobile_tool = create_mobile_use_tool(
     system_prompt=system_prompt,
     timeout_seconds=300,  # 任务超时时间：5分钟
-    poll_interval_seconds=3  # 状态查询间隔：3秒
+    step_interval_seconds=3  # 状态查询间隔：3秒
 )
 
 # 2. 复用配置执行多个任务（异步调用）
@@ -90,7 +90,6 @@ from dataclasses import dataclass
 from typing import Type, TypeVar, List, Dict, Any, Callable
 from queue import Queue
 from threading import Lock
-
 
 from veadk.utils.logger import get_logger
 from veadk.utils.volcengine_sign import ve_request
@@ -143,17 +142,6 @@ class ResponseMetadata:
     Version: str  # 接口版本
     Service: str  # 服务名称
     Region: str  # 地域
-
-
-@dataclass
-class CreateAgentRunConfigResult:
-    ConfigId: int  # 配置ID（整数类型）
-
-
-@dataclass
-class CreateAgentRunConfigResponse:
-    ResponseMetadata: ResponseMetadata  # 公共元数据
-    Result: CreateAgentRunConfigResult  # 该接口专属结果
 
 
 @dataclass
@@ -275,55 +263,22 @@ class PodPool:
         return self.available_pods.qsize()
 
 
-def _create_agent_config(system_prompt: str) -> CreateAgentRunConfigResponse:
-    try:
-        agent_config = ve_request(
-            request_body={
-                "MaxStep": 100,
-                "OutputSchema": "{}",
-                "RetryLimit": 3,
-                "SystemPrompt": system_prompt,
-                "TosBucket": tos_bucket,
-                "TosEndpoint": tos_endpoint,
-                "TosRegion": tos_region,
-            },
-            action="CreateAgentRunConfig",
-            ak=ak,
-            sk=sk,
-            service=service_name,
-            version=version,
-            region=region,
-            content_type="application/json",
-            host=host,
-        )
-    except Exception as e:
-        raise MobileUseToolError(f"CreateAgentRunConfig 调用失败: {e}") from e
-
-    create_agent_config_response = _dict_to_dataclass(
-        agent_config, CreateAgentRunConfigResponse
-    )
-    if (
-        not getattr(create_agent_config_response, "Result", None)
-        or create_agent_config_response.Result is None
-        or create_agent_config_response.Result.ConfigId is None
-    ):
-        raise MobileUseToolError(f"CreateAgentRunConfig 返回无效结果: {agent_config}")
-    logger.debug(f"创建 Agent 配置成功：{create_agent_config_response}")
-    return create_agent_config_response
-
-
-def _run_agent_task(user_prompt: str, config_id: int, pid: str) -> RunAgentTaskResponse:
+def _run_agent_task(system_prompt: str, user_prompt: str, pid: str, max_step: int, step_interval: int,
+                    timeout: int) -> RunAgentTaskResponse:
     try:
         run_task = ve_request(
             request_body={
                 "RunName": "test-run",
                 "PodId": pid,
                 "ProductId": product_id,
+                "SystemPrompt": system_prompt,
                 "UserPrompt": user_prompt,
-                "AgentRunConfigId": config_id,
                 "EndpointId": tos_endpoint,
+                "MaxStep": max_step,
+                "StepInterval": step_interval,
+                "Timeout": timeout
             },
-            action="RunAgentTask",
+            action="RunAgentTaskOneStep",
             ak=ak,
             sk=sk,
             service=service_name,
@@ -337,9 +292,9 @@ def _run_agent_task(user_prompt: str, config_id: int, pid: str) -> RunAgentTaskR
 
     run_task_response = _dict_to_dataclass(run_task, RunAgentTaskResponse)
     if (
-        not getattr(run_task_response, "Result", None)
-        or not run_task_response.Result
-        or not run_task_response.Result.RunId
+            not getattr(run_task_response, "Result", None)
+            or not run_task_response.Result
+            or not run_task_response.Result.RunId
     ):
         raise MobileUseToolError(f"RunAgentTask 返回无效结果: {run_task}")
     logger.debug(f"启动 Agent 运行成功：{run_task_response}")
@@ -352,7 +307,6 @@ def _get_task_result(task_id: str) -> GetAgentResultResponse:
             request_body={},
             query={
                 "RunId": task_id,
-                # "IsDetail": False
             },
             action="GetAgentResult",
             ak=ak,
@@ -420,9 +374,10 @@ def _cancel_task(task_id: str) -> None:
 
 
 def create_mobile_use_tool(
-    system_prompt: str,
-    timeout_seconds: int = 600,
-    poll_interval_seconds: int = 5,
+        system_prompt: str,
+        timeout_seconds: int = 900,
+        max_step: int = 100,
+        step_interval_seconds: int = 1,
 ):
     """
     闭包外层函数：初始化虚拟手机工具的固定配置（系统提示、超时/轮询参数）
@@ -433,10 +388,11 @@ def create_mobile_use_tool(
             系统级指令，定义Agent的角色、行为规范、约束条件和安全边界。
             示例：
               * "You are a mobile testing agent. Follow least-privilege principles and avoid unauthorized access."
+        max_step (int): 每个agent最大执行步骤数
         timeout_seconds (int):
             最大等待时间（秒），超时未完成则抛出异常。默认：600。
-        poll_interval_seconds (int):
-            状态查询间隔（秒）。默认：5。
+        step_interval_seconds (int):
+            状态查询间隔（秒）。默认：1。
 
     Returns:
         Callable[[str], str]: 内层工具函数，接收 user_prompt 执行具体任务并返回结果
@@ -444,9 +400,6 @@ def create_mobile_use_tool(
     # 初始化pod池
     _require_env_vars()
     pod_pool = PodPool(pod_ids)
-    # 创建Agent配置
-    agent_config = _create_agent_config(system_prompt)
-    config_id = agent_config.Result.ConfigId
 
     async def mobile_use_tool(user_prompts: List[str]) -> list[None]:
         """
@@ -496,7 +449,7 @@ def create_mobile_use_tool(
 
                     # 2. 执行任务
                     logger.info(f"任务{index}分配到pod: {pod_id}，开始执行: {prompt}")
-                    task_response = _run_agent_task(prompt, config_id, pod_id)
+                    task_response = _run_agent_task(system_prompt, prompt, pod_id, max_step, step_interval_seconds, timeout_seconds)
                     task_id = task_response.Result.RunId
 
                     # 3. 轮询任务结果
@@ -526,7 +479,7 @@ def create_mobile_use_tool(
                             logger.debug(
                                 f"任务{index}，thread_id={task_response.Result.ThreadId}, run_id={task_id}.当前步骤: {last_step['Action']}，状态: {'成功' if last_step['StepResult']['IsSuccess'] else '失败'}"
                             )
-                        await asyncio.sleep(poll_interval_seconds)
+                        await asyncio.sleep(5)
 
                 except Exception as e:
                     # 任务执行异常
