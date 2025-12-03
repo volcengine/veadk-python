@@ -58,13 +58,10 @@ tool:
     token:      # `user_token`
   # [optional] for Volcengine Lake AI Service https://www.volcengine.com/product/las
   mobile_use:
-    product_id: # `product_id`
+    product_id: # `product_id` https://console.volcengine.com/ACEP/Business/5
     pod_id:
       - # `pod_id_1`
       - # `pod_id_1`
-    tos_bucket: # `bucket_name`
-    tos_region: # `region`
-    tos_endpoint: # `endpoint`
 
   las:
     url: #mcp sse url
