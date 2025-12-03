@@ -23,11 +23,8 @@
 2. 环境变量配置（必需，运行前需手动设置）：
    - VOLCENGINE_ACCESS_KEY: 火山引擎访问密钥 AK（需具备 IPAAS + TOS 操作权限）
    - VOLCENGINE_SECRET_KEY: 火山引擎访问密钥 SK
-   - TOOL_MOBILE_USE_TOS_BUCKET: 任务结果（如截图）存储的 TOS 桶名
-   - TOOL_MOBILE_USE_TOS_ENDPOINT: TOS 服务端点（示例：tos-cn-north-1.volces.com）
-   - TOOL_MOBILE_USE_TOS_REGION: TOS 地域（需与端点一致，示例：cn-north-1）
    - TOOL_MOBILE_USE_POD_ID: 虚拟手机 Pod 唯一标识（从火山引擎控制台获取），如果希望复杂任务多个pod并行执行，则传入多个
-   - TOOL_MOBILE_USE_PRODUCT_ID: 产品 ID（关联虚拟手机资源池，从控制台获取）
+   - TOOL_MOBILE_USE_PRODUCT_ID: 产品 ID（关联虚拟手机资源池，从控制台获取， https://console.volcengine.com/ACEP/Business/5）
 
   yaml文件配置格式
    tool:
@@ -36,9 +33,6 @@
         pod_id:
             - xxxx
             - xxxx
-        tos_bucket: xxx
-        tos_region: xxx
-        tos_endpoint: xxx
    volcengine:
       access_key: xxx
       secret_key: xxx
@@ -98,9 +92,6 @@ logger = get_logger(__name__)
 
 ak = os.getenv("VOLCENGINE_ACCESS_KEY")
 sk = os.getenv("VOLCENGINE_SECRET_KEY")
-tos_bucket = os.getenv("TOOL_MOBILE_USE_TOS_BUCKET")
-tos_endpoint = os.getenv("TOOL_MOBILE_USE_TOS_ENDPOINT")
-tos_region = os.getenv("TOOL_MOBILE_USE_TOS_REGION")
 pod_ids = ast.literal_eval(os.getenv("TOOL_MOBILE_USE_POD_ID", "[]"))
 product_id = os.getenv("TOOL_MOBILE_USE_PRODUCT_ID")
 
@@ -113,9 +104,6 @@ host = "open.volcengineapi.com"
 REQUIRED_ENV_VARS = [
     "VOLCENGINE_ACCESS_KEY",
     "VOLCENGINE_SECRET_KEY",
-    "TOOL_MOBILE_USE_TOS_BUCKET",
-    "TOOL_MOBILE_USE_TOS_ENDPOINT",
-    "TOOL_MOBILE_USE_TOS_REGION",
     "TOOL_MOBILE_USE_POD_ID",
     "TOOL_MOBILE_USE_PRODUCT_ID",
 ]
@@ -273,7 +261,6 @@ def _run_agent_task(system_prompt: str, user_prompt: str, pid: str, max_step: in
                 "ProductId": product_id,
                 "SystemPrompt": system_prompt,
                 "UserPrompt": user_prompt,
-                "EndpointId": tos_endpoint,
                 "MaxStep": max_step,
                 "StepInterval": step_interval,
                 "Timeout": timeout
