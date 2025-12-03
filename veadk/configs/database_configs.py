@@ -135,7 +135,7 @@ class NormalTOSConfig(BaseSettings):
 class TOSVectorConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="DATABASE_TOS_VECTOR_")
 
-    endpoint: str = "tosvectors-cn-boe.volces.com"
+    endpoint: str = "tosvectors-cn-beijing.volces.com"
 
     region: str = "cn-beijing"
 

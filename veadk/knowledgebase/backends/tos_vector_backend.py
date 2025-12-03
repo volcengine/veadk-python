@@ -30,7 +30,9 @@ from veadk.configs.model_configs import EmbeddingModelConfig, NormalEmbeddingMod
 from veadk.integrations.ve_tos.ve_tos import VeTOS
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
 from veadk.knowledgebase.backends.utils import get_llama_index_splitter
+from veadk.utils.logger import get_logger
 
+logger = get_logger()
 try:
     from tos.vector_client import VectorClient
     from tos import DataType, DistanceMetricType
@@ -120,10 +122,10 @@ class TosVectorKnowledgeBackend(BaseKnowledgebaseBackend):
         return nodes
 
     def _create_index(self):
-        if not self._bucket_exists():
-            self._tos_vector_client.create_vector_bucket(
-                vector_bucket_name=self.tos_vector_bucket_name,
-            )
+        self._tos_vector_client.create_vector_bucket(
+            vector_bucket_name=self.tos_vector_bucket_name,
+        )
+
         if not self._index_exists():
             self._tos_vector_client.create_index(
                 vector_bucket_name=self.tos_vector_bucket_name,
@@ -180,11 +182,19 @@ class TosVectorKnowledgeBackend(BaseKnowledgebaseBackend):
 
     @override
     def add_from_directory(self, directory: str, *args, **kwargs) -> bool:
+        # fixme
+        logger.warning(
+            "add_from_directory is not yet fully developed and may have issues such as missing images."
+        )
         documents = SimpleDirectoryReader(input_dir=directory).load_data()
         return self._process_and_store_documents(documents)
 
     @override
     def add_from_files(self, files: list[str], *args, **kwargs) -> bool:
+        # fixme
+        logger.warning(
+            "add_from_files is not yet fully developed and may have issues such as missing images."
+        )
         documents = SimpleDirectoryReader(input_files=files).load_data()
         return self._process_and_store_documents(documents)
 
