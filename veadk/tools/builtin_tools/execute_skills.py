@@ -30,7 +30,7 @@ def execute_skills(
     workflow_prompt: str,
     skills: Optional[List[str]] = None,
     tool_context: ToolContext = None,
-    timeout: int = 30,
+    timeout: int = 300,
 ) -> str:
     """execute skills in a code sandbox and return the output.
     For C++ code, don't execute it directly, compile and execute via Python; write sources and object files to /tmp.
@@ -38,7 +38,7 @@ def execute_skills(
     Args:
         workflow_prompt (str): instruction of workflow
         skills (Optional[List[str]]): The skills will be invoked
-        timeout (int, optional): The timeout in seconds for the code execution. Defaults to 30.
+        timeout (int, optional): The timeout in seconds for the code execution. Defaults to 300.
 
     Returns:
         str: The output of the code execution.
