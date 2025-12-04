@@ -23,20 +23,20 @@ Prerequisites:
 1. Subscribe to the Cloud Phone service with your Volcano Engine account to obtain
    `product_id` and `pod_id`.
 2. Required environment variables (set before running):
-   - VOLCENGINE_ACCESS_KEY: Volcano Engine access key AK (requires IPAAS permissions)
+   - VOLCENGINE_ACCESS_KEY: Volcano Engine access key AK
    - VOLCENGINE_SECRET_KEY: Volcano Engine secret key SK
-   - TOOL_MOBILE_USE_POD_ID: Virtual phone Pod identifier (from the console). For complex
-     tasks requiring parallel execution across multiple pods, provide multiple IDs.
-   - TOOL_MOBILE_USE_PRODUCT_ID: Product ID (linked to the virtual phone resource pool,
-     available in the console: https://console.volcengine.com/ACEP/Business/5)
+   - TOOL_MOBILE_USE_TOOL_ID: Product ID and Virtual phone Pod identifier (from the console). For complex
+     tasks requiring parallel execution across multiple pods, provide multiple IDs. available in the console: https://console.volcengine.com/ACEP/)
+     "业务ID" is product_id, "实例 ID" is pod_id. tool_id = {product_id}-{pod_id}.
+
 
 YAML configuration format
   tool:
     mobile_use:
-      product_id: xxxx
-      pod_id:
-        - xxxx
-        - xxxx
+      tool_id:
+        - product_id-pod_id
+        - product_id-pod_id
+
   volcengine:
     access_key: xxx
     secret_key: xxx
@@ -102,8 +102,9 @@ logger = get_logger(__name__)
 
 ak = os.getenv("VOLCENGINE_ACCESS_KEY")
 sk = os.getenv("VOLCENGINE_SECRET_KEY")
-pod_ids = ast.literal_eval(os.getenv("TOOL_MOBILE_USE_POD_ID", "[]"))
-product_id = os.getenv("TOOL_MOBILE_USE_PRODUCT_ID")
+tool_ids = ast.literal_eval(os.getenv("TOOL_MOBILE_USE_TOOL_ID", "[]"))
+product_id = None
+pod_ids = None
 
 service_name = "ipaas"
 region = "cn-north-1"
@@ -113,8 +114,7 @@ host = "open.volcengineapi.com"
 REQUIRED_ENV_VARS = [
     "VOLCENGINE_ACCESS_KEY",
     "VOLCENGINE_SECRET_KEY",
-    "TOOL_MOBILE_USE_POD_ID",
-    "TOOL_MOBILE_USE_PRODUCT_ID",
+    "TOOL_MOBILE_USE_TOOL_ID",
 ]
 
 
@@ -122,14 +122,6 @@ class MobileUseToolError(Exception):
     def __init__(self, msg: str):
         self.msg = msg
         logger.error(f"mobile use tool execute error :{msg}")
-
-
-def _require_env_vars() -> None:
-    missing = [name for name in REQUIRED_ENV_VARS if not os.getenv(name)]
-    if missing:
-        raise MobileUseToolError(
-            f"Missing required environment variables: {', '.join(missing)}"
-        )
 
 
 @dataclass
@@ -254,12 +246,12 @@ class PodPool:
 
 
 def _run_agent_task(
-    system_prompt: str,
-    user_prompt: str,
-    pid: str,
-    max_step: int,
-    step_interval: int,
-    timeout: int,
+        system_prompt: str,
+        user_prompt: str,
+        pid: str,
+        max_step: int,
+        step_interval: int,
+        timeout: int,
 ) -> RunAgentTaskResponse:
     try:
         run_task = ve_request(
@@ -287,9 +279,9 @@ def _run_agent_task(
 
     run_task_response = _dict_to_dataclass(run_task, RunAgentTaskResponse)
     if (
-        not getattr(run_task_response, "Result", None)
-        or not run_task_response.Result
-        or not run_task_response.Result.RunId
+            not getattr(run_task_response, "Result", None)
+            or not run_task_response.Result
+            or not run_task_response.Result.RunId
     ):
         raise MobileUseToolError(f"RunAgentTask returned invalid result: {run_task}")
     logger.debug(f"Agent run started: {run_task_response}")
@@ -374,11 +366,32 @@ def _cancel_task(task_id: str) -> None:
         raise MobileUseToolError(f"CancelAgentTask invocation failed: {e}") from e
 
 
+def _require_env_vars() -> None:
+    missing = [name for name in REQUIRED_ENV_VARS if not os.getenv(name)]
+    if missing:
+        raise MobileUseToolError(
+            f"Missing required environment variables: {', '.join(missing)}"
+        )
+
+
+def _get_product_and_pod():
+    if tool_ids is None or tool_ids.__len__() == 0:
+        raise MobileUseToolError("TOOL_MOBILE_USE_TOOL_ID is None")
+    global product_id
+    global pod_ids
+    if "-" in tool_ids[0]:
+        product_id = tool_ids[0].split("-")[0]
+        pod_ids = [tool_id.split("-")[1] for tool_id in tool_ids]
+    else:
+        raise MobileUseToolError(
+            "TOOL_MOBILE_USE_TOOL_ID is invalid, please check the tool id from https://console.volcengine.com/ACEP/")
+
+
 def create_mobile_use_tool(
-    system_prompt: str,
-    timeout_seconds: int = 900,
-    max_step: int = 100,
-    step_interval_seconds: int = 1,
+        system_prompt: str,
+        timeout_seconds: int = 900,
+        max_step: int = 100,
+        step_interval_seconds: int = 1,
 ):
     """
     Outer closure: initialize fixed configuration for the virtual mobile tool
@@ -402,6 +415,7 @@ def create_mobile_use_tool(
         perform tasks and returns results.
     """
     _require_env_vars()
+    _get_product_and_pod()
     pod_pool = PodPool(pod_ids)
 
     async def mobile_use_tool(user_prompts: List[str]) -> list[None]:
