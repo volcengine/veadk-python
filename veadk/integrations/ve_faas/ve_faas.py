@@ -14,7 +14,11 @@
 
 import json
 import time
-
+import shutil
+from pathlib import Path
+from cookiecutter.main import cookiecutter
+import veadk.integrations.ve_faas as vefaas
+from veadk.version import VERSION
 import requests
 import volcenginesdkcore
 import volcenginesdkvefaas
@@ -318,12 +322,6 @@ class VeFaaS:
         logger.info(
             f"Start to update VeFaaS function {function_name} with path {path}."
         )
-
-        import shutil
-        from pathlib import Path
-        from cookiecutter.main import cookiecutter
-        import veadk.integrations.ve_faas as vefaas
-        from veadk.version import VERSION
 
         user_proj_path = Path(path).resolve()
         template_dir = Path(vefaas.__file__).parent / "template"
