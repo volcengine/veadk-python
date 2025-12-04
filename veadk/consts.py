@@ -28,7 +28,7 @@ DEFAULT_MODEL_EXTRA_CONFIG = {
         "veadk-source": "veadk",
         "veadk-version": VERSION,
         "User-Agent": f"VeADK/{VERSION}",
-        "X-Client-Request-Id": f"veadk/{VERSION}",
+        "X-Client-Request-Id": getenv("MODEL_AGENT_CLIENT_REQ_ID", f"veadk/{VERSION}"),
     },
     "extra_body": {
         "caching": {
