@@ -119,7 +119,6 @@ REQUIRED_ENV_VARS = [
 
 
 class MobileUseToolError(Exception):
-
     def __init__(self, msg: str):
         self.msg = msg
         logger.error(f"mobile use tool execute error :{msg}")
@@ -128,43 +127,45 @@ class MobileUseToolError(Exception):
 def _require_env_vars() -> None:
     missing = [name for name in REQUIRED_ENV_VARS if not os.getenv(name)]
     if missing:
-        raise MobileUseToolError(f"Missing required environment variables: {', '.join(missing)}")
+        raise MobileUseToolError(
+            f"Missing required environment variables: {', '.join(missing)}"
+        )
 
 
 @dataclass
 class ResponseMetadata:
-    RequestId: str 
-    Action: str  
-    Version: str  
-    Service: str  
-    Region: str  
+    RequestId: str
+    Action: str
+    Version: str
+    Service: str
+    Region: str
 
 
 @dataclass
 class RunAgentTaskResult:
-    RunId: str  
-    RunName: str 
-    ThreadId: str 
+    RunId: str
+    RunName: str
+    ThreadId: str
 
 
 @dataclass
 class RunAgentTaskResponse:
-    ResponseMetadata: ResponseMetadata  
-    Result: RunAgentTaskResult  
+    ResponseMetadata: ResponseMetadata
+    Result: RunAgentTaskResult
 
 
 @dataclass
 class GetAgentResultResult:
-    IsSuccess: int 
-    Content: str 
+    IsSuccess: int
+    Content: str
     StructOutput: str
     ScreenShots: List[str]
 
 
 @dataclass
 class GetAgentResultResponse:
-    ResponseMetadata: ResponseMetadata 
-    Result: GetAgentResultResult 
+    ResponseMetadata: ResponseMetadata
+    Result: GetAgentResultResult
 
 
 @dataclass
@@ -212,7 +213,6 @@ def _dict_to_dataclass(data: dict, cls: Type[T]) -> T:
 
 
 class PodPool:
-
     def __init__(self, pod_ids: List[str]):
         self.pod_ids = pod_ids
         self.available_pods = Queue()
@@ -241,7 +241,9 @@ class PodPool:
             if pid in self.task_map:
                 del self.task_map[pid]
             self.available_pods.put(pid)
-        logger.debug(f"Released pod: {pid}, available pods: {self.available_pods.qsize()}")
+        logger.debug(
+            f"Released pod: {pid}, available pods: {self.available_pods.qsize()}"
+        )
 
     def get_pod_status(self, pid: str) -> str:
         with self.pod_lock:
@@ -251,8 +253,14 @@ class PodPool:
         return self.available_pods.qsize()
 
 
-def _run_agent_task(system_prompt: str, user_prompt: str, pid: str, max_step: int, step_interval: int,
-                    timeout: int) -> RunAgentTaskResponse:
+def _run_agent_task(
+    system_prompt: str,
+    user_prompt: str,
+    pid: str,
+    max_step: int,
+    step_interval: int,
+    timeout: int,
+) -> RunAgentTaskResponse:
     try:
         run_task = ve_request(
             request_body={
@@ -263,7 +271,7 @@ def _run_agent_task(system_prompt: str, user_prompt: str, pid: str, max_step: in
                 "UserPrompt": user_prompt,
                 "MaxStep": max_step,
                 "StepInterval": step_interval,
-                "Timeout": timeout
+                "Timeout": timeout,
             },
             action="RunAgentTaskOneStep",
             ak=ak,
@@ -279,9 +287,9 @@ def _run_agent_task(system_prompt: str, user_prompt: str, pid: str, max_step: in
 
     run_task_response = _dict_to_dataclass(run_task, RunAgentTaskResponse)
     if (
-            not getattr(run_task_response, "Result", None)
-            or not run_task_response.Result
-            or not run_task_response.Result.RunId
+        not getattr(run_task_response, "Result", None)
+        or not run_task_response.Result
+        or not run_task_response.Result.RunId
     ):
         raise MobileUseToolError(f"RunAgentTask returned invalid result: {run_task}")
     logger.debug(f"Agent run started: {run_task_response}")
@@ -310,7 +318,9 @@ def _get_task_result(task_id: str) -> GetAgentResultResponse:
 
     result = _dict_to_dataclass(task_result, GetAgentResultResponse)
     if not getattr(result, "Result", None):
-        raise MobileUseToolError(f"GetAgentResult returned invalid result: {task_result}")
+        raise MobileUseToolError(
+            f"GetAgentResult returned invalid result: {task_result}"
+        )
     logger.debug(f"Fetched agent result: {result}")
     return result
 
@@ -331,11 +341,15 @@ def _get_current_step(task_id: str) -> ListAgentRunCurrentResponse:
             method="GET",
         )
     except Exception as e:
-        raise MobileUseToolError(f"ListAgentRunCurrentStep invocation failed: {e}") from e
+        raise MobileUseToolError(
+            f"ListAgentRunCurrentStep invocation failed: {e}"
+        ) from e
 
     result = _dict_to_dataclass(current_step, ListAgentRunCurrentResponse)
     if not getattr(result, "Result", None):
-        raise MobileUseToolError(f"ListAgentRunCurrentStep returned invalid result: {current_step}")
+        raise MobileUseToolError(
+            f"ListAgentRunCurrentStep returned invalid result: {current_step}"
+        )
     logger.debug(f"Fetched agent current step: {result}")
     return result
 
@@ -361,10 +375,10 @@ def _cancel_task(task_id: str) -> None:
 
 
 def create_mobile_use_tool(
-        system_prompt: str,
-        timeout_seconds: int = 900,
-        max_step: int = 100,
-        step_interval_seconds: int = 1,
+    system_prompt: str,
+    timeout_seconds: int = 900,
+    max_step: int = 100,
+    step_interval_seconds: int = 1,
 ):
     """
     Outer closure: initialize fixed configuration for the virtual mobile tool
@@ -432,10 +446,19 @@ def create_mobile_use_tool(
                         logger.debug(
                             f"Task {index} waiting for pod, available pods: {pod_pool.get_available_count()}"
                         )
-                        await asyncio.sleep(1)  
+                        await asyncio.sleep(1)
 
-                    logger.info(f"Task {index} assigned to pod: {pod_id}, starting: {prompt}")
-                    task_response = _run_agent_task(system_prompt, prompt, pod_id, max_step, step_interval_seconds, timeout_seconds)
+                    logger.info(
+                        f"Task {index} assigned to pod: {pod_id}, starting: {prompt}"
+                    )
+                    task_response = _run_agent_task(
+                        system_prompt,
+                        prompt,
+                        pod_id,
+                        max_step,
+                        step_interval_seconds,
+                        timeout_seconds,
+                    )
                     task_id = task_response.Result.RunId
                     pod_pool.task_map[pod_id] = task_id
 
