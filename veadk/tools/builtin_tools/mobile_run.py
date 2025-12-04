@@ -246,12 +246,12 @@ class PodPool:
 
 
 def _run_agent_task(
-        system_prompt: str,
-        user_prompt: str,
-        pid: str,
-        max_step: int,
-        step_interval: int,
-        timeout: int,
+    system_prompt: str,
+    user_prompt: str,
+    pid: str,
+    max_step: int,
+    step_interval: int,
+    timeout: int,
 ) -> RunAgentTaskResponse:
     try:
         run_task = ve_request(
@@ -279,9 +279,9 @@ def _run_agent_task(
 
     run_task_response = _dict_to_dataclass(run_task, RunAgentTaskResponse)
     if (
-            not getattr(run_task_response, "Result", None)
-            or not run_task_response.Result
-            or not run_task_response.Result.RunId
+        not getattr(run_task_response, "Result", None)
+        or not run_task_response.Result
+        or not run_task_response.Result.RunId
     ):
         raise MobileUseToolError(f"RunAgentTask returned invalid result: {run_task}")
     logger.debug(f"Agent run started: {run_task_response}")
@@ -384,14 +384,15 @@ def _get_product_and_pod():
         pod_ids = [tool_id.split("-")[1] for tool_id in tool_ids]
     else:
         raise MobileUseToolError(
-            "TOOL_MOBILE_USE_TOOL_ID is invalid, please check the tool id from https://console.volcengine.com/ACEP/")
+            "TOOL_MOBILE_USE_TOOL_ID is invalid, please check the tool id from https://console.volcengine.com/ACEP/"
+        )
 
 
 def create_mobile_use_tool(
-        system_prompt: str,
-        timeout_seconds: int = 900,
-        max_step: int = 100,
-        step_interval_seconds: int = 1,
+    system_prompt: str,
+    timeout_seconds: int = 900,
+    max_step: int = 100,
+    step_interval_seconds: int = 1,
 ):
     """
     Outer closure: initialize fixed configuration for the virtual mobile tool
