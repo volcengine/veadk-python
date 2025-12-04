@@ -16,6 +16,7 @@ dependencies = [
     "a2a-sdk>=0.3.0", # For Google Agent2Agent protocol
     "deprecated>=1.2.18",
     "google-adk>=1.10.0", # For basic agent architecture
+    "google-adk<=1.19.0", # For basic agent architecture
     "litellm>=1.74.3", # For model inference
     "loguru>=0.7.3", # For better logging
     "opentelemetry-exporter-otlp>=1.35.0",
