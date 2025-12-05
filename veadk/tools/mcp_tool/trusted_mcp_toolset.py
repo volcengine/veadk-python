@@ -14,18 +14,9 @@
 
 from __future__ import annotations
 
-import sys
-from typing import Callable
-from typing import Dict
-from typing import List
-from typing import Optional
-from typing import TextIO
+import inspect
 from typing import Union
 
-from google.adk.auth.auth_schemes import AuthScheme
-from google.adk.agents.readonly_context import ReadonlyContext
-from google.adk.auth.auth_credential import AuthCredential
-from google.adk.tools.base_toolset import ToolPredicate
 from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
 from google.adk.tools.mcp_tool.mcp_session_manager import SseConnectionParams
 from google.adk.tools.mcp_tool.mcp_session_manager import StdioConnectionParams
@@ -78,17 +69,18 @@ class TrustedMcpToolset(McpToolset):
             SseConnectionParams,
             StreamableHTTPConnectionParams,
         ],
-        tool_filter: Optional[Union[ToolPredicate, List[str]]] = None,
-        tool_name_prefix: Optional[str] = None,
-        errlog: TextIO = sys.stderr,
-        auth_scheme: Optional[AuthScheme] = None,
-        auth_credential: Optional[AuthCredential] = None,
-        require_confirmation: Union[bool, Callable[..., bool]] = False,
-        header_provider: Optional[Callable[[ReadonlyContext], Dict[str, str]]] = None,
+        # tool_filter: Optional[Union[ToolPredicate, List[str]]] = None,
+        # tool_name_prefix: Optional[str] = None,
+        # errlog: TextIO = sys.stderr,
+        # auth_scheme: Optional[AuthScheme] = None,
+        # auth_credential: Optional[AuthCredential] = None,
+        # require_confirmation: Union[bool, Callable[..., bool]] = False,
+        # header_provider: Optional[Callable[[ReadonlyContext], Dict[str, str]]] = None,
+        **kwargs,  # other kwargs for super class (i.e., McpToolset.__init__)
     ):
         """Initializes the TrustedMcpToolset.
 
-        Args:
+        Args: ref McpToolset.__init__
           connection_params: The connection parameters to the MCP server. Can be:
             ``StdioConnectionParams`` for using local mcp server (e.g. using ``npx`` or
             ``python3``); or ``SseConnectionParams`` for a local/remote SSE server; or
@@ -111,15 +103,16 @@ class TrustedMcpToolset(McpToolset):
           header_provider: A callable that takes a ReadonlyContext and returns a
             dictionary of headers to be used for the MCP session.
         """
+        # Filter out the kwargs that are not allowed by the super class
+        sig = inspect.signature(McpToolset.__init__)
+        allowed = set(sig.parameters.keys())
+        allowed.discard("self")
+        # Filter out args already used in this class
+        allowed.discard("connection_params")
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k in allowed}
         super().__init__(
             connection_params=connection_params,
-            tool_filter=tool_filter,
-            tool_name_prefix=tool_name_prefix,
-            errlog=errlog,
-            auth_scheme=auth_scheme,
-            auth_credential=auth_credential,
-            require_confirmation=require_confirmation,
-            header_provider=header_provider,
+            **filtered_kwargs,
         )
 
         # Create the session manager that will handle the TrustedMCP connection
