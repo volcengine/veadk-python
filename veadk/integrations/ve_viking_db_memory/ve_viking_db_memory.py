@@ -281,28 +281,3 @@ class VikingDBMemoryClient(Service):
         }
         res = self.json("UpdateCollection", {}, json.dumps(params))
         return json.loads(res)
-
-    def search_memory(self, collection_name, query, filter, limit=10):
-        params = {
-            "collection_name": collection_name,
-            "limit": limit,
-            "filter": filter,
-        }
-        if query:
-            params["query"] = query
-        res = self.json("SearchMemory", {}, json.dumps(params))
-        return json.loads(res)
-
-    def add_messages(
-        self, collection_name, session_id, messages, metadata, entities=None
-    ):
-        params = {
-            "collection_name": collection_name,
-            "session_id": session_id,
-            "messages": messages,
-            "metadata": metadata,
-        }
-        if entities is not None:
-            params["entities"] = entities
-        res = self.json("AddMessages", {}, json.dumps(params))
-        return json.loads(res)
