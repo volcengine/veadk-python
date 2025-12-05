@@ -15,6 +15,7 @@
 import datetime
 import hashlib
 import hmac
+from typing import Literal
 from urllib.parse import quote
 
 import requests
@@ -172,10 +173,9 @@ def ve_request(
     host: str,
     content_type: str = "application/json",
     header: dict = {},
+    query: dict = {},
+    method: Literal["GET", "POST", "PUT", "DELETE"] = "POST",
 ):
-    # response_body = request("Get", datetime.datetime.utcnow(), {}, {}, AK, SK, "ListUsers", None)
-    # print(response_body)
-    # 以下参数视服务不同而不同，一个服务内通常是一致的
     global Service
     Service = service
     global Version
@@ -186,19 +186,16 @@ def ve_request(
     Host = host
     global ContentType
     ContentType = content_type
-
     AK = ak
     SK = sk
-
     now = datetime.datetime.utcnow()
-
     # Body的格式需要配合Content-Type，API使用的类型请阅读具体的官方文档，如:json格式需要json.dumps(obj)
     # response_body = request("GET", now, {"Limit": "2"}, {}, AK, SK, "ListUsers", None)
     import json
 
     try:
         response_body = request(
-            "POST", now, {}, header, AK, SK, action, json.dumps(request_body)
+            method, now, query, header, AK, SK, action, json.dumps(request_body)
         )
         return response_body
     except Exception as e:
