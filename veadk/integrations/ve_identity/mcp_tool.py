@@ -24,14 +24,13 @@ from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.tool_context import ToolContext
 from google.adk.tools._gemini_schema_util import _to_gemini_schema
 from google.adk.tools.mcp_tool.mcp_session_manager import MCPSessionManager
-from google.adk.tools.mcp_tool.mcp_session_manager import retry_on_closed_resource
 
 from veadk.integrations.ve_identity.auth_config import VeIdentityAuthConfig
 from veadk.integrations.ve_identity.auth_mixins import (
     VeIdentityAuthMixin,
     AuthRequiredException,
 )
-from veadk.integrations.ve_identity.utils import generate_headers
+from veadk.integrations.ve_identity.utils import generate_headers, retry_on_errors
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -157,7 +156,7 @@ class VeIdentityMcpTool(VeIdentityAuthMixin, BaseTool):
             args=args, tool_context=tool_context, credential=credential
         )
 
-    @retry_on_closed_resource
+    @retry_on_errors
     async def _run_async_impl(
         self, *, args, tool_context: ToolContext, credential: AuthCredential
     ):
