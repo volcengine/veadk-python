@@ -73,7 +73,6 @@ nav:
       - 评测: evaluation.md
       - 持续优化: optimization.md
     - 命令行工具: cli.md
-    - 最佳实践（进阶）: best-practice-advanced.md
   - 参考:
     - API References: references/api.md
     - 贡献代码: references/contributing.md
