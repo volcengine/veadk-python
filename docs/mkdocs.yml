@@ -55,11 +55,13 @@ nav:
     - 连接能力源——工具:
       - 内置工具: tools/builtin.md
       - 自定义工具: tools/function.md
+      - 护栏工具: tools/guardrail.md
     - 连接数据源——知识库:
       - 基本使用: knowledgebase/overview.md
       - 最佳实践（知识库相关）: knowledgebase/best-practice-knowledgebase.md
     - 身份与权限: 
       - 概述: auth/overview.md
+      - 入站认证: auth/inbound.md
       - 使用 API Key 进行出站认证: auth/api-key-outbound.md
       - OAuth2 用户联邦出站认证: auth/oauth2-user-federation-outbound.md
       - OAuth2 M2M 出站认证: auth/oauth2-m2m-outbound.md
