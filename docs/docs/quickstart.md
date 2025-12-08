@@ -20,10 +20,44 @@ veadk --version
     请查看[Python 安装指南](https://www.python.org/downloads/)了解如何安装 Python。
 
 ??? note "了解如何从源码构建 VeADK"
-    请查看[安装](https://volcengine.github.io/veadk-python/introduction/installation)章节中“从源码构建”部分，了解如何从源码构建 VeADK。
+    1. 下载源码至本地
+    将VeADK的代码包从Github下载到本地
+    ```bash
+    git clone https://github.com/volcengine/veadk-python.git
+    cd veadk-python
+    ```
+    2. 配置`uv`环境
+    本项目使用`uv`进行构建，（了解如何[安装`uv`](https://docs.astral.sh/uv/getting-started/installation/)）
+    ```bash
+    # 选择 3.10及以上版本
+    uv venv --python 3.10
+    ```
+    激活`uv`虚拟环境
+    === "Linux"
+        ```bash
+        source .venv/bin/activate
+        ```
+    === "MacOS"
+        ```bash
+        source .venv/bin/activate
+        ```
+    === "Windows CMD"
+        ```bash
+        .venv\Scripts\activate.bat
+        ```
+    === "Windows PowerShell"
+        ```bash
+        .venv\Scripts\activate.ps1
+        ```
+    安装 VeADK
+    ```bash
+    uv pip install .
+    # 或以本地可编辑模式安装
+    # uv pip install -e .
+    ```
 
 ??? note "了解如何为 VeADK 贡献代码"
-    请查看[贡献指南](contributing.md)了解如何为 VeADK 项目贡献代码。
+    请查看[贡献指南](./references/contributing.md)了解如何为 VeADK 项目贡献代码。
 
 ## 生成并运行
 
