@@ -142,22 +142,22 @@ VeADK 各组件与火山引擎相关产品的结合矩阵：
 |  | [**VeSearch**](https://www.volcengine.com/docs/85508/1512748)（联网问答Agent） | 提供信息搜索与云端自动整合功能 |
 |  | [**Web Scraper**](https://www.volcengine.com/docs/84296/1545470) | 定制化内容查询（邀测） |
 |  | [**飞书 Lark**](https://open.larkoffice.com/document/uAjLw4CM/ukTMukTMukTM/mcp_integration/mcp_introduction) | 进行飞书相关操作 |
-|  | [**AI 数据湖服务 LAS(Lake AI Service)**](https://www.volcengine.com/product/las)| 提供开放、低成本、高性能的AI数据湖，海量数据存储与查询能力 |
+|  | [**AI 数据湖服务 LAS**](https://www.volcengine.com/product/las)| 提供开放、低成本、高性能的AI数据湖，海量数据存储与查询能力 |
 | **短期记忆** | [**MySQL**](https://www.volcengine.com/docs/6313) | 提供使用 MySQL 数据库存储短期记忆，提供高性能读写能力，可实现持久化 |
 |  | [**PostgreSQL**](https://www.volcengine.com/product/rds-pg) | 提供使用 PostgreSQL 数据库存储短期记忆，提供高性能读写能力，可实现持久化 |
 |  | [**火山引擎云数据库 MySQL 版**](https://www.volcengine.com/product/rds-mysql) | 记忆存储 |
-| **长期记忆** | [**云搜索服务**](https://www.volcengine.com/product/es)(OpenSearch) | 兼容 OpenSearch，支持向量搜索等能力 |
+| **长期记忆** | [**云搜索服务**](https://www.volcengine.com/product/es) (OpenSearch) | 兼容 OpenSearch，支持向量搜索等能力 |
 |  | [**Redis**](https://www.volcengine.com/product/redis) | Redis 作为长期记忆存储，支持 Redisearch 功能 |
-|  | [**Viking 记忆库**](https://www.volcengine.com/docs/84313/1254437) | 知识向量化存储和检索 |
-| **知识库** | [**Viking 知识库**](https://www.volcengine.com/docs/84313/1254437) | 知识向量化存储和检索 |
+|  | [**Viking 记忆库**](https://www.volcengine.com/docs/84313/1860687?lang=zh) | 知识向量化存储和检索 |
+| **知识库** | [**Viking 知识库**](https://www.volcengine.com/docs/84313/1860732?lang=zh) | 知识向量化存储和检索 |
 |  | [**MySQL**](https://www.volcengine.com/docs/6313) | 提供使用 MySQL 数据库存储短期记忆，提供高性能读写能力，不具备向量搜索功能 |
 |  | [**Redis**](https://www.volcengine.com/product/redis) | Redis 作为长期记忆存储，支持 Redisearch |
-|  | [**云搜索服务**](https://www.volcengine.com/product/es)(OpenSearch) | 知识向量化存储和检索 |
-| **可观测** | [**应用性能监控全链路版**](https://www.volcengine.com/product/apmplus)(APMPlus) | 调用链路观测 |
+|  | [**云搜索服务**](https://www.volcengine.com/product/es) (OpenSearch) | 知识向量化存储和检索 |
+| **可观测** | [**应用性能监控全链路版**](https://www.volcengine.com/product/apmplus) (APMPlus) | 调用链路观测 |
 |  | [**扣子罗盘**](https://www.coze.cn/loop)(CozeLoop) | 调用链路观测 |
-|  | [**日志服务**](https://www.volcengine.com/product/tls)(TLS) | 调用链路观测、日志存储与检索 |
-| **评测** | [**扣子罗盘**](https://www.coze.cn/loop)(CozeLoop) | 在线评测 |
-| **云部署** | [**火山引擎函数服务**](https://www.volcengine.com/product/vefaas)(VeFaaS) | 提供一键上云能力 |
+|  | [**日志服务**](https://www.volcengine.com/product/tls) (TLS) | 调用链路观测、日志存储与检索 |
+| **评测** | [**扣子罗盘**](https://www.coze.cn/loop) (CozeLoop) | 在线评测 |
+| **云部署** | [**火山引擎函数服务**](https://www.volcengine.com/product/vefaas) (VeFaaS) | 提供一键上云能力 |
 |  | [**火山引擎 API 网关**](https://www.volcengine.com/product/apig) | 提供鉴权、路由等能力 |
 |  | [**火山引擎持续交付**](https://www.volcengine.com/product/cp) | 提供用户仓库向 VeFaaS 进行基于镜像的持续交付部署 |
 |  | [**火山引擎镜像仓库**](https://www.volcengine.com/product/cr) | 提供用户代码镜像托管维护 |
