@@ -16,11 +16,16 @@
 
 from __future__ import annotations
 import base64
+import functools
 from typing import Optional
 
 from google.adk.events import Event
 from google.adk.auth import AuthConfig
 from google.adk.auth.auth_credential import AuthCredential
+
+from veadk.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def is_pending_auth_event(event: Event) -> bool:
@@ -149,3 +154,31 @@ def generate_headers(credential: AuthCredential) -> Optional[dict[str, str]]:
             pass
 
     return headers
+
+
+def retry_on_errors(func):
+    """Decorator to automatically retry action when MCP session errors occur.
+
+    When MCP session errors occur, the decorator will automatically retry the
+    action once. The create_session method will handle creating a new session
+    if the old one was disconnected.
+
+    Args:
+        func: The function to decorate.
+
+    Returns:
+        The decorated function.
+    """
+
+    @functools.wraps(func)  # Preserves original function metadata
+    async def wrapper(self, *args, **kwargs):
+        try:
+            return await func(self, *args, **kwargs)
+        except Exception as e:
+            # If an error is thrown, we will retry the function to reconnect to the
+            # server. create_session will handle detecting and replacing disconnected
+            # sessions.
+            logger.info("Retrying %s due to error: %s", func.__name__, e)
+            return await func(self, *args, **kwargs)
+
+    return wrapper

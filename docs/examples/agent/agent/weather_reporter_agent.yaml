@@ -1,0 +1,9 @@
+root_agent:
+  type: Agent # Agent | SequencialAgent | LoopAgent | ParallelAgent
+  name: weather_reporter
+  description: An intelligent_assistant which can provider weather information.
+  instruction: Help user according to your tools.
+  model_name: 
+  model_api_key: 
+  tools:
+    - name: veadk.tools.demo_tools.get_city_weather # tool 所在的模块及函数名称

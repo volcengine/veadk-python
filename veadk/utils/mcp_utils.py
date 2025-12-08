@@ -24,20 +24,29 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def get_mcp_params(url: str) -> Any:
+def get_mcp_params(url: str, api_key: str = None) -> Any:
     """Automatically set MCP connection params according to url.
 
     Only support http and sse protocol.
 
     Args:
         url (str): MCP server url
+        api_key (str, optional): API key to access MCP server. Defaults to None.
+
+    Returns:
+        Any: MCP connection params.
     """
+    if api_key:
+        headers = {"Authorization": f"Bearer {api_key}"}
+    else:
+        headers = None
+
     if "/mcp" in url:
         logger.info("MCP url detected, use StreamableHTTPConnectionParams.")
-        return StreamableHTTPConnectionParams(url=url)
+        return StreamableHTTPConnectionParams(url=url, headers=headers)
     elif "/sse" in url:
         logger.info("SSE url detected, use SseConnectionParams.")
-        return SseConnectionParams(url=url)
+        return SseConnectionParams(url=url, headers=headers)
     else:
         raise ValueError(
             "Unsupported MCP url, because it has no `/mcp` or `/sse` field in your url. Please specify your connection params manually."

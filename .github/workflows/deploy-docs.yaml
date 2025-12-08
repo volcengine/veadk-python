@@ -19,29 +19,31 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          node-version: '22'
+          python-version: '3.12'
 
       - name: Install dependencies
         run: |
           cd docs
-          npm install
+          pip install -r requirements.txt
 
-      - name: Build documentation
+      - name: Build MkDocs site
         run: |
           cd docs
-          npx nuxt generate --extends docus
+          mkdocs build
 
       - name: Upload artifact for GitHub Pages
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/.output/public/
+          path: docs/site/
 
       - name: Deploy to GitHub Pages
         id: deploy

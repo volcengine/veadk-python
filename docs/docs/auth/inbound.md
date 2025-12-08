@@ -1,0 +1,74 @@
+---
+titie: 入站认证
+description: 通过入站认证访问 Agent
+navigation:
+  icon: i-lucide-lock
+---
+
+VeADK 支持 API key 和 OAuth2 方式的入站认证。
+
+## API Key 认证
+
+API key 认证是通过唯一字符串密钥验证请求方身份、授权访问 API 资源的常见认证方式。VeADK 约定将 API key 通过 URL 的 `token` 参数传递。
+
+!!! tip 
+    API key 仅适用于 A2A/MCP Server 部署模式，不建议在 VeADK Web 部署模式中使用，更推荐采用 OAuth2 认证。
+
+### 使用方式
+
+您可以通过脚手架创建 Agent 时指定 API key 认证方式，或者部署已有项目时添加 `--auth-method=api-key` 参数启用该认证。
+
+当用户访问应用时，API 网关将验证用户 `token` URL 参数中携带的 API key。
+
+## OAuth2 单点登录
+
+OAuth2 是一种开放标准的授权框架，通过令牌而非直接暴露账号密码，安全实现第三方应用对资源的有限访问。
+
+OAuth2 单点登录是基于 OAuth2 授权框架实现的身份认证方案，用户一次登录后可免重复验证访问多个关联应用。VeADK Web 支持 OAuth2 单点登录的认证方式。
+
+
+!!! tip 
+    使用 OAuth2 单点登录需要版本为 4.0.0 及以上的 API 网关。
+
+
+### 使用方式
+
+您可以通过脚手架创建 Agent 时指定 OAuth2 认证方式，或者部署已有项目时添加 `--auth-method=oauth2` 参数启用该认证，VeADK 将自动为您创建 Identity 用户池和客户端。如果您需要使用已有的用户池或客户端，您可以在部署时添加 `--user-pool-name` 和 `--client-name` 参数指定用户池和客户端。
+
+在部署 VeADK Web 应用后，您可以在 Identity 中创建用户。
+
+1. 登录火山引擎控制台，导航到 Agent Identity 服务
+2. 在左侧导航树中，选择 身份认证 > 用户池管理，选择用户池
+3. 在用户池的用户标签页中，点击 新建用户，填写用户信息并点击 确定
+
+当用户访问 VeADK Web 应用时，API 网关将引导用户至登录页完成登录。您可以在 `Authorization` 请求头中获得用户的 JWT 令牌。
+
+## OAuth2 JWT 认证
+
+OAuth2 JWT 认证是将 OAuth2 授权框架与 JWT 结合，用 JWT 格式承载授权令牌的认证方式。A2A/MCP Server 支持 OAuth2 JWT 的认证方式。
+
+### 使用方式
+
+您可以通过脚手架创建 Agent 时指定 OAuth2 认证方式，或者部署已有项目时添加 `--auth-method=oauth2` 参数启用该认证，VeADK 将自动为您创建 Identity 用户池。如果您需要使用已有的用户池，您可以在部署时添加 `--user-pool-name` 参数指定用户池。
+
+在部署 A2A/MCP Server 应用后，您可以在 Identity 中管理客户端。
+
+1. 登录火山引擎控制台，导航到 Agent Identity 服务
+2. 在左侧导航树中，选择 身份认证 > 用户池管理，选择用户池
+3. 在客户端的用户标签中，点击 新建客户端，填写 客户端名称，选择 客户端类型 并点击确定
+
+您可以创建 M2M 类型的客户端用于验证。您可以使用以下 curl 命令生成 JWT 令牌。
+
+```bash
+REGION="cn-beijing"
+USER_POOL_ID="FILL_IN_YOUR_USER_POOL_ID"
+CLIENT_ID="FILL_IN_YOUR_CLIENT_ID"
+CLIENT_SECRET="FILL_IN_YOUR_SECRET"
+
+curl --location "https://auth.id.${REGION}.volces.com/userpool/${USER_POOL_ID}/oauth/token" \
+  --header "Content-Type: application/x-www-form-urlencoded" \
+  --header "Authorization: Basic $(echo -n "${CLIENT_ID}:${CLIENT_SECRET}" | base64)" \
+  --data-urlencode "grant_type=client_credentials"
+```
+
+当用户访问 A2A/MCP Server 应用时，API 网关将验证用户携带的 JWT 令牌。您可以在 `Authorization` 请求头中获得用户的 JWT 令牌。
