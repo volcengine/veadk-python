@@ -66,7 +66,7 @@ root_agent = Agent(
 
 如果您想使用本地模型或其他提供商的模型，可以在初始化时指定模型相关配置：
 
-```python title="agent.py" linenums="1" hl_lines="4-6"
+```python title="agent.py" linenums="1" hl_lines="4-7"
 from veadk import Agent
 
 agent = Agent(
@@ -98,7 +98,7 @@ agent = Agent(model=llm)
 
 此外，您还可以根据[火山引擎方舟大模型平台](https://www.volcengine.com/product/ark)的能力，指定一些[额外选项](https://www.volcengine.com/docs/82379/1494384?lang=zh)，例如您可以禁用豆包 1.6 系列模型的思考能力，以实现更加快速的响应：
 
-```python title="agent.py" linenums="1" hl_lines="7-11"
+```python title="agent.py" linenums="1" hl_lines="7"
 import asyncio
 
 from veadk import Agent, Runner

@@ -18,7 +18,7 @@ title: 贡献代码
 
 `pre-commit` 将在您提交代码前进行一系列检查，例如代码格式规范检查、密钥泄漏检查等。未使用 `pre-commit` 检查过的提交将不会通过 Github 中的 CI/CD 工作流检查，这意味着代码将不会被合并。
 
-```bash [Terminal]
+```bash
 pip install pre-commit
 
 pre-commit install .

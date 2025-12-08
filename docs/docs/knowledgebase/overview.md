@@ -16,7 +16,7 @@ KnowledgeBase 在 veadk 框架中扮演 Agent 的外部知识库 角色。它像
 
 4) 与 Agent 无缝集成 ：通过在创建 Agent 时传入 knowledgebase=kb 参数，Agent 就能自动利用这个知识库来增强其回答能力。
 
-## 使用方法：
+## 使用方法
 
 以下是使用 KnowledgeBase 的典型步骤，并对比了 viking 和 opensearch 的配置差异。
 

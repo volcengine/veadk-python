@@ -62,64 +62,64 @@ flowchart LR
 3. 配置服务器参数（端口、主机等）
 === "代码"
 
-    ```python title="server.py" linenums="1" hl_lines="5"
-        from google.adk.a2a.utils.agent_to_a2a import to_a2a
-        from veadk import Agent
-        from veadk.tools.demo_tools import get_city_weather
+```python title="server.py" linenums="1" hl_lines="1 11"
+from google.adk.a2a.utils.agent_to_a2a import to_a2a
+from veadk import Agent
+from veadk.tools.demo_tools import get_city_weather
 
-        agent = Agent(
-            name="weather_agent",
-            description="An agent that can get the weather of a city",
-            tools=[get_city_weather],
-        )
+agent = Agent(
+    name="weather_agent",
+    description="An agent that can get the weather of a city",
+    tools=[get_city_weather],
+)
 
-        app = to_a2a(agent=agent)
-    ```
+app = to_a2a(agent=agent)
+```
 ### 客户端集成
 1. 导入 RemoteVeAgent 类
 2. 配置远程 Agent 连接参数
 3. 在 Root Agent 中添加 Remote Agent 作为 Sub Agent
 === "代码"
 
-    ```python title="client.py" linenums="1"
-        from veadk import Agent, Runner
-        from veadk.a2a.remote_ve_agent import RemoteVeAgent
+```python title="client.py" linenums="1"
+from veadk import Agent, Runner
+from veadk.a2a.remote_ve_agent import RemoteVeAgent
 
-        async def main(prompt: str) -> str:
-            """Main function for run an agent.
+async def main(prompt: str) -> str:
+    """Main function for run an agent.
 
-            Args:
-                prompt (str): The prompt to run.
+    Args:
+        prompt (str): The prompt to run.
 
-            Returns:
-                str: The response from the agent.
-            """
-            weather_agent = RemoteVeAgent(
-                name="weather_agent",
-                url="http://localhost:8000/",  # <--- url of A2A server
-            )
-            print(f"Remote agent name is {weather_agent.name}.")
-            print(f"Remote agent description is {weather_agent.description}.")
+    Returns:
+        str: The response from the agent.
+    """
+    weather_agent = RemoteVeAgent(
+        name="weather_agent",
+        url="http://localhost:8000/",  # <--- url of A2A server
+    )
+    print(f"Remote agent name is {weather_agent.name}.")
+    print(f"Remote agent description is {weather_agent.description}.")
 
-            agent = Agent(
-                name="root_agent",
-                description="An assistant for fetching weather.",
-                instruction="You are a helpful assistant. You can invoke weather agent to get weather information.",
-                sub_agents=[weather_agent],
-            )
+    agent = Agent(
+        name="root_agent",
+        description="An assistant for fetching weather.",
+        instruction="You are a helpful assistant. You can invoke weather agent to get weather information.",
+        sub_agents=[weather_agent],
+    )
 
-            runner = Runner(agent=agent)
-            response = await runner.run(messages=prompt)
+    runner = Runner(agent=agent)
+    response = await runner.run(messages=prompt)
 
-            return response
+    return response
 
 
-        if __name__ == "__main__":
-            import asyncio
+if __name__ == "__main__":
+    import asyncio
 
-            response = asyncio.run(main("What is the weather like of Beijing?"))
-            print(response)
-    ```
+    response = asyncio.run(main("What is the weather like of Beijing?"))
+    print(response)
+```
 ### 交互流程
 下图为示例对应的交互流程图
 ```mermaid
@@ -195,52 +195,52 @@ veADK 的 A2A 鉴权机制提供了灵活的认证选项，支持标准的 Beare
 
 === "代码"
     ```python title="client.py" linenums="1"
-        # <...code truncated...>
+    # <...code truncated...>
+    
+    # 创建自定义的 httpx.AsyncClient 实例
+    custom_client = httpx.AsyncClient(
+        # 基础 URL 设置
+        base_url="https://vefaas.example.com/agents/",
         
-        # 创建自定义的 httpx.AsyncClient 实例
-        custom_client = httpx.AsyncClient(
-            # 基础 URL 设置
-            base_url="https://vefaas.example.com/agents/",
-            
-            # 超时设置（秒）
-            timeout=30.0,
-            
-            # 连接池设置
-            limits=httpx.Limits(
-                max_connections=100,        # 最大并发连接数
-                max_keepalive_connections=20,  # 最大保活连接数
-                keepalive_expiry=60.0,      # 保活连接过期时间
-            ),
-            
-            # 重试配置（需要 httpx >= 0.24.0）
-            follow_redirects=True,        # 跟随重定向
-            
-            # 自定义默认请求头
-            headers={
-                "User-Agent": "Custom-VeADK-Client/1.0",
-                "X-Custom-Header": "custom-value"
-            },
-            
-            # SSL 验证选项（生产环境中建议保持默认的 True）
-            verify=True,
-            
-            # 代理配置（如需使用代理）
-            proxies="http://proxy.example.com:8080",
-            
-            # 并发请求设置
-            http2=True,  # 启用 HTTP/2 支持
-        )
+        # 超时设置（秒）
+        timeout=30.0,
         
-        # 创建 RemoteVeAgent 实例时，将自定义客户端传递给 httpx_client 参数
-        remote_agent = RemoteVeAgent(
-            name="a2a_agent",
-            url="https://example.com/a2a",
-            auth_token="your_token_here",
-            auth_method="header",
-            httpx_client=custom_client,
-        )
+        # 连接池设置
+        limits=httpx.Limits(
+            max_connections=100,        # 最大并发连接数
+            max_keepalive_connections=20,  # 最大保活连接数
+            keepalive_expiry=60.0,      # 保活连接过期时间
+        ),
+        
+        # 重试配置（需要 httpx >= 0.24.0）
+        follow_redirects=True,        # 跟随重定向
+        
+        # 自定义默认请求头
+        headers={
+            "User-Agent": "Custom-VeADK-Client/1.0",
+            "X-Custom-Header": "custom-value"
+        },
+        
+        # SSL 验证选项（生产环境中建议保持默认的 True）
+        verify=True,
+        
+        # 代理配置（如需使用代理）
+        proxies="http://proxy.example.com:8080",
+        
+        # 并发请求设置
+        http2=True,  # 启用 HTTP/2 支持
+    )
+    
+    # 创建 RemoteVeAgent 实例时，将自定义客户端传递给 httpx_client 参数
+    remote_agent = RemoteVeAgent(
+        name="a2a_agent",
+        url="https://example.com/a2a",
+        auth_token="your_token_here",
+        auth_method="header",
+        httpx_client=custom_client,
+    )
 
-        # <...code truncated...>
+    # <...code truncated...>
     ```
 
 

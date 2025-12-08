@@ -28,7 +28,7 @@ veadk --version
     ```
     2. 配置`uv`环境
     本项目使用`uv`进行构建，（了解如何[安装`uv`](https://docs.astral.sh/uv/getting-started/installation/)）
-    ```bash
+    ```plantext
     # 选择 3.10及以上版本
     uv venv --python 3.10
     ```
@@ -42,11 +42,11 @@ veadk --version
         source .venv/bin/activate
         ```
     === "Windows CMD"
-        ```bash
+        ```cmd
         .venv\Scripts\activate.bat
         ```
     === "Windows PowerShell"
-        ```bash
+        ```powershell
         .venv\Scripts\activate.ps1
         ```
     安装 VeADK
