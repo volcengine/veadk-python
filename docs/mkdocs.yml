@@ -1,0 +1,172 @@
+site_name: Volcengine ADK
+site_description: Documents for Volcengine Agent Development Kit
+site_url: https://volcengine.github.io/veadk-docs/
+repo_url: https://github.com/volcengine/veadk-python
+repo_name: volcengine/veadk-python
+copyright: Copyright &copy; 2025 Volcengine
+
+
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  logo: assets/images/volcengine-color.svg
+  favicon: assets/images/volcengine-color.svg
+  language: zh
+  palette:
+    scheme: black
+  font:
+    text: SF Pro Display
+    code: Maple Mono
+  features:
+    - search.share
+    - navigation.footer
+    # - navigation.instant.preview
+    - navigation.path
+    - navigation.sections
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.instant
+    - navigation.instant.progress
+    - content.action.edit
+    - content.action.view
+    - content.code.copy
+    - content.code.select
+
+nav:
+  - 文档:
+    - 欢迎: index.md
+    - 初识 VeADK 世界: veadk.md
+    - 企业级 Agent 设计：从 0 到 1: design.md
+    - 快速开始: quickstart.md
+    - 配置项: configuration.md
+    - 常见问题: troubleshooting.md
+    - Hello Agent:
+      - 概述: agent/overview.md
+      - 构建智能体: agent/agent.md
+      - 多智能体交互: agent/agents.md
+      - A2A 协议: agent/agent-to-agent.md
+    - 执行引擎:
+      - Runner: runner.md
+    - 个性化引擎——记忆:
+      - 短期记忆: memory/short-term-memory.md
+      - 长期记忆: memory/long-term-memory.md
+      # - 最佳实践（记忆相关）: memory/best-practice-memory.md
+    - 连接能力源——工具:
+      - 内置工具: tools/builtin.md
+      - 自定义工具: tools/function.md
+      - 护栏工具: tools/guardrail.md
+    - 连接数据源——知识库:
+      - 基本使用: knowledgebase/overview.md
+      - 最佳实践（知识库相关）: knowledgebase/best-practice-knowledgebase.md
+    - 身份与权限: 
+      - 概述: auth/overview.md
+      - 入站认证: auth/inbound.md
+      - 使用 API Key 进行出站认证: auth/api-key-outbound.md
+      - OAuth2 用户联邦出站认证: auth/oauth2-user-federation-outbound.md
+      - OAuth2 M2M 出站认证: auth/oauth2-m2m-outbound.md
+      - Trusted MCP 出站认证: auth/trusted-mcp-outbound.md
+    - 可观测:
+      - 开启观测: observation/tracing.md
+      - 在火山引擎观测: observation/ve-tracing.md
+      - 埋点与字段规范: observation/span-attributes.md
+    - 部署与持续优化:
+      - 部署到火山引擎: deploy.md
+      - 评测: evaluation.md
+      - 持续优化: optimization.md
+    - 命令行工具: cli.md
+  - 参考:
+    - API References: references/api.md
+    - 贡献代码: references/contributing.md
+    - License: references/license.md
+  - IDE 支持:
+    - 系统提示词: ide/txt.md
+    # - snippets.json: ide/snippets.md
+  # - VeADK Gallery: 
+  #   - Agent 示例: gallery/agent-gallery.md
+  #   - 应用示例: gallery/app-gallery.md
+
+plugins:  
+  - search
+  - mkdocs-video:
+      is_video: True
+      video_muted: True
+      video_controls: True
+      css_style:
+        width: "80%"
+        display: "block"
+        margin: "0 auto"
+        border-radius: "8px"
+        box-shadow: "0 4px 12px rgba(0, 0, 0, 0.25)"
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google
+  - git-revision-date-localized:
+      enable_creation_date: true
+      type: timeago
+  - llmstxt:
+      full_output: llms-full.txt
+      markdown_description: VeADK.
+      sections:
+        Usage documentation:
+        - index.md
+        - quickstart.md
+        - runner.md
+        - tools/builtin.md
+        - tools/function.md
+        - knowledgebase/overview.md
+        - memory/short-term-memory.md
+        - memory/long-term-memory.md
+        - observation/tracing.md
+        - observation/ve-tracing.md
+
+extra:
+  social:
+  - icon: fontawesome/brands/github
+    link: https://github.com/volcengine/veadk-python
+  - icon: fontawesome/brands/python
+    link: https://pypi.org/project/veadk-python
+
+extra_css:
+  - stylesheets/extra.css
+
+# Extensions
+markdown_extensions:
+  - def_list
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.details
+  - mkdocs-click
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      dedent_subsections: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - toc:
+      permalink: true
+      title: 导航
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
