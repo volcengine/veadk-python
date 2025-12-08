@@ -204,7 +204,7 @@ Tracing 指的是对智能体执行过程的**全链路记录与追踪**。
 
 开启后，您可以看到日志中可以打印出相关 Tracing 数据的 ID：
 
-![cozeloop空间](../assets/images/observation/show_traceid.jpeg)
+![TraceID示意](../assets/images/observation/show_traceid.jpeg)
 
 !!! tip "与 OpenTelemetry 的兼容性"
     VeADK 相关字段命名遵循 OpenTelemetry 生成式 AI 规范，您可以直接将 Tracing 数据导入到 OpenTelemetry 兼容的系统中进行分析和可视化。
