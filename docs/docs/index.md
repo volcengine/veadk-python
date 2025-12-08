@@ -21,13 +21,13 @@ hide:
 }
 </style>
 
-!!! tip "欢迎报名 2025 年度火山引擎冬季 Force 大会 “AI Agent开发工作坊”"
+!!! tip "🎉 欢迎报名 2025 年度火山引擎冬季 Force 大会 “AI Agent开发工作坊”"
 
-    **时间：**2025 年 12 月 19 日 14:00-18:00
+    **⏰ 时间：**2025 年 12 月 19 日 14:00-18:00
 
-    **场地：**上海世博中心 6F-617
+    **📌 场地：**上海世博中心 6F-617
 
-    **论坛简介：**AI Agent 工作坊，依托全流程的实际动手操作，并融合相关理论与最佳实践总结，助力参会者掌握从零到一构建企业级 AI Agent 的实战能力，使其具备涵盖 Agent 设计、开发、部署、运维以及持续评估与优化的完整技能体系。借助 AI IDE TRAE 和火山的 Agent SDK VeADK，推动 AI Agent快速落地，实现 Vibe 编程，助力参与者完成基础的 Agent 开发并加速进阶；通过集成和使用 Agentkit，促使 AI Agent 实现从 Research 到 Production - Ready 的能力跨越；运用 Agentkit Identity，达成用户到智能体、智能体到智能体、智能体到 MCP 工具的全链路零信任安全；通过Agentkit MCP 网关，实现存量应用向智能体的迁移与复用；利用 AgentKit 罗盘评测工具，对智能体进行持续评估和质量监测；基于面向真实客户场景的最佳实践闭环，加速 AI 从试点应用迈向规模化应用的落地进程。通过样例库介绍和动手实验，构建共创、行动、反馈的迭代机制。
+    **📄 简介：**AI Agent 工作坊，依托全流程的实际动手操作，并融合相关理论与最佳实践总结，助力参会者掌握从零到一构建企业级 AI Agent 的实战能力，使其具备涵盖 Agent 设计、开发、部署、运维以及持续评估与优化的完整技能体系。借助 AI IDE TRAE 和火山的 Agent SDK VeADK，推动 AI Agent快速落地，实现 Vibe 编程，助力参与者完成基础的 Agent 开发并加速进阶；通过集成和使用 Agentkit，促使 AI Agent 实现从 Research 到 Production - Ready 的能力跨越；运用 Agentkit Identity，达成用户到智能体、智能体到智能体、智能体到 MCP 工具的全链路零信任安全；通过Agentkit MCP 网关，实现存量应用向智能体的迁移与复用；利用 AgentKit 罗盘评测工具，对智能体进行持续评估和质量监测；基于面向真实客户场景的最佳实践闭环，加速 AI 从试点应用迈向规模化应用的落地进程。通过样例库介绍和动手实验，构建共创、行动、反馈的迭代机制。
 
     <a class="openai-button" href="https://www.volcengine.com/contact/force-2512">点击报名</a>
 
@@ -79,6 +79,12 @@ hide:
 [快速开始 :fontawesome-solid-paper-plane:](quickstart.md){ .openai-button }
 
 </div>
+
+---
+
+## 使用 VeADK 构建 DeepResearch
+
+![type:video](https://veadk.tos-cn-beijing.volces.com/doc-assets/veadk_deepresearch.mp4)
 
 ---
 
@@ -136,22 +142,22 @@ VeADK 各组件与火山引擎相关产品的结合矩阵：
 |  | [**VeSearch**](https://www.volcengine.com/docs/85508/1512748)（联网问答Agent） | 提供信息搜索与云端自动整合功能 |
 |  | [**Web Scraper**](https://www.volcengine.com/docs/84296/1545470) | 定制化内容查询（邀测） |
 |  | [**飞书 Lark**](https://open.larkoffice.com/document/uAjLw4CM/ukTMukTMukTM/mcp_integration/mcp_introduction) | 进行飞书相关操作 |
-|  | [**AI 数据湖服务 LAS(Lake AI Service)**](https://www.volcengine.com/product/las)| 提供开放、低成本、高性能的AI数据湖，海量数据存储与查询能力 |
+|  | [**AI 数据湖服务 LAS**](https://www.volcengine.com/product/las)| 提供开放、低成本、高性能的AI数据湖，海量数据存储与查询能力 |
 | **短期记忆** | [**MySQL**](https://www.volcengine.com/docs/6313) | 提供使用 MySQL 数据库存储短期记忆，提供高性能读写能力，可实现持久化 |
 |  | [**PostgreSQL**](https://www.volcengine.com/product/rds-pg) | 提供使用 PostgreSQL 数据库存储短期记忆，提供高性能读写能力，可实现持久化 |
 |  | [**火山引擎云数据库 MySQL 版**](https://www.volcengine.com/product/rds-mysql) | 记忆存储 |
-| **长期记忆** | [**云搜索服务**](https://www.volcengine.com/product/es)(OpenSearch) | 兼容 OpenSearch，支持向量搜索等能力 |
+| **长期记忆** | [**云搜索服务**](https://www.volcengine.com/product/es) (OpenSearch) | 兼容 OpenSearch，支持向量搜索等能力 |
 |  | [**Redis**](https://www.volcengine.com/product/redis) | Redis 作为长期记忆存储，支持 Redisearch 功能 |
-|  | [**viking**](https://www.volcengine.com/docs/84313/1254437) | 知识向量化存储和检索 |
-| **知识库** | [**viking**](https://www.volcengine.com/docs/84313/1254437) | 知识向量化存储和检索 |
-|  | [**mysql**](https://www.volcengine.com/docs/6313) | 提供使用 MySQL 数据库存储短期记忆，提供高性能读写能力，不具备向量搜索功能 |
-|  | [**redis**](https://www.volcengine.com/product/redis) | Redis 作为长期记忆存储，支持 Redisearch |
-|  | [**云搜索服务**](https://www.volcengine.com/product/es)(OpenSearch) | 知识向量化存储和检索 |
-| **可观测** | [**应用性能监控全链路版**](https://www.volcengine.com/product/apmplus)(APMPlus) | 调用链路观测 |
+|  | [**Viking 记忆库**](https://www.volcengine.com/docs/84313/1860687?lang=zh) | 知识向量化存储和检索 |
+| **知识库** | [**Viking 知识库**](https://www.volcengine.com/docs/84313/1860732?lang=zh) | 知识向量化存储和检索 |
+|  | [**MySQL**](https://www.volcengine.com/docs/6313) | 提供使用 MySQL 数据库存储短期记忆，提供高性能读写能力，不具备向量搜索功能 |
+|  | [**Redis**](https://www.volcengine.com/product/redis) | Redis 作为长期记忆存储，支持 Redisearch |
+|  | [**云搜索服务**](https://www.volcengine.com/product/es) (OpenSearch) | 知识向量化存储和检索 |
+| **可观测** | [**应用性能监控全链路版**](https://www.volcengine.com/product/apmplus) (APMPlus) | 调用链路观测 |
 |  | [**扣子罗盘**](https://www.coze.cn/loop)(CozeLoop) | 调用链路观测 |
-|  | [**日志服务**](https://www.volcengine.com/product/tls)(TLS) | 调用链路观测、日志存储与检索 |
-| **评测** | [**扣子罗盘**](https://www.coze.cn/loop)(CozeLoop) | 在线评测 |
-| **云部署** | [**火山引擎函数服务**](https://www.volcengine.com/product/vefaas)(VeFaaS) | 提供一键上云能力 |
+|  | [**日志服务**](https://www.volcengine.com/product/tls) (TLS) | 调用链路观测、日志存储与检索 |
+| **评测** | [**扣子罗盘**](https://www.coze.cn/loop) (CozeLoop) | 在线评测 |
+| **云部署** | [**火山引擎函数服务**](https://www.volcengine.com/product/vefaas) (VeFaaS) | 提供一键上云能力 |
 |  | [**火山引擎 API 网关**](https://www.volcengine.com/product/apig) | 提供鉴权、路由等能力 |
 |  | [**火山引擎持续交付**](https://www.volcengine.com/product/cp) | 提供用户仓库向 VeFaaS 进行基于镜像的持续交付部署 |
 |  | [**火山引擎镜像仓库**](https://www.volcengine.com/product/cr) | 提供用户代码镜像托管维护 |
