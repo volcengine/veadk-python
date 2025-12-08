@@ -95,6 +95,9 @@ class VikingDBMemoryClient(Service):
                 api_info[key].header[item] = header[item]
         self.api_info = api_info
 
+    def get_host(self):
+        return self.service_info.host
+
     @staticmethod
     def get_service_info(host, region, scheme, connection_timeout, socket_timeout):
         service_info = ServiceInfo(

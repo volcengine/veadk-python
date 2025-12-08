@@ -122,13 +122,15 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
         )
 
     def _get_sdk_client(self) -> VikingMem:
+        client = self._get_client()
         return VikingMem(
-            host="api-knowledgebase.mlp.cn-beijing.volces.com",
-            region="cn-beijing",
+            host=client.get_host(),
+            region=self.region,
             auth=IAM(
                 ak=self.volcengine_access_key,
                 sk=self.volcengine_secret_key,
             ),
+            sts_token=self.session_token,
         )
 
     @override
