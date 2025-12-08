@@ -123,12 +123,13 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
     _viking_sdk_client = None
 
     def model_post_init(self, __context: Any) -> None:
-        self._set_env_host()
+        self._set_service_info()
 
         self._viking_sdk_client = VikingKnowledgeBaseService(
             host=self.host,
             ak=self.volcengine_access_key,
             sk=self.volcengine_secret_key,
+            sts_token=self.session_token,
             scheme=self.schema,
         )
 
@@ -559,7 +560,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
 
         return entries
 
-    def _set_env_host(self):
+    def _set_service_info(self):
         env_host = getenv(
             "DATABASE_VIKING_BASE_URL", default_value=None, allow_false_values=True
         )
@@ -574,6 +575,12 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
                     "DATABASE_VIKING_BASE_URL must start with http:// or https://"
                 )
 
+        if not (self.volcengine_access_key and self.volcengine_secret_key):
+            cred = get_credential_from_vefaas_iam()
+            self.volcengine_access_key = cred.access_key_id
+            self.volcengine_secret_key = cred.secret_access_key
+            self.session_token = cred.session_token
+
     def _do_request(
         self,
         body: dict,
@@ -581,21 +588,12 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         method: Literal["GET", "POST", "PUT", "DELETE"] = "POST",
     ) -> dict:
         full_path = f"{self.base_url}{path}"
-        volcengine_access_key = self.volcengine_access_key
-        volcengine_secret_key = self.volcengine_secret_key
-        session_token = self.session_token
-
-        if not (volcengine_access_key and volcengine_secret_key):
-            cred = get_credential_from_vefaas_iam()
-            volcengine_access_key = cred.access_key_id
-            volcengine_secret_key = cred.secret_access_key
-            session_token = cred.session_token
 
         request = build_vikingdb_knowledgebase_request(
             path=path,
-            volcengine_access_key=volcengine_access_key,
-            volcengine_secret_key=volcengine_secret_key,
-            session_token=session_token,
+            volcengine_access_key=self.volcengine_access_key,
+            volcengine_secret_key=self.volcengine_secret_key,
+            session_token=self.session_token,
             method=method,
             data=body,
         )
