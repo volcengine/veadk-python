@@ -19,7 +19,7 @@ from veadk.version import VERSION
 
 DEFAULT_AGENT_NAME = "veAgent"
 
-DEFAULT_MODEL_AGENT_NAME = "doubao-seed-1-6-250615"
+DEFAULT_MODEL_AGENT_NAME = "doubao-seed-1-6-251015"
 DEFAULT_MODEL_AGENT_PROVIDER = "openai"
 DEFAULT_MODEL_AGENT_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
 DEFAULT_MODEL_EXTRA_CONFIG = {
@@ -68,7 +68,7 @@ DEFAULT_IMAGE_EDIT_MODEL_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
 DEFAULT_VIDEO_MODEL_NAME = "doubao-seedance-1-0-pro-250528"
 DEFAULT_VIDEO_MODEL_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
 
-DEFAULT_IMAGE_GENERATE_MODEL_NAME = "doubao-seedream-4-0-250828"
+DEFAULT_IMAGE_GENERATE_MODEL_NAME = "doubao-seedream-4-5-251128"
 DEFAULT_IMAGE_GENERATE_MODEL_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
 
 VEFAAS_IAM_CRIDENTIAL_PATH = "/var/run/secrets/iam/credential"
