@@ -25,8 +25,6 @@ title: 长期记忆
 | `viking`     | 使用 VikingDB 记忆库产品作为长期记忆存储                   |
 | `viking_mem` | 已废弃，设置后将会自动转为 `viking`                        |
 
-### Viking 后端
-
 ## 初始化方法
 
 在使用长期记忆之前，需要实例化 LongTermMemory 对象并指定后端类型。以下代码展示了如何初始化基于 VikingDB 的长期记忆模块，并将其绑定到 Agent：
