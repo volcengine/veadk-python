@@ -33,7 +33,8 @@ git clone ... # clone repo first
 
 cd veadk-python
 
-uv venv --python 3.10
+# create a virtual environment with python 3.12
+uv venv --python 3.12
 
 # only install necessary requirements
 uv sync
@@ -63,7 +64,7 @@ model:
     api_key: # <-- set your Volcengine ARK api key here
 ```
 
-You can refer to the [config instructions](https://volcengine.github.io/veadk-python/installation.html#%E9%85%8D%E7%BD%AE) for more details.
+You can refer to the [config instructions](https://volcengine.github.io/veadk-python/configuration/) for more details.
 
 ## Have a try
 
