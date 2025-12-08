@@ -29,7 +29,6 @@ from mcp import StdioServerParameters, ClientSession
 from mcp.types import ListToolsResult
 
 from google.adk.tools.mcp_tool.mcp_session_manager import (
-    retry_on_closed_resource,
     SseConnectionParams,
     StdioConnectionParams,
     StreamableHTTPConnectionParams,
@@ -43,7 +42,7 @@ from google.adk.agents.readonly_context import ReadonlyContext
 from veadk.integrations.ve_identity.auth_config import VeIdentityAuthConfig
 from veadk.integrations.ve_identity.auth_mixins import VeIdentityAuthMixin
 from veadk.integrations.ve_identity.mcp_tool import VeIdentityMcpTool
-from veadk.integrations.ve_identity.utils import generate_headers
+from veadk.integrations.ve_identity.utils import generate_headers, retry_on_errors
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +157,7 @@ class VeIdentityMcpToolset(VeIdentityAuthMixin, BaseToolset):
             errlog=errlog,
         )
 
-    @retry_on_closed_resource
+    @retry_on_errors
     @override
     async def get_tools(
         self,
