@@ -15,6 +15,7 @@
 import json
 import time
 import shutil
+import tempfile
 from pathlib import Path
 from cookiecutter.main import cookiecutter
 import veadk.integrations.ve_faas as vefaas
@@ -309,12 +310,10 @@ class VeFaaS:
 
         # Get application status and extract function info
         status, full_response = self._get_application_status(app_id)
-
         # Extract function name from application config
         cloud_resource = full_response["Result"]["CloudResource"]
         cloud_resource = json.loads(cloud_resource)
         function_name = cloud_resource["framework"]["function"]["Name"]
-        # existing_url = cloud_resource["framework"]["url"]["system_url"]
         function_id = cloud_resource["framework"]["function"]["Id"]
         if not function_id:
             raise ValueError(f"Function '{function_name}' not found for update")
@@ -333,14 +332,17 @@ class VeFaaS:
             "veadk_version": VERSION,
         }
 
+        temp_base = Path(tempfile.gettempdir())
+
         cookiecutter(
             template=str(template_dir),
-            output_dir="/tmp",
+            output_dir=str(temp_base),
             no_input=True,
             extra_context=settings,
         )
 
-        tmp_path = Path("/tmp") / tmp_dir_name
+        tmp_path = temp_base / tmp_dir_name
+
         try:
             agent_dir = tmp_path / "src" / user_proj_path.name.replace("-", "_")
             if agent_dir.exists():
