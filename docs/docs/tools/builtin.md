@@ -209,7 +209,6 @@ veADK 集成了以下火山引擎工具：
         name: doubao-seedream-4-0-250828
         api_base: https://ark.cn-beijing.volces.com/api/v3/
         api_key: your-api-key-here
-
     ```
 
 运行结果：
@@ -358,6 +357,52 @@ veADK 集成了以下火山引擎工具：
 
 ![运行结果](../assets/images/tools/las1.png)
 ![运行结果](../assets/images/tools/las2.png)
+
+
+
+### 手机指令执行 (Mobile Run)
+`mobile_run` 该工具可以让Agent在云手机上完成手机任务。
+
+!!! warning "使用 `mobile_run` 工具的附加要求"
+    1. 需要在火山购买云手机服务，并订购pod
+    2. 根据自己的需要在云手机上配置环境，必须下载app，登录账号等。
+
+
+=== "代码"
+
+    ```python
+    --8<-- "examples/tools/mobile_run/agent.py"
+    ```
+
+=== "环境变量"
+
+    必须配置在环境变量的配置项：
+    - `TOOL_MOBIL_USE_TOOL_ID`：  用于执行命令的云手机id 
+
+    或在 `config.yaml` 中定义：
+    
+    ```yaml title="config.yaml"
+      tool:
+        mobile_use:
+          tool_id:
+            - product_id-pod_id
+            - product_id-pod_id
+    
+      volcengine:
+        access_key: xxx
+        secret_key: xxx
+    ```
+
+    获取方式：
+    1. 登录火山，进入云手机产品控制界面
+![云手机产品控制界面](../assets/images/tools/mua_1.png)
+![实例管理界面](../assets/images/tools/mua_2.png)
+    2. tool_id 格式为：product_id-pod_id
+
+运行结果：
+![img_2.png](../assets/images/tools/mua_3.png)
+
+
 
 ## 系统工具
 
