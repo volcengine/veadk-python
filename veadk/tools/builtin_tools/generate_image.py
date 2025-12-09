@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from veadk.tools.builtin_tools.image_generate import image_generate  # noqa: F401
+from veadk.tools.builtin_tools.image_generate import (
+    image_generate,  # noqa: F401
+)
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
