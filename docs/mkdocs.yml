@@ -1,12 +1,11 @@
 site_name: Volcengine ADK
 site_description: Documents for Volcengine Agent Development Kit
-site_url: https://volcengine.github.io/veadk-docs/
+site_url: https://volcengine.github.io/veadk-python/
 repo_url: https://github.com/volcengine/veadk-python
 repo_name: volcengine/veadk-python
 copyright: Copyright &copy; 2025 Volcengine
 
-
-edit_uri: edit/main/docs/
+edit_uri: edit/main/docs/docs/
 
 theme:
   name: material
