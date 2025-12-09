@@ -149,7 +149,7 @@ VeADK 各组件与火山引擎相关产品的结合矩阵：
 | **长期记忆** | [**云搜索服务**](https://www.volcengine.com/product/es) (OpenSearch) | 兼容 OpenSearch，支持向量搜索等能力 |
 |  | [**Redis**](https://www.volcengine.com/product/redis) | Redis 作为长期记忆存储，支持 Redisearch 功能 |
 |  | [**Viking 记忆库**](https://www.volcengine.com/docs/84313/1860687?lang=zh) | 知识向量化存储和检索 |
-| **知识库** | [**Viking 知识库**](https://www.volcengine.com/docs/84313/1860732?lang=zh) | 知识向量化存储和检索 |
+| **知识库** | [**Viking 知识库**](https://www.volcengine.com/docs/84313/2117716?lang=zh) | 知识向量化存储和检索 |
 |  | [**MySQL**](https://www.volcengine.com/docs/6313) | 提供使用 MySQL 数据库存储短期记忆，提供高性能读写能力，不具备向量搜索功能 |
 |  | [**Redis**](https://www.volcengine.com/product/redis) | Redis 作为长期记忆存储，支持 Redisearch |
 |  | [**云搜索服务**](https://www.volcengine.com/product/es) (OpenSearch) | 知识向量化存储和检索 |
