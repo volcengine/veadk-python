@@ -705,6 +705,80 @@ class VeTOS:
             logger.error(f"Image download failed: {str(e)}")
             return False
 
+    def download_directory(
+        self, bucket_name: str, prefix: str, local_dir: str = "/tmp"
+    ) -> bool:
+        """Download entire directory from TOS bucket to local directory
+
+        Args:
+            bucket_name: TOS bucket name
+            prefix: Directory prefix in TOS (e.g., "skills/pdf/")
+            local_dir: Local directory path to save files
+
+        Returns:
+            bool: True if download succeeds, False otherwise
+        """
+        bucket_name = self._check_bucket_name(bucket_name)
+
+        if not self._client:
+            logger.error("TOS client is not initialized")
+            return False
+
+        try:
+            # Ensure prefix ends with /
+            if prefix and not prefix.endswith("/"):
+                prefix += "/"
+
+            # Create local directory if not exists
+            os.makedirs(local_dir, exist_ok=True)
+
+            # List all objects with the prefix
+            is_truncated = True
+            next_continuation_token = ""
+            downloaded_count = 0
+
+            while is_truncated:
+                out = self._client.list_objects_type2(
+                    bucket_name,
+                    prefix=prefix,
+                    continuation_token=next_continuation_token,
+                )
+                is_truncated = out.is_truncated
+                next_continuation_token = out.next_continuation_token
+
+                # Download each object
+                for content in out.contents:
+                    object_key = content.key
+
+                    # Skip directory markers (objects ending with /)
+                    if object_key.endswith("/"):
+                        continue
+
+                    # Calculate relative path and local file path
+                    relative_path = object_key[len(prefix) :]
+                    local_file_path = os.path.join(local_dir, relative_path)
+
+                    # Create subdirectories if needed
+                    local_file_dir = os.path.dirname(local_file_path)
+                    if local_file_dir:
+                        os.makedirs(local_file_dir, exist_ok=True)
+
+                    # Download the file
+                    if self.download(bucket_name, object_key, local_file_path):
+                        downloaded_count += 1
+                        logger.debug(f"Downloaded: {object_key} -> {local_file_path}")
+                    else:
+                        logger.warning(f"Failed to download: {object_key}")
+
+            logger.info(
+                f"Downloaded {downloaded_count} files from {bucket_name}/{prefix} to {local_dir}"
+            )
+            return downloaded_count > 0
+
+        except Exception as e:
+            logger.error(f"Failed to download directory: {str(e)}")
+            return False
+
     def close(self):
         if self._client:
             self._client.close()
