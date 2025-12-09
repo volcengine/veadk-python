@@ -1,0 +1,118 @@
+@font-face {
+  font-family: "Maple Mono";
+  src: "./fonts/MapleMono-NF-CN-Regular.ttf";
+}
+
+@font-face {
+    font-family: 'SF Pro Display';
+    font-style: normal;
+    font-weight: 400;
+    src: local('SF Pro Display'), url('https://fonts.cdnfonts.com/s/59278/SFPRODISPLAYREGULAR.woff') format('woff');
+}
+@font-face {
+    font-family: 'SF Pro Display';
+    font-style: italic;
+    font-weight: 100;
+    src: local('SF Pro Display'), url('https://fonts.cdnfonts.com/s/59278/SFPRODISPLAYULTRALIGHTITALIC.woff') format('woff');
+}
+@font-face {
+    font-family: 'SF Pro Display';
+    font-style: italic;
+    font-weight: 200;
+    src: local('SF Pro Display'), url('https://fonts.cdnfonts.com/s/59278/SFPRODISPLAYTHINITALIC.woff') format('woff');
+}
+@font-face {
+    font-family: 'SF Pro Display';
+    font-style: italic;
+    font-weight: 300;
+    src: local('SF Pro Display'), url('https://fonts.cdnfonts.com/s/59278/SFPRODISPLAYLIGHTITALIC.woff') format('woff');
+}
+@font-face {
+    font-family: 'SF Pro Display';
+    font-style: normal;
+    font-weight: 500;
+    src: local('SF Pro Display'), url('https://fonts.cdnfonts.com/s/59278/SFPRODISPLAYMEDIUM.woff') format('woff');
+}
+@font-face {
+    font-family: 'SF Pro Display';
+    font-style: italic;
+    font-weight: 600;
+    src: local('SF Pro Display'), url('https://fonts.cdnfonts.com/s/59278/SFPRODISPLAYSEMIBOLDITALIC.woff') format('woff');
+}
+@font-face {
+    font-family: 'SF Pro Display';
+    font-style: normal;
+    font-weight: 700;
+    src: local('SF Pro Display'), url('https://fonts.cdnfonts.com/s/59278/SFPRODISPLAYBOLD.woff') format('woff');
+}
+@font-face {
+    font-family: 'SF Pro Display';
+    font-style: italic;
+    font-weight: 800;
+    src: local('SF Pro Display'), url('https://fonts.cdnfonts.com/s/59278/SFPRODISPLAYHEAVYITALIC.woff') format('woff');
+}
+@font-face {
+    font-family: 'SF Pro Display';
+    font-style: italic;
+    font-weight: 900;
+    src: local('SF Pro Display'), url('https://fonts.cdnfonts.com/s/59278/SFPRODISPLAYBLACKITALIC.woff') format('woff');
+}
+
+
+.md-typeset h1 {
+    color: black;
+    font-size: 30px;
+    font-weight: 600;
+}
+
+.md-typeset h2 {
+    color: black;
+    font-size: 25px;
+    font-weight: 600;
+}
+
+.md-typeset h3 {
+    color: black;
+    font-size: 20px;
+    font-weight: 600;
+}
+
+.md-typeset {
+    font-size: 16px;
+}
+
+/* .md-ellipsis {
+    font-size: 14px;
+} */
+
+.md-typeset pre {
+    border-radius: 8px
+}
+
+.openai-button {
+  display: inline-block;
+  background-color: #000;        /* 黑底 */
+  color: #fff !important;                   /* 白字 */
+  font-size: 15px;
+  padding: 5px 20px;
+  border-radius: 9999px;         /* 全圆角，像 OpenAI 按钮 */
+  text-decoration: none;         /* 去掉下划线 */
+  transition: all 0.2s ease;     /* 平滑过渡 */
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  cursor: pointer;
+}
+
+.openai-button:hover {
+  background-color: #1a1a1a;     /* 悬停时稍微变亮 */
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.15);
+}
+
+.openai-button:active {
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Style for the main navigation section titles */
+nav.md-nav--primary .md-nav__item--section > .md-nav__link {
+  color: #1565C0;
+  font-weight: bold;
+}
