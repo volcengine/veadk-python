@@ -12,27 +12,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import base64
+import json
+import traceback
 from typing import Dict
+
 from google.adk.tools import ToolContext
+from opentelemetry import trace
+from opentelemetry.trace import Span
 from volcenginesdkarkruntime import Ark
+
 from veadk.config import getenv, settings
 from veadk.consts import (
     DEFAULT_IMAGE_EDIT_MODEL_API_BASE,
     DEFAULT_IMAGE_EDIT_MODEL_NAME,
 )
-import base64
-from opentelemetry import trace
-import traceback
-import json
-from veadk.version import VERSION
-from opentelemetry.trace import Span
 from veadk.utils.logger import get_logger
+from veadk.version import VERSION
 
 logger = get_logger(__name__)
 
 client = Ark(
     api_key=getenv(
-        "MODEL_EDIT_API_KEY", getenv("MODEL_AGENT_API_KEY", settings.model.api_key)
+        "MODEL_EDIT_API_KEY",
+        getenv("MODEL_AGENT_API_KEY", settings.model.api_key),
     ),
     base_url=getenv("MODEL_EDIT_API_BASE", DEFAULT_IMAGE_EDIT_MODEL_API_BASE),
 )
@@ -135,6 +138,14 @@ async def image_edit(
                 response = client.images.generate(
                     model=getenv("MODEL_EDIT_NAME", DEFAULT_IMAGE_EDIT_MODEL_NAME),
                     **inputs,
+                    extra_headers={
+                        "veadk-source": "veadk",
+                        "veadk-version": VERSION,
+                        "User-Agent": f"VeADK/{VERSION}",
+                        "X-Client-Request-Id": getenv(
+                            "MODEL_AGENT_CLIENT_REQ_ID", f"veadk/{VERSION}"
+                        ),
+                    },
                 )
                 output_part = None
                 if response.data and len(response.data) > 0:
@@ -154,7 +165,8 @@ async def image_edit(
                             image_bytes = base64.b64decode(image)
 
                             tos_url = _upload_image_to_tos(
-                                image_bytes=image_bytes, object_key=f"{image_name}.png"
+                                image_bytes=image_bytes,
+                                object_key=f"{image_name}.png",
                             )
                             if tos_url:
                                 tool_context.state[f"{image_name}_url"] = tos_url
@@ -277,9 +289,10 @@ def add_span_attributes(
 
 def _upload_image_to_tos(image_bytes: bytes, object_key: str) -> None:
     try:
-        from veadk.integrations.ve_tos.ve_tos import VeTOS
         import os
         from datetime import datetime
+
+        from veadk.integrations.ve_tos.ve_tos import VeTOS
 
         timestamp: str = datetime.now().strftime("%Y%m%d%H%M%S%f")[:-3]
         object_key = f"{timestamp}-{object_key}"

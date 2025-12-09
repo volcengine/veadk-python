@@ -26,7 +26,9 @@ from google.genai.types import Blob, Part
 from opentelemetry import trace
 from opentelemetry.trace import Span
 from volcenginesdkarkruntime import Ark
-from volcenginesdkarkruntime.types.images.images import SequentialImageGenerationOptions
+from volcenginesdkarkruntime.types.images.images import (
+    SequentialImageGenerationOptions,
+)
 
 from veadk.config import getenv, settings
 from veadk.consts import (
@@ -41,7 +43,8 @@ logger = get_logger(__name__)
 
 client = Ark(
     api_key=getenv(
-        "MODEL_IMAGE_API_KEY", getenv("MODEL_AGENT_API_KEY", settings.model.api_key)
+        "MODEL_IMAGE_API_KEY",
+        getenv("MODEL_AGENT_API_KEY", settings.model.api_key),
     ),
     base_url=getenv("MODEL_IMAGE_API_BASE", DEFAULT_IMAGE_GENERATE_MODEL_API_BASE),
 )
@@ -119,11 +122,24 @@ def handle_single_task_sync(
                 and sequential_image_generation == "auto"
                 and max_images
             ):
-                response = client.images.generate(
-                    model=getenv("MODEL_IMAGE_NAME", DEFAULT_IMAGE_GENERATE_MODEL_NAME),
-                    **inputs,
-                    sequential_image_generation_options=SequentialImageGenerationOptions(
-                        max_images=max_images
+                response = (
+                    client.images.generate(
+                        model=getenv(
+                            "MODEL_IMAGE_NAME",
+                            DEFAULT_IMAGE_GENERATE_MODEL_NAME,
+                        ),
+                        **inputs,
+                        sequential_image_generation_options=SequentialImageGenerationOptions(
+                            max_images=max_images
+                        ),
+                        extra_headers={
+                            "veadk-source": "veadk",
+                            "veadk-version": VERSION,
+                            "User-Agent": f"VeADK/{VERSION}",
+                            "X-Client-Request-Id": getenv(
+                                "MODEL_AGENT_CLIENT_REQ_ID", f"veadk/{VERSION}"
+                            ),
+                        },
                     ),
                 )
             else:
@@ -157,7 +173,8 @@ def handle_single_task_sync(
                             continue
                         image_bytes = base64.b64decode(b64)
                         image_url = _upload_image_to_tos(
-                            image_bytes=image_bytes, object_key=f"{image_name}.png"
+                            image_bytes=image_bytes,
+                            object_key=f"{image_name}.png",
                         )
                         if not image_url:
                             logger.error(f"Upload image to TOS failed: {image_name}")
@@ -367,7 +384,11 @@ async def image_generate(tasks: list[dict], tool_context) -> Dict:
     logger.debug(
         f"image_generate success_list: {success_list}\nerror_list: {error_list}"
     )
-    return {"status": "success", "success_list": success_list, "error_list": error_list}
+    return {
+        "status": "success",
+        "success_list": success_list,
+        "error_list": error_list,
+    }
 
 
 def add_span_attributes(
