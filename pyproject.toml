@@ -1,6 +1,6 @@
 [project]
 name = "veadk-python"
-version = "0.2.29"
+version = "0.2.27"
 description = "Volcengine agent development kit, integrations with Volcengine cloud services."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -72,6 +72,9 @@ dev = [
     "pytest-xdist>=3.8.0",
 ]
 
+responses = [
+    "litellm>=1.79.3"
+]
 
 [dependency-groups]
 dev = [
