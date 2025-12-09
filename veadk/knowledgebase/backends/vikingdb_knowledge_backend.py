@@ -500,7 +500,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         top_k: int = 5,
         metadata: dict | None = None,
         rerank: bool = True,
-        chunk_diffusion_count: int | None = 3,
+        chunk_diffusion_count: int | None = 0,
     ) -> list[KnowledgebaseEntry]:
         SEARCH_KNOWLEDGE_PATH = "/api/knowledge/collection/search_knowledge"
 
