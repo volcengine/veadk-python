@@ -109,6 +109,8 @@ def handle_single_task_sync(
         inputs["watermark"] = watermark
     if sequential_image_generation:
         inputs["sequential_image_generation"] = sequential_image_generation
+    if image_field is not None:
+        inputs["image"] = [image_field]
 
     with tracer.start_as_current_span(f"call_llm_task_{idx}") as span:
         try:
@@ -399,7 +401,7 @@ def add_span_attributes(
         span.set_attribute("cozeloop.report.source", "veadk")
 
         # llm attributes
-        span.set_attribute("gen_ai.system", "openai")
+        span.set_attribute("gen_ai.system", "Ark")
         span.set_attribute("gen_ai.operation.name", "chat")
         if request_model:
             span.set_attribute("gen_ai.request.model", request_model)
