@@ -38,7 +38,7 @@ def execute_skills(
     Args:
         workflow_prompt (str): instruction of workflow
         skills (Optional[List[str]]): The skills will be invoked
-        timeout (int, optional): The timeout in seconds for the code execution. Defaults to 300.
+        timeout (int, optional): The timeout in seconds for the code execution, less than or equal to 300. Defaults to 300.
 
     Returns:
         str: The output of the code execution.
@@ -65,8 +65,8 @@ def execute_skills(
         f"Execute skills in session_id={session_id}, tool_id={tool_id}, host={host}, service={service}, region={region}, timeout={timeout}"
     )
 
-    ak = tool_context.state.get("VOLCENGINE_ACCESS_KEY")
-    sk = tool_context.state.get("VOLCENGINE_SECRET_KEY")
+    ak = getenv("VOLCENGINE_ACCESS_KEY")
+    sk = getenv("VOLCENGINE_SECRET_KEY")
     header = {}
 
     if not (ak and sk):
@@ -90,13 +90,26 @@ def execute_skills(
     if skills:
         cmd.extend(["--skills"] + skills)
 
+    # TODO: remove after agentkit supports custom environment variables setting
+    env_vars = {
+        "MODEL_AGENT_API_KEY": os.getenv("MODEL_AGENT_API_KEY"),
+        "TOS_SKILLS_DIR": os.getenv("TOS_SKILLS_DIR"),
+    }
+
     code = f"""
 import subprocess
+import os
+
+env = os.environ.copy()
+env.update({env_vars!r})
+
 result = subprocess.run(
     {cmd!r},
     cwd='/home/gem/veadk_skills',
     capture_output=True,
-    text=True
+    text=True,
+    env=env,
+    timeout={timeout - 10},
 )
 print(result.stdout)
 if result.stderr:
