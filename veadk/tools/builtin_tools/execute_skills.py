@@ -101,7 +101,9 @@ import subprocess
 import os
 
 env = os.environ.copy()
-env.update({env_vars!r})
+for key, value in {env_vars!r}.items():
+    if key not in env:
+        env[key] = value
 
 result = subprocess.run(
     {cmd!r},
