@@ -182,3 +182,35 @@ def get_agent_dir():
         full_path = os.getcwd()
 
     return full_path
+
+
+def check_litellm_version(min_version: str):
+    """
+    Check if the installed litellm version meets the minimum requirement.
+
+    Args:
+        min_version (str): The minimum required version of litellm.
+    """
+    try:
+        from packaging.version import InvalidVersion
+        from packaging.version import parse as parse_version
+        import pkg_resources
+
+        try:
+            installed = parse_version(pkg_resources.get_distribution("litellm").version)
+        except pkg_resources.DistributionNotFound:
+            raise ImportError(
+                "litellm installation not detected, please install it first: pip install litellm>=1.79.3"
+            ) from None
+        except InvalidVersion as e:
+            raise ValueError(f"Invalid format of litellm version number:{e}") from None
+        required = parse_version(min_version)
+        if installed < required:
+            raise ValueError(
+                "You have used `enable_responses=True`. If you want to use the `responses_api`, please install the relevant support:"
+                "\npip install veadk-python[responses]"
+            )
+    except ImportError:
+        raise ImportError(
+            "packaging or pkg_resources not found. Please install them: pip install packaging setuptools"
+        )
