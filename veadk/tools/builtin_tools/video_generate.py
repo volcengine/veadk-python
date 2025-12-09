@@ -342,7 +342,7 @@ def add_span_attributes(
         span.set_attribute("cozeloop.report.source", "veadk")
 
         # llm attributes
-        span.set_attribute("gen_ai.system", "openai")
+        span.set_attribute("gen_ai.system", "Ark")
         span.set_attribute("gen_ai.operation.name", "chat")
         if request_model:
             span.set_attribute("gen_ai.request.model", request_model)
