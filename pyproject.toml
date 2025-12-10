@@ -40,6 +40,7 @@ dependencies = [
     "aiomysql>=0.3.2", # For async MySQL database (short term memory)
     "opensearch-py==2.8.0",
     "filetype>=1.2.0",
+    "agentkit-sdk-python"
 ]
 
 [project.scripts]
