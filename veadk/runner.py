@@ -481,6 +481,10 @@ class Runner(ADKRunner):
                 f"Auto create session: {session.id}, user_id: {session.user_id}, app_name: {self.app_name}"
             )
 
+        import uuid
+
+        x_session_id = f"{self.agent.name}_{user_id}_{session_id or uuid.uuid4()}"
+        self._inject_header_to_tools(x_session_id=x_session_id)
         final_output = ""
         for converted_message in converted_messages:
             try:
@@ -732,3 +736,16 @@ class Runner(ADKRunner):
 
         await self.long_term_memory.add_session_to_memory(session, kwargs=kwargs)
         logger.info(f"Add session `{session.id}` to long term memory.")
+
+    def _inject_header_to_tools(self, x_session_id: str):
+        """Auto inject header to McpToolset"""
+        from google.adk.tools.mcp_tool import McpToolset
+
+        for tool in self.agent.tools:
+            if isinstance(tool, McpToolset):
+                original_provider = tool._header_provider
+                tool._header_provider = lambda ctx, sid=x_session_id: {
+                    **(original_provider(ctx) if original_provider else {}),
+                    "x-session-id": sid,
+                }
+                logger.debug(f"Injected session context to McpToolset: {x_session_id}")

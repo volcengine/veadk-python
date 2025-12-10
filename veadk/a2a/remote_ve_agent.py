@@ -286,6 +286,39 @@ class RemoteVeAgent(RemoteA2aAgent):
         # Inject auth token if credential service is available
         await self._inject_auth_token(ctx)
 
+        # Inject session_id to http headers
+        if hasattr(self, "_a2a_client") and isinstance(self._a2a_client, BaseClient):
+            if hasattr(self._a2a_client, "_transport") and hasattr(
+                self._a2a_client._transport, "httpx_client"
+            ):
+                # get session_id from InvocationContext
+                import uuid
+
+                parent_name = (
+                    ctx.agent.parent_agent.name
+                    if hasattr(ctx.agent, "parent_agent") and ctx.agent.parent_agent
+                    else self.name
+                )
+                user_id = (
+                    ctx.session.user_id
+                    if hasattr(ctx, "session")
+                    and hasattr(ctx.session, "user_id")
+                    and ctx.session.user_id
+                    else "unknown"
+                )
+                session_id = (
+                    ctx.session.id
+                    if hasattr(ctx, "session")
+                    and hasattr(ctx.session, "id")
+                    and ctx.session.id
+                    else str(uuid.uuid4())
+                )
+                x_session_id = f"{parent_name}_{user_id}_{session_id}"
+                self._a2a_client._transport.httpx_client.headers.update(
+                    {"x-session-id": x_session_id}
+                )
+                logger.debug(f"Auto-injected session_id header: {x_session_id}")
+
     async def _inject_auth_token(self, ctx: InvocationContext) -> None:
         """Inject authentication token from credential service into the HTTP client.
 

@@ -18,13 +18,15 @@ This module provides middleware for extracting authentication credentials
 from HTTP requests and storing them in the credential service.
 """
 
+import logging
 from typing import Callable, Literal, Optional
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 from volcenginesdkcore.rest import ApiException
-import json
-from starlette.datastructures import MutableHeaders
+
+
 from veadk.auth.ve_credential_service import VeCredentialService
 from veadk.utils.auth import (
     extract_delegation_chain_from_jwt,
@@ -37,9 +39,8 @@ from veadk.integrations.ve_identity import (
     IdentityClient,
     get_default_identity_client,
 )
-from veadk.utils.logger import get_logger
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class A2AAuthMiddleware(BaseHTTPMiddleware):
@@ -310,173 +311,3 @@ def build_a2a_auth_middleware(
             )
 
     return ConfiguredA2AAuthMiddleware
-
-
-class A2ASessionAffinityMiddleware(BaseHTTPMiddleware):
-    _PATCHED = False
-
-    def __init__(self, app, upstream_header: str = "x-session-id"):
-        super().__init__(app)
-        self.upstream_header = upstream_header
-        if not A2ASessionAffinityMiddleware._PATCHED:
-            self._patch()
-            A2ASessionAffinityMiddleware._PATCHED = True
-
-    def _patch(self):
-        from a2a.server.apps.jsonrpc.jsonrpc_app import JSONRPCApplication
-        from a2a.types import SendStreamingMessageRequest, TaskResubscriptionRequest
-
-        header_name = self.upstream_header
-        orig_create_response = JSONRPCApplication._create_response
-
-        async def patched_process_streaming(self_app, request_id, a2a_request, context):
-            """pre-extract the first event to get context_id"""
-            request_obj = a2a_request.root
-
-            if isinstance(request_obj, SendStreamingMessageRequest):
-                gen = self_app.handler.on_message_send_stream(request_obj, context)
-            elif isinstance(request_obj, TaskResubscriptionRequest):
-                gen = self_app.handler.on_resubscribe_to_task(request_obj, context)
-            else:
-                return self_app._create_response(context, None)
-
-            # pre-extract the first event
-            try:
-                first = await gen.__anext__()
-            except StopAsyncIteration:
-                # empty generator, return empty stream
-                async def empty():
-                    return
-                    yield  # make it a generator
-
-                return self_app._create_response(context, empty())
-
-            # extract context_id
-            try:
-                ctx_id = getattr(first.root.result, "context_id", None)
-                if ctx_id:
-                    context.state["_ctx"] = ctx_id
-                    logger.info(f"[Affinity] extract context_id: {ctx_id}")
-            except Exception as e:
-                logger.error(f"[Affinity] extract context_id failed: {e}")
-
-            # re-compose generator
-            async def combined():
-                yield first
-                async for item in gen:
-                    yield item
-
-            return self_app._create_response(context, combined())
-
-        def patched_create_response(self_app, context, handler_result):
-            """add header"""
-            response = orig_create_response(self_app, context, handler_result)
-
-            ctx_id = context.state.get("_ctx")
-
-            # non-streaming: extract from body
-            if not ctx_id and hasattr(response, "body"):
-                try:
-                    ctx_id = (
-                        json.loads(response.body).get("result", {}).get("contextId")
-                    )
-                except Exception:
-                    pass
-
-            if ctx_id:
-                response.headers[header_name] = ctx_id
-                logger.info(f"[Affinity] Header: {ctx_id}")
-
-            return response
-
-        JSONRPCApplication._process_streaming_request = patched_process_streaming
-        JSONRPCApplication._create_response = patched_create_response
-        logger.info("[Affinity] Patch 完成")
-
-    async def dispatch(self, request, call_next):
-        return await call_next(request)
-
-
-class MCPSessionAffinityMiddleware:
-    """MCP session affinity middleware (ASGI level)"""
-
-    def __init__(self, app, upstream_header: str = "x-session-id"):
-        self.app = app
-        self.upstream_header = upstream_header.lower()
-        self.upstream_header_bytes = upstream_header.lower().encode()
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-
-        # check if it is a MCP path
-        path = scope.get("path", "")
-        if not path.startswith("/mcp"):
-            await self.app(scope, receive, send)
-            return
-
-        # collect request body to extract session_id
-        body_parts = []
-        session_id = None
-
-        async def receive_wrapper():
-            message = await receive()
-            if message["type"] == "http.request":
-                body = message.get("body", b"")
-                body_parts.append(body)
-            return message
-
-        # read the full request body first
-        first_message = await receive()
-        if first_message["type"] == "http.request":
-            body_parts.append(first_message.get("body", b""))
-            # if there is more data
-            more_body = first_message.get("more_body", False)
-            while more_body:
-                msg = await receive()
-                if msg["type"] == "http.request":
-                    body_parts.append(msg.get("body", b""))
-                    more_body = msg.get("more_body", False)
-                else:
-                    break
-
-        # try to extract session_id from the request body
-        full_body = b"".join(body_parts)
-        try:
-            data = json.loads(full_body)
-            # MCP tools/call format: {"method": "tools/call", "params": {"arguments": {"session_id": "..."}}}
-            if isinstance(data, dict):
-                params = data.get("params", {})
-                args = params.get("arguments", {})
-                session_id = args.get("session_id")
-                if session_id:
-                    logger.info(f"[MCP Affinity] extract session_id: {session_id}")
-        except Exception as e:
-            logger.error(f"[MCP Affinity] parse request body failed: {e}")
-
-        # replay the request body
-        body_sent = False
-
-        async def replay_receive():
-            nonlocal body_sent
-            if not body_sent:
-                body_sent = True
-                return {"type": "http.request", "body": full_body, "more_body": False}
-            return await receive()
-
-        # wrap send to inject header
-        header_value = session_id.encode() if session_id else None
-
-        async def send_wrapper(message):
-            if message["type"] == "http.response.start" and header_value:
-                headers = MutableHeaders(raw=list(message.get("headers", [])))
-                headers[self.upstream_header] = session_id
-                message = {
-                    **message,
-                    "headers": headers.raw,
-                }
-                logger.info(f"[MCP Affinity] Header set: {session_id}")
-            await send(message)
-
-        await self.app(scope, replay_receive, send_wrapper)
