@@ -733,7 +733,7 @@ class IdentityClient:
         )
         return response.allowed
 
-    def create_user_pool(self, name: str) -> str:
+    def create_user_pool(self, name: str) -> tuple[str, str]:
         from volcenginesdkid import CreateUserPoolRequest, CreateUserPoolResponse
 
         request = CreateUserPoolRequest(
@@ -741,14 +741,14 @@ class IdentityClient:
         )
         response: CreateUserPoolResponse = self._api_client.create_user_pool(request)
 
-        return response.uid
+        return response.uid, response.domain
 
-    def get_user_pool(self, name: str) -> str | None:
+    def get_user_pool(self, name: str) -> tuple[str, str] | None:
         from volcenginesdkid import (
             ListUserPoolsRequest,
             ListUserPoolsResponse,
             FilterForListUserPoolsInput,
-            DataForListUsersOutput,
+            DataForListUserPoolsOutput,
         )
 
         request = ListUserPoolsRequest(
@@ -762,8 +762,8 @@ class IdentityClient:
         if response.total_count == 0:
             return None
 
-        user_pool: DataForListUsersOutput = response.data[0]
-        return user_pool.uid
+        user_pool: DataForListUserPoolsOutput = response.data[0]
+        return user_pool.uid, user_pool.domain
 
     def create_user_pool_client(
         self, user_pool_uid: str, name: str, client_type: str
