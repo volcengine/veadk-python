@@ -303,20 +303,20 @@ class CloudAgentEngine(BaseModel):
 
             if auth_method == "oauth2":
                 # Get or create the Identity user pool.
-                identity_user_pool_id = self._veidentity_service.get_user_pool(
+                identity_user_pool = self._veidentity_service.get_user_pool(
                     name=identity_user_pool_name,
                 )
-                if not identity_user_pool_id:
-                    identity_user_pool_id = self._veidentity_service.create_user_pool(
+                if not identity_user_pool:
+                    identity_user_pool = self._veidentity_service.create_user_pool(
                         name=identity_user_pool_name,
                     )
-                issuer = f"https://auth.id.{self.region}.volces.com/userpool/{identity_user_pool_id}"
+                identity_user_pool_id = identity_user_pool[0]
+                identity_user_pool_domain = identity_user_pool[1]
 
                 # Create APIG upstream for Identity.
-                identity_domain = f"auth.id.{self.region}.volces.com"
                 veapig_identity_upstream_id = (
                     self._veapig_service.check_domain_upstream_exist(
-                        domain=identity_domain,
+                        domain=identity_user_pool_domain,
                         port=443,
                         gateway_id=veapig_gateway_id,
                     )
@@ -324,7 +324,7 @@ class CloudAgentEngine(BaseModel):
                 if not veapig_identity_upstream_id:
                     veapig_identity_upstream_id = (
                         self._veapig_service.create_domain_upstream(
-                            domain=f"auth.id.{self.region}.volces.com",
+                            domain=identity_user_pool_domain,
                             port=443,
                             is_https=True,
                             gateway_id=veapig_gateway_id,
@@ -364,9 +364,9 @@ class CloudAgentEngine(BaseModel):
 
                     plugin_name = "wasm-oauth2-sso"
                     plugin_config = {
-                        "AuthorizationUrl": f"{issuer}/authorize",
+                        "AuthorizationUrl": f"https://{identity_user_pool_domain}/authorize",
                         "UpstreamId": veapig_identity_upstream_id,
-                        "TokenUrl": f"{issuer}/oauth/token",
+                        "TokenUrl": f"https://{identity_user_pool_domain}/oauth/token",
                         "RedirectPath": "/callback",
                         "SignoutPath": "/signout",
                         "ClientId": identity_client_id,
@@ -377,9 +377,9 @@ class CloudAgentEngine(BaseModel):
                     plugin_config = {
                         "RemoteJwks": {
                             "UpstreamId": veapig_identity_upstream_id,
-                            "Url": f"{issuer}/keys",
+                            "Url": f"https://{identity_user_pool_domain}/keys",
                         },
-                        "Issuer": issuer,
+                        "Issuer": f"https://{identity_user_pool_domain}",
                         "ValidateConsumer": False,
                     }
                 self._vefaas_service.apig_client.create_plugin_binding(
