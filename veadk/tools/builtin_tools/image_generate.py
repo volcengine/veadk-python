@@ -146,6 +146,14 @@ def handle_single_task_sync(
                 response = client.images.generate(
                     model=getenv("MODEL_IMAGE_NAME", DEFAULT_IMAGE_GENERATE_MODEL_NAME),
                     **inputs,
+                    extra_headers={
+                        "veadk-source": "veadk",
+                        "veadk-version": VERSION,
+                        "User-Agent": f"VeADK/{VERSION}",
+                        "X-Client-Request-Id": getenv(
+                            "MODEL_AGENT_CLIENT_REQ_ID", f"veadk/{VERSION}"
+                        ),
+                    },
                 )
 
             if not response.error:
