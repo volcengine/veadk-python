@@ -57,6 +57,11 @@ tool:
     api_key:    # `app_secret`
     token:      # `user_token`
   # [optional] for Volcengine Lake AI Service https://www.volcengine.com/product/las
+  mobile_use:
+    tool_id: #https://console.volcengine.com/ACEP
+      - # `product_id`-`pod_id_1`
+      - # `product_id`-`pod_id_1`
+
   las:
     url: #mcp sse url
     dataset_id:  #dataset name

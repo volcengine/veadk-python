@@ -674,7 +674,7 @@ class Runner(ADKRunner):
         return eval_set_path
 
     async def save_session_to_long_term_memory(
-        self, session_id: str, user_id: str = "", app_name: str = ""
+        self, session_id: str, user_id: str = "", app_name: str = "", **kwargs
     ) -> None:
         """Save the specified session to long-term memory.
 
@@ -730,5 +730,5 @@ class Runner(ADKRunner):
             )
             return
 
-        await self.long_term_memory.add_session_to_memory(session)
+        await self.long_term_memory.add_session_to_memory(session, kwargs=kwargs)
         logger.info(f"Add session `{session.id}` to long term memory.")

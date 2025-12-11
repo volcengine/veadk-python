@@ -15,17 +15,19 @@
 
 import click
 
+from veadk.cli.cli_agentkit import agentkit
+from veadk.cli.cli_clean import clean
+from veadk.cli.cli_create import create
 from veadk.cli.cli_deploy import deploy
 from veadk.cli.cli_eval import eval
 from veadk.cli.cli_init import init
-from veadk.cli.cli_create import create
 from veadk.cli.cli_kb import kb
 from veadk.cli.cli_pipeline import pipeline
 from veadk.cli.cli_prompt import prompt
-from veadk.cli.cli_web import web
-from veadk.cli.cli_uploadevalset import uploadevalset
+from veadk.cli.cli_rl import rl_group
 from veadk.cli.cli_update import update
-from veadk.cli.cli_clean import clean
+from veadk.cli.cli_uploadevalset import uploadevalset
+from veadk.cli.cli_web import web
 from veadk.version import VERSION
 
 
@@ -53,6 +55,8 @@ veadk.add_command(kb)
 veadk.add_command(uploadevalset)
 veadk.add_command(update)
 veadk.add_command(clean)
+veadk.add_command(rl_group)
+veadk.add_command(agentkit)
 
 if __name__ == "__main__":
     veadk()

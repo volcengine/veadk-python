@@ -34,7 +34,8 @@ logger = get_logger(__name__)
 
 client = Ark(
     api_key=getenv(
-        "MODEL_VIDEO_API_KEY", getenv("MODEL_AGENT_API_KEY", settings.model.api_key)
+        "MODEL_VIDEO_API_KEY",
+        getenv("MODEL_AGENT_API_KEY", settings.model.api_key),
     ),
     base_url=getenv("MODEL_VIDEO_API_BASE", DEFAULT_VIDEO_MODEL_API_BASE),
 )
@@ -48,6 +49,14 @@ async def generate(prompt, first_frame_image=None, last_frame_image=None):
                 content=[
                     {"type": "text", "text": prompt},
                 ],
+                extra_headers={
+                    "veadk-source": "veadk",
+                    "veadk-version": VERSION,
+                    "User-Agent": f"VeADK/{VERSION}",
+                    "X-Client-Request-Id": getenv(
+                        "MODEL_AGENT_CLIENT_REQ_ID", f"veadk/{VERSION}"
+                    ),
+                },
             )
         elif last_frame_image is None:
             response = client.content_generation.tasks.create(
@@ -62,6 +71,14 @@ async def generate(prompt, first_frame_image=None, last_frame_image=None):
                         },
                     ],
                 ),
+                extra_headers={
+                    "veadk-source": "veadk",
+                    "veadk-version": VERSION,
+                    "User-Agent": f"VeADK/{VERSION}",
+                    "X-Client-Request-Id": getenv(
+                        "MODEL_AGENT_CLIENT_REQ_ID", f"veadk/{VERSION}"
+                    ),
+                },
             )
         else:
             response = client.content_generation.tasks.create(
@@ -79,6 +96,14 @@ async def generate(prompt, first_frame_image=None, last_frame_image=None):
                         "role": "last_frame",
                     },
                 ],
+                extra_headers={
+                    "veadk-source": "veadk",
+                    "veadk-version": VERSION,
+                    "User-Agent": f"VeADK/{VERSION}",
+                    "X-Client-Request-Id": getenv(
+                        "MODEL_AGENT_CLIENT_REQ_ID", f"veadk/{VERSION}"
+                    ),
+                },
             )
     except:
         traceback.print_exc()
@@ -342,7 +367,7 @@ def add_span_attributes(
         span.set_attribute("cozeloop.report.source", "veadk")
 
         # llm attributes
-        span.set_attribute("gen_ai.system", "openai")
+        span.set_attribute("gen_ai.system", "Ark")
         span.set_attribute("gen_ai.operation.name", "chat")
         if request_model:
             span.set_attribute("gen_ai.request.model", request_model)

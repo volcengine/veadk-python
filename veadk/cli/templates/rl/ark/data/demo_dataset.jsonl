@@ -1,0 +1,3 @@
+{"messages":[{"role":"user","content":"将一个故事然后告诉我北京的天气怎么样"}],"thinking":{"type": "enabled"}}
+{"messages":[{"role":"user","content":"上海的天气怎么样"}],"thinking":{"type": "enabled"}}
+{"messages":[{"role":"user","content":"上海和北京的天气怎么样"}],"thinking":{"type": "enabled"}}
