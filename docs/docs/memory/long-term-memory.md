@@ -30,30 +30,24 @@ title: 长期记忆
 在使用长期记忆之前，需要实例化 LongTermMemory 对象并指定后端类型。以下代码展示了如何初始化基于 VikingDB 的长期记忆模块，并将其绑定到 Agent：
 
 ```python
-os.environ["DATABASE_VIKING_PROJECT"] = "default"
-os.environ["DATABASE_VIKING_REGION"] = "cn-beijing"
+from veadk import Agent, Runner
+from veadk.memory import LongTermMemory
 
 # 初始化长期记忆
 # backend="viking" 指定使用 VikingDB
 # app_name 和 user_id 用于数据隔离
 long_term_memory = LongTermMemory(
-    backend="viking",
-    app_name="local_memory_demo",
-    user_id="demo_user"
+    backend="viking", app_name="local_memory_demo", user_id="demo_user"
 )
 
 # 将长期记忆绑定到 Agent
 root_agent = Agent(
-    name='minimal_agent',
+    name="minimal_agent",
     instruction="Acknowledge user input and maintain simple conversation.",
-    short_term_memory=short_term_memory, # 短期记忆实例
+    long_term_memory=long_term_memory,  # 长期记忆实例
 )
 
-# 初始化 Runner 时传入 shared memory 对象
-runner = Runner(
-    agent=root_agent,
-    long_term_memory=long_term_memory, # 长期记忆实例
-)
+runner = Runner(agent=root_agent)
 ```
 
 ## 记忆管理
@@ -64,10 +58,8 @@ runner = Runner(
 
 ```python
 # 假设 runner1 已经完成了一次对话
-completed_session = await runner1.session_service.get_session(
-    app_name=APP_NAME,
-    user_id=USER_ID,
-    session_id=session_id
+completed_session = await runner.session_service.get_session(
+    app_name=APP_NAME, user_id=USER_ID, session_id=session_id
 )
 
 # 将完整会话归档到长期记忆
@@ -146,7 +138,7 @@ async for event in runner2.run_async(user_id=USER_ID, session_id=session_id, new
 - 提供连续性强、个性化的多会话交互体验；
 - 为长期任务、学习型应用或持续监控场景提供基础能力。
 
-```
+```text
 [Log Output]
 Runner1 Question: My favorite project is Project Alpha.
 Runner1 Answer: (Acknowledged)
