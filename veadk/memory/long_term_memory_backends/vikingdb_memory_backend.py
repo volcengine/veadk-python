@@ -157,7 +157,7 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
 
         client = self._get_sdk_client()
         collection = client.get_collection(collection_name=self.index)
-        response =collection.add_session(
+        response = collection.add_session(
             session_id=session_id,
             messages=messages,
             metadata=metadata,
