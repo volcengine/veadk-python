@@ -30,6 +30,9 @@ from veadk.integrations.ve_viking_db_memory.ve_viking_db_memory import (
 from veadk.memory.long_term_memory_backends.base_backend import (
     BaseLongTermMemoryBackend,
 )
+from vikingdb import IAM
+from vikingdb.memory import VikingMem
+
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -118,6 +121,18 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
             region=self.region,
         )
 
+    def _get_sdk_client(self) -> VikingMem:
+        client = self._get_client()
+        return VikingMem(
+            host=client.get_host(),
+            region=self.region,
+            auth=IAM(
+                ak=self.volcengine_access_key,
+                sk=self.volcengine_secret_key,
+            ),
+            sts_token=self.session_token,
+        )
+
     @override
     def save_memory(self, user_id: str, event_strings: list[str], **kwargs) -> bool:
         assistant_id = kwargs.get("assistant_id", "assistant")
@@ -140,12 +155,12 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
             f"Request for add {len(messages)} memory to VikingDB: collection_name={self.index}, metadata={metadata}, session_id={session_id}"
         )
 
-        client = self._get_client()
-        response = client.add_messages(
-            collection_name=self.index,
+        client = self._get_sdk_client()
+        collection = client.get_collection(collection_name=self.index)
+        response = collection.add_session(
+            session_id=session_id,
             messages=messages,
             metadata=metadata,
-            session_id=session_id,
         )
 
         logger.debug(f"Response from add memory to VikingDB: {response}")
@@ -165,9 +180,12 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
             f"Request for search memory in VikingDB: filter={filter}, collection_name={self.index}, query={query}, limit={top_k}"
         )
 
-        client = self._get_client()
-        response = client.search_memory(
-            collection_name=self.index, query=query, filter=filter, limit=top_k
+        client = self._get_sdk_client()
+        collection = client.get_collection(collection_name=self.index)
+        response = collection.search_memory(
+            query=query,
+            filter=filter,
+            limit=top_k,
         )
 
         logger.debug(f"Response from search memory in VikingDB: {response}")
