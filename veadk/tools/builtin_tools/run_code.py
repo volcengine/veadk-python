@@ -49,6 +49,9 @@ def run_code(
     host = getenv(
         "AGENTKIT_TOOL_HOST", service + "." + region + ".volces.com"
     )  # temporary host for code run tool
+    scheme = getenv("AGENTKIT_TOOL_SCHEME", "https", allow_false_values=True).lower()
+    if scheme not in {"http", "https"}:
+        scheme = "https"
     logger.debug(f"tools endpoint: {host}")
 
     session_id = tool_context._invocation_context.session.id
@@ -103,6 +106,7 @@ def run_code(
         region=region,
         host=host,
         header=header,
+        scheme=scheme,
     )
     logger.debug(f"Invoke run code response: {res}")
 
