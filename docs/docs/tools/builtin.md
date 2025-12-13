@@ -146,6 +146,7 @@ veADK 集成了以下火山引擎工具：
     - `AGENTKIT_TOOL_ID`：用于调用火山引擎AgentKit Tools的沙箱环境Id
     - `AGENTKIT_TOOL_HOST`：用于调用火山引擎AgentKit Tools的EndPoint
     - `AGENTKIT_TOOL_SERVICE_CODE`：用于调用AgentKit Tools的ServiceCode
+    - `AGENTKIT_TOOL_SCHEME`：用于切换调用 AgentKit Tools 的协议，允许 `http`/`https`，默认 `https`
 
     环境变量列表：
 
