@@ -93,5 +93,5 @@ A: Agent Identity 会自动处理：
 如有问题，请：
 
 1. 查看相应文档的常见问题部分
-2. 查看 [Agent Identity 官方文档](https://www.volcengine.com/docs/86848/1913964)
+2. 查看 [Agent Identity 官方文档](https://www.volcengine.com/docs/86848/2080920?lang=zh)
 3. 联系火山引擎技术支持

@@ -62,9 +62,8 @@ TrustedMcpToolset 支持以下关键配置：
 
 ## 相关资源
 
-- [Agent Identity 产品介绍](./overview.md)
-- [API Key 认证](./api-key-outbound.md)
-- [OAuth2 M2M 认证](./oauth2-m2m-outbound.md)
-- [OAuth2 USER_FEDERATION 认证](./oauth2-user-federation-outbound.md)
-- [Agent Identity API 参考](https://www.volcengine.com/docs/86848/1918752)
+- [Agent Identity 产品介绍](https://www.volcengine.com/docs/86848/2080920?lang=zh)
+- [API Key 认证](https://volcengine.github.io/veadk-python/auth/api-key-outbound/)
+- [OAuth2 USER_FEDERATION 认证](https://volcengine.github.io/veadk-python/auth/oauth2-user-federation-outbound/)
+- [Trusted MCP 认证](https://volcengine.github.io/veadk-python/auth/trusted-mcp-outbound/)
 - [TrustedMCP 配置文件与说明](https://github.com/volcengine/AICC-Trusted-MCP/blob/main/README.md)

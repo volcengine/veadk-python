@@ -21,16 +21,6 @@ hide:
 }
 </style>
 
-!!! tip "🎉 欢迎报名 2025 年度火山引擎冬季 Force 大会 “AI Agent开发工作坊”"
-
-    **⏰ 时间：**2025 年 12 月 19 日 14:00-18:00
-
-    **📌 场地：**上海世博中心 6F-617
-
-    **📄 简介：**AI Agent 工作坊，依托全流程的实际动手操作，并融合相关理论与最佳实践总结，助力参会者掌握从零到一构建企业级 AI Agent 的实战能力，使其具备涵盖 Agent 设计、开发、部署、运维以及持续评估与优化的完整技能体系。借助 AI IDE TRAE 和火山的 Agent SDK VeADK，推动 AI Agent快速落地，实现 Vibe 编程，助力参与者完成基础的 Agent 开发并加速进阶；通过集成和使用 Agentkit，促使 AI Agent 实现从 Research 到 Production - Ready 的能力跨越；运用 Agentkit Identity，达成用户到智能体、智能体到智能体、智能体到 MCP 工具的全链路零信任安全；通过Agentkit MCP 网关，实现存量应用向智能体的迁移与复用；利用 AgentKit 罗盘评测工具，对智能体进行持续评估和质量监测；基于面向真实客户场景的最佳实践闭环，加速 AI 从试点应用迈向规模化应用的落地进程。通过样例库介绍和动手实验，构建共创、行动、反馈的迭代机制。
-
-    <a class="openai-button" href="https://www.volcengine.com/contact/force-2512">点击报名</a>
-
 <div class="get-started-text">Volcengine Agent Development Kit</div>
 
 <div class="subtitle">火山引擎智能体开发套件</div>
