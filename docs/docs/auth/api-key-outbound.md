@@ -86,8 +86,8 @@ A: 实现错误处理和重试逻辑。
 
 ## 相关资源
 
-- [Agent Identity 产品介绍](./1.agent-identity-intro.md)
-- [OAuth2 M2M 认证](./3.oauth2-m2m-outbound.md)
-- [OAuth2 USER_FEDERATION 认证](./4.oauth2-user-federation-outbound.md)
-- [Trusted MCP 认证](./trusted-mcp-outbound.md)
+- [Agent Identity 产品介绍](https://www.volcengine.com/docs/86848/2080920?lang=zh)
+- [API Key 认证](https://volcengine.github.io/veadk-python/auth/api-key-outbound/)
+- [OAuth2 USER_FEDERATION 认证](https://volcengine.github.io/veadk-python/auth/oauth2-user-federation-outbound/)
+- [Trusted MCP 认证](https://volcengine.github.io/veadk-python/auth/trusted-mcp-outbound/)
 - [Agent Identity API 参考](https://www.volcengine.com/docs/86848/1918752)
