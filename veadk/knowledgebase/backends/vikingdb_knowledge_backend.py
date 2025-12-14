@@ -117,7 +117,10 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         default_factory=lambda: os.getenv("DATABASE_VIKING_PROJECT", "default")
     )
 
-    region: str = "cn-beijing"
+    region: str = Field(
+        default_factory=lambda: os.getenv("DATABASE_VIKING_REGION", "cn-beijing")
+    )
+
     base_url: str = "https://api-knowledgebase.mlp.cn-beijing.volces.com"
     host: str = "api-knowledgebase.mlp.cn-beijing.volces.com"
     schema: str = "https"
