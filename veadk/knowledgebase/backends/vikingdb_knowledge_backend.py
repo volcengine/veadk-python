@@ -22,16 +22,18 @@ from typing import Any, Literal
 import requests
 from pydantic import Field
 from typing_extensions import override
-from veadk.utils.misc import getenv
+from volcengine.viking_knowledgebase import VikingKnowledgeBaseService
+
 import veadk.config  # noqa E401
 from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 from veadk.configs.database_configs import NormalTOSConfig, TOSConfig
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
-from veadk.knowledgebase.backends.utils import build_vikingdb_knowledgebase_request
+from veadk.knowledgebase.backends.utils import (
+    build_vikingdb_knowledgebase_request,
+)
 from veadk.knowledgebase.entry import KnowledgebaseEntry
 from veadk.utils.logger import get_logger
-from veadk.utils.misc import formatted_timestamp
-from volcengine.viking_knowledgebase import VikingKnowledgeBaseService
+from veadk.utils.misc import formatted_timestamp, getenv
 
 try:
     from veadk.integrations.ve_tos.ve_tos import VeTOS
@@ -111,7 +113,9 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
     )
     session_token: str = ""
 
-    volcengine_project: str = "default"
+    volcengine_project: str = Field(
+        default_factory=lambda: os.getenv("DATABASE_VIKING_PROJECT", "default")
+    )
 
     region: str = "cn-beijing"
     base_url: str = "https://api-knowledgebase.mlp.cn-beijing.volces.com"
@@ -562,7 +566,9 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
 
     def _set_service_info(self):
         env_host = getenv(
-            "DATABASE_VIKING_BASE_URL", default_value=None, allow_false_values=True
+            "DATABASE_VIKING_BASE_URL",
+            default_value=None,
+            allow_false_values=True,
         )
         if env_host:
             if env_host.startswith("http://") or env_host.startswith("https://"):
