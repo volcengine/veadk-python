@@ -25,6 +25,7 @@ Version = ""
 Region = ""
 Host = ""
 ContentType = ""
+Scheme = "https"
 
 
 def norm_query(params):
@@ -59,7 +60,17 @@ def hash_sha256(content: str):
 
 
 # 第二步：签名请求函数
-def request(method, date, query, header, ak, sk, action, body):
+def request(
+    method,
+    date,
+    query,
+    header,
+    ak,
+    sk,
+    action,
+    body,
+    scheme: Literal["http", "https"] = "https",
+):
     # 第三步：创建身份证明。其中的 Service 和 Region 字段是固定的。ak 和 sk 分别代表
     # AccessKeyID 和 SecretAccessKey。同时需要初始化签名结构体。一些签名计算时需要的属性也在这里处理。
     # 初始化身份证明结构体
@@ -151,7 +162,7 @@ def request(method, date, query, header, ak, sk, action, body):
     # 第六步：将 Signature 签名写入 HTTP Header 中，并发送 HTTP 请求。
     r = requests.request(
         method=method,
-        url="https://{}{}".format(request_param["host"], request_param["path"]),
+        url=f"{scheme}://{request_param['host']}{request_param['path']}",
         headers=header,
         params=request_param["query"],
         data=request_param["body"],
@@ -175,6 +186,7 @@ def ve_request(
     header: dict = {},
     query: dict = {},
     method: Literal["GET", "POST", "PUT", "DELETE"] = "POST",
+    scheme: Literal["http", "https"] = "https",
 ):
     global Service
     Service = service
@@ -186,6 +198,8 @@ def ve_request(
     Host = host
     global ContentType
     ContentType = content_type
+    global Scheme
+    Scheme = scheme
     AK = ak
     SK = sk
     now = datetime.datetime.utcnow()
@@ -195,7 +209,15 @@ def ve_request(
 
     try:
         response_body = request(
-            method, now, query, header, AK, SK, action, json.dumps(request_body)
+            method,
+            now,
+            query,
+            header,
+            AK,
+            SK,
+            action,
+            json.dumps(request_body),
+            Scheme,
         )
         return response_body
     except Exception as e:
