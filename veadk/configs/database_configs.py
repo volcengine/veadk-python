@@ -130,3 +130,47 @@ class NormalTOSConfig(BaseSettings):
     region: str = "cn-beijing"
 
     bucket: str
+
+
+class TOSVectorConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="DATABASE_TOS_VECTOR_")
+
+    endpoint: str = "tosvectors-cn-beijing.volces.com"
+
+    region: str = "cn-beijing"
+
+    security_token: str | None = None
+
+    max_retry_count: int = 3
+
+    max_connections: int = 1024
+
+    connection_time: int = 10
+
+    enable_verify_ssl: bool = True
+
+    dns_cache_time: int = 15
+
+    proxy_host: str | None = None
+
+    proxy_port: int | None = None
+
+    proxy_username: str | None = None
+
+    proxy_password: str | None = None
+
+    high_latency_log_threshold: int = 100
+
+    socket_timeout: int = 30
+
+    credentials_provider: object | None = None
+
+    except100_continue_threshold: int = 65536
+
+    user_agent_product_name: str | None = None
+
+    user_agent_soft_name: str | None = None
+
+    user_agent_soft_version: str | None = None
+
+    user_agent_customized_key_values: dict[str, str] | None = None
