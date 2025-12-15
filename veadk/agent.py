@@ -287,17 +287,23 @@ class Agent(LlmAgent):
         if enable_apmplus_tracer and not any(
             isinstance(e, APMPlusExporter) for e in exporters
         ):
-            self.tracers[0].exporters.append(APMPlusExporter())  # type: ignore
+            exporter = APMPlusExporter()
+            self.tracers[0].exporters.append(exporter)  # type: ignore
+            exporter.register()
             logger.info("Enable APMPlus exporter by env.")
 
         if enable_cozeloop_tracer and not any(
             isinstance(e, CozeloopExporter) for e in exporters
         ):
-            self.tracers[0].exporters.append(CozeloopExporter())  # type: ignore
+            exporter = CozeloopExporter()
+            self.tracers[0].exporters.append(exporter)  # type: ignore
+            exporter.register()
             logger.info("Enable CozeLoop exporter by env.")
 
         if enable_tls_tracer and not any(isinstance(e, TLSExporter) for e in exporters):
-            self.tracers[0].exporters.append(TLSExporter())  # type: ignore
+            exporter = TLSExporter()
+            self.tracers[0].exporters.append(exporter)  # type: ignore
+            exporter.register()
             logger.info("Enable TLS exporter by env.")
 
         logger.debug(

@@ -536,6 +536,39 @@ class APMPlusExporter(BaseExporter):
         )
 
     @override
+    def register(self) -> None:
+        """Register the APMPlus exporter with the global tracer provider.
+
+        This method ensures compatibility with automatic instrumentation by
+        checking if there are any existing APMPlus span processors before
+        registering the exporter. If there are existing ones, it skips
+        registration to avoid conflicts.
+        """
+        # Check for existing APMPlus span processors to ensure compatibility with automatic instrumentation
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
+        
+        # Get the global tracer provider
+        tracer_provider = trace.get_tracer_provider()
+        
+        # Check if there are any existing span processors that are APMPlus related
+        span_processors = tracer_provider._active_span_processor._span_processors
+
+        # TODO: Compatible with one-agent collector
+        has_existing_apmplus = any(
+            isinstance(p, (BatchSpanProcessor, SimpleSpanProcessor))
+            and hasattr(p.span_exporter, "_endpoint")
+            and "apmplus" in p.span_exporter._endpoint
+            for p in span_processors
+        )
+        
+        if not has_existing_apmplus:
+            # Call the base class register method to handle resource attributes and processor registration
+            super().register()
+        else:
+            logger.info("APMPlusExporter: Skipping registration as APMPlus processor already exists.")
+    
+    @override
     def export(self) -> None:
         """Force immediate export of pending telemetry data to APMPlus.
 
