@@ -68,11 +68,15 @@ def run_code(
     sk = tool_context.state.get("VOLCENGINE_SECRET_KEY")
     header = {}
 
-    if not (ak and sk):
+    # 检查AK/SK是否有效（非None且非字符串"None"）
+    def is_valid_credential(cred):
+        return cred is not None and cred != "None"
+    
+    if not (is_valid_credential(ak) and is_valid_credential(sk)):
         logger.debug("Get AK/SK from tool context failed.")
         ak = os.getenv("VOLCENGINE_ACCESS_KEY")
         sk = os.getenv("VOLCENGINE_SECRET_KEY")
-        if not (ak and sk):
+        if not (is_valid_credential(ak) and is_valid_credential(sk)):
             logger.debug(
                 "Get AK/SK from environment variables failed. Try to use credential from Iam."
             )
