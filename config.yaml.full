@@ -142,6 +142,11 @@ database:
   mem0:
     base_url: # default "https://api.mem0.ai/v1", using full https url including port
     api_key:  #api_key
+  tos_vector:
+    endpoint: tosvectors-cn-beijing.volces.com # default Volcengine TOS Vector endpoint
+    region: cn-beijing                  # default Volcengine TOS Vector region
+    bucket:
+    account_id:
     
 
 
