@@ -18,6 +18,7 @@ from functools import cached_property
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from veadk.auth.veauth.ark_veauth import get_ark_token
+from veadk.auth.veauth.speech_veauth import get_speech_token
 from veadk.consts import (
     DEFAULT_MODEL_AGENT_API_BASE,
     DEFAULT_MODEL_AGENT_NAME,
@@ -76,3 +77,17 @@ class NormalEmbeddingModelConfig(BaseSettings):
     """The api base of the model for embedding."""
 
     api_key: str
+
+
+class RealtimeModelConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="MODEL_REALTIME_")
+
+    name: str = "doubao_realtime_voice_model"
+    """Model name for realtime."""
+
+    api_base: str = "wss://openspeech.bytedance.com/api/v3/realtime/dialogue"
+    """The api base of the model for realtime."""
+
+    @cached_property
+    def api_key(self) -> str:
+        return os.getenv("MODEL_REALTIME_API_KEY") or get_speech_token()
