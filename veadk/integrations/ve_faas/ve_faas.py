@@ -14,7 +14,12 @@
 
 import json
 import time
-
+import shutil
+import tempfile
+from pathlib import Path
+from cookiecutter.main import cookiecutter
+import veadk.integrations.ve_faas as vefaas
+from veadk.version import VERSION
 import requests
 import volcenginesdkcore
 import volcenginesdkvefaas
@@ -32,7 +37,7 @@ from veadk.integrations.ve_faas.ve_faas_utils import (
     zip_and_encode_folder,
 )
 from veadk.utils.logger import get_logger
-from veadk.utils.misc import formatted_timestamp
+from veadk.utils.misc import formatted_timestamp, getenv
 from veadk.utils.volcengine_sign import ve_request
 
 logger = get_logger(__name__)
@@ -114,10 +119,11 @@ class VeFaaS:
                 name=function_name,
                 description="Created by VeADK (Volcengine Agent Development Kit)",
                 tags=[TagForCreateFunctionInput(key="provider", value="veadk")],
-                runtime="native-python3.10/v1",
+                runtime="native-python3.12/v1",
                 request_timeout=1800,
                 envs=envs,
                 memory_mb=2048,
+                role=getenv("IAM_ROLE", None, allow_false_values=True),
             )
         )
 
@@ -304,12 +310,10 @@ class VeFaaS:
 
         # Get application status and extract function info
         status, full_response = self._get_application_status(app_id)
-
         # Extract function name from application config
         cloud_resource = full_response["Result"]["CloudResource"]
         cloud_resource = json.loads(cloud_resource)
         function_name = cloud_resource["framework"]["function"]["Name"]
-        # existing_url = cloud_resource["framework"]["url"]["system_url"]
         function_id = cloud_resource["framework"]["function"]["Id"]
         if not function_id:
             raise ValueError(f"Function '{function_name}' not found for update")
@@ -318,31 +322,62 @@ class VeFaaS:
             f"Start to update VeFaaS function {function_name} with path {path}."
         )
 
-        # Upload and mount code using extracted method
-        self._upload_and_mount_code(function_id, path)
+        user_proj_path = Path(path).resolve()
+        template_dir = Path(vefaas.__file__).parent / "template"
+        tmp_dir_name = f"{user_proj_path.name}_update_{formatted_timestamp()}"
 
-        # Use update_function client method to apply changes
-        self.client.update_function(
-            volcenginesdkvefaas.UpdateFunctionRequest(
-                id=function_id,
-                request_timeout=1800,  # Keep same timeout as deploy
+        settings = {
+            "local_dir_name": tmp_dir_name.replace("-", "_"),
+            "app_name": user_proj_path.name.replace("-", "_"),
+            "veadk_version": VERSION,
+        }
+
+        temp_base = Path(tempfile.gettempdir())
+
+        cookiecutter(
+            template=str(template_dir),
+            output_dir=str(temp_base),
+            no_input=True,
+            extra_context=settings,
+        )
+
+        tmp_path = temp_base / tmp_dir_name
+
+        try:
+            agent_dir = tmp_path / "src" / user_proj_path.name.replace("-", "_")
+            if agent_dir.exists():
+                shutil.rmtree(agent_dir)
+            agent_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(user_proj_path, agent_dir, dirs_exist_ok=True)
+            user_requirements = user_proj_path / "requirements.txt"
+
+            if user_requirements.exists():
+                logger.debug("Using user-provided requirements.txt")
+                shutil.copy(user_requirements, tmp_path / "src" / "requirements.txt")
+            else:
+                logger.warning("No requirements.txt found, using template default")
+
+            self._upload_and_mount_code(function_id, str(tmp_path / "src"))
+            self.client.update_function(
+                volcenginesdkvefaas.UpdateFunctionRequest(
+                    id=function_id,
+                    request_timeout=1800,  # Keep same timeout as deploy
+                )
             )
-        )
+            logger.info(
+                f"VeFaaS function {function_name} with ID {function_id} updated."
+            )
+            url = self._release_application(app_id)
+            logger.info(
+                f"VeFaaS application {application_name} with ID {app_id} released."
+            )
+            logger.info(f"VeFaaS application {application_name} updated on {url}.")
+            return url, app_id, function_id
 
-        logger.info(f"Function updated successfully: {function_id}")
-
-        logger.info(f"VeFaaS function {function_name} with ID {function_id} updated.")
-
-        # Release the application to apply changes
-        url = self._release_application(app_id)
-
-        logger.info(f"VeFaaS application {application_name} with ID {app_id} released.")
-
-        logger.info(
-            f"VeFaaS application {application_name} with ID {app_id} updated on {url}."
-        )
-
-        return url, app_id, function_id
+        finally:
+            if tmp_path.exists():
+                shutil.rmtree(tmp_path)
+                logger.debug(f"Cleaned up temporary directory: {tmp_path}")
 
     def get_application_details(self, app_id: str = None, app_name: str = None):
         if not app_id and not app_name:

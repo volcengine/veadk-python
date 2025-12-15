@@ -14,7 +14,7 @@
 
 import json
 import threading
-
+from veadk.utils.misc import getenv
 from volcengine.ApiInfo import ApiInfo
 from volcengine.auth.SignerV4 import SignerV4
 from volcengine.base.Service import Service
@@ -51,10 +51,25 @@ class VikingDBMemoryClient(Service):
         ak="",
         sk="",
         sts_token="",
-        scheme="http",
+        scheme="https",
         connection_timeout=30,
         socket_timeout=30,
     ):
+        env_host = getenv(
+            "DATABASE_VIKINGMEM_BASE_URL", default_value=None, allow_false_values=True
+        )
+        if env_host:
+            if env_host.startswith("http://"):
+                host = env_host.replace("http://", "")
+                scheme = "http"
+            elif env_host.startswith("https://"):
+                host = env_host.replace("https://", "")
+                scheme = "https"
+            else:
+                raise ValueError(
+                    "DATABASE_VIKINGMEM_BASE_URL must start with http:// or https://"
+                )
+
         self.service_info = VikingDBMemoryClient.get_service_info(
             host, region, scheme, connection_timeout, socket_timeout
         )
@@ -79,6 +94,9 @@ class VikingDBMemoryClient(Service):
             for item in header:
                 api_info[key].header[item] = header[item]
         self.api_info = api_info
+
+    def get_host(self):
+        return self.service_info.host
 
     @staticmethod
     def get_service_info(host, region, scheme, connection_timeout, socket_timeout):
@@ -265,29 +283,4 @@ class VikingDBMemoryClient(Service):
             "BuiltinEntityTypes": builtin_entity_types,
         }
         res = self.json("UpdateCollection", {}, json.dumps(params))
-        return json.loads(res)
-
-    def search_memory(self, collection_name, query, filter, limit=10):
-        params = {
-            "collection_name": collection_name,
-            "limit": limit,
-            "filter": filter,
-        }
-        if query:
-            params["query"] = query
-        res = self.json("SearchMemory", {}, json.dumps(params))
-        return json.loads(res)
-
-    def add_messages(
-        self, collection_name, session_id, messages, metadata, entities=None
-    ):
-        params = {
-            "collection_name": collection_name,
-            "session_id": session_id,
-            "messages": messages,
-            "metadata": metadata,
-        }
-        if entities is not None:
-            params["entities"] = entities
-        res = self.json("AddMessages", {}, json.dumps(params))
         return json.loads(res)

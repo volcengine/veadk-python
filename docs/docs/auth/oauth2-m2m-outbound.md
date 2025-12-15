@@ -1,0 +1,115 @@
+# 使用 OAuth2 M2M 进行出站认证
+
+OAuth2 M2M（Machine to Machine）认证用于服务间通信，比 API Key 更安全且支持令牌刷新。
+
+## 创建 OAuth2 M2M 凭据
+
+### 基础步骤
+
+1. 登录火山引擎控制台，导航到 **Agent Identity** 服务
+2. 在左侧导航树中，选择 **身份认证 > 出站凭据托管 > OAuth Client**
+3. 点击 **新建 > 新建 OAuth Client**
+4. 在 **OAuth2 流程** 中选择 **机器对机器（M2M）**
+5. 点击 **确定** 完成创建
+
+### 方式一：使用内置 Vendor（推荐）
+
+选择提供商类型：**Lark**、**Coze**、**Google**、**GitHub**
+
+- Client ID
+- Client Secret
+
+### 方式二：使用 OIDC 配置
+
+选择提供商类型为 **自定义**，填写：
+
+- 发行者 URL：OIDC 提供商的 Discovery URL（如 `https://accounts.google.com/.well-known/openid-configuration`）
+- Client ID
+- Client Secret
+- 权限范围：至少包含 `openid`
+
+### 方式三：使用自定义 OAuth2 配置
+
+选择提供商类型为 **自定义**，填写：
+
+- Client ID
+- Client Secret
+- 权限范围
+- Issuer
+- 授权端点
+- 令牌端点
+
+## 使用方式
+
+### VeIdentityFunctionTool
+
+```python
+from veadk.integrations.ve_identity import VeIdentityFunctionTool, oauth2_auth
+import aiohttp
+
+async def call_service(access_token: str, endpoint: str):
+    headers = {"Authorization": f"Bearer {access_token}"}
+    async with aiohttp.ClientSession() as session:
+        async with session.get(endpoint, headers=headers) as resp:
+            return await resp.json()
+
+auth_config = oauth2_auth(
+    provider_name="my-oauth2-m2m-provider",
+    scopes=["api://your-service/.default"],
+    auth_flow="M2M",
+)
+tool = VeIdentityFunctionTool(
+    func=call_service,
+    auth_config=auth_config,
+)
+```
+
+### VeIdentityMcpToolset
+
+```python
+from veadk.integrations.ve_identity import VeIdentityMcpToolset, oauth2_auth
+from google.adk.agents.mcp import StdioServerParameters
+
+auth_config = oauth2_auth(
+    provider_name="my-oauth2-m2m-provider",
+    scopes=["api://your-service/.default"],
+    auth_flow="M2M",
+)
+toolset = VeIdentityMcpToolset(
+    auth_config=auth_config,
+    connection_params=StdioServerParameters(
+        command="python",
+        args=["-m", "my_service_mcp_server"],
+    ),
+)
+```
+
+## 常见问题
+
+**Q: OAuth2 M2M 和 API Key 有什么区别？**
+
+A: API Key 简单固定，OAuth2 M2M 更安全且支持令牌刷新。
+
+**Q: 令牌过期了怎么办？**
+
+A: Agent Identity 会自动刷新令牌。
+
+**Q: 如何配置多个 Scopes？**
+
+A:
+
+```python
+auth_config = oauth2_auth(
+    provider_name="my-provider",
+    scopes=["api://service1/.default", "api://service2/.default"],
+    auth_flow="M2M",
+)
+```
+
+## 相关资源
+
+- [Agent Identity 产品介绍](https://www.volcengine.com/docs/86848/2080920?lang=zh)
+- [API Key 认证](https://volcengine.github.io/veadk-python/auth/api-key-outbound/)
+- [OAuth2 USER_FEDERATION 认证](https://volcengine.github.io/veadk-python/auth/oauth2-user-federation-outbound/)
+- [Trusted MCP 认证](https://volcengine.github.io/veadk-python/auth/trusted-mcp-outbound/)
+- [Agent Identity API 参考](https://www.volcengine.com/docs/86848/1918752)

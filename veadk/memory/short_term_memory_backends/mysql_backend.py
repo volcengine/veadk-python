@@ -15,10 +15,12 @@
 from functools import cached_property
 from typing import Any
 
+from google.adk import version as adk_version
 from google.adk.sessions import (
     BaseSessionService,
     DatabaseSessionService,
 )
+from packaging.version import parse as parse_version
 from pydantic import Field
 from typing_extensions import override
 from urllib.parse import quote_plus
@@ -32,13 +34,17 @@ from veadk.memory.short_term_memory_backends.base_backend import (
 
 class MysqlSTMBackend(BaseShortTermMemoryBackend):
     mysql_config: MysqlConfig = Field(default_factory=MysqlConfig)
+    db_kwargs: dict = Field(default_factory=dict)
 
     def model_post_init(self, context: Any) -> None:
         encoded_username = quote_plus(self.mysql_config.user)
         encoded_password = quote_plus(self.mysql_config.password)
-        self._db_url = f"mysql+pymysql://{encoded_username}:{encoded_password}@{self.mysql_config.host}/{self.mysql_config.database}"
+        if parse_version(adk_version.__version__) < parse_version("1.19.0"):
+            self._db_url = f"mysql+pymysql://{encoded_username}:{encoded_password}@{self.mysql_config.host}/{self.mysql_config.database}"
+        else:
+            self._db_url = f"mysql+aiomysql://{encoded_username}:{encoded_password}@{self.mysql_config.host}/{self.mysql_config.database}"
 
     @cached_property
     @override
     def session_service(self) -> BaseSessionService:
-        return DatabaseSessionService(db_url=self._db_url)
+        return DatabaseSessionService(db_url=self._db_url, **self.db_kwargs)

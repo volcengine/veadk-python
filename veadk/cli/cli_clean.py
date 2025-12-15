@@ -12,11 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import time
 import click
-
-from veadk.config import getenv
-from veadk.integrations.ve_faas.ve_faas import VeFaaS
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -58,6 +54,10 @@ def clean(
     Returns:
         None
     """
+    import time
+    from veadk.config import getenv
+    from veadk.integrations.ve_faas.ve_faas import VeFaaS
+
     if not volcengine_access_key:
         volcengine_access_key = getenv("VOLCENGINE_ACCESS_KEY")
     if not volcengine_secret_key:

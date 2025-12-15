@@ -128,7 +128,7 @@ def getenv(
         )
 
 
-def set_envs(config_yaml_path: str) -> tuple[dict, dict]:
+def set_envs(config_yaml_path: str, env_from_dotenv: dict = None) -> tuple[dict, dict]:
     from veadk.utils.logger import get_logger
 
     logger = get_logger(__name__)
@@ -137,20 +137,20 @@ def set_envs(config_yaml_path: str) -> tuple[dict, dict]:
         config_dict = safe_load(yaml_file)
 
     flatten_config_dict = flatten_dict(config_dict)
-
+    config_upper_map = {k.upper(): v for k, v in flatten_config_dict.items()}
+    all_keys = {k.upper() for k in flatten_config_dict.keys()} | set(
+        env_from_dotenv.keys() if env_from_dotenv else []
+    )
     veadk_environments = {}
-    for k, v in flatten_config_dict.items():
-        k = k.upper()
-
+    for k in all_keys:
         if k in os.environ:
             logger.info(
                 f"Environment variable {k} has been set, value in `config.yaml` will be ignored."
             )
             veadk_environments[k] = os.environ[k]
             continue
-        veadk_environments[k] = str(v)
-        os.environ[k] = str(v)
-
+        veadk_environments[k] = str(config_upper_map.get(k))
+        os.environ[k] = str(config_upper_map.get(k))
     return config_dict, veadk_environments
 
 

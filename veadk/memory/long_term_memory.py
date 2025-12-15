@@ -249,6 +249,7 @@ class LongTermMemory(BaseMemoryService, BaseModel):
     async def add_session_to_memory(
         self,
         session: Session,
+        **kwargs,
     ):
         """Add a chat session's events to the long-term memory backend.
 
@@ -283,7 +284,12 @@ class LongTermMemory(BaseMemoryService, BaseModel):
         logger.info(
             f"Adding {len(event_strings)} events to long term memory: index={self.index}"
         )
-        self._backend.save_memory(user_id=user_id, event_strings=event_strings)
+        if self.backend == "viking":
+            self._backend.save_memory(
+                user_id=user_id, event_strings=event_strings, **kwargs
+            )
+        else:
+            self._backend.save_memory(user_id=user_id, event_strings=event_strings)
         logger.info(
             f"Added {len(event_strings)} events to long term memory: index={self.index}, user_id={user_id}"
         )
