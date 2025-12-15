@@ -14,6 +14,7 @@
 
 import json
 
+from google.adk.agents.run_config import StreamingMode
 from veadk.tracing.telemetry.attributes.extractors.types import (
     ExtractorResponse,
     LLMAttributesParams,
@@ -507,13 +508,15 @@ def llm_gen_ai_is_streaming(params: LLMAttributesParams) -> ExtractorResponse:
     for performance analysis and debugging purposes.
 
     Args:
-        params: LLM execution parameters (currently not implemented)
+        params: LLM execution parameters
 
     Returns:
-        ExtractorResponse: Response containing None (not implemented)
+        ExtractorResponse: Response containing None
     """
-    # return params.llm_request.stream
-    return ExtractorResponse(content=None)
+    is_streaming = bool(
+        params.invocation_context.run_config and params.invocation_context.run_config.streaming_mode != StreamingMode.NONE)
+
+    return ExtractorResponse(content=is_streaming)
 
 
 def llm_gen_ai_operation_name(params: LLMAttributesParams) -> ExtractorResponse:
@@ -804,6 +807,21 @@ def llm_gen_ai_request_functions(params: LLMAttributesParams) -> ExtractorRespon
 
     return ExtractorResponse(content=functions)
 
+def llm_server_address(params: LLMAttributesParams) -> ExtractorResponse:
+    """Extract the LLM server address (model API base URL).
+
+    Returns the model API base URL configured on the current Agent.
+    If the Agent or base URL is unavailable, returns 'unknown' to
+    keep the span attribute consistent.
+
+    Args:
+        params: LLM execution parameters containing invocation context
+
+    Returns:
+        ExtractorResponse: Response containing the server address or 'unknown'
+    """
+    return ExtractorResponse(content=getattr(params.invocation_context.agent, "model_api_base", None) or "unknown")
+
 
 LLM_ATTRIBUTES = {
     # -> 1. attributes
@@ -813,6 +831,7 @@ LLM_ATTRIBUTES = {
     "gen_ai.request.max_tokens": llm_gen_ai_request_max_tokens,
     "gen_ai.request.temperature": llm_gen_ai_request_temperature,
     "gen_ai.request.top_p": llm_gen_ai_request_top_p,
+    "server.address": llm_server_address,
     # CozeLoop required
     "gen_ai.request.functions": llm_gen_ai_request_functions,
     # -> 1.2. response
