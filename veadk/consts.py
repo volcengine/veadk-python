@@ -19,7 +19,7 @@ from veadk.version import VERSION
 
 DEFAULT_AGENT_NAME = "veAgent"
 
-DEFAULT_MODEL_AGENT_NAME = "doubao-seed-1-8-251215"
+DEFAULT_MODEL_AGENT_NAME = "doubao-seed-1-6-251015"
 DEFAULT_MODEL_AGENT_PROVIDER = "openai"
 DEFAULT_MODEL_AGENT_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
 DEFAULT_MODEL_EXTRA_CONFIG = {
