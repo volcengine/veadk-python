@@ -24,15 +24,14 @@ from pydantic import Field
 from typing_extensions import Any, override
 
 import veadk.config  # noqa E401
-from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 from veadk.configs.database_configs import TOSVectorConfig
 from veadk.configs.model_configs import EmbeddingModelConfig, NormalEmbeddingModelConfig
-from veadk.integrations.ve_tos.ve_tos import VeTOS
+
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
 from veadk.knowledgebase.backends.utils import get_llama_index_splitter
 from veadk.utils.logger import get_logger
 
-logger = get_logger()
+logger = get_logger(__name__)
 try:
     from tos.vector_client import VectorClient
     from tos import DataType, DistanceMetricType
@@ -77,26 +76,11 @@ class TosVectorKnowledgeBackend(BaseKnowledgebaseBackend):
         # create_bucket and index if not exist
         self._create_index()
 
-        self._tos_client = self._get_tos_client()
-
         self._embed_model = OpenAILikeEmbedding(
             model_name=self.embedding_config.name,
             api_key=self.embedding_config.api_key,
             api_base=self.embedding_config.api_base,
         )
-
-    def _bucket_exists(self) -> bool:
-        try:
-            bucket_exist = self._tos_vector_client.get_vector_bucket(
-                vector_bucket_name=self.tos_vector_bucket_name,
-                account_id=self.tos_vector_account_id,
-            )
-            return bucket_exist.status_code == 200
-        except TosServerError as e:
-            if e.status_code == 404:
-                return False
-            else:
-                raise e
 
     def _index_exists(self) -> bool:
         try:
@@ -122,6 +106,7 @@ class TosVectorKnowledgeBackend(BaseKnowledgebaseBackend):
         return nodes
 
     def _create_index(self):
+        # no need to check if bucket exists, create_bucket will create it if not exist
         self._tos_vector_client.create_vector_bucket(
             vector_bucket_name=self.tos_vector_bucket_name,
         )
@@ -135,25 +120,6 @@ class TosVectorKnowledgeBackend(BaseKnowledgebaseBackend):
                 dimension=self.embedding_config.dim,
                 distance_metric=DistanceMetricType.DistanceMetricCosine,
             )
-
-    def _get_tos_client(self) -> VeTOS:
-        volcengine_access_key = self.volcengine_access_key
-        volcengine_secret_key = self.volcengine_secret_key
-        session_token = self.session_token
-
-        if not (volcengine_access_key and volcengine_secret_key):
-            cred = get_credential_from_vefaas_iam()
-            volcengine_access_key = cred.access_key_id
-            volcengine_secret_key = cred.secret_access_key
-            session_token = cred.session_token
-
-        return VeTOS(
-            ak=volcengine_access_key,
-            sk=volcengine_secret_key,
-            session_token=session_token,
-            region=self.tos_vector_config.region,
-            bucket_name=self.tos_vector_bucket_name,
-        )
 
     def precheck_index_naming(self) -> None:
         pass
