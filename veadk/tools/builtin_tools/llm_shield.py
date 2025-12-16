@@ -67,7 +67,10 @@ class LLMShieldPlugin(BasePlugin):
         self.appid = getenv("TOOL_LLM_SHIELD_APP_ID")
         self.region = region
         self.timeout = timeout
-        self.url = getenv("TOOL_LLM_SHIELD_URL", f"https://{self.region}.sdk.access.llm-shield.omini-shield.com")
+        self.url = getenv(
+            "TOOL_LLM_SHIELD_URL",
+            f"https://{self.region}.sdk.access.llm-shield.omini-shield.com",
+        )
         self.api_key = getenv("TOOL_LLM_SHIELD_API_KEY")
 
         self.category_map = {
