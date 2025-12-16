@@ -67,6 +67,8 @@ class LLMShieldPlugin(BasePlugin):
         self.appid = getenv("TOOL_LLM_SHIELD_APP_ID")
         self.region = region
         self.timeout = timeout
+        self.url = getenv("TOOL_LLM_SHIELD_URL", f"https://{self.region}.sdk.access.llm-shield.omini-shield.com")
+        self.api_key = getenv("TOOL_LLM_SHIELD_API_KEY")
 
         self.category_map = {
             101: "Model Misuse",
@@ -120,13 +122,15 @@ class LLMShieldPlugin(BasePlugin):
         body_json = json.dumps(body).encode("utf-8")
 
         header = {"X-Security-Token": session_token}
-        url = f"https://{self.region}.sdk.access.llm-shield.omini-shield.com"
+        # Add x-api-key header if API key is provided
+        if self.api_key:
+            header["x-api-key"] = self.api_key
         path = "/v2/moderate"
         action = "Moderate"
         version = "2025-08-31"
 
         signed_header = request_sign(
-            header, ak, sk, self.region, url, path, action, body_json
+            header, ak, sk, self.region, self.url, path, action, body_json
         )
 
         signed_header.update(
@@ -139,7 +143,7 @@ class LLMShieldPlugin(BasePlugin):
 
         try:
             response = requests.post(
-                url + path,
+                self.url + path,
                 headers=signed_header,
                 data=body_json,
                 params={"Action": action, "Version": version},
