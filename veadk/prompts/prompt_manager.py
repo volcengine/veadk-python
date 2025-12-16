@@ -13,9 +13,9 @@
 # limitations under the License.
 
 from abc import ABC, abstractmethod
-from typing import override
 
 from google.adk.agents.readonly_context import ReadonlyContext
+from typing_extensions import override
 
 from veadk.prompts.agent_default_prompt import DEFAULT_INSTRUCTION
 from veadk.utils.logger import get_logger
