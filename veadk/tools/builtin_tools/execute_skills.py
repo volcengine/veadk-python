@@ -106,8 +106,8 @@ def execute_skills(
         f"Execute skills in session_id={session_id}, tool_id={tool_id}, host={host}, service={service}, region={region}, timeout={timeout}"
     )
 
-    ak = getenv("VOLCENGINE_ACCESS_KEY")
-    sk = getenv("VOLCENGINE_SECRET_KEY")
+    ak = tool_context.state.get("VOLCENGINE_ACCESS_KEY")
+    sk = tool_context.state.get("VOLCENGINE_SECRET_KEY")
     header = {}
 
     if not (ak and sk):
