@@ -21,7 +21,7 @@ from veadk.prompts.prompt_manager import CozeloopPromptManager
 prompt_manager = CozeloopPromptManager(
     cozeloop_workspace_id="",   # CozeLoop workspace ID
     cozeloop_token="",          # CozeLoop token
-    prompt_key="main_agent",    # CozeLoop 中创建的 Prompt Key
+    prompt_key="",    # CozeLoop 中创建的 Prompt Key
     label="production",         # CozeLoop 中创建的 Prompt 标签
 )
 
