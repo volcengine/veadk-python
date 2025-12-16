@@ -141,6 +141,7 @@ def execute_skills(
         version="2018-01-01",
         region=region,
         host="sts.volcengineapi.com",
+        header=header,
     )
     try:
         account_id = res["Result"]["AccountId"]
