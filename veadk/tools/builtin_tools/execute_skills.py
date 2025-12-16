@@ -26,6 +26,47 @@ from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 logger = get_logger(__name__)
 
 
+def _clean_ansi_codes(text: str) -> str:
+    """Remove ANSI escape sequences (color codes, etc.)"""
+    import re
+
+    ansi_escape = re.compile(r"\x1b\[[0-9;]*m")
+    return ansi_escape.sub("", text)
+
+
+def _format_execution_result(result_str: str) -> str:
+    """Format the execution results, handle escape characters and JSON structures"""
+    try:
+        result_json = json.loads(result_str)
+
+        if not result_json.get("success"):
+            message = result_json.get("message", "Unknown error")
+            outputs = result_json.get("data", {}).get("outputs", [])
+            if outputs and isinstance(outputs[0], dict):
+                error_msg = outputs[0].get("ename", "Unknown error")
+                return f"Execution failed: {message}, {error_msg}"
+
+        outputs = result_json.get("data", {}).get("outputs", [])
+        if not outputs:
+            return "No output generated"
+
+        formatted_lines = []
+        for output in outputs:
+            if output and isinstance(output, dict) and "text" in output:
+                text = output["text"]
+                text = _clean_ansi_codes(text)
+                text = text.replace("\\n", "\n")
+                formatted_lines.append(text)
+
+        return "".join(formatted_lines).strip()
+
+    except json.JSONDecodeError:
+        return _clean_ansi_codes(result_str)
+    except Exception as e:
+        logger.warning(f"Error formatting result: {e}, returning raw result")
+        return result_str
+
+
 def execute_skills(
     workflow_prompt: str,
     skills: Optional[List[str]] = None,
@@ -159,7 +200,7 @@ if result.stderr:
     logger.debug(f"Invoke run code response: {res}")
 
     try:
-        return res["Result"]["Result"]
+        return _format_execution_result(res["Result"]["Result"])
     except KeyError as e:
         logger.error(f"Error occurred while running code: {e}, response is {res}")
         return res
