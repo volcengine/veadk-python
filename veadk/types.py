@@ -19,6 +19,7 @@ from veadk.agents.loop_agent import LoopAgent
 from veadk.agents.parallel_agent import ParallelAgent
 from veadk.agents.sequential_agent import SequentialAgent
 from veadk.memory.short_term_memory import ShortTermMemory
+from google.genai.types import LiveConnectConfig
 
 
 class MediaMessage(BaseModel):
@@ -45,3 +46,7 @@ class AgentRunConfig(BaseModel):
     short_term_memory: ShortTermMemory = Field(
         default_factory=ShortTermMemory, description="The short-term memory instance"
     )
+
+
+class RealtimeVoiceConnectConfig(LiveConnectConfig):
+    """Configuration for connecting to the realtime voice model."""
