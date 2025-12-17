@@ -15,6 +15,7 @@ veadk prompt
 ```
 
 选项包括：
+
 ```shell
 --path：指定要优化的 Agent 文件路径，默认值为当前目录下 agent.py。注意，必须将定义的智能体作为全局变量导出
 --feedback：指定优化后的提示词反馈，用于优化模型
@@ -45,13 +46,14 @@ VeADK 与方舟平台 Agent RL 集成，用户使用 VeADK 提供的脚手架，
 
 在你的终端中运行以下命令，初始化一个强化学习项目：
 
-```shell
+```bash
 veadk rl init --platform ark --workspace veadk_rl_ark_project
 ```
+
 该命令会在当前目录下创建一个名为 `veadk_rl_ark_project` 的文件夹，其中包含了一个基本的强化学习项目结构。
 然后在终端中运行以下命令，提交任务到方舟平台：
 
-```shell
+```bash
 cd veadk_rl_ark_project
 veadk rl submit --platform ark
 ```
@@ -59,6 +61,7 @@ veadk rl submit --platform ark
 #### 原理说明
 
 生成后的项目结构如下，其中核心文件包括：
+
 - 数据集: `data/*.jsonl`
 - `/plugins`文件夹下的rollout和reward:
   - rollout ：用以规定agent的工作流，`raw_async_veadk_rollout.py`提供了使用在方舟rl中使用veadk agent的示例，
@@ -83,6 +86,7 @@ veadk_rl_ark_project
 ```
 
 #### 最佳实践案例
+
 1. 脚手架中，基于 VeADK 的天气查询 Agent 进行强化学习优化
 2. 提交任务 (veadk rl submit --platform ark)
 
@@ -104,20 +108,21 @@ VeADK 与 Agent Lightning 集成，用户使用 VeADK 提供的脚手架，可�
 
 在你的终端中运行以下命令，初始化一个 Agent Lightning 项目：
 
-```shell
+```bash
 veadk rl init --platform lightning --workspace veadk_rl_lightning_project
 ```
+
 该命令会在当前目录下创建一个名为 `veadk_rl_lightning_project` 的文件夹，其中包含了一个基本的基于 VeADK 和 Agent Lightning 的强化学习项目结构。
 然后在终端1中运行以下命令，启动 client：
 
-```shell
+```bash
 cd veadk_rl_lightning_project
 veadk rl run --platform lightning --client
 ```
 
 然后在终端2中运行以下命令，启动 server：
 
-```shell
+```bash
 cd veadk_rl_lightning_project
 veadk rl run --platform lightning --server
 ```
@@ -160,5 +165,3 @@ veadk_rl_lightning_project
 ![启动client](./assets/images/optimization/lightning_client.png)
 
 ![启动server](./assets/images/optimization/lightning_training_server.png)
-
-
