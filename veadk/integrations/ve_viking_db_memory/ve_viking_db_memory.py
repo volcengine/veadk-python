@@ -290,8 +290,8 @@ class VikingDBMemoryClient(Service):
         res = self.json("CreateCollection", {}, json.dumps(params))
         return json.loads(res)
 
-    def get_collection(self, collection_name):
-        params = {"CollectionName": collection_name}
+    def get_collection(self, collection_name, project="default"):
+        params = {"CollectionName": collection_name, "ProjectName": project}
         res = self.json("GetCollection", {}, json.dumps(params))
         return json.loads(res)
 

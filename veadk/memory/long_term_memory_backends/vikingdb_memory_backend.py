@@ -92,9 +92,9 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
 
     def _collection_exist(self) -> bool:
         try:
-            client = self._get_sdk_client()
+            client = self._get_client()
             client.get_collection(
-                collection_name=self.index, project_name=self.volcengine_project
+                collection_name=self.index, project=self.volcengine_project
             )
             logger.info(f"Collection {self.index} exist.")
             return True
