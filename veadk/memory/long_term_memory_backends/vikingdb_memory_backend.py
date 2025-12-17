@@ -21,6 +21,8 @@ from typing import Any
 
 from pydantic import Field
 from typing_extensions import override
+from vikingdb import IAM
+from vikingdb.memory import VikingMem
 
 import veadk.config  # noqa E401
 from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
@@ -46,8 +48,15 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
 
     session_token: str = ""
 
-    region: str = "cn-beijing"
+    region: str = Field(
+        default_factory=lambda: os.getenv("DATABASE_VIKINGMEM_REGION") or "cn-beijing"
+    )
     """VikingDB memory region"""
+
+    volcengine_project: str = Field(
+        default_factory=lambda: os.getenv("DATABASE_VIKINGMEM_PROJECT") or "default"
+    )
+    """VikingDB memory project"""
 
     memory_type: list[str] = Field(default_factory=list)
 
@@ -84,7 +93,9 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
     def _collection_exist(self) -> bool:
         try:
             client = self._get_client()
-            client.get_collection(collection_name=self.index)
+            client.get_collection(
+                collection_name=self.index, project=self.volcengine_project
+            )
             logger.info(f"Collection {self.index} exist.")
             return True
         except Exception:
@@ -98,6 +109,7 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
         client = self._get_client()
         response = client.create_collection(
             collection_name=self.index,
+            project=self.volcengine_project,
             description="Created by Volcengine Agent Development Kit VeADK",
             builtin_event_types=self.memory_type,
         )
@@ -116,6 +128,18 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
             sk=self.volcengine_secret_key,
             sts_token=self.session_token,
             region=self.region,
+        )
+
+    def _get_sdk_client(self) -> VikingMem:
+        client = self._get_client()
+        return VikingMem(
+            host=client.get_host(),
+            region=self.region,
+            auth=IAM(
+                ak=self.volcengine_access_key,
+                sk=self.volcengine_secret_key,
+            ),
+            sts_token=self.session_token,
         )
 
     @override
@@ -140,12 +164,14 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
             f"Request for add {len(messages)} memory to VikingDB: collection_name={self.index}, metadata={metadata}, session_id={session_id}"
         )
 
-        client = self._get_client()
-        response = client.add_messages(
-            collection_name=self.index,
+        client = self._get_sdk_client()
+        collection = client.get_collection(
+            collection_name=self.index, project_name=self.volcengine_project
+        )
+        response = collection.add_session(
+            session_id=session_id,
             messages=messages,
             metadata=metadata,
-            session_id=session_id,
         )
 
         logger.debug(f"Response from add memory to VikingDB: {response}")
@@ -165,9 +191,14 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
             f"Request for search memory in VikingDB: filter={filter}, collection_name={self.index}, query={query}, limit={top_k}"
         )
 
-        client = self._get_client()
-        response = client.search_memory(
-            collection_name=self.index, query=query, filter=filter, limit=top_k
+        client = self._get_sdk_client()
+        collection = client.get_collection(
+            collection_name=self.index, project_name=self.volcengine_project
+        )
+        response = collection.search_memory(
+            query=query,
+            filter=filter,
+            limit=top_k,
         )
 
         logger.debug(f"Response from search memory in VikingDB: {response}")

@@ -9,13 +9,46 @@
 2.  **配置**：初始化工具并按需提供参数。
 3.  **注册**：将工具实例添加至 Agent 的 `tools` 列表。
 
-```python
-from veadk import Agent
-from veadk.tools.builtin_tools.web_search import websearch
+=== "Python"
 
-# 在 Agent 初始化时注册工具
-# Agent(tools=[websearch], other_params...)
-```
+    ```python
+    from veadk import Agent
+    from veadk.tools.builtin_tools.web_search import websearch
+    
+    # 在 Agent 初始化时注册工具
+    # Agent(tools=[websearch], other_params...)
+    ```
+
+=== "Golang"
+
+    ```golang
+    import (
+        "log"
+    
+        veagent "github.com/volcengine/veadk-go/agent/llmagent"
+        "github.com/volcengine/veadk-go/tool/builtin_tools/web_search"
+        "google.golang.org/adk/agent/llmagent"
+        "google.golang.org/adk/tool"
+    )
+    
+    func main() {
+        webSearch, err := web_search.NewWebSearchTool(&web_search.Config{})
+        if err != nil {
+            log.Fatalf("NewWebSearchTool failed: %v", err)
+            return
+        }
+        cfg := veagent.Config{
+            Config: llmagent.Config{
+                Tools: []tool.Tool{webSearch},
+            },
+        }
+        veAgent, err := veagent.New(&cfg)
+        if err != nil {
+            log.Fatalf("NewLLMAgent failed: %v", err)
+            return
+        }
+    }
+    ```
 
 工具注册后，Agent 会根据 **用户提示** 和 **指令** 自主决定是否调用。框架将在调用时自动执行工具。
 
@@ -46,11 +79,19 @@ veADK 集成了以下火山引擎工具：
     1. 需要配置火山引擎 AK、SK 或者使用火山引 IAM 授权的临时 StsToken 
     2. 需要配置用于 Agent 推理模型的API Key
 
-=== "代码"
+=== "Python"
 
     ```python
     --8<-- "examples/tools/web_search/agent.py"
     ```
+
+=== "Golang"
+
+    ```golang
+    --8<-- "examples/tools/web_search/agent.go"
+    ```
+
+
 
 === "环境变量"
 
@@ -146,6 +187,7 @@ veADK 集成了以下火山引擎工具：
     - `AGENTKIT_TOOL_ID`：用于调用火山引擎AgentKit Tools的沙箱环境Id
     - `AGENTKIT_TOOL_HOST`：用于调用火山引擎AgentKit Tools的EndPoint
     - `AGENTKIT_TOOL_SERVICE_CODE`：用于调用AgentKit Tools的ServiceCode
+    - `AGENTKIT_TOOL_SCHEME`：用于切换调用 AgentKit Tools 的协议，允许 `http`/`https`，默认 `https`
 
     环境变量列表：
 
@@ -183,10 +225,88 @@ veADK 集成了以下火山引擎工具：
     2. 需要配置用于 Agent 推理图像生成的模型名称
     
 
-=== "代码"
+=== "Python"
 
     ```python
     --8<-- "examples/tools/image_generate/agent.py"
+    ```
+
+=== "Golang"
+
+    ```go
+    package main
+
+    import (
+        "context"
+        "fmt"
+        "log"
+        "os"
+    
+        "github.com/a2aproject/a2a-go/a2asrv"
+        "github.com/google/uuid"
+        veagent "github.com/volcengine/veadk-go/agent/llmagent"
+        "github.com/volcengine/veadk-go/common"
+        "github.com/volcengine/veadk-go/tool/builtin_tools"
+        "google.golang.org/adk/agent"
+        "google.golang.org/adk/agent/llmagent"
+        "google.golang.org/adk/artifact"
+        "google.golang.org/adk/cmd/launcher"
+        "google.golang.org/adk/cmd/launcher/full"
+        "google.golang.org/adk/model"
+        "google.golang.org/adk/session"
+        "google.golang.org/adk/tool"
+    )
+
+    func main() {
+        ctx := context.Background()
+        cfg := &veagent.Config{
+            ModelName:    common.DEFAULT_MODEL_AGENT_NAME,
+            ModelAPIBase: common.DEFAULT_MODEL_AGENT_API_BASE,
+            ModelAPIKey:  os.Getenv(common.MODEL_AGENT_API_KEY),
+        }
+        cfg.Name = "image_generate_tool_agent"
+        cfg.Description = "Agent to generate images based on text descriptions or images."
+        cfg.Instruction = "I can generate images based on text descriptions or images."
+        cfg.AfterModelCallbacks = []llmagent.AfterModelCallback{saveReportfunc}
+    
+        imageGenerate, err := builtin_tools.NewImageGenerateTool(&builtin_tools.ImageGenerateConfig{
+            ModelName: common.DEFAULT_MODEL_IMAGE_NAME,
+            BaseURL:   common.DEFAULT_MODEL_IMAGE_API_BASE,
+            APIKey:    os.Getenv(common.MODEL_IMAGE_API_KEY),
+        })
+        if err != nil {
+            fmt.Printf("NewLLMAgent failed: %v", err)
+            return
+        }
+    
+        cfg.Tools = []tool.Tool{imageGenerate}
+    
+        sessionService := session.InMemoryService()
+        rootAgent, err := veagent.New(cfg)
+    
+        if err != nil {
+            log.Fatalf("Failed to create agent: %v", err)
+        }
+    
+        agentLoader, err := agent.NewMultiLoader(
+            rootAgent,
+        )
+        if err != nil {
+            log.Fatalf("Failed to create agent loader: %v", err)
+        }
+    
+        artifactservice := artifact.InMemoryService()
+        config := &launcher.Config{
+            ArtifactService: artifactservice,
+            SessionService:  sessionService,
+            AgentLoader:     agentLoader,
+        }
+    
+        l := full.NewLauncher()
+        if err = l.Execute(ctx, config, os.Args[1:]); err != nil {
+            log.Fatalf("Run failed: %v\n\n%s", err, l.CommandLineSyntax())
+        }
+    }
     ```
 
 === "环境变量"
@@ -209,7 +329,6 @@ veADK 集成了以下火山引擎工具：
         name: doubao-seedream-4-0-250828
         api_base: https://ark.cn-beijing.volces.com/api/v3/
         api_key: your-api-key-here
-
     ```
 
 运行结果：
@@ -227,10 +346,82 @@ veADK 集成了以下火山引擎工具：
     3. 需要配置用于 Agent 推理图片生成的模型名称（该用例使用了 image_generate 工具，因此需要推理图像生成模型的配置）
     
 
-=== "代码"
+=== "Python"
 
     ```python
     --8<-- "examples/tools/video_generate/agent.py"
+    ```
+
+=== "Golang"
+
+    ```go
+    package main
+    
+    import (
+        "context"
+        "fmt"
+        "log"
+        "os"
+    
+        "github.com/a2aproject/a2a-go/a2asrv"
+        "github.com/google/uuid"
+        veagent "github.com/volcengine/veadk-go/agent/llmagent"
+        "github.com/volcengine/veadk-go/common"
+        "github.com/volcengine/veadk-go/tool/builtin_tools"
+        "google.golang.org/adk/agent"
+        "google.golang.org/adk/artifact"
+        "google.golang.org/adk/cmd/launcher"
+        "google.golang.org/adk/cmd/launcher/full"
+        "google.golang.org/adk/model"
+        "google.golang.org/adk/session"
+        "google.golang.org/adk/tool"
+    )
+
+    func main() {
+        ctx := context.Background()
+        cfg := &veagent.Config{
+            ModelName:    common.DEFAULT_MODEL_AGENT_NAME,
+            ModelAPIBase: common.DEFAULT_MODEL_AGENT_API_BASE,
+            ModelAPIKey:  os.Getenv(common.MODEL_AGENT_API_KEY),
+        }
+        videoGenerate, err := builtin_tools.NewVideoGenerateTool(&builtin_tools.VideoGenerateConfig{
+            ModelName: common.DEFAULT_MODEL_VIDEO_NAME,
+            BaseURL:   common.DEFAULT_MODEL_VIDEO_API_BASE,
+            APIKey:    os.Getenv(common.MODEL_VIDEO_API_KEY),
+        })
+        if err != nil {
+            fmt.Printf("NewLLMAgent failed: %v", err)
+            return
+        }
+    
+        cfg.Tools = []tool.Tool{videoGenerate}
+    
+        sessionService := session.InMemoryService()
+        rootAgent, err := veagent.New(cfg)
+    
+        if err != nil {
+            log.Fatalf("Failed to create agent: %v", err)
+        }
+    
+        agentLoader, err := agent.NewMultiLoader(
+            rootAgent,
+        )
+        if err != nil {
+            log.Fatalf("Failed to create agent loader: %v", err)
+        }
+    
+        artifactservice := artifact.InMemoryService()
+        config := &launcher.Config{
+            ArtifactService: artifactservice,
+            SessionService:  sessionService,
+            AgentLoader:     agentLoader,
+        }
+    
+        l := full.NewLauncher()
+        if err = l.Execute(ctx, config, os.Args[1:]); err != nil {
+            log.Fatalf("Run failed: %v\n\n%s", err, l.CommandLineSyntax())
+        }
+    }
     ```
 
 === "环境变量"
@@ -358,6 +549,52 @@ veADK 集成了以下火山引擎工具：
 
 ![运行结果](../assets/images/tools/las1.png)
 ![运行结果](../assets/images/tools/las2.png)
+
+
+
+### 手机指令执行 (Mobile Run)
+`mobile_run` 该工具可以让Agent在云手机上完成手机任务。
+
+!!! warning "使用 `mobile_run` 工具的附加要求"
+    1. 需要在火山购买云手机服务，并订购pod
+    2. 根据自己的需要在云手机上配置环境，必须下载app，登录账号等。
+
+
+=== "代码"
+
+    ```python
+    --8<-- "examples/tools/mobile_run/agent.py"
+    ```
+
+=== "环境变量"
+
+    必须配置在环境变量的配置项：
+    - `TOOL_MOBIL_USE_TOOL_ID`：  用于执行命令的云手机id 
+
+    或在 `config.yaml` 中定义：
+    
+    ```yaml title="config.yaml"
+      tool:
+        mobile_use:
+          tool_id:
+            - product_id-pod_id
+            - product_id-pod_id
+    
+      volcengine:
+        access_key: xxx
+        secret_key: xxx
+    ```
+
+    获取方式：
+    1. 登录火山，进入云手机产品控制界面
+![云手机产品控制界面](../assets/images/tools/mua_1.png)
+![实例管理界面](../assets/images/tools/mua_2.png)
+    2. tool_id 格式为：product_id-pod_id
+
+运行结果：
+![img_2.png](../assets/images/tools/mua_3.png)
+
+
 
 ## 系统工具
 

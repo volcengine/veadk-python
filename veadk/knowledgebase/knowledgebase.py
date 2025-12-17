@@ -51,6 +51,12 @@ def _get_backend_cls(backend: str) -> type[BaseKnowledgebaseBackend]:
             )
 
             return RedisKnowledgeBackend
+        case "tos_vector":
+            from veadk.knowledgebase.backends.tos_vector_backend import (
+                TosVectorKnowledgeBackend,
+            )
+
+            return TosVectorKnowledgeBackend
 
     raise ValueError(f"Unsupported knowledgebase backend: {backend}")
 
@@ -165,7 +171,8 @@ class KnowledgeBase(BaseModel):
     description: str = "This knowledgebase stores some user-related information."
 
     backend: Union[
-        Literal["local", "opensearch", "viking", "redis"], BaseKnowledgebaseBackend
+        Literal["local", "opensearch", "viking", "redis", "tos_vector"],
+        BaseKnowledgebaseBackend,
     ] = "local"
 
     backend_config: dict = Field(default_factory=dict)

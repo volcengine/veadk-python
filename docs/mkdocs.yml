@@ -1,12 +1,11 @@
 site_name: Volcengine ADK
 site_description: Documents for Volcengine Agent Development Kit
-site_url: https://volcengine.github.io/veadk-docs/
+site_url: https://volcengine.github.io/veadk-python/
 repo_url: https://github.com/volcengine/veadk-python
 repo_name: volcengine/veadk-python
 copyright: Copyright &copy; 2025 Volcengine
 
-
-edit_uri: edit/main/docs/
+edit_uri: edit/main/docs/docs/
 
 theme:
   name: material
@@ -46,6 +45,7 @@ nav:
       - 构建智能体: agent/agent.md
       - 多智能体交互: agent/agents.md
       - A2A 协议: agent/agent-to-agent.md
+      - Prompt 管理: agent/prompt.md
     - 执行引擎:
       - Runner: runner.md
     - 个性化引擎——记忆:

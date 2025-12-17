@@ -53,11 +53,18 @@ graph LR
     H --> I["最终回答: 根据北京天气给出穿衣建议"]
 ```
 
-=== "代码"
+=== "Python"
 
     ```python
     --8<-- "examples/agent/agents/llm_agent.py"
     ```
+
+=== "Golang"
+
+    ```python
+    --8<-- "examples/agent/agents/llm_agent.go"
+    ```
+
 
 === "环境变量"
 
