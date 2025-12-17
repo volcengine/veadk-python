@@ -9,13 +9,46 @@
 2.  **配置**：初始化工具并按需提供参数。
 3.  **注册**：将工具实例添加至 Agent 的 `tools` 列表。
 
-```python
-from veadk import Agent
-from veadk.tools.builtin_tools.web_search import websearch
+=== "Python"
 
-# 在 Agent 初始化时注册工具
-# Agent(tools=[websearch], other_params...)
-```
+    ```python
+    from veadk import Agent
+    from veadk.tools.builtin_tools.web_search import websearch
+    
+    # 在 Agent 初始化时注册工具
+    # Agent(tools=[websearch], other_params...)
+    ```
+
+=== "Golang"
+
+    ```golang
+    import (
+        "log"
+    
+        veagent "github.com/volcengine/veadk-go/agent/llmagent"
+        "github.com/volcengine/veadk-go/tool/builtin_tools/web_search"
+        "google.golang.org/adk/agent/llmagent"
+        "google.golang.org/adk/tool"
+    )
+    
+    func main() {
+        webSearch, err := web_search.NewWebSearchTool(&web_search.Config{})
+        if err != nil {
+            log.Fatalf("NewWebSearchTool failed: %v", err)
+            return
+        }
+        cfg := veagent.Config{
+            Config: llmagent.Config{
+                Tools: []tool.Tool{webSearch},
+            },
+        }
+        veAgent, err := veagent.New(&cfg)
+        if err != nil {
+            log.Fatalf("NewLLMAgent failed: %v", err)
+            return
+        }
+    }
+    ```
 
 工具注册后，Agent 会根据 **用户提示** 和 **指令** 自主决定是否调用。框架将在调用时自动执行工具。
 
@@ -46,11 +79,19 @@ veADK 集成了以下火山引擎工具：
     1. 需要配置火山引擎 AK、SK 或者使用火山引 IAM 授权的临时 StsToken 
     2. 需要配置用于 Agent 推理模型的API Key
 
-=== "代码"
+=== "Python"
 
     ```python
     --8<-- "examples/tools/web_search/agent.py"
     ```
+
+=== "Golang"
+
+    ```golang
+    --8<-- "examples/tools/web_search/agent.go"
+    ```
+
+
 
 === "环境变量"
 

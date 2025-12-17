@@ -190,188 +190,253 @@ database:
 
 #### 知识库初始化(从变量加载)：
 
-```python
-APP_NAME = "viking_demo"
+=== "Python"
 
-mock_data = [
-    """西格蒙德·弗洛伊德（Sigmund Freud，1856年5月6日-1939年9月23日）是精神分析的创始人。
-    精神分析既是一种治疗精神疾病的方法，也是一种解释人类行为的理论。弗洛伊德认为，我们童年时期的经历对我们的成年生活有很大的影响，并且塑造了我们的个性。
-    例如，源自人们曾经的创伤经历的焦虑感，会隐藏在意识深处，并且可能在成年期间引起精神问题（以神经症的形式）。""",
-    """阿尔弗雷德·阿德勒（Alfred Adler，1870年2月7日-1937年5月28日），奥地利精神病学家，人本主义心理学先驱，个体心理学的创始人。
-    曾追随弗洛伊D探讨神经症问题，但也是精神分析学派内部第一个反对弗洛伊德的心理学体系的心理学家。
-    著有《自卑与超越》《人性的研究》《个体心理学的理论与实践》《自卑与生活》等。""",
-]
-kb = KnowledgeBase(
-    backend="viking",  # 这里设置为viking
-    app_name=APP_NAME,
-)
-res = kb.collection_status()
+    ```python
+    APP_NAME = "viking_demo"
+    
+    mock_data = [
+        """西格蒙德·弗洛伊德（Sigmund Freud，1856年5月6日-1939年9月23日）是精神分析的创始人。
+        精神分析既是一种治疗精神疾病的方法，也是一种解释人类行为的理论。弗洛伊德认为，我们童年时期的经历对我们的成年生活有很大的影响，并且塑造了我们的个性。
+        例如，源自人们曾经的创伤经历的焦虑感，会隐藏在意识深处，并且可能在成年期间引起精神问题（以神经症的形式）。""",
+        """阿尔弗雷德·阿德勒（Alfred Adler，1870年2月7日-1937年5月28日），奥地利精神病学家，人本主义心理学先驱，个体心理学的创始人。
+        曾追随弗洛伊D探讨神经症问题，但也是精神分析学派内部第一个反对弗洛伊德的心理学体系的心理学家。
+        著有《自卑与超越》《人性的研究》《个体心理学的理论与实践》《自卑与生活》等。""",
+    ]
+    kb = KnowledgeBase(
+        backend="viking",  # 这里设置为viking
+        app_name=APP_NAME,
+    )
+    res = kb.collection_status()
+    
+    if not res["existed"]:
+        kb.create_collection()  # viking需要专门create一下
+    
+    kb.add_from_text(mock_data)
+    ```
 
-if not res["existed"]:
-    kb.create_collection()  # viking需要专门create一下
+=== "Golang"
 
-kb.add_from_text(mock_data)
-```
+    ```golang
+	knowledgeBase, err := knowledgebase.NewKnowledgeBase(
+		ktypes.VikingBackend,
+		knowledgebase.WithBackendConfig(
+			&viking_knowledge_backend.Config{
+				Index:            "veadk_go_test_kg",
+				CreateIfNotExist: true, // 当 Index 不存在时会自动创建
+				TosConfig: &ve_tos.Config{
+					Bucket: "veadk-go-bucket",
+				},
+			}),
+	)
+	if err != nil {
+		log.Fatal("NewVikingKnowledgeBackend error: ", err)
+	}
+
+	mock_data := []string{
+		`西格蒙德·弗洛伊德（Sigmund Freud，1856年5月6日-1939年9月23日）是精神分析的创始人。
+	精神分析既是一种治疗精神疾病的方法，也是一种解释人类行为的理论。弗洛伊德认为，我们童年时期的经历对我们的成年生活有很大的影响，并且塑造了我们的个性。
+	例如，源自人们曾经的创伤经历的焦虑感，会隐藏在意识深处，并且可能在成年期间引起精神问题（以神经症的形式）。`,
+		`阿尔弗雷德·阿德勒（Alfred Adler，1870年2月7日-1937年5月28日），奥地利精神病学家，人本主义心理学先驱，个体心理学的创始人。
+	曾追随弗洛伊德探讨神经症问题，但也是精神分析学派内部第一个反对弗洛伊德的心理学体系的心理学家。
+	著有《自卑与超越》《人性的研究》《个体心理学的理论与实践》《自卑与生活》等。`}
+
+	if err = knowledgeBase.Backend.AddFromText(mock_data); err != nil {
+		log.Fatal("AddFromText error: ", err)
+		return
+	}
+    ```
+
 
 
 
 #### Agent代码初始化：
 
-```python
-agent = Agent(
-    name="chat_agent",
-    model_name="doubao-seed-1-6-250615",
-    description="你是一个优秀的助手，你可以和用户进行对话。",
-    instruction="""你是一个优秀的助手。当被提问时，请遵循以下步骤：
-1. 首先，根据你的内部知识，生成一个初步的回答。
-2. 然后，查询你的知识库，寻找与问题相关的信息来验证或丰富你的答案。
-3. 最后，结合你的内部知识和知识库中的信息，给出一个全面、准确的最终答案。""",
-    knowledgebase=kb,
-    tools=[calculate_date_difference],
-)
+=== "Python"
 
-```
+    ```python
+    agent = Agent(
+       name="chat_agent",
+       model_name="doubao-seed-1-6-250615",
+       description="你是一个优秀的助手，你可以和用户进行对话。",
+       instruction="""你是一个优秀的助手。当被提问时，请遵循以下步骤：
+    1. 首先，根据你的内部知识，生成一个初步的回答。
+    2. 然后，查询你的知识库，寻找与问题相关的信息来验证或丰富你的答案。
+    3. 最后，结合你的内部知识和知识库中的信息，给出一个全面、准确的最终答案。""",
+       knowledgebase=kb,
+       tools=[calculate_date_difference],
+    )
+    ```
+
+=== "Golang"
+
+    ```golang
+   	cfg := veagent.Config{
+		Config: llmagent.Config{
+			Name:        "chat_agent",
+			Description: "你是一个优秀的助手，你可以和用户进行对话。",
+			Instruction: `你是一个优秀的助手。当被提问时，请遵循以下步骤：\n1. 首先，根据你的内部知识，生成一个初步的回答。\n2. 然后，查询你的知识库，寻找与问题相关的信息来验证或丰富你的答案。\n3. 最后，结合你的内部知识和知识库中的信息，给出一个全面、准确的最终答案。`,
+			Tools:       []tool.Tool{calculateDateDifferenceTool},
+		},
+		ModelName:     "doubao-seed-1-6-250615",
+		KnowledgeBase: knowledgeBase,
+	}
+
+	veAgent, err := veagent.New(&cfg)
+	if err != nil {
+		fmt.Printf("NewLLMAgent failed: %v", err)
+		return
+	}
+    ```
 
 ####
 
 #### 完整代码：
 
-```python
-import os
-from uuid import uuid4
-import yaml
+=== "Python"
 
-os.environ["LITELLM_LOGGING"] = "False"
-os.environ["LOGGING_LEVEL"] = "DEBUG"  
+    ```python
+      import os
+      from uuid import uuid4
+      import yaml
+      
+      os.environ["LITELLM_LOGGING"] = "False"
+      os.environ["LOGGING_LEVEL"] = "DEBUG"  
+      
+      import asyncio
+      from datetime import datetime
+      
+      from veadk import Agent, Runner
+      from veadk.knowledgebase import KnowledgeBase
+      
+      # 从config.yaml读取配置
+      with open('config.yaml', 'r') as f:
+          config = yaml.safe_load(f)
+      
+      # 打印配置结构用于调试
+      print("Config structure:", config)
+      
+      # 设置环境变量（使用get方法避免KeyError）
+      if config.get('database') and config['database'].get('viking'):
+          os.environ["DATABASE_VIKING_PROJECT"] = config['database']['viking'].get('project', 'default')
+          os.environ["DATABASE_VIKING_REGION"] = config['database']['viking'].get('region', 'cn-beijing')
+      else:
+          print("Warning: Viking database config not found, using defaults")
+          os.environ["DATABASE_VIKING_PROJECT"] = 'default'
+          os.environ["DATABASE_VIKING_REGION"] = 'cn-beijing'
+      
+      if config.get('database') and config['database'].get('tos'):
+          os.environ["DATABASE_TOS_BUCKET"] = config['database']['tos'].get('bucket', 'test-wangyue')
+      else:
+          print("Warning: TOS config not found, using default")
+          os.environ["DATABASE_TOS_BUCKET"] = 'test-wangyue'
+      
+      if config.get('volcengine'):
+          os.environ["VOLCENGINE_ACCESS_KEY"] = config['volcengine'].get('access_key', '')
+          os.environ["VOLCENGINE_SECRET_KEY"] = config['volcengine'].get('secret_key', '')
+      else:
+          print("Warning: Volcengine config not found")
+          os.environ["VOLCENGINE_ACCESS_KEY"] = ''
+          os.environ["VOLCENGINE_SECRET_KEY"] = ''
+      
+      # 验证环境变量
+      assert os.getenv("DATABASE_VIKING_PROJECT") and os.getenv("DATABASE_VIKING_REGION"), (
+          "请设置config.yaml里的viking参数"
+      )
+      assert os.getenv("VOLCENGINE_ACCESS_KEY") and os.getenv("VOLCENGINE_SECRET_KEY"), (
+          "请在config.yaml里设置火山ak和sk"
+      )
+      assert os.getenv("DATABASE_TOS_BUCKET"), "请在config.yaml里设置tos相关的参数"
+      
+      APP_NAME = "viking_demo"
+      
+      mock_data = [
+          """西格蒙德·弗洛伊德（Sigmund Freud，1856年5月6日-1939年9月23日）是精神分析的创始人。
+          精神分析既是一种治疗精神疾病的方法，也是一种解释人类行为的理论。弗洛伊德认为，我们童年时期的经历对我们的成年生活有很大的影响，并且塑造了我们的个性。
+          例如，源自人们曾经的创伤经历的焦虑感，会隐藏在意识深处，并且可能在成年期间引起精神问题（以神经症的形式）。""",
+          """阿尔弗雷德·阿德勒（Alfred Adler，1870年2月7日-1937年5月28日），奥地利精神病学家，人本主义心理学先驱，个体心理学的创始人。
+          曾追随弗洛伊德探讨神经症问题，但也是精神分析学派内部第一个反对弗洛伊德的心理学体系的心理学家。
+          著有《自卑与超越》《人性的研究》《个体心理学的理论与实践》《自卑与生活》等。""",
+      ]
+      kb = KnowledgeBase(
+          backend="viking",  # 这里设置为viking
+          app_name=APP_NAME,
+      )
+      res = kb.collection_status()
+      
+      if not res["existed"]:
+          kb.create_collection()  # viking需要专门create一下
+      
+      kb.add_from_text(mock_data)
+      #kb.add_from_files(["tmp/demo.txt"])
+      
+      def calculate_date_difference(date1: str, date2: str) -> int:
+          """
+          计算两个日期之间的天数差异
+          参数:
+              date1: 第一个日期，格式为"YYYY-MM-DD"
+              date2: 第二个日期，格式为"YYYY-MM-DD"
+          返回:
+              两个日期之间的天数差异（绝对值）
+          """
+          # 解析日期字符串为datetime对象
+          try:
+              d1 = datetime.strptime(date1, "%Y-%m-%d")
+              d2 = datetime.strptime(date2, "%Y-%m-%d")
+          except ValueError as e:
+              raise ValueError(f"日期格式错误，请使用YYYY-MM-DD格式: {e}")
+          # 计算日期差并返回绝对值
+          delta = d2 - d1
+          return abs(delta.days)
+      
+      agent = Agent(
+          name="chat_agent",
+          model_name="doubao-seed-1-6-250615",
+          description="你是一个优秀的助手，你可以和用户进行对话。",
+          instruction="你是一个优秀的助手，你可以和用户进行对话。",
+          knowledgebase=kb,
+          tools=[calculate_date_difference],
+      )
+      
+      runner = Runner(
+          agent,
+          app_name=APP_NAME,
+      )
+      
+      async def main():
+          """
+          主函数，用于运行agent
+          """
+          session_id = uuid4().hex
+          while True:
+              try:
+                  print("
+      
+      您: ", end="")
+                  message = input()
+                  if message.strip().lower() == "exit":
+                      break
+                  print("
+      
+      Agent: ")
+                  completion = await runner.run(
+                      messages=message,
+                      session_id=session_id,
+                  )
+                  print(completion)
+      
+              except (KeyboardInterrupt, EOFError):
+                  break
+      
+      if __name__ == "__main__":
+          asyncio.run(main())
+    ``` 
 
-import asyncio
-from datetime import datetime
+=== "Golang"
 
-from veadk import Agent, Runner
-from veadk.knowledgebase import KnowledgeBase
-
-# 从config.yaml读取配置
-with open('config.yaml', 'r') as f:
-    config = yaml.safe_load(f)
-
-# 打印配置结构用于调试
-print("Config structure:", config)
-
-# 设置环境变量（使用get方法避免KeyError）
-if config.get('database') and config['database'].get('viking'):
-    os.environ["DATABASE_VIKING_PROJECT"] = config['database']['viking'].get('project', 'default')
-    os.environ["DATABASE_VIKING_REGION"] = config['database']['viking'].get('region', 'cn-beijing')
-else:
-    print("Warning: Viking database config not found, using defaults")
-    os.environ["DATABASE_VIKING_PROJECT"] = 'default'
-    os.environ["DATABASE_VIKING_REGION"] = 'cn-beijing'
-
-if config.get('database') and config['database'].get('tos'):
-    os.environ["DATABASE_TOS_BUCKET"] = config['database']['tos'].get('bucket', 'test-wangyue')
-else:
-    print("Warning: TOS config not found, using default")
-    os.environ["DATABASE_TOS_BUCKET"] = 'test-wangyue'
-
-if config.get('volcengine'):
-    os.environ["VOLCENGINE_ACCESS_KEY"] = config['volcengine'].get('access_key', '')
-    os.environ["VOLCENGINE_SECRET_KEY"] = config['volcengine'].get('secret_key', '')
-else:
-    print("Warning: Volcengine config not found")
-    os.environ["VOLCENGINE_ACCESS_KEY"] = ''
-    os.environ["VOLCENGINE_SECRET_KEY"] = ''
-
-# 验证环境变量
-assert os.getenv("DATABASE_VIKING_PROJECT") and os.getenv("DATABASE_VIKING_REGION"), (
-    "请设置config.yaml里的viking参数"
-)
-assert os.getenv("VOLCENGINE_ACCESS_KEY") and os.getenv("VOLCENGINE_SECRET_KEY"), (
-    "请在config.yaml里设置火山ak和sk"
-)
-assert os.getenv("DATABASE_TOS_BUCKET"), "请在config.yaml里设置tos相关的参数"
-
-APP_NAME = "viking_demo"
-
-mock_data = [
-    """西格蒙德·弗洛伊德（Sigmund Freud，1856年5月6日-1939年9月23日）是精神分析的创始人。
-    精神分析既是一种治疗精神疾病的方法，也是一种解释人类行为的理论。弗洛伊德认为，我们童年时期的经历对我们的成年生活有很大的影响，并且塑造了我们的个性。
-    例如，源自人们曾经的创伤经历的焦虑感，会隐藏在意识深处，并且可能在成年期间引起精神问题（以神经症的形式）。""",
-    """阿尔弗雷德·阿德勒（Alfred Adler，1870年2月7日-1937年5月28日），奥地利精神病学家，人本主义心理学先驱，个体心理学的创始人。
-    曾追随弗洛伊德探讨神经症问题，但也是精神分析学派内部第一个反对弗洛伊德的心理学体系的心理学家。
-    著有《自卑与超越》《人性的研究》《个体心理学的理论与实践》《自卑与生活》等。""",
-]
-kb = KnowledgeBase(
-    backend="viking",  # 这里设置为viking
-    app_name=APP_NAME,
-)
-res = kb.collection_status()
-
-if not res["existed"]:
-    kb.create_collection()  # viking需要专门create一下
-
-kb.add_from_text(mock_data)
-#kb.add_from_files(["tmp/demo.txt"])
-
-def calculate_date_difference(date1: str, date2: str) -> int:
-    """
-    计算两个日期之间的天数差异
-    参数:
-        date1: 第一个日期，格式为"YYYY-MM-DD"
-        date2: 第二个日期，格式为"YYYY-MM-DD"
-    返回:
-        两个日期之间的天数差异（绝对值）
-    """
-    # 解析日期字符串为datetime对象
-    try:
-        d1 = datetime.strptime(date1, "%Y-%m-%d")
-        d2 = datetime.strptime(date2, "%Y-%m-%d")
-    except ValueError as e:
-        raise ValueError(f"日期格式错误，请使用YYYY-MM-DD格式: {e}")
-    # 计算日期差并返回绝对值
-    delta = d2 - d1
-    return abs(delta.days)
-
-agent = Agent(
-    name="chat_agent",
-    model_name="doubao-seed-1-6-250615",
-    description="你是一个优秀的助手，你可以和用户进行对话。",
-    instruction="你是一个优秀的助手，你可以和用户进行对话。",
-    knowledgebase=kb,
-    tools=[calculate_date_difference],
-)
-
-runner = Runner(
-    agent,
-    app_name=APP_NAME,
-)
-
-async def main():
-    """
-    主函数，用于运行agent
-    """
-    session_id = uuid4().hex
-    while True:
-        try:
-            print("
-
-您: ", end="")
-            message = input()
-            if message.strip().lower() == "exit":
-                break
-            print("
-
-Agent: ")
-            completion = await runner.run(
-                messages=message,
-                session_id=session_id,
-            )
-            print(completion)
-
-        except (KeyboardInterrupt, EOFError):
-            break
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
+    ```golang 
+    --8<-- "examples/knowledge/viking_knowledge.go"
+    ```
 
 #### 运行结果：
 
