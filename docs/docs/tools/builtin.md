@@ -225,10 +225,88 @@ veADK 集成了以下火山引擎工具：
     2. 需要配置用于 Agent 推理图像生成的模型名称
     
 
-=== "代码"
+=== "Python"
 
     ```python
     --8<-- "examples/tools/image_generate/agent.py"
+    ```
+
+=== "Golang"
+
+    ```go
+    package main
+
+    import (
+        "context"
+        "fmt"
+        "log"
+        "os"
+    
+        "github.com/a2aproject/a2a-go/a2asrv"
+        "github.com/google/uuid"
+        veagent "github.com/volcengine/veadk-go/agent/llmagent"
+        "github.com/volcengine/veadk-go/common"
+        "github.com/volcengine/veadk-go/tool/builtin_tools"
+        "google.golang.org/adk/agent"
+        "google.golang.org/adk/agent/llmagent"
+        "google.golang.org/adk/artifact"
+        "google.golang.org/adk/cmd/launcher"
+        "google.golang.org/adk/cmd/launcher/full"
+        "google.golang.org/adk/model"
+        "google.golang.org/adk/session"
+        "google.golang.org/adk/tool"
+    )
+
+    func main() {
+        ctx := context.Background()
+        cfg := &veagent.Config{
+            ModelName:    common.DEFAULT_MODEL_AGENT_NAME,
+            ModelAPIBase: common.DEFAULT_MODEL_AGENT_API_BASE,
+            ModelAPIKey:  os.Getenv(common.MODEL_AGENT_API_KEY),
+        }
+        cfg.Name = "image_generate_tool_agent"
+        cfg.Description = "Agent to generate images based on text descriptions or images."
+        cfg.Instruction = "I can generate images based on text descriptions or images."
+        cfg.AfterModelCallbacks = []llmagent.AfterModelCallback{saveReportfunc}
+    
+        imageGenerate, err := builtin_tools.NewImageGenerateTool(&builtin_tools.ImageGenerateConfig{
+            ModelName: common.DEFAULT_MODEL_IMAGE_NAME,
+            BaseURL:   common.DEFAULT_MODEL_IMAGE_API_BASE,
+            APIKey:    os.Getenv(common.MODEL_IMAGE_API_KEY),
+        })
+        if err != nil {
+            fmt.Printf("NewLLMAgent failed: %v", err)
+            return
+        }
+    
+        cfg.Tools = []tool.Tool{imageGenerate}
+    
+        sessionService := session.InMemoryService()
+        rootAgent, err := veagent.New(cfg)
+    
+        if err != nil {
+            log.Fatalf("Failed to create agent: %v", err)
+        }
+    
+        agentLoader, err := agent.NewMultiLoader(
+            rootAgent,
+        )
+        if err != nil {
+            log.Fatalf("Failed to create agent loader: %v", err)
+        }
+    
+        artifactservice := artifact.InMemoryService()
+        config := &launcher.Config{
+            ArtifactService: artifactservice,
+            SessionService:  sessionService,
+            AgentLoader:     agentLoader,
+        }
+    
+        l := full.NewLauncher()
+        if err = l.Execute(ctx, config, os.Args[1:]); err != nil {
+            log.Fatalf("Run failed: %v\n\n%s", err, l.CommandLineSyntax())
+        }
+    }
     ```
 
 === "环境变量"
@@ -268,10 +346,82 @@ veADK 集成了以下火山引擎工具：
     3. 需要配置用于 Agent 推理图片生成的模型名称（该用例使用了 image_generate 工具，因此需要推理图像生成模型的配置）
     
 
-=== "代码"
+=== "Python"
 
     ```python
     --8<-- "examples/tools/video_generate/agent.py"
+    ```
+
+=== "Golang"
+
+    ```go
+    package main
+    
+    import (
+        "context"
+        "fmt"
+        "log"
+        "os"
+    
+        "github.com/a2aproject/a2a-go/a2asrv"
+        "github.com/google/uuid"
+        veagent "github.com/volcengine/veadk-go/agent/llmagent"
+        "github.com/volcengine/veadk-go/common"
+        "github.com/volcengine/veadk-go/tool/builtin_tools"
+        "google.golang.org/adk/agent"
+        "google.golang.org/adk/artifact"
+        "google.golang.org/adk/cmd/launcher"
+        "google.golang.org/adk/cmd/launcher/full"
+        "google.golang.org/adk/model"
+        "google.golang.org/adk/session"
+        "google.golang.org/adk/tool"
+    )
+
+    func main() {
+        ctx := context.Background()
+        cfg := &veagent.Config{
+            ModelName:    common.DEFAULT_MODEL_AGENT_NAME,
+            ModelAPIBase: common.DEFAULT_MODEL_AGENT_API_BASE,
+            ModelAPIKey:  os.Getenv(common.MODEL_AGENT_API_KEY),
+        }
+        videoGenerate, err := builtin_tools.NewVideoGenerateTool(&builtin_tools.VideoGenerateConfig{
+            ModelName: common.DEFAULT_MODEL_VIDEO_NAME,
+            BaseURL:   common.DEFAULT_MODEL_VIDEO_API_BASE,
+            APIKey:    os.Getenv(common.MODEL_VIDEO_API_KEY),
+        })
+        if err != nil {
+            fmt.Printf("NewLLMAgent failed: %v", err)
+            return
+        }
+    
+        cfg.Tools = []tool.Tool{videoGenerate}
+    
+        sessionService := session.InMemoryService()
+        rootAgent, err := veagent.New(cfg)
+    
+        if err != nil {
+            log.Fatalf("Failed to create agent: %v", err)
+        }
+    
+        agentLoader, err := agent.NewMultiLoader(
+            rootAgent,
+        )
+        if err != nil {
+            log.Fatalf("Failed to create agent loader: %v", err)
+        }
+    
+        artifactservice := artifact.InMemoryService()
+        config := &launcher.Config{
+            ArtifactService: artifactservice,
+            SessionService:  sessionService,
+            AgentLoader:     agentLoader,
+        }
+    
+        l := full.NewLauncher()
+        if err = l.Execute(ctx, config, os.Args[1:]); err != nil {
+            log.Fatalf("Run failed: %v\n\n%s", err, l.CommandLineSyntax())
+        }
+    }
     ```
 
 === "环境变量"
