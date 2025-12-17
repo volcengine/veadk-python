@@ -19,6 +19,14 @@ hide:
   font-size: 1.2rem;
   color: #666;
 }
+
+.buttons-row {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+}
 </style>
 
 <div class="get-started-text">Volcengine Agent Development Kit</div>
@@ -31,21 +39,35 @@ hide:
 
 !!! tip "快速开始"
     通过以下方式安装 VeADK：
-    === "稳定版"
+    === "Python"
 
         ```bash
+        # 稳定版
         pip install veadk-python
-        ```
 
-    === "抢先版"
-
-        ```bash
+        # 主分支预览版
         pip install git+https://github.com/volcengine/veadk-python.git@main
         ```
 
+    === "Golang"
+
+        ```bash
+        go get github.com/volcengine/veadk-go
+        ```
+
+    === "Java"
+        
+        ```xml title="pom.xml"
+        <dependency>
+            <groupId>com.volcengine.veadk</groupId>
+            <artifactId>veadk-java</artifactId>
+            <version>0.0.1</version>
+        </dependency>
+        ``` 
+
     ---
 
-    或者您可以使用 VeADK 提供的镜像仓库：
+    或者您可以使用 VeADK 提供的 Python 版镜像仓库：
     === "稳定版"
 
         ```
@@ -64,10 +86,14 @@ hide:
         veadk-cn-beijing.cr.volces.com/veadk/veadk-python:0.2.20
         ```
 
-<div class="grid" markdown>
+<div class="buttons-row" markdown>
+[veadk-python :fontawesome-brands-github:](https://github.com/volcengine/veadk-python){ .openai-button }
+
+[veadk-go :fontawesome-brands-github:](https://github.com/volcengine/veadk-go){ .openai-button }
+
+[veadk-java :fontawesome-brands-github:](https://github.com/volcengine/veadk-java){ .openai-button }
 
 [快速开始 :fontawesome-solid-paper-plane:](quickstart.md){ .openai-button }
-
 </div>
 
 ---
