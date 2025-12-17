@@ -207,8 +207,7 @@ def check_litellm_version(min_version: str):
         required = parse_version(min_version)
         if installed < required:
             raise ValueError(
-                "You have used `enable_responses=True`. If you want to use the `responses_api`, please install the relevant support:"
-                "\npip install veadk-python[responses]"
+                "You have used `enable_responses=True`. If you want to use the `responses_api`, please ensure that `litellm>=1.79.3`"
             )
     except ImportError:
         raise ImportError(
