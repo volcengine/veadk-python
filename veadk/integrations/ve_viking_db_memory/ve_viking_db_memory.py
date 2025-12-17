@@ -14,12 +14,14 @@
 
 import json
 import threading
-from veadk.utils.misc import getenv
+
 from volcengine.ApiInfo import ApiInfo
 from volcengine.auth.SignerV4 import SignerV4
 from volcengine.base.Service import Service
 from volcengine.Credentials import Credentials
 from volcengine.ServiceInfo import ServiceInfo
+
+from veadk.utils.misc import getenv
 
 
 class VikingDBMemoryException(Exception):
@@ -56,7 +58,9 @@ class VikingDBMemoryClient(Service):
         socket_timeout=30,
     ):
         env_host = getenv(
-            "DATABASE_VIKINGMEM_BASE_URL", default_value=None, allow_false_values=True
+            "DATABASE_VIKINGMEM_BASE_URL",
+            default_value=None,
+            allow_false_values=True,
         )
         if env_host:
             if env_host.startswith("http://"):
@@ -85,7 +89,9 @@ class VikingDBMemoryClient(Service):
             self.get_body("Ping", {}, json.dumps({}))
         except Exception as e:
             raise VikingDBMemoryException(
-                1000028, "missed", "host or region is incorrect: {}".format(str(e))
+                1000028,
+                "missed",
+                "host or region is incorrect: {}".format(str(e)),
             ) from None
 
     def setHeader(self, header):
@@ -118,49 +124,70 @@ class VikingDBMemoryClient(Service):
                 "/api/memory/collection/create",
                 {},
                 {},
-                {"Accept": "application/json", "Content-Type": "application/json"},
+                {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
             ),
             "GetCollection": ApiInfo(
                 "POST",
                 "/api/memory/collection/info",
                 {},
                 {},
-                {"Accept": "application/json", "Content-Type": "application/json"},
+                {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
             ),
             "DropCollection": ApiInfo(
                 "POST",
                 "/api/memory/collection/delete",
                 {},
                 {},
-                {"Accept": "application/json", "Content-Type": "application/json"},
+                {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
             ),
             "UpdateCollection": ApiInfo(
                 "POST",
                 "/api/memory/collection/update",
                 {},
                 {},
-                {"Accept": "application/json", "Content-Type": "application/json"},
+                {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
             ),
             "SearchMemory": ApiInfo(
                 "POST",
                 "/api/memory/search",
                 {},
                 {},
-                {"Accept": "application/json", "Content-Type": "application/json"},
+                {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
             ),
             "AddMessages": ApiInfo(
                 "POST",
                 "/api/memory/messages/add",
                 {},
                 {},
-                {"Accept": "application/json", "Content-Type": "application/json"},
+                {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
             ),
             "Ping": ApiInfo(
                 "GET",
                 "/api/memory/ping",
                 {},
                 {},
-                {"Accept": "application/json", "Content-Type": "application/json"},
+                {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
             ),
         }
         return api_info
@@ -199,7 +226,9 @@ class VikingDBMemoryClient(Service):
                 res_json = json.loads(e.args[0].decode("utf-8"))
             except Exception as e:
                 raise VikingDBMemoryException(
-                    1000028, "missed", "json load res error, res:{}".format(str(e))
+                    1000028,
+                    "missed",
+                    "json load res error, res:{}".format(str(e)),
                 ) from None
             code = res_json.get("code", 1000028)
             request_id = res_json.get("request_id", 1000028)
@@ -223,7 +252,9 @@ class VikingDBMemoryClient(Service):
                 res_json = json.loads(e.args[0].decode("utf-8"))
             except Exception as e:
                 raise VikingDBMemoryException(
-                    1000028, "missed", "json load res error, res:{}".format(str(e))
+                    1000028,
+                    "missed",
+                    "json load res error, res:{}".format(str(e)),
                 ) from None
             code = res_json.get("code", 1000028)
             request_id = res_json.get("request_id", 1000028)
@@ -241,6 +272,7 @@ class VikingDBMemoryClient(Service):
         self,
         collection_name,
         description="",
+        project="default",
         custom_event_type_schemas=[],
         custom_entity_type_schemas=[],
         builtin_event_types=[],
@@ -248,6 +280,7 @@ class VikingDBMemoryClient(Service):
     ):
         params = {
             "CollectionName": collection_name,
+            "ProjectName": project,
             "Description": description,
             "CustomEventTypeSchemas": custom_event_type_schemas,
             "CustomEntityTypeSchemas": custom_entity_type_schemas,

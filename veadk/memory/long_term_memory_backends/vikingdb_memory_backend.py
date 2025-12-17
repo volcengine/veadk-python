@@ -21,6 +21,8 @@ from typing import Any
 
 from pydantic import Field
 from typing_extensions import override
+from vikingdb import IAM
+from vikingdb.memory import VikingMem
 
 import veadk.config  # noqa E401
 from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
@@ -30,9 +32,6 @@ from veadk.integrations.ve_viking_db_memory.ve_viking_db_memory import (
 from veadk.memory.long_term_memory_backends.base_backend import (
     BaseLongTermMemoryBackend,
 )
-from vikingdb import IAM
-from vikingdb.memory import VikingMem
-
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -49,8 +48,15 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
 
     session_token: str = ""
 
-    region: str = "cn-beijing"
+    region: str = Field(
+        default_factory=lambda: os.getenv("DATABASE_VIKINGMEM_REGION") or "cn-beijing"
+    )
     """VikingDB memory region"""
+
+    volcengine_project: str = Field(
+        default_factory=lambda: os.getenv("DATABASE_VIKINGMEM_PROJECT") or "default"
+    )
+    """VikingDB memory project"""
 
     memory_type: list[str] = Field(default_factory=list)
 
@@ -86,8 +92,10 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
 
     def _collection_exist(self) -> bool:
         try:
-            client = self._get_client()
-            client.get_collection(collection_name=self.index)
+            client = self._get_sdk_client()
+            client.get_collection(
+                collection_name=self.index, project_name=self.volcengine_project
+            )
             logger.info(f"Collection {self.index} exist.")
             return True
         except Exception:
@@ -101,6 +109,7 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
         client = self._get_client()
         response = client.create_collection(
             collection_name=self.index,
+            project=self.volcengine_project,
             description="Created by Volcengine Agent Development Kit VeADK",
             builtin_event_types=self.memory_type,
         )
@@ -156,7 +165,9 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
         )
 
         client = self._get_sdk_client()
-        collection = client.get_collection(collection_name=self.index)
+        collection = client.get_collection(
+            collection_name=self.index, project_name=self.volcengine_project
+        )
         response = collection.add_session(
             session_id=session_id,
             messages=messages,
@@ -181,7 +192,9 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
         )
 
         client = self._get_sdk_client()
-        collection = client.get_collection(collection_name=self.index)
+        collection = client.get_collection(
+            collection_name=self.index, project_name=self.volcengine_project
+        )
         response = collection.search_memory(
             query=query,
             filter=filter,
