@@ -67,6 +67,11 @@ class LLMShieldPlugin(BasePlugin):
         self.appid = getenv("TOOL_LLM_SHIELD_APP_ID")
         self.region = region
         self.timeout = timeout
+        self.url = getenv(
+            "TOOL_LLM_SHIELD_URL",
+            f"https://{self.region}.sdk.access.llm-shield.omini-shield.com",
+        )
+        self.api_key = getenv("TOOL_LLM_SHIELD_API_KEY", allow_false_values=True)
 
         self.category_map = {
             101: "Model Misuse",
@@ -96,18 +101,6 @@ class LLMShieldPlugin(BasePlugin):
             logger.error("LLM Shield app ID not configured")
             return None
 
-        ak = os.getenv("VOLCENGINE_ACCESS_KEY")
-        sk = os.getenv("VOLCENGINE_SECRET_KEY")
-        session_token = ""
-        if not (ak and sk):
-            logger.debug("Get AK/SK from environment variables failed.")
-            credential = get_credential_from_vefaas_iam()
-            ak = credential.access_key_id
-            sk = credential.secret_access_key
-            session_token = credential.session_token
-        else:
-            logger.debug("Successfully get AK/SK from environment variables.")
-
         body = {
             "Message": {
                 "Role": role,
@@ -119,27 +112,50 @@ class LLMShieldPlugin(BasePlugin):
 
         body_json = json.dumps(body).encode("utf-8")
 
-        header = {"X-Security-Token": session_token}
-        url = f"https://{self.region}.sdk.access.llm-shield.omini-shield.com"
         path = "/v2/moderate"
         action = "Moderate"
         version = "2025-08-31"
 
-        signed_header = request_sign(
-            header, ak, sk, self.region, url, path, action, body_json
-        )
-
-        signed_header.update(
-            {
+        # Check if using API key authentication
+        logger.debug(f"API key value: {self.api_key}, type: {type(self.api_key)}")
+        if self.api_key and self.api_key != "":
+            logger.debug("Using API key authentication (no AK/SK signature)")
+            # Use API key authentication only - match curl command headers exactly
+            signed_header = {
                 "Content-Type": "application/json",
-                "X-Top-Service": "llmshield",
-                "X-Top-Region": self.region,
+                "x-api-key": self.api_key,
             }
-        )
+        else:
+            logger.debug("Using AK/SK signature authentication")
+            # Use AK/SK signature authentication
+            ak = os.getenv("VOLCENGINE_ACCESS_KEY")
+            sk = os.getenv("VOLCENGINE_SECRET_KEY")
+            session_token = ""
+            if not (ak and sk):
+                logger.debug("Get AK/SK from environment variables failed.")
+                credential = get_credential_from_vefaas_iam()
+                ak = credential.access_key_id
+                sk = credential.secret_access_key
+                session_token = credential.session_token
+            else:
+                logger.debug("Successfully get AK/SK from environment variables.")
+
+            header = {"X-Security-Token": session_token}
+            signed_header = request_sign(
+                header, ak, sk, self.region, self.url, path, action, body_json
+            )
+
+            signed_header.update(
+                {
+                    "Content-Type": "application/json",
+                    "X-Top-Service": "llmshield",
+                    "X-Top-Region": self.region,
+                }
+            )
 
         try:
             response = requests.post(
-                url + path,
+                self.url + path,
                 headers=signed_header,
                 data=body_json,
                 params={"Action": action, "Version": version},
@@ -151,7 +167,6 @@ class LLMShieldPlugin(BasePlugin):
                     f"LLM Shield HTTP error: {response.status_code} - {response.text}"
                 )
                 return None
-
             response = response.json()
         except requests.exceptions.Timeout:
             logger.error("LLM Shield request timeout")
