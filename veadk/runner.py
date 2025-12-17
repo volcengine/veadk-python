@@ -137,6 +137,10 @@ def intercept_new_message(process_func):
                 new_message=new_message,
                 **kwargs,
             ):
+                if event is None:
+                    logger.error(f"Event is None with new_message: {new_message}")
+                    continue
+
                 yield event
                 event_metadata = f"| agent_name: {event.author} , user_id: {user_id} , session_id: {session_id} , invocation_id: {event.invocation_id}"
                 if event.get_function_calls():
