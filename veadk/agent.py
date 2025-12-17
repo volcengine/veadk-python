@@ -44,7 +44,11 @@ from veadk.knowledgebase import KnowledgeBase
 from veadk.memory.long_term_memory import LongTermMemory
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.processors import BaseRunProcessor, NoOpRunProcessor
-from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INSTRUCTION
+from veadk.prompts.agent_default_prompt import (
+    DEFAULT_DESCRIPTION,
+    DEFAULT_INSTRUCTION,
+)
+from veadk.prompts.prompt_manager import BasePromptManager
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_asyncio, patch_tracer
@@ -95,6 +99,8 @@ class Agent(LlmAgent):
     tools: list[ToolUnion] = []
 
     sub_agents: list[BaseAgent] = Field(default_factory=list, exclude=True)
+
+    prompt_manager: Optional[BasePromptManager] = None
 
     knowledgebase: Optional[KnowledgeBase] = None
 
@@ -202,6 +208,9 @@ class Agent(LlmAgent):
             else:
                 self.before_agent_callback = check_agent_authorization
 
+        if self.prompt_manager:
+            self.instruction = self.prompt_manager.get_prompt
+
         logger.info(f"VeADK version: {VERSION}")
 
         logger.info(f"{self.__class__.__name__} `{self.name}` init done.")
@@ -274,14 +283,20 @@ class Agent(LlmAgent):
             return
 
         if not self.tracers:
-            from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
+            from veadk.tracing.telemetry.opentelemetry_tracer import (
+                OpentelemetryTracer,
+            )
 
             self.tracers.append(OpentelemetryTracer())
 
         exporters = self.tracers[0].exporters  # type: ignore
 
-        from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporter
-        from veadk.tracing.telemetry.exporters.cozeloop_exporter import CozeloopExporter
+        from veadk.tracing.telemetry.exporters.apmplus_exporter import (
+            APMPlusExporter,
+        )
+        from veadk.tracing.telemetry.exporters.cozeloop_exporter import (
+            CozeloopExporter,
+        )
         from veadk.tracing.telemetry.exporters.tls_exporter import TLSExporter
 
         if enable_apmplus_tracer and not any(
