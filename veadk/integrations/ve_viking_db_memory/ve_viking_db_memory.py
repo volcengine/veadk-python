@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import json
+import os
 import threading
 
 from volcengine.ApiInfo import ApiInfo
@@ -281,6 +282,9 @@ class VikingDBMemoryClient(Service):
         params = {
             "CollectionName": collection_name,
             "ProjectName": project,
+            "CollectionType": os.getenv(
+                "DATABASE_VIKINGMEM_COLLECTION_TYPE", "standard"
+            ),
             "Description": description,
             "CustomEventTypeSchemas": custom_event_type_schemas,
             "CustomEntityTypeSchemas": custom_entity_type_schemas,
