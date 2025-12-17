@@ -17,7 +17,7 @@
 
 在代码中直接定义智能体是最常见且最灵活的方式。此方法便于动态调整参数、集成外部模块并进行单元测试。您可以创建一个最简单的 Agent，无需额外设置。**Agent 缺省属性将来自环境变量或默认值。**如下代码实现了一个最简化的 Agent 定义与运行：
 
-=== "代码"
+=== "Python"
 
     ```python title="agent.py" linenums="1" hl_lines="5"
     import asyncio
@@ -30,6 +30,66 @@
     response = asyncio.run(runner.run(messages="Hi!"))
     print(response)
     ```
+
+=== "Golang"
+
+    ```golang title="agent.go" linenums="1" hl_lines="18"
+    package main
+
+    import (
+        "context"
+        "fmt"
+    
+        "github.com/google/uuid"
+        _ "github.com/volcengine/veadk-go/agent"
+        veagent "github.com/volcengine/veadk-go/agent/llmagent"
+        "google.golang.org/adk/agent"
+        "google.golang.org/adk/runner"
+        "google.golang.org/adk/session"
+        "google.golang.org/genai"
+    )
+    
+    func main() {
+        ctx := context.Background()
+        veAgent, err := veagent.New(&veagent.Config{})
+        if err != nil {
+            fmt.Printf("NewVeAgent failed: %v", err)
+            return
+        }
+    
+        appName := "veAgent_app"
+        userID := "user-1234"
+        sessionId := fmt.Sprintf("%s-%s", session.KeyPrefixTemp, uuid.NewString())
+        sessionService := session.InMemoryService()
+        agentRunner, err := runner.New(runner.Config{
+            AppName:        appName,
+            Agent:          veAgent,
+            SessionService: sessionService,
+        })
+        if err != nil {
+            fmt.Printf("New runner error:%v", err)
+            return
+        }
+    
+        _, err = sessionService.Create(ctx, &session.CreateRequest{
+            AppName:   appName,
+            UserID:    userID,
+            SessionID: sessionId,
+        })
+        if err != nil {
+            fmt.Printf("Create session error:%v", err)
+            return
+        }
+    
+        for event, err := range agentRunner.Run(ctx, userID, sessionId, genai.NewContentFromText("你好", genai.RoleUser), agent.RunConfig{StreamingMode: agent.StreamingModeNone}) {
+            if err != nil {
+                fmt.Printf("got unexpected error: %v", err)
+            }
+            fmt.Printf("got event: %s\n", event.Content.Parts[0].Text)
+        }
+    }
+    ```
+
 
 === "所需环境变量"
 
@@ -50,15 +110,33 @@
 
 您也可以通过以下方式设置更多 Agent 元数据信息：
 
-```python title="agent.py" linenums="1" hl_lines="4-6"
-from veadk import Agent, Runner
+=== "Python"
 
-root_agent = Agent(
-    name="life_assistant",
-    description="生活助手",
-    instruction="你是一个生活助手，你可以回答用户的问题。",
-)
-```
+    ```python title="agent.py" linenums="1" hl_lines="4-6"
+    from veadk import Agent, Runner
+    
+    root_agent = Agent(
+        name="life_assistant",
+        description="生活助手",
+        instruction="你是一个生活助手，你可以回答用户的问题。",
+    )
+    ```
+
+=== "Golang"
+
+    ```golang title="agent.go" linenums="1" hl_lines="2-4"
+    cfg := &veagent.Config{}
+	cfg.Name = "life_assistant"
+	cfg.Description = "生活助手"
+	cfg.Instruction = "你是一个生活助手，你可以回答用户的问题。"
+
+	veAgent, err := veagent.New(cfg)
+	if err != nil {
+		fmt.Printf("NewVeAgent failed: %v", err)
+		return
+	}
+    ```
+
 
 其中，`name` 代表 Agent 的名称，`description` 是对 Agent 功能的简单描述（在Agent Tree中唯一标识某个Agent），`instruction` 是 Agent 的系统提示词，用于定义其行为和响应风格。
 
@@ -66,18 +144,38 @@ root_agent = Agent(
 
 如果您想使用本地模型或其他提供商的模型，可以在初始化时指定模型相关配置：
 
-```python title="agent.py" linenums="1" hl_lines="4-7"
-from veadk import Agent
+=== "Python"
 
-agent = Agent(
-    model_provider="...",
-    model_name="...",
-    model_api_key="...",
-    model_api_base="..."
-)
-```
+    ```python title="agent.py" linenums="1" hl_lines="4-7"
+    from veadk import Agent
+    
+    agent = Agent(
+        model_provider="...",
+        model_name="...",
+        model_api_key="...",
+        model_api_base="..."
+    )
+    ```
 
-由于 VeADK 的 Agent 基于 [LiteLLM]() 实现，因此您可以使用 LiteLLM 支持的所有模型提供商。您可以查看 [LiteLLM 支持的模型提供商列表](https://docs.litellm.ai/docs/providers)来设置 `model_provider` 参数。
+=== "Golang"
+
+    ```golang title="agent.go" linenums="1" hl_lines="2-4"
+    cfg := &veagent.Config{
+		ModelName: "...",
+		ModelAPIBase: "...",
+		ModelAPIKey: "...",
+	}
+    
+    veAgent, err := veagent.New(cfg)
+	if err != nil {
+		fmt.Printf("NewVeAgent failed: %v", err)
+		return
+	}
+    ```
+
+由于 python VeADK 的 Agent 基于 [LiteLLM]() 实现，因此您可以使用 LiteLLM 支持的所有模型提供商。您可以查看 [LiteLLM 支持的模型提供商列表](https://docs.litellm.ai/docs/providers)来设置 `model_provider` 参数。
+
+golang 暂不支持 LiteLLM，因此 VeADK 的 Agent 基于 OpenAI 实现，因此您可以使用所有支持OpenAI协议的模型。
 
 #### 设置模型客户端
 
@@ -98,20 +196,46 @@ agent = Agent(model=llm)
 
 此外，您还可以根据[火山引擎方舟大模型平台](https://www.volcengine.com/product/ark)的能力，指定一些[额外选项](https://www.volcengine.com/docs/82379/1494384?lang=zh)，例如您可以禁用豆包 1.6 系列模型的思考能力，以实现更加快速的响应：
 
-```python title="agent.py" linenums="1" hl_lines="7"
-import asyncio
+=== "Python"
 
-from veadk import Agent, Runner
+    ```python title="agent.py" linenums="1" hl_lines="7"
+    import asyncio
+    
+    from veadk import Agent, Runner
+    
+    agent = Agent(
+        model_name="doubao-seed-1.6-250615",
+        model_extra_config={"extra_body": {"thinking": {"type": "disabled"}}},
+    )
+    runner = Runner(agent=agent)
+    
+    response = asyncio.run(runner.run(messages="hi!"))
+    print(response)
+    ```
 
-agent = Agent(
-    model_name="doubao-seed-1.6-250615",
-    model_extra_config={"extra_body": {"thinking": {"type": "disabled"}}},
-)
-runner = Runner(agent=agent)
+=== "Golang"
 
-response = asyncio.run(runner.run(messages="hi!"))
-print(response)
-```
+    ```golang title="agent.go" linenums="1" hl_lines="6-14"
+    import (
+        _ "github.com/volcengine/veadk-go/agent"
+        veagent "github.com/volcengine/veadk-go/agent/llmagent"
+    )
+    
+    veAgent, err := veagent.New(&veagent.Config{
+		ModelExtraConfig: map[string]any{
+			"extra_body": map[string]any{
+				"thinking": map[string]string{
+					"type": "disabled",
+				},
+			},
+		},
+	})
+	if err != nil {
+		fmt.Printf("NewVeAgent failed: %v", err)
+		return
+	}
+    ```
+
 
 ### 通过配置文件
 
