@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import os
-from typing import Optional, Union
+from typing import Optional, Union, AsyncGenerator
 
 # If user didn't set LITELLM_LOCAL_MODEL_COST_MAP, set it to True
 # to enable local model cost map.
@@ -24,10 +24,12 @@ from typing import Optional, Union
 if not os.getenv("LITELLM_LOCAL_MODEL_COST_MAP"):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
-from google.adk.agents import LlmAgent, RunConfig
+from google.adk.agents import LlmAgent, RunConfig, InvocationContext
 from google.adk.agents.base_agent import BaseAgent
+from google.adk.agents.context_cache_config import ContextCacheConfig
 from google.adk.agents.llm_agent import InstructionProvider, ToolUnion
 from google.adk.agents.run_config import StreamingMode
+from google.adk.events import Event, EventActions
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.runners import Runner
 from google.genai import types
@@ -44,10 +46,15 @@ from veadk.knowledgebase import KnowledgeBase
 from veadk.memory.long_term_memory import LongTermMemory
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.processors import BaseRunProcessor, NoOpRunProcessor
-from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INSTRUCTION
+from veadk.prompts.agent_default_prompt import (
+    DEFAULT_DESCRIPTION,
+    DEFAULT_INSTRUCTION,
+)
+from veadk.prompts.prompt_manager import BasePromptManager
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_asyncio, patch_tracer
+from veadk.utils.misc import check_litellm_version
 from veadk.version import VERSION
 
 patch_tracer()
@@ -96,12 +103,18 @@ class Agent(LlmAgent):
 
     sub_agents: list[BaseAgent] = Field(default_factory=list, exclude=True)
 
+    prompt_manager: Optional[BasePromptManager] = None
+
     knowledgebase: Optional[KnowledgeBase] = None
 
     short_term_memory: Optional[ShortTermMemory] = None
     long_term_memory: Optional[LongTermMemory] = None
 
     tracers: list[BaseTracer] = []
+
+    enable_responses: bool = False
+
+    context_cache_config: Optional[ContextCacheConfig] = None
 
     run_processor: Optional[BaseRunProcessor] = Field(default=None, exclude=True)
     """Optional run processor for intercepting and processing agent execution flows.
@@ -151,12 +164,31 @@ class Agent(LlmAgent):
         logger.info(f"Model extra config: {self.model_extra_config}")
 
         if not self.model:
-            self.model = LiteLlm(
-                model=f"{self.model_provider}/{self.model_name}",
-                api_key=self.model_api_key,
-                api_base=self.model_api_base,
-                **self.model_extra_config,
-            )
+            if self.enable_responses:
+                min_version = "1.79.3"
+                check_litellm_version(min_version)
+
+                from veadk.models.ark_llm import ArkLlm
+
+                self.model = ArkLlm(
+                    model=f"{self.model_provider}/{self.model_name}",
+                    api_key=self.model_api_key,
+                    api_base=self.model_api_base,
+                    **self.model_extra_config,
+                )
+                if not self.context_cache_config:
+                    self.context_cache_config = ContextCacheConfig(
+                        cache_intervals=100,  # maximum number
+                        ttl_seconds=315360000,
+                        min_tokens=0,
+                    )
+            else:
+                self.model = LiteLlm(
+                    model=f"{self.model_provider}/{self.model_name}",
+                    api_key=self.model_api_key,
+                    api_base=self.model_api_base,
+                    **self.model_extra_config,
+                )
             logger.debug(
                 f"LiteLLM client created with config: {self.model_extra_config}"
             )
@@ -202,12 +234,37 @@ class Agent(LlmAgent):
             else:
                 self.before_agent_callback = check_agent_authorization
 
+        if self.prompt_manager:
+            self.instruction = self.prompt_manager.get_prompt
+
         logger.info(f"VeADK version: {VERSION}")
 
         logger.info(f"{self.__class__.__name__} `{self.name}` init done.")
         logger.debug(
             f"Agent: {self.model_dump(include={'name', 'model_name', 'model_api_base', 'tools'})}"
         )
+
+    async def _run_async_impl(
+        self, ctx: InvocationContext
+    ) -> AsyncGenerator[Event, None]:
+        if self.enable_responses:
+            if not ctx.context_cache_config:
+                ctx.context_cache_config = self.context_cache_config
+
+        async for event in super()._run_async_impl(ctx):
+            yield event
+            if self.enable_responses and event.cache_metadata:
+                # for persistent short-term memory with response api
+                session_state_event = Event(
+                    invocation_id=event.invocation_id,
+                    author=event.author,
+                    actions=EventActions(
+                        state_delta={
+                            "response_id": event.cache_metadata.cache_name,
+                        }
+                    ),
+                )
+                yield session_state_event
 
     async def _run(
         self,
@@ -274,14 +331,20 @@ class Agent(LlmAgent):
             return
 
         if not self.tracers:
-            from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
+            from veadk.tracing.telemetry.opentelemetry_tracer import (
+                OpentelemetryTracer,
+            )
 
             self.tracers.append(OpentelemetryTracer())
 
         exporters = self.tracers[0].exporters  # type: ignore
 
-        from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporter
-        from veadk.tracing.telemetry.exporters.cozeloop_exporter import CozeloopExporter
+        from veadk.tracing.telemetry.exporters.apmplus_exporter import (
+            APMPlusExporter,
+        )
+        from veadk.tracing.telemetry.exporters.cozeloop_exporter import (
+            CozeloopExporter,
+        )
         from veadk.tracing.telemetry.exporters.tls_exporter import TLSExporter
 
         if enable_apmplus_tracer and not any(

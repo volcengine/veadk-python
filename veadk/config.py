@@ -19,6 +19,7 @@ from dotenv import find_dotenv, load_dotenv, dotenv_values
 from pydantic import BaseModel, Field
 
 from veadk.configs.auth_configs import VeIdentityConfig
+from veadk.configs.model_configs import RealtimeModelConfig
 from veadk.configs.database_configs import (
     MysqlConfig,
     OpensearchConfig,
@@ -70,6 +71,7 @@ class VeADKConfig(BaseModel):
     )
 
     veidentity: VeIdentityConfig = Field(default_factory=VeIdentityConfig)
+    realtime_model: RealtimeModelConfig = Field(default_factory=RealtimeModelConfig)
 
 
 def getenv(

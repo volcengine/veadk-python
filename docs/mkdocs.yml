@@ -45,6 +45,7 @@ nav:
       - 构建智能体: agent/agent.md
       - 多智能体交互: agent/agents.md
       - A2A 协议: agent/agent-to-agent.md
+      - Prompt 管理: agent/prompt.md
     - 执行引擎:
       - Runner: runner.md
     - 个性化引擎——记忆:

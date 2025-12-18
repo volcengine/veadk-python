@@ -117,6 +117,10 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         default_factory=lambda: os.getenv("DATABASE_VIKING_PROJECT", "default")
     )
 
+    version: str = Field(
+        default_factory=lambda: os.getenv("DATABASE_VIKING_VERSION", "2")
+    )
+
     region: str = Field(
         default_factory=lambda: os.getenv("DATABASE_VIKING_REGION", "cn-beijing")
     )
@@ -457,12 +461,16 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
 
     def create_collection(self) -> None:
         CREATE_COLLECTION_PATH = "/api/knowledge/collection/create"
-
+        if self.version not in ["2", "4"]:
+            raise ValueError(
+                f"The version number must be 2 or 4. The current value: {self.version}. For details, please refer to: `https://www.volcengine.com/docs/84313/1254593?lang=zh`"
+            )
         response = self._do_request(
             body={
                 "name": self.index,
                 "project": self.volcengine_project,
                 "description": "Created by Volcengine Agent Development Kit (VeADK).",
+                "version": int(self.version),
             },
             path=CREATE_COLLECTION_PATH,
             method="POST",

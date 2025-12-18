@@ -12,4 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-VERSION = "0.5.0"
+from .doubao_realtime_voice_llm import DoubaoRealtimeVoice
+from google.adk.models.registry import LLMRegistry
+
+__all__ = [
+    "DoubaoRealtimeVoice",
+]
+
+LLMRegistry.register(DoubaoRealtimeVoice)

@@ -106,8 +106,8 @@ def execute_skills(
         f"Execute skills in session_id={session_id}, tool_id={tool_id}, host={host}, service={service}, region={region}, timeout={timeout}"
     )
 
-    ak = getenv("VOLCENGINE_ACCESS_KEY")
-    sk = getenv("VOLCENGINE_SECRET_KEY")
+    ak = tool_context.state.get("VOLCENGINE_ACCESS_KEY")
+    sk = tool_context.state.get("VOLCENGINE_SECRET_KEY")
     header = {}
 
     if not (ak and sk):
@@ -141,6 +141,7 @@ def execute_skills(
         version="2018-01-01",
         region=region,
         host="sts.volcengineapi.com",
+        header=header,
     )
     try:
         account_id = res["Result"]["AccountId"]
@@ -156,23 +157,62 @@ def execute_skills(
     code = f"""
 import subprocess
 import os
+import time
+import select
+import sys
 
 env = os.environ.copy()
 for key, value in {env_vars!r}.items():
     if key not in env:
         env[key] = value
 
-result = subprocess.run(
+process = subprocess.Popen(
     {cmd!r},
     cwd='/home/gem/veadk_skills',
-    capture_output=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
     text=True,
     env=env,
-    timeout={timeout - 10},
+    bufsize=1, 
+    universal_newlines=True
 )
-print(result.stdout)
-if result.stderr:
-    print(result.stderr)
+
+start_time = time.time()
+timeout = {timeout - 10}
+
+with open('/tmp/agent.log', 'w') as log_file:
+    while True:
+        if time.time() - start_time > timeout:
+            process.kill()
+            log_file.write('log_type=stderr request_id=x function_id=y revision_number=1 Process timeout\\n')
+            break
+            
+        reads = [process.stdout.fileno(), process.stderr.fileno()]
+        ret = select.select(reads, [], [], 1)
+        
+        for fd in ret[0]:
+            if fd == process.stdout.fileno():
+                line = process.stdout.readline()
+                if line:
+                    log_file.write(f'log_type=stdout request_id=x function_id=y revision_number=1 {{line}}')
+                    log_file.flush()
+            if fd == process.stderr.fileno():
+                line = process.stderr.readline()
+                if line:
+                    log_file.write(f'log_type=stderr request_id=x function_id=y revision_number=1 {{line}}')
+                    log_file.flush()
+        
+        if process.poll() is not None:
+            break
+    
+    for line in process.stdout:
+        log_file.write(f'log_type=stdout request_id=x function_id=y revision_number=1 {{line}}')
+    for line in process.stderr:
+        log_file.write(f'log_type=stderr request_id=x function_id=y revision_number=1 {{line}}')
+
+with open('/tmp/agent.log', 'r') as log_file:
+    output = log_file.read()
+    print(output)
     """
 
     res = ve_request(
