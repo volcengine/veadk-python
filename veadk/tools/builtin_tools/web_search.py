@@ -38,7 +38,12 @@ def web_search(query: str, tool_context: ToolContext | None = None) -> list[str]
     """
     ak = None
     sk = None
-    if tool_context:
+    # First try to get tool-specific AK/SK
+    ak = os.getenv("TOOL_WEB_SEARCH_ACCESS_KEY")
+    sk = os.getenv("TOOL_WEB_SEARCH_SECRET_KEY")
+    if ak and sk:
+        logger.debug("Successfully get tool-specific AK/SK.")
+    elif tool_context:
         ak = tool_context.state.get("VOLCENGINE_ACCESS_KEY")
         sk = tool_context.state.get("VOLCENGINE_SECRET_KEY")
     session_token = ""
