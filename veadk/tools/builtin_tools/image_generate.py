@@ -122,25 +122,23 @@ def handle_single_task_sync(
                 and sequential_image_generation == "auto"
                 and max_images
             ):
-                response = (
-                    client.images.generate(
-                        model=getenv(
-                            "MODEL_IMAGE_NAME",
-                            DEFAULT_IMAGE_GENERATE_MODEL_NAME,
-                        ),
-                        **inputs,
-                        sequential_image_generation_options=SequentialImageGenerationOptions(
-                            max_images=max_images
-                        ),
-                        extra_headers={
-                            "veadk-source": "veadk",
-                            "veadk-version": VERSION,
-                            "User-Agent": f"VeADK/{VERSION}",
-                            "X-Client-Request-Id": getenv(
-                                "MODEL_AGENT_CLIENT_REQ_ID", f"veadk/{VERSION}"
-                            ),
-                        },
+                response = client.images.generate(
+                    model=getenv(
+                        "MODEL_IMAGE_NAME",
+                        DEFAULT_IMAGE_GENERATE_MODEL_NAME,
                     ),
+                    **inputs,
+                    sequential_image_generation_options=SequentialImageGenerationOptions(
+                        max_images=max_images
+                    ),
+                    extra_headers={
+                        "veadk-source": "veadk",
+                        "veadk-version": VERSION,
+                        "User-Agent": f"VeADK/{VERSION}",
+                        "X-Client-Request-Id": getenv(
+                            "MODEL_AGENT_CLIENT_REQ_ID", f"veadk/{VERSION}"
+                        ),
+                    },
                 )
             else:
                 response = client.images.generate(
