@@ -33,13 +33,13 @@ title: A2A Agent
 | **共享内存或上下文** | 当 Sub Agent 需要直接访问主 Agent 的内部状态或共享内存以提高效率时，A2A 的网络开销与序列化/反序列化会适得其反               | 
 | **简单的辅助函数**  |对于无需独立部署或复杂状态管理的小型复用逻辑，直接在同一 Agent 中编写函数或类，通常比拆分为独立的 A2A Agent 更合适               |
 
-## veADK 中的 A2A 工作流： <!-- 标题序号: 3 -->
-**veADK** 简化了基于 A2A 协议构建并连接 Agent 的过程。下面是一个直观的工作流概览：
+## VeADK 中的 A2A 工作流： <!-- 标题序号: 3 -->
+**VeADK** 简化了基于 A2A 协议构建并连接 Agent 的过程。下面是一个直观的工作流概览：
 
-1. **对 Agent 开放访问（Exposing）：** 从现有的 veADK Agent 入手，将其转化为一个 A2AServer, 把它变成能让其他 Agent 可访问的形式。A2AServer 可以视作为 Agent 搭建的一个 Web 服务，其他 Agent 可以通过它向您的 Agent 发送请求。
-2. **连接到开放访问的 Agent（Consuming）：**在另一个 Agent 中（可能运行于同一台机器，也可能运行于不同机器），可使用名为 `RemoteVeAgent`  的 veADK 组件，作为客户端访问上一步创建的 A2AServer，`RemoteVeAgent` 会在后台处理网络通信、鉴权和数据格式等复杂问题。
+1. **对 Agent 开放访问（Exposing）：** 从现有的 VeADK Agent 入手，将其转化为一个 A2AServer, 把它变成能让其他 Agent 可访问的形式。A2AServer 可以视作为 Agent 搭建的一个 Web 服务，其他 Agent 可以通过它向您的 Agent 发送请求。
+2. **连接到开放访问的 Agent（Consuming）：**在另一个 Agent 中（可能运行于同一台机器，也可能运行于不同机器），可使用名为 `RemoteVeAgent`  的 VeADK 组件，作为客户端访问上一步创建的 A2AServer，`RemoteVeAgent` 会在后台处理网络通信、鉴权和数据格式等复杂问题。
 
-**veADK** 对网络层进行了抽象封装，使分布式多 Agent 系统使用体验接近本地系统, 下图展示了一个完整的 **A2A 系统拓扑**：
+**VeADK** 对网络层进行了抽象封装，使分布式多 Agent 系统使用体验接近本地系统, 下图展示了一个完整的 **A2A 系统拓扑**：
 ```mermaid
 flowchart LR
         A[Root Agent<br/>（需要访问其它 Agent）<br/>]
@@ -48,7 +48,7 @@ flowchart LR
         end
         A <-->RemoteVeAgent
         B[您的 Agent 代码<br/>（开放访问）<br/>]
-        C[A2A Server<br/>（veADK 组件）<br/>] 
+        C[A2A Server<br/>（VeADK 组件）<br/>] 
         C -->B
         RemoteVeAgent <-->|网络请求交互|C
 ```
@@ -150,7 +150,7 @@ sequenceDiagram
 ```
 
 ## A2A Client 鉴权参数
-veADK 的 A2A 鉴权机制提供了灵活的认证选项，支持标准的 Bearer token 认证和查询参数认证两种常见模式，同时也支持无认证的公开服务场景，能够满足不同的安全需求
+VeADK 的 A2A 鉴权机制提供了灵活的认证选项，支持标准的 Bearer token 认证和查询参数认证两种常见模式，同时也支持无认证的公开服务场景，能够满足不同的安全需求
 ### Querystring 方式
 - 将认证令牌作为 URL 查询参数 token={auth_token} 传递
 - 通过设置 auth_method 为 "querystring" 来启用
@@ -184,7 +184,7 @@ veADK 的 A2A 鉴权机制提供了灵活的认证选项，支持标准的 Beare
     ![火山 veFaaS 应用中的认证信息](../assets/images/agents/a2a_querystring.png)
 
 ### 自定义 HTTP 客户端
-在 veADK中，主要通过 RemoteVeAgent 类来实现自定义 HTTP 客户端的配置，它提供了一个 httpx_client 参数，允许您传入预配置的 httpx.AsyncClient 实例。这使得您可以灵活地控制 HTTP 请求的各种参数，如代理设置、超时控制、连接池管理等，从而更好地适应不同的网络环境和需求。
+在 VeADK中，主要通过 RemoteVeAgent 类来实现自定义 HTTP 客户端的配置，它提供了一个 httpx_client 参数，允许您传入预配置的 httpx.AsyncClient 实例。这使得您可以灵活地控制 HTTP 请求的各种参数，如代理设置、超时控制、连接池管理等，从而更好地适应不同的网络环境和需求。
 #### 您可以通过运参考以下示例代码设置创建自定义的 HTTP 客户端，可配置各种 HTTP 客户端参数，如：
 - 超时设置
 - 代理配置
