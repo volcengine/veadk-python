@@ -74,7 +74,7 @@ class Agent(LlmAgent):
         name (str): The name of the agent.
         description (str): A description of the agent, useful in A2A scenarios.
         instruction (Union[str, InstructionProvider]): The instruction or instruction provider.
-        model_name (str): Name of the model used by the agent.
+        model_name (Union[str, List[str]]): Name of the model used by the agent.
         model_provider (str): Provider of the model (e.g., openai).
         model_api_base (str): The base URL of the model API.
         model_api_key (str): The API key for accessing the model.
@@ -93,7 +93,9 @@ class Agent(LlmAgent):
     description: str = DEFAULT_DESCRIPTION
     instruction: Union[str, InstructionProvider] = DEFAULT_INSTRUCTION
 
-    model_name: str = Field(default_factory=lambda: settings.model.name)
+    model_name: Union[str, list[str]] = Field(
+        default_factory=lambda: settings.model.name
+    )
     model_provider: str = Field(default_factory=lambda: settings.model.provider)
     model_api_base: str = Field(default_factory=lambda: settings.model.api_base)
     model_api_key: str = Field(default_factory=lambda: settings.model.api_key)
@@ -183,10 +185,29 @@ class Agent(LlmAgent):
                         min_tokens=0,
                     )
             else:
+                fallbacks = None
+                if isinstance(self.model_name, list):
+                    if self.model_name:
+                        model_name = self.model_name[0]
+                        fallbacks = [
+                            f"{self.model_provider}/{m}" for m in self.model_name[1:]
+                        ]
+                        logger.info(
+                            f"Using primary model: {model_name}, with fallbacks: {self.model_name[1:]}"
+                        )
+                    else:
+                        model_name = settings.model.name
+                        logger.warning(
+                            f"Empty model_name list provided, using default model from settings: {model_name}"
+                        )
+                else:
+                    model_name = self.model_name
+
                 self.model = LiteLlm(
-                    model=f"{self.model_provider}/{self.model_name}",
+                    model=f"{self.model_provider}/{model_name}",
                     api_key=self.model_api_key,
                     api_base=self.model_api_base,
+                    fallbacks=fallbacks,
                     **self.model_extra_config,
                 )
             logger.debug(
