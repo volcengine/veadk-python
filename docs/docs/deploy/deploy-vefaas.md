@@ -1,33 +1,39 @@
 ---
-title: 部署到火山引擎
+title: 部署到 VeFaaS
 ---
 
+本教程将介绍如何将您的 Agent 部署到火山引擎 VeFaaS 函数服务。
+
 ## 前置准备
+
 在开始部署之前，请确保你已完成以下准备工作：
 
-1.  **创建火山引擎账号**：你首先需要一个有效的火山引擎账号。
-2.  **开通相关云服务**：为了成功部署和访问 Veadk 应用，你需要在火山引擎控制台中激活以下服务。这些通常是首次访问服务时根据引导完成的一次性操作。
-    *   [**函数服务 (veFaaS)**](https://console.volcengine.com/vefaas)：用于托管和运行你的 Agent 应用代码。
-    *   [**API 网关 (API Gateway)**](https://console.volcengine.com/veapig)：用于创建和管理 API，使你的 Agent 应用能够从外部访问。
+1. **创建火山引擎账号**：你首先需要一个有效的火山引擎账号。
+2. **开通相关云服务**：为了成功部署和访问 Veadk 应用，你需要在火山引擎控制台中激活以下服务。这些通常是首次访问服务时根据引导完成的一次性操作。
+   * [**函数服务 (veFaaS)**](https://console.volcengine.com/vefaas)：用于托管和运行你的 Agent 应用代码。
+   * [**API 网关 (API Gateway)**](https://console.volcengine.com/veapig)：用于创建和管理 API，使你的 Agent 应用能够从外部访问。
+
 在部署到火山引擎前，你需要提前在火山引擎控制台开通 [函数服务](https://console.volcengine.com/vefaas) 和  [API网关](https://console.volcengine.com/veapig) 服务。如果你事先已开通过服务，可以忽略该环节。
 
 ### 首次开通服务授权
 
 如果你是首次使用上述服务，控制台会引导你完成必要的 IAM (Identity and Access Management) 角色授权。
 
-1.  访问 [函数服务](https://console.volcengine.com/vefaas) 或 [API 网关](https://console.volcengine.com/veapig) 的控制台页面。
-2.  在页面弹出的授权提示中，单击 **立即授权**。
-3.  授权成功后，系统会自动跳转至对应服务的控制台主页，表明服务已成功开通。
+1. 访问 [函数服务](https://console.volcengine.com/vefaas) 或 [API 网关](https://console.volcengine.com/veapig) 的控制台页面。
+2. 在页面弹出的授权提示中，单击 **立即授权**。
+3. 授权成功后，系统会自动跳转至对应服务的控制台主页，表明服务已成功开通。
 
 > ⚠️ **注意**：此授权步骤是必需的，它授予函数服务和 API 网关访问其他云资源的权限，以确保应用能够正常部署和运行。
 
-
 ### 函数服务
+
 1. 首次进入 [函数服务](https://console.volcengine.com/vefaas) 页面，控制台将会提醒你进行IAM角色的开通，请点击【立即授权】同意角色开通。
 ![IAM 角色开通](./assets/images/deploy/vefaas_attach_role.png)
 2. 点击后，控制台将会显示你已完成授权。几秒后将会自动跳转会 [函数服务](https://console.volcengine.com/vefaas) 控制台。当展示如下页面时，[函数服务](https://console.volcengine.com/vefaas) 服务即开通成功。
 ![IAM 角色开通](./assets/images/deploy/vefaas_index.png)
+
 ### API网关
+
 1. 首次进入 [API网关](https://console.volcengine.com/veapig) 页面，控制台将会提醒你进行IAM角色的开通，请点击【立即授权】同意角色开通。
 ![IAM 角色开通](./assets/images/deploy/veapig_attach_role.png)
 2. 点击后，控制台将会显示你已完成授权。几秒后将会自动跳转会 [API网关](https://console.volcengine.com/veapig) 控制台。当展示如下页面时，[API网关](https://console.volcengine.com/veapig) 服务即开通成功。
@@ -37,9 +43,9 @@ title: 部署到火山引擎
 
 Veadk 提供多种部署方式以适应不同的开发工作流：
 
-*   **通过命令行工具 (CLI) 部署**：最快捷的方式，适合快速创建、部署和迭代 Agent 应用。
-*   **通过 Python SDK 部署**：允许你通过编写代码以编程方式管理部署流程，适合集成到自动化脚本或现有项目中。
-*   **设置持续交付 (CI/CD)**：与代码仓库（如 GitHub）集成，实现代码提交后自动构建和部署，是团队协作和生产环境的最佳实践。
+* **通过命令行工具 (CLI) 部署**：最快捷的方式，适合快速创建、部署和迭代 Agent 应用。
+* **通过 Python SDK 部署**：允许你通过编写代码以编程方式管理部署流程，适合集成到自动化脚本或现有项目中。
+* **设置持续交付 (CI/CD)**：与代码仓库（如 GitHub）集成，实现代码提交后自动构建和部署，是团队协作和生产环境的最佳实践。
 
 接下来，我们将详细介绍每种部署方式的操作步骤。
 
@@ -81,16 +87,17 @@ Run python `deploy.py` for deployment on Volcengine FaaS platform.
 
 **参数说明**：
 
-*   **Local directory name**：项目在本地创建的目录名称。
-*   **Volcengine FaaS application name**：你的应用在火山引擎函数服务平台的名称。**注意**：名称中不能包含下划线 `_`。
-*   **Volcengine API Gateway ...**：API 网关相关的实例、服务和上游名称。这些为**可选**参数。如果留空，Veadk 会在部署时自动创建和关联相应的网关资源。
-*   **Choose a deploy mode**：选择部署模式。
-    *   `A2A/MCP Server`：标准的后端 Agent 服务模式。
-    *   `VeADK Web / Google ADK Web`：如果你需要一个 Web 交互界面，请选择此项。
+* **Local directory name**：项目在本地创建的目录名称。
+* **Volcengine FaaS application name**：你的应用在火山引擎函数服务平台的名称。**注意**：名称中不能包含下划线 `_`。
+* **Volcengine API Gateway ...**：API 网关相关的实例、服务和上游名称。这些为**可选**参数。如果留空，Veadk 会在部署时自动创建和关联相应的网关资源。
+* **Choose a deploy mode**：选择部署模式。
+  * `A2A/MCP Server`：标准的后端 Agent 服务模式。
+  * `VeADK Web / Google ADK Web`：如果你需要一个 Web 交互界面，请选择此项。
 
 项目初始化完成后，你可以在生成的 `deploy.py` 文件中随时修改这些配置。
 
 生成后的项目结构如下：
+
 ```shell
 veadk-cloud-proj
 ├── __init__.py
@@ -112,9 +119,9 @@ veadk-cloud-proj
 
 部署前，你需要配置必要的环境变量，特别是访问火山引擎所需的身份凭证。
 
-1.  在项目根目录下，将 `config.yaml.example` 文件复制一份并重命名为 `config.yaml`。
-2.  编辑 `config.yaml` 文件，填入你的火山引擎访问密钥 (Access Key 和 Secret Key)。
-3.  如果是新建的火山账号，还需确认是否已经授权给`ServerlessApplicationRole`角色。进入[创建应用页面](https://console.volcengine.com/vefaas/region:vefaas+cn-beijing/application/create?templateId=67f7b4678af5a6000850556c)点击[一键授权]即可。
+1. 在项目根目录下，将 `config.yaml.example` 文件复制一份并重命名为 `config.yaml`。
+2. 编辑 `config.yaml` 文件，填入你的火山引擎访问密钥 (Access Key 和 Secret Key)。
+3. 如果是新建的火山账号，还需确认是否已经授权给`ServerlessApplicationRole`角色。进入[创建应用页面](https://console.volcengine.com/vefaas/region:vefaas+cn-beijing/application/create?templateId=67f7b4678af5a6000850556c)点击[一键授权]即可。
 ![一键授权](./assets/images/deploy/add_permission.png)
 
 ```yaml
@@ -141,13 +148,15 @@ Test message: How is the weather like in Beijing?
 ```
 
 ### 方式二：部署现有项目
+
 如果你已经有一个本地开发的 Agent 项目，可以使用 `veadk deploy` 命令将其快速部署到火山引擎函数服务平台。
 
 #### 1. 项目准备
+
 在执行部署前，请确保你的项目满足以下结构要求：
 
-*   项目根目录下必须包含一个 `agent.py` 文件，且该文件中定义了一个全局变量 `root_agent`。
-*   项目根目录下必须包含一个 `__init__.py` 文件，且该文件中包含了 `from . import agent` 语句。
+* 项目根目录下必须包含一个 `agent.py` 文件，且该文件中定义了一个全局变量 `root_agent`。
+* 项目根目录下必须包含一个 `__init__.py` 文件，且该文件中包含了 `from . import agent` 语句。
 
 #### 2. 执行部署
 
@@ -173,8 +182,8 @@ veadk deploy --vefaas-app-name 「YourAgentAppName}
 | --use-adk-web | FLAG | 设置后将会在云端启动 web，否则为 A2A / MCP 模式 |
 | ---path | 字符串 | 本地项目路径，默认为当前目录                  |
 
-
 ## 通过 Python SDK 部署
+
 对于希望将部署流程集成到自动化脚本或现有代码库中的开发者，Veadk 提供了强大的 Python SDK。你可以通过 `CloudAgentEngine` 类以编程方式完成应用的部署、更新和删除。
 
 ### 1. 部署 Agent 应用
@@ -265,8 +274,10 @@ print(f"Agent response: {response}")
 ```
 
 #### 更新应用代码
+
 当你本地的 Agent 代码有更新时，可以使用 `update_function_code` 方法来更新已部署的应用，而无需重新创建一个新应用。
 > ⚠️ **注意**：此操作只会更新函数的代码和配置，应用原有的访问端点 (Endpoint) 会保持不变。
+
 ```python
 from veadk.cloud.cloud_agent_engine import CloudAgentEngine
 
@@ -279,8 +290,8 @@ updated_cloud_app = engine.update_function_code(
 )
 
 # 可以使用updated_cloud_app.vefaas_endpoint访问您的项目
-
 ```
+
 #### 删除应用
 
 如果你需要下线并删除一个已部署的应用，可以使用 `remove` 方法。
@@ -304,17 +315,19 @@ engine.remove(app_name="my-python-agent")
 Confirm delete cloud app my-python-agent? (y/N): y
 ```
 
-
 ## 验证与调用应用
+
 应用部署成功后，你可以通过火山引擎控制台验证部署状态，并使用不同协议与你的 Agent 服务进行交互。
 
 ### 在控制台验证部署
+
 1. 登录 [火山引擎函数服务 (veFaaS) 控制台](https://console.volcengine.com/vefaas)。
 2. 在左侧导航栏中，选择 **我的应用**。
-1. 在应用列表中，你应该能看到你刚刚部署的应用。你可以单击应用名称进入详情页，查看其配置、日志、监控和访问端点等信息。
+3. 在应用列表中，你应该能看到你刚刚部署的应用。你可以单击应用名称进入详情页，查看其配置、日志、监控和访问端点等信息。
 ![部署完成](./assets/images/deploy/deploy_agent.png)
 
 ### 调用方法
+
 部署完成后，Veadk Agent 服务支持通过两种标准协议进行调用：A2A (Agent-to-Agent) 和 MCP (Meta-protocol for Calling Plugins)。
 
 > **关于 API 网关认证**：
@@ -324,9 +337,9 @@ Confirm delete cloud app my-python-agent? (y/N): y
 
 #### 1. 获取认证凭证 (Key Auth Token)
 
-1.  登录 [API 网关控制台](https://console.volcengine.com/veapig)。
-2.  在左侧导航栏中，选择 **消费者管理**。
-3.  找到与你的应用关联的消费者，并复制其 **Key Auth Token**。
+1. 登录 [API 网关控制台](https://console.volcengine.com/veapig)。
+2. 在左侧导航栏中，选择 **消费者管理**。
+3. 找到与你的应用关联的消费者，并复制其 **Key Auth Token**。
 
 #### 2. 通过 A2A 协议调用
 
