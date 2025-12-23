@@ -4,11 +4,35 @@ title: 快速开始
 
 ## 安装
 
-您可以从 PyPI 中安装最新版的 VeADK：
+=== "✨ 使用 UV 安装"
 
-```bash
-pip install veadk-python
-```
+    我们推荐您使用 `uv` 包管理工具来安装 VeADK，您可以遵循以下步骤：
+
+    ```bash
+    # 使用 `uv` 来创建一个基于 Python 3.10 版本的虚拟环境
+    uv venv --python 3.10
+
+    # 激活 `uv` 环境
+    source .venv/bin/activate
+    ```
+
+    环境激活后，您可以看到您的命令行开头会有括号标注的虚拟环境名称（通常为您的所在目录名称）：
+
+    ![img](./assets/images/uv_demo.jpeg)
+
+    您可以使用已经激活的虚拟环境来安装 VeADK：
+
+    ```bash
+    uv pip install veadk-python
+    ```
+
+=== "使用 PIP 安装"
+
+    您可以直接使用 `pip` 命令从 PyPI 中安装最新版的 VeADK：
+
+    ```bash
+    pip install veadk-python
+    ```
 
 您可以通过运行如下命令来检测您的 VeADK 是否安装成功：
 

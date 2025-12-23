@@ -71,9 +71,10 @@ nav:
       - 在火山引擎观测: observation/ve-tracing.md
       - 埋点与字段规范: observation/span-attributes.md
     - 部署与持续优化:
-      - 部署到火山引擎: deploy.md
-      - 评测: evaluation.md
-      - 持续优化: optimization.md
+      - 部署到 AgentKit: deploy/deploy-agentkit.md
+      - 部署到 VeFaaS: deploy/deploy-vefaas.md
+      - 评测: deploy/evaluation.md
+      - 持续优化: deploy/optimization.md
     - 命令行工具: cli.md
   - 参考:
     - API References: references/api.md
@@ -121,6 +122,10 @@ plugins:
         - memory/long-term-memory.md
         - observation/tracing.md
         - observation/ve-tracing.md
+        - deploy/deploy-vefaas.md
+        - deploy/deploy-agentkit.md
+        - deploy/evaluation.md
+        - deploy/optimization.md
 
 extra:
   social:

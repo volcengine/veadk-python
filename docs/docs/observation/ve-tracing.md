@@ -164,7 +164,7 @@ python agent.py
 
 ### 准备工作
 
-#### veADK代码中创建tracing project和实例
+#### VeADK代码中创建tracing project和实例
 
 ```yaml title="config.yaml"
 model:

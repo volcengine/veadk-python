@@ -130,6 +130,7 @@ veadk rl run --platform lightning --server
 #### 原理说明
 
 生成后的项目结构如下，其中核心文件包括：
+
 - agent_client: `examples/*/*_agent.py` 中定义了agent的rollout逻辑和reward规则
 - training_server: `examples/*/train.py` 定义了训练相关参数,用于启动训练服务器
 
