@@ -175,6 +175,20 @@
 
 由于 python VeADK 的 Agent 基于 [LiteLLM]() 实现，因此您可以使用 LiteLLM 支持的所有模型提供商。您可以查看 [LiteLLM 支持的模型提供商列表](https://docs.litellm.ai/docs/providers)来设置 `model_provider` 参数。
 
+基于 LiteLLM 的 [Fallbacks](https://docs.litellm.ai/docs/completion/reliable_completions) 容错机制，VeADK 实现了智能的模型切换能力。当目标模型经多次重试仍调用失败时，系统将自动切换至备选模型继续执行任务：
+
+=== "Python"
+
+    ```python title="agent.py" linenums="1" hl_lines="4"
+    from veadk import Agent
+    
+    agent = Agent(
+        model_name=["doubao-seed-1-8-251215", "doubao-seed-1-6-251015", "doubao-seed-1.6-250615"]
+    )
+    ```
+
+在上述配置中，VeADK 默认会首先尝试 doubao-seed-1-8-251215，如果失败再去尝试后续模型，直至成功。
+
 golang 暂不支持 LiteLLM，因此 VeADK 的 Agent 基于 OpenAI 实现，因此您可以使用所有支持OpenAI协议的模型。
 
 #### 设置模型客户端
