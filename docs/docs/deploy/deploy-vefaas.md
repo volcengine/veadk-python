@@ -121,7 +121,7 @@ veadk-cloud-proj
 
 1. 在项目根目录下，将 `config.yaml.example` 文件复制一份并重命名为 `config.yaml`。
 2. 编辑 `config.yaml` 文件，填入你的火山引擎访问密钥 (Access Key 和 Secret Key)。
-3. 如果是新建的火山账号，还需确认是否已经授权给`ServerlessApplicationRole`角色。进入[创建应用页面](https://console.volcengine.com/vefaas/region:vefaas+cn-beijing/application/create?templateId=67f7b4678af5a6000850556c)点击[一键授权]即可。
+3. 如果是新建的火山账号，还需确认是否已经授权给`ServerlessApplicationRole`角色。进入[创建应用页面](https://console.volcengine.com/vefaas/region:vefaas+cn-beijing/application/create)点击[一键授权]即可。
 ![一键授权](./assets/images/deploy/add_permission.png)
 
 ```yaml
