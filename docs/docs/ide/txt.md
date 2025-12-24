@@ -10,5 +10,8 @@
 
 ### 使用方法
 
-- 下载我们为您准备好的提示词文件：[llms-full.txt](../../llms-full.txt){:download}
-- 复制到您的 IDE 提示词文件中
+1. 下载我们为您准备好的提示词文件：[llms-full.txt](../../llms-full.txt){:download}
+2. 打开 Trae 中的设置界面，找到 “规则” 选项
+3. 将文件内容复制到您的 Trae 规则文件中
+
+![img](../assets/images/trae_rules.png)
