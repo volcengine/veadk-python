@@ -2,8 +2,8 @@
 title: VeADK 命令行工具
 ---
 
-
 ## 命令行工具概述
+
 VeADK 提供如下命令便捷您的操作：
 
 | 命令 | 描述 | 说明 |
@@ -17,7 +17,6 @@ VeADK 提供如下命令便捷您的操作：
 | `veadk prompt` | 优化智能体系统提示词 | 生成优化后的提示词文件，在PromptPilot工作空间中保存优化记录和版本历史。 |
 | `veadk uploadevalset` | 评测集相关操作 | 上传评测数据集到Cozeloop平台，生成平台上的评测集记录和访问权限配置。 |
 | `veadk pipeline` | 持续交付相关操作 | 创建CI/CD配置文件，设置自动化构建流水线。 |
-
 
 ## 项目初始化
 
@@ -558,6 +557,26 @@ veadk pipeline \
   --region cn-beijing
 ```
 
+## AgentKit 命令兼容
 
+VeADK 命令行兼容 AgentKit 命令，您可以直接在 AgentKit 相关命令前添加 `veadk` 前缀，例如：
 
+创建一个新的 AgentKit 项目：
 
+```bash
+veadk agentkit init
+```
+
+进行项目配置：
+
+```bash
+veadk agentkit config
+```
+
+部署项目到火山引擎 AgentKit 平台：
+
+```bash
+veadk agentkit launch
+```
+
+更多 AgentKit 命令请参考 [AgentKit 命令行工具](https://volcengine.github.io/agentkit-sdk-python/content/2.agentkit-cli/1.overview.html)。

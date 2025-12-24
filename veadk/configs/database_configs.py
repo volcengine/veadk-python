@@ -28,6 +28,10 @@ class OpensearchConfig(BaseSettings):
 
     port: int = 9200
 
+    cert_path: str = ""
+
+    use_ssl: bool = True
+
     username: str = ""
 
     password: str = ""
