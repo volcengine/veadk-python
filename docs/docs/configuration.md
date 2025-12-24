@@ -73,7 +73,8 @@ volcengine:
 |           | `DATABASE_OPENSEARCH_PORT`                  | OpenSearch 端口，默认 9200 |
 |           | `DATABASE_OPENSEARCH_USERNAME`              | OpenSearch 用户名 |
 |           | `DATABASE_OPENSEARCH_PASSWORD`              | OpenSearch 密码 |
-|           | `DATABASE_OPENSEARCH_CERT_PATH`             | OpenSearch 证书路径 |
+|           | `DATABASE_OPENSEARCH_CERT_PATH`             | OpenSearch 证书路径。**生产环境下建议通过证书访问。** |
+|           | `DATABASE_OPENSEARCH_USE_SSL`               | 是否启用 SSL 验证（`https`），默认 True |
 | MySQL     | `DATABASE_MYSQL_HOST`                       | MySQL 主机地址 |
 |           | `DATABASE_MYSQL_USER`                       | MySQL 用户名 |
 |           | `DATABASE_MYSQL_PASSWORD`                   | MySQL 密码 |

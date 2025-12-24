@@ -30,6 +30,8 @@ class OpensearchConfig(BaseSettings):
 
     cert_path: str = ""
 
+    use_ssl: bool = True
+
     username: str = ""
 
     password: str = ""

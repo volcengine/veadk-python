@@ -12,9 +12,9 @@ KnowledgeBase 在 veadk 框架中扮演 Agent 的外部知识库 角色。它像
 
 2. 后端抽象 (Backend Abstraction) ： KnowledgeBase 提供了一个统一的接口，屏蔽了底层向量数据库的实现细节。您只需要在初始化时通过 backend 参数指定使用 viking 还是 opensearch ，而无需关心它们各自的 API 调用方式。
 
-3) 知识检索 (Retrieval) ：当 KnowledgeBase 实例被传递给 Agent 后，Agent 会自动获得一个内置的 knowledgebase_search 工具。在回答问题时，Agent 可以自主决定是否使用此工具，将用户的问题转化为关键词去知识库中搜索相关信息，从而给出更精准、更具上下文的回答。
+3. 知识检索 (Retrieval) ：当 KnowledgeBase 实例被传递给 Agent 后，Agent 会自动获得一个内置的 knowledgebase_search 工具。在回答问题时，Agent 可以自主决定是否使用此工具，将用户的问题转化为关键词去知识库中搜索相关信息，从而给出更精准、更具上下文的回答。
 
-4) 与 Agent 无缝集成 ：通过在创建 Agent 时传入 knowledgebase=kb 参数，Agent 就能自动利用这个知识库来增强其回答能力。
+4. 与 Agent 无缝集成 ：通过在创建 Agent 时传入 knowledgebase=kb 参数，Agent 就能自动利用这个知识库来增强其回答能力。
 
 ## 使用方法
 
@@ -91,15 +91,13 @@ runner = Runner(agent, app_name="your_app_name")
 
 ![alt text](../assets/images/knowledge/image-8.png)
 
-
-
 6. 点击创建知识库按钮，点完后会有一个弹出问是否导入文档，选择暂不导入。
 ![alt text](../assets/images/knowledge/image-9.png)
 
 ![alt text](../assets/images/knowledge/image-10.png)
 
-
 ### TOS配置
+
 1. 登陆火山控制台进入TOS控制台
 ![alt text](../assets/images/knowledge/image-11.png)
 

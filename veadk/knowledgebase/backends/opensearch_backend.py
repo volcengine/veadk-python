@@ -99,7 +99,7 @@ class OpensearchKnowledgeBackend(BaseKnowledgebaseBackend):
                 self.opensearch_config.username,
                 self.opensearch_config.password,
             ),
-            use_ssl=True,
+            use_ssl=self.opensearch_config.use_ssl,
             verify_certs=False if not self.opensearch_config.cert_path else True,
             ca_certs=self.opensearch_config.cert_path,
             dim=self.embedding_config.dim,
