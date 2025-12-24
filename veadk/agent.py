@@ -56,6 +56,7 @@ from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_asyncio, patch_tracer
 from veadk.utils.misc import check_litellm_version
 from veadk.version import VERSION
+from veadk.prompts.prompt_example import AgentExample, format_examples
 
 patch_tracer()
 patch_asyncio()
@@ -139,6 +140,8 @@ class Agent(LlmAgent):
     """
 
     enable_authz: bool = False
+
+    examples: list[AgentExample] = Field(default_factory=list)
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
@@ -254,6 +257,15 @@ class Agent(LlmAgent):
                     ]
             else:
                 self.before_agent_callback = check_agent_authorization
+
+        if self.examples:
+            base = (
+                self.instruction
+                if isinstance(self.instruction, str)
+                else DEFAULT_INSTRUCTION
+            )
+            self.instruction = base + format_examples(self.examples)
+        print(self.instruction)
 
         if self.prompt_manager:
             self.instruction = self.prompt_manager.get_prompt
