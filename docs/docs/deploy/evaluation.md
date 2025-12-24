@@ -39,10 +39,10 @@ VeADK 提供了以下三种方式来评测您的 Agent：
 
 1.  **基于网页的用户界面（veadk web）**
     通过基于网页的界面，以交互方式评测 Agent 。操作过程中可直接在网页上与 Agent 互动，实时观察其表现并进行评测。
-    ![evaluation-web-ui](./assets/images/evaluation/veadk_web_eval.gif)
+    ![evaluation-web-ui](../assets/images/evaluation/veadk_web_eval.gif)
 2.  **命令行界面（veadk eval）**
     直接从命令行对现有的评测集文件运行评测。无需打开图形界面，通过输入命令即可快速执行评测操作，适合熟悉命令行的开发人员。
-    ![evaluation-cli](./assets/images/evaluation/veadk_eval.gif)
+    ![evaluation-cli](../assets/images/evaluation/veadk_eval.gif)
 3.  **编程方式（pytest）**
     使用 pytest（Python 的一种测试框架）和测试文件，将评测集成到您的测试流程中。这种方式适合自动化测试场景，可与现有开发测试链路无缝衔接。
 

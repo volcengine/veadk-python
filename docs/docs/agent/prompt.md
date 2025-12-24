@@ -4,13 +4,25 @@
 
 ## CozeLoop 提示词管理
 
+您可以通过 CozeLoop 云端提示词管理功能来对接您的 Agent 系统提示词。
+
+### 准备
+
 在使用 CozeLoop 进行提示词管理前，您需要安装 Python 版本的 `cozeloop` SDK：
 
 ```bash
 pip install cozeloop
 ```
 
-您可以通过 CozeLoop 云端提示词管理功能来对接您的 Agent 系统提示词。例如：
+### 属性获取
+
+- [了解如何获取 CozeLoop Workspace ID](https://loop.coze.cn/open/docs/cozeloop/authentication-for-sdk#05d27a86)
+- [了解如何获取 CozeLoop Token / API Key](https://loop.coze.cn/open/docs/cozeloop/authentication-for-sdk)
+- 您可以在 CozeLoop 中的 “Prompt 开发” 板块获取 Prompt Key，如下图所示：
+
+![img](../assets/images/cozeloop_prompt_key.png)
+
+### 使用方法
 
 ```python title="agent.py" linenums="1" hl_lines="4 6-11 13"
 import asyncio
@@ -20,7 +32,7 @@ from veadk.prompts.prompt_manager import CozeloopPromptManager
 
 prompt_manager = CozeloopPromptManager(
     cozeloop_workspace_id="",   # CozeLoop workspace ID
-    cozeloop_token="",          # CozeLoop token
+    cozeloop_token="",          # CozeLoop token / api key
     prompt_key="",    # CozeLoop 中创建的 Prompt Key
     label="production",         # CozeLoop 中创建的 Prompt 标签
 )

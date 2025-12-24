@@ -28,16 +28,16 @@ title: 部署到 VeFaaS
 ### 函数服务
 
 1. 首次进入 [函数服务](https://console.volcengine.com/vefaas) 页面，控制台将会提醒你进行IAM角色的开通，请点击【立即授权】同意角色开通。
-![IAM 角色开通](./assets/images/deploy/vefaas_attach_role.png)
+![IAM 角色开通](../assets/images/deploy/vefaas_attach_role.png)
 2. 点击后，控制台将会显示你已完成授权。几秒后将会自动跳转会 [函数服务](https://console.volcengine.com/vefaas) 控制台。当展示如下页面时，[函数服务](https://console.volcengine.com/vefaas) 服务即开通成功。
-![IAM 角色开通](./assets/images/deploy/vefaas_index.png)
+![IAM 角色开通](../assets/images/deploy/vefaas_index.png)
 
 ### API网关
 
 1. 首次进入 [API网关](https://console.volcengine.com/veapig) 页面，控制台将会提醒你进行IAM角色的开通，请点击【立即授权】同意角色开通。
-![IAM 角色开通](./assets/images/deploy/veapig_attach_role.png)
+![IAM 角色开通](../assets/images/deploy/veapig_attach_role.png)
 2. 点击后，控制台将会显示你已完成授权。几秒后将会自动跳转会 [API网关](https://console.volcengine.com/veapig) 控制台。当展示如下页面时，[API网关](https://console.volcengine.com/veapig) 服务即开通成功。
-![IAM 角色开通](./assets/images/deploy/veapig_index.png)
+![IAM 角色开通](../assets/images/deploy/veapig_index.png)
 
 ## 部署方式概览
 
@@ -122,7 +122,7 @@ veadk-cloud-proj
 1. 在项目根目录下，将 `config.yaml.example` 文件复制一份并重命名为 `config.yaml`。
 2. 编辑 `config.yaml` 文件，填入你的火山引擎访问密钥 (Access Key 和 Secret Key)。
 3. 如果是新建的火山账号，还需确认是否已经授权给`ServerlessApplicationRole`角色。进入[创建应用页面](https://console.volcengine.com/vefaas/region:vefaas+cn-beijing/application/create)点击[一键授权]即可。
-![一键授权](./assets/images/deploy/add_permission.png)
+![一键授权](../assets/images/deploy/add_permission.png)
 
 ```yaml
 volcengine:
@@ -324,7 +324,7 @@ Confirm delete cloud app my-python-agent? (y/N): y
 1. 登录 [火山引擎函数服务 (veFaaS) 控制台](https://console.volcengine.com/vefaas)。
 2. 在左侧导航栏中，选择 **我的应用**。
 3. 在应用列表中，你应该能看到你刚刚部署的应用。你可以单击应用名称进入详情页，查看其配置、日志、监控和访问端点等信息。
-![部署完成](./assets/images/deploy/deploy_agent.png)
+![部署完成](../assets/images/deploy/deploy_agent.png)
 
 ### 调用方法
 
@@ -370,7 +370,7 @@ if __name__ == "__main__":
 ```
 
 > ⚠️ **注意**：上述 `CloudApp` 的直接调用方式默认不会携带认证信息。如果你的 API 网关开启了密钥认证，此调用会失败。你需要使用下一种方式，或临时关闭认证插件。
-> ![关闭插件](./assets/images/deploy/close_key_auth.png)
+> ![关闭插件](../assets/images/deploy/close_key_auth.png)
 
 **方式二：作为子 Agent 远程调用 (使用 `RemoteVeAgent`)**
 
@@ -471,16 +471,16 @@ if __name__ == "__main__":
 与函数服务和 API 网关类似，首次访问这些服务时，你需要根据页面提示完成 **IAM 角色授权**。
 #### 持续交付
 1. 首次进入 [持续交付](https://console.volcengine.com/cp) 页面，控制台将会提醒你进行IAM角色的开通，请点击【立即授权】同意角色开通。
-![IAM 角色开通](./assets/images/deploy/cp_attach_role.png)
+![IAM 角色开通](../assets/images/deploy/cp_attach_role.png)
 2. 点击授权后，控制台将会继续为你开通服务，界面如下。
-![IAM 服务开通](./assets/images/deploy/cp_open.png)
+![IAM 服务开通](../assets/images/deploy/cp_open.png)
 3. 当点击【申请开通】后，控制台将会自动跳转。当展示如下页面时，[持续交付](https://console.volcengine.com/cp)` 服务即开通成功。
-![IAM 角色开通](./assets/images/deploy/cp_index.png)
+![IAM 角色开通](../assets/images/deploy/cp_index.png)
 #### 镜像仓库
 1. 首次进入 [镜像仓库](https://console.volcengine.com/cr) 页面，控制台将会提醒你进行IAM角色的开通，请点击【立即授权】同意角色开通。
-![IAM 角色开通](./assets/images/deploy/cr_attach_role.png)
+![IAM 角色开通](../assets/images/deploy/cr_attach_role.png)
 3. 点击授权后，控制台将会自动跳转。当展示如下页面时，[持续交付](https://console.volcengine.com/cp) 服务即开通成功。
-![IAM 角色开通](./assets/images/deploy/cr_index.png)
+![IAM 角色开通](../assets/images/deploy/cr_index.png)
 
 
 ### 2. 挂载持续交付流水线
