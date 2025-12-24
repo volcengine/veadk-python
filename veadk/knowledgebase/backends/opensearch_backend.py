@@ -27,9 +27,13 @@ from typing_extensions import Any, override
 
 import veadk.config  # noqa E401
 from veadk.configs.database_configs import OpensearchConfig
-from veadk.configs.model_configs import EmbeddingModelConfig, NormalEmbeddingModelConfig
+from veadk.configs.model_configs import (
+    EmbeddingModelConfig,
+    NormalEmbeddingModelConfig,
+)
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
 from veadk.knowledgebase.backends.utils import get_llama_index_splitter
+from veadk.utils.logger import get_logger
 
 try:
     from llama_index.vector_stores.opensearch import (
@@ -40,6 +44,9 @@ except ImportError:
     raise ImportError(
         "Please install VeADK extensions\npip install veadk-python[extensions]"
     )
+
+
+logger = get_logger(__name__)
 
 
 class OpensearchKnowledgeBackend(BaseKnowledgebaseBackend):
@@ -79,6 +86,12 @@ class OpensearchKnowledgeBackend(BaseKnowledgebaseBackend):
 
     def model_post_init(self, __context: Any) -> None:
         self.precheck_index_naming()
+
+        if not self.opensearch_config.cert_path:
+            logger.warning(
+                "OpenSearch cert_path is not set, which may lead to security risks"
+            )
+
         self._opensearch_client = OpensearchVectorClient(
             endpoint=self.opensearch_config.host,
             port=self.opensearch_config.port,
@@ -87,7 +100,8 @@ class OpensearchKnowledgeBackend(BaseKnowledgebaseBackend):
                 self.opensearch_config.password,
             ),
             use_ssl=True,
-            verify_certs=False,
+            verify_certs=False if not self.opensearch_config.cert_path else True,
+            cert_path=self.opensearch_config.cert_path,
             dim=self.embedding_config.dim,
             index=self.index,  # collection name
         )

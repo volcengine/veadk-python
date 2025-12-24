@@ -22,7 +22,10 @@ from typing_extensions import Any, override
 
 import veadk.config  # noqa E401
 from veadk.configs.database_configs import OpensearchConfig
-from veadk.configs.model_configs import EmbeddingModelConfig, NormalEmbeddingModelConfig
+from veadk.configs.model_configs import (
+    EmbeddingModelConfig,
+    NormalEmbeddingModelConfig,
+)
 from veadk.knowledgebase.backends.utils import get_llama_index_splitter
 from veadk.memory.long_term_memory_backends.base_backend import (
     BaseLongTermMemoryBackend,
@@ -74,6 +77,11 @@ class OpensearchLTMBackend(BaseLongTermMemoryBackend):
 
         self.precheck_index_naming(index)
 
+        if not self.opensearch_config.cert_path:
+            logger.warning(
+                "OpenSearch cert_path is not set, which may lead to security risks"
+            )
+
         opensearch_client = OpensearchVectorClient(
             endpoint=self.opensearch_config.host,
             port=self.opensearch_config.port,
@@ -82,7 +90,8 @@ class OpensearchLTMBackend(BaseLongTermMemoryBackend):
                 self.opensearch_config.password,
             ),
             use_ssl=True,
-            verify_certs=False,
+            verify_certs=False if not self.opensearch_config.cert_path else True,
+            cert_path=self.opensearch_config.cert_path,
             dim=self.embedding_config.dim,
             index=index,
         )
