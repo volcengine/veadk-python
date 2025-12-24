@@ -91,7 +91,7 @@ class OpensearchLTMBackend(BaseLongTermMemoryBackend):
             ),
             use_ssl=True,
             verify_certs=False if not self.opensearch_config.cert_path else True,
-            cert_path=self.opensearch_config.cert_path,
+            ca_certs=self.opensearch_config.cert_path,
             dim=self.embedding_config.dim,
             index=index,
         )
