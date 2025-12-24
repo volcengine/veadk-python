@@ -46,7 +46,7 @@ nav:
       - 多智能体交互: agent/agents.md
       - A2A 协议: agent/agent-to-agent.md
       - Prompt 管理: agent/prompt.md
-      - ResponsesAPI 支持: agent/responses-api.md
+      - Responses API: agent/responses-api.md
     - 执行引擎:
       - Runner: runner.md
     - 个性化引擎——记忆:
