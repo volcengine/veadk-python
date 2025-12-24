@@ -90,14 +90,14 @@ veadk_rl_ark_project
 1. 脚手架中，基于 VeADK 的天气查询 Agent 进行强化学习优化
 2. 提交任务 (veadk rl submit --platform ark)
 
-![提交任务](./assets/images/optimization/submit_task.png)
+![提交任务](../assets/images/optimization/submit_task.png)
 
-![训练中](./assets/images/optimization/training.png)
+![训练中](../assets/images/optimization/training.png)
 3. 查看训练日志和时间线
 
-![查看训练日志](./assets/images/optimization/logs.png)
+![查看训练日志](../assets/images/optimization/logs.png)
 
-![查看训练时间线](./assets/images/optimization/timeline.png)
+![查看训练时间线](../assets/images/optimization/timeline.png)
 
 ### Agent Lightning
 
@@ -163,6 +163,6 @@ veadk_rl_lightning_project
 1. 脚手架中，基于 VeADK 的天气查询 Agent 进行强化学习优化
 2. 启动 client (veadk rl run --platform lightning --client) 与 server (veadk rl run --platform lightning --server)，分别在终端1与终端2中运行以上命令
 
-![启动client](./assets/images/optimization/lightning_client.png)
+![启动client](../assets/images/optimization/lightning_client.png)
 
-![启动server](./assets/images/optimization/lightning_training_server.png)
+![启动server](../assets/images/optimization/lightning_training_server.png)
