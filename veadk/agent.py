@@ -85,6 +85,8 @@ class Agent(LlmAgent):
         short_term_memory (Optional[ShortTermMemory]): Session-based memory for temporary context.
         long_term_memory (Optional[LongTermMemory]): Cross-session memory for persistent user context.
         tracers (list[BaseTracer]): List of tracers used for telemetry and monitoring.
+        enable_authz (bool): Whether to enable agent authorization checks.
+        auto_save_session (bool): Whether to automatically save sessions to long-term memory.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
@@ -139,6 +141,8 @@ class Agent(LlmAgent):
     """
 
     enable_authz: bool = False
+
+    auto_save_session: bool = False
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
@@ -257,6 +261,27 @@ class Agent(LlmAgent):
 
         if self.prompt_manager:
             self.instruction = self.prompt_manager.get_prompt
+
+        if self.auto_save_session:
+            if self.long_term_memory is None:
+                logger.warning(
+                    "auto_save_session is enabled, but long_term_memory is not initialized."
+                )
+            else:
+                from veadk.tools.builtin_tools.save_session import (
+                    save_session_to_memory,
+                )
+
+                if self.after_agent_callback:
+                    if isinstance(self.after_agent_callback, list):
+                        self.after_agent_callback.append(save_session_to_memory)
+                    else:
+                        self.after_agent_callback = [
+                            self.after_agent_callback,
+                            save_session_to_memory,
+                        ]
+                else:
+                    self.after_agent_callback = save_session_to_memory
 
         logger.info(f"VeADK version: {VERSION}")
 
