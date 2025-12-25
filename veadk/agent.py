@@ -56,6 +56,11 @@ from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_asyncio, patch_tracer
 from veadk.utils.misc import check_litellm_version
 from veadk.version import VERSION
+from veadk.prompts.prompt_example import (
+    ExampleTool,
+    _convert_to_adk_examples,
+    AgentExample,
+)
 
 patch_tracer()
 patch_asyncio()
@@ -139,6 +144,8 @@ class Agent(LlmAgent):
     """
 
     enable_authz: bool = False
+
+    examples: list[AgentExample] = Field(default_factory=list)
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
@@ -257,6 +264,11 @@ class Agent(LlmAgent):
 
         if self.prompt_manager:
             self.instruction = self.prompt_manager.get_prompt
+
+        if self.examples:
+            adk_examples = _convert_to_adk_examples(self.examples)
+            self.tools.append(ExampleTool(adk_examples))
+            logger.info(f"Added {len(self.examples)} examples to agent")
 
         logger.info(f"VeADK version: {VERSION}")
 
