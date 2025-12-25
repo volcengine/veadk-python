@@ -480,9 +480,9 @@ VeADK 集成了以下火山引擎工具：
 
     必须配置在环境变量的配置项：
 
-    - `TOOL_LARK_ENDPOINT`：  用于 Agent 推理视频生成的模型名称
-    - `TOOL_LARK_API_KEY`：  用于 Agent 推理图像生成的模型名称
-    - `TOOL_LARK_TOKEN`：  用于 Agent 推理模型 API Key
+    - `TOOL_LARK_ENDPOINT`：  用于  Lark 服务的 Endpoint
+    - `TOOL_LARK_API_KEY`：  用于 Lark 服务的 API Key
+    - `TOOL_LARK_TOKEN`：  用于 Lark 服务的 OAuthToken
 
     环境变量列表：
     - `MODEL_AGENT_API_KEY`：  用于 Agent 推理模型 API Key
