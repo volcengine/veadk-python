@@ -18,7 +18,6 @@ from google.genai import types
 from google.adk.examples.example import Example
 
 
-# === Add these classes before the Agent class ===
 class FunctionCallExample(BaseModel):
     """Represents a function call output in an example."""
 
