@@ -268,20 +268,22 @@ class Agent(LlmAgent):
                     "auto_save_session is enabled, but long_term_memory is not initialized."
                 )
             else:
-                from veadk.tools.builtin_tools.save_session import (
-                    save_session_to_memory,
+                from veadk.memory.save_session_callback import (
+                    save_session_to_long_term_memory,
                 )
 
                 if self.after_agent_callback:
                     if isinstance(self.after_agent_callback, list):
-                        self.after_agent_callback.append(save_session_to_memory)
+                        self.after_agent_callback.append(
+                            save_session_to_long_term_memory
+                        )
                     else:
                         self.after_agent_callback = [
                             self.after_agent_callback,
-                            save_session_to_memory,
+                            save_session_to_long_term_memory,
                         ]
                 else:
-                    self.after_agent_callback = save_session_to_memory
+                    self.after_agent_callback = save_session_to_long_term_memory
 
         logger.info(f"VeADK version: {VERSION}")
 

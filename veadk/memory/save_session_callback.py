@@ -36,7 +36,7 @@ MIN_TIME_THRESHOLD = getenv(
 )  # Minimum seconds between saves (1 minute)
 
 
-async def save_session_to_memory(
+async def save_session_to_long_term_memory(
     callback_context: CallbackContext,
 ) -> None:
     """Save the current session to long-term memory.
