@@ -56,7 +56,11 @@ from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_asyncio, patch_tracer
 from veadk.utils.misc import check_litellm_version
 from veadk.version import VERSION
-from veadk.prompts.prompt_example import AgentExample, format_examples
+from veadk.prompts.prompt_example import (
+    ExampleTool,
+    _convert_to_adk_examples,
+    AgentExample,
+)
 
 patch_tracer()
 patch_asyncio()
@@ -258,17 +262,13 @@ class Agent(LlmAgent):
             else:
                 self.before_agent_callback = check_agent_authorization
 
-        if self.examples:
-            base = (
-                self.instruction
-                if isinstance(self.instruction, str)
-                else DEFAULT_INSTRUCTION
-            )
-            self.instruction = base + format_examples(self.examples)
-        print(self.instruction)
-
         if self.prompt_manager:
             self.instruction = self.prompt_manager.get_prompt
+
+        if self.examples:
+            adk_examples = _convert_to_adk_examples(self.examples)
+            self.tools.append(ExampleTool(adk_examples))
+            logger.info(f"Added {len(self.examples)} examples to agent")
 
         logger.info(f"VeADK version: {VERSION}")
 

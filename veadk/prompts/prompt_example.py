@@ -12,40 +12,47 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
 from typing import Any, Union
+from pydantic import BaseModel, Field
+from google.genai import types
+from google.adk.examples.example import Example
 
 
-@dataclass
-class FunctionCallExample:
-    """Function call output example."""
+# === Add these classes before the Agent class ===
+class FunctionCallExample(BaseModel):
+    """Represents a function call output in an example."""
 
     func_name: str
-    func_args: dict[str, Any]
+    func_args: dict[str, Any] = Field(default_factory=dict)
 
 
-@dataclass
-class AgentExample:
-    """Input/output example for agent instruction."""
+class AgentExample(BaseModel):
+    """A few-shot example for the agent.
+
+    Attributes:
+        input: User input text.
+        output: Expected output - text string or function call.
+    """
 
     input: str
     output: Union[str, FunctionCallExample]
 
 
-def format_examples(examples: list[AgentExample]) -> str:
-    """Format examples as natural language string."""
-    if not examples:
-        return ""
-
-    lines = ["\n\n# Input/Output Example"]
-    for i, ex in enumerate(examples, 1):
-        lines.append(f"\nExample {i}:")
-        lines.append(f"- Input: {ex.input}")
+def _convert_to_adk_examples(examples: list[AgentExample]) -> list[Example]:
+    """Convert AgentExample list to ADK Example list."""
+    result = []
+    for ex in examples:
+        input_content = types.Content(
+            role="user", parts=[types.Part.from_text(text=ex.input)]
+        )
         if isinstance(ex.output, str):
-            lines.append(f"- Output: {ex.output}")
+            output_parts = [types.Part.from_text(text=ex.output)]
         else:
-            lines.append(
-                f"- Output: Call function `{ex.output.func_name}` with arguments {ex.output.func_args}"
-            )
-
-    return "\n".join(lines)
+            output_parts = [
+                types.Part.from_function_call(
+                    name=ex.output.func_name, args=ex.output.func_args
+                )
+            ]
+        output_content = [types.Content(role="model", parts=output_parts)]
+        result.append(Example(input=input_content, output=output_content))
+    return result
