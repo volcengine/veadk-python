@@ -51,6 +51,7 @@ extensions = [
     "redis>=5.0",                 # For Redis database
     "tos>=2.8.4",                   # For TOS storage and Viking DB
     "llama-index-vector-stores-redis>=0.6.1",
+    "cozeloop>=0.1.21", #For Cozeloop Prompt manager
 ]
 database = [
     "redis>=5.0",                 # For Redis database
