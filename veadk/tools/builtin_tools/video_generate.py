@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import json
-import time
+import asyncio
 import traceback
 from typing import Dict, cast
 
@@ -125,7 +125,10 @@ async def generate(
 
 
 async def video_generate(
-    params: list, tool_context: ToolContext, batch_size: int = 10
+    params: list,
+    tool_context: ToolContext,
+    batch_size: int = 10,
+    max_wait_seconds: int = 1200,
 ) -> Dict:
     """
     Generate videos in **batch** from text prompts, optionally guided by a first/last frame,
@@ -139,6 +142,10 @@ async def video_generate(
             A list of video generation requests. Each item supports the fields below.
         batch_size (int):
             The number of videos to generate in a batch. Defaults to 10.
+        max_wait_seconds (int):
+            Maximum time in seconds to wait for all video tasks in each batch.
+            Default is 20 minutes (1200 seconds). When the timeout is reached,
+            unfinished tasks will be marked as timeout errors.
 
             Required per item:
                 - video_name (str):
@@ -241,6 +248,7 @@ async def video_generate(
     """
     success_list = []
     error_list = []
+    timeout_tasks = []
     logger.debug(f"Using model: {getenv('MODEL_VIDEO_NAME', DEFAULT_VIDEO_MODEL_NAME)}")
     logger.debug(f"video_generate params: {params}")
 
@@ -299,6 +307,10 @@ async def video_generate(
 
             logger.debug("begin query video_generate task status...")
 
+            sleep_interval = 10
+            max_sleep_times = max_wait_seconds // sleep_interval
+            sleep_times = 0
+
             while True:
                 task_list = list(task_dict.keys())
                 if len(task_list) == 0:
@@ -332,7 +344,23 @@ async def video_generate(
                         logger.debug(
                             f"{task_dict[task_id]} video_generate current status: {status}, Retrying after 10 seconds..."
                         )
-                time.sleep(10)
+                if sleep_times >= max_sleep_times:
+                    logger.error(
+                        f"video_generate polling timed out after {max_wait_seconds} seconds; remaining tasks: {task_dict}"
+                    )
+                    for task_id, video_name in task_dict.items():
+                        timeout_tasks.append(
+                            {
+                                "task_id": task_id,
+                                "video_name": video_name,
+                            }
+                        )
+                        error_list.append(video_name)
+                    task_dict.clear()
+                    break
+
+                await asyncio.sleep(sleep_interval)
+                sleep_times += 1
 
             add_span_attributes(
                 span,
@@ -353,6 +381,7 @@ async def video_generate(
             "status": "error",
             "success_list": success_list,
             "error_list": error_list,
+            "timeout_tasks": timeout_tasks,
         }
     else:
         logger.debug(
@@ -362,6 +391,7 @@ async def video_generate(
             "status": "success",
             "success_list": success_list,
             "error_list": error_list,
+            "timeout_tasks": timeout_tasks,
         }
 
 
