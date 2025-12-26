@@ -52,7 +52,7 @@ async def generate(
         if model_name.startswith("doubao-seedance-1-0") and generate_audio:
             logger.warning(
                 "The `doubao-seedance-1-0` series models do not support enabling the audio field. "
-                "Please upgrade to the `doubao-seedance-1-5` series."
+                "Please upgrade to the doubao-seedance-1-5 series of you want to generate video with audio."
             )
             generate_audio = None
         if first_frame_image is None:
