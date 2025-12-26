@@ -83,7 +83,10 @@ def _build_input_parts(item: dict, task_type: str, image_field):
 
 
 def handle_single_task_sync(
-    idx: int, item: dict, tool_context
+    idx: int,
+    item: dict,
+    timeout: int,
+    tool_context,
 ) -> tuple[list[dict], list[str]]:
     logger.debug(f"handle_single_task_sync item {idx}: {item}")
     success_list: list[dict] = []
@@ -139,6 +142,7 @@ def handle_single_task_sync(
                             "MODEL_AGENT_CLIENT_REQ_ID", f"veadk/{VERSION}"
                         ),
                     },
+                    timeout=timeout,
                 )
             else:
                 response = client.images.generate(
@@ -152,6 +156,7 @@ def handle_single_task_sync(
                             "MODEL_AGENT_CLIENT_REQ_ID", f"veadk/{VERSION}"
                         ),
                     },
+                    timeout=timeout,
                 )
 
             if not response.error:
@@ -228,14 +233,16 @@ def handle_single_task_sync(
     return success_list, error_list
 
 
-async def image_generate(tasks: list[dict], tool_context) -> Dict:
-    """Generate images with Seedream 4.0.
+async def image_generate(tasks: list[dict], tool_context, timeout: int = 600) -> Dict:
+    """Generate images with Seedream 4.0 / 4.5
 
     Commit batch image generation requests via tasks.
 
     Args:
         tasks (list[dict]):
             A list of image-generation tasks. Each task is a dict.
+        timeout (int)
+            The timeout limit for the image generation task request, in seconds, with a default value of 600 seconds.
     Per-task schema
     ---------------
     Required:
@@ -336,7 +343,9 @@ async def image_generate(tasks: list[dict], tool_context) -> Dict:
 
         def make_task(idx, item):
             ctx = base_ctx.copy()
-            return lambda: ctx.run(handle_single_task_sync, idx, item, tool_context)
+            return lambda: ctx.run(
+                handle_single_task_sync, idx, item, timeout, tool_context
+            )
 
         loop = asyncio.get_event_loop()
         futures = [
