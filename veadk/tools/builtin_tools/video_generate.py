@@ -41,14 +41,27 @@ client = Ark(
 )
 
 
-async def generate(prompt, first_frame_image=None, last_frame_image=None):
+async def generate(
+    prompt, first_frame_image=None, last_frame_image=None, generate_audio=None
+):
     try:
+        if generate_audio is False:
+            generate_audio = None
+        model_name = getenv("MODEL_VIDEO_NAME", DEFAULT_VIDEO_MODEL_NAME)
+
+        if model_name.startswith("doubao-seedance-1-0") and generate_audio:
+            logger.warning(
+                "The `doubao-seedance-1-0` series models do not support enabling the audio field. "
+                "Please upgrade to the `doubao-seedance-1-5` series."
+            )
+            generate_audio = None
         if first_frame_image is None:
             response = client.content_generation.tasks.create(
                 model=getenv("MODEL_VIDEO_NAME", DEFAULT_VIDEO_MODEL_NAME),
                 content=[
                     {"type": "text", "text": prompt},
                 ],
+                generate_audio=generate_audio,
                 extra_headers={
                     "veadk-source": "veadk",
                     "veadk-version": VERSION,
@@ -148,6 +161,12 @@ async def video_generate(
                     URL or Base64 string (data URL) for the **last frame** (role = `last_frame`).
                     Use when you want the clip to end on a specific image.
 
+                - generate_audio (bool | None):
+                    Boolean value, used to determine whether the generated video should have sound.
+                    If this field is not configured (None) or its value is `False`, no sound will be generated.
+                    If it is configured as `True`, sound can be generated.
+                    If you want to describe the sound content in detail, you can do so in the `prompt` field.
+
             Notes on first/last frame:
                 * When both frames are provided, **match width/height** to avoid cropping; if they differ,
                   the tail frame may be auto-cropped to fit.
@@ -243,22 +262,32 @@ async def video_generate(
                 prompt = item["prompt"]
                 first_frame = item.get("first_frame", None)
                 last_frame = item.get("last_frame", None)
+                generate_audio = item.get("generate_audio", None)
                 try:
                     if not first_frame:
                         logger.debug(
                             f"video_generate task_{idx} text generation: prompt={prompt}"
                         )
-                        response = await generate(prompt)
+                        response = await generate(prompt, generate_audio=generate_audio)
                     elif not last_frame:
                         logger.debug(
                             f"video_generate task_{idx} first frame generation: prompt={prompt}, first_frame={first_frame}"
                         )
-                        response = await generate(prompt, first_frame)
+                        response = await generate(
+                            prompt,
+                            first_frame_image=first_frame,
+                            generate_audio=generate_audio,
+                        )
                     else:
                         logger.debug(
                             f"video_generate task_{idx} first and last frame generation: prompt={prompt}, first_frame={first_frame}, last_frame={last_frame}"
                         )
-                        response = await generate(prompt, first_frame, last_frame)
+                        response = await generate(
+                            prompt,
+                            first_frame_image=first_frame,
+                            last_frame_image=last_frame,
+                            generate_audio=generate_audio,
+                        )
                     logger.debug(
                         f"batch_{start_idx // batch_size} video_generate task_{idx} response: {response}"
                     )

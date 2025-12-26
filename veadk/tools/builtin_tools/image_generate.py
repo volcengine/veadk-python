@@ -229,7 +229,7 @@ def handle_single_task_sync(
 
 
 async def image_generate(tasks: list[dict], tool_context) -> Dict:
-    """Generate images with Seedream 4.0.
+    """Generate images with Seedream 4.0 / 4.5
 
     Commit batch image generation requests via tasks.
 
