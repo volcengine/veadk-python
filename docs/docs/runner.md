@@ -1,8 +1,8 @@
 # 执行引擎
 
-`Runner` 是 ADK Runtime 中的一个核心组件，负责协调你定义的 Agents、Tools、Callbacks，使它们共同响应用户输入，同时管理信息流、状态变化，以及与外部服务（例如 LLM、Tools）或存储的交互。
+`Runner` 是 ADK Runtime 中的一个核心组件，负责协调你定义的 Agents、Tools、Callbacks 等外部组件，使它们共同响应用户输入，同时管理信息流、状态变化，以及与外部服务（例如 LLM、Tools）或存储的交互。
 
-VeADK 的执行引擎完全兼容 Google ADK Runner，更多`Runner`工作机制说明您可参考 [Google ADK Agent 运行时](https://google.github.io/adk-docs/runtime/)。
+VeADK 的执行引擎完全兼容 Google ADK Runner，关于 `Runner` 的完整工作机制与生命周期说明可参考 [Google ADK Agent 运行时](https://google.github.io/adk-docs/runtime/)。
 
 ---
 

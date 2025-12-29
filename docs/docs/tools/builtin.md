@@ -5,18 +5,18 @@
 
 ## 使用方法
 
-1.  **导入**：从 `veadk.tools.builtin_tools` 模块导入所需工具。
-2.  **配置**：初始化工具并按需提供参数。
-3.  **注册**：将工具实例添加至 Agent 的 `tools` 列表。
+1. **导入**：从 `veadk.tools.builtin_tools` 模块导入所需工具。
+2. **配置**：初始化工具并按需提供参数。
+3. **注册**：将工具实例添加至 Agent 的 `tools` 列表。
 
 === "Python"
 
     ```python
     from veadk import Agent
-    from veadk.tools.builtin_tools.web_search import websearch
+    from veadk.tools.builtin_tools.web_search import web_search
     
     # 在 Agent 初始化时注册工具
-    # Agent(tools=[websearch], other_params...)
+    agent = Agent(tools=[web_search])
     ```
 
 === "Golang"
@@ -90,8 +90,6 @@ VeADK 集成了以下火山引擎工具：
     ```golang
     --8<-- "examples/tools/web_search/agent.go"
     ```
-
-
 
 === "环境变量"
 

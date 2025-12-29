@@ -28,7 +28,7 @@ Responses API 是火山方舟最新推出的 API 接口，原生支持高效的�
 from veadk import Agent
 
 root_agent = Agent(
-    enable_responses=True,      # 开启 Responses API
+    enable_responses=True, # 开启 Responses API
 )
 
 ```

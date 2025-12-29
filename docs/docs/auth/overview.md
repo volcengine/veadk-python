@@ -73,9 +73,9 @@ A: Agent Identity 会自动处理：
 
 ## 后续步骤
 
-- [使用 API Key 进行出站认证](./2.api-key-outbound.md)
-- [使用 OAuth2 M2M 进行出站认证](./3.oauth2-m2m-outbound.md)
-- [使用 OAuth2 USER_FEDERATION 进行出站认证](./4.oauth2-user-federation-outbound.md)
+- [使用 API Key 进行出站认证](./api-key-outbound.md)
+- [使用 OAuth2 M2M 进行出站认证](./oauth2-m2m-outbound.md)
+- [使用 OAuth2 USER_FEDERATION 进行出站认证](./oauth2-user-federation-outbound.md)
 
 ## 相关资源
 
