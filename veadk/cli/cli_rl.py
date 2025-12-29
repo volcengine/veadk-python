@@ -38,8 +38,8 @@ def rl_group():
     "--platform",
     "-p",
     required=True,
-    type=click.Choice(["ark"], case_sensitive=False),
-    help="Scaffold platform type (only support for now: ark)",
+    type=click.Choice(["ark", "lightning"], case_sensitive=False),
+    help="Scaffold platform type (supported: ark, lightning)",
 )
 @click.option(
     "--workspace", "-w", required=True, type=str, help="Target workspace directory name"
@@ -52,8 +52,9 @@ def rl_group():
 )
 def rl_init(platform: str, workspace: str, overwrite: bool):
     """
-    Initialize RL scaffold project for ark platform
+    Initialize RL scaffold project for ark or lightning platform
     Example: veadk rl init --platform ark --workspace veadk_rl_ark_project
+    Example: veadk rl init --platform lightning --workspace veadk_rl_lightning_project
     """
     # Locate template directory
     rl_template_root = get_rl_template_root()
