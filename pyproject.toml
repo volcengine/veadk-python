@@ -25,7 +25,7 @@ dependencies = [
     "volcengine-python-sdk>=5.0.1", # For Volcengine API
     "volcengine>=1.0.193", # For Volcengine sign
     "agent-pilot-sdk==0.1.2", # Prompt optimization by Volcengine AgentPilot/PromptPilot toolkits
-    "fastmcp==2.12.3", # For running MCP
+    "fastmcp>=2.12.3", # For running MCP
     "trustedmcp==0.0.5", # For running TrustedMCP
     "cookiecutter==2.6.0", # For cloud deploy
     "omegaconf==2.3.0", # For agent builder
