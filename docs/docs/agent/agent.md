@@ -90,7 +90,6 @@
     }
     ```
 
-
 === "所需环境变量"
 
     环境变量列表：
@@ -126,17 +125,16 @@
 
     ```golang title="agent.go" linenums="1" hl_lines="2-4"
     cfg := &veagent.Config{}
-	cfg.Name = "life_assistant"
-	cfg.Description = "生活助手"
-	cfg.Instruction = "你是一个生活助手，你可以回答用户的问题。"
+    cfg.Name = "life_assistant"
+    cfg.Description = "生活助手"
+    cfg.Instruction = "你是一个生活助手，你可以回答用户的问题。"
 
-	veAgent, err := veagent.New(cfg)
-	if err != nil {
-		fmt.Printf("NewVeAgent failed: %v", err)
-		return
-	}
+    veAgent, err := veagent.New(cfg)
+    if err != nil {
+        fmt.Printf("NewVeAgent failed: %v", err)
+        return
+    }
     ```
-
 
 其中，`name` 代表 Agent 的名称，`description` 是对 Agent 功能的简单描述（在Agent Tree中唯一标识某个Agent），`instruction` 是 Agent 的系统提示词，用于定义其行为和响应风格。
 
@@ -161,50 +159,56 @@
 
     ```golang title="agent.go" linenums="1" hl_lines="2-4"
     cfg := &veagent.Config{
-		ModelName: "...",
-		ModelAPIBase: "...",
-		ModelAPIKey: "...",
-	}
+        ModelName: "...",
+        ModelAPIBase: "...",
+        ModelAPIKey: "...",
+    }
     
     veAgent, err := veagent.New(cfg)
-	if err != nil {
-		fmt.Printf("NewVeAgent failed: %v", err)
-		return
-	}
+    if err != nil {
+        fmt.Printf("NewVeAgent failed: %v", err)
+        return
+    }
     ```
 
-由于 python VeADK 的 Agent 基于 [LiteLLM]() 实现，因此您可以使用 LiteLLM 支持的所有模型提供商。您可以查看 [LiteLLM 支持的模型提供商列表](https://docs.litellm.ai/docs/providers)来设置 `model_provider` 参数。
+VeADK Python 版本中的 Agent 推理模型基于 [LiteLLM](https://github.com/BerriAI/litellm) 实现，因此您可以使用 LiteLLM 支持的所有模型提供商。您可以查看 [LiteLLM 支持的模型提供商列表](https://docs.litellm.ai/docs/providers)来设置 `model_provider` 参数。
 
-基于 LiteLLM 的 [Fallbacks](https://docs.litellm.ai/docs/completion/reliable_completions) 容错机制，VeADK 实现了智能的模型切换能力。当目标模型经多次重试仍调用失败时，系统将自动切换至备选模型继续执行任务：
+#### 模型容错
+
+VeADK 为您提供了基于 LiteLLM 的 [Fallbacks](https://docs.litellm.ai/docs/completion/reliable_completions) 模型容错机制，能够在前序模型访问失败时进行模型自动切换。例如，当目标模型经多次重试仍调用失败时，系统将自动切换至备选模型来继续执行任务：
 
 === "Python"
 
-    ```python title="agent.py" linenums="1" hl_lines="4"
+    ```python title="agent.py" linenums="1" hl_lines="4-8"
     from veadk import Agent
-    
+
     agent = Agent(
-        model_name=["doubao-seed-1-8-251215", "doubao-seed-1-6-251015", "doubao-seed-1.6-250615"]
+        model_name=[
+            "doubao-seed-1-8-251215",
+            "doubao-seed-1-6-251015",
+            "doubao-seed-1.6-250615",
+        ]
     )
     ```
 
-在上述配置中，VeADK 默认会首先尝试 doubao-seed-1-8-251215，如果失败再去尝试后续模型，直至成功。
+在上述配置中，VeADK 默认会首先尝试 `doubao-seed-1-8-251215` 模型，如果失败后会尝试后续模型，直至成功。
 
-golang 暂不支持 LiteLLM，因此 VeADK 的 Agent 基于 OpenAI 实现，因此您可以使用所有支持OpenAI协议的模型。
-
-#### 设置模型客户端
+#### 自定义您的模型客户端
 
 VeADK 支持您直接定义 LiteLLM 的客户端，来实现高度自定义的模型配置：
 
-```python title="agent.py" linenums="1" hl_lines="5 8"
-from google.adk.models.lite_llm import LiteLlm
-from veadk import Agent
+=== "Python"
 
-# 自定义您的模型客户端
-llm = LiteLlm()
+    ```python title="agent.py" linenums="1" hl_lines="5 8"
+    from google.adk.models.lite_llm import LiteLlm
+    from veadk import Agent
 
-# 直接将模型客户端传递给 Agent
-agent = Agent(model=llm)
-```
+    # 自定义您的模型客户端
+    llm = LiteLlm()
+
+    # 直接将模型客户端传递给 Agent
+    agent = Agent(model=llm)
+    ```
 
 #### 配置模型额外参数
 
@@ -236,20 +240,19 @@ agent = Agent(model=llm)
     )
     
     veAgent, err := veagent.New(&veagent.Config{
-		ModelExtraConfig: map[string]any{
-			"extra_body": map[string]any{
-				"thinking": map[string]string{
-					"type": "disabled",
-				},
-			},
-		},
-	})
-	if err != nil {
-		fmt.Printf("NewVeAgent failed: %v", err)
-		return
-	}
+        ModelExtraConfig: map[string]any{
+            "extra_body": map[string]any{
+                "thinking": map[string]string{
+                    "type": "disabled",
+                },
+            },
+        },
+    })
+    if err != nil {
+        fmt.Printf("NewVeAgent failed: %v", err)
+        return
+    }
     ```
-
 
 ### 通过配置文件
 
@@ -265,7 +268,7 @@ root_agent:
   description: An intelligent_assistant which can provider weather information.
   instruction: Help user according to your tools.
   model_name: doubao-1-5-pro-32k-250115
-  model_api_key: xxx # 您的模型API Key
+  model_api_key: ... # 您的模型API Key
   tools:
     - name: veadk.tools.demo_tools.get_city_weather # tool 所在的模块及函数名称
 ```
@@ -297,14 +300,14 @@ response = asyncio.run(runner.run("今天北京天气如何？"))
 print(response)
 ```
 
-### 构建 Agent 的方法对比
+## 构建 Agent 的方法对比
 
 **对比总结**：
 
-| 特性   | 代码方式  | YAML 方式 |
+| 特性 | 代码方式 | YAML 方式 |
 | ---- | ----- | ------- |
-| 灵活性  | 高     | 中       |
-| 可读性  | 中     | 高       |
-| 可维护性 | 中     | 高       |
-| 动态生成 | 支持    | 一般      |
-| 适用场景 | 开发、生产 | 实验、配置化、生产  |
+| 灵活性 | 高 | 中 |
+| 可读性 | 中 | 高 |
+| 可维护性 | 中 | 高 |
+| 动态生成 | 支持 | 一般 |
+| 适用场景 | 开发、生产 | 实验、配置化、生产 |

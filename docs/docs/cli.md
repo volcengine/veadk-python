@@ -43,17 +43,22 @@ VeADK 提供如下命令便捷您的操作：
 ### 使用示例
 
 启动交互式初始化流程：
+
 ```bash
 veadk init
 ```
+
 执行以上命令后，您将被引导完成项目初始化流程。根据提示输入项目名称、本地目录名称、Volcengine FaaS 应用名称、Volcengine API Gateway 实例名称、服务名称、上游名称等信息，以默认项目名称`weather-reporter`为例：
 ![veadk_init](./assets/images/cli/cli_veadk_init.gif)
 您也可以在初始化时直接指定使用 `web_template` 模板：
+
 ```bash
 veadk init --vefaas-template-type web_template
 ```
+
 执行完成之后，命令所生成的目录结构如下：
-```
+
+```bash
 weather-reporter/
 ├────src                    # 智能体项目源代码目录
 │   ├────weather_report     # 天气预报智能体项目目录
@@ -94,27 +99,35 @@ weather-reporter/
 ### 使用示例
 
 启动交互式创建流程：
+
 ```bash
 veadk create
 ```
+
 您也直接指定智能体名称来创建，例如：
+
 ```bash
 veadk create location-agent
 ```
+
 在执行以上命令后，您将被引导完成智能体创建流程。首先，系统会提示您选择以何种方式提供 API Key，您可以选择直接输入或稍后配置。如下所示：
 ![veadk_create](./assets/images/cli/cli_veadk_create.gif)
 您也可以在创建时同时提供 API Key：
+
 ```bash
 veadk create location-agent --ark-api-key "xxxxxx"
 ```
+
 该命令会创建一个包含 API Key 的 `.env` 文件。您可以稍后编辑此文件以更新 API Key。命令创建的完整目录结构如下：
-```
+
+```bash
 location-agent/
 ├── .env          # 包含 API key 的环境配置
 ├── __init__.py   # Python 包初始化文件
 └── agent.py      # 主要智能体定义文件
 ```
-这时，您可以使用 `veadk web` 命令来运行示例`location-agent` 智能体，具体执行方式及参数说明请参考下一节：[Web 调试界面](#web-调试界面)。
+
+这时，您可以使用 `veadk web` 命令来运行示例`location-agent` 智能体。
 
 ## Web 调试界面
 
@@ -135,24 +148,27 @@ location-agent/
 | `--log-level` | [debug\|info\|warning\|error] | 设置日志输出级别，默认值为 info |
 | `--help` | | 显示此帮助信息并退出 |
 
-**长短期记忆机制**
+**长短期记忆机制**：
 
 VeADK Web 调试界面支持智能体的短期记忆和长期记忆功能，这些机制通过以下方式传递到 Web 界面中：
 
 **短期记忆传递**：
-   - 智能体在交互过程中产生的对话历史会自动保存为短期记忆
-   - Web 界面通过会话 ID 关联智能体的短期记忆数据
-   - 每次对话都会加载对应的短期记忆上下文
+
+- 智能体在交互过程中产生的对话历史会自动保存为短期记忆
+- Web 界面通过会话 ID 关联智能体的短期记忆数据
+- 每次对话都会加载对应的短期记忆上下文
 
 **长期记忆传递**：
-   - 智能体的知识库配置信息会传递给 Web 界面
-   - Web 界面支持基于长期记忆的智能体行为定制
-   - 长期记忆数据通过智能体配置自动加载
+
+- 智能体的知识库配置信息会传递给 Web 界面
+- Web 界面支持基于长期记忆的智能体行为定制
+- 长期记忆数据通过智能体配置自动加载
 
 **记忆服务集成**：
-   - 自动检测并配置相应的记忆后端服务
-   - 支持多种记忆存储类型（local、mysql、redis等）
-   - 记忆数据在 Web 界面中实时同步和更新
+
+- 自动检测并配置相应的记忆后端服务
+- 支持多种记忆存储类型（local、mysql、redis等）
+- 记忆数据在 Web 界面中实时同步和更新
 
 ### 使用示例
 
@@ -167,13 +183,11 @@ veadk web --port 8080
 
 该命令能够自动读取执行命令目录中的 `agent.py` 文件，并加载其中的 `root_agent` 全局变量。服务启动后，通常可以在 `http://127.0.0.1:8000` 访问。
 
-
 ### 使用示例
 
 使用示例如下图示：
 ![veadk_web](./assets/images/cli/cli_veadk_web.gif)
 在界面左上角的选择框中，您可以选择要调试的智能体。在本示例中，您可以看到您创建的`location-agent`智能体。
-
 
 ## 知识库
 
@@ -198,9 +212,9 @@ veadk web --port 8080
 
 | 参数 | 类型 | 描述 |
 | :--- | :--- | :--- |
-| `--backend` | [local\|opensearch\|viking\|redis] | **(必需)** 知识库后端类型。 |
-| `--app_name` | TEXT | 用于组织和隔离知识库数据的应用标识符。 |
-| `--index` | TEXT | 知识库索引标识符，在 `app_name` 内唯一。|
+| `--backend` | [local\|opensearch\|viking\|redis] | **(必需)** 知识库后端类型 |
+| `--app_name` | TEXT | 用于组织和隔离知识库数据的应用标识符 |
+| `--index` | TEXT | 知识库索引标识符，在 `app_name` 内唯一 |
 | `--path` | TEXT | **(必需)** 要添加的知识内容的文件或目录路径。 |
 | `--help` | | 显示此帮助信息并退出。 |
 
@@ -211,7 +225,7 @@ veadk web --port 8080
 - **viking**: 火山引擎的托管向量数据库服务，为语义搜索和 RAG 应用优化。
 - **redis**: 具有向量搜索功能的内存数据存储，适用于快速检索、较小的知识库。
 
-**注意**
+**注意**：
 
 veadk kb add 命令需要将您的文档内容转换成向量，这个过程默认会使用一个嵌入模型（Embedding Model）服务，该服务会将文档内容转换为向量表示。您可以根据需要配置不同的嵌入模型，例如火山引擎的方舟大模型平台。
 
@@ -224,7 +238,8 @@ veadk kb add 命令需要将您的文档内容转换成向量，这个过程默�
 下面的示例将演示将单个文件添加到redis作为后端的知识库，并在后续的智能体调用中使用。
 
 假设您在当前目录下有一个名为`qa.md`的文件，内容如下：
-```
+
+```markdown
 # 智能客服知识库
 
 ## 1. 公司简介
@@ -272,10 +287,12 @@ A4: 知识库支持 **实时更新**，管理员提交后即可立即生效。
 ```
 
 您可以使用以下命令将其添加到本地知识库：
+
 ```bash
 veadk kb add --backend redis --app_name app --path ./qa.md
 ```
-**注意**
+
+**注意**：
 
 - 在本例中，我们选择的是redis后端。您需要事先在本地目录的`.env`文件中配置好`DATABASE_REDIS_HOST`,`DATABASE_REDIS_HOST`,`DATABASE_REDIS_PORT`,`DATABASE_REDIS_PASSWORD`(以及可选的`DATABASE_REDIS_USER`)等环境变量。
 - 您需要确认您配置的redis服务是否正常运行，并且端口号是否与您在`.env`文件中配置的一致。
@@ -285,6 +302,7 @@ veadk kb add --backend redis --app_name app --path ./qa.md
 ![veadk_kb_add](./assets/images/cli/cli_veadk_kb_add.gif)
 
 接下来，您可以通过如下代码来验证智能库是否添加成功：
+
 ```python
 import asyncio
 
@@ -317,9 +335,9 @@ response = asyncio.run(
 )
 
 print(response)
-
 ```
-**注意**
+
+**注意**：
 
 - 您需要确认您运行上述代码时，redis服务正常运行并已经开启向量搜索功能。同时，这段代码需要和上面的命令共享相同的环境变更配置（建议在相同目录下运行，这样可以共享相同的.env配置文件。）
 - 代码中的'app_name'需要与上面的命令中的'app_name'保持一致，在本 示例中为'app'。
@@ -345,7 +363,7 @@ print(response)
 | `--veapig-instance-name` | TEXT | (可选) 用于配置外部 API 访问的火山引擎 API 网关实例名称。 |
 | `--veapig-service-name` | TEXT | (可选) 火山引擎 API 网关服务名称。 |
 | `--veapig-upstream-name` | TEXT | (可选) 火山引擎 API 网关上游名称。 |
-| `--short-term-memory-backend`| [local\|mysql] | 短期记忆存储的后端类型。默认为 `local`。 |
+| `--short-term-memory-backend` | [local\|mysql] | 短期记忆存储的后端类型。默认为 `local`。 |
 | `--use-adk-web` | | 为部署的智能体启用 ADK Web 界面。 |
 | `--path` | TEXT | 包含要部署的 VeADK 项目的本地目录路径。默认为当前目录 `.`。 |
 | `--help` | | 显示此帮助信息并退出。 |
@@ -353,6 +371,7 @@ print(response)
 ### 使用示例
 
 在项目根目录下，执行部署（需要提供AK/SK和FaaS应用名）：
+
 ```bash
 veadk deploy \
   --vefaas-app-name my-cloud-app \
@@ -361,6 +380,7 @@ veadk deploy \
 ```
 
 部署指定路径下的项目，并启用 Web 界面：
+
 ```bash
 veadk deploy \
   --path ./my-agent-project \
@@ -370,7 +390,7 @@ veadk deploy \
   --secret-key "YOUR_SECRET_KEY"
 ```
 
-**注意**
+**注意**：
 
 - 您也可以在项目根目录下的`.env`文件中设置 `VOLCENGINE_ACCESS_KEY` 和 `VOLCENGINE_SECRET_KEY` 环境变量，避免在命令行中明文暴露 AK/SK。
 
@@ -406,17 +426,22 @@ veadk deploy \
 ```bash
 veadk prompt --path ./weather_reporter/agent.py --feedback "希望提示词能够更加具体明确" --api-key "YOUR_API_KEY" --workspace-id "YOUR_WORKSPACE_ID"
 ```
-** 注意 **
+
+**注意**：
 
 - 您需要先在火山引擎[PromptPilot控制台](https://promptpilot.volcengine.com/)创建一个项目，并获取 API Key 和工作空间 ID。
 - 您也可以在项目根目录下的`.env`文件中设置 `PROMPTPILOT_API_KEY` 环境变量，避免在命令行中明文暴露 API Key。
 - 本命令会自动读取智能体代码中的`Agent`对象的`instruction` 内容，作为目标来进行提示词优化。本本例中，原始的`instruction`内容如下所示：
-```
+
+```text
 Once user ask you weather of a city, you need to provide the weather report for that city by calling `get_city_weather`
 ```
+
 本命令运行的结果如下所示：
-```
+
+```text
 Optimized prompt for agent weather_reporter:
+
 # Role
 You are a weather information provider. When the user asks about the weather of a city, your task is to offer an accurate weather report for that city.
 
@@ -429,7 +454,6 @@ You are a weather information provider. When the user asks about the weather of 
 - If the user's inquiry is not clear about the city name or contains ambiguous information, ask the user to clarify the city name before proceeding.
 - Ensure that the information provided is based on the data obtained from the `get_city_weather` function and is as accurate as possible.
 ```
-
 
 ## 评测
 
@@ -464,11 +488,12 @@ You are a weather information provider. When the user asks about the weather of 
 
 - 必须提供 `--agent-dir` 或 `--agent-a2a-url` 两者之一。
 - 如果两者都提供，`--agent-a2a-url` 优先。
-- 需要事先准备好评测数据集文件，您可以参考[评测](/observation/evaluation)中的说明，创建一个符合 Google ADK 格式的 JSON 文件。
+- 需要事先准备好评测数据集文件，您可以参考[评测](deploy/evaluation.md)中的说明，创建一个符合 Google ADK 格式的 JSON 文件。
 
 ### 使用示例
 
-**本地评估示例:**
+**本地评估示例**：
+
 ```bash
 veadk eval \
   --agent-dir ./my-agent \
@@ -476,7 +501,8 @@ veadk eval \
   --evaluator adk
 ```
 
-**远程评估示例:**
+**远程评估示例**：
+
 ```bash
 veadk eval \
   --agent-a2a-url http://my-agent-url.com/invoke \
