@@ -115,6 +115,23 @@ def common_gen_ai_session_id(**kwargs) -> str:
     return session_id or "<unknown_session_id>"
 
 
+def common_gen_ai_invocation_id(**kwargs) -> str:
+    """Extract the invocation identifier from context.
+
+    Provides invocation-level identification for organizing telemetry data
+    by individual API calls and enabling detailed analysis of each operation.
+
+    Args:
+        **kwargs: Keyword arguments containing context information.
+            Expected to include 'invocation_id' key.
+
+    Returns:
+        str: Invocation identifier or placeholder if not available
+    """
+    invocation_id = kwargs.get("invocation_id")
+    return invocation_id or "<unknown_invocation_id>"
+
+
 def common_cozeloop_report_source(**kwargs) -> str:
     """Extract the CozeLoop report source identifier.
 
@@ -175,6 +192,7 @@ COMMON_ATTRIBUTES = {
     "app.name": common_gen_ai_app_name,  # TLS required
     "user.id": common_gen_ai_user_id,  # CozeLoop / TLS required
     "session.id": common_gen_ai_session_id,  # CozeLoop / TLS required
+    "invocation.id": common_gen_ai_invocation_id,  # CozeLoop required
     "cozeloop.report.source": common_cozeloop_report_source,  # CozeLoop required
     "cozeloop.call_type": common_cozeloop_call_type,  # CozeLoop required
 }

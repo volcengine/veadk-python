@@ -147,7 +147,10 @@ def _set_agent_input_attribute(
             if part.text:
                 span.add_event(
                     "gen_ai.user.message",
-                    {f"parts.{idx}.type": "text", f"parts.{idx}.content": part.text},
+                    {
+                        f"parts.{idx}.type": "text",
+                        f"parts.{idx}.content": part.text,
+                    },
                 )
             if part.inline_data:
                 span.add_event(
@@ -186,7 +189,8 @@ def _set_agent_output_attribute(span: Span, llm_response: LlmResponse) -> None:
     if content and content.parts:
         # set gen_ai.output attribute required by APMPlus
         span.set_attribute(
-            "gen_ai.output", safe_json_serialize(content.model_dump(exclude_none=True))
+            "gen_ai.output",
+            safe_json_serialize(content.model_dump(exclude_none=True)),
         )
 
         for idx, part in enumerate(content.parts):
@@ -374,6 +378,7 @@ def trace_call_llm(
         user_id=invocation_context.user_id,
         app_name=invocation_context.app_name,
         session_id=invocation_context.session.id,
+        invocation_id=invocation_context.invocation_id,
         model_provider=invocation_context.agent.model_provider
         if isinstance(invocation_context.agent, Agent)
         else "",
