@@ -17,7 +17,7 @@ OAuth2 USER_FEDERATION 认证用于用户委托场景，应用代表用户访问
 
 - Client ID
 - Client Secret
-- 回调 URL（选择[回调地址](./4.oauth2-user-federation-outbound.md#回调地址)对应区域的地址）
+- 回调 URL（选择[回调地址](#回调地址)对应区域的地址）
 
 ### 方式二：使用 OIDC 配置
 
@@ -27,7 +27,7 @@ OAuth2 USER_FEDERATION 认证用于用户委托场景，应用代表用户访问
 - Client ID
 - Client Secret
 - 权限范围：至少包含 `openid`
-- 回调 URL（选择[回调地址](./4.oauth2-user-federation-outbound.md#回调地址)对应区域的地址）
+- 回调 URL（选择[回调地址](#回调地址)对应区域的地址）
 
 ### 方式三：使用自定义 OAuth2 配置
 
@@ -39,7 +39,7 @@ OAuth2 USER_FEDERATION 认证用于用户委托场景，应用代表用户访问
 - Issuer
 - 授权端点
 - 令牌端点
-- 回调 URL（选择[回调地址](./4.oauth2-user-federation-outbound.md#回调地址)对应区域的地址）
+- 回调 URL（选择[回调地址](#回调地址)对应区域的地址）
 
 ## 回调地址
 
