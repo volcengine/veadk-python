@@ -613,7 +613,7 @@ VeADK 集成了以下火山引擎工具：
     - 注：视频云工具不支持Space的创建，请在火山视频云控制台提前创建[视频云空间](https://console.volcengine.com/vod/region:vod+cn-north-1/overview/)
 
 
-=== "代码"
+=== "Python"
 
     ```python
     import asyncio

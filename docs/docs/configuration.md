@@ -51,17 +51,20 @@ volcengine:
 
 统一前缀： `TOOL_`
 
-| 子类       | 环境变量名称           | 释义 |
-| ---------- | ---------------------- | ---- |
-| VeSearch   | `TOOL_VESEARCH_ENDPOINT` | 火山引擎搜索机器人 ID（bot_id） |
-|            | `TOOL_VESEARCH_API_KEY`  | 火山引擎搜索服务密钥 |
-| WebScraper | `TOOL_WEB_SCRAPER_ENDPOINT` | WebScraper 端点 |
-|            | `TOOL_WEB_SCRAPER_API_KEY`  | WebScraper 密钥（token） |
-| Lark       | `TOOL_LARK_ENDPOINT`    | Lark 应用 ID（app_id） |
+| 子类         | 环境变量名称           | 释义                    |
+|------------| ---------------------- |-----------------------|
+| VeSearch   | `TOOL_VESEARCH_ENDPOINT` | 火山引擎搜索机器人 ID（bot_id）  |
+|            | `TOOL_VESEARCH_API_KEY`  | 火山引擎搜索服务密钥            |
+| WebScraper | `TOOL_WEB_SCRAPER_ENDPOINT` | WebScraper 端点         |
+|            | `TOOL_WEB_SCRAPER_API_KEY`  | WebScraper 密钥（token）  |
+| Lark       | `TOOL_LARK_ENDPOINT`    | Lark 应用 ID（app_id）    |
 |            | `TOOL_LARK_API_KEY`     | Lark 应用密钥（app_secret） |
-|            | `TOOL_LARK_TOKEN`       | Lark 用户 token |
+|            | `TOOL_LARK_TOKEN`       | Lark 用户 token         |
 | LAS        | `TOOL_LAS_URL`          | LAS SSE 服务地址（含 token） |
-|            | `TOOL_LAS_DATASET_ID`   | LAS 数据集 ID |
+|            | `TOOL_LAS_DATASET_ID`   | LAS 数据集 ID            |
+| VOD        | `TOOL_VOD_GROUPS`   | 视频编辑能力组               |
+|            | `TOOL_VOD_TIMEOUT`   | VOD工具连接超时时长           |
+
 
 ### 数据库类
 
