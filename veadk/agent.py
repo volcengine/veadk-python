@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import os
-from typing import Optional, Union, AsyncGenerator
+from typing import AsyncGenerator, Optional, Union
 
 # If user didn't set LITELLM_LOCAL_MODEL_COST_MAP, set it to True
 # to enable local model cost map.
@@ -24,12 +24,15 @@ from typing import Optional, Union, AsyncGenerator
 if not os.getenv("LITELLM_LOCAL_MODEL_COST_MAP"):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
-from google.adk.agents import LlmAgent, RunConfig, InvocationContext
+from google.adk.agents import InvocationContext, LlmAgent, RunConfig
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.context_cache_config import ContextCacheConfig
 from google.adk.agents.llm_agent import InstructionProvider, ToolUnion
 from google.adk.agents.run_config import StreamingMode
 from google.adk.events import Event, EventActions
+from google.adk.flows.llm_flows.auto_flow import AutoFlow
+from google.adk.flows.llm_flows.base_llm_flow import BaseLlmFlow
+from google.adk.flows.llm_flows.single_flow import SingleFlow
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.runners import Runner
 from google.genai import types
@@ -53,8 +56,8 @@ from veadk.prompts.agent_default_prompt import (
 from veadk.prompts.prompt_manager import BasePromptManager
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.logger import get_logger
-from veadk.utils.patches import patch_asyncio, patch_tracer
 from veadk.utils.misc import check_litellm_version
+from veadk.utils.patches import patch_asyncio, patch_tracer
 from veadk.version import VERSION
 
 patch_tracer()
@@ -117,6 +120,8 @@ class Agent(LlmAgent):
     tracers: list[BaseTracer] = []
 
     enable_responses: bool = False
+
+    enable_shadow_agent: bool = False
 
     context_cache_config: Optional[ContextCacheConfig] = None
 
@@ -291,6 +296,28 @@ class Agent(LlmAgent):
         logger.debug(
             f"Agent: {self.model_dump(include={'name', 'model_name', 'model_api_base', 'tools'})}"
         )
+
+    @property
+    def _llm_flow(self) -> BaseLlmFlow:
+        if (
+            self.disallow_transfer_to_parent
+            and self.disallow_transfer_to_peers
+            and not self.sub_agents
+        ):
+            from veadk.flows.supervisor_single_flow import SupervisorSingleFlow
+
+            if self.enable_shadow_agent:
+                logger.debug(f"Enable supervisor flow for agent: {self.name}")
+                return SupervisorSingleFlow(supervised_agent=self)
+            else:
+                return SingleFlow()
+        else:
+            from veadk.flows.supervisor_auto_flow import SupervisorAutoFlow
+
+            if self.enable_shadow_agent:
+                logger.debug(f"Enable supervisor flow for agent: {self.name}")
+                return SupervisorAutoFlow(supervised_agent=self)
+            return AutoFlow()
 
     async def _run_async_impl(
         self, ctx: InvocationContext
