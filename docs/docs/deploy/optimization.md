@@ -117,51 +117,46 @@ veadk rl init --platform lightning --workspace veadk_rl_lightning_project
 
 ```bash
 cd veadk_rl_lightning_project
-veadk rl run --platform lightning --client
+python veadk_agent.py
 ```
 
-然后在终端2中运行以下命令，启动 server：
+然后在终端2中运行以下命令
+
+- 首先重启 ray 集群：
 
 ```bash
 cd veadk_rl_lightning_project
-veadk rl run --platform lightning --server
+bash restart_ray.sh
+```  
+
+- 启动 server：
+
+```bash
+cd veadk_rl_lightning_project
+bash train.sh
 ```
 
 #### 原理说明
 
 生成后的项目结构如下，其中核心文件包括：
 
-- agent_client: `examples/*/*_agent.py` 中定义了agent的rollout逻辑和reward规则
-- training_server: `examples/*/train.py` 定义了训练相关参数,用于启动训练服务器
+- agent_client: `*_agent.py` 中定义了agent的rollout逻辑和reward规则
+- training_server: `train.sh` 定义了训练相关参数,用于启动训练服务器
 
 ```shell
 veadk_rl_lightning_project
-├── agentligtning 
-    ├── runner # 运行器：负责任务执行、调度、主流程管理
-    ├── tracer # 追踪模块：记录日志、链路追踪、调试信息
-    ├── trainer  # 训练模块：支持模型训练、微调与评估逻辑
-    ├── verl # VERL强化学习组件
-    └── server.py # 训练服务器
-└── examples # 示例项目,包含若干示例
-    ├── spider # 示例一：Spider 数据库问答任务
-        ├── sql_agent.py # sql agent的rollout逻辑和reward设定
-        ├── train.sh #训练服务器启动脚本,设定训练相关参数
-        └── data # 数据集
-            ├── train.parquet # 训练数据集,需要为parquet格式
-            └── eval.parquet # 评测数据集,需要为parquet格式
-    ├── rag # 示例二：RAG 应用示例
-        ├── rag_agent.py # rag agent的rollout逻辑和reward设定
-        └── train.sh #训练服务器启动脚本,设定训练相关参数
-    └── calc_x # 示例三：计算 agent 应用示例
-        ├── calc_agent.py # calculate agent的rollout逻辑和reward设定
-        └── train.sh #训练服务器启动脚本,设定训练相关参数
-    
+├── data 
+    ├── demo_train.parquet # 训练数据,必须为 parquet 格式
+    ├── demo_test.parquet # 测试数据,必须为 parquet 格式
+└── demo_calculate_agent.py # agent的rollout逻辑和reward设定
+└── train.sh # 训练服务器启动脚本,设定训练相关参数 
+└── restart_ray.sh # 重启 ray 集群脚本
 ```
 
 #### 最佳实践案例
 
-1. 脚手架中，基于 VeADK 的天气查询 Agent 进行强化学习优化
-2. 启动 client (veadk rl run --platform lightning --client) 与 server (veadk rl run --platform lightning --server)，分别在终端1与终端2中运行以上命令
+1. 脚手架中，基于 VeADK 的算术 Agent 进行强化学习优化
+2. 启动 client (python demo_calculate_agent.py), 重启ray集群(bash restart_ray.sh), 最后启动训练服务器server (bash train.sh)，分别在终端1与终端2中运行以上命令
 
 ![启动client](../assets/images/optimization/lightning_client.png)
 
