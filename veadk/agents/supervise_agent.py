@@ -1,17 +1,10 @@
 from google.adk.models.llm_request import LlmRequest
 from jinja2 import Template
-from pydantic import BaseModel
 
 from veadk import Agent, Runner
+from veadk.utils.logger import get_logger
 
-
-class SupervisorAgentOutput(BaseModel):
-    advice: str = ""
-    """
-    Advices for the worker agent.
-    For example, suggested function call / actions / responses.
-    """
-
+logger = get_logger(__name__)
 
 instruction = Template("""You are a supervisor of an agent system. The system prompt of worker agent is:
 
@@ -19,13 +12,7 @@ instruction = Template("""You are a supervisor of an agent system. The system pr
 {{ system_prompt }}
 ```
                        
-```worker agent tools
-{{ agent_tools }}
-```
-
 You should guide the agent to finish task. If you think the history execution is not correct, you should give your advice to the worker agent. If you think the history execution is correct, you should output an empty string.
-
-Your final response should be in `json` format.
 """)
 
 
@@ -33,9 +20,8 @@ def build_supervisor(supervised_agent: Agent) -> Agent:
     custom_instruction = instruction.render(system_prompt=supervised_agent.instruction)
     agent = Agent(
         name="supervisor",
-        description="",
+        description="A supervisor for agent execution",
         instruction=custom_instruction,
-        output_schema=SupervisorAgentOutput,
     )
 
     return agent
@@ -55,4 +41,11 @@ async def generate_advice(agent: Agent, llm_request: LlmRequest) -> str:
                 if part.function_response:
                     messages += f"{content.role}: {part.function_response}"
 
-    return await runner.run(messages="History trajectory is: " + messages)
+    prompt = (
+        f"Tools of agent is {llm_request.tools_dict}. History trajectory is: "
+        + messages
+    )
+
+    logger.debug(f"Prompt for supervisor: {prompt}")
+
+    return await runner.run(messages=prompt)

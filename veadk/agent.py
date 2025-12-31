@@ -121,7 +121,7 @@ class Agent(LlmAgent):
 
     enable_responses: bool = False
 
-    enable_shadow_agent: bool = False
+    enable_supervisor_flow: bool = False
 
     context_cache_config: Optional[ContextCacheConfig] = None
 
@@ -306,7 +306,7 @@ class Agent(LlmAgent):
         ):
             from veadk.flows.supervisor_single_flow import SupervisorSingleFlow
 
-            if self.enable_shadow_agent:
+            if self.enable_supervisor_flow:
                 logger.debug(f"Enable supervisor flow for agent: {self.name}")
                 return SupervisorSingleFlow(supervised_agent=self)
             else:
@@ -314,7 +314,7 @@ class Agent(LlmAgent):
         else:
             from veadk.flows.supervisor_auto_flow import SupervisorAutoFlow
 
-            if self.enable_shadow_agent:
+            if self.enable_supervisor_flow:
                 logger.debug(f"Enable supervisor flow for agent: {self.name}")
                 return SupervisorAutoFlow(supervised_agent=self)
             return AutoFlow()
