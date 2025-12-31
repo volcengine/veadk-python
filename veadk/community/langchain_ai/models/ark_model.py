@@ -27,7 +27,7 @@ class ArkChatModel(ChatOpenAI):
             model=model,
             api_key=secret_from_env("MODEL_AGENT_API_KEY")(),
             base_url=from_env(
-                "MODEL_AGENT_API_BASE_URL",
+                "MODEL_AGENT_API_BASE",
                 default="https://ark.cn-beijing.volces.com/api/v3",
             )(),
             **kwargs,
