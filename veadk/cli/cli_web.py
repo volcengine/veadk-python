@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 from functools import wraps
 
 import click
@@ -139,5 +140,14 @@ def web(ctx, *args, **kwargs) -> None:
     # from Google ADK and Litellm
     if "--log_level" not in extra_args:
         extra_args.extend(["--log_level", "ERROR"])
+        logging.basicConfig(level=logging.ERROR, force=True)
+
+    if "--log_level" in extra_args:
+        logging.basicConfig(
+            level=getattr(
+                logging, extra_args[extra_args.index("--log_level") + 1].upper()
+            ),
+            force=True,
+        )
 
     cli_web.main(args=extra_args, standalone_mode=False)
