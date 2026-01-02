@@ -32,7 +32,7 @@ from veadk.memory.short_term_memory_backends.postgresql_backend import (
 from veadk.memory.short_term_memory_backends.sqlite_backend import (
     SQLiteSTMBackend,
 )
-from veadk.models.ark_transform import build_cache_metadata
+from veadk.models.ark_llm import build_cache_metadata
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
