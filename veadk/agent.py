@@ -54,7 +54,6 @@ from veadk.prompts.prompt_manager import BasePromptManager
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_asyncio, patch_tracer
-from veadk.utils.misc import check_litellm_version
 from veadk.version import VERSION
 
 patch_tracer()
@@ -171,9 +170,6 @@ class Agent(LlmAgent):
 
         if not self.model:
             if self.enable_responses:
-                min_version = "1.79.3"
-                check_litellm_version(min_version)
-
                 from veadk.models.ark_llm import ArkLlm
 
                 self.model = ArkLlm(
