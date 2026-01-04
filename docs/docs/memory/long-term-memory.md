@@ -417,3 +417,25 @@ Session archived to Long-Term Memory
 Runner2 Question: favorite project
 Runner2 Answer: Your favorite project is Project Alpha.
 ```
+
+## 自动保存 session 到长期记忆
+
+为简化操作流程，VeADK 的 Agent 模块支持将对话 Session 自动保存至长期记忆。只需在初始化 Agent 时，开启 auto_save_session 属性并完成长期记忆组件的初始化配置即可，具体示例如下：
+
+```python
+from veadk import Agent
+from veadk.memory import LongTermMemory
+
+# 初始化长期记忆组件
+long_term_memory = LongTermMemory(
+    backend="viking", app_name=APP_NAME, user_id=USER_ID
+)
+
+# 初始化 Agent 并开启 Session 自动保存
+agent = Agent(
+    auto_save_session=True,
+    long_term_memory=long_term_memory
+)
+```
+
+为避免索引被频繁初始化，VeADK 提供 MIN_MESSAGES_THRESHOLD 和 MIN_TIME_THRESHOLD 两个环境变量，支持自定义 Session 保存周期。其中，默认触发保存的条件为累计 10 条 event 或间隔 60 秒；此外，当切换 Session 并发起新的问答请求时，VeADK 会自动将旧 Session 的会话内容保存至长期记忆中。
