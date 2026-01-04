@@ -173,7 +173,6 @@ def _file_data_to_content_param(
 ) -> ResponseInputContentParam:
     file_uri = part.file_data.file_uri
     mime_type = part.file_data.mime_type
-    display_name = part.file_data.display_name
     fps = 1.0
     if getattr(part, "video_metadata", None):
         video_metadata = part.video_metadata
@@ -202,8 +201,6 @@ def _file_data_to_content_param(
         )
     # file
     param = {"file_id": value} if is_file_id else {"file_url": value}
-    if display_name:
-        param["filename"] = display_name
     return ResponseInputFileParam(
         type="input_file",
         **param,
@@ -239,8 +236,6 @@ def _inline_data_to_content_param(part: types.Part) -> ResponseInputContentParam
         )
 
     file_param: Dict[str, Any] = {"file_data": data_uri}
-    if getattr(part.inline_data, "display_name", None):
-        file_param["filename"] = part.inline_data.display_name
     return ResponseInputFileParam(
         type="input_file",
         **file_param,
