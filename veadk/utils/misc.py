@@ -186,7 +186,7 @@ def get_agent_dir():
 
 async def upload_to_files_api(
     local_path: str,
-    fps: Optional[str] = None,
+    fps: Optional[float] = None,
     poll_interval: float = 3.0,
     max_wait_seconds: float = 10 * 60,
 ) -> str:
