@@ -143,9 +143,14 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
         )
 
     @override
-    def save_memory(self, user_id: str, event_strings: list[str], **kwargs) -> bool:
+    def save_memory(
+        self,
+        user_id: str,
+        event_strings: list[str],
+        **kwargs,
+    ) -> bool:
         assistant_id = kwargs.get("assistant_id", "assistant")
-        session_id = str(uuid.uuid1())
+        session_id = kwargs.get("session_id", str(uuid.uuid1()))
         messages = []
         for raw_events in event_strings:
             event = json.loads(raw_events)
@@ -161,7 +166,7 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
         }
 
         logger.debug(
-            f"Request for add {len(messages)} memory to VikingDB: collection_name={self.index}, metadata={metadata}, session_id={session_id}"
+            f"Request for add {len(messages)} memory to VikingDB: collection_name={self.index}, metadata={metadata}, session_id={session_id}, messages={messages}"
         )
 
         client = self._get_sdk_client()
