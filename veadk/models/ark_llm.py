@@ -17,10 +17,9 @@
 import base64
 import json
 from typing import Any, Dict, Union, AsyncGenerator, Tuple, List, Optional, Literal
+from typing_extensions import override
 
-from google.adk.models import LlmRequest, LlmResponse
-from google.adk.models.lite_llm import LiteLlm
-from google.adk.models.cache_metadata import CacheMetadata
+from google.adk.models import LlmRequest, LlmResponse, Gemini
 from google.genai import types
 from pydantic import Field, BaseModel
 from volcenginesdkarkruntime import AsyncArk
@@ -146,24 +145,6 @@ def _schema_to_dict(schema: types.Schema | dict[str, Any]) -> dict:
         schema_dict["properties"] = new_props
 
     return schema_dict
-
-
-def build_cache_metadata(response_id: str) -> CacheMetadata:
-    """Create a new CacheMetadata instance for agent response tracking.
-    Args:
-        response_id: Response ID to track
-    Returns:
-        A new CacheMetadata instance with the agent-response mapping
-    """
-    # `adk >= 1.17`
-    cache_metadata = CacheMetadata(
-        cache_name=response_id,
-        expire_time=0,
-        fingerprint="",
-        invocations_used=0,
-        contents_count=0,
-    )
-    return cache_metadata
 
 
 # -----------------------------------------------------------------
@@ -638,8 +619,7 @@ def ark_response_to_generate_content_response(
         )
 
     # previous_response_id
-    previous_response_id = raw_response.id
-    llm_response.cache_metadata = build_cache_metadata(previous_response_id)
+    llm_response.interaction_id = raw_response.id
 
     return llm_response
 
@@ -662,12 +642,29 @@ class ArkLlmClient:
         return raw_response
 
 
-class ArkLlm(LiteLlm):
+class ArkLlm(Gemini):
+    model: str
     llm_client: ArkLlmClient = Field(default_factory=ArkLlmClient)
     _additional_args: Dict[str, Any] = None
+    use_interactions_api: bool = True
 
     def __init__(self, **kwargs):
+        # adk version check
+        if "previous_interaction_id" not in LlmRequest.model_fields:
+            raise ImportError(
+                "If using the ResponsesAPI, "
+                "please upgrade the version of google-adk to `1.21.0` or higher with the command: "
+                "`pip install -U 'google-adk>=1.21.0'`"
+            )
         super().__init__(**kwargs)
+        drop_params = kwargs.pop("drop_params", None)
+        self._additional_args = dict(kwargs)
+        self._additional_args.pop("llm_client", None)
+        self._additional_args.pop("messages", None)
+        self._additional_args.pop("tools", None)
+        self._additional_args.pop("stream", None)
+        if drop_params is not None:
+            self._additional_args["drop_params"] = drop_params
 
     async def generate_content_async(
         self, llm_request: LlmRequest, stream: bool = False
@@ -694,8 +691,8 @@ class ArkLlm(LiteLlm):
         # ------------------------------------------------------ #
         # get previous_response_id
         previous_response_id = None
-        if llm_request.cache_metadata and llm_request.cache_metadata.cache_name:
-            previous_response_id = llm_request.cache_metadata.cache_name
+        if llm_request.previous_interaction_id:
+            previous_response_id = llm_request.previous_interaction_id
         responses_args = {
             "model": self.model,
             "instructions": instructions,
@@ -723,3 +720,11 @@ class ArkLlm(LiteLlm):
             raw_response = await self.llm_client.aresponse(**responses_args)
             llm_response = ark_response_to_generate_content_response(raw_response)
             yield llm_response
+
+    @classmethod
+    @override
+    def supported_models(cls) -> list[str]:
+        return [
+            # For OpenAI models (e.g., "openai/gpt-4o")
+            r"openai/.*",
+        ]
