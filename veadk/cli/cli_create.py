@@ -147,6 +147,10 @@ def create(agent_name: str, ark_api_key: str) -> None:
     """
     if not agent_name:
         agent_name = click.prompt("Enter the agent name")
+
+    if "-" in agent_name:
+        raise ValueError("Agent name cannot contain '-'. Use '_' instead.")
+
     if not ark_api_key:
         ark_api_key = _prompt_for_ark_api_key()
 
