@@ -12,4 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-VERSION = "0.5.3"
+from langchain.tools import ToolRuntime, tool
+
+from veadk.knowledgebase import KnowledgeBase
+from veadk.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+@tool
+def load_knowledgebase(query: str, runtime: ToolRuntime) -> list[str]:
+    """Load knowledge base for the current user.
+
+    Args:
+        query: The query to search for in the knowledge base.
+    """
+    knowledgeabse: KnowledgeBase = runtime.context.knowledgebase  # type: ignore
+
+    results = knowledgeabse.search(query)
+
+    return [result.content for result in results]

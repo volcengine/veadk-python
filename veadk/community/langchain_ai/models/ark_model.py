@@ -12,4 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-VERSION = "0.5.3"
+from __future__ import annotations
+
+from langchain_core.utils.utils import (
+    from_env,
+    secret_from_env,
+)
+from langchain_openai import ChatOpenAI
+
+
+class ArkChatModel(ChatOpenAI):
+    def __init__(self, model: str, **kwargs):
+        super().__init__(
+            model=model,
+            api_key=secret_from_env("MODEL_AGENT_API_KEY")(),
+            base_url=from_env(
+                "MODEL_AGENT_API_BASE",
+                default="https://ark.cn-beijing.volces.com/api/v3",
+            )(),
+            **kwargs,
+        )

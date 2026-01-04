@@ -266,7 +266,8 @@ class LLMShieldPlugin(BasePlugin):
                 content=types.Content(
                     role="model",
                     parts=[types.Part(text=response)],
-                )
+                ),
+                partial=True,
             )
         return None
 
@@ -313,7 +314,8 @@ class LLMShieldPlugin(BasePlugin):
                 content=types.Content(
                     role="model",
                     parts=[types.Part(text=response)],
-                )
+                ),
+                partial=True,
             )
         return None
 
