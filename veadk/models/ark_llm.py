@@ -431,8 +431,9 @@ def _get_responses_inputs(
     if llm_request.config:
         config_dict = llm_request.config.model_dump(exclude_none=True)
         generation_params = {}
-        for key in config_dict:
-            generation_params[key] = config_dict[key]
+        for key in ("temperature", "max_output_tokens", "top_p"):
+            if key in config_dict:
+                generation_params[key] = config_dict[key]
 
         if not generation_params:
             generation_params = None
