@@ -181,8 +181,8 @@ def _file_data_to_content_param(
         else:
             fps = getattr(video_metadata, "fps", 1)
 
-    is_file_id = file_uri.startswith("file_id:")
-    value = file_uri[8:] if is_file_id else file_uri
+    is_file_id = file_uri.startswith("file_id://")
+    value = file_uri[10:] if is_file_id else file_uri
     # video
     if mime_type.startswith("video/"):
         param = {"file_id": value} if is_file_id else {"video_url": value}
