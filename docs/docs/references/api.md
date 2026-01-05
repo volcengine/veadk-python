@@ -2,6 +2,9 @@
 title: API References
 ---
 
+API References are currently unavailable in this preview.
+
+<!--
 ::: veadk.agent.Agent
     options:
       show_root_heading: true
@@ -26,3 +29,4 @@ title: API References
     options:
       show_root_heading: true
       heading: "KnowledgeBase"
+-->
