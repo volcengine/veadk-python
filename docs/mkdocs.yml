@@ -78,7 +78,7 @@ nav:
       - 持续优化: deploy/optimization.md
     - 命令行工具: cli.md
   - 参考:
-    - API References: references/api.md
+    # - API References: references/api.md
     - 贡献代码: references/contributing.md
     - License: references/license.md
   - IDE 支持:

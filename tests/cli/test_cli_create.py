@@ -20,10 +20,10 @@ from veadk.cli.cli_create import create, _generate_files
 def test_create_agent_with_options():
     runner = CliRunner()
     with runner.isolated_filesystem() as temp_dir:
-        result = runner.invoke(create, ["test-agent", "--ark-api-key", "test-key"])
+        result = runner.invoke(create, ["test_agent", "--ark-api-key", "test-key"])
         assert result.exit_code == 0
 
-        agent_folder = Path(temp_dir) / "test-agent"
+        agent_folder = Path(temp_dir) / "test_agent"
         assert agent_folder.exists()
 
         config_path = agent_folder / ".env"
@@ -42,12 +42,12 @@ def test_create_agent_overwrite_existing_directory():
     runner = CliRunner()
     with runner.isolated_filesystem() as temp_dir:
         # First, create the agent
-        runner.invoke(create, ["test-agent", "--ark-api-key", "test-key"])
+        runner.invoke(create, ["test_agent", "--ark-api-key", "test-key"])
 
         # Attempt to create it again, but cancel the overwrite
         result = runner.invoke(
             create,
-            ["test-agent", "--ark-api-key", "test-key"],
+            ["test_agent", "--ark-api-key", "test-key"],
             input="n\n",
         )
         assert "Operation cancelled" in result.output
@@ -55,18 +55,18 @@ def test_create_agent_overwrite_existing_directory():
         # Attempt to create it again, and confirm the overwrite
         result = runner.invoke(
             create,
-            ["test-agent", "--ark-api-key", "new-key"],
+            ["test_agent", "--ark-api-key", "new-key"],
             input="y\n",
         )
         assert result.exit_code == 0
-        agent_folder = Path(temp_dir) / "test-agent"
+        agent_folder = Path(temp_dir) / "test_agent"
         config_path = agent_folder / ".env"
         config_content = config_path.read_text()
         assert "MODEL_AGENT_API_KEY=new-key" in config_content
 
 
 def test_generate_files(tmp_path: Path):
-    agent_name = "test-agent"
+    agent_name = "test_agent"
     api_key = "test-key"
     target_dir = tmp_path / agent_name
 
@@ -87,26 +87,26 @@ def test_generate_files(tmp_path: Path):
 def test_prompt_for_ark_api_key_enter_now():
     runner = CliRunner()
     with runner.isolated_filesystem():
-        result = runner.invoke(create, input="test-agent\n1\nmy-secret-key\n")
+        result = runner.invoke(create, input="test_agent\n1\nmy-secret-key\n")
         assert result.exit_code == 0
-        assert "my-secret-key" in (Path("test-agent") / ".env").read_text()
+        assert "my-secret-key" in (Path("test_agent") / ".env").read_text()
 
 
 def test_prompt_for_ark_api_key_configure_later():
     runner = CliRunner()
     with runner.isolated_filesystem():
-        result = runner.invoke(create, input="test-agent\n2\n")
+        result = runner.invoke(create, input="test_agent\n2\n")
         assert result.exit_code == 0
-        assert "MODEL_AGENT_API_KEY=" in (Path("test-agent") / ".env").read_text()
+        assert "MODEL_AGENT_API_KEY=" in (Path("test_agent") / ".env").read_text()
 
 
 def test_create_agent_with_prompts():
     runner = CliRunner()
     with runner.isolated_filesystem() as temp_dir:
-        result = runner.invoke(create, input="test-agent\n1\ntest-key\n")
+        result = runner.invoke(create, input="test_agent\n1\ntest-key\n")
         assert result.exit_code == 0
 
-        agent_folder = Path(temp_dir) / "test-agent"
+        agent_folder = Path(temp_dir) / "test_agent"
         assert agent_folder.exists()
 
         config_path = agent_folder / ".env"
