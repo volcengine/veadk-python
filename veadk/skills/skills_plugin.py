@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -43,7 +44,7 @@ class SkillsPlugin(BasePlugin):
         # Without plugin (direct tool usage):
         agent = Agent(
             tools=[
-                SkillsTool(skills_directory="./skills"),
+                SkillsTool(skills_directory="./skills", skills_space_name="veadk-skillspace"),
                 BashTool(skills_directory="./skills"),
                 ReadFileTool(),
                 WriteFileTool(),
@@ -54,11 +55,16 @@ class SkillsPlugin(BasePlugin):
         # With plugin (auto-registration for multi-agent apps):
         app = App(
             root_agent=agent,
-            plugins=[SkillsPlugin(skills_directory="./skills")]
+            plugins=[SkillsPlugin(skills_directory="./skills", skills_space_name="veadk-skillspace")]
         )
     """
 
-    def __init__(self, skills_directory: str | Path, name: str = "skills_plugin"):
+    def __init__(
+        self,
+        skills_directory: str | Path,
+        skills_space_name: Optional[str] = None,
+        name: str = "skills_plugin",
+    ):
         """Initialize the skills plugin.
 
         Args:
@@ -66,6 +72,11 @@ class SkillsPlugin(BasePlugin):
           name: Name of the plugin instance.
         """
         super().__init__(name)
+        self.skills_space_name = skills_space_name or os.getenv("SKILL_SPACE_NAME")
+        if not self.skills_space_name:
+            logger.warning(
+                "skills_space_name not provided and SKILL_SPACE_NAME environment variable is not set"
+            )
         self.skills_directory = Path(skills_directory)
 
     async def before_agent_callback(
@@ -82,10 +93,12 @@ class SkillsPlugin(BasePlugin):
         initialize_session_path(session_id, str(self.skills_directory))
         logger.debug(f"Initialized session path for session: {session_id}")
 
-        add_skills_tool_to_agent(self.skills_directory, agent)
+        add_skills_tool_to_agent(self.skills_directory, self.skills_space_name, agent)
 
 
-def add_skills_tool_to_agent(skills_directory: str | Path, agent: BaseAgent) -> None:
+def add_skills_tool_to_agent(
+    skills_directory: str | Path, skills_space_name: Optional[str], agent: BaseAgent
+) -> None:
     """Utility function to add Skills and Bash tools to a given agent.
 
     Args:
@@ -97,5 +110,5 @@ def add_skills_tool_to_agent(skills_directory: str | Path, agent: BaseAgent) -> 
         return
 
     skills_directory = Path(skills_directory)
-    agent.tools.append(SkillsToolset(skills_directory))
+    agent.tools.append(SkillsToolset(skills_directory, skills_space_name))
     logger.debug(f"Added skills toolset to agent: {agent.name}")
