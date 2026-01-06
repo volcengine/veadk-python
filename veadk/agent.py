@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import os
-from typing import Optional, Union, AsyncGenerator
+from typing import Optional, Union
 
 # If user didn't set LITELLM_LOCAL_MODEL_COST_MAP, set it to True
 # to enable local model cost map.
@@ -24,12 +24,11 @@ from typing import Optional, Union, AsyncGenerator
 if not os.getenv("LITELLM_LOCAL_MODEL_COST_MAP"):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
-from google.adk.agents import LlmAgent, RunConfig, InvocationContext
+from google.adk.agents import LlmAgent, RunConfig
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.context_cache_config import ContextCacheConfig
 from google.adk.agents.llm_agent import InstructionProvider, ToolUnion
 from google.adk.agents.run_config import StreamingMode
-from google.adk.events import Event, EventActions
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.runners import Runner
 from google.genai import types
@@ -54,7 +53,6 @@ from veadk.prompts.prompt_manager import BasePromptManager
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_asyncio, patch_tracer
-from veadk.utils.misc import check_litellm_version
 from veadk.version import VERSION
 
 patch_tracer()
@@ -171,9 +169,6 @@ class Agent(LlmAgent):
 
         if not self.model:
             if self.enable_responses:
-                min_version = "1.79.3"
-                check_litellm_version(min_version)
-
                 from veadk.models.ark_llm import ArkLlm
 
                 self.model = ArkLlm(
@@ -182,12 +177,6 @@ class Agent(LlmAgent):
                     api_base=self.model_api_base,
                     **self.model_extra_config,
                 )
-                if not self.context_cache_config:
-                    self.context_cache_config = ContextCacheConfig(
-                        cache_intervals=100,  # maximum number
-                        ttl_seconds=315360000,
-                        min_tokens=0,
-                    )
             else:
                 fallbacks = None
                 if isinstance(self.model_name, list):
@@ -291,28 +280,6 @@ class Agent(LlmAgent):
         logger.debug(
             f"Agent: {self.model_dump(include={'name', 'model_name', 'model_api_base', 'tools'})}"
         )
-
-    async def _run_async_impl(
-        self, ctx: InvocationContext
-    ) -> AsyncGenerator[Event, None]:
-        if self.enable_responses:
-            if not ctx.context_cache_config:
-                ctx.context_cache_config = self.context_cache_config
-
-        async for event in super()._run_async_impl(ctx):
-            yield event
-            if self.enable_responses and event.cache_metadata:
-                # for persistent short-term memory with response api
-                session_state_event = Event(
-                    invocation_id=event.invocation_id,
-                    author=event.author,
-                    actions=EventActions(
-                        state_delta={
-                            "response_id": event.cache_metadata.cache_name,
-                        }
-                    ),
-                )
-                yield session_state_event
 
     async def _run(
         self,
