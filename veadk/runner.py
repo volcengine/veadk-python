@@ -152,12 +152,17 @@ def intercept_new_message(process_func):
                             f"Function response: {function_response} {event_metadata}"
                         )
                 elif event.content is not None and event.content.parts:
-                    final_output = ""
                     for part in event.content.parts:
-                        if not part.thought and len(part.text.strip()) > 0:
+                        if len(part.text.strip()) > 0:
                             final_output = part.text
-                            break
-                    logger.debug(f"Event output: {final_output} {event_metadata}")
+                            if part.thought:
+                                logger.debug(
+                                    f"Thinking output: {final_output} {event_metadata}"
+                                )
+                            else:
+                                logger.debug(
+                                    f"Event output: {final_output} {event_metadata}"
+                                )
 
             post_run_process(self)
 
