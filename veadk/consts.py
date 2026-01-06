@@ -72,3 +72,5 @@ DEFAULT_IMAGE_GENERATE_MODEL_NAME = "doubao-seedream-4-5-251128"
 DEFAULT_IMAGE_GENERATE_MODEL_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
 
 VEFAAS_IAM_CRIDENTIAL_PATH = "/var/run/secrets/iam/credential"
+
+DEFAULT_NACOS_GROUP = "VEADK_GROUP"
