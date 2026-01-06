@@ -1,8 +1,13 @@
-from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset, StdioConnectionParams, StdioServerParameters
+from google.adk.tools.mcp_tool.mcp_toolset import (
+    MCPToolset,
+    StdioConnectionParams,
+    StdioServerParameters,
+)
 import subprocess
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
 
 def check_env():
     try:
@@ -16,18 +21,19 @@ def check_env():
             "Check `npx` command failed. Please install `npx` command manually."
         ) from e
 
+
 check_env()
 
 playwright_tools = MCPToolset(
     connection_params=StdioConnectionParams(
         server_params=StdioServerParameters(
-            command='npx',
+            command="npx",
             args=[
                 "-y",
                 "@playwright/mcp@latest",
             ],
         ),
-        timeout=30
+        timeout=30,
     ),
     # tool_filter=['browser_navigate', 'browser_screenshot', 'browser_fill', 'browser_click']
 )
