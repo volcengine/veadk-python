@@ -56,7 +56,7 @@ class SkillsToolset(BaseToolset):
     Note: For file upload/download, use the ArtifactsToolset separately.
     """
 
-    def __init__(self, skills_directory: str | Path):
+    def __init__(self, skills_directory: str | Path, skills_space_name: Optional[str]):
         """Initialize the skills toolset.
 
         Args:
@@ -66,7 +66,7 @@ class SkillsToolset(BaseToolset):
         self.skills_directory = Path(skills_directory)
 
         # Create skills tools
-        self.skills_tool = SkillsTool(self.skills_directory)
+        self.skills_tool = SkillsTool(self.skills_directory, skills_space_name)
         self.read_file_tool = FunctionTool(func=read_file_tool)
         self.write_file_tool = FunctionTool(write_file_tool)
         self.edit_file_tool = FunctionTool(edit_file_tool)
