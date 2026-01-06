@@ -49,6 +49,7 @@ from veadk.prompts.agent_default_prompt import (
     DEFAULT_DESCRIPTION,
     DEFAULT_INSTRUCTION,
 )
+from veadk.models.lite_llm_ext import patch_litellm_get_content
 from veadk.prompts.prompt_manager import BasePromptManager
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.logger import get_logger
@@ -57,6 +58,7 @@ from veadk.version import VERSION
 
 patch_tracer()
 patch_asyncio()
+patch_litellm_get_content()
 logger = get_logger(__name__)
 
 
