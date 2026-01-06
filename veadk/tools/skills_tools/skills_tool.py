@@ -117,7 +117,7 @@ class SkillsTool(BaseTool):
 
                 service = os.getenv("AGENTKIT_TOOL_SERVICE_CODE", "agentkit")
                 region = os.getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
-                host = os.getenv("AGENTKIT_SKILL_HOST", "")
+                host = os.getenv("AGENTKIT_SKILL_HOST", "open.volcengineapi.com")
                 if not host:
                     raise RuntimeError(
                         "AGENTKIT_SKILL_HOST is not set; please provide it via environment variables"
@@ -227,7 +227,7 @@ class SkillsTool(BaseTool):
 
                 service = os.getenv("AGENTKIT_TOOL_SERVICE_CODE", "agentkit")
                 region = os.getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
-                host = os.getenv("AGENTKIT_SKILL_HOST", "")
+                host = os.getenv("AGENTKIT_SKILL_HOST", "open.volcengineapi.com")
                 if not host:
                     raise RuntimeError(
                         "AGENTKIT_SKILL_HOST is not set; please provide it via environment variables"
@@ -264,47 +264,7 @@ class SkillsTool(BaseTool):
 
                 result = response.get("Result")
 
-                tos_path = result["TosPath"]
-
-                tos_skills_dir = os.getenv(
-                    "TOS_SKILLS_DIR"
-                )  # e.g. tos://agentkit-skills/skills/
-
-                # Parse bucket and prefix from TOS_SKILLS_DIR
-                if not tos_skills_dir:
-                    error_msg = (
-                        f"Error: TOS_SKILLS_DIR environment variable is not set. "
-                        f"Cannot download skill '{skill_name}' from remote registry. "
-                        f"Please set TOS_SKILLS_DIR"
-                    )
-                    logger.error(error_msg)
-                    return error_msg
-
-                # Validate TOS_SKILLS_DIR format
-                if not tos_skills_dir.startswith("tos://"):
-                    error_msg = (
-                        f"Error: TOS_SKILLS_DIR format is invalid: '{tos_skills_dir}'. "
-                        f"Expected format: tos://bucket-name/path/to/skills/ "
-                        f"Cannot download skill '{skill_name}'."
-                    )
-                    logger.error(error_msg)
-                    return error_msg
-
-                # Parse bucket from TOS_SKILLS_DIR
-                # Remove "tos://" prefix and split by first "/"
-                path_without_protocol = tos_skills_dir[6:]  # Remove "tos://"
-
-                if "/" not in path_without_protocol:
-                    # Only bucket name, no path
-                    tos_bucket = path_without_protocol.rstrip("/")
-                else:
-                    # Split bucket and path
-                    first_slash_idx = path_without_protocol.index("/")
-                    tos_bucket = path_without_protocol[:first_slash_idx]
-
-                logger.info(
-                    f"Parsed TOS location - Bucket: {tos_bucket}, Path: {tos_path}"
-                )
+                tos_bucket, tos_path = result["BucketName"], result["TosPath"]
 
                 # Initialize VeTOS client
                 tos_client = VeTOS(
@@ -314,7 +274,7 @@ class SkillsTool(BaseTool):
                     bucket_name=tos_bucket,
                 )
 
-                save_path = f"/tmp/{skill_name}.zip"
+                save_path = skill_dir.parent / f"{skill_dir.name}.zip"
 
                 success = tos_client.download(
                     bucket_name=tos_bucket,
@@ -338,11 +298,6 @@ class SkillsTool(BaseTool):
                     return (
                         f"Error: Failed to extract skill '{skill_name}' from zip: {e}"
                     )
-                finally:
-                    try:
-                        os.remove(save_path)
-                    except Exception:
-                        pass
 
                 logger.info(
                     f"Successfully downloaded skill '{skill_name}' from skill space"
