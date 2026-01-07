@@ -24,6 +24,8 @@ from typing import Optional, Union
 if not os.getenv("LITELLM_LOCAL_MODEL_COST_MAP"):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
+import uuid
+
 from google.adk.agents import LlmAgent, RunConfig
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.context_cache_config import ContextCacheConfig
@@ -89,6 +91,7 @@ class Agent(LlmAgent):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()).split("-")[0])
     name: str = DEFAULT_AGENT_NAME
     description: str = DEFAULT_DESCRIPTION
     instruction: Union[str, InstructionProvider] = DEFAULT_INSTRUCTION
@@ -278,7 +281,13 @@ class Agent(LlmAgent):
 
         logger.info(f"{self.__class__.__name__} `{self.name}` init done.")
         logger.debug(
-            f"Agent: {self.model_dump(include={'name', 'model_name', 'model_api_base', 'tools'})}"
+            f"Agent: {self.model_dump(include={'id', 'name', 'model_name', 'model_api_base', 'tools'})}"
+        )
+
+    def update_model(self, model_name: str):
+        logger.info(f"Updating model to {model_name}")
+        self.model = self.model.model_copy(
+            update={"model": f"{self.model_provider}/{model_name}"}
         )
 
     async def _run(
