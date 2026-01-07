@@ -49,6 +49,7 @@ class SkillsPlugin(BasePlugin):
                 ReadFileTool(),
                 WriteFileTool(),
                 EditFileTool(),
+                playwright_tools
             ]
         )
 
