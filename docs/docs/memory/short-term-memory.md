@@ -211,15 +211,23 @@ VeADK 中，您可以使用如下短期记忆后端服务来初始化您的短�
 ```python
 from google.adk.apps.app import App
 from google.adk.apps.app import EventsCompactionConfig
+from veadk.agent import Agent
+
+root_agent = Agent(
+    description="hello world agent",
+    instruction="""你是一个智能助手，擅长用中文礼貌回复用户的问题。""",
+)
 
 app = App(
-    name='my-agent',
+    name='my_agent',
     root_agent=root_agent,
     events_compaction_config=EventsCompactionConfig(
         compaction_interval=3,  # 每 3 次新调用触发一次压缩。
         overlap_size=1          # 包含前一个窗口的最后一次事件重叠。
     ),
 )
+
+root_agent = agent
 ```
 
 ### 定义压缩器
