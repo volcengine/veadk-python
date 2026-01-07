@@ -74,3 +74,4 @@ DEFAULT_IMAGE_GENERATE_MODEL_API_BASE = "https://ark.cn-beijing.volces.com/api/v
 VEFAAS_IAM_CRIDENTIAL_PATH = "/var/run/secrets/iam/credential"
 
 DEFAULT_NACOS_GROUP = "VEADK_GROUP"
+DEFAULT_NACOS_INSTANCE_NAME = "veadk"

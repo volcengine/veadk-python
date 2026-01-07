@@ -19,7 +19,8 @@ from v2.nacos import ClientConfig, NacosConfigService
 from v2.nacos.config.model.config_param import ConfigParam
 
 from veadk.agent import Agent
-from veadk.consts import DEFAULT_NACOS_GROUP
+from veadk.auth.veauth.mse_veauth import get_mse_cridential
+from veadk.consts import DEFAULT_NACOS_GROUP, DEFAULT_NACOS_INSTANCE_NAME
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -30,57 +31,86 @@ class DynamicConfigManager:
     DynamicConfigManager is responsible for creating and publishing dynamic config to nacos.
     """
 
-    def __init__(self, agents: list[Agent] | Agent, app_name: str = ""):
+    def __init__(
+        self,
+        agents: list[Agent] | Agent,
+    ):
         """
         Initialize DynamicConfigManager with agents and app_name.
 
         Args:
             agents (list[Agent] | Agent): The agent(s) to be included in the dynamic config.
-            app_name (str): The name of the application, used as the Nacos group id. Defaults to DEFAULT_NACOS_GROUP.
         """
         if isinstance(agents, list):
             self.agents = agents
         else:
             self.agents = [agents]
 
-        if not app_name:
+        logger.debug(f"DynamicConfigManager init with {len(self.agents)} agent(s).")
+
+    async def create_config(
+        self,
+        configs: dict = {},
+        instance_name: str = "",
+        group_id: str = "",
+    ):
+        if not instance_name:
             logger.warning(
-                f"app_name is not provided, use default value {DEFAULT_NACOS_GROUP}. This may lead to unexpected behavior such as configuration override."
+                f"instance_name is not provided, use default value `{DEFAULT_NACOS_INSTANCE_NAME}`. This may lead to unexpected behavior such as configuration override."
             )
-        self.app_name = app_name or DEFAULT_NACOS_GROUP
+            instance_name = DEFAULT_NACOS_INSTANCE_NAME
 
-        logger.debug(
-            f"DynamicConfigManager init with {len(self.agents)} agent(s) for app {self.app_name}"
-        )
+        if not group_id:
+            logger.warning(
+                f"group_id is not provided, use default value `{DEFAULT_NACOS_GROUP}`. This may lead to unexpected behavior such as configuration override."
+            )
+            group_id = group_id or DEFAULT_NACOS_GROUP
 
-    async def create_config(self, config: dict = {}):
+        nacos_endpoint = os.getenv("NACOS_ENDPOINT")
+        nacos_port = os.getenv("NACOS_PORT", "8848")
+        nacos_username = os.getenv("NACOS_USERNAME", "nacos")
+        nacos_password = os.getenv("NACOS_PASSWORD")
+
+        if not all([nacos_endpoint, nacos_port, nacos_username, nacos_password]):
+            logger.warning(
+                "fetch NACOS_ENDPOINT, NACOS_PORT, NACOS_USERNAME, and NACOS_PASSWORD from env failed, try to get by volcengine AK/SK."
+            )
+
+            nacos_credentials = get_mse_cridential(instance_name=instance_name)
+            nacos_endpoint = nacos_credentials.endpoint
+            nacos_port = nacos_credentials.port
+            nacos_username = nacos_credentials.username
+            nacos_password = nacos_credentials.password
+
         client_config = ClientConfig(
-            server_addresses=os.getenv("NACOS_SERVER_ADDRESSES"),
+            server_addresses=f"{nacos_endpoint}:{nacos_port}",
             namespace_id="",
-            username=os.getenv("NACOS_USERNAME"),
-            password=os.getenv("NACOS_PASSWORD"),
+            username=nacos_username,
+            password=nacos_password,
         )
 
         config_client = await NacosConfigService.create_config_service(
             client_config=client_config
         )
 
-        configs = {
-            "agent": [
-                {
-                    "id": agent.id,
-                    "name": agent.name,
-                    "description": agent.description,
-                    "model_name": agent.model_name,
-                    "instruction": agent.instruction,
-                }
-                for agent in self.agents
-            ]
-        }
+        if not configs:
+            logger.info("user config_dict is empty, use default config instead.")
+            configs = {
+                "agent": [
+                    {
+                        "id": agent.id,
+                        "name": agent.name,
+                        "description": agent.description,
+                        "model_name": agent.model_name,
+                        "instruction": agent.instruction,
+                    }
+                    for agent in self.agents
+                ]
+            }
         response = await config_client.publish_config(
             param=ConfigParam(
                 data_id="veadk",
-                group=self.app_name,
+                group=group_id,
                 type="json",
                 content=json.dumps(configs),
             )
