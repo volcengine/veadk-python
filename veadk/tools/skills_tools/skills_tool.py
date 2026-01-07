@@ -38,8 +38,9 @@ class SkillsTool(BaseTool):
     def __init__(self, skills_directory: str | Path, skills_space_name: Optional[str]):
         self.skills_directory = Path(skills_directory).resolve()
         if not self.skills_directory.exists():
-            raise ValueError(
-                f"Skills directory does not exist: {self.skills_directory}"
+            self.skills_directory.mkdir(parents=True, exist_ok=True)
+            logger.info(
+                f"Skills directory does not exist: {self.skills_directory}, automatically created"
             )
 
         self.skills_space_name = skills_space_name
@@ -171,6 +172,7 @@ class SkillsTool(BaseTool):
                 logger.error(f"Failed to discover skill from skill space: {e}")
 
         if not skills_entries:
+            logger.warning("No skills found in local and skill space.")
             return "<available_skills>\n<!-- No skills found in skills directory and skill space -->\n</available_skills>\n"
 
         return (
@@ -210,6 +212,7 @@ class SkillsTool(BaseTool):
         """Load and return the full content of a skill."""
         # Check cache first
         if skill_name in self._skill_cache:
+            logger.info(f"Invoke skill '{skill_name}' from cache successfully.")
             return self._skill_cache[skill_name]
 
         # Find skill directory
@@ -325,12 +328,12 @@ class SkillsTool(BaseTool):
             # Cache the formatted content
             self._skill_cache[skill_name] = formatted_content
 
-            logger.info(f"Loaded skill '{skill_name}' successfully.")
+            logger.info(f"Invoke skill '{skill_name}' successfully.")
             return formatted_content
 
         except Exception as e:
-            logger.error(f"Failed to load skill {skill_name}: {e}")
-            return f"Error loading skill '{skill_name}': {e}"
+            logger.error(f"Failed to invoke skill {skill_name}: {e}")
+            return f"Error invoking skill '{skill_name}': {e}"
 
     def _parse_skill_metadata(self, skill_file: Path) -> Dict[str, str] | None:
         """Parse YAML frontmatter from a SKILL.md file."""
