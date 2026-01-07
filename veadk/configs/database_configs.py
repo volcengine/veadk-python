@@ -178,3 +178,13 @@ class TOSVectorConfig(BaseSettings):
     user_agent_soft_version: str | None = None
 
     user_agent_customized_key_values: dict[str, str] | None = None
+
+
+class MSENacosConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="NACOS_")
+
+    endpoint: str
+    port: str = "8848"  # hard coding by Volcengine MSE Nacos service
+
+    username: str = "nacos"  # hard coding by Volcengine MSE Nacos service
+    password: str

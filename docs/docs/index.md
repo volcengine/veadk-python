@@ -116,7 +116,7 @@ hide:
 
     ---
 
-    提供短期记忆与长期记忆的完整解决方案：短期记忆可基于 MySQL 实现持久化存储；长期记忆则依托 Viking DB、云搜索服务构建。VeADK 以 LlamaINdex 作为知识库核心处理入口，同时支持 Viking 知识库后端无缝接入。
+    提供短期记忆与长期记忆的完整解决方案：短期记忆可基于 MySQL 实现持久化存储；长期记忆则依托 Viking DB、云搜索服务构建。VeADK 以 LlamaIndex 作为知识库核心处理入口，同时支持 Viking 知识库后端无缝接入。
 
 -   :material-toolbox:{ .lg .middle } __内置丰富工具和生态集成__
 

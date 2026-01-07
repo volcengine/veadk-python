@@ -17,13 +17,16 @@ title: 长期记忆
 
 ## 支持后端类型
 
-| 类别         | 说明                                                       |
+调试可以用 `local` 后端。生产更建议使用 `viking` 或 `mem0` 后端。
+
+| 类别         | 说明                                                        |
 | :----------- | :--------------------------------------------------------- |
-| `local`      | 内存跨 Session 记忆，程序结束后即清空                      |
-| `opensearch` | 使用 OpenSearch 作为长期记忆存储，可实现持久化和检索       |
-| `redis`      | 使用 Redis 作为长期记忆存储，Redis 需要支持 Rediseach 功能 |
-| `viking`     | 使用 VikingDB 记忆库产品作为长期记忆存储                   |
-| `viking_mem` | 已废弃，设置后将会自动转为 `viking`                        |
+| `local`      | 内存跨 Session 记忆，程序结束后即清空 (仅适用于本地调试)            |
+| `viking`     | 使用 VikingDB 记忆库产品作为长期记忆存储 (生产推荐)              |
+| `mem0`       | 使用 Mem0 记忆库产品作为长期记忆存储 (生产推荐)                  |
+| `viking_mem` | 已废弃，设置后将会自动转为 `viking`                            |
+| `opensearch` | 使用 OpenSearch 作为长期记忆存储，可实现持久化和检索             |
+| `redis`      | 使用 Redis 作为长期记忆存储，Redis 需要支持 Rediseach 功能      |
 
 ## 初始化方法
 

@@ -151,7 +151,11 @@ database:
     region: cn-beijing                  # default Volcengine TOS Vector region
     bucket:
     account_id:
-    
+
+# Dynamic config
+nacos:
+  endpoint:
+  password:
 
 
 # [optional] for prompt optimization in cli/app
