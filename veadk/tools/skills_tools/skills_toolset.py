@@ -27,6 +27,7 @@ from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.tools import BaseTool, FunctionTool
 from google.adk.tools.base_toolset import BaseToolset
 
+from veadk.tools.builtin_tools.playwright import playwright_tools
 from veadk.tools.skills_tools import (
     SkillsTool,
     read_file_tool,
@@ -48,6 +49,7 @@ class SkillsToolset(BaseToolset):
     3. WriteFileTool - Write/create files
     4. EditFileTool - Edit files with precise replacements
     5. BashTool - Execute shell commands
+    6. playwright_tools - Operate the browser
 
     Skills provide specialized domain knowledge and scripts that the agent can use
     to solve complex tasks. The toolset enables discovery of available skills,
@@ -71,6 +73,7 @@ class SkillsToolset(BaseToolset):
         self.write_file_tool = FunctionTool(write_file_tool)
         self.edit_file_tool = FunctionTool(edit_file_tool)
         self.bash_tool = FunctionTool(bash_tool)
+        self.playwright_tools = playwright_tools
 
     @override
     async def get_tools(
@@ -87,4 +90,5 @@ class SkillsToolset(BaseToolset):
             self.write_file_tool,
             self.edit_file_tool,
             self.bash_tool,
+            self.playwright_tools,
         ]
