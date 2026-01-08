@@ -145,6 +145,8 @@ class Agent(LlmAgent):
 
     auto_save_session: bool = False
 
+    skills: list[str] = Field(default_factory=list)
+
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
 
@@ -277,11 +279,14 @@ class Agent(LlmAgent):
                 else:
                     self.after_agent_callback = save_session_to_long_term_memory
 
+        if self.skills:
+            self.load_skills()
+
         logger.info(f"VeADK version: {VERSION}")
 
         logger.info(f"{self.__class__.__name__} `{self.name}` init done.")
         logger.debug(
-            f"Agent: {self.model_dump(include={'id', 'name', 'model_name', 'model_api_base', 'tools'})}"
+            f"Agent: {self.model_dump(include={'id', 'name', 'model_name', 'model_api_base', 'tools', 'skills'})}"
         )
 
     def update_model(self, model_name: str):
@@ -289,6 +294,28 @@ class Agent(LlmAgent):
         self.model = self.model.model_copy(
             update={"model": f"{self.model_provider}/{model_name}"}
         )
+
+    def load_skills(self):
+        from pathlib import Path
+
+        from veadk.skills.utils import load_skills_from_directory
+
+        skills = []
+        for skill in self.skills:
+            path = Path(skill)
+            if path.is_dir():
+                skills.extend(load_skills_from_directory(path))
+            else:
+                logger.error(
+                    f"Skill {skill} is not a directory, skip. Loading skills from cloud is WIP."
+                )
+        if skills:
+            self.instruction += "\nYou have the following skills:\n"
+
+            for skill in skills:
+                self.instruction += (
+                    f"- name: {skill.name}\n- description: {skill.description}\n\n"
+                )
 
     async def _run(
         self,
