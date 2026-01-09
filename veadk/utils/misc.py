@@ -18,10 +18,11 @@ import os
 import sys
 import time
 import types
-from typing import Any, Dict, List, MutableMapping, Tuple, Optional
+from typing import Any, Dict, List, MutableMapping, Optional, Tuple
 
 import requests
 from yaml import safe_load
+
 import __main__
 
 
@@ -190,9 +191,10 @@ async def upload_to_files_api(
     poll_interval: float = 3.0,
     max_wait_seconds: float = 10 * 60,
 ) -> str:
+    from volcenginesdkarkruntime import AsyncArk
+
     from veadk.config import getenv, settings
     from veadk.consts import DEFAULT_MODEL_AGENT_API_BASE
-    from volcenginesdkarkruntime import AsyncArk
 
     client = AsyncArk(
         api_key=getenv("MODEL_AGENT_API_KEY", settings.model.api_key),
@@ -210,6 +212,8 @@ async def upload_to_files_api(
         else None,
     )
     await client.files.wait_for_processing(
-        id=file.id, poll_interval=poll_interval, max_wait_seconds=max_wait_seconds
+        id=file.id,
+        poll_interval=poll_interval,
+        max_wait_seconds=max_wait_seconds,
     )
     return file.id
