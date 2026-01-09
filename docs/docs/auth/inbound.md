@@ -65,7 +65,7 @@ USER_POOL_ID="FILL_IN_YOUR_USER_POOL_ID"
 CLIENT_ID="FILL_IN_YOUR_CLIENT_ID"
 CLIENT_SECRET="FILL_IN_YOUR_SECRET"
 
-curl --location "https://auth.id.${REGION}.volces.com/userpool/${USER_POOL_ID}/oauth/token" \
+curl --location "https://userpool-${USER_POOL_ID}.userpool.auth.id.${REGION}.volces.com/oauth/token" \
   --header "Content-Type: application/x-www-form-urlencoded" \
   --header "Authorization: Basic $(echo -n "${CLIENT_ID}:${CLIENT_SECRET}" | base64)" \
   --data-urlencode "grant_type=client_credentials"
