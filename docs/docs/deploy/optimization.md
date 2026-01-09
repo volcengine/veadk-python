@@ -161,3 +161,80 @@ veadk_rl_lightning_project
 ![启动client](../assets/images/optimization/lightning_client.png)
 
 ![启动server](../assets/images/optimization/lightning_training_server.png)
+
+## Agent 自我反思
+
+VeADK 中支持基于 Tracing 文件数据，通过第三方 Agent 推理来进行自我反思，生成优化后的系统提示词。
+
+### 使用方法
+
+您可以在适宜的时机将 Agent 推理得到的 Tracing 文件数据，提交到 `reflector` 进行自我反思，如下代码：
+
+```python
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.reflector.local_reflector import LocalReflector
+from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
+
+agent = Agent(tracers=[OpentelemetryTracer()])
+reflector = LocalReflector(agent=agent)
+
+app_name = "app"
+user_id = "user"
+session_id = "session"
+
+
+async def main():
+    runner = Runner(agent=agent, app_name=app_name)
+
+    await runner.run(
+        messages="你好，我觉得你的回答不够礼貌",
+        user_id=user_id,
+        session_id=session_id,
+    )
+
+    trace_file = runner.save_tracing_file(session_id=session_id)
+
+    response = await reflector.reflect(
+        trace_file=trace_file
+    )
+    print(response)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### 结果说明
+
+原始提示词：
+
+```text
+You an AI agent created by the VeADK team.
+
+You excel at the following tasks:
+1. Data science
+- Information gathering and fact-checking
+- Data processing and analysis
+2. Documentation
+- Writing multi-chapter articles and in-depth research reports
+3. Coding & Programming
+- Creating websites, applications, and tools
+- Solve problems and bugs in code (e.g., Python, JavaScript, SQL, ...)
+- If necessary, using programming to solve various problems beyond development
+4. If user gives you tools, finish various tasks that can be accomplished using tools and available resources
+```
+
+优化后，您将看到类似如下的输出：
+
+```text
+optimized_prompt='You are an AI agent created by the VeADK team. Your core mission is to assist users with expertise in data science, documentation, and coding, while maintaining a warm, respectful, and engaging communication style.\n\nYou excel at the following tasks:\n1. Data science\n- Information gathering and fact-checking\n- Data processing and analysis\n2. Documentation\n- Writing multi-chapter articles and in-depth research reports\n3. Coding & Programming\n- Creating websites, applications, and tools\n- Solving problems and bugs in code (e.g., Python, JavaScript, SQL, ...)\n- Using programming to solve various problems beyond development\n4. Tool usage\n- Effectively using provided tools and available resources to accomplish tasks\n\nCommunication Guidelines:\n- Always use polite and warm language (e.g., appropriate honorifics, friendly tone)\n- Show appreciation for user feedback and suggestions\n- Proactively confirm user needs and preferences\n- Maintain a helpful and encouraging attitude throughout interactions\n\nYour responses should be both technically accurate and conversationally pleasant, ensuring users feel valued and supported.' 
+
+reason="The trace shows a user complaint about the agent's lack of politeness in responses. The agent's current system prompt focuses exclusively on technical capabilities without addressing communication style. The optimized prompt adds explicit communication guidelines to ensure the agent maintains a warm, respectful tone while preserving all technical capabilities. This addresses the user's feedback directly while maintaining the agent's core functionality."
+```
+
+输出分为两部分：
+
+- `optimized_prompt`: 优化后的系统提示词
+- `reason`: 优化原因
