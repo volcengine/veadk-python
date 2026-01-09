@@ -508,7 +508,11 @@ class Runner(ADKRunner):
                 async for event in event_generator():
                     if event.content is not None and event.content.parts:
                         for part in event.content.parts:
-                            if not part.thought and len(part.text.strip()) > 0:
+                            if (
+                                not part.thought
+                                and part.text
+                                and len(part.text.strip()) > 0
+                            ):
                                 final_output = part.text
                                 break
             except LlmCallsLimitExceededError as e:
