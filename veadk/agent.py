@@ -314,6 +314,8 @@ class Agent(LlmAgent):
         skills: Dict[str, Skill] = {}
 
         for item in self.skills:
+            if not item or str(item).strip() == "":
+                continue
             path = Path(item)
             if path.exists() and path.is_dir():
                 for skill in load_skills_from_directory(path):
