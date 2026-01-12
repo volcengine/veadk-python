@@ -221,6 +221,7 @@ class CloudAgentEngine(BaseModel):
         identity_user_pool_name: str = "",
         identity_client_name: str = "",
         local_test: bool = False,
+        enable_session_affinity: bool = False,
     ) -> CloudApp:
         """Deploys a local agent project to Volcengine FaaS, creating necessary resources.
 
@@ -287,15 +288,20 @@ class CloudAgentEngine(BaseModel):
             identity_client_name = f"{application_name}-id-cli-{formatted_timestamp()}"
 
         try:
-            vefaas_application_url, app_id, function_id = self._vefaas_service.deploy(
-                path=path,
-                name=application_name,
-                gateway_name=gateway_name,
-                gateway_service_name=gateway_service_name,
-                gateway_upstream_name=gateway_upstream_name,
-                enable_key_auth=enable_key_auth,
+            vefaas_application_url, app_id, function_id, affinity_binding_id = (
+                self._vefaas_service.deploy(
+                    path=path,
+                    name=application_name,
+                    gateway_name=gateway_name,
+                    gateway_service_name=gateway_service_name,
+                    gateway_upstream_name=gateway_upstream_name,
+                    enable_key_auth=enable_key_auth,
+                    enable_session_affinity=enable_session_affinity,
+                )
             )
-            _ = function_id  # for future use
+            _ = function_id
+            if affinity_binding_id:
+                logger.info(f"Session affinity plugin bindng_id: {affinity_binding_id}")
 
             veapig_gateway_id, _, veapig_route_id = (
                 self._vefaas_service.get_application_route(app_id=app_id)
@@ -393,6 +399,7 @@ class CloudAgentEngine(BaseModel):
                 vefaas_application_name=application_name,
                 vefaas_endpoint=vefaas_application_url,
                 vefaas_application_id=app_id,
+                affinity_binding_id=affinity_binding_id,
             )
         except Exception as e:
             raise ValueError(
@@ -483,3 +490,8 @@ class CloudAgentEngine(BaseModel):
             raise ValueError(
                 f"Failed to update agent project on Volcengine FaaS platform. Error: {e}"
             )
+
+    def disable_session_affinity(self, binding_id: str) -> None:
+        """Disable session affinity by deleting plugin binding."""
+        self._vefaas_service.disable_session_affinity(binding_id)
+        logger.info(f"Session affinity plugin binding {binding_id} deleted.")
