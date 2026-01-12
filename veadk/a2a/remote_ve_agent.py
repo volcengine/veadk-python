@@ -314,10 +314,13 @@ class RemoteVeAgent(RemoteA2aAgent):
                     else str(uuid.uuid4())
                 )
                 x_session_id = f"{parent_name}_{user_id}_{session_id}"
+                x_session_id_key = "x-session-id-veadk"
                 self._a2a_client._transport.httpx_client.headers.update(
-                    {"x-session-id-veadk": x_session_id}
+                    {x_session_id_key: x_session_id}
                 )
-                logger.debug(f"Auto-injected session_id header: {x_session_id}")
+                logger.debug(
+                    f"a2a client inject {x_session_id_key} to header: {x_session_id}"
+                )
 
     async def _inject_auth_token(self, ctx: InvocationContext) -> None:
         """Inject authentication token from credential service into the HTTP client.
