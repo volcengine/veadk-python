@@ -472,6 +472,11 @@ class Runner(ADKRunner):
             )
         logger.info(f"Run config: {run_config}")
 
+        if self.agent.skills:
+            from veadk.tools.skills_tools.session_path import initialize_session_path
+
+            initialize_session_path(session_id)
+
         user_id = user_id or self.user_id
 
         converted_messages: list = _convert_messages(

@@ -12,12 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 from pathlib import Path
-
+import os
 import frontmatter
 
 from veadk.skills.skill import Skill
 from veadk.utils.logger import get_logger
+from veadk.utils.volcengine_sign import ve_request
 
 logger = get_logger(__name__)
 
@@ -25,6 +27,10 @@ logger = get_logger(__name__)
 def load_skill_from_directory(skill_directory: Path) -> Skill:
     logger.info(f"Load skill from {skill_directory}")
     skill_readme = skill_directory / "SKILL.md"
+    if not skill_readme.exists():
+        logger.error(f"Skill '{skill_directory}' has no SKILL.md file.")
+        raise ValueError(f"Skill '{skill_directory}' has no SKILL.md file")
+
     skill = frontmatter.load(str(skill_readme))
 
     skill_name = skill.get("name", "")
@@ -39,7 +45,7 @@ def load_skill_from_directory(skill_directory: Path) -> Skill:
         )
 
     logger.info(
-        f"Successfully loaded skill from {skill_readme}, name={skill['name']}, description={skill['description']}"
+        f"Successfully loaded skill {skill_name} locally from {skill_readme}, name={skill_name}, description={skill_description}"
     )
     return Skill(
         name=skill_name,  # type: ignore
@@ -58,4 +64,76 @@ def load_skills_from_directory(skills_directory: Path) -> list[Skill]:
     return skills
 
 
-def load_skills_from_cloud(space_name: str) -> list[Skill]: ...
+def load_skills_from_cloud(skill_space_ids: str) -> list[Skill]:
+    skill_space_ids_list = [x.strip() for x in skill_space_ids.split(",")]
+    logger.info(f"Load skills from skill spaces: {skill_space_ids_list}")
+
+    from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
+
+    skills = []
+
+    for skill_space_id in skill_space_ids_list:
+        try:
+            service = os.getenv("AGENTKIT_TOOL_SERVICE_CODE", "agentkit")
+            region = os.getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
+            host = os.getenv("AGENTKIT_SKILL_HOST", "open.volcengineapi.com")
+
+            access_key = os.getenv("VOLCENGINE_ACCESS_KEY")
+            secret_key = os.getenv("VOLCENGINE_SECRET_KEY")
+            session_token = ""
+
+            if not (access_key and secret_key):
+                # Try to get from vefaas iam
+                cred = get_credential_from_vefaas_iam()
+                access_key = cred.access_key_id
+                secret_key = cred.secret_access_key
+                session_token = cred.session_token
+
+            response = ve_request(
+                request_body={
+                    "SkillSpaceId": skill_space_id,
+                    "InnerTags": {"source": "sandbox"},
+                },
+                action="ListSkillsBySpaceId",
+                ak=access_key,
+                sk=secret_key,
+                service=service,
+                version="2025-10-30",
+                region=region,
+                host=host,
+                header={"X-Security-Token": session_token},
+            )
+
+            if isinstance(response, str):
+                response = json.loads(response)
+
+            list_skills_result = response.get("Result")
+            items = list_skills_result.get("Items")
+
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                skill_name = item.get("Name")
+                skill_description = item.get("Description")
+                tos_bucket = item.get("BucketName")
+                tos_path = item.get("TosPath")
+                if not skill_name:
+                    continue
+
+                skill = Skill(
+                    name=skill_name,  # type: ignore
+                    description=skill_description,  # type: ignore
+                    path=tos_path,
+                    skill_space_id=skill_space_id,
+                    bucket_name=tos_bucket,
+                )
+
+                skills.append(skill)
+
+                logger.info(
+                    f"Successfully loaded skill {skill_name} from skill space={skill_space_id}, name={skill_name}, description={skill_description}"
+                )
+        except Exception as e:
+            logger.error(f"Failed to load skill from skill space: {e}")
+
+    return skills
