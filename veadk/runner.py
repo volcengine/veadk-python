@@ -756,6 +756,6 @@ class Runner(ADKRunner):
                 original_provider = tool._header_provider
                 tool._header_provider = lambda ctx, sid=x_session_id: {
                     **(original_provider(ctx) if original_provider else {}),
-                    "x-session-id": sid,
+                    "x-session-id-veadk": sid,
                 }
                 logger.debug(f"Injected session context to McpToolset: {x_session_id}")

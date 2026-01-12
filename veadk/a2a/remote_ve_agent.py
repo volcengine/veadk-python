@@ -315,7 +315,7 @@ class RemoteVeAgent(RemoteA2aAgent):
                 )
                 x_session_id = f"{parent_name}_{user_id}_{session_id}"
                 self._a2a_client._transport.httpx_client.headers.update(
-                    {"x-session-id": x_session_id}
+                    {"x-session-id-veadk": x_session_id}
                 )
                 logger.debug(f"Auto-injected session_id header: {x_session_id}")
 
