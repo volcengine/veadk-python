@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 _session_path_cache: dict[str, Path] = {}
 
 
-def initialize_session_path(session_id: str, skills_directory: str) -> Path:
+def initialize_session_path(session_id: str) -> Path:
     """Initialize a session's working directory with skills symlink.
 
     This is called by SkillsPlugin.before_agent_callback() to ensure the session
@@ -51,24 +51,9 @@ def initialize_session_path(session_id: str, skills_directory: str) -> Path:
     session_path = base_path / session_id
 
     # Create working directories
+    (session_path / "skills").mkdir(parents=True, exist_ok=True)
     (session_path / "uploads").mkdir(parents=True, exist_ok=True)
     (session_path / "outputs").mkdir(parents=True, exist_ok=True)
-
-    # Create symlink to skills directory
-    skills_mount = Path(skills_directory)
-    skills_link = session_path / "skills"
-    if skills_mount.exists() and not skills_link.exists():
-        try:
-            skills_link.symlink_to(skills_mount)
-            logger.debug(f"Created symlink: {skills_link} -> {skills_mount}")
-        except FileExistsError:
-            # Symlink already exists (race condition from concurrent session setup)
-            pass
-        except Exception as e:
-            # Log but don't fail - skills can still be accessed via absolute path
-            logger.warning(
-                f"Failed to create skills symlink for session {session_id}: {e}"
-            )
 
     # Cache and return
     resolved_path = session_path.resolve()

@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import os
-from typing import Optional, Union
+from typing import Dict, Optional, Union
 
 # If user didn't set LITELLM_LOCAL_MODEL_COST_MAP, set it to True
 # to enable local model cost map.
@@ -297,25 +297,44 @@ class Agent(LlmAgent):
 
     def load_skills(self):
         from pathlib import Path
+        from veadk.skills.skill import Skill
+        from veadk.skills.utils import (
+            load_skills_from_directory,
+            load_skills_from_cloud,
+        )
+        from veadk.tools.builtin_tools.playwright import playwright_tools
+        from veadk.tools.skills_tools import (
+            SkillsTool,
+            read_file_tool,
+            write_file_tool,
+            edit_file_tool,
+            bash_tool,
+        )
 
-        from veadk.skills.utils import load_skills_from_directory
+        skills: Dict[str, Skill] = {}
 
-        skills = []
-        for skill in self.skills:
-            path = Path(skill)
-            if path.is_dir():
-                skills.extend(load_skills_from_directory(path))
+        for item in self.skills:
+            path = Path(item)
+            if path.exists() and path.is_dir():
+                for skill in load_skills_from_directory(path):
+                    skills[skill.name] = skill
             else:
-                logger.error(
-                    f"Skill {skill} is not a directory, skip. Loading skills from cloud is WIP."
-                )
+                for skill in load_skills_from_cloud(item):
+                    skills[skill.name] = skill
         if skills:
             self.instruction += "\nYou have the following skills:\n"
 
-            for skill in skills:
+            for skill in skills.values():
                 self.instruction += (
                     f"- name: {skill.name}\n- description: {skill.description}\n\n"
                 )
+
+            self.tools.append(SkillsTool(skills))
+            self.tools.append(read_file_tool)
+            self.tools.append(write_file_tool)
+            self.tools.append(edit_file_tool)
+            self.tools.append(bash_tool)
+            self.tools.append(playwright_tools)
 
     async def _run(
         self,
