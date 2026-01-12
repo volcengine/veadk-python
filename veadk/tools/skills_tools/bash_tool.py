@@ -38,7 +38,11 @@ async def bash_tool(command: str, description: str, tool_context: ToolContext):
     Execute bash commands in the skills environment with local shell.
     Working Directory & Structure:
     - Commands run in a temporary session directory: /tmp/veadk/{session_id}/
-    - skills_directory -> All skills are available here (read-only).
+    - Working directory structure:
+        /tmp/veadk/{session_id}/
+        ├── skills/     -> all skills are available here (read-only).
+        ├── uploads/    -> staged user files (temporary)
+        └── outputs/    -> generated files for return
     - Your current working directory is added to PYTHONPATH.
 
     Python Imports (CRITICAL):

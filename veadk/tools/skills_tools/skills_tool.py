@@ -14,15 +14,15 @@
 
 from __future__ import annotations
 
-import json
+import os
+import tempfile
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-import yaml
 from google.adk.tools import BaseTool, ToolContext
 from google.genai import types
 
-from veadk.utils.volcengine_sign import ve_request
+from veadk.skills.skill import Skill
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -35,17 +35,8 @@ class SkillsTool(BaseTool):
     tool description. Agent invokes a skill by name to load its full instructions.
     """
 
-    def __init__(self, skills_directory: str | Path, skills_space_name: Optional[str]):
-        self.skills_directory = Path(skills_directory).resolve()
-        if not self.skills_directory.exists():
-            self.skills_directory.mkdir(parents=True, exist_ok=True)
-            logger.info(
-                f"Skills directory does not exist: {self.skills_directory}, automatically created"
-            )
-
-        self.skills_space_name = skills_space_name
-
-        self._skill_cache: Dict[str, str] = {}
+    def __init__(self, skills: Dict[str, Skill]):
+        self.skills = skills
 
         # Generate description with available skills embedded
         description = self._generate_description_with_skills()
@@ -70,116 +61,13 @@ class SkillsTool(BaseTool):
             '  - command: "data-analysis" - invoke the data-analysis skill\n'
             '  - command: "pdf-processing" - invoke the pdf-processing skill\n\n'
             "Important:\n"
-            "- Avaliable skills listed in <available_skills> below\n"
-            "- If the invoked skills are not in the available skills, this tool will automatically download these skills from the remote object storage bucket."
             "- Do not invoke a skill that is already loaded in the conversation\n"
             "- After loading a skill, use the bash tool for execution\n"
             "- If not specified, scripts are located in the skill-name/scripts subdirectory\n"
             "</skills_instructions>\n\n"
         )
 
-        # Discover and append available skills
-        skills_xml = self._discover_skills()
-        return base_description + skills_xml
-
-    def _discover_skills(self) -> str:
-        """Discover available skills and format as XML."""
-
-        skills_entries = []
-
-        # Discover skills from local directory
-        if self.skills_directory.exists():
-            for skill_dir in sorted(self.skills_directory.iterdir()):
-                if not skill_dir.is_dir():
-                    continue
-
-                skill_file = skill_dir / "SKILL.md"
-                if not skill_file.exists():
-                    continue
-
-                try:
-                    metadata = self._parse_skill_metadata(skill_file)
-                    if metadata:
-                        skill_xml = (
-                            "<skill>\n"
-                            f"<name>{metadata['name']}</name>\n"
-                            f"<description>{metadata['description']}</description>\n"
-                            "</skill>"
-                        )
-                        skills_entries.append(skill_xml)
-                except Exception as e:
-                    logger.error(f"Failed to parse skill {skill_dir.name}: {e}")
-
-        # Discover skills from remote skill space
-        if self.skills_space_name:
-            try:
-                from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
-                import os
-
-                service = os.getenv("AGENTKIT_TOOL_SERVICE_CODE", "agentkit")
-                region = os.getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
-                host = os.getenv("AGENTKIT_SKILL_HOST", "open.volcengineapi.com")
-                if not host:
-                    raise RuntimeError(
-                        "AGENTKIT_SKILL_HOST is not set; please provide it via environment variables"
-                    )
-
-                access_key = os.getenv("VOLCENGINE_ACCESS_KEY")
-                secret_key = os.getenv("VOLCENGINE_SECRET_KEY")
-                session_token = ""
-
-                if not (access_key and secret_key):
-                    # Try to get from vefaas iam
-                    cred = get_credential_from_vefaas_iam()
-                    access_key = cred.access_key_id
-                    secret_key = cred.secret_access_key
-                    session_token = cred.session_token
-
-                response = ve_request(
-                    request_body={"SkillSpaceName": self.skills_space_name},
-                    action="ListSkillsBySpaceName",
-                    ak=access_key,
-                    sk=secret_key,
-                    service=service,
-                    version="2025-10-30",
-                    region=region,
-                    host=host,
-                    header={"X-Security-Token": session_token},
-                )
-
-                if isinstance(response, str):
-                    response = json.loads(response)
-
-                result = response.get("Result")
-                items = result.get("Items")
-
-                for item in items:
-                    if not isinstance(item, dict):
-                        continue
-                    name = item.get("Name")
-                    description = item.get("Description")
-                    if not name:
-                        continue
-                    skill_xml = (
-                        "<skill>\n"
-                        f"<name>{name}</name>\n"
-                        f"<description>{description}</description>\n"
-                        "</skill>"
-                    )
-                    skills_entries.append(skill_xml)
-
-            except Exception as e:
-                logger.error(f"Failed to discover skill from skill space: {e}")
-
-        if not skills_entries:
-            logger.warning("No skills found in local and skill space.")
-            return "<available_skills>\n<!-- No skills found in skills directory and skill space -->\n</available_skills>\n"
-
-        return (
-            "<available_skills>\n"
-            + "\n".join(skills_entries)
-            + "\n</available_skills>\n"
-        )
+        return base_description
 
     def _get_declaration(self) -> types.FunctionDeclaration:
         return types.FunctionDeclaration(
@@ -206,35 +94,23 @@ class SkillsTool(BaseTool):
         if not skill_name:
             return "Error: No skill name provided"
 
-        return self._invoke_skill(skill_name)
+        return self._invoke_skill(skill_name, tool_context)
 
-    def _invoke_skill(self, skill_name: str) -> str:
+    def _invoke_skill(self, skill_name: str, tool_context: ToolContext) -> str:
         """Load and return the full content of a skill."""
-        # Check cache first
-        if skill_name in self._skill_cache:
-            logger.info(f"Invoke skill '{skill_name}' from cache successfully.")
-            return self._skill_cache[skill_name]
+        if skill_name not in self.skills:
+            return f"Error: Skill '{skill_name}' does not exist."
 
-        # Find skill directory
-        skill_dir = self.skills_directory / skill_name
-        if not skill_dir.exists() or not skill_dir.is_dir() and self.skills_space_name:
-            # Try to download from skill space
-            logger.info(
-                f"Skill '{skill_name}' not found locally, attempting to download from skill space"
-            )
+        skill = self.skills[skill_name]
+        skill_dir = (
+            Path(tempfile.gettempdir()) / "veadk" / tool_context.session.id / "skills"
+        )
 
+        if skill.skill_space_id:
+            logger.info(f"Attempting to download skill '{skill_name}' from skill space")
             try:
                 from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
                 from veadk.integrations.ve_tos.ve_tos import VeTOS
-                import os
-
-                service = os.getenv("AGENTKIT_TOOL_SERVICE_CODE", "agentkit")
-                region = os.getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
-                host = os.getenv("AGENTKIT_SKILL_HOST", "open.volcengineapi.com")
-                if not host:
-                    raise RuntimeError(
-                        "AGENTKIT_SKILL_HOST is not set; please provide it via environment variables"
-                    )
 
                 access_key = os.getenv("VOLCENGINE_ACCESS_KEY")
                 secret_key = os.getenv("VOLCENGINE_SECRET_KEY")
@@ -247,27 +123,7 @@ class SkillsTool(BaseTool):
                     secret_key = cred.secret_access_key
                     session_token = cred.session_token
 
-                response = ve_request(
-                    request_body={
-                        "SkillSpaceName": self.skills_space_name,
-                        "SkillName": skill_name,
-                    },
-                    action="GetSkillInfo",
-                    ak=access_key,
-                    sk=secret_key,
-                    service=service,
-                    version="2025-10-30",
-                    region=region,
-                    host=host,
-                    header={"X-Security-Token": session_token},
-                )
-
-                if isinstance(response, str):
-                    response = json.loads(response)
-
-                result = response.get("Result")
-
-                tos_bucket, tos_path = result["BucketName"], result["TosPath"]
+                tos_bucket, tos_path = skill.bucket_name, skill.path
 
                 # Initialize VeTOS client
                 tos_client = VeTOS(
@@ -277,7 +133,7 @@ class SkillsTool(BaseTool):
                     bucket_name=tos_bucket,
                 )
 
-                save_path = skill_dir.parent / f"{skill_dir.name}.zip"
+                save_path = skill_dir / f"{skill_name}.zip"
 
                 success = tos_client.download(
                     bucket_name=tos_bucket,
@@ -290,12 +146,29 @@ class SkillsTool(BaseTool):
 
                 # Extract downloaded zip into the skill directory
                 import zipfile
+                import shutil
 
-                skill_dir.parent.mkdir(parents=True, exist_ok=True)
+                # Remove existing skill directory to ensure clean extraction
+                target_skill_dir = skill_dir / skill_name
+                if target_skill_dir.exists():
+                    try:
+                        shutil.rmtree(target_skill_dir)
+                        logger.info(
+                            f"Removed existing skill directory: {target_skill_dir}"
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to remove existing skill directory {target_skill_dir}: {e}"
+                        )
 
                 try:
                     with zipfile.ZipFile(save_path, "r") as z:
-                        z.extractall(path=str(skill_dir.parent))
+                        z.extractall(path=str(skill_dir))
+                except zipfile.BadZipFile:
+                    logger.error(
+                        f"Downloaded file for '{skill_name}' is not a valid zip"
+                    )
+                    return f"Error: Downloaded file for skill '{skill_name}' is not a valid zip archive."
                 except Exception as e:
                     logger.error(f"Failed to extract skill zip for '{skill_name}': {e}")
                     return (
@@ -314,8 +187,24 @@ class SkillsTool(BaseTool):
                     f"Error: Skill '{skill_name}' not found locally and failed to download from skill space: {e}. "
                     f"Check the available skills list in the tool description."
                 )
+        else:
+            # Create symlink to skills directory
+            skills_mount = Path(skill.path)
+            skills_link = skill_dir / skill_name
+            if skills_mount.exists() and not skills_link.exists():
+                try:
+                    skills_link.symlink_to(skills_mount)
+                    logger.debug(f"Created symlink: {skills_link} -> {skills_mount}")
+                except FileExistsError:
+                    # Symlink already exists (race condition from concurrent session setup)
+                    pass
+                except Exception as e:
+                    # Log but don't fail - skills can still be accessed via absolute path
+                    logger.warning(
+                        f"Failed to create skills symlink for {str(skills_mount)}: {e}"
+                    )
 
-        skill_file = skill_dir / "SKILL.md"
+        skill_file = skill_dir / skill_name / "SKILL.md"
         if not skill_file.exists():
             return f"Error: Skill '{skill_name}' has no SKILL.md file."
 
@@ -323,10 +212,9 @@ class SkillsTool(BaseTool):
             with open(skill_file, "r", encoding="utf-8") as f:
                 content = f.read()
 
-            formatted_content = self._format_skill_content(skill_name, content)
-
-            # Cache the formatted content
-            self._skill_cache[skill_name] = formatted_content
+            formatted_content = self._format_skill_content(
+                skill_name, content, str(skill_dir)
+            )
 
             logger.info(f"Invoke skill '{skill_name}' successfully.")
             return formatted_content
@@ -335,39 +223,11 @@ class SkillsTool(BaseTool):
             logger.error(f"Failed to invoke skill {skill_name}: {e}")
             return f"Error invoking skill '{skill_name}': {e}"
 
-    def _parse_skill_metadata(self, skill_file: Path) -> Dict[str, str] | None:
-        """Parse YAML frontmatter from a SKILL.md file."""
-        try:
-            with open(skill_file, "r", encoding="utf-8") as f:
-                content = f.read()
-
-            if not content.startswith("---"):
-                return None
-
-            parts = content.split("---", 2)
-            if len(parts) < 3:
-                return None
-
-            metadata = yaml.safe_load(parts[1])
-            if (
-                isinstance(metadata, dict)
-                and "name" in metadata
-                and "description" in metadata
-            ):
-                return {
-                    "name": metadata["name"],
-                    "description": metadata["description"],
-                }
-            return None
-        except Exception as e:
-            logger.error(f"Failed to parse metadata from {skill_file}: {e}")
-            return None
-
-    def _format_skill_content(self, skill_name: str, content: str) -> str:
+    def _format_skill_content(self, skill_name: str, content: str, skill_dir) -> str:
         """Format skill content for display to the agent."""
         header = (
             f'<command-message>The "{skill_name}" skill is loading</command-message>\n\n'
-            f"Base directory for this skill: {self.skills_directory}/{skill_name}\n\n"
+            f"Base directory for this skill: {skill_dir}/{skill_name}\n\n"
         )
         footer = (
             "\n\n---\n"

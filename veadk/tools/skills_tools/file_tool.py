@@ -28,6 +28,13 @@ def read_file_tool(file_path: str, offset: int, limit: int, tool_context: ToolCo
     """Read files with line numbers for precise editing.
 
     Reads a file from the filesystem with line numbers.
+
+    Working directory structure:
+        /tmp/veadk/{session_id}/
+        ├── skills/     -> all skills are available here (read-only).
+        ├── uploads/    -> staged user files (temporary)
+        └── outputs/    -> generated files for return
+
     Usage:
     - Provide a path to the file (absolute or relative to your working directory)
     - Returns content with line numbers (format: LINE_NUMBER|CONTENT)
@@ -88,6 +95,13 @@ def write_file_tool(file_path: str, content: str, tool_context: ToolContext):
     """Write content to files (overwrites existing files).
 
     Writes content to a file on the filesystem.
+
+    Working directory structure:
+        /tmp/veadk/{session_id}/
+        ├── skills/     -> all skills are available here (read-only).
+        ├── uploads/    -> staged user files (temporary)
+        └── outputs/    -> generated files for return
+
     Usage:
     - Provide a path (absolute or relative to working directory) and content to write
     - Overwrites existing files
@@ -135,6 +149,12 @@ def edit_file_tool(
     tool_context: ToolContext,
 ):
     """Edit files by replacing exact string matches.
+
+    Working directory structure:
+        /tmp/veadk/{session_id}/
+        ├── skills/     -> all skills are available here (read-only).
+        ├── uploads/    -> staged user files (temporary)
+        └── outputs/    -> generated files for return
 
     Performs exact string replacements in files.
     Usage:
