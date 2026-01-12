@@ -751,11 +751,14 @@ class Runner(ADKRunner):
         """Auto inject header to McpToolset"""
         from google.adk.tools.mcp_tool import McpToolset
 
+        x_session_id_key = "x-session-id-veadk"
         for tool in self.agent.tools:
             if isinstance(tool, McpToolset):
                 original_provider = tool._header_provider
                 tool._header_provider = lambda ctx, sid=x_session_id: {
                     **(original_provider(ctx) if original_provider else {}),
-                    "x-session-id-veadk": sid,
+                    x_session_id_key: sid,
                 }
-                logger.debug(f"Injected session context to McpToolset: {x_session_id}")
+                logger.debug(
+                    f"mcp client inject {x_session_id_key} to McpToolset: {x_session_id}"
+                )
