@@ -24,8 +24,11 @@ from typing import Optional, Union
 if not os.getenv("LITELLM_LOCAL_MODEL_COST_MAP"):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
+import uuid
+
 from google.adk.agents import LlmAgent, RunConfig
 from google.adk.agents.base_agent import BaseAgent
+from google.adk.agents.context_cache_config import ContextCacheConfig
 from google.adk.agents.llm_agent import InstructionProvider, ToolUnion
 from google.adk.agents.run_config import StreamingMode
 from google.adk.models.lite_llm import LiteLlm
@@ -44,7 +47,11 @@ from veadk.knowledgebase import KnowledgeBase
 from veadk.memory.long_term_memory import LongTermMemory
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.processors import BaseRunProcessor, NoOpRunProcessor
-from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INSTRUCTION
+from veadk.prompts.agent_default_prompt import (
+    DEFAULT_DESCRIPTION,
+    DEFAULT_INSTRUCTION,
+)
+from veadk.prompts.prompt_manager import BasePromptManager
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_asyncio, patch_tracer
@@ -67,7 +74,7 @@ class Agent(LlmAgent):
         name (str): The name of the agent.
         description (str): A description of the agent, useful in A2A scenarios.
         instruction (Union[str, InstructionProvider]): The instruction or instruction provider.
-        model_name (str): Name of the model used by the agent.
+        model_name (Union[str, List[str]]): Name of the model used by the agent.
         model_provider (str): Provider of the model (e.g., openai).
         model_api_base (str): The base URL of the model API.
         model_api_key (str): The API key for accessing the model.
@@ -78,15 +85,20 @@ class Agent(LlmAgent):
         short_term_memory (Optional[ShortTermMemory]): Session-based memory for temporary context.
         long_term_memory (Optional[LongTermMemory]): Cross-session memory for persistent user context.
         tracers (list[BaseTracer]): List of tracers used for telemetry and monitoring.
+        enable_authz (bool): Whether to enable agent authorization checks.
+        auto_save_session (bool): Whether to automatically save sessions to long-term memory.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()).split("-")[0])
     name: str = DEFAULT_AGENT_NAME
     description: str = DEFAULT_DESCRIPTION
     instruction: Union[str, InstructionProvider] = DEFAULT_INSTRUCTION
 
-    model_name: str = Field(default_factory=lambda: settings.model.name)
+    model_name: Union[str, list[str]] = Field(
+        default_factory=lambda: settings.model.name
+    )
     model_provider: str = Field(default_factory=lambda: settings.model.provider)
     model_api_base: str = Field(default_factory=lambda: settings.model.api_base)
     model_api_key: str = Field(default_factory=lambda: settings.model.api_key)
@@ -96,12 +108,18 @@ class Agent(LlmAgent):
 
     sub_agents: list[BaseAgent] = Field(default_factory=list, exclude=True)
 
+    prompt_manager: Optional[BasePromptManager] = None
+
     knowledgebase: Optional[KnowledgeBase] = None
 
     short_term_memory: Optional[ShortTermMemory] = None
     long_term_memory: Optional[LongTermMemory] = None
 
     tracers: list[BaseTracer] = []
+
+    enable_responses: bool = False
+
+    context_cache_config: Optional[ContextCacheConfig] = None
 
     run_processor: Optional[BaseRunProcessor] = Field(default=None, exclude=True)
     """Optional run processor for intercepting and processing agent execution flows.
@@ -124,6 +142,10 @@ class Agent(LlmAgent):
     """
 
     enable_authz: bool = False
+
+    auto_save_session: bool = False
+
+    skills: list[str] = Field(default_factory=list)
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
@@ -151,12 +173,41 @@ class Agent(LlmAgent):
         logger.info(f"Model extra config: {self.model_extra_config}")
 
         if not self.model:
-            self.model = LiteLlm(
-                model=f"{self.model_provider}/{self.model_name}",
-                api_key=self.model_api_key,
-                api_base=self.model_api_base,
-                **self.model_extra_config,
-            )
+            if self.enable_responses:
+                from veadk.models.ark_llm import ArkLlm
+
+                self.model = ArkLlm(
+                    model=f"{self.model_provider}/{self.model_name}",
+                    api_key=self.model_api_key,
+                    api_base=self.model_api_base,
+                    **self.model_extra_config,
+                )
+            else:
+                fallbacks = None
+                if isinstance(self.model_name, list):
+                    if self.model_name:
+                        model_name = self.model_name[0]
+                        fallbacks = [
+                            f"{self.model_provider}/{m}" for m in self.model_name[1:]
+                        ]
+                        logger.info(
+                            f"Using primary model: {model_name}, with fallbacks: {self.model_name[1:]}"
+                        )
+                    else:
+                        model_name = settings.model.name
+                        logger.warning(
+                            f"Empty model_name list provided, using default model from settings: {model_name}"
+                        )
+                else:
+                    model_name = self.model_name
+
+                self.model = LiteLlm(
+                    model=f"{self.model_provider}/{model_name}",
+                    api_key=self.model_api_key,
+                    api_base=self.model_api_base,
+                    fallbacks=fallbacks,
+                    **self.model_extra_config,
+                )
             logger.debug(
                 f"LiteLLM client created with config: {self.model_extra_config}"
             )
@@ -202,12 +253,69 @@ class Agent(LlmAgent):
             else:
                 self.before_agent_callback = check_agent_authorization
 
+        if self.prompt_manager:
+            self.instruction = self.prompt_manager.get_prompt
+
+        if self.auto_save_session:
+            if self.long_term_memory is None:
+                logger.warning(
+                    "auto_save_session is enabled, but long_term_memory is not initialized."
+                )
+            else:
+                from veadk.memory.save_session_callback import (
+                    save_session_to_long_term_memory,
+                )
+
+                if self.after_agent_callback:
+                    if isinstance(self.after_agent_callback, list):
+                        self.after_agent_callback.append(
+                            save_session_to_long_term_memory
+                        )
+                    else:
+                        self.after_agent_callback = [
+                            self.after_agent_callback,
+                            save_session_to_long_term_memory,
+                        ]
+                else:
+                    self.after_agent_callback = save_session_to_long_term_memory
+
+        if self.skills:
+            self.load_skills()
+
         logger.info(f"VeADK version: {VERSION}")
 
         logger.info(f"{self.__class__.__name__} `{self.name}` init done.")
         logger.debug(
-            f"Agent: {self.model_dump(include={'name', 'model_name', 'model_api_base', 'tools'})}"
+            f"Agent: {self.model_dump(include={'id', 'name', 'model_name', 'model_api_base', 'tools', 'skills'})}"
         )
+
+    def update_model(self, model_name: str):
+        logger.info(f"Updating model to {model_name}")
+        self.model = self.model.model_copy(
+            update={"model": f"{self.model_provider}/{model_name}"}
+        )
+
+    def load_skills(self):
+        from pathlib import Path
+
+        from veadk.skills.utils import load_skills_from_directory
+
+        skills = []
+        for skill in self.skills:
+            path = Path(skill)
+            if path.is_dir():
+                skills.extend(load_skills_from_directory(path))
+            else:
+                logger.error(
+                    f"Skill {skill} is not a directory, skip. Loading skills from cloud is WIP."
+                )
+        if skills:
+            self.instruction += "\nYou have the following skills:\n"
+
+            for skill in skills:
+                self.instruction += (
+                    f"- name: {skill.name}\n- description: {skill.description}\n\n"
+                )
 
     async def _run(
         self,
@@ -274,14 +382,20 @@ class Agent(LlmAgent):
             return
 
         if not self.tracers:
-            from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
+            from veadk.tracing.telemetry.opentelemetry_tracer import (
+                OpentelemetryTracer,
+            )
 
             self.tracers.append(OpentelemetryTracer())
 
         exporters = self.tracers[0].exporters  # type: ignore
 
-        from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporter
-        from veadk.tracing.telemetry.exporters.cozeloop_exporter import CozeloopExporter
+        from veadk.tracing.telemetry.exporters.apmplus_exporter import (
+            APMPlusExporter,
+        )
+        from veadk.tracing.telemetry.exporters.cozeloop_exporter import (
+            CozeloopExporter,
+        )
         from veadk.tracing.telemetry.exporters.tls_exporter import TLSExporter
 
         if enable_apmplus_tracer and not any(

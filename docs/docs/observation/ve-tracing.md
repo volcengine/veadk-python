@@ -3,13 +3,16 @@ title: 在火山引擎观测
 ---
 
 ## CozeLoop 平台
+
 通过 VeADK 开发的火山智能体接入到扣子罗盘之后，可以通过扣子罗盘的评测功能进行 Agent 评测，或者通过 Trace 功能实现调用链路观测。火山智能体的 Trace 数据可以直接上报至扣子罗盘，实现调用链路观测；在扣子罗盘中注册的火山智能体，也可以通过观测功能进行 Agent 评测。
+
 ### 准备工作
+
 在 VeADK 配置文件 config.yaml 的 observability 字段中填写 cozeloop 的属性。关于配置文件的详细说明及示例可参考配置文件。
 
-- endpoint：固定设置为 https://api.coze.cn/v1/loop/opentelemetry/v1/traces。
+- endpoint：固定设置为 `https://api.coze.cn/v1/loop/opentelemetry/v1/traces`
 - api_key：扣子罗盘访问密钥，支持个人访问令牌、OAuth 访问令牌和服务访问令牌。获取方式可参考[配置个人访问令牌](https://loop.coze.cn/open/docs/cozeloop/authentication-for-sdk#05d27a86)。
-- service_name：扣子罗盘工作空间的 ID。你可以在登录扣子罗盘之后，左上角切换到想要存放火山智能体数据的工作空间，并在 URL 的 space 关键词之后获取工作空间 ID，例如 https://loop.coze.cn/console/enterprise/personal/space/739XXXXXXXX092/pe/prompts 中，**739XXXXXXXX092**为工作空间 ID。
+- service_name：扣子罗盘工作空间的 ID。你可以在登录扣子罗盘之后，左上角切换到想要存放火山智能体数据的工作空间，并在 URL 的 space 关键词之后获取工作空间 ID，例如 `https://loop.coze.cn/console/enterprise/personal/space/739XXXXXXXX092/pe/prompts` 中，**739XXXXXXXX092**为工作空间 ID。
 
 ![cozeloop空间](../assets/images/observation/coze-spaceid.png)
 
@@ -34,7 +37,9 @@ observability:
 ```
 
 ### 部署运行
+
 #### Cozeloop exporter接入代码
+
 ```python title="agent.py"
 import asyncio
 
@@ -61,17 +66,24 @@ prompt = "How is the weather like in Beijing? Besides, tell me which tool you in
 
 asyncio.run(runner.run(messages=prompt, session_id=session_id))
 ```
+
 #### 效果展示
+
 ```bash
 python agent.py
 ```
+
 ![cozeloop空间](../assets/images/observation/coze-console.png)
+
 ![cozeloop空间](../assets/images/observation/coze-trace.png)
 
 ## APMPlus 平台
-通过 VeADK 开发的火山智能体接入到 APMPlus 之后，可以通过 APMPlus 的评测功能进行 Agent 评测，或者通过 Trace 功能实现调用链路观测。火山智能体的 Trace 数据可以直接上报至 APMPlus，实现调用链路观测。
+
+通过 VeADK 开发的火山智能体可以通过定义 APMPlus 数据导出器接入到火山引擎 APMPlus 平台，实现调用链路观测。
+
 ### 准备工作
-- endpoint：指定APMPlus的接入点为 http://apmplus-cn-beijing.volces.com:4317。
+
+- endpoint：指定APMPlus的接入点为 http://apmplus-cn-beijing.volces.com:4317
 - api_key：需填入有效应用程序密钥。
 - service_name：指定服务名称，可根据实际需求修改。
 初始化 APMPlusExporter：利用APMPlusExporterConfig配置端点、应用程序密钥和服务名称，创建APMPlusExporter实例，配置从环境变量获取。示例代码如下：
@@ -125,25 +137,35 @@ asyncio.run(runner.run(messages=prompt, session_id=session_id))
 ```
 
 ### 部署运行
+
 本地运行上述agent.py代码，触发APMPlus追踪器记录Agent运行的各个节点的调用，以及Metrics信息上传云端存储：
+
 ```bash
 python agent.py
 ```
+
 ![apmplus空间](../assets/images/observation/apm-console.png)
 
 #### 会话信息
+
 ![apmplus空间](../assets/images/observation/apm-session.png)
 
 #### trace信息
+
 ![apmplus空间](../assets/images/observation/apm-trace.png)
 
 #### 模型指标信息
+
 ![apmplus空间](../assets/images/observation/apm-metrics.png)
 
 ## TLS 平台
-通过 VeADK 开发的火山智能体接入到 TLS 之后，可以通过 TLS 的评测功能进行 Agent 评测，或者通过 Trace 功能实现调用链路观测。火山智能体的 Trace 数据可以直接上报至 TLS，实现调用链路观测。
+
+通过 VeADK 开发的火山智能体可以通过定义 TLS 数据导出器来接入到火山引擎日志服务 TLS，并在 TLS 的观测功能模块中进行 Agent 执行链路观测。
+
 ### 准备工作
-#### veADK代码中创建tracing project和实例
+
+#### VeADK代码中创建tracing project和实例
+
 ```yaml title="config.yaml"
 model:
   agent:
@@ -191,6 +213,7 @@ print(f"Created trace instance with ID: {trace_instance['TraceInstanceId']}")
 ```
 
 #### TLS Exporter接入代码示例
+
 ```python title="agent.py"
 import asyncio
 
@@ -226,9 +249,13 @@ asyncio.run(runner.run(messages=prompt, session_id=session_id))
 ```
 
 ### 部署运行
+
 本地运行上述agent.py代码，触发TLS Project、Topic的创建，并且通过追踪器记录Agent运行的各个节点的调用：
+
 ```bash
 python agent.py
 ```
+
 ![控制台打印](../assets/images/observation/tls-console.png)
+
 ![tls空间](../assets/images/observation/tls-trace.png)

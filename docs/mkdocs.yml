@@ -45,6 +45,8 @@ nav:
       - 构建智能体: agent/agent.md
       - 多智能体交互: agent/agents.md
       - A2A 协议: agent/agent-to-agent.md
+      - Prompt 管理: agent/prompt.md
+      - Responses API: agent/responses-api.md
     - 执行引擎:
       - Runner: runner.md
     - 个性化引擎——记忆:
@@ -57,7 +59,7 @@ nav:
       - 护栏工具: tools/guardrail.md
     - 连接数据源——知识库:
       - 基本使用: knowledgebase/overview.md
-      - 最佳实践（知识库相关）: knowledgebase/best-practice-knowledgebase.md
+      - 最佳实践: knowledgebase/best-practice-knowledgebase.md
     - 身份与权限: 
       - 概述: auth/overview.md
       - 入站认证: auth/inbound.md
@@ -70,12 +72,13 @@ nav:
       - 在火山引擎观测: observation/ve-tracing.md
       - 埋点与字段规范: observation/span-attributes.md
     - 部署与持续优化:
-      - 部署到火山引擎: deploy.md
-      - 评测: evaluation.md
-      - 持续优化: optimization.md
+      - 部署到 AgentKit: deploy/deploy-agentkit.md
+      - 部署到 VeFaaS: deploy/deploy-vefaas.md
+      - 评测: deploy/evaluation.md
+      - 持续优化: deploy/optimization.md
     - 命令行工具: cli.md
   - 参考:
-    - API References: references/api.md
+    # - API References: references/api.md
     - 贡献代码: references/contributing.md
     - License: references/license.md
   - IDE 支持:
@@ -87,6 +90,7 @@ nav:
 
 plugins:  
   - search
+  - autorefs
   - mkdocs-video:
       is_video: True
       video_muted: True
@@ -120,6 +124,10 @@ plugins:
         - memory/long-term-memory.md
         - observation/tracing.md
         - observation/ve-tracing.md
+        - deploy/deploy-vefaas.md
+        - deploy/deploy-agentkit.md
+        - deploy/evaluation.md
+        - deploy/optimization.md
 
 extra:
   social:

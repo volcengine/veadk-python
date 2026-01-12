@@ -18,10 +18,11 @@ import os
 import sys
 import time
 import types
-from typing import Any, Dict, List, MutableMapping, Tuple
+from typing import Any, Dict, List, MutableMapping, Optional, Tuple
 
 import requests
 from yaml import safe_load
+
 import __main__
 
 
@@ -182,3 +183,37 @@ def get_agent_dir():
         full_path = os.getcwd()
 
     return full_path
+
+
+async def upload_to_files_api(
+    local_path: str,
+    fps: Optional[float] = None,
+    poll_interval: float = 3.0,
+    max_wait_seconds: float = 10 * 60,
+) -> str:
+    from volcenginesdkarkruntime import AsyncArk
+
+    from veadk.config import getenv, settings
+    from veadk.consts import DEFAULT_MODEL_AGENT_API_BASE
+
+    client = AsyncArk(
+        api_key=getenv("MODEL_AGENT_API_KEY", settings.model.api_key),
+        base_url=getenv("DEFAULT_MODEL_AGENT_API_BASE", DEFAULT_MODEL_AGENT_API_BASE),
+    )
+    file = await client.files.create(
+        file=open(local_path, "rb"),
+        purpose="user_data",
+        preprocess_configs={
+            "video": {
+                "fps": fps,
+            }
+        }
+        if fps
+        else None,
+    )
+    await client.files.wait_for_processing(
+        id=file.id,
+        poll_interval=poll_interval,
+        max_wait_seconds=max_wait_seconds,
+    )
+    return file.id

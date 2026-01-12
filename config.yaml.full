@@ -20,7 +20,7 @@ model:
     api_base: https://ark.cn-beijing.volces.com/api/v3/
     api_key:
   video:
-    name: doubao-seedance-1-0-pro-250528
+    name: doubao-seedance-1-5-pro-251215
     api_base: https://ark.cn-beijing.volces.com/api/v3/
     api_key: 
   image:
@@ -61,6 +61,10 @@ tool:
     tool_id: #https://console.volcengine.com/ACEP
       - # `product_id`-`pod_id_1`
       - # `product_id`-`pod_id_1`
+  # [optional] for Vod Tool  https://console.volcengine.com/vod
+  vod:
+    groups:
+    timeout: 10.0
 
   las:
     url: #mcp sse url
@@ -142,7 +146,16 @@ database:
   mem0:
     base_url: # default "https://api.mem0.ai/v1", using full https url including port
     api_key:  #api_key
-    
+  tos_vector:
+    endpoint: tosvectors-cn-beijing.volces.com # default Volcengine TOS Vector endpoint
+    region: cn-beijing                  # default Volcengine TOS Vector region
+    bucket:
+    account_id:
+
+# Dynamic config
+nacos:
+  endpoint:
+  password:
 
 
 # [optional] for prompt optimization in cli/app

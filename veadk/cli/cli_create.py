@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import click
 import shutil
 from pathlib import Path
+
+import click
 
 _ENV_TEMPLATE = """\
 MODEL_AGENT_API_KEY={ark_api_key}
@@ -31,7 +32,7 @@ root_agent = Agent(
     name="root_agent",
     description="A helpful assistant for user questions.",
     instruction="Answer user questions to the best of your knowledge",
-    model_name="doubao-seed-1-6-251015", # <---- you can change your model here
+    model_name="doubao-seed-1-8-251215", # <---- change model here
 )
 """
 
@@ -146,6 +147,10 @@ def create(agent_name: str, ark_api_key: str) -> None:
     """
     if not agent_name:
         agent_name = click.prompt("Enter the agent name")
+
+    if "-" in agent_name:
+        raise ValueError("Agent name cannot contain '-'. Use '_' instead.")
+
     if not ark_api_key:
         ark_api_key = _prompt_for_ark_api_key()
 

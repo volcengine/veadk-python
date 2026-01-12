@@ -15,39 +15,129 @@ title: 短期记忆
 
 下面展示了创建和使用短期记忆：
 
-```python
-import asyncio
-from veadk import Agent, Runner
-from veadk.memory.short_term_memory import ShortTermMemory
+=== "Python"
 
-app_name = "app_short_term_1"
-user_id = "user_short_term_1"
-session_id = "session_short_term_1"
-
-agent = Agent()
-short_term_memory = ShortTermMemory(
-    backend="local", # 指定 ShortTermMemory 的存储方式
-    # 如果是 sqlite，指定数据库路径
-    # local_database_path="/tmp/d_persistent_short_term_memory.db", 
-)  
-runner = Runner(
-    agent=agent, short_term_memory=short_term_memory, app_name=app_name, user_id=user_id
-)
-
-async def main():
-    response1 = await runner.run(
-        messages="我在 7 月 15 日购买了 20 个冰激凌", session_id=session_id
-    )
-    print(f"response of round 1: {response1}")
+    ```python
+    import asyncio
+    from veadk import Agent, Runner
+    from veadk.memory.short_term_memory import ShortTermMemory
     
-    response2 = await runner.run(
-        messages="我什么时候买了冰激凌？", session_id=session_id
-    )
-    print(f"response of round 2: {response2}")
+    app_name = "app_short_term_1"
+    user_id = "user_short_term_1"
+    session_id = "session_short_term_1"
     
-if __name__ == "__main__":
-    asyncio.run(main())
-```
+    agent = Agent()
+    short_term_memory = ShortTermMemory(
+        backend="local", # 指定 ShortTermMemory 的存储方式
+        # 如果是 sqlite，指定数据库路径
+        # local_database_path="/tmp/d_persistent_short_term_memory.db", 
+    )  
+    runner = Runner(
+        agent=agent, short_term_memory=short_term_memory, app_name=app_name, user_id=user_id
+    )
+    
+    async def main():
+        response1 = await runner.run(
+            messages="我在 7 月 15 日购买了 20 个冰激凌", session_id=session_id
+        )
+        print(f"response of round 1: {response1}")
+        
+        response2 = await runner.run(
+            messages="我什么时候买了冰激凌？", session_id=session_id
+        )
+        print(f"response of round 2: {response2}")
+        
+    if __name__ == "__main__":
+        asyncio.run(main())
+    ```
+
+=== "Golang"
+    
+    ```
+    package main
+
+    import (
+        "context"
+        "log"
+        "strings"
+    
+        veagent "github.com/volcengine/veadk-go/agent/llmagent"
+        "github.com/volcengine/veadk-go/common"
+        "github.com/volcengine/veadk-go/utils"
+        "google.golang.org/adk/agent"
+        "google.golang.org/adk/agent/llmagent"
+        "google.golang.org/adk/runner"
+        "google.golang.org/adk/session"
+        "google.golang.org/genai"
+    )
+    
+    func main() {
+        ctx := context.Background()
+        appName := "ve_agent"
+        userID := "user1111"
+    
+        rootAgent, err := veagent.New(&veagent.Config{
+            Config: llmagent.Config{
+                Name:        "RootAgent",
+                Instruction: "Acknowledge the user's statement.",
+            },
+            ModelName:    common.DEFAULT_MODEL_AGENT_NAME,
+            ModelAPIBase: common.DEFAULT_MODEL_AGENT_API_BASE,
+            ModelAPIKey:  utils.GetEnvWithDefault(common.MODEL_AGENT_API_KEY),
+        })
+        if err != nil {
+            log.Printf("NewLLMAgent failed: %v", err)
+            return
+        }
+        sessionService := session.InMemoryService()
+    
+        runner1, err := runner.New(runner.Config{
+            AppName:        appName,
+            Agent:          rootAgent,
+            SessionService: sessionService,
+        })
+        if err != nil {
+            log.Fatal(err)
+        }
+    
+        sessionID := "session123456789"
+        _, err = sessionService.Create(ctx, &session.CreateRequest{
+            AppName:   appName,
+            UserID:    userID,
+            SessionID: sessionID,
+        })
+        if err != nil {
+            log.Fatalf("sessionService.Create error: %v", err)
+        }
+        userInput1 := genai.NewContentFromText("我在 7 月 15 日购买了 20 个冰激凌。", "user")
+    
+        var finalResponseText string
+        for event, err := range runner1.Run(ctx, userID, sessionID, userInput1, agent.RunConfig{}) {
+            if err != nil {
+                log.Printf("Agent Error: %v", err)
+                continue
+            }
+            if event.Content != nil && !event.LLMResponse.Partial {
+                finalResponseText = strings.Join(textParts(event.LLMResponse.Content), "")
+            }
+        }
+        log.Printf("Agent 1 Response: %s\n", finalResponseText)
+    
+        userInput2 := genai.NewContentFromText("我什么时候买了冰激凌？", "user")
+        var finalResponse2Text string
+        for event, err := range runner1.Run(ctx, userID, sessionID, userInput2, agent.RunConfig{}) {
+            if err != nil {
+                log.Printf("Agent Error: %v", err)
+                continue
+            }
+            if event.Content != nil && !event.LLMResponse.Partial {
+                finalResponse2Text = strings.Join(textParts(event.LLMResponse.Content), "")
+            }
+        }
+        log.Printf("Agent 1 Response: %s\n", finalResponse2Text)
+    }
+    ```
+
 **示例输出**
 
 ```
@@ -121,15 +211,23 @@ VeADK 中，您可以使用如下短期记忆后端服务来初始化您的短�
 ```python
 from google.adk.apps.app import App
 from google.adk.apps.app import EventsCompactionConfig
+from veadk.agent import Agent
+
+root_agent = Agent(
+    description="hello world agent",
+    instruction="""你是一个智能助手，擅长用中文礼貌回复用户的问题。""",
+)
 
 app = App(
-    name='my-agent',
+    name='my_agent',
     root_agent=root_agent,
     events_compaction_config=EventsCompactionConfig(
         compaction_interval=3,  # 每 3 次新调用触发一次压缩。
         overlap_size=1          # 包含前一个窗口的最后一次事件重叠。
     ),
 )
+
+root_agent = agent
 ```
 
 ### 定义压缩器

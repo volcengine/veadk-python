@@ -137,6 +137,10 @@ def intercept_new_message(process_func):
                 new_message=new_message,
                 **kwargs,
             ):
+                if event is None:
+                    logger.error(f"Event is None with new_message: {new_message}")
+                    continue
+
                 yield event
                 event_metadata = f"| agent_name: {event.author} , user_id: {user_id} , session_id: {session_id} , invocation_id: {event.invocation_id}"
                 if event.get_function_calls():
@@ -147,14 +151,18 @@ def intercept_new_message(process_func):
                         logger.debug(
                             f"Function response: {function_response} {event_metadata}"
                         )
-                elif (
-                    event.content is not None
-                    and event.content.parts
-                    and event.content.parts[0].text is not None
-                    and len(event.content.parts[0].text.strip()) > 0
-                ):
-                    final_output = event.content.parts[0].text
-                    logger.debug(f"Event output: {final_output} {event_metadata}")
+                elif event.content is not None and event.content.parts:
+                    for part in event.content.parts:
+                        if len(part.text.strip()) > 0:
+                            final_output = part.text
+                            if part.thought:
+                                logger.debug(
+                                    f"Thinking output: {final_output} {event_metadata}"
+                                )
+                            else:
+                                logger.debug(
+                                    f"Event output: {final_output} {event_metadata}"
+                                )
 
             post_run_process(self)
 
@@ -502,13 +510,15 @@ class Runner(ADKRunner):
                         yield event
 
                 async for event in event_generator():
-                    if (
-                        event.content is not None
-                        and event.content.parts
-                        and event.content.parts[0].text is not None
-                        and len(event.content.parts[0].text.strip()) > 0
-                    ):
-                        final_output = event.content.parts[0].text
+                    if event.content is not None and event.content.parts:
+                        for part in event.content.parts:
+                            if (
+                                not part.thought
+                                and part.text
+                                and len(part.text.strip()) > 0
+                            ):
+                                final_output = part.text
+                                break
             except LlmCallsLimitExceededError as e:
                 logger.warning(f"Max number of llm calls limit exceeded: {e}")
                 final_output = ""

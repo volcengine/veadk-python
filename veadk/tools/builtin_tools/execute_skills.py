@@ -26,11 +26,52 @@ from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 logger = get_logger(__name__)
 
 
+def _clean_ansi_codes(text: str) -> str:
+    """Remove ANSI escape sequences (color codes, etc.)"""
+    import re
+
+    ansi_escape = re.compile(r"\x1b\[[0-9;]*m")
+    return ansi_escape.sub("", text)
+
+
+def _format_execution_result(result_str: str) -> str:
+    """Format the execution results, handle escape characters and JSON structures"""
+    try:
+        result_json = json.loads(result_str)
+
+        if not result_json.get("success"):
+            message = result_json.get("message", "Unknown error")
+            outputs = result_json.get("data", {}).get("outputs", [])
+            if outputs and isinstance(outputs[0], dict):
+                error_msg = outputs[0].get("ename", "Unknown error")
+                return f"Execution failed: {message}, {error_msg}"
+
+        outputs = result_json.get("data", {}).get("outputs", [])
+        if not outputs:
+            return "No output generated"
+
+        formatted_lines = []
+        for output in outputs:
+            if output and isinstance(output, dict) and "text" in output:
+                text = output["text"]
+                text = _clean_ansi_codes(text)
+                text = text.replace("\\n", "\n")
+                formatted_lines.append(text)
+
+        return "".join(formatted_lines).strip()
+
+    except json.JSONDecodeError:
+        return _clean_ansi_codes(result_str)
+    except Exception as e:
+        logger.warning(f"Error formatting result: {e}, returning raw result")
+        return result_str
+
+
 def execute_skills(
     workflow_prompt: str,
     skills: Optional[List[str]] = None,
     tool_context: ToolContext = None,
-    timeout: int = 300,
+    timeout: int = 900,
 ) -> str:
     """execute skills in a code sandbox and return the output.
     For C++ code, don't execute it directly, compile and execute via Python; write sources and object files to /tmp.
@@ -38,7 +79,7 @@ def execute_skills(
     Args:
         workflow_prompt (str): instruction of workflow
         skills (Optional[List[str]]): The skills will be invoked
-        timeout (int, optional): The timeout in seconds for the code execution, less than or equal to 300. Defaults to 300.
+        timeout (int, optional): The timeout in seconds for the code execution, less than or equal to 900. Defaults to 900.
 
     Returns:
         str: The output of the code execution.
@@ -65,8 +106,8 @@ def execute_skills(
         f"Execute skills in session_id={session_id}, tool_id={tool_id}, host={host}, service={service}, region={region}, timeout={timeout}"
     )
 
-    ak = getenv("VOLCENGINE_ACCESS_KEY")
-    sk = getenv("VOLCENGINE_SECRET_KEY")
+    ak = tool_context.state.get("VOLCENGINE_ACCESS_KEY")
+    sk = tool_context.state.get("VOLCENGINE_SECRET_KEY")
     header = {}
 
     if not (ak and sk):
@@ -91,31 +132,87 @@ def execute_skills(
         cmd.extend(["--skills"] + skills)
 
     # TODO: remove after agentkit supports custom environment variables setting
+    res = ve_request(
+        request_body={},
+        action="GetCallerIdentity",
+        ak=ak,
+        sk=sk,
+        service="sts",
+        version="2018-01-01",
+        region=region,
+        host="sts.volcengineapi.com",
+        header=header,
+    )
+    try:
+        account_id = res["Result"]["AccountId"]
+    except KeyError as e:
+        logger.error(f"Error occurred while getting account id: {e}, response is {res}")
+        return res
+
     env_vars = {
-        "MODEL_AGENT_API_KEY": os.getenv("MODEL_AGENT_API_KEY"),
-        "TOS_SKILLS_DIR": os.getenv("TOS_SKILLS_DIR"),
+        "TOS_SKILLS_DIR": f"tos://agentkit-platform-{account_id}/skills/",
+        "TOOL_USER_SESSION_ID": tool_user_session_id,
     }
 
     code = f"""
 import subprocess
 import os
+import time
+import select
+import sys
 
 env = os.environ.copy()
 for key, value in {env_vars!r}.items():
     if key not in env:
         env[key] = value
 
-result = subprocess.run(
+process = subprocess.Popen(
     {cmd!r},
     cwd='/home/gem/veadk_skills',
-    capture_output=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
     text=True,
     env=env,
-    timeout={timeout - 10},
+    bufsize=1, 
+    universal_newlines=True
 )
-print(result.stdout)
-if result.stderr:
-    print(result.stderr)
+
+start_time = time.time()
+timeout = {timeout - 10}
+
+with open('/tmp/agent.log', 'w') as log_file:
+    while True:
+        if time.time() - start_time > timeout:
+            process.kill()
+            log_file.write('log_type=stderr request_id=x function_id=y revision_number=1 Process timeout\\n')
+            break
+            
+        reads = [process.stdout.fileno(), process.stderr.fileno()]
+        ret = select.select(reads, [], [], 1)
+        
+        for fd in ret[0]:
+            if fd == process.stdout.fileno():
+                line = process.stdout.readline()
+                if line:
+                    log_file.write(f'log_type=stdout request_id=x function_id=y revision_number=1 {{line}}')
+                    log_file.flush()
+            if fd == process.stderr.fileno():
+                line = process.stderr.readline()
+                if line:
+                    log_file.write(f'log_type=stderr request_id=x function_id=y revision_number=1 {{line}}')
+                    log_file.flush()
+        
+        if process.poll() is not None:
+            break
+    
+    for line in process.stdout:
+        log_file.write(f'log_type=stdout request_id=x function_id=y revision_number=1 {{line}}')
+    for line in process.stderr:
+        log_file.write(f'log_type=stderr request_id=x function_id=y revision_number=1 {{line}}')
+
+with open('/tmp/agent.log', 'r') as log_file:
+    output = log_file.read()
+    print(output)
     """
 
     res = ve_request(
@@ -143,7 +240,7 @@ if result.stderr:
     logger.debug(f"Invoke run code response: {res}")
 
     try:
-        return res["Result"]["Result"]
+        return _format_execution_result(res["Result"]["Result"])
     except KeyError as e:
         logger.error(f"Error occurred while running code: {e}, response is {res}")
         return res

@@ -1,21 +1,54 @@
 
 # 内置工具使用指南
 
-本文档旨在说明如何有效利用 veADK 内置工具（BuiltinTools）。这些工具提供了即用型功能（如网页搜索或代码执行器），赋予 Agent 通用能力。例如，需要从网络检索信息的 Agent 可直接使用 **web_search** 工具，无需额外配置。
+本文档旨在说明如何有效利用 VeADK 内置工具（BuiltinTools）。这些工具提供了即用型功能（如网页搜索或代码执行器），赋予 Agent 通用能力。例如，需要从网络检索信息的 Agent 可直接使用 **web_search** 工具，无需额外配置。
 
 ## 使用方法
 
-1.  **导入**：从 `veadk.tools.builtin_tools` 模块导入所需工具。
-2.  **配置**：初始化工具并按需提供参数。
-3.  **注册**：将工具实例添加至 Agent 的 `tools` 列表。
+1. **导入**：从 `veadk.tools.builtin_tools` 模块导入所需工具。
+2. **配置**：初始化工具并按需提供参数。
+3. **注册**：将工具实例添加至 Agent 的 `tools` 列表。
 
-```python
-from veadk import Agent
-from veadk.tools.builtin_tools.web_search import websearch
+=== "Python"
 
-# 在 Agent 初始化时注册工具
-# Agent(tools=[websearch], other_params...)
-```
+    ```python
+    from veadk import Agent
+    from veadk.tools.builtin_tools.web_search import web_search
+    
+    # 在 Agent 初始化时注册工具
+    agent = Agent(tools=[web_search])
+    ```
+
+=== "Golang"
+
+    ```golang
+    import (
+        "log"
+    
+        veagent "github.com/volcengine/veadk-go/agent/llmagent"
+        "github.com/volcengine/veadk-go/tool/builtin_tools/web_search"
+        "google.golang.org/adk/agent/llmagent"
+        "google.golang.org/adk/tool"
+    )
+    
+    func main() {
+        webSearch, err := web_search.NewWebSearchTool(&web_search.Config{})
+        if err != nil {
+            log.Fatalf("NewWebSearchTool failed: %v", err)
+            return
+        }
+        cfg := veagent.Config{
+            Config: llmagent.Config{
+                Tools: []tool.Tool{webSearch},
+            },
+        }
+        veAgent, err := veagent.New(&cfg)
+        if err != nil {
+            log.Fatalf("NewLLMAgent failed: %v", err)
+            return
+        }
+    }
+    ```
 
 工具注册后，Agent 会根据 **用户提示** 和 **指令** 自主决定是否调用。框架将在调用时自动执行工具。
 
@@ -23,7 +56,7 @@ from veadk.tools.builtin_tools.web_search import websearch
 
 ## 工具列表
 
-veADK 集成了以下火山引擎工具：
+VeADK 集成了以下火山引擎工具：
 
 | 工具名称 | 功能说明 | 导入路径 |
 | :--- | :--- | :--- |
@@ -37,6 +70,7 @@ veADK 集成了以下火山引擎工具：
 | `lark` | 集成[飞书开放能力](https://open.larkoffice.com/document/uAjLw4CM/ukTMukTMukTM/mcp_integration/mcp_installation)，实现文档处理、会话管理等。 | `from veadk.tools.builtin_tools.lark import lark` |
 | `las` | 基于[火山引擎 AI 多模态数据湖服务 LAS](https://www.volcengine.com/mcp-marketplace) 进行数据管理。 | `from veadk.tools.builtin_tools.las import las` |
 | `mobile_run` | 手机指令执行   | `from veadk.tools.builtin_tools.mobile_run import create_mobile_use_tool` |
+| `vod`      | 视频剪辑助手   | `from veadk.tools.builtin_tools.vod import vod_tools` |
 
 ### 公域搜索 (Web Search)
 
@@ -46,10 +80,16 @@ veADK 集成了以下火山引擎工具：
     1. 需要配置火山引擎 AK、SK 或者使用火山引 IAM 授权的临时 StsToken 
     2. 需要配置用于 Agent 推理模型的API Key
 
-=== "代码"
+=== "Python"
 
     ```python
     --8<-- "examples/tools/web_search/agent.py"
+    ```
+
+=== "Golang"
+
+    ```golang
+    --8<-- "examples/tools/web_search/agent.go"
     ```
 
 === "环境变量"
@@ -146,6 +186,7 @@ veADK 集成了以下火山引擎工具：
     - `AGENTKIT_TOOL_ID`：用于调用火山引擎AgentKit Tools的沙箱环境Id
     - `AGENTKIT_TOOL_HOST`：用于调用火山引擎AgentKit Tools的EndPoint
     - `AGENTKIT_TOOL_SERVICE_CODE`：用于调用AgentKit Tools的ServiceCode
+    - `AGENTKIT_TOOL_SCHEME`：用于切换调用 AgentKit Tools 的协议，允许 `http`/`https`，默认 `https`
 
     环境变量列表：
 
@@ -183,10 +224,88 @@ veADK 集成了以下火山引擎工具：
     2. 需要配置用于 Agent 推理图像生成的模型名称
     
 
-=== "代码"
+=== "Python"
 
     ```python
     --8<-- "examples/tools/image_generate/agent.py"
+    ```
+
+=== "Golang"
+
+    ```go
+    package main
+
+    import (
+        "context"
+        "fmt"
+        "log"
+        "os"
+    
+        "github.com/a2aproject/a2a-go/a2asrv"
+        "github.com/google/uuid"
+        veagent "github.com/volcengine/veadk-go/agent/llmagent"
+        "github.com/volcengine/veadk-go/common"
+        "github.com/volcengine/veadk-go/tool/builtin_tools"
+        "google.golang.org/adk/agent"
+        "google.golang.org/adk/agent/llmagent"
+        "google.golang.org/adk/artifact"
+        "google.golang.org/adk/cmd/launcher"
+        "google.golang.org/adk/cmd/launcher/full"
+        "google.golang.org/adk/model"
+        "google.golang.org/adk/session"
+        "google.golang.org/adk/tool"
+    )
+
+    func main() {
+        ctx := context.Background()
+        cfg := &veagent.Config{
+            ModelName:    common.DEFAULT_MODEL_AGENT_NAME,
+            ModelAPIBase: common.DEFAULT_MODEL_AGENT_API_BASE,
+            ModelAPIKey:  os.Getenv(common.MODEL_AGENT_API_KEY),
+        }
+        cfg.Name = "image_generate_tool_agent"
+        cfg.Description = "Agent to generate images based on text descriptions or images."
+        cfg.Instruction = "I can generate images based on text descriptions or images."
+        cfg.AfterModelCallbacks = []llmagent.AfterModelCallback{saveReportfunc}
+    
+        imageGenerate, err := builtin_tools.NewImageGenerateTool(&builtin_tools.ImageGenerateConfig{
+            ModelName: common.DEFAULT_MODEL_IMAGE_NAME,
+            BaseURL:   common.DEFAULT_MODEL_IMAGE_API_BASE,
+            APIKey:    os.Getenv(common.MODEL_IMAGE_API_KEY),
+        })
+        if err != nil {
+            fmt.Printf("NewLLMAgent failed: %v", err)
+            return
+        }
+    
+        cfg.Tools = []tool.Tool{imageGenerate}
+    
+        sessionService := session.InMemoryService()
+        rootAgent, err := veagent.New(cfg)
+    
+        if err != nil {
+            log.Fatalf("Failed to create agent: %v", err)
+        }
+    
+        agentLoader, err := agent.NewMultiLoader(
+            rootAgent,
+        )
+        if err != nil {
+            log.Fatalf("Failed to create agent loader: %v", err)
+        }
+    
+        artifactservice := artifact.InMemoryService()
+        config := &launcher.Config{
+            ArtifactService: artifactservice,
+            SessionService:  sessionService,
+            AgentLoader:     agentLoader,
+        }
+    
+        l := full.NewLauncher()
+        if err = l.Execute(ctx, config, os.Args[1:]); err != nil {
+            log.Fatalf("Run failed: %v\n\n%s", err, l.CommandLineSyntax())
+        }
+    }
     ```
 
 === "环境变量"
@@ -226,10 +345,82 @@ veADK 集成了以下火山引擎工具：
     3. 需要配置用于 Agent 推理图片生成的模型名称（该用例使用了 image_generate 工具，因此需要推理图像生成模型的配置）
     
 
-=== "代码"
+=== "Python"
 
     ```python
     --8<-- "examples/tools/video_generate/agent.py"
+    ```
+
+=== "Golang"
+
+    ```go
+    package main
+    
+    import (
+        "context"
+        "fmt"
+        "log"
+        "os"
+    
+        "github.com/a2aproject/a2a-go/a2asrv"
+        "github.com/google/uuid"
+        veagent "github.com/volcengine/veadk-go/agent/llmagent"
+        "github.com/volcengine/veadk-go/common"
+        "github.com/volcengine/veadk-go/tool/builtin_tools"
+        "google.golang.org/adk/agent"
+        "google.golang.org/adk/artifact"
+        "google.golang.org/adk/cmd/launcher"
+        "google.golang.org/adk/cmd/launcher/full"
+        "google.golang.org/adk/model"
+        "google.golang.org/adk/session"
+        "google.golang.org/adk/tool"
+    )
+
+    func main() {
+        ctx := context.Background()
+        cfg := &veagent.Config{
+            ModelName:    common.DEFAULT_MODEL_AGENT_NAME,
+            ModelAPIBase: common.DEFAULT_MODEL_AGENT_API_BASE,
+            ModelAPIKey:  os.Getenv(common.MODEL_AGENT_API_KEY),
+        }
+        videoGenerate, err := builtin_tools.NewVideoGenerateTool(&builtin_tools.VideoGenerateConfig{
+            ModelName: common.DEFAULT_MODEL_VIDEO_NAME,
+            BaseURL:   common.DEFAULT_MODEL_VIDEO_API_BASE,
+            APIKey:    os.Getenv(common.MODEL_VIDEO_API_KEY),
+        })
+        if err != nil {
+            fmt.Printf("NewLLMAgent failed: %v", err)
+            return
+        }
+    
+        cfg.Tools = []tool.Tool{videoGenerate}
+    
+        sessionService := session.InMemoryService()
+        rootAgent, err := veagent.New(cfg)
+    
+        if err != nil {
+            log.Fatalf("Failed to create agent: %v", err)
+        }
+    
+        agentLoader, err := agent.NewMultiLoader(
+            rootAgent,
+        )
+        if err != nil {
+            log.Fatalf("Failed to create agent loader: %v", err)
+        }
+    
+        artifactservice := artifact.InMemoryService()
+        config := &launcher.Config{
+            ArtifactService: artifactservice,
+            SessionService:  sessionService,
+            AgentLoader:     agentLoader,
+        }
+    
+        l := full.NewLauncher()
+        if err = l.Execute(ctx, config, os.Args[1:]); err != nil {
+            log.Fatalf("Run failed: %v\n\n%s", err, l.CommandLineSyntax())
+        }
+    }
     ```
 
 === "环境变量"
@@ -288,9 +479,9 @@ veADK 集成了以下火山引擎工具：
 
     必须配置在环境变量的配置项：
 
-    - `TOOL_LARK_ENDPOINT`：  用于 Agent 推理视频生成的模型名称
-    - `TOOL_LARK_API_KEY`：  用于 Agent 推理图像生成的模型名称
-    - `TOOL_LARK_TOKEN`：  用于 Agent 推理模型 API Key
+    - `TOOL_LARK_ENDPOINT`：  用于  Lark 服务的 Endpoint
+    - `TOOL_LARK_API_KEY`：  用于 Lark 服务的 API Key
+    - `TOOL_LARK_TOKEN`：  用于 Lark 服务的 OAuthToken
 
     环境变量列表：
     - `MODEL_AGENT_API_KEY`：  用于 Agent 推理模型 API Key
@@ -402,7 +593,82 @@ veADK 集成了以下火山引擎工具：
 运行结果：
 ![img_2.png](../assets/images/tools/mua_3.png)
 
+### 视频云MCP工具（Vod MCP Tool）
 
+`vod_tools`允许Agent通过调用火山引擎的视频云MCP来进行视频剪辑处理，详情请参考[VOD MCP Server](https://github.com/volcengine/mcp-server/blob/main/server/mcp_server_vod/README_zh.md)
+
+!!! warning "使用 `vod_tools` 的附加要求"
+    1. 需要配置火山引擎 AK、SK
+    2. （可选）可以配置`TOOL_VOD_GROUPS`选择多样化的视频剪辑能力。可选范围为：
+        - `edit`:视频剪辑相关tools
+        - `intelligent_slicing`: 智能切片相关tools
+        - `intelligent_matting`: 智能抠图相关tools
+        - `subtitle_processing`: 字幕处理相关tools
+        - `audio_processing`: 音频处理相关tools
+        - `video_enhancement`: 视频增强相关tools
+        - `upload`: 上传相关
+        - `video_play`: 视频播放相关
+    3. （可选）工具连接超时时长`TOOL_VOD_TIMEOUT`，默认为10秒
+    - 注：如果需要多个工具组，请使用逗号进行连接，如果不进行配置，则默认为`edit,video_play`
+    - 注：视频云工具不支持Space的创建，请在火山视频云控制台提前创建[视频云空间](https://console.volcengine.com/vod/region:vod+cn-north-1/overview/)
+
+
+=== "Python"
+
+    ```python
+    import asyncio
+    from veadk import Agent, Runner
+    from veadk.tools.builtin_tools.vod import vod_tools
+    agent = Agent(tools=[vod_tools])
+    runner = Runner(agent)
+    result = asyncio.run(
+        runner.run(
+            messages="将这两个视频合并:<your-url1>, <your-url2>, space_name为<your-space-name",
+        )
+    )
+    print(result)
+    ```
+
+=== "环境变量"
+
+    必须配置在环境变量的配置项：
+
+    - `VOLCENGINE_ACCESS_KEY`：  火山引擎的AccessKey
+    - `VOLCENGINE_SECRET_KEY`：  火山引擎的SecretKey
+
+    可选环境变量
+    - TOOL_VOD_GROUPS: 配置能力组
+    - TOOL_VOD_TIMEOUT: 工具连接超时时长, 默认为10.0秒
+
+    或在 `config.yaml` 中定义：
+
+    ```yaml title="config.yaml"
+    model:
+      agent:
+        provider: openai
+        name: doubao-seed-1-6-250615
+        api_base: https://ark.cn-beijing.volces.com/api/v3/
+        api_key: your-api-key-here
+    volcengine:
+      access_key: you-access-key-here
+      secret_key: you-secret-key-here
+    tool:
+      vod: 
+        groups: xxxxx
+        timeout: 10.0
+    ```
+
+输出结果：
+```text
+已成功将两个视频合并，合并后的视频信息如下：
+- **播放地址**：<url>
+- **视频时长**：x秒 
+- **分辨率**：xxxxx
+- **文件名称**：xxxxx.mp4  
+（注：播放地址有效期为60分钟，若过期可重新生成）
+```
+
+注：有些视频编辑任务可能时间开销较大，该类任务会直接返回一个task_id，可以继续询问agent，让其查询task是否完成，从而获得任务后续。
 
 ## 系统工具
 
@@ -414,7 +680,7 @@ veADK 集成了以下火山引擎工具：
 
 ### AgentKit 沙箱工具（Tools）
 
-   AgentKit 沙箱工具提供了多种智能体在执行任务中需要的运行环境工具，支持快速集成与便捷调用，同时veADK提供了更多内置工具。
+   AgentKit 沙箱工具提供了多种智能体在执行任务中需要的运行环境工具，支持快速集成与便捷调用，同时VeADK提供了更多内置工具。
 一体化工具集包含 Browser、Terminal、Code 运行环境，支持自动根据任务切换。
    
 **创建沙箱** 按以下步骤操作：

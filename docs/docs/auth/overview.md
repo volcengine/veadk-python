@@ -73,9 +73,9 @@ A: Agent Identity 会自动处理：
 
 ## 后续步骤
 
-- [使用 API Key 进行出站认证](./2.api-key-outbound.md)
-- [使用 OAuth2 M2M 进行出站认证](./3.oauth2-m2m-outbound.md)
-- [使用 OAuth2 USER_FEDERATION 进行出站认证](./4.oauth2-user-federation-outbound.md)
+- [使用 API Key 进行出站认证](./api-key-outbound.md)
+- [使用 OAuth2 M2M 进行出站认证](./oauth2-m2m-outbound.md)
+- [使用 OAuth2 USER_FEDERATION 进行出站认证](./oauth2-user-federation-outbound.md)
 
 ## 相关资源
 
@@ -93,5 +93,5 @@ A: Agent Identity 会自动处理：
 如有问题，请：
 
 1. 查看相应文档的常见问题部分
-2. 查看 [Agent Identity 官方文档](https://www.volcengine.com/docs/86848/1913964)
+2. 查看 [Agent Identity 官方文档](https://www.volcengine.com/docs/86848/2080920?lang=zh)
 3. 联系火山引擎技术支持
