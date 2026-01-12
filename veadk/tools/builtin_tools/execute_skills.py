@@ -130,12 +130,12 @@ def execute_skills(
     if skills:
         cmd.extend(["--skills"] + skills)
 
-    skill_space_name = os.getenv("SKILL_SPACE_NAME", "")
-    if not skill_space_name:
-        logger.warning("SKILL_SPACE_NAME environment variable is not set")
+    skill_space_id = os.getenv("SKILL_SPACE_ID", "")
+    if not skill_space_id:
+        logger.warning("SKILL_SPACE_ID environment variable is not set")
 
     env_vars = {
-        "SKILL_SPACE_NAME": skill_space_name,
+        "SKILL_SPACE_ID": skill_space_id,
         "TOOL_USER_SESSION_ID": tool_user_session_id,
     }
 
