@@ -315,8 +315,6 @@ class Agent(LlmAgent):
             edit_file_tool,
             read_file_tool,
             write_file_tool,
-            edit_file_tool,
-            bash_tool,
             register_skills_tool,
         )
 
