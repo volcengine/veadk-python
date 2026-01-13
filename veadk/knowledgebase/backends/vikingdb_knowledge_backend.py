@@ -136,14 +136,6 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
     def model_post_init(self, __context: Any) -> None:
         self._set_service_info()
 
-        self._viking_sdk_client = VikingKnowledgeBaseService(
-            host=self.host,
-            ak=self.volcengine_access_key,
-            sk=self.volcengine_secret_key,
-            sts_token=self.session_token,
-            scheme=self.schema,
-        )
-
         self.precheck_index_naming()
 
         # check whether collection exist, if not, create it
@@ -552,6 +544,16 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             "chunk_diffusion_count": chunk_diffusion_count,
         }
 
+        self._set_service_info()
+
+        self._viking_sdk_client = VikingKnowledgeBaseService(
+            host=self.host,
+            ak=self.volcengine_access_key,
+            sk=self.volcengine_secret_key,
+            sts_token=self.session_token,
+            scheme=self.schema,
+        )
+
         response = self._viking_sdk_client.search_knowledge(
             collection_name=self.index,
             project=self.volcengine_project,
@@ -605,6 +607,8 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         method: Literal["GET", "POST", "PUT", "DELETE"] = "POST",
     ) -> dict:
         full_path = f"{self.base_url}{path}"
+
+        self._set_service_info()
 
         request = build_vikingdb_knowledgebase_request(
             path=path,
