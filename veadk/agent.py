@@ -302,13 +302,13 @@ class Agent(LlmAgent):
             load_skills_from_directory,
             load_skills_from_cloud,
         )
-        from veadk.tools.builtin_tools.playwright import playwright_tools
         from veadk.tools.skills_tools import (
             SkillsTool,
             read_file_tool,
             write_file_tool,
             edit_file_tool,
             bash_tool,
+            register_skills_tool,
         )
 
         skills: Dict[str, Skill] = {}
@@ -336,7 +336,7 @@ class Agent(LlmAgent):
             self.tools.append(write_file_tool)
             self.tools.append(edit_file_tool)
             self.tools.append(bash_tool)
-            self.tools.append(playwright_tools)
+            self.tools.append(register_skills_tool)
 
     async def _run(
         self,

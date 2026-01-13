@@ -92,7 +92,7 @@ def get_session_path(session_id: str) -> Path:
         f"Auto-initializing with default /skills. "
         f"Install SkillsPlugin for custom skills directories."
     )
-    return initialize_session_path(session_id, "/skills")
+    return initialize_session_path(session_id)
 
 
 def clear_session_cache(session_id: str | None = None) -> None:
