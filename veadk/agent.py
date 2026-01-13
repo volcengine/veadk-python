@@ -309,13 +309,13 @@ class Agent(LlmAgent):
             load_skills_from_cloud,
             load_skills_from_directory,
         )
-        from veadk.tools.builtin_tools.playwright import playwright_tools
         from veadk.tools.skills_tools import (
             SkillsTool,
             bash_tool,
             edit_file_tool,
             read_file_tool,
             write_file_tool,
+            register_skills_tool,
         )
 
         skills: Dict[str, Skill] = {}
@@ -343,7 +343,7 @@ class Agent(LlmAgent):
             self.tools.append(write_file_tool)
             self.tools.append(edit_file_tool)
             self.tools.append(bash_tool)
-            self.tools.append(playwright_tools)
+            self.tools.append(register_skills_tool)
 
     def _prepare_tracers(self):
         enable_apmplus_tracer = os.getenv("ENABLE_APMPLUS", "false").lower() == "true"
