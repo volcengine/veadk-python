@@ -15,6 +15,7 @@
 from .bash_tool import bash_tool
 from .file_tool import edit_file_tool, read_file_tool, write_file_tool
 from .skills_tool import SkillsTool
+from .register_skills_tool import register_skills_tool
 from .session_path import initialize_session_path, get_session_path, clear_session_cache
 
 
@@ -23,6 +24,7 @@ __all__ = [
     "edit_file_tool",
     "read_file_tool",
     "write_file_tool",
+    "register_skills_tool",
     "SkillsTool",
     "initialize_session_path",
     "get_session_path",

@@ -14,7 +14,6 @@
 
 import json
 import os
-from typing import Optional, List
 
 from google.adk.tools import ToolContext
 
@@ -69,7 +68,6 @@ def _format_execution_result(result_str: str) -> str:
 
 def execute_skills(
     workflow_prompt: str,
-    skills: Optional[List[str]] = None,
     tool_context: ToolContext = None,
 ) -> str:
     """execute skills in a code sandbox and return the output.
@@ -77,7 +75,6 @@ def execute_skills(
 
     Args:
         workflow_prompt (str): instruction of workflow
-        skills (Optional[List[str]]): The skills will be invoked
 
     Returns:
         str: The output of the code execution.
@@ -127,8 +124,6 @@ def execute_skills(
         logger.debug("Successfully get AK/SK from tool context.")
 
     cmd = ["python", "agent.py", workflow_prompt]
-    if skills:
-        cmd.extend(["--skills"] + skills)
 
     skill_space_id = os.getenv("SKILL_SPACE_ID", "")
     if not skill_space_id:
