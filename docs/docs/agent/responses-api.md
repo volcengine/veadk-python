@@ -22,6 +22,8 @@ Responses API 是火山方舟最新推出的 API 接口，原生支持高效的�
 
 ### 快速开始
 
+**开启 Responses API**
+
 只需配置 `enable_responses=True` 即可。
 
 ```python hl_lines="4"
@@ -33,61 +35,12 @@ root_agent = Agent(
 
 ```
 
-### 效果展示
+**效果展示**
 
 ![responses-api](../assets/images/agents/responses_api.png)
 
-## 注意事项
 
-1. **版本要求**：必须保证 `google-adk>=1.21.0`。
-2. **模型支持**：请确保使用的模型支持 Responses API（注：Doubao 系列模型 0615 版本之后，除特殊说明外均支持）。
-3. **缓存机制**：VeADK 开启 Responses API 并使用火山方舟模型时默认开启上下文缓存（Session 缓存）。但若在 Agent 中设置了 `output_schema`，因该字段与缓存机制冲突，系统将自动关闭缓存。
-
-## 上下文缓存
-
-在 Responses API 模式下，VeADK 默认开启会话缓存（Session Caching）。该机制会自动存储初始上下文信息，并在每一轮对话中动态更新。在后续请求中，系统会将缓存内容与新输入合并后发送给模型推理。此功能特别适用于多轮对话、复杂工具调用等长上下文场景。
-
-### 缓存信息查看
-
-您可以通过返回的 `Event.usage_metadata` 字段查看 Token 使用及缓存命中情况。
-
-以下是一次包含两轮对话的 `usage_metadata` 示例：
-
-```json
-{"cached_content_token_count":0,"candidates_token_count":87,"prompt_token_count":210,"total_token_count":297}
-{"cached_content_token_count":297,"candidates_token_count":181,"prompt_token_count":314,"total_token_count":495}
-```
-
-**字段说明：**
-
-- `cached_content_token_count`：命中缓存的 Token 数量（即从缓存中读取的 Token 数）。
-- `candidates_token_count`：模型生成的 Token 数量（输出 Token）。
-- `prompt_token_count`：输入给模型的总 Token 数量（包含已缓存和未缓存部分）。
-- `total_token_count`：总消耗 Token 数量（输入 + 输出）。
-
-**缓存机制说明：**
-
-- 缓存仅影响输入（Prompt）Token，不影响输出（Completion）Token。
-- **缓存命中率**反映了缓存策略的有效性，命中率越高，Token 成本节省越多。
-  - 计算公式：`缓存命中率 = (cached_content_token_count / prompt_token_count) × 100%`
-- 输入 Token 成本节约率：用于量化整个会话的缓存收益，是面向业务侧的核心指标，支持会话级汇总计算。
-
-### 成本节省示例
-
-基于上述样例数据，缓存命中率计算如下：
-
-- **第一轮对话**：0%（初始状态，无缓存）
-- **第二轮对话**：`297 / 314 * 100% ≈ 94.58%`
-
-输入 Token 成本节约率：`(0 + 297) / (210 + 314) ≈ 56.68%`
-
-这意味着在开启缓存后，该次会话的 **输入 Token 缓存命中率达到了 56.68%**，大幅减少了重复内容的计算开销。
-[火山方舟：缓存Token计费说明](https://www.volcengine.com/docs/82379/1544106?lang=zh)
-
-注：第N轮的`cached_content_token_count`不一定等于第N-1轮的`total_token_count`，如果开启了thinking，二者不等。
-
-
-## 多模态能力支持
+### 多模态能力支持
 
 Responses API 除文本交互外，还具备图片、视频和文件等多模态理解能力。
 您可以使用 `google.genai.types.FileData` 字段传递多模态数据（如图片路径、视频 URL、Files API 生成的 file_id 等）。
@@ -110,7 +63,7 @@ Responses API 除文本交互外，还具备图片、视频和文件等多模态
         - 支持传入 Base64 编码的数据。
         - 参考：[火山方舟：图片理解-Base64编码](https://www.volcengine.com/docs/82379/1362931?lang=zh#477e51ce)
 
-### 样例代码
+#### 样例代码
 
 **注**：以下所有示例代码均基于下述 `Agent` 配置与 `main` 函数：
 
@@ -155,7 +108,7 @@ async def main(message: types.Content):
 ```
 
 
-### 图片理解
+#### 图片理解
 
 === "本地路径"
 
@@ -229,7 +182,7 @@ async def main(message: types.Content):
 
 
 
-### 视频理解
+#### 视频理解
 
 === "Files API"
 
@@ -289,7 +242,7 @@ async def main(message: types.Content):
     ```
 
 
-### 文档理解
+#### 文档理解
 
 部分模型支持处理 PDF 格式的文档，系统会通过视觉功能理解整个文档的上下文。
 当传入 PDF 文档时，大模型会将文件分页处理成多张图片，分析解读其中的文本与图片信息，并结合这些信息完成文档理解任务。
@@ -339,6 +292,55 @@ async def main(message: types.Content):
     )
     ```
 
+## 上下文缓存
+
+在 Responses API 模式下，VeADK 默认开启会话缓存（Session Caching）。该机制会自动存储初始上下文信息，并在每一轮对话中动态更新。在后续请求中，系统会将缓存内容与新输入合并后发送给模型推理。此功能特别适用于多轮对话、复杂工具调用等长上下文场景。
+
+### 缓存信息查看
+
+您可以通过返回的 `Event.usage_metadata` 字段查看 Token 使用及缓存命中情况。
+
+以下是一次包含两轮对话的 `usage_metadata` 示例：
+
+```json
+{"cached_content_token_count":0,"candidates_token_count":87,"prompt_token_count":210,"total_token_count":297}
+{"cached_content_token_count":297,"candidates_token_count":181,"prompt_token_count":314,"total_token_count":495}
+```
+
+**字段说明：**
+
+- `cached_content_token_count`：命中缓存的 Token 数量（即从缓存中读取的 Token 数）。
+- `candidates_token_count`：模型生成的 Token 数量（输出 Token）。
+- `prompt_token_count`：输入给模型的总 Token 数量（包含已缓存和未缓存部分）。
+- `total_token_count`：总消耗 Token 数量（输入 + 输出）。
+
+**缓存机制说明：**
+
+- 缓存仅影响输入（Prompt）Token，不影响输出（Completion）Token。
+- **缓存命中率**反映了缓存策略的有效性，命中率越高，Token 成本节省越多。
+  - 计算公式：`缓存命中率 = (cached_content_token_count / prompt_token_count) × 100%`
+- 输入 Token 成本节约率：用于量化整个会话的缓存收益，是面向业务侧的核心指标，支持会话级汇总计算。
+
+### 成本节省示例
+
+基于上述样例数据，缓存命中率计算如下：
+
+- **第一轮对话**：0%（初始状态，无缓存）
+- **第二轮对话**：`297 / 314 * 100% ≈ 94.58%`
+
+输入 Token 成本节约率：`(0 + 297) / (210 + 314) ≈ 56.68%`
+
+这意味着在开启缓存后，该次会话的 **输入 Token 缓存命中率达到了 56.68%**，大幅减少了重复内容的计算开销。
+[火山方舟：缓存Token计费说明](https://www.volcengine.com/docs/82379/1544106?lang=zh)
+
+注：第N轮的`cached_content_token_count`不一定等于第N-1轮的`total_token_count`，如果开启了thinking，二者不等。
+
+
+## 注意事项
+
+1. **版本要求**：必须保证 `google-adk>=1.21.0`。
+2. **模型支持**：请确保使用的模型支持 Responses API（注：Doubao 系列模型 0615 版本之后，除特殊说明外均支持）。
+3. **缓存机制**：VeADK 开启 Responses API 并使用火山方舟模型时默认开启上下文缓存（Session 缓存）。但若在 Agent 中设置了 `output_schema`，因该字段与缓存机制冲突，系统将自动关闭缓存。
 
 
 ## 参考文档

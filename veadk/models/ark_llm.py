@@ -16,6 +16,7 @@
 
 import base64
 import json
+import time
 from typing import Any, Dict, Union, AsyncGenerator, Tuple, List, Optional, Literal
 from typing_extensions import override
 
@@ -50,6 +51,7 @@ from volcenginesdkarkruntime.types.responses.response_input_param import (
     EasyInputMessageParam,
     FunctionCallOutput,
 )
+from volcenginesdkarkruntime._exceptions import ArkBadRequestError
 
 from veadk.config import settings
 from veadk.consts import DEFAULT_VIDEO_MODEL_API_BASE
@@ -441,10 +443,12 @@ def get_model_without_provider(request_data: dict) -> dict:
 
 
 def filtered_inputs(
-    inputs: List[ResponseInputItemParam],
+    inputs: List[ResponseInputItemParam], previous_response_id: Optional[str] = None
 ) -> List[ResponseInputItemParam]:
     # Keep the first message and all consecutive user messages from the end
     # Collect all consecutive user messages from the end
+    if previous_response_id is None:
+        return inputs
     new_inputs = []
     for m in reversed(inputs):  # Skip the first message
         if m.get("type") == "function_call_output" or m.get("role") == "user":
@@ -477,12 +481,22 @@ def request_reorganization_by_ark(request_data: Dict) -> Dict:
     request_data = get_model_without_provider(request_data)
 
     # 2. filtered input
-    request_data["input"] = filtered_inputs(request_data["input"])
+    request_data["input"] = filtered_inputs(
+        request_data.get("input"),
+        previous_response_id=request_data.get("previous_response_id", None),
+    )
 
     # 3. filter not support data
     request_data = {
         key: value for key, value in request_data.items() if key in ark_supported_fields
     }
+
+    # expire time 1 hour when send aresponses req
+    extra_body = request_data.get("extra_body")
+    if not isinstance(extra_body, dict):
+        extra_body = {}
+        request_data["extra_body"] = extra_body
+    extra_body["expire_at"] = int(time.time()) + 3600
 
     # [Note: Ark Limitations] caching and text
     # After enabling caching, output_schema(text) cannot be used. Caching must be disabled.
@@ -625,7 +639,7 @@ def ark_response_to_generate_content_response(
 
 
 class ArkLlmClient:
-    async def aresponse(
+    async def aresponses(
         self, **kwargs
     ) -> Union[ArkTypeResponse, AsyncStream[ResponseStreamEvent]]:
         # 1. Get request params
@@ -706,18 +720,55 @@ class ArkLlm(Gemini):
 
         if generation_params:
             responses_args.update(generation_params)
-        responses_args = request_reorganization_by_ark(responses_args)
+        try:
+            async for llm_response in self.generate_content_via_responses(
+                responses_args.copy(), stream=stream
+            ):
+                yield llm_response
+        except ArkBadRequestError as e:
+            # Check if it is PreviousResponseNotFound
+            is_expired = False
+            if hasattr(e, "body") and isinstance(e.body, dict):
+                if e.body.get("code") == "InvalidParameter.PreviousResponseNotFound":
+                    is_expired = True
 
+            if is_expired:
+                logger.warning(
+                    f"Interaction expired (PreviousResponseNotFound). Retrying without previous_response_id. Error: {e}"
+                )
+                # Remove previous_response_id
+                if "previous_response_id" in responses_args:
+                    del responses_args["previous_response_id"]
+                # Retry
+                try:
+                    async for llm_response in self.generate_content_via_responses(
+                        responses_args.copy(), stream=stream
+                    ):
+                        yield llm_response
+                except Exception as retry_e:
+                    logger.error(f"Retry failed in generate_content_async: {retry_e}")
+                    raise retry_e
+            else:
+                logger.error(f"Error in generate_content_async: {e}")
+                raise e
+        except Exception as e:
+            logger.error(f"Error in generate_content_async: {e}")
+            raise e
+
+    async def generate_content_via_responses(
+        self, responses_args: dict, stream: bool = False
+    ):
+        responses_args = request_reorganization_by_ark(responses_args)
         if stream:
             responses_args["stream"] = True
-            async for part in await self.llm_client.aresponse(**responses_args):
+            async for part in await self.llm_client.aresponses(**responses_args):
                 llm_response = event_to_generate_content_response(
                     event=part, is_partial=True, model_version=self.model
                 )
                 if llm_response:
                     yield llm_response
         else:
-            raw_response = await self.llm_client.aresponse(**responses_args)
+            raw_response = await self.llm_client.aresponses(**responses_args)
             llm_response = ark_response_to_generate_content_response(raw_response)
             yield llm_response
 
