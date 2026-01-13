@@ -1,6 +1,6 @@
 [project]
 name = "veadk-python"
-version = "0.5.1"
+version = "0.5.5"
 description = "Volcengine agent development kit, integrations with Volcengine cloud services."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,20 +13,19 @@ authors = [
 ]
 dependencies = [
     "pydantic-settings==2.10.1", # Config management
-    "a2a-sdk==0.3.7", # For Google Agent2Agent protocol
+    "a2a-sdk>=0.3.7", # For Google Agent2Agent protocol
     "deprecated==1.2.18",
-    "google-adk==1.19.0", # For basic agent architecture
-    "litellm==1.74.3", # For model inference
+    "google-adk>=1.19.0", # For basic agent architecture
+    "litellm>=1.74.3", # For model inference
     "loguru==0.7.3", # For better logging
     "opentelemetry-exporter-otlp==1.37.0",
     "opentelemetry-instrumentation-logging>=0.56b0",
     "wrapt==1.17.2", # For patching built-in functions
-    "openai<1.100", # For fix https://github.com/BerriAI/litellm/issues/13710
-    "volcengine-python-sdk==4.0.33", # For Volcengine API
-    "volcengine==1.0.193", # For Volcengine sign
+    "volcengine-python-sdk>=5.0.1", # For Volcengine API
+    "volcengine>=1.0.193", # For Volcengine sign
     "agent-pilot-sdk==0.1.2", # Prompt optimization by Volcengine AgentPilot/PromptPilot toolkits
-    "fastmcp==2.12.3", # For running MCP
-    "trustedmcp==0.0.4", # For running TrustedMCP
+    "fastmcp>=2.12.3", # For running MCP
+    "trustedmcp==0.0.5", # For running TrustedMCP
     "cookiecutter==2.6.0", # For cloud deploy
     "omegaconf==2.3.0", # For agent builder
     "llama-index==0.14.0",
@@ -34,13 +33,14 @@ dependencies = [
     "llama-index-llms-openai-like==0.5.1",
     "llama-index-vector-stores-opensearch==0.6.1",
     "psycopg2-binary==2.9.10", # For PostgreSQL database (short term memory)
-    "asyncpg==0.29.0", # For async PostgreSQL database (short term memory)
+    "asyncpg>=0.29.0", # For async PostgreSQL database (short term memory)
     "pymysql==1.1.1", # For MySQL database (short term memory)
     "aiomysql==0.3.2", # For async MySQL database (short term memory)
     "opensearch-py==2.8.0",
     "filetype==1.2.0",
-    "vikingdb-python-sdk==0.1.3",
-    "agentkit-sdk-python>=0.2.0"
+    "vikingdb-python-sdk>=0.1.3",
+    "agentkit-sdk-python>=0.2.0",
+    "python-frontmatter==1.1.0",
 ]
 
 [project.scripts]
@@ -51,6 +51,7 @@ extensions = [
     "redis>=5.0",                 # For Redis database
     "tos>=2.8.4",                   # For TOS storage and Viking DB
     "llama-index-vector-stores-redis>=0.6.1",
+    "cozeloop>=0.1.21", #For Cozeloop Prompt manager
 ]
 database = [
     "redis>=5.0",                 # For Redis database

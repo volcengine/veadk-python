@@ -142,4 +142,4 @@ veadk web
 
 交互界面如图：
 
-![veadk交互界面](../assets/images/overview/veadk-web.png)
+![veadk交互界面](./assets/images/overview/veadk-web.png)

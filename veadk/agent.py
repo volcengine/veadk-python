@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import os
-from typing import Optional, Union, AsyncGenerator
+from typing import Dict, Optional, Union
 
 # If user didn't set LITELLM_LOCAL_MODEL_COST_MAP, set it to True
 # to enable local model cost map.
@@ -24,12 +24,13 @@ from typing import Optional, Union, AsyncGenerator
 if not os.getenv("LITELLM_LOCAL_MODEL_COST_MAP"):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
-from google.adk.agents import LlmAgent, RunConfig, InvocationContext
+import uuid
+
+from google.adk.agents import LlmAgent, RunConfig
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.context_cache_config import ContextCacheConfig
 from google.adk.agents.llm_agent import InstructionProvider, ToolUnion
 from google.adk.agents.run_config import StreamingMode
-from google.adk.events import Event, EventActions
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.runners import Runner
 from google.genai import types
@@ -54,7 +55,6 @@ from veadk.prompts.prompt_manager import BasePromptManager
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_asyncio, patch_tracer
-from veadk.utils.misc import check_litellm_version
 from veadk.version import VERSION
 from veadk.prompts.prompt_example import (
     ExampleTool,
@@ -90,10 +90,13 @@ class Agent(LlmAgent):
         short_term_memory (Optional[ShortTermMemory]): Session-based memory for temporary context.
         long_term_memory (Optional[LongTermMemory]): Cross-session memory for persistent user context.
         tracers (list[BaseTracer]): List of tracers used for telemetry and monitoring.
+        enable_authz (bool): Whether to enable agent authorization checks.
+        auto_save_session (bool): Whether to automatically save sessions to long-term memory.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()).split("-")[0])
     name: str = DEFAULT_AGENT_NAME
     description: str = DEFAULT_DESCRIPTION
     instruction: Union[str, InstructionProvider] = DEFAULT_INSTRUCTION
@@ -145,6 +148,10 @@ class Agent(LlmAgent):
 
     enable_authz: bool = False
 
+    auto_save_session: bool = False
+
+    skills: list[str] = Field(default_factory=list)
+
     examples: list[AgentExample] = Field(default_factory=list)
 
     def model_post_init(self, __context: Any) -> None:
@@ -174,9 +181,6 @@ class Agent(LlmAgent):
 
         if not self.model:
             if self.enable_responses:
-                min_version = "1.79.3"
-                check_litellm_version(min_version)
-
                 from veadk.models.ark_llm import ArkLlm
 
                 self.model = ArkLlm(
@@ -185,12 +189,6 @@ class Agent(LlmAgent):
                     api_base=self.model_api_base,
                     **self.model_extra_config,
                 )
-                if not self.context_cache_config:
-                    self.context_cache_config = ContextCacheConfig(
-                        cache_intervals=100,  # maximum number
-                        ttl_seconds=315360000,
-                        min_tokens=0,
-                    )
             else:
                 fallbacks = None
                 if isinstance(self.model_name, list):
@@ -265,6 +263,32 @@ class Agent(LlmAgent):
         if self.prompt_manager:
             self.instruction = self.prompt_manager.get_prompt
 
+        if self.auto_save_session:
+            if self.long_term_memory is None:
+                logger.warning(
+                    "auto_save_session is enabled, but long_term_memory is not initialized."
+                )
+            else:
+                from veadk.memory.save_session_callback import (
+                    save_session_to_long_term_memory,
+                )
+
+                if self.after_agent_callback:
+                    if isinstance(self.after_agent_callback, list):
+                        self.after_agent_callback.append(
+                            save_session_to_long_term_memory
+                        )
+                    else:
+                        self.after_agent_callback = [
+                            self.after_agent_callback,
+                            save_session_to_long_term_memory,
+                        ]
+                else:
+                    self.after_agent_callback = save_session_to_long_term_memory
+
+        if self.skills:
+            self.load_skills()
+
         if self.examples:
             adk_examples = _convert_to_adk_examples(self.examples)
             self.tools.append(ExampleTool(adk_examples))
@@ -274,30 +298,57 @@ class Agent(LlmAgent):
 
         logger.info(f"{self.__class__.__name__} `{self.name}` init done.")
         logger.debug(
-            f"Agent: {self.model_dump(include={'name', 'model_name', 'model_api_base', 'tools'})}"
+            f"Agent: {self.model_dump(include={'id', 'name', 'model_name', 'model_api_base', 'tools', 'skills'})}"
         )
 
-    async def _run_async_impl(
-        self, ctx: InvocationContext
-    ) -> AsyncGenerator[Event, None]:
-        if self.enable_responses:
-            if not ctx.context_cache_config:
-                ctx.context_cache_config = self.context_cache_config
+    def update_model(self, model_name: str):
+        logger.info(f"Updating model to {model_name}")
+        self.model = self.model.model_copy(
+            update={"model": f"{self.model_provider}/{model_name}"}
+        )
 
-        async for event in super()._run_async_impl(ctx):
-            yield event
-            if self.enable_responses and event.cache_metadata:
-                # for persistent short-term memory with response api
-                session_state_event = Event(
-                    invocation_id=event.invocation_id,
-                    author=event.author,
-                    actions=EventActions(
-                        state_delta={
-                            "response_id": event.cache_metadata.cache_name,
-                        }
-                    ),
+    def load_skills(self):
+        from pathlib import Path
+        from veadk.skills.skill import Skill
+        from veadk.skills.utils import (
+            load_skills_from_directory,
+            load_skills_from_cloud,
+        )
+        from veadk.tools.builtin_tools.playwright import playwright_tools
+        from veadk.tools.skills_tools import (
+            SkillsTool,
+            read_file_tool,
+            write_file_tool,
+            edit_file_tool,
+            bash_tool,
+        )
+
+        skills: Dict[str, Skill] = {}
+
+        for item in self.skills:
+            if not item or str(item).strip() == "":
+                continue
+            path = Path(item)
+            if path.exists() and path.is_dir():
+                for skill in load_skills_from_directory(path):
+                    skills[skill.name] = skill
+            else:
+                for skill in load_skills_from_cloud(item):
+                    skills[skill.name] = skill
+        if skills:
+            self.instruction += "\nYou have the following skills:\n"
+
+            for skill in skills.values():
+                self.instruction += (
+                    f"- name: {skill.name}\n- description: {skill.description}\n\n"
                 )
-                yield session_state_event
+
+            self.tools.append(SkillsTool(skills))
+            self.tools.append(read_file_tool)
+            self.tools.append(write_file_tool)
+            self.tools.append(edit_file_tool)
+            self.tools.append(bash_tool)
+            self.tools.append(playwright_tools)
 
     async def _run(
         self,

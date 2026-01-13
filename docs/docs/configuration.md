@@ -51,17 +51,20 @@ volcengine:
 
 统一前缀： `TOOL_`
 
-| 子类       | 环境变量名称           | 释义 |
-| ---------- | ---------------------- | ---- |
-| VeSearch   | `TOOL_VESEARCH_ENDPOINT` | 火山引擎搜索机器人 ID（bot_id） |
-|            | `TOOL_VESEARCH_API_KEY`  | 火山引擎搜索服务密钥 |
-| WebScraper | `TOOL_WEB_SCRAPER_ENDPOINT` | WebScraper 端点 |
-|            | `TOOL_WEB_SCRAPER_API_KEY`  | WebScraper 密钥（token） |
-| Lark       | `TOOL_LARK_ENDPOINT`    | Lark 应用 ID（app_id） |
+| 子类         | 环境变量名称           | 释义                    |
+|------------| ---------------------- |-----------------------|
+| VeSearch   | `TOOL_VESEARCH_ENDPOINT` | 火山引擎搜索机器人 ID（bot_id）  |
+|            | `TOOL_VESEARCH_API_KEY`  | 火山引擎搜索服务密钥            |
+| WebScraper | `TOOL_WEB_SCRAPER_ENDPOINT` | WebScraper 端点         |
+|            | `TOOL_WEB_SCRAPER_API_KEY`  | WebScraper 密钥（token）  |
+| Lark       | `TOOL_LARK_ENDPOINT`    | Lark 应用 ID（app_id）    |
 |            | `TOOL_LARK_API_KEY`     | Lark 应用密钥（app_secret） |
-|            | `TOOL_LARK_TOKEN`       | Lark 用户 token |
+|            | `TOOL_LARK_TOKEN`       | Lark 用户 token         |
 | LAS        | `TOOL_LAS_URL`          | LAS SSE 服务地址（含 token） |
-|            | `TOOL_LAS_DATASET_ID`   | LAS 数据集 ID |
+|            | `TOOL_LAS_DATASET_ID`   | LAS 数据集 ID            |
+| VOD        | `TOOL_VOD_GROUPS`   | 视频编辑能力组               |
+|            | `TOOL_VOD_TIMEOUT`   | VOD工具连接超时时长           |
+
 
 ### 数据库类
 
@@ -139,9 +142,13 @@ veidentity:
 | 名称 | 值 | 释义 |
 |------|----|------|
 | DEFAULT_AGENT_NAME | `veAgent` | Agent 的缺省名称 |
-| DEFAULT_MODEL_AGENT_NAME | `doubao-seed-1-6-250615` | Agent 的推理模型名称 |
-| DEFAULT_MODEL_AGENT_PROVIDER | `openai` | Agent 的推理模型提供商 |
+| DEFAULT_MODEL_AGENT_NAME | `doubao-seed-1-6-251015` | Agent 的推理模型名称 |
+| DEFAULT_MODEL_AGENT_PROVIDER | `openai` | Agent 的推理模型提供商，方舟平台兼容 openai 规范，因此使用方舟默认是 openai 即可 |
 | DEFAULT_MODEL_AGENT_API_BASE | `https://ark.cn-beijing.volces.com/api/v1/` | 模型 API 基础地址 |
+| DEFAULT_IMAGE_GENERATE_MODEL_NAME | `doubao-seedream-4-5-251128` | image_generate 工具默认使用的方舟生图模型 |
+| DEFAULT_IMAGE_GENERATE_MODEL_API_BASE | `https://ark.cn-beijing.volces.com/api/v3/` | image_generate 工具默认使用的方舟生图模型 API 基础地址 |
+| DEFAULT_VIDEO_MODEL_NAME | `doubao-seedance-1-5-pro-251215` | video_generate 工具默认使用的方舟视频生成模型 |
+| DEFAULT_VIDEO_MODEL_API_BASE | `https://ark.cn-beijing.volces.com/api/v3/` | video_generate 工具默认使用的方舟视频生成模型 API 基础地址 |
 | DEFAULT_APMPLUS_OTEL_EXPORTER_ENDPOINT | `http://apmplus-cn-beijing.volces.com:4317` | APMPlus OpenTelemetry Trace 导出地址 |
 | DEFAULT_APMPLUS_OTEL_EXPORTER_SERVICE_NAME | `veadk_tracing` | APMPlus 服务名 |
 | DEFAULT_COZELOOP_OTEL_EXPORTER_ENDPOINT | `https://api.coze.cn/v1/loop/opentelemetry/v1/traces` | CozeLoop OTEL Trace 上报地址 |
@@ -152,5 +159,5 @@ veidentity:
 | DEFAULT_CR_REPO_NAME | `veadk-user-repo` | 容器镜像仓库名称 |
 | DEFAULT_TLS_LOG_PROJECT_NAME | `veadk-logs` | TLS 日志项目名称 |
 | DEFAULT_TLS_TRACING_INSTANCE_NAME | `veadk-tracing` | TLS Tracing 实例名称 |
-| DEFAULT_TOS_BUCKET_NAME | `veadk-default-bucket` | 默认 TOS 存储桶名称 |
+| DEFAULT_TOS_BUCKET_NAME | `veadk-default-bucket` | 默认 TOS 存储桶名称，由于 TOS 存储桶全球唯一，因此强烈建议用户自定义存储桶名称，避免与其他用户冲突导致运行失败 |
 | DEFAULT_COZELOOP_SPACE_NAME | `VeADK Space` | CozeLoop 空间名称 |

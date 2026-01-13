@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import json
-import time
+import asyncio
 import traceback
 from typing import Dict, cast
 
@@ -41,14 +41,27 @@ client = Ark(
 )
 
 
-async def generate(prompt, first_frame_image=None, last_frame_image=None):
+async def generate(
+    prompt, first_frame_image=None, last_frame_image=None, generate_audio=None
+):
     try:
+        if generate_audio is False:
+            generate_audio = None
+        model_name = getenv("MODEL_VIDEO_NAME", DEFAULT_VIDEO_MODEL_NAME)
+
+        if model_name.startswith("doubao-seedance-1-0") and generate_audio:
+            logger.warning(
+                "The `doubao-seedance-1-0` series models do not support enabling the audio field. "
+                "Please upgrade to the doubao-seedance-1-5 series of you want to generate video with audio."
+            )
+            generate_audio = None
         if first_frame_image is None:
             response = client.content_generation.tasks.create(
                 model=getenv("MODEL_VIDEO_NAME", DEFAULT_VIDEO_MODEL_NAME),
                 content=[
                     {"type": "text", "text": prompt},
                 ],
+                generate_audio=generate_audio,
                 extra_headers={
                     "veadk-source": "veadk",
                     "veadk-version": VERSION,
@@ -112,7 +125,10 @@ async def generate(prompt, first_frame_image=None, last_frame_image=None):
 
 
 async def video_generate(
-    params: list, tool_context: ToolContext, batch_size: int = 10
+    params: list,
+    tool_context: ToolContext,
+    batch_size: int = 10,
+    max_wait_seconds: int = 1200,
 ) -> Dict:
     """
     Generate videos in **batch** from text prompts, optionally guided by a first/last frame,
@@ -126,6 +142,10 @@ async def video_generate(
             A list of video generation requests. Each item supports the fields below.
         batch_size (int):
             The number of videos to generate in a batch. Defaults to 10.
+        max_wait_seconds (int):
+            Maximum time in seconds to wait for all video tasks in each batch.
+            Default is 20 minutes (1200 seconds). When the timeout is reached,
+            unfinished tasks will be marked as timeout errors.
 
             Required per item:
                 - video_name (str):
@@ -147,6 +167,12 @@ async def video_generate(
                 - last_frame (str | None):
                     URL or Base64 string (data URL) for the **last frame** (role = `last_frame`).
                     Use when you want the clip to end on a specific image.
+
+                - generate_audio (bool | None):
+                    Boolean value, used to determine whether the generated video should have sound.
+                    If this field is not configured (None) or its value is `False`, no sound will be generated.
+                    If it is configured as `True`, sound can be generated.
+                    If you want to describe the sound content in detail, you can do so in the `prompt` field.
 
             Notes on first/last frame:
                 * When both frames are provided, **match width/height** to avoid cropping; if they differ,
@@ -222,6 +248,7 @@ async def video_generate(
     """
     success_list = []
     error_list = []
+    timeout_tasks = []
     logger.debug(f"Using model: {getenv('MODEL_VIDEO_NAME', DEFAULT_VIDEO_MODEL_NAME)}")
     logger.debug(f"video_generate params: {params}")
 
@@ -243,22 +270,32 @@ async def video_generate(
                 prompt = item["prompt"]
                 first_frame = item.get("first_frame", None)
                 last_frame = item.get("last_frame", None)
+                generate_audio = item.get("generate_audio", None)
                 try:
                     if not first_frame:
                         logger.debug(
                             f"video_generate task_{idx} text generation: prompt={prompt}"
                         )
-                        response = await generate(prompt)
+                        response = await generate(prompt, generate_audio=generate_audio)
                     elif not last_frame:
                         logger.debug(
                             f"video_generate task_{idx} first frame generation: prompt={prompt}, first_frame={first_frame}"
                         )
-                        response = await generate(prompt, first_frame)
+                        response = await generate(
+                            prompt,
+                            first_frame_image=first_frame,
+                            generate_audio=generate_audio,
+                        )
                     else:
                         logger.debug(
                             f"video_generate task_{idx} first and last frame generation: prompt={prompt}, first_frame={first_frame}, last_frame={last_frame}"
                         )
-                        response = await generate(prompt, first_frame, last_frame)
+                        response = await generate(
+                            prompt,
+                            first_frame_image=first_frame,
+                            last_frame_image=last_frame,
+                            generate_audio=generate_audio,
+                        )
                     logger.debug(
                         f"batch_{start_idx // batch_size} video_generate task_{idx} response: {response}"
                     )
@@ -269,6 +306,10 @@ async def video_generate(
                     continue
 
             logger.debug("begin query video_generate task status...")
+
+            sleep_interval = 10
+            max_sleep_times = max_wait_seconds // sleep_interval
+            sleep_times = 0
 
             while True:
                 task_list = list(task_dict.keys())
@@ -303,7 +344,23 @@ async def video_generate(
                         logger.debug(
                             f"{task_dict[task_id]} video_generate current status: {status}, Retrying after 10 seconds..."
                         )
-                time.sleep(10)
+                if sleep_times >= max_sleep_times:
+                    logger.error(
+                        f"video_generate polling timed out after {max_wait_seconds} seconds; remaining tasks: {task_dict}"
+                    )
+                    for task_id, video_name in task_dict.items():
+                        timeout_tasks.append(
+                            {
+                                "task_id": task_id,
+                                "video_name": video_name,
+                            }
+                        )
+                        error_list.append(video_name)
+                    task_dict.clear()
+                    break
+
+                await asyncio.sleep(sleep_interval)
+                sleep_times += 1
 
             add_span_attributes(
                 span,
@@ -324,6 +381,7 @@ async def video_generate(
             "status": "error",
             "success_list": success_list,
             "error_list": error_list,
+            "timeout_tasks": timeout_tasks,
         }
     else:
         logger.debug(
@@ -333,6 +391,7 @@ async def video_generate(
             "status": "success",
             "success_list": success_list,
             "error_list": error_list,
+            "timeout_tasks": timeout_tasks,
         }
 
 

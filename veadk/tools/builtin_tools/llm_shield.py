@@ -53,19 +53,18 @@ class LLMShieldPlugin(BasePlugin):
         ```
     """
 
-    def __init__(self, region: str = "cn-beijing", timeout: int = 50) -> None:
+    def __init__(self, timeout: int = 50) -> None:
         """
         Initialize the LLM Shield Plugin.
 
         Args:
-            region (str, optional): The service region. Defaults to "cn-beijing".
             timeout (int, optional): Request timeout in seconds. Defaults to 50.
         """
         self.name = "LLMShieldPlugin"
         super().__init__(name=self.name)
 
         self.appid = getenv("TOOL_LLM_SHIELD_APP_ID")
-        self.region = region
+        self.region = getenv("TOOL_LLM_SHIELD_REGION", "cn-beijing")
         self.timeout = timeout
         self.url = getenv(
             "TOOL_LLM_SHIELD_URL",
@@ -267,7 +266,8 @@ class LLMShieldPlugin(BasePlugin):
                 content=types.Content(
                     role="model",
                     parts=[types.Part(text=response)],
-                )
+                ),
+                partial=True,
             )
         return None
 
@@ -314,7 +314,8 @@ class LLMShieldPlugin(BasePlugin):
                 content=types.Content(
                     role="model",
                     parts=[types.Part(text=response)],
-                )
+                ),
+                partial=True,
             )
         return None
 

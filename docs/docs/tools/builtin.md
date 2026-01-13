@@ -5,18 +5,18 @@
 
 ## 使用方法
 
-1.  **导入**：从 `veadk.tools.builtin_tools` 模块导入所需工具。
-2.  **配置**：初始化工具并按需提供参数。
-3.  **注册**：将工具实例添加至 Agent 的 `tools` 列表。
+1. **导入**：从 `veadk.tools.builtin_tools` 模块导入所需工具。
+2. **配置**：初始化工具并按需提供参数。
+3. **注册**：将工具实例添加至 Agent 的 `tools` 列表。
 
 === "Python"
 
     ```python
     from veadk import Agent
-    from veadk.tools.builtin_tools.web_search import websearch
+    from veadk.tools.builtin_tools.web_search import web_search
     
     # 在 Agent 初始化时注册工具
-    # Agent(tools=[websearch], other_params...)
+    agent = Agent(tools=[web_search])
     ```
 
 === "Golang"
@@ -70,6 +70,7 @@ VeADK 集成了以下火山引擎工具：
 | `lark` | 集成[飞书开放能力](https://open.larkoffice.com/document/uAjLw4CM/ukTMukTMukTM/mcp_integration/mcp_installation)，实现文档处理、会话管理等。 | `from veadk.tools.builtin_tools.lark import lark` |
 | `las` | 基于[火山引擎 AI 多模态数据湖服务 LAS](https://www.volcengine.com/mcp-marketplace) 进行数据管理。 | `from veadk.tools.builtin_tools.las import las` |
 | `mobile_run` | 手机指令执行   | `from veadk.tools.builtin_tools.mobile_run import create_mobile_use_tool` |
+| `vod`      | 视频剪辑助手   | `from veadk.tools.builtin_tools.vod import vod_tools` |
 
 ### 公域搜索 (Web Search)
 
@@ -90,8 +91,6 @@ VeADK 集成了以下火山引擎工具：
     ```golang
     --8<-- "examples/tools/web_search/agent.go"
     ```
-
-
 
 === "环境变量"
 
@@ -480,9 +479,9 @@ VeADK 集成了以下火山引擎工具：
 
     必须配置在环境变量的配置项：
 
-    - `TOOL_LARK_ENDPOINT`：  用于 Agent 推理视频生成的模型名称
-    - `TOOL_LARK_API_KEY`：  用于 Agent 推理图像生成的模型名称
-    - `TOOL_LARK_TOKEN`：  用于 Agent 推理模型 API Key
+    - `TOOL_LARK_ENDPOINT`：  用于  Lark 服务的 Endpoint
+    - `TOOL_LARK_API_KEY`：  用于 Lark 服务的 API Key
+    - `TOOL_LARK_TOKEN`：  用于 Lark 服务的 OAuthToken
 
     环境变量列表：
     - `MODEL_AGENT_API_KEY`：  用于 Agent 推理模型 API Key
@@ -594,7 +593,82 @@ VeADK 集成了以下火山引擎工具：
 运行结果：
 ![img_2.png](../assets/images/tools/mua_3.png)
 
+### 视频云MCP工具（Vod MCP Tool）
 
+`vod_tools`允许Agent通过调用火山引擎的视频云MCP来进行视频剪辑处理，详情请参考[VOD MCP Server](https://github.com/volcengine/mcp-server/blob/main/server/mcp_server_vod/README_zh.md)
+
+!!! warning "使用 `vod_tools` 的附加要求"
+    1. 需要配置火山引擎 AK、SK
+    2. （可选）可以配置`TOOL_VOD_GROUPS`选择多样化的视频剪辑能力。可选范围为：
+        - `edit`:视频剪辑相关tools
+        - `intelligent_slicing`: 智能切片相关tools
+        - `intelligent_matting`: 智能抠图相关tools
+        - `subtitle_processing`: 字幕处理相关tools
+        - `audio_processing`: 音频处理相关tools
+        - `video_enhancement`: 视频增强相关tools
+        - `upload`: 上传相关
+        - `video_play`: 视频播放相关
+    3. （可选）工具连接超时时长`TOOL_VOD_TIMEOUT`，默认为10秒
+    - 注：如果需要多个工具组，请使用逗号进行连接，如果不进行配置，则默认为`edit,video_play`
+    - 注：视频云工具不支持Space的创建，请在火山视频云控制台提前创建[视频云空间](https://console.volcengine.com/vod/region:vod+cn-north-1/overview/)
+
+
+=== "Python"
+
+    ```python
+    import asyncio
+    from veadk import Agent, Runner
+    from veadk.tools.builtin_tools.vod import vod_tools
+    agent = Agent(tools=[vod_tools])
+    runner = Runner(agent)
+    result = asyncio.run(
+        runner.run(
+            messages="将这两个视频合并:<your-url1>, <your-url2>, space_name为<your-space-name",
+        )
+    )
+    print(result)
+    ```
+
+=== "环境变量"
+
+    必须配置在环境变量的配置项：
+
+    - `VOLCENGINE_ACCESS_KEY`：  火山引擎的AccessKey
+    - `VOLCENGINE_SECRET_KEY`：  火山引擎的SecretKey
+
+    可选环境变量
+    - TOOL_VOD_GROUPS: 配置能力组
+    - TOOL_VOD_TIMEOUT: 工具连接超时时长, 默认为10.0秒
+
+    或在 `config.yaml` 中定义：
+
+    ```yaml title="config.yaml"
+    model:
+      agent:
+        provider: openai
+        name: doubao-seed-1-6-250615
+        api_base: https://ark.cn-beijing.volces.com/api/v3/
+        api_key: your-api-key-here
+    volcengine:
+      access_key: you-access-key-here
+      secret_key: you-secret-key-here
+    tool:
+      vod: 
+        groups: xxxxx
+        timeout: 10.0
+    ```
+
+输出结果：
+```text
+已成功将两个视频合并，合并后的视频信息如下：
+- **播放地址**：<url>
+- **视频时长**：x秒 
+- **分辨率**：xxxxx
+- **文件名称**：xxxxx.mp4  
+（注：播放地址有效期为60分钟，若过期可重新生成）
+```
+
+注：有些视频编辑任务可能时间开销较大，该类任务会直接返回一个task_id，可以继续询问agent，让其查询task是否完成，从而获得任务后续。
 
 ## 系统工具
 

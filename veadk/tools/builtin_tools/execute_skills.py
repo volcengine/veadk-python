@@ -71,7 +71,6 @@ def execute_skills(
     workflow_prompt: str,
     skills: Optional[List[str]] = None,
     tool_context: ToolContext = None,
-    timeout: int = 900,
 ) -> str:
     """execute skills in a code sandbox and return the output.
     For C++ code, don't execute it directly, compile and execute via Python; write sources and object files to /tmp.
@@ -79,11 +78,11 @@ def execute_skills(
     Args:
         workflow_prompt (str): instruction of workflow
         skills (Optional[List[str]]): The skills will be invoked
-        timeout (int, optional): The timeout in seconds for the code execution, less than or equal to 900. Defaults to 900.
 
     Returns:
         str: The output of the code execution.
     """
+    timeout = 900  # The timeout in seconds for the code execution, less than or equal to 900. Defaults to 900. Hard-coded to prevent the Agent from adjusting this parameter.
 
     tool_id = getenv("AGENTKIT_TOOL_ID")
 
@@ -131,26 +130,12 @@ def execute_skills(
     if skills:
         cmd.extend(["--skills"] + skills)
 
-    # TODO: remove after agentkit supports custom environment variables setting
-    res = ve_request(
-        request_body={},
-        action="GetCallerIdentity",
-        ak=ak,
-        sk=sk,
-        service="sts",
-        version="2018-01-01",
-        region=region,
-        host="sts.volcengineapi.com",
-        header=header,
-    )
-    try:
-        account_id = res["Result"]["AccountId"]
-    except KeyError as e:
-        logger.error(f"Error occurred while getting account id: {e}, response is {res}")
-        return res
+    skill_space_id = os.getenv("SKILL_SPACE_ID", "")
+    if not skill_space_id:
+        logger.warning("SKILL_SPACE_ID environment variable is not set")
 
     env_vars = {
-        "TOS_SKILLS_DIR": f"tos://agentkit-platform-{account_id}/skills/",
+        "SKILL_SPACE_ID": skill_space_id,
         "TOOL_USER_SESSION_ID": tool_user_session_id,
     }
 
