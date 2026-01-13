@@ -12,24 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any
 
 from google.adk.examples.base_example_provider import BaseExampleProvider
 from google.adk.examples.example import Example as ADKExample
 from google.genai.types import Content, FunctionCall, Part
-from pydantic import BaseModel, Field
 from typing_extensions import override
 
-
-class ExampleFunctionCall(BaseModel):
-    function_name: str
-    arguments: dict[str, Any] = Field(default_factory=dict)
-
-
-class Example(BaseModel):
-    input: str
-    expected_output: str | None
-    expected_function_call: ExampleFunctionCall | None
+from veadk.examples.types import Example
 
 
 class InMemoryExampleStore(BaseExampleProvider):
