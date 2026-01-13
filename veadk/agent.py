@@ -56,11 +56,9 @@ from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_asyncio, patch_tracer
 from veadk.version import VERSION
-from veadk.prompts.prompt_example import (
-    ExampleTool,
-    _convert_to_adk_examples,
-    AgentExample,
-)
+from veadk.prompts.prompt_example import _convert_to_adk_examples, AgentExample
+from google.adk.tools import ExampleTool
+
 
 patch_tracer()
 patch_asyncio()
