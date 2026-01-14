@@ -152,7 +152,7 @@ class TrustedMcpSessionManager(MCPSessionManager):
                 else:
                     # Create a new session
                     logger.info("Initialize MCP session")
-                    return super().create_session(headers)
+                    return await super().create_session(headers)
             except Exception:
                 # If session creation fails, clean up the exit stack
                 if exit_stack:
