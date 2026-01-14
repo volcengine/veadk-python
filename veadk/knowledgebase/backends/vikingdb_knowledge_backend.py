@@ -160,6 +160,9 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             )
 
     def _get_tos_client(self, tos_bucket_name: str) -> VeTOS:
+        ak = None
+        sk = None
+        sts_token = None
         if not (self.volcengine_access_key and self.volcengine_secret_key):
             cred = self._set_service_info()
             ak = cred.access_key_id
@@ -543,6 +546,9 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             "chunk_diffusion_count": chunk_diffusion_count,
         }
 
+        ak = None
+        sk = None
+        sts_token = None
         if not (self.volcengine_access_key and self.volcengine_secret_key):
             cred = self._set_service_info()
             ak = cred.access_key_id
@@ -608,6 +614,9 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
     ) -> dict:
         full_path = f"{self.base_url}{path}"
 
+        ak = None
+        sk = None
+        sts_token = None
         if not (self.volcengine_access_key and self.volcengine_secret_key):
             cred = self._set_service_info()
             ak = cred.access_key_id
