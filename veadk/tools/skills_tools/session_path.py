@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import platform
 import tempfile
 from pathlib import Path
 from veadk.utils.logger import get_logger
@@ -47,7 +48,11 @@ def initialize_session_path(session_id: str) -> Path:
         return _session_path_cache[session_id]
 
     # Initialize new session path
-    base_path = Path(tempfile.gettempdir()) / "veadk"
+    if platform.system() in ("Linux", "Darwin"):  # Linux or macOS
+        base_path = Path("/tmp") / "veadk"
+    else:  # Windows
+        base_path = Path(tempfile.gettempdir()) / "veadk"
+
     session_path = base_path / session_id
 
     # Create working directories
@@ -56,8 +61,9 @@ def initialize_session_path(session_id: str) -> Path:
     (session_path / "outputs").mkdir(parents=True, exist_ok=True)
 
     # Cache and return
-    resolved_path = session_path.resolve()
+    resolved_path = session_path
     _session_path_cache[session_id] = resolved_path
+    logger.info(f"Initialized session path for {session_id}: {resolved_path}")
     return resolved_path
 
 

@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import os
-import tempfile
 from pathlib import Path
 from typing import Any, Dict
 
@@ -23,6 +22,7 @@ from google.adk.tools import BaseTool, ToolContext
 from google.genai import types
 
 from veadk.skills.skill import Skill
+from veadk.tools.skills_tools.session_path import get_session_path
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -102,9 +102,8 @@ class SkillsTool(BaseTool):
             return f"Error: Skill '{skill_name}' does not exist."
 
         skill = self.skills[skill_name]
-        skill_dir = (
-            Path(tempfile.gettempdir()) / "veadk" / tool_context.session.id / "skills"
-        )
+        working_dir = get_session_path(session_id=tool_context.session.id)
+        skill_dir = working_dir / "skills"
 
         if skill.skill_space_id:
             logger.info(f"Attempting to download skill '{skill_name}' from skill space")
