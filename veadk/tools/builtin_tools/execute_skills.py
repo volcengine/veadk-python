@@ -165,6 +165,7 @@ with open('/tmp/agent.log', 'w') as log_file:
         if time.time() - start_time > timeout:
             process.kill()
             log_file.write('log_type=stderr request_id=x function_id=y revision_number=1 Process timeout\\n')
+            print("Process timeout", end='', file=sys.stderr)
             break
             
         reads = [process.stdout.fileno(), process.stderr.fileno()]
@@ -176,23 +177,23 @@ with open('/tmp/agent.log', 'w') as log_file:
                 if line:
                     log_file.write(f'log_type=stdout request_id=x function_id=y revision_number=1 {{line}}')
                     log_file.flush()
+                    print(line, end='')
             if fd == process.stderr.fileno():
                 line = process.stderr.readline()
                 if line:
                     log_file.write(f'log_type=stderr request_id=x function_id=y revision_number=1 {{line}}')
                     log_file.flush()
+                    print(line, end='', file=sys.stderr)
         
         if process.poll() is not None:
             break
     
     for line in process.stdout:
         log_file.write(f'log_type=stdout request_id=x function_id=y revision_number=1 {{line}}')
+        print(line, end='')
     for line in process.stderr:
         log_file.write(f'log_type=stderr request_id=x function_id=y revision_number=1 {{line}}')
-
-with open('/tmp/agent.log', 'r') as log_file:
-    output = log_file.read()
-    print(output)
+        print(line, end='', file=sys.stderr)
     """
 
     res = ve_request(
