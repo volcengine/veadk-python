@@ -23,6 +23,7 @@ from veadk.consts import (
     DEFAULT_MODEL_AGENT_API_BASE,
     DEFAULT_MODEL_AGENT_NAME,
     DEFAULT_MODEL_AGENT_PROVIDER,
+    DEFAULT_MODEL_EMBEDDING_NAME,
 )
 
 
@@ -46,7 +47,7 @@ class ModelConfig(BaseSettings):
 class EmbeddingModelConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MODEL_EMBEDDING_")
 
-    name: str = "doubao-embedding-text-240715"
+    name: str = DEFAULT_MODEL_EMBEDDING_NAME
     """Model name for embedding."""
 
     dim: int = 2560

@@ -75,3 +75,5 @@ VEFAAS_IAM_CRIDENTIAL_PATH = "/var/run/secrets/iam/credential"
 
 DEFAULT_NACOS_GROUP = "VEADK_GROUP"
 DEFAULT_NACOS_INSTANCE_NAME = "veadk"
+
+DEFAULT_MODEL_EMBEDDING_NAME = "doubao-embedding-vision-250615"
