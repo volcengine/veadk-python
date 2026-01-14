@@ -137,8 +137,6 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
     _viking_sdk_client = None
 
     def model_post_init(self, __context: Any) -> None:
-        self._set_service_info()
-
         self.precheck_index_naming()
 
         # check whether collection exist, if not, create it
@@ -572,17 +570,31 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             post_processing=post_precessing,
         )
 
-        entries = []
-        for result in response.get("result_list", []):
-            doc_meta_raw_str = result.get("doc_info", {}).get("doc_meta")
-            doc_meta_list = json.loads(doc_meta_raw_str) if doc_meta_raw_str else []
-            metadata = {}
-            for meta in doc_meta_list:
-                metadata[meta["field_name"]] = meta["field_value"]
+        logger.debug(
+            f"Search knowledge {self.index} using project {self.volcengine_project} original response: {response}"
+        )
 
-            entries.append(
-                KnowledgebaseEntry(content=result.get("content", ""), metadata=metadata)
+        entries = []
+        if not response.get("result_list", []):
+            logger.warning(
+                f"Search knowledge {self.index} using project {self.volcengine_project} got empty response."
             )
+        else:
+            logger.debug(
+                f"Search knowledge {self.index} using project {self.volcengine_project} got {len(response.get('result_list', []))} results."
+            )
+            for result in response.get("result_list", []):
+                doc_meta_raw_str = result.get("doc_info", {}).get("doc_meta")
+                doc_meta_list = json.loads(doc_meta_raw_str) if doc_meta_raw_str else []
+                metadata = {}
+                for meta in doc_meta_list:
+                    metadata[meta["field_name"]] = meta["field_value"]
+
+                entries.append(
+                    KnowledgebaseEntry(
+                        content=result.get("content", ""), metadata=metadata
+                    )
+                )
 
         return entries
 
