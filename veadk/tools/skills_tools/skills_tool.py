@@ -111,6 +111,8 @@ class SkillsTool(BaseTool):
                 from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
                 from veadk.integrations.ve_tos.ve_tos import VeTOS
 
+                region = os.getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
+
                 access_key = os.getenv("VOLCENGINE_ACCESS_KEY")
                 secret_key = os.getenv("VOLCENGINE_SECRET_KEY")
                 session_token = ""
@@ -130,6 +132,7 @@ class SkillsTool(BaseTool):
                     sk=secret_key,
                     session_token=session_token,
                     bucket_name=tos_bucket,
+                    region=region,
                 )
 
                 save_path = skill_dir / f"{skill_name}.zip"

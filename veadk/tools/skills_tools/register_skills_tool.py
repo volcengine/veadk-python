@@ -121,6 +121,7 @@ def register_skills_tool(
             sk=secret_key,
             session_token=session_token,
             bucket_name=tos_bucket,
+            region=region,
         )
 
         object_key = (
