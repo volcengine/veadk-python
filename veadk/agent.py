@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import os
-from typing import Dict, Optional, Union
+from typing import Dict, Optional, Union, Literal
 
 # If user didn't set LITELLM_LOCAL_MODEL_COST_MAP, set it to True
 # to enable local model cost map.
@@ -145,6 +145,8 @@ class Agent(LlmAgent):
     auto_save_session: bool = False
 
     skills: list[str] = Field(default_factory=list)
+
+    skills_mode: Literal["skills_sandbox", "aio_sandbox", "local"] = "skills_sandbox"
 
     example_store: Optional[BaseExampleProvider] = None
 
@@ -309,14 +311,7 @@ class Agent(LlmAgent):
             load_skills_from_cloud,
             load_skills_from_directory,
         )
-        from veadk.tools.skills_tools import (
-            SkillsTool,
-            bash_tool,
-            edit_file_tool,
-            read_file_tool,
-            write_file_tool,
-            register_skills_tool,
-        )
+        from veadk.tools.skills_tools.skills_toolset import SkillsToolset
 
         skills: Dict[str, Skill] = {}
 
@@ -338,12 +333,14 @@ class Agent(LlmAgent):
                     f"- name: {skill.name}\n- description: {skill.description}\n\n"
                 )
 
-            self.tools.append(SkillsTool(skills))
-            self.tools.append(read_file_tool)
-            self.tools.append(write_file_tool)
-            self.tools.append(edit_file_tool)
-            self.tools.append(bash_tool)
-            self.tools.append(register_skills_tool)
+            if self.skills_mode not in ["skills_sandbox", "aio_sandbox", "local"]:
+                raise ValueError(
+                    f"Unsupported skill mode {self.skills_mode}, use `skills_sandbox`, `aio_sandbox` or `local` instead."
+                )
+
+            self.tools.append(SkillsToolset(skills, self.skills_mode))
+        else:
+            logger.warning("No skills loaded.")
 
     def _prepare_tracers(self):
         enable_apmplus_tracer = os.getenv("ENABLE_APMPLUS", "false").lower() == "true"

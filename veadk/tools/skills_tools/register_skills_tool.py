@@ -80,14 +80,13 @@ def register_skills_tool(
     try:
         from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 
-        service = os.getenv("AGENTKIT_TOOL_SERVICE_CODE", "agentkit")
+        agentkit_tool_service = os.getenv("AGENTKIT_TOOL_SERVICE_CODE", "agentkit")
+        agentkit_skill_host = os.getenv("AGENTKIT_SKILL_HOST", "open.volcengineapi.com")
         region = os.getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
-        host = os.getenv("AGENTKIT_SKILL_HOST", "open.volcengineapi.com")
 
         access_key = os.getenv("VOLCENGINE_ACCESS_KEY")
         secret_key = os.getenv("VOLCENGINE_SECRET_KEY")
         session_token = ""
-        region = os.getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
 
         if not (access_key and secret_key):
             cred = get_credential_from_vefaas_iam()
@@ -149,10 +148,10 @@ def register_skills_tool(
             action="CreateSkill",
             ak=access_key,
             sk=secret_key,
-            service=service,
+            service=agentkit_tool_service,
             version="2025-10-30",
             region=region,
-            host=host,
+            host=agentkit_skill_host,
             header={"X-Security-Token": session_token},
         )
 
