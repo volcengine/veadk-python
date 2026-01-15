@@ -24,6 +24,7 @@ from veadk.consts import (
     DEFAULT_MODEL_AGENT_NAME,
     DEFAULT_MODEL_AGENT_PROVIDER,
     DEFAULT_MODEL_EMBEDDING_NAME,
+    DEFAULT_MODEL_EMBEDDING_DIM,
 )
 
 
@@ -50,10 +51,10 @@ class EmbeddingModelConfig(BaseSettings):
     name: str = DEFAULT_MODEL_EMBEDDING_NAME
     """Model name for embedding."""
 
-    dim: int = 2560
+    dim: int = DEFAULT_MODEL_EMBEDDING_DIM
     """Embedding dim is different from different models."""
 
-    api_base: str = "https://ark.cn-beijing.volces.com/api/v3/"
+    api_base: str = DEFAULT_MODEL_AGENT_API_BASE
     """The api base of the model for embedding."""
 
     @cached_property

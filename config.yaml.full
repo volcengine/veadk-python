@@ -15,8 +15,8 @@ model:
     api_key: 
   # [optional] for knowledgebase
   embedding:
-    name: doubao-embedding-text-240715
-    dim: 2560
+    name: doubao-embedding-vision-250615
+    dim: 2048
     api_base: https://ark.cn-beijing.volces.com/api/v3/
     api_key:
   video:
