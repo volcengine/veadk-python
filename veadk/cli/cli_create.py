@@ -32,7 +32,7 @@ root_agent = Agent(
     name="root_agent",
     description="A helpful assistant for user questions.",
     instruction="Answer user questions to the best of your knowledge",
-    model_name="doubao-seed-1-8-251215", # <---- change model here
+    model_name="doubao-seed-1-8-251228", # <---- change model here
 )
 """
 
