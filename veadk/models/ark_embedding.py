@@ -108,7 +108,6 @@ class ArkEmbedding(BaseEmbedding):
             **kwargs,
         )
 
-        # 设置默认值
         if self.api_base is None:
             self.api_base = DEFAULT_MODEL_EMBEDDING_API_BASE
 
@@ -245,27 +244,21 @@ class ArkEmbedding(BaseEmbedding):
         return results
 
     def get_text_embedding(self, text: str) -> List[float]:
-        """公共接口：获取文本嵌入"""
         return self._get_text_embedding(text)
 
     async def aget_text_embedding(self, text: str) -> List[float]:
-        """公共接口：异步获取文本嵌入"""
         return await self._aget_text_embedding(text)
 
     def get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
-        """Public interface: batch text embedding"""
         return self._get_text_embeddings(texts)
 
     async def aget_text_embeddings(self, texts: List[str]) -> List[List[float]]:
-        """Public interface: async batch text embedding"""
         return await self._aget_text_embeddings(texts)
 
     def get_query_embedding(self, query: str) -> List[float]:
-        """Public interface: get query embedding"""
         return self._get_query_embedding(query)
 
     async def aget_query_embedding(self, query: str) -> List[float]:
-        """Public interface: async get query embedding"""
         return await self._aget_query_embedding(query)
 
     @classmethod
