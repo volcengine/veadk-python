@@ -70,8 +70,9 @@ def execute_skills(
     workflow_prompt: str,
     tool_context: ToolContext = None,
 ) -> str:
-    """execute skills in a code sandbox and return the output.
-    For C++ code, don't execute it directly, compile and execute via Python; write sources and object files to /tmp.
+    """Execute skills in a sandbox and return the output.
+
+    Execute skills in a remote sandbox amining to provide isolation and security.
 
     Args:
         workflow_prompt (str): instruction of workflow

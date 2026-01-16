@@ -39,14 +39,14 @@ class SkillsTool(BaseTool):
         self.skills = skills
 
         # Generate description with available skills embedded
-        description = self._generate_description_with_skills()
+        description = self._generate_description()
 
         super().__init__(
-            name="skills",
+            name="skills_tool",
             description=description,
         )
 
-    def _generate_description_with_skills(self) -> str:
+    def _generate_description(self) -> str:
         """Generate tool description with available skills embedded."""
         base_description = (
             "Execute a skill within the main conversation\n\n"
