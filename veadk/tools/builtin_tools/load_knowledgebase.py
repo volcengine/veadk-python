@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import json
+
 from google.adk.models.llm_request import LlmRequest
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.tool_context import ToolContext
@@ -23,6 +25,7 @@ from typing_extensions import override
 
 from veadk.knowledgebase import KnowledgeBase
 from veadk.knowledgebase.entry import KnowledgebaseEntry
+from veadk.tools.builtin_tools.load_kb_queries import load_profile
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -70,6 +73,34 @@ class LoadKnowledgebaseTool(FunctionTool):
         await super().process_llm_request(
             tool_context=tool_context, llm_request=llm_request
         )
+
+        index = self.knowledgebase.index
+        if self.knowledgebase.enable_profile:
+            from pathlib import Path
+
+            profile_names = []
+            profile_descriptions = []
+
+            with open(
+                f"./profiles/knowledgebase/profiles_{index}/profile_list.json",
+                "r",
+            ) as f:
+                profile_names = json.load(f)
+
+            for profile_name in profile_names:
+                profile_descriptions.append(
+                    load_profile(
+                        Path(
+                            f"./profiles/knowledgebase/profiles_{index}/profile_{profile_name}.json"
+                        ),
+                    )["description"]
+                )
+
+            profiles_text = "\n".join(
+                f"- profile_name: {name}\n  profile_description: {profile_descriptions[idx]}"
+                for idx, name in enumerate(profile_names)
+            )
+
         # Tell the model about the knowledgebase.
         llm_request.append_instructions(
             [
@@ -77,8 +108,21 @@ class LoadKnowledgebaseTool(FunctionTool):
 You have a knowledgebase (knowledegebase name is `{self.knowledgebase.name}`, knowledgebase description is `{self.knowledgebase.description}`). You can use it to answer questions. If any questions need
 you to look up the knowledgebase, you should call load_knowledgebase function with a query.
 """
-            ]
+            ],
         )
+
+        if self.knowledgebase.enable_profile:
+            llm_request.append_instructions(
+                [
+                    f"""
+The knowledgebase is divided into the following profiles: 
+
+{profiles_text}
+
+You should choose some profiles which are relevant to the user question. Before load the knowledgebase, you must call `load_kb_queries` to load the recommanded queries of the knowledgebase profiles. You should generate final knowledgebase queries based on the user question and recommanded queries.
+"""
+                ]
+            )
 
     async def load_knowledgebase(
         self, query: str, tool_context: ToolContext

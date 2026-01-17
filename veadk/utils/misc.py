@@ -217,3 +217,13 @@ async def upload_to_files_api(
         max_wait_seconds=max_wait_seconds,
     )
     return file.id
+
+
+def write_string_to_file(file_path: str, content: str):
+    dir_path = os.path.dirname(file_path)
+
+    if dir_path:
+        os.makedirs(dir_path, exist_ok=True)
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(content)
