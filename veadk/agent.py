@@ -246,7 +246,7 @@ class Agent(LlmAgent):
                 self.tools.append(load_kb_queries)
 
         if self.long_term_memory is not None:
-            from google.adk.tools.load_memory_tool import load_memory
+            from google.adk.tools import load_memory
 
             if hasattr(load_memory, "custom_metadata"):
                 if not load_memory.custom_metadata:
