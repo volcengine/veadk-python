@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Callable, Literal, Union
 
 from pydantic import BaseModel, Field
@@ -251,6 +250,7 @@ class KnowledgeBase(BaseModel):
             list[KnowledgebaseProfile]: A list of knowledgebase profiles.
         """
         import json
+        from pathlib import Path
 
         from veadk import Agent, Runner
         from veadk.utils.misc import write_string_to_file
