@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import os
-from typing import Dict, Optional, Union, Literal
+from typing import Dict, Literal, Optional, Union
 
 # If user didn't set LITELLM_LOCAL_MODEL_COST_MAP, set it to True
 # to enable local model cost map.
@@ -231,6 +231,13 @@ class Agent(LlmAgent):
             )
             self.tools.append(load_knowledgebase_tool)
 
+            if self.knowledgebase.enable_profile:
+                from veadk.tools.builtin_tools.load_kb_queries import (
+                    load_kb_queries,
+                )
+
+                self.tools.append(load_kb_queries)
+
         if self.long_term_memory is not None:
             from google.adk.tools import load_memory
 
@@ -333,7 +340,11 @@ class Agent(LlmAgent):
                     f"- name: {skill.name}\n- description: {skill.description}\n\n"
                 )
 
-            if self.skills_mode not in ["skills_sandbox", "aio_sandbox", "local"]:
+            if self.skills_mode not in [
+                "skills_sandbox",
+                "aio_sandbox",
+                "local",
+            ]:
                 raise ValueError(
                     f"Unsupported skill mode {self.skills_mode}, use `skills_sandbox`, `aio_sandbox` or `local` instead."
                 )
