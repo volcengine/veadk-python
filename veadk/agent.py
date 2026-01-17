@@ -120,9 +120,7 @@ class Agent(LlmAgent):
 
     context_cache_config: Optional[ContextCacheConfig] = None
 
-    run_processor: Optional[BaseRunProcessor] = Field(
-        default=None, exclude=True
-    )
+    run_processor: Optional[BaseRunProcessor] = Field(default=None, exclude=True)
     """Optional run processor for intercepting and processing agent execution flows.
 
     The run processor can be used to implement cross-cutting concerns such as:
@@ -148,9 +146,7 @@ class Agent(LlmAgent):
 
     skills: list[str] = Field(default_factory=list)
 
-    skills_mode: Literal["skills_sandbox", "aio_sandbox", "local"] = (
-        "skills_sandbox"
-    )
+    skills_mode: Literal["skills_sandbox", "aio_sandbox", "local"] = "skills_sandbox"
 
     example_store: Optional[BaseExampleProvider] = None
 
@@ -195,8 +191,7 @@ class Agent(LlmAgent):
                     if self.model_name:
                         model_name = self.model_name[0]
                         fallbacks = [
-                            f"{self.model_provider}/{m}"
-                            for m in self.model_name[1:]
+                            f"{self.model_provider}/{m}" for m in self.model_name[1:]
                         ]
                         logger.info(
                             f"Using primary model: {model_name}, with fallbacks: {self.model_name[1:]}"
@@ -237,6 +232,9 @@ class Agent(LlmAgent):
             self.tools.append(load_knowledgebase_tool)
 
             if self.knowledgebase.enable_profile:
+                logger.debug(
+                    f"Knowledgebase {self.knowledgebase.index} profile enabled"
+                )
                 from veadk.tools.builtin_tools.load_kb_queries import (
                     load_kb_queries,
                 )
@@ -249,9 +247,7 @@ class Agent(LlmAgent):
             if hasattr(load_memory, "custom_metadata"):
                 if not load_memory.custom_metadata:
                     load_memory.custom_metadata = {}
-                load_memory.custom_metadata["backend"] = (
-                    self.long_term_memory.backend
-                )
+                load_memory.custom_metadata["backend"] = self.long_term_memory.backend
             self.tools.append(load_memory)
 
         if self.enable_authz:
@@ -343,7 +339,9 @@ class Agent(LlmAgent):
             self.instruction += "\nYou have the following skills:\n"
 
             for skill in skills.values():
-                self.instruction += f"- name: {skill.name}\n- description: {skill.description}\n\n"
+                self.instruction += (
+                    f"- name: {skill.name}\n- description: {skill.description}\n\n"
+                )
 
             if self.skills_mode not in [
                 "skills_sandbox",
@@ -359,17 +357,11 @@ class Agent(LlmAgent):
             logger.warning("No skills loaded.")
 
     def _prepare_tracers(self):
-        enable_apmplus_tracer = (
-            os.getenv("ENABLE_APMPLUS", "false").lower() == "true"
-        )
-        enable_cozeloop_tracer = (
-            os.getenv("ENABLE_COZELOOP", "false").lower() == "true"
-        )
+        enable_apmplus_tracer = os.getenv("ENABLE_APMPLUS", "false").lower() == "true"
+        enable_cozeloop_tracer = os.getenv("ENABLE_COZELOOP", "false").lower() == "true"
         enable_tls_tracer = os.getenv("ENABLE_TLS", "false").lower() == "true"
 
-        if not (
-            enable_apmplus_tracer or enable_cozeloop_tracer or enable_tls_tracer
-        ):
+        if not (enable_apmplus_tracer or enable_cozeloop_tracer or enable_tls_tracer):
             logger.info("No exporter enabled by env, skip prepare tracers.")
             return
 
@@ -402,9 +394,7 @@ class Agent(LlmAgent):
             self.tracers[0].exporters.append(CozeloopExporter())  # type: ignore
             logger.info("Enable CozeLoop exporter by env.")
 
-        if enable_tls_tracer and not any(
-            isinstance(e, TLSExporter) for e in exporters
-        ):
+        if enable_tls_tracer and not any(isinstance(e, TLSExporter) for e in exporters):
             self.tracers[0].exporters.append(TLSExporter())  # type: ignore
             logger.info("Enable TLS exporter by env.")
 
