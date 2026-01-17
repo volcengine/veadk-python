@@ -98,3 +98,4 @@ exclude = [
     "veadk/integrations/ve_faas/template/*",
     "veadk/integrations/ve_faas/web_template/*"
 ]
+line-length = 80
