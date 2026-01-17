@@ -17,6 +17,8 @@ from __future__ import annotations
 import os
 from typing import Dict, Literal, Optional, Union
 
+from google.adk.flows.llm_flows.base_llm_flow import BaseLlmFlow
+
 # If user didn't set LITELLM_LOCAL_MODEL_COST_MAP, set it to True
 # to enable local model cost map.
 # This value is `false` by default, which brings heavy performance burden,
@@ -150,6 +152,8 @@ class Agent(LlmAgent):
 
     example_store: Optional[BaseExampleProvider] = None
 
+    enable_supervisor: bool = False
+
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
 
@@ -242,7 +246,7 @@ class Agent(LlmAgent):
                 self.tools.append(load_kb_queries)
 
         if self.long_term_memory is not None:
-            from google.adk.tools import load_memory
+            from google.adk.tools.load_memory_tool import load_memory
 
             if hasattr(load_memory, "custom_metadata"):
                 if not load_memory.custom_metadata:
@@ -401,6 +405,31 @@ class Agent(LlmAgent):
         logger.debug(
             f"Opentelemetry Tracer init {len(self.tracers[0].exporters)} exporters"  # type: ignore
         )
+
+    @property
+    def _llm_flow(self) -> BaseLlmFlow:
+        from google.adk.flows.llm_flows.auto_flow import AutoFlow
+        from google.adk.flows.llm_flows.single_flow import SingleFlow
+
+        if (
+            self.disallow_transfer_to_parent
+            and self.disallow_transfer_to_peers
+            and not self.sub_agents
+        ):
+            from veadk.flows.supervise_single_flow import SupervisorSingleFlow
+
+            if self.enable_supervisor:
+                logger.debug(f"Enable supervisor flow for agent: {self.name}")
+                return SupervisorSingleFlow(supervised_agent=self)
+            else:
+                return SingleFlow()
+        else:
+            from veadk.flows.supervise_auto_flow import SupervisorAutoFlow
+
+            if self.enable_supervisor:
+                logger.debug(f"Enable supervisor flow for agent: {self.name}")
+                return SupervisorAutoFlow(supervised_agent=self)
+            return AutoFlow()
 
     async def run(self, **kwargs):
         raise NotImplementedError(
