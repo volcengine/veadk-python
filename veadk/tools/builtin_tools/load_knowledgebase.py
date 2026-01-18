@@ -124,6 +124,31 @@ You should choose some profiles which are relevant to the user question. Before 
                 ]
             )
 
+        if self.knowledgebase.query_with_user_profile:
+            from veadk import Agent
+
+            agent = tool_context._invocation_context.agent
+            if not isinstance(agent, Agent) or not agent.long_term_memory:
+                logger.error(
+                    "Agent in tool context is not an instance of veadk.Agent or long term memory is not set in agent attribution. Cannot load user profile."
+                )
+                return
+
+            user_profile = agent.long_term_memory.get_user_profile(tool_context.user_id)
+
+            if user_profile:
+                llm_request.append_instructions(
+                    [
+                        f"""
+Please generate the knowledgebase queries based on the user profile (description) at the same time. For example, for a query `quick sort algorithm`, you should generate `quick sort algorithm for python` if the user is a python developer, or `quick sort algorithm friendly introduction` if the user is a beginner.
+
+The user profile is : 
+
+{user_profile}
+"""
+                    ]
+                )
+
     async def load_knowledgebase(
         self, query: str, tool_context: ToolContext
     ) -> LoadKnowledgebaseResponse:

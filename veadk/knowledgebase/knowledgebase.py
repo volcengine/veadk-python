@@ -108,6 +108,8 @@ class KnowledgeBase(BaseModel):
 
     enable_profile: bool = False
 
+    query_with_user_profile: bool = False
+
     def model_post_init(self, __context: Any) -> None:
         if isinstance(self.backend, BaseKnowledgebaseBackend):
             self._backend = self.backend
@@ -133,6 +135,11 @@ class KnowledgeBase(BaseModel):
         logger.info(
             f"Initialized knowledgebase with backend {self._backend.__class__.__name__}"
         )
+
+        if self.query_with_user_profile:
+            logger.info(
+                "Enable user profile querying for knowledgebase. You *must* use Viking Memory backend to enjoy this feature."
+            )
 
     def add_from_directory(self, directory: str, **kwargs) -> bool:
         """Add knowledge from file path to knowledgebase.
