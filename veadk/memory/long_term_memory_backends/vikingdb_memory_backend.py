@@ -224,3 +224,58 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
                 for r in result
             ]
         return []
+
+    def get_user_profile(self, user_id: str) -> str:
+        from veadk.utils.volcengine_sign import ve_request
+
+        response: dict = self._get_client().get_collection(
+            collection_name=self.index, project=self.volcengine_project
+        )
+
+        mem_id = response["Result"]["ResourceId"]
+        logger.info(
+            f"Get user profile for user_id={user_id} from Viking Memory with mem_id={mem_id}"
+        )
+
+        ak = ""
+        sk = ""
+        sts_token = ""
+        if self.volcengine_access_key and self.volcengine_secret_key:
+            ak = self.volcengine_access_key
+            sk = self.volcengine_secret_key
+            sts_token = self.session_token
+        else:
+            cred = get_credential_from_vefaas_iam()
+            ak = cred.access_key_id
+            sk = cred.secret_access_key
+            sts_token = cred.session_token
+
+        response = ve_request(
+            request_body={
+                "filter": {
+                    "user_id": [user_id],
+                    "memory_category": 1,
+                },
+                "limit": 5000,
+                "resource_id": mem_id,
+            },
+            action="MemorySearch",
+            ak=ak,
+            sk=sk,
+            header={"X-Security-Token": sts_token},
+            service="vikingdb",
+            version="2025-06-09",
+            region=self.region,
+            host="open.volcengineapi.com",
+        )
+
+        try:
+            logger.debug(
+                f"Response from VikingDB: {response}, user_profile: {response['data']['result_list'][0]['memory_info']['user_profile']}"
+            )
+            return response["data"]["result_list"][0]["memory_info"]["user_profile"]
+        except (KeyError, IndexError):
+            logger.error(
+                f"Failed to get user profile for user_id={user_id} mem_id={mem_id}: {response}"
+            )
+            return ""
