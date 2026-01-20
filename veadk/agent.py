@@ -356,6 +356,11 @@ class Agent(LlmAgent):
                     f"Unsupported skill mode {self.skills_mode}, use `skills_sandbox`, `aio_sandbox` or `local` instead."
                 )
 
+            if self.skills_mode == "skills_sandbox":
+                self.instruction += (
+                    "You can use the skills by calling the `execute_skills` tool.\n\n"
+                )
+
             self.tools.append(SkillsToolset(skills, self.skills_mode))
         else:
             logger.warning("No skills loaded.")
