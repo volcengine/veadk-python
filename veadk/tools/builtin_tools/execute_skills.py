@@ -126,11 +126,29 @@ def execute_skills(
 
     cmd = ["python", "agent.py", workflow_prompt]
 
+    res = ve_request(
+        request_body={},
+        action="GetCallerIdentity",
+        ak=ak,
+        sk=sk,
+        service="sts",
+        version="2018-01-01",
+        region=region,
+        host="sts.volcengineapi.com",
+        header=header,
+    )
+    try:
+        account_id = res["Result"]["AccountId"]
+    except KeyError as e:
+        logger.error(f"Error occurred while getting account id: {e}, response is {res}")
+        return res
+
     skill_space_id = os.getenv("SKILL_SPACE_ID", "")
     if not skill_space_id:
         logger.warning("SKILL_SPACE_ID environment variable is not set")
 
     env_vars = {
+        "TOS_SKILLS_DIR": f"tos://agentkit-platform-{account_id}/skills/",
         "SKILL_SPACE_ID": skill_space_id,
         "TOOL_USER_SESSION_ID": tool_user_session_id,
     }
