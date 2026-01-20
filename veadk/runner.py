@@ -472,7 +472,7 @@ class Runner(ADKRunner):
             )
         logger.info(f"Run config: {run_config}")
 
-        if self.agent.skills:
+        if hasattr(self.agent, "skills") and self.agent.skills:
             from veadk.tools.skills_tools.session_path import initialize_session_path
 
             initialize_session_path(session_id)
