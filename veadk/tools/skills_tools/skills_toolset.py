@@ -83,19 +83,17 @@ class SkillsToolset(BaseToolset):
 
         match self.skills_mode:
             case "local":
-                logger.info(
-                    "Skills mode=local, adding skills_tool, read_file_tool, write_file_tool, edit_file_tool, bash_tool and register_skills_tool to the agent."
+                logger.debug(
+                    "Skills mode=local, get skills_tool, read_file_tool, write_file_tool, edit_file_tool, bash_tool and register_skills_tool."
                 )
                 return list(self._tools.values())
 
             case "skills_sandbox":
-                logger.info(
-                    "Skills mode=skills_sandbox, no skills tools are added to the agent."
-                )
+                logger.debug("Skills mode=skills_sandbox, get no skills tools.")
                 return []
 
             case "aio_sandbox":
-                logger.info("Skills mode=aio_sandbox: not implemented yet")
+                logger.debug("Skills mode=aio_sandbox: not implemented yet")
                 return []
 
             case _:
