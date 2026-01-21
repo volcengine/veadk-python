@@ -160,11 +160,10 @@ def register_skills_tool(
 
         logger.debug(f"CreateSkill response: {response}")
 
-        if "Error" in response:
-            logger.error(
-                f"Failed to register skill '{skill_name}': {response['Error']}"
-            )
-            return f"Failed to register skill '{skill_name}': {response['Error']}"
+        if "ResponseMetadata" in response and "Error" in response["ResponseMetadata"]:
+            error_details = response["ResponseMetadata"]["Error"]
+            logger.error(f"Failed to register skill '{skill_name}': {error_details}")
+            return f"Failed to register skill '{skill_name}': {error_details}"
 
         logger.info(
             f"Successfully registered skill '{skill_name}' to skill space {skill_space_ids_list}."
