@@ -20,7 +20,6 @@ from llama_index.core import (
     SimpleDirectoryReader,
 )
 from llama_index.core.schema import BaseNode
-from llama_index.embeddings.openai_like import OpenAILikeEmbedding
 from pydantic import Field
 from typing_extensions import Any, override
 
@@ -30,6 +29,7 @@ from veadk.configs.model_configs import EmbeddingModelConfig, NormalEmbeddingMod
 
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
 from veadk.knowledgebase.backends.utils import get_llama_index_splitter
+from veadk.models.ark_embedding import create_embedding_model
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -77,7 +77,7 @@ class TosVectorKnowledgeBackend(BaseKnowledgebaseBackend):
         # create_bucket and index if not exist
         self._create_index()
 
-        self._embed_model = OpenAILikeEmbedding(
+        self._embed_model = create_embedding_model(
             model_name=self.embedding_config.name,
             api_key=self.embedding_config.api_key,
             api_base=self.embedding_config.api_base,

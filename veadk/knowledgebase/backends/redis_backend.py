@@ -19,7 +19,6 @@ from llama_index.core import (
     VectorStoreIndex,
 )
 from llama_index.core.schema import BaseNode
-from llama_index.embeddings.openai_like import OpenAILikeEmbedding
 from pydantic import Field
 from typing_extensions import Any, override
 
@@ -28,6 +27,7 @@ from veadk.configs.database_configs import RedisConfig
 from veadk.configs.model_configs import EmbeddingModelConfig, NormalEmbeddingModelConfig
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
 from veadk.knowledgebase.backends.utils import get_llama_index_splitter
+from veadk.models.ark_embedding import create_embedding_model
 
 try:
     from llama_index.vector_stores.redis import RedisVectorStore
@@ -92,7 +92,7 @@ class RedisKnowledgeBackend(BaseKnowledgebaseBackend):
             password=self.redis_config.password,
         )
 
-        self._embed_model = OpenAILikeEmbedding(
+        self._embed_model = create_embedding_model(
             model_name=self.embedding_config.name,
             api_key=self.embedding_config.api_key,
             api_base=self.embedding_config.api_base,
