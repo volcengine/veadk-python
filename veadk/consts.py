@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import time
-
+import os
 from veadk.utils.misc import getenv
 from veadk.version import VERSION
 
@@ -76,6 +76,19 @@ VEFAAS_IAM_CRIDENTIAL_PATH = "/var/run/secrets/iam/credential"
 DEFAULT_NACOS_GROUP = "VEADK_GROUP"
 DEFAULT_NACOS_INSTANCE_NAME = "veadk"
 
+provider = os.getenv("CLOUD_PROVIDER")
+
+if provider and provider.lower() == "byteplus":
+    DEFAULT_MODEL_AGENT_NAME = "seed-1-6-250915"
+    DEFAULT_MODEL_AGENT_API_BASE = "https://ark.ap-southeast.bytepluses.com/api/v3"
+    DEFAULT_IMAGE_EDIT_MODEL_NAME = "seededit-3-0-i2i-250628"
+    DEFAULT_IMAGE_EDIT_MODEL_API_BASE = "https://ark.ap-southeast.bytepluses.com/api/v3"
+    DEFAULT_VIDEO_MODEL_NAME = "seedance-1-5-pro-251215"
+    DEFAULT_VIDEO_MODEL_API_BASE = "https://ark.ap-southeast.bytepluses.com/api/v3"
+    DEFAULT_IMAGE_GENERATE_MODEL_NAME = "seedream-4-5-251128"
+    DEFAULT_IMAGE_GENERATE_MODEL_API_BASE = (
+        "https://ark.ap-southeast.bytepluses.com/api/v3"
+    )
 DEFAULT_MODEL_EMBEDDING_NAME = "doubao-embedding-vision-250615"
 DEFAULT_MODEL_EMBEDDING_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
 DEFAULT_MODEL_EMBEDDING_DIM = 2048

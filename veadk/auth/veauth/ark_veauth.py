@@ -35,6 +35,12 @@ def get_ark_token(region: str = "cn-beijing") -> str:
         secret_key = cred.secret_access_key
         session_token = cred.session_token
 
+    provider = os.getenv("CLOUD_PROVIDER")
+    host = "open.volcengineapi.com"
+    if provider and provider.lower() == "byteplus":
+        region = "ap-southeast-1"
+        host = "open.byteplusapi.com"
+
     res = ve_request(
         request_body={"ProjectName": "default", "Filter": {"AllowAll": True}},
         header={"X-Security-Token": session_token},
@@ -44,8 +50,9 @@ def get_ark_token(region: str = "cn-beijing") -> str:
         service="ark",
         version="2024-01-01",
         region=region,
-        host="open.volcengineapi.com",
+        host=host,
     )
+    logger.info(f"Successfully fetched ARK API Key list: {res}")
     try:
         first_api_key_id = res["Result"]["Items"][0]["Id"]
         logger.warning("By default, VeADK fetches the first API Key in the list.")
@@ -65,7 +72,7 @@ def get_ark_token(region: str = "cn-beijing") -> str:
         service="ark",
         version="2024-01-01",
         region=region,
-        host="open.volcengineapi.com",
+        host=host,
     )
     try:
         api_key = res["Result"]["ApiKey"]
