@@ -83,17 +83,12 @@ class SkillsToolset(BaseToolset):
 
         match self.skills_mode:
             case "local":
-                logger.debug(
-                    "Skills mode=local, get skills_tool, read_file_tool, write_file_tool, edit_file_tool, bash_tool and register_skills_tool."
-                )
                 return list(self._tools.values())
 
             case "skills_sandbox":
-                logger.debug("Skills mode=skills_sandbox, get no skills tools.")
                 return []
 
             case "aio_sandbox":
-                logger.debug("Skills mode=aio_sandbox: not implemented yet")
                 return []
 
             case _:
