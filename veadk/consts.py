@@ -19,7 +19,7 @@ from veadk.version import VERSION
 
 DEFAULT_AGENT_NAME = "veAgent"
 
-DEFAULT_MODEL_AGENT_NAME = "doubao-seed-1-6-251015"
+DEFAULT_MODEL_AGENT_NAME = "doubao-seed-1-8-251228"
 DEFAULT_MODEL_AGENT_PROVIDER = "openai"
 DEFAULT_MODEL_AGENT_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
 DEFAULT_MODEL_EXTRA_CONFIG = {
@@ -77,7 +77,7 @@ DEFAULT_NACOS_GROUP = "VEADK_GROUP"
 DEFAULT_NACOS_INSTANCE_NAME = "veadk"
 
 provider = os.getenv("CLOUD_PROVIDER")
-print(f"CLOUD_PROVIDER: {provider}")
+
 if provider and provider.lower() == "byteplus":
     DEFAULT_MODEL_AGENT_NAME = "seed-1-6-250915"
     DEFAULT_MODEL_AGENT_API_BASE = "https://ark.ap-southeast.bytepluses.com/api/v3"
@@ -89,3 +89,6 @@ if provider and provider.lower() == "byteplus":
     DEFAULT_IMAGE_GENERATE_MODEL_API_BASE = (
         "https://ark.ap-southeast.bytepluses.com/api/v3"
     )
+DEFAULT_MODEL_EMBEDDING_NAME = "doubao-embedding-vision-250615"
+DEFAULT_MODEL_EMBEDDING_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
+DEFAULT_MODEL_EMBEDDING_DIM = 2048

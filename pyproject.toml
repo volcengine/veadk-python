@@ -1,6 +1,6 @@
 [project]
 name = "veadk-python"
-version = "0.5.4"
+version = "0.5.10"
 description = "Volcengine agent development kit, integrations with Volcengine cloud services."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -38,7 +38,7 @@ dependencies = [
     "aiomysql==0.3.2", # For async MySQL database (short term memory)
     "opensearch-py==2.8.0",
     "filetype==1.2.0",
-    "vikingdb-python-sdk==0.1.3",
+    "vikingdb-python-sdk>=0.1.3",
     "agentkit-sdk-python>=0.2.0",
     "python-frontmatter==1.1.0",
 ]

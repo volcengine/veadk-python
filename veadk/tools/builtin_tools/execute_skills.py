@@ -14,7 +14,6 @@
 
 import json
 import os
-from typing import Optional, List
 
 from google.adk.tools import ToolContext
 
@@ -69,21 +68,19 @@ def _format_execution_result(result_str: str) -> str:
 
 def execute_skills(
     workflow_prompt: str,
-    skills: Optional[List[str]] = None,
     tool_context: ToolContext = None,
-    timeout: int = 900,
 ) -> str:
-    """execute skills in a code sandbox and return the output.
-    For C++ code, don't execute it directly, compile and execute via Python; write sources and object files to /tmp.
+    """Execute skills in a sandbox and return the output.
+
+    Execute skills in a remote sandbox amining to provide isolation and security.
 
     Args:
         workflow_prompt (str): instruction of workflow
-        skills (Optional[List[str]]): The skills will be invoked
-        timeout (int, optional): The timeout in seconds for the code execution, less than or equal to 900. Defaults to 900.
 
     Returns:
         str: The output of the code execution.
     """
+    timeout = 900  # The timeout in seconds for the code execution, less than or equal to 900. Defaults to 900. Hard-coded to prevent the Agent from adjusting this parameter.
 
     tool_id = getenv("AGENTKIT_TOOL_ID")
 
@@ -128,10 +125,7 @@ def execute_skills(
         logger.debug("Successfully get AK/SK from tool context.")
 
     cmd = ["python", "agent.py", workflow_prompt]
-    if skills:
-        cmd.extend(["--skills"] + skills)
 
-    # TODO: remove after agentkit supports custom environment variables setting
     res = ve_request(
         request_body={},
         action="GetCallerIdentity",
@@ -149,8 +143,13 @@ def execute_skills(
         logger.error(f"Error occurred while getting account id: {e}, response is {res}")
         return res
 
+    skill_space_id = os.getenv("SKILL_SPACE_ID", "")
+    if not skill_space_id:
+        logger.warning("SKILL_SPACE_ID environment variable is not set")
+
     env_vars = {
         "TOS_SKILLS_DIR": f"tos://agentkit-platform-{account_id}/skills/",
+        "SKILL_SPACE_ID": skill_space_id,
         "TOOL_USER_SESSION_ID": tool_user_session_id,
     }
 
@@ -185,6 +184,7 @@ with open('/tmp/agent.log', 'w') as log_file:
         if time.time() - start_time > timeout:
             process.kill()
             log_file.write('log_type=stderr request_id=x function_id=y revision_number=1 Process timeout\\n')
+            print("Process timeout", end='', file=sys.stderr)
             break
             
         reads = [process.stdout.fileno(), process.stderr.fileno()]
@@ -196,23 +196,23 @@ with open('/tmp/agent.log', 'w') as log_file:
                 if line:
                     log_file.write(f'log_type=stdout request_id=x function_id=y revision_number=1 {{line}}')
                     log_file.flush()
+                    print(line, end='')
             if fd == process.stderr.fileno():
                 line = process.stderr.readline()
                 if line:
                     log_file.write(f'log_type=stderr request_id=x function_id=y revision_number=1 {{line}}')
                     log_file.flush()
+                    print(line, end='', file=sys.stderr)
         
         if process.poll() is not None:
             break
     
     for line in process.stdout:
         log_file.write(f'log_type=stdout request_id=x function_id=y revision_number=1 {{line}}')
+        print(line, end='')
     for line in process.stderr:
         log_file.write(f'log_type=stderr request_id=x function_id=y revision_number=1 {{line}}')
-
-with open('/tmp/agent.log', 'r') as log_file:
-    output = log_file.read()
-    print(output)
+        print(line, end='', file=sys.stderr)
     """
 
     res = ve_request(

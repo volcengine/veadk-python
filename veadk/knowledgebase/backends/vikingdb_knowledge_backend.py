@@ -25,7 +25,10 @@ from typing_extensions import override
 from volcengine.viking_knowledgebase import VikingKnowledgeBaseService
 
 import veadk.config  # noqa E401
-from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
+from veadk.auth.veauth.utils import (
+    VeIAMCredential,
+    get_credential_from_vefaas_iam,
+)
 from veadk.configs.database_configs import NormalTOSConfig, TOSConfig
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
 from veadk.knowledgebase.backends.utils import (
@@ -134,16 +137,6 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
     _viking_sdk_client = None
 
     def model_post_init(self, __context: Any) -> None:
-        self._set_service_info()
-
-        self._viking_sdk_client = VikingKnowledgeBaseService(
-            host=self.host,
-            ak=self.volcengine_access_key,
-            sk=self.volcengine_secret_key,
-            sts_token=self.session_token,
-            scheme=self.schema,
-        )
-
         self.precheck_index_naming()
 
         # check whether collection exist, if not, create it
@@ -165,20 +158,19 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             )
 
     def _get_tos_client(self, tos_bucket_name: str) -> VeTOS:
-        volcengine_access_key = self.volcengine_access_key
-        volcengine_secret_key = self.volcengine_secret_key
-        session_token = self.session_token
-
-        if not (volcengine_access_key and volcengine_secret_key):
-            cred = get_credential_from_vefaas_iam()
-            volcengine_access_key = cred.access_key_id
-            volcengine_secret_key = cred.secret_access_key
-            session_token = cred.session_token
+        ak = None
+        sk = None
+        sts_token = None
+        if not (self.volcengine_access_key and self.volcengine_secret_key):
+            cred = self._set_service_info()
+            ak = cred.access_key_id
+            sk = cred.secret_access_key
+            sts_token = cred.session_token
 
         return VeTOS(
-            ak=volcengine_access_key,
-            sk=volcengine_secret_key,
-            session_token=session_token,
+            ak=ak or self.volcengine_access_key,
+            sk=sk or self.volcengine_secret_key,
+            session_token=sts_token or self.session_token,
             region=self.tos_config.region,
             bucket_name=tos_bucket_name or self.tos_config.bucket,
         )
@@ -552,6 +544,23 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             "chunk_diffusion_count": chunk_diffusion_count,
         }
 
+        ak = None
+        sk = None
+        sts_token = None
+        if not (self.volcengine_access_key and self.volcengine_secret_key):
+            cred = self._set_service_info()
+            ak = cred.access_key_id
+            sk = cred.secret_access_key
+            sts_token = cred.session_token
+
+        self._viking_sdk_client = VikingKnowledgeBaseService(
+            host=self.host,
+            ak=ak or self.volcengine_access_key,
+            sk=sk or self.volcengine_secret_key,
+            sts_token=sts_token or self.session_token,
+            scheme=self.schema,
+        )
+
         response = self._viking_sdk_client.search_knowledge(
             collection_name=self.index,
             project=self.volcengine_project,
@@ -561,21 +570,35 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             post_processing=post_precessing,
         )
 
-        entries = []
-        for result in response.get("result_list", []):
-            doc_meta_raw_str = result.get("doc_info", {}).get("doc_meta")
-            doc_meta_list = json.loads(doc_meta_raw_str) if doc_meta_raw_str else []
-            metadata = {}
-            for meta in doc_meta_list:
-                metadata[meta["field_name"]] = meta["field_value"]
+        logger.debug(
+            f"Search knowledge {self.index} using project {self.volcengine_project} original response: {response}"
+        )
 
-            entries.append(
-                KnowledgebaseEntry(content=result.get("content", ""), metadata=metadata)
+        entries = []
+        if not response.get("result_list", []):
+            logger.warning(
+                f"Search knowledge {self.index} using project {self.volcengine_project} got empty response."
             )
+        else:
+            logger.debug(
+                f"Search knowledge {self.index} using project {self.volcengine_project} got {len(response.get('result_list', []))} results."
+            )
+            for result in response.get("result_list", []):
+                doc_meta_raw_str = result.get("doc_info", {}).get("doc_meta")
+                doc_meta_list = json.loads(doc_meta_raw_str) if doc_meta_raw_str else []
+                metadata = {}
+                for meta in doc_meta_list:
+                    metadata[meta["field_name"]] = meta["field_value"]
+
+                entries.append(
+                    KnowledgebaseEntry(
+                        content=result.get("content", ""), metadata=metadata
+                    )
+                )
 
         return entries
 
-    def _set_service_info(self):
+    def _set_service_info(self) -> VeIAMCredential:
         env_host = getenv(
             "DATABASE_VIKING_BASE_URL",
             default_value=None,
@@ -592,11 +615,8 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
                     "DATABASE_VIKING_BASE_URL must start with http:// or https://"
                 )
 
-        if not (self.volcengine_access_key and self.volcengine_secret_key):
-            cred = get_credential_from_vefaas_iam()
-            self.volcengine_access_key = cred.access_key_id
-            self.volcengine_secret_key = cred.secret_access_key
-            self.session_token = cred.session_token
+        cred = get_credential_from_vefaas_iam()
+        return cred
 
     def _do_request(
         self,
@@ -606,11 +626,20 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
     ) -> dict:
         full_path = f"{self.base_url}{path}"
 
+        ak = None
+        sk = None
+        sts_token = None
+        if not (self.volcengine_access_key and self.volcengine_secret_key):
+            cred = self._set_service_info()
+            ak = cred.access_key_id
+            sk = cred.secret_access_key
+            sts_token = cred.session_token
+
         request = build_vikingdb_knowledgebase_request(
             path=path,
-            volcengine_access_key=self.volcengine_access_key,
-            volcengine_secret_key=self.volcengine_secret_key,
-            session_token=self.session_token,
+            volcengine_access_key=ak or self.volcengine_access_key,
+            volcengine_secret_key=sk or self.volcengine_secret_key,
+            session_token=sts_token or self.session_token,
             method=method,
             data=body,
         )

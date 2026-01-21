@@ -13,9 +13,12 @@
 # limitations under the License.
 
 from pydantic import BaseModel
+from typing import Optional
 
 
 class Skill(BaseModel):
     name: str
     description: str
-    path: str
+    path: str  # local path or tos path
+    skill_space_id: Optional[str] = None
+    bucket_name: Optional[str] = None
