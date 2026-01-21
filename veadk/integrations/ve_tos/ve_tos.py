@@ -37,12 +37,25 @@ class VeTOS:
         ak: str = "",
         sk: str = "",
         session_token: str = "",
-        region: str = "cn-beijing",
         bucket_name: str = DEFAULT_TOS_BUCKET_NAME,
     ) -> None:
         self.ak = ak if ak else os.getenv("VOLCENGINE_ACCESS_KEY", "")
         self.sk = sk if sk else os.getenv("VOLCENGINE_SECRET_KEY", "")
         self.session_token = session_token
+
+        # get provider
+        provider = os.getenv("CLOUD_PROVIDER")
+        logger.info(f"Cloud provider: {provider}")
+        if provider and provider.lower() == "byteplus":
+            self.region = "ap-southeast-1"
+            self.sld = "bytepluses"
+        else:
+            self.region = "cn-beijing"
+            self.sld = "volces"
+
+        logger.info(
+            f"TOS client ready: region={self.region}, endpoint=tos-{self.region}.{self.sld}.com"
+        )
 
         # Add empty value validation
         if not self.ak or not self.sk:
@@ -51,7 +64,6 @@ class VeTOS:
                 "either via parameters or environment variables."
             )
 
-        self.region = region
         self.bucket_name = (
             bucket_name if bucket_name else getenv("", DEFAULT_TOS_BUCKET_NAME)
         )
@@ -75,7 +87,7 @@ class VeTOS:
                 ak=self.ak,
                 sk=self.sk,
                 security_token=self.session_token,
-                endpoint=f"tos-{self.region}.volces.com",
+                endpoint=f"tos-{self.region}.{self.sld}.com",
                 region=self.region,
             )
             logger.info("Init TOS client.")
@@ -90,7 +102,7 @@ class VeTOS:
                 self.ak,
                 self.sk,
                 security_token=self.session_token,
-                endpoint=f"tos-{self.region}.volces.com",
+                endpoint=f"tos-{self.region}.{self.sld}.com",
                 region=self.region,
             )
             logger.info("refreshed client successfully.")
@@ -255,7 +267,7 @@ class VeTOS:
     def build_tos_url(self, object_key: str, bucket_name: str = "") -> str:
         bucket_name = self._check_bucket_name(bucket_name)
         tos_url: str = (
-            f"https://{bucket_name}.tos-{self.region}.volces.com/{object_key}"
+            f"https://{bucket_name}.tos-{self.region}.{self.sld}.com/{object_key}"
         )
         return tos_url
 
@@ -606,7 +618,7 @@ class VeTOS:
                     bucket=bucket_name,
                     key=object_key,
                     file_path=file_path,
-                    metadata=metadata,
+                    meta=metadata,
                 )
                 logger.debug(f"Async upload success, object_key: {object_key}")
             return
