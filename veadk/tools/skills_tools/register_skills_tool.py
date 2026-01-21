@@ -68,7 +68,7 @@ def register_skills_tool(
     try:
         skill = frontmatter.load(str(skill_readme))
         skill_name = skill.get("name", "")
-        skill_description = skill.get("description", "")
+        # skill_description = skill.get("description", "")
     except Exception as e:
         logger.error(
             f"Failed to get skill name and description from {skill_readme}: {e}"
@@ -146,8 +146,6 @@ def register_skills_tool(
         ]
 
         request_body = {
-            "Name": skill_name,
-            "Description": skill_description,
             "TosUrl": tos_url,
             "SkillSpaces": skill_space_ids_list,
         }
