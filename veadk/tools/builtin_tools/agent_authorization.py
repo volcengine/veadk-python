@@ -59,7 +59,7 @@ async def check_agent_authorization(
         role_id = actors[0]
 
         principal = {"Type": "user", "Id": user_id}
-        operation = {"Type": "Action", "Id": "invoke"}
+        operation = {"Type": "action", "Id": "invoke"}
         resource = {"Type": "agent", "Id": role_id}
         original_callers = [{"Type": "agent", "Id": actor} for actor in actors[1:]]
 
@@ -68,6 +68,7 @@ async def check_agent_authorization(
             operation=operation,
             resource=resource,
             original_callers=original_callers,
+            namespace_name="wqf--test",
         )
 
         if allowed:
