@@ -33,6 +33,8 @@ from veadk.utils.logger import get_logger
 from veadk.utils.misc import get_agent_dir
 from veadk.utils.patches import patch_google_adk_telemetry
 
+__all__ = ["OpentelemetryTracer"]
+
 logger = get_logger(__name__)
 
 

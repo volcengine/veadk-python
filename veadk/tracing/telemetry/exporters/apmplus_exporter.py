@@ -553,6 +553,12 @@ class APMPlusExporter(BaseExporter):
         
         # Check if there are any existing span processors that are APMPlus related
         span_processors = tracer_provider._active_span_processor._span_processors
+        for processor in span_processors:
+            logger.error(f"processor: {processor}")
+            logger.error(f"exporter: {processor.span_exporter}")
+
+            if hasattr(processor.span_exporter, "_endpoint"):
+                logger.error(f"exporter endpoint: {processor.span_exporter._endpoint}")
 
         # TODO: Compatible with one-agent collector
         has_existing_apmplus = any(
