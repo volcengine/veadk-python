@@ -1,6 +1,6 @@
 [project]
 name = "veadk-python"
-version = "0.5.10"
+version = "0.5.11"
 description = "Volcengine agent development kit, integrations with Volcengine cloud services."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -26,6 +26,7 @@ dependencies = [
     "agent-pilot-sdk==0.1.2", # Prompt optimization by Volcengine AgentPilot/PromptPilot toolkits
     "fastmcp>=2.12.3", # For running MCP
     "trustedmcp==0.0.5", # For running TrustedMCP
+    "mcp==1.23.0", # There might be some async generator problem logs in mcp 1.25.0
     "cookiecutter==2.6.0", # For cloud deploy
     "omegaconf==2.3.0", # For agent builder
     "llama-index==0.14.0",
