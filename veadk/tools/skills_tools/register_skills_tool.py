@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import zipfile
+import frontmatter
 from pathlib import Path
 from datetime import datetime
 
@@ -31,16 +32,12 @@ logger = get_logger(__name__)
 
 
 def register_skills_tool(
-    skill_name: str,
-    skill_description: str,
     skill_local_path: str,
     tool_context: ToolContext,
 ) -> str:
     """Register a skill to the remote skill space by uploading its zip package to TOS and calling the CreateSkill API.
 
     Args:
-        skill_name (str): The name of the skill.
-        skill_description (str): The description of the skill.
         skill_local_path (str): The local path of the skill directory.
             - The format of the skill directory is as follows:
                 skill_local_path/
@@ -67,6 +64,16 @@ def register_skills_tool(
     if not skill_readme.exists():
         logger.error(f"Skill path '{skill_path}' has no SKILL.md file.")
         return f"Skill path '{skill_path}' has no SKILL.md file."
+
+    try:
+        skill = frontmatter.load(str(skill_readme))
+        skill_name = skill.get("name", "")
+        # skill_description = skill.get("description", "")
+    except Exception as e:
+        logger.error(
+            f"Failed to get skill name and description from {skill_readme}: {e}"
+        )
+        return f"Failed to get skill name and description from {skill_readme}: {e}"
 
     zip_file_path = working_dir / "outputs" / f"{skill_name}.zip"
 
@@ -138,13 +145,14 @@ def register_skills_tool(
             x.strip() for x in skill_space_ids.split(",") if x.strip()
         ]
 
+        request_body = {
+            "TosUrl": tos_url,
+            "SkillSpaces": skill_space_ids_list,
+        }
+        logger.debug(f"CreateSkill request body: {request_body}")
+
         response = ve_request(
-            request_body={
-                "Name": skill_name,
-                "Description": skill_description,
-                "TosUrl": tos_url,
-                "SkillSpaces": skill_space_ids_list,
-            },
+            request_body=request_body,
             action="CreateSkill",
             ak=access_key,
             sk=secret_key,
@@ -160,11 +168,10 @@ def register_skills_tool(
 
         logger.debug(f"CreateSkill response: {response}")
 
-        if "Error" in response:
-            logger.error(
-                f"Failed to register skill '{skill_name}': {response['Error']}"
-            )
-            return f"Failed to register skill '{skill_name}': {response['Error']}"
+        if "ResponseMetadata" in response and "Error" in response["ResponseMetadata"]:
+            error_details = response["ResponseMetadata"]["Error"]
+            logger.error(f"Failed to register skill '{skill_name}': {error_details}")
+            return f"Failed to register skill '{skill_name}': {error_details}"
 
         logger.info(
             f"Successfully registered skill '{skill_name}' to skill space {skill_space_ids_list}."
