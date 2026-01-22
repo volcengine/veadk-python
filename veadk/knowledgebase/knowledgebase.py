@@ -27,39 +27,47 @@ logger = get_logger(__name__)
 
 
 def _get_backend_cls(backend: str) -> type[BaseKnowledgebaseBackend]:
-    match backend:
-        case "local":
-            from veadk.knowledgebase.backends.in_memory_backend import (
-                InMemoryKnowledgeBackend,
-            )
+    try:
+        match backend:
+            case "local":
+                from veadk.knowledgebase.backends.in_memory_backend import (
+                    InMemoryKnowledgeBackend,
+                )
 
-            return InMemoryKnowledgeBackend
-        case "opensearch":
-            from veadk.knowledgebase.backends.opensearch_backend import (
-                OpensearchKnowledgeBackend,
-            )
+                return InMemoryKnowledgeBackend
+            case "opensearch":
+                from veadk.knowledgebase.backends.opensearch_backend import (
+                    OpensearchKnowledgeBackend,
+                )
 
-            return OpensearchKnowledgeBackend
-        case "viking":
-            from veadk.knowledgebase.backends.vikingdb_knowledge_backend import (
-                VikingDBKnowledgeBackend,
-            )
+                return OpensearchKnowledgeBackend
+            case "redis":
+                from veadk.knowledgebase.backends.redis_backend import (
+                    RedisKnowledgeBackend,
+                )
 
-            return VikingDBKnowledgeBackend
-        case "redis":
-            from veadk.knowledgebase.backends.redis_backend import (
-                RedisKnowledgeBackend,
-            )
+                return RedisKnowledgeBackend
+            case "tos_vector":
+                from veadk.knowledgebase.backends.tos_vector_backend import (
+                    TosVectorKnowledgeBackend,
+                )
 
-            return RedisKnowledgeBackend
-        case "tos_vector":
-            from veadk.knowledgebase.backends.tos_vector_backend import (
-                TosVectorKnowledgeBackend,
-            )
+                return TosVectorKnowledgeBackend
+            case "viking":
+                from veadk.knowledgebase.backends.vikingdb_knowledge_backend import (
+                    VikingDBKnowledgeBackend,
+                )
 
-            return TosVectorKnowledgeBackend
-
-    raise ValueError(f"Unsupported knowledgebase backend: {backend}")
+                return VikingDBKnowledgeBackend
+            case _:
+                raise ValueError(f"Unsupported knowledgebase backend: {backend}")
+    except ImportError as e:
+        if "llama_index" in str(e) or "llama-index" in str(e):
+            raise ImportError(
+                "KnowledgeBase functionality requires 'veadk-python[extensions]'. "
+                "Please install it via `pip install veadk-python[extensions]`."
+            ) from e
+        raise e
 
 
 class KnowledgeBase(BaseModel):
