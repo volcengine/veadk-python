@@ -68,7 +68,7 @@ async def check_agent_authorization(
             operation=operation,
             resource=resource,
             original_callers=original_callers,
-            namespace_name="wqf--test",
+            namespace="wqf--test",
         )
 
         if allowed:
