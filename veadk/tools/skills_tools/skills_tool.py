@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from __future__ import annotations
-
+import os
 from pathlib import Path
 from typing import Any, Dict
 
@@ -101,6 +101,7 @@ class SkillsTool(BaseTool):
 
         working_dir = get_session_path(session_id=tool_context.session.id)
         skill_dir = working_dir / "skills"
+        region = os.getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
 
         if skill_name not in self.skills:
             # 1. Download skill from TOS if not found locally
@@ -114,7 +115,6 @@ class SkillsTool(BaseTool):
                 try:
                     from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
                     from veadk.integrations.ve_tos.ve_tos import VeTOS
-                    import os
 
                     access_key = os.getenv("VOLCENGINE_ACCESS_KEY")
                     secret_key = os.getenv("VOLCENGINE_SECRET_KEY")
@@ -183,6 +183,7 @@ class SkillsTool(BaseTool):
                         sk=secret_key,
                         session_token=session_token,
                         bucket_name=tos_bucket,
+                        region=region,
                     )
 
                     # Download the skill directory from TOS
@@ -215,8 +216,6 @@ class SkillsTool(BaseTool):
                 try:
                     from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
                     from veadk.integrations.ve_tos.ve_tos import VeTOS
-
-                    region = os.getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
 
                     access_key = os.getenv("VOLCENGINE_ACCESS_KEY")
                     secret_key = os.getenv("VOLCENGINE_SECRET_KEY")

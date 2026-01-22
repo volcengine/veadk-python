@@ -89,11 +89,14 @@ def load_skills_from_cloud(skill_space_ids: str) -> list[Skill]:
                 secret_key = cred.secret_access_key
                 session_token = cred.session_token
 
+            request_body = {
+                "SkillSpaceId": skill_space_id,
+                "InnerTags": {"source": "sandbox"},
+            }
+            logger.debug(f"ListSkillsBySpaceId request body: {request_body}")
+
             response = ve_request(
-                request_body={
-                    "SkillSpaceId": skill_space_id,
-                    "InnerTags": {"source": "sandbox"},
-                },
+                request_body=request_body,
                 action="ListSkillsBySpaceId",
                 ak=access_key,
                 sk=secret_key,
