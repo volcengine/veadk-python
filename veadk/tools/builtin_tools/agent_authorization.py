@@ -59,7 +59,7 @@ async def check_agent_authorization(
         role_id = actors[0]
 
         principal = {"Type": "user", "Id": user_id}
-        operation = {"Type": "action", "Id": "invoke"}
+        operation = {"Type": "Action", "Id": "invoke"}
         resource = {"Type": "agent", "Id": role_id}
         original_callers = [{"Type": "agent", "Id": actor} for actor in actors[1:]]
 
