@@ -116,30 +116,55 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
         logger.debug(f"Create collection with response {response}")
         return response
 
-    def _get_client(self) -> VikingDBMemoryClient:
-        if not (self.volcengine_access_key and self.volcengine_secret_key):
-            cred = get_credential_from_vefaas_iam()
-            self.volcengine_access_key = cred.access_key_id
-            self.volcengine_secret_key = cred.secret_access_key
-            self.session_token = cred.session_token
+    def _get_ak_sk_sts(self) -> tuple[str, str, str]:
+        ak = ""
+        sk = ""
+        sts_token = ""
 
+        if self.volcengine_access_key and self.volcengine_secret_key:
+            ak = self.volcengine_access_key
+            sk = self.volcengine_secret_key
+            sts_token = self.session_token
+            logger.debug(
+                "Get volcengine credential from Environments for VikingMEMBackend"
+            )
+
+        else:
+            cred = get_credential_from_vefaas_iam()
+            ak = cred.access_key_id
+            sk = cred.secret_access_key
+            sts_token = cred.session_token
+            logger.debug(
+                "Get volcengine credential from VeFaaS IAM file for VikingMEMBackend."
+            )
+
+        return ak, sk, sts_token
+
+    def _get_client(self) -> VikingDBMemoryClient:
+        ak, sk, sts_token = self._get_ak_sk_sts()
         return VikingDBMemoryClient(
-            ak=self.volcengine_access_key,
-            sk=self.volcengine_secret_key,
-            sts_token=self.session_token,
+            ak=ak,
+            sk=sk,
+            sts_token=sts_token,
             region=self.region,
         )
 
     def _get_sdk_client(self) -> VikingMem:
-        client = self._get_client()
+        ak, sk, sts_token = self._get_ak_sk_sts()
+        client = VikingDBMemoryClient(
+            ak=ak,
+            sk=sk,
+            sts_token=sts_token,
+            region=self.region,
+        )
         return VikingMem(
             host=client.get_host(),
             region=self.region,
             auth=IAM(
-                ak=self.volcengine_access_key,
-                sk=self.volcengine_secret_key,
+                ak=ak,
+                sk=sk,
             ),
-            sts_token=self.session_token,
+            sts_token=sts_token,
         )
 
     @override
@@ -237,19 +262,7 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
             f"Get user profile for user_id={user_id} from Viking Memory with mem_id={mem_id}"
         )
 
-        ak = ""
-        sk = ""
-        sts_token = ""
-        if self.volcengine_access_key and self.volcengine_secret_key:
-            ak = self.volcengine_access_key
-            sk = self.volcengine_secret_key
-            sts_token = self.session_token
-        else:
-            cred = get_credential_from_vefaas_iam()
-            ak = cred.access_key_id
-            sk = cred.secret_access_key
-            sts_token = cred.session_token
-
+        ak, sk, sts_token = self._get_ak_sk_sts()
         response = ve_request(
             request_body={
                 "filter": {
