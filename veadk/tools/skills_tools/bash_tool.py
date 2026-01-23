@@ -24,7 +24,9 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-async def bash_tool(command: str, description: str, tool_context: ToolContext):
+async def bash_tool(
+    command: str, description: str, tool_context: ToolContext, timeout: float = 600.0
+) -> str:
     """Execute bash commands in the skills environment with local shell.
 
     This tool uses the local bash shell to execute commands with:
@@ -57,14 +59,14 @@ async def bash_tool(command: str, description: str, tool_context: ToolContext):
     - Use read_file, write_file, and edit_file for interacting with the filesystem.
 
     Timeouts:
-    - pip install: 120s
-    - python scripts: 60s
-    - other commands: 30s
+    - Default timeout is 600 seconds (10 minutes).
+    - Adjust the 'timeout' parameter as needed for longer-running commands.
 
     Args:
         command: Bash command to execute. Use && to chain commands.
         description: Clear, concise description of what this command does (5-10 words)
         tool_context: The context of the tool execution, including session info.
+        timeout: Maximum time in seconds to allow for command execution. Default is 600s.
 
     Returns:
         The output of the bash command or error message.
@@ -77,9 +79,6 @@ async def bash_tool(command: str, description: str, tool_context: ToolContext):
         # Get session working directory (initialized by SkillsPlugin)
         working_dir = get_session_path(session_id=tool_context.session.id)
         logger.info(f"Session working directory: {working_dir}")
-
-        # Determine timeout based on command
-        timeout = _get_command_timeout_seconds(command)
 
         # Prepare environment with PYTHONPATH including skills directory
         # This allows imports like: from skills.slack_gif_creator.core import something
@@ -146,13 +145,3 @@ async def bash_tool(command: str, description: str, tool_context: ToolContext):
         error_msg = f"Error executing command '{command}': {e}"
         logger.error(error_msg)
         return error_msg
-
-
-def _get_command_timeout_seconds(command: str) -> float:
-    """Determine appropriate timeout for command in seconds."""
-    if "pip install" in command or "pip3 install" in command:
-        return 120.0
-    elif "python " in command or "python3 " in command:
-        return 60.0
-    else:
-        return 30.0
