@@ -66,6 +66,7 @@ async def bash_tool(
         command: Bash command to execute. Use && to chain commands.
         description: Clear, concise description of what this command does (5-10 words)
         tool_context: The context of the tool execution, including session info.
+        timeout: Maximum time in seconds to allow for command execution. Default is 600s.
 
     Returns:
         The output of the bash command or error message.
