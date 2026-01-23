@@ -67,6 +67,7 @@ nav:
       - OAuth2 用户联邦出站认证: auth/oauth2-user-federation-outbound.md
       - OAuth2 M2M 出站认证: auth/oauth2-m2m-outbound.md
       - Trusted MCP 出站认证: auth/trusted-mcp-outbound.md
+      - 权限策略: auth/permission-policy.md
     - 可观测:
       - 开启观测: observation/tracing.md
       - 在火山引擎观测: observation/ve-tracing.md

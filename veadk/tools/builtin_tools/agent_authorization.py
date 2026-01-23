@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from typing import Optional
 
 from google.genai import types
@@ -59,15 +60,18 @@ async def check_agent_authorization(
         role_id = actors[0]
 
         principal = {"Type": "user", "Id": user_id}
-        operation = {"Type": "action", "Id": "invoke"}
+        operation = {"Type": "Action", "Id": "invoke"}
         resource = {"Type": "agent", "Id": role_id}
         original_callers = [{"Type": "agent", "Id": actor} for actor in actors[1:]]
+
+        namespace = os.getenv("RUNTIME_IDENTITY_NAMESPACE", "default")
 
         allowed = identity_client.check_permission(
             principal=principal,
             operation=operation,
             resource=resource,
             original_callers=original_callers,
+            namespace=namespace,
         )
 
         if allowed:
