@@ -38,10 +38,7 @@ from pydantic import ConfigDict, Field
 from typing_extensions import Any
 
 from veadk.config import settings
-from veadk.consts import (
-    DEFAULT_AGENT_NAME,
-    DEFAULT_MODEL_EXTRA_CONFIG,
-)
+from veadk.consts import DEFAULT_AGENT_NAME, DEFAULT_MODEL_EXTRA_CONFIG
 from veadk.knowledgebase import KnowledgeBase
 from veadk.memory.long_term_memory import LongTermMemory
 from veadk.memory.short_term_memory import ShortTermMemory
@@ -88,6 +85,7 @@ class Agent(LlmAgent):
         auto_save_session (bool): Whether to automatically save sessions to long-term memory.
         skills (list[str]): List of skills that equip the agent with specific capabilities.
         example_store (Optional[BaseExampleProvider]): Example store for providing example Q/A.
+        enable_shadowchar (bool): Whether to enable shadow character for the agent.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
@@ -153,6 +151,8 @@ class Agent(LlmAgent):
     example_store: Optional[BaseExampleProvider] = None
 
     enable_supervisor: bool = False
+
+    enable_ghostchar: bool = False
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
@@ -303,6 +303,14 @@ class Agent(LlmAgent):
             from google.adk.tools.example_tool import ExampleTool
 
             self.tools.append(ExampleTool(examples=self.example_store))
+
+        if self.enable_ghostchar:
+            logger.info("Ghostchar tool enabled")
+            from veadk.tools.ghost_char import GhostcharTool
+
+            self.tools.append(GhostcharTool())
+
+            self.instruction += "Please add a character `< at the beginning of you each text-based response."
 
         logger.info(f"VeADK version: {VERSION}")
 
