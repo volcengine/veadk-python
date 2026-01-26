@@ -99,6 +99,11 @@ def execute_skills(
     tool_user_session_id = agent_name + "_" + user_id + "_" + session_id
     logger.debug(f"tool_user_session_id: {tool_user_session_id}")
 
+    cloud_provider = getenv("CLOUD_PROVIDER", "", allow_false_values=True)
+    scheme = getenv("AGENTKIT_TOOL_SCHEME", "https", allow_false_values=True).lower()
+    if scheme not in {"http", "https"}:
+        scheme = "https"
+
     logger.debug(
         f"Execute skills in session_id={session_id}, tool_id={tool_id}, host={host}, service={service}, region={region}, timeout={timeout}"
     )
@@ -126,22 +131,26 @@ def execute_skills(
 
     cmd = ["python", "agent.py", workflow_prompt]
 
-    res = ve_request(
-        request_body={},
-        action="GetCallerIdentity",
-        ak=ak,
-        sk=sk,
-        service="sts",
-        version="2018-01-01",
-        region=region,
-        host="sts.volcengineapi.com",
-        header=header,
-    )
-    try:
-        account_id = res["Result"]["AccountId"]
-    except KeyError as e:
-        logger.error(f"Error occurred while getting account id: {e}, response is {res}")
-        return res
+    account_id = ""
+    if cloud_provider != "vestack":
+        res = ve_request(
+            request_body={},
+            action="GetCallerIdentity",
+            ak=ak,
+            sk=sk,
+            service="sts",
+            version="2018-01-01",
+            region=region,
+            host="sts.volcengineapi.com",
+            header=header,
+        )
+        try:
+            account_id = res["Result"]["AccountId"]
+        except KeyError as e:
+            logger.error(
+                f"Error occurred while getting account id: {e}, response is {res}"
+            )
+            return res
 
     skill_space_id = os.getenv("SKILL_SPACE_ID", "")
     if not skill_space_id:
@@ -236,6 +245,7 @@ with open('/tmp/agent.log', 'w') as log_file:
         region=region,
         host=host,
         header=header,
+        scheme=scheme,
     )
     logger.debug(f"Invoke run code response: {res}")
 
