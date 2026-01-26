@@ -37,39 +37,47 @@ logger = get_logger(__name__)
 
 
 def _get_backend_cls(backend: str) -> type[BaseLongTermMemoryBackend]:
-    match backend:
-        case "local":
-            from veadk.memory.long_term_memory_backends.in_memory_backend import (
-                InMemoryLTMBackend,
-            )
+    try:
+        match backend:
+            case "local":
+                from veadk.memory.long_term_memory_backends.in_memory_backend import (
+                    InMemoryLTMBackend,
+                )
 
-            return InMemoryLTMBackend
-        case "opensearch":
-            from veadk.memory.long_term_memory_backends.opensearch_backend import (
-                OpensearchLTMBackend,
-            )
+                return InMemoryLTMBackend
+            case "opensearch":
+                from veadk.memory.long_term_memory_backends.opensearch_backend import (
+                    OpensearchLTMBackend,
+                )
 
-            return OpensearchLTMBackend
-        case "viking":
-            from veadk.memory.long_term_memory_backends.vikingdb_memory_backend import (
-                VikingDBLTMBackend,
-            )
+                return OpensearchLTMBackend
+            case "viking":
+                from veadk.memory.long_term_memory_backends.vikingdb_memory_backend import (
+                    VikingDBLTMBackend,
+                )
 
-            return VikingDBLTMBackend
-        case "redis":
-            from veadk.memory.long_term_memory_backends.redis_backend import (
-                RedisLTMBackend,
-            )
+                return VikingDBLTMBackend
+            case "redis":
+                from veadk.memory.long_term_memory_backends.redis_backend import (
+                    RedisLTMBackend,
+                )
 
-            return RedisLTMBackend
-        case "mem0":
-            from veadk.memory.long_term_memory_backends.mem0_backend import (
-                Mem0LTMBackend,
-            )
+                return RedisLTMBackend
+            case "mem0":
+                from veadk.memory.long_term_memory_backends.mem0_backend import (
+                    Mem0LTMBackend,
+                )
 
-            return Mem0LTMBackend
-
-    raise ValueError(f"Unsupported long term memory backend: {backend}")
+                return Mem0LTMBackend
+            case _:
+                raise ValueError(f"Unsupported long term memory backend: {backend}")
+    except ImportError as e:
+        if "llama_index" in str(e) or "llama-index" in str(e):
+            raise ImportError(
+                "LongTermMemory functionality requires 'veadk-python[extensions]'. "
+                "Please install it via `pip install veadk-python[extensions]`."
+            ) from e
+        raise e
 
 
 class LongTermMemory(BaseMemoryService, BaseModel):
