@@ -99,7 +99,7 @@ def execute_skills(
     tool_user_session_id = agent_name + "_" + user_id + "_" + session_id
     logger.debug(f"tool_user_session_id: {tool_user_session_id}")
 
-    cloud_provider = getenv("CLOUD_PROVIDER", "")
+    cloud_provider = getenv("CLOUD_PROVIDER", "", allow_false_values=True)
     scheme = getenv("AGENTKIT_TOOL_SCHEME", "https", allow_false_values=True).lower()
     if scheme not in {"http", "https"}:
         scheme = "https"
