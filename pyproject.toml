@@ -1,6 +1,6 @@
 [project]
 name = "veadk-python"
-version = "0.5.12"
+version = "0.5.14"
 description = "Volcengine agent development kit, integrations with Volcengine cloud services."
 readme = "README.md"
 requires-python = ">=3.10"
