@@ -147,7 +147,9 @@ def execute_skills(
         try:
             account_id = res["Result"]["AccountId"]
         except KeyError as e:
-            logger.error(f"Error occurred while getting account id: {e}, response is {res}")
+            logger.error(
+                f"Error occurred while getting account id: {e}, response is {res}"
+            )
             return res
 
     skill_space_id = os.getenv("SKILL_SPACE_ID", "")
@@ -243,7 +245,7 @@ with open('/tmp/agent.log', 'w') as log_file:
         region=region,
         host=host,
         header=header,
-        scheme=scheme
+        scheme=scheme,
     )
     logger.debug(f"Invoke run code response: {res}")
 
