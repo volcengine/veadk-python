@@ -738,6 +738,8 @@ class IdentityClient:
 
         request = CreateUserPoolRequest(
             name=name,
+            self_sign_up_enabled=False,
+            self_account_recovery_enabled=True,
         )
         response: CreateUserPoolResponse = self._api_client.create_user_pool(request)
 
