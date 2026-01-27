@@ -19,6 +19,17 @@ from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
 
 
 def build_supabase_mcptoolset(url: str, api_key: str) -> MCPToolset:
+    """Build a MCPToolset for Supabase.
+
+    You can get the corresponding information from https://supabase.com/docs/guides/getting-started/mcp
+
+    Args:
+        url (str): The Supabase URL.
+        api_key (str): The Supabase API key.
+
+    Returns:
+        MCPToolset: The MCPToolset for Supabase.
+    """
     return MCPToolset(
         connection_params=StreamableHTTPConnectionParams(
             url=url, headers={"Authorization": f"Bearer {api_key}"}
