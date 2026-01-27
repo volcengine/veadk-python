@@ -51,8 +51,19 @@ def load_kb_queries(profile_names: list[str], tool_context: ToolContext) -> list
 
     index = tool_context._invocation_context.agent.knowledgebase.index
 
+    all_profile_names = []
+
+    with open(
+            f"./profiles/knowledgebase/profiles_{index}/all_profile_list.json",
+            "r",
+    ) as f:
+        all_profile_names = json.load(f)
+
     recommanded_queries = []
     for profile_name in profile_names:
+        if profile_name not in all_profile_names:
+            logger.info(f"{profile_name} Invalid")
+            continue
         profile_path = Path(
             f"./profiles/knowledgebase/profiles_{index}/profile_{profile_name}.json"
         )

@@ -303,6 +303,6 @@ class KnowledgeBase(BaseModel):
         profile_names = [profile.name for profile in profiles]
 
         write_string_to_file(
-            profile_path + "/profile_list.json",
+            profile_path + "/all_profile_list.json",
             json.dumps(profile_names, indent=4, ensure_ascii=False),
         )

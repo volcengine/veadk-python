@@ -27,6 +27,7 @@ from veadk.knowledgebase import KnowledgeBase
 from veadk.knowledgebase.entry import KnowledgebaseEntry
 from veadk.tools.builtin_tools.load_kb_queries import load_profile
 from veadk.utils.logger import get_logger
+from veadk import Agent
 
 logger = get_logger(__name__)
 
@@ -47,6 +48,46 @@ class LoadKnowledgebaseTool(FunctionTool):
             self.custom_metadata = {}
         self.custom_metadata["backend"] = knowledgebase.backend
 
+    #     if self.knowledgebase.enable_profile:
+    #         from pathlib import Path
+    #
+    #         profile_names = []
+    #         profile_descriptions = []
+    #
+    #         with open(
+    #                 f"./profiles/knowledgebase/profiles_{self.knowledgebase.index}/all_profile_list.json",
+    #                 "r",
+    #         ) as f:
+    #             profile_names = json.load(f)
+    #
+    #         for profile_name in profile_names:
+    #             profile_descriptions.append(
+    #
+    #                 load_profile(
+    #                     Path(
+    #                         f"./profiles/knowledgebase/profiles_{self.knowledgebase.index}/profile_{profile_name}.json"
+    #                     ),
+    #                 )["description"]
+    #             )
+    #
+    #         profiles_text = "\n".join(
+    #             f"- profile_name: **{name}**\n  profile_description: {profile_descriptions[idx]}"
+    #             for idx, name in enumerate(profile_names)
+    #         )
+    #
+    #         self.select_agent = Agent(
+    #             name="DocRetrieveAgent",
+    #             description="A helpful assistant for retrieving documents relevant to user query.",
+    #             instruction=f"""
+    # The knowledgebase is divided into the following profiles:
+    #
+    # {profiles_text}
+    #
+    # You should choose some profile_name which are most relevant to the user question.
+    # """,
+    #             model_name="doubao-seed-1-6-251015",
+    #         )
+
     @override
     def _get_declaration(self) -> types.FunctionDeclaration | None:
         return types.FunctionDeclaration(
@@ -65,10 +106,10 @@ class LoadKnowledgebaseTool(FunctionTool):
 
     @override
     async def process_llm_request(
-        self,
-        *,
-        tool_context: ToolContext,
-        llm_request: LlmRequest,
+            self,
+            *,
+            tool_context: ToolContext,
+            llm_request: LlmRequest,
     ) -> None:
         await super().process_llm_request(
             tool_context=tool_context, llm_request=llm_request
@@ -82,13 +123,14 @@ class LoadKnowledgebaseTool(FunctionTool):
             profile_descriptions = []
 
             with open(
-                f"./profiles/knowledgebase/profiles_{index}/profile_list.json",
-                "r",
+                    f"./profiles/knowledgebase/profiles_{index}/all_profile_list.json",
+                    "r",
             ) as f:
                 profile_names = json.load(f)
 
             for profile_name in profile_names:
                 profile_descriptions.append(
+
                     load_profile(
                         Path(
                             f"./profiles/knowledgebase/profiles_{index}/profile_{profile_name}.json"
@@ -97,7 +139,7 @@ class LoadKnowledgebaseTool(FunctionTool):
                 )
 
             profiles_text = "\n".join(
-                f"- profile_name: {name}\n  profile_description: {profile_descriptions[idx]}"
+                f"- profile_name: **{name}**\n  profile_description: {profile_descriptions[idx]}"
                 for idx, name in enumerate(profile_names)
             )
 
@@ -105,9 +147,9 @@ class LoadKnowledgebaseTool(FunctionTool):
         llm_request.append_instructions(
             [
                 f"""
-You have a knowledgebase (knowledegebase name is `{self.knowledgebase.name}`, knowledgebase description is `{self.knowledgebase.description}`). You can use it to answer questions. If any questions need
-you to look up the knowledgebase, you should call load_knowledgebase function with a query.
-"""
+    You have a knowledgebase (knowledegebase name is `{self.knowledgebase.name}`, knowledgebase description is `{self.knowledgebase.description}`). You can use it to answer questions. If any questions need
+    you to look up the knowledgebase, you should call load_knowledgebase function with a query.
+    """
             ],
         )
 
@@ -115,12 +157,12 @@ you to look up the knowledgebase, you should call load_knowledgebase function wi
             llm_request.append_instructions(
                 [
                     f"""
-The knowledgebase is divided into the following profiles: 
-
-{profiles_text}
-
-You should choose some profiles which are relevant to the user question. Before load the knowledgebase, you must call `load_kb_queries` to load the recommanded queries of the knowledgebase profiles. You should generate final knowledgebase queries based on the user question and recommanded queries.
-"""
+    The knowledgebase is divided into the following profiles: 
+    
+    {profiles_text}
+    
+    You should choose some profile_name which are most relevant to the user question. Before load the knowledgebase, you must call `load_kb_queries` to load the recommanded queries of the knowledgebase profiles. You should generate final knowledgebase queries based on the user question and recommanded queries.
+    """
                 ]
             )
 
@@ -140,17 +182,17 @@ You should choose some profiles which are relevant to the user question. Before 
                 llm_request.append_instructions(
                     [
                         f"""
-Please generate the knowledgebase queries based on the user profile (description) at the same time. For example, for a query `quick sort algorithm`, you should generate `quick sort algorithm for python` if the user is a python developer, or `quick sort algorithm friendly introduction` if the user is a beginner.
-
-The user profile is : 
-
-{user_profile}
-"""
+    Please generate the knowledgebase queries based on the user profile (description) at the same time. For example, for a query `quick sort algorithm`, you should generate `quick sort algorithm for python` if the user is a python developer, or `quick sort algorithm friendly introduction` if the user is a beginner.
+    
+    The user profile is : 
+    
+    {user_profile}
+    """
                     ]
                 )
 
     async def load_knowledgebase(
-        self, query: str, tool_context: ToolContext
+            self, query: str, tool_context: ToolContext
     ) -> LoadKnowledgebaseResponse:
         """Loads the knowledgebase for the user.
 
