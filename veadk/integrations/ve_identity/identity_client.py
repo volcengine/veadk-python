@@ -743,27 +743,59 @@ class IdentityClient:
 
         return response.uid, response.domain
 
-    def get_user_pool(self, name: str) -> tuple[str, str] | None:
+    def get_user_pool(
+        self,
+        name: Optional[str] = None,
+        uid: Optional[str] = None,
+    ) -> tuple[str, str] | None:
+        """Get user pool by name or UID.
+
+        Args:
+            name: User pool name (used for list query).
+            uid: User pool UID (used for direct get query).
+
+        Returns:
+            Tuple of (uid, domain) if found, None otherwise.
+
+        Raises:
+            ValueError: If neither name nor uid is provided.
+        """
         from volcenginesdkid import (
             ListUserPoolsRequest,
             ListUserPoolsResponse,
+            GetUserPoolRequest,
+            GetUserPoolResponse,
             FilterForListUserPoolsInput,
             DataForListUserPoolsOutput,
         )
 
-        request = ListUserPoolsRequest(
-            page_number=1,
-            page_size=1,
-            filter=FilterForListUserPoolsInput(
-                name=name,
-            ),
-        )
-        response: ListUserPoolsResponse = self._api_client.list_user_pools(request)
-        if response.total_count == 0:
-            return None
+        if uid:
+            # Direct get by UID
+            request = GetUserPoolRequest(uid=uid)
+            try:
+                response: GetUserPoolResponse = self._api_client.get_user_pool(request)
+                return response.uid, response.domain
+            except Exception as e:
+                logger.warning(f"Failed to get user pool by UID {uid}: {e}")
+                return None
 
-        user_pool: DataForListUserPoolsOutput = response.data[0]
-        return user_pool.uid, user_pool.domain
+        if name:
+            # List query by name
+            request = ListUserPoolsRequest(
+                page_number=1,
+                page_size=1,
+                filter=FilterForListUserPoolsInput(
+                    name=name,
+                ),
+            )
+            response: ListUserPoolsResponse = self._api_client.list_user_pools(request)
+            if response.total_count == 0:
+                return None
+
+            user_pool: DataForListUserPoolsOutput = response.data[0]
+            return user_pool.uid, user_pool.domain
+
+        raise ValueError("Either name or uid must be provided")
 
     def create_user_pool_client(
         self, user_pool_uid: str, name: str, client_type: str
@@ -828,8 +860,24 @@ class IdentityClient:
         self._api_client.update_user_pool_client(request2)
 
     def get_user_pool_client(
-        self, user_pool_uid: str, name: str
+        self,
+        user_pool_uid: str,
+        name: Optional[str] = None,
+        client_uid: Optional[str] = None,
     ) -> tuple[str, str] | None:
+        """Get user pool client by name or client UID.
+
+        Args:
+            user_pool_uid: User pool UID (required).
+            name: Client name (used for list query).
+            client_uid: Client UID (used for direct get query).
+
+        Returns:
+            Tuple of (client_uid, client_secret) if found, None otherwise.
+
+        Raises:
+            ValueError: If neither name nor client_uid is provided.
+        """
         from volcenginesdkid import (
             ListUserPoolClientsRequest,
             ListUserPoolClientsResponse,
@@ -839,26 +887,45 @@ class IdentityClient:
             GetUserPoolClientResponse,
         )
 
-        request = ListUserPoolClientsRequest(
-            user_pool_uid=user_pool_uid,
-            page_number=1,
-            page_size=1,
-            filter=FilterForListUserPoolClientsInput(
-                name=name,
-            ),
-        )
-        response: ListUserPoolClientsResponse = self._api_client.list_user_pool_clients(
-            request
-        )
-        if response.total_count == 0:
-            return None
+        if client_uid:
+            # Direct get by client UID
+            request = GetUserPoolClientRequest(
+                user_pool_uid=user_pool_uid,
+                client_uid=client_uid,
+            )
+            try:
+                response: GetUserPoolClientResponse = (
+                    self._api_client.get_user_pool_client(request)
+                )
+                return response.uid, response.client_secret
+            except Exception as e:
+                logger.warning(f"Failed to get client by UID {client_uid}: {e}")
+                return None
 
-        client: DataForListUserPoolClientsOutput = response.data[0]
-        request2 = GetUserPoolClientRequest(
-            user_pool_uid=user_pool_uid,
-            client_uid=client.uid,
-        )
-        response2: GetUserPoolClientResponse = self._api_client.get_user_pool_client(
-            request2
-        )
-        return response2.uid, response2.client_secret
+        if name:
+            # List query by name
+            request = ListUserPoolClientsRequest(
+                user_pool_uid=user_pool_uid,
+                page_number=1,
+                page_size=1,
+                filter=FilterForListUserPoolClientsInput(
+                    name=name,
+                ),
+            )
+            response: ListUserPoolClientsResponse = (
+                self._api_client.list_user_pool_clients(request)
+            )
+            if response.total_count == 0:
+                return None
+
+            client: DataForListUserPoolClientsOutput = response.data[0]
+            request2 = GetUserPoolClientRequest(
+                user_pool_uid=user_pool_uid,
+                client_uid=client.uid,
+            )
+            response2: GetUserPoolClientResponse = (
+                self._api_client.get_user_pool_client(request2)
+            )
+            return response2.uid, response2.client_secret
+
+        raise ValueError("Either name or client_uid must be provided")
