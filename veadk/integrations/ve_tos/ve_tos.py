@@ -55,7 +55,13 @@ class VeTOS:
             self.sld = "volces"
             default_region = "cn-beijing"
 
-        self.region = region or os.getenv("DATABASE_TOS_REGION", default_region)
+        self.region = region
+        if not self.region:
+            self.region = (
+                os.getenv("REGION")
+                or os.getenv("DATABASE_TOS_REGION")
+                or default_region
+            )
 
         logger.info(
             f"TOS client ready: region={self.region}, endpoint=tos-{self.region}.{self.sld}.com"
