@@ -65,6 +65,7 @@ For custom OAuth2 providers:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -89,6 +90,17 @@ from starlette.routing import Route
 
 if TYPE_CHECKING:
     from veadk.integrations.ve_identity import IdentityClient
+
+try:
+    from authlib.jose import JsonWebKey, jwt
+    from authlib.jose.errors import JoseError
+
+    _AUTHLIB_AVAILABLE = True
+except ImportError:  # pragma: no cover - optional dependency
+    JsonWebKey = None
+    jwt = None
+    JoseError = Exception
+    _AUTHLIB_AVAILABLE = False
 
 # Maximum cookie size before warning (browsers typically limit to 4KB).
 _MAX_COOKIE_SIZE_WARNING = 3800
@@ -295,6 +307,20 @@ class OAuth2Config(BaseModel):
     token_refresh_threshold_seconds: int = 300  # Refresh when < 5 min remaining
     auto_refresh_token: bool = True
 
+    # Access token validation (Authorization header + session)
+    issuer: Optional[str] = None
+    jwks_uri: Optional[str] = None
+    audience: Optional[str | list[str]] = None
+    allowed_algorithms: list[str] = Field(default_factory=lambda: ["RS256"])
+    jwks_cache_ttl_seconds: int = 300
+    jwks_kid_miss_cooldown_seconds: int = 30
+    use_introspection: bool = False
+    introspection_url: Optional[str] = None
+    introspection_client_id: Optional[str] = None
+    introspection_client_secret: Optional[str] = None
+    introspection_cache_ttl_seconds: int = 300
+    introspection_cache_max_entries: int = 1000
+
     # API vs browser behavior
     api_path_prefixes: list[str] = Field(default_factory=lambda: ["/api/"])
 
@@ -454,6 +480,9 @@ class OAuth2Config(BaseModel):
             token_url=oidc_config.token_endpoint,
             userinfo_url=oidc_config.userinfo_endpoint,
             end_session_url=oidc_config.end_session_endpoint,
+            issuer=oidc_config.issuer,
+            jwks_uri=oidc_config.jwks_uri,
+            introspection_url=oidc_config.introspection_endpoint,
             client_id=resolved_client_id,
             client_secret=client_secret,
             redirect_uri=redirect_uri,
@@ -630,6 +659,11 @@ class OAuth2Handler:
             timeout=config.http_timeout_seconds,
             limits=limits,
         )
+        self._jwks_cache: Optional[dict[str, Any]] = None
+        self._jwks_cache_time = 0.0
+        self._jwks_last_kid_miss_refresh = 0.0
+        self._jwks_lock = asyncio.Lock()
+        self._introspection_cache: dict[str, tuple[dict[str, Any], float]] = {}
 
     async def close(self) -> None:
         """Close the HTTP client."""
@@ -865,6 +899,279 @@ class OAuth2Handler:
         except Exception as e:
             logger.error("User info fetch error: %s", e)
             raise Exception(f"User info fetch error: {e}")
+
+    def _normalized_audience(self) -> Optional[list[str]]:
+        audience = self.config.audience
+        if not audience:
+            return None
+        if isinstance(audience, str):
+            audience_list = [audience]
+        else:
+            audience_list = list(audience)
+        audience_list = [str(item) for item in audience_list if item is not None]
+        return audience_list or None
+
+    def _decode_jwt_header(self, token: str) -> dict[str, Any]:
+        parts = token.split(".")
+        if len(parts) != 3:
+            raise HTTPException(status_code=401, detail="Invalid JWT format")
+        try:
+            header_bytes = self._base64url_decode(parts[0])
+            header = json.loads(header_bytes.decode("utf-8"))
+        except Exception as e:
+            raise HTTPException(status_code=401, detail="Invalid JWT header") from e
+        if not isinstance(header, dict):
+            raise HTTPException(status_code=401, detail="Invalid JWT header")
+        return header
+
+    def _ensure_allowed_algorithm(self, alg: Optional[str]) -> None:
+        if not alg or str(alg).lower() == "none":
+            raise HTTPException(status_code=401, detail="Unsupported token algorithm")
+        allowed = self.config.allowed_algorithms
+        if allowed and alg not in allowed:
+            raise HTTPException(status_code=401, detail="Unsupported token algorithm")
+
+    @staticmethod
+    def _jwks_has_kid(jwks: dict[str, Any], kid: str) -> bool:
+        keys = jwks.get("keys", [])
+        if not isinstance(keys, list):
+            return False
+        return any(isinstance(key, dict) and key.get("kid") == kid for key in keys)
+
+    async def _fetch_jwks(self) -> dict[str, Any]:
+        if not self.config.jwks_uri:
+            raise HTTPException(status_code=503, detail="JWKS URI not configured")
+        try:
+            response = await self._http_client.get(self.config.jwks_uri)
+            response.raise_for_status()
+            jwks = response.json()
+        except httpx.HTTPStatusError as e:
+            logger.error("JWKS fetch failed: %s", e.response.text)
+            raise HTTPException(status_code=503, detail="Failed to fetch JWKS") from e
+        except httpx.RequestError as e:
+            logger.error("JWKS request error: %s", e)
+            raise HTTPException(status_code=503, detail="Failed to fetch JWKS") from e
+        except Exception as e:
+            logger.error("JWKS decode error: %s", e)
+            raise HTTPException(status_code=503, detail="Invalid JWKS response") from e
+
+        if not isinstance(jwks, dict) or "keys" not in jwks:
+            raise HTTPException(status_code=503, detail="Invalid JWKS response")
+        return jwks
+
+    async def _get_jwks(self, force_refresh: bool = False) -> dict[str, Any]:
+        now = time.time()
+        if (
+            not force_refresh
+            and self._jwks_cache
+            and now - self._jwks_cache_time < self.config.jwks_cache_ttl_seconds
+        ):
+            return self._jwks_cache
+
+        async with self._jwks_lock:
+            now = time.time()
+            if (
+                not force_refresh
+                and self._jwks_cache
+                and now - self._jwks_cache_time < self.config.jwks_cache_ttl_seconds
+            ):
+                return self._jwks_cache
+
+            try:
+                jwks = await self._fetch_jwks()
+            except HTTPException as exc:
+                if self._jwks_cache:
+                    logger.warning(
+                        "JWKS fetch failed, using cached keys: %s", exc.detail
+                    )
+                    self._jwks_cache_time = now
+                    return self._jwks_cache
+                raise
+            except Exception as exc:
+                if self._jwks_cache:
+                    logger.warning("JWKS fetch failed, using cached keys: %s", exc)
+                    self._jwks_cache_time = now
+                    return self._jwks_cache
+                raise
+
+            self._jwks_cache = jwks
+            self._jwks_cache_time = now
+            return jwks
+
+    async def _get_jwks_for_kid(self, kid: Optional[str]) -> dict[str, Any]:
+        jwks = await self._get_jwks()
+        if not kid:
+            return jwks
+        if self._jwks_has_kid(jwks, kid):
+            return jwks
+        now = time.time()
+        if (
+            now - self._jwks_last_kid_miss_refresh
+            < self.config.jwks_kid_miss_cooldown_seconds
+        ):
+            return jwks
+        jwks = await self._get_jwks(force_refresh=True)
+        self._jwks_last_kid_miss_refresh = now
+        return jwks
+
+    def _prune_introspection_cache(self) -> None:
+        if not self._introspection_cache:
+            return
+        now = time.time()
+        expired = [
+            token
+            for token, (_, expires_at) in self._introspection_cache.items()
+            if expires_at <= now
+        ]
+        for token in expired:
+            self._introspection_cache.pop(token, None)
+        while (
+            len(self._introspection_cache) > self.config.introspection_cache_max_entries
+        ):
+            self._introspection_cache.pop(next(iter(self._introspection_cache)))
+
+    def _validate_audience(self, claims: dict[str, Any]) -> None:
+        audience = self._normalized_audience()
+        if not audience:
+            return
+        aud_claim = claims.get("aud")
+        if aud_claim is not None:
+            if isinstance(aud_claim, list):
+                aud_list = [str(item) for item in aud_claim if item is not None]
+            else:
+                aud_list = [str(aud_claim)]
+            if any(aud in audience for aud in aud_list):
+                return
+            raise HTTPException(status_code=403, detail="Token audience not allowed")
+
+        client_id = claims.get("client_id") or claims.get("azp")
+        if client_id and str(client_id) in audience:
+            return
+        raise HTTPException(status_code=403, detail="Token audience not allowed")
+
+    async def _validate_with_jwks(self, token: str) -> dict[str, Any]:
+        if not _AUTHLIB_AVAILABLE:
+            raise HTTPException(
+                status_code=503, detail="authlib is required for JWT validation"
+            )
+        header = self._decode_jwt_header(token)
+        alg = header.get("alg")
+        self._ensure_allowed_algorithm(alg)
+        kid = header.get("kid")
+
+        jwks = await self._get_jwks_for_kid(kid)
+        if kid and not self._jwks_has_kid(jwks, kid):
+            raise HTTPException(status_code=401, detail="Unknown token key")
+
+        try:
+            key_set = JsonWebKey.import_key_set(jwks)
+            claims_options: dict[str, Any] = {"exp": {"essential": True}}
+            if self.config.issuer:
+                claims_options["iss"] = {
+                    "essential": True,
+                    "value": self.config.issuer,
+                }
+            claims = jwt.decode(token, key_set, claims_options=claims_options)
+            claims.validate()
+            claims_dict = dict(claims)
+        except JoseError as e:
+            logger.warning("JWT validation failed: %s", e)
+            raise HTTPException(status_code=401, detail="Invalid access token") from e
+        except Exception as e:
+            logger.error("JWT validation error: %s", e)
+            raise HTTPException(status_code=500, detail="Token validation error") from e
+
+        self._validate_audience(claims_dict)
+        return claims_dict
+
+    async def _validate_with_introspection(self, token: str) -> dict[str, Any]:
+        if not self.config.introspection_url:
+            raise HTTPException(
+                status_code=503, detail="Introspection endpoint not configured"
+            )
+
+        now = time.time()
+        cached = self._introspection_cache.get(token)
+        if cached and cached[1] > now:
+            return cached[0]
+
+        data = {"token": token}
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        auth = None
+        if (
+            self.config.introspection_client_id
+            and self.config.introspection_client_secret
+        ):
+            auth = (
+                self.config.introspection_client_id,
+                self.config.introspection_client_secret,
+            )
+        elif self.config.client_id and self.config.client_secret:
+            auth = (self.config.client_id, self.config.client_secret)
+
+        try:
+            response = await self._http_client.post(
+                self.config.introspection_url,
+                data=data,
+                headers=headers,
+                auth=auth,
+            )
+            response.raise_for_status()
+            result = response.json()
+        except httpx.HTTPStatusError as e:
+            logger.error("Introspection failed: %s", e.response.text)
+            raise HTTPException(
+                status_code=503, detail="Token introspection failed"
+            ) from e
+        except httpx.RequestError as e:
+            logger.error("Introspection request error: %s", e)
+            raise HTTPException(
+                status_code=503, detail="Token introspection failed"
+            ) from e
+        except Exception as e:
+            logger.error("Introspection decode error: %s", e)
+            raise HTTPException(
+                status_code=503, detail="Token introspection failed"
+            ) from e
+
+        if not isinstance(result, dict):
+            raise HTTPException(status_code=503, detail="Token introspection failed")
+
+        if not result.get("active", False):
+            raise HTTPException(status_code=401, detail="Inactive access token")
+
+        exp = result.get("exp")
+        if exp is not None:
+            try:
+                exp = int(exp)
+            except (TypeError, ValueError):
+                exp = None
+        if exp is not None and exp <= now:
+            raise HTTPException(status_code=401, detail="Access token expired")
+
+        if self.config.issuer:
+            issuer = result.get("iss")
+            if issuer and issuer != self.config.issuer:
+                raise HTTPException(status_code=403, detail="Token issuer not allowed")
+
+        self._validate_audience(result)
+
+        cache_until = now + self.config.introspection_cache_ttl_seconds
+        if exp is not None:
+            cache_until = min(cache_until, exp)
+        self._introspection_cache[token] = (result, cache_until)
+        if len(self._introspection_cache) > self.config.introspection_cache_max_entries:
+            self._prune_introspection_cache()
+
+        return result
+
+    async def validate_access_token(self, token: str) -> dict[str, Any]:
+        """Validate access token via introspection or JWKS."""
+        if not token:
+            raise HTTPException(status_code=401, detail="Missing access token")
+        if self.config.use_introspection:
+            return await self._validate_with_introspection(token)
+        return await self._validate_with_jwks(token)
 
     def encode_session(self, session: OAuth2Session) -> str:
         """Encode OAuth2 session data for cookie storage.
@@ -1146,6 +1453,12 @@ def register_oauth2_routes(
         if not session or session.is_expired():
             raise HTTPException(status_code=401, detail="Not authenticated")
 
+        if not _is_access_token_already_validated(request, session.access_token):
+            try:
+                await oauth2_handler.validate_access_token(session.access_token)
+            except HTTPException as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+
         if not session.user_info:
             if oauth2_handler.config.userinfo_url:
                 try:
@@ -1244,6 +1557,7 @@ def setup_oauth2(
     route_paths = register_oauth2_routes(app, oauth2_handler, routes=routes)
 
     merged_exempt_paths = set(route_paths.all_paths())
+    merged_exempt_paths.discard(route_paths.userinfo)
     if exempt_paths:
         merged_exempt_paths.update(exempt_paths)
 
@@ -1284,21 +1598,74 @@ def _is_api_request(request: Request, api_prefixes: list[str]) -> bool:
     return False
 
 
+def _extract_bearer_token(authorization: str) -> Optional[str]:
+    """Extract bearer token from Authorization header."""
+    if not authorization:
+        return None
+    parts = authorization.strip().split()
+    if len(parts) != 2:
+        return None
+    if parts[0].lower() != "bearer":
+        return None
+    return parts[1] or None
+
+
+def _set_scope_user_from_claims(
+    request: Request, claims: dict[str, Any], user_id_field: str
+) -> None:
+    if not claims:
+        return
+    user_id = claims.get(user_id_field)
+    if not user_id:
+        for key in ("sub", "user_id", "uid", "username", "email"):
+            if key == user_id_field:
+                continue
+            user_id = claims.get(key)
+            if user_id:
+                break
+    if not user_id:
+        return
+    try:
+        from starlette.authentication import SimpleUser
+
+        request.scope["user"] = SimpleUser(str(user_id))
+    except Exception:
+        request.scope["user"] = str(user_id)
+
+
+def _mark_access_token_validated(request: Request, token: str) -> None:
+    try:
+        request.state.oauth2_access_token_validated = True
+        request.state.oauth2_access_token = token
+    except Exception:
+        pass
+
+
+def _is_access_token_already_validated(request: Request, token: str) -> bool:
+    try:
+        return (
+            getattr(request.state, "oauth2_access_token_validated", False)
+            and getattr(request.state, "oauth2_access_token", None) == token
+        )
+    except Exception:
+        return False
+
+
 def create_oauth2_middleware(
     oauth2_handler: OAuth2Handler,
     *,
     exempt_paths: Optional[Iterable[str]] = None,
     exempt_prefixes: Optional[Iterable[str]] = None,
-    allow_existing_authorization: bool = True,
 ):
     """Create OAuth2 authentication middleware for Starlette/FastAPI.
 
     The middleware:
     - Skips authentication for exempt paths/prefixes and OPTIONS requests.
-    - Passes through requests that already have an Authorization header.
+    - Validates bearer tokens from Authorization headers (JWKS/introspection).
     - Injects the OAuth2 access token as an Authorization header for valid sessions.
     - Auto-refreshes tokens when they are close to expiry (if configured).
-    - Returns 401 JSON for API requests, redirects browsers to login for others.
+    - Returns 401 JSON for API requests or invalid Authorization tokens.
+    - Redirects browsers to login when no valid auth is present.
     """
     exempt_paths_set = set(exempt_paths or [])
     exempt_prefixes_tuple = tuple(exempt_prefixes or [])
@@ -1316,8 +1683,30 @@ def create_oauth2_middleware(
         ):
             return await call_next(request)
 
-        # Pass through if there's already an Authorization header.
-        if allow_existing_authorization and "authorization" in request.headers:
+        authorization = request.headers.get("authorization")
+        if authorization:
+            token = _extract_bearer_token(authorization)
+            if not token:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Bearer token required"},
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            try:
+                claims = await oauth2_handler.validate_access_token(token)
+            except HTTPException as exc:
+                headers = exc.headers or {}
+                if exc.status_code == 401 and "WWW-Authenticate" not in headers:
+                    headers = {**headers, "WWW-Authenticate": "Bearer"}
+                return JSONResponse(
+                    status_code=exc.status_code,
+                    content={"detail": exc.detail},
+                    headers=headers,
+                )
+            _set_scope_user_from_claims(
+                request, claims, oauth2_handler.config.user_id_field
+            )
+            _mark_access_token_validated(request, token)
             return await call_next(request)
 
         session = oauth2_handler.get_session_from_request(request)
@@ -1346,30 +1735,45 @@ def create_oauth2_middleware(
                         response_cookies.append(user_id_cookie)
 
         if session and not session.is_expired():
-            auth_header_value = session.to_authorization_header().encode()
+            try:
+                claims = await oauth2_handler.validate_access_token(
+                    session.access_token
+                )
+            except HTTPException as exc:
+                if exc.status_code >= 500:
+                    return JSONResponse(
+                        status_code=exc.status_code, content={"detail": exc.detail}
+                    )
+                session = None
+            else:
+                auth_header_value = session.to_authorization_header().encode()
 
-            # Update the scope headers so downstream dependencies can read it.
-            headers = list(request.scope.get("headers", []))
-            headers = [
-                (name, value)
-                for name, value in headers
-                if name.lower() != b"authorization"
-            ]
-            headers.append((b"authorization", auth_header_value))
-            request.scope["headers"] = headers
+                # Update the scope headers so downstream dependencies can read it.
+                headers = list(request.scope.get("headers", []))
+                headers = [
+                    (name, value)
+                    for name, value in headers
+                    if name.lower() != b"authorization"
+                ]
+                headers.append((b"authorization", auth_header_value))
+                request.scope["headers"] = headers
+                _set_scope_user_from_claims(
+                    request, claims, oauth2_handler.config.user_id_field
+                )
+                _mark_access_token_validated(request, session.access_token)
 
-            logger.debug(
-                "Added Authorization header to request: %s...",
-                session.to_authorization_header()[:20],
-            )
+                logger.debug(
+                    "Added Authorization header to request: %s...",
+                    session.to_authorization_header()[:20],
+                )
 
-            response = await call_next(request)
+                response = await call_next(request)
 
-            # Set any refreshed session cookies on the response.
-            for cookie_params in response_cookies:
-                response.set_cookie(**cookie_params)
+                # Set any refreshed session cookies on the response.
+                for cookie_params in response_cookies:
+                    response.set_cookie(**cookie_params)
 
-            return response
+                return response
 
         # No valid session - handle API vs browser requests differently.
         if _is_api_request(request, config.api_path_prefixes):
