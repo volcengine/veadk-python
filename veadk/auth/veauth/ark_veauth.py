@@ -52,7 +52,6 @@ def get_ark_token(region: str = "cn-beijing") -> str:
         region=region,
         host=host,
     )
-    logger.info(f"Successfully fetched ARK API Key list: {res}")
     try:
         first_api_key_id = res["Result"]["Items"][0]["Id"]
         logger.warning("By default, VeADK fetches the first API Key in the list.")
