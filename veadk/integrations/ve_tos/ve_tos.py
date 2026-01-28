@@ -37,21 +37,25 @@ class VeTOS:
         ak: str = "",
         sk: str = "",
         session_token: str = "",
+        region: str = "",
         bucket_name: str = DEFAULT_TOS_BUCKET_NAME,
     ) -> None:
         self.ak = ak if ak else os.getenv("VOLCENGINE_ACCESS_KEY", "")
         self.sk = sk if sk else os.getenv("VOLCENGINE_SECRET_KEY", "")
         self.session_token = session_token
 
-        # get provider
-        provider = os.getenv("CLOUD_PROVIDER")
+        # get provider from env
+        provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
         logger.info(f"Cloud provider: {provider}")
-        if provider and provider.lower() == "byteplus":
-            self.region = "ap-southeast-1"
+
+        if provider == "byteplus":
             self.sld = "bytepluses"
+            default_region = "ap-southeast-1"
         else:
-            self.region = "cn-beijing"
             self.sld = "volces"
+            default_region = "cn-beijing"
+
+        self.region = region or os.getenv("DATABASE_TOS_REGION", default_region)
 
         logger.info(
             f"TOS client ready: region={self.region}, endpoint=tos-{self.region}.{self.sld}.com"
