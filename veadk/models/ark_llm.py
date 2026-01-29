@@ -97,7 +97,7 @@ ark_supported_fields = [
     "extra_query",
     "extra_body",
     "timeout",
-    "reasoning"
+    "reasoning",
     # auth params
     "api_key",
     "api_base",
