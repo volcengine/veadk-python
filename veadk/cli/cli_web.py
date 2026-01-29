@@ -22,6 +22,50 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _patch_adkwebserver_oauth2(
+    user_pool_name: str,
+    user_pool_client: str,
+    redirect_uri: str,
+) -> None:
+    """
+    Monkey patch AdkWebServer to enable OAuth2 authentication.
+
+    This function patches the AdkWebServer.get_fast_api_app method to add
+    OAuth2 authentication middleware using VeIdentity User Pool.
+
+    Args:
+        user_pool_name: VeIdentity User Pool name.
+        user_pool_client: VeIdentity User Pool client name.
+        redirect_uri: OAuth2 redirect URI (e.g., http://127.0.0.1:8000/oauth2/callback).
+    """
+    import google.adk.cli.adk_web_server
+
+    from veadk.auth.middleware.oauth2_auth import OAuth2Config, setup_oauth2
+
+    original_get_fast_api = google.adk.cli.adk_web_server.AdkWebServer.get_fast_api_app
+
+    def wrapped_get_fast_api(self, *args, **kwargs):
+        app = original_get_fast_api(self, *args, **kwargs)
+
+        # Setup OAuth2 with VeIdentity User Pool
+        oauth2_config = OAuth2Config.from_veidentity(
+            user_pool_name=user_pool_name,
+            client_name=user_pool_client,
+            redirect_uri=redirect_uri,
+        )
+        oauth2_config.cookie_secure = False
+
+        setup_oauth2(
+            app,
+            oauth2_config,
+        )
+        logger.info("OAuth2 middleware installed")
+
+        return app
+
+    google.adk.cli.adk_web_server.AdkWebServer.get_fast_api_app = wrapped_get_fast_api
+
+
 def patch_adkwebserver_disable_openapi():
     """
     Monkey patch AdkWebServer to disable OpenAPI documentation endpoints.
@@ -58,8 +102,33 @@ def patch_adkwebserver_disable_openapi():
 @click.command(
     context_settings=dict(ignore_unknown_options=True, allow_extra_args=True)
 )
+@click.option(
+    "--oauth2-user-pool",
+    type=str,
+    default=None,
+    help="VeIdentity User Pool name for OAuth2 authentication.",
+)
+@click.option(
+    "--oauth2-user-pool-client",
+    type=str,
+    default=None,
+    help="VeIdentity User Pool client name for OAuth2 authentication.",
+)
+@click.option(
+    "--oauth2-redirect-uri",
+    type=str,
+    default=None,
+    help="OAuth2 redirect URI. Defaults to http://{host}:{port}/oauth2/callback.",
+)
 @click.pass_context
-def web(ctx, *args, **kwargs) -> None:
+def web(
+    ctx,
+    oauth2_user_pool: str | None,
+    oauth2_user_pool_client: str | None,
+    oauth2_redirect_uri: str | None,
+    *args,
+    **kwargs,
+) -> None:
     """
     Launch a web server with VeADK agent support and memory integration.
 
@@ -134,6 +203,30 @@ def web(ctx, *args, **kwargs) -> None:
     from google.adk.cli.cli_tools_click import cli_web
 
     extra_args: list = ctx.args
+
+    # Setup OAuth2 if configured
+    if oauth2_user_pool and oauth2_user_pool_client:
+        # Build redirect_uri from host/port if not provided
+        redirect_uri = oauth2_redirect_uri
+        if not redirect_uri:
+            # Parse host and port from extra_args
+            host = "127.0.0.1"
+            port = "8000"
+            if "--host" in extra_args:
+                host = extra_args[extra_args.index("--host") + 1]
+            if "--port" in extra_args:
+                port = extra_args[extra_args.index("--port") + 1]
+            redirect_uri = f"http://{host}:{port}/oauth2/callback"
+
+        _patch_adkwebserver_oauth2(
+            user_pool_name=oauth2_user_pool,
+            user_pool_client=oauth2_user_pool_client,
+            redirect_uri=redirect_uri,
+        )
+        logger.info(
+            f"OAuth2 enabled: user_pool={oauth2_user_pool}, "
+            f"client={oauth2_user_pool_client}, redirect_uri={redirect_uri}"
+        )
     logger.debug(f"User args: {extra_args}")
 
     # set a default log level to avoid unnecessary outputs

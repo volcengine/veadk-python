@@ -10,7 +10,7 @@ VeADK 提供如下命令便捷您的操作：
 | :-- | :-- | :-- |
 | `veadk init` | 生成可在 VeFaaS 中部署的项目脚手架 | 生成完整的项目目录结构，包括智能体定义文件、部署配置、依赖文件等，支持标准智能体和Web应用两种模板。 |
 | `veadk create` | 在当前目录中创建一个新的智能体 | 创建智能体项目结构，生成.env环境配置文件、agent.py智能体定义文件和__init__.py包初始化文件。 |
-| `veadk web` | 支持长短期记忆、知识库的前端调试界面 | 启动本地Web服务器，生成调试界面访问地址，配置记忆服务和知识库集成环境。 |
+| `veadk web` | 支持长短期记忆、知识库的前端调试界面 | 启动本地Web服务器，生成调试界面访问地址，配置记忆服务和知识库集成环境，并可通过 Agent Identity 提供 SSO 单点登录。 |
 | `veadk kb` | 知识库相关操作 | 创建知识库索引文件，支持多种后端存储，生成向量化文档和检索配置文件。 |
 | `veadk deploy` | 将某个项目部署到 VeFaaS 中 | 生成部署包文件，创建云资源配置，部署智能体到火山引擎函数计算服务并生成API访问端点。 |
 | `veadk eval` | 支持不同后端的评测 | 生成评测报告文件，包含性能指标数据和测试结果，支持本地和远程智能体评估。 |
@@ -137,6 +137,8 @@ location-agent/
 
 该命令会启动一个支持 VeADK 智能体短期和长期记忆功能的 Web 服务器。它会自动检测并加载当前目录下的智能体，并配置相应的记忆服务。
 
+同时，`veadk web` 支持使用 Agent Identity（User Pool）提供 OAuth2/OIDC 的 SSO 单点登录能力。启用后，Web 调试界面会接入 Agent Identity 的用户池与客户端配置，自动完成登录重定向与回调处理。
+
 ### 参数说明
 
 `veadk web` 命令全面兼容 Google ADK 中的 `adk web` 命令，支持相同的参数接口和行为模式。
@@ -146,6 +148,9 @@ location-agent/
 | `--port` | INTEGER | 指定 Web 服务器监听的端口号，默认值为 8000 |
 | `--host` | TEXT | 指定 Web 服务器绑定的主机地址，默认值为 127.0.0.1 |
 | `--log-level` | [debug\|info\|warning\|error] | 设置日志输出级别，默认值为 info |
+| `--oauth2-user-pool` | TEXT | 启用 Agent Identity 的 User Pool 名称 |
+| `--oauth2-user-pool-client` | TEXT | 启用 Agent Identity 的 User Pool Client 名称 |
+| `--oauth2-redirect-uri` | TEXT | OAuth2 回调地址，默认使用 `http://{host}:{port}/oauth2/callback` |
 | `--help` | | 显示此帮助信息并退出 |
 
 **长短期记忆机制**：
@@ -179,6 +184,12 @@ VeADK Web 调试界面支持智能体的短期记忆和长期记忆功能，这�
 veadk web
 # 指定端口
 veadk web --port 8080
+```
+
+启用基于Agent Identity的单点登录：
+
+```bash
+veadk web --oauth2-user-pool my-user-pool --oauth2-user-pool-client my-web-client
 ```
 
 该命令能够自动读取执行命令目录中的 `agent.py` 文件，并加载其中的 `root_agent` 全局变量。服务启动后，通常可以在 `http://127.0.0.1:8000` 访问。
