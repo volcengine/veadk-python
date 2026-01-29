@@ -240,44 +240,16 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
 
         result = response.get("data", {}).get("result_list", [])
 
-        memory_results = []
-        for r in result:
-            if r.get("memory_info", {}):
-                content = ""
-                # extract user profile
-                if r.get("memory_info").get("user_profile"):
-                    logger.debug(
-                        f"Detect user profile: {r.get('memory_info').get('user_profile')}"
-                    )
-                    content += (
-                        f"User profile: {r.get('memory_info').get('user_profile')} "
-                    )
-
-                # # extract original messages
-                # if r.get("memory_info").get("original_message"):
-                #     logger.debug(
-                #         f"Detect original message: {r.get('memory_info').get('original_message')}"
-                #     )
-                #     content += f"Original message: {r.get('memory_info').get('original_message')} "
-
-                # extract summary
-                if r.get("memory_info").get("summary"):
-                    logger.debug(
-                        f"Detect summary: {r.get('memory_info').get('summary')}"
-                    )
-                    content += f"Message summary: {r.get('memory_info').get('summary')}"
-
-                memory_results.append(
-                    json.dumps(
-                        {
-                            "role": "user",
-                            "parts": [{"text": content}],
-                        },
-                        ensure_ascii=False,
-                    )
+        return (
+            [
+                json.dumps(
+                    {"role": "user", "parts": [{"text": str(result)}]},
+                    ensure_ascii=False,
                 )
-
-        return memory_results
+            ]
+            if result
+            else []
+        )
 
     def get_user_profile(self, user_id: str) -> str:
         from veadk.utils.volcengine_sign import ve_request
