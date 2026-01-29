@@ -240,12 +240,16 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
 
         result = response.get("data", {}).get("result_list", [])
 
-        return [
-            json.dumps(
-                {"role": "user", "parts": [{"text": str(result)}]},
-                ensure_ascii=False,
-            )
-        ]
+        return (
+            [
+                json.dumps(
+                    {"role": "user", "parts": [{"text": str(result)}]},
+                    ensure_ascii=False,
+                )
+            ]
+            if result
+            else []
+        )
 
     def get_user_profile(self, user_id: str) -> str:
         from veadk.utils.volcengine_sign import ve_request
