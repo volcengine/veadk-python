@@ -116,7 +116,7 @@ def handle_single_task_sync(
     if sequential_image_generation:
         inputs["sequential_image_generation"] = sequential_image_generation
     if image_field is not None:
-        inputs["image"] = [image_field]
+        inputs["image"] = image_field
 
     with tracer.start_as_current_span(f"call_llm_task_{idx}") as span:
         try:
