@@ -63,21 +63,40 @@ def web_search(query: str, tool_context: ToolContext | None = None) -> list[str]
     else:
         logger.debug("Successfully get AK/SK from tool context.")
 
-    response = ve_request(
-        request_body={
+    provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
+    logger.info(f"Cloud provider: {provider}")
+
+    if provider == "byteplus":
+        request_body = {
+            "Query": query,
+            "Count": 5,
+        }
+        host = "torchlight.byteintlapi.com/search_api/web_search"
+        api_key = os.getenv("BYTEPLUS_WEB_SEARCH_API_KEY")
+        header = {
+            "X-Security-Token": session_token,
+            "Authorization": f"Bearer {api_key}",
+        }
+    else:
+        request_body = {
             "Query": query,
             "SearchType": "web",
             "Count": 5,
             "NeedSummary": True,
-        },
+        }
+        host = "mercury.volcengineapi.com"
+        header = {"X-Security-Token": session_token}
+
+    response = ve_request(
+        request_body=request_body,
         action="WebSearch",
         ak=ak,
         sk=sk,
         service="volc_torchlight_api",
         version="2025-01-01",
         region="cn-beijing",
-        host="mercury.volcengineapi.com",
-        header={"X-Security-Token": session_token},
+        host=host,
+        header=header,
     )
 
     try:
