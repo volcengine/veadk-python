@@ -14,11 +14,21 @@
 
 from google.adk.models.llm_request import LlmRequest
 from jinja2 import Template
+from pydantic import BaseModel
 
 from veadk import Agent, Runner
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+class Advice(BaseModel):
+    advice: str
+    """The advice to the worker agent. Should be empty if the history execution is correct."""
+
+    reason: str
+    """The reason for the advice"""
+
 
 instruction = Template("""You are a supervisor of an agent system. The system prompt of worker agent is:
 
@@ -26,10 +36,8 @@ instruction = Template("""You are a supervisor of an agent system. The system pr
 {{ system_prompt }}
 ```
 
-
-
 You should guide the agent to finish task and must output a JSON-format string with specific advice and reason:
-                       
+
 - If you think the history execution is not correct, you should give your advice to the worker agent: {"advice": "Your advice here", "reason": "Your reason here"}.
 - If you think the history execution is correct, you should output an empty string: {"advice": "", "reason": "Your reason here"}.
 """)
@@ -41,6 +49,7 @@ def build_supervisor(supervised_agent: Agent) -> Agent:
         name="supervisor",
         description="A supervisor for agent execution",
         instruction=custom_instruction,
+        model_extra_config={"response_format": Advice},
     )
 
     return agent
