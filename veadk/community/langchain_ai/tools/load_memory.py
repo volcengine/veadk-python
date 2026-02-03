@@ -35,7 +35,7 @@ def load_memory(query: str, runtime: ToolRuntime) -> list[str]:
         return ["Long-term memory store is not initialized."]
 
     app_name = store.index
-    user_id = runtime.context.user_id
+    user_id = runtime.context.user_id  # type: ignore
 
     logger.info(f"Load memory for user {user_id} with query {query}")
     response = store.search((app_name, user_id), query=query)
