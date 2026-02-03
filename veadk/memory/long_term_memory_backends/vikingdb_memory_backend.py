@@ -150,7 +150,14 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
 
     def _get_client(self) -> VikingDBMemoryClient:
         ak, sk, sts_token = self._get_ak_sk_sts()
+        if self.cloud_provider.lower() == "byteplus":
+            host = f"api-knowledgebase.mlp.{self.region}.bytepluses.com"
+
+        logger.info(f"Cloud provider: {self.cloud_provider.lower()}")
+        logger.info(f"VikingDBLTMBackend: region={self.region}, host={host}")
+
         return VikingDBMemoryClient(
+            host=host,
             ak=ak,
             sk=sk,
             sts_token=sts_token,
@@ -159,22 +166,22 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
 
     def _get_sdk_client(self) -> VikingMem:
         ak, sk, sts_token = self._get_ak_sk_sts()
-        client = VikingDBMemoryClient(
-            ak=ak,
-            sk=sk,
-            sts_token=sts_token,
-            region=self.region,
-        )
-
-        host = client.get_host()
         if self.cloud_provider.lower() == "byteplus":
             host = f"api-knowledgebase.mlp.{self.region}.bytepluses.com"
 
         logger.info(f"Cloud provider: {self.cloud_provider.lower()}")
         logger.info(f"VikingDBLTMBackend: region={self.region}, host={host}")
 
-        return VikingMem(
+        client = VikingDBMemoryClient(
             host=host,
+            region=self.region,
+            ak=ak,
+            sk=sk,
+            sts_token=sts_token,
+        )
+
+        return VikingMem(
+            host=client.get_host(),
             region=self.region,
             auth=IAM(
                 ak=ak,

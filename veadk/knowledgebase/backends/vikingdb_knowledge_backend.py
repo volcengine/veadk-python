@@ -705,6 +705,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             session_token=sts_token or self.session_token,
             method=method,
             data=body,
+            region=self.region,
         )
         response = requests.request(
             method=method,

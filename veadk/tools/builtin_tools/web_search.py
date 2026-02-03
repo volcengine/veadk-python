@@ -17,6 +17,7 @@ The document of this tool see: https://www.volcengine.com/docs/85508/1650263
 """
 
 import os
+import requests
 
 from google.adk.tools import ToolContext
 
@@ -71,33 +72,40 @@ def web_search(query: str, tool_context: ToolContext | None = None) -> list[str]
             "Query": query,
             "Count": 5,
         }
-        host = "torchlight.byteintlapi.com/search_api/web_search"
         api_key = os.getenv("BYTEPLUS_WEB_SEARCH_API_KEY")
+        if not api_key:
+            logger.error("BYTEPLUS_WEB_SEARCH_API_KEY is not set.")
+            return ["Web search failed: API key is not set."]
         header = {
-            "X-Security-Token": session_token,
             "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
         }
-    else:
-        request_body = {
-            "Query": query,
-            "SearchType": "web",
-            "Count": 5,
-            "NeedSummary": True,
-        }
-        host = "mercury.volcengineapi.com"
-        header = {"X-Security-Token": session_token}
 
-    response = ve_request(
-        request_body=request_body,
-        action="WebSearch",
-        ak=ak,
-        sk=sk,
-        service="volc_torchlight_api",
-        version="2025-01-01",
-        region="cn-beijing",
-        host=host,
-        header=header,
-    )
+        response = requests.post(
+            url="https://torchlight.byteintlapi.com/search_api/web_search",
+            headers=header,
+            json=request_body,
+            timeout=60,
+        )
+        response.raise_for_status()
+        response = response.json()
+    else:
+        response = ve_request(
+            request_body={
+                "Query": query,
+                "SearchType": "web",
+                "Count": 5,
+                "NeedSummary": True,
+            },
+            action="WebSearch",
+            ak=ak,
+            sk=sk,
+            service="volc_torchlight_api",
+            version="2025-01-01",
+            region="cn-beijing",
+            host="mercury.volcengineapi.com",
+            header={"X-Security-Token": session_token},
+        )
 
     try:
         results: list = response["Result"]["WebResults"]
