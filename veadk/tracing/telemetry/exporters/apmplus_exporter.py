@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from google.adk.agents.invocation_context import InvocationContext
+from google.adk.agents.run_config import StreamingMode
 from google.adk.events import Event
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
@@ -296,13 +297,18 @@ class MeterUploader:
             llm_request: Request object with model and parameter details
             llm_response: Response object with content and usage metadata
         """
+        is_streaming = bool(
+            invocation_context.run_config
+            and invocation_context.run_config.streaming_mode != StreamingMode.NONE
+        )
+        server_address = getattr(invocation_context.agent, "model_api_base", "unknown")
         attributes = {
             "gen_ai_system": "volcengine",
             "gen_ai_response_model": llm_request.model,
             "gen_ai_operation_name": "chat",
             "gen_ai_operation_type": "llm",
-            "stream": "false",
-            "server_address": "api.volcengine.com",
+            "stream": is_streaming,
+            "server_address": server_address,
         }  # required by Volcengine APMPlus
 
         if llm_response.usage_metadata:
@@ -337,7 +343,7 @@ class MeterUploader:
             if llm_response.error_code and self.chat_exception_counter:
                 exception_attributes = {
                     **attributes,
-                    "error_type": llm_response.error_message,
+                    "error_type": llm_response.error_code,
                 }
                 self.chat_exception_counter.add(1, exception_attributes)
 
