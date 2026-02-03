@@ -146,7 +146,7 @@ class Agent(LlmAgent):
 
     skills: list[str] = Field(default_factory=list)
 
-    skills_mode: Literal["skills_sandbox", "aio_sandbox", "local"] = "skills_sandbox"
+    skills_mode: Optional[Literal["skills_sandbox", "aio_sandbox", "local"]] = None
 
     example_store: Optional[BaseExampleProvider] = None
 
@@ -336,6 +336,63 @@ class Agent(LlmAgent):
         from veadk.tools.skills_tools.skills_toolset import SkillsToolset
 
         skills: Dict[str, Skill] = {}
+
+        # Determine skills_mode if not set
+        if not self.skills_mode:
+            tool_id = os.getenv("AGENTKIT_TOOL_ID")
+            if not tool_id:
+                self.skills_mode = "local"
+            else:
+                from veadk.utils.volcengine_sign import ve_request
+                from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
+
+                ak = os.getenv("VOLCENGINE_ACCESS_KEY")
+                sk = os.getenv("VOLCENGINE_SECRET_KEY")
+                header = {}
+
+                if not (ak and sk):
+                    logger.debug(
+                        "Get AK/SK from environment variables failed. Try to use credential from Iam."
+                    )
+                    credential = get_credential_from_vefaas_iam()
+                    ak = credential.access_key_id
+                    sk = credential.secret_access_key
+                    header = {"X-Security-Token": credential.session_token}
+                else:
+                    logger.debug("Successfully get AK/SK from environment variables.")
+
+                service = os.getenv("AGENTKIT_TOOL_SERVICE_CODE", "agentkit")
+                region = os.getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
+                host = service + "." + region + ".volcengineapi.com"
+
+                res = ve_request(
+                    request_body={"ToolId": tool_id},
+                    action="GetTool",
+                    ak=ak,
+                    sk=sk,
+                    service=service,
+                    version="2025-10-30",
+                    region=region,
+                    host=host,
+                    header=header,
+                )
+                try:
+                    tool_type = res["Result"]["ToolType"]
+                    logger.debug(f"Agentkit tool type={tool_type}")
+                except KeyError:
+                    tool_type = "unknown"
+                    logger.error(f"Failed to get agentkit tool type: {res}")
+
+                if tool_type == "All-in-one":
+                    self.skills_mode = "aio_sandbox"
+                elif tool_type == "Skill":
+                    self.skills_mode = "skills_sandbox"
+                else:
+                    self.skills_mode = "skills_sandbox"
+                    logger.warning(
+                        "Custom tool detected, default skills_mode is skills_sandbox; set skills_mode to aio_sandbox if you want to run skills with aio_sandbox"
+                    )
+            logger.info(f"Determined skills_mode: {self.skills_mode}")
 
         for item in self.skills:
             if not item or str(item).strip() == "":
