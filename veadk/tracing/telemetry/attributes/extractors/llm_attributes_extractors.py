@@ -514,7 +514,9 @@ def llm_gen_ai_is_streaming(params: LLMAttributesParams) -> ExtractorResponse:
         ExtractorResponse: Response containing None
     """
     is_streaming = bool(
-        params.invocation_context.run_config and params.invocation_context.run_config.streaming_mode != StreamingMode.NONE)
+        params.invocation_context.run_config
+        and params.invocation_context.run_config.streaming_mode != StreamingMode.NONE
+    )
 
     return ExtractorResponse(content=is_streaming)
 
@@ -807,6 +809,7 @@ def llm_gen_ai_request_functions(params: LLMAttributesParams) -> ExtractorRespon
 
     return ExtractorResponse(content=functions)
 
+
 def llm_server_address(params: LLMAttributesParams) -> ExtractorResponse:
     """Extract the LLM server address (model API base URL).
 
@@ -820,7 +823,10 @@ def llm_server_address(params: LLMAttributesParams) -> ExtractorResponse:
     Returns:
         ExtractorResponse: Response containing the server address or 'unknown'
     """
-    return ExtractorResponse(content=getattr(params.invocation_context.agent, "model_api_base", None) or "unknown")
+    return ExtractorResponse(
+        content=getattr(params.invocation_context.agent, "model_api_base", None)
+        or "unknown"
+    )
 
 
 LLM_ATTRIBUTES = {

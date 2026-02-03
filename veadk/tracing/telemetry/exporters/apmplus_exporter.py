@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -36,7 +35,6 @@ from pydantic import BaseModel, Field
 from typing_extensions import override
 
 from veadk.config import settings
-from veadk.consts import DEFAULT_MODEL_AGENT_API_BASE
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
 from veadk.utils.logger import get_logger
 
@@ -300,15 +298,19 @@ class MeterUploader:
             llm_response: Response object with content and usage metadata
         """
         is_streaming = bool(
-            invocation_context.run_config and invocation_context.run_config.streaming_mode != StreamingMode.NONE)
-        server_address = getattr(invocation_context.agent, "model_api_base", None) or "unknown"
+            invocation_context.run_config
+            and invocation_context.run_config.streaming_mode != StreamingMode.NONE
+        )
+        server_address = (
+            getattr(invocation_context.agent, "model_api_base", None) or "unknown"
+        )
         attributes = {
             "gen_ai_system": "volcengine",
             "gen_ai_response_model": llm_request.model,
             "gen_ai_operation_name": "chat",
             "gen_ai_operation_type": "llm",
             "stream": is_streaming,
-            "server_address":  server_address,
+            "server_address": server_address,
         }  # required by Volcengine APMPlus
 
         if llm_response.usage_metadata:
