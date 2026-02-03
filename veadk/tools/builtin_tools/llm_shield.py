@@ -64,7 +64,9 @@ class LLMShieldPlugin(BasePlugin):
         super().__init__(name=self.name)
 
         self.appid = getenv("TOOL_LLM_SHIELD_APP_ID")
-        self.region = getenv("TOOL_LLM_SHIELD_REGION", "cn-beijing")
+        self.region = (
+            os.getenv("REGION") or os.getenv("TOOL_LLM_SHIELD_REGION") or "cn-beijing"
+        )
         self.timeout = timeout
         self.url = getenv(
             "TOOL_LLM_SHIELD_URL",
