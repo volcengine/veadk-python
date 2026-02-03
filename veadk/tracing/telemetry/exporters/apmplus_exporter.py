@@ -301,9 +301,7 @@ class MeterUploader:
             invocation_context.run_config
             and invocation_context.run_config.streaming_mode != StreamingMode.NONE
         )
-        server_address = (
-            getattr(invocation_context.agent, "model_api_base", None) or "unknown"
-        )
+        server_address = getattr(invocation_context.agent, "model_api_base", "unknown")
         attributes = {
             "gen_ai_system": "volcengine",
             "gen_ai_response_model": llm_request.model,

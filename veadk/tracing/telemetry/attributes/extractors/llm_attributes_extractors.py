@@ -824,8 +824,7 @@ def llm_server_address(params: LLMAttributesParams) -> ExtractorResponse:
         ExtractorResponse: Response containing the server address or 'unknown'
     """
     return ExtractorResponse(
-        content=getattr(params.invocation_context.agent, "model_api_base", None)
-        or "unknown"
+        content=getattr(params.invocation_context.agent, "model_api_base", "unknown")
     )
 
 
