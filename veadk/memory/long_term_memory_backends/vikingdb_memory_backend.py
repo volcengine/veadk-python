@@ -48,9 +48,11 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
 
     session_token: str = ""
 
-    region: str = Field(
-        default_factory=lambda: os.getenv("DATABASE_VIKINGMEM_REGION") or "cn-beijing"
+    cloud_provider: str = Field(
+        default_factory=lambda: os.getenv("CLOUD_PROVIDER", "volces")
     )
+
+    region: str = Field(default="")
     """VikingDB memory region"""
 
     volcengine_project: str = Field(
@@ -61,6 +63,12 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
     memory_type: list[str] = Field(default_factory=list)
 
     def model_post_init(self, __context: Any) -> None:
+        if not self.region:
+            if self.cloud_provider.lower() == "byteplus":
+                self.region = os.getenv("DATABASE_VIKING_REGION", "cn-hongkong")
+            else:
+                self.region = os.getenv("DATABASE_VIKING_REGION", "cn-beijing")
+
         # We get memory type from:
         # 1. user input
         # 2. environment variable
@@ -142,7 +150,14 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
 
     def _get_client(self) -> VikingDBMemoryClient:
         ak, sk, sts_token = self._get_ak_sk_sts()
+        if self.cloud_provider.lower() == "byteplus":
+            host = f"api-knowledgebase.mlp.{self.region}.bytepluses.com"
+
+        logger.info(f"Cloud provider: {self.cloud_provider.lower()}")
+        logger.info(f"VikingDBLTMBackend: region={self.region}, host={host}")
+
         return VikingDBMemoryClient(
+            host=host,
             ak=ak,
             sk=sk,
             sts_token=sts_token,
@@ -151,12 +166,20 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
 
     def _get_sdk_client(self) -> VikingMem:
         ak, sk, sts_token = self._get_ak_sk_sts()
+        if self.cloud_provider.lower() == "byteplus":
+            host = f"api-knowledgebase.mlp.{self.region}.bytepluses.com"
+
+        logger.info(f"Cloud provider: {self.cloud_provider.lower()}")
+        logger.info(f"VikingDBLTMBackend: region={self.region}, host={host}")
+
         client = VikingDBMemoryClient(
+            host=host,
+            region=self.region,
             ak=ak,
             sk=sk,
             sts_token=sts_token,
-            region=self.region,
         )
+
         return VikingMem(
             host=client.get_host(),
             region=self.region,

@@ -169,12 +169,13 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
         default_factory=lambda: os.getenv("DATABASE_VIKING_VERSION", "2")
     )
 
-    region: str = Field(
-        default_factory=lambda: os.getenv("DATABASE_VIKING_REGION", "cn-beijing")
+    cloud_provider: str = Field(
+        default_factory=lambda: os.getenv("CLOUD_PROVIDER", "volces")
     )
 
-    base_url: str = "https://api-knowledgebase.mlp.cn-beijing.volces.com"
-    host: str = "api-knowledgebase.mlp.cn-beijing.volces.com"
+    region: str = Field(default="")
+    base_url: str = Field(default="")
+    host: str = Field(default="")
     schema: str = "https"
 
     tos_config: TOSConfig | NormalTOSConfig = Field(default_factory=TOSConfig)
@@ -182,6 +183,23 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
     _viking_sdk_client = None
 
     def model_post_init(self, __context: Any) -> None:
+        if not self.region:
+            if self.cloud_provider.lower() == "byteplus":
+                self.region = os.getenv("DATABASE_VIKING_REGION", "cn-hongkong")
+                self.base_url = (
+                    f"https://api-knowledgebase.mlp.{self.region}.bytepluses.com"
+                )
+                self.host = f"api-knowledgebase.mlp.{self.region}.bytepluses.com"
+            else:
+                self.region = os.getenv("DATABASE_VIKING_REGION", "cn-beijing")
+                self.base_url = (
+                    f"https://api-knowledgebase.mlp.{self.region}.volces.com"
+                )
+                self.host = f"api-knowledgebase.mlp.{self.region}.volces.com"
+
+        logger.info(f"Cloud provider: {self.cloud_provider.lower()}")
+        logger.info(f"VikingDBKnowledgeBackend: region={self.region}, host={self.host}")
+
         self.precheck_index_naming()
 
         # check whether collection exist, if not, create it
@@ -687,6 +705,7 @@ class VikingDBKnowledgeBackend(BaseKnowledgebaseBackend):
             session_token=sts_token or self.session_token,
             method=method,
             data=body,
+            region=self.region,
         )
         response = requests.request(
             method=method,
