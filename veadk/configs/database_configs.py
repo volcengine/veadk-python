@@ -118,6 +118,13 @@ class TOSConfig(BaseSettings):
 
     region: str = "cn-beijing"
 
+    def model_post_init(self, __context) -> None:
+        cloud_provider = os.getenv("CLOUD_PROVIDER", "volces").lower()
+
+        if cloud_provider == "byteplus":
+            self.endpoint = "tos-ap-southeast-1.bytepluses.com"
+            self.region = "ap-southeast-1"
+
     @cached_property
     def bucket(self) -> str:
         _bucket = os.getenv("DATABASE_TOS_BUCKET") or DEFAULT_TOS_BUCKET_NAME
