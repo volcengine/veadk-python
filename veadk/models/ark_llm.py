@@ -37,6 +37,11 @@ from volcenginesdkarkruntime.types.responses import (
     ResponseReasoningSummaryTextDeltaEvent,
     ResponseTextDeltaEvent,
     ResponseCompletedEvent,
+    ResponseIncompleteEvent,
+    ResponseError,
+)
+from volcenginesdkarkruntime.types.responses.response_incomplete_details import (
+    IncompleteDetails,
 )
 from volcenginesdkarkruntime.types.responses.response_input_message_content_list_param import (
     ResponseInputTextParam,
@@ -551,6 +556,26 @@ def request_reorganization_by_ark(request_data: Dict) -> Dict:
 
 # ---------------------------------------
 # output transfer -----------------------
+def record_logs(raw_response: ArkTypeResponse):
+    try:
+        if isinstance(raw_response, ArkTypeResponse):
+            error_message = ""
+            if raw_response.error and isinstance(raw_response.error, ResponseError):
+                error_message += f"The response with error code `{raw_response.error.code}`, error message is `{raw_response.error.message}`"
+
+            if raw_response.incomplete_details and isinstance(
+                raw_response.incomplete_details, IncompleteDetails
+            ):
+                error_message += f"The reason for the incomplete return is `{raw_response.incomplete_details.reason}`, content_filter: `{raw_response.incomplete_details.content_filter}`"
+            logger.debug(
+                f"Ark response: Received Response from model `{raw_response.model}` with id `{raw_response.id}`. "
+                f"Status: `{raw_response.status}`. "
+                f"{error_message}"
+            )
+    except Exception as e:
+        logger.error(f"Failed to record ark logs: {e}")
+
+
 def event_to_generate_content_response(
     event: Union[ArkTypeResponse, ResponseStreamEvent],
     *,
@@ -587,7 +612,9 @@ def event_to_generate_content_response(
             parts.append(types.Part(text=event.delta, thought=True))
         elif isinstance(event, ResponseTextDeltaEvent):
             parts.append(types.Part.from_text(text=event.delta))
-        elif isinstance(event, ResponseCompletedEvent):
+        elif isinstance(event, ResponseCompletedEvent) or isinstance(
+            event, ResponseIncompleteEvent
+        ):
             raw_response = event.response
             llm_response = ark_response_to_generate_content_response(raw_response)
             return llm_response
@@ -607,6 +634,7 @@ def ark_response_to_generate_content_response(
     ArkTypeResponse -> LlmResponse
     instead of `_model_response_to_generate_content_response`,
     """
+    record_logs(raw_response)
     outputs = raw_response.output
     status = raw_response.status
     incomplete_details = getattr(
