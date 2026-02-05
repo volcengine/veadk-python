@@ -122,20 +122,20 @@ def intercept_new_message(process_func):
     def decorator(func):
         @functools.wraps(func)
         async def wrapper(
-                self,
-                *,
-                user_id: str,
-                session_id: str,
-                new_message: types.Content,
-                **kwargs,
+            self,
+            *,
+            user_id: str,
+            session_id: str,
+            new_message: types.Content,
+            **kwargs,
         ):
             await pre_run_process(self, process_func, new_message, user_id, session_id)
 
             async for event in func(
-                    user_id=user_id,
-                    session_id=session_id,
-                    new_message=new_message,
-                    **kwargs,
+                user_id=user_id,
+                session_id=session_id,
+                new_message=new_message,
+                **kwargs,
             ):
                 if event is None:
                     logger.error(f"Event is None with new_message: {new_message}")
@@ -172,10 +172,10 @@ def intercept_new_message(process_func):
 
 
 def _convert_messages(
-        messages: RunnerMessage,
-        app_name: str,
-        user_id: str,
-        session_id: str,
+    messages: RunnerMessage,
+    app_name: str,
+    user_id: str,
+    session_id: str,
 ) -> list:
     """Convert a VeADK ``RunnerMessage`` into a list of Google ADK messages.
 
@@ -251,7 +251,7 @@ def _convert_messages(
 
 
 async def _upload_image_to_tos(
-        part: genai.types.Part, app_name: str, user_id: str, session_id: str
+    part: genai.types.Part, app_name: str, user_id: str, session_id: str
 ) -> None:
     """Upload inline media data in a message part to TOS and rewrite its URL.
 
@@ -316,15 +316,15 @@ class Runner(ADKRunner):
     """
 
     def __init__(
-            self,
-            agent: BaseAgent | Agent | None = None,
-            short_term_memory: ShortTermMemory | None = None,
-            app_name: str | None = None,
-            user_id: str = "veadk_default_user",
-            upload_inline_data_to_tos: bool = False,
-            run_processor: "BaseRunProcessor | None" = None,
-            *args,
-            **kwargs,
+        self,
+        agent: BaseAgent | Agent | None = None,
+        short_term_memory: ShortTermMemory | None = None,
+        app_name: str | None = None,
+        user_id: str = "veadk_default_user",
+        upload_inline_data_to_tos: bool = False,
+        run_processor: "BaseRunProcessor | None" = None,
+        *args,
+        **kwargs,
     ) -> None:
         """Initialize a Runner instance.
 
@@ -429,14 +429,14 @@ class Runner(ADKRunner):
         )
 
     async def run(
-            self,
-            messages: RunnerMessage,
-            user_id: str = "",
-            session_id: str = f"tmp-session-{formatted_timestamp()}",
-            run_config: RunConfig | None = None,
-            save_tracing_data: bool = False,
-            upload_inline_data_to_tos: bool = False,
-            run_processor: "BaseRunProcessor | None" = None,
+        self,
+        messages: RunnerMessage,
+        user_id: str = "",
+        session_id: str = f"tmp-session-{formatted_timestamp()}",
+        run_config: RunConfig | None = None,
+        save_tracing_data: bool = False,
+        upload_inline_data_to_tos: bool = False,
+        run_processor: "BaseRunProcessor | None" = None,
     ):
         """Run a conversation with multi-turn text and multimodal inputs.
 
@@ -506,10 +506,10 @@ class Runner(ADKRunner):
                 )
                 async def event_generator():
                     async for event in self.run_async(
-                            user_id=user_id,
-                            session_id=session_id,
-                            new_message=converted_message,
-                            run_config=run_config,
+                        user_id=user_id,
+                        session_id=session_id,
+                        new_message=converted_message,
+                        run_config=run_config,
                     ):
                         yield event
 
@@ -517,9 +517,9 @@ class Runner(ADKRunner):
                     if event.content is not None and event.content.parts:
                         for part in event.content.parts:
                             if (
-                                    not part.thought
-                                    and part.text
-                                    and len(part.text.strip()) > 0
+                                not part.thought
+                                and part.text
+                                and len(part.text.strip()) > 0
                             ):
                                 final_output = part.text
                                 break
@@ -633,7 +633,7 @@ class Runner(ADKRunner):
             ```
         """
         if not isinstance(
-                self.agent, (Agent, SequentialAgent, ParallelAgent, LoopAgent)
+            self.agent, (Agent, SequentialAgent, ParallelAgent, LoopAgent)
         ):
             logger.warning(
                 (
@@ -692,7 +692,7 @@ class Runner(ADKRunner):
         return eval_set_path
 
     async def save_session_to_long_term_memory(
-            self, session_id: str, user_id: str = "", app_name: str = "", **kwargs
+        self, session_id: str, user_id: str = "", app_name: str = "", **kwargs
     ) -> None:
         """Save the specified session to long-term memory.
 
