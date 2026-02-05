@@ -361,9 +361,19 @@ class Agent(LlmAgent):
                 else:
                     logger.debug("Successfully get AK/SK from environment variables.")
 
+                provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
+                if provider == "byteplus":
+                    sld = "byteplusapi"
+                    default_region = "ap-southeast-1"
+                else:
+                    sld = "volcengineapi"
+                    default_region = "cn-beijing"
+
                 service = os.getenv("AGENTKIT_TOOL_SERVICE_CODE", "agentkit")
-                region = os.getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
-                host = service + "." + region + ".volcengineapi.com"
+                region = os.getenv("AGENTKIT_TOOL_REGION", default_region)
+                host = os.getenv(
+                    "AGENTKIT_SKILL_HOST", service + "." + region + f".{sld}.com"
+                )
 
                 res = ve_request(
                     request_body={"ToolId": tool_id},
