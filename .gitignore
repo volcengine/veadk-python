@@ -200,3 +200,5 @@ cython_debug/
 
 *.mp3
 *.pcm
+
+.trae

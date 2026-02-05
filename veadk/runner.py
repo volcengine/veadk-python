@@ -355,13 +355,16 @@ class Runner(ADKRunner):
         Raises:
             None
         """
+
         self.user_id = user_id
         self.long_term_memory = None
-        self.short_term_memory = short_term_memory
         self.upload_inline_data_to_tos = upload_inline_data_to_tos
         credential_service = kwargs.pop("credential_service", None)
         session_service = kwargs.pop("session_service", None)
         memory_service = kwargs.pop("memory_service", None)
+        if not short_term_memory:
+            short_term_memory = agent.short_term_memory
+        self.short_term_memory = short_term_memory
 
         # Handle run_processor: priority is runner arg > agent.run_processor > NoOpRunProcessor
         if run_processor is not None:
