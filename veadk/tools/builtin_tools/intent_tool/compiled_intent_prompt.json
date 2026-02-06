@@ -1,0 +1,99 @@
+{
+  "predict.predict": {
+    "traces": [],
+    "train": [],
+    "demos": [
+      {
+        "augmented": true,
+        "question": "高股息的股票",
+        "reasoning": "概念辨析：用户问题核心为“高股息的股票”，意图是筛选具有“高股息”特征的股票，属于指标类筛选。“高股息”明确指向股票的财务/收益特征指标，无特定行业、时间窗口等额外限定条件，因此：\n- primary_intent为“stock_factor_query”（股票因子查询）；\n- industry（行业）无相关信息，为空数组；\n- time_window（时间窗口）无明确时间范围，为null；\n- indicator（指标）为“高股息”，对应股票的股息率特征；\n- 其他字段（governance、missing_critical_slots、extra）无相关信息，为空。",
+        "goal_frame_json": "{\"primary_intent\": \"stock_factor_query\", \"industry\": [], \"time_window\": null, \"indicator\": [\"高股息\"], \"governance\": {}, \"missing_critical_slots\": [], \"extra\": {}}"
+      },
+      {
+        "augmented": true,
+        "question": "波动背离预警的股票",
+        "reasoning": "概念辨析：用户问题“波动背离预警的股票”中，“波动背离预警”属于技术指标类的预警信号，是筛选股票的核心条件，对应Indicator；未提及特定行业/板块，故Industry为空；无时间范围限定，time_window为null；primary_intent为股票因子查询，符合“stock_factor_query”。",
+        "goal_frame_json": "{\"primary_intent\": \"stock_factor_query\", \"industry\": [], \"time_window\": null, \"indicator\": [\"波动背离预警\"], \"governance\": {}, \"missing_critical_slots\": [], \"extra\": {}}"
+      },
+      {
+        "augmented": true,
+        "question": "创新药有哪些股票60日首板新高且ROE.TTM大于0%",
+        "reasoning": "概念辨析：用户问题核心为“创新药有哪些股票60日首板新高且ROE.TTM大于0%”，需提取关键语义类别。“创新药”属于行业/题材范畴（Industry）；“60日”为明确时间周期（time_window）；“首板新高”是股票技术形态指标（Indicator），“ROE.TTM大于0%”是财务指标（Indicator），均符合筛选条件。各语义类别无重复或缺失，符合提取逻辑。",
+        "goal_frame_json": "{\"primary_intent\": \"stock_factor_query\", \"industry\": [\"创新药\"], \"time_window\": \"60日\", \"indicator\": [\"首板新高\", \"ROE.TTM大于0%\"], \"governance\": {}, \"missing_critical_slots\": [], \"extra\": {}}"
+      },
+      {
+        "augmented": true,
+        "question": "今天的涨停板中，有10日MACD反复金叉的公司。",
+        "reasoning": "概念辨析：用户问题核心为筛选今天涨停且10日MACD反复金叉的股票。\"今天\"明确指向时间窗口（time_window）；\"涨停板\"描述股票当日状态，属于指标（indicator）；\"10日MACD反复金叉\"为技术指标类筛选条件，同样属于indicator。问题未涉及行业/题材，故industry为空。各语义类别无重复，信息完整。",
+        "goal_frame_json": "{\"primary_intent\": \"stock_factor_query\", \"industry\": [], \"time_window\": \"今天\", \"indicator\": [\"涨停板\", \"10日MACD反复金叉\"], \"governance\": {}, \"missing_critical_slots\": [], \"extra\": {}}"
+      },
+      {
+        "augmented": true,
+        "question": "60日多次缩量的股票",
+        "reasoning": "用户问题为“60日多次缩量的股票”，核心是筛选满足特定条件的股票。概念辨析：“60日”明确指向时间范围，属于time_window；“多次缩量”是描述成交量特征的技术指标，属于indicator。问题未提及行业/题材，故industry为空。各语义类别无重复，指标与时间窗口均明确。",
+        "goal_frame_json": "{\"primary_intent\": \"stock_factor_query\", \"industry\": [], \"time_window\": \"60日\", \"indicator\": [\"多次缩量\"], \"governance\": {}, \"missing_critical_slots\": [], \"extra\": {}}"
+      },
+      {
+        "augmented": true,
+        "question": "找出符合CCI变动250日新高的股票",
+        "reasoning": "概念辨析：用户问题核心为筛选符合“CCI变动250日新高”的股票，其中“CCI”（商品通道指数）是技术分析指标，“250日新高”明确指向时间窗口（250个交易日周期）及指标状态（新高），属于Indicator类别。问题未提及特定行业/板块，故industry为空；无治理相关信息，missing_critical_slots和extra均为空。",
+        "goal_frame_json": "{\"primary_intent\": \"stock_factor_query\", \"industry\": [], \"time_window\": \"250日\", \"indicator\": [\"CCI变动250日新高\"], \"governance\": {}, \"missing_critical_slots\": [], \"extra\": {}}"
+      },
+      {
+        "question": "固态电池相关的股票和龙头股",
+        "goal_frame_json": "{\"primary_intent\": \"stock_factor_query\", \"industry\": [\"固态电池\"], \"time_window\": \"月度\", \"indicator\": [\"龙头股、月度强势\"], \"governance\": {}, \"missing_critical_slots\": [], \"extra\": {}}",
+        "reasoning": "概念辨析：用户问题中的“固态电池相关”指向的“固态电池”属于行业/范围（Industry），对应factor_name中的“固态电池”；“龙头股”属于指标/属性（Indicator）中的股票筛选指标，用于筛选行业内表现突出的股票；factor_name中的“月度强势”作为指标属性，明确了股票需在月度时间窗口内表现强势，因此时间窗口（time_window）为“月度”。分类后无重复词语，信息提取完整。"
+      },
+      {
+        "question": "储能概念龙头",
+        "goal_frame_json": "{\"primary_intent\": \"stock_factor_query\", \"industry\": [\"储能\"], \"time_window\": null, \"indicator\": [\"月度强势\"], \"governance\": {}, \"missing_critical_slots\": [], \"extra\": {}}",
+        "reasoning": "“储能”是明确的行业/概念范畴，属于Industry；“月度强势”描述的是表现属性，属于Indicator（指标/属性）。用户问题中未提及具体时间窗口，因此time_window为空。“储能”作为核心行业类别，与factor_name中的“储能”语义一致，“月度强势”作为补充指标，用于明确分析维度。"
+      },
+      {
+        "question": "沪深两市中期新高的半导体设备公司有哪些",
+        "goal_frame_json": "{\"primary_intent\": \"stock_factor_query\", \"industry\": [\"半导体设备\", \"沪深两市\"], \"time_window\": \"中期\", \"indicator\": [\"中期新高\"], \"governance\": {}, \"missing_critical_slots\": [], \"extra\": {}}",
+        "reasoning": "概念辨析：用户问题“沪深两市中期新高的半导体设备公司有哪些”中，“半导体设备”明确指向行业板块（属于Industry），“沪深两市”是公司上市的市场范围（同样属于Industry的范围）；“中期新高”是股价在中期内达到的技术指标（属于Indicator）；“中期”明确了时间周期（Time_window）。因子名中的“中期新高”“半导体设备”“沪市等权|深市等权”与问题核心要素匹配，各部分无重复语义。"
+      },
+      {
+        "question": "明泓量化卖出的股票有哪些",
+        "goal_frame_json": "{\"primary_intent\": \"stock_factor_query\", \"industry\": [], \"time_window\": null, \"indicator\": [\"明泓量化卖出\"], \"governance\": {}, \"missing_critical_slots\": [], \"extra\": {}}",
+        "reasoning": "概念辨析：“明泓量化卖出” 是特定实体“明泓量化”执行的股票卖出动作，用户意图为查询该实体卖出的股票列表。问题未提及行业范围（如板块、题材等），也未指定时间窗口（如“最近”“某年”等），因此行业（industry）和时间窗口（time_window）为空；核心指标为“明泓量化卖出”，指向明泓量化的卖出行为。"
+      },
+      {
+        "question": "算力股票有哪些？",
+        "goal_frame_json": "{\"primary_intent\": \"stock_factor_query\", \"industry\": [], \"time_window\": null, \"indicator\": [], \"governance\": {}, \"missing_critical_slots\": [\"intent_subject\"], \"extra\": {}}",
+        "reasoning": "用户问题为“算力股票有哪些？”，参考因子名“算力概念”。概念辨析：“算力概念”属于行业/范围类别中的“题材”，用户询问的是属于“算力概念”题材的股票列表，语义类别为Industry（题材）。用户未提及时间窗口，故time_window为空。问题核心是查询“算力概念”题材下的股票，意图明确为行业相关的股票列表查询。"
+      },
+      {
+        "question": "人形机器人概念股龙头股有哪些？",
+        "goal_frame_json": "{\"primary_intent\": \"stock_factor_query\", \"industry\": [], \"time_window\": \"月度\", \"indicator\": [], \"governance\": {}, \"missing_critical_slots\": [\"intent_subject\"], \"extra\": {}}",
+        "reasoning": "概念辨析：用户问题“人形机器人概念股龙头股有哪些？”中，“人形机器人”属于行业/题材类，对应 Industry 类别；“月度强势”为量化表现指标，对应 Indicator 类别；因子名中“月度”暗示时间范围，对应 time_window 类别。未提及其他无关信息，无重复词语。"
+      }
+    ],
+    "signature": {
+      "instructions": "Given the fields `question`, produce the fields `reasoning`, `goal_frame_json`.",
+      "fields": [
+        {
+          "prefix": "Question:",
+          "description": "用户自然语言问题"
+        },
+        {
+          "prefix": "Reasoning:",
+          "description": "先分析意图与槽位，再输出 JSON"
+        },
+        {
+          "prefix": "Goal Frame Json:",
+          "description": "GoalFrame 的 JSON 字符串"
+        }
+      ]
+    },
+    "lm": null
+  },
+  "metadata": {
+    "dependency_versions": {
+      "python": "3.12",
+      "dspy": "3.1.2",
+      "cloudpickle": "3.1"
+    }
+  }
+}
