@@ -152,6 +152,16 @@ def set_envs(config_yaml_path: str, env_from_dotenv: dict = None) -> tuple[dict,
             continue
         veadk_environments[k] = str(config_upper_map.get(k))
         os.environ[k] = str(config_upper_map.get(k))
+
+    provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
+    if provider == "byteplus":
+        byteplus_access_key = veadk_environments.get("BYTEPLUS_ACCESS_KEY")
+        if byteplus_access_key:
+            os.environ["VOLCENGINE_ACCESS_KEY"] = byteplus_access_key
+        byteplus_secret_key = veadk_environments.get("BYTEPLUS_SECRET_KEY")
+        if byteplus_secret_key:
+            os.environ["VOLCENGINE_SECRET_KEY"] = byteplus_secret_key
+
     return config_dict, veadk_environments
 
 

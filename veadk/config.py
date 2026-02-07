@@ -49,6 +49,15 @@ else:
     env_from_dotenv = {}
     logger.info("No `.env` file found.")
 
+provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
+if provider == "byteplus":
+    byteplus_access_key = os.getenv("BYTEPLUS_ACCESS_KEY")
+    if byteplus_access_key:
+        os.environ["VOLCENGINE_ACCESS_KEY"] = byteplus_access_key
+    byteplus_secret_key = os.getenv("BYTEPLUS_SECRET_KEY")
+    if byteplus_secret_key:
+        os.environ["VOLCENGINE_SECRET_KEY"] = byteplus_secret_key
+
 
 class VeADKConfig(BaseModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
@@ -89,6 +98,20 @@ def getenv(
         str: The value of the environment variable.
     """
     value = os.getenv(env_name, default_value)
+
+    if value == default_value or not value:
+        provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
+        if provider == "byteplus":
+            if env_name == "VOLCENGINE_ACCESS_KEY":
+                byteplus_key = os.getenv("BYTEPLUS_ACCESS_KEY")
+                if byteplus_key:
+                    os.environ["VOLCENGINE_ACCESS_KEY"] = byteplus_key
+                    value = byteplus_key
+            elif env_name == "VOLCENGINE_SECRET_KEY":
+                byteplus_key = os.getenv("BYTEPLUS_SECRET_KEY")
+                if byteplus_key:
+                    os.environ["VOLCENGINE_SECRET_KEY"] = byteplus_key
+                    value = byteplus_key
 
     if allow_false_values:
         return value
