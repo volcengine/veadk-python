@@ -305,6 +305,7 @@ def trace_tool_call(
     tool: BaseTool,
     args: dict[str, Any],
     function_response_event: Event,
+    **kwargs,
 ) -> None:
     """Trace a tool function call with comprehensive telemetry data.
 
@@ -344,6 +345,7 @@ def trace_call_llm(
     event_id: str,
     llm_request: LlmRequest,
     llm_response: LlmResponse,
+    **kwargs,
 ) -> None:
     """Trace a language model call with comprehensive telemetry data.
 
@@ -413,4 +415,4 @@ def trace_call_llm(
 
 
 # Do not modify this function
-def trace_send_data(): ...
+def trace_send_data(**kwargs): ...
