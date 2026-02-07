@@ -88,9 +88,18 @@ def execute_skills(
         "AGENTKIT_TOOL_SERVICE_CODE", "agentkit"
     )  # temporary service for code run tool
     region = getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
+    # volces example: agentkit.cn-beijing.volces.com
     host = getenv(
         "AGENTKIT_TOOL_HOST", service + "." + region + ".volces.com"
     )  # temporary host for code run tool
+
+    provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
+    if provider == "byteplus":
+        region = (
+            os.getenv("REGION") or os.getenv("AGENTKIT_TOOL_REGION") or "ap-southeast-1"
+        )
+        # byteplus example: agentkit.ap-southeast-1.bytepluses.com
+        host = getenv("AGENTKIT_TOOL_HOST", service + "." + region + ".bytepluses.com")
     logger.debug(f"tools endpoint: {host}")
 
     session_id = tool_context._invocation_context.session.id
