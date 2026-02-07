@@ -363,7 +363,18 @@ class Agent(LlmAgent):
 
                 service = os.getenv("AGENTKIT_TOOL_SERVICE_CODE", "agentkit")
                 region = os.getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
+                # volcengine example: agentkit.cn-beijing.volcengineapi.com
                 host = service + "." + region + ".volcengineapi.com"
+
+                provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
+                if provider == "byteplus":
+                    region = (
+                        os.getenv("REGION")
+                        or os.getenv("AGENTKIT_TOOL_REGION")
+                        or "ap-southeast-1"
+                    )
+                    # byteplus example: agentkit.ap-southeast-1.bytepluses.com
+                    host = service + "." + region + ".bytepluses.com"
 
                 res = ve_request(
                     request_body={"ToolId": tool_id},

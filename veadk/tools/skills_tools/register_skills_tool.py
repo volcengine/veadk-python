@@ -88,8 +88,19 @@ def register_skills_tool(
         from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 
         agentkit_tool_service = os.getenv("AGENTKIT_TOOL_SERVICE_CODE", "agentkit")
+        # volcengine example: agentkit.cn-beijing.volcengineapi.com
         agentkit_skill_host = os.getenv("AGENTKIT_SKILL_HOST", "open.volcengineapi.com")
         region = os.getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
+        provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
+
+        if provider == "byteplus":
+            region = (
+                os.getenv("REGION")
+                or os.getenv("AGENTKIT_TOOL_REGION")
+                or "ap-southeast-1"
+            )
+            # byteplus example: agentkit-ppe.ap-southeast-1.byteplusapi.com
+            agentkit_skill_host = os.getenv("AGENTKIT_SKILL_HOST", "byteplusapi.com")
 
         access_key = os.getenv("VOLCENGINE_ACCESS_KEY")
         secret_key = os.getenv("VOLCENGINE_SECRET_KEY")
