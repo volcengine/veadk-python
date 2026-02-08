@@ -345,6 +345,7 @@ def trace_call_llm(
     event_id: str,
     llm_request: LlmRequest,
     llm_response: LlmResponse,
+    *args,
     **kwargs,
 ) -> None:
     """Trace a language model call with comprehensive telemetry data.
