@@ -154,6 +154,8 @@ class Agent(LlmAgent):
 
     enable_ghostchar: bool = False
 
+    enable_dataset_gen: bool = False
+
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
 
@@ -311,6 +313,22 @@ class Agent(LlmAgent):
             self.tools.append(GhostcharTool())
 
             self.instruction += "Please add a character `< at the beginning of you each text-based response."
+
+        if self.enable_dataset_gen:
+            from veadk.toolkits.dataset_auto_gen_callback import (
+                dataset_auto_gen_callback,
+            )
+
+            if self.after_agent_callback:
+                if isinstance(self.after_agent_callback, list):
+                    self.after_agent_callback.append(dataset_auto_gen_callback)
+                else:
+                    self.after_agent_callback = [
+                        self.after_agent_callback,
+                        dataset_auto_gen_callback,
+                    ]
+            else:
+                self.after_agent_callback = dataset_auto_gen_callback
 
         logger.info(f"VeADK version: {VERSION}")
 
