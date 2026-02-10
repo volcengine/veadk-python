@@ -156,13 +156,11 @@ class ServerWithReverseMCP:
                 )
                 return
 
-            # Parse mcp_tool_filter from query params, comma-separated string
-            mcp_tool_filter_str = ws.query_params.get("mcp_tool_filter")
-            mcp_tool_filter = None
-            if mcp_tool_filter_str:
-                mcp_tool_filter = [
-                    t.strip() for t in mcp_tool_filter_str.split(",") if t.strip()
-                ]
+            # Parse filters from query params, comma-separated string
+            filters_str = ws.query_params.get("filters")
+            filters = None
+            if filters_str:
+                filters = [t.strip() for t in filters_str.split(",") if t.strip()]
 
             logger.info(f"Register websocket {client_id} to session manager.")
             self.ws_session_mgr.connections[client_id] = ws
@@ -180,7 +178,7 @@ class ServerWithReverseMCP:
                         url=mcp_toolset_url,
                         headers=mcp_toolset_headers,
                     ),
-                    tool_filter=mcp_tool_filter,
+                    tool_filter=filters,
                 )
             )
             self.ws_agent_mgr[client_id] = agent

@@ -28,7 +28,7 @@ class ClientWithReverseMCP:
         ws_url: str,
         mcp_server_url: str,
         client_id: str,
-        mcp_tool_filter: list[str] | None = None,
+        filters: list[str] | None = None,
     ):
         """Start a client with reverse mcp,
 
@@ -36,11 +36,11 @@ class ClientWithReverseMCP:
             ws_url: The url of the websocket server (cloud). Like example.com:8000
             mcp_server_url: The url of the mcp server (local).
             client_id: The client id for the websocket connection.
-            mcp_tool_filter: Optional list of tool names to filter. If None, all tools are available.
+            filters: Optional list of tool names to filter (whitelist). If None, all tools are available.
         """
         self.ws_url = f"ws://{ws_url}/ws?id={client_id}"
-        if mcp_tool_filter:
-            self.ws_url += f"&mcp_tool_filter={','.join(mcp_tool_filter)}"
+        if filters:
+            self.ws_url += f"&filters={','.join(filters)}"
         self.mcp_server_url = mcp_server_url
 
         # set timeout for httpx client
