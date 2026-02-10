@@ -152,7 +152,8 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
         ak, sk, sts_token = self._get_ak_sk_sts()
         if self.cloud_provider.lower() == "byteplus":
             host = f"api-knowledgebase.mlp.{self.region}.bytepluses.com"
-
+        else:
+            host = f"api-knowledgebase.mlp.{self.region}.volces.com"
         logger.info(f"Cloud provider: {self.cloud_provider.lower()}")
         logger.info(f"VikingDBLTMBackend: region={self.region}, host={host}")
 
@@ -168,7 +169,8 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
         ak, sk, sts_token = self._get_ak_sk_sts()
         if self.cloud_provider.lower() == "byteplus":
             host = f"api-knowledgebase.mlp.{self.region}.bytepluses.com"
-
+        else:
+            host = f"api-knowledgebase.mlp.{self.region}.volces.com"
         logger.info(f"Cloud provider: {self.cloud_provider.lower()}")
         logger.info(f"VikingDBLTMBackend: region={self.region}, host={host}")
 
