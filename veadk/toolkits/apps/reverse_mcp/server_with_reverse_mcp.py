@@ -91,7 +91,6 @@ class ServerWithReverseMCP:
         agent: "Agent",
         host: str = "0.0.0.0",
         port: int = 8000,
-        short_term_memory: Optional[Any] = None,
     ):
         self.agent = agent
 
@@ -100,26 +99,6 @@ class ServerWithReverseMCP:
 
         self.app = FastAPI()
 
-        # Session and artifact services for new endpoints
-        # Priority: 1. provided short_term_memory, 2. agent's short_term_memory, 3. create new
-        if short_term_memory is not None:
-            from google.adk.sessions.base_session_service import BaseSessionService
-
-            if isinstance(short_term_memory, BaseSessionService):
-                self.session_service = short_term_memory
-            else:
-                self.session_service = short_term_memory.session_service
-        elif (
-            hasattr(agent, "short_term_memory") and agent.short_term_memory is not None
-        ):
-            from google.adk.sessions.base_session_service import BaseSessionService
-
-            if isinstance(agent.short_term_memory, BaseSessionService):
-                self.session_service = agent.short_term_memory
-            else:
-                self.session_service = agent.short_term_memory.session_service
-        else:
-            self.session_service = InMemorySessionService()
         self.artifact_service = InMemoryArtifactService()
 
         # build routes for self.app
@@ -127,6 +106,7 @@ class ServerWithReverseMCP:
 
         self.ws_session_mgr = WebsocketSessionManager()
         self.ws_agent_mgr: dict[str, "Agent"] = {}
+        self.ws_session_service_mgr: dict[str, "InMemorySessionService"] = {}
 
     def build(self):
         logger.info("Build routes for server with reverse mcp")
@@ -140,6 +120,8 @@ class ServerWithReverseMCP:
             session_id: str
 
             websocket_id: str
+
+            mcp_tool_filter: Optional[list[str]] = None
 
         class InvokeResponse(BaseModel):
             """Response model for /invoke endpoint"""
@@ -155,16 +137,32 @@ class ServerWithReverseMCP:
 
             agent = self.ws_agent_mgr[payload.websocket_id]
 
-            if not agent.tools:
-                logger.debug("Mount fake MCPToolset to agent")
+            mcp_toolset_url = f"http://127.0.0.1:{self.port}/mcp"
+            mcp_toolset_headers = {REVERSE_MCP_HEADER_KEY: payload.websocket_id}
 
-                # we hard code the mcp url with `/mcp` to obey the mcp protocol
+            has_mcp_toolset = False
+            for tool in agent.tools:
+                if isinstance(tool, MCPToolset):
+                    if hasattr(tool, "_connection_params"):
+                        conn_params = tool._connection_params
+                        if (
+                            hasattr(conn_params, "url")
+                            and conn_params.url == mcp_toolset_url
+                            and hasattr(conn_params, "headers")
+                            and conn_params.headers == mcp_toolset_headers
+                        ):
+                            has_mcp_toolset = True
+                            break
+
+            if not has_mcp_toolset:
+                logger.debug("Mount fake MCPToolset to agent")
                 agent.tools.append(
                     MCPToolset(
                         connection_params=StreamableHTTPConnectionParams(
-                            url=f"http://127.0.0.1:{self.port}/mcp",
-                            headers={REVERSE_MCP_HEADER_KEY: payload.websocket_id},
+                            url=mcp_toolset_url,
+                            headers=mcp_toolset_headers,
                         ),
+                        tool_filter=payload.mcp_tool_filter,
                     )
                 )
 
@@ -194,6 +192,9 @@ class ServerWithReverseMCP:
             logger.info(f"Fork agent for websocket {client_id}")
             self.ws_agent_mgr[client_id] = self.agent.clone()
 
+            logger.info(f"Create session service for websocket {client_id}")
+            self.ws_session_service_mgr[client_id] = InMemorySessionService()
+
             await ws.accept()
             logger.info(f"Websocket {client_id} connected")
 
@@ -201,12 +202,22 @@ class ServerWithReverseMCP:
                 raw = await ws.receive_text()
                 await self.ws_session_mgr.handle_ws_message(client_id, raw)
 
-        # ========== New endpoints: create_session, create_session_with_id, run_sse ==========
-        # NOTE: These must be defined BEFORE the catch-all /{path:path} route
-
         class CreateSessionRequest(BaseModel):
             state: Optional[dict[str, Any]] = None
             session_id: Optional[str] = None
+            websocket_id: str
+
+        class RunAgentRequestWithWsId(RunAgentRequest):
+            websocket_id: str
+            mcp_tool_filter: Optional[list[str]] = None
+
+        def _get_session_service(websocket_id: str) -> InMemorySessionService:
+            """Get session service for the websocket client."""
+            if websocket_id not in self.ws_session_service_mgr:
+                raise HTTPException(
+                    status_code=404, detail=f"WebSocket client {websocket_id} not found"
+                )
+            return self.ws_session_service_mgr[websocket_id]
 
         @self.app.post(
             "/apps/{app_name}/users/{user_id}/sessions",
@@ -215,21 +226,22 @@ class ServerWithReverseMCP:
         async def create_session(
             app_name: str,
             user_id: str,
-            req: Optional[CreateSessionRequest] = None,
+            req: CreateSessionRequest,
         ) -> Session:
             """Create a new session."""
-            session_id = req.session_id if req and req.session_id else str(uuid.uuid4())
+            session_id = req.session_id if req.session_id else str(uuid.uuid4())
             session = Session(
                 app_name=app_name,
                 user_id=user_id,
                 id=session_id,
-                state=req.state if req and req.state else {},
+                state=req.state if req.state else {},
             )
-            await self.session_service.create_session(
+            session_service = _get_session_service(req.websocket_id)
+            await session_service.create_session(
                 app_name=app_name,
                 user_id=user_id,
                 session_id=session_id,
-                state=req.state if req and req.state else {},
+                state=req.state if req.state else {},
             )
             logger.info(
                 f"Created session: {session_id} for user {user_id} in app {app_name}"
@@ -244,29 +256,32 @@ class ServerWithReverseMCP:
             app_name: str,
             user_id: str,
             session_id: str,
-            state: Optional[dict[str, Any]] = None,
+            req: CreateSessionRequest,
         ) -> Session:
             """Create a session with specific ID."""
-            await self.session_service.create_session(
+            session_service = _get_session_service(req.websocket_id)
+            await session_service.create_session(
                 app_name=app_name,
                 user_id=user_id,
                 session_id=session_id,
-                state=state if state else {},
+                state=req.state if req.state else {},
             )
             session = Session(
                 app_name=app_name,
                 user_id=user_id,
                 id=session_id,
-                state=state if state else {},
+                state=req.state if req.state else {},
             )
             logger.info(f"Created session with ID: {session_id} for user {user_id}")
             return session
 
         @self.app.post("/run_sse")
-        async def run_agent_sse(req: RunAgentRequest) -> StreamingResponse:
+        async def run_agent_sse(req: RunAgentRequestWithWsId) -> StreamingResponse:
             """Run agent with SSE streaming."""
+            session_service = _get_session_service(req.websocket_id)
+
             # Get session
-            session = await self.session_service.get_session(
+            session = await session_service.get_session(
                 app_name=req.app_name,
                 user_id=req.user_id,
                 session_id=req.session_id,
@@ -274,26 +289,43 @@ class ServerWithReverseMCP:
             if not session:
                 raise HTTPException(status_code=404, detail="Session not found")
 
-            # Use the first connected websocket client, or create a new agent clone
-            websocket_id = None
-            if self.ws_agent_mgr:
-                websocket_id = list(self.ws_agent_mgr.keys())[0]
-                agent = self.ws_agent_mgr[websocket_id]
-                logger.debug(f"Using agent from websocket {websocket_id}")
+            # Get agent for this websocket
+            if req.websocket_id in self.ws_agent_mgr:
+                agent = self.ws_agent_mgr[req.websocket_id]
+                logger.debug(f"Using agent from websocket {req.websocket_id}")
             else:
-                # No websocket connected, use original agent
-                agent = self.agent
-                logger.debug("No websocket connected, using original agent")
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"WebSocket client {req.websocket_id} not found",
+                )
 
             # Mount MCPToolset if needed
-            if not agent.tools:
+            mcp_toolset_url = f"http://127.0.0.1:{self.port}/mcp"
+            mcp_toolset_headers = {REVERSE_MCP_HEADER_KEY: req.websocket_id}
+
+            has_mcp_toolset = False
+            for tool in agent.tools:
+                if isinstance(tool, MCPToolset):
+                    if hasattr(tool, "_connection_params"):
+                        conn_params = tool._connection_params
+                        if (
+                            hasattr(conn_params, "url")
+                            and conn_params.url == mcp_toolset_url
+                            and hasattr(conn_params, "headers")
+                            and conn_params.headers == mcp_toolset_headers
+                        ):
+                            has_mcp_toolset = True
+                            break
+
+            if not has_mcp_toolset:
                 logger.debug("Mount fake MCPToolset to agent for SSE")
                 agent.tools.append(
                     MCPToolset(
                         connection_params=StreamableHTTPConnectionParams(
-                            url=f"http://127.0.0.1:{self.port}/mcp",
-                            headers={REVERSE_MCP_HEADER_KEY: websocket_id or "default"},
+                            url=mcp_toolset_url,
+                            headers=mcp_toolset_headers,
                         ),
+                        tool_filter=req.mcp_tool_filter,
                     )
                 )
 
@@ -301,7 +333,7 @@ class ServerWithReverseMCP:
             runner = GoogleRunner(
                 agent=agent,
                 app_name=req.app_name,
-                session_service=self.session_service,
+                session_service=session_service,
                 artifact_service=self.artifact_service,
             )
 
