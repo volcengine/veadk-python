@@ -15,9 +15,14 @@
 import asyncio
 import json
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
-from fastapi import FastAPI, Request, Response, WebSocket
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket
+from fastapi.responses import StreamingResponse
+from google.adk.artifacts import InMemoryArtifactService
+from google.adk.cli.adk_web_server import RunAgentRequest
+from google.adk.runners import Runner as GoogleRunner
+from google.adk.sessions import InMemorySessionService, Session
 from google.adk.tools.mcp_tool.mcp_session_manager import (
     StreamableHTTPConnectionParams,
 )
@@ -86,6 +91,7 @@ class ServerWithReverseMCP:
         agent: "Agent",
         host: str = "0.0.0.0",
         port: int = 8000,
+        short_term_memory: Optional[Any] = None,
     ):
         self.agent = agent
 
@@ -93,6 +99,29 @@ class ServerWithReverseMCP:
         self.port = port
 
         self.app = FastAPI()
+
+        # Session and artifact services for new endpoints
+        # Priority: 1. provided short_term_memory, 2. agent's short_term_memory, 3. create new
+        if short_term_memory is not None:
+            from google.adk.sessions.base_session_service import BaseSessionService
+
+            if isinstance(short_term_memory, BaseSessionService):
+                self.session_service = short_term_memory
+            else:
+                self.session_service = short_term_memory.session_service
+        elif (
+            hasattr(agent, "short_term_memory") and agent.short_term_memory is not None
+        ):
+            from google.adk.sessions.base_session_service import BaseSessionService
+
+            if isinstance(agent.short_term_memory, BaseSessionService):
+                self.session_service = agent.short_term_memory
+            else:
+                self.session_service = agent.short_term_memory.session_service
+        else:
+            self.session_service = InMemorySessionService()
+        self.artifact_service = InMemoryArtifactService()
+
         # build routes for self.app
         self.build()
 
@@ -172,8 +201,135 @@ class ServerWithReverseMCP:
                 raw = await ws.receive_text()
                 await self.ws_session_mgr.handle_ws_message(client_id, raw)
 
+        # ========== New endpoints: create_session, create_session_with_id, run_sse ==========
+        # NOTE: These must be defined BEFORE the catch-all /{path:path} route
+
+        class CreateSessionRequest(BaseModel):
+            state: Optional[dict[str, Any]] = None
+            session_id: Optional[str] = None
+
+        @self.app.post(
+            "/apps/{app_name}/users/{user_id}/sessions",
+            response_model_exclude_none=True,
+        )
+        async def create_session(
+            app_name: str,
+            user_id: str,
+            req: Optional[CreateSessionRequest] = None,
+        ) -> Session:
+            """Create a new session."""
+            session_id = req.session_id if req and req.session_id else str(uuid.uuid4())
+            session = Session(
+                app_name=app_name,
+                user_id=user_id,
+                id=session_id,
+                state=req.state if req and req.state else {},
+            )
+            await self.session_service.create_session(
+                app_name=app_name,
+                user_id=user_id,
+                session_id=session_id,
+                state=req.state if req and req.state else {},
+            )
+            logger.info(
+                f"Created session: {session_id} for user {user_id} in app {app_name}"
+            )
+            return session
+
+        @self.app.post(
+            "/apps/{app_name}/users/{user_id}/sessions/{session_id}",
+            response_model_exclude_none=True,
+        )
+        async def create_session_with_id(
+            app_name: str,
+            user_id: str,
+            session_id: str,
+            state: Optional[dict[str, Any]] = None,
+        ) -> Session:
+            """Create a session with specific ID."""
+            await self.session_service.create_session(
+                app_name=app_name,
+                user_id=user_id,
+                session_id=session_id,
+                state=state if state else {},
+            )
+            session = Session(
+                app_name=app_name,
+                user_id=user_id,
+                id=session_id,
+                state=state if state else {},
+            )
+            logger.info(f"Created session with ID: {session_id} for user {user_id}")
+            return session
+
+        @self.app.post("/run_sse")
+        async def run_agent_sse(req: RunAgentRequest) -> StreamingResponse:
+            """Run agent with SSE streaming."""
+            # Get session
+            session = await self.session_service.get_session(
+                app_name=req.app_name,
+                user_id=req.user_id,
+                session_id=req.session_id,
+            )
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
+
+            # Use the first connected websocket client, or create a new agent clone
+            websocket_id = None
+            if self.ws_agent_mgr:
+                websocket_id = list(self.ws_agent_mgr.keys())[0]
+                agent = self.ws_agent_mgr[websocket_id]
+                logger.debug(f"Using agent from websocket {websocket_id}")
+            else:
+                # No websocket connected, use original agent
+                agent = self.agent
+                logger.debug("No websocket connected, using original agent")
+
+            # Mount MCPToolset if needed
+            if not agent.tools:
+                logger.debug("Mount fake MCPToolset to agent for SSE")
+                agent.tools.append(
+                    MCPToolset(
+                        connection_params=StreamableHTTPConnectionParams(
+                            url=f"http://127.0.0.1:{self.port}/mcp",
+                            headers={REVERSE_MCP_HEADER_KEY: websocket_id or "default"},
+                        ),
+                    )
+                )
+
+            # Create runner
+            runner = GoogleRunner(
+                agent=agent,
+                app_name=req.app_name,
+                session_service=self.session_service,
+                artifact_service=self.artifact_service,
+            )
+
+            async def event_generator():
+                try:
+                    async for event in runner.run_async(
+                        user_id=req.user_id,
+                        session_id=req.session_id,
+                        new_message=req.new_message,
+                        state_delta=req.state_delta,
+                    ):
+                        event_json = event.model_dump_json(
+                            exclude_none=True, by_alias=True
+                        )
+                        logger.debug(f"SSE event: {event_json}")
+                        yield f"data: {event_json}\n\n"
+                except Exception as e:
+                    logger.exception(f"Error in event_generator: {e}")
+                    yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+            return StreamingResponse(
+                event_generator(),
+                media_type="text/event-stream",
+            )
+
         # build the fake MPC server,
         # and intercept all requests to the client websocket client.
+        # NOTE: This catch-all route must be defined LAST
         @self.app.api_route("/{path:path}", methods=["GET", "POST"])
         async def mcp_proxy(path: str, request: Request):
             client_id = request.headers.get(REVERSE_MCP_HEADER_KEY)
