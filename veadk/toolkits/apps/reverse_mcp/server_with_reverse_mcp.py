@@ -121,8 +121,6 @@ class ServerWithReverseMCP:
 
             websocket_id: str
 
-            mcp_tool_filter: Optional[list[str]] = None
-
         class InvokeResponse(BaseModel):
             """Response model for /invoke endpoint"""
 
@@ -137,35 +135,6 @@ class ServerWithReverseMCP:
 
             agent = self.ws_agent_mgr[payload.websocket_id]
 
-            mcp_toolset_url = f"http://127.0.0.1:{self.port}/mcp"
-            mcp_toolset_headers = {REVERSE_MCP_HEADER_KEY: payload.websocket_id}
-
-            has_mcp_toolset = False
-            for tool in agent.tools:
-                if isinstance(tool, MCPToolset):
-                    if hasattr(tool, "_connection_params"):
-                        conn_params = tool._connection_params
-                        if (
-                            hasattr(conn_params, "url")
-                            and conn_params.url == mcp_toolset_url
-                            and hasattr(conn_params, "headers")
-                            and conn_params.headers == mcp_toolset_headers
-                        ):
-                            has_mcp_toolset = True
-                            break
-
-            if not has_mcp_toolset:
-                logger.debug("Mount fake MCPToolset to agent")
-                agent.tools.append(
-                    MCPToolset(
-                        connection_params=StreamableHTTPConnectionParams(
-                            url=mcp_toolset_url,
-                            headers=mcp_toolset_headers,
-                        ),
-                        tool_filter=payload.mcp_tool_filter,
-                    )
-                )
-
             runner = Runner(app_name=payload.app_name, agent=agent)
             response = await runner.run(
                 messages=[prompt],
@@ -179,6 +148,7 @@ class ServerWithReverseMCP:
         @self.app.websocket("/ws")
         async def ws_endpoint(ws: WebSocket):
             client_id = ws.query_params.get("id")
+
             if not client_id:
                 await ws.close(
                     code=400,
@@ -186,11 +156,34 @@ class ServerWithReverseMCP:
                 )
                 return
 
+            # Parse mcp_tool_filter from query params, comma-separated string
+            mcp_tool_filter_str = ws.query_params.get("mcp_tool_filter")
+            mcp_tool_filter = None
+            if mcp_tool_filter_str:
+                mcp_tool_filter = [
+                    t.strip() for t in mcp_tool_filter_str.split(",") if t.strip()
+                ]
+
             logger.info(f"Register websocket {client_id} to session manager.")
             self.ws_session_mgr.connections[client_id] = ws
 
             logger.info(f"Fork agent for websocket {client_id}")
-            self.ws_agent_mgr[client_id] = self.agent.clone()
+            agent = self.agent.clone()
+
+            # Mount MCPToolset when creating agent
+            mcp_toolset_url = f"http://127.0.0.1:{self.port}/mcp"
+            mcp_toolset_headers = {REVERSE_MCP_HEADER_KEY: client_id}
+            logger.debug(f"Mount MCPToolset to agent for websocket {client_id}")
+            agent.tools.append(
+                MCPToolset(
+                    connection_params=StreamableHTTPConnectionParams(
+                        url=mcp_toolset_url,
+                        headers=mcp_toolset_headers,
+                    ),
+                    tool_filter=mcp_tool_filter,
+                )
+            )
+            self.ws_agent_mgr[client_id] = agent
 
             logger.info(f"Create session service for websocket {client_id}")
             self.ws_session_service_mgr[client_id] = InMemorySessionService()
@@ -209,7 +202,6 @@ class ServerWithReverseMCP:
 
         class RunAgentRequestWithWsId(RunAgentRequest):
             websocket_id: str
-            mcp_tool_filter: Optional[list[str]] = None
 
         def _get_session_service(websocket_id: str) -> InMemorySessionService:
             """Get session service for the websocket client."""
@@ -297,36 +289,6 @@ class ServerWithReverseMCP:
                 raise HTTPException(
                     status_code=404,
                     detail=f"WebSocket client {req.websocket_id} not found",
-                )
-
-            # Mount MCPToolset if needed
-            mcp_toolset_url = f"http://127.0.0.1:{self.port}/mcp"
-            mcp_toolset_headers = {REVERSE_MCP_HEADER_KEY: req.websocket_id}
-
-            has_mcp_toolset = False
-            for tool in agent.tools:
-                if isinstance(tool, MCPToolset):
-                    if hasattr(tool, "_connection_params"):
-                        conn_params = tool._connection_params
-                        if (
-                            hasattr(conn_params, "url")
-                            and conn_params.url == mcp_toolset_url
-                            and hasattr(conn_params, "headers")
-                            and conn_params.headers == mcp_toolset_headers
-                        ):
-                            has_mcp_toolset = True
-                            break
-
-            if not has_mcp_toolset:
-                logger.debug("Mount fake MCPToolset to agent for SSE")
-                agent.tools.append(
-                    MCPToolset(
-                        connection_params=StreamableHTTPConnectionParams(
-                            url=mcp_toolset_url,
-                            headers=mcp_toolset_headers,
-                        ),
-                        tool_filter=req.mcp_tool_filter,
-                    )
                 )
 
             # Create runner
