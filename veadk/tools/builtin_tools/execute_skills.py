@@ -90,7 +90,7 @@ def execute_skills(
 
     cloud_provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
     if cloud_provider == "byteplus":
-        sld = "byteplusapi"
+        sld = "bytepluses"
         default_region = "ap-southeast-1"
     else:
         sld = "volces"
