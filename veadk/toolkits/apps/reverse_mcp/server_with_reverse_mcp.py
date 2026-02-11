@@ -377,10 +377,27 @@ class ServerWithReverseMCP:
 
             logger.debug(f"[Reverse mcp proxy] Response from local: {resp}")
 
+            # Filter hop-by-hop headers to avoid Content-Length mismatch
+            headers = resp["payload"]["headers"]
+            hop_by_hop_headers = {
+                "content-length",
+                "transfer-encoding",
+                "connection",
+                "keep-alive",
+                "proxy-authenticate",
+                "proxy-authorization",
+                "te",
+                "trailers",
+                "upgrade",
+            }
+            filtered_headers = {
+                k: v for k, v in headers.items() if k.lower() not in hop_by_hop_headers
+            }
+
             return Response(
                 content=resp["payload"]["body"],  # type: ignore
                 status_code=resp["payload"]["status"],  # type: ignore
-                headers=resp["payload"]["headers"],  # type: ignore
+                headers=filtered_headers,  # type: ignore
             )
 
     def run(self):
