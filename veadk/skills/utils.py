@@ -75,8 +75,19 @@ def load_skills_from_cloud(skill_space_ids: str) -> list[Skill]:
     for skill_space_id in skill_space_ids_list:
         try:
             service = os.getenv("AGENTKIT_TOOL_SERVICE_CODE", "agentkit")
-            region = os.getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
-            host = os.getenv("AGENTKIT_SKILL_HOST", "open.volcengineapi.com")
+
+            provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
+            if provider == "byteplus":
+                sld = "byteplusapi"
+                default_region = "ap-southeast-1"
+            else:
+                sld = "volcengineapi"
+                default_region = "cn-beijing"
+
+            region = os.getenv("AGENTKIT_TOOL_REGION", default_region)
+            host = os.getenv(
+                "AGENTKIT_SKILL_HOST", service + "." + region + f".{sld}.com"
+            )
 
             access_key = os.getenv("VOLCENGINE_ACCESS_KEY")
             secret_key = os.getenv("VOLCENGINE_SECRET_KEY")

@@ -65,10 +65,18 @@ def download_skills_tool(
             secret_key = cred.secret_access_key
             session_token = cred.session_token
 
+        cloud_provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
+        if cloud_provider == "byteplus":
+            sld = "byteplusapi"
+            default_region = "ap-southeast-1"
+        else:
+            sld = "volces"
+            default_region = "cn-beijing"
+
         # Get service configuration
         service = os.getenv("AGENTKIT_TOOL_SERVICE_CODE", "agentkit")
-        region = os.getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
-        host = os.getenv("AGENTKIT_SKILL_HOST", "open.volcengineapi.com")
+        region = os.getenv("AGENTKIT_TOOL_REGION", default_region)
+        host = os.getenv("AGENTKIT_SKILL_HOST", service + "." + region + f".{sld}.com")
 
         # Ensure download path exists
         download_dir = Path(download_path)

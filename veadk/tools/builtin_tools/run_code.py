@@ -45,9 +45,18 @@ def run_code(
     service = getenv(
         "AGENTKIT_TOOL_SERVICE_CODE", "agentkit"
     )  # temporary service for code run tool
-    region = getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
+
+    cloud_provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
+    if cloud_provider == "byteplus":
+        sld = "bytepluses"
+        default_region = "ap-southeast-1"
+    else:
+        sld = "volces"
+        default_region = "cn-beijing"
+
+    region = getenv("AGENTKIT_TOOL_REGION", default_region)
     host = getenv(
-        "AGENTKIT_TOOL_HOST", service + "." + region + ".volces.com"
+        "AGENTKIT_TOOL_HOST", service + "." + region + f".{sld}.com"
     )  # temporary host for code run tool
     scheme = getenv("AGENTKIT_TOOL_SCHEME", "https", allow_false_values=True).lower()
     if scheme not in {"http", "https"}:
