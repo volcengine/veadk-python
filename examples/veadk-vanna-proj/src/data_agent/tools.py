@@ -495,3 +495,18 @@ def recall_metadata(tenant: str, query: str, timeout: int = 30) -> Dict[str, Any
 
     except requests.exceptions.RequestException as e:
         return f"错误: {e}, 返回内容: {result}"
+
+
+def get_current_time() -> str:
+    """
+    获取当前时间的函数
+
+    Returns:
+        当前时间的字符串表示，格式为 "YYYY-MM-DD HH:MM:SS"
+
+    Example:
+        current_time = get_current_time()
+    """
+    from datetime import datetime
+
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")

@@ -16,6 +16,7 @@ from .tools import (
     save_text_memory,
     query_with_dsl,
     recall_metadata,
+    get_current_time,
 )
 
 # # Define the Veadk Agent using Vanna Tools
@@ -290,6 +291,7 @@ agent: Agent = Agent(
         save_text_memory,  # SaveTextMemoryTool: Save text to memory
         query_with_dsl,
         recall_metadata,
+        get_current_time,
     ],
     planner=PlanReActPlanner(),
     model_extra_config={"extra_body": {"thinking": {"type": "disabled"}}},
