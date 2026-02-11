@@ -19,14 +19,16 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket
 from fastapi.responses import StreamingResponse
+from google.adk.agents.run_config import StreamingMode
 from google.adk.artifacts import InMemoryArtifactService
 from google.adk.cli.adk_web_server import RunAgentRequest
-from google.adk.runners import Runner as GoogleRunner
+from google.adk.runners import Runner as GoogleRunner, RunConfig
 from google.adk.sessions import InMemorySessionService, Session
 from google.adk.tools.mcp_tool.mcp_session_manager import (
     StreamableHTTPConnectionParams,
 )
 from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
+from google.adk.utils.context_utils import Aclosing
 from pydantic import BaseModel
 
 from veadk import Runner
@@ -297,19 +299,44 @@ class ServerWithReverseMCP:
                 artifact_service=self.artifact_service,
             )
 
+            # Determine streaming mode from request
+            stream_mode = StreamingMode.SSE if req.streaming else StreamingMode.NONE
+
             async def event_generator():
                 try:
-                    async for event in runner.run_async(
-                        user_id=req.user_id,
-                        session_id=req.session_id,
-                        new_message=req.new_message,
-                        state_delta=req.state_delta,
-                    ):
-                        event_json = event.model_dump_json(
-                            exclude_none=True, by_alias=True
+                    async with Aclosing(
+                        runner.run_async(
+                            user_id=req.user_id,
+                            session_id=req.session_id,
+                            new_message=req.new_message,
+                            state_delta=req.state_delta,
+                            run_config=RunConfig(streaming_mode=stream_mode),
+                            invocation_id=req.invocation_id,
                         )
-                        logger.debug(f"SSE event: {event_json}")
-                        yield f"data: {event_json}\n\n"
+                    ) as agen:
+                        async for event in agen:
+                            # ADK Web renders artifacts from `actions.artifactDelta`
+                            # during part processing *and* during action processing
+                            # 1) the original event with `artifactDelta` cleared (content)
+                            # 2) a content-less "action-only" event carrying `artifactDelta`
+                            events_to_stream = [event]
+                            if (
+                                event.actions.artifact_delta
+                                and event.content
+                                and event.content.parts
+                            ):
+                                content_event = event.model_copy(deep=True)
+                                content_event.actions.artifact_delta = {}
+                                artifact_event = event.model_copy(deep=True)
+                                artifact_event.content = None
+                                events_to_stream = [content_event, artifact_event]
+
+                            for event_to_stream in events_to_stream:
+                                sse_event = event_to_stream.model_dump_json(
+                                    exclude_none=True, by_alias=True
+                                )
+                                logger.debug(f"SSE event: {sse_event}")
+                                yield f"data: {sse_event}\n\n"
                 except Exception as e:
                     logger.exception(f"Error in event_generator: {e}")
                     yield f"data: {json.dumps({'error': str(e)})}\n\n"
