@@ -56,3 +56,45 @@ def get_location_weather(city: str) -> dict[str, str]:
     )
     temperature = random.randint(-10, 40)
     return {"result": f"{condition}, {temperature}°C"}
+
+
+def search_agent_tool(query: str) -> dict[str, str]:
+    """Search for available agents based on the user query."""
+    # Mock agent data
+    agents = {
+        "travel_agent": "Helps with booking flights and hotels.",
+        "coding_agent": "Assists with writing and debugging code.",
+        "research_agent": "Summarizes academic papers and articles.",
+    }
+
+    result = {}
+    query = query.lower()
+    for name, card in agents.items():
+        if query in name or query in card.lower():
+            result[name] = card
+
+    return result
+
+
+def agent_invoke(prompt: str, url: str) -> dict:
+    """Invokes an agent service using the A2A protocol."""
+    import requests
+
+    response = requests.post(
+        url,
+        headers={"Content-Type": "application/json"},
+        json={
+            "jsonrpc": "2.0",
+            "id": "req-1",
+            "method": "message/send",
+            "params": {
+                "message": {
+                    "id": "123456",
+                    "messageId": "123456",
+                    "role": "user",
+                    "parts": [{"text": prompt}],
+                }
+            },
+        },
+    )
+    return response.json()

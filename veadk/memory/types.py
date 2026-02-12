@@ -17,4 +17,19 @@ from pydantic import BaseModel
 
 class MemoryProfile(BaseModel):
     name: str
+    describe: str
     event_ids: list[str]
+
+
+class MemoryProfileList(BaseModel):
+    profiles: list[MemoryProfile]  # 核心：list[MemoryProfile]类型字段
+
+
+class MemoryProfileV2(BaseModel):
+    name: str
+    tags: list[str]
+    event_ids: list[str]
+
+
+class MemoryProfileListV2(BaseModel):
+    profiles: list[MemoryProfileV2]  # 核心：list[MemoryProfile]类型字段

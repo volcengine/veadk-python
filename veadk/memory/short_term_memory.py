@@ -188,39 +188,86 @@ class ShortTermMemory(BaseModel):
         import json
 
         from veadk import Agent, Runner
-        from veadk.memory.types import MemoryProfile
+        from veadk.memory.types import MemoryProfileListV2
         from veadk.utils.misc import write_string_to_file
 
         event_text = ""
         for event in events:
             event_text += f"- Event id: {event.id}\nEvent content: {event.content}\n"
+        print("the events is：\n ", event_text)
+        print("-------------------")
+        #         instructions_v1 = """Summarize the memory events into at least two groups according to the event content. An event can belong to multiple groups. You must output the summary in JSON format (Each group should have a simple name (only a-z and _ is allowed), and a list of event ids):
+        # [
+        #     {
+        #         "name": "",
+        #         "describe":"",
+        #         "event_ids": ["Event id here"]
+        #     },
+        #     {
+        #         "name": "",
+        #         "describe":"",
+        #         "event_ids": ["Event id here"]
+        #     }
+        # ]
+        # The event id must be derived from the provided events data.
+        # """
+        instructions_v2 = """You are tasked with grouping memory events based on their content. Follow these requirements strictly:
+
+1. **Core Task**: Summarize the provided memory events into at least 2 groups. An event can belong to multiple groups.
+2. **Input Specification**: The input is structured memory events data containing unique event IDs (to be used directly in outputs) and event details (characters, time, location, event type, topic, emotion, etc.).
+3. **Group Requirements**:
+   - **Name**: A concise name for the group, using only lowercase letters and underscores (e.g., "family_dinner_events").
+   - **Tags**: A list of entity tags extracted from the events in the group, covering characters, time, location, event type, topic, and emotion (e.g., ["Alice", "2023-10-01", "home", "reunion", "holiday_plans", "joyful"]).
+   - **Event IDs**: A list of event IDs from the input data that belong to the group (must match the IDs provided in the input).
+4. **Output Format**: Strictly use JSON format with no extra content. The JSON structure must be:
+{
+    "groups": [
+        {
+            "name": "group_name_1",
+            "tags": ["tag1", "tag2", ...],
+            "event_ids": ["event_id_1", "event_id_2", ...]
+        },
+        {
+            "name": "group_name_2",
+            "tags": ["tag3", "tag4", ...],
+            "event_ids": ["event_id_3", "event_id_4", ...]
+        }
+    ]
+}
+5. **Prohibitions**: Do not fabricate event IDs, tags, or group names; all content must be derived from the input events data. Do not output any text outside the JSON structure.
+        
+"""
 
         agent = Agent(
             name="memory_summarizer",
             description="A summarizer that summarizes the memory events.",
-            instruction="""Summarize the memory events into different groups according to the event content. An event can belong to multiple groups. You must output the summary in JSON format (Each group should have a simple name (only a-z and _ is allowed), and a list of event ids):
-[
-    {
-        "name": "",
-        "event_ids": ["Event id here"]
-    },
-    {
-        "name": "",
-        "event_ids": ["Event id here"]
-    }
-]""",
+            instruction=instructions_v2,
             model_name="deepseek-v3-2-251201",
-            output_schema=MemoryProfile,
+            output_schema=MemoryProfileListV2,
         )
         runner = Runner(agent=agent)
+        print("event_text  =", event_text)
 
         response = await runner.run(messages="Events are: \n" + event_text)
+        print("response  =", response)
 
         # profile path: ./profiles/memory/<app_name>/user_id/session_id/profile_name.json
-        groups = json.loads(response)
-        group_names = [group["name"] for group in groups]
+        try:
+            groups = json.loads(response)
+            print("groups  =", groups)
+        except Exception as e:
+            # 捕获所有可能的异常（如JSON解析错误、response未定义、打印异常等）
+            print(f"解析JSON时出错: {e}")  # 可选：打印错误信息，便于排查
+            groups = {
+                "profiles": [],
+            }  # 报错时生成空列表
 
-        for group in groups:
+        group_names = [
+            {"name": group["name"], "tags": group["tags"]}
+            for group in groups["profiles"]
+        ]
+
+        for group in groups["profiles"]:
             group["event_list"] = []
             for event_id in group["event_ids"]:
                 for event in events:
@@ -232,7 +279,7 @@ class ShortTermMemory(BaseModel):
             file_path=f"./profiles/memory/{app_name}/{user_id}/{session_id}/profile_list.json",
         )
 
-        for group in groups:
+        for group in groups["profiles"]:
             write_string_to_file(
                 content=json.dumps(group, ensure_ascii=False),
                 file_path=f"./profiles/memory/{app_name}/{user_id}/{session_id}/{group['name']}.json",
