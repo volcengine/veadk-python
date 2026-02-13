@@ -170,6 +170,10 @@ class ServerWithReverseMCP:
             logger.info(f"Fork agent for websocket {client_id}")
             agent = self.agent.clone()
 
+            logger.info(
+                f"clone agent \n model_name={agent.model_name}\n instruction={agent.instruction}\n"
+            )
+
             # Mount MCPToolset when creating agent
             mcp_toolset_url = f"http://127.0.0.1:{self.port}/mcp"
             mcp_toolset_headers = {REVERSE_MCP_HEADER_KEY: client_id}
@@ -191,9 +195,13 @@ class ServerWithReverseMCP:
             await ws.accept()
             logger.info(f"Websocket {client_id} connected")
 
-            while True:
-                raw = await ws.receive_text()
-                await self.ws_session_mgr.handle_ws_message(client_id, raw)
+            try:
+                while True:
+                    raw = await ws.receive_text()
+                    logger.debug(f"ws.receive_text() = {raw}")
+                    await self.ws_session_mgr.handle_ws_message(client_id, raw)
+            except Exception as e:
+                logger.warning(f"client {client_id} web socket connection closed: {e}")
 
         class CreateSessionRequest(BaseModel):
             state: Optional[dict[str, Any]] = None
