@@ -454,15 +454,17 @@ class Agent(LlmAgent):
 
             self.instruction += "\nYou have the following skills:\n"
 
+            has_checklist = False
             for skill in skills.values():
                 self.instruction += (
                     f"- name: {skill.name}\n- description: {skill.description}\n\n"
                 )
+                if skill.checklist:
+                    has_checklist = True
 
-            has_checklist = any(skill.checklist for skill in skills.values())
             if has_checklist:
                 self.instruction += (
-                    "Each skill has a checklist that you must complete step by step. "
+                    "Some skills have a checklist that you must complete step by step. "
                     "Use the `update_check_list` tool to mark each item as completed.\n\n"
                 )
 
