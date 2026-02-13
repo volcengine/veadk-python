@@ -347,7 +347,7 @@ class ServerWithReverseMCP:
                                 yield f"data: {sse_event}\n\n"
                 except Exception as e:
                     logger.exception(f"Error in event_generator: {e}")
-                    yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                    yield f"data: {json.dumps({'error': 'Internal server error'})}\n\n"
 
             return StreamingResponse(
                 event_generator(),
