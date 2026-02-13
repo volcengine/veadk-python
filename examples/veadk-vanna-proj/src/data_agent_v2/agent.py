@@ -4,7 +4,7 @@ from google.adk.tools.agent_tool import AgentTool
 from .tools import (
     visualize_data,
     save_correctanswer_memory,
-    search_similar,
+    search_similar_tools,
     generate_document,
     summarize_data,
     run_python_file,
@@ -18,6 +18,7 @@ from .tools import (
     recall_metadata,
     get_current_time,
 )
+
 
 metadata_query_agent: Agent = Agent(
     name="metadata_query_agent",
@@ -173,7 +174,7 @@ agent: Agent = Agent(
 你是主协调智能体，负责：
 - 根据用户自然语言请求，分析任务类型并调度相应的专业智能体
 - 协调多个智能体之间的协作
-- 对于你觉得有效的信息，可以调用 `save_text_memory` 工具保存到内存中，并使用 `search_similar` 工具查询相似的信息。
+- 对于你觉得有效的信息，可以调用 `save_text_memory` 工具保存到内存中，对于你觉得有用的工具调用信息，也可以调用 `save_correctanswer_memory` 工具保存到内存中，并使用 `search_similar_tools` 工具查询相似的工具使用信息。
 - 整合最终结果并返回给用户
 
 ### 调度策略
@@ -202,7 +203,7 @@ agent: Agent = Agent(
     """,
     tools=[
         save_correctanswer_memory,
-        search_similar,
+        search_similar_tools,
         save_text_memory,
         visualize_data,
         summarize_data,

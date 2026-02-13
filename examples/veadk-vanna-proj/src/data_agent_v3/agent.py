@@ -5,7 +5,7 @@ from google.adk.planners import PlanReActPlanner
 from .tools import (
     visualize_data,
     save_correctanswer_memory,
-    search_similar,
+    search_similar_tools,
     generate_document,
     summarize_data,
     run_python_file,
@@ -20,6 +20,7 @@ from .tools import (
     get_current_time,
     exit_loop,
 )
+
 
 metadata_query_agent: Agent = Agent(
     name="metadata_query_agent",
@@ -203,7 +204,7 @@ summary_agent: Agent = Agent(
 ### 任务
 你是总结智能体，负责：
 - 根据循环执行智能体的结果，总结出最终的分析结果
-- 对于你觉得有效的信息，可以调用 `save_text_memory` 工具保存到内存中，并使用 `search_similar` 工具查询相似的信息。
+- 对于你觉得有效的信息，可以调用 `save_text_memory` 工具保存到内存中，对于你觉得有用的工具调用信息，也可以调用 `save_correctanswer_memory` 工具保存到内存中，并使用 `search_similar_tools` 工具查询相似的工具使用信息。
 - 整合最终结果并返回给用户
 
 ### 输出要求：
@@ -227,7 +228,7 @@ summary_agent: Agent = Agent(
     planner=PlanReActPlanner(),
     tools=[
         save_correctanswer_memory,
-        search_similar,
+        search_similar_tools,
         save_text_memory,
         visualize_data,
         summarize_data,

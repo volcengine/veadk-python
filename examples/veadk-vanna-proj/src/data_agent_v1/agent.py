@@ -4,7 +4,7 @@ from .tools import (
     run_sql,
     visualize_data,
     save_correctanswer_memory,
-    search_similar,
+    search_similar_tools,
     generate_document,
     summarize_data,
     run_python_file,
@@ -19,7 +19,6 @@ from .tools import (
     get_current_time,
 )
 
-
 # Define the Veadk Agent using Vanna Tools
 agent: Agent = Agent(
     name="b2b_data_agent",
@@ -32,16 +31,15 @@ agent: Agent = Agent(
 - 调用工具 `query_with_dsl` 查询业务数据。注意，调用工具 `query_with_dsl` 的时候，operator参数固定为 "liujiawei.boom@bytedance.com"，tenant参数请固定为"c360"。
 - 对于复杂的数据分析任务，你必须编写Python代码来进行数据分析，并使用 `run_python_file` 工具来执行Python脚本（如果需要安装Python包，请先使用 `pip_install` 工具安装）
 - 对于时间敏感的查询，可以使用`get_current_time`工具获取当前时间。
-- 对于你觉得有效的信息，可以调用 `save_text_memory` 工具保存到内存中，并使用 `search_similar` 工具查询相似的信息。
+- 对于你觉得有效的信息，可以调用 `save_text_memory` 工具保存到内存中，对于你觉得有用的工具调用信息，也可以调用 `save_correctanswer_memory` 工具保存到内存中，并使用 `search_similar_tools` 工具查询相似的工具使用信息。
 
 ### 关键指南：
 - **分析元数据**：
     - 分析元数据，将用户描述的字段、对象或条件映射到确切的字段名。**注意** 对于使用到字段名的地方，严格按照元数据提供的字段名原样使用，不要修改，例如元数据提供的字段名= "sf_id"，在使用到的地方就用"sf_id"，不要修改为"sfid"
     - 对于枚举字段（字段的数据类型='enum'）
         1. 基于抽样值理解枚举值数据，描述结构为"value:`值`,lable:`label`" 中的label理解关键字，但始终在过滤器或条件中使用对应的value。例如：在名为'account'数据对象中，如果字段'sub_industry_c'是枚举类型，其中一个label是'游戏'，value是'Game'，那么如果用户说“游戏客户”，则解释为查询对象'account'，过滤器为："sub_industry_c = 'Game'"。对所有枚举应用此逻辑。
-        2. 如果使用枚举字段作为三元组判断条件，不能使用contains函数，而应该使用“=”，例如要实现“模型简称='DeepSeek'”，三元组应为"ModelShortName = 'DeepSeek'"
     - 对于文本字段（字段的数据类型='text'）,有以下约定
-        1. 如果同时该字段的特殊类型是“可模糊匹配”时，在过滤器条件中不能使用'='操作符，而应使用contains函数，例如name.contains('名称')，反之则不能使用contains函数
+        1. 如果同时该字段的特殊类型是“可模糊匹配”时，通过like进行模糊匹配。
 
 - **解析用户查询**：
     - 从用户需求中识别核心数据对象（obj）（例如，如果用户提到“客户”或“accounts”，则映射到元数据中匹配的对象）。
@@ -71,8 +69,10 @@ agent: Agent = Agent(
         2. 如果是还要查询客户数据，则默认以客户ID作为groupBy
 
 - **DSL构建规则**：
-    1. filter过滤器禁止使用子查询语句。
-    2. 选择的元数据字段必须来自于同一数据对象，禁止跨多数据对象选取字段。
+    1. Where过滤器禁止使用子查询语句。
+    2. 选取的元数据字段必须来自于同一数据对象，禁止跨多数据对象选取字段。
+    3. enum类型字段只允许使用=操作符
+    4. Select不允许出现聚合函数，如sum，max等。
 
 - **其他约定**：
     1. 对于100万、1亿这类的金额，在进行过滤时，需要转换成正确的数字，如100万应转换为1000000
@@ -138,7 +138,7 @@ agent: Agent = Agent(
         run_sql,  # RunSqlTool: Execute SQL queries
         visualize_data,  # VisualizeDataTool: Create visualizations
         save_correctanswer_memory,  # SaveQuestionToolArgsTool: Save tool usage examples
-        search_similar,  # SearchSavedCorrectToolUsesTool: Search tool usage examples
+        search_similar_tools,  # SearchSavedCorrectToolUsesTool: Search tool usage examples
         generate_document,  # WriteFileTool: Create new files
         summarize_data,  # SummarizeDataTool: Summarize CSV data
         run_python_file,  # RunPythonFileTool: Execute Python scripts

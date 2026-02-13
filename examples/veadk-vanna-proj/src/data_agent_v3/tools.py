@@ -229,15 +229,19 @@ async def save_correctanswer_memory(
         args: The arguments that were passed to the tool.
     """
     # Temporarily disabled due to infinite loop issues
-    return "Memory saved successfully (Simulated)"
+    args_model = save_mem_tool.get_args_schema()(
+        question=question, tool_name=tool_name, args=args
+    )
+    result = await save_mem_tool.execute(mock_context, args_model)
+    return str(result.result_for_llm)
 
 
-async def search_similar(question: str, limit: int = 10) -> str:
+async def search_similar_tools(question: str, limit: int = 10) -> str:
     """
-    Search for similar usage patterns based on a question.
+    Search for similar tool usage patterns based on a question.
 
     Args:
-        question: The question to find similar usage patterns for.
+        question: The question to find similar tool usage patterns for.
         limit: Maximum number of results to return.
     """
     args_model = search_mem_tool.get_args_schema()(question=question, limit=limit)
@@ -447,11 +451,10 @@ def query_with_dsl(
 
         # 检查响应状态
         response.raise_for_status()
-
         return result
 
     except Exception as e:
-        return f"错误: {e}, 返回内容: {result}"
+        return f"错误: {str(e)}, 返回内容: {result}"
 
 
 def recall_metadata(tenant: str, query: str, timeout: int = 30) -> Dict[str, Any]:
@@ -490,12 +493,10 @@ def recall_metadata(tenant: str, query: str, timeout: int = 30) -> Dict[str, Any
 
         # 检查响应状态
         response.raise_for_status()
-
-        # 解析JSON响应
         return result
 
-    except requests.exceptions.RequestException as e:
-        return f"错误: {e}, 返回内容: {result}"
+    except Exception as e:
+        return f"错误: {str(e)}, 返回内容: {result}"
 
 
 def get_current_time() -> str:
@@ -510,7 +511,8 @@ def get_current_time() -> str:
     """
     from datetime import datetime
 
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return current_time
 
 
 def exit_loop(tool_context: AdkToolContext):
