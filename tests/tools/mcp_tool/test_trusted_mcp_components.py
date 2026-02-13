@@ -170,7 +170,7 @@ class TestTrustedMcpComponents(unittest.TestCase):
                     connection_params=self.mock_http_params, errlog=sys.stderr
                 )
                 manager._sessions = {}
-                manager._session_lock = asyncio.Lock()
+                # manager._session_lock = asyncio.Lock()
 
                 # Call create_session
                 headers = {"x-trusted-mcp": "true"}
@@ -207,7 +207,7 @@ class TestTrustedMcpComponents(unittest.TestCase):
                     connection_params=self.mock_http_params, errlog=sys.stderr
                 )
                 manager._sessions = {}
-                manager._session_lock = asyncio.Lock()
+                # manager._session_lock = asyncio.Lock()
 
                 # Set up an existing session
                 existing_session = mock.MagicMock()
