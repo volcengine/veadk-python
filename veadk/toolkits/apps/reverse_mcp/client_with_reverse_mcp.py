@@ -23,14 +23,24 @@ logger = get_logger(__name__)
 
 
 class ClientWithReverseMCP:
-    def __init__(self, ws_url: str, mcp_server_url: str, client_id: str):
+    def __init__(
+        self,
+        ws_url: str,
+        mcp_server_url: str,
+        client_id: str,
+        filters: list[str] | None = None,
+    ):
         """Start a client with reverse mcp,
 
         Args:
             ws_url: The url of the websocket server (cloud). Like example.com:8000
             mcp_server_url: The url of the mcp server (local).
+            client_id: The client id for the websocket connection.
+            filters: Optional list of tool names to filter (whitelist). If None, all tools are available.
         """
         self.ws_url = f"ws://{ws_url}/ws?id={client_id}"
+        if filters:
+            self.ws_url += f"&filters={','.join(filters)}"
         self.mcp_server_url = mcp_server_url
 
         # set timeout for httpx client
