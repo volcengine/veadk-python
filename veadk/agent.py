@@ -86,6 +86,7 @@ class Agent(LlmAgent):
         skills (list[str]): List of skills that equip the agent with specific capabilities.
         example_store (Optional[BaseExampleProvider]): Example store for providing example Q/A.
         enable_shadowchar (bool): Whether to enable shadow character for the agent.
+        enable_dynamic_load_skills (bool): Whether to enable dynamic loading of skills.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
@@ -155,6 +156,8 @@ class Agent(LlmAgent):
     enable_ghostchar: bool = False
 
     enable_dataset_gen: bool = False
+
+    enable_dynamic_load_skills: bool = False
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
@@ -347,13 +350,14 @@ class Agent(LlmAgent):
         from pathlib import Path
 
         from veadk.skills.skill import Skill
+        from veadk.skills.check_skills_callback import check_skills
         from veadk.skills.utils import (
             load_skills_from_cloud,
             load_skills_from_directory,
         )
         from veadk.tools.skills_tools.skills_toolset import SkillsToolset
 
-        skills: Dict[str, Skill] = {}
+        self.skills_dict: Dict[str, Skill] = {}
 
         # Determine skills_mode if not set
         if not self.skills_mode:
@@ -428,14 +432,14 @@ class Agent(LlmAgent):
             path = Path(item)
             if path.exists() and path.is_dir():
                 for skill in load_skills_from_directory(path):
-                    skills[skill.name] = skill
+                    self.skills_dict[skill.name] = skill
             else:
                 for skill in load_skills_from_cloud(item):
-                    skills[skill.name] = skill
-        if skills:
+                    self.skills_dict[skill.name] = skill
+        if self.skills_dict:
             self.instruction += "\nYou have the following skills:\n"
 
-            for skill in skills.values():
+            for skill in self.skills_dict.values():
                 self.instruction += (
                     f"- name: {skill.name}\n- description: {skill.description}\n\n"
                 )
@@ -459,9 +463,21 @@ class Agent(LlmAgent):
                     "You can use the skills by calling the `skills_tool` tool.\n\n"
                 )
 
-            self.tools.append(SkillsToolset(skills, self.skills_mode))
+            self.tools.append(SkillsToolset(self.skills_dict, self.skills_mode))
         else:
             logger.warning("No skills loaded.")
+
+        if self.enable_dynamic_load_skills and self.skills_dict:
+            if self.before_agent_callback:
+                if isinstance(self.before_agent_callback, list):
+                    self.before_agent_callback.append(check_skills)
+                else:
+                    self.before_agent_callback = [
+                        self.before_agent_callback,
+                        check_skills,
+                    ]
+            else:
+                self.before_agent_callback = check_skills
 
     def _prepare_tracers(self):
         enable_apmplus_tracer = os.getenv("ENABLE_APMPLUS", "false").lower() == "true"
