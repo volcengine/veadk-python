@@ -34,6 +34,7 @@ from veadk.tools.skills_tools import (
     bash_tool,
     register_skills_tool,
 )
+from veadk.skills.utils import update_check_list
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -73,6 +74,7 @@ class SkillsToolset(BaseToolset):
             "edit_file": FunctionTool(edit_file_tool),
             "bash": FunctionTool(bash_tool),
             "register_skills": FunctionTool(register_skills_tool),
+            "update_check_list": FunctionTool(update_check_list),
         }
 
     @override

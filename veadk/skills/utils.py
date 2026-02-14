@@ -17,11 +17,72 @@ from pathlib import Path
 import os
 import frontmatter
 
+from google.adk.tools import BaseTool, ToolContext
+from typing import Any, Dict, Optional, Callable
+
 from veadk.skills.skill import Skill
 from veadk.utils.logger import get_logger
 from veadk.utils.volcengine_sign import ve_request
 
 logger = get_logger(__name__)
+
+
+def update_check_list(
+    tool_context: ToolContext, skill_name: str, check_item: str, state: bool
+):
+    """
+    Update the checklist item state for a specific skill.
+    Use this tool to mark checklist items as completed during skill execution.
+
+    eg:
+    update_check_list(skill_name="skill-creator", check_item="analyze_content", state=True)
+    """
+    agent_name = tool_context.agent_name
+    if agent_name not in tool_context.state:
+        tool_context.state[agent_name] = {}
+    if skill_name not in tool_context.state[agent_name]:
+        tool_context.state[agent_name][skill_name] = {}
+    if "check_list" not in tool_context.state[agent_name][skill_name]:
+        tool_context.state[agent_name][skill_name]["check_list"] = {}
+    tool_context.state[agent_name][skill_name]["check_list"][check_item] = state
+    logger.info(f"Updated agent[{agent_name}] state: {tool_context.state[agent_name]}")
+
+
+def create_init_skill_check_list_callback(
+    skills_with_checklist: Dict[str, Skill],
+) -> Callable[[BaseTool, Dict[str, Any], ToolContext], Optional[Dict]]:
+    """
+    Create a callback function to initialize checklist when a skill is invoked.
+
+    Args:
+        skills_with_checklist: Dictionary mapping skill names to Skill objects
+
+    Returns:
+        A callback function for before_tool_callback
+    """
+
+    def init_skill_check_list(
+        tool: BaseTool, args: Dict[str, Any], tool_context: ToolContext
+    ) -> Optional[Dict]:
+        """Callback to initialize checklist when a skill is invoked."""
+        if tool.name == "skills_tool":
+            skill_name = args.get("command")
+            agent_name = tool_context.agent_name
+            if skill_name in skills_with_checklist:
+                skill = skills_with_checklist[skill_name]
+                check_list_items = skill.get_checklist_items()
+                check_list_state = {item: False for item in check_list_items}
+                if agent_name not in tool_context.state:
+                    tool_context.state[agent_name] = {}
+                tool_context.state[agent_name][skill_name] = {
+                    "check_list": check_list_state
+                }
+                logger.info(
+                    f"Initialized agent[{agent_name}] skill[{skill_name}] check_list: {check_list_state}"
+                )
+        return None
+
+    return init_skill_check_list
 
 
 def load_skill_from_directory(skill_directory: Path) -> Skill:
@@ -35,6 +96,7 @@ def load_skill_from_directory(skill_directory: Path) -> Skill:
 
     skill_name = skill.get("name", "")
     skill_description = skill.get("description", "")
+    checklist = skill.get("checklist", [])
 
     if not skill_name or not skill_description:
         logger.error(
@@ -47,10 +109,14 @@ def load_skill_from_directory(skill_directory: Path) -> Skill:
     logger.info(
         f"Successfully loaded skill {skill_name} locally from {skill_readme}, name={skill_name}, description={skill_description}"
     )
+    if checklist:
+        logger.info(f"Skill {skill_name} checklist: {checklist}")
+
     return Skill(
         name=skill_name,  # type: ignore
         description=skill_description,  # type: ignore
         path=str(skill_directory),
+        checklist=checklist,
     )
 
 
