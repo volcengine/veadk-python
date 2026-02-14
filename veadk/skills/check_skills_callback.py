@@ -344,6 +344,7 @@ def check_skills(callback_context: CallbackContext) -> Optional[types.Content]:
 
         # Update agent.skills_dict with reloaded skills
         agent.skills_dict = reloaded_skills_dict
+        agent._skills_with_checklist = reloaded_skills_dict
         logger.info(
             f"Updated agent.skills_dict with {len(reloaded_skills_dict)} skills"
         )

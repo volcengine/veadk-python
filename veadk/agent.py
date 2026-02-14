@@ -455,15 +455,10 @@ class Agent(LlmAgent):
         if self.skills_dict:
             self.instruction += "\nYou have the following skills:\n"
 
-            for skill in self.skills_dict.values():
-                    skills[skill.name] = skill
-        if skills:
-            self._skills_with_checklist = skills
-
-            self.instruction += "\nYou have the following skills:\n"
+            self._skills_with_checklist = self.skills_dict
 
             has_checklist = False
-            for skill in skills.values():
+            for skill in self.skills_dict.values():
                 self.instruction += (
                     f"- name: {skill.name}\n- description: {skill.description}\n\n"
                 )
