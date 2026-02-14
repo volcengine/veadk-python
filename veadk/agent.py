@@ -156,6 +156,8 @@ class Agent(LlmAgent):
 
     enable_dataset_gen: bool = False
 
+    _skills_with_checklist: Dict[str, Any] = {}
+
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
 
@@ -300,6 +302,21 @@ class Agent(LlmAgent):
 
         if self.skills:
             self.load_skills()
+            from veadk.skills.utils import create_init_skill_check_list_callback
+
+            init_callback = create_init_skill_check_list_callback(
+                self._skills_with_checklist
+            )
+            if self.before_tool_callback:
+                if isinstance(self.before_tool_callback, list):
+                    self.before_tool_callback.append(init_callback)
+                else:
+                    self.before_tool_callback = [
+                        self.before_tool_callback,
+                        init_callback,
+                    ]
+            else:
+                self.before_tool_callback = init_callback
 
         if self.example_store:
             from google.adk.tools.example_tool import ExampleTool
@@ -433,11 +450,22 @@ class Agent(LlmAgent):
                 for skill in load_skills_from_cloud(item):
                     skills[skill.name] = skill
         if skills:
+            self._skills_with_checklist = skills
+
             self.instruction += "\nYou have the following skills:\n"
 
+            has_checklist = False
             for skill in skills.values():
                 self.instruction += (
                     f"- name: {skill.name}\n- description: {skill.description}\n\n"
+                )
+                if skill.checklist:
+                    has_checklist = True
+
+            if has_checklist:
+                self.instruction += (
+                    "Some skills have a checklist that you must complete step by step. "
+                    "Use the `update_check_list` tool to mark each item as completed.\n\n"
                 )
 
             if self.skills_mode not in [
