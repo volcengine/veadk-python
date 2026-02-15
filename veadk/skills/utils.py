@@ -38,14 +38,18 @@ def update_check_list(
     update_check_list(skill_name="skill-creator", check_item="analyze_content", state=True)
     """
     agent_name = tool_context.agent_name
-    if agent_name not in tool_context.state:
-        tool_context.state[agent_name] = {}
-    if skill_name not in tool_context.state[agent_name]:
-        tool_context.state[agent_name][skill_name] = {}
-    if "check_list" not in tool_context.state[agent_name][skill_name]:
-        tool_context.state[agent_name][skill_name]["check_list"] = {}
-    tool_context.state[agent_name][skill_name]["check_list"][check_item] = state
-    logger.info(f"Updated agent[{agent_name}] state: {tool_context.state[agent_name]}")
+    current_state = tool_context.state.to_dict()
+    if agent_name not in current_state:
+        current_state[agent_name] = {}
+    if skill_name not in current_state[agent_name]:
+        current_state[agent_name][skill_name] = {}
+    if "check_list" not in current_state[agent_name][skill_name]:
+        current_state[agent_name][skill_name]["check_list"] = {}
+    current_state[agent_name][skill_name]["check_list"][check_item] = state
+    tool_context.state.update(current_state)
+    logger.info(
+        f"Updated agent[{agent_name}] skill[{skill_name}] check_list[{check_item}] state: {state}"
+    )
 
 
 def create_init_skill_check_list_callback(
@@ -72,11 +76,11 @@ def create_init_skill_check_list_callback(
                 skill = skills_with_checklist[skill_name]
                 check_list_items = skill.get_checklist_items()
                 check_list_state = {item: False for item in check_list_items}
-                if agent_name not in tool_context.state:
-                    tool_context.state[agent_name] = {}
-                tool_context.state[agent_name][skill_name] = {
-                    "check_list": check_list_state
-                }
+                current_state = tool_context.state.to_dict()
+                if agent_name not in current_state:
+                    current_state[agent_name] = {}
+                current_state[agent_name][skill_name] = {"check_list": check_list_state}
+                tool_context.state.update(current_state)
                 logger.info(
                     f"Initialized agent[{agent_name}] skill[{skill_name}] check_list: {check_list_state}"
                 )
