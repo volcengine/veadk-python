@@ -67,7 +67,17 @@ class SkillsTool(BaseTool):
             "</skills_instructions>\n\n"
         )
 
-        return base_description
+        available_skills_description = "<available_skills>\n"
+        for skill_name, skill in self.skills.items():
+            available_skills_description += (
+                f"  <skill>\n"
+                f"    <name>{skill_name}</name>\n"
+                f"    <description>{skill.description}</description>\n"
+                f"  </skill>\n"
+            )
+        available_skills_description += "</available_skills>"
+
+        return base_description + available_skills_description
 
     def _get_declaration(self) -> types.FunctionDeclaration:
         return types.FunctionDeclaration(
