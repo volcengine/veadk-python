@@ -375,8 +375,6 @@ class Agent(LlmAgent):
 
         self.skills_dict: Dict[str, Skill] = {}
 
-        self.tools.append(SkillsToolset(self.skills_dict, self.skills_mode))
-
         # Determine skills_mode if not set
         if not self.skills_mode:
             tool_id = os.getenv("AGENTKIT_TOOL_ID")
@@ -494,6 +492,8 @@ class Agent(LlmAgent):
 
         else:
             logger.warning("No skills loaded.")
+
+        self.tools.append(SkillsToolset(self.skills_dict, self.skills_mode))
 
         if self.enable_dynamic_load_skills:
             if self.before_agent_callback:
