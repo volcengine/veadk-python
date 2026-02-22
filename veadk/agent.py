@@ -306,6 +306,7 @@ class Agent(LlmAgent):
         if self.skills:
             self.load_skills()
             if self.enable_skills_checklist:
+                logger.info("Skills checklist enabled")
                 from veadk.skills.utils import create_init_skill_check_list_callback
 
                 init_callback = create_init_skill_check_list_callback(
