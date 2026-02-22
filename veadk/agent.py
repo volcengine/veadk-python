@@ -158,6 +158,7 @@ class Agent(LlmAgent):
     enable_dataset_gen: bool = False
 
     enable_dynamic_load_skills: bool = False
+    enable_skills_checklist: bool = False
     _skills_with_checklist: Dict[str, Any] = {}
 
     def model_post_init(self, __context: Any) -> None:
@@ -306,21 +307,23 @@ class Agent(LlmAgent):
 
         if self.skills:
             self.load_skills()
-            from veadk.skills.utils import create_init_skill_check_list_callback
+            if self.enable_skills_checklist:
+                logger.info("Skills checklist enabled")
+                from veadk.skills.utils import create_init_skill_check_list_callback
 
-            init_callback = create_init_skill_check_list_callback(
-                self._skills_with_checklist
-            )
-            if self.before_tool_callback:
-                if isinstance(self.before_tool_callback, list):
-                    self.before_tool_callback.append(init_callback)
+                init_callback = create_init_skill_check_list_callback(
+                    self._skills_with_checklist
+                )
+                if self.before_tool_callback:
+                    if isinstance(self.before_tool_callback, list):
+                        self.before_tool_callback.append(init_callback)
+                    else:
+                        self.before_tool_callback = [
+                            self.before_tool_callback,
+                            init_callback,
+                        ]
                 else:
-                    self.before_tool_callback = [
-                        self.before_tool_callback,
-                        init_callback,
-                    ]
-            else:
-                self.before_tool_callback = init_callback
+                    self.before_tool_callback = init_callback
 
         if self.example_store:
             from google.adk.tools.example_tool import ExampleTool
@@ -492,11 +495,12 @@ class Agent(LlmAgent):
                     "You can use the skills by calling the `skills_tool` tool.\n\n"
                 )
 
-            self.tools.append(SkillsToolset(self.skills_dict, self.skills_mode))
         else:
             logger.warning("No skills loaded.")
 
-        if self.enable_dynamic_load_skills and self.skills_dict:
+        self.tools.append(SkillsToolset(self.skills_dict, self.skills_mode))
+
+        if self.enable_dynamic_load_skills:
             if self.before_agent_callback:
                 if isinstance(self.before_agent_callback, list):
                     self.before_agent_callback.append(check_skills)
