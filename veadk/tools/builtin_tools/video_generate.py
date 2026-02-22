@@ -65,10 +65,7 @@ class VideoGenerationConfig:
     camera_fixed: Optional[bool] = None
     seed: Optional[int] = None
     watermark: Optional[bool] = None
-
-
-def _get_model_name() -> str:
-    return getenv("MODEL_VIDEO_NAME", DEFAULT_VIDEO_MODEL_NAME)
+    tools: Optional[List[Dict]] = None
 
 
 def _build_content(prompt: str, config: VideoGenerationConfig) -> list:
@@ -147,12 +144,33 @@ def _should_disable_audio(
     return generate_audio
 
 
-def _build_request_body(prompt: str, config: VideoGenerationConfig) -> dict:
-    model_name = _get_model_name()
+def _is_text_to_video(config: VideoGenerationConfig) -> bool:
+    return not (
+        config.first_frame
+        or config.last_frame
+        or config.reference_images
+        or config.reference_videos
+        or config.reference_audios
+    )
+
+
+def _build_request_body(
+    prompt: str, config: VideoGenerationConfig, model_name: str
+) -> dict:
     body = {
         "model": model_name,
         "content": _build_content(prompt, config),
     }
+
+    if config.tools is not None:
+        if not _is_text_to_video(config):
+            logger.warning(
+                "tools (e.g., web_search) is only supported for text-to-video scenarios. "
+                "When using first_frame, last_frame, reference_images, reference_videos, or reference_audios, "
+                "the tools parameter will be ignored."
+            )
+        else:
+            body["tools"] = config.tools
 
     generate_audio = _should_disable_audio(model_name, config.generate_audio)
     if generate_audio is not None:
@@ -176,9 +194,11 @@ def _build_request_body(prompt: str, config: VideoGenerationConfig) -> dict:
     return body
 
 
-async def _create_video_task(prompt: str, config: VideoGenerationConfig) -> dict:
+async def _create_video_task(
+    prompt: str, config: VideoGenerationConfig, model_name: str
+) -> dict:
     url = f"{API_BASE}/contents/generations/tasks"
-    body = _build_request_body(prompt, config)
+    body = _build_request_body(prompt, config, model_name)
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(url, headers=_get_headers(), json=body)
@@ -403,18 +423,20 @@ def _parse_item_to_config(item: dict) -> VideoGenerationConfig:
         camera_fixed=item.get("camera_fixed"),
         seed=item.get("seed"),
         watermark=item.get("watermark"),
+        tools=item.get("tools"),
     )
 
 
 async def _process_single_item(
     item: dict,
+    model_name: str,
 ) -> VideoTaskResult:
     video_name = item["video_name"]
     prompt = item["prompt"]
     config = _parse_item_to_config(item)
 
     try:
-        task_data = await _create_video_task(prompt, config)
+        task_data = await _create_video_task(prompt, config, model_name)
         task_id = task_data.get("id")
         return VideoTaskResult(
             video_name=video_name,
@@ -453,6 +475,7 @@ async def video_generate(
     tool_context: ToolContext,
     batch_size: int = 10,
     max_wait_seconds: int = 1200,
+    model_name: str = getenv("MODEL_VIDEO_NAME", DEFAULT_VIDEO_MODEL_NAME),
 ) -> Dict:
     """
     Generate videos in batch from text prompts, with support for multiple input modes:
@@ -540,6 +563,25 @@ async def video_generate(
                     Whether to generate audio. Only Seedance 1.5 pro supports this.
                     If True, audio (ambient sounds, music, voice) can be generated.
                     Describe desired audio content in the prompt field.
+
+                - tools (list[dict]):
+                    Tool configuration for enhanced video generation. Optional.
+                    Currently supports web_search for text-to-video scenarios only.
+
+                    Example:
+                        "tools": [{"type": "web_search"}]
+
+                    Note: tools is ONLY supported for text-to-video scenarios.
+                    If you provide first_frame, last_frame, reference_images,
+                    reference_videos, or reference_audios, the tools parameter
+                    will be ignored.
+
+            Optional model_name(str):
+                If the user does not specify, do not pass this parameter and use the default value.
+                If during execution, this tool encounters a model-related error (note that it must be a model-related error, otherwise do not perform this action), such as `ModelNotOpen`,
+                then after reminding about the relevant issue, you can execute this tool again and downgrade the model to the following models, passing this parameter:
+                `doubao-seedance-1-5-pro-251215`
+                `doubao-seedance-1-0-pro-250528`
 
         batch_size (int):
             Number of videos to generate per batch. Defaults to 10.
@@ -649,7 +691,6 @@ async def video_generate(
     error_list = []
     error_details = []
     pending_list = []
-    model_name = _get_model_name()
 
     logger.debug(f"Using model: {model_name}")
     logger.debug(f"video_generate params: {params}")
@@ -659,7 +700,7 @@ async def video_generate(
         logger.debug(f"Processing batch {start_idx // batch_size}: {len(batch)} items")
 
         task_results = await asyncio.gather(
-            *[_process_single_item(item) for item in batch]
+            *[_process_single_item(item, model_name) for item in batch]
         )
 
         pending_tasks = {}
