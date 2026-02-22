@@ -65,7 +65,7 @@ DEFAULT_COZELOOP_SPACE_NAME = "VeADK Space"
 DEFAULT_IMAGE_EDIT_MODEL_NAME = "doubao-seededit-3-0-i2i-250628"
 DEFAULT_IMAGE_EDIT_MODEL_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
 
-DEFAULT_VIDEO_MODEL_NAME = "doubao-seedance-1-5-pro-251215"
+DEFAULT_VIDEO_MODEL_NAME = "doubao-seedance-2-0-260128"
 DEFAULT_VIDEO_MODEL_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
 
 DEFAULT_IMAGE_GENERATE_MODEL_NAME = "doubao-seedream-4-5-251128"
@@ -83,7 +83,7 @@ if provider and provider.lower() == "byteplus":
     DEFAULT_MODEL_AGENT_API_BASE = "https://ark.ap-southeast.bytepluses.com/api/v3"
     DEFAULT_IMAGE_EDIT_MODEL_NAME = "seededit-3-0-i2i-250628"
     DEFAULT_IMAGE_EDIT_MODEL_API_BASE = "https://ark.ap-southeast.bytepluses.com/api/v3"
-    DEFAULT_VIDEO_MODEL_NAME = "seedance-1-5-pro-251215"
+    DEFAULT_VIDEO_MODEL_NAME = "seedance-2-0-260128"
     DEFAULT_VIDEO_MODEL_API_BASE = "https://ark.ap-southeast.bytepluses.com/api/v3"
     DEFAULT_IMAGE_GENERATE_MODEL_NAME = "seedream-4-5-251128"
     DEFAULT_IMAGE_GENERATE_MODEL_API_BASE = (
