@@ -232,6 +232,8 @@ class Agent(LlmAgent):
 
         self._prepare_tracers()
 
+        self._validate_tool_dependencies()
+
         if self.knowledgebase:
             from veadk.tools.builtin_tools.load_knowledgebase import (
                 LoadKnowledgebaseTool,
@@ -509,6 +511,35 @@ class Agent(LlmAgent):
                     ]
             else:
                 self.before_agent_callback = check_skills
+
+    def _validate_tool_dependencies(self):
+        tool_names = set()
+        for tool in self.tools:
+            if hasattr(tool, "__name__"):
+                tool_names.add(tool.__name__)
+            elif hasattr(tool, "name"):
+                tool_names.add(tool.name)
+
+        has_video_generate = "video_generate" in tool_names
+        has_video_task_query = "video_task_query" in tool_names
+
+        if has_video_generate and not has_video_task_query:
+            from veadk.tools.builtin_tools.video_generate import video_task_query
+
+            logger.warning(
+                "video_generate tool is mounted but video_task_query is not. "
+                "video_task_query is required for querying video generation status. "
+                "Automatically adding video_task_query to tools."
+            )
+            self.tools.append(video_task_query)
+        elif has_video_task_query and not has_video_generate:
+            from veadk.tools.builtin_tools.video_generate import video_generate
+
+            logger.warning(
+                "video_task_query tool is mounted but video_generate is not. "
+                "Automatically adding video_generate to tools."
+            )
+            self.tools.append(video_generate)
 
     def _prepare_tracers(self):
         enable_apmplus_tracer = os.getenv("ENABLE_APMPLUS", "false").lower() == "true"
