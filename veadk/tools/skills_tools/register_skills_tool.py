@@ -92,7 +92,7 @@ def register_skills_tool(
             sld = "byteplusapi"
             default_region = "ap-southeast-1"
         else:
-            sld = "volces"
+            sld = "volcengineapi"
             default_region = "cn-beijing"
 
         agentkit_tool_service = os.getenv("AGENTKIT_TOOL_SERVICE_CODE", "agentkit")
