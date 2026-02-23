@@ -37,7 +37,6 @@ from pydantic import BaseModel
 from veadk import Runner
 from veadk.utils.logger import get_logger
 
-
 if TYPE_CHECKING:
     from veadk import Agent
 
@@ -91,7 +90,7 @@ class ResourceManager:
 
     def get(self, client_id: str) -> Optional[ClientResource]:
         with self._lock:
-            logger.info(f"get {client_id}")
+            logger.debug(f"get {client_id}")
             resource = self.resources.get(client_id)
             if resource:
                 resource.update_activity()
@@ -265,6 +264,13 @@ class ServerWithReverseMCP:
 
             # Parse filters from query params, comma-separated string
             filters_str = ws.query_params.get("filters")
+            logger.info(f"the mcp filter is {filters_str}")
+            # todo 后续前端直接控制
+            if filters_str == "":
+                filters_str = (
+                    "click,close_page,drag,evaluate_script,fill,fill_form,handle_dialog,hover,list_pages,"
+                    "navigate_page,new_page,press_key,resize_page,select_page,take_snapshot,wait_for"
+                )
             filters = None
             if filters_str:
                 filters = [t.strip() for t in filters_str.split(",") if t.strip()]
