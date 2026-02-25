@@ -87,9 +87,18 @@ def execute_skills(
     service = getenv(
         "AGENTKIT_TOOL_SERVICE_CODE", "agentkit"
     )  # temporary service for code run tool
-    region = getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
+
+    cloud_provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
+    if cloud_provider == "byteplus":
+        sld = "bytepluses"
+        default_region = "ap-southeast-1"
+    else:
+        sld = "volces"
+        default_region = "cn-beijing"
+
+    region = getenv("AGENTKIT_TOOL_REGION", default_region)
     host = getenv(
-        "AGENTKIT_TOOL_HOST", service + "." + region + ".volces.com"
+        "AGENTKIT_TOOL_HOST", service + "." + region + f".{sld}.com"
     )  # temporary host for code run tool
     logger.debug(f"tools endpoint: {host}")
 
@@ -99,7 +108,6 @@ def execute_skills(
     tool_user_session_id = agent_name + "_" + user_id + "_" + session_id
     logger.debug(f"tool_user_session_id: {tool_user_session_id}")
 
-    cloud_provider = getenv("CLOUD_PROVIDER", "", allow_false_values=True)
     scheme = getenv("AGENTKIT_TOOL_SCHEME", "https", allow_false_values=True).lower()
     if scheme not in {"http", "https"}:
         scheme = "https"
@@ -141,7 +149,9 @@ def execute_skills(
             service="sts",
             version="2018-01-01",
             region=region,
-            host="sts.volcengineapi.com",
+            host="sts.volcengineapi.com"
+            if cloud_provider != "byteplus"
+            else "open.byteplusapi.com",
             header=header,
         )
         try:

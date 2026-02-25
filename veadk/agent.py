@@ -86,6 +86,7 @@ class Agent(LlmAgent):
         skills (list[str]): List of skills that equip the agent with specific capabilities.
         example_store (Optional[BaseExampleProvider]): Example store for providing example Q/A.
         enable_shadowchar (bool): Whether to enable shadow character for the agent.
+        enable_dynamic_load_skills (bool): Whether to enable dynamic loading of skills.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
@@ -153,6 +154,12 @@ class Agent(LlmAgent):
     enable_supervisor: bool = False
 
     enable_ghostchar: bool = False
+
+    enable_dataset_gen: bool = False
+
+    enable_dynamic_load_skills: bool = False
+    enable_skills_checklist: bool = False
+    _skills_with_checklist: Dict[str, Any] = {}
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
@@ -224,6 +231,8 @@ class Agent(LlmAgent):
             )
 
         self._prepare_tracers()
+
+        self._validate_tool_dependencies()
 
         if self.knowledgebase:
             from veadk.tools.builtin_tools.load_knowledgebase import (
@@ -298,6 +307,23 @@ class Agent(LlmAgent):
 
         if self.skills:
             self.load_skills()
+            if self.enable_skills_checklist:
+                logger.info("Skills checklist enabled")
+                from veadk.skills.utils import create_init_skill_check_list_callback
+
+                init_callback = create_init_skill_check_list_callback(
+                    self._skills_with_checklist
+                )
+                if self.before_tool_callback:
+                    if isinstance(self.before_tool_callback, list):
+                        self.before_tool_callback.append(init_callback)
+                    else:
+                        self.before_tool_callback = [
+                            self.before_tool_callback,
+                            init_callback,
+                        ]
+                else:
+                    self.before_tool_callback = init_callback
 
         if self.example_store:
             from google.adk.tools.example_tool import ExampleTool
@@ -311,6 +337,22 @@ class Agent(LlmAgent):
             self.tools.append(GhostcharTool())
 
             self.instruction += "Please add a character `< at the beginning of you each text-based response."
+
+        if self.enable_dataset_gen:
+            from veadk.toolkits.dataset_auto_gen_callback import (
+                dataset_auto_gen_callback,
+            )
+
+            if self.after_agent_callback:
+                if isinstance(self.after_agent_callback, list):
+                    self.after_agent_callback.append(dataset_auto_gen_callback)
+                else:
+                    self.after_agent_callback = [
+                        self.after_agent_callback,
+                        dataset_auto_gen_callback,
+                    ]
+            else:
+                self.after_agent_callback = dataset_auto_gen_callback
 
         logger.info(f"VeADK version: {VERSION}")
 
@@ -329,13 +371,14 @@ class Agent(LlmAgent):
         from pathlib import Path
 
         from veadk.skills.skill import Skill
+        from veadk.skills.check_skills_callback import check_skills
         from veadk.skills.utils import (
             load_skills_from_cloud,
             load_skills_from_directory,
         )
         from veadk.tools.skills_tools.skills_toolset import SkillsToolset
 
-        skills: Dict[str, Skill] = {}
+        self.skills_dict: Dict[str, Skill] = {}
 
         # Determine skills_mode if not set
         if not self.skills_mode:
@@ -361,9 +404,19 @@ class Agent(LlmAgent):
                 else:
                     logger.debug("Successfully get AK/SK from environment variables.")
 
+                provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
+                if provider == "byteplus":
+                    sld = "byteplusapi"
+                    default_region = "ap-southeast-1"
+                else:
+                    sld = "volcengineapi"
+                    default_region = "cn-beijing"
+
                 service = os.getenv("AGENTKIT_TOOL_SERVICE_CODE", "agentkit")
-                region = os.getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
-                host = service + "." + region + ".volcengineapi.com"
+                region = os.getenv("AGENTKIT_TOOL_REGION", default_region)
+                host = os.getenv(
+                    "AGENTKIT_SKILL_HOST", service + "." + region + f".{sld}.com"
+                )
 
                 res = ve_request(
                     request_body={"ToolId": tool_id},
@@ -400,16 +453,27 @@ class Agent(LlmAgent):
             path = Path(item)
             if path.exists() and path.is_dir():
                 for skill in load_skills_from_directory(path):
-                    skills[skill.name] = skill
+                    self.skills_dict[skill.name] = skill
             else:
                 for skill in load_skills_from_cloud(item):
-                    skills[skill.name] = skill
-        if skills:
+                    self.skills_dict[skill.name] = skill
+        if self.skills_dict:
             self.instruction += "\nYou have the following skills:\n"
 
-            for skill in skills.values():
+            self._skills_with_checklist = self.skills_dict
+
+            has_checklist = False
+            for skill in self.skills_dict.values():
                 self.instruction += (
                     f"- name: {skill.name}\n- description: {skill.description}\n\n"
+                )
+                if skill.checklist:
+                    has_checklist = True
+
+            if has_checklist:
+                self.instruction += (
+                    "Some skills have a checklist that you must complete step by step. "
+                    "Use the `update_check_list` tool to mark each item as completed.\n\n"
                 )
 
             if self.skills_mode not in [
@@ -431,9 +495,51 @@ class Agent(LlmAgent):
                     "You can use the skills by calling the `skills_tool` tool.\n\n"
                 )
 
-            self.tools.append(SkillsToolset(skills, self.skills_mode))
         else:
             logger.warning("No skills loaded.")
+
+        self.tools.append(SkillsToolset(self.skills_dict, self.skills_mode))
+
+        if self.enable_dynamic_load_skills:
+            if self.before_agent_callback:
+                if isinstance(self.before_agent_callback, list):
+                    self.before_agent_callback.append(check_skills)
+                else:
+                    self.before_agent_callback = [
+                        self.before_agent_callback,
+                        check_skills,
+                    ]
+            else:
+                self.before_agent_callback = check_skills
+
+    def _validate_tool_dependencies(self):
+        tool_names = set()
+        for tool in self.tools:
+            if hasattr(tool, "__name__"):
+                tool_names.add(tool.__name__)
+            elif hasattr(tool, "name"):
+                tool_names.add(tool.name)
+
+        has_video_generate = "video_generate" in tool_names
+        has_video_task_query = "video_task_query" in tool_names
+
+        if has_video_generate and not has_video_task_query:
+            from veadk.tools.builtin_tools.video_generate import video_task_query
+
+            logger.warning(
+                "video_generate tool is mounted but video_task_query is not. "
+                "video_task_query is required for querying video generation status. "
+                "Automatically adding video_task_query to tools."
+            )
+            self.tools.append(video_task_query)
+        elif has_video_task_query and not has_video_generate:
+            from veadk.tools.builtin_tools.video_generate import video_generate
+
+            logger.warning(
+                "video_task_query tool is mounted but video_generate is not. "
+                "Automatically adding video_generate to tools."
+            )
+            self.tools.append(video_generate)
 
     def _prepare_tracers(self):
         enable_apmplus_tracer = os.getenv("ENABLE_APMPLUS", "false").lower() == "true"
