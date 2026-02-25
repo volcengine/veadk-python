@@ -77,14 +77,19 @@ class SummarizeDataTool(BaseTool):
     ) -> VannaToolContext:
         """Create Vanna context from Veadk ToolContext."""
         user_id = tool_context.user_id
+        session_id = tool_context.session.id
         user_email = tool_context.state.get("user_email", "user@example.com")
 
-        vanna_user = User(id=user_id, email=user_email, group_memberships=user_groups)
+        vanna_user = User(
+            id=user_id + "_" + session_id,
+            email=user_email,
+            group_memberships=user_groups,
+        )
 
         vanna_context = VannaToolContext(
             user=vanna_user,
-            conversation_id=tool_context.session.id,
-            request_id=tool_context.session.id,
+            conversation_id=session_id,
+            request_id=session_id,
             agent_memory=self.agent_memory,
         )
 

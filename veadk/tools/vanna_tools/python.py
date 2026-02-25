@@ -85,16 +85,25 @@ class RunPythonFileTool(BaseTool):
     def _create_vanna_context(
         self, tool_context: ToolContext, user_groups: List[str]
     ) -> VannaToolContext:
+        """Create Vanna context from Veadk ToolContext."""
         user_id = tool_context.user_id
+        session_id = tool_context.session.id
         user_email = tool_context.state.get("user_email", "user@example.com")
 
-        vanna_user = User(id=user_id, email=user_email, group_memberships=user_groups)
-        return VannaToolContext(
+        vanna_user = User(
+            id=user_id + "_" + session_id,
+            email=user_email,
+            group_memberships=user_groups,
+        )
+
+        vanna_context = VannaToolContext(
             user=vanna_user,
-            conversation_id=tool_context.session.id,
-            request_id=tool_context.session.id,
+            conversation_id=session_id,
+            request_id=session_id,
             agent_memory=self.agent_memory,
         )
+
+        return vanna_context
 
     async def run_async(
         self, *, args: Dict[str, Any], tool_context: ToolContext
@@ -136,14 +145,12 @@ class PipInstallTool(BaseTool):
         Args:
             file_system: A Vanna file system instance (e.g., LocalFileSystem)
             agent_memory: A Vanna agent memory instance (e.g., DemoAgentMemory)
-            access_groups: List of user groups that can access this tool (default: admin only)
+            access_groups: List of user groups that can access this tool
         """
         self.file_system = file_system
         self.agent_memory = agent_memory
         self.vanna_tool = VannaPipInstallTool(file_system=file_system)
-        self.access_groups = access_groups or [
-            "admin"
-        ]  # Default: only admin can install packages
+        self.access_groups = access_groups or ["admin", "user"]
 
         super().__init__(
             name="pip_install",
@@ -190,16 +197,25 @@ class PipInstallTool(BaseTool):
     def _create_vanna_context(
         self, tool_context: ToolContext, user_groups: List[str]
     ) -> VannaToolContext:
+        """Create Vanna context from Veadk ToolContext."""
         user_id = tool_context.user_id
+        session_id = tool_context.session.id
         user_email = tool_context.state.get("user_email", "user@example.com")
 
-        vanna_user = User(id=user_id, email=user_email, group_memberships=user_groups)
-        return VannaToolContext(
+        vanna_user = User(
+            id=user_id + "_" + session_id,
+            email=user_email,
+            group_memberships=user_groups,
+        )
+
+        vanna_context = VannaToolContext(
             user=vanna_user,
-            conversation_id=tool_context.session.id,
-            request_id=tool_context.session.id,
+            conversation_id=session_id,
+            request_id=session_id,
             agent_memory=self.agent_memory,
         )
+
+        return vanna_context
 
     async def run_async(
         self, *, args: Dict[str, Any], tool_context: ToolContext

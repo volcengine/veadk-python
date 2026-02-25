@@ -12,44 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 from veadk import Agent, Runner
-
-# Import Vanna dependencies for initialization
-from vanna.integrations.sqlite import SqliteRunner
-from vanna.tools import LocalFileSystem
-from vanna.integrations.local.agent_memory import DemoAgentMemory
-import httpx
-
-# Import the refactored class-based tools
-from veadk.tools.vanna_tools.run_sql import RunSqlTool
-from veadk.tools.vanna_tools.visualize_data import VisualizeDataTool
-from veadk.tools.vanna_tools.file_system import WriteFileTool
-from veadk.tools.vanna_tools.agent_memory import (
-    SaveQuestionToolArgsTool,
-    SearchSavedCorrectToolUsesTool,
-)
-from veadk.tools.vanna_tools.summarize_data import SummarizeDataTool
-
+from veadk.tools.vanna_tools.vanna_toolset import VannaToolSet
 from google.adk.sessions import InMemorySessionService
-
-
-# Setup SQLite database
-def setup_sqlite():
-    """Download and setup the Chinook SQLite database."""
-    db_path = "/tmp/Chinook.sqlite"
-    if not os.path.exists(db_path):
-        print("Downloading Chinook.sqlite...")
-        url = "https://vanna.ai/Chinook.sqlite"
-        try:
-            with open(db_path, "wb") as f:
-                with httpx.stream("GET", url) as response:
-                    for chunk in response.iter_bytes():
-                        f.write(chunk)
-            print("Database downloaded successfully!")
-        except Exception as e:
-            print(f"Error downloading database: {e}")
-    return db_path
 
 
 # Create a session with user groups for access control
@@ -63,57 +28,10 @@ async def create_session(user_groups: list = ["user"]):
     return session_service, example_session
 
 
-# Initialize user-customizable resources
-db_path = setup_sqlite()
-
-# 1. SQL Runner - can be SqliteRunner, PostgresRunner, MySQLRunner, etc.
-sqlite_runner = SqliteRunner(database_path=db_path)
-
-# 2. File System - customize working directory as needed
-file_system = LocalFileSystem(working_directory="/tmp/data_storage")
-if not os.path.exists("/tmp/data_storage"):
-    os.makedirs("/tmp/data_storage", exist_ok=True)
-
-# 3. Agent Memory - customize memory implementation and capacity
-agent_memory = DemoAgentMemory(max_items=1000)
-
-# Initialize tools with user-defined components and access control
-# Tool names now match Vanna's original names for compatibility
-run_sql_tool = RunSqlTool(
-    sql_runner=sqlite_runner,
-    file_system=file_system,
-    agent_memory=agent_memory,
-    access_groups=["admin", "user"],  # Both admin and user can use
+vanna_toolset = VannaToolSet(
+    connection_string="sqlite:///tmp/Chinook.sqlite", file_storage="/tmp/vanna_files"
 )
 
-visualize_data_tool = VisualizeDataTool(
-    file_system=file_system,
-    agent_memory=agent_memory,
-    access_groups=["admin", "user"],
-)
-
-write_file_tool = WriteFileTool(
-    file_system=file_system,
-    agent_memory=agent_memory,
-    access_groups=["admin", "user"],
-)
-
-# Memory tools: save only for admin, search for all users
-save_tool = SaveQuestionToolArgsTool(
-    agent_memory=agent_memory,
-    access_groups=["admin"],  # Only admin can save
-)
-
-search_tool = SearchSavedCorrectToolUsesTool(
-    agent_memory=agent_memory,
-    access_groups=["admin", "user"],  # All users can search
-)
-
-summarize_data_tool = SummarizeDataTool(
-    file_system=file_system,
-    agent_memory=agent_memory,
-    access_groups=["admin", "user"],
-)
 
 # Define the Veadk Agent with class-based tools
 agent: Agent = Agent(
@@ -276,14 +194,7 @@ agent: Agent = Agent(
     5. `search_saved_correct_tool_uses` - Search for similar tool usage patterns
     6. `summarize_data` - Generate statistical summaries of CSV files
     """,
-    tools=[
-        run_sql_tool,
-        visualize_data_tool,
-        write_file_tool,
-        save_tool,
-        search_tool,
-        summarize_data_tool,
-    ],
+    tools=[vanna_toolset],
     model_extra_config={"extra_body": {"thinking": {"type": "disabled"}}},
 )
 
@@ -311,12 +222,7 @@ async def main(prompt: str, user_groups: list = None) -> str:
 if __name__ == "__main__":
     import asyncio
 
-    # print("=== Example 1: Regular User ===")
-    # user_input = "What are the top 5 selling albums?"
-    # response = asyncio.run(main(user_input, user_groups=['user']))
-    # print(response)
-
-    print("\n=== Example 2: Admin User (can save patterns) ===")
-    admin_input = "What are the top 5 selling albums?"
-    response = asyncio.run(main(admin_input, user_groups=["admin"]))
+    print("=== Example 1: Regular User ===")
+    user_input = "What are the top 5 selling albums?"
+    response = asyncio.run(main(user_input, user_groups=["user"]))
     print(response)
