@@ -96,6 +96,10 @@ class ResourceManager:
                 resource.update_activity()
             return resource
 
+    def list(self) -> list:
+        with self._lock:
+            return list(self.resources.keys())
+
     async def remove(self, client_id: str):
         if client_id in self.resources:
             resource = self.resources.pop(client_id)
@@ -249,6 +253,11 @@ class ServerWithReverseMCP:
             """Manually remove a client resource."""
             await self.resource_manager.remove(client_id)
             return {"status": "success", "client_id": client_id}
+
+        @self.app.get("/management/clients")
+        async def get_clients():
+            """Manually remove a client resource."""
+            return {"status": "success", "client_list": self.resource_manager.list()}
 
         # build websocket endpoint
         @self.app.websocket("/ws")
