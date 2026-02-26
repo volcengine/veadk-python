@@ -27,6 +27,10 @@ from veadk.utils.volcengine_sign import ve_request
 logger = get_logger(__name__)
 
 
+def _build_state_key(*parts: str) -> str:
+    return ":".join([part for part in parts if part])
+
+
 def update_check_list(
     tool_context: ToolContext, skill_name: str, check_item: str, state: bool
 ):
@@ -38,15 +42,8 @@ def update_check_list(
     update_check_list(skill_name="skill-creator", check_item="analyze_content", state=True)
     """
     agent_name = tool_context.agent_name
-    current_state = tool_context.state.to_dict()
-    if agent_name not in current_state:
-        current_state[agent_name] = {}
-    if skill_name not in current_state[agent_name]:
-        current_state[agent_name][skill_name] = {}
-    if "check_list" not in current_state[agent_name][skill_name]:
-        current_state[agent_name][skill_name]["check_list"] = {}
-    current_state[agent_name][skill_name]["check_list"][check_item] = state
-    tool_context.state.update(current_state)
+    state_key = _build_state_key(agent_name, skill_name, "check_list", check_item)
+    tool_context.state.update({state_key: state})
     logger.info(
         f"Updated agent[{agent_name}] skill[{skill_name}] check_list[{check_item}] state: {state}"
     )
@@ -75,12 +72,11 @@ def create_init_skill_check_list_callback(
             if skill_name in skills_with_checklist:
                 skill = skills_with_checklist[skill_name]
                 check_list_items = skill.get_checklist_items()
-                check_list_state = {item: False for item in check_list_items}
-                current_state = tool_context.state.to_dict()
-                if agent_name not in current_state:
-                    current_state[agent_name] = {}
-                current_state[agent_name][skill_name] = {"check_list": check_list_state}
-                tool_context.state.update(current_state)
+                check_list_state = {
+                    _build_state_key(agent_name, skill_name, "check_list", item): False
+                    for item in check_list_items
+                }
+                tool_context.state.update(check_list_state)
                 logger.info(
                     f"Initialized agent[{agent_name}] skill[{skill_name}] check_list: {check_list_state}"
                 )
