@@ -59,6 +59,12 @@ def _get_backend_cls(backend: str) -> type[BaseKnowledgebaseBackend]:
                 )
 
                 return VikingDBKnowledgeBackend
+            case "context_search":
+                from veadk.knowledgebase.backends.context_search_backend import (
+                    ContextSearchBackend,
+                )
+
+                return ContextSearchBackend
             case _:
                 raise ValueError(f"Unsupported knowledgebase backend: {backend}")
     except ImportError as e:
@@ -102,7 +108,9 @@ class KnowledgeBase(BaseModel):
     description: str = "This knowledgebase stores some user-related information."
 
     backend: Union[
-        Literal["local", "opensearch", "viking", "redis", "tos_vector"],
+        Literal[
+            "local", "opensearch", "viking", "redis", "tos_vector", "context_search"
+        ],
         BaseKnowledgebaseBackend,
     ] = "local"
 
