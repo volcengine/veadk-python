@@ -48,6 +48,7 @@ async def test_cloud():
                     test_endpoint,
                     "app-123",
                     "func-456",
+                    None,
                 )
 
                 # Mock update operation

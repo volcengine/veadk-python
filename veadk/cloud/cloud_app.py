@@ -62,6 +62,7 @@ class CloudApp:
         vefaas_endpoint: str = "",
         vefaas_application_id: str = "",
         use_agent_card: bool = False,
+        affinity_binding_id: str | None = None,
     ):
         """Initializes the CloudApp with VeFaaS application details.
 
@@ -92,6 +93,7 @@ class CloudApp:
         self.vefaas_application_id = vefaas_application_id
         self.vefaas_application_name = vefaas_application_name
         self.use_agent_card = use_agent_card
+        self.affinity_binding_id = affinity_binding_id
 
         # vefaas must be set one of three
         if (
