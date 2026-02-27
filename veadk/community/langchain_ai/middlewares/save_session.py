@@ -18,6 +18,7 @@ from langchain.agents import AgentState
 from langchain.agents.middleware import after_agent
 from langchain_core.messages.ai import AIMessage
 from langchain_core.messages.human import HumanMessage
+from langchain_core.messages.tool import ToolMessage
 from langgraph.runtime import Runtime
 
 from veadk.community.langchain_ai.store.memory.viking_memory import (
@@ -46,15 +47,22 @@ def save_session(state: AgentState, runtime: Runtime) -> None:
 
     events = {}
     for message in messages:
-        print(type(message))
+        event = None
+
         if isinstance(message, HumanMessage):
-            event = {"role": "user", "parts": [{"text": message.content}]}
+            if message.content and message.content.strip():
+                event = {"role": "user", "parts": [{"text": message.content}]}
 
         elif isinstance(message, AIMessage):
-            event = {"role": "assistant", "parts": [{"text": message.content}]}
-        else:
-            ...
+            if message.content and message.content.strip():
+                event = {"role": "assistant", "parts": [{"text": message.content}]}
 
-        events[message.id] = event
+        elif isinstance(message, ToolMessage):
+            # ToolMessage is not saved to memory store, skip it
+            continue
 
-    store.put(namespace=(app_name, user_id), key=session_id, value=events)
+        if event:
+            events[message.id] = event
+
+    if events:
+        store.put(namespace=(app_name, user_id), key=session_id, value=events)
