@@ -151,6 +151,8 @@ class Meters:
     APMPLUS_SPAN_LATENCY = "apmplus_span_latency"
     # tool token usage
     APMPLUS_TOOL_TOKEN_USAGE = "apmplus_tool_token_usage"
+    # skill invoke latency
+    GEN_AI_SKILL_INVOKE_LATENCY = "gen_ai_skill_invoke_latency"
 
 
 class MeterUploader:
@@ -268,6 +270,12 @@ class MeterUploader:
             description="Token consumption of APMPlus tool token",
             unit="count",
             explicit_bucket_boundaries_advisory=_GEN_AI_CLIENT_TOKEN_USAGE_BUCKETS,
+        )
+        self.skill_invoke_latency = self.meter.create_histogram(
+            name=Meters.GEN_AI_SKILL_INVOKE_LATENCY,
+            description="Latency of skill invocations",
+            unit="s",
+            explicit_bucket_boundaries_advisory=_GEN_AI_CLIENT_OPERATION_DURATION_BUCKETS,
         )
 
     def record_call_llm(
