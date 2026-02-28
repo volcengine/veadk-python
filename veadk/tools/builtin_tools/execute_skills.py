@@ -170,6 +170,7 @@ def execute_skills(
         "TOS_SKILLS_DIR": f"tos://agentkit-platform-{account_id}/skills/",
         "SKILL_SPACE_ID": skill_space_id,
         "TOOL_USER_SESSION_ID": tool_user_session_id,
+        "PYTHONPATH": "$SRV_PYTHONPATH:$PYTHONPATH",
     }
 
     code = f"""
