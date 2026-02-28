@@ -27,29 +27,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing_extensions import override
 
 from veadk.tracing.base_tracer import BaseTracer
-from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporter
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
 from veadk.tracing.telemetry.exporters.inmemory_exporter import InMemoryExporter
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import get_agent_dir
 from veadk.utils.patches import patch_google_adk_telemetry
 
+__all__ = ["OpentelemetryTracer"]
+
 logger = get_logger(__name__)
-
-
-def _update_resource_attributions(
-    provider: TracerProvider, resource_attributes: dict
-) -> None:
-    """Update the resource attributes of a TracerProvider instance.
-
-    This function merges new resource attributes with the existing ones in the
-    provider, allowing dynamic configuration of telemetry metadata.
-
-    Args:
-        provider: The TracerProvider instance to update
-        resource_attributes: Dictionary of attributes to merge with existing resources
-    """
-    provider._resource = provider._resource.merge(Resource.create(resource_attributes))
 
 
 class OpentelemetryTracer(BaseModel, BaseTracer):
@@ -152,6 +138,7 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         duplicate exporter detection and in-memory span collection setup.
         """
         # set provider anyway, then get global provider
+        # set if not exist
         trace_api.set_tracer_provider(
             trace_sdk.TracerProvider(
                 span_limits=SpanLimits(
@@ -159,34 +146,19 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
                 )
             )
         )
-        global_tracer_provider: TracerProvider = trace_api.get_tracer_provider()  # type: ignore
 
-        span_processors = global_tracer_provider._active_span_processor._span_processors
-        have_apmplus_exporter = any(
-            isinstance(p, (BatchSpanProcessor, SimpleSpanProcessor))
-            and hasattr(p.span_exporter, "_endpoint")
-            and "apmplus" in p.span_exporter._endpoint
-            for p in span_processors
-        )
+        # add in-memory exporter to exporters list
+        self._inmemory_exporter = InMemoryExporter()
+        self.exporters.append(self._inmemory_exporter)
 
-        if have_apmplus_exporter:
-            self.exporters = [
-                e for e in self.exporters if not isinstance(e, APMPlusExporter)
-            ]
-
+        # Call each exporter's register method to register with the global tracer provider
+        # This allows each exporter to handle its own configuration and registration logic
         for exporter in self.exporters:
-            processor = exporter.processor
-            resource_attributes = exporter.resource_attributes
-
-            if resource_attributes:
-                _update_resource_attributions(
-                    global_tracer_provider, resource_attributes
-                )
-
-            if processor:
-                global_tracer_provider.add_span_processor(processor)
-                self._processors.append(processor)
-
+            exporter.register()
+            
+            # Add processor to internal list if exists
+            if exporter.processor:
+                self._processors.append(exporter.processor)
                 logger.debug(
                     f"Add span processor for exporter `{exporter.__class__.__name__}` to OpentelemetryTracer."
                 )
@@ -194,21 +166,6 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
                 logger.error(
                     f"Add span processor for exporter `{exporter.__class__.__name__}` to OpentelemetryTracer failed."
                 )
-
-        self._inmemory_exporter = InMemoryExporter()
-        if self._inmemory_exporter.processor:
-            # make sure the in memory exporter processor is added at index 0
-            # because we use this to record all spans
-            global_tracer_provider._active_span_processor._span_processors = (
-                self._inmemory_exporter.processor,
-            ) + global_tracer_provider._active_span_processor._span_processors
-
-            self._processors.append(self._inmemory_exporter.processor)
-            self.exporters.append(self._inmemory_exporter)
-        else:
-            logger.warning(
-                "InMemoryExporter processor is not initialized, cannot add to OpentelemetryTracer."
-            )
 
         logger.info(
             f"Init OpentelemetryTracer with {len(self._processors)} exporter(s)."
