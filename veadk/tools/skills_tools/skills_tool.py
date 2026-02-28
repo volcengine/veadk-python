@@ -19,10 +19,16 @@ from typing import Any, Dict
 
 from google.adk.tools import BaseTool, ToolContext
 from google.genai import types
+from opentelemetry import trace
+from opentelemetry.sdk.trace import _Span
+from opentelemetry.trace.status import Status, StatusCode
 
 from veadk.skills.skill import Skill
 from veadk.tools.skills_tools.session_path import get_session_path
+from veadk.tracing.telemetry.telemetry import set_common_attributes_on_tool_span
 from veadk.utils.logger import get_logger
+
+tracer = trace.get_tracer("veadk.skills_tool")
 
 logger = get_logger(__name__)
 
@@ -94,7 +100,11 @@ class SkillsTool(BaseTool):
         if not skill_name:
             return "Error: No skill name provided"
 
-        return self._invoke_skill(skill_name, tool_context)
+        with tracer.start_as_current_span(f"execute_skill {skill_name}") as span:
+            result = self._invoke_skill(skill_name, tool_context)
+            self._add_skill_span_attributes(span, skill_name, result)
+            self._upload_skill_metrics(span, skill_name, result)
+            return result
 
     def _invoke_skill(self, skill_name: str, tool_context: ToolContext) -> str:
         """Load and return the full content of a skill."""
@@ -345,3 +355,75 @@ class SkillsTool(BaseTool):
             "The skill has been loaded. Follow the instructions above and use the bash tool to execute commands."
         )
         return header + content + footer
+
+    def _add_skill_span_attributes(
+        self,
+        span: _Span,
+        skill_name: str,
+        result: str,
+    ) -> None:
+        """Add attributes to the skill execution span."""
+        try:
+            set_common_attributes_on_tool_span(current_span=span)
+
+            if result:
+                if result.startswith("Error:"):
+                    span.set_status(Status(StatusCode.ERROR, result))
+
+            span.set_attribute("skill.name", skill_name)
+            span.set_attribute("tool.name", self.name)
+            span.set_attribute("gen_ai.operation.name", "execute_skill")
+            span.set_attribute("gen_ai.span.kind", "tool")
+            if skill_name in self.skills:
+                skill = self.skills[skill_name]
+                if hasattr(skill, "skill_space_id") and skill.skill_space_id:
+                    span.set_attribute("skill.space_id", skill.skill_space_id)
+                if hasattr(skill, "bucket_name") and skill.bucket_name:
+                    span.set_attribute("skill.bucket_name", skill.bucket_name)
+                if hasattr(skill, "path") and skill.path:
+                    span.set_attribute("skill.path", skill.path)
+                if hasattr(skill, "id") and skill.id:
+                    span.set_attribute("skill.id", skill.id)
+            logger.debug(f"Added skill span attributes for {skill_name}")
+        except Exception as e:
+            logger.warning(f"Failed to add skill span attributes: {e}")
+
+    def _upload_skill_metrics(self, span: _Span, skill_name: str, result: str) -> None:
+        """Upload skill metrics to the telemetry system."""
+        try:
+            import time
+            from veadk.tracing.telemetry.telemetry import meter_uploader
+
+            if meter_uploader:
+                # 初始化属性，包含技能相关信息
+                skill = self.skills.get(skill_name)
+                attributes = {
+                    "skill_name": skill_name,
+                    "tool_name": self.name,
+                    "skill_space_id": (
+                        skill.skill_space_id if skill and skill.skill_space_id else ""
+                    ),
+                    "skill_id": skill.id if skill and skill.id else "",
+                    "gen_ai.operation.name": "execute_skill",
+                    "error_type": (
+                        "skill_execution_error" if result.startswith("Error:") else ""
+                    ),
+                }
+
+                # 计算 span 执行耗时（秒）
+                latency_seconds = 0
+                if hasattr(span, "start_time"):
+                    # 计算耗时（秒）
+                    latency_seconds = (time.time_ns() - span.start_time) / 1e9  # type: ignore
+
+                # 记录技能执行延迟
+                if hasattr(meter_uploader, "skill_invoke_latency"):
+                    # 使用 skill_invoke_latency 记录技能执行延迟（秒）
+                    meter_uploader.skill_invoke_latency.record(
+                        latency_seconds, attributes
+                    )
+                    logger.debug(
+                        f"Uploaded skill metrics for {skill_name} with latency {latency_seconds:.4f}s and attributes {attributes}"
+                    )
+        except Exception as e:
+            logger.warning(f"Failed to upload skill metrics: {e}")
