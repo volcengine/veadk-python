@@ -197,6 +197,7 @@ def load_skills_from_cloud(skill_space_ids: str) -> list[Skill]:
                 skill_description = item.get("Description")
                 tos_bucket = item.get("BucketName")
                 tos_path = item.get("TosPath")
+                skill_id = item.get("SkillId")
                 if not skill_name:
                     continue
 
@@ -206,6 +207,7 @@ def load_skills_from_cloud(skill_space_ids: str) -> list[Skill]:
                     path=tos_path,
                     skill_space_id=skill_space_id,
                     bucket_name=tos_bucket,
+                    id=skill_id,
                 )
 
                 skills.append(skill)
