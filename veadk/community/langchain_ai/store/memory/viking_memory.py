@@ -48,10 +48,11 @@ class VikingMemoryStore(BaseStore):
         for op in ops:
             if isinstance(op, PutOp):
                 self._apply_put_op(op)
+                results.append(None)
             elif isinstance(op, GetOp):
-                self._apply_get_op(op)
+                results.append(self._apply_get_op(op))
             elif isinstance(op, SearchOp):
-                results.extend(self._apply_search_op(op))
+                results.append(self._apply_search_op(op))
             # elif isinstance(op, ListNamespacesOp):
             #     self._apply_list_namespaces_op(op)
             else:
@@ -98,5 +99,7 @@ class VikingMemoryStore(BaseStore):
         if not query:
             return []
 
-        value = self._backend.search_memory(user_id=user_id, query=query, top_k=1)
+        value = self._backend.search_memory(
+            user_id=user_id, query=query, top_k=op.limit or 1
+        )
         return value
