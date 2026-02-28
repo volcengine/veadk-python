@@ -85,39 +85,41 @@ def create_init_skill_check_list_callback(
     return init_skill_check_list
 
 
-def load_skill_from_directory(skill_directory: Path) -> Skill:
+def load_skill_from_directory(skill_directory: Path) -> Optional[Skill]:
     logger.info(f"Load skill from {skill_directory}")
     skill_readme = skill_directory / "SKILL.md"
     if not skill_readme.exists():
         logger.error(f"Skill '{skill_directory}' has no SKILL.md file.")
-        raise ValueError(f"Skill '{skill_directory}' has no SKILL.md file")
+        return None
 
-    skill = frontmatter.load(str(skill_readme))
+    try:
+        skill = frontmatter.load(str(skill_readme))
 
-    skill_name = skill.get("name", "")
-    skill_description = skill.get("description", "")
-    checklist = skill.get("checklist", [])
+        skill_name = skill.get("name", "")
+        skill_description = skill.get("description", "")
+        checklist = skill.get("checklist", [])
 
-    if not skill_name or not skill_description:
-        logger.error(
-            f"Skill {skill_readme} is missing name or description. Please check the SKILL.md file."
+        if not skill_name or not skill_description:
+            logger.error(
+                f"Skill {skill_readme} is missing name or description. Please check the SKILL.md file."
+            )
+            return None
+
+        logger.info(
+            f"Successfully loaded skill {skill_name} locally from {skill_readme}, name={skill_name}, description={skill_description}"
         )
-        raise ValueError(
-            f"Skill {skill_readme} is missing name or description. Please check the SKILL.md file."
+        if checklist:
+            logger.info(f"Skill {skill_name} checklist: {checklist}")
+
+        return Skill(
+            name=skill_name,  # type: ignore
+            description=skill_description,  # type: ignore
+            path=str(skill_directory),
+            checklist=checklist,
         )
-
-    logger.info(
-        f"Successfully loaded skill {skill_name} locally from {skill_readme}, name={skill_name}, description={skill_description}"
-    )
-    if checklist:
-        logger.info(f"Skill {skill_name} checklist: {checklist}")
-
-    return Skill(
-        name=skill_name,  # type: ignore
-        description=skill_description,  # type: ignore
-        path=str(skill_directory),
-        checklist=checklist,
-    )
+    except Exception as e:
+        logger.error(f"Failed to load skill from {skill_directory}: {e}")
+        return None
 
 
 def load_skills_from_directory(skills_directory: Path) -> list[Skill]:
@@ -126,7 +128,8 @@ def load_skills_from_directory(skills_directory: Path) -> list[Skill]:
     for skill_directory in skills_directory.iterdir():
         if skill_directory.is_dir():
             skill = load_skill_from_directory(skill_directory)
-            skills.append(skill)
+            if skill is not None:
+                skills.append(skill)
     return skills
 
 
