@@ -166,7 +166,11 @@ def reload_skills_from_config(skills_config: List[str]) -> Dict[str, Skill]:
                 for skill_dir in path.iterdir():
                     if skill_dir.is_dir():
                         skill = load_skill_from_directory(skill_dir)
-                        all_skills[skill.name] = skill
+                        # Only add skill if it loaded successfully
+                        if skill is not None:
+                            all_skills[skill.name] = skill
+                        else:
+                            logger.warning(f"Skipped failed skill from {skill_dir}")
             except Exception as e:
                 logger.error(
                     f"Failed to reload skills from local directory {path}: {e}"
