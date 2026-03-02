@@ -444,7 +444,8 @@ class VeFaaS:
         gateway_service_name: str = "",
         gateway_upstream_name: str = "",
         enable_key_auth: bool = False,
-    ) -> tuple[str, str, str]:
+        enable_session_affinity: bool = False,
+    ) -> tuple[str, str, str, str | None]:
         """Deploy an agent project to VeFaaS service.
 
         Args:
@@ -456,7 +457,7 @@ class VeFaaS:
             enable_key_auth (bool, optional): Enable key auth. Defaults to False.
 
         Returns:
-            tuple[str, str, str]: (url, app_id, function_id)
+            tuple[str, str, str, str | None]: (url, app_id, function_id, affinity_binding_id)
         """
         # Naming check
         if "_" in name:
@@ -508,7 +509,11 @@ class VeFaaS:
 
         logger.info(f"VeFaaS application {name} with ID {app_id} deployed on {url}.")
 
-        return url, app_id, function_id
+        # Enable session affinity plugin
+        affinity_binding_id = None
+        if enable_session_affinity:
+            affinity_binding_id = self._enable_session_affinity(app_id)
+        return url, app_id, function_id, affinity_binding_id
 
     def _create_image_function(self, function_name: str, image: str):
         """Create function using container image instead of code upload."""
@@ -678,7 +683,8 @@ class VeFaaS:
         gateway_name: str = "",
         gateway_service_name: str = "",
         gateway_upstream_name: str = "",
-    ) -> tuple[str, str, str]:
+        enable_session_affinity: bool = False,
+    ) -> tuple[str, str, str, str | None]:
         """Deploy application using container image.
 
         Args:
@@ -767,7 +773,11 @@ class VeFaaS:
 
         logger.info(f"VeFaaS application {name} with ID {app_id} deployed on {url}.")
 
-        return url, app_id, function_id
+        # Enable session affinity plugin
+        affinity_binding_id = None
+        if enable_session_affinity:
+            affinity_binding_id = self._enable_session_affinity(app_id)
+        return url, app_id, function_id, affinity_binding_id
 
     def _get_application_logs(self, app_id: str) -> list[str]:
         response = _ = ve_request(
@@ -786,3 +796,27 @@ class VeFaaS:
             return logs
         except Exception as _:
             raise ValueError(f"Get application log failed. Response: {response}")
+
+    def _enable_session_affinity(self, app_id: str) -> str | None:
+        """Enable session affinity for application. Returns binding_id."""
+        route_info = self.get_application_route(app_id=app_id)
+        if not route_info:
+            logger.warning(f"Cannot get route info for app {app_id}, skip affinity")
+            return None
+        gateway_id, service_id, _ = route_info
+        # Create plugin on gateway (ignore if already exists)
+        try:
+            self.apig_client.create_session_affinity_plugin(gateway_id)
+        except Exception:
+            logger.warning(
+                f"Create session affinity plugin failed. Gateway ID: {gateway_id}"
+            )
+        # Bind plugin to service
+        binding_id = self.apig_client.bind_session_affinity_plugin(service_id)
+        logger.info(f"Session affinity enabled, binding_id: {binding_id}")
+        return binding_id
+
+    def disable_session_affinity(self, binding_id: str) -> None:
+        """Disable session affinity by deleting plugin binding."""
+        self.apig_client.delete_plugin_binding(binding_id)
+        logger.info(f"Session affinity disabled, binding_id: {binding_id}")

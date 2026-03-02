@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import time
-
+import json
 import volcenginesdkcore
 from volcenginesdkapig import APIGApi
 from volcenginesdkapig20221112 import APIG20221112Api, UpstreamListForCreateRouteInput
@@ -347,3 +347,52 @@ class APIGateway:
             "upstream_id": upstream_id,
             "route_ids": route_ids,
         }
+
+    def create_session_affinity_plugin(self, gateway_id: str) -> str:
+        """Create session affinity plugin on gateway. Returns plugin_id."""
+        response = ve_request(
+            request_body={
+                "PluginName": "wasm-session-affinity-pro",
+                "PluginConfig": "",
+                "GatewayId": gateway_id,
+                "Enable": True,
+            },
+            action="CreatePlugin",
+            ak=self.ak,
+            sk=self.sk,
+            service="apig",
+            version="2022-11-12",
+            region=self.region,
+            host="open.volcengineapi.com",
+        )
+        return response["Result"]["PluginID"]
+
+    def bind_session_affinity_plugin(self, service_id: str) -> str:
+        """Bind session affinity plugin to service. Returns binding_id."""
+        plugin_config = json.dumps(
+            {
+                "Position": "Header",
+                "DownstreamSessionKey": "x-session-id-veadk",
+                "UpstreamHeaders": [],
+                "FailureModeAllow": False,
+            }
+        )
+        return self.create_plugin_binding(
+            scope="SERVICE",
+            target=service_id,
+            plugin_name="wasm-session-affinity-pro",
+            plugin_config=plugin_config,
+        )
+
+    def delete_plugin_binding(self, binding_id: str) -> None:
+        """Delete a plugin binding by id."""
+        ve_request(
+            request_body={"Id": binding_id},
+            action="DeletePluginBinding",
+            ak=self.ak,
+            sk=self.sk,
+            service="apig",
+            version="2021-03-03",
+            region=self.region,
+            host="open.volcengineapi.com",
+        )
