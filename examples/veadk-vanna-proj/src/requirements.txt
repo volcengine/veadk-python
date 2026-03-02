@@ -1,0 +1,5 @@
+veadk-python==0.5.16
+fastapi==0.123.10
+uvicorn[standard]==0.40.0
+vanna==2.0.1
+httpx==0.28.1
