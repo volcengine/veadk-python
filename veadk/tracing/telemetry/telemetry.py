@@ -37,6 +37,23 @@ logger = get_logger(__name__)
 meter_uploader = None
 
 
+def init_global_meter_uploader_from_exporters(exporters):
+    """Initialize global meter_uploader from a list of exporters.
+
+    Args:
+        exporters: List of exporter instances to search for meter_uploader
+    """
+    global meter_uploader
+    for exporter in exporters:
+        if hasattr(exporter, "meter_uploader") and exporter.meter_uploader:
+            meter_uploader = exporter.meter_uploader
+            logger.debug(
+                "Global meter_uploader initialized from exporter: {}",
+                exporter.__class__.__name__,
+            )
+            break
+
+
 def _upload_call_llm_metrics(
     invocation_context: InvocationContext,
     event_id: str,
@@ -90,7 +107,7 @@ def _upload_tool_call_metrics(
     if meter_uploader:
         meter_uploader.record_tool_call(tool, args, function_response_event)
     else:
-        logger.warning(
+        logger.debug(
             "Meter uploader is not initialized yet. Skip recording tool call metrics."
         )
 
