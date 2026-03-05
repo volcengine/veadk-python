@@ -108,7 +108,7 @@ async def main(prompt: str) -> str:
     """
     weather_agent = RemoteVeAgent(
         name="weather_agent",
-        url="http://localhost:8000/",  # <--- url of A2A server
+        url="http://localhost:8000",  # <--- url of A2A server
     )
     print(f"Remote agent name is {weather_agent.name}.")
     print(f"Remote agent description is {weather_agent.description}.")
