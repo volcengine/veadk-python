@@ -12,23 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
 import functools
+import json
 from typing import AsyncGenerator, Literal, Optional
 
-from a2a.client.base_client import BaseClient
 import httpx
 import requests
+from a2a.client.base_client import BaseClient
 from a2a.types import AgentCard
+from google.adk.agents.invocation_context import InvocationContext
 from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
+from google.adk.events.event import Event
+from google.adk.utils.context_utils import Aclosing
 
 from veadk.integrations.ve_identity.utils import generate_headers
 from veadk.utils.auth import VE_TIP_TOKEN_CREDENTIAL_KEY, VE_TIP_TOKEN_HEADER
 from veadk.utils.logger import get_logger
-from google.adk.utils.context_utils import Aclosing
-from google.adk.events.event import Event
-from google.adk.agents.invocation_context import InvocationContext
-
 
 logger = get_logger(__name__)
 
@@ -140,7 +139,7 @@ class RemoteVeAgent(RemoteA2aAgent):
         httpx_client: Optional[httpx.AsyncClient] = None,
     ):
         # Determine the effective URL for the agent and handle conflicts.
-        effective_url = url
+        effective_url = url.rstrip("/") if url else None
         if httpx_client and httpx_client.base_url:
             client_url_str = str(httpx_client.base_url).rstrip("/")
             if url and url.rstrip("/") != client_url_str:
@@ -327,8 +326,9 @@ class RemoteVeAgent(RemoteA2aAgent):
             return
 
         try:
-            from veadk.utils.auth import build_auth_config
             from google.adk.agents.callback_context import CallbackContext
+
+            from veadk.utils.auth import build_auth_config
 
             # Inject TIP token via header
             workload_auth_config = build_auth_config(
