@@ -214,6 +214,10 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
             f"Init OpentelemetryTracer with {len(self._processors)} exporter(s)."
         )
 
+        # Initialize global meter_uploader from exporters
+        from veadk.tracing.telemetry.telemetry import init_global_meter_uploader_from_exporters
+        init_global_meter_uploader_from_exporters(self.exporters)
+
     @property
     def trace_file_path(self) -> str:
         """Get the file path of the most recent trace dump.
