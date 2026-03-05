@@ -15,6 +15,7 @@
 import sys
 
 from loguru import logger
+from opentelemetry import trace
 
 from veadk.utils.misc import getenv
 
@@ -42,9 +43,23 @@ def filter_log():
 
 def setup_logger():
     logger.remove()
+
+    def format_with_traceid(record):
+        span = trace.get_current_span()
+        trace_id_part = ""
+        if span.is_recording():
+            trace_id_part = (
+                f" | trace_id={format(span.get_span_context().trace_id, '016x')}"
+            )
+
+        base_format = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level}</level> | <cyan>{file}:{line}</cyan>"
+        message_part = " - {message}\n{exception}"
+
+        return base_format + trace_id_part + message_part
+
     logger.add(
         sys.stdout,
-        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level}</level> | <cyan>{file}:{line}</cyan> - {message}",
+        format=format_with_traceid,
         colorize=True,
         level=getenv("LOGGING_LEVEL", "DEBUG"),
     )

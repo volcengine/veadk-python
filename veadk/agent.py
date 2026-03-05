@@ -587,6 +587,13 @@ class Agent(LlmAgent):
             f"Opentelemetry Tracer init {len(self.tracers[0].exporters)} exporters"  # type: ignore
         )
 
+        # Initialize global meter_uploader from exporters
+        from veadk.tracing.telemetry.telemetry import (
+            init_global_meter_uploader_from_exporters,
+        )
+
+        init_global_meter_uploader_from_exporters(self.tracers[0].exporters)  # type: ignore
+
     @property
     def _llm_flow(self) -> BaseLlmFlow:
         from google.adk.flows.llm_flows.auto_flow import AutoFlow
