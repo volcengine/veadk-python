@@ -47,7 +47,10 @@ def init_global_meter_uploader_from_exporters(exporters):
     for exporter in exporters:
         if hasattr(exporter, "meter_uploader") and exporter.meter_uploader:
             meter_uploader = exporter.meter_uploader
-            logger.debug("Global meter_uploader initialized from exporter: {}", exporter.__class__.__name__)
+            logger.debug(
+                "Global meter_uploader initialized from exporter: {}",
+                exporter.__class__.__name__,
+            )
             break
 
 

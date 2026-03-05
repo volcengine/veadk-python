@@ -588,7 +588,10 @@ class Agent(LlmAgent):
         )
 
         # Initialize global meter_uploader from exporters
-        from veadk.tracing.telemetry.telemetry import init_global_meter_uploader_from_exporters
+        from veadk.tracing.telemetry.telemetry import (
+            init_global_meter_uploader_from_exporters,
+        )
+
         init_global_meter_uploader_from_exporters(self.tracers[0].exporters)  # type: ignore
 
     @property
