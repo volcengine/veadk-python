@@ -337,3 +337,130 @@ class SaveTextMemoryTool(BaseTool):
             return str(result.result_for_llm)
         except Exception as e:
             return f"Error saving text memory: {str(e)}"
+
+
+class SearchTextMemoriesTool(BaseTool):
+    """Search stored documentation and DDL schemas based on a query."""
+
+    def __init__(
+        self,
+        agent_memory,
+        access_groups: Optional[List[str]] = None,
+    ):
+        """
+        Initialize the search text memories tool with custom agent_memory.
+
+        Args:
+            agent_memory: A Vanna agent memory instance (e.g., VikingDBAgentMemory)
+            access_groups: List of user groups that can access this tool (e.g., ['admin', 'user'])
+        """
+        self.agent_memory = agent_memory
+        self.access_groups = access_groups or ["admin", "user"]
+
+        super().__init__(
+            name="search_text_memories",
+            description="Search for relevant documentation and DDL schemas based on a query. This retrieves stored documentation, contextual information, and table schemas that are relevant to the question.",
+        )
+
+    def _get_declaration(self) -> types.FunctionDeclaration:
+        return types.FunctionDeclaration(
+            name=self.name,
+            description=self.description,
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "query": types.Schema(
+                        type=types.Type.STRING,
+                        description="The query to search for in documentation and DDL schemas",
+                    ),
+                    "limit": types.Schema(
+                        type=types.Type.INTEGER,
+                        description="Maximum number of results to return (default: 10)",
+                    ),
+                    "include_ddl": types.Schema(
+                        type=types.Type.BOOLEAN,
+                        description="Whether to include DDL schema results (default: true)",
+                    ),
+                },
+                required=["query"],
+            ),
+        )
+
+    def _get_user_groups(self, tool_context: ToolContext) -> List[str]:
+        """Get user groups from context."""
+        user_groups = tool_context.state.get("user_groups", ["user"])
+        return user_groups
+
+    def _check_access(self, user_groups: List[str]) -> bool:
+        """Check if user has access to this tool."""
+        return any(group in self.access_groups for group in user_groups)
+
+    def _create_vanna_context(
+        self, tool_context: ToolContext, user_groups: List[str]
+    ) -> VannaToolContext:
+        """Create Vanna context from Veadk ToolContext."""
+        user_id = tool_context.user_id
+        session_id = tool_context.session.id
+        user_email = tool_context.state.get("user_email", "user@example.com")
+
+        vanna_user = User(
+            id=user_id + "_" + session_id,
+            email=user_email,
+            group_memberships=user_groups,
+        )
+
+        vanna_context = VannaToolContext(
+            user=vanna_user,
+            conversation_id=session_id,
+            request_id=session_id,
+            agent_memory=self.agent_memory,
+        )
+
+        return vanna_context
+
+    async def run_async(
+        self, *, args: Dict[str, Any], tool_context: ToolContext
+    ) -> str:
+        """Search for text memories including documentation and DDL."""
+        query = args.get("query", "").strip()
+        limit = args.get("limit", 10)
+        include_ddl = args.get("include_ddl", True)
+
+        if not query:
+            return "Error: No query provided"
+
+        try:
+            user_groups = self._get_user_groups(tool_context)
+
+            if not self._check_access(user_groups):
+                return f"Error: Access denied. This tool requires one of the following groups: {', '.join(self.access_groups)}"
+
+            vanna_context = self._create_vanna_context(tool_context, user_groups)
+
+            # Call the agent_memory's search_text_memories method
+            results = await self.agent_memory.search_text_memories(
+                query=query,
+                context=vanna_context,
+                limit=limit,
+                similarity_threshold=0.7,
+                include_ddl=include_ddl,
+            )
+
+            if not results:
+                return f"No relevant documentation or DDL found for query: {query}"
+
+            # Format results for LLM
+            formatted_results = []
+            for idx, result in enumerate(results, 1):
+                formatted_results.append(
+                    f"{idx}. [Score: {result.similarity_score:.2f}]\n{result.memory.content}\n"
+                )
+
+            response = f"Found {len(results)} relevant results:\n\n" + "\n".join(
+                formatted_results
+            )
+
+            return response
+
+        except Exception as e:
+            return f"Error searching text memories: {str(e)}"
