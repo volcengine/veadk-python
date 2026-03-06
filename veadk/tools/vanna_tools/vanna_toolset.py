@@ -30,6 +30,7 @@ from veadk.tools.vanna_tools.agent_memory import (
     SaveQuestionToolArgsTool,
     SearchSavedCorrectToolUsesTool,
     SaveTextMemoryTool,
+    SearchTextMemoriesTool,
 )
 from veadk.tools.vanna_tools.run_sql import RunSqlTool
 from veadk.tools.vanna_tools.visualize_data import VisualizeDataTool
@@ -41,10 +42,16 @@ from google.adk.tools.base_toolset import BaseToolset
 
 
 class VannaToolSet(BaseToolset):
-    def __init__(self, connection_string: str, file_storage: str = "/tmp/data"):
+    def __init__(
+        self,
+        connection_string: str,
+        file_storage: str = "/tmp/data",
+        agent_memory=None,
+    ):
         super().__init__()
         self.connection_string = connection_string
         self.file_storage = file_storage
+        self.custom_agent_memory = agent_memory
         self._post_init()
 
     def _post_init(self):
@@ -58,6 +65,8 @@ class VannaToolSet(BaseToolset):
                 - postgresql://user:password@host:port/database
                 - mysql://user:password@host:port/database
             file_storage (str, optional): The directory to store files. Defaults to "/tmp/data".
+            agent_memory (optional): Custom agent memory instance (e.g., VikingDBAgentMemory).
+                If not provided, defaults to DemoAgentMemory.
         """
 
         from vanna.integrations.sqlite import SqliteRunner
@@ -137,7 +146,12 @@ class VannaToolSet(BaseToolset):
             os.makedirs(self.file_storage, exist_ok=True)
 
         self.file_system = LocalFileSystem(working_directory=self.file_storage)
-        self.agent_memory = DemoAgentMemory(max_items=1000)
+
+        # Use custom agent_memory if provided, otherwise use default DemoAgentMemory
+        if self.custom_agent_memory is not None:
+            self.agent_memory = self.custom_agent_memory
+        else:
+            self.agent_memory = DemoAgentMemory(max_items=1000)
 
         self._tools = {
             "SaveQuestionToolArgsTool": SaveQuestionToolArgsTool(
@@ -147,6 +161,9 @@ class VannaToolSet(BaseToolset):
                 agent_memory=self.agent_memory,
             ),
             "SaveTextMemoryTool": SaveTextMemoryTool(
+                agent_memory=self.agent_memory,
+            ),
+            "SearchTextMemoriesTool": SearchTextMemoriesTool(
                 agent_memory=self.agent_memory,
             ),
             "WriteFileTool": WriteFileTool(
