@@ -14,6 +14,7 @@
 
 from typing import Sequence
 
+from opentelemetry import trace
 from opentelemetry.context import (
     _SUPPRESS_INSTRUMENTATION_KEY,
     attach,
@@ -246,3 +247,18 @@ class InMemoryExporter(BaseExporter):
 
         self._exporter = _InMemoryExporter()
         self.processor = _InMemorySpanProcessor(self._exporter)
+
+    @override
+    def register(self) -> None:
+        """Register the in-memory exporter with the global tracer provider.
+
+        Ensures the in-memory exporter's processor is added at the beginning
+        of the span processors list to record all spans.
+        """
+        tracer_provider = trace.get_tracer_provider()
+
+        # Ensure the in-memory exporter processor is added at index 0
+        # because we use this to record all spans
+        tracer_provider._active_span_processor._span_processors = (
+            self.processor,
+        ) + tracer_provider._active_span_processor._span_processors
