@@ -133,12 +133,10 @@ def _get_headers() -> dict:
 def _should_disable_audio(
     model_name: str, generate_audio: Optional[bool]
 ) -> Optional[bool]:
-    if generate_audio is False:
-        return None
-    if model_name.startswith("doubao-seedance-1-0") and generate_audio:
+    if model_name.startswith("doubao-seedance-1-0") and generate_audio is not None:
         logger.warning(
             "The `doubao-seedance-1-0` series models do not support enabling the audio field. "
-            "Please upgrade to the doubao-seedance-1-5 series if you want to generate video with audio."
+            "Please upgrade to the doubao-seedance-1-5 series or higher if you want to generate video with audio."
         )
         return None
     return generate_audio
