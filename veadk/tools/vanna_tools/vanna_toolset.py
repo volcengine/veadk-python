@@ -67,11 +67,9 @@ class VannaToolSet(BaseToolset):
         from vanna.tools import LocalFileSystem
         from vanna.integrations.local.agent_memory import DemoAgentMemory
 
-        # 验证连接字符串格式
         if not self.connection_string:
             raise ValueError("Connection string cannot be empty")
 
-        # 检查连接字符串格式
         if self.connection_string.startswith("sqlite://"):
             if len(self.connection_string) <= len("sqlite://"):
                 raise ValueError(
@@ -133,41 +131,32 @@ class VannaToolSet(BaseToolset):
             try:
                 from urllib.parse import urlparse, parse_qs
 
-                # 解析 URI
                 parsed = urlparse(self.connection_string)
 
-                # 提取基本信息
                 user = parsed.username
                 password = parsed.password
                 host = parsed.hostname
-                port = parsed.port or 8123  # 默认端口
+                port = parsed.port or 8123
                 database = parsed.path.lstrip("/")
 
-                # 解析查询参数
                 query_params = parse_qs(parsed.query)
                 kwargs = {}
 
-                # 处理所有查询参数
                 for key, values in query_params.items():
                     if not values:
                         continue
 
-                    value = values[0]  # 取第一个值
+                    value = values[0]
 
-                    # 处理布尔值参数
                     if value.lower() in ("true", "false", "1", "0", "yes", "no"):
                         kwargs[key] = value.lower() in ("true", "1", "yes")
-                    # 处理数字参数
                     elif value.isdigit():
                         kwargs[key] = int(value)
-                    # 处理浮点数参数
                     elif value.replace(".", "", 1).isdigit():
                         kwargs[key] = float(value)
-                    # 其他参数保持字符串
                     else:
                         kwargs[key] = value
 
-                # 验证必需参数
                 if not all([user, password, host, database]):
                     raise ValueError(
                         "Missing required connection parameters (user, password, host, database)"
