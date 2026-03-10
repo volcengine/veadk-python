@@ -63,6 +63,7 @@ class VannaToolSet(BaseToolset):
         from vanna.integrations.sqlite import SqliteRunner
         from vanna.integrations.postgres import PostgresRunner
         from vanna.integrations.mysql import MySQLRunner
+        from .clickhouse.sql_runner import ClickHouseRunner
         from vanna.tools import LocalFileSystem
         from vanna.integrations.local.agent_memory import DemoAgentMemory
 
@@ -128,9 +129,65 @@ class VannaToolSet(BaseToolset):
                 )
             except (IndexError, ValueError) as e:
                 raise ValueError(f"Invalid MySQL connection string format: {e}") from e
+        elif self.connection_string.startswith("clickhouse://"):
+            try:
+                from urllib.parse import urlparse, parse_qs
+
+                # 解析 URI
+                parsed = urlparse(self.connection_string)
+
+                # 提取基本信息
+                user = parsed.username
+                password = parsed.password
+                host = parsed.hostname
+                port = parsed.port or 8123  # 默认端口
+                database = parsed.path.lstrip("/")
+
+                # 解析查询参数
+                query_params = parse_qs(parsed.query)
+                kwargs = {}
+
+                # 处理所有查询参数
+                for key, values in query_params.items():
+                    if not values:
+                        continue
+
+                    value = values[0]  # 取第一个值
+
+                    # 处理布尔值参数
+                    if value.lower() in ("true", "false", "1", "0", "yes", "no"):
+                        kwargs[key] = value.lower() in ("true", "1", "yes")
+                    # 处理数字参数
+                    elif value.isdigit():
+                        kwargs[key] = int(value)
+                    # 处理浮点数参数
+                    elif value.replace(".", "", 1).isdigit():
+                        kwargs[key] = float(value)
+                    # 其他参数保持字符串
+                    else:
+                        kwargs[key] = value
+
+                # 验证必需参数
+                if not all([user, password, host, database]):
+                    raise ValueError(
+                        "Missing required connection parameters (user, password, host, database)"
+                    )
+
+                self.runner = ClickHouseRunner(
+                    host=host,
+                    database=database,
+                    user=user,
+                    password=password,
+                    port=port,
+                    **kwargs,
+                )
+            except (IndexError, ValueError, AttributeError) as e:
+                raise ValueError(
+                    f"Invalid ClickHouse connection string format: {e}"
+                ) from e
         else:
             raise ValueError(
-                "Unsupported connection string format. Please use sqlite://, postgresql://, or mysql://"
+                "Unsupported connection string format. Please use sqlite://, postgresql://, mysql://, or clickhouse://"
             )
 
         if not os.path.exists(self.file_storage):
