@@ -63,14 +63,13 @@ class VannaToolSet(BaseToolset):
         from vanna.integrations.sqlite import SqliteRunner
         from vanna.integrations.postgres import PostgresRunner
         from vanna.integrations.mysql import MySQLRunner
+        from .clickhouse.sql_runner import ClickHouseRunner
         from vanna.tools import LocalFileSystem
         from vanna.integrations.local.agent_memory import DemoAgentMemory
 
-        # 验证连接字符串格式
         if not self.connection_string:
             raise ValueError("Connection string cannot be empty")
 
-        # 检查连接字符串格式
         if self.connection_string.startswith("sqlite://"):
             if len(self.connection_string) <= len("sqlite://"):
                 raise ValueError(
@@ -128,9 +127,56 @@ class VannaToolSet(BaseToolset):
                 )
             except (IndexError, ValueError) as e:
                 raise ValueError(f"Invalid MySQL connection string format: {e}") from e
+        elif self.connection_string.startswith("clickhouse://"):
+            try:
+                from urllib.parse import urlparse, parse_qs
+
+                parsed = urlparse(self.connection_string)
+
+                user = parsed.username
+                password = parsed.password
+                host = parsed.hostname
+                port = parsed.port or 8123
+                database = parsed.path.lstrip("/")
+
+                query_params = parse_qs(parsed.query)
+                kwargs = {}
+
+                for key, values in query_params.items():
+                    if not values:
+                        continue
+
+                    value = values[0]
+
+                    if value.lower() in ("true", "false", "1", "0", "yes", "no"):
+                        kwargs[key] = value.lower() in ("true", "1", "yes")
+                    elif value.isdigit():
+                        kwargs[key] = int(value)
+                    elif value.replace(".", "", 1).isdigit():
+                        kwargs[key] = float(value)
+                    else:
+                        kwargs[key] = value
+
+                if not all([user, password, host, database]):
+                    raise ValueError(
+                        "Missing required connection parameters (user, password, host, database)"
+                    )
+
+                self.runner = ClickHouseRunner(
+                    host=host,
+                    database=database,
+                    user=user,
+                    password=password,
+                    port=port,
+                    **kwargs,
+                )
+            except (IndexError, ValueError, AttributeError) as e:
+                raise ValueError(
+                    f"Invalid ClickHouse connection string format: {e}"
+                ) from e
         else:
             raise ValueError(
-                "Unsupported connection string format. Please use sqlite://, postgresql://, or mysql://"
+                "Unsupported connection string format. Please use sqlite://, postgresql://, mysql://, or clickhouse://"
             )
 
         if not os.path.exists(self.file_storage):
