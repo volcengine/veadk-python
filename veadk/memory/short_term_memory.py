@@ -138,6 +138,7 @@ class ShortTermMemory(BaseModel):
         app_name: str,
         user_id: str,
         session_id: str,
+        state: dict | None = None,
     ) -> Session | None:
         """Create or retrieve a user session.
 
@@ -151,6 +152,7 @@ class ShortTermMemory(BaseModel):
             app_name (str): The name of the application associated with the session.
             user_id (str): The unique identifier of the user.
             session_id (str): The unique identifier of the session to be created or retrieved.
+            state (dict | None): The initial state of the session.
 
         Returns:
             Session | None: The retrieved or newly created `Session` object, or `None` if the session creation failed.
@@ -175,7 +177,7 @@ class ShortTermMemory(BaseModel):
             return session
         else:
             return await self._session_service.create_session(
-                app_name=app_name, user_id=user_id, session_id=session_id
+                app_name=app_name, user_id=user_id, session_id=session_id, state=state
             )
 
     async def generate_profile(
