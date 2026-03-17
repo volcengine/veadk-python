@@ -152,7 +152,10 @@ class ShortTermMemory(BaseModel):
             app_name (str): The name of the application associated with the session.
             user_id (str): The unique identifier of the user.
             session_id (str): The unique identifier of the session to be created or retrieved.
-            state (dict | None): The initial state of the session.
+            state (dict | None):
+                The initial state of the session.
+                If a session with the given `session_id` already exists,
+                this argument is ignored and the existing session state is preserved.
 
         Returns:
             Session | None: The retrieved or newly created `Session` object, or `None` if the session creation failed.
