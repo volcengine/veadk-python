@@ -173,6 +173,17 @@ def execute_skills(
         "PYTHONPATH": "$SRV_PYTHONPATH:$PYTHONPATH",
     }
 
+	# 注入模型配置，让沙箱使用与本地 Agent 相同的模型。
+    for model_key in [
+       "MODEL_AGENT_NAME",
+       "MODEL_AGENT_PROVIDER",
+       "MODEL_AGENT_API_BASE",
+       "MODEL_AGENT_API_KEY",
+    ]:
+        model_val = os.getenv(model_key, "")
+        if model_val:
+            env_vars[model_key] = model_val
+
     code = f"""
 import subprocess
 import os
