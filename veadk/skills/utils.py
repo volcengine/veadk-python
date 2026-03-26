@@ -174,7 +174,7 @@ def load_skills_from_cloud(skill_space_ids: str) -> list[Skill]:
                 "InnerTags": {"source": "sandbox"},
             }
             logger.debug(f"ListSkillsBySpaceId request body: {request_body}")
-            scheme = os.getenv("AGENTKIT_TOOL_SCHEME", "https").lower()
+            scheme = os.getenv("AGENTKIT_TOP_SCHEME", "https").lower()
 
             response = ve_request(
                 request_body=request_body,

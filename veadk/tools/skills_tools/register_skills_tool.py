@@ -135,7 +135,7 @@ def register_skills_tool(
                 return f"Error: Failed to get account id when registering skill '{skill_name}'."
 
         tos_bucket = f"agentkit-platform-{region}-{account_id}-skill"
-        scheme = os.getenv("AGENTKIT_TOOL_SCHEME", "https").lower()
+        scheme = os.getenv("AGENTKIT_TOP_SCHEME", "https").lower()
         if cloud_provider == "vestack":
             import requests
 
