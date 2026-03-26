@@ -117,6 +117,12 @@ class SkillsTool(BaseTool):
             # 1. Download skill from TOS if not found locally
             user_skill_dir = skill_dir / skill_name
             if not user_skill_dir.exists() or not user_skill_dir.is_dir():
+                cloud_provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
+                if cloud_provider == "vestack":
+                    error_msg = f"Error: Skill '{skill_name}' not found locally or in skill space. Downloading from TOS_SKILLS_DIR is not supported in vestack environment."
+                    logger.error(error_msg)
+                    return error_msg
+
                 # Try to download from TOS
                 logger.info(
                     f"Skill '{skill_name}' not found locally or in skill space, attempting to download from TOS..."
@@ -240,22 +246,111 @@ class SkillsTool(BaseTool):
 
                     tos_bucket, tos_path = skill.bucket_name, skill.path
 
-                    # Initialize VeTOS client
-                    tos_client = VeTOS(
-                        ak=access_key,
-                        sk=secret_key,
-                        session_token=session_token,
-                        bucket_name=tos_bucket,
-                        region=region,
-                    )
-
                     save_path = skill_dir / f"{skill_name}.zip"
 
-                    success = tos_client.download(
-                        bucket_name=tos_bucket,
-                        object_key=tos_path,
-                        save_path=save_path,
-                    )
+                    cloud_provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
+                    if cloud_provider == "vestack":
+                        import requests
+                        from veadk.utils.volcengine_sign import ve_request
+
+                        # Extract skill_id and skill_version from TosPath
+                        # skills/s-yeh6iwdnggwobasystug/v1/web-search.zip
+                        skill_id = skill.id
+                        skill_version = ""
+                        try:
+                            path_parts = tos_path.split("/")
+                            if len(path_parts) >= 3:
+                                skill_id = path_parts[1]
+                                skill_version = path_parts[2]
+                        except Exception:
+                            pass
+
+                        # Call GenTempTosObjectDownloadUrl API
+                        temp_url_request_body = {
+                            "SkillId": skill_id,
+                            "SkillVersion": skill_version,
+                        }
+                        logger.debug(
+                            f"GenTempTosObjectDownloadUrl request body: {temp_url_request_body}"
+                        )
+
+                        agentkit_tool_service = os.getenv(
+                            "AGENTKIT_TOOL_SERVICE_CODE", "agentkit"
+                        )
+                        region = os.getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
+                        default_sld = (
+                            "byteplusapi"
+                            if cloud_provider == "byteplus"
+                            else "volcengineapi"
+                        )
+                        agentkit_skill_host = os.getenv(
+                            "AGENTKIT_SKILL_HOST",
+                            agentkit_tool_service
+                            + "."
+                            + region
+                            + f".{default_sld}.com",
+                        )
+                        scheme = os.getenv("AGENTKIT_TOOL_SCHEME", "https").lower()
+                        
+                        temp_url_res = ve_request(
+                            request_body=temp_url_request_body,
+                            action="GenTempTosObjectDownloadUrl",
+                            ak=access_key,
+                            sk=secret_key,
+                            service=agentkit_tool_service,
+                            version="2025-10-30",
+                            region=region,
+                            host=agentkit_skill_host,
+                            header={"X-Security-Token": session_token},
+                            scheme=scheme,
+                        )
+
+                        if isinstance(temp_url_res, str):
+                            temp_url_res = json.loads(temp_url_res)
+
+                        if (
+                            "ResponseMetadata" in temp_url_res
+                            and "Error" in temp_url_res["ResponseMetadata"]
+                        ):
+                            error_details = temp_url_res["ResponseMetadata"]["Error"]
+                            logger.error(
+                                f"Failed to get temporary download URL for '{skill_name}': {error_details}"
+                            )
+                            success = False
+                        else:
+                            signed_url = temp_url_res.get("Result", {}).get("SignedUrl")
+                            if not signed_url:
+                                logger.error(
+                                    f"Failed to get SignedUrl from GenTempTosObjectDownloadUrl response: {temp_url_res}"
+                                )
+                                success = False
+                            else:
+                                try:
+                                    response = requests.get(signed_url)
+                                    response.raise_for_status()
+                                    with open(save_path, "wb") as f:
+                                        f.write(response.content)
+                                    success = True
+                                except Exception as e:
+                                    logger.error(
+                                        f"Failed to download skill '{skill_name}' from minio: {e}"
+                                    )
+                                    success = False
+                    else:
+                        # Initialize VeTOS client
+                        tos_client = VeTOS(
+                            ak=access_key,
+                            sk=secret_key,
+                            session_token=session_token,
+                            bucket_name=tos_bucket,
+                            region=region,
+                        )
+
+                        success = tos_client.download(
+                            bucket_name=tos_bucket,
+                            object_key=tos_path,
+                            save_path=save_path,
+                        )
 
                     if not success:
                         return (
