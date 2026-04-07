@@ -50,14 +50,10 @@ def _download_skill_via_vestack(
             skill_id = path_parts[1]
             skill_version = path_parts[2]
         else:
-            logger.error(
-                f"Invalid TosPath format for skill '{skill_name}': {tos_path}"
-            )
+            logger.error(f"Invalid TosPath format for skill '{skill_name}': {tos_path}")
             return False
     except Exception as e:
-        logger.error(
-            f"Failed to parse TosPath for skill '{skill_name}': {e}"
-        )
+        logger.error(f"Failed to parse TosPath for skill '{skill_name}': {e}")
         return False
 
     # Call GenTempTosObjectDownloadUrl API
@@ -65,9 +61,6 @@ def _download_skill_via_vestack(
         "SkillId": skill_id,
         "SkillVersion": skill_version,
     }
-    logger.debug(
-        f"GenTempTosObjectDownloadUrl request body: {temp_url_request_body}"
-    )
 
     temp_url_res = ve_request(
         request_body=temp_url_request_body,
@@ -189,7 +182,7 @@ def download_skills_tool(
                     "InnerTags": {"source": "sandbox"},
                 }
                 logger.info(f"ListSkillsBySpaceId request body: {request_body}")
-                
+
                 response = ve_request(
                     request_body=request_body,
                     action="ListSkillsBySpaceId",

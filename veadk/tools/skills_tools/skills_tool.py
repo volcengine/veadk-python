@@ -396,28 +396,16 @@ class SkillsTool(BaseTool):
             "SkillId": skill_id,
             "SkillVersion": skill_version,
         }
-        logger.debug(
-            f"GenTempTosObjectDownloadUrl request body: {temp_url_request_body}"
-        )
 
-        agentkit_tool_service = os.getenv(
-            "AGENTKIT_TOOL_SERVICE_CODE", "agentkit"
-        )
+        agentkit_tool_service = os.getenv("AGENTKIT_TOOL_SERVICE_CODE", "agentkit")
         region = os.getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
-        default_sld = (
-            "byteplusapi"
-            if cloud_provider == "byteplus"
-            else "volcengineapi"
-        )
+        default_sld = "byteplusapi" if cloud_provider == "byteplus" else "volcengineapi"
         agentkit_skill_host = os.getenv(
             "AGENTKIT_SKILL_HOST",
-            agentkit_tool_service
-            + "."
-            + region
-            + f".{default_sld}.com",
+            agentkit_tool_service + "." + region + f".{default_sld}.com",
         )
         scheme = os.getenv("AGENTKIT_TOP_SCHEME", "https").lower()
-        
+
         temp_url_res = ve_request(
             request_body=temp_url_request_body,
             action="GenTempTosObjectDownloadUrl",

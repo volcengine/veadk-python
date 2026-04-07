@@ -143,8 +143,7 @@ def register_skills_tool(
             temp_url_request_body = {
                 "SkillName": skill_name,
             }
-            logger.debug(f"GenTempTosObjectUrl request body: {temp_url_request_body}")
-           
+
             temp_url_res = ve_request(
                 request_body=temp_url_request_body,
                 action="GenTempTosObjectUrl",
