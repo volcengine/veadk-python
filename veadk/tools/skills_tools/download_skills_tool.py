@@ -28,6 +28,86 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _download_skill_via_vestack(
+    tos_path: str,
+    skill_name: str,
+    access_key: str,
+    secret_key: str,
+    session_token: str,
+    service: str,
+    region: str,
+    host: str,
+    scheme: str,
+    zip_path: Path,
+) -> bool:
+    import json
+    import requests
+    from veadk.utils.volcengine_sign import ve_request
+
+    try:
+        path_parts = tos_path.split("/")
+        if len(path_parts) >= 3:
+            skill_id = path_parts[1]
+            skill_version = path_parts[2]
+        else:
+            logger.error(f"Invalid TosPath format for skill '{skill_name}': {tos_path}")
+            return False
+    except Exception as e:
+        logger.error(f"Failed to parse TosPath for skill '{skill_name}': {e}")
+        return False
+
+    # Call GenTempTosObjectDownloadUrl API
+    temp_url_request_body = {
+        "SkillId": skill_id,
+        "SkillVersion": skill_version,
+    }
+
+    temp_url_res = ve_request(
+        request_body=temp_url_request_body,
+        action="GenTempTosObjectDownloadUrl",
+        ak=access_key,
+        sk=secret_key,
+        service=service,
+        version="2025-10-30",
+        region=region,
+        host=host,
+        header={"X-Security-Token": session_token},
+        scheme=scheme,
+    )
+
+    if isinstance(temp_url_res, str):
+        temp_url_res = json.loads(temp_url_res)
+
+    if (
+        "ResponseMetadata" in temp_url_res
+        and "Error" in temp_url_res["ResponseMetadata"]
+    ):
+        error_details = temp_url_res["ResponseMetadata"]["Error"]
+        logger.error(
+            f"Failed to get temporary download URL for '{skill_name}': {error_details}"
+        )
+        return False
+    else:
+        signed_url = temp_url_res.get("Result", {}).get("SignedUrl")
+        if not signed_url:
+            logger.error(
+                f"Failed to get SignedUrl from GenTempTosObjectDownloadUrl response: {temp_url_res}"
+            )
+            return False
+        else:
+            try:
+                response = requests.get(signed_url)
+                response.raise_for_status()
+                with open(zip_path, "wb") as f:
+                    f.write(response.content)
+                return True
+            except Exception as e:
+                logger.warning(
+                    f"Failed to download skill '{skill_name}' from minio: {e}"
+                )
+                return False
+
+
 def download_skills_tool(
     download_path: str, skill_names: Optional[list[str]] = None
 ) -> str:
@@ -92,6 +172,7 @@ def download_skills_tool(
 
         all_downloaded_skills = []
 
+        scheme = os.getenv("AGENTKIT_TOP_SCHEME", "https").lower()
         # Iterate through each skill space
         for skill_space_id in skill_space_ids_list:
             try:
@@ -112,6 +193,7 @@ def download_skills_tool(
                     region=region,
                     host=host,
                     header={"X-Security-Token": session_token},
+                    scheme=scheme,
                 )
 
                 if isinstance(response, str):
@@ -161,11 +243,26 @@ def download_skills_tool(
 
                     # Download zip file
                     zip_path = download_dir / f"{skill_name}.zip"
-                    success = tos_client.download(
-                        bucket_name=tos_bucket,
-                        object_key=tos_path,
-                        save_path=str(zip_path),
-                    )
+
+                    if cloud_provider == "vestack":
+                        success = _download_skill_via_vestack(
+                            tos_path=tos_path,
+                            skill_name=skill_name,
+                            access_key=access_key,
+                            secret_key=secret_key,
+                            session_token=session_token,
+                            service=service,
+                            region=region,
+                            host=host,
+                            scheme=scheme,
+                            zip_path=zip_path,
+                        )
+                    else:
+                        success = tos_client.download(
+                            bucket_name=tos_bucket,
+                            object_key=tos_path,
+                            save_path=str(zip_path),
+                        )
 
                     if not success:
                         logger.warning(f"Failed to download skill '{skill_name}'")
