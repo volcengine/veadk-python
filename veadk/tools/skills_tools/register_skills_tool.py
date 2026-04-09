@@ -111,46 +111,99 @@ def register_skills_tool(
             secret_key = cred.secret_access_key
             session_token = cred.session_token
 
-        res = ve_request(
-            request_body={},
-            action="GetCallerIdentity",
-            ak=access_key,
-            sk=secret_key,
-            service="sts",
-            version="2018-01-01",
-            region=region,
-            host="sts.volcengineapi.com"
-            if cloud_provider != "byteplus"
-            else "open.byteplusapi.com",
-            header={"X-Security-Token": session_token},
-        )
-        try:
-            account_id = res["Result"]["AccountId"]
-        except KeyError as e:
-            logger.error(
-                f"Error occurred while getting account id: {e}, response is {res}"
+        account_id = ""
+        if cloud_provider != "vestack":
+            res = ve_request(
+                request_body={},
+                action="GetCallerIdentity",
+                ak=access_key,
+                sk=secret_key,
+                service="sts",
+                version="2018-01-01",
+                region=region,
+                host="sts.volcengineapi.com"
+                if cloud_provider != "byteplus"
+                else "open.byteplusapi.com",
+                header={"X-Security-Token": session_token},
             )
-            return f"Error: Failed to get account id when registering skill '{skill_name}'."
+            try:
+                account_id = res["Result"]["AccountId"]
+            except KeyError as e:
+                logger.error(
+                    f"Error occurred while getting account id: {e}, response is {res}"
+                )
+                return f"Error: Failed to get account id when registering skill '{skill_name}'."
 
         tos_bucket = f"agentkit-platform-{region}-{account_id}-skill"
+        scheme = os.getenv("AGENTKIT_TOP_SCHEME", "https").lower()
+        if cloud_provider == "vestack":
+            import requests
 
-        tos_client = VeTOS(
-            ak=access_key,
-            sk=secret_key,
-            session_token=session_token,
-            bucket_name=tos_bucket,
-            region=region,
-        )
+            # Call GenTempTosObjectUrl API
+            temp_url_request_body = {
+                "SkillName": skill_name,
+            }
 
-        object_key = (
-            f"uploads/{datetime.now().strftime('%Y%m%d_%H%M%S')}/{skill_name}.zip"
-        )
-        tos_client.upload_file(
-            file_path=zip_file_path, bucket_name=tos_bucket, object_key=object_key
-        )
-        tos_url = tos_client.build_tos_url(
-            bucket_name=tos_bucket, object_key=object_key
-        )
+            temp_url_res = ve_request(
+                request_body=temp_url_request_body,
+                action="GenTempTosObjectUrl",
+                ak=access_key,
+                sk=secret_key,
+                service=agentkit_tool_service,
+                version="2025-10-30",
+                region=region,
+                host=agentkit_skill_host,
+                header={"X-Security-Token": session_token},
+                scheme=scheme,
+            )
+
+            if isinstance(temp_url_res, str):
+                temp_url_res = json.loads(temp_url_res)
+
+            if (
+                "ResponseMetadata" in temp_url_res
+                and "Error" in temp_url_res["ResponseMetadata"]
+            ):
+                error_details = temp_url_res["ResponseMetadata"]["Error"]
+                logger.error(
+                    f"Failed to get temporary upload URL for '{skill_name}': {error_details}"
+                )
+                return f"Failed to get temporary upload URL for '{skill_name}': {error_details}"
+
+            signed_url = temp_url_res.get("Result", {}).get("SignedUrl")
+            tos_url = temp_url_res.get("Result", {}).get("TosUrl")
+
+            if not signed_url or not tos_url:
+                logger.error(
+                    f"Failed to get SignedUrl or TosUrl from GenTempTosObjectUrl response: {temp_url_res}"
+                )
+                return f"Failed to get temporary upload URL for '{skill_name}'."
+
+            try:
+                with open(zip_file_path, "rb") as f:
+                    response = requests.put(signed_url, data=f)
+                    response.raise_for_status()
+            except Exception as e:
+                logger.error(f"Failed to upload skill '{skill_name}' to minio: {e}")
+                return f"Failed to upload skill '{skill_name}' to minio: {e}"
+        else:
+            tos_client = VeTOS(
+                ak=access_key,
+                sk=secret_key,
+                session_token=session_token,
+                bucket_name=tos_bucket,
+                region=region,
+            )
+
+            object_key = (
+                f"uploads/{datetime.now().strftime('%Y%m%d_%H%M%S')}/{skill_name}.zip"
+            )
+            tos_client.upload_file(
+                file_path=zip_file_path, bucket_name=tos_bucket, object_key=object_key
+            )
+            tos_url = tos_client.build_tos_url(
+                bucket_name=tos_bucket, object_key=object_key
+            )
 
         skill_space_ids = os.getenv("SKILL_SPACE_ID", "")
         skill_space_ids_list = [
@@ -173,6 +226,7 @@ def register_skills_tool(
             region=region,
             host=agentkit_skill_host,
             header={"X-Security-Token": session_token},
+            scheme=scheme,
         )
 
         if isinstance(response, str):
