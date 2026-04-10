@@ -87,6 +87,8 @@ class Agent(LlmAgent):
         example_store (Optional[BaseExampleProvider]): Example store for providing example Q/A.
         enable_shadowchar (bool): Whether to enable shadow character for the agent.
         enable_dynamic_load_skills (bool): Whether to enable dynamic loading of skills.
+        enable_responses_cache (bool): Whether Ark Responses API should reuse
+            `previous_response_id` and caching for multi-turn continuation.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
@@ -118,6 +120,7 @@ class Agent(LlmAgent):
     tracers: list[BaseTracer] = []
 
     enable_responses: bool = False
+    enable_responses_cache: bool = True
 
     context_cache_config: Optional[ContextCacheConfig] = None
 
@@ -194,6 +197,7 @@ class Agent(LlmAgent):
                     model=f"{self.model_provider}/{self.model_name}",
                     api_key=self.model_api_key,
                     api_base=self.model_api_base,
+                    enable_responses_cache=self.enable_responses_cache,
                     **self.model_extra_config,
                 )
             else:

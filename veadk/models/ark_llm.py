@@ -481,9 +481,16 @@ def _remove_caching(request_data: dict) -> None:
     request_data.pop("caching", None)
 
 
-def request_reorganization_by_ark(request_data: Dict) -> Dict:
+def request_reorganization_by_ark(
+    request_data: Dict, enable_responses_cache: bool = True
+) -> Dict:
     # 1. model provider
     request_data = get_model_without_provider(request_data)
+
+    if not enable_responses_cache:
+        request_data.pop("previous_response_id", None)
+        _remove_caching(request_data)
+        request_data.pop("store", None)
 
     # 2. filtered input
     request_data["input"] = filtered_inputs(
@@ -672,7 +679,9 @@ class ArkLlmClient:
     ) -> Union[ArkTypeResponse, AsyncStream[ResponseStreamEvent]]:
         # 1. Get request params
         api_base = kwargs.pop("api_base", DEFAULT_VIDEO_MODEL_API_BASE)
-        api_key = kwargs.pop("api_key", settings.model.api_key)
+        api_key = kwargs.pop("api_key", None)
+        if api_key is None:
+            api_key = settings.model.api_key
 
         # 2. Call openai responses
         client = AsyncArk(
@@ -689,6 +698,7 @@ class ArkLlm(Gemini):
     llm_client: ArkLlmClient = Field(default_factory=ArkLlmClient)
     _additional_args: Dict[str, Any] = None
     use_interactions_api: bool = True
+    enable_responses_cache: bool = True
 
     def __init__(self, **kwargs):
         # adk version check
@@ -699,12 +709,14 @@ class ArkLlm(Gemini):
                 "`pip install -U 'google-adk>=1.21.0'`"
             )
         super().__init__(**kwargs)
+        self.enable_responses_cache = kwargs.get("enable_responses_cache", True)
         drop_params = kwargs.pop("drop_params", None)
         self._additional_args = dict(kwargs)
         self._additional_args.pop("llm_client", None)
         self._additional_args.pop("messages", None)
         self._additional_args.pop("tools", None)
         self._additional_args.pop("stream", None)
+        self._additional_args.pop("enable_responses_cache", None)
         if drop_params is not None:
             self._additional_args["drop_params"] = drop_params
 
@@ -733,7 +745,7 @@ class ArkLlm(Gemini):
         # ------------------------------------------------------ #
         # get previous_response_id
         previous_response_id = None
-        if llm_request.previous_interaction_id:
+        if self.enable_responses_cache and llm_request.previous_interaction_id:
             previous_response_id = llm_request.previous_interaction_id
         responses_args = {
             "model": self.model,
@@ -786,7 +798,9 @@ class ArkLlm(Gemini):
     async def generate_content_via_responses(
         self, responses_args: dict, stream: bool = False
     ):
-        responses_args = request_reorganization_by_ark(responses_args)
+        responses_args = request_reorganization_by_ark(
+            responses_args, enable_responses_cache=self.enable_responses_cache
+        )
         if stream:
             responses_args["stream"] = True
             async for part in await self.llm_client.aresponses(**responses_args):
