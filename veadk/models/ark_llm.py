@@ -574,7 +574,8 @@ def record_logs(raw_response: ArkTypeResponse):
                 raw_response.incomplete_details, IncompleteDetails
             ):
                 error_message += f"The reason for the incomplete return is `{raw_response.incomplete_details.reason}`, content_filter: `{raw_response.incomplete_details.content_filter}`"
-            logger.debug(
+            # (important!) record raw_response.id as info level to track the response, which is critical for log correlation between Ark and LiteLLM
+            logger.info(
                 f"Ark response: Received Response from model `{raw_response.model}` with id `{raw_response.id}`. "
                 f"Status: `{raw_response.status}`. "
                 f"{error_message}"
