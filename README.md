@@ -102,6 +102,11 @@ Before commit or push your changes, please make sure the unittests are passed ,o
 pytest -n 16
 ```
 
+## Security and privacy
+
+This project takes security seriously.
+For vulnerability reporting and supported versions, see [SECURITY.md](SECURITY.md)
+
 ## Contact with us
 
 Join our discussion group by scanning the QR code below:
