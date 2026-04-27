@@ -99,6 +99,54 @@ def patch_adkwebserver_disable_openapi():
     google.adk.cli.adk_web_server.AdkWebServer.get_fast_api_app = wrapped_get_fast_api
 
 
+def patch_agent_loader_list_agents():
+    """
+    Monkey patch AgentLoader.list_agents to only return directories
+    that contain valid agent patterns.
+
+    This function filters out non-agent directories (like tools/, tests/, schemas/)
+    from the agent selection dropdown. A directory is considered a valid agent if
+    it contains any of the following:
+    - {dir}/agent.py file
+    - {dir}/__init__.py file
+    - {dir}/root_agent.yaml file
+    - {dir}.py file (as a module)
+    """
+    import os
+    from pathlib import Path
+
+    from google.adk.cli.utils.agent_loader import AgentLoader
+
+    original_list_agents = AgentLoader.list_agents
+
+    def filtered_list_agents(self):
+        base_path = Path.cwd() / self.agents_dir
+        all_dirs = [
+            x
+            for x in os.listdir(base_path)
+            if os.path.isdir(os.path.join(base_path, x))
+            and not x.startswith(".")
+            and x != "__pycache__"
+        ]
+
+        valid_agents = []
+        for d in all_dirs:
+            dir_path = base_path / d
+            if (dir_path / "agent.py").exists():
+                valid_agents.append(d)
+            elif (dir_path / "__init__.py").exists():
+                valid_agents.append(d)
+            elif (dir_path / "root_agent.yaml").exists():
+                valid_agents.append(d)
+            elif (base_path / f"{d}.py").exists():
+                valid_agents.append(d)
+
+        valid_agents.sort()
+        return valid_agents
+
+    AgentLoader.list_agents = filtered_list_agents
+
+
 @click.command(
     context_settings=dict(ignore_unknown_options=True, allow_extra_args=True)
 )
@@ -199,6 +247,7 @@ def web(
     )
 
     patch_adkwebserver_disable_openapi()
+    patch_agent_loader_list_agents()
 
     from google.adk.cli.cli_tools_click import cli_web
 
