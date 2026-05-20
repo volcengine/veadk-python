@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from veadk.realtime.live import DoubaoAsyncSession, ProtocolEvents
 from veadk.realtime import protocol
 from google.genai import types
@@ -111,21 +111,22 @@ async def test_receive(mock_session):
 
     for response_data, parse_data, expected in test_cases:
         mock_session._ws.recv = AsyncMock(return_value=response_data)
-        protocol.parse_response = MagicMock(return_value=parse_data)
-        async for msg in mock_session.receive():
-            if response_data["event"] == ProtocolEvents.ASR_INFO:
-                assert msg.server_content.interrupted == expected
-            elif response_data["event"] == ProtocolEvents.ASR_RESPONSE:
-                assert msg.server_content.input_transcription.text == expected
-            elif response_data["event"] == ProtocolEvents.TTS_RESPONSE:
-                assert (
-                    msg.server_content.model_turn.parts[0].inline_data.data == expected
-                )
-            elif response_data["event"] == ProtocolEvents.CHAT_RESPONSE:
-                assert msg.server_content.output_transcription.text == expected
-            elif response_data["event"] == ProtocolEvents.USAGE_RESPONSE:
-                assert msg.usage_metadata.tool_use_prompt_token_count == expected
-            break
+        with patch.object(protocol, "parse_response", return_value=parse_data):
+            async for msg in mock_session.receive():
+                if response_data["event"] == ProtocolEvents.ASR_INFO:
+                    assert msg.server_content.interrupted == expected
+                elif response_data["event"] == ProtocolEvents.ASR_RESPONSE:
+                    assert msg.server_content.input_transcription.text == expected
+                elif response_data["event"] == ProtocolEvents.TTS_RESPONSE:
+                    assert (
+                        msg.server_content.model_turn.parts[0].inline_data.data
+                        == expected
+                    )
+                elif response_data["event"] == ProtocolEvents.CHAT_RESPONSE:
+                    assert msg.server_content.output_transcription.text == expected
+                elif response_data["event"] == ProtocolEvents.USAGE_RESPONSE:
+                    assert msg.usage_metadata.tool_use_prompt_token_count == expected
+                break
 
 
 @pytest.mark.asyncio

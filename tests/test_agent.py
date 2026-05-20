@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import os
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, PropertyMock, patch
 
 from google.adk.agents.llm_agent import LlmAgent
 from google.adk.models.lite_llm import LiteLlm
@@ -76,19 +76,32 @@ def test_agent():
 
 @patch.dict("os.environ", {"MODEL_AGENT_API_KEY": "mock_api_key"})
 def test_agent_default_values():
-    agent = Agent()
+    with (
+        patch("veadk.agent.settings.model.name", new=DEFAULT_MODEL_AGENT_NAME),
+        patch("veadk.agent.settings.model.provider", new=DEFAULT_MODEL_AGENT_PROVIDER),
+        patch(
+            "veadk.agent.settings.model.api_base",
+            new=DEFAULT_MODEL_AGENT_API_BASE,
+        ),
+        patch(
+            "veadk.configs.model_configs.ModelConfig.api_key",
+            new_callable=PropertyMock,
+            return_value="mock_api_key",
+        ),
+    ):
+        agent = Agent()
 
-    assert agent.name == DEFAULT_AGENT_NAME
+        assert agent.name == DEFAULT_AGENT_NAME
 
-    assert agent.model_name == DEFAULT_MODEL_AGENT_NAME
-    assert agent.model_provider == DEFAULT_MODEL_AGENT_PROVIDER
-    assert agent.model_api_base == DEFAULT_MODEL_AGENT_API_BASE
+        assert agent.model_name == DEFAULT_MODEL_AGENT_NAME
+        assert agent.model_provider == DEFAULT_MODEL_AGENT_PROVIDER
+        assert agent.model_api_base == DEFAULT_MODEL_AGENT_API_BASE
 
-    assert agent.tools == []
-    assert agent.sub_agents == []
-    assert agent.knowledgebase is None
-    assert agent.long_term_memory is None
-    # assert agent.tracers == []
+        assert agent.tools == []
+        assert agent.sub_agents == []
+        assert agent.knowledgebase is None
+        assert agent.long_term_memory is None
+        # assert agent.tracers == []
 
 
 @patch.dict("os.environ", {"MODEL_AGENT_API_KEY": "mock_api_key"})
