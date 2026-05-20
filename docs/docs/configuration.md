@@ -60,6 +60,9 @@ volcengine:
 | Lark       | `TOOL_LARK_ENDPOINT`    | Lark 应用 ID（app_id）    |
 |            | `TOOL_LARK_API_KEY`     | Lark 应用密钥（app_secret） |
 |            | `TOOL_LARK_TOKEN`       | Lark 用户 token         |
+| Feishu Channel | `TOOL_FEISHU_CHANNEL_APP_ID` | 飞书机器人应用 ID（app_id） |
+|            | `TOOL_FEISHU_CHANNEL_APP_SECRET` | 飞书机器人应用密钥（app_secret） |
+|            | `TOOL_FEISHU_CHANNEL_TRANSPORT` | Channel 传输模式，默认 `ws` |
 | LAS        | `TOOL_LAS_URL`          | LAS SSE 服务地址（含 token） |
 |            | `TOOL_LAS_DATASET_ID`   | LAS 数据集 ID            |
 | VOD        | `TOOL_VOD_GROUPS`   | 视频编辑能力组               |

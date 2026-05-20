@@ -80,6 +80,21 @@ res = asyncio.run(agent.run("hello!"))
 print(res)
 ```
 
+## Feishu bot channel
+
+VeADK now provides `veadk.extensions.FeishuChannelExtension` for bridging a Feishu bot with a `Runner`. It maps `union_id` to `user_id`, and `thread_id` / `chat_id` to `session_id`, so VeADK memory and tracing can work directly in Feishu conversations.
+
+```python
+from veadk import Agent, Runner
+from veadk.extensions import FeishuChannelExtension
+
+agent = Agent()
+runner = Runner(agent=agent, app_name="feishu_demo")
+channel = FeishuChannelExtension(runner=runner)
+```
+
+Configure credentials with `TOOL_FEISHU_CHANNEL_APP_ID` and `TOOL_FEISHU_CHANNEL_APP_SECRET`, or in `config.yaml` under `tool.feishu_channel`.
+
 ## Command line tools
 
 VeADK provides several useful command line tools for faster deployment and optimization, such as:
