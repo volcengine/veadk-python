@@ -253,12 +253,16 @@ class FeishuChannelExtension:
                 "Install `veadk-python[extensions]` or `pip install lark-oapi`."
             ) from exc
 
-        resolved_app_id = app_id or os.getenv("TOOL_FEISHU_CHANNEL_APP_ID") or os.getenv(
-            "TOOL_LARK_ENDPOINT"
+        resolved_app_id = (
+            app_id
+            or os.getenv("TOOL_FEISHU_CHANNEL_APP_ID")
+            or os.getenv("TOOL_LARK_ENDPOINT")
         )
-        resolved_app_secret = app_secret or os.getenv(
-            "TOOL_FEISHU_CHANNEL_APP_SECRET"
-        ) or os.getenv("TOOL_LARK_API_KEY")
+        resolved_app_secret = (
+            app_secret
+            or os.getenv("TOOL_FEISHU_CHANNEL_APP_SECRET")
+            or os.getenv("TOOL_LARK_API_KEY")
+        )
 
         if not resolved_app_id or not resolved_app_secret:
             raise ValueError(
