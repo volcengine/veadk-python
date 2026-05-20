@@ -56,6 +56,11 @@ tool:
     endpoint:   # `app_id`
     api_key:    # `app_secret`
     token:      # `user_token`
+  # [optional] for Feishu bot channel extension based on lark_oapi.channel
+  feishu_channel:
+    app_id:
+    app_secret:
+    transport: ws  # `ws` | `webhook`
   # [optional] for Volcengine Lake AI Service https://www.volcengine.com/product/las
   mobile_use:
     tool_id: #https://console.volcengine.com/ACEP

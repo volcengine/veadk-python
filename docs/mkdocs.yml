@@ -55,6 +55,7 @@ nav:
       # - 最佳实践（记忆相关）: memory/best-practice-memory.md
     - 连接能力源——工具:
       - 内置工具: tools/builtin.md
+      - 飞书 Channel 扩展: tools/feishu-channel.md
       - 自定义工具: tools/function.md
       - 护栏工具: tools/guardrail.md
     - 连接数据源——知识库:
