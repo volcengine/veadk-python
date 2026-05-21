@@ -34,6 +34,10 @@ from veadk.evaluation import EvalSetRecorder
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.processors.base_run_processor import BaseRunProcessor
 from veadk.types import MediaMessage
+from veadk.utils.adk_compat import (
+    get_event_function_calls,
+    get_event_function_responses,
+)
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp, read_file_to_bytes
 
@@ -143,17 +147,19 @@ def intercept_new_message(process_func):
 
                 yield event
                 event_metadata = f"| agent_name: {event.author} , user_id: {user_id} , session_id: {session_id} , invocation_id: {event.invocation_id}"
-                if event.get_function_calls():
-                    for function_call in event.get_function_calls():
+                function_calls = get_event_function_calls(event)
+                function_responses = get_event_function_responses(event)
+                if function_calls:
+                    for function_call in function_calls:
                         logger.debug(f"Function call: {function_call} {event_metadata}")
-                elif event.get_function_responses():
-                    for function_response in event.get_function_responses():
+                elif function_responses:
+                    for function_response in function_responses:
                         logger.debug(
                             f"Function response: {function_response} {event_metadata}"
                         )
                 elif event.content is not None and event.content.parts:
                     for part in event.content.parts:
-                        if len(part.text.strip()) > 0:
+                        if part.text and len(part.text.strip()) > 0:
                             final_output = part.text
                             if part.thought:
                                 logger.debug(
@@ -286,7 +292,10 @@ async def _upload_image_to_tos(
             )
             part.inline_data.display_name = tos_url
     except Exception as e:
-        logger.error(f"Upload to TOS failed: {e}")
+        logger.exception(
+            "Upload inline data to TOS failed"
+            f" | app_name={app_name}, user_id={user_id}, session_id={session_id}, error={e}"
+        )
 
 
 class Runner(ADKRunner):

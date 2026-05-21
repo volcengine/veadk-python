@@ -294,8 +294,8 @@ class AuthRequestProcessor(BaseRunProcessor):
                     new_message=message,
                     run_config=RunConfig(streaming_mode=stream_mode),
                 ):
-                    if event.get_function_calls():
-                        for function_call in event.get_function_calls():
+                    if get_event_function_calls(event):
+                        for function_call in get_event_function_calls(event):
                             logger.debug(f"Function call: {function_call}")
                     elif event.content is not None:
                         yield event.content.parts[0].text
