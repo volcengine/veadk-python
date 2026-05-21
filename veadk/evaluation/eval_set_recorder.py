@@ -15,7 +15,12 @@
 import time
 from pathlib import Path
 import os
-from google.adk.cli.utils import evals
+# Note: ``from google.adk.cli.utils import evals`` is imported lazily inside
+# ``add_session_to_eval_set`` below. On google-adk 2.0, that submodule pulls
+# in ``gcs_eval_set_results_manager`` at top level, which requires
+# ``google-cloud-storage`` to be installed. We don't want loading
+# ``veadk.evaluation`` (or, transitively, ``veadk.Runner``) to fail for users
+# who never touch the eval recorder, so defer the import to the call site.
 from google.adk.evaluation.eval_case import EvalCase, SessionInput
 from google.adk.evaluation.local_eval_sets_manager import LocalEvalSetsManager
 from google.adk.sessions import BaseSessionService
@@ -89,6 +94,8 @@ class EvalSetRecorder(LocalEvalSetsManager):
         assert session, "Session not found."
 
         # Convert the session data to eval invocations
+        from google.adk.cli.utils import evals  # lazy: see top-of-file note
+
         invocations = evals.convert_session_to_eval_invocations(session)
 
         # Populate the session with initial session state.
