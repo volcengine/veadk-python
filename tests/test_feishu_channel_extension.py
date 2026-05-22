@@ -19,6 +19,11 @@ import pytest
 from veadk.extensions.feishu_channel import FeishuChannelExtension
 
 
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
 class FakeChannel:
     def __init__(self):
         self.handlers = {}
@@ -29,6 +34,25 @@ class FakeChannel:
 
     async def send(self, chat_id, body, options=None):
         self.sent_messages.append((chat_id, body, options))
+
+
+class FakeStreamController:
+    def __init__(self):
+        self.chunks = []
+
+    async def append(self, chunk):
+        self.chunks.append(chunk)
+
+
+class FakeStreamChannel(FakeChannel):
+    def __init__(self):
+        super().__init__()
+        self.stream_calls = []
+
+    async def stream(self, chat_id, spec, options=None):
+        controller = FakeStreamController()
+        await spec["markdown"](controller)
+        self.stream_calls.append((chat_id, controller.chunks, options))
 
 
 class FakeRunner:
@@ -44,6 +68,46 @@ class FakeRunner:
             }
         )
         return f"echo:{messages}"
+
+
+class FakeStreamingMemory:
+    def __init__(self):
+        self.sessions = []
+        self.session_service = object()
+
+    async def create_session(self, app_name, user_id, session_id):
+        self.sessions.append(
+            {"app_name": app_name, "user_id": user_id, "session_id": session_id}
+        )
+        return True
+
+
+class FakeStreamingRunner:
+    def __init__(self):
+        self.app_name = "stream_app"
+        self.short_term_memory = FakeStreamingMemory()
+        self.run_async_calls = []
+
+    async def run_async(self, user_id, session_id, new_message, run_config=None):
+        self.run_async_calls.append(
+            {
+                "user_id": user_id,
+                "session_id": session_id,
+                "new_message": new_message,
+                "run_config": run_config,
+            }
+        )
+        yield SimpleNamespace(
+            content=SimpleNamespace(
+                parts=[
+                    SimpleNamespace(text="hel", thought=False),
+                    SimpleNamespace(text="thinking", thought=True),
+                ]
+            )
+        )
+        yield SimpleNamespace(
+            content=SimpleNamespace(parts=[SimpleNamespace(text="lo", thought=False)])
+        )
 
 
 def build_message(**overrides):
@@ -73,7 +137,7 @@ def build_message(**overrides):
     return message
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_extension_uses_union_id_and_thread_id():
     runner = FakeRunner()
     channel = FakeChannel()
@@ -102,7 +166,7 @@ async def test_extension_uses_union_id_and_thread_id():
     ]
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_extension_falls_back_to_chat_id_when_thread_missing():
     runner = FakeRunner()
     channel = FakeChannel()
@@ -118,7 +182,7 @@ async def test_extension_falls_back_to_chat_id_when_thread_missing():
     assert runner.calls[0]["session_id"] == "oc_chat"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_extension_ignores_empty_message_by_default():
     runner = FakeRunner()
     channel = FakeChannel()
@@ -130,3 +194,26 @@ async def test_extension_ignores_empty_message_by_default():
 
     assert runner.calls == []
     assert channel.sent_messages == []
+
+
+@pytest.mark.anyio
+async def test_extension_streaming_uses_markdown_producer_controller():
+    runner = FakeStreamingRunner()
+    channel = FakeStreamChannel()
+    extension = FeishuChannelExtension(
+        runner=runner,
+        channel=channel,
+        streaming=True,
+    )
+
+    await extension._on_message(build_message())
+
+    assert runner.short_term_memory.sessions == [
+        {
+            "app_name": "stream_app",
+            "user_id": "on_union",
+            "session_id": "oc_chat",
+        }
+    ]
+    assert len(runner.run_async_calls) == 1
+    assert channel.stream_calls == [("oc_chat", ["hel", "lo"], {"reply_to": "om_001"})]
