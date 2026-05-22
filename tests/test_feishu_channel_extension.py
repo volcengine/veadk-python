@@ -216,6 +216,4 @@ async def test_extension_streaming_uses_markdown_producer_controller():
         }
     ]
     assert len(runner.run_async_calls) == 1
-    assert channel.stream_calls == [
-        ("oc_chat", ["hel", "lo"], {"reply_to": "om_001"})
-    ]
+    assert channel.stream_calls == [("oc_chat", ["hel", "lo"], {"reply_to": "om_001"})]

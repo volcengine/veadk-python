@@ -93,7 +93,10 @@ class FeishuChannelExtension:
         self.response_formatter = response_formatter or self.default_response_formatter
         self.reply_in_thread = reply_in_thread
         self.ignore_empty_messages = ignore_empty_messages
-        self.streaming = streaming or str(os.getenv("TOOL_FEISHU_CHANNEL_STREAMING", "")).lower() == "true"
+        self.streaming = (
+            streaming
+            or str(os.getenv("TOOL_FEISHU_CHANNEL_STREAMING", "")).lower() == "true"
+        )
 
         if channel is not None:
             self.channel = channel
@@ -193,11 +196,11 @@ class FeishuChannelExtension:
 
             if self.runner.short_term_memory:
                 await self.runner.short_term_memory.create_session(
-                    app_name=self.runner.app_name, 
-                    user_id=context.user_id, 
-                    session_id=context.session_id
+                    app_name=self.runner.app_name,
+                    user_id=context.user_id,
+                    session_id=context.session_id,
                 )
-                
+
             converted_messages = _convert_messages(
                 context.text, self.runner.app_name, context.user_id, context.session_id
             )
@@ -219,7 +222,7 @@ class FeishuChannelExtension:
                             for part in event.content.parts:
                                 if not getattr(part, "thought", False) and part.text:
                                     await stream.append(part.text)
-            
+
             await self._maybe_await(
                 self.channel.stream(
                     context.chat_id,
