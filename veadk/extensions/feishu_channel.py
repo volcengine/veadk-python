@@ -84,6 +84,7 @@ class FeishuChannelExtension:
         reply_in_thread: bool = True,
         ignore_empty_messages: bool = True,
         channel_kwargs: dict[str, Any] | None = None,
+        streaming: bool = False,
     ) -> None:
         self.runner = runner
         self.session_id_factory = session_id_factory or self.default_session_id_factory
@@ -92,6 +93,7 @@ class FeishuChannelExtension:
         self.response_formatter = response_formatter or self.default_response_formatter
         self.reply_in_thread = reply_in_thread
         self.ignore_empty_messages = ignore_empty_messages
+        self.streaming = streaming or str(os.getenv("TOOL_FEISHU_CHANNEL_STREAMING", "")).lower() == "true"
 
         if channel is not None:
             self.channel = channel
@@ -167,8 +169,64 @@ class FeishuChannelExtension:
 
         context = self.build_message_context(message=message, text=text)
 
+        send_options = {}
+        if self.reply_in_thread and context.message_id:
+            send_options["reply_to"] = context.message_id
+
         if self.message_handler is not None:
             response_text = await self._maybe_await(self.message_handler(context))
+            if not response_text:
+                return
+
+            await self._maybe_await(
+                self.channel.send(
+                    context.chat_id,
+                    self.response_formatter(str(response_text)),
+                    send_options,
+                )
+            )
+        elif getattr(self, "streaming", False) and hasattr(self.channel, "stream"):
+            from google.adk.agents import RunConfig
+            from google.adk.agents.run_config import StreamingMode
+            from veadk.config import getenv
+            from veadk.runner import _convert_messages
+
+            if self.runner.short_term_memory:
+                await self.runner.short_term_memory.create_session(
+                    app_name=self.runner.app_name, 
+                    user_id=context.user_id, 
+                    session_id=context.session_id
+                )
+                
+            converted_messages = _convert_messages(
+                context.text, self.runner.app_name, context.user_id, context.session_id
+            )
+
+            run_config = RunConfig(
+                streaming_mode=StreamingMode.SSE,
+                max_llm_calls=int(getenv("MODEL_AGENT_MAX_LLM_CALLS", 100)),
+            )
+
+            async def stream_to_feishu(stream):
+                for converted_message in converted_messages:
+                    async for event in self.runner.run_async(
+                        user_id=context.user_id,
+                        session_id=context.session_id,
+                        new_message=converted_message,
+                        run_config=run_config,
+                    ):
+                        if event.content and event.content.parts:
+                            for part in event.content.parts:
+                                if not getattr(part, "thought", False) and part.text:
+                                    await stream.append(part.text)
+            
+            await self._maybe_await(
+                self.channel.stream(
+                    context.chat_id,
+                    {"markdown": stream_to_feishu},
+                    send_options,
+                )
+            )
         else:
             response_text = await self.runner.run(
                 messages=context.text,
@@ -176,20 +234,16 @@ class FeishuChannelExtension:
                 session_id=context.session_id,
             )
 
-        if not response_text:
-            return
+            if not response_text:
+                return
 
-        send_options = {}
-        if self.reply_in_thread and context.message_id:
-            send_options["reply_to"] = context.message_id
-
-        await self._maybe_await(
-            self.channel.send(
-                context.chat_id,
-                self.response_formatter(str(response_text)),
-                send_options,
+            await self._maybe_await(
+                self.channel.send(
+                    context.chat_id,
+                    self.response_formatter(str(response_text)),
+                    send_options,
+                )
             )
-        )
 
     def build_message_context(
         self, message: Any, text: str | None = None
