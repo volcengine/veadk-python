@@ -38,6 +38,7 @@ tool:
     app_id: cli_xxx
     app_secret: xxx
     transport: ws
+    streaming: true
 ```
 
 ## 最小示例
