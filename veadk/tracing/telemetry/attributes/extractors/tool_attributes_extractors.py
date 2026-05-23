@@ -126,6 +126,8 @@ def tool_gen_ai_tool_output(params: ToolAttributesParams) -> ExtractorResponse:
     Returns:
         ExtractorResponse: Response containing JSON serialized tool output data
     """
+    if params.function_response_event is None:
+        return ExtractorResponse(content="<unknown_tool_output>")
     function_response = params.function_response_event.get_function_responses()[
         0
     ].model_dump()

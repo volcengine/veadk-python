@@ -156,9 +156,10 @@ class ToolAttributesParams:
         args: Dictionary of arguments that were passed to the tool function
             during execution, including parameter names and values
         function_response_event: Event object containing the tool's execution
-            results, return values, timing information, and any error details
+            results, return values, timing information, and any error details.
+            May be None if tool execution raised an exception.
     """
 
     tool: BaseTool
     args: dict[str, Any]
-    function_response_event: Event
+    function_response_event: Event | None

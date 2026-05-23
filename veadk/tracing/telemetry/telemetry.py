@@ -88,7 +88,7 @@ def _upload_call_llm_metrics(
 def _upload_tool_call_metrics(
     tool: BaseTool,
     args: dict[str, Any],
-    function_response_event: Event,
+    function_response_event: Event | None,
 ):
     """Upload tool call metrics to the global meter uploader.
 
@@ -321,7 +321,7 @@ def set_common_attributes_on_tool_span(current_span: _Span) -> None:
 def trace_tool_call(
     tool: BaseTool,
     args: dict[str, Any],
-    function_response_event: Event,
+    function_response_event: Event | None,
     **kwargs,
 ) -> None:
     """Trace a tool function call with comprehensive telemetry data.
