@@ -67,6 +67,9 @@ VeADK 集成了以下火山引擎工具：
 | `image_edit` | [编辑图片](https://www.volcengine.com/docs/82379/1541523)（图生图）。 | `from veadk.tools.builtin_tools.image_edit import image_edit` |
 | `video_generate` | 根据文本描述[生成视频](https.www.volcengine.com/docs/82379/1520757)。 | `from veadk.tools.builtin_tools.video_generate import video_generate` |
 | `run_code` | 在 [AgentKit 沙箱](https://console.volcengine.com/agentkit-ppe/region:agentkit-ppe+cn-beijing/builtintools)中执行代码。 | `from veadk.tools.builtin_tools.run_code import run_code` |
+| `execute_skills` | 在预制技能沙箱中远程执行 `agent.py` 工作流。 | `from veadk.tools.builtin_tools.execute_skills import execute_skills` |
+| `coding` | 在预制 OpenCode 沙箱中执行代码生成工作流。 | `from veadk.tools.builtin_tools.coding import coding` |
+| `run_sandbox_agent` | 指定任意 `tool_id` 在远端 AgentKit 沙箱中执行 `agent.py`。 | `from veadk.tools.builtin_tools.run_sandbox_agent import run_sandbox_agent` |
 | `lark` | 集成[飞书开放能力](https://open.larkoffice.com/document/uAjLw4CM/ukTMukTMukTM/mcp_integration/mcp_installation)，实现文档处理、会话管理等。 | `from veadk.tools.builtin_tools.lark import lark` |
 | `las` | 基于[火山引擎 AI 多模态数据湖服务 LAS](https://www.volcengine.com/mcp-marketplace) 进行数据管理。 | `from veadk.tools.builtin_tools.las import las` |
 | `mobile_run` | 手机指令执行   | `from veadk.tools.builtin_tools.mobile_run import create_mobile_use_tool` |
@@ -183,7 +186,10 @@ VeADK 集成了以下火山引擎工具：
 
     以下是必须在环境变量里面的配置项：
 
-    - `AGENTKIT_TOOL_ID`：用于调用火山引擎AgentKit Tools的沙箱环境Id
+    - `AGENTKIT_TOOL_ID`：默认的 AgentKit 沙箱环境 Id，会作为所有沙箱工具的兜底配置
+    - `AGENTKIT_TOOL_ID_SCRIPT`：`run_code` 专用沙箱环境 Id，未配置时回退到 `AGENTKIT_TOOL_ID`
+    - `AGENTKIT_TOOL_ID_SKILLS`：`execute_skills` 专用沙箱环境 Id，未配置时回退到 `AGENTKIT_TOOL_ID`
+    - `AGENTKIT_TOOL_ID_OPENCODE`：`coding` 专用沙箱环境 Id，未配置时回退到 `AGENTKIT_TOOL_ID`
     - `AGENTKIT_TOOL_HOST`：用于调用火山引擎AgentKit Tools的EndPoint
     - `AGENTKIT_TOOL_SERVICE_CODE`：用于调用AgentKit Tools的ServiceCode
     - `AGENTKIT_TOOL_SCHEME`：用于切换调用 AgentKit Tools 的协议，允许 `http`/`https`，默认 `https`
@@ -204,6 +210,11 @@ VeADK 集成了以下火山引擎工具：
         name: doubao-seed-1-6-250615
         api_base: https://ark.cn-beijing.volces.com/api/v3/
         api_key: your-api-key-here
+    agentkit:
+      tool_id: your-default-tool-id
+      tool_id_script: your-script-tool-id
+      tool_id_skills: your-skills-tool-id
+      tool_id_opencode: your-opencode-tool-id
     volcengine:
         # [optional] for Viking DB and `web_search` tool
       access_key: you-access-key-here

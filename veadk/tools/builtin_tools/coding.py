@@ -14,44 +14,20 @@
 
 from google.adk.tools import ToolContext
 
-from veadk.tools.builtin_tools._agentkit import (
-    get_agentkit_account_id,
-    resolve_agentkit_tool_id,
-)
+from veadk.tools.builtin_tools._agentkit import resolve_agentkit_tool_id
 from veadk.tools.builtin_tools.run_sandbox_agent import run_sandbox_agent
-from veadk.utils.logger import get_logger
-
-logger = get_logger(__name__)
 
 
-def execute_skills(
+def coding(
     workflow_prompt: str,
     tool_context: ToolContext = None,
+    timeout: int = 900,
 ) -> str:
-    """Execute skills in a sandbox and return the output.
-
-    Execute skills in a remote sandbox amining to provide isolation and security.
-
-    Args:
-        workflow_prompt (str): instruction of workflow
-
-    Returns:
-        str: The output of the code execution.
-    """
-    timeout = 900
-    tool_id = resolve_agentkit_tool_id("AGENTKIT_TOOL_ID_SKILLS")
-    account_id = get_agentkit_account_id(tool_context.state if tool_context else None)
-
-    extra_env_vars = {}
-    if account_id:
-        extra_env_vars["TOS_SKILLS_DIR"] = (
-            f"tos://agentkit-platform-{account_id}/skills/"
-        )
-
+    """Create code with the pre-configured OpenCode AgentKit sandbox."""
+    tool_id = resolve_agentkit_tool_id("AGENTKIT_TOOL_ID_OPENCODE")
     return run_sandbox_agent(
         workflow_prompt=workflow_prompt,
         tool_id=tool_id,
         tool_context=tool_context,
         timeout=timeout,
-        extra_env_vars=extra_env_vars,
     )

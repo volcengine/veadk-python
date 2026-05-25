@@ -12,15 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
-import os
-
 from langchain.tools import ToolRuntime, tool
 
-from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
-from veadk.config import getenv
+from veadk.tools.builtin_tools._agentkit import (
+    get_agentkit_endpoint_config,
+    invoke_agentkit_run_code,
+    resolve_agentkit_tool_id,
+)
 from veadk.utils.logger import get_logger
-from veadk.utils.volcengine_sign import ve_request
 
 logger = get_logger(__name__)
 
@@ -39,18 +38,8 @@ def run_code(code: str, language: str, runtime: ToolRuntime, timeout: int = 30) 
         str: The output of the code execution.
     """
 
-    tool_id = getenv("AGENTKIT_TOOL_ID")
-
-    service = getenv(
-        "AGENTKIT_TOOL_SERVICE_CODE", "agentkit"
-    )  # temporary service for code run tool
-    region = getenv("AGENTKIT_TOOL_REGION", "cn-beijing")
-    host = getenv(
-        "AGENTKIT_TOOL_HOST", service + "." + region + ".volces.com"
-    )  # temporary host for code run tool
-    scheme = os.getenv("AGENTKIT_TOOL_SCHEME", "https").lower()
-    if scheme not in {"http", "https"}:
-        scheme = "https"
+    tool_id = resolve_agentkit_tool_id("AGENTKIT_TOOL_ID_SCRIPT")
+    service, region, host, _ = get_agentkit_endpoint_config()
     logger.debug(f"tools endpoint: {host}")
 
     session_id = runtime.context.session_id  # type: ignore
@@ -64,44 +53,12 @@ def run_code(code: str, language: str, runtime: ToolRuntime, timeout: int = 30) 
         f"Running code in language: {language}, session_id={session_id}, code={code}, tool_id={tool_id}, host={host}, service={service}, region={region}, timeout={timeout}"
     )
 
-    header = {}
-
-    logger.debug("Get AK/SK from tool context failed.")
-    ak = os.getenv("VOLCENGINE_ACCESS_KEY")
-    sk = os.getenv("VOLCENGINE_SECRET_KEY")
-    if not (ak and sk):
-        logger.debug(
-            "Get AK/SK from environment variables failed. Try to use credential from Iam."
-        )
-        credential = get_credential_from_vefaas_iam()
-        ak = credential.access_key_id
-        sk = credential.secret_access_key
-        header = {"X-Security-Token": credential.session_token}
-    else:
-        logger.debug("Successfully get AK/SK from environment variables.")
-
-    res = ve_request(
-        request_body={
-            "ToolId": tool_id,
-            "UserSessionId": tool_user_session_id,
-            "OperationType": "RunCode",
-            "OperationPayload": json.dumps(
-                {
-                    "code": code,
-                    "timeout": timeout,
-                    "kernel_name": language,
-                }
-            ),
-        },
-        action="InvokeTool",
-        ak=ak,
-        sk=sk,
-        service=service,
-        version="2025-10-30",
-        region=region,
-        host=host,
-        header=header,
-        scheme=scheme,  # type: ignore
+    res = invoke_agentkit_run_code(
+        tool_id=tool_id,
+        tool_user_session_id=tool_user_session_id,
+        code=code,
+        timeout=timeout,
+        kernel_name=language,
     )
     logger.debug(f"Invoke run code response: {res}")
 

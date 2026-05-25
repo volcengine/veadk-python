@@ -37,6 +37,22 @@ volcengine:
   access_key:
   secret_key:
 
+agentkit:
+  # [optional] default AgentKit tool id fallback for all sandbox tools
+  tool_id:
+  # [optional] dedicated tool id for `run_code`
+  tool_id_script:
+  # [optional] dedicated tool id for `execute_skills`
+  tool_id_skills:
+  # [optional] dedicated tool id for `coding`
+  tool_id_opencode:
+  # [optional] AgentKit endpoint configs
+  tool_host:
+  tool_service_code: agentkit
+  tool_region: cn-beijing
+  tool_scheme: https
+  top_scheme: https
+
 tool:
   # [optional] https://console.volcengine.com/ask-echo/my-agent
   vesearch: 
