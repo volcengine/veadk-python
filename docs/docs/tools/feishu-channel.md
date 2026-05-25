@@ -29,6 +29,8 @@ pip install lark-oapi
 - `TOOL_FEISHU_CHANNEL_APP_ID`
 - `TOOL_FEISHU_CHANNEL_APP_SECRET`
 - `TOOL_FEISHU_CHANNEL_TRANSPORT`，默认 `ws`
+- `TOOL_FEISHU_CHANNEL_STREAMING`，是否开启流式输出，默认 `false`
+- `TOOL_FEISHU_CHANNEL_REACTIONS`，是否在收到消息时回复“收到”表情，默认 `false`
 
 或在 `config.yaml` 中配置：
 
@@ -39,6 +41,7 @@ tool:
     app_secret: xxx
     transport: ws
     streaming: true
+    reactions: true
 ```
 
 ## 最小示例

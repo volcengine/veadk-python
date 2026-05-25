@@ -60,6 +60,9 @@ class FeishuMessageContext:
     text: str
 
 
+FEISHU_EMOJI_ONE_SECOND = "OneSecond"
+
+
 class FeishuChannelExtension:
     """Bridge a Feishu bot channel with a VeADK runner.
 
@@ -85,6 +88,7 @@ class FeishuChannelExtension:
         ignore_empty_messages: bool = True,
         channel_kwargs: dict[str, Any] | None = None,
         streaming: bool = False,
+        reactions: bool = False,
     ) -> None:
         self.runner = runner
         self.session_id_factory = session_id_factory or self.default_session_id_factory
@@ -93,6 +97,10 @@ class FeishuChannelExtension:
         self.response_formatter = response_formatter or self.default_response_formatter
         self.reply_in_thread = reply_in_thread
         self.ignore_empty_messages = ignore_empty_messages
+        self.reactions = (
+            reactions
+            or str(os.getenv("TOOL_FEISHU_CHANNEL_REACTIONS", "")).lower() == "true"
+        )
         self.streaming = (
             streaming
             or str(os.getenv("TOOL_FEISHU_CHANNEL_STREAMING", "")).lower() == "true"
@@ -171,6 +179,42 @@ class FeishuChannelExtension:
             return
 
         context = self.build_message_context(message=message, text=text)
+
+        if self.reactions and context.message_id:
+            try:
+                import lark_oapi.api.im.v1 as lark_im
+
+                emoji = (
+                    lark_im.Emoji.builder().emoji_type(FEISHU_EMOJI_ONE_SECOND).build()
+                )
+                request = (
+                    lark_im.CreateMessageReactionRequest.builder()
+                    .message_id(context.message_id)
+                    .request_body(
+                        lark_im.CreateMessageReactionRequestBody.builder()
+                        .reaction_type(emoji)
+                        .build()
+                    )
+                    .build()
+                )
+
+                if hasattr(self.channel, "client"):
+                    response = await self._maybe_await(
+                        self.channel.client.im.v1.message_reaction.create(request)
+                    )
+
+                    if not response.success():
+                        logger.error(
+                            f"Failed to add reaction to message {context.message_id}: {response.code} {response.msg}"
+                        )
+                else:
+                    logger.warning(
+                        "Channel has no client attribute, cannot send reaction"
+                    )
+            except Exception as e:
+                logger.error(
+                    f"Failed to add reaction to message {context.message_id}: {e}"
+                )
 
         send_options = {}
         if self.reply_in_thread and context.message_id:
