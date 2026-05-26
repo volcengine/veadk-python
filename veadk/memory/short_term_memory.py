@@ -23,6 +23,9 @@ from google.adk.sessions import (
 )
 from pydantic import BaseModel, Field, PrivateAttr
 
+from veadk.memory.short_term_memory_backends.api_backend import (
+    ApiSTMBackend,
+)
 from veadk.memory.short_term_memory_backends.mysql_backend import (
     MysqlSTMBackend,
 )
@@ -60,11 +63,12 @@ class ShortTermMemory(BaseModel):
     The short term memory represents the context of the agent model. All content in the short term memory will be sent to agent model directly, including the system prompt, historical user prompt, and historical model responses.
 
     Attributes:
-        backend (Literal["local", "mysql", "sqlite", "postgresql", "database"]):
+        backend (Literal["local", "mysql", "sqlite", "postgresql", "api", "database"]):
             The backend of short term memory:
             - `local` for in-memory storage
             - `mysql` for mysql / PostgreSQL storage
             - `sqlite` for locally sqlite storage
+            - `api` for remote API storage
         backend_configs (dict): Configuration dict for init short term memory backend.
         db_url (str):
             Database connection url for init short term memory backend.
@@ -76,7 +80,9 @@ class ShortTermMemory(BaseModel):
             A callback to be called after loading memory from the backend. The callback function should accept `Session` as an input.
     """
 
-    backend: Literal["local", "mysql", "sqlite", "postgresql", "database"] = "local"
+    backend: Literal["local", "mysql", "sqlite", "postgresql", "api", "database"] = (
+        "local"
+    )
 
     backend_configs: dict = Field(default_factory=dict)
 
@@ -122,6 +128,10 @@ class ShortTermMemory(BaseModel):
                 case "postgresql":
                     self._session_service = PostgreSqlSTMBackend(
                         db_kwargs=self.db_kwargs, **self.backend_configs
+                    ).session_service
+                case "api":
+                    self._session_service = ApiSTMBackend(
+                        **self.backend_configs
                     ).session_service
 
         if self.after_load_memory_callback:

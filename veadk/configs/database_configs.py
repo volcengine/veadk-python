@@ -89,6 +89,18 @@ class RedisConfig(BaseSettings):
     """STS token for Redis auth, not supported yet."""
 
 
+class ApiSessionConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="DATABASE_API_SESSION_")
+
+    service: str = "arkclaw"
+
+    version: str = "2026-03-01"
+
+    region: str = "cn-beijing"
+
+    account_id: str = ""
+
+
 class Mem0Config(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="DATABASE_MEM0_")
 
