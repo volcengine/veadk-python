@@ -313,7 +313,9 @@ class Agent(LlmAgent):
             self.load_skills()
             if self.enable_skills_checklist:
                 logger.info("Skills checklist enabled")
-                from veadk.skills.utils import create_init_skill_check_list_callback
+                from veadk.skills.utils import (
+                    create_init_skill_check_list_callback,
+                )
 
                 init_callback = create_init_skill_check_list_callback(
                     self._skills_with_checklist
@@ -374,8 +376,8 @@ class Agent(LlmAgent):
     def load_skills(self):
         from pathlib import Path
 
-        from veadk.skills.skill import Skill
         from veadk.skills.check_skills_callback import check_skills
+        from veadk.skills.skill import Skill
         from veadk.skills.utils import (
             load_skills_from_cloud,
             load_skills_from_directory,
@@ -390,8 +392,10 @@ class Agent(LlmAgent):
             if not tool_id:
                 self.skills_mode = "local"
             else:
+                from veadk.auth.veauth.utils import (
+                    get_credential_from_vefaas_iam,
+                )
                 from veadk.utils.volcengine_sign import ve_request
-                from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 
                 ak = os.getenv("VOLCENGINE_ACCESS_KEY")
                 sk = os.getenv("VOLCENGINE_SECRET_KEY")
@@ -419,7 +423,8 @@ class Agent(LlmAgent):
                 service = os.getenv("AGENTKIT_TOOL_SERVICE_CODE", "agentkit")
                 region = os.getenv("AGENTKIT_TOOL_REGION", default_region)
                 host = os.getenv(
-                    "AGENTKIT_SKILL_HOST", service + "." + region + f".{sld}.com"
+                    "AGENTKIT_SKILL_HOST",
+                    service + "." + region + f".{sld}.com",
                 )
 
                 res = ve_request(
@@ -528,7 +533,9 @@ class Agent(LlmAgent):
         has_video_task_query = "video_task_query" in tool_names
 
         if has_video_generate and not has_video_task_query:
-            from veadk.tools.builtin_tools.video_generate import video_task_query
+            from veadk.tools.builtin_tools.video_generate import (
+                video_task_query,
+            )
 
             logger.warning(
                 "video_generate tool is mounted but video_task_query is not. "
@@ -623,7 +630,7 @@ class Agent(LlmAgent):
                 return SupervisorAutoFlow(supervised_agent=self)
             return AutoFlow()
 
-    async def run(self, **kwargs):
-        raise NotImplementedError(
-            "Run method in VeADK agent is deprecated since version 0.5.6. Please use runner.run_async instead. Ref: https://agentkit.gitbook.io/docs/runner/overview"
-        )
+    # async def run(self, **kwargs):
+    #     raise NotImplementedError(
+    #         "Run method in VeADK agent is deprecated since version 0.5.6. Please use runner.run_async instead. Ref: https://agentkit.gitbook.io/docs/runner/overview"
+    #     )
