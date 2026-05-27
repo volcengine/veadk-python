@@ -1,6 +1,6 @@
 [project]
 name = "veadk-python"
-version = "0.5.34"
+version = "0.5.35"
 description = "Volcengine agent development kit, integrations with Volcengine cloud services."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -15,7 +15,7 @@ dependencies = [
     "pydantic-settings==2.10.1", # Config management
     "a2a-sdk==0.3.7", # For Google Agent2Agent protocol
     "deprecated==1.2.18",
-    "google-adk==1.19.0", # For basic agent architecture
+    "google-adk==1.32.0", # For basic agent architecture
     "litellm>=1.74.3,<=1.82.6", # For model inference
     "loguru==0.7.3", # For better logging
     "opentelemetry-exporter-otlp==1.37.0",
@@ -26,7 +26,7 @@ dependencies = [
     "agent-pilot-sdk==0.1.2", # Prompt optimization by Volcengine AgentPilot/PromptPilot toolkits
     "fastmcp>=2.12.3", # For running MCP
     "trustedmcp==0.0.5", # For running TrustedMCP
-    "mcp==1.23.0", # There might be some async generator problem logs in mcp 1.25.0
+    "mcp==1.26.0", # Bumped to satisfy google-adk 1.32.0 requirement
     "cookiecutter==2.6.0", # For cloud deploy
     "omegaconf==2.3.0", # For agent builder
     "psycopg2-binary==2.9.10", # For PostgreSQL database (short term memory)
