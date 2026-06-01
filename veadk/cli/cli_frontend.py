@@ -90,6 +90,19 @@ def _resolve_frontend_dir(arg: str | None) -> Path:
     default=None,
     help="OAuth2 redirect URI. Defaults to http://{host}:{port}/oauth2/callback.",
 )
+@click.option(
+    "--oauth2-provider",
+    default="veidentity",
+    show_default=True,
+    help="SSO provider id shown on the login page (e.g. veidentity, github, "
+    "google). Drives the login button's label/icon.",
+)
+@click.option(
+    "--oauth2-provider-label",
+    default=None,
+    help="Display label for the SSO login button (defaults to a name derived "
+    "from --oauth2-provider).",
+)
 def frontend(
     agents_dir: str,
     frontend_dir: str | None,
@@ -99,6 +112,8 @@ def frontend(
     oauth2_user_pool: str | None,
     oauth2_user_pool_client: str | None,
     oauth2_redirect_uri: str | None,
+    oauth2_provider: str,
+    oauth2_provider_label: str | None,
 ) -> None:
     """Launch the A2UI web UI backed by the ADK agent API server."""
     from google.adk.cli.fast_api import get_fast_api_app
@@ -123,10 +138,29 @@ def frontend(
         )
         # Allow cookies over http for local/non-TLS serving.
         oauth2_config.cookie_secure = False
-        setup_oauth2(app, oauth2_config)
+
+        # Expose the configured provider(s) to the login page (unauthenticated).
+        label = oauth2_provider_label or oauth2_provider.replace("_", " ").title()
+        providers = [
+            {"id": oauth2_provider, "label": label, "loginUrl": "/oauth2/login"}
+        ]
+
+        @app.get("/web/auth-config")
+        async def _web_auth_config():
+            return {"providers": providers}
+
+        # Protect the API but exempt the SPA shell + this config endpoint so the
+        # app can load and render its own login page when not signed in.
+        setup_oauth2(
+            app,
+            oauth2_config,
+            exempt_paths={"/", "/index.html", "/favicon.ico", "/web/auth-config"},
+            exempt_prefixes={"/assets"},
+        )
         logger.info(
-            f"OAuth2 SSO enabled (user_pool={oauth2_user_pool}, "
-            f"client={oauth2_user_pool_client}, redirect_uri={redirect_uri})"
+            f"OAuth2 SSO enabled (provider={oauth2_provider}, "
+            f"user_pool={oauth2_user_pool}, client={oauth2_user_pool_client}, "
+            f"redirect_uri={redirect_uri})"
         )
 
     if dev:

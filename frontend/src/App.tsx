@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Check, Copy } from "lucide-react";
+import { motion } from "motion/react";
 import {
   createSession,
   deleteSession,
@@ -15,6 +16,7 @@ import { Blocks, ThinkingPlaceholder } from "./ui/Blocks";
 import { Composer } from "./ui/Composer";
 import { TraceDrawer } from "./ui/TraceDrawer";
 import { LoginPage } from "./ui/LoginPage";
+import { Markdown } from "./ui/Markdown";
 import { useStickToBottom } from "./ui/useStickToBottom";
 import { login, logout, resolveIdentity, type AuthStatus } from "./adk/identity";
 import type { A2uiAction, A2uiComponent } from "./a2ui/types";
@@ -288,18 +290,32 @@ export default function App() {
             if (turn.role === "user") {
               const text = turn.blocks.map((b) => ("text" in b ? b.text : "")).join("");
               return (
-                <div key={i} className="turn turn--user">
-                  <div className="bubble">{text}</div>
+                <motion.div
+                  key={i}
+                  className="turn turn--user"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.2, ease: "easeOut" }}
+                >
+                  <div className="bubble">
+                    <Markdown text={text} />
+                  </div>
                   <div className="turn-actions turn-actions--right">
                     {turn.meta?.ts && <span className="meta-text">{fmtTime(turn.meta.ts)}</span>}
                     <CopyButton text={text} />
                   </div>
-                </div>
+                </motion.div>
               );
             }
             const pending = turn.blocks.length === 0;
             return (
-              <div key={i} className="turn turn--assistant">
+              <motion.div
+                key={i}
+                className="turn turn--assistant"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.2, ease: "easeOut" }}
+              >
                 {pending ? (
                   isLast && busy ? <ThinkingPlaceholder /> : null
                 ) : (
@@ -320,7 +336,7 @@ export default function App() {
                     </div>
                   </>
                 )}
-              </div>
+              </motion.div>
             );
           })}
                 </div>

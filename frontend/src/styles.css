@@ -62,7 +62,7 @@ body {
   display: flex;
   flex-direction: column;
   background: hsl(var(--sidebar));
-  border-right: 1px solid hsl(var(--border));
+  border-right: 1px dashed hsl(var(--border));
 }
 .sidebar-top {
   display: flex;
@@ -246,7 +246,7 @@ body {
 .turn--user { align-items: flex-end; }
 .turn--assistant { align-items: flex-start; }
 
-.bubble { white-space: pre-wrap; line-height: 1.65; font-size: 15px; }
+.bubble { line-height: 1.65; font-size: 14px; }
 .turn--user .bubble {
   max-width: 85%;
   padding: 10px 16px;
@@ -254,6 +254,75 @@ body {
   background: hsl(var(--secondary));
 }
 .turn--assistant .bubble { max-width: 100%; }
+
+/* ---------- markdown (used by both user + assistant message bodies) ---------- */
+.md { font-size: 14px; line-height: 1.65; }
+/* tight vertical rhythm: no margin on first/last child so bubbles hug content */
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 0 0 0.7em; }
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 {
+  margin: 1.1em 0 0.5em;
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+.md h1 { font-size: 1.4em; }
+.md h2 { font-size: 1.25em; }
+.md h3 { font-size: 1.1em; }
+.md h4, .md h5, .md h6 { font-size: 1em; }
+.md ul, .md ol { margin: 0 0 0.7em; padding-left: 1.4em; }
+.md li { margin: 0.15em 0; }
+.md li > ul, .md li > ol { margin: 0.15em 0; }
+.md a { color: hsl(var(--primary)); text-decoration: underline; text-underline-offset: 2px; }
+.md a:hover { opacity: 0.8; }
+.md blockquote {
+  margin: 0 0 0.7em;
+  padding: 0.1em 0.9em;
+  border-left: 3px solid hsl(var(--border));
+  color: hsl(var(--muted-foreground));
+}
+.md hr { border: none; border-top: 1px solid hsl(var(--border)); margin: 1em 0; }
+.md strong { font-weight: 650; }
+/* inline code */
+.md code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.875em;
+  background: hsl(var(--muted));
+  padding: 0.12em 0.35em;
+  border-radius: 5px;
+}
+/* fenced code blocks: reset inline styling, use the same muted panel as elsewhere */
+.md pre {
+  margin: 0 0 0.7em;
+  padding: 12px 14px;
+  background: hsl(var(--muted));
+  border-radius: 8px;
+  overflow-x: auto;
+  line-height: 1.55;
+}
+.md pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: 12.5px;
+}
+.md table {
+  width: 100%;
+  margin: 0 0 0.7em;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+.md th, .md td {
+  border: 1px solid hsl(var(--border));
+  padding: 6px 10px;
+  text-align: left;
+}
+.md th { background: hsl(var(--muted)); font-weight: 600; }
+.md img { max-width: 100%; border-radius: 8px; }
+/* user bubble: keep markdown compact and on-tone inside the grey pill */
+.turn--user .md code { background: hsl(var(--background) / 0.55); }
+.turn--user .md pre { background: hsl(var(--background) / 0.55); }
 
 /* ---------- thinking / tool blocks (lightweight, like the generating line) ---------- */
 .block-thinking, .block-tool { width: 100%; }
@@ -292,7 +361,32 @@ body {
 }
 @keyframes shimmer { from { background-position: 220% 0; } to { background-position: -220% 0; } }
 .think-label--done { color: hsl(var(--muted-foreground)); }
-.tool-name { font-weight: 500; color: hsl(var(--foreground)); }
+
+/* tool-call row — mirrors janus-ee event-renderer.tsx tool_pair styling:
+ * muted, low-key row with a small status dot, name, and chevron. */
+.tool-head { color: hsl(var(--muted-foreground)); transition: color 0.12s; }
+.tool-head:hover { color: hsl(var(--foreground)); }
+.tool-name { font-weight: 400; color: inherit; }
+/* small status dot (h-1.5 w-1.5 rounded-full in janus): grey while running,
+ * solid green once the tool returns. */
+.tool-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: hsl(var(--muted-foreground));
+}
+.tool-dot--running { animation: pulse 1.4s ease-in-out infinite; }
+.tool-dot--done { background: #10b981; } /* emerald-500, matching janus' bg-emerald-500 */
+.tool-detail { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 4px; padding-left: 14px; }
+.tool-section-label {
+  margin-bottom: 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: hsl(var(--muted-foreground));
+}
+.tool-result { max-height: 240px; overflow: auto; }
 
 /* animated expand/collapse via grid-rows trick */
 .think-collapse {
@@ -314,12 +408,13 @@ body {
   overflow-y: auto;
 }
 .tool-args {
-  margin: 8px 0 4px;
-  padding: 10px 12px;
+  margin: 0;
+  padding: 8px 10px;
   background: hsl(var(--muted));
-  border-radius: 8px;
+  border-radius: 6px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1.5;
   overflow-x: auto;
   white-space: pre-wrap;
 }
@@ -652,3 +747,20 @@ body {
 .login-btn .icon { width: 18px; height: 18px; }
 .login-legal { margin: 18px 0 0; font-size: 12px; color: hsl(var(--muted-foreground)); }
 .login-footer { padding: 18px 24px; text-align: center; font-size: 12px; color: hsl(var(--muted-foreground)); }
+
+/* ---------- reduced motion ---------- */
+/* Honor the OS setting for CSS-driven motion (shimmer/pulse/spin/collapse,
+ * drawer slide). motion/react components are handled separately via
+ * <MotionConfig reducedMotion="user"> in main.tsx. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.login-providers { display: flex; flex-direction: column; gap: 10px; }

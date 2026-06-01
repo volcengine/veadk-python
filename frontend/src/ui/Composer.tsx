@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef } from "react";
 import { ArrowUp, Loader2, Plus } from "lucide-react";
+import { motion } from "motion/react";
 
 export interface ComposerProps {
   value: string;
@@ -43,15 +44,17 @@ export function Composer({ value, onChange, onSubmit, disabled, busy }: Composer
             }
           }}
         />
-        <button
+        <motion.button
           type="button"
           className="comp-send"
           disabled={!canSend}
           onClick={onSubmit}
           aria-label="发送"
+          whileTap={canSend ? { scale: 0.9 } : undefined}
+          transition={{ type: "spring", stiffness: 600, damping: 22 }}
         >
           {busy ? <Loader2 className="icon spin" /> : <ArrowUp className="icon" />}
-        </button>
+        </motion.button>
       </div>
     </div>
   );

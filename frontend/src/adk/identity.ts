@@ -17,10 +17,34 @@ export interface Identity {
   info?: Record<string, unknown>;
 }
 
-/** Start the OAuth2 login flow, returning here afterwards. */
-export function login(): void {
+export interface Provider {
+  id: string;
+  label: string;
+  loginUrl: string;
+}
+
+/** Fetch the SSO providers the server has configured (unauthenticated). */
+export async function fetchProviders(): Promise<Provider[]> {
+  try {
+    const res = await fetch("/web/auth-config", { headers: { Accept: "application/json" } });
+    if (!res.ok) return [];
+    const data = (await res.json()) as { providers?: Provider[] };
+    return Array.isArray(data.providers) ? data.providers : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Start a provider's OAuth2 login flow, returning here afterwards. */
+export function loginTo(loginUrl: string): void {
   const here = window.location.pathname + window.location.search + window.location.hash;
-  window.location.assign(`/oauth2/login?redirect=${encodeURIComponent(here)}`);
+  const sep = loginUrl.includes("?") ? "&" : "?";
+  window.location.assign(`${loginUrl}${sep}redirect=${encodeURIComponent(here)}`);
+}
+
+/** Start the default OAuth2 login flow. */
+export function login(): void {
+  loginTo("/oauth2/login");
 }
 
 export function logout(): void {
