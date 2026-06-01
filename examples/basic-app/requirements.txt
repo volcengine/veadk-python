@@ -1,0 +1,4 @@
+# veadk-python[a2ui] is installed from the feat/a2ui branch by the build script
+# (scripts/install_veadk.sh, wired via docker_build.build_script in agentkit.yaml)
+# using a shallow + sparse clone, because the frontend (veadk/webui) and the
+# a2ui Python support are not on PyPI yet. Nothing to install here.
