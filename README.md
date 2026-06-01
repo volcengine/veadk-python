@@ -123,9 +123,18 @@ so it ships with the wheel):
 cd frontend && npm install && npm run build
 ```
 
+Point the agent at a custom component catalog (relative paths resolve against the
+agent's directory; absolute paths work too). With no argument it auto-discovers a
+`catalog.json` next to the agent, falling back to the bundled basic catalog:
+
+```python
+Agent(enable_a2ui=True, a2ui_catalog="catalog.json")  # beside the agent
+```
+
 Enterprises extend the component set in two matching halves: a backend catalog
-(subclass `veadk.a2ui.BaseA2UICatalog`) and a frontend renderer directory
-(`frontend/src/a2ui/components/<Name>/`). See [`frontend/README.md`](frontend/README.md).
+(a `catalog.json` or a `veadk.a2ui.BaseA2UICatalog` subclass) and a frontend
+renderer directory (`frontend/src/a2ui/components/<Name>/`). See
+[`frontend/README.md`](frontend/README.md).
 
 ## Command line tools
 

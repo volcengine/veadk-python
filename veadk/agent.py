@@ -170,9 +170,12 @@ class Agent(LlmAgent):
     Requires the optional `a2ui-agent-sdk` dependency (`pip install veadk-python[a2ui]`)."""
 
     a2ui_catalog: Optional[Any] = None
-    """Optional A2UI catalog: a `veadk.a2ui.BaseA2UICatalog`, an `A2uiCatalog`, a
-    pre-built `(A2uiCatalog, examples)` tuple, or None for the bundled basic catalog.
-    Only used when `enable_a2ui=True`."""
+    """Optional A2UI catalog. Accepts a path to a catalog JSON (str; relative paths
+    resolve against the agent's directory, absolute paths used as-is), a
+    `veadk.a2ui.BaseA2UICatalog`, an `A2uiCatalog`, or a pre-built
+    `(A2uiCatalog, examples)` tuple. When None, auto-discovers `catalog.json` next
+    to the agent, falling back to the bundled basic catalog. Only used when
+    `enable_a2ui=True`."""
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init

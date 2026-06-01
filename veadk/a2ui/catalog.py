@@ -33,6 +33,7 @@ optional ``a2ui-agent-sdk`` dependency unless a catalog is actually built.
 from __future__ import annotations
 
 import abc
+import os
 from typing import TYPE_CHECKING, Optional, Tuple
 
 from veadk.utils.logger import get_logger
@@ -46,6 +47,11 @@ logger = get_logger(__name__)
 # is the first to expose ``createSurface`` / ``updateComponents`` cleanly.
 DEFAULT_A2UI_VERSION = "0.9"
 
+# Convention: a custom catalog lives next to the agent module as `catalog.json`,
+# with optional few-shot examples under an `a2ui_examples/` directory.
+DEFAULT_CATALOG_FILENAME = "catalog.json"
+DEFAULT_EXAMPLES_DIRNAME = "a2ui_examples"
+
 # A built catalog is always paired with its few-shot examples string (may be "").
 BuiltCatalog = Tuple["A2uiCatalog", str]
 
@@ -53,6 +59,39 @@ _IMPORT_ERROR_HINT = (
     "A2UI support requires the optional `a2ui-agent-sdk` dependency. "
     "Install it with: pip install veadk-python[a2ui]"
 )
+
+
+def load_catalog(
+    catalog_path: str,
+    version: str = DEFAULT_A2UI_VERSION,
+    examples_path: Optional[str] = None,
+) -> BuiltCatalog:
+    """Load a catalog from a local JSON file (or ``file://`` URI).
+
+    Args:
+        catalog_path: Path to the catalog JSON.
+        version: A2UI catalog version.
+        examples_path: Optional path/glob to few-shot example JSON files.
+
+    Returns:
+        A ``(A2uiCatalog, examples_str)`` tuple.
+    """
+    try:
+        from a2ui.schema.catalog import CatalogConfig
+        from a2ui.schema.manager import A2uiSchemaManager
+    except ImportError as e:  # pragma: no cover - exercised only without the extra
+        raise ImportError(_IMPORT_ERROR_HINT) from e
+
+    config = CatalogConfig.from_path(
+        name=os.path.splitext(os.path.basename(catalog_path))[0] or "catalog",
+        catalog_path=catalog_path,
+        examples_path=examples_path,
+    )
+    manager = A2uiSchemaManager(version=version, catalogs=[config])
+    catalog = manager.get_selected_catalog()
+    examples = manager.load_examples(catalog)
+    logger.debug(f"Loaded A2UI catalog from {catalog_path} ('{catalog.catalog_id}')")
+    return catalog, examples
 
 
 def _import_a2ui():
@@ -135,18 +174,4 @@ class BaseA2UICatalog(abc.ABC):
             )
             return get_basic_catalog(self.version, self.examples_path)
 
-        try:
-            from a2ui.schema.catalog import CatalogConfig
-            from a2ui.schema.manager import A2uiSchemaManager
-        except ImportError as e:  # pragma: no cover
-            raise ImportError(_IMPORT_ERROR_HINT) from e
-
-        config = CatalogConfig.from_path(
-            name=type(self).__name__,
-            catalog_path=self.catalog_path,
-            examples_path=self.examples_path,
-        )
-        manager = A2uiSchemaManager(version=self.version, catalogs=[config])
-        catalog = manager.get_selected_catalog()
-        examples = manager.load_examples(catalog)
-        return catalog, examples
+        return load_catalog(self.catalog_path, self.version, self.examples_path)

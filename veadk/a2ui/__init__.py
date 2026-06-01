@@ -23,12 +23,14 @@ from veadk.a2ui.catalog import (
     DEFAULT_A2UI_VERSION,
     BaseA2UICatalog,
     get_basic_catalog,
+    load_catalog,
 )
 from veadk.a2ui.toolset import build_a2ui_toolset
 
 __all__ = [
     "BaseA2UICatalog",
     "get_basic_catalog",
+    "load_catalog",
     "build_a2ui_toolset",
     "DEFAULT_A2UI_VERSION",
 ]
