@@ -1,0 +1,83 @@
+---
+title: "Execution Engine"
+description: "The Runner coordinates Agents, tools, and callbacks, manages information flow and state, and supports enterprise multi-tenant data isolation."
+---
+
+The `Runner` is a core component of the ADK Runtime. It coordinates the external components you define — Agents, tools, callbacks, and more — so they jointly respond to user input, while managing information flow, state changes, and interactions with external services (such as the LLM and tools) or storage.
+
+VeADK's execution engine is fully compatible with the Google ADK Runner. For a complete explanation of the `Runner`'s mechanism and lifecycle, see the [Google ADK Agent Runtime](https://google.github.io/adk-docs/runtime/).
+
+## Multi-Tenant Design
+
+To meet enterprise multi-tenancy requirements, you can achieve data isolation through three core dimensions — `app_name`, `user_id`, and `session_id`. The isolation scope of each dimension is as follows:
+
+| Data | Isolation dimensions |
+| :- | :- |
+| Short-term memory | `app_name` `user_id` `session_id` |
+| Long-term memory | `app_name` `user_id` |
+| Knowledge base | `app_name` |
+
+## Simplest Run
+
+VeADK provides a simple run interface `Runner.run` to directly run an Agent instance, process user input, and return a response.
+
+<Callout type="warn" title="Usage limitation">
+This run interface is highly encapsulated. If you need more flexible control at production level, we recommend the `Runner.run_async` interface, which processes the Event objects produced at each execution step of the Agent through an async generator.
+</Callout>
+
+Here is a simplest run example:
+
+```python
+import asyncio
+
+from veadk import Agent, Runner
+
+agent = Agent()
+
+runner = Runner(agent=agent)
+
+response = asyncio.run(runner.run(messages="What is the weather in Beijing?"))
+
+print(response)
+```
+
+## Production-Level Run
+
+Taking image understanding as an example, the following demonstrates how to use `runner.run_async` to process Events:
+
+```python
+from google.genai.types import Blob, Content, Part
+
+from veadk import Agent, Runner
+
+APP_NAME = "app"
+USER_ID = "user"
+SESSION_ID = "session"
+
+agent = Agent()
+runner = Runner(agent=agent, app_name=APP_NAME)
+
+user_message = Content(
+  role="user",
+  parts=[
+    Part(
+      text="Describe everything in this image in detail, including objects, colors, layout, and text (if any)."
+    ),
+    Part(
+      inline_data=Blob(
+        display_name=os.path.basename(image_path),
+        data=read_png_to_bytes(image_path),
+        mime_type="image/png",
+      )
+    ),
+  ],
+)
+
+async for event in runner.run_async(
+  user_id=runner.user_id,
+  session_id=session_id,
+  new_message=user_message,
+  run_config=RunConfig(max_llm_calls=1),
+):
+  # Handle your Event here
+```

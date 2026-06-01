@@ -1,0 +1,91 @@
+---
+title: "Feishu Channel Extension"
+description: "Use FeishuChannelExtension to bridge inbound Feishu bot messages to the VeADK Runner."
+---
+
+`veadk.extensions.FeishuChannelExtension` bridges inbound messages from a Feishu (Lark) bot to the VeADK `Runner`.
+
+By default it works off the `message` event of `lark_oapi.channel.FeishuChannel`, and maps the session identity according to the following rules:
+
+- `sender.union_id -> Runner.user_id`
+- `conversation.thread_id -> Runner.session_id`
+- If the thread ID does not exist, it falls back to `chat_id -> Runner.session_id`
+
+The benefit is that VeADK's existing short-term memory, long-term memory, tracing, and multi-tenant isolation capabilities can be reused directly.
+
+## Installation
+
+```bash
+pip install veadk-python[extensions]
+```
+
+If you only want this capability, you can install it on its own:
+
+```bash
+pip install lark-oapi
+```
+
+## Configuration
+
+Environment variables:
+
+- `TOOL_FEISHU_CHANNEL_APP_ID`
+- `TOOL_FEISHU_CHANNEL_APP_SECRET`
+- `TOOL_FEISHU_CHANNEL_TRANSPORT`, defaults to `ws`
+- `TOOL_FEISHU_CHANNEL_STREAMING`, whether to enable streaming output, defaults to `false`
+- `TOOL_FEISHU_CHANNEL_REACTIONS`, whether to reply with a "received" reaction on incoming messages, defaults to `false`
+
+Or configure them in `config.yaml`:
+
+```yaml title="config.yaml"
+tool:
+  feishu_channel:
+    app_id: cli_xxx
+    app_secret: xxx
+    transport: ws
+    streaming: true
+    reactions: true
+```
+
+## Minimal example
+
+```python title="examples/channel/feishu_bot.py"
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.extensions import FeishuChannelExtension
+from veadk.memory.short_term_memory import ShortTermMemory
+
+agent = Agent(
+    name="feishu_agent",
+    instruction="你是一个通过飞书机器人与用户沟通的助手。",
+)
+
+runner = Runner(
+    agent=agent,
+    app_name="veadk_feishu_demo",
+    user_id="veadk_feishu_default_user",
+    short_term_memory=ShortTermMemory(),
+)
+
+channel = FeishuChannelExtension(
+    runner=runner,
+    channel_kwargs={
+        "transport": "ws",
+    },
+)
+
+
+async def main():
+    await channel.connect()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+## Notes
+
+- By default the Feishu `Channel` WebSocket mode is used, so as long as the bot has subscribed to message events, you can start the connection directly.
+- By default replies use `reply_to=<original message_id>`, so VeADK output stays attached to the current Feishu message thread.
+- You can override the default mapping logic via `session_id_factory` and `user_id_factory`.

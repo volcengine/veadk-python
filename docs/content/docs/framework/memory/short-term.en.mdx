@@ -1,0 +1,280 @@
+---
+title: "Short-term Memory"
+description: "VeADK short-term memory keeps session-level context to improve consistency across multi-turn interactions."
+---
+
+This document introduces the **Short-term Memory** mechanism in VeADK and how to use it. The core purpose of short-term memory is to retain "session-level" context so that multi-turn interactions stay consistent and the agent's responses remain coherent.
+
+When a user starts a conversation with your Agent, `ShortTermMemory` or `SessionService` automatically creates a `Session` object. This `Session` tracks and manages all relevant content throughout the conversation.
+
+<Callout type="info">
+For more information, see [Google ADK Session](https://google.github.io/adk-docs/sessions/session).
+</Callout>
+
+## Using ShortTermMemory
+
+The following shows how to create and use short-term memory:
+
+<Tabs items={['Python', 'Golang']}>
+  <Tab value="Python">
+
+```python
+import asyncio
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+
+app_name = "app_short_term_1"
+user_id = "user_short_term_1"
+session_id = "session_short_term_1"
+
+agent = Agent()
+short_term_memory = ShortTermMemory(
+    backend="local", # Specify the ShortTermMemory storage backend
+    # If using sqlite, specify the database path
+    # local_database_path="/tmp/d_persistent_short_term_memory.db",
+)
+runner = Runner(
+    agent=agent, short_term_memory=short_term_memory, app_name=app_name, user_id=user_id
+)
+
+async def main():
+    response1 = await runner.run(
+        messages="I bought 20 ice creams on July 15.", session_id=session_id
+    )
+    print(f"response of round 1: {response1}")
+
+    response2 = await runner.run(
+        messages="When did I buy the ice creams?", session_id=session_id
+    )
+    print(f"response of round 2: {response2}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+  </Tab>
+  <Tab value="Golang">
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+    "strings"
+
+    veagent "github.com/volcengine/veadk-go/agent/llmagent"
+    "github.com/volcengine/veadk-go/common"
+    "github.com/volcengine/veadk-go/utils"
+    "google.golang.org/adk/agent"
+    "google.golang.org/adk/agent/llmagent"
+    "google.golang.org/adk/runner"
+    "google.golang.org/adk/session"
+    "google.golang.org/genai"
+)
+
+func main() {
+    ctx := context.Background()
+    appName := "ve_agent"
+    userID := "user1111"
+
+    rootAgent, err := veagent.New(&veagent.Config{
+        Config: llmagent.Config{
+            Name:        "RootAgent",
+            Instruction: "Acknowledge the user's statement.",
+        },
+        ModelName:    common.DEFAULT_MODEL_AGENT_NAME,
+        ModelAPIBase: common.DEFAULT_MODEL_AGENT_API_BASE,
+        ModelAPIKey:  utils.GetEnvWithDefault(common.MODEL_AGENT_API_KEY),
+    })
+    if err != nil {
+        log.Printf("NewLLMAgent failed: %v", err)
+        return
+    }
+    sessionService := session.InMemoryService()
+
+    runner1, err := runner.New(runner.Config{
+        AppName:        appName,
+        Agent:          rootAgent,
+        SessionService: sessionService,
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    sessionID := "session123456789"
+    _, err = sessionService.Create(ctx, &session.CreateRequest{
+        AppName:   appName,
+        UserID:    userID,
+        SessionID: sessionID,
+    })
+    if err != nil {
+        log.Fatalf("sessionService.Create error: %v", err)
+    }
+    userInput1 := genai.NewContentFromText("I bought 20 ice creams on July 15.", "user")
+
+    var finalResponseText string
+    for event, err := range runner1.Run(ctx, userID, sessionID, userInput1, agent.RunConfig{}) {
+        if err != nil {
+            log.Printf("Agent Error: %v", err)
+            continue
+        }
+        if event.Content != nil && !event.LLMResponse.Partial {
+            finalResponseText = strings.Join(textParts(event.LLMResponse.Content), "")
+        }
+    }
+    log.Printf("Agent 1 Response: %s\n", finalResponseText)
+
+    userInput2 := genai.NewContentFromText("When did I buy the ice creams?", "user")
+    var finalResponse2Text string
+    for event, err := range runner1.Run(ctx, userID, sessionID, userInput2, agent.RunConfig{}) {
+        if err != nil {
+            log.Printf("Agent Error: %v", err)
+            continue
+        }
+        if event.Content != nil && !event.LLMResponse.Partial {
+            finalResponse2Text = strings.Join(textParts(event.LLMResponse.Content), "")
+        }
+    }
+    log.Printf("Agent 1 Response: %s\n", finalResponse2Text)
+}
+```
+
+  </Tab>
+</Tabs>
+
+**Example output**
+
+```text
+response of round 1: It sounds like you recorded an ice cream purchase! Would you like to:
+
+1. Calculate the related cost (if you have unit price information)
+2. Record or analyze spending habits
+3. Any other data processing or recording needs related to this purchase?
+
+response of round 2: Based on the information you provided, you bought 20 ice creams on **July 15**.
+```
+
+## Short-term Memory Backends
+
+In VeADK, you can initialize short-term memory with the following backend services:
+
+| Type | Description |
+| :- | :- |
+| `local` | In-memory short-term memory, cleared when the program exits. Production environments should use a database for persistence to meet distributed architecture requirements. |
+| `mysql` | Stores short-term memory in a MySQL database for persistence. |
+| `sqlite` | Stores short-term memory in a local SQLite database for persistence. |
+| `postgresql` | Stores short-term memory in a PostgreSQL database for persistence. |
+
+### Database Backend Configuration
+
+<Tabs items={['mysql', 'postgresql']}>
+  <Tab value="mysql">
+
+```yaml
+database:
+    mysql:
+        host:
+        user:
+        password:
+        charset: utf8
+```
+
+  </Tab>
+  <Tab value="postgresql">
+
+```yaml
+database:
+    postgresql:
+        host: # host or ip
+        user:
+        password:
+```
+
+  </Tab>
+</Tabs>
+
+Provision a database on Volcengine:
+
+- [How to provision a Volcengine MySQL database](https://www.volcengine.com/product/rds-mysql)
+- [How to provision a Volcengine postgresql database](https://www.volcengine.com/product/rds-pg)
+
+## Session Management
+
+You usually do not need to create or manage `Session` objects directly. Instead, they are managed through `SessionService`, which handles the full lifecycle of a conversation session.
+
+Its core responsibilities include:
+
+1. **Start a new session** `create_session()`: creates a brand-new Session object when the user begins interacting.
+2. **Resume an existing session** `get_session()`: retrieves a specific Session by `session_id`, allowing the Agent to continue from prior progress.
+3. **Save conversation progress** `append_event()`: appends new interaction content (Event objects) to the session history. This is also the mechanism for updating session state.
+4. **List sessions** `list_sessions()`: queries active sessions for a specific user and application.
+5. **Clean up session data** `delete_session()`: deletes the Session object and its associated data when the session ends or is no longer needed.
+
+## Context Compaction
+
+As an Agent runs, the session history keeps growing, which increases the amount of data the LLM processes and slows down response times. The context compaction feature uses a sliding-window approach to summarize session history; when the history exceeds a predefined threshold, the system automatically compacts older events.
+
+### Configuring Context Compaction
+
+Once context compaction is added, the `Runner` automatically compacts the session history each time the interval is reached.
+
+```python
+from google.adk.apps.app import App
+from google.adk.apps.app import EventsCompactionConfig
+from veadk.agent import Agent
+
+root_agent = Agent(
+    description="hello world agent",
+    instruction="""You are an intelligent assistant who replies to user questions politely in Chinese.""",
+)
+
+app = App(
+    name='my_agent',
+    root_agent=root_agent,
+    events_compaction_config=EventsCompactionConfig(
+        compaction_interval=3,  # Trigger compaction every 3 new invocations.
+        overlap_size=1          # Include the last event of the previous window as overlap.
+    ),
+)
+
+root_agent = agent
+```
+
+### Defining a Compactor
+
+You can use `LlmEventSummarizer` to customize the specific LLM and the compaction structure via `PromptTemplate`.
+
+```python
+from google.adk.apps.app import App
+from google.adk.apps.app import EventsCompactionConfig
+from google.adk.models.lite_llm import LiteLlm
+from google.adk.apps.llm_event_summarizer import LlmEventSummarizer
+
+# Custom AI model used by the compactor
+summarization_llm = LiteLlm(
+                model="volcengine/doubao-seed-1-6-lite-251015",
+                api_key=f"{model_api_key}",
+                api_base=f"{model_api_base}",
+            )
+
+my_compactor = LlmEventSummarizer(llm=summarization_llm,
+# Custom compaction structure
+prompt_template="""
+Please summarize the conversation. Compression Requirements:
+1. Retain key entities, data points, and timelines
+2. Highlight core problems and solutions discussed
+3. Maintain logical coherence and contextual relevance
+4. Eliminate duplicate expressions and redundant details
+""")
+
+app = App(
+    name='my-agent',
+    root_agent=root_agent,
+    events_compaction_config=EventsCompactionConfig(
+        compactor=my_compactor,
+        compaction_interval=5,
+        overlap_size=1
+    ),
+)
+```

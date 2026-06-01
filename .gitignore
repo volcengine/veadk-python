@@ -202,3 +202,5 @@ cython_debug/
 *.pcm
 
 .trae
+.claude
+.agents

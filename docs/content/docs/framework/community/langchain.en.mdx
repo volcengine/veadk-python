@@ -1,0 +1,80 @@
+---
+title: "Langchain Community Support"
+description: "Use VeADK models, knowledge base, and short/long-term memory inside Langchain / LangGraph applications."
+---
+
+VeADK provides a set of components under the `veadk.community.langchain_ai` module that integrate with the Langchain / LangGraph ecosystem, letting you reuse VeADK's models, knowledge base, and memory capabilities directly in Langchain applications.
+
+## Models
+
+`ArkChatModel` extends Langchain's `ChatOpenAI` and is used to call models on the Volcengine Ark platform. Set the `MODEL_AGENT_API_KEY` environment variable before using it.
+
+```python
+from veadk.community.langchain_ai.models.ark_model import ArkChatModel
+
+llm = ArkChatModel(model="deepseek-v3-1-terminus")
+
+response = llm.invoke("Hello, please introduce yourself.")
+print(response.content)
+```
+
+<Callout type="info">
+  `ArkChatModel` is compatible with the full Langchain `ChatOpenAI` interface, so you can use it in chains, agents, or graphs just like any other Langchain chat model.
+</Callout>
+
+## Knowledge Base
+
+`KnowledgeBase` provides knowledge base capabilities backed by vector retrieval. In Langchain / LangGraph, you can expose the knowledge base's semantic retrieval to an agent through the `load_knowledgebase` tool, allowing the agent to automatically retrieve relevant knowledge based on the user's question.
+
+```python
+from veadk.knowledgebase import KnowledgeBase
+
+knowledgebase = KnowledgeBase(
+    name="preference",
+    backend="viking",
+    index="viking_demo_create_2",
+)
+```
+
+Provide `load_knowledgebase` as a tool to your LangGraph agent:
+
+```python
+from veadk.community.langchain_ai.tools.load_knowledgebase import load_knowledgebase
+
+# Add load_knowledgebase as a tool to your LangGraph agent
+tools = [load_knowledgebase]
+```
+
+At runtime the agent calls `load_knowledgebase(query)`, which performs semantic retrieval against the configured knowledge base and returns the relevant snippets.
+
+## Short-term Memory
+
+`ShortTermMemory` provides session-scoped short-term memory for retaining conversation context within a single session.
+
+```python
+from veadk.memory.short_term_memory import ShortTermMemory
+
+short_term_memory = ShortTermMemory(backend="sqlite")
+```
+
+Short-term memory is isolated per session, making it suitable for retaining context within one continuous conversation. After a session ends, this data is not retained across sessions.
+
+## Long-term Memory
+
+Long-term memory persists memory across different sessions. VeADK provides Volcengine Viking-backed long-term memory storage through `VikingMemoryStore` and lets the agent retrieve historical memory through the `load_memory` tool.
+
+```python
+from veadk.community.langchain_ai.tools.load_memory import load_memory
+from veadk.community.langchain_ai.store.memory.viking_memory import VikingMemoryStore
+
+store = VikingMemoryStore(index="aiops")
+
+# Provide load_memory as a tool to your LangGraph agent
+tools = [load_memory]
+```
+
+At runtime the agent calls `load_memory(query)`, retrieving historical memory relevant to the current question from the long-term memory store, enabling cross-session memory.
+
+<Callout type="info">
+  Before using `VikingMemoryStore`, make sure the relevant Volcengine Viking environment variables are configured correctly.
+</Callout>

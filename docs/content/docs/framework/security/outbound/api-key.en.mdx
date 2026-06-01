@@ -1,0 +1,96 @@
+---
+title: "Outbound Auth with API Key"
+description: "Use an API Key for the simplest form of outbound authentication, ideal for service-to-service communication and fixed credentials."
+---
+
+API Key authentication is the simplest form of outbound authentication, suitable for service-to-service communication and fixed-credential scenarios.
+
+## Create an API Key Credential
+
+1. Log in to the Volcengine console and navigate to the **Agent Identity** service
+2. In the left navigation tree, select **Authentication > Outbound Credential Custody**
+3. Click **New > New API Key** and enter an API Key name
+4. Enter the API Key provided by the third-party service
+5. Configure how the API Key is passed (Header or Query) and click **OK**
+
+## Usage
+
+### VeIdentityFunctionTool
+
+```python
+from veadk.integrations.ve_identity import VeIdentityFunctionTool, api_key_auth
+import aiohttp
+
+async def call_api(api_key: str, endpoint: str):
+    headers = {"Authorization": f"Bearer {api_key}"}
+    async with aiohttp.ClientSession() as session:
+        async with session.get(endpoint, headers=headers) as resp:
+            return await resp.json()
+
+auth_config = api_key_auth(provider_name="my-api-provider")
+tool = VeIdentityFunctionTool(
+    func=call_api,
+    auth_config=auth_config,
+    into="api_key",
+)
+```
+
+### VeIdentityMcpToolset
+
+```python
+from veadk.integrations.ve_identity import VeIdentityMcpToolset, api_key_auth
+from google.adk.agents.mcp import StdioServerParameters
+
+auth_config = api_key_auth(provider_name="my-api-provider")
+toolset = VeIdentityMcpToolset(
+    auth_config=auth_config,
+    connection_params=StdioServerParameters(
+        command="python",
+        args=["-m", "my_api_mcp_server"],
+    ),
+)
+```
+
+## Example
+
+```python
+import asyncio
+from veadk import Agent, Runner
+from veadk.integrations.ve_identity import VeIdentityFunctionTool, api_key_auth
+import aiohttp
+
+async def query_api(api_key: str, user_id: str):
+    headers = {"Authorization": f"Bearer {api_key}"}
+    url = f"https://api.example.com/users/{user_id}"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as resp:
+            return await resp.json()
+
+tool = VeIdentityFunctionTool(
+    func=query_api,
+    auth_config=api_key_auth(provider_name="user-api"),
+    into="api_key",
+)
+
+agent = Agent(tools=[tool])
+runner = Runner(agent=agent)
+asyncio.run(runner.run(messages="Look up user 123"))
+```
+
+## FAQ
+
+**Q: How do I update an API Key?**
+
+A: Edit the credential in the Agent Identity console.
+
+**Q: How do I handle API call failures?**
+
+A: Implement error handling and retry logic.
+
+## Related Resources
+
+- [Agent Identity overview](https://www.volcengine.com/docs/86848/2080920?lang=zh)
+- [OAuth2 M2M authentication](/en/docs/framework/security/outbound/oauth2-m2m)
+- [OAuth2 USER_FEDERATION authentication](/en/docs/framework/security/outbound/oauth2-user-federation)
+- [Trusted MCP authentication](/en/docs/framework/security/outbound/trusted-mcp)
+- [Agent Identity API reference](https://www.volcengine.com/docs/86848/1918752)

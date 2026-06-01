@@ -74,3 +74,9 @@ regex = '''os\.environ\[".*?KEY"\]\s*=\s*".+"'''
 
 [allowlist]
 paths = ["requirements.txt", "tests", "veadk/realtime/client.py", "veadk/realtime/live.py"]
+# False positives: the docs search config references the @orama/tokenizers
+# package and its createTokenizer() helper. The word "tokenizer" trips
+# token-transformer-id-pattern, but these are library identifiers, not secrets.
+regexes = [
+  '''tokenizer''',
+]

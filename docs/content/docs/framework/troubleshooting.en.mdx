@@ -1,0 +1,59 @@
+---
+title: "Troubleshooting"
+description: "Common issues and solutions for VeADK setup, development, and deployment."
+---
+
+<Accordions>
+  <Accordion title="What is the relationship between VeADK and Google ADK? Are they compatible?">
+    VeADK's agent capabilities are inherited from Google ADK and are fully compatible with Google ADK. For agent capabilities, you can also refer to the official Google ADK [documentation](https://google.github.io/adk-docs/) or the [Chinese version](https://adk.wiki/).
+  </Accordion>
+</Accordions>
+
+## Environment Setup
+
+<Accordions>
+  <Accordion title="When using the knowledge base, packages such as llama-index are reported as not found">
+    Please install the VeADK extensions package:
+
+    ```bash
+    pip install veadk-python[extensions]
+    ```
+
+    In some shells, you may need to add quotes:
+
+    ```bash
+    pip install "veadk-python[extensions]"
+    ```
+  </Accordion>
+</Accordions>
+
+## Development
+
+<Accordions>
+  <Accordion title="After setting the Volcengine AK/SK, fetching the model API Key fails">
+    VeADK does not automatically create a Volcengine Ark platform API Key for you. Please create your API Key on the Volcengine Ark platform. For detailed steps, see the [documentation](https://www.volcengine.com/docs/82379/1361424), or go directly to the [console entry](https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey?apikey=%7B%7D).
+  </Accordion>
+</Accordions>
+
+## Deployment
+
+<Accordions>
+  <Accordion title="Stuck at the Release stage with no error in the cloud">
+    Please first enable permissions on the VeFaaS platform.
+
+    ![Enable permissions](/assets/images/faq/troubleshooting-01.png)
+  </Accordion>
+  <Accordion title="After activating a new account, the ServerlessApplicationRole authorization is missing">
+    Go to the Volcengine Function Service site, open the application creation page (for example [here](https://console.volcengine.com/vefaas/region:vefaas+cn-beijing/application/create?templateId=67f7b4678af5a6000850556c)), and click "One-click Authorization".
+
+    ![Role authorization](/assets/images/faq/troubleshooting-02.png)
+  </Accordion>
+  <Accordion title="Dependency installation fails with insufficient installation space">
+    The default maximum dependency installation size for VeFaaS is 1024 MB. If you need more space, please contact the Volcengine VeFaaS product team to expand it.
+  </Accordion>
+  <Accordion title="Error log shows [apig_gateway][][get_info][Error] ExceededQuota">
+    ![Gateway quota exceeded error](/assets/images/faq/troubleshooting-03.jpeg)
+
+    In Volcengine APIG, there can be at most 1 Serverless-type gateway instance. You need to specify the unique gateway instance during deployment.
+  </Accordion>
+</Accordions>

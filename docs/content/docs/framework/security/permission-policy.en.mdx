@@ -1,0 +1,49 @@
+---
+title: "Permission Policy"
+description: "Configure permission policies covering the full User → Agent → Tool chain using the Cedar declarative authorization language."
+---
+
+Agent permission policies are built on the Cedar declarative authorization language, providing a permission-management scheme that covers the full User → Agent → Tool chain. This guide shows you how to enable authorization checks in your agent code and configure permission policies in the console, ensuring an agent is only accessible to authorized users.
+
+## Prerequisites
+
+Following the [usage docs](https://www.volcengine.com/docs/86848/2123355?lang=zh), log in to the Volcengine Agent Identity and Permission Management platform and create a policy namespace and permission policy as follows:
+
+- Go to "Access Control > Permission Policy" and create a policy namespace (enter a namespace name and description, and choose the owning project and tags);
+- Within the target namespace, create a new permission policy and define rules via "Visual Editor" or "Cedar Statement Editor" (for example: allow a specific user to invoke a given agent);
+- Use the "Simulate Permission Check" feature to verify that the policy behaves as expected.
+
+## Implementation
+
+Before invoking the agent, configure the `RUNTIME_IDENTITY_NAMESPACE` environment variable in the [AgentKit Runtime](https://console.volcengine.com/agentkit/region:agentkit+cn-beijing/runtime) console to specify the policy namespace (defaults to `default`), so that authorization checks match the corresponding policy rules:
+
+```bash
+# Set the policy namespace name (replace with the namespace you actually created)
+RUNTIME_IDENTITY_NAMESPACE="your-policy-namespace-name"
+```
+
+Enable authorization (`enable_authz=True`) when initializing the Agent to trigger the authorization check flow. Below is a code example for deploying to [AgentKit Runtime](https://console.volcengine.com/agentkit/region:agentkit+cn-beijing/runtime):
+
+```python title="agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+
+# The user ID whose permission is to be checked
+user_id = "9d154b10-285f-404c-ba67-0bf648ff9ce0"
+
+# Initialize the Agent with authorization enabled
+agent = Agent(enable_authz=True)
+
+runner = Runner(agent=agent)
+
+# Invoke the agent and pass the user ID (the core basis for the authorization check)
+response = asyncio.run(runner.run(messages="Hello", user_id=user_id))
+
+print(response)
+```
+
+Results:
+
+- Authorized: if the user has permission to invoke the agent in the policy namespace, the code runs normally and returns the agent's response;
+- Unauthorized: if the user is not authorized to access the agent, a permission exception is raised. Example error message: `Agent <agent role> is not authorized to run by user 9d154b10-285f-404c-ba67-0bf648ff9ce0.`
