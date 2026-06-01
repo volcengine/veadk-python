@@ -773,7 +773,7 @@ class IdentityClient:
 
         if uid:
             # Direct get by UID
-            request = GetUserPoolRequest(uid=uid)
+            request = GetUserPoolRequest(user_pool_uid=uid)
             try:
                 response: GetUserPoolResponse = self._api_client.get_user_pool(request)
                 return response.uid, response.domain

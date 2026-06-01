@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { LogOut, MoreHorizontal, Plus, RefreshCw, Loader2, Trash2 } from "lucide-react";
+import { LogOut, MoreHorizontal, Plus, Trash2 } from "lucide-react";
 import type { AdkSession } from "../adk/client";
 import { sessionTitle } from "../blocks";
 import { displayName } from "../adk/identity";
@@ -13,8 +13,6 @@ export interface SidebarProps {
   onNewChat: () => void;
   onPickSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
-  onRefresh: () => void;
-  loadingSessions: boolean;
   userInfo?: Record<string, unknown>;
   onLogout: () => void;
 }
@@ -28,8 +26,6 @@ export function Sidebar({
   onNewChat,
   onPickSession,
   onDeleteSession,
-  onRefresh,
-  loadingSessions,
   userInfo,
   onLogout,
 }: SidebarProps) {
@@ -41,10 +37,6 @@ export function Sidebar({
     <aside className="sidebar">
       <div className="sidebar-top">
         <div className="brand">VeADK Web</div>
-        <button className="new-chat" onClick={onNewChat}>
-          <Plus className="icon" />
-          新会话
-        </button>
         <select
           className="agent-select"
           value={appName}
@@ -56,18 +48,15 @@ export function Sidebar({
             </option>
           ))}
         </select>
+        <button className="new-chat" onClick={onNewChat}>
+          <Plus className="icon" />
+          新会话
+        </button>
       </div>
 
       <div className="sidebar-history">
         <div className="history-head">
           <span>历史会话</span>
-          <button className="history-refresh" onClick={onRefresh} title="刷新">
-            {loadingSessions ? (
-              <Loader2 className="icon spin" />
-            ) : (
-              <RefreshCw className="icon" />
-            )}
-          </button>
         </div>
         <div className="history-list">
           {sorted.length === 0 && (

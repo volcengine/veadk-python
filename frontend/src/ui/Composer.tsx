@@ -35,7 +35,7 @@ export function Composer({ value, onChange, onSubmit, disabled, busy }: Composer
           rows={1}
           value={value}
           disabled={disabled}
-          placeholder={disabled ? "连接中…" : "让智能体用 UI 回答，比如「给我一张航班状态卡片」"}
+          placeholder={disabled ? "连接中…" : "给智能体发消息…"}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {

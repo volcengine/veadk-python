@@ -1,8 +1,9 @@
-# VeADK A2UI Frontend
+# VeADK Web
 
-A React UI that renders **agent-driven UI** (A2UI, https://a2ui.org) streamed from
-a VeADK agent over the Google ADK API server. It talks to the same server that
-`veadk frontend` launches — no separate backend.
+A React web UI for VeADK agents. It talks to the standard Google ADK API server
+that `veadk frontend` launches (no separate backend): streaming chat with
+thinking / tool-call blocks, session history, a tracing viewer, optional SSO, and
+rich agent-driven UI (A2UI) rendering when an agent emits it.
 
 ## Run
 
@@ -28,6 +29,33 @@ Dev loop with hot reload:
 veadk frontend --dev --agents-dir examples   # API only, CORS for vite
 cd frontend && npm run dev                    # http://localhost:5173 (proxies API)
 ```
+
+The agent dropdown lists every subdirectory (app) under `--agents-dir`. Point it
+at a folder containing only your agent(s) to control the list.
+
+## Authentication
+
+The ADK `user_id` (which scopes sessions/memory) comes from the signed-in user.
+
+**SSO (VeIdentity OAuth2)** — enable with flags; the UI shows a login page and
+redirects through VeIdentity, then uses the `sub` from `/oauth2/userinfo`:
+
+```bash
+veadk frontend --agents-dir examples \
+  --oauth2-user-pool <name>      --oauth2-user-pool-client <name>
+  # or by id (env: OAUTH2_USER_POOL_ID / OAUTH2_USER_POOL_CLIENT_ID):
+  # --oauth2-user-pool-uid <id>  --oauth2-user-pool-client-uid <id>
+```
+Requires Volcengine credentials (AK/SK) in the environment. The login button's
+label/icon is config-driven (`--oauth2-provider` / `--oauth2-provider-label`),
+exposed at `GET /web/auth-config`.
+
+**No SSO (local)** — without those flags, the login page asks for a username
+(letters + digits, ≤16), stored locally and used as the `user_id`.
+
+Login state is cached: SSO via the `veadk_session` cookie, local mode via
+`localStorage`. The session itself is created lazily on the first message (not on
+page load).
 
 ## How it works
 

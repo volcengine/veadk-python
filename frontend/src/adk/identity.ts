@@ -7,14 +7,43 @@
 //   401 -> SSO enabled but not signed in (show the login page)
 //   404/err -> SSO not configured (local dev; use a default id)
 
-const DEFAULT_USER_ID = "web-user";
+const LOCAL_USER_KEY = "veadk_local_user";
 
-export type AuthStatus = "authenticated" | "unauthenticated" | "disabled";
+export type AuthStatus = "authenticated" | "unauthenticated";
 
 export interface Identity {
   status: AuthStatus;
   userId: string;
   info?: Record<string, unknown>;
+  /** True when there is no SSO and the id comes from the local username flow. */
+  local?: boolean;
+}
+
+/** Validation for the no-SSO local username (letters + digits, <= 16). */
+export const USERNAME_RE = /^[A-Za-z0-9]{1,16}$/;
+
+export function getLocalUser(): string | null {
+  try {
+    return localStorage.getItem(LOCAL_USER_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setLocalUser(name: string): void {
+  try {
+    localStorage.setItem(LOCAL_USER_KEY, name);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function clearLocalUser(): void {
+  try {
+    localStorage.removeItem(LOCAL_USER_KEY);
+  } catch {
+    /* ignore */
+  }
 }
 
 export interface Provider {
@@ -51,26 +80,33 @@ export function logout(): void {
   window.location.assign("/oauth2/logout");
 }
 
-/** Resolve identity from the OAuth2 userinfo endpoint. */
+/** Resolve identity. With SSO: via /oauth2/userinfo. Without SSO (endpoint 404):
+ *  use a locally chosen username, or prompt for one on the login page. */
 export async function resolveIdentity(): Promise<Identity> {
-  let res: Response;
+  let res: Response | null = null;
   try {
     res = await fetch("/oauth2/userinfo", { headers: { Accept: "application/json" } });
   } catch {
-    return { status: "disabled", userId: DEFAULT_USER_ID };
+    res = null;
   }
 
-  if (res.status === 401) {
-    return { status: "unauthenticated", userId: DEFAULT_USER_ID };
+  // SSO enabled, signed in.
+  if (res && res.ok) {
+    const info = (await res.json()) as Record<string, unknown>;
+    const userId = String(info.sub ?? info.user_id ?? info.email ?? "");
+    return { status: "authenticated", userId, info };
   }
-  if (!res.ok) {
-    // 404 => SSO not configured; anything else => degrade to local mode.
-    return { status: "disabled", userId: DEFAULT_USER_ID };
+  // SSO enabled, not signed in -> provider login page.
+  if (res && res.status === 401) {
+    return { status: "unauthenticated", userId: "", local: false };
   }
 
-  const info = (await res.json()) as Record<string, unknown>;
-  const userId = String(info.sub ?? info.user_id ?? info.email ?? DEFAULT_USER_ID);
-  return { status: "authenticated", userId, info };
+  // No SSO (404 / unreachable): local username mode.
+  const saved = getLocalUser();
+  if (saved) {
+    return { status: "authenticated", userId: saved, info: { name: saved }, local: true };
+  }
+  return { status: "unauthenticated", userId: "", local: true };
 }
 
 /** A short display name for the signed-in user. */

@@ -77,13 +77,27 @@ def _resolve_frontend_dir(arg: str | None) -> Path:
 @click.option(
     "--oauth2-user-pool",
     default=None,
-    help="VeIdentity User Pool name. When set, enables SSO: unauthenticated "
-    "browsers are redirected to login and the UI uses the signed-in user.",
+    help="VeIdentity User Pool NAME. When set (or its UID), enables SSO: "
+    "unauthenticated browsers see a login page and the UI uses the signed-in user.",
 )
 @click.option(
     "--oauth2-user-pool-client",
     default=None,
-    help="VeIdentity User Pool client name (required with --oauth2-user-pool).",
+    help="VeIdentity User Pool client NAME.",
+)
+@click.option(
+    "--oauth2-user-pool-uid",
+    default=None,
+    envvar="OAUTH2_USER_POOL_ID",
+    help="VeIdentity User Pool UID (env: OAUTH2_USER_POOL_ID). Use instead of "
+    "the pool name.",
+)
+@click.option(
+    "--oauth2-user-pool-client-uid",
+    default=None,
+    envvar="OAUTH2_USER_POOL_CLIENT_ID",
+    help="VeIdentity client UID (env: OAUTH2_USER_POOL_CLIENT_ID). Use instead "
+    "of the client name.",
 )
 @click.option(
     "--oauth2-redirect-uri",
@@ -111,6 +125,8 @@ def frontend(
     dev: bool,
     oauth2_user_pool: str | None,
     oauth2_user_pool_client: str | None,
+    oauth2_user_pool_uid: str | None,
+    oauth2_user_pool_client_uid: str | None,
     oauth2_redirect_uri: str | None,
     oauth2_provider: str,
     oauth2_provider_label: str | None,
@@ -127,20 +143,39 @@ def frontend(
         web=False,  # we serve our own UI, not the bundled ADK dev UI
     )
 
-    if oauth2_user_pool and oauth2_user_pool_client:
-        from veadk.auth.middleware.oauth2_auth import OAuth2Config, setup_oauth2
+    pool_ok = oauth2_user_pool or oauth2_user_pool_uid
+    client_ok = oauth2_user_pool_client or oauth2_user_pool_client_uid
+    if pool_ok and client_ok:
+        from veadk.auth.middleware.oauth2_auth import setup_oauth2, OAuth2Config
 
         redirect_uri = oauth2_redirect_uri or f"http://{host}:{port}/oauth2/callback"
         oauth2_config = OAuth2Config.from_veidentity(
             user_pool_name=oauth2_user_pool,
+            user_pool_uid=oauth2_user_pool_uid,
             client_name=oauth2_user_pool_client,
+            client_uid=oauth2_user_pool_client_uid,
             redirect_uri=redirect_uri,
         )
         # Allow cookies over http for local/non-TLS serving.
         oauth2_config.cookie_secure = False
+        # Logout clears our session and returns to the app (which then shows the
+        # login page). We skip the IdP end-session redirect because its
+        # post_logout_redirect_uri must be whitelisted in VeIdentity; a local
+        # logout avoids that requirement. Set logout_redirect_url to the app root.
+        oauth2_config.logout_redirect_url = f"http://{host}:{port}/"
+        oauth2_config.end_session_url = None
 
         # Expose the configured provider(s) to the login page (unauthenticated).
-        label = oauth2_provider_label or oauth2_provider.replace("_", " ").title()
+        default_labels = {
+            "veidentity": "火山引擎 Identity",
+            "github": "GitHub",
+            "google": "Google",
+        }
+        label = (
+            oauth2_provider_label
+            or default_labels.get(oauth2_provider)
+            or oauth2_provider.replace("_", " ").title()
+        )
         providers = [
             {"id": oauth2_provider, "label": label, "loginUrl": "/oauth2/login"}
         ]
@@ -159,7 +194,8 @@ def frontend(
         )
         logger.info(
             f"OAuth2 SSO enabled (provider={oauth2_provider}, "
-            f"user_pool={oauth2_user_pool}, client={oauth2_user_pool_client}, "
+            f"pool={oauth2_user_pool or oauth2_user_pool_uid}, "
+            f"client={oauth2_user_pool_client or oauth2_user_pool_client_uid}, "
             f"redirect_uri={redirect_uri})"
         )
 

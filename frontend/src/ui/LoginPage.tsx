@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Github, LogIn } from "lucide-react";
-import { fetchProviders, loginTo, type Provider } from "../adk/identity";
+import { ArrowRight, Github, LogIn } from "lucide-react";
+import { fetchProviders, loginTo, USERNAME_RE, type Provider } from "../adk/identity";
 
 function providerIcon(id: string) {
   if (id.toLowerCase() === "github") return <Github className="icon" />;
@@ -8,18 +8,22 @@ function providerIcon(id: string) {
 }
 
 export interface LoginPageProps {
-  /** Fallback when the server reports no explicit providers. */
-  onLogin: () => void;
+  /** Chosen username for the no-SSO local mode. */
+  onUsername: (name: string) => void;
 }
 
-/** Branded sign-in landing page (LobeHub-style). Renders a button per SSO
- *  provider the server has configured; clicking starts that provider's flow. */
-export function LoginPage({ onLogin }: LoginPageProps) {
+export function LoginPage({ onUsername }: LoginPageProps) {
   const [providers, setProviders] = useState<Provider[] | null>(null);
+  const [name, setName] = useState("");
 
   useEffect(() => {
     fetchProviders().then(setProviders);
   }, []);
+
+  const valid = USERNAME_RE.test(name);
+  const submit = () => {
+    if (valid) onUsername(name);
+  };
 
   return (
     <div className="login">
@@ -30,29 +34,57 @@ export function LoginPage({ onLogin }: LoginPageProps) {
       <main className="login-main">
         <div className="login-card">
           <h1 className="login-title">
-            会成长的
+            VeADK 提供
             <br />
-            智能体伙伴
+            企业级 Agent 解决方案
           </h1>
-          <p className="login-sub">登录以继续使用 VeADK Web</p>
 
-          <div className="login-providers">
-            {providers && providers.length > 0 ? (
-              providers.map((p) => (
-                <button key={p.id} className="login-btn" onClick={() => loginTo(p.loginUrl)}>
-                  {providerIcon(p.id)}
-                  <span>使用 {p.label} 登录</span>
+          {providers === null ? null : providers.length > 0 ? (
+            <>
+              <p className="login-sub">登录以继续使用 VeADK Web</p>
+              <div className="login-providers">
+                {providers.map((p) => (
+                  <button key={p.id} className="login-btn" onClick={() => loginTo(p.loginUrl)}>
+                    {providerIcon(p.id)}
+                    <span>使用 {p.label} 登录</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="login-sub">输入一个用户名即可开始</p>
+              <form
+                className="login-name"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  submit();
+                }}
+              >
+                <input
+                  className="login-name-input"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="用户名（字母 + 数字，最多 16 位）"
+                  maxLength={16}
+                  autoFocus
+                />
+                <button
+                  type="submit"
+                  className="login-name-go"
+                  disabled={!valid}
+                  aria-label="进入"
+                >
+                  <ArrowRight className="icon" />
                 </button>
-              ))
-            ) : (
-              <button className="login-btn" onClick={onLogin}>
-                <LogIn className="icon" />
-                <span>登录 / 注册</span>
-              </button>
-            )}
-          </div>
+              </form>
+              {name && !valid && (
+                <p className="login-hint">只能包含大小写字母和数字，最多 16 位。</p>
+              )}
+            </>
+          )}
 
-          <p className="login-legal">登录即表示你已阅读并同意服务条款与隐私政策</p>
+          <p className="login-legal">继续即表示你已阅读并同意服务条款与隐私政策</p>
         </div>
       </main>
 
