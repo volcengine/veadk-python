@@ -1,0 +1,73 @@
+---
+title: "Quick Start"
+description: "Install VeADK, then create and run your first agent."
+---
+
+## Prerequisites
+
+Before starting, install VeADK and set the `MODEL_AGENT_API_KEY` environment variable (your Volcengine Ark platform API Key).
+
+<Tabs items={['pip', 'Source preview']}>
+  <Tab value="pip">
+    ```bash
+    # stable release
+    pip install veadk-python
+    ```
+  </Tab>
+  <Tab value="Source preview">
+    ```bash
+    # main-branch preview
+    pip install git+https://github.com/volcengine/veadk-python.git@main
+    ```
+  </Tab>
+</Tabs>
+
+## Creating an Agent
+
+You can create a simple conversational agent by defining the `Agent` class:
+
+```python
+from veadk import Agent
+
+agent = Agent(
+    name="root_agent",
+    description="A helpful assistant for user questions.",
+    instruction="Answer user questions to the best of your knowledge",
+    model_name="doubao-seed-1-6-250615",
+    model_api_key="...",
+)
+```
+
+Parameter descriptions:
+
+- `name`: agent name, used for identification when invoked;
+- `description`: agent description, indicating its basic capabilities in A2A scenarios;
+- `instruction`: the system prompt that defines the agent's behavior and responses;
+- `model_name`: the model the agent uses;
+- `model_api_key`: the API Key used to invoke the model.
+
+## Running an Agent
+
+VeADK uses `Runner` to execute the agent and provides a highly encapsulated `run` method for local testing:
+
+```python
+import asyncio
+
+from veadk import Agent, Runner
+
+agent = Agent(
+    name="root_agent",
+    description="A helpful assistant for user questions.",
+    instruction="Answer user questions to the best of your knowledge",
+    model_name="doubao-seed-1-6-250615",
+    model_api_key="...",
+)
+runner = Runner(agent=agent)
+
+response = asyncio.run(runner.run("Hello"))
+print(response)
+```
+
+<Callout type="info">
+  For more on `Runner`, see the [Runner](/en/docs/framework/runner) chapter.
+</Callout>

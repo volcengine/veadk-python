@@ -1,0 +1,62 @@
+---
+title: "Agent Core Concepts Overview"
+description: "Introduces the core concepts of an Agent and its four building blocks: model, tools, memory, and knowledge base."
+---
+
+## Core Concepts and Design Principles
+
+### Agent
+
+**Overview**: An AI Agent is an intelligent entity that relies on a foundation model as its core decision-making and execution engine. It interacts in natural language, receives external instructions, perceives the input, then analyzes, decides, and takes corresponding actions. It does not operate in isolation — it can flexibly invoke tools such as search, computation, and automation to break through its own capability limits; it can use memory to accumulate context, preferences, and task progress during interactions; and it can connect to knowledge bases built from industry data and domain materials to quickly retrieve precise information to support its judgment. Ultimately it autonomously drives the full workflow from task understanding and planning to execution, becoming an intelligent collaborative partner with self-learning and adaptive abilities. Beyond this, an Agent can interact with other Agents through the A2A protocol to build more powerful capabilities. Agents also have the ability to self-learn and evolve, gradually improving over time. In short, the Agent is the way humans/machines and machines/services will interact in the future.
+
+As described above, an Agent comprises several core building blocks: the foundation model, tools, memory, and the knowledge base, as shown below:
+
+![Agent architecture overview](/assets/images/overview/agent-overview.png)
+
+### Model (LLM, VLM, MLLM)
+
+This is the Agent's brain, including large language models (LLM), vision language models (VLM/MLLM), and more. They understand the user's natural-language or multimodal input, and are responsible for parsing requirements, planning steps, and deciding tool-calling logic. They are the core driver of the Agent.
+
+### Tool
+
+Tools are the Agent's hands and feet. They execute the concrete tasks the model plans and obtain external real-time data or operation results (the model itself cannot directly check the weather, book a flight, query a database, etc.). Common tool types:
+
+| Category | Tool | Description |
+| :--- | :--- | :--- |
+| **Information retrieval** | `Web Search` | Search for real-time information |
+| | `Vesearch` | Vector retrieval |
+| | `Web Scraper` | Crawl web page content |
+| **System operations** | `API call` | Call external services such as ride-hailing, payment, office software (Lark), etc. |
+| | `Database query` | Query databases such as LAS/Bytehouse |
+| | `Local function` | Execute local code such as veFaaS/Lambda |
+| **Standardized protocols** | `MCP`, `Function Call` | Standardize the interaction between the model and tools |
+
+### Memory
+
+Memory is the Agent's memory. It stores conversational context and user preferences, making interactions more coherent and personalized.
+
+| Type | Description | Storage and implementation |
+| :--- | :--- | :--- |
+| **Short-term memory** | Context within a single session. The model gives relevant answers based on context, remembers what you just said, and uses it as input, making the conversation more coherent. | Local memory, MySQL (good for temporary single-session storage) |
+| **Long-term memory** | Historical preferences across sessions. By profiling the user across multiple turns, it identifies interests, preferences, and knowledge domains to provide personalized service in later sessions. | OpenSearch, Redis (support semantic indexing for fast retrieval of historical preferences) |
+
+### Knowledge Base
+
+The knowledge base is the Agent's domain expert. Through RAG it supplements the model's knowledge blind spots and provides accurate domain-specific/private knowledge.
+
+**Core value**
+
+| Value | Description |
+| :--- | :--- |
+| **Supplement private knowledge** | Provides content not present in the model's training data, such as internal documents (employee handbooks, product manuals) and industry materials (medical guidelines, legal provisions). |
+| **Reduce hallucination** | Lets the Agent generate answers grounded in an explicit knowledge base, avoiding confident but wrong responses. |
+
+**Storage and implementation**
+
+| Point | Description |
+| :--- | :--- |
+| **Document support** | TXT, PDF, Word, etc., with automatic chunking. |
+| **Storage tools** | OpenSearch, Viking DB, etc. |
+| **Core technology** | RAG (Retrieval-Augmented Generation): first retrieve relevant chunks from the knowledge base, then pass them to the model to generate the answer. |
+
+The above is a brief introduction to the Agent's core concepts and building blocks. For more details, see the dedicated chapters below.

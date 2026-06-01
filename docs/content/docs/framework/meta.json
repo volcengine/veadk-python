@@ -1,0 +1,31 @@
+{
+  "title": "框架",
+  "icon": "LayoutGrid",
+  "root": true,
+  "pages": [
+    "index",
+    "---[Rocket]入门---",
+    "getting-started",
+    "introduction",
+    "enterprise-design",
+    "configuration",
+    "---[Boxes]核心能力---",
+    "agent",
+    "runner",
+    "tools",
+    "memory",
+    "knowledgebase",
+    "---[Puzzle]扩展与界面---",
+    "plugin",
+    "frontend",
+    "---[ShieldCheck]安全与运维---",
+    "security",
+    "observability",
+    "deploy",
+    "eval-optimization",
+    "---[Compass]更多---",
+    "community",
+    "troubleshooting",
+    "gallery"
+  ]
+}

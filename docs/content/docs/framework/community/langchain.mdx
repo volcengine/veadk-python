@@ -1,0 +1,80 @@
+---
+title: "Langchain 社区支持"
+description: "在 Langchain / LangGraph 应用中使用 VeADK 的模型、知识库以及短期与长期记忆能力。"
+---
+
+VeADK 在 `veadk.community.langchain_ai` 模块下提供了一系列与 Langchain / LangGraph 生态集成的组件，让您可以在 Langchain 应用中直接复用 VeADK 的模型、知识库与记忆能力。
+
+## 模型
+
+`ArkChatModel` 继承自 Langchain 的 `ChatOpenAI`，用于调用火山引擎方舟（Ark）平台上的模型。使用前请配置环境变量 `MODEL_AGENT_API_KEY`。
+
+```python
+from veadk.community.langchain_ai.models.ark_model import ArkChatModel
+
+llm = ArkChatModel(model="deepseek-v3-1-terminus")
+
+response = llm.invoke("你好，请介绍一下你自己。")
+print(response.content)
+```
+
+<Callout type="info">
+  `ArkChatModel` 兼容 Langchain `ChatOpenAI` 的全部接口，您可以像使用任意 Langchain 聊天模型一样在链（chain）、代理（agent）或图（graph）中使用它。
+</Callout>
+
+## 知识库
+
+`KnowledgeBase` 提供基于向量检索的知识库能力。在 Langchain / LangGraph 中，可以通过 `load_knowledgebase` 工具将知识库的语义检索能力暴露给智能体，智能体便可根据用户问题自动检索相关知识。
+
+```python
+from veadk.knowledgebase import KnowledgeBase
+
+knowledgebase = KnowledgeBase(
+    name="preference",
+    backend="viking",
+    index="viking_demo_create_2",
+)
+```
+
+将 `load_knowledgebase` 作为工具提供给 LangGraph 智能体：
+
+```python
+from veadk.community.langchain_ai.tools.load_knowledgebase import load_knowledgebase
+
+# 将 load_knowledgebase 作为工具加入到您的 LangGraph 智能体
+tools = [load_knowledgebase]
+```
+
+智能体在运行时会调用 `load_knowledgebase(query)`，对配置的知识库执行语义检索并返回相关片段。
+
+## 短期记忆
+
+`ShortTermMemory` 提供会话级别（session-scoped）的短期记忆，用于在单次会话内保存对话上下文。
+
+```python
+from veadk.memory.short_term_memory import ShortTermMemory
+
+short_term_memory = ShortTermMemory(backend="sqlite")
+```
+
+短期记忆按会话隔离，适合在一次连续对话中保留上下文。会话结束后，这些数据不会跨会话保留。
+
+## 长期记忆
+
+长期记忆用于在不同会话之间持久化记忆。VeADK 通过 `VikingMemoryStore` 提供基于火山引擎 Viking 的长期记忆存储，并通过 `load_memory` 工具让智能体检索历史记忆。
+
+```python
+from veadk.community.langchain_ai.tools.load_memory import load_memory
+from veadk.community.langchain_ai.store.memory.viking_memory import VikingMemoryStore
+
+store = VikingMemoryStore(index="aiops")
+
+# 将 load_memory 作为工具提供给您的 LangGraph 智能体
+tools = [load_memory]
+```
+
+智能体在运行时会调用 `load_memory(query)`，从长期记忆存储中检索与当前问题相关的历史记忆，从而实现跨会话的记忆能力。
+
+<Callout type="info">
+  使用 `VikingMemoryStore` 前，请确保已正确配置火山引擎 Viking 相关的环境变量。
+</Callout>

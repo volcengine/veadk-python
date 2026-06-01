@@ -1,0 +1,91 @@
+---
+title: "Best Practices"
+description: "Combine short-term and long-term memory to build efficient, continuous, and personalized enterprise agent experiences."
+---
+
+This document explains how to combine [short-term memory](/en/docs/framework/memory/short-term) and [long-term memory](/en/docs/framework/memory/long-term) in enterprise scenarios to deliver efficient, continuous, and personalized agent interactions.
+
+## System Name
+
+Customer Support Assistant
+
+## Scenario
+
+An enterprise wants to build an intelligent customer service system to handle customer inquiries, issue tracking, and multi-turn interactions.
+The system must meet the following requirements:
+
+1. **Multi-turn continuity**: Within the same session, the agent should remember the customer's prior questions and context to avoid repeated questions;
+2. **Cross-session memory**: When a customer returns at a different time, the agent should recognize the user's historical information and provide personalized suggestions;
+3. **Tool calls and logging**: The agent can call the internal knowledge base, CRM system, and ticketing system, and save the results in association with the context.
+
+In this scenario:
+
+- **Short-term memory** is responsible for storing the current session's context, including the user's latest question, the answers already provided, and tool-call results;
+- **Long-term memory** is responsible for storing cross-session customer information, historical ticket status, preferences, and the knowledge base index for FAQs.
+
+## Agent Design
+
+Design approach:
+
+1. **Initialize the agent and short-term memory**
+   - Short-term memory stores current session information for fast context access, ensuring multi-turn coherence.
+2. **Configure the long-term memory backend**
+   - Long-term memory stores the user's historical data and important cross-session information.
+3. **Interaction flow**
+   - User sends a message → Agent retrieves session context from short-term memory → checks long-term memory for relevant history → performs reasoning and tool calls → updates both short-term and long-term memory.
+
+## Runtime Flow
+
+```text
+# Placeholder: a multi-turn dialogue example showing short-term and long-term memory interaction logic
+# 1. User asks a question
+# 2. Agent retrieves short-term memory
+# 3. Agent queries long-term memory (historical tickets / preferences)
+# 4. Agent calls tools (knowledge base / CRM / ticketing system)
+# 5. Agent replies to the user
+# 6. Update short-term and long-term memory
+```
+
+## Start code!
+
+### Preparation
+
+### Agent Definition
+
+### Run
+
+## Results
+
+1. **Short-term memory effect**:
+   - Ensures coherence between questions and context within a single session;
+   - Within the same session, the agent can directly reference information the user provided earlier;
+   - Example: when the user asks "What is the status of the ticket I submitted last time?", the agent can immediately reference the in-session context.
+
+2. **Long-term memory effect**:
+   - Records user information and historical actions across sessions;
+   - Example: the next time the user logs in, the agent can recognize the customer and provide personalized recommendations or reminders, such as "The ticket you submitted last time has been resolved. Do you need any further support?"
+
+3. **Combined effect**:
+   - The agent can access both short-term and long-term memory simultaneously, achieving "in-session continuity + cross-session knowledge accumulation";
+   - Improves response accuracy and user satisfaction while reducing repetitive operations and manual intervention;
+   - Supports complex business workflows, such as continuously tracking multiple tickets or managing long-term projects.
+
+```text
+# Placeholder: result diagram or JSON output example
+# {
+#   "user_id": "12345",
+#   "current_session": {
+#       "short_term_memory": {...},
+#       "latest_query": "...",
+#       "tool_calls": [...]
+#   },
+#   "long_term_memory": {
+#       "previous_sessions": [...],
+#       "preferences": {...},
+#       "historical_tickets": [...]
+#   },
+#   "agent_response": "Based on your ticket history, the latest status is..."
+# }
+```
+
+In this way, the enterprise agent can respond quickly within the current session while also retaining memory across time and tasks, delivering a high-quality, sustainable customer experience.

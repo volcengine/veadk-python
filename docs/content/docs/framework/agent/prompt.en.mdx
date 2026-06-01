@@ -1,0 +1,65 @@
+---
+title: "Prompt Management"
+description: "Version-manage and hot-update an Agent's system prompt via CozeLoop or a custom Prompt Manager."
+---
+
+In real production, prompts need version management and dynamic delivery. VeADK provides a Prompt management module that lets you template and hot-update prompts, and switch prompt versions dynamically at runtime.
+
+## CozeLoop Prompt Management
+
+You can connect your Agent's system prompt to CozeLoop's cloud prompt management.
+
+### Prerequisites
+
+Before using CozeLoop for prompt management, install the Python `cozeloop` SDK:
+
+```bash
+pip install cozeloop
+```
+
+### Obtaining the Attributes
+
+- [Learn how to obtain the CozeLoop Workspace ID](https://loop.coze.cn/open/docs/cozeloop/authentication-for-sdk#05d27a86)
+- [Learn how to obtain the CozeLoop Token / API Key](https://loop.coze.cn/open/docs/cozeloop/authentication-for-sdk)
+- You can obtain the Prompt Key in the "Prompt Development" section of CozeLoop, as shown below:
+
+![CozeLoop Prompt Key](/assets/images/cozeloop_prompt_key.png)
+
+### Usage
+
+```python title="agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.prompts.prompt_manager import CozeloopPromptManager
+
+prompt_manager = CozeloopPromptManager(
+    cozeloop_workspace_id="",   # CozeLoop workspace ID
+    cozeloop_token="",          # CozeLoop token / api key
+    prompt_key="",    # The Prompt Key created in CozeLoop
+    label="production",         # The Prompt label created in CozeLoop
+)
+
+agent = Agent(name="test_prompt_mgr", prompt_manager=prompt_manager)
+
+runner = Runner(agent=agent)
+
+response = asyncio.run(runner.run(messages="What is your task?"))
+print(response)
+```
+
+<Callout type="info" title="Note">
+CozeLoop caches prompts locally with a **refresh interval of 1 minute**. If fetching a prompt fails, VeADK's default Agent system prompt is returned.
+</Callout>
+
+In the logs you can see that before each user request is processed, the `get_prompt` method of `CozeloopPromptManager` is executed to fetch the latest prompt template content. The result looks like this:
+
+![CozeLoop Prompt Manager](/assets/images/agents/cozeloop_prompt_mgr.png)
+
+For more details, see [CozeLoop Prompt Management](https://loop.coze.cn/open/docs/cozeloop/what-is-prompt).
+
+## Implement Your Own Prompt Manager
+
+If you want to implement more advanced prompt templates or variable combinations, you can subclass the `PromptManager` class to implement custom prompt management logic.
+
+When implementing a custom Prompt Manager, you need to implement the `get_prompt` method, which is called before each user request is processed to fetch the latest prompt template content.

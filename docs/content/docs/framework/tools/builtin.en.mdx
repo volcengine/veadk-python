@@ -1,0 +1,1088 @@
+---
+title: "Built-in Tools"
+description: "Guide to VeADK built-in tools (BuiltinTools), covering web search, code execution, image/video generation, and other Volcengine capabilities."
+---
+
+This document explains how to effectively use VeADK built-in tools (BuiltinTools). These tools provide ready-to-use capabilities (such as web search or a code executor) that give your Agent general-purpose abilities. For example, an Agent that needs to retrieve information from the web can directly use the **web_search** tool with no extra configuration.
+
+## How to use
+
+1. **Import**: import the tool you need from the `veadk.tools.builtin_tools` module.
+2. **Configure**: initialize the tool and provide parameters as needed.
+3. **Register**: add the tool instance to the Agent's `tools` list.
+
+<Tabs items={['Python', 'Golang']}>
+  <Tab value="Python">
+
+```python
+from veadk import Agent
+from veadk.tools.builtin_tools.web_search import web_search
+
+# Register the tool when initializing the Agent
+agent = Agent(tools=[web_search])
+```
+
+  </Tab>
+  <Tab value="Golang">
+
+```go
+import (
+    "log"
+
+    veagent "github.com/volcengine/veadk-go/agent/llmagent"
+    "github.com/volcengine/veadk-go/tool/builtin_tools/web_search"
+    "google.golang.org/adk/agent/llmagent"
+    "google.golang.org/adk/tool"
+)
+
+func main() {
+    webSearch, err := web_search.NewWebSearchTool(&web_search.Config{})
+    if err != nil {
+        log.Fatalf("NewWebSearchTool failed: %v", err)
+        return
+    }
+    cfg := veagent.Config{
+        Config: llmagent.Config{
+            Tools: []tool.Tool{webSearch},
+        },
+    }
+    veAgent, err := veagent.New(&cfg)
+    if err != nil {
+        log.Fatalf("NewLLMAgent failed: %v", err)
+        return
+    }
+}
+```
+
+  </Tab>
+</Tabs>
+
+Once a tool is registered, the Agent autonomously decides whether to call it based on the **user prompt** and **instruction**. The framework automatically executes the tool when it is called.
+
+<Callout type="warn">
+Be sure to read the "Limitations" section at the end of this document.
+</Callout>
+
+## Tool list
+
+VeADK integrates the following Volcengine tools:
+
+| Tool name | Description | Import path |
+| :--- | :--- | :--- |
+| `web_search` | Full-web search via the [Fusion Information Search API](https://www.volcengine.com/docs/85508/1650263). | `from veadk.tools.builtin_tools.web_search import web_search` |
+| `web_scraper` | Aggregated search (invitation-only beta), source [here](https://github.com/volcengine/mcp-server/tree/main/server). | `from veadk.tools.builtin_tools.web_scraper import web_scraper` |
+| `vesearch` | Search via the [Online Q&A Agent](https://www.volcengine.com/docs/85508/1512748), supporting Toutiao search and more. | `from veadk.tools.builtin_tools.vesearch import vesearch` |
+| `image_generate` | [Generate images](https://www.volcengine.com/docs/82379/1541523) from text descriptions. | `from veadk.tools.builtin_tools.image_generate import image_generate` |
+| `image_edit` | [Edit images](https://www.volcengine.com/docs/82379/1541523) (image-to-image). | `from veadk.tools.builtin_tools.image_edit import image_edit` |
+| `video_generate` | [Generate videos](https://www.volcengine.com/docs/82379/1520757) from text descriptions. | `from veadk.tools.builtin_tools.video_generate import video_generate` |
+| `run_code` | Execute code in the [AgentKit sandbox](https://console.volcengine.com/agentkit-ppe/region:agentkit-ppe+cn-beijing/builtintools). | `from veadk.tools.builtin_tools.run_code import run_code` |
+| `execute_skills` | Remotely run an `agent.py` workflow in a prebuilt skills sandbox. | `from veadk.tools.builtin_tools.execute_skills import execute_skills` |
+| `coding` | Run a code-generation workflow in a prebuilt OpenCode sandbox. | `from veadk.tools.builtin_tools.coding import coding` |
+| `run_sandbox_agent` | Run `agent.py` in a remote AgentKit sandbox with any specified `tool_id`. | `from veadk.tools.builtin_tools.run_sandbox_agent import run_sandbox_agent` |
+| `lark` | Integrate [Feishu (Lark) open capabilities](https://open.larkoffice.com/document/uAjLw4CM/ukTMukTMukTM/mcp_integration/mcp_installation) for document processing, conversation management, and more. | `from veadk.tools.builtin_tools.lark import lark` |
+| `las` | Data management based on the [Volcengine AI multimodal data lake service LAS](https://www.volcengine.com/mcp-marketplace). | `from veadk.tools.builtin_tools.las import las` |
+| `mobile_run` | Execute mobile-phone commands. | `from veadk.tools.builtin_tools.mobile_run import create_mobile_use_tool` |
+| `vod` | Video editing assistant. | `from veadk.tools.builtin_tools.vod import vod_tools` |
+
+### Web Search
+
+The `web_search` tool lets the Agent search through the Fusion Information Search API. For details, see the [Fusion Information Search API docs](https://www.volcengine.com/docs/85508/1650263).
+
+<Callout type="warn" title="Additional requirements for the web_search tool">
+1. You need to configure a Volcengine AK/SK, or use a temporary StsToken authorized via Volcengine IAM.
+2. You need to configure the API Key used for the Agent's reasoning model.
+</Callout>
+
+<Tabs items={['Python', 'Golang', 'Environment variables']}>
+  <Tab value="Python">
+
+```python title="examples/tools/web_search/agent.py"
+from veadk import Agent, Runner
+from veadk.tools.builtin_tools.web_search import web_search
+from veadk.memory.short_term_memory import ShortTermMemory
+
+
+app_name = "veadk_app"
+user_id = "veadk_user"
+session_id = "veadk_session"
+
+agent = Agent(
+    name="WebSearchAgent",
+    model_name="doubao-seed-1-6-250615",
+    description="An agent that can get result from Web Search",
+    instruction="You are a helpful assistant that can provide information use web search tool.",
+    tools=[web_search],
+)
+short_term_memory = ShortTermMemory()
+
+runner = Runner(
+    agent=agent, short_term_memory=short_term_memory, app_name=app_name, user_id=user_id
+)
+
+
+async def main():
+    response = await runner.run(
+        messages="What is the weather in Hangzhou today?", session_id=session_id
+    )
+    print(response)
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    asyncio.run(main())
+```
+
+  </Tab>
+  <Tab value="Golang">
+
+```go title="examples/tools/web_search/agent.go"
+package main
+
+import (
+	"context"
+	"log"
+	"os"
+
+	veagent "github.com/volcengine/veadk-go/agent/llmagent"
+	"github.com/volcengine/veadk-go/common"
+	"github.com/volcengine/veadk-go/tool/builtin_tools/web_search"
+	"github.com/volcengine/veadk-go/utils"
+	"google.golang.org/adk/agent"
+	"google.golang.org/adk/cmd/launcher"
+	"google.golang.org/adk/cmd/launcher/full"
+	"google.golang.org/adk/session"
+	"google.golang.org/adk/tool"
+)
+
+func main() {
+	ctx := context.Background()
+	sessionService := session.InMemoryService()
+
+	cfg := &veagent.Config{
+		ModelName:    common.DEFAULT_MODEL_AGENT_NAME,
+		ModelAPIBase: common.DEFAULT_MODEL_AGENT_API_BASE,
+		ModelAPIKey:  utils.GetEnvWithDefault(common.MODEL_AGENT_API_KEY),
+	}
+	cfg.Name = "WebSearchAgent"
+	cfg.Description = "An agent that can get result from Web Search"
+	cfg.Instruction = "You are a helpful assistant that can provide information use web search tool."
+
+	webSearch, err := web_search.NewWebSearchTool(&web_search.Config{})
+	if err != nil {
+		log.Fatalf("NewWebSearchTool failed: %v", err)
+		return
+	}
+
+	cfg.Tools = []tool.Tool{webSearch}
+
+	rootAgent, err := veagent.New(cfg)
+	if err != nil {
+		log.Fatalf("Failed to create agent: %v", err)
+	}
+
+	config := &launcher.Config{
+		AgentLoader:    agent.NewSingleLoader(rootAgent),
+		SessionService: sessionService,
+	}
+
+	l := full.NewLauncher()
+	if err = l.Execute(ctx, config, os.Args[1:]); err != nil {
+		log.Fatalf("Run failed: %v\n\n%s", err, l.CommandLineSyntax())
+	}
+}
+```
+
+  </Tab>
+  <Tab value="Environment variables">
+
+Environment variables:
+
+- `MODEL_AGENT_API_KEY`: API Key for the Agent's reasoning model
+- `VOLCENGINE_ACCESS_KEY`: Volcengine AccessKey used to call WebSearch
+- `VOLCENGINE_SECRET_KEY`: Volcengine SecretKey used to call WebSearch
+
+Or define them in `config.yaml`:
+
+```yaml title="config.yaml"
+model:
+  agent:
+    provider: openai
+    name: doubao-seed-1-6-250615
+    api_base: https://ark.cn-beijing.volces.com/api/v3/
+    api_key: your-api-key-here
+volcengine:
+  # [optional] for Viking DB and `web_search` tool
+  access_key: you-access-key-here
+  secret_key: you-secret-key-here
+```
+
+  </Tab>
+</Tabs>
+
+Result:
+
+![Result](/assets/images/tools/web_search.png)
+
+### VeSearch
+
+The `vesearch` tool lets the Agent search by calling Volcengine's Online Q&A Agent. For details, see the [Online Q&A Agent](https://www.volcengine.com/docs/85508/1512748).
+
+<Callout type="warn" title="Additional requirements for the vesearch tool">
+1. You need to configure a Volcengine AK/SK, or use a temporary StsToken authorized via Volcengine IAM.
+2. You need to configure the API Key used for the Agent's reasoning model.
+3. You need to configure the Online Q&A Agent's agent ID, obtained after creating an agent in the console ([console address](https://console.volcengine.com/ask-echo/my-agent)). The config item name is `TOOL_VESEARCH_ENDPOINT`.
+</Callout>
+
+<Tabs items={['Code', 'Environment variables']}>
+  <Tab value="Code">
+
+```python title="examples/tools/vesearch/agent.py"
+from veadk import Agent, Runner
+from veadk.tools.builtin_tools.vesearch import vesearch
+from veadk.memory.short_term_memory import ShortTermMemory
+
+
+app_name = "veadk_app"
+user_id = "veadk_user"
+session_id = "veadk_session"
+API_KEY = "vesearch_api_key"
+
+agent = Agent(
+    name="ve_search_agent",
+    model_name="doubao-seed-1-6-250615",
+    api_key=API_KEY,
+    description="An agent that can get result from veSearch",
+    instruction="You are a helpful assistant that can provide information use vesearch tool.",
+    tools=[vesearch],
+)
+short_term_memory = ShortTermMemory()
+
+runner = Runner(
+    agent=agent, short_term_memory=short_term_memory, app_name=app_name, user_id=user_id
+)
+
+
+async def main():
+    response = await runner.run(
+        messages="What is the weather in Hangzhou today?", session_id=session_id
+    )
+    print(response)
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    asyncio.run(main())
+```
+
+  </Tab>
+  <Tab value="Environment variables">
+
+Environment variables:
+
+- `MODEL_AGENT_API_KEY`: API Key for the Agent's reasoning model
+- `VOLCENGINE_ACCESS_KEY`: Volcengine AccessKey used to call WebSearch
+- `VOLCENGINE_SECRET_KEY`: Volcengine SecretKey used to call WebSearch
+- `TOOL_VESEARCH_ENDPOINT`: agent ID for the Online Q&A Agent. Note: **must be configured as an environment variable.**
+
+Or define them in `config.yaml`:
+
+```yaml title="config.yaml"
+model:
+  agent:
+    provider: openai
+    name: doubao-seed-1-6-250615
+    api_base: https://ark.cn-beijing.volces.com/api/v3/
+    api_key: your-api-key-here
+volcengine:
+  # [optional] for Viking DB and `web_search` tool
+  access_key: you-access-key-here
+  secret_key: you-secret-key-here
+```
+
+  </Tab>
+</Tabs>
+
+Result:
+
+![Result](/assets/images/tools/vesearch.png)
+
+### Run Code
+
+The `run_code` tool enables the Agent to execute code, allowing the model to perform computation, data processing, or run small programs.
+
+<Callout type="warn" title="Additional requirements for the run_code tool">
+1. You need to configure a Volcengine AK/SK, or use a temporary StsToken authorized via Volcengine IAM.
+2. You need to configure the API Key used for the Agent's reasoning model.
+3. You need to configure an AgentKit Tools Id, see the **AgentKit sandbox tools (Tools)** section.
+</Callout>
+
+<Tabs items={['Code', 'Environment variables']}>
+  <Tab value="Code">
+
+```python title="examples/tools/run_code/agent.py"
+from veadk import Agent, Runner
+from veadk.tools.builtin_tools.web_search import web_search
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.tools.builtin_tools.run_code import run_code
+
+app_name = "veadk_app"
+user_id = "veadk_user"
+session_id = "veadk_session"
+
+agent: Agent = Agent(
+    name="data_analysis_agent",
+    description="A data analysis for stock marketing",
+    instruction="""
+        你是一个资深软件工程师，在沙箱里执行生产的代码， 避免每次安装检查, 
+        可以使用python lib akshare 下载相关的股票数据。可以通过web_search工具搜索相关公司的经营数据。如果缺失了依赖库, 
+        通过python代码为沙箱安装缺失的依赖库。""",
+    tools=[run_code, web_search],
+)
+
+
+short_term_memory = ShortTermMemory()
+
+runner = Runner(
+    agent=agent, short_term_memory=short_term_memory, app_name=app_name, user_id=user_id
+)
+
+
+async def main():
+    response = await runner.run(messages="阳光电源？", session_id=session_id)
+    print(response)
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    asyncio.run(main())
+```
+
+  </Tab>
+  <Tab value="Environment variables">
+
+The following items must be configured as environment variables:
+
+- `AGENTKIT_TOOL_ID`: the default AgentKit sandbox environment Id, used as the fallback for all sandbox tools
+- `AGENTKIT_TOOL_ID_SCRIPT`: the dedicated sandbox environment Id for `run_code`; falls back to `AGENTKIT_TOOL_ID` if unset
+- `AGENTKIT_TOOL_ID_SKILLS`: the dedicated sandbox environment Id for `execute_skills`; falls back to `AGENTKIT_TOOL_ID` if unset
+- `AGENTKIT_TOOL_ID_OPENCODE`: the dedicated sandbox environment Id for `coding`; falls back to `AGENTKIT_TOOL_ID` if unset
+- `AGENTKIT_TOOL_HOST`: the EndPoint for calling Volcengine AgentKit Tools
+- `AGENTKIT_TOOL_SERVICE_CODE`: the ServiceCode for calling AgentKit Tools
+- `AGENTKIT_TOOL_SCHEME`: switches the protocol for calling AgentKit Tools; allows `http`/`https`, defaults to `https`
+- `AGENTKIT_TOP_SCHEME`: switches the protocol for calling AgentKit TOP; allows `http`/`https`, defaults to `https`
+
+Environment variables:
+
+- `MODEL_AGENT_API_KEY`: API Key for the Agent's reasoning model
+- `VOLCENGINE_ACCESS_KEY`: Volcengine AccessKey used to call WebSearch
+- `VOLCENGINE_SECRET_KEY`: Volcengine SecretKey used to call WebSearch
+
+Or define them in `config.yaml`:
+
+```yaml title="config.yaml"
+model:
+  agent:
+    provider: openai
+    name: doubao-seed-1-6-250615
+    api_base: https://ark.cn-beijing.volces.com/api/v3/
+    api_key: your-api-key-here
+agentkit:
+  tool_id: your-default-tool-id
+  tool_id_script: your-script-tool-id
+  tool_id_skills: your-skills-tool-id
+  tool_id_opencode: your-opencode-tool-id
+volcengine:
+  # [optional] for Viking DB and `web_search` tool
+  access_key: you-access-key-here
+  secret_key: you-secret-key-here
+```
+
+  </Tab>
+</Tabs>
+
+Result:
+
+![Result](/assets/images/tools/run_code1.png)
+![Result](/assets/images/tools/run_code2.png)
+
+### Image Generate
+
+The `image_generate` tool generates images from a user's description.
+
+<Callout type="warn" title="Additional requirements for the image_generate tool">
+1. You need to configure the API Key used for the Agent's reasoning model.
+2. You need to configure the model name used for image generation.
+</Callout>
+
+<Tabs items={['Python', 'Golang', 'Environment variables']}>
+  <Tab value="Python">
+
+```python title="examples/tools/image_generate/agent.py"
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.tools.builtin_tools.generate_image import image_generate
+
+app_name = "veadk_app"
+user_id = "veadk_user"
+session_id = "veadk_session"
+
+agent = Agent(
+    name="image_generate_agent",
+    description=("根据需求生成图片."),
+    instruction=(
+        """
+        你是一个图片生成专家，根据用户的需求生成图片。
+        你可以使用的工具有：
+            - image_generate
+        你只能依靠自己和绘图工具来完成任务。
+        """
+    ),
+    tools=[
+        image_generate,
+    ],
+)
+
+short_term_memory = ShortTermMemory()
+
+runner = Runner(
+    agent=agent, short_term_memory=short_term_memory, app_name=app_name, user_id=user_id
+)
+
+
+async def main():
+    response = await runner.run(messages="Generate a cute kitten", session_id=session_id)
+    print(response)
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    asyncio.run(main())
+```
+
+  </Tab>
+  <Tab value="Golang">
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "os"
+
+    veagent "github.com/volcengine/veadk-go/agent/llmagent"
+    "github.com/volcengine/veadk-go/common"
+    "github.com/volcengine/veadk-go/tool/builtin_tools"
+    "google.golang.org/adk/agent"
+    "google.golang.org/adk/agent/llmagent"
+    "google.golang.org/adk/artifact"
+    "google.golang.org/adk/cmd/launcher"
+    "google.golang.org/adk/cmd/launcher/full"
+    "google.golang.org/adk/session"
+    "google.golang.org/adk/tool"
+)
+
+func main() {
+    ctx := context.Background()
+    cfg := &veagent.Config{
+        ModelName:    common.DEFAULT_MODEL_AGENT_NAME,
+        ModelAPIBase: common.DEFAULT_MODEL_AGENT_API_BASE,
+        ModelAPIKey:  os.Getenv(common.MODEL_AGENT_API_KEY),
+    }
+    cfg.Name = "image_generate_tool_agent"
+    cfg.Description = "Agent to generate images based on text descriptions or images."
+    cfg.Instruction = "I can generate images based on text descriptions or images."
+    cfg.AfterModelCallbacks = []llmagent.AfterModelCallback{saveReportfunc}
+
+    imageGenerate, err := builtin_tools.NewImageGenerateTool(&builtin_tools.ImageGenerateConfig{
+        ModelName: common.DEFAULT_MODEL_IMAGE_NAME,
+        BaseURL:   common.DEFAULT_MODEL_IMAGE_API_BASE,
+        APIKey:    os.Getenv(common.MODEL_IMAGE_API_KEY),
+    })
+    if err != nil {
+        fmt.Printf("NewLLMAgent failed: %v", err)
+        return
+    }
+
+    cfg.Tools = []tool.Tool{imageGenerate}
+
+    sessionService := session.InMemoryService()
+    rootAgent, err := veagent.New(cfg)
+
+    if err != nil {
+        log.Fatalf("Failed to create agent: %v", err)
+    }
+
+    agentLoader, err := agent.NewMultiLoader(
+        rootAgent,
+    )
+    if err != nil {
+        log.Fatalf("Failed to create agent loader: %v", err)
+    }
+
+    artifactservice := artifact.InMemoryService()
+    config := &launcher.Config{
+        ArtifactService: artifactservice,
+        SessionService:  sessionService,
+        AgentLoader:     agentLoader,
+    }
+
+    l := full.NewLauncher()
+    if err = l.Execute(ctx, config, os.Args[1:]); err != nil {
+        log.Fatalf("Run failed: %v\n\n%s", err, l.CommandLineSyntax())
+    }
+}
+```
+
+  </Tab>
+  <Tab value="Environment variables">
+
+Environment variables:
+
+- `MODEL_IMAGE_NAME`: the model name used for image generation
+- `MODEL_AGENT_API_KEY`: API Key for the Agent's reasoning model
+
+Or define them in `config.yaml`:
+
+```yaml title="config.yaml"
+model:
+  agent:
+    provider: openai
+    name: doubao-seed-1-6-250615
+    api_base: https://ark.cn-beijing.volces.com/api/v3/
+    api_key: your-api-key-here
+  image:
+    name: doubao-seedream-4-0-250828
+    api_base: https://ark.cn-beijing.volces.com/api/v3/
+    api_key: your-api-key-here
+```
+
+  </Tab>
+</Tabs>
+
+Result:
+
+![Result](/assets/images/tools/cat.jpeg)
+![Result](/assets/images/tools/image_generate.png)
+
+### Video Generate
+
+The `video_generate` tool generates videos from a user's description.
+
+<Callout type="warn" title="Additional requirements for the video_generate tool">
+1. You need to configure the API Key used for the Agent's reasoning model.
+2. You need to configure the model name used for video generation.
+3. You need to configure the model name used for image generation (this example uses the image_generate tool, so an image-generation model config is also required).
+</Callout>
+
+<Tabs items={['Python', 'Golang', 'Environment variables']}>
+  <Tab value="Python">
+
+```python title="examples/tools/video_generate/agent.py"
+from veadk import Agent, Runner
+from veadk.tools.builtin_tools.video_generate import video_generate
+from veadk.tools.builtin_tools.image_generate import image_generate
+from veadk.memory.short_term_memory import ShortTermMemory
+
+app_name = "veadk_app"
+user_id = "veadk_user"
+session_id = "veadk_session"
+
+agent = Agent(
+    name="quick_video_create_agent",
+    description=("You are an expert in creating images and video"),
+    instruction="""You can create images and using the images to generate video, 
+                 first you using the image_generate tool to create an image as the first_frame and next create the last_frame, 
+                 then you using the generated first_frame and last_frame to invoke video_generate tool to create a video.
+                 After the video is created, you need to return the full absolute path of the video avoid the user cannot find the video
+                 and give a quick summary of the content of the video.
+                """,
+    tools=[image_generate, video_generate],
+)
+
+
+short_term_memory = ShortTermMemory()
+
+runner = Runner(
+    agent=agent, short_term_memory=short_term_memory, app_name=app_name, user_id=user_id
+)
+
+
+async def main():
+    response = await runner.run(
+        messages="First generate an image of a puppy, then generate an image of the puppy flying up to the sky to catch a mouse, and finally compose a video",
+        session_id=session_id,
+    )
+    print(response)
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    asyncio.run(main())
+```
+
+  </Tab>
+  <Tab value="Golang">
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "os"
+
+    veagent "github.com/volcengine/veadk-go/agent/llmagent"
+    "github.com/volcengine/veadk-go/common"
+    "github.com/volcengine/veadk-go/tool/builtin_tools"
+    "google.golang.org/adk/agent"
+    "google.golang.org/adk/artifact"
+    "google.golang.org/adk/cmd/launcher"
+    "google.golang.org/adk/cmd/launcher/full"
+    "google.golang.org/adk/session"
+    "google.golang.org/adk/tool"
+)
+
+func main() {
+    ctx := context.Background()
+    cfg := &veagent.Config{
+        ModelName:    common.DEFAULT_MODEL_AGENT_NAME,
+        ModelAPIBase: common.DEFAULT_MODEL_AGENT_API_BASE,
+        ModelAPIKey:  os.Getenv(common.MODEL_AGENT_API_KEY),
+    }
+    videoGenerate, err := builtin_tools.NewVideoGenerateTool(&builtin_tools.VideoGenerateConfig{
+        ModelName: common.DEFAULT_MODEL_VIDEO_NAME,
+        BaseURL:   common.DEFAULT_MODEL_VIDEO_API_BASE,
+        APIKey:    os.Getenv(common.MODEL_VIDEO_API_KEY),
+    })
+    if err != nil {
+        fmt.Printf("NewLLMAgent failed: %v", err)
+        return
+    }
+
+    cfg.Tools = []tool.Tool{videoGenerate}
+
+    sessionService := session.InMemoryService()
+    rootAgent, err := veagent.New(cfg)
+
+    if err != nil {
+        log.Fatalf("Failed to create agent: %v", err)
+    }
+
+    agentLoader, err := agent.NewMultiLoader(
+        rootAgent,
+    )
+    if err != nil {
+        log.Fatalf("Failed to create agent loader: %v", err)
+    }
+
+    artifactservice := artifact.InMemoryService()
+    config := &launcher.Config{
+        ArtifactService: artifactservice,
+        SessionService:  sessionService,
+        AgentLoader:     agentLoader,
+    }
+
+    l := full.NewLauncher()
+    if err = l.Execute(ctx, config, os.Args[1:]); err != nil {
+        log.Fatalf("Run failed: %v\n\n%s", err, l.CommandLineSyntax())
+    }
+}
+```
+
+  </Tab>
+  <Tab value="Environment variables">
+
+Environment variables:
+
+- `MODEL_VIDEO_NAME`: the model name used for video generation
+- `MODEL_IMAGE_NAME`: the model name used for image generation
+- `MODEL_AGENT_API_KEY`: API Key for the Agent's reasoning model
+
+Or define them in `config.yaml`:
+
+```yaml title="config.yaml"
+model:
+  agent:
+    provider: openai
+    name: doubao-seed-1-6-250615
+    api_base: https://ark.cn-beijing.volces.com/api/v3/
+    api_key: your-api-key-here
+  image:
+    name: doubao-seedream-4-0-250828
+    api_base: https://ark.cn-beijing.volces.com/api/v3/
+    api_key: your-api-key-here
+  video:
+    name: doubao-seedance-1-0-pro-250528
+    api_base: https://ark.cn-beijing.volces.com/api/v3/
+    api_key: your-api-key-here
+```
+
+  </Tab>
+</Tabs>
+
+Result:
+
+![Result](/assets/images/tools/video_generate.gif)
+![Result](/assets/images/tools/video_generate1.png)
+![Result](/assets/images/tools/video_generate2.png)
+
+### Lark MCP Tools
+
+The `lark` MCP tool set helps you quickly integrate an AI Agent with Feishu (Lark) open capabilities, enabling Agent-based automation such as Feishu cloud document processing, conversation management, and calendar scheduling.
+
+<Callout type="warn" title="Additional requirements for the lark tool">
+See [Lark create app](https://open.larkoffice.com/document/develop-an-echo-bot/introduction) for how to obtain the items below.
+
+1. You need to configure the API Key used for the Agent's reasoning model.
+2. You need to configure the Application ID for the Lark service.
+3. You need to configure the API Key for the Lark service.
+4. You need to configure the OAuthToken for the Lark service.
+</Callout>
+
+<Tabs items={['Code', 'Environment variables']}>
+  <Tab value="Code">
+
+```python title="examples/tools/lark/agent.py"
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.tools.builtin_tools.lark import lark_tools
+
+app_name = "veadk_app"
+user_id = "veadk_user"
+session_id = "veadk_session"
+
+agent = Agent(
+    name="lark_agent",
+    description=("飞书机器人"),
+    instruction=(
+        """
+            你是一个飞书机器人，通过lark_tools给用户发消息。
+        """
+    ),
+    tools=[
+        lark_tools,
+    ],
+)
+
+short_term_memory = ShortTermMemory()
+
+runner = Runner(
+    agent=agent, short_term_memory=short_term_memory, app_name=app_name, user_id=user_id
+)
+
+
+async def main():
+    response = await runner.run(
+        messages="给xiangya@bytedance.com发送'你好，我是lark agent'",
+        session_id=session_id,
+    )
+    print(response)
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    asyncio.run(main())
+```
+
+  </Tab>
+  <Tab value="Environment variables">
+
+Items that must be configured as environment variables:
+
+- `TOOL_LARK_ENDPOINT`: the Endpoint for the Lark service
+- `TOOL_LARK_API_KEY`: the API Key for the Lark service
+- `TOOL_LARK_TOKEN`: the OAuthToken for the Lark service
+
+Environment variables:
+
+- `MODEL_AGENT_API_KEY`: API Key for the Agent's reasoning model
+
+Or define them in `config.yaml`:
+
+```yaml title="config.yaml"
+model:
+  agent:
+    provider: openai
+    name: doubao-seed-1-6-250615
+    api_base: https://ark.cn-beijing.volces.com/api/v3/
+    api_key: your-api-key-here
+```
+
+  </Tab>
+</Tabs>
+
+Result:
+
+![Result](/assets/images/tools/lark1.png)
+![Result](/assets/images/tools/lark2.png)
+
+### LAS MCP Tools
+
+The `las` MCP tool set is built on the AI multimodal data lake service LAS, providing capabilities to create, preview, query/analyze, edit, and clean multimodal datasets.
+
+<Callout type="warn" title="Additional requirements for the las tool">
+1. You need to configure the API Key used for the Agent's reasoning model.
+2. You need to [create a LAS general dataset](https://console.volcengine.com/las/region:las+cn-beijing/next/dataset/common/create) in advance and obtain its LAS DatasetId.
+3. You need to configure the DatasetId for the LAS service.
+4. You need to configure the URL for the LAS service ([how to obtain the URL](https://www.volcengine.com/mcp-marketplace/detail?name=LAS%20MCP)).
+</Callout>
+
+<Tabs items={['Code', 'Environment variables']}>
+  <Tab value="Code">
+
+```python title="examples/tools/las/agent.py"
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.tools.builtin_tools.las import las
+
+app_name = "veadk_app"
+user_id = "veadk_user"
+session_id = "veadk_session"
+
+agent = Agent(
+    name="las_agent",
+    description=("use data from las"),
+    instruction=(
+        """
+        你是一个诗人，根据用户的需求生成诗词。
+        你可以使用的MCP工具集有：
+            - las
+        第一步你需要使用las工具去ds_public数据集检索相关内容，然后基于检索内容作为基础来写一首诗词。
+        """
+    ),
+    tools=[
+        las,
+    ],
+)
+
+short_term_memory = ShortTermMemory()
+
+runner = Runner(
+    agent=agent, short_term_memory=short_term_memory, app_name=app_name, user_id=user_id
+)
+
+
+async def main():
+    response = await runner.run(
+        messages="写一首国风和木头、爱情相关的诗词", session_id=session_id
+    )
+    print(response)
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    asyncio.run(main())
+```
+
+  </Tab>
+  <Tab value="Environment variables">
+
+Items that must be configured as environment variables:
+
+- `TOOL_LAS_URL`: the address that serves the LAS MCP Server
+- `TOOL_LAS_DATASET_ID`: the dataset ID used by the LAS service
+
+Environment variables:
+
+- `MODEL_AGENT_API_KEY`: API Key for the Agent's reasoning model
+
+Or define them in `config.yaml`:
+
+```yaml title="config.yaml"
+model:
+  agent:
+    provider: openai
+    name: doubao-seed-1-6-250615
+    api_base: https://ark.cn-beijing.volces.com/api/v3/
+    api_key: your-api-key-here
+```
+
+  </Tab>
+</Tabs>
+
+Result:
+
+![Result](/assets/images/tools/las1.png)
+![Result](/assets/images/tools/las2.png)
+
+### Mobile Run
+
+The `mobile_run` tool lets the Agent complete phone tasks on a cloud phone.
+
+<Callout type="warn" title="Additional requirements for the mobile_run tool">
+1. You need to purchase the cloud phone service on Volcengine and subscribe to a pod.
+2. Configure the environment on the cloud phone as needed: you must download apps, log into accounts, and so on.
+</Callout>
+
+<Tabs items={['Code', 'Environment variables']}>
+  <Tab value="Code">
+
+```python title="examples/tools/mobile_run/agent.py"
+# (example: examples/tools/mobile_run/agent.py)
+from veadk import Agent, Runner
+from veadk.tools.builtin_tools.mobile_run import create_mobile_use_tool
+
+agent = Agent(tools=[create_mobile_use_tool()])
+runner = Runner(agent=agent)
+```
+
+  </Tab>
+  <Tab value="Environment variables">
+
+Items that must be configured as environment variables:
+
+- `TOOL_MOBIL_USE_TOOL_ID`: the cloud phone id used to execute commands
+
+Or define them in `config.yaml`:
+
+```yaml title="config.yaml"
+tool:
+  mobile_use:
+    tool_id:
+      - product_id-pod_id
+      - product_id-pod_id
+
+volcengine:
+  access_key: xxx
+  secret_key: xxx
+```
+
+How to obtain:
+
+1. Log into Volcengine and open the cloud phone product console.
+
+![Cloud phone product console](/assets/images/tools/mua_1.png)
+![Instance management view](/assets/images/tools/mua_2.png)
+
+2. The `tool_id` format is `product_id-pod_id`.
+
+  </Tab>
+</Tabs>
+
+Result:
+
+![img_2.png](/assets/images/tools/mua_3.png)
+
+### Vod MCP Tool
+
+`vod_tools` lets the Agent perform video editing by calling Volcengine's video cloud MCP. For details, see the [VOD MCP Server](https://github.com/volcengine/mcp-server/blob/main/server/mcp_server_vod/README_zh.md).
+
+<Callout type="warn" title="Additional requirements for vod_tools">
+1. You need to configure a Volcengine AK/SK.
+2. (Optional) You can configure `TOOL_VOD_GROUPS` to select diverse video editing capabilities. Available values:
+    - `edit`: video editing tools
+    - `intelligent_slicing`: intelligent slicing tools
+    - `intelligent_matting`: intelligent matting tools
+    - `subtitle_processing`: subtitle processing tools
+    - `audio_processing`: audio processing tools
+    - `video_enhancement`: video enhancement tools
+    - `upload`: upload-related tools
+    - `video_play`: video playback tools
+3. (Optional) The tool connection timeout `TOOL_VOD_TIMEOUT`, default 10 seconds.
+4. Note: if you need multiple tool groups, join them with commas; if not configured, the default is `edit,video_play`.
+5. Note: the video cloud tools do not support Space creation; please create a [video cloud space](https://console.volcengine.com/vod/region:vod+cn-north-1/overview/) in advance in the Volcengine video cloud console.
+</Callout>
+
+<Tabs items={['Python', 'Environment variables']}>
+  <Tab value="Python">
+
+```python
+import asyncio
+from veadk import Agent, Runner
+from veadk.tools.builtin_tools.vod import vod_tools
+agent = Agent(tools=[vod_tools])
+runner = Runner(agent)
+result = asyncio.run(
+    runner.run(
+        messages="将这两个视频合并:<your-url1>, <your-url2>, space_name为<your-space-name",
+    )
+)
+print(result)
+```
+
+  </Tab>
+  <Tab value="Environment variables">
+
+Items that must be configured as environment variables:
+
+- `VOLCENGINE_ACCESS_KEY`: Volcengine AccessKey
+- `VOLCENGINE_SECRET_KEY`: Volcengine SecretKey
+
+Optional environment variables:
+
+- `TOOL_VOD_GROUPS`: configure capability groups
+- `TOOL_VOD_TIMEOUT`: tool connection timeout, default 10.0 seconds
+
+Or define them in `config.yaml`:
+
+```yaml title="config.yaml"
+model:
+  agent:
+    provider: openai
+    name: doubao-seed-1-6-250615
+    api_base: https://ark.cn-beijing.volces.com/api/v3/
+    api_key: your-api-key-here
+volcengine:
+  access_key: you-access-key-here
+  secret_key: you-secret-key-here
+tool:
+  vod:
+    groups: xxxxx
+    timeout: 10.0
+```
+
+  </Tab>
+</Tabs>
+
+Output:
+
+```text
+The two videos have been merged successfully. Details of the merged video:
+- **Playback URL**: <url>
+- **Duration**: x seconds
+- **Resolution**: xxxxx
+- **File name**: xxxxx.mp4
+(Note: the playback URL is valid for 60 minutes; regenerate it if it expires.)
+```
+
+Note: some video editing tasks may take a long time. Such tasks return a `task_id` directly; you can keep asking the Agent to query whether the task is complete and obtain the follow-up result.
+
+## System tools
+
+- `load_knowledgebase`: a knowledge base retrieval tool. When you pass the `knowledgebase` parameter to the Agent, this tool is automatically mounted, and the Agent autonomously decides when to query the knowledge base at runtime.
+- `load_memory`: a long-term memory retrieval tool. When you pass the `long_term_memory` parameter to the Agent, this tool is automatically mounted, and the Agent autonomously decides when to query long-term memory at runtime.
+
+See [System Tools](/en/docs/framework/tools/system-tools) for details.
+
+## Others
+
+### AgentKit sandbox tools (Tools)
+
+AgentKit sandbox tools provide a variety of runtime-environment tools that agents need to perform tasks, supporting fast integration and convenient invocation; VeADK also provides more built-in tools. The all-in-one tool set includes Browser, Terminal, and Code runtime environments, and switches automatically based on the task.
+
+**Create a sandbox** following these steps:
+
+1. **Create a sandbox tool**: set a custom sandbox name such as `AIO_Sandbox_xxxx`, choose "all-in-one tool set" as the tool set type, and describe it as "Python code sandbox".
+
+![Create sandbox](/assets/images/tools/agentkittools1.png)
+![Create sandbox](/assets/images/tools/agentkittools2.png)
+
+2. **Get the result**: after creation, obtain the sandbox ID for `AIO_Sandbox_xxxx` in the console, e.g. `t-ye8dj82xxxxx`.
+
+![Get sandbox ID](/assets/images/tools/agentkittools3.png)
+
+## Limitations
+
+- Built-in tools rely on related Volcengine services. Before use, make sure the corresponding services are enabled and that AK/SK, API Key, and other authentication is configured.
+- Some tools (such as `web_scraper`) are in an invitation-only beta; availability is governed by the console.
+- Sandbox tools (`run_code`, `execute_skills`, `coding`, `run_sandbox_agent`) require a correctly configured AgentKit Tool Id, otherwise they cannot be invoked.

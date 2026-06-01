@@ -1,0 +1,39 @@
+---
+title: "API 参考"
+description: "VeADK 的公共 API 概览与模块索引。"
+---
+
+VeADK 的完整 API 文档由源码中的 docstring 生成。本页提供顶层入口与模块索引，便于你快速定位。
+
+## 顶层入口
+
+最常用的对象可直接从 `veadk` 导入：
+
+```python
+from veadk import Agent, Runner
+```
+
+| 对象 | 说明 |
+| :-- | :-- |
+| `Agent` | 智能体核心类，封装模型、工具、记忆、知识库等能力。参见[构建智能体](/cn/docs/framework/agent/create)。 |
+| `Runner` | 执行引擎，负责运行智能体并管理会话。参见[执行引擎](/cn/docs/framework/runner)。 |
+
+## 模块索引
+
+| 模块 | 内容 |
+| :-- | :-- |
+| `veadk.agent` / `veadk.agents` | 单智能体与多智能体（顺序、并行、循环）。 |
+| `veadk.runner` | `Runner` 执行引擎。 |
+| `veadk.tools` | 内置函数工具与 MCP 工具。 |
+| `veadk.memory` | 短期记忆与长期记忆后端。 |
+| `veadk.knowledgebase` | 知识库接入。 |
+| `veadk.a2ui` | A2UI（智能体驱动 UI）目录与工具集。参见 [A2UI](/cn/docs/framework/frontend/a2ui)。 |
+| `veadk.auth` | 入站 / 出站认证与权限策略。 |
+| `veadk.tracing` | 可观测与埋点。 |
+| `veadk.evaluation` | 评测与优化。 |
+| `veadk.cli` | 命令行工具。参见 [CLI](/cn/docs/cli/veadk-cli)。 |
+| `veadk.config` | 配置系统。参见[配置项](/cn/docs/framework/configuration)。 |
+
+<Callout type="info">
+  需要逐个符号的签名与 docstring？请查看 [PyPI 包](https://pypi.org/project/veadk-python/)或 [GitHub 源码](https://github.com/volcengine/veadk-python/tree/main/veadk)。
+</Callout>
