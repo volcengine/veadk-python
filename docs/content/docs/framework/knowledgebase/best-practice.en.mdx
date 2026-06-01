@@ -1,0 +1,187 @@
+---
+title: "Best Practices"
+description: "Deeply integrate the knowledge base with multiple agents in production to build a knowledge-driven IT operations assistant."
+---
+
+This document explains how to deeply integrate the knowledge base with agents in enterprise or production environments to build complex, multi-step, knowledge-driven applications.
+
+## Scenario
+
+In this best practice, we act as an enterprise IT operations department building an intelligent operations assistant, with a focus on:
+
+- **Cross-department knowledge integration**: Integrate documents and runbooks from different departments such as networking, servers, software, and access management;
+- **Multi-step task guidance**: After the user describes a problem, the agent can automatically generate operational steps and dynamically adjust them based on execution results;
+- **Issue tracking and knowledge updates**: After each task, automatically record the solution and any anomalies, and update the knowledge base;
+- **Multi-channel interaction**: Support entry points such as a web interface and command-line interaction.
+
+In this scenario, the knowledge base not only stores static documents but also combines with the Agent, tools, and short-term/long-term memory to form a "query—reason—execute—update" closed loop.
+
+## Design Approach
+
+### Knowledge Organization and Classification
+
+- Classify department documents (networking, servers, application software, etc.);
+- Vectorize the documents for semantic retrieval;
+- For procedural documents, mark operational steps and conditional branches.
+
+### Backend Construction and Integration
+
+- Use a vector database to store vectorized documents;
+- Provide a retrieval interface `query(prompt, context)` that combines context to deliver targeted answers;
+- Support a knowledge-update interface to write new operational experience or exception-handling results back into the knowledge base.
+
+### Combining Agents and Tools
+
+- The Agent calls the knowledge base to obtain operational steps;
+- Use short-term memory to track session state and step completion;
+- Use long-term memory to store cross-session preferences or history;
+- Call tools (such as a Sandbox or system APIs) to execute tasks or simulate operations.
+
+### Multi-step Task Execution and Dynamic Adjustment
+
+- User describes a problem → Agent searches the knowledge base → extracts steps → executes steps → adjusts the next step based on results;
+- Record failures or anomalies, and update successful experience into the knowledge base.
+
+## Outcome
+
+- Achieves unified access to cross-department knowledge;
+- Supports multi-turn, complex operational tasks;
+- Automatically updates the knowledge base after each operation, forming a continuous learning capability.
+
+## Implementing Your IT Operations Assistant
+
+The following implements the intelligent operations assistant step by step.
+
+### Preparing the Knowledge Base
+
+Prepare the following knowledge assets, organized in Markdown:
+
+- Networking documents (such as IP addresses, ports, protocols, etc.);
+- Server documents (such as installation/configuration, monitoring metrics, etc.);
+- Application software documents (such as usage, troubleshooting, etc.);
+- Access-management documents (such as role assignment, access control, etc.).
+
+Example:
+
+```markdown title="network_sop.md"
+# 网络排障 Runbook（摘要）
+
+## DNS 解析异常
+
+- 检查本机 /etc/resolv.conf；
+- 检查上游 DNS 可达性；
+- 刷新 DNS 缓存：`systemd-resolve --flush-caches`；
+- 如为权威解析变更：确认变更已在权威 DNS 生效，等待 TTL；
+- 如需紧急处理，可调用标准化作业：`dns-cache-flush`
+```
+
+```markdown title="host_sop.md"
+# 主机/中间件 Runbook（摘要）
+
+## CPU 飙高
+
+- top 确认进程；
+- dump/火焰图采集；
+- 参考 SOP：`collect-cpu-profile`
+```
+
+```markdown title="app_sop.md"
+# 业务应用 Runbook（摘要）
+
+## 502 网关错误
+
+- 查看 Nginx/Ingress 错误日志；
+- 回滚至上一稳定版本；
+- 触发金丝雀放量回退；
+```
+
+```markdown title="security_sop.md"
+# 安全事件 Runbook（摘要）
+
+## 失陷主机初步处置
+
+- 下线隔离；
+- Hash/IOC 采集；
+- 通报安全应急群；
+```
+
+Mount the documents above into the VeADK knowledge base:
+
+```python
+from veadk.knowledgebase import KnowledgeBase
+
+kb = KnowledgeBase(
+    backend="viking",
+    index="itops_kb",
+)
+
+kb.add_from_files(
+    [
+        "network_sop.md",
+        "host_sop.md",
+        "app_sop.md",
+        "security_sop.md",
+    ]
+)
+```
+
+## Building Multiple Agents with Knowledge Bases
+
+```python
+network_agent = Agent(
+    name="network_agent",
+    description="Network operations agent focusing on DNS/Connectivity.",
+    instruction="仅根据你的知识库回答网络排障问题。不要臆测，不要编造。必要时建议提交工单。",
+    knowledgebase=kb_network,
+    model=network_llm,
+)
+
+host_agent = Agent(
+    name="host_agent",
+    description="Host/Middleware operations agent.",
+    instruction="仅根据你的知识库回答主机/中间件排障问题。必要时建议采集证据或提交工单。",
+    knowledgebase=kb_host,
+    model=host_llm,
+)
+
+app_agent = Agent(
+    name="app_agent",
+    description="Application operations agent.",
+    instruction="仅根据你的知识库回答业务应用排障问题。必要时建议回滚或触发标准化作业。",
+    knowledgebase=kb_app,
+    model=app_llm,
+)
+
+sec_agent = Agent(
+    name="sec_agent",
+    description="Security operations agent.",
+    instruction="仅根据你的知识库回答安全相关问题。对可能的失陷要给出初步处置建议。",
+    knowledgebase=kb_sec,
+    model=sec_llm,
+)
+
+root_agent = Agent(
+    name="itops_root",
+    description="Planner that routes user intents to the right department agent.",
+    instruction=(
+        "你是 IT 运维总控台。先判断用户问题属于 网络/主机/应用/安全 哪一类，"
+        "然后调用相应子 Agent 获取答案并整合。若问题跨域，可分别调用多个子 Agent 并给出综合结论。"
+        "若涉及动作（如创建工单），请明确说明，并在获得用户确认后再调用相关工具。"
+    ),
+    tools=[create_ticket, query_cmdb],
+    sub_agents=[network_agent, host_agent, app_agent, sec_agent],
+    model=planner_llm,
+)
+
+runner = Runner(agent=root_agent, app_name="itops_demo_app", user_id="demo_user")
+```
+
+## Running Your Agent
+
+### Via VeADK Web
+
+![Running via VeADK Web](/assets/images/knowledge/kb-bp-1.jpeg)
+
+### Via the Terminal
+
+![Running via the terminal](/assets/images/knowledge/kb-bp-2.jpeg)

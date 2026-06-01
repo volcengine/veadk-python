@@ -1,0 +1,4 @@
+{
+  "title": "Observability",
+  "pages": ["overview", "tracing", "ve-tracing", "span-attributes"]
+}

@@ -1,0 +1,4 @@
+{
+  "title": "Multi-Agent",
+  "pages": ["overview", "a2a", "a2a-hub", "middleware-events"]
+}

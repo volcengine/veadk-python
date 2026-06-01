@@ -1,0 +1,39 @@
+---
+title: "API Reference"
+description: "An overview of VeADK's public API and a module index."
+---
+
+VeADK's full API documentation is generated from the docstrings in the source. This page gives you the top-level entry points and a module index so you can find things quickly.
+
+## Top-level entry points
+
+The most common objects are importable directly from `veadk`:
+
+```python
+from veadk import Agent, Runner
+```
+
+| Object | Description |
+| :-- | :-- |
+| `Agent` | The core agent class — wraps the model, tools, memory, and knowledge base. See [Create an Agent](/en/docs/framework/agent/create). |
+| `Runner` | The execution engine that runs an agent and manages sessions. See [Runner](/en/docs/framework/runner). |
+
+## Module index
+
+| Module | Contents |
+| :-- | :-- |
+| `veadk.agent` / `veadk.agents` | Single agent and multi-agent (sequential, parallel, loop). |
+| `veadk.runner` | The `Runner` execution engine. |
+| `veadk.tools` | Built-in function tools and MCP tools. |
+| `veadk.memory` | Short-term and long-term memory backends. |
+| `veadk.knowledgebase` | Knowledge base integration. |
+| `veadk.a2ui` | A2UI (agent-driven UI) catalog and toolset. See [A2UI](/en/docs/framework/frontend/a2ui). |
+| `veadk.auth` | Inbound / outbound authentication and permission policy. |
+| `veadk.tracing` | Observability and instrumentation. |
+| `veadk.evaluation` | Evaluation and optimization. |
+| `veadk.cli` | Command-line tools. See [CLI](/en/docs/cli/veadk-cli). |
+| `veadk.config` | Configuration system. See [Configuration](/en/docs/framework/configuration). |
+
+<Callout type="info">
+  Need per-symbol signatures and docstrings? Browse the [PyPI package](https://pypi.org/project/veadk-python/) or the [source on GitHub](https://github.com/volcengine/veadk-python/tree/main/veadk).
+</Callout>

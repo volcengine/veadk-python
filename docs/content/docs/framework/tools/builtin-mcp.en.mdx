@@ -1,0 +1,93 @@
+---
+title: "Built-in MCP Tools"
+description: "Connect remote tool sets in VeADK via MCP (Model Context Protocol), including MCP Router, Trusted MCP, and the Supabase toolset."
+---
+
+[MCP (Model Context Protocol)](https://modelcontextprotocol.io/) is an open protocol for connecting large language models to external tools and data sources. On top of Google ADK's `MCPToolset`, VeADK provides several ready-to-use built-in ways to connect to MCP, letting you register tools exposed by a remote MCP Server directly onto your Agent.
+
+Just like ordinary tools, an MCP tool set only needs to be placed in `Agent(tools=[...])`. The Agent automatically discovers the list of tools in the tool set at runtime and calls them as needed.
+
+## MCP Router
+
+`mcp_router` aggregates and forwards the tools of multiple MCP Servers through the Volcengine MCP Router, which is ideal when you need a unified entry point for several MCP services. It works over a streamable HTTP connection (`StreamableHTTPConnectionParams`).
+
+```python
+from veadk import Agent
+from veadk.tools.builtin_tools.mcp_router import mcp_router
+
+agent = Agent(tools=[mcp_router])
+```
+
+Environment variables:
+
+- `TOOL_MCP_ROUTER_URL`: the MCP Router service address
+- `TOOL_MCP_ROUTER_API_KEY`: the API Key used for authentication, sent as the `Authorization: Bearer <key>` request header
+
+Or configure them in `config.yaml`:
+
+```yaml title="config.yaml"
+tool:
+  mcp_router:
+    url: https://your-mcp-router-endpoint
+    api_key: your-api-key-here
+```
+
+## Trusted MCP Toolset
+
+When you need to connect to an MCP Server protected by access control, use `TrustedMcpToolset`. It builds on the standard `MCPToolset` and injects authentication into outbound requests, allowing secure access to trusted MCP services.
+
+```python
+from veadk import Agent
+from veadk.tools.mcp_tool.trusted_mcp_toolset import TrustedMcpToolset
+
+toolset = TrustedMcpToolset(
+    connection_params=...,  # MCP Server connection parameters
+)
+
+agent = Agent(tools=[toolset])
+```
+
+<Callout type="info">
+`TrustedMcpToolset` extends Google ADK's `McpToolset` and reuses its connection parameters (such as `StreamableHTTPConnectionParams`). Provide the connection parameters and authentication credentials that match how your target MCP Server is accessed.
+</Callout>
+
+## Supabase toolset
+
+VeADK provides the `build_supabase_mcptoolset` helper to quickly build a tool set that accesses a [Supabase](https://supabase.com/) MCP Server.
+
+```python
+from veadk import Agent
+from veadk.tools.builtin_tools.supabase_toolset import build_supabase_mcptoolset
+
+supabase_toolset = build_supabase_mcptoolset(
+    url="https://your-supabase-mcp-endpoint",
+    api_key="your-api-key-here",
+)
+
+agent = Agent(tools=[supabase_toolset])
+```
+
+`build_supabase_mcptoolset` accepts a `url` and an `api_key`, and returns an `MCPToolset` instance you can register on the Agent directly.
+
+## Custom MCP Server
+
+If the built-in connectors above do not meet your needs, you can connect to any MCP Server directly using Google ADK's `MCPToolset`:
+
+```python
+from veadk import Agent
+from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
+from google.adk.tools.mcp_tool.mcp_session_manager import (
+    StreamableHTTPConnectionParams,
+)
+
+toolset = MCPToolset(
+    connection_params=StreamableHTTPConnectionParams(
+        url="https://your-mcp-endpoint",
+        headers={"Authorization": "Bearer your-api-key-here"},
+    ),
+)
+
+agent = Agent(tools=[toolset])
+```
+
+Once registered, the Agent automatically loads the tools exposed by the MCP Server and calls them as needed during reasoning.

@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-      - feat/docs
+      - feat/new-docs
     paths:
       - 'docs/**'
       - '.github/workflows/deploy-docs.yaml'
@@ -16,35 +16,60 @@ permissions:
   pages: write
   id-token: write
 
+# Allow one concurrent deployment; cancel in-progress runs.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
+    defaults:
+      run:
+        working-directory: docs
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          python-version: '3.12'
+          node-version: 22
+
+      # pnpm via corepack (bundled with Node) — avoids third-party setup actions
+      # that are blocked by the org's allowed-actions policy.
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.16.1 --activate
 
       - name: Install dependencies
-        run: |
-          cd docs
-          pip install -r requirements.txt
+        run: pnpm install --frozen-lockfile
 
-      - name: Build MkDocs site
-        run: |
-          cd docs
-          mkdocs build
+      - name: Build static site (Fumadocs)
+        run: pnpm build:static
+        env:
+          # GitHub Pages project site is served from /<repo>. Without this base
+          # path, assets and routes 404 under the sub-path. (The pitfall.)
+          NEXT_PUBLIC_BASE_PATH: /${{ github.event.repository.name }}
+          # Optional: external Ask-AI endpoint (e.g. a VeFaaS function).
+          NEXT_PUBLIC_AI_CHAT_URL: ${{ vars.AI_CHAT_URL }}
 
       - name: Upload artifact for GitHub Pages
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/site/
+          path: docs/out
 
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    # The github-pages environment restricts deployments to the default branch.
+    # Branches/PRs run the build job above to validate; deploy happens on main.
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
       - name: Deploy to GitHub Pages
         id: deploy
         uses: actions/deploy-pages@v4

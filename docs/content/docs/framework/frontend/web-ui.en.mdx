@@ -1,0 +1,97 @@
+---
+title: "VeADK Frontend"
+description: "A bundled React UI that renders agent-streamed A2UI, served alongside the agent API by veadk frontend."
+---
+
+VeADK ships a React frontend that renders [A2UI](/en/docs/framework/frontend/a2ui) (agent-driven UI) streamed from an agent over the Google ADK API server. It talks to the same server process that `veadk frontend` launches, so there is **no separate backend to deploy**.
+
+## Run
+
+Build the UI once, then serve the UI and the agent API together with a single command:
+
+```bash
+# 1. build the UI
+cd frontend && npm install && npm run build
+
+# 2. serve UI + agent API from one process (repo root)
+veadk frontend --agents-dir examples
+# open http://127.0.0.1:8000
+```
+
+### Dev mode (hot reload)
+
+In dev mode the command serves only the API (with CORS allowing the Vite dev server), and Vite runs the UI separately with hot reload:
+
+```bash
+veadk frontend --dev --agents-dir examples   # API only, CORS for vite
+cd frontend && npm run dev                    # http://localhost:5173 (proxies API)
+```
+
+## The `veadk frontend` command
+
+| Option | Default | Description |
+| :-- | :-- | :-- |
+| `--agents-dir` | — | Directory of agent apps; each subdirectory exposes a `root_agent`. |
+| `--frontend-dir` | build output of `./frontend` | Directory of the built React UI (output of `npm run build`). |
+| `--host` | `127.0.0.1` | Address to bind. |
+| `--port` | `8000` | Port to bind. |
+| `--dev` | off | Dev mode: serve the API only and allow CORS from the Vite dev server (`http://localhost:5173`). |
+
+<Callout type="info">
+  Outside dev mode, if the built frontend directory is not found, the command fails and asks you to run `npm run build` first (or use `--dev` with the Vite dev server).
+</Callout>
+
+## How it works
+
+<Steps>
+
+<Step>
+`adk/client.ts` calls `/list-apps`, creates a session, and streams `/run_sse`.
+</Step>
+
+<Step>
+`a2ui/extract.ts` pulls A2UI messages out of the `send_a2ui_json_to_client` tool response (`validated_a2ui_json`).
+</Step>
+
+<Step>
+`a2ui/Surface.tsx` applies `createSurface` / `updateComponents` / `updateDataModel` into surface state and renders the root component.
+</Step>
+
+<Step>
+`a2ui/registry.ts` maps each component name to a React renderer; each renderer lives in its own directory under `a2ui/components/<Name>/` and self-registers.
+</Step>
+
+</Steps>
+
+## Adding a custom (enterprise) component
+
+A custom component has two halves that share one **catalog id**. For the backend half, see [A2UI](/en/docs/framework/frontend/a2ui#register-custom-enterprise-components); the frontend half is below.
+
+**Frontend half** — drop in a new directory; it auto-registers (no central edit):
+
+```
+src/a2ui/components/RevenueChart/
+├── RevenueChart.tsx       # the React renderer
+└── index.ts               # register("RevenueChart", RevenueChart)
+```
+
+```ts title="src/a2ui/components/RevenueChart/index.ts"
+import { register } from "../../registry";
+import { RevenueChart } from "./RevenueChart";
+register("RevenueChart", RevenueChart);
+```
+
+```tsx title="src/a2ui/components/RevenueChart/RevenueChart.tsx"
+import type { ComponentRendererProps } from "../../registry";
+
+export function RevenueChart({ node, ctx }: ComponentRendererProps) {
+  const series = ctx.resolve(node.series as any);
+  return <div className="corp-chart">{/* render series */}</div>;
+}
+```
+
+`components/index.ts` imports every `*/index.ts` via `import.meta.glob`, so the new folder is picked up automatically.
+
+<Callout type="info">
+  Unknown components with no registered renderer fall back to a collapsible JSON view, so a catalog/renderer mismatch never crashes the UI.
+</Callout>

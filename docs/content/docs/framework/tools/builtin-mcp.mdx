@@ -1,0 +1,93 @@
+---
+title: "内置 MCP 工具"
+description: "在 VeADK 中通过 MCP（Model Context Protocol）接入远程工具集，包括 MCP Router、可信 MCP 与 Supabase 工具集。"
+---
+
+[MCP（Model Context Protocol）](https://modelcontextprotocol.io/) 是一种用于连接大模型与外部工具/数据源的开放协议。VeADK 在 Google ADK 的 `MCPToolset` 之上提供了若干开箱即用的内置 MCP 接入方式，让你能够把远程 MCP Server 暴露的工具直接注册到 Agent 上。
+
+与普通工具一样，MCP 工具集只需要放进 `Agent(tools=[...])` 即可，Agent 会在运行时自动发现工具集中的工具列表，并按需调用。
+
+## MCP Router
+
+`mcp_router` 通过火山引擎 MCP Router 聚合并转发多个 MCP Server 的工具，适合需要统一接入多个 MCP 服务的场景。它基于可流式传输的 HTTP 连接（`StreamableHTTPConnectionParams`）工作。
+
+```python
+from veadk import Agent
+from veadk.tools.builtin_tools.mcp_router import mcp_router
+
+agent = Agent(tools=[mcp_router])
+```
+
+环境变量：
+
+- `TOOL_MCP_ROUTER_URL`：MCP Router 的服务地址
+- `TOOL_MCP_ROUTER_API_KEY`：用于鉴权的 API Key，将作为 `Authorization: Bearer <key>` 请求头发送
+
+或在 `config.yaml` 中配置：
+
+```yaml title="config.yaml"
+tool:
+  mcp_router:
+    url: https://your-mcp-router-endpoint
+    api_key: your-api-key-here
+```
+
+## 可信 MCP 工具集（Trusted MCP Toolset）
+
+当你需要连接受访问控制保护的 MCP Server 时，可以使用 `TrustedMcpToolset`。它在标准 `MCPToolset` 的基础上为出站请求注入鉴权信息，从而安全地访问受信任的 MCP 服务。
+
+```python
+from veadk import Agent
+from veadk.tools.mcp_tool.trusted_mcp_toolset import TrustedMcpToolset
+
+toolset = TrustedMcpToolset(
+    connection_params=...,  # MCP Server 连接参数
+)
+
+agent = Agent(tools=[toolset])
+```
+
+<Callout type="info">
+`TrustedMcpToolset` 继承自 Google ADK 的 `McpToolset`，并复用其连接参数（如 `StreamableHTTPConnectionParams`）。请根据目标 MCP Server 的接入方式提供对应的连接参数与鉴权凭证。
+</Callout>
+
+## Supabase 工具集
+
+VeADK 提供了 `build_supabase_mcptoolset` 辅助函数，用于快速构建访问 [Supabase](https://supabase.com/) MCP Server 的工具集。
+
+```python
+from veadk import Agent
+from veadk.tools.builtin_tools.supabase_toolset import build_supabase_mcptoolset
+
+supabase_toolset = build_supabase_mcptoolset(
+    url="https://your-supabase-mcp-endpoint",
+    api_key="your-api-key-here",
+)
+
+agent = Agent(tools=[supabase_toolset])
+```
+
+`build_supabase_mcptoolset` 接受 `url` 与 `api_key` 两个参数，返回一个可直接注册到 Agent 的 `MCPToolset` 实例。
+
+## 自定义 MCP Server
+
+如果上述内置接入方式无法满足需求，你也可以直接使用 Google ADK 的 `MCPToolset` 连接任意 MCP Server：
+
+```python
+from veadk import Agent
+from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
+from google.adk.tools.mcp_tool.mcp_session_manager import (
+    StreamableHTTPConnectionParams,
+)
+
+toolset = MCPToolset(
+    connection_params=StreamableHTTPConnectionParams(
+        url="https://your-mcp-endpoint",
+        headers={"Authorization": "Bearer your-api-key-here"},
+    ),
+)
+
+agent = Agent(tools=[toolset])
+```
+
+注册后，Agent 会自动加载 MCP Server 暴露的工具，并在推理过程中按需调用。

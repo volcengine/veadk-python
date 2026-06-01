@@ -1,0 +1,4 @@
+{
+  "title": "出站认证",
+  "pages": ["api-key", "oauth2-m2m", "oauth2-user-federation", "trusted-mcp"]
+}

@@ -1,0 +1,183 @@
+---
+title: "Outbound Auth with OAuth2 USER_FEDERATION"
+description: "Use OAuth2 user-delegation authentication so your app can access third-party services on behalf of a user."
+---
+
+OAuth2 USER_FEDERATION authentication is used for user-delegation scenarios, where the application accesses a third-party service on behalf of the user.
+
+## Create an OAuth2 USER_FEDERATION Credential
+
+### Basic Steps
+
+1. Log in to the Volcengine console and navigate to the **Agent Identity** service
+2. In the left navigation tree, select **Authentication > Outbound Credential Custody > OAuth Client**
+3. Click **New > New OAuth Client**
+4. Under **OAuth2 Flow**, select **User Delegation (USER_FEDERATION)**
+
+### Option 1: Use a Built-in Vendor (Recommended)
+
+Choose a provider type: **Lark**, **Coze**, **Google**, **GitHub**, and fill in:
+
+- Client ID
+- Client Secret
+- Callback URL (choose the address for your region from [Callback Addresses](#callback-addresses))
+
+### Option 2: Use OIDC Configuration
+
+Choose **Custom** as the provider type and fill in:
+
+- Issuer URL: the OIDC provider's Discovery URL (e.g. `https://accounts.google.com/.well-known/openid-configuration`)
+- Client ID
+- Client Secret
+- Scopes: must include at least `openid`
+- Callback URL (choose the address for your region from [Callback Addresses](#callback-addresses))
+
+### Option 3: Use Custom OAuth2 Configuration
+
+Choose **Custom** as the provider type and fill in:
+
+- Client ID
+- Client Secret
+- Scopes
+- Issuer
+- Authorization endpoint
+- Token endpoint
+- Callback URL (choose the address for your region from [Callback Addresses](#callback-addresses))
+
+## Callback Addresses
+
+When configuring the callback address in a third-party OAuth2 provider, use one of the following Agent Identity callback addresses (choose by your region):
+
+- **Beijing**: `https://auth.id.cn-beijing.volces.com/api/v1/oauth2callback`
+- **Shanghai**: `https://auth.id.cn-shanghai.volces.com/api/v1/oauth2callback`
+- **Guangzhou**: `https://auth.id.cn-guangzhou.volces.com/api/v1/oauth2callback`
+
+After the user authorizes, the provider redirects the authorization code (`code`) and state (`state`) to this address, and Agent Identity handles the subsequent token exchange.
+
+## Usage
+
+### VeIdentityFunctionTool
+
+```python
+from veadk.integrations.ve_identity import VeIdentityFunctionTool, oauth2_auth
+import aiohttp
+
+async def access_github(access_token: str, repo_owner: str, repo_name: str):
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    url = f"https://api.github.com/repos/{repo_owner}/{repo_name}"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as resp:
+            return await resp.json()
+
+auth_config = oauth2_auth(
+    provider_name="github-oauth2-provider",
+    scopes=["repo", "user"],
+    auth_flow="USER_FEDERATION",
+    callback_url="https://your-app.com/oauth/callback",
+)
+tool = VeIdentityFunctionTool(
+    func=access_github,
+    auth_config=auth_config,
+)
+```
+
+### VeIdentityMcpToolset
+
+```python
+from veadk.integrations.ve_identity import VeIdentityMcpToolset, oauth2_auth
+from google.adk.agents.mcp import StdioServerParameters
+
+auth_config = oauth2_auth(
+    provider_name="github-oauth2-provider",
+    scopes=["repo", "user"],
+    auth_flow="USER_FEDERATION",
+    callback_url="https://your-app.com/oauth/callback",
+)
+toolset = VeIdentityMcpToolset(
+    auth_config=auth_config,
+    connection_params=StdioServerParameters(
+        command="npx",
+        args=["@modelcontextprotocol/server-github"],
+    ),
+)
+```
+
+## Example
+
+```python
+import asyncio
+from veadk import Agent
+from veadk.integrations.ve_identity import (
+    VeIdentityMcpToolset,
+    oauth2_auth,
+)
+from google.adk.tools.mcp_tool.mcp_session_manager import (
+    StreamableHTTPConnectionParams,
+)
+
+from veadk.integrations.ve_identity.auth_processor import AuthRequestProcessor
+
+# ECS toolset
+ecs_tools = VeIdentityMcpToolset(
+    auth_config=oauth2_auth(
+        provider_name="volc-ecs-oauth2-provider",
+        scopes=["read"],
+        auth_flow="USER_FEDERATION",
+    ),
+    connection_params=StreamableHTTPConnectionParams(
+        url="https://ecs.mcp.volcbiz.com/ecs/mcp",
+    ),
+)
+
+# Cloud Assistant toolset
+cloud_assistant_tools = VeIdentityMcpToolset(
+    auth_config=oauth2_auth(
+        provider_name="volc-ecs-oauth2-provider",
+        scopes=["read"],
+        auth_flow="USER_FEDERATION",
+    ),
+    connection_params=StreamableHTTPConnectionParams(
+        url="https://ecs.mcp.volcbiz.com/cloud_assistant/mcp",
+    ),
+)
+
+agent = Agent(
+    tools=[ecs_tools, cloud_assistant_tools],
+    system_prompt="You are a Volcengine ECS assistant. You can query ECS instance information and run server commands.",
+    run_processor=AuthRequestProcessor(),
+)
+
+asyncio.run(
+    agent.run(
+        prompt="First list my ECS instances, then pick a running instance and run 'uname -a && df -h && free -m' on it to check system info, disk space, and memory usage"
+    )
+)
+```
+
+## FAQ
+
+**Q: What does a user need to do the first time?**
+
+A: The user needs to authorize the application in the third-party service. Agent Identity handles the authorization flow automatically.
+
+**Q: How do I handle a user revoking authorization?**
+
+A: If the user revokes authorization, Agent Identity returns an error. The application should prompt the user to re-authorize.
+
+**Q: What happens when a token expires?**
+
+A: Agent Identity refreshes the token automatically. If the refresh fails, it returns an error, and the application should prompt the user to re-authorize.
+
+**Q: What if I need a custom callback address?**
+
+A: For a custom callback address, you must pass the authorization code (`code`), state (`state`), and redirect URL to the Agent Identity callback address for the corresponding region for processing. Agent Identity handles the token exchange and credential management.
+
+## Related Resources
+
+- [Agent Identity overview](https://www.volcengine.com/docs/86848/2080920?lang=zh)
+- [API Key authentication](/en/docs/framework/security/outbound/api-key)
+- [OAuth2 M2M authentication](/en/docs/framework/security/outbound/oauth2-m2m)
+- [Trusted MCP authentication](/en/docs/framework/security/outbound/trusted-mcp)

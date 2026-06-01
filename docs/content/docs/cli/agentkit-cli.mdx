@@ -1,0 +1,48 @@
+---
+title: "AgentKit 命令兼容"
+description: "VeADK 命令行兼容 AgentKit 命令，只需在 AgentKit 命令前添加 veadk 前缀即可使用。"
+---
+
+## 概述
+
+VeADK 命令行兼容 AgentKit 命令。您可以直接在 AgentKit 相关命令前添加 `veadk` 前缀，复用熟悉的 AgentKit 工作流来创建、配置并将项目部署到火山引擎 AgentKit 平台。
+
+<Callout type="info">
+  使用 AgentKit 兼容命令前，请确保您已安装 VeADK，并在项目根目录的 `.env` 文件中配置好火山引擎的访问凭据。
+</Callout>
+
+## 命令一览
+
+| 命令 | 描述 |
+| :-- | :-- |
+| `veadk agentkit init` | 创建一个新的 AgentKit 项目。 |
+| `veadk agentkit config` | 对 AgentKit 项目进行配置。 |
+| `veadk agentkit launch` | 将项目部署到火山引擎 AgentKit 平台。 |
+
+## 创建项目
+
+使用 `init` 命令创建一个新的 AgentKit 项目：
+
+```bash
+veadk agentkit init
+```
+
+## 配置项目
+
+使用 `config` 命令对项目进行配置：
+
+```bash
+veadk agentkit config
+```
+
+## 部署项目
+
+使用 `launch` 命令将项目部署到火山引擎 AgentKit 平台：
+
+```bash
+veadk agentkit launch
+```
+
+## 更多参考
+
+更多 AgentKit 命令及其完整参数说明，请参阅 [AgentKit 命令行工具](https://volcengine.github.io/agentkit-sdk-python/content/2.agentkit-cli/1.overview.html)。

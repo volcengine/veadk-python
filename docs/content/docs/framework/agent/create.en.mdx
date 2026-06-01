@@ -1,0 +1,332 @@
+---
+title: "Build Your First Agent"
+description: "Build and run an Agent in the simplest way, either through code or a YAML configuration file."
+---
+
+This document explains how to build and run an Agent in the simplest way. It covers two main definition methods:
+
+- Definition in code
+- YAML definition based on Agent Builder
+
+This document does not depend on any complex external components and aims to help you form an overall understanding of a minimal runnable example.
+
+## Ways to Define an Agent
+
+Defining an Agent is the starting point of its lifecycle. Regardless of system scale, the Agent is the subject of task decomposition and planning.
+
+This section introduces two definition approaches: the **code approach** and the **YAML configuration approach**.
+
+### Build in Code
+
+Defining an Agent directly in code is the most common and flexible approach. It makes it easy to dynamically adjust parameters, integrate external modules, and run unit tests. You can create the simplest Agent without any extra setup. **Default Agent attributes come from environment variables or built-in defaults.** The code below implements a minimal Agent definition and run:
+
+<Tabs items={['Python', 'Golang', 'Required environment variables']}>
+<Tab value="Python">
+
+```python title="agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+
+agent = Agent()
+runner = Runner(agent=agent)
+
+response = asyncio.run(runner.run(messages="Hi!"))
+print(response)
+```
+
+</Tab>
+<Tab value="Golang">
+
+```go title="agent.go"
+package main
+
+import (
+    "context"
+    "fmt"
+
+    "github.com/google/uuid"
+    _ "github.com/volcengine/veadk-go/agent"
+    veagent "github.com/volcengine/veadk-go/agent/llmagent"
+    "google.golang.org/adk/agent"
+    "google.golang.org/adk/runner"
+    "google.golang.org/adk/session"
+    "google.golang.org/genai"
+)
+
+func main() {
+    ctx := context.Background()
+    veAgent, err := veagent.New(&veagent.Config{})
+    if err != nil {
+        fmt.Printf("NewVeAgent failed: %v", err)
+        return
+    }
+
+    appName := "veAgent_app"
+    userID := "user-1234"
+    sessionId := fmt.Sprintf("%s-%s", session.KeyPrefixTemp, uuid.NewString())
+    sessionService := session.InMemoryService()
+    agentRunner, err := runner.New(runner.Config{
+        AppName:        appName,
+        Agent:          veAgent,
+        SessionService: sessionService,
+    })
+    if err != nil {
+        fmt.Printf("New runner error:%v", err)
+        return
+    }
+
+    _, err = sessionService.Create(ctx, &session.CreateRequest{
+        AppName:   appName,
+        UserID:    userID,
+        SessionID: sessionId,
+    })
+    if err != nil {
+        fmt.Printf("Create session error:%v", err)
+        return
+    }
+
+    for event, err := range agentRunner.Run(ctx, userID, sessionId, genai.NewContentFromText("你好", genai.RoleUser), agent.RunConfig{StreamingMode: agent.StreamingModeNone}) {
+        if err != nil {
+            fmt.Printf("got unexpected error: %v", err)
+        }
+        fmt.Printf("got event: %s\n", event.Content.Parts[0].Text)
+    }
+}
+```
+
+</Tab>
+<Tab value="Required environment variables">
+
+Environment variable list:
+
+- `MODEL_AGENT_API_KEY`: API key for the user's Agent inference model
+- ...
+
+Or define them in `config.yaml`:
+
+```yaml title="config.yaml"
+model:
+  agent:
+    api_key: ...
+```
+
+</Tab>
+</Tabs>
+
+#### Set Agent Metadata
+
+You can also set more Agent metadata as follows:
+
+<Tabs items={['Python', 'Golang']}>
+<Tab value="Python">
+
+```python title="agent.py"
+from veadk import Agent, Runner
+
+root_agent = Agent(
+    name="life_assistant",
+    description="Life assistant",
+    instruction="You are a life assistant who can answer user questions.",
+)
+```
+
+</Tab>
+<Tab value="Golang">
+
+```go title="agent.go"
+cfg := &veagent.Config{}
+cfg.Name = "life_assistant"
+cfg.Description = "Life assistant"
+cfg.Instruction = "You are a life assistant who can answer user questions."
+
+veAgent, err := veagent.New(cfg)
+if err != nil {
+    fmt.Printf("NewVeAgent failed: %v", err)
+    return
+}
+```
+
+</Tab>
+</Tabs>
+
+Here, `name` is the Agent's name, `description` is a short description of the Agent's function (it uniquely identifies an Agent within the Agent tree), and `instruction` is the Agent's system prompt that defines its behavior and response style.
+
+#### Use a Different Model
+
+If you want to use a local model or a model from another provider, you can specify the model configuration during initialization:
+
+<Tabs items={['Python', 'Golang']}>
+<Tab value="Python">
+
+```python title="agent.py"
+from veadk import Agent
+
+agent = Agent(
+    model_provider="...",
+    model_name="...",
+    model_api_key="...",
+    model_api_base="..."
+)
+```
+
+</Tab>
+<Tab value="Golang">
+
+```go title="agent.go"
+cfg := &veagent.Config{
+    ModelName: "...",
+    ModelAPIBase: "...",
+    ModelAPIKey: "...",
+}
+
+veAgent, err := veagent.New(cfg)
+if err != nil {
+    fmt.Printf("NewVeAgent failed: %v", err)
+    return
+}
+```
+
+</Tab>
+</Tabs>
+
+The Agent inference model in the VeADK Python version is implemented on top of [LiteLLM](https://github.com/BerriAI/litellm), so you can use all model providers that LiteLLM supports. See the [list of providers supported by LiteLLM](https://docs.litellm.ai/docs/providers) to set the `model_provider` parameter.
+
+#### Model Fallbacks
+
+VeADK provides a model fallback mechanism based on LiteLLM [Fallbacks](https://docs.litellm.ai/docs/completion/reliable_completions), which can automatically switch models when a preceding model fails. For example, when the target model still fails after multiple retries, the system automatically switches to a backup model to continue the task:
+
+```python title="agent.py"
+from veadk import Agent
+
+agent = Agent(
+    model_name=[
+        "doubao-seed-1-8-251215",
+        "doubao-seed-1-6-251015",
+        "doubao-seed-1.6-250615",
+    ]
+)
+```
+
+With the configuration above, VeADK first tries the `doubao-seed-1-8-251215` model by default; if it fails, it tries the subsequent models until one succeeds.
+
+#### Customize Your Model Client
+
+VeADK lets you define the LiteLLM client directly for highly customized model configuration:
+
+```python title="agent.py"
+from google.adk.models.lite_llm import LiteLlm
+from veadk import Agent
+
+# Customize your model client
+llm = LiteLlm()
+
+# Pass the model client directly to the Agent
+agent = Agent(model=llm)
+```
+
+#### Configure Extra Model Parameters
+
+In addition, based on the capabilities of the [Volcengine Ark model platform](https://www.volcengine.com/product/ark), you can specify some [extra options](https://www.volcengine.com/docs/82379/1494384?lang=zh). For example, you can disable the thinking capability of the Doubao 1.6 series models for faster responses:
+
+<Tabs items={['Python', 'Golang']}>
+<Tab value="Python">
+
+```python title="agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+
+agent = Agent(
+    model_name="doubao-seed-1.6-250615",
+    model_extra_config={"extra_body": {"thinking": {"type": "disabled"}}},
+)
+runner = Runner(agent=agent)
+
+response = asyncio.run(runner.run(messages="hi!"))
+print(response)
+```
+
+</Tab>
+<Tab value="Golang">
+
+```go title="agent.go"
+import (
+    _ "github.com/volcengine/veadk-go/agent"
+    veagent "github.com/volcengine/veadk-go/agent/llmagent"
+)
+
+veAgent, err := veagent.New(&veagent.Config{
+    ModelExtraConfig: map[string]any{
+        "extra_body": map[string]any{
+            "thinking": map[string]string{
+                "type": "disabled",
+            },
+        },
+    },
+})
+if err != nil {
+    fmt.Printf("NewVeAgent failed: %v", err)
+    return
+}
+```
+
+</Tab>
+</Tabs>
+
+### Through a Configuration File
+
+When building Agents, you often need a more concise definition and configuration management approach. To support this scenario, VeADK provides a YAML file definition method. This approach describes all the Agent's metadata and behavioral structure with declarative syntax.
+
+**Basic structure**: This section gives a simple YAML file `weather_reporter_agent.yaml` to demonstrate how to define an agent that queries weather information.
+
+```yaml title="weather_reporter_agent.yaml"
+root_agent:
+  type: Agent # Agent | SequencialAgent | LoopAgent | ParallelAgent
+  name: weather_reporter
+  description: An intelligent_assistant which can provider weather information.
+  instruction: Help user according to your tools.
+  model_name: doubao-1-5-pro-32k-250115
+  model_api_key: ... # Your model API key
+  tools:
+    - name: veadk.tools.demo_tools.get_city_weather # The module and function name where the tool lives
+```
+
+**Structure explanation**:
+
+- `type`: Agent category
+- `name`: Agent name
+- `description`: Overall description of the Agent
+- `instruction`: The Agent's system prompt
+- `model_name`: Model name, such as doubao-1-5-pro-32k-250115, deepseek-r1-250528, etc.
+- `tools`: Tool list and invocation rules
+
+**Usage**: The following demonstrates how to use this agent to query Beijing's weather based on the `weather_reporter_agent.yaml` file above.
+
+```python title="agent.py"
+import asyncio
+
+from veadk import Runner
+from veadk.agent_builder import AgentBuilder
+
+agent_builder = AgentBuilder()
+
+agent = agent_builder.build(path="weather_reporter_agent.yaml")
+
+runner = Runner(agent)
+response = asyncio.run(runner.run("What is the weather in Beijing today?"))
+
+print(response)
+```
+
+## Comparison of Agent Construction Methods
+
+**Summary**:
+
+| Feature | Code approach | YAML approach |
+| ---- | ----- | ------- |
+| Flexibility | High | Medium |
+| Readability | Medium | High |
+| Maintainability | Medium | High |
+| Dynamic generation | Supported | Limited |
+| Use cases | Development, production | Experimentation, configuration-driven, production |

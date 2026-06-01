@@ -1,0 +1,97 @@
+---
+title: "VeADK 前端"
+description: "内置 React 前端，用于渲染智能体流式返回的 A2UI，并通过 veadk frontend 与智能体 API 同进程提供服务。"
+---
+
+VeADK 自带一个 React 前端，用于渲染智能体经由 Google ADK API Server 流式返回的 [A2UI](/cn/docs/framework/frontend/a2ui)（智能体驱动 UI）。它与 `veadk frontend` 启动的是同一个服务进程，因此**无需单独部署后端**。
+
+## 运行
+
+先构建前端，再用一条命令同时提供 UI 与智能体 API：
+
+```bash
+# 1. 构建前端
+cd frontend && npm install && npm run build
+
+# 2. 在仓库根目录，单进程提供 UI + 智能体 API
+veadk frontend --agents-dir examples
+# 打开 http://127.0.0.1:8000
+```
+
+### 开发模式（热更新）
+
+开发模式下只提供 API（并为 Vite 开发服务器开启 CORS），前端由 Vite 单独以热更新方式运行：
+
+```bash
+veadk frontend --dev --agents-dir examples   # 仅 API，为 vite 放行 CORS
+cd frontend && npm run dev                    # http://localhost:5173（代理 API）
+```
+
+## `veadk frontend` 命令
+
+| 选项 | 默认值 | 说明 |
+| :-- | :-- | :-- |
+| `--agents-dir` | — | 智能体应用目录，每个子目录暴露一个 `root_agent`。 |
+| `--frontend-dir` | `./frontend` 的构建产物 | 已构建 React UI（`npm run build` 输出）所在目录。 |
+| `--host` | `127.0.0.1` | 监听地址。 |
+| `--port` | `8000` | 监听端口。 |
+| `--dev` | 关闭 | 开发模式：仅提供 API，并放行来自 Vite 开发服务器（`http://localhost:5173`）的 CORS。 |
+
+<Callout type="info">
+  非开发模式下，若未找到已构建的前端目录，命令会报错提示先执行 `npm run build`（或改用 `--dev` 配合 Vite 开发服务器）。
+</Callout>
+
+## 工作原理
+
+<Steps>
+
+<Step>
+`adk/client.ts` 调用 `/list-apps`，创建会话，并通过 `/run_sse` 进行流式接收。
+</Step>
+
+<Step>
+`a2ui/extract.ts` 从 `send_a2ui_json_to_client` 工具的响应（`validated_a2ui_json`）中提取 A2UI 消息。
+</Step>
+
+<Step>
+`a2ui/Surface.tsx` 将 `createSurface` / `updateComponents` / `updateDataModel` 应用到 surface 状态中，并渲染根组件。
+</Step>
+
+<Step>
+`a2ui/registry.ts` 将每个组件名映射到一个 React 渲染器；每个渲染器位于 `a2ui/components/<Name>/` 目录下并自行注册。
+</Step>
+
+</Steps>
+
+## 添加企业自定义组件
+
+一个自定义组件由两个“对半”组成，它们共享同一个 **catalog id**。后端部分见 [A2UI](/cn/docs/framework/frontend/a2ui#注册企业自定义组件)；前端部分如下。
+
+**前端部分** —— 新建一个目录即可自动注册（无需修改任何中心文件）：
+
+```
+src/a2ui/components/RevenueChart/
+├── RevenueChart.tsx       # React 渲染器
+└── index.ts               # register("RevenueChart", RevenueChart)
+```
+
+```ts title="src/a2ui/components/RevenueChart/index.ts"
+import { register } from "../../registry";
+import { RevenueChart } from "./RevenueChart";
+register("RevenueChart", RevenueChart);
+```
+
+```tsx title="src/a2ui/components/RevenueChart/RevenueChart.tsx"
+import type { ComponentRendererProps } from "../../registry";
+
+export function RevenueChart({ node, ctx }: ComponentRendererProps) {
+  const series = ctx.resolve(node.series as any);
+  return <div className="corp-chart">{/* 渲染 series */}</div>;
+}
+```
+
+`components/index.ts` 通过 `import.meta.glob` 导入每个 `*/index.ts`，因此新目录会被自动拾取。
+
+<Callout type="info">
+  未注册渲染器的未知组件会回退到可折叠的 JSON 视图，因此目录与渲染器不匹配也不会导致界面崩溃。
+</Callout>

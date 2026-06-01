@@ -1,0 +1,118 @@
+---
+title: "Outbound Auth with OAuth2 M2M"
+description: "Use OAuth2 machine-to-machine authentication for secure service-to-service communication with token refresh."
+---
+
+OAuth2 M2M (Machine to Machine) authentication is used for service-to-service communication. It is more secure than an API Key and supports token refresh.
+
+## Create an OAuth2 M2M Credential
+
+### Basic Steps
+
+1. Log in to the Volcengine console and navigate to the **Agent Identity** service
+2. In the left navigation tree, select **Authentication > Outbound Credential Custody > OAuth Client**
+3. Click **New > New OAuth Client**
+4. Under **OAuth2 Flow**, select **Machine to Machine (M2M)**
+5. Click **OK** to finish
+
+### Option 1: Use a Built-in Vendor (Recommended)
+
+Choose a provider type: **Lark**, **Coze**, **Google**, **GitHub**
+
+- Client ID
+- Client Secret
+
+### Option 2: Use OIDC Configuration
+
+Choose **Custom** as the provider type and fill in:
+
+- Issuer URL: the OIDC provider's Discovery URL (e.g. `https://accounts.google.com/.well-known/openid-configuration`)
+- Client ID
+- Client Secret
+- Scopes: must include at least `openid`
+
+### Option 3: Use Custom OAuth2 Configuration
+
+Choose **Custom** as the provider type and fill in:
+
+- Client ID
+- Client Secret
+- Scopes
+- Issuer
+- Authorization endpoint
+- Token endpoint
+
+## Usage
+
+### VeIdentityFunctionTool
+
+```python
+from veadk.integrations.ve_identity import VeIdentityFunctionTool, oauth2_auth
+import aiohttp
+
+async def call_service(access_token: str, endpoint: str):
+    headers = {"Authorization": f"Bearer {access_token}"}
+    async with aiohttp.ClientSession() as session:
+        async with session.get(endpoint, headers=headers) as resp:
+            return await resp.json()
+
+auth_config = oauth2_auth(
+    provider_name="my-oauth2-m2m-provider",
+    scopes=["api://your-service/.default"],
+    auth_flow="M2M",
+)
+tool = VeIdentityFunctionTool(
+    func=call_service,
+    auth_config=auth_config,
+)
+```
+
+### VeIdentityMcpToolset
+
+```python
+from veadk.integrations.ve_identity import VeIdentityMcpToolset, oauth2_auth
+from google.adk.agents.mcp import StdioServerParameters
+
+auth_config = oauth2_auth(
+    provider_name="my-oauth2-m2m-provider",
+    scopes=["api://your-service/.default"],
+    auth_flow="M2M",
+)
+toolset = VeIdentityMcpToolset(
+    auth_config=auth_config,
+    connection_params=StdioServerParameters(
+        command="python",
+        args=["-m", "my_service_mcp_server"],
+    ),
+)
+```
+
+## FAQ
+
+**Q: What is the difference between OAuth2 M2M and API Key?**
+
+A: An API Key is simple and fixed; OAuth2 M2M is more secure and supports token refresh.
+
+**Q: What happens when a token expires?**
+
+A: Agent Identity refreshes the token automatically.
+
+**Q: How do I configure multiple scopes?**
+
+A:
+
+```python
+auth_config = oauth2_auth(
+    provider_name="my-provider",
+    scopes=["api://service1/.default", "api://service2/.default"],
+    auth_flow="M2M",
+)
+```
+
+## Related Resources
+
+- [Agent Identity overview](https://www.volcengine.com/docs/86848/2080920?lang=zh)
+- [API Key authentication](/en/docs/framework/security/outbound/api-key)
+- [OAuth2 USER_FEDERATION authentication](/en/docs/framework/security/outbound/oauth2-user-federation)
+- [Trusted MCP authentication](/en/docs/framework/security/outbound/trusted-mcp)
+- [Agent Identity API reference](https://www.volcengine.com/docs/86848/1918752)

@@ -1,0 +1,100 @@
+---
+title: "Agent Identity Overview"
+description: "Agent Identity provides one-stop identity and permission management to secure outbound and inbound agent operations."
+---
+
+Agent Identity is Volcengine's one-stop identity and permission management platform. It handles user authentication and access control, ensuring the security and compliance of an agent's outbound and inbound operations.
+
+## Core Capabilities
+
+- **User identity management**: supports user pool management, enterprise IdP (SAML/OIDC), and third-party identity federation
+- **Workload identity management**: assigns a unique digital identity to each agent/tool and maintains attribute tags
+- **Third-party credential custody**: encrypts and stores API Keys and OAuth tokens, eliminating plaintext credential leaks
+- **Access control**: attribute- and context-based dynamic authorization for fine-grained permission control
+
+## Activation Steps
+
+### 1. Visit the Agent Identity console
+
+Open the **[Agent Identity](https://console.volcengine.com/identity)** activation page, check **Agree to the terms of service**, and click **Activate and authorize**.
+
+### 2. Create an outbound credential provider
+
+Create the appropriate outbound credential provider for your scenario:
+
+| Auth method | Provider type | Use case |
+|---------|----------|--------|
+| API Key | API Key | Service-to-service communication |
+| OAuth2 M2M | OAuth Client | Backend service-to-service auth |
+| OAuth2 USER_FEDERATION | OAuth Client | User-delegated auth |
+
+### 3. Configure credential details
+
+Configure the corresponding credentials for your auth method (such as API Key, Client ID, Client Secret, callback URL, etc.).
+
+### 4. Quick start
+
+```python
+from veadk.integrations.ve_identity import (
+    VeIdentityFunctionTool,
+    api_key_auth,
+)
+
+auth_config = api_key_auth(provider_name="my-provider")
+tool = VeIdentityFunctionTool(
+    func=my_function,
+    auth_config=auth_config,
+    into="api_key",
+)
+```
+
+## FAQ
+
+**Q: How do I choose an auth method?**
+
+A:
+
+- **API Key**: simple, fixed credential; suitable for simple scenarios
+- **OAuth2 M2M**: secure, supports token expiry and refresh; suitable for production
+- **OAuth2 USER_FEDERATION**: user authorization; suitable when user consent is required
+
+**Q: Will my credentials be exposed?**
+
+A: No. Agent Identity will:
+
+- Store credentials encrypted
+- Support automatic credential rotation
+- Avoid exposing credentials in code
+
+**Q: How is credential expiry handled?**
+
+A: Agent Identity handles it automatically:
+
+- Token caching and refresh
+- Automatic credential rotation
+- Renewal before expiry
+
+## Next Steps
+
+- [Outbound auth with API Key](/en/docs/framework/security/outbound/api-key)
+- [Outbound auth with OAuth2 M2M](/en/docs/framework/security/outbound/oauth2-m2m)
+- [Outbound auth with OAuth2 USER_FEDERATION](/en/docs/framework/security/outbound/oauth2-user-federation)
+
+## Related Resources
+
+### Agent Identity official docs
+
+- [Agent Identity API reference](https://www.volcengine.com/docs/86848/1918752)
+
+### External resources
+
+- [OAuth2 specification](https://tools.ietf.org/html/rfc6749)
+- [OpenID Connect](https://openid.net/connect/)
+
+## Getting Help
+
+If you run into issues:
+
+1. Check the FAQ section of the relevant doc
+2. See the [Agent Identity official docs](https://www.volcengine.com/docs/86848/2080920?lang=zh)
+3. Contact Volcengine technical support
