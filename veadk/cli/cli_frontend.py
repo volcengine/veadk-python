@@ -74,12 +74,31 @@ def _resolve_frontend_dir(arg: str | None) -> Path:
         f"({DEV_SERVER_ORIGIN}). Run `npm run dev` in ./frontend alongside this."
     ),
 )
+@click.option(
+    "--oauth2-user-pool",
+    default=None,
+    help="VeIdentity User Pool name. When set, enables SSO: unauthenticated "
+    "browsers are redirected to login and the UI uses the signed-in user.",
+)
+@click.option(
+    "--oauth2-user-pool-client",
+    default=None,
+    help="VeIdentity User Pool client name (required with --oauth2-user-pool).",
+)
+@click.option(
+    "--oauth2-redirect-uri",
+    default=None,
+    help="OAuth2 redirect URI. Defaults to http://{host}:{port}/oauth2/callback.",
+)
 def frontend(
     agents_dir: str,
     frontend_dir: str | None,
     host: str,
     port: int,
     dev: bool,
+    oauth2_user_pool: str | None,
+    oauth2_user_pool_client: str | None,
+    oauth2_redirect_uri: str | None,
 ) -> None:
     """Launch the A2UI web UI backed by the ADK agent API server."""
     from google.adk.cli.fast_api import get_fast_api_app
@@ -92,6 +111,23 @@ def frontend(
         allow_origins=allow_origins,
         web=False,  # we serve our own UI, not the bundled ADK dev UI
     )
+
+    if oauth2_user_pool and oauth2_user_pool_client:
+        from veadk.auth.middleware.oauth2_auth import OAuth2Config, setup_oauth2
+
+        redirect_uri = oauth2_redirect_uri or f"http://{host}:{port}/oauth2/callback"
+        oauth2_config = OAuth2Config.from_veidentity(
+            user_pool_name=oauth2_user_pool,
+            client_name=oauth2_user_pool_client,
+            redirect_uri=redirect_uri,
+        )
+        # Allow cookies over http for local/non-TLS serving.
+        oauth2_config.cookie_secure = False
+        setup_oauth2(app, oauth2_config)
+        logger.info(
+            f"OAuth2 SSO enabled (user_pool={oauth2_user_pool}, "
+            f"client={oauth2_user_pool_client}, redirect_uri={redirect_uri})"
+        )
 
     if dev:
         logger.info(

@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Loader2, MoreHorizontal, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { LogOut, MoreHorizontal, Plus, RefreshCw, Loader2, Trash2 } from "lucide-react";
 import type { AdkSession } from "../adk/client";
 import { sessionTitle } from "../blocks";
+import { displayName } from "../adk/identity";
 
 export interface SidebarProps {
   apps: string[];
@@ -14,6 +15,8 @@ export interface SidebarProps {
   onDeleteSession: (id: string) => void;
   onRefresh: () => void;
   loadingSessions: boolean;
+  userInfo?: Record<string, unknown>;
+  onLogout: () => void;
 }
 
 export function Sidebar({
@@ -27,6 +30,8 @@ export function Sidebar({
   onDeleteSession,
   onRefresh,
   loadingSessions,
+  userInfo,
+  onLogout,
 }: SidebarProps) {
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const sorted = [...sessions].sort(
@@ -107,6 +112,18 @@ export function Sidebar({
           ))}
         </div>
       </div>
+
+      {userInfo && (
+        <div className="sidebar-user">
+          <div className="user-avatar">{(displayName(userInfo) || "U").slice(0, 1).toUpperCase()}</div>
+          <span className="user-name" title={displayName(userInfo)}>
+            {displayName(userInfo)}
+          </span>
+          <button className="user-logout" title="退出登录" onClick={onLogout}>
+            <LogOut className="icon" />
+          </button>
+        </div>
+      )}
     </aside>
   );
 }

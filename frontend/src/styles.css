@@ -573,3 +573,82 @@ body {
   color: hsl(var(--muted-foreground));
 }
 .a2ui-fallback pre { overflow-x: auto; margin: 6px 0 0; }
+
+/* ---------- boot (resolving identity) ---------- */
+.boot { height: 100vh; background: hsl(var(--background)); }
+
+/* ---------- sidebar user footer ---------- */
+.sidebar-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid hsl(var(--border));
+}
+.user-avatar {
+  width: 26px; height: 26px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 600;
+}
+.user-name {
+  flex: 1; min-width: 0;
+  font-size: 13px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.user-logout {
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px;
+  border: none; border-radius: 6px; background: none;
+  color: hsl(var(--muted-foreground)); cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.user-logout:hover { background: hsl(var(--accent)); color: hsl(var(--foreground)); }
+.user-logout .icon { width: 15px; height: 15px; }
+
+/* ---------- login page (LobeHub-style) ---------- */
+.login {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+.login-top { padding: 18px 24px; }
+.login-brand { font-weight: 600; font-size: 15px; letter-spacing: -0.01em; }
+.login-main { flex: 1; display: flex; align-items: center; justify-content: center; padding: 0 24px; }
+.login-card { width: 100%; max-width: 420px; }
+.login-title {
+  margin: 0 0 14px;
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+}
+.login-sub { margin: 0 0 28px; color: hsl(var(--muted-foreground)); font-size: 15px; }
+.login-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 14px 18px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 14px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+.login-btn:hover { background: hsl(var(--accent)); border-color: hsl(var(--ring) / 0.3); }
+.login-btn:active { transform: scale(0.99); }
+.login-btn .icon { width: 18px; height: 18px; }
+.login-legal { margin: 18px 0 0; font-size: 12px; color: hsl(var(--muted-foreground)); }
+.login-footer { padding: 18px 24px; text-align: center; font-size: 12px; color: hsl(var(--muted-foreground)); }

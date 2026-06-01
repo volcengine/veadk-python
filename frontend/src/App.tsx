@@ -14,7 +14,9 @@ import { Sidebar } from "./ui/Sidebar";
 import { Blocks, ThinkingPlaceholder } from "./ui/Blocks";
 import { Composer } from "./ui/Composer";
 import { TraceDrawer } from "./ui/TraceDrawer";
+import { LoginPage } from "./ui/LoginPage";
 import { useStickToBottom } from "./ui/useStickToBottom";
+import { login, logout, resolveIdentity, type AuthStatus } from "./adk/identity";
 import type { A2uiAction, A2uiComponent } from "./a2ui/types";
 
 /** Hand-drawn "tracing / observability" icon (stacked spans). */
@@ -82,7 +84,6 @@ function CopyButton({ text }: { text: string }) {
 // Side-effect import: registers all A2UI components under a2ui/components/*.
 import "./a2ui/components";
 
-const USER_ID = "web-user";
 
 const GREETINGS = [
   "今天想做点什么？",
@@ -106,9 +107,22 @@ export default function App() {
   const [error, setError] = useState("");
   const [traceOpen, setTraceOpen] = useState(false);
   const [greeting, setGreeting] = useState(pickGreeting);
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  const [userId, setUserId] = useState("");
+  const [userInfo, setUserInfo] = useState<Record<string, unknown> | undefined>();
   const { ref: scrollRef, onScroll } = useStickToBottom<HTMLDivElement>(turns);
 
+  // Resolve SSO identity first; it provides the ADK user_id.
   useEffect(() => {
+    resolveIdentity().then((id) => {
+      setUserId(id.userId);
+      setUserInfo(id.info);
+      setAuthStatus(id.status);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (authStatus === "unauthenticated") return; // login page is shown instead
     listApps()
       .then((list) => {
         setApps(list);
@@ -116,24 +130,24 @@ export default function App() {
         if (preferred) setAppName(preferred);
       })
       .catch((e) => setError(String(e)));
-  }, []);
+  }, [authStatus]);
 
-  // When the app changes: load its sessions and open a fresh one.
+  // When the app (or resolved user) changes: load sessions and open a fresh one.
   useEffect(() => {
-    if (!appName) return;
+    if (!appName || !userId) return;
     void startNewChat(appName);
     void refreshSessions(appName);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appName]);
+  }, [appName, userId]);
 
   async function refreshSessions(app: string) {
     setLoadingSessions(true);
     try {
-      const list = await listSessions(app, USER_ID);
+      const list = await listSessions(app, userId);
       // Hydrate events so the sidebar can show a title per session.
       const hydrated = await Promise.all(
         list.map((s) =>
-          s.events?.length ? Promise.resolve(s) : getSession(app, USER_ID, s.id),
+          s.events?.length ? Promise.resolve(s) : getSession(app, userId, s.id),
         ),
       );
       setSessions(hydrated);
@@ -148,7 +162,7 @@ export default function App() {
     setError("");
     setGreeting(pickGreeting());
     try {
-      const id = await createSession(app, USER_ID);
+      const id = await createSession(app, userId);
       setSessionId(id);
       setTurns([]);
     } catch (e) {
@@ -158,7 +172,7 @@ export default function App() {
 
   async function removeSession(id: string) {
     try {
-      await deleteSession(appName, USER_ID, id);
+      await deleteSession(appName, userId, id);
       if (id === sessionId) await startNewChat(appName);
       await refreshSessions(appName);
     } catch (e) {
@@ -169,7 +183,7 @@ export default function App() {
   async function pickSession(id: string) {
     setError("");
     try {
-      const s = await getSession(appName, USER_ID, id);
+      const s = await getSession(appName, userId, id);
       setSessionId(id);
       setTurns(eventsToTurns(s.events ?? []));
     } catch (e) {
@@ -191,7 +205,7 @@ export default function App() {
       let acc = emptyAcc();
       let tokens = 0;
       let ts = Date.now() / 1000;
-      for await (const event of runSSE({ appName, userId: USER_ID, sessionId, text })) {
+      for await (const event of runSSE({ appName, userId: userId, sessionId, text })) {
         acc = applyEvent(acc, event);
         const usage = event.usageMetadata ?? event.usage_metadata;
         if (usage?.totalTokenCount) tokens = usage.totalTokenCount;
@@ -219,6 +233,13 @@ export default function App() {
     send(`[ui-action] ${name}: ${JSON.stringify(context)}`);
   }
 
+  if (authStatus === null) {
+    return <div className="boot" />; // resolving identity
+  }
+  if (authStatus === "unauthenticated") {
+    return <LoginPage onLogin={login} />;
+  }
+
   return (
     <div className="layout">
       <Sidebar
@@ -232,6 +253,8 @@ export default function App() {
         onDeleteSession={removeSession}
         onRefresh={() => refreshSessions(appName)}
         loadingSessions={loadingSessions}
+        userInfo={userInfo}
+        onLogout={logout}
       />
 
       {(() => {
