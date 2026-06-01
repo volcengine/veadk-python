@@ -62,6 +62,9 @@ database = [
     "mem0ai==0.1.118",              # For mem0
 ]
 speech = []
+a2ui = [
+    "a2ui-agent-sdk>=0.2.1",        # For A2UI agent-driven UI (https://a2ui.org)
+]
 eval = [
     "prometheus-client>=0.22.1",    # For exporting data to Prometheus pushgateway
     "deepeval>=3.2.6",              # For DeepEval-based evaluation

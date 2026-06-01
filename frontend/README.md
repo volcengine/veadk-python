@@ -1,0 +1,88 @@
+# VeADK A2UI Frontend
+
+A React UI that renders **agent-driven UI** (A2UI, https://a2ui.org) streamed from
+a VeADK agent over the Google ADK API server. It talks to the same server that
+`veadk frontend` launches — no separate backend.
+
+## Run
+
+The build output goes to `veadk/webui` (inside the Python package) and is
+committed, so it ships with the wheel and `veadk frontend` works for installed
+users without a build step:
+
+```bash
+# serve UI + agent API from one process
+veadk frontend --agents-dir examples
+# open http://127.0.0.1:8000
+```
+
+Rebuild the UI from source after changing it:
+
+```bash
+cd frontend && npm install && npm run build   # -> veadk/webui
+```
+
+Dev loop with hot reload:
+
+```bash
+veadk frontend --dev --agents-dir examples   # API only, CORS for vite
+cd frontend && npm run dev                    # http://localhost:5173 (proxies API)
+```
+
+## How it works
+
+1. `adk/client.ts` calls `/list-apps`, creates a session, and streams `/run_sse`.
+2. `a2ui/extract.ts` pulls A2UI messages out of the `send_a2ui_json_to_client`
+   tool response (`validated_a2ui_json`).
+3. `a2ui/Surface.tsx` applies `createSurface` / `updateComponents` /
+   `updateDataModel` into surface state and renders the root component.
+4. `a2ui/registry.ts` maps each component name to a React renderer; each renderer
+   lives in its own directory under `a2ui/components/<Name>/` and self-registers.
+
+## Adding a custom (enterprise) component
+
+A custom component has two halves that share one **catalog id**:
+
+**Frontend half** — drop a new directory; it auto-registers (no central edit):
+
+```
+src/a2ui/components/RevenueChart/
+├── RevenueChart.tsx       # the React renderer
+└── index.ts               # register("RevenueChart", RevenueChart)
+```
+
+```ts
+// index.ts
+import { register } from "../../registry";
+import { RevenueChart } from "./RevenueChart";
+register("RevenueChart", RevenueChart);
+```
+
+```tsx
+// RevenueChart.tsx
+import type { ComponentRendererProps } from "../../registry";
+export function RevenueChart({ node, ctx }: ComponentRendererProps) {
+  const series = ctx.resolve(node.series as any);
+  return <div className="corp-chart">{/* render series */}</div>;
+}
+```
+
+`components/index.ts` imports every `*/index.ts` via `import.meta.glob`, so the
+new folder is picked up automatically.
+
+**Backend half** — declare the component in a catalog and point the agent at it
+(see `veadk.a2ui.BaseA2UICatalog`):
+
+```python
+from veadk import Agent
+from veadk.a2ui import BaseA2UICatalog
+
+class FinanceCatalog(BaseA2UICatalog):
+    catalog_path = "/opt/corp/a2ui/finance_catalog.json"   # defines RevenueChart
+    examples_path = "/opt/corp/a2ui/finance_examples"
+
+agent = Agent(enable_a2ui=True, a2ui_catalog=FinanceCatalog())
+```
+
+Unknown components (no registered renderer) fall back to a collapsible JSON view,
+so a catalog/renderer mismatch never crashes the UI.

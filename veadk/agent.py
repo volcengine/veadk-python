@@ -164,6 +164,19 @@ class Agent(LlmAgent):
     enable_skills_checklist: bool = False
     _skills_with_checklist: Dict[str, Any] = {}
 
+    enable_a2ui: bool = False
+    """Enable A2UI (agent-driven UI). When True, a `SendA2uiToClientToolset` is
+    appended so the agent can reply with declarative UI rendered by a client.
+    Requires the optional `a2ui-agent-sdk` dependency (`pip install veadk-python[a2ui]`)."""
+
+    a2ui_catalog: Optional[Any] = None
+    """Optional A2UI catalog. Accepts a path to a catalog JSON (str; relative paths
+    resolve against the agent's directory, absolute paths used as-is), a
+    `veadk.a2ui.BaseA2UICatalog`, an `A2uiCatalog`, or a pre-built
+    `(A2uiCatalog, examples)` tuple. When None, auto-discovers `catalog.json` next
+    to the agent, falling back to the bundled basic catalog. Only used when
+    `enable_a2ui=True`."""
+
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
 
@@ -343,6 +356,12 @@ class Agent(LlmAgent):
             self.tools.append(GhostcharTool())
 
             self.instruction += "Please add a character `< at the beginning of you each text-based response."
+
+        if self.enable_a2ui:
+            logger.info("A2UI enabled")
+            from veadk.a2ui import build_a2ui_toolset
+
+            self.tools.append(build_a2ui_toolset(catalog=self.a2ui_catalog))
 
         if self.enable_dataset_gen:
             from veadk.toolkits.dataset_auto_gen_callback import (

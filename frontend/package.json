@@ -1,0 +1,24 @@
+{
+  "name": "veadk-a2ui-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "VeADK A2UI web UI — renders agent-driven UI over the ADK API server.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "lucide-react": "^0.460.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}

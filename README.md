@@ -95,12 +95,54 @@ channel = FeishuChannelExtension(runner=runner)
 
 Configure credentials with `TOOL_FEISHU_CHANNEL_APP_ID` and `TOOL_FEISHU_CHANNEL_APP_SECRET`, or in `config.yaml` under `tool.feishu_channel`.
 
+## A2UI (agent-driven UI)
+
+VeADK integrates Google's [A2UI](https://a2ui.org), letting an agent reply with
+declarative UI (cards, rows, forms) instead of plain text. A client renders the
+UI with native components. Enable it with a single flag (requires the optional
+`a2ui-agent-sdk` dependency: `pip install veadk-python[a2ui]`):
+
+```python
+from veadk import Agent
+
+agent = Agent(enable_a2ui=True)  # uses the bundled "basic" component catalog
+```
+
+A bundled React web UI renders A2UI over the standard ADK API server. The built
+UI ships inside the package (`veadk/webui`, produced by `npm run build`), so
+installed users can launch it directly:
+
+```bash
+veadk frontend --agents-dir examples           # serve UI + API on http://127.0.0.1:8000
+```
+
+To rebuild the UI from source (output goes to `veadk/webui`, which is committed
+so it ships with the wheel):
+
+```bash
+cd frontend && npm install && npm run build
+```
+
+Point the agent at a custom component catalog (relative paths resolve against the
+agent's directory; absolute paths work too). With no argument it auto-discovers a
+`catalog.json` next to the agent, falling back to the bundled basic catalog:
+
+```python
+Agent(enable_a2ui=True, a2ui_catalog="catalog.json")  # beside the agent
+```
+
+Enterprises extend the component set in two matching halves: a backend catalog
+(a `catalog.json` or a `veadk.a2ui.BaseA2UICatalog` subclass) and a frontend
+renderer directory (`frontend/src/a2ui/components/<Name>/`). See
+[`frontend/README.md`](frontend/README.md).
+
 ## Command line tools
 
 VeADK provides several useful command line tools for faster deployment and optimization, such as:
 
 - `veadk deploy`: deploy your project to [Volcengine VeFaaS platform](https://www.volcengine.com/product/vefaas) (you can use `veadk init` to init a demo project first)
 - `veadk prompt`: otpimize the system prompt of your agent by [PromptPilot](https://promptpilot.volcengine.com)
+- `veadk frontend`: serve the A2UI web UI together with the ADK agent API server
 
 ## Contribution
 
