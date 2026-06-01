@@ -39,7 +39,7 @@ from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 from claude_agent_sdk.types import SystemPromptPreset
 
 from veadk.runtime.base_runtime import BaseRuntime, build_system_append
-from veadk.runtime.cc.proxy import detect_endpoint_kind, get_shim_url
+from veadk.runtime.cc.proxy import detect_endpoint_kind
 from veadk.runtime.cc.translate import build_prompt, sdk_message_to_events
 from veadk.utils.logger import get_logger
 
@@ -50,8 +50,6 @@ if TYPE_CHECKING:
     from veadk.agent import Agent
 
 logger = get_logger(__name__)
-
-_LOCAL_SHIM_TOKEN = "veadk-local"
 
 
 def _model_env(model: str) -> dict[str, str]:
@@ -143,22 +141,17 @@ class ClaudeCodeRuntime(BaseRuntime):
         api_base: str | None,
         api_key: str | None,
     ) -> dict[str, str]:
-        if kind == "openai":
-            if not api_base or not api_key:
-                raise ValueError(
-                    "cc runtime with an OpenAI-compatible endpoint requires both "
-                    "model_api_base and model_api_key."
-                )
-            base_url = await get_shim_url(api_base, api_key)
-            # Credentials are validated by the shim against the backend; the token
-            # the SDK sends to the local shim is irrelevant but must override any
-            # inherited one.
-            return {
-                "ANTHROPIC_BASE_URL": base_url,
-                "ANTHROPIC_AUTH_TOKEN": _LOCAL_SHIM_TOKEN,
-                "ANTHROPIC_API_KEY": _LOCAL_SHIM_TOKEN,
-                **_model_env(model),
-            }
+        # Routing Claude Code to a non-Anthropic model (via the OpenAI<->Anthropic
+        # shim) is disabled pending license/terms review. The cc runtime currently
+        # supports only Anthropic-compatible endpoints. The shim itself still lives
+        # in `proxy.py` so this can be re-enabled once cleared.
+        if kind != "anthropic":
+            raise ValueError(
+                "The 'cc' runtime currently supports only Anthropic-compatible "
+                "endpoints; routing Claude Code to a non-Anthropic model is "
+                "disabled. Set an Anthropic endpoint (model_provider='anthropic') "
+                "or use runtime='adk'."
+            )
 
         # Native Anthropic endpoint.
         if not api_key:
