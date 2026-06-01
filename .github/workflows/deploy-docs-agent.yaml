@@ -1,0 +1,53 @@
+name: Deploy Docs Agent
+
+# Auto-deploys the docs "Ask AI" agent to Volcengine VeFaaS whenever the agent
+# (or the docs it indexes) changes. The deployed agent serves the A2A protocol;
+# after deploying, put its public URL into the `AI_CHAT_URL` repo variable so
+# the docs site (deploy-docs.yaml) can talk to it.
+
+# Deploy uses Volcengine AK/SK from secrets — the GITHUB_TOKEN only needs to
+# read the repo for checkout.
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/ask-ai-agent/**'
+      - 'docs/content/docs/**'           # docs changed -> rebuild the search index
+      - '.github/workflows/deploy-docs-agent.yaml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install VeADK
+        run: pip install .
+
+      - name: Rebuild docs search index
+        run: python docs/ask-ai-agent/build_index.py
+
+      - name: Deploy to VeFaaS
+        env:
+          VOLCENGINE_ACCESS_KEY: ${{ secrets.VOLCENGINE_ACCESS_KEY }}
+          VOLCENGINE_SECRET_KEY: ${{ secrets.VOLCENGINE_SECRET_KEY }}
+          # The deployed agent gets its Ark token from the VeFaaS IAM role, so no
+          # model API key is needed at runtime — only the model name.
+          MODEL_AGENT_NAME: deepseek-v4-flash-260425
+        run: |
+          ARGS="--vefaas-app-name ${{ vars.VEFAAS_APP_NAME || 'veadk-docs-assistant' }} --path docs/ask-ai-agent"
+          if [ -n "${{ vars.VEFAAS_IAM_ROLE }}" ]; then
+            ARGS="$ARGS --iam-role ${{ vars.VEFAAS_IAM_ROLE }}"
+          fi
+          echo "veadk deploy $ARGS"
+          veadk deploy $ARGS

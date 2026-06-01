@@ -30,3 +30,6 @@ next-env.d.ts
 !/lib
 !/lib/**
 !/build
+
+# Generated docs search index for the Ask-AI agent (rebuilt by build_index.py / CI).
+/ask-ai-agent/docs_index.json
