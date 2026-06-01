@@ -1,4 +1,8 @@
 {
   "title": "前端与 A2UI",
-  "pages": ["a2ui", "web-ui"]
+  "pages": [
+    "a2ui",
+    "web-ui",
+    "ask-ai"
+  ]
 }
