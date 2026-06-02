@@ -1,0 +1,125 @@
+---
+title: "Tunnel"
+description: "Connect on-prem MCP servers to a cloud agent through an outbound tunnel — the agent calls your internal tools with no inbound port opened."
+---
+
+A cloud agent wants to call MCP servers that live on an enterprise's **internal
+network**, which usually can't be reached from outside. VeADK's `veadk.tunnel`
+provides a tunnel that the **enterprise opens outbound**: a connector dials out
+from the internal network to the cloud agent and **registers** one or more local
+MCP servers; the agent discovers them at run time and calls them as tools.
+Because the connection is outbound, **no inbound port** is opened on the
+enterprise side — it traverses NAT / firewalls naturally.
+
+## How it works
+
+```text
+        enterprise network                  │            cloud (ADK server)
+  MCP server(s)  ◀── connector ──outbound WSS──▶  /tunnel/connect ─ registry
+                      (registers to agent)   │     agent + TunnelToolset
+                                             │       (mounts tools per turn)
+```
+
+- An agent opts in with `Agent(enable_tunnel=True)` and gets a `TunnelToolset`.
+- The cloud app mounts the `/tunnel/*` routes via `mount_tunnel`
+  (or `mount_tunnel_if_enabled`).
+- The connector dials out to `/tunnel/connect` and registers local MCP servers
+  **by the agent's name**.
+- On the next turn, `TunnelToolset.get_tools()` reads the registry and the local
+  server's tools appear — **no redeploy**.
+
+## Cloud: enable and mount
+
+The agent just flips a switch:
+
+```python
+from veadk import Agent
+
+agent = Agent(name="ops_agent", enable_tunnel=True)
+root_agent = agent
+```
+
+The cloud service (ADK's `get_fast_api_app`) mounts the tunnel routes:
+
+```python
+from google.adk.cli.fast_api import get_fast_api_app
+from veadk.tunnel import mount_tunnel_if_enabled
+
+app = get_fast_api_app(agents_dir="agents", web=False)
+
+# Mount only if some agent enabled the tunnel; token is the tunnel-layer auth.
+mount_tunnel_if_enabled(app, agents=[root_agent], token="<tunnel-token>")
+```
+
+At registration the connector must name the **target agent**, and that agent
+must have `enable_tunnel=True` — otherwise registration is rejected. The registry
+is keyed by agent name, so servers registered to A are visible only to A.
+
+## Enterprise: the connector
+
+Run the connector inside your network to register local MCP server(s):
+
+```python
+import asyncio
+from veadk.tunnel import LocalServer, TunnelConnector
+
+async def main():
+    connector = TunnelConnector(
+        cloud_url="https://<agent-endpoint>",
+        agent="ops_agent",
+        token="<tunnel-token>",
+        servers=[
+            LocalServer(
+                name="ops",
+                address="http://mcp.internal:9000/mcp",  # internal MCP server URL
+                # Auth to reach YOUR MCP server (stays on-prem, never leaves):
+                # headers={"Authorization": "Bearer <your-mcp-token>"},
+                # query={"api_key": "<your-key>"},
+                # tool_filter=["get_employee"],       # optionally expose a subset
+            ),
+        ],
+    )
+    await connector.start()  # runs until interrupted
+
+asyncio.run(main())
+```
+
+## Two-layer auth
+
+| Layer | Who → who | Credential | Where it lives |
+| :--- | :--- | :--- | :--- |
+| Tunnel | connector → agent | `token` (via `?token=` or `Authorization`) | issued by an admin for the agent |
+| Per-server | connector → your MCP server | `LocalServer.headers` / `query` | **connector only (on-prem); never leaves** |
+
+## Deploying to AgentKit
+
+`mount_tunnel` adds plain routes, so the cloud service deploys like any other
+agent with `veadk agentkit launch` (see [Deploy](/en/docs/framework/deploy)).
+Two notes:
+
+- The tunnel relies on a **WebSocket** through the gateway, verified working on
+  the AgentKit (`key_auth`) gateway.
+- The gateway's `key_auth` consumes the `Authorization` header. In that case put
+  the **gateway credential** in `extra_headers` and let the tunnel `token` ride
+  on `?token=`:
+
+```python
+TunnelConnector(
+    cloud_url="https://<endpoint>",
+    agent="ops_agent",
+    token="<tunnel-token>",                                  # via ?token=
+    extra_headers={"Authorization": "Bearer <gateway-key>"}, # gateway auth
+    servers=[...],
+)
+```
+
+## Limitations
+
+- The registry is **in-process**: the connector's WebSocket and the agent run
+  must hit the same process. Multi-replica deployments need sticky routing or a
+  shared registry / message bus.
+- Cancelling a cloud-side request does not yet stop the connector's long-lived
+  stream.
+
+See [`examples/tunnel`](https://github.com/volcengine/veadk-python/tree/main/examples/tunnel)
+for a full runnable example.

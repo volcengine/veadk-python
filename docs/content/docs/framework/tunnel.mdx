@@ -1,0 +1,105 @@
+---
+title: "隧道（Tunnel）"
+description: "通过出站隧道，把企业内网的 MCP Server 接入云端 Agent —— 无需开放任何入站端口，Agent 即可调用内网工具。"
+---
+
+云端的 Agent 想调用企业**内网**里的 MCP Server，但内网通常不允许外部直接访问。VeADK 的 `veadk.tunnel` 提供一条**由企业侧主动向外建立**的隧道：连接器（connector）从内网出站连到云端 Agent，并把一个或多个本地 MCP Server **注册**上去；Agent 在运行时自动感知并把它们当作工具调用。因为连接是出站的，所以**无需在企业侧开放入站端口**，天然穿透 NAT / 防火墙。
+
+## 工作原理
+
+```text
+        企业内网                            │            云端 (ADK server)
+  MCP Server(s)  ◀── connector ──出站WSS──▶  /tunnel/connect ─ registry
+                      (按名字注册到 Agent)   │   Agent + TunnelToolset
+                                            │     (每轮对话动态挂载工具)
+```
+
+- Agent 用 `Agent(enable_tunnel=True)` 开启隧道，自动获得一个 `TunnelToolset`。
+- 云端 app 通过 `mount_tunnel`（或 `mount_tunnel_if_enabled`）挂载 `/tunnel/*` 路由。
+- 连接器从内网出站连到 `/tunnel/connect`，把本地 MCP Server **按 Agent 名字**注册。
+- 下一轮对话时，`TunnelToolset.get_tools()` 读取注册表，本地 Server 的工具即出现 —— **无需重新部署**。
+
+## 云端：开启并挂载
+
+Agent 侧只需打开开关：
+
+```python
+from veadk import Agent
+
+agent = Agent(name="ops_agent", enable_tunnel=True)
+root_agent = agent
+```
+
+云端服务（ADK 的 `get_fast_api_app`）挂载隧道路由：
+
+```python
+from google.adk.cli.fast_api import get_fast_api_app
+from veadk.tunnel import mount_tunnel_if_enabled
+
+app = get_fast_api_app(agents_dir="agents", web=False)
+
+# 只要有一个 Agent 开了 enable_tunnel 就挂载；token 是隧道层鉴权
+mount_tunnel_if_enabled(app, agents=[root_agent], token="<tunnel-token>")
+```
+
+注册时连接器必须指定**目标 Agent 名字**，且该 Agent 必须 `enable_tunnel=True`，否则注册被拒绝。注册表按 Agent 名字隔离：注册到 A 的 Server 只有 A 能看到。
+
+## 企业侧：连接器
+
+在内网运行连接器，把本地 MCP Server 注册到云端 Agent：
+
+```python
+import asyncio
+from veadk.tunnel import LocalServer, TunnelConnector
+
+async def main():
+    connector = TunnelConnector(
+        cloud_url="https://<agent-endpoint>",
+        agent="ops_agent",
+        token="<tunnel-token>",
+        servers=[
+            LocalServer(
+                name="ops",
+                address="http://mcp.internal:9000/mcp",  # 内网 MCP Server 地址
+                # 访问你自己 MCP Server 的鉴权（留在企业侧，不出内网）：
+                # headers={"Authorization": "Bearer <your-mcp-token>"},
+                # query={"api_key": "<your-key>"},
+                # tool_filter=["get_employee"],       # 可只暴露部分工具
+            ),
+        ],
+    )
+    await connector.start()  # 保持运行
+
+asyncio.run(main())
+```
+
+## 两层鉴权
+
+| 层 | 谁向谁 | 凭证 | 存放位置 |
+| :--- | :--- | :--- | :--- |
+| 隧道层 | 连接器 → Agent | `token`（经 `?token=` 或 `Authorization` 头） | 由管理员为 Agent 颁发 |
+| 单 Server 层 | 连接器 → 你的 MCP Server | `LocalServer.headers` / `query` | **仅留在连接器（企业侧），密钥不出内网** |
+
+## 部署到 AgentKit
+
+`mount_tunnel` 加的是普通路由，云端服务可像其它 Agent 一样用 `veadk agentkit launch` 部署（参见 [部署](/cn/docs/framework/deploy)）。注意两点：
+
+- 隧道依赖经过网关的 **WebSocket**，已在 AgentKit（`key_auth`）网关上验证可用。
+- 网关的 `key_auth` 会占用 `Authorization` 头。此时让连接器把**网关凭证**放在 `extra_headers`，隧道 `token` 走 `?token=`：
+
+```python
+TunnelConnector(
+    cloud_url="https://<endpoint>",
+    agent="ops_agent",
+    token="<tunnel-token>",                                  # 走 ?token=
+    extra_headers={"Authorization": "Bearer <gateway-key>"}, # 走网关鉴权
+    servers=[...],
+)
+```
+
+## 局限
+
+- 注册表为**进程内**：连接器的 WebSocket 与 Agent 运行必须命中同一进程。多副本部署需 sticky 路由或共享注册表 / 消息总线。
+- 云端请求取消时，连接器侧的长连流暂未联动关闭。
+
+完整可运行示例见 [`examples/tunnel`](https://github.com/volcengine/veadk-python/tree/main/examples/tunnel)。
