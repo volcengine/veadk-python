@@ -1,0 +1,9 @@
+# AgentKit command artifacts — never commit these
+agentkit.yaml
+agentkit*.yaml
+.agentkit/
+Dockerfile
+*.log
+pipeline_failed_*.log
+__pycache__/
+.env
