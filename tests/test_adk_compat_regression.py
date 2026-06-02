@@ -277,8 +277,7 @@ def test_helper_function_calls_matches_native_getter():
 def test_helper_function_responses_matches_native_getter():
     event = _make_real_adk_function_response_event()
     assert (
-        adk_compat.get_event_function_responses(event)
-        == event.get_function_responses()
+        adk_compat.get_event_function_responses(event) == event.get_function_responses()
     )
 
 

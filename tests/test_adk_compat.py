@@ -15,7 +15,9 @@
 from types import SimpleNamespace
 
 from veadk.memory.short_term_memory_backends.mysql_backend import MysqlSTMBackend
-from veadk.memory.short_term_memory_backends.postgresql_backend import PostgreSqlSTMBackend
+from veadk.memory.short_term_memory_backends.postgresql_backend import (
+    PostgreSqlSTMBackend,
+)
 from veadk.memory.short_term_memory_backends.sqlite_backend import SQLiteSTMBackend
 from veadk.tracing.telemetry.attributes.extractors.tool_attributes_extractors import (
     tool_gen_ai_tool_output,
@@ -57,7 +59,9 @@ def test_get_event_function_calls_fallback_to_parts():
 
 def test_get_event_function_calls_getter_error_fallback_to_parts():
     class Event:
-        content = SimpleNamespace(parts=[SimpleNamespace(function_call="fallback_call")])
+        content = SimpleNamespace(
+            parts=[SimpleNamespace(function_call="fallback_call")]
+        )
 
         def get_function_calls(self):
             raise RuntimeError("broken getter")
