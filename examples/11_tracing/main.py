@@ -12,23 +12,50 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Observe what the agent did with tracing.
+"""Observe what the agent did with tracing — local, and/or cloud exporters.
 
 Attach a tracer via `tracers=[...]`. Every LLM call and tool call becomes a span,
-and the run gets a `trace_id` you can correlate in an observability backend.
+and the run gets a `trace_id` (32 hex chars) you can search in your backend.
 
-To ship traces to a platform, set the matching env vars
-(`ENABLE_COZELOOP=true`, `ENABLE_APMPLUS=true`, `ENABLE_TLS=true`) and configure
-their endpoints/keys; VeADK wires up the exporters automatically and you can then
-search for the printed `trace_id` in that platform's UI.
+By default spans are collected in-memory (no credentials needed). Set any of
+`ENABLE_APMPLUS` / `ENABLE_COZELOOP` / `ENABLE_TLS` to `true` (and fill in the
+matching creds in `.env`) to also ship traces to those Volcengine observability
+platforms. APMPlus can authenticate with your Volcengine AK/SK; CozeLoop and TLS
+use their own key / ids. See `.env.example`.
 """
 
 import asyncio
+import os
 
 from veadk import Agent, Runner
+from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
 from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
 
 SESSION_ID = "demo-session"
+
+
+def _enabled(env_name: str) -> bool:
+    return os.getenv(env_name, "").lower() == "true"
+
+
+def build_exporters() -> list[BaseExporter]:
+    """Build the cloud exporters enabled via env (their config is read from .env)."""
+    exporters: list[BaseExporter] = []
+    if _enabled("ENABLE_APMPLUS"):
+        from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporter
+
+        exporters.append(APMPlusExporter())
+    if _enabled("ENABLE_COZELOOP"):
+        from veadk.tracing.telemetry.exporters.cozeloop_exporter import (
+            CozeloopExporter,
+        )
+
+        exporters.append(CozeloopExporter())
+    if _enabled("ENABLE_TLS"):
+        from veadk.tracing.telemetry.exporters.tls_exporter import TLSExporter
+
+        exporters.append(TLSExporter())
+    return exporters
 
 
 def get_city_weather(city: str) -> dict[str, str]:
@@ -41,7 +68,14 @@ def get_city_weather(city: str) -> dict[str, str]:
 
 
 async def main() -> None:
-    tracer = OpentelemetryTracer()
+    # No exporters -> in-memory only (still yields a trace_id). With ENABLE_* set,
+    # the same spans are also shipped to those platforms.
+    exporters = build_exporters()
+    tracer = OpentelemetryTracer(exporters=exporters)
+    print(
+        "Exporters:",
+        [type(e).__name__ for e in exporters] or "in-memory only (no cloud export)",
+    )
 
     agent = Agent(
         name="traced_agent",
@@ -55,8 +89,8 @@ async def main() -> None:
     answer = await runner.run(messages="北京今天天气怎么样？", session_id=SESSION_ID)
     print("Answer:", answer)
 
-    # Each LLM/tool call was recorded as a span under this trace id. With a
-    # platform exporter enabled (see README), search this id in its UI.
+    # 32-char hex id tying all spans of this run together. With an exporter
+    # enabled, search this id in that platform's UI.
     print("Trace id:", runner.get_trace_id())
 
 
