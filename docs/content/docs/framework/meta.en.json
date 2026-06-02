@@ -17,6 +17,7 @@
     "---[Puzzle]Extend & UI---",
     "plugin",
     "frontend",
+    "tunnel",
     "---[ShieldCheck]Security---",
     "security",
     "---[Activity]Observability---",
