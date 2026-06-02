@@ -63,6 +63,25 @@ def patch_asyncio():
     CancelScope.__exit__ = patched_cancel_scope_exit
 
 
+def _iter_loaded_attrs(mod):
+    """Iterate ``(name, value)`` pairs for already-loaded module attrs.
+
+    Walking ``dir(mod) + getattr(mod, name)`` would trip ``__getattr__`` hooks
+    that ADK 2.0 uses for lazy loading (e.g. ``google.adk.tools``), which in
+    turn drags in optional-dep submodules like ``discovery_engine_search_tool``
+    that veadk does not need. Reading ``mod.__dict__`` avoids that side effect
+    — we only see attrs that have actually been imported into the module
+    namespace, which is exactly the set we want to patch.
+    """
+    namespace = getattr(mod, "__dict__", None)
+    if not isinstance(namespace, dict):
+        return
+    # Snapshot to avoid "dict changed size during iteration" if a setattr
+    # below mutates the namespace mid-loop.
+    for name, value in tuple(namespace.items()):
+        yield name, value
+
+
 def patch_google_adk_telemetry() -> None:
     trace_functions = {
         "trace_tool_call": trace_tool_call,
@@ -70,11 +89,10 @@ def patch_google_adk_telemetry() -> None:
         "trace_send_data": trace_send_data,
     }
 
-    for mod_name, mod in sys.modules.items():
+    for mod_name, mod in tuple(sys.modules.items()):
         if mod_name.startswith("google.adk"):
-            for var_name in dir(mod):
-                var = getattr(mod, var_name, None)
-                if var_name in trace_functions.keys() and isinstance(var, Callable):
+            for var_name, var in _iter_loaded_attrs(mod):
+                if var_name in trace_functions and isinstance(var, Callable):
                     setattr(mod, var_name, trace_functions[var_name])
                     logger.debug(
                         f"Patch {mod_name} {var_name} with {trace_functions[var_name]}"
@@ -86,8 +104,7 @@ def patch_tracer() -> None:
 
     for mod_name, mod in tuple(sys.modules.items()):
         if mod_name.startswith("google.adk"):
-            for var_name in dir(mod):
-                var = getattr(mod, var_name, None)
+            for var_name, var in _iter_loaded_attrs(mod):
                 if var_name == "tracer" and isinstance(var, trace.Tracer):
                     setattr(
                         mod,

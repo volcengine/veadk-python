@@ -60,6 +60,10 @@ from volcenginesdkarkruntime._exceptions import ArkBadRequestError
 
 from veadk.config import settings
 from veadk.consts import DEFAULT_VIDEO_MODEL_API_BASE
+from veadk.utils.adk_compat import (
+    get_previous_interaction_id,
+    llm_request_has_field,
+)
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -580,8 +584,8 @@ def record_logs(raw_response: ArkTypeResponse):
                 f"Status: `{raw_response.status}`. "
                 f"{error_message}"
             )
-    except Exception as e:
-        logger.error(f"Failed to record ark logs: {e}")
+    except Exception:
+        logger.exception("Failed to record Ark response logs")
 
 
 def event_to_generate_content_response(
@@ -703,7 +707,7 @@ class ArkLlm(Gemini):
 
     def __init__(self, **kwargs):
         # adk version check
-        if "previous_interaction_id" not in LlmRequest.model_fields:
+        if not llm_request_has_field("previous_interaction_id"):
             raise ImportError(
                 "If using the ResponsesAPI, "
                 "please upgrade the version of google-adk to `1.21.0` or higher with the command: "
@@ -746,8 +750,8 @@ class ArkLlm(Gemini):
         # ------------------------------------------------------ #
         # get previous_response_id
         previous_response_id = None
-        if self.enable_responses_cache and llm_request.previous_interaction_id:
-            previous_response_id = llm_request.previous_interaction_id
+        if self.enable_responses_cache:
+            previous_response_id = get_previous_interaction_id(llm_request)
         responses_args = {
             "model": self.model,
             "instructions": instructions,
@@ -786,15 +790,17 @@ class ArkLlm(Gemini):
                         responses_args.copy(), stream=stream
                     ):
                         yield llm_response
-                except Exception as retry_e:
-                    logger.error(f"Retry failed in generate_content_async: {retry_e}")
-                    raise retry_e
+                except Exception:
+                    logger.exception(
+                        "Retry without previous_response_id failed in Ark Responses API"
+                    )
+                    raise
             else:
-                logger.error(f"Error in generate_content_async: {e}")
-                raise e
-        except Exception as e:
-            logger.error(f"Error in generate_content_async: {e}")
-            raise e
+                logger.exception("Ark Responses API request failed")
+                raise
+        except Exception:
+            logger.exception("Unexpected error in Ark Responses API generation")
+            raise
 
     async def generate_content_via_responses(
         self, responses_args: dict, stream: bool = False

@@ -25,6 +25,7 @@ from google.adk.sessions import InMemorySessionService
 from google.genai import types
 from pydantic import BaseModel
 
+from veadk.utils.adk_compat import get_event_function_calls
 from veadk.utils.misc import formatted_timestamp
 
 
@@ -556,8 +557,8 @@ class BaseEvaluator:
                         and event.content.parts
                     ):
                         final_response = event.content
-                    elif event.get_function_calls():
-                        for call in event.get_function_calls():
+                    else:
+                        for call in get_event_function_calls(event):
                             tool_uses.append(call)
                 tok = time.time()
                 _latency = str((tok - tik) * 1000)

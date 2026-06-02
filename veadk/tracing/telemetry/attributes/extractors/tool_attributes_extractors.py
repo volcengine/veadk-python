@@ -16,6 +16,7 @@ from veadk.tracing.telemetry.attributes.extractors.types import (
     ExtractorResponse,
     ToolAttributesParams,
 )
+from veadk.utils.adk_compat import get_event_function_responses
 from veadk.utils.misc import safe_json_serialize
 
 
@@ -126,9 +127,20 @@ def tool_gen_ai_tool_output(params: ToolAttributesParams) -> ExtractorResponse:
     Returns:
         ExtractorResponse: Response containing JSON serialized tool output data
     """
-    function_response = params.function_response_event.get_function_responses()[
-        0
-    ].model_dump()
+    function_responses = get_event_function_responses(params.function_response_event)
+    if not function_responses:
+        return ExtractorResponse(content="<unknown_tool_output>")
+    function_response_obj = function_responses[0]
+    if hasattr(function_response_obj, "model_dump"):
+        function_response = function_response_obj.model_dump()
+    elif isinstance(function_response_obj, dict):
+        function_response = function_response_obj
+    else:
+        function_response = {
+            "id": getattr(function_response_obj, "id", ""),
+            "name": getattr(function_response_obj, "name", ""),
+            "response": getattr(function_response_obj, "response", None),
+        }
     tool_output = {
         "id": function_response["id"],
         "name": function_response["name"],
