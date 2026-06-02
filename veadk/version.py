@@ -12,4 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-VERSION = "0.5.35"
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _get_version
+
+try:
+    # Single source of truth: the version recorded at install/build time,
+    # which setuptools-scm derives from the latest git tag.
+    VERSION = _get_version("veadk-python")
+except PackageNotFoundError:
+    # Importing from a source tree that has not been installed (no dist
+    # metadata). setuptools-scm only computes the version at build/install.
+    VERSION = "0.0.0+unknown"
