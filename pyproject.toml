@@ -1,6 +1,10 @@
+[build-system]
+requires = ["setuptools>=64", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "veadk-python"
-version = "0.5.35"
+dynamic = ["version"]
 description = "Volcengine agent development kit, integrations with Volcengine cloud services."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -96,6 +100,13 @@ include-package-data = true
 
 [tool.setuptools.package-data]
 "veadk" = ["**/*"]
+
+# Derive the package version from the latest git tag (e.g. tag "0.5.36"
+# publishes version 0.5.36). No version string is hardcoded anywhere; release
+# by tagging. ``fallback_version`` is used only when building outside a git
+# checkout (e.g. from a source tarball that carries no SCM metadata).
+[tool.setuptools_scm]
+fallback_version = "0.0.0"
 
 [tool.ruff]
 exclude = [

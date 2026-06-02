@@ -11,6 +11,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          # setuptools-scm derives the version from git tags, so the build
+          # needs full history and all tags (not the default shallow clone).
+          fetch-depth: 0
+          fetch-tags: true
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
