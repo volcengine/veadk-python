@@ -186,6 +186,12 @@ class Agent(LlmAgent):
     to the agent, falling back to the bundled basic catalog. Only used when
     `enable_a2ui=True`."""
 
+    enable_tunnel: bool = False
+    """Enable the tunnel. When True, a `TunnelToolset` is appended so on-prem
+    resource servers (e.g. MCP servers) connected through `veadk.tunnel` show up
+    as tools for this agent. The cloud app must also mount the tunnel routes via
+    `veadk.tunnel.mount_tunnel`/`mount_tunnel_if_enabled`."""
+
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
 
@@ -371,6 +377,12 @@ class Agent(LlmAgent):
             from veadk.a2ui import build_a2ui_toolset
 
             self.tools.append(build_a2ui_toolset(catalog=self.a2ui_catalog))
+
+        if self.enable_tunnel:
+            logger.info("Tunnel enabled")
+            from veadk.tunnel import TunnelToolset
+
+            self.tools.append(TunnelToolset(agent_name=self.name))
 
         if self.enable_dataset_gen:
             from veadk.toolkits.dataset_auto_gen_callback import (
