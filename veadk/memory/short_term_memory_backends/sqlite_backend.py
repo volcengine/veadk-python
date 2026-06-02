@@ -17,17 +17,16 @@ import sqlite3
 from functools import cached_property
 from typing import Any
 
-from google.adk import version as adk_version
 from google.adk.sessions import (
     BaseSessionService,
     DatabaseSessionService,
 )
-from packaging.version import parse as parse_version
 from typing_extensions import override
 
 from veadk.memory.short_term_memory_backends.base_backend import (
     BaseShortTermMemoryBackend,
 )
+from veadk.utils.adk_compat import should_use_async_db_drivers
 
 
 class SQLiteSTMBackend(BaseShortTermMemoryBackend):
@@ -41,10 +40,10 @@ class SQLiteSTMBackend(BaseShortTermMemoryBackend):
             conn = sqlite3.connect(self.local_path)
             conn.close()
 
-        if parse_version(adk_version.__version__) < parse_version("1.19.0"):
-            self._db_url = f"sqlite:///{self.local_path}"
-        else:
+        if should_use_async_db_drivers():
             self._db_url = f"sqlite+aiosqlite:///{self.local_path}"
+        else:
+            self._db_url = f"sqlite:///{self.local_path}"
 
     @cached_property
     @override

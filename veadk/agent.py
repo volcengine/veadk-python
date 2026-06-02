@@ -49,6 +49,7 @@ from veadk.prompts.agent_default_prompt import (
 )
 from veadk.prompts.prompt_manager import BasePromptManager
 from veadk.tracing.base_tracer import BaseTracer
+from veadk.utils.adk_compat import is_adk_gte
 from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_asyncio, patch_tracer
 from veadk.version import VERSION
@@ -690,7 +691,12 @@ class Agent(LlmAgent):
         async for event in get_runtime(self.runtime).run_async(self, ctx):
             yield event
 
-    # async def run(self, **kwargs):
-    #     raise NotImplementedError(
-    #         "Run method in VeADK agent is deprecated since version 0.5.6. Please use runner.run_async instead. Ref: https://agentkit.gitbook.io/docs/runner/overview"
-    #     )
+    if not is_adk_gte("2.0.0"):
+        # On google-adk 1.x, BaseAgent has no `run` method, so override here
+        # to nudge users toward `runner.run_async`. On google-adk 2.x,
+        # BaseAgent.run is a @final async generator that the workflow engine
+        # invokes internally; overriding it would break NodeRunner execution.
+        async def run(self, **kwargs):
+            raise NotImplementedError(
+                "Run method in VeADK agent is deprecated since version 0.5.6. Please use runner.run_async instead. Ref: https://agentkit.gitbook.io/docs/runner/overview"
+            )
