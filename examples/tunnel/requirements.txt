@@ -1,0 +1,3 @@
+# veadk-python is installed from the feat/tunnel branch by the build script
+# (scripts/install_veadk.sh, wired via docker_build.build_script in agentkit.yaml),
+# because veadk/tunnel is not on PyPI yet. Nothing to install here.

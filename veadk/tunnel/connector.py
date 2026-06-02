@@ -83,6 +83,7 @@ class TunnelConnector:
         agent: str,
         servers: list[LocalServer],
         token: Optional[str] = None,
+        extra_headers: Optional[dict[str, str]] = None,
     ) -> None:
         """
         Args:
@@ -90,12 +91,17 @@ class TunnelConnector:
                 ``https://xxx.apigateway-cn-beijing.volceapi.com``.
             agent: Target agent name (must have ``enable_tunnel=True``).
             servers: Local servers to expose.
-            token: Tunnel token issued for that agent.
+            token: Tunnel token issued for that agent (sent via ``?token=``).
+            extra_headers: Extra headers for the WebSocket handshake, e.g. the
+                edge / API-gateway credential
+                (``{"Authorization": "Bearer <key>"}``), kept separate from the
+                tunnel ``token``.
         """
         self.cloud_url = cloud_url.rstrip("/")
         self.agent = agent
         self.servers = {s.name: s for s in servers}
         self.token = token
+        self.extra_headers = extra_headers or {}
         self._tasks: set = set()
 
     def _ws_url(self) -> str:
@@ -107,7 +113,9 @@ class TunnelConnector:
 
     async def start(self) -> None:
         ws_url = self._ws_url()
-        headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
+        # Tunnel token goes via ?token=; the Authorization header is free for the
+        # edge/API gateway's own credential (passed via extra_headers).
+        headers = dict(self.extra_headers)
         async with httpx.AsyncClient() as http:
             async with websockets.connect(ws_url, additional_headers=headers) as ws:
                 await ws.send(

@@ -32,6 +32,9 @@ from veadk.tunnel import LocalServer, TunnelConnector
 CLOUD_URL = os.getenv("CLOUD_URL", "http://127.0.0.1:8000")
 TOKEN = os.getenv("TUNNEL_TOKEN")
 AGENT = "ops_agent"
+# When deployed behind an API gateway (e.g. AgentKit key_auth), the gateway
+# needs its own credential on the WebSocket — separate from the tunnel TOKEN.
+GATEWAY_KEY = os.getenv("GATEWAY_KEY")
 
 
 async def main() -> None:
@@ -50,6 +53,9 @@ async def main() -> None:
         agent=AGENT,
         token=TOKEN,
         servers=servers,
+        extra_headers=(
+            {"Authorization": f"Bearer {GATEWAY_KEY}"} if GATEWAY_KEY else None
+        ),
     )
     print(
         f"Connecting {[s.name for s in servers]} to agent `{AGENT}` at {CLOUD_URL} ..."
