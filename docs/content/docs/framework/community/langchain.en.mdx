@@ -1,0 +1,122 @@
+---
+title: "Langchain Community Support"
+description: "Use VeADK models, knowledge base, and short/long-term memory inside Langchain / LangGraph applications."
+---
+
+VeADK provides a set of components under the `veadk.community.langchain_ai` module that integrate with the Langchain / LangGraph ecosystem, letting you reuse VeADK's models, knowledge base, and memory capabilities directly in Langchain applications.
+
+## Models
+
+`ArkChatModel` extends Langchain's `ChatOpenAI` and is used to call models on the Volcengine Ark platform. Set the environment variable before using it:
+
+```bash
+export MODEL_AGENT_API_KEY="<your Ark API Key>"
+```
+
+```python
+from veadk.community.langchain_ai.models.ark_model import ArkChatModel
+
+llm = ArkChatModel(model="deepseek-v3-1-terminus")
+
+response = llm.invoke("Hello, please introduce yourself.")
+print(response.content)
+```
+
+<Callout type="info">
+  `ArkChatModel` is compatible with the full Langchain `ChatOpenAI` interface, so you can use it in chains, agents, or graphs just like any other Langchain chat model.
+</Callout>
+
+## Knowledge Base
+
+`KnowledgeBase` provides knowledge base capabilities backed by vector retrieval. In Langchain / LangGraph, you expose the knowledge base's semantic retrieval to an agent through the `load_knowledgebase` tool. The tool reads the knowledge base instance from the runtime context (`runtime.context.knowledgebase`), so you pass your configured `KnowledgeBase` through `context`.
+
+```python
+from dataclasses import dataclass
+
+from langchain.agents import create_agent
+from veadk.knowledgebase import KnowledgeBase
+from veadk.community.langchain_ai.models.ark_model import ArkChatModel
+from veadk.community.langchain_ai.tools.load_knowledgebase import load_knowledgebase
+
+# 1. Configure the knowledge base instance
+knowledgebase = KnowledgeBase(
+    name="preference",
+    backend="viking",
+    index="viking_demo_create_2",
+)
+
+# 2. Define a context schema that carries the knowledge base to the tool
+@dataclass
+class Context:
+    knowledgebase: KnowledgeBase
+
+# 3. Build the LangGraph agent with load_knowledgebase as a tool
+agent = create_agent(
+    model=ArkChatModel(model="deepseek-v3-1-terminus"),
+    tools=[load_knowledgebase],
+    context_schema=Context,
+)
+
+# 4. Inject the knowledge base instance via context at invoke time
+result = agent.invoke(
+    {"messages": [{"role": "user", "content": "What are my preferences?"}]},
+    context=Context(knowledgebase=knowledgebase),
+)
+print(result["messages"][-1].content)
+```
+
+At runtime the agent calls `load_knowledgebase(query)`, which performs semantic retrieval against the knowledge base in `context` and returns the relevant snippets.
+
+## Short-term Memory
+
+`ShortTermMemory` provides session-scoped short-term memory for retaining conversation context within a single session.
+
+```python
+from veadk.memory.short_term_memory import ShortTermMemory
+
+short_term_memory = ShortTermMemory(backend="sqlite")
+```
+
+Short-term memory is isolated per session, making it suitable for retaining context within one continuous conversation. After a session ends, this data is not retained across sessions.
+
+## Long-term Memory
+
+Long-term memory persists memory across different sessions. VeADK provides Volcengine Viking-backed long-term memory storage through `VikingMemoryStore` and lets the agent retrieve historical memory through the `load_memory` tool. `load_memory` reads the memory store (`runtime.store`) and user identifier (`runtime.context.user_id`) at runtime, so you pass `VikingMemoryStore` as `store` and provide `user_id` through `context`.
+
+```python
+from dataclasses import dataclass
+
+from langchain.agents import create_agent
+from veadk.community.langchain_ai.models.ark_model import ArkChatModel
+from veadk.community.langchain_ai.tools.load_memory import load_memory
+from veadk.community.langchain_ai.store.memory.viking_memory import VikingMemoryStore
+
+# 1. Configure the long-term memory store
+store = VikingMemoryStore(index="aiops")
+
+# 2. Define a context schema that provides user_id
+@dataclass
+class Context:
+    user_id: str
+
+# 3. Build the LangGraph agent, wiring in the store and the load_memory tool
+agent = create_agent(
+    model=ArkChatModel(model="deepseek-v3-1-terminus"),
+    tools=[load_memory],
+    context_schema=Context,
+    store=store,
+)
+
+# 4. Provide user_id through context at invoke time
+result = agent.invoke(
+    {"messages": [{"role": "user", "content": "Where did we leave off last time?"}]},
+    context=Context(user_id="user-123"),
+)
+print(result["messages"][-1].content)
+```
+
+At runtime the agent calls `load_memory(query)`, retrieving historical memory relevant to the current question from the long-term memory store, enabling cross-session memory.
+
+<Callout type="info">
+  Before using `VikingMemoryStore`, make sure the relevant Volcengine Viking environment variables are configured correctly.
+</Callout>

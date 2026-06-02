@@ -1,0 +1,216 @@
+---
+title: "Best Practices"
+description: "Combine the knowledge base with multiple agents to build a knowledge-driven IT operations assistant."
+---
+
+This page combines the knowledge base with multiple agents to build an IT operations assistant: a root agent routes the user's question to the right department sub-agent (network, host, application, security), and each sub-agent answers strictly from its own knowledge base (its runbooks).
+
+## Scenario
+
+- **Cross-department knowledge integration**: integrate runbooks from networking, servers, applications, and security;
+- **Intent routing**: the root agent decides which department a question belongs to and calls the corresponding sub-agent;
+- **Actions need confirmation**: for actions like creating a ticket, confirm with the user before calling the tool.
+
+<Callout type="info">
+The example uses the knowledge base's `local` backend so it runs locally; it embeds documents, so install `pip install "veadk-python[extensions]"`. For production, switch to `viking` or `opensearch`.
+</Callout>
+
+## Step 1: Prepare the knowledge bases
+
+Organize each department's runbooks as Markdown. Examples (excerpts):
+
+```markdown title="network_sop.md"
+# Network Troubleshooting Runbook (excerpt)
+
+## DNS resolution failure
+
+- Check local /etc/resolv.conf;
+- Check upstream DNS reachability;
+- Flush the DNS cache: `systemd-resolve --flush-caches`;
+- If an authoritative change: confirm it took effect on the authoritative DNS, wait for the TTL.
+```
+
+```markdown title="host_sop.md"
+# Host/Middleware Runbook (excerpt)
+
+## High CPU
+
+- Use top to identify the process;
+- Collect a dump / flame graph;
+- See SOP: collect-cpu-profile.
+```
+
+```markdown title="app_sop.md"
+# Application Runbook (excerpt)
+
+## 502 gateway error
+
+- Check Nginx/Ingress error logs;
+- Roll back to the last stable version;
+- Trigger a canary rollback.
+```
+
+```markdown title="security_sop.md"
+# Security Incident Runbook (excerpt)
+
+## Initial handling of a compromised host
+
+- Take it offline and isolate it;
+- Collect hashes / IOCs;
+- Notify the security on-call group.
+```
+
+Create one knowledge base per department (isolated by a distinct `index`) and ingest the matching documents:
+
+```python
+from veadk.knowledgebase import KnowledgeBase
+
+
+def build_kb(index: str, files: list[str]) -> KnowledgeBase:
+    kb = KnowledgeBase(backend="local", index=index)
+    kb.add_from_files(files)
+    return kb
+
+
+kb_network = build_kb("itops_network", ["network_sop.md"])
+kb_host = build_kb("itops_host", ["host_sop.md"])
+kb_app = build_kb("itops_app", ["app_sop.md"])
+kb_sec = build_kb("itops_security", ["security_sop.md"])
+```
+
+<Callout type="info">
+`KnowledgeBase` is identified by `index` (you can also pass `app_name`, which falls back to `index` when omitted). Each sub-agent gets its own `index` for department-level knowledge isolation.
+</Callout>
+
+## Step 2: Define action tools
+
+The root agent can call two tools — query the CMDB and create a ticket (mocked with in-memory data here):
+
+```python
+def query_cmdb(hostname: str) -> str:
+    """Look up asset information for a host in the CMDB.
+
+    Args:
+        hostname: the host name, e.g. "web-01".
+
+    Returns:
+        A description of the asset information.
+    """
+    cmdb = {
+        "web-01": "App server, owner: App team, IP: 192.0.2.21, status: online",
+        "db-01": "DB server, owner: Host team, IP: 192.0.2.11, status: online",
+    }
+    return cmdb.get(hostname, f"Host {hostname} not found in CMDB")
+
+
+def create_ticket(title: str, detail: str) -> str:
+    """Create an operations ticket.
+
+    Args:
+        title: the ticket title.
+        detail: the ticket details.
+
+    Returns:
+        The new ticket's ID and status.
+    """
+    ticket_id = "T-2001"  # example: integrate with your ticketing system in production
+    return f"Created ticket {ticket_id}: {title} ({detail}), status: pending"
+```
+
+## Step 3: Build the multi-agent system with knowledge bases
+
+Each sub-agent gets one department knowledge base; the root agent orchestrates them via `sub_agents` and holds the action tools:
+
+```python
+from veadk import Agent, Runner
+
+MODEL_NAME = "doubao-seed-1-8-251228"
+
+network_agent = Agent(
+    name="network_agent",
+    description="Network operations, focused on DNS and connectivity.",
+    instruction="Answer network troubleshooting questions strictly from your knowledge base. Don't speculate; suggest filing a ticket when needed.",
+    knowledgebase=kb_network,
+    model_name=MODEL_NAME,
+)
+
+host_agent = Agent(
+    name="host_agent",
+    description="Host / middleware operations.",
+    instruction="Answer host/middleware troubleshooting questions strictly from your knowledge base. Suggest collecting evidence or filing a ticket when needed.",
+    knowledgebase=kb_host,
+    model_name=MODEL_NAME,
+)
+
+app_agent = Agent(
+    name="app_agent",
+    description="Application operations.",
+    instruction="Answer application troubleshooting questions strictly from your knowledge base. Suggest a rollback or a standard procedure when needed.",
+    knowledgebase=kb_app,
+    model_name=MODEL_NAME,
+)
+
+sec_agent = Agent(
+    name="sec_agent",
+    description="Security operations.",
+    instruction="Answer security questions strictly from your knowledge base. Give initial handling advice for possible compromises.",
+    knowledgebase=kb_sec,
+    model_name=MODEL_NAME,
+)
+
+root_agent = Agent(
+    name="itops_root",
+    description="A console that routes user intents to the right department sub-agent.",
+    instruction=(
+        "You are the IT operations console. First decide whether the question is "
+        "about network/host/application/security, then call the corresponding "
+        "sub-agent and integrate the answer. For cross-domain questions, call "
+        "multiple sub-agents. For actions (such as creating a ticket), explain "
+        "and confirm with the user before calling the relevant tool."
+    ),
+    model_name=MODEL_NAME,
+    tools=[query_cmdb, create_ticket],
+    sub_agents=[network_agent, host_agent, app_agent, sec_agent],
+)
+
+runner = Runner(agent=root_agent, app_name="itops_demo", user_id="demo_user")
+```
+
+## Step 4: Run
+
+```python
+import asyncio
+
+if __name__ == "__main__":
+    print(
+        asyncio.run(
+            runner.run(
+                messages="DNS resolution is failing in production. How do I troubleshoot?",
+                session_id="itops-1",
+            )
+        )
+    )
+```
+
+You can also run it via VeADK Web or the terminal:
+
+### Via VeADK Web
+
+![Running via VeADK Web](/assets/images/knowledge/kb-bp-1.jpeg)
+
+### Via the terminal
+
+![Running via the terminal](/assets/images/knowledge/kb-bp-2.jpeg)
+
+## Outcome
+
+- **Unified access to cross-department knowledge**: one entry point routes to the right department knowledge base;
+- **Knowledge isolation**: each sub-agent sees only its own department's runbooks, reducing cross-talk;
+- **Controlled actions**: actions like creating a ticket run only after user confirmation.
+
+## Next steps
+
+<Cards>
+  <Card title="Knowledge Base Overview" href="/en/docs/framework/knowledgebase/overview" description="Features, backends, and configuration." />
+  <Card title="Multi-agent" href="/en/docs/framework/agent/multi-agent/overview" description="Sequential, parallel, and loop orchestration patterns." />
+</Cards>

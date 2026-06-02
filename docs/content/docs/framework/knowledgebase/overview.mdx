@@ -1,0 +1,352 @@
+---
+title: "概述"
+description: "VeADK 知识库的功能与用法，以及 VikingDB 与 OpenSearch 两种后端的开通与配置。"
+---
+
+知识库（KnowledgeBase）是智能体的外部知识来源——一个可随时查阅、专门存放静态资料的"图书馆"。把它挂到智能体上，VeADK 会自动赋予智能体一个检索工具，让它在回答前先到你的资料里检索相关片段，从而给出更精准、更有依据的回答（RAG）。
+
+## 主要功能
+
+1. **知识注入（Ingestion）**：把外部、非结构化的文本资料（产品文档、FAQ、文章等）添加进知识库，框架自动转换为可检索的格式。
+   - 从文件导入：`kb.add_from_files([...])`
+   - 从目录导入：`kb.add_from_directory("./docs")`
+   - 从内存文本导入：`kb.add_from_text([...])`
+2. **后端抽象（Backend Abstraction）**：统一接口屏蔽底层向量库差异，初始化时用 `backend` 指定 `local`、`viking`、`opensearch` 或 `redis` 即可，业务代码无需改动。
+3. **知识检索（Retrieval）**：把知识库传给智能体后，智能体会自动获得一个内置的 `load_knowledgebase` 工具。回答问题时，它会自主决定是否检索知识库。
+4. **与 Agent 无缝集成**：创建 `Agent` 时传入 `knowledgebase=kb` 即可。
+
+## 使用方法
+
+下面是使用知识库的最小流程。
+
+<Steps>
+
+<Step>
+### 初始化知识库并注入知识
+
+`local` 后端无需任何外部服务，最适合上手。它会对文档做向量化，需要安装扩展依赖 `pip install "veadk-python[extensions]"`，并配置 embedding 模型（缺省时复用 `MODEL_AGENT_API_KEY`）。
+
+```python
+from veadk.knowledgebase import KnowledgeBase
+
+kb = KnowledgeBase(backend="local", index="company_faq")
+
+# 从内存文本注入；也可用 add_from_files / add_from_directory
+kb.add_from_text(
+    [
+        "公司的标准年假为每年 15 天，入职满一年起享受。",
+        "经主管批准后，员工每周最多可远程办公 2 天。",
+    ]
+)
+```
+</Step>
+
+<Step>
+### 集成到 Agent 并运行
+
+```python
+import asyncio
+
+from veadk import Agent, Runner
+
+agent = Agent(
+    name="kb_agent",
+    model_name="doubao-seed-1-8-251228",
+    instruction="你是一个知识渊博的助手，请优先利用知识库回答问题。",
+    knowledgebase=kb,  # 自动获得 load_knowledgebase 检索工具
+)
+
+runner = Runner(agent=agent, app_name="company_faq")
+
+print(asyncio.run(runner.run(messages="年假有多少天？可以远程办公吗？")))
+```
+</Step>
+
+</Steps>
+
+切换到生产用的持久化后端（如 `viking`、`opensearch`、`redis`）时，业务代码几乎不变——只改 `backend`，并在 `config.yaml` 里提供对应连接信息。下文介绍这两种后端的开通与配置。
+
+## 入门示例
+
+### 资源开通
+
+#### VikingDB 开通
+
+1. 登录控制台进入 VikingDB 操作页面。
+
+![VikingDB 操作页面](/assets/images/knowledge/image.png)
+
+- 进入控制台后，选中中间红框处进入知识库。
+
+![知识库入口](/assets/images/knowledge/image-1.png)
+
+- 进入知识库列表页后，按红框提示进入创建页面。
+
+![知识库列表页](/assets/images/knowledge/image-3.png)
+
+- 点击创建按钮，弹出创建选项（请选择旗舰版本）。
+
+![创建选项](/assets/images/knowledge/image-4.png)
+
+- 进入创建详情页，按提示输入关键信息，核心部分见红框。
+
+![创建详情页](/assets/images/knowledge/image-5.png)
+
+![创建详情页](/assets/images/knowledge/image-6.png)
+
+![创建详情页](/assets/images/knowledge/image-7.png)
+
+![创建详情页](/assets/images/knowledge/image-8.png)
+
+2. 点击创建知识库；弹出是否导入文档时，选择暂不导入。
+
+![创建知识库](/assets/images/knowledge/image-9.png)
+
+![创建知识库](/assets/images/knowledge/image-10.png)
+
+#### TOS 配置
+
+1. 登录火山控制台进入 TOS 控制台，创建 TOS 桶。
+
+![TOS 控制台](/assets/images/knowledge/image-11.png)
+
+参见 [火山引擎 TOS 文档](https://www.volcengine.com/docs/6349?lang=zh)。
+
+#### OpenSearch 开通
+
+1. 登录火山控制台进入云搜索控制台，创建 OpenSearch 实例。
+
+![云搜索控制台](/assets/images/knowledge/image-13.png)
+
+![创建 OpenSearch 实例](/assets/images/knowledge/image-14.png)
+
+参见 [火山引擎云搜索服务文档：创建实例](https://www.volcengine.com/docs/6465/1117829?lang=zh)。
+
+### 代码配置
+
+#### config.yaml
+
+把上面开通的 VikingDB、TOS、OpenSearch 信息填入 `config.yaml`。密钥**不要**写进配置文件——用环境变量引用：
+
+```yaml
+model:
+  agent:
+    provider: openai
+    name: doubao-seed-1-8-251228
+    api_base: https://ark.cn-beijing.volces.com/api/v3/
+    api_key: ${MODEL_AGENT_API_KEY}
+
+volcengine:
+  # Viking DB 与 embedding 需要火山引擎 ak/sk
+  access_key: ${VOLCENGINE_ACCESS_KEY}
+  secret_key: ${VOLCENGINE_SECRET_KEY}
+
+database:
+  viking:
+    project: default    # Volcengine Viking DB 中的项目
+    region: cn-beijing
+  tos:
+    endpoint: tos-cn-beijing.volces.com
+    region: cn-beijing
+    bucket: your_bucket_name
+  opensearch:
+    host: your_opensearch_host
+    port: 9200
+    username: admin
+    password: ${DATABASE_OPENSEARCH_PASSWORD}
+```
+
+对应地，在环境变量中提供这些密钥：
+
+```bash
+export MODEL_AGENT_API_KEY="<你的方舟 API Key>"
+export VOLCENGINE_ACCESS_KEY="<你的 AK>"
+export VOLCENGINE_SECRET_KEY="<你的 SK>"
+export DATABASE_OPENSEARCH_PASSWORD="<你的 OpenSearch 密码>"
+```
+
+### 演示场景
+
+下面用一段心理学家简介作为知识，并配一个计算日期差的工具，演示「检索知识库 + 调用工具」。
+
+知识内容：
+
+```python
+mock_data = [
+    """西格蒙德·弗洛伊德（Sigmund Freud，1856年5月6日-1939年9月23日）是精神分析的创始人。
+精神分析既是一种治疗精神疾病的方法，也是一种解释人类行为的理论。""",
+    """阿尔弗雷德·阿德勒（Alfred Adler，1870年2月7日-1937年5月28日），奥地利精神病学家，
+人本主义心理学先驱，个体心理学的创始人。""",
+]
+```
+
+智能体角色设定：
+
+```python
+instruction = """你是一个优秀的助手。当被提问时，请遵循以下步骤：
+1. 先根据内部知识给出初步回答；
+2. 查询知识库，寻找相关信息来验证或丰富答案；
+3. 结合内部知识与知识库信息，给出全面、准确的最终答案。"""
+```
+
+测试问题：
+
+1. 弗洛伊德和阿德勒相差多少岁？
+2. 弗洛伊德和阿德勒相差多少天？他们对后世的影响有多大？
+
+### VikingDB 作为存储
+
+VikingDB 需要在使用前显式创建一次集合。下面从内存文本注入知识：
+
+```python
+from veadk.knowledgebase import KnowledgeBase
+
+APP_NAME = "viking_demo"
+
+kb = KnowledgeBase(backend="viking", index=APP_NAME)
+
+if not kb.collection_status()["existed"]:
+    kb.create_collection()  # Viking 需要显式创建集合
+
+kb.add_from_text(mock_data)
+```
+
+完整可运行示例（VikingDB 后端，配合一个日期差工具）：
+
+```python
+import asyncio
+from datetime import datetime
+
+from veadk import Agent, Runner
+from veadk.knowledgebase import KnowledgeBase
+
+APP_NAME = "viking_demo"
+
+mock_data = [
+    "西格蒙德·弗洛伊德（1856年5月6日-1939年9月23日）是精神分析的创始人。",
+    "阿尔弗雷德·阿德勒（1870年2月7日-1937年5月28日）是个体心理学的创始人。",
+]
+
+kb = KnowledgeBase(backend="viking", index=APP_NAME)
+if not kb.collection_status()["existed"]:
+    kb.create_collection()
+kb.add_from_text(mock_data)
+
+
+def calculate_date_difference(date1: str, date2: str) -> int:
+    """计算两个日期之间的天数差（绝对值）。
+
+    Args:
+        date1: 第一个日期，格式 "YYYY-MM-DD"。
+        date2: 第二个日期，格式 "YYYY-MM-DD"。
+
+    Returns:
+        两个日期之间的天数差。
+    """
+    d1 = datetime.strptime(date1, "%Y-%m-%d")
+    d2 = datetime.strptime(date2, "%Y-%m-%d")
+    return abs((d2 - d1).days)
+
+
+agent = Agent(
+    name="chat_agent",
+    model_name="doubao-seed-1-8-251228",
+    instruction=(
+        "你是一个优秀的助手。回答时先查询知识库验证或丰富答案，"
+        "再结合内部知识给出全面准确的回答。"
+    ),
+    knowledgebase=kb,
+    tools=[calculate_date_difference],
+)
+
+runner = Runner(agent=agent, app_name=APP_NAME)
+
+if __name__ == "__main__":
+    print(asyncio.run(runner.run(messages="弗洛伊德和阿德勒相差多少天？")))
+```
+
+#### 运行结果
+
+下图展示智能体先通过 `load_knowledgebase` 检索知识库，再通过 Function Call 调用 `calculate_date_difference`，最后给出综合回答。
+
+![输入问题](/assets/images/knowledge/image-17.png)
+
+![执行过程](/assets/images/knowledge/image-18.png)
+
+![执行过程](/assets/images/knowledge/image-19.png)
+
+![执行结果](/assets/images/knowledge/image-20.png)
+
+### OpenSearch 作为存储
+
+OpenSearch 通常自动创建索引，无需显式 create。下面从文件注入知识，并额外挂载真实的 `web_search` 工具，在知识库信息不足时联网补充：
+
+```python
+import asyncio
+from datetime import datetime
+
+from veadk import Agent, Runner
+from veadk.knowledgebase import KnowledgeBase
+from veadk.tools.builtin_tools.web_search import web_search
+
+APP_NAME = "opensearch_demo"
+
+kb = KnowledgeBase(backend="opensearch", index=APP_NAME)
+kb.add_from_files(["tmp/demo.txt"])  # 事先把知识写入 tmp/demo.txt
+
+
+def calculate_date_difference(date1: str, date2: str) -> int:
+    """计算两个日期之间的天数差（绝对值）。
+
+    Args:
+        date1: 第一个日期，格式 "YYYY-MM-DD"。
+        date2: 第二个日期，格式 "YYYY-MM-DD"。
+
+    Returns:
+        两个日期之间的天数差。
+    """
+    d1 = datetime.strptime(date1, "%Y-%m-%d")
+    d2 = datetime.strptime(date2, "%Y-%m-%d")
+    return abs((d2 - d1).days)
+
+
+agent = Agent(
+    name="chat_agent",
+    model_name="doubao-seed-1-8-251228",
+    instruction=(
+        "你是一个优秀的助手。回答时先查询知识库；"
+        "若知识库信息不足或涉及实时信息，使用 `web_search` 联网搜索；"
+        "最后结合各方信息给出全面准确的回答。"
+    ),
+    knowledgebase=kb,
+    tools=[calculate_date_difference, web_search],
+)
+
+runner = Runner(agent=agent, app_name=APP_NAME)
+
+if __name__ == "__main__":
+    print(asyncio.run(runner.run(messages="弗洛伊德和阿德勒相差多少天？")))
+```
+
+![执行过程](/assets/images/knowledge/image-21.png)
+
+![执行结果](/assets/images/knowledge/image-22.png)
+
+## 总结与对比
+
+知识库的设计让你可以轻松切换底层向量库，而无需改动大部分业务代码。主要差异在于前期配置，以及 Viking 需要显式创建集合。
+
+| 特性 | Viking 后端 | OpenSearch 后端 |
+| :--- | :--- | :--- |
+| **核心优势** | 托管服务、免运维，与火山引擎生态结合紧密。 | 开源、灵活，可私有化部署，社区成熟。 |
+| **config.yaml** | 需要 `viking.project`、`viking.region` 及 `tos`。 | 需要 `opensearch.host`、`port`、`username`、`password`。 |
+| **初始化** | 使用前需检查并调用 `kb.create_collection()`。 | 通常自动创建索引，无需额外步骤。 |
+| **代码使用** | **完全一致**：`add_from_files`、`add_from_text` 等用法相同。 | **完全一致**：抽象层屏蔽了差异。 |
+| **依赖** | 依赖火山引擎 `ak/sk` 进行认证与 embedding。 | 同样需要 `ak/sk` 调用 embedding 模型，但数据库本身独立。 |
+
+## 下一步
+
+<Cards>
+  <Card title="知识库最佳实践" href="/cn/docs/framework/knowledgebase/best-practice" description="把知识库与多智能体深度结合。" />
+  <Card title="构建智能体" href="/cn/docs/framework/agent/create" description="配置模型、工具、记忆与知识库。" />
+</Cards>

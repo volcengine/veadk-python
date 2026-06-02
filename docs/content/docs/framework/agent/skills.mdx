@@ -1,0 +1,115 @@
+---
+title: "Agent 技能（Skills）"
+description: "通过可复用的技能包为 Agent 按需注入领域知识与脚本，支持本地与沙箱两种运行模式。"
+---
+
+技能（Skills）是一种可复用的「提示词包」，用于为 Agent 注入特定的领域知识、操作流程与脚本。与一次性把所有提示词塞入 `instruction` 不同，技能采用**渐进式加载（progressive prompt loading）**：Agent 仅在需要时才加载某个技能的完整内容，从而控制上下文长度、提升执行准确性。
+
+VeADK 提供三种技能运行模式：
+
+| 模式 | 说明 |
+| :- | :- |
+| `local` | 技能位于本地目录，直接由 Agent 加载并在本地执行。 |
+| `skills_sandbox` | 技能托管在云端技能空间（Skill Space），通过 `execute_skills` 工具在沙箱中执行。 |
+| `aio_sandbox` | All-in-one 沙箱模式，适用于 AgentKit 托管的工具运行时。 |
+
+未显式设置 `skills_mode` 时，VeADK 会根据运行环境自动推断：本地运行默认为 `local`；在 AgentKit 工具运行时中，会根据工具类型自动选择 `skills_sandbox` 或 `aio_sandbox`。
+
+## 技能目录结构
+
+一个本地技能由独立目录构成，目录中包含一个 `SKILL.md` 文件：
+
+```bash
+skills/
+└── kb_skill/
+    └── SKILL.md
+```
+
+`SKILL.md` 使用 frontmatter 声明 `name` 与 `description`，其后为技能正文：
+
+```markdown title="skills/kb_skill/SKILL.md"
+---
+name: kb_skill
+description: 帮助用户创建知识库
+---
+
+...正文部分（操作步骤、约束、脚本说明等）
+```
+
+<Callout type="warn" title="命名要求">
+`SKILL.md` 中的 `name` 必须与所在目录名保持一致。
+</Callout>
+
+## 本地模式
+
+在 `local` 模式下，向 `skills` 传入技能目录的路径，并将 `skills_mode` 设置为 `local`：
+
+```python
+from veadk import Agent
+
+agent = Agent(
+    skills=["/abs/path/to/skills/kb_skill"],
+    skills_mode="local",
+)
+```
+
+Agent 在初始化时会加载技能元信息（`name` 与 `description`）并将其注入系统提示词，引导模型在合适的时机调用对应技能。本地模式下，VeADK 还会自动挂载一组配套工具（读写文件、编辑文件、执行 Shell 命令、注册技能等），供 Agent 在执行技能时使用。
+
+## 沙箱模式
+
+在 `skills_sandbox` 模式下，技能托管在云端技能空间。向 `skills` 传入云端技能空间标识，并引入 `execute_skills` 工具，Agent 会在需要时调用该工具在沙箱中执行所选技能：
+
+```python
+from veadk import Agent
+from veadk.tools.builtin_tools.execute_skills import execute_skills
+
+agent = Agent(
+    skills=[skill_space_id],
+    tools=[execute_skills],
+)
+```
+
+## 技能检查清单（Checklist）
+
+技能可在其定义中携带一份检查清单（checklist），用于约束 Agent 按步骤完成任务。开启后，Agent 在执行技能时需逐项完成检查项，并通过 `update_check_list` 工具将每一项标记为已完成：
+
+```python
+from veadk import Agent
+
+agent = Agent(
+    skills=["/abs/path/to/skills/kb_skill"],
+    skills_mode="local",
+    enable_skills_checklist=True,
+)
+```
+
+当某个技能定义了 checklist 时，VeADK 会在该技能被调用时自动初始化所有检查项的状态，并在系统提示词中提示模型逐项完成。
+
+## 动态加载技能
+
+通过 `enable_dynamic_load_skills=True`，可在运行时动态发现并加载新的技能，而无需在 Agent 初始化时一次性声明全部技能：
+
+```python
+from veadk import Agent
+
+agent = Agent(
+    skills_mode="local",
+    enable_dynamic_load_skills=True,
+)
+```
+
+## 参数总览
+
+| 参数 | 类型 | 说明 |
+| :- | :- | :- |
+| `skills` | `list[str]` | 技能列表，元素为本地技能目录路径或云端技能空间标识。 |
+| `skills_mode` | `"local" \| "skills_sandbox" \| "aio_sandbox"` | 技能运行模式，缺省时自动推断。 |
+| `enable_skills_checklist` | `bool` | 是否启用技能检查清单，默认 `False`。 |
+| `enable_dynamic_load_skills` | `bool` | 是否启用技能的动态加载，默认 `False`。 |
+
+## 下一步
+
+<Cards>
+  <Card title="构建智能体" href="/cn/docs/framework/agent/create" description="为智能体配置模型、工具与元信息。" />
+  <Card title="添加工具" href="/cn/docs/framework/tools/builtin" description="联网搜索、代码沙箱、图像与视频生成等。" />
+</Cards>

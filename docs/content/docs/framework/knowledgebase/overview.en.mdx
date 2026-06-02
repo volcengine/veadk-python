@@ -1,0 +1,353 @@
+---
+title: "Overview"
+description: "Features and usage of the VeADK KnowledgeBase, plus provisioning and configuration for the VikingDB and OpenSearch backends."
+---
+
+The KnowledgeBase is an agent's external source of knowledge — a "library" of static material it can consult at any time. Attach it to an agent and VeADK automatically gives the agent a retrieval tool, so it can look up relevant passages from your content before answering, producing more precise, grounded responses (RAG).
+
+## Key features
+
+1. **Ingestion**: add external, unstructured text (product docs, FAQs, articles) into the knowledge base; the framework converts it into a retrievable format automatically.
+   - From files: `kb.add_from_files([...])`
+   - From a directory: `kb.add_from_directory("./docs")`
+   - From in-memory text: `kb.add_from_text([...])`
+2. **Backend abstraction**: a unified interface hides the underlying vector store. Specify `local`, `viking`, `opensearch`, or `redis` via `backend` at init — your business code stays the same.
+3. **Retrieval**: once a knowledge base is passed to an agent, the agent gains a built-in `load_knowledgebase` tool and decides on its own whether to use it when answering.
+4. **Seamless agent integration**: pass `knowledgebase=kb` when creating an `Agent`.
+
+## Usage
+
+Here is the minimal flow for using a knowledge base.
+
+<Steps>
+
+<Step>
+### Initialize the knowledge base and ingest knowledge
+
+The `local` backend requires no external service, making it the easiest to start with. It embeds documents, so install the extensions dependency `pip install "veadk-python[extensions]"` and configure an embedding model (it reuses `MODEL_AGENT_API_KEY` when omitted).
+
+```python
+from veadk.knowledgebase import KnowledgeBase
+
+kb = KnowledgeBase(backend="local", index="company_faq")
+
+# Ingest from in-memory text; you can also use add_from_files / add_from_directory
+kb.add_from_text(
+    [
+        "Standard annual leave is 15 days per year, available after one year of employment.",
+        "Employees may work remotely up to 2 days per week with manager approval.",
+    ]
+)
+```
+</Step>
+
+<Step>
+### Integrate with an agent and run
+
+```python
+import asyncio
+
+from veadk import Agent, Runner
+
+agent = Agent(
+    name="kb_agent",
+    model_name="doubao-seed-1-8-251228",
+    instruction="You are a knowledgeable assistant. Prefer the knowledge base when answering.",
+    knowledgebase=kb,  # automatically gains the load_knowledgebase tool
+)
+
+runner = Runner(agent=agent, app_name="company_faq")
+
+print(asyncio.run(runner.run(messages="How many days of annual leave are there? Can I work remotely?")))
+```
+</Step>
+
+</Steps>
+
+Switching to a persistent production backend (`viking`, `opensearch`, `redis`) barely changes your code — just change `backend` and provide the connection details in `config.yaml`. The sections below cover provisioning and configuring those two backends.
+
+## Getting started
+
+### Provisioning resources
+
+#### Provisioning VikingDB
+
+1. Log in to the console and open the VikingDB page.
+
+![VikingDB page](/assets/images/knowledge/image.png)
+
+- After entering the console, select the option in the middle red box to open the knowledge base.
+
+![Knowledge base entry](/assets/images/knowledge/image-1.png)
+
+- On the knowledge base list page, follow the red box to open the creation page.
+
+![Knowledge base list page](/assets/images/knowledge/image-3.png)
+
+- Click Create; in the options that pop up, choose the Flagship edition.
+
+![Creation options](/assets/images/knowledge/image-4.png)
+
+- On the creation details page, enter the key information as prompted (core parts in the red boxes).
+
+![Creation details page](/assets/images/knowledge/image-5.png)
+
+![Creation details page](/assets/images/knowledge/image-6.png)
+
+![Creation details page](/assets/images/knowledge/image-7.png)
+
+![Creation details page](/assets/images/knowledge/image-8.png)
+
+2. Click Create Knowledge Base; when asked whether to import documents, choose not to import for now.
+
+![Create knowledge base](/assets/images/knowledge/image-9.png)
+
+![Create knowledge base](/assets/images/knowledge/image-10.png)
+
+#### TOS configuration
+
+1. Log in to the Volcengine console, open the TOS console, and create a TOS bucket.
+
+![TOS console](/assets/images/knowledge/image-11.png)
+
+See the [Volcengine TOS docs](https://www.volcengine.com/docs/6349?lang=zh).
+
+#### Provisioning OpenSearch
+
+1. Log in to the Volcengine console, open the Cloud Search console, and create an OpenSearch instance.
+
+![Cloud Search console](/assets/images/knowledge/image-13.png)
+
+![Create OpenSearch instance](/assets/images/knowledge/image-14.png)
+
+See the [Volcengine Cloud Search Service docs: Create an instance](https://www.volcengine.com/docs/6465/1117829?lang=zh).
+
+### Code configuration
+
+#### config.yaml
+
+Fill the provisioned VikingDB, TOS, and OpenSearch details into `config.yaml`. Do **not** put secrets in the file — reference them via environment variables:
+
+```yaml
+model:
+  agent:
+    provider: openai
+    name: doubao-seed-1-8-251228
+    api_base: https://ark.cn-beijing.volces.com/api/v3/
+    api_key: ${MODEL_AGENT_API_KEY}
+
+volcengine:
+  # Viking DB and embedding require Volcengine ak/sk
+  access_key: ${VOLCENGINE_ACCESS_KEY}
+  secret_key: ${VOLCENGINE_SECRET_KEY}
+
+database:
+  viking:
+    project: default    # project in Volcengine Viking DB
+    region: cn-beijing
+  tos:
+    endpoint: tos-cn-beijing.volces.com
+    region: cn-beijing
+    bucket: your_bucket_name
+  opensearch:
+    host: your_opensearch_host
+    port: 9200
+    username: admin
+    password: ${DATABASE_OPENSEARCH_PASSWORD}
+```
+
+Provide those secrets in environment variables:
+
+```bash
+export MODEL_AGENT_API_KEY="<your Ark API key>"
+export VOLCENGINE_ACCESS_KEY="<your AK>"
+export VOLCENGINE_SECRET_KEY="<your SK>"
+export DATABASE_OPENSEARCH_PASSWORD="<your OpenSearch password>"
+```
+
+### Demo scenario
+
+The example below uses short bios of two psychologists as knowledge, plus a date-difference tool, to demonstrate "retrieve from the knowledge base + call a tool."
+
+Knowledge content:
+
+```python
+mock_data = [
+    """西格蒙德·弗洛伊德（Sigmund Freud，1856年5月6日-1939年9月23日）是精神分析的创始人。
+精神分析既是一种治疗精神疾病的方法，也是一种解释人类行为的理论。""",
+    """阿尔弗雷德·阿德勒（Alfred Adler，1870年2月7日-1937年5月28日），奥地利精神病学家，
+人本主义心理学先驱，个体心理学的创始人。""",
+]
+```
+
+Agent persona:
+
+```python
+instruction = """You are an excellent assistant. When asked, follow these steps:
+1. Give a preliminary answer from your own knowledge;
+2. Query the knowledge base to verify or enrich the answer;
+3. Combine your own knowledge and the knowledge base to give a complete, accurate answer."""
+```
+
+Test questions:
+
+1. How many years apart are Freud and Adler?
+2. How many days apart are Freud and Adler? How significant was their influence on later generations?
+
+### Using VikingDB as storage
+
+VikingDB requires explicitly creating a collection once before use. Here we ingest knowledge from in-memory text:
+
+```python
+from veadk.knowledgebase import KnowledgeBase
+
+APP_NAME = "viking_demo"
+
+kb = KnowledgeBase(backend="viking", index=APP_NAME)
+
+if not kb.collection_status()["existed"]:
+    kb.create_collection()  # Viking requires an explicit create
+
+kb.add_from_text(mock_data)
+```
+
+Complete runnable example (VikingDB backend with a date-difference tool):
+
+```python
+import asyncio
+from datetime import datetime
+
+from veadk import Agent, Runner
+from veadk.knowledgebase import KnowledgeBase
+
+APP_NAME = "viking_demo"
+
+mock_data = [
+    "Sigmund Freud (6 May 1856 - 23 Sep 1939) founded psychoanalysis.",
+    "Alfred Adler (7 Feb 1870 - 28 May 1937) founded individual psychology.",
+]
+
+kb = KnowledgeBase(backend="viking", index=APP_NAME)
+if not kb.collection_status()["existed"]:
+    kb.create_collection()
+kb.add_from_text(mock_data)
+
+
+def calculate_date_difference(date1: str, date2: str) -> int:
+    """Calculate the absolute number of days between two dates.
+
+    Args:
+        date1: the first date, in "YYYY-MM-DD" format.
+        date2: the second date, in "YYYY-MM-DD" format.
+
+    Returns:
+        The number of days between the two dates.
+    """
+    d1 = datetime.strptime(date1, "%Y-%m-%d")
+    d2 = datetime.strptime(date2, "%Y-%m-%d")
+    return abs((d2 - d1).days)
+
+
+agent = Agent(
+    name="chat_agent",
+    model_name="doubao-seed-1-8-251228",
+    instruction=(
+        "You are an excellent assistant. Query the knowledge base to verify or "
+        "enrich your answer, then combine it with your own knowledge for a "
+        "complete, accurate response."
+    ),
+    knowledgebase=kb,
+    tools=[calculate_date_difference],
+)
+
+runner = Runner(agent=agent, app_name=APP_NAME)
+
+if __name__ == "__main__":
+    print(asyncio.run(runner.run(messages="How many days apart are Freud and Adler?")))
+```
+
+#### Run results
+
+The images below show the agent first retrieving from the knowledge base via `load_knowledgebase`, then calling `calculate_date_difference` via a Function Call, and finally giving a combined answer.
+
+![Input question](/assets/images/knowledge/image-17.png)
+
+![Execution process](/assets/images/knowledge/image-18.png)
+
+![Execution process](/assets/images/knowledge/image-19.png)
+
+![Execution result](/assets/images/knowledge/image-20.png)
+
+### Using OpenSearch as storage
+
+OpenSearch usually creates the index automatically, with no explicit create. Here we ingest knowledge from a file and also attach the real `web_search` tool to supplement from the web when the knowledge base is insufficient:
+
+```python
+import asyncio
+from datetime import datetime
+
+from veadk import Agent, Runner
+from veadk.knowledgebase import KnowledgeBase
+from veadk.tools.builtin_tools.web_search import web_search
+
+APP_NAME = "opensearch_demo"
+
+kb = KnowledgeBase(backend="opensearch", index=APP_NAME)
+kb.add_from_files(["tmp/demo.txt"])  # write your knowledge into tmp/demo.txt first
+
+
+def calculate_date_difference(date1: str, date2: str) -> int:
+    """Calculate the absolute number of days between two dates.
+
+    Args:
+        date1: the first date, in "YYYY-MM-DD" format.
+        date2: the second date, in "YYYY-MM-DD" format.
+
+    Returns:
+        The number of days between the two dates.
+    """
+    d1 = datetime.strptime(date1, "%Y-%m-%d")
+    d2 = datetime.strptime(date2, "%Y-%m-%d")
+    return abs((d2 - d1).days)
+
+
+agent = Agent(
+    name="chat_agent",
+    model_name="doubao-seed-1-8-251228",
+    instruction=(
+        "You are an excellent assistant. Query the knowledge base first; "
+        "if it is insufficient or the question involves real-time information, "
+        "use `web_search`; then combine everything into a complete, accurate answer."
+    ),
+    knowledgebase=kb,
+    tools=[calculate_date_difference, web_search],
+)
+
+runner = Runner(agent=agent, app_name=APP_NAME)
+
+if __name__ == "__main__":
+    print(asyncio.run(runner.run(messages="How many days apart are Freud and Adler?")))
+```
+
+![Execution process](/assets/images/knowledge/image-21.png)
+
+![Execution result](/assets/images/knowledge/image-22.png)
+
+## Summary and comparison
+
+The KnowledgeBase design lets you switch the underlying vector store without changing most of your business logic. The main differences are the upfront configuration and the fact that Viking requires explicitly creating a collection.
+
+| Feature | Viking backend | OpenSearch backend |
+| :--- | :--- | :--- |
+| **Core advantage** | Managed service, no ops overhead, tightly integrated with the Volcengine ecosystem. | Open-source and flexible, supports private deployment, with a mature community. |
+| **config.yaml** | Requires `viking.project`, `viking.region`, and `tos`. | Requires `opensearch.host`, `port`, `username`, `password`. |
+| **Initialization** | Check and call `kb.create_collection()` before use. | Usually creates the index automatically, with no extra steps. |
+| **Code usage** | **Identical**: `add_from_files`, `add_from_text`, etc. are used the same way. | **Identical**: the abstraction layer hides the differences. |
+| **Dependencies** | Relies on Volcengine `ak/sk` for authentication and embedding. | Also requires `ak/sk` to call the embedding model, but the database itself is independent. |
+
+## Next steps
+
+<Cards>
+  <Card title="Knowledge Base Best Practices" href="/en/docs/framework/knowledgebase/best-practice" description="Deeply integrate the knowledge base with multiple agents." />
+  <Card title="Build an Agent" href="/en/docs/framework/agent/create" description="Configure models, tools, memory, and knowledge bases." />
+</Cards>

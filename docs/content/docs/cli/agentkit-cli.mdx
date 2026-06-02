@@ -1,0 +1,44 @@
+---
+title: "AgentKit 命令兼容"
+description: "在 AgentKit 命令前加 veadk 前缀，复用熟悉的 AgentKit 工作流。"
+---
+
+VeADK 命令行内置了 AgentKit 命令。在任意 AgentKit 命令前加上 `veadk agentkit` 前缀，即可复用熟悉的 AgentKit 工作流来创建、构建、部署并管理火山引擎 AgentKit 平台上的项目。
+
+```bash
+veadk agentkit --help
+```
+
+<Callout type="info">
+  使用前请确保已安装 VeADK，并在项目根目录的 `.env` 文件中配置好火山引擎访问凭据。
+</Callout>
+
+## 命令一览
+
+| 命令 | 描述 |
+| :-- | :-- |
+| `veadk agentkit init` | 用模板创建新项目，或包装一个已有的 Agent。 |
+| `veadk agentkit config` | 配置 AgentKit（支持交互与非交互模式）。 |
+| `veadk agentkit build` | 为 Agent 构建 Docker 镜像。 |
+| `veadk agentkit deploy` | 将 Agent 部署到目标环境。 |
+| `veadk agentkit launch` | 一条命令完成构建与部署。 |
+| `veadk agentkit invoke` | 向已部署的 Agent 发送测试请求。 |
+| `veadk agentkit status` | 查看 Agent 运行时状态。 |
+| `veadk agentkit destroy` | 销毁正在运行的 Agent 运行时。 |
+| `veadk agentkit memory` | 管理 AgentKit Memory 集合。 |
+| `veadk agentkit knowledge` | 管理 AgentKit 知识库。 |
+| `veadk agentkit tools` | 管理 AgentKit 工具与会话。 |
+| `veadk agentkit runtime` | 管理 AgentKit 运行时。 |
+
+## 常用流程
+
+创建项目，然后一步构建并部署：
+
+```bash
+veadk agentkit init
+veadk agentkit launch
+```
+
+## 更多参考
+
+各子命令的完整参数说明请参阅 [AgentKit 命令行工具](https://volcengine.github.io/agentkit-sdk-python/content/2.agentkit-cli/1.overview.html)。

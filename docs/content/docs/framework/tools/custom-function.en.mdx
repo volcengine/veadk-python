@@ -1,0 +1,258 @@
+---
+title: "Custom tools"
+description: "Wrap your own Python functions as tools in VeADK: plain-argument functions, context-aware functions, and long-running tasks."
+---
+
+When the built-in tools don't fit your needs, wrap any Python function as a **custom tool** to extend your agent. This page covers three forms: plain-argument functions, context-aware functions, and long-running tasks.
+
+## Plain-argument functions
+
+A plain-argument function is the simplest custom tool: define a function, add type hints and a docstring, and register it on the agent. The agent decides when to call it and how to pass arguments based on the signature and docstring.
+
+<Steps>
+
+<Step>
+### Define the function
+
+Use flat, clear arguments and return types.
+</Step>
+
+<Step>
+### Write the docstring
+
+Describe what the function does, its arguments, and its return value — the model relies on this to understand the tool.
+</Step>
+
+<Step>
+### Register it on the agent
+
+Put the function in the agent's `tools` list.
+</Step>
+
+</Steps>
+
+The calculator below illustrates this. Note the `divide` branch: on division by zero it returns `status: "error"` with no `result`, consistent with the `status: "success"` of the other branches.
+
+```python title="examples/tools/function_tools/simple_function_tool.py"
+import asyncio
+from typing import Any, Dict
+
+from google.adk.tools.tool_context import ToolContext
+from veadk import Agent, Runner
+
+
+def calculator(
+    a: float, b: float, operation: str, tool_context: ToolContext
+) -> Dict[str, Any]:
+    """A simple calculator that performs a basic arithmetic operation.
+
+    Args:
+        a (float): The first operand.
+        b (float): The second operand.
+        operation (str): One of "add", "subtract", "multiply", "divide".
+
+    Returns:
+        Dict[str, Any]: On success, contains "result", "operation", and
+        "status" == "success". On failure (unsupported operation or division
+        by zero), contains "status" == "error" and a "message".
+    """
+    if operation == "add":
+        return {"result": a + b, "operation": "+", "status": "success"}
+    if operation == "subtract":
+        return {"result": a - b, "operation": "-", "status": "success"}
+    if operation == "multiply":
+        return {"result": a * b, "operation": "*", "status": "success"}
+    if operation == "divide":
+        if b == 0:
+            return {"status": "error", "message": "Divisor cannot be zero."}
+        return {"result": a / b, "operation": "/", "status": "success"}
+    return {"status": "error", "message": f"Unsupported operation: {operation}"}
+
+
+agent = Agent(
+    name="computing_agent",
+    model_name="doubao-seed-1-8-251228",
+    instruction="Use the `calculator` tool to perform the calculation the user asks for.",
+    tools=[calculator],
+)
+runner = Runner(agent=agent)
+
+response = asyncio.run(runner.run("Add 2 and 3"))
+print(response)
+```
+
+![simple_tool_result.png](/assets/images/tools/function_tools/simple_tool_result.png)
+
+## Context-aware functions
+
+Add a `tool_context: ToolContext` parameter to a tool function to access the agent's runtime context — session ID, user identity, the current agent, and more. The framework injects this argument automatically; the model neither sees nor needs to pass it.
+
+```python title="examples/tools/function_tools/tool_context_usage.py"
+import asyncio
+
+from google.adk.tools.tool_context import ToolContext
+from veadk import Agent, Runner
+
+
+def message_checker(user_message: str, tool_context: ToolContext) -> str:
+    """Check a user message and return it normalized.
+
+    Args:
+        user_message (str): The user message to check.
+
+    Returns:
+        str: The checked message.
+    """
+    print(f"user_message: {user_message}")
+    print(f"current agent: {tool_context._invocation_context.agent.name}")
+    print(f"app_name: {tool_context._invocation_context.app_name}")
+    print(f"user_id: {tool_context._invocation_context.user_id}")
+    print(f"session_id: {tool_context._invocation_context.session.id}")
+
+    return f"Checked message: {user_message.upper()}"
+
+
+agent = Agent(
+    name="context_agent",
+    model_name="doubao-seed-1-8-251228",
+    instruction="Use message_checker to check the user message, then show the checked result.",
+    tools=[message_checker],
+)
+runner = Runner(agent=agent)
+
+response = asyncio.run(runner.run("Hello world!"))
+print(response)
+```
+
+![tool_context_result.jpg](/assets/images/tools/function_tools/tool_context_result.jpg)
+
+The tool function can thus read the session ID, user identity, currently executing agent, and more, enabling smarter decisions.
+
+## Long-running tasks
+
+Long-running tasks suit time-consuming or asynchronous work (large computations, data analysis, batch jobs). Wrap the function with `LongRunningFunctionTool`: the tool returns a `pending` status and a task ID first, your app advances the task in the background, then feeds the final result back to the agent.
+
+Here's a complete, runnable example: the tool returns `pending`, the run loop captures the long-running call, then a `FunctionResponse` feeds back a `finish` status so the agent can produce its final reply.
+
+```python title="examples/tools/function_tools/long_running_tool.py"
+import asyncio
+from typing import Any
+
+from google.adk.events import Event
+from google.adk.tools.long_running_tool import LongRunningFunctionTool
+from google.genai.types import Content, FunctionCall, FunctionResponse, Part
+from veadk import Agent, Runner
+
+APP_NAME = "long_running_tool_app"
+USER_ID = "long_running_tool_user"
+SESSION_ID = "long_running_tool_session"
+
+
+def big_data_processing(data_url: str) -> dict[str, Any]:
+    """Start processing big data located at a URL.
+
+    Args:
+        data_url (str): The URL of the big data to process.
+
+    Returns:
+        dict[str, Any]: The initial task state, with "status" == "pending",
+        the "data-url", and a "task-id" to track the job.
+    """
+    # Kick off the long-running job and return its handle immediately.
+    return {
+        "status": "pending",
+        "data-url": data_url,
+        "task-id": "big-data-processing-1",
+    }
+
+
+long_running_tool = LongRunningFunctionTool(func=big_data_processing)
+
+agent = Agent(
+    name="long_running_tool_agent",
+    model_name="doubao-seed-1-8-251228",
+    instruction="Use long_running_tool to process big data.",
+    tools=[long_running_tool],
+)
+runner = Runner(agent=agent, app_name=APP_NAME)
+
+
+def get_long_running_call(event: Event) -> FunctionCall | None:
+    """Return the long-running function call carried by an event, if any."""
+    if not event.long_running_tool_ids or not event.content or not event.content.parts:
+        return None
+    for part in event.content.parts:
+        if (
+            part.function_call
+            and part.function_call.id in event.long_running_tool_ids
+        ):
+            return part.function_call
+    return None
+
+
+def get_function_response(
+    event: Event, function_call_id: str
+) -> FunctionResponse | None:
+    """Return the function response matching a given call id, if any."""
+    if not event.content or not event.content.parts:
+        return None
+    for part in event.content.parts:
+        if (
+            part.function_response
+            and part.function_response.id == function_call_id
+        ):
+            return part.function_response
+    return None
+
+
+async def main():
+    # Create the session before running.
+    session = await runner.short_term_memory.create_session(
+        app_name=APP_NAME, user_id=USER_ID, session_id=SESSION_ID
+    )
+
+    query = "Process the big data from https://example.com/data.csv"
+    content = Content(role="user", parts=[Part(text=query)])
+
+    print("Running agent...")
+    long_running_call = None
+    long_running_response = None
+    async for event in runner.run_async(
+        session_id=session.id, user_id=USER_ID, new_message=content
+    ):
+        if long_running_call is None:
+            long_running_call = get_long_running_call(event)
+        elif long_running_response is None:
+            long_running_response = get_function_response(event, long_running_call.id)
+        if event.content and event.content.parts:
+            if text := "".join(part.text or "" for part in event.content.parts):
+                print(f"[{event.author}]: {text}")
+
+    # The task finished in the background; send the final result back to the agent.
+    if long_running_response is not None:
+        updated = long_running_response.model_copy(deep=True)
+        updated.response = {"status": "finish"}
+        async for event in runner.run_async(
+            session_id=session.id,
+            user_id=USER_ID,
+            new_message=Content(
+                role="user", parts=[Part(function_response=updated)]
+            ),
+        ):
+            if event.content and event.content.parts:
+                if text := "".join(part.text or "" for part in event.content.parts):
+                    print(f"[{event.author}]: {text}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+![long_running_tool_result](/assets/images/tools/function_tools/long_running_tool_result.jpeg)
+
+## Next steps
+
+<Cards>
+  <Card title="Built-in tools" href="/en/docs/framework/tools/builtin" description="Web search, image / video generation, code sandboxes, and more." />
+  <Card title="Built-in MCP tools" href="/en/docs/framework/tools/builtin-mcp" description="Feishu / Lark, LAS, VOD, MCP Router, and more." />
+</Cards>

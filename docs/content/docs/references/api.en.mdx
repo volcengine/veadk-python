@@ -1,0 +1,41 @@
+---
+title: "Module index"
+description: "A quick map of the veadk.* packages: what each module does and which guide covers it."
+---
+
+VeADK does not publish an auto-generated API reference site. This page is a quick map of the main `veadk.*` packages, so you can find which module holds a capability and which guide covers it. For per-symbol signatures and docstrings, browse the [PyPI package](https://pypi.org/project/veadk-python/) or the [source on GitHub](https://github.com/volcengine/veadk-python/tree/main/veadk).
+
+## Top-level entry points
+
+The two most common objects are importable directly from `veadk`:
+
+```python
+from veadk import Agent, Runner
+```
+
+| Object | Description |
+| :-- | :-- |
+| `Agent` | The core agent class — wraps the model, tools, memory, and knowledge base. See [Create an Agent](/en/docs/framework/agent/create). |
+| `Runner` | The execution engine that runs an agent and manages sessions. See [Runner](/en/docs/framework/runner). |
+
+## Module index
+
+| Module | Responsibility | Related guide |
+| :-- | :-- | :-- |
+| `veadk.agent` | The single-agent `Agent` definition. | [Create an Agent](/en/docs/framework/agent/create) |
+| `veadk.agents` | Multi-agent orchestration (sequential, parallel, loop). | [Multi-agent](/en/docs/framework/agent/multi-agent/overview) |
+| `veadk.runner` | The `Runner` execution engine. | [Runner](/en/docs/framework/runner) |
+| `veadk.tools` | Built-in tools, custom function tools, and MCP tools. | [Built-in tools](/en/docs/framework/tools/builtin) |
+| `veadk.memory` | Short-term and long-term memory backends. | [Short-term memory](/en/docs/framework/memory/short-term) |
+| `veadk.knowledgebase` | Knowledge base (RAG) integration and retrieval. | [Knowledge base](/en/docs/framework/knowledgebase/overview) |
+| `veadk.a2a` | Agent-to-Agent protocol and remote agents. | [A2A](/en/docs/framework/agent/multi-agent/a2a) |
+| `veadk.a2ui` | A2UI (agent-driven UI) catalog and toolset. | [A2UI](/en/docs/framework/frontend/a2ui) |
+| `veadk.auth` | Inbound / outbound authentication and permission policy. | [Security](/en/docs/framework/security/overview) |
+| `veadk.tracing` | Tracing and instrumentation (APMPlus, CozeLoop, TLS). | [Observability](/en/docs/framework/observability/overview) |
+| `veadk.evaluation` | Evaluation and optimization. | [Evaluation](/en/docs/framework/eval-optimization/evaluation) |
+| `veadk.cli` | Command-line tools. | [CLI](/en/docs/cli/veadk-cli) |
+| `veadk.config` | Configuration system (env vars and `config.yaml`). | [Configuration](/en/docs/framework/configuration) |
+
+<Callout type="info">
+  This is a navigation map, not a complete symbol listing. Treat the source as the authority for the actual classes, functions, and parameters in each module.
+</Callout>

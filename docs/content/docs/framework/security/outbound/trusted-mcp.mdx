@@ -1,0 +1,57 @@
+---
+title: "使用 Trusted MCP 进行出站认证"
+description: "通过 Trusted MCP 构建端到端加密、全链路可信的 Agent 出站通信。"
+---
+
+Trusted MCP 在标准 MCP 之上扩展组件间的身份证明与端到端加密通信，防止服务身份伪造、数据篡改与流量劫持；结合机密计算（如 Jeddak AICC）和可信推理（如机密豆包），可让 Agent 与大模型运行在可信环境中。VeADK 通过 `tools` 机制原生连接 Trusted MCP 服务。这是[安全概述](/cn/docs/framework/security/overview)中的可信执行平面。
+
+## 前置条件
+
+1. 准备可用的 Trusted MCP 服务地址，例如 `wss://your-trusted-mcp.example.com`。
+2. 准备 AICC 配置文件 `./aicc_config.json`（用于机密环境与远端证明），参考[官方示例](https://github.com/volcengine/AICC-Trusted-MCP/blob/main/README.md)。
+3. 在连接参数中设置请求头 `x-trusted-mcp: true` 以启用可信模式。
+
+## 使用方式
+
+```python title="agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.utils.mcp_utils import get_mcp_params
+from veadk.tools.mcp_tool.trusted_mcp_toolset import TrustedMcpToolset
+
+mcp_url = "<TrustedMCP server address>"
+
+# 1. 构造连接参数并开启可信模式
+connection_params = get_mcp_params(mcp_url)
+connection_params.headers = {"x-trusted-mcp": "true"}
+
+# 2. 初始化 Trusted MCP 工具集
+toolset = TrustedMcpToolset(connection_params=connection_params)
+
+# 3. 初始化并运行 Agent
+agent = Agent(tools=[toolset])
+runner = Runner(agent=agent)
+
+response = asyncio.run(runner.run(messages="北京天气怎么样？"))
+print(response)  # 北京天气晴朗，气温 25°C。
+```
+
+## 配置项
+
+`TrustedMcpToolset` 支持以下关键配置：
+
+| 配置 | 类型 | 默认 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `x-trusted-mcp`（请求头） | 字符串 | `true` | 是否启用可信通道 |
+| `aicc_config`（路径） | 字符串 | `./aicc_config.json` | AICC 配置文件路径，用于机密计算环境的证明与策略配置 |
+
+配置文件示例与说明见 [TrustedMCP 配置文件](https://github.com/volcengine/AICC-Trusted-MCP/blob/main/README.md)。
+
+## 下一步
+
+<Cards>
+  <Card title="安全概述" href="/cn/docs/framework/security/overview" description="四个安全平面的整体地图。" />
+  <Card title="OAuth2 用户委托" href="/cn/docs/framework/security/outbound/oauth2-user-federation" description="代表用户访问第三方服务。" />
+  <Card title="API Key" href="/cn/docs/framework/security/outbound/api-key" description="最简单的出站认证方式。" />
+</Cards>

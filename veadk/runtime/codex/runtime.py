@@ -1,0 +1,151 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""OpenAI Codex runtime for VeADK.
+
+Drives an agent invocation through the Codex SDK (``codex_app_server``) instead
+of ADK's built-in LLM flow, while the surrounding ``Runner`` keeps owning
+session, memory and tracing.
+
+Key guarantees (mirroring the ``cc`` runtime):
+
+- The model is always the one configured on the agent (or via ``ANTHROPIC_MODEL`` /
+  settings); if none resolves, the runtime fails fast.
+- Codex is isolated from the host's ``~/.codex`` via a dedicated ``CODEX_HOME`` with
+  a generated ``config.toml``; the backend credential is injected through the
+  provider's ``env_key`` env var. A wrong key fails loudly.
+- Codex only speaks the Responses API, so requests are routed through an
+  in-process Responses→chat shim (see :mod:`veadk.runtime.codex.proxy`).
+
+Note: this requires the Codex binary on PATH and the ``codex_app_server`` SDK.
+"""
+
+from __future__ import annotations
+
+import os
+import tempfile
+from typing import TYPE_CHECKING, AsyncGenerator
+
+from codex_app_server import AsyncCodex  # type: ignore[import-not-found]
+
+from veadk.runtime.base_runtime import BaseRuntime, build_system_append
+from veadk.runtime.codex.proxy import get_shim_url
+from veadk.runtime.codex.translate import build_prompt, result_to_events
+from veadk.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from google.adk.agents.invocation_context import InvocationContext
+    from google.adk.events.event import Event
+
+    from veadk.agent import Agent
+
+logger = get_logger(__name__)
+
+_PROVIDER_ID = "veadk"
+_KEY_ENV = "VEADK_CODEX_API_KEY"
+_LOCAL_SHIM_TOKEN = "veadk-local"
+
+# Cache one isolated CODEX_HOME per (shim_url, model).
+_CODEX_HOMES: dict[tuple[str, str], str] = {}
+
+
+class CodexRuntime(BaseRuntime):
+    """Run an agent invocation via the Codex SDK."""
+
+    name = "codex"
+
+    async def run_async(
+        self, agent: "Agent", ctx: "InvocationContext"
+    ) -> AsyncGenerator["Event", None]:
+        model = self._resolve_model(agent)
+        api_base = agent.model_api_base or os.getenv("OPENAI_BASE_URL")
+        api_key = agent.model_api_key or os.getenv("OPENAI_API_KEY")
+        if not api_base or not api_key:
+            raise ValueError(
+                "codex runtime requires model_api_base and model_api_key "
+                "(the chat endpoint Codex is bridged onto)."
+            )
+
+        shim_url = await get_shim_url(api_base, api_key)
+        codex_home = _prepare_codex_home(shim_url, model)
+
+        # Codex has no clean SDK channel to append to its base system prompt, so
+        # the agent identity/instruction is folded into a leading block of the
+        # input (a labelled preamble), not the transcript itself.
+        prompt = build_prompt(ctx)
+        append_text = build_system_append(agent)
+        if append_text:
+            prompt = (
+                f"# System instructions\n\n{append_text}\n\n# Conversation\n\n{prompt}"
+            )
+        logger.info(f"codex runtime: model={model}, shim={shim_url}")
+
+        # Isolate from the host's ~/.codex and pin the backend credential. The
+        # Codex app-server subprocess reads these from the environment at spawn.
+        previous = {k: os.environ.get(k) for k in ("CODEX_HOME", _KEY_ENV)}
+        os.environ["CODEX_HOME"] = codex_home
+        os.environ[_KEY_ENV] = _LOCAL_SHIM_TOKEN
+        try:
+            async with AsyncCodex() as codex:
+                thread = await codex.thread_start(model=model)
+                result = await thread.run(prompt)
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        for event in result_to_events(result, agent.name, ctx.invocation_id):
+            yield event
+
+    def _resolve_model(self, agent: "Agent") -> str:
+        name = agent.model_name
+        if isinstance(name, list):
+            name = name[0] if name else ""
+        name = name or os.getenv("OPENAI_MODEL", "")
+        if not name:
+            raise ValueError(
+                "codex runtime requires a model: set Agent(model_name=...) "
+                "or the OPENAI_MODEL environment variable."
+            )
+        return name
+
+
+def _prepare_codex_home(shim_url: str, model: str) -> str:
+    """Create (and cache) an isolated CODEX_HOME with a config.toml.
+
+    The config points Codex at the local Responses shim using a dedicated
+    ``veadk`` provider, so the run never touches the host's ``~/.codex``.
+    """
+    cache_key = (shim_url, model)
+    cached = _CODEX_HOMES.get(cache_key)
+    if cached is not None:
+        return cached
+
+    home = tempfile.mkdtemp(prefix="veadk-codex-")
+    config = (
+        f'model = "{model}"\n'
+        f'model_provider = "{_PROVIDER_ID}"\n\n'
+        f"[model_providers.{_PROVIDER_ID}]\n"
+        f'name = "{_PROVIDER_ID}"\n'
+        f'base_url = "{shim_url}/v1"\n'
+        f'env_key = "{_KEY_ENV}"\n'
+        f'wire_api = "responses"\n'
+    )
+    with open(os.path.join(home, "config.toml"), "w", encoding="utf-8") as f:
+        f.write(config)
+
+    _CODEX_HOMES[cache_key] = home
+    return home

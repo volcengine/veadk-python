@@ -1,0 +1,56 @@
+---
+title: "Deploy to AgentKit"
+description: "Use VeADK's AgentKit-compatible CLI commands to generate and deploy a standard AgentKit project to the Volcengine AgentKit platform."
+---
+
+Besides deploying to VeFaaS, you can deploy your agent to the Volcengine **AgentKit** platform. The VeADK CLI is compatible with AgentKit commands—just prefix the familiar AgentKit commands with `veadk` (using the `agentkit` command directly works as well).
+
+## Prerequisites
+
+- VeADK is installed (it bundles the `agentkit` dependency).
+- Volcengine access credentials (Access Key / Secret Key) are configured in the `.env` file at your project root.
+
+## Steps
+
+<Steps>
+
+<Step>
+### Create the project
+
+Generate a standard AgentKit project:
+
+```bash
+veadk agentkit init
+```
+</Step>
+
+<Step>
+### Configure the project
+
+Configure the project as needed:
+
+```bash
+veadk agentkit config
+```
+</Step>
+
+<Step>
+### Deploy the project
+
+From the project root, deploy it to the Volcengine AgentKit platform:
+
+```bash
+veadk agentkit launch
+```
+</Step>
+
+</Steps>
+
+`veadk agentkit` passes through all of AgentKit's subcommands (such as `build`, `deploy`, `status`, and `destroy`). For the full command list and descriptions, see [AgentKit-Compatible Commands](/en/docs/cli/agentkit-cli); for more detailed platform deployment steps, see the [AgentKit documentation](https://volcengine.github.io/agentkit-sdk-python/content/2.agentkit-cli/1.overview.html).
+
+## Next Steps
+
+<Cards>
+  <Card title="AgentKit-Compatible Commands" href="/en/docs/cli/agentkit-cli" description="See all veadk agentkit subcommands." />
+  <Card title="Deploy to VeFaaS" href="/en/docs/framework/deploy/vefaas" description="Deploy your agent to the Volcengine function service." />
+</Cards>

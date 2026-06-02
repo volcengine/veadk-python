@@ -1,0 +1,47 @@
+---
+title: "IDE Rules / llms.txt"
+description: "Provide VeADK prompts to LLMs and AI IDEs via the llms.txt mechanism to auto-generate VeADK-based code."
+---
+
+VeADK uses the [`llms.txt`](https://llmstxt.org/) mechanism to provide LLMs and AI IDEs with prompts about VeADK. Feed this content to your LLM or IDE so it can generate VeADK-based code more accurately.
+
+## Prompt Files
+
+VeADK provides two prompt files; use whichever fits your need:
+
+| File | Description |
+| :-- | :-- |
+| [`llms.txt`](/llms.txt) | A concise index listing VeADK's key concepts and documentation links. |
+| [`llms-full.txt`](/llms-full.txt) | The full version, containing all prompt content ready to use as IDE rules. |
+
+## Using It in Trae
+
+Using [Trae](https://www.trae.ai/) as an example, configure the prompts as rules:
+
+<Steps>
+
+<Step>
+### Download the prompt file
+
+Download [`llms-full.txt`](/llms-full.txt).
+</Step>
+
+<Step>
+### Open the rules settings
+
+Open Trae's settings page and find the **Rules** option.
+</Step>
+
+<Step>
+### Add the rules
+
+Copy the file content into your Trae rules file.
+</Step>
+
+</Steps>
+
+![Configure rules in Trae](/assets/images/trae_rules.png)
+
+<Callout type="info">
+  Any other IDE or editor that supports custom rules / system prompts can likewise paste the content of `llms-full.txt` to use as rules.
+</Callout>

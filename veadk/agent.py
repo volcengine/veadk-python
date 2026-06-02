@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import os
-from typing import Dict, Literal, Optional, Union
+from typing import TYPE_CHECKING, AsyncGenerator, Dict, Literal, Optional, Union
 
 from google.adk.flows.llm_flows.base_llm_flow import BaseLlmFlow
 
@@ -53,6 +53,10 @@ from veadk.utils.adk_compat import is_adk_gte
 from veadk.utils.logger import get_logger
 from veadk.utils.patches import patch_asyncio, patch_tracer
 from veadk.version import VERSION
+
+if TYPE_CHECKING:
+    from google.adk.agents.invocation_context import InvocationContext
+    from google.adk.events.event import Event
 
 patch_tracer()
 patch_asyncio()
@@ -164,6 +168,24 @@ class Agent(LlmAgent):
     enable_dynamic_load_skills: bool = False
     enable_skills_checklist: bool = False
     _skills_with_checklist: Dict[str, Any] = {}
+
+    runtime: Literal["adk", "cc", "codex"] = "adk"
+    """Agent runtime backend. ``"adk"`` (default) uses Google ADK's built-in LLM
+    flow. ``"cc"`` delegates the inner agent loop to the Claude Code SDK; ``"codex"``
+    is reserved. Non-``adk`` runtimes are implemented under :mod:`veadk.runtime`."""
+
+    enable_a2ui: bool = False
+    """Enable A2UI (agent-driven UI). When True, a `SendA2uiToClientToolset` is
+    appended so the agent can reply with declarative UI rendered by a client.
+    Requires the optional `a2ui-agent-sdk` dependency (`pip install veadk-python[a2ui]`)."""
+
+    a2ui_catalog: Optional[Any] = None
+    """Optional A2UI catalog. Accepts a path to a catalog JSON (str; relative paths
+    resolve against the agent's directory, absolute paths used as-is), a
+    `veadk.a2ui.BaseA2UICatalog`, an `A2uiCatalog`, or a pre-built
+    `(A2uiCatalog, examples)` tuple. When None, auto-discovers `catalog.json` next
+    to the agent, falling back to the bundled basic catalog. Only used when
+    `enable_a2ui=True`."""
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
@@ -314,7 +336,9 @@ class Agent(LlmAgent):
             self.load_skills()
             if self.enable_skills_checklist:
                 logger.info("Skills checklist enabled")
-                from veadk.skills.utils import create_init_skill_check_list_callback
+                from veadk.skills.utils import (
+                    create_init_skill_check_list_callback,
+                )
 
                 init_callback = create_init_skill_check_list_callback(
                     self._skills_with_checklist
@@ -342,6 +366,12 @@ class Agent(LlmAgent):
             self.tools.append(GhostcharTool())
 
             self.instruction += "Please add a character `< at the beginning of you each text-based response."
+
+        if self.enable_a2ui:
+            logger.info("A2UI enabled")
+            from veadk.a2ui import build_a2ui_toolset
+
+            self.tools.append(build_a2ui_toolset(catalog=self.a2ui_catalog))
 
         if self.enable_dataset_gen:
             from veadk.toolkits.dataset_auto_gen_callback import (
@@ -375,8 +405,8 @@ class Agent(LlmAgent):
     def load_skills(self):
         from pathlib import Path
 
-        from veadk.skills.skill import Skill
         from veadk.skills.check_skills_callback import check_skills
+        from veadk.skills.skill import Skill
         from veadk.skills.utils import (
             load_skills_from_cloud,
             load_skills_from_directory,
@@ -391,8 +421,10 @@ class Agent(LlmAgent):
             if not tool_id:
                 self.skills_mode = "local"
             else:
+                from veadk.auth.veauth.utils import (
+                    get_credential_from_vefaas_iam,
+                )
                 from veadk.utils.volcengine_sign import ve_request
-                from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 
                 ak = os.getenv("VOLCENGINE_ACCESS_KEY")
                 sk = os.getenv("VOLCENGINE_SECRET_KEY")
@@ -420,7 +452,8 @@ class Agent(LlmAgent):
                 service = os.getenv("AGENTKIT_TOOL_SERVICE_CODE", "agentkit")
                 region = os.getenv("AGENTKIT_TOOL_REGION", default_region)
                 host = os.getenv(
-                    "AGENTKIT_SKILL_HOST", service + "." + region + f".{sld}.com"
+                    "AGENTKIT_SKILL_HOST",
+                    service + "." + region + f".{sld}.com",
                 )
 
                 res = ve_request(
@@ -529,7 +562,9 @@ class Agent(LlmAgent):
         has_video_task_query = "video_task_query" in tool_names
 
         if has_video_generate and not has_video_task_query:
-            from veadk.tools.builtin_tools.video_generate import video_task_query
+            from veadk.tools.builtin_tools.video_generate import (
+                video_task_query,
+            )
 
             logger.warning(
                 "video_generate tool is mounted but video_task_query is not. "
@@ -623,6 +658,26 @@ class Agent(LlmAgent):
                 logger.debug(f"Enable supervisor flow for agent: {self.name}")
                 return SupervisorAutoFlow(supervised_agent=self)
             return AutoFlow()
+
+    async def _run_async_impl(
+        self, ctx: "InvocationContext"
+    ) -> AsyncGenerator["Event", None]:
+        """Dispatch the agent loop to the configured runtime.
+
+        For the default ``"adk"`` runtime this defers to ADK's built-in LLM flow.
+        Other runtimes are resolved from :mod:`veadk.runtime` and bridge an
+        external agent harness (e.g. the Claude Code SDK) back into the ADK event
+        stream, so the surrounding ``Runner`` is unaffected.
+        """
+        if self.runtime == "adk":
+            async for event in super()._run_async_impl(ctx):
+                yield event
+            return
+
+        from veadk.runtime import get_runtime
+
+        async for event in get_runtime(self.runtime).run_async(self, ctx):
+            yield event
 
     if not is_adk_gte("2.0.0"):
         # On google-adk 1.x, BaseAgent has no `run` method, so override here

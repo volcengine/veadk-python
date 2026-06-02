@@ -1,0 +1,157 @@
+---
+title: "入站认证"
+description: "用 API Key 或 OAuth2 验证调用方身份，保护对智能体的访问。"
+---
+
+入站认证控制谁能调用你的智能体——它是[安全概述](/cn/docs/framework/security/overview)四个平面之一。VeADK 支持两种方式：**API Key**（简单，适合 A2A/MCP Server）与 **OAuth2**（推荐，支持单点登录）。本页介绍两者的接入方式。出站方向（智能体调用外部服务）见[出站认证](/cn/docs/framework/security/overview#出站认证)。
+
+## API Key 认证
+
+VeADK 将 API Key 通过 URL 的 `token` 查询参数传递，由 API 网关校验。
+
+<Callout type="info">
+API Key 仅适用于 A2A/MCP Server 部署模式。VeADK Web 部署模式更推荐 OAuth2。
+</Callout>
+
+创建 Agent 时指定 API Key 认证，或在部署已有项目时加上 [`--auth-method=api-key`](/cn/docs/framework/deploy/vefaas)。用户访问时，API 网关校验 `token` 参数中的 API Key。
+
+## OAuth2 单点登录
+
+OAuth2 用令牌代替账号密码授予有限访问，一次登录即可访问多个关联应用。VeADK 提供两种接入方式：
+
+| 方式 | 适用场景 | 说明 |
+| :--- | :--- | :--- |
+| API 网关模式 | VeFaaS 云端部署 | 通过脚手架部署，由 API 网关处理认证 |
+| Starlette/FastAPI 中间件 | 本地开发 / 自托管 | 在应用内集成 OAuth2 中间件 |
+
+### 方式一：API 网关模式（VeFaaS 部署）
+
+由 API 网关处理 OAuth2 流程，适用于通过 VeFaaS 部署的 VeADK Web 应用。
+
+<Callout type="info">
+需要 4.0.0 及以上版本的 API 网关。
+</Callout>
+
+创建 Agent 时指定 OAuth2 认证，或在部署时加上 [`--auth-method=oauth2`](/cn/docs/framework/deploy/vefaas)，VeADK 会自动创建 Identity 用户池和客户端。复用已有资源时，用 `--user-pool-name` 和 `--client-name` 指定。
+
+部署后在 Agent Identity 控制台的 **身份认证 > 用户池管理** 中创建用户。用户访问应用时，API 网关引导其登录，登录后可在 `Authorization` 请求头中取得用户的 JWT 令牌。
+
+### 方式二：Starlette/FastAPI 中间件（本地/自托管）
+
+通过 VeADK 提供的中间件在应用内处理 OAuth2，支持所有基于 Starlette 的框架（含 FastAPI）。推荐用 `OAuth2Config.from_veidentity()` 自动配置 VeIdentity 用户池：
+
+```python
+from fastapi import FastAPI
+from veadk.auth.middleware.oauth2_auth import OAuth2Config, setup_oauth2
+
+app = FastAPI()  # 换成 Starlette() 即可用于纯 Starlette 应用
+
+setup_oauth2(
+    app,
+    OAuth2Config.from_veidentity(
+        user_pool_name="my-app",
+        client_name="my-app-web",
+        redirect_uri="https://myapp.com/oauth2/callback",
+    ),
+)
+```
+
+`from_veidentity()` 会自动创建用户池与客户端（如不存在）、注册回调 URL、配置 OAuth2 端点。中间件注册的路由：
+
+| 路由 | 说明 |
+| :--- | :--- |
+| `/oauth2/login` | 发起登录流程 |
+| `/oauth2/callback` | 回调处理 |
+| `/oauth2/logout` | 登出并清除会话 |
+| `/oauth2/userinfo` | 获取当前用户信息 |
+
+中间件会区分请求类型：浏览器请求重定向到登录页；API 请求返回 `401 Unauthorized` JSON。API 请求通过 `Accept: application/json`、路径前缀（默认 `/api/`）或 `X-Requested-With: XMLHttpRequest` 识别。
+
+#### 常用配置
+
+```python
+setup_oauth2(
+    app,
+    OAuth2Config.from_veidentity(
+        user_pool_name="my-app",
+        client_name="my-app-web",
+        redirect_uri="http://localhost:8000/oauth2/callback",
+        cookie_secure=False,           # 本地 HTTP 开发需禁用安全 cookie
+        auto_create=False,             # 复用已有资源，不存在时报错
+        auto_register_callback=False,  # 不修改回调 URL
+        api_path_prefixes=["/api/", "/graphql"],
+    ),
+    exempt_paths=["/health", "/metrics"],      # 跳过认证：精确匹配
+    exempt_prefixes=["/public/", "/static/"],  # 跳过认证：前缀匹配
+)
+```
+
+接入非 VeIdentity 的 OAuth2 提供商时，直接构造 `OAuth2Config(authorize_url=..., token_url=..., userinfo_url=..., client_id=..., client_secret=..., redirect_uri=...)`。
+
+`OAuth2Config.from_veidentity()` 的关键参数：`user_pool_name`、`client_name`、`redirect_uri`（必填），`auto_create`（默认 `True`）、`auto_register_callback`（默认 `True`）、`client_type`（默认 `WEB_APPLICATION`）、`scope`（默认 `"openid profile email"`）。`OAuth2Config` 还支持 `session_timeout_seconds`（默认 `3600`）、`cookie_secure`（默认 `True`）、`auto_refresh_token`（默认 `True`）、`token_refresh_threshold_seconds`（默认 `300`）等。
+
+#### 分布式部署
+
+默认的 `InMemoryStateStore` 仅适用于单进程。分布式场景需用 Redis 等外部存储——实现 `create_state` / `validate_and_consume_state` 两个方法即可，例如：
+
+```python
+import json
+import secrets
+
+
+class RedisStateStore:
+    def __init__(self, redis_client, ttl: int = 300):
+        self._redis = redis_client
+        self._ttl = ttl
+
+    def create_state(self, redirect_after_auth: str = "/", code_verifier=None) -> str:
+        state = secrets.token_urlsafe(32)
+        self._redis.setex(
+            f"oauth2:{state}",
+            self._ttl,
+            json.dumps({
+                "redirect_after_auth": redirect_after_auth,
+                "code_verifier": code_verifier,
+            }),
+        )
+        return state
+
+    def validate_and_consume_state(self, state: str):
+        key = f"oauth2:{state}"
+        data = self._redis.get(key)
+        if not data:
+            return None
+        self._redis.delete(key)
+        return json.loads(data)
+
+
+setup_oauth2(app, config, state_store=RedisStateStore(redis_client))
+```
+
+## OAuth2 JWT 认证
+
+A2A/MCP Server 支持用 JWT 承载 OAuth2 授权令牌。创建 Agent 时指定 OAuth2 认证，或在部署时加上 [`--auth-method=oauth2`](/cn/docs/framework/deploy/vefaas)；VeADK 会自动创建 Identity 用户池，复用已有用户池时用 `--user-pool-name` 指定。
+
+部署后在 Agent Identity 控制台的 **身份认证 > 用户池管理** 中创建 M2M 类型客户端，用以下命令生成 JWT 令牌：
+
+```bash
+REGION="cn-beijing"
+USER_POOL_ID="FILL_IN_YOUR_USER_POOL_ID"
+CLIENT_ID="FILL_IN_YOUR_CLIENT_ID"
+CLIENT_SECRET="FILL_IN_YOUR_SECRET"
+
+curl --location "https://userpool-${USER_POOL_ID}.userpool.auth.id.${REGION}.volces.com/oauth/token" \
+  --header "Content-Type: application/x-www-form-urlencoded" \
+  --header "Authorization: Basic $(echo -n "${CLIENT_ID}:${CLIENT_SECRET}" | base64)" \
+  --data-urlencode "grant_type=client_credentials"
+```
+
+用户访问应用时，API 网关校验 JWT 令牌；可在 `Authorization` 请求头中取得令牌。
+
+## 下一步
+
+<Cards>
+  <Card title="安全概述" href="/cn/docs/framework/security/overview" description="四个安全平面的整体地图。" />
+  <Card title="出站认证：API Key" href="/cn/docs/framework/security/outbound/api-key" description="让智能体安全地调用外部服务。" />
+  <Card title="权限策略" href="/cn/docs/framework/security/permission-policy" description="基于 Cedar 的细粒度授权。" />
+</Cards>

@@ -1,0 +1,67 @@
+---
+title: "System tools"
+description: "The VeADK system tools load_knowledgebase and load_memory, mounted automatically when an agent is configured with a knowledge base or long-term memory."
+---
+
+System tools are built-in tools that VeADK mounts **automatically** based on the agent's configuration. You don't add them to the `tools` list yourself — once you give the agent the corresponding capability (a knowledge base or long-term memory), the framework registers the matching retrieval tool, and the agent decides when to call it at runtime.
+
+| Tool | Trigger | What it does |
+| :--- | :--- | :--- |
+| `load_knowledgebase` | Pass a `knowledgebase` to the agent | Retrieve knowledge-base content at runtime |
+| `load_memory` | Pass a `long_term_memory` to the agent | Retrieve long-term memory at runtime |
+
+## load_knowledgebase
+
+When you pass a `knowledgebase` to the agent, VeADK mounts the `load_knowledgebase` tool. The agent decides on its own when to query the knowledge base and which keywords to search with, then uses the retrieved knowledge as context for its answer.
+
+```python
+from veadk import Agent, Runner
+from veadk.knowledgebase import KnowledgeBase
+
+# Build a knowledge base (see the knowledge base docs for backends and ingestion)
+knowledgebase = KnowledgeBase(backend="local", index="company_faq")
+
+agent = Agent(
+    name="kb_agent",
+    model_name="doubao-seed-1-8-251228",
+    instruction="When answering, retrieve from the knowledge base where helpful.",
+    knowledgebase=knowledgebase,  # mounts load_knowledgebase automatically
+)
+
+runner = Runner(agent=agent)
+```
+
+For backend types, initialization, and data ingestion, see the [knowledge base docs](/en/docs/framework/knowledgebase/overview).
+
+## load_memory
+
+When you pass a `long_term_memory` to the agent, VeADK mounts the `load_memory` tool. Across sessions, the agent decides on its own when to query long-term memory to retain user preferences, history, and other long-lived state.
+
+```python
+from veadk import Agent, Runner
+from veadk.memory.long_term_memory import LongTermMemory
+
+long_term_memory = LongTermMemory(backend="local", app_name="ltm_demo")
+
+agent = Agent(
+    name="memory_agent",
+    model_name="doubao-seed-1-8-251228",
+    instruction="Retrieve long-term memory when useful, to give personalized, continuous answers.",
+    long_term_memory=long_term_memory,  # mounts load_memory automatically
+)
+
+runner = Runner(agent=agent)
+```
+
+For long-term memory backends and configuration, see the [long-term memory docs](/en/docs/framework/memory/long-term).
+
+<Callout type="info">
+System tools are managed by the framework: just provide a `knowledgebase` or `long_term_memory` — you don't add `load_knowledgebase` / `load_memory` to the `tools` list yourself. The agent decides when to call them based on its instruction and user input.
+</Callout>
+
+## Next steps
+
+<Cards>
+  <Card title="Knowledge base" href="/en/docs/framework/knowledgebase/overview" description="Give the agent private knowledge, used together with load_knowledgebase." />
+  <Card title="Long-term memory" href="/en/docs/framework/memory/long-term" description="Keep preferences and history across sessions, used together with load_memory." />
+</Cards>

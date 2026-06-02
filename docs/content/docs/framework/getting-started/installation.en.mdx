@@ -1,0 +1,92 @@
+---
+title: "Installation"
+description: "Install VeADK via pip, source, or the official image, and set up the basic environment."
+---
+
+## Prerequisites
+
+- Python `3.10` or later
+- An API Key from the Volcengine Ark platform
+
+## Install VeADK
+
+You can install VeADK via pip, from source, or by using the official image.
+
+<Tabs items={['pip', 'Source', 'Image']}>
+  <Tab value="pip">
+    ```bash
+    # Stable release
+    pip install -U veadk-python
+    ```
+
+    Install the extensions package, which includes optional capabilities such as the knowledge base:
+
+    ```bash
+    pip install -U "veadk-python[extensions]"
+    ```
+
+    After installation, verify with:
+
+    ```bash
+    veadk --version
+    ```
+  </Tab>
+  <Tab value="Source">
+    Install the main-branch preview:
+
+    ```bash
+    pip install git+https://github.com/volcengine/veadk-python.git@main
+    ```
+
+    Install a specific branch:
+
+    ```bash
+    pip install git+https://github.com/volcengine/veadk-python.git@[branch-name]
+    ```
+  </Tab>
+  <Tab value="Image">
+    VeADK provides a Python image registry that can be used directly as a base image:
+
+    ```bash
+    # Stable release
+    veadk-cn-beijing.cr.volces.com/veadk/veadk-python:latest
+
+    # Main-branch preview
+    veadk-cn-beijing.cr.volces.com/veadk/veadk-python:preview
+
+    # Specific version
+    veadk-cn-beijing.cr.volces.com/veadk/veadk-python:<version>
+    ```
+  </Tab>
+</Tabs>
+
+<Callout type="info">
+  If you prefer `uv`, run `uv venv --python 3.10 && source .venv/bin/activate`, then install with `uv add veadk-python` (or `uv add "veadk-python[extensions]"`).
+</Callout>
+
+## Configure the API Key
+
+By default, VeADK uses models from the Volcengine Ark platform. After installation, set the `MODEL_AGENT_API_KEY` environment variable to your Volcengine Ark API Key:
+
+```bash
+export MODEL_AGENT_API_KEY="your-ark-api-key"
+```
+
+You can also place it in a `.env` file at your project root:
+
+```bash title=".env"
+MODEL_AGENT_API_KEY=your-ark-api-key
+```
+
+<Callout type="info">
+  For a complete reference of configuration options (environment variables, `config.yaml`, built-in constants, and their priority), see [Configuration](/en/docs/framework/configuration).
+</Callout>
+
+## Next steps
+
+Once installed and configured, you can start building your first agent.
+
+<Cards>
+  <Card title="Quickstart" href="/en/docs/framework/getting-started/quickstart" description="Create and run your first agent." />
+  <Card title="Local debugging" href="/en/docs/framework/getting-started/local-debugging" description="Debug your agent in the browser." />
+</Cards>

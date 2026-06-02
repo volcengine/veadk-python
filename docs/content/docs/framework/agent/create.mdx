@@ -1,0 +1,244 @@
+---
+title: "构建智能体"
+description: "用代码或 YAML 配置定义智能体，并配置模型回退、自定义客户端与额外参数。"
+---
+
+智能体的定义是其生命周期的起点。本页介绍如何配置一个智能体——选择模型、设置回退、自定义模型客户端，以及用 YAML 声明式地描述智能体。
+
+<Callout type="info">
+  只想先跑通一个最小示例？先看[快速开始](/cn/docs/framework/getting-started/quickstart)，再回到本页做进一步配置。
+</Callout>
+
+VeADK 提供两种定义方式：**代码方式**与 **YAML 配置方式**。代码方式更灵活，便于动态调整参数与单元测试；YAML 方式更简洁，适合声明式的配置管理。
+
+## 通过代码构建
+
+直接在代码中定义智能体是最常见、最灵活的方式。缺省属性来自环境变量或内置默认值，因此最简单的智能体无需任何额外设置：
+
+```python title="agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+
+agent = Agent()
+runner = Runner(agent=agent)
+
+response = asyncio.run(runner.run(messages="Hi!"))
+print(response)
+```
+
+运行前，请通过环境变量提供模型推理服务的 API Key（VeADK 默认读取 `MODEL_AGENT_API_KEY`）：
+
+```bash
+export MODEL_AGENT_API_KEY="<你的方舟 API Key>"
+```
+
+<Callout type="info">
+  也可以在 `config.yaml` 中集中管理密钥，详见[配置](/cn/docs/framework/configuration)。**切勿在代码中硬编码 API Key。**
+</Callout>
+
+### 设置元信息
+
+通过 `name`、`description`、`instruction` 设置智能体的元信息：
+
+```python title="agent.py"
+from veadk import Agent
+
+root_agent = Agent(
+    name="life_assistant",
+    description="生活助手",
+    instruction="你是一个生活助手，你可以回答用户的问题。",
+)
+```
+
+- `name`：智能体名称，在 Agent Tree 中唯一标识某个智能体。
+- `description`：对智能体功能的简短描述（在 A2A 等场景下表明其能力）。
+- `instruction`：系统提示词，定义智能体的行为与响应风格。
+
+### 使用不同模型
+
+如果想使用其他提供商或本地模型，可在初始化时指定模型相关配置（API Key 仍通过环境变量提供）：
+
+```python title="agent.py"
+from veadk import Agent
+
+agent = Agent(
+    model_provider="openai",
+    model_name="doubao-seed-1-8-251228",
+    model_api_base="https://ark.cn-beijing.volces.com/api/v3/",
+)
+```
+
+VeADK Python 版本的推理模型基于 [LiteLLM](https://github.com/BerriAI/litellm) 实现，因此你可以使用 LiteLLM 支持的所有模型提供商。参见 [LiteLLM 支持的模型提供商列表](https://docs.litellm.ai/docs/providers)来设置 `model_provider`。
+
+### 模型容错（Fallbacks）
+
+VeADK 基于 LiteLLM 的 [Fallbacks](https://docs.litellm.ai/docs/completion/reliable_completions) 提供模型容错：当目标模型经多次重试仍失败时，自动切换到备选模型继续执行。将 `model_name` 传入一个列表即可：
+
+```python title="agent.py"
+from veadk import Agent
+
+agent = Agent(
+    model_name=[
+        "doubao-seed-1-8-251228",
+        "deepseek-r1-250528",
+    ]
+)
+```
+
+VeADK 会按顺序优先尝试第一个模型，失败后依次尝试后续模型，直至成功。
+
+### 自定义模型客户端
+
+如需高度自定义的模型配置，可以直接传入一个 LiteLLM 客户端：
+
+```python title="agent.py"
+from google.adk.models.lite_llm import LiteLlm
+from veadk import Agent
+
+# 自定义你的模型客户端
+llm = LiteLlm(model="doubao-seed-1-8-251228")
+
+# 直接将模型客户端传递给 Agent
+agent = Agent(model=llm)
+```
+
+### 配置模型额外参数
+
+你还可以根据[火山引擎方舟大模型平台](https://www.volcengine.com/product/ark)的能力指定[额外选项](https://www.volcengine.com/docs/82379/1494384?lang=zh)。例如禁用思考能力以获得更快的响应：
+
+```python title="agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+
+agent = Agent(
+    model_name="doubao-seed-1-8-251228",
+    model_extra_config={"extra_body": {"thinking": {"type": "disabled"}}},
+)
+runner = Runner(agent=agent)
+
+response = asyncio.run(runner.run(messages="Hi!"))
+print(response)
+```
+
+## 挂载工具、记忆与知识库
+
+智能体的[四个核心要素](/cn/docs/framework/agent/overview)中，模型由上文配置，其余三者在初始化时挂载即可。
+
+### 工具
+
+将工具函数或工具实例放入 `tools` 列表。VeADK 提供内置工具，你也可以传入普通 Python 函数作为自定义工具：
+
+```python title="agent.py"
+from veadk import Agent
+from veadk.tools.demo_tools import get_city_weather
+
+agent = Agent(
+    name="weather_assistant",
+    instruction="根据用户问题调用工具回答天气。",
+    tools=[get_city_weather],
+)
+```
+
+参见[内置工具](/cn/docs/framework/tools/builtin)与[自定义函数工具](/cn/docs/framework/tools/custom-function)。
+
+### 记忆
+
+将 `ShortTermMemory`（单会话上下文）传给 `Runner`，将 `LongTermMemory`（跨会话上下文）传给 `Agent`。挂载长期记忆后，VeADK 会自动为智能体注入 `load_memory` 工具，让模型按需检索历史：
+
+```python title="agent.py"
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.memory.long_term_memory import LongTermMemory
+
+agent = Agent(
+    name="assistant",
+    long_term_memory=LongTermMemory(backend="local"),
+)
+
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory(backend="local"))
+```
+
+参见[短期记忆](/cn/docs/framework/memory/short-term)与[长期记忆](/cn/docs/framework/memory/long-term)。
+
+### 知识库
+
+将 `KnowledgeBase` 传给 `knowledgebase`。挂载后，VeADK 会自动注入 `load_knowledgebase` 工具，让模型在回答前检索相关片段：
+
+```python title="agent.py"
+from veadk import Agent
+from veadk.knowledgebase import KnowledgeBase
+
+agent = Agent(
+    name="kb_assistant",
+    instruction="回答前先检索知识库。",
+    knowledgebase=KnowledgeBase(backend="local"),
+)
+```
+
+参见[知识库](/cn/docs/framework/knowledgebase/overview)。
+
+## 通过 YAML 配置
+
+当你需要更简洁、声明式的配置管理时，可用 YAML 文件描述智能体的全部元信息与行为结构。下面的 `weather_reporter_agent.yaml` 定义了一个查询天气的智能体：
+
+```yaml title="weather_reporter_agent.yaml"
+root_agent:
+  type: Agent # Agent | SequentialAgent | LoopAgent | ParallelAgent
+  name: weather_reporter
+  description: An intelligent assistant that can provide weather information.
+  instruction: Help the user according to your tools.
+  model_name: doubao-seed-1-8-251228
+  tools:
+    - name: veadk.tools.demo_tools.get_city_weather # 工具所在的模块及函数名称
+```
+
+字段说明：
+
+| 字段 | 说明 |
+| :--- | :--- |
+| `type` | 智能体类别（`Agent`、`SequentialAgent`、`LoopAgent`、`ParallelAgent`） |
+| `name` | 智能体名称 |
+| `description` | 智能体的总体描述 |
+| `instruction` | 系统提示词 |
+| `model_name` | 模型名称，如 `doubao-seed-1-8-251228`、`deepseek-r1-250528` 等 |
+| `tools` | 工具列表与调用规则 |
+
+<Callout type="info">
+  YAML 中省略了 API Key，由环境变量 `MODEL_AGENT_API_KEY` 提供。
+</Callout>
+
+用 `AgentBuilder` 加载该 YAML 并运行：
+
+```python title="agent.py"
+import asyncio
+
+from veadk import Runner
+from veadk.agent_builder import AgentBuilder
+
+agent_builder = AgentBuilder()
+agent = agent_builder.build(path="weather_reporter_agent.yaml")
+
+runner = Runner(agent)
+response = asyncio.run(runner.run("今天北京天气如何？"))
+print(response)
+```
+
+## 两种方式对比
+
+| 特性 | 代码方式 | YAML 方式 |
+| :--- | :--- | :--- |
+| 灵活性 | 高 | 中 |
+| 可读性 | 中 | 高 |
+| 可维护性 | 中 | 高 |
+| 动态生成 | 支持 | 一般 |
+| 适用场景 | 开发、生产 | 实验、配置化、生产 |
+
+## 下一步
+
+<Cards>
+  <Card title="添加工具" href="/cn/docs/framework/tools/builtin" description="联网搜索、代码沙箱、图像与视频生成等。" />
+  <Card title="Prompt 管理" href="/cn/docs/framework/agent/prompt" description="对系统提示词进行版本管理与热更新。" />
+  <Card title="多智能体" href="/cn/docs/framework/agent/multi-agent/overview" description="用顺序、并行、循环等模式编排多个智能体。" />
+</Cards>

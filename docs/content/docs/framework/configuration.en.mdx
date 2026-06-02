@@ -1,0 +1,205 @@
+---
+title: "Configuration"
+description: "VeADK's configuration priority, environment variable reference, built-in constants, and runtime dynamic configuration."
+---
+
+VeADK reads configuration from environment variables, `.env`, and `config.yaml`, so you keep secrets and connection details out of your code. This page is the complete reference of configuration items.
+
+## Priority
+
+VeADK reads environment variables in the following priority order (decreasing):
+
+1. System environment variables (variables preset at the system level)
+2. `.env` file environment variables
+3. Configuration values in the `config.yaml` file
+
+## Environment variable reference
+
+### Volcengine ecosystem
+
+Unified prefix: `VOLCENGINE_`
+
+| Variable | Description |
+| :- | :- |
+| `VOLCENGINE_ACCESS_KEY` | Volcengine Access Key |
+| `VOLCENGINE_SECRET_KEY` | Volcengine Secret Key |
+
+Corresponding `yaml` format:
+
+```yaml title="config.yaml"
+volcengine:
+  access_key:
+  secret_key:
+```
+
+### Models
+
+Unified prefix: `MODEL_`
+
+| Subcategory | Variable | Description |
+| :- | :- | :- |
+| Agent inference model | `MODEL_AGENT_NAME` | Model name |
+| | `MODEL_AGENT_PROVIDER` | Model provider conforming to the LiteLLM spec |
+| | `MODEL_AGENT_API_BASE` | Access URL |
+| | `MODEL_AGENT_API_KEY` | Access key |
+| Embedding model | `MODEL_EMBEDDING_NAME` | Embedding model name |
+| | `MODEL_EMBEDDING_DIM` | Embedding model dimension |
+| | `MODEL_EMBEDDING_API_BASE` | Access URL |
+| | `MODEL_EMBEDDING_API_KEY` | Access key |
+| Judge model | `MODEL_JUDGE_NAME` | Model name |
+| | `MODEL_JUDGE_API_BASE` | Access URL |
+| | `MODEL_JUDGE_API_KEY` | Access key |
+
+### Built-in tools
+
+Unified prefix: `TOOL_`
+
+| Subcategory | Variable | Description |
+| :- | :- | :- |
+| VeSearch | `TOOL_VESEARCH_ENDPOINT` | Volcengine search bot ID (bot_id) |
+| | `TOOL_VESEARCH_API_KEY` | Volcengine search service key |
+| WebScraper | `TOOL_WEB_SCRAPER_ENDPOINT` | WebScraper endpoint |
+| | `TOOL_WEB_SCRAPER_API_KEY` | WebScraper key (token) |
+| Lark | `TOOL_LARK_ENDPOINT` | Lark app ID (app_id) |
+| | `TOOL_LARK_API_KEY` | Lark app secret (app_secret) |
+| | `TOOL_LARK_TOKEN` | Lark user token |
+| Feishu Channel | `TOOL_FEISHU_CHANNEL_APP_ID` | Feishu bot app ID (app_id) |
+| | `TOOL_FEISHU_CHANNEL_APP_SECRET` | Feishu bot app secret (app_secret) |
+| | `TOOL_FEISHU_CHANNEL_TRANSPORT` | Channel transport mode, default `ws` |
+| LAS | `TOOL_LAS_URL` | LAS SSE service URL (with token) |
+| | `TOOL_LAS_DATASET_ID` | LAS dataset ID |
+| VOD | `TOOL_VOD_GROUPS` | Video editing capability groups |
+| | `TOOL_VOD_TIMEOUT` | VOD tool connection timeout |
+
+### Databases
+
+Unified prefix: `DATABASE_`
+
+| Subcategory | Variable | Description |
+| :- | :- | :- |
+| OpenSearch | `DATABASE_OPENSEARCH_HOST` | OpenSearch host (without http/https) |
+| | `DATABASE_OPENSEARCH_PORT` | OpenSearch port, default 9200 |
+| | `DATABASE_OPENSEARCH_USERNAME` | OpenSearch username |
+| | `DATABASE_OPENSEARCH_PASSWORD` | OpenSearch password |
+| | `DATABASE_OPENSEARCH_CERT_PATH` | OpenSearch certificate path. **In production, access via certificate is recommended.** |
+| | `DATABASE_OPENSEARCH_USE_SSL` | Whether to enable SSL verification (`https`), default True |
+| MySQL | `DATABASE_MYSQL_HOST` | MySQL host |
+| | `DATABASE_MYSQL_USER` | MySQL username |
+| | `DATABASE_MYSQL_PASSWORD` | MySQL password |
+| | `DATABASE_MYSQL_DATABASE` | MySQL database name |
+| | `DATABASE_MYSQL_CHARSET` | MySQL charset, default utf8 |
+| Redis | `DATABASE_REDIS_HOST` | Redis host |
+| | `DATABASE_REDIS_PORT` | Redis port, default 6379 |
+| | `DATABASE_REDIS_PASSWORD` | Redis password |
+| | `DATABASE_REDIS_DB` | Redis database number, default 0 |
+| VikingDB | `DATABASE_VIKING_PROJECT` | Viking DB project name |
+| | `DATABASE_VIKING_REGION` | Viking DB region |
+| TOS | `DATABASE_TOS_ENDPOINT` | TOS access endpoint |
+| | `DATABASE_TOS_REGION` | TOS region |
+| | `DATABASE_TOS_BUCKET` | TOS bucket name |
+
+### Observability
+
+Unified prefix: `OBSERVABILITY_`
+
+| Subcategory | Variable | Description |
+| :- | :- | :- |
+| APMPlus | `OBSERVABILITY_OPENTELEMETRY_APMPLUS_ENDPOINT` | APMPlus reporting URL |
+| | `OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY` | APMPlus auth key |
+| | `OBSERVABILITY_OPENTELEMETRY_APMPLUS_SERVICE_NAME` | APMPlus service name |
+| CozeLoop | `OBSERVABILITY_OPENTELEMETRY_COZELOOP_ENDPOINT` | CozeLoop reporting URL |
+| | `OBSERVABILITY_OPENTELEMETRY_COZELOOP_API_KEY` | CozeLoop auth key |
+| | `OBSERVABILITY_OPENTELEMETRY_COZELOOP_SERVICE_NAME` | CozeLoop space ID (space_id) |
+| TLS | `OBSERVABILITY_OPENTELEMETRY_TLS_ENDPOINT` | TLS reporting URL |
+| | `OBSERVABILITY_OPENTELEMETRY_TLS_SERVICE_NAME` | TLS topic_id |
+| | `OBSERVABILITY_OPENTELEMETRY_TLS_REGION` | TLS region |
+| Prometheus | `OBSERVABILITY_PROMETHEUS_PUSHGATEWAY_URL` | Prometheus Pushgateway URL |
+| | `OBSERVABILITY_PROMETHEUS_USERNAME` | Prometheus username |
+| | `OBSERVABILITY_PROMETHEUS_PASSWORD` | Prometheus password |
+
+### Prompt Pilot
+
+| Variable | Description |
+| :- | :- |
+| `PROMPT_PILOT_API_KEY` | Prompt Pilot product key |
+
+### Agent Identity
+
+Unified prefix: `VEIDENTITY_`
+
+| Variable | Description |
+| :- | :- |
+| `VEIDENTITY_REGION` | Agent Identity service region, default cn-beijing |
+| `VEIDENTITY_ENDPOINT` | Agent Identity service endpoint (optional; generated automatically if not provided) |
+
+Corresponding `yaml` format:
+
+```yaml title="config.yaml"
+veidentity:
+  region: cn-beijing
+  endpoint:  # optional; generated automatically if not provided
+```
+
+## Built-in constants
+
+In VeADK, if certain values are not explicitly specified and are also absent from the environment variables, the following default values are used:
+
+| Name | Value | Description |
+| :- | :- | :- |
+| DEFAULT_AGENT_NAME | `veAgent` | Default agent name |
+| DEFAULT_MODEL_AGENT_NAME | `doubao-seed-1-8-251228` | Default agent inference model name |
+| DEFAULT_MODEL_AGENT_PROVIDER | `openai` | Default agent inference model provider. The Ark platform is OpenAI-compatible, so `openai` is the default for Ark. |
+| DEFAULT_MODEL_AGENT_API_BASE | `https://ark.cn-beijing.volces.com/api/v3/` | Model API base URL |
+| DEFAULT_IMAGE_GENERATE_MODEL_NAME | `doubao-seedream-5-0-260128` | Default Ark image model used by the image_generate tool |
+| DEFAULT_IMAGE_GENERATE_MODEL_API_BASE | `https://ark.cn-beijing.volces.com/api/v3/` | Default API base for the Ark image model used by image_generate |
+| DEFAULT_VIDEO_MODEL_NAME | `doubao-seedance-2-0-260128` | Default Ark video model used by the video_generate tool |
+| DEFAULT_VIDEO_MODEL_API_BASE | `https://ark.cn-beijing.volces.com/api/v3/` | Default API base for the Ark video model used by video_generate |
+| DEFAULT_APMPLUS_OTEL_EXPORTER_ENDPOINT | `http://apmplus-cn-beijing.volces.com:4317` | APMPlus OpenTelemetry trace export URL |
+| DEFAULT_APMPLUS_OTEL_EXPORTER_SERVICE_NAME | `veadk_tracing` | APMPlus service name |
+| DEFAULT_COZELOOP_OTEL_EXPORTER_ENDPOINT | `https://api.coze.cn/v1/loop/opentelemetry/v1/traces` | CozeLoop OTEL trace reporting URL |
+| DEFAULT_TLS_OTEL_EXPORTER_ENDPOINT | `https://tls-cn-beijing.volces.com:4318/v1/traces` | TLS trace reporting URL |
+| DEFAULT_TLS_OTEL_EXPORTER_REGION | `cn-beijing` | TLS region |
+| DEFAULT_CR_INSTANCE_NAME | `veadk-user-instance` | Container registry instance name |
+| DEFAULT_CR_NAMESPACE_NAME | `veadk-user-namespace` | Container registry namespace |
+| DEFAULT_CR_REPO_NAME | `veadk-user-repo` | Container registry repository name |
+| DEFAULT_TLS_LOG_PROJECT_NAME | `veadk-logs` | TLS log project name |
+| DEFAULT_TLS_TRACING_INSTANCE_NAME | `veadk-tracing` | TLS tracing instance name |
+| DEFAULT_TOS_BUCKET_NAME | `veadk-default-bucket` | Default TOS bucket name. Since TOS bucket names are globally unique, it is strongly recommended that you customize the bucket name to avoid conflicts with other users that would cause failures. |
+| DEFAULT_COZELOOP_SPACE_NAME | `VeADK Space` | CozeLoop space name |
+
+## Runtime dynamic configuration
+
+Beyond environment variables and constants, VeADK also supports dynamically updating agent configuration at runtime (hot updates), managed uniformly by the `DynamicConfigManager`. The dynamic configuration uses a JSON structure containing an `agent` array, which can override fields for one or more agents.
+
+The configurable fields per agent are as follows:
+
+| Field | Description |
+| :- | :- |
+| `id` | Must match the target Agent's ID |
+| `name` | Name used for display and logging |
+| `description` | Description used for display and logging |
+| `model_name` | Model name registered in Volcengine |
+| `instruction` | Prompt defining the agent's behavior and capabilities |
+
+Example structure:
+
+```json
+{
+  "agent": [
+    {
+      "id": "...",
+      "name": "...",
+      "description": "...",
+      "model_name": "...",
+      "instruction": "..."
+    }
+  ]
+}
+```
+
+## Next steps
+
+<Cards>
+  <Card title="Installation" href="/en/docs/framework/getting-started/installation" description="Configure your API key and set up the environment." />
+  <Card title="Create an agent" href="/en/docs/framework/agent/create" description="Configure the model, tools, memory, and knowledge base." />
+</Cards>

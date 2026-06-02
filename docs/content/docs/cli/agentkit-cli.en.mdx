@@ -1,0 +1,44 @@
+---
+title: "AgentKit Command Compatibility"
+description: "Prefix any AgentKit command with veadk to reuse the familiar AgentKit workflow."
+---
+
+The VeADK CLI bundles the AgentKit commands. Prefix any AgentKit command with `veadk agentkit` to reuse the familiar AgentKit workflow for creating, building, deploying, and managing projects on the Volcengine AgentKit platform.
+
+```bash
+veadk agentkit --help
+```
+
+<Callout type="info">
+  Before you start, make sure VeADK is installed and your Volcengine access credentials are configured in the `.env` file in your project root.
+</Callout>
+
+## Command reference
+
+| Command | Description |
+| :-- | :-- |
+| `veadk agentkit init` | Create a new project from a template, or wrap an existing agent. |
+| `veadk agentkit config` | Configure AgentKit (interactive and non-interactive modes). |
+| `veadk agentkit build` | Build a Docker image for the agent. |
+| `veadk agentkit deploy` | Deploy the agent to a target environment. |
+| `veadk agentkit launch` | Build and deploy in one command. |
+| `veadk agentkit invoke` | Send a test request to a deployed agent. |
+| `veadk agentkit status` | Show the status of the agent runtime. |
+| `veadk agentkit destroy` | Destroy a running agent runtime. |
+| `veadk agentkit memory` | Manage AgentKit Memory collections. |
+| `veadk agentkit knowledge` | Manage AgentKit knowledge bases. |
+| `veadk agentkit tools` | Manage AgentKit tools and sessions. |
+| `veadk agentkit runtime` | Manage AgentKit runtimes. |
+
+## Common flow
+
+Create a project, then build and deploy in one step:
+
+```bash
+veadk agentkit init
+veadk agentkit launch
+```
+
+## Further reference
+
+For the full parameter details of each subcommand, see the [AgentKit CLI](https://volcengine.github.io/agentkit-sdk-python/content/2.agentkit-cli/1.overview.html).

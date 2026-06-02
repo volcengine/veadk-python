@@ -1,0 +1,72 @@
+---
+title: "Quickstart"
+description: "Create and run your first VeADK agent in minutes."
+---
+
+This guide walks you through creating and running your first agent.
+
+## Prerequisites
+
+<Steps>
+
+<Step>
+### Install VeADK
+
+```bash
+pip install veadk-python
+```
+
+For other install options (source, container image), see [Installation](/en/docs/framework/getting-started/installation).
+</Step>
+
+<Step>
+### Set your model API key
+
+By default, VeADK reads your Volcengine Ark API key from an environment variable:
+
+```bash
+export MODEL_AGENT_API_KEY="<your Ark API key>"
+```
+</Step>
+
+</Steps>
+
+## Create and run an agent
+
+Define an agent with `Agent` and run it with `Runner`. `Runner.run()` is a convenience method for local testing:
+
+```python
+import asyncio
+from veadk import Agent, Runner
+
+agent = Agent(
+    name="assistant",
+    description="A helpful assistant for user questions.",
+    instruction="Answer user questions to the best of your knowledge.",
+    model_name="doubao-seed-1-8-251228",
+)
+
+response = asyncio.run(Runner(agent=agent).run("Hi, introduce yourself"))
+print(response)
+```
+
+Key `Agent` parameters:
+
+| Parameter | Description |
+| :--- | :--- |
+| `name` | Agent name, used for identification (e.g. in A2A). |
+| `description` | What the agent does; surfaced in A2A scenarios. |
+| `instruction` | System prompt that defines behavior and responses. |
+| `model_name` | The model the agent uses. |
+
+<Callout type="info">
+  The model API key comes from the `MODEL_AGENT_API_KEY` environment variable by default — no need to put it in code. You can also manage it in `config.yaml`; see [Configuration](/en/docs/framework/configuration).
+</Callout>
+
+## Next steps
+
+<Cards>
+  <Card title="Create an agent" href="/en/docs/framework/agent/create" description="Model fallbacks, custom clients, YAML config, and more." />
+  <Card title="Add tools" href="/en/docs/framework/tools/builtin" description="Web search, code sandbox, image & video generation." />
+  <Card title="Local debugging" href="/en/docs/framework/getting-started/local-debugging" description="Debug your agent in a web UI." />
+</Cards>

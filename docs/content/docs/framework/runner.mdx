@@ -1,0 +1,102 @@
+---
+title: "执行引擎"
+description: "Runner 协调 Agent、工具与回调，管理信息流与状态，并支持企业级多租户数据隔离。"
+---
+
+`Runner` 是 ADK 运行时的核心组件：它协调你定义的 Agent、工具、回调等组件，让它们共同响应用户输入，同时管理信息流、状态变化，以及与外部服务（如 LLM、工具）和存储的交互。
+
+VeADK 的执行引擎完全兼容 Google ADK Runner。关于 `Runner` 的完整工作机制与生命周期，参见 [Google ADK Agent 运行时](https://google.github.io/adk-docs/runtime/)。
+
+## 多租户隔离
+
+面向企业级多租户场景，`Runner` 通过 `app_name`、`user_id`、`session_id` 三个维度实现数据隔离：
+
+| 数据 | 隔离维度 |
+| :- | :- |
+| 短期记忆 | `app_name` `user_id` `session_id` |
+| 长期记忆 | `app_name` `user_id` |
+| 知识库 | `app_name` |
+
+## 最简运行
+
+`Runner.run()` 直接运行一个 Agent 实例，处理输入并返回最终文本响应，适合本地测试：
+
+```python
+import asyncio
+
+from veadk import Agent, Runner
+
+agent = Agent()
+runner = Runner(agent=agent)
+
+response = asyncio.run(runner.run("北京的天气怎么样？"))
+print(response)
+```
+
+<Callout type="warn" title="使用限制">
+`Runner.run()` 封装度较高。如果你需要在生产环境中更灵活地控制执行过程，请使用 `Runner.run_async()`：它返回一个异步生成器，逐个产出 Agent 执行过程中的 Event 事件。
+</Callout>
+
+## 流式处理事件
+
+以图片理解为例，下面用 `runner.run_async()` 逐个处理 Event，并在最终事件到达时打印模型回复：
+
+```python
+import asyncio
+from pathlib import Path
+
+from google.adk.agents import RunConfig
+from google.genai.types import Blob, Content, Part
+
+from veadk import Agent, Runner
+
+APP_NAME = "app"
+USER_ID = "user"
+SESSION_ID = "session"
+
+agent = Agent()
+runner = Runner(agent=agent, app_name=APP_NAME, user_id=USER_ID)
+
+image_path = "image.png"
+
+user_message = Content(
+    role="user",
+    parts=[
+        Part(text="请详细描述这张图片的内容，包括物体、颜色、布局和文字（如有）。"),
+        Part(
+            inline_data=Blob(
+                display_name=Path(image_path).name,
+                data=Path(image_path).read_bytes(),
+                mime_type="image/png",
+            )
+        ),
+    ],
+)
+
+
+async def main():
+    async for event in runner.run_async(
+        user_id=USER_ID,
+        session_id=SESSION_ID,
+        new_message=user_message,
+        run_config=RunConfig(max_llm_calls=10),
+    ):
+        if event.is_final_response() and event.content:
+            for part in event.content.parts:
+                if part.text:
+                    print(part.text)
+
+
+asyncio.run(main())
+```
+
+<Callout type="info">
+`run_async()` 在调用前需存在对应会话。当 `Runner` 配置了短期记忆时，`run()` 会按需自动创建会话；若直接使用 `run_async()`，请确保 `session_id` 对应的会话已创建。
+</Callout>
+
+## 下一步
+
+<Cards>
+  <Card title="本地可视化调试" href="/cn/docs/framework/getting-started/local-debugging" description="在浏览器中观察 Runner 的执行过程。" />
+  <Card title="短期记忆" href="/cn/docs/framework/memory/short-term" description="为 Runner 配置会话级记忆。" />
+</Cards>

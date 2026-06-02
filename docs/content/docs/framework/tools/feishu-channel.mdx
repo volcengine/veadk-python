@@ -1,0 +1,101 @@
+---
+title: "飞书 Channel 扩展"
+description: "用 FeishuChannelExtension 把飞书机器人的入站消息桥接到 VeADK Runner。"
+---
+
+`veadk.extensions.FeishuChannelExtension` 把飞书机器人的入站消息桥接到 VeADK `Runner`。
+
+<Callout type="info">
+本页是把飞书**作为入站消息渠道**：飞书用户发来的消息会触发你的 Agent 运行。如果你想反过来——让 Agent **调用飞书能力**（发消息、处理云文档、管理日历），请看[内置 MCP 工具](/cn/docs/framework/tools/builtin-mcp)中的 `lark_tools`。
+</Callout>
+
+它默认基于 `lark_oapi.channel.FeishuChannel` 的 `message` 事件工作，并按以下规则映射会话身份：
+
+- `sender.union_id -> Runner.user_id`
+- `conversation.thread_id -> Runner.session_id`
+- 线程 ID 不存在时回退到 `chat_id -> Runner.session_id`
+
+这样，VeADK 现有的短期记忆、长期记忆、Tracing 和多租户隔离能力都可以直接复用。
+
+## 安装
+
+```bash
+pip install veadk-python[extensions]
+```
+
+如果只想要这一项能力，也可以单独安装：
+
+```bash
+pip install lark-oapi
+```
+
+## 配置
+
+环境变量：
+
+- `TOOL_FEISHU_CHANNEL_APP_ID`
+- `TOOL_FEISHU_CHANNEL_APP_SECRET`
+- `TOOL_FEISHU_CHANNEL_TRANSPORT`：默认 `ws`
+- `TOOL_FEISHU_CHANNEL_STREAMING`：是否开启流式输出，默认 `false`
+- `TOOL_FEISHU_CHANNEL_REACTIONS`：是否在收到消息时回复“收到”表情，默认 `false`
+
+或在 `config.yaml` 中配置：
+
+```yaml title="config.yaml"
+tool:
+  feishu_channel:
+    app_id: cli_xxx
+    app_secret: xxx
+    transport: ws
+    streaming: true
+    reactions: true
+```
+
+## 最小示例
+
+```python title="examples/channel/feishu_bot.py"
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.extensions import FeishuChannelExtension
+from veadk.memory.short_term_memory import ShortTermMemory
+
+agent = Agent(
+    name="feishu_agent",
+    model_name="doubao-seed-1-8-251228",
+    instruction="你是一个通过飞书机器人与用户沟通的助手。",
+)
+
+runner = Runner(
+    agent=agent,
+    app_name="veadk_feishu_demo",
+    user_id="veadk_feishu_default_user",
+    short_term_memory=ShortTermMemory(),
+)
+
+channel = FeishuChannelExtension(
+    runner=runner,
+    channel_kwargs={"transport": "ws"},
+)
+
+
+async def main():
+    await channel.connect()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+## 说明
+
+- 默认使用飞书 `Channel` 的 WebSocket 模式，因此只要机器人已订阅消息事件，即可直接启动连接。
+- 默认回复使用 `reply_to=原消息 message_id`，让 VeADK 的输出挂在当前飞书消息线程下。
+- 你可以通过 `session_id_factory` 与 `user_id_factory` 覆盖默认的身份映射逻辑。
+
+## 下一步
+
+<Cards>
+  <Card title="飞书 / Lark MCP 工具" href="/cn/docs/framework/tools/builtin-mcp" description="反过来：让 Agent 调用飞书能力。" />
+  <Card title="短期记忆" href="/cn/docs/framework/memory/short-term" description="为多轮飞书对话保留上下文。" />
+</Cards>

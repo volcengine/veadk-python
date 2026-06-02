@@ -1,0 +1,554 @@
+---
+title: "内置工具"
+description: "VeADK 内置的原生函数工具：网页搜索、向量检索、网页读取、图像 / 视频生成、代码沙箱、手机操作、语音合成等。"
+---
+
+内置工具是 VeADK 预先封装好的原生函数工具，开箱即用，让 Agent 获得网页搜索、代码执行、图像 / 视频生成等火山引擎能力，无需自己实现底层逻辑。
+
+本页介绍**原生函数工具**。基于 MCP（Model Context Protocol）接入的工具（飞书 / Lark、LAS 数据湖、视频云 VOD、MCP Router、Supabase 等）请见[内置 MCP 工具](/cn/docs/framework/tools/builtin-mcp)。
+
+## 使用方法
+
+<Steps>
+
+<Step>
+### 导入工具
+
+从 `veadk.tools.builtin_tools` 导入需要的工具。
+</Step>
+
+<Step>
+### 注册到 Agent
+
+把工具实例放进 `Agent` 的 `tools` 列表即可：
+
+```python
+from veadk import Agent
+from veadk.tools.builtin_tools.web_search import web_search
+
+agent = Agent(tools=[web_search])
+```
+</Step>
+
+</Steps>
+
+注册后，Agent 会根据用户输入与指令**自主决定**是否调用工具，框架在调用时自动执行。
+
+<Callout type="warn">
+内置工具依赖火山引擎相关服务。使用前请开通对应服务，并完成 AK/SK、API Key 等鉴权配置（见每个工具的“环境变量”说明），详见[配置](/cn/docs/framework/configuration)。
+</Callout>
+
+## 工具一览
+
+| 工具 | 功能 | 导入路径 |
+| :--- | :--- | :--- |
+| `web_search` | 通过[融合信息搜索 API](https://www.volcengine.com/docs/85508/1650263) 进行全网搜索 | `from veadk.tools.builtin_tools.web_search import web_search` |
+| `web_scraper` | 聚合搜索（邀测），代码见[此处](https://github.com/volcengine/mcp-server/tree/main/server) | `from veadk.tools.builtin_tools.web_scraper import web_scraper` |
+| `vesearch` | 调用[联网问答 Agent](https://www.volcengine.com/docs/85508/1512748) 进行搜索 | `from veadk.tools.builtin_tools.vesearch import vesearch` |
+| `link_reader` | 读取并解析网页链接内容 | `from veadk.tools.builtin_tools.link_reader import link_reader` |
+| `image_generate` | 根据文本描述[生成图片](https://www.volcengine.com/docs/82379/1541523) | `from veadk.tools.builtin_tools.image_generate import image_generate` |
+| `image_edit` | [编辑图片](https://www.volcengine.com/docs/82379/1541523)（图生图） | `from veadk.tools.builtin_tools.image_edit import image_edit` |
+| `video_generate` | 根据文本描述[生成视频](https://www.volcengine.com/docs/82379/1520757) | `from veadk.tools.builtin_tools.video_generate import video_generate` |
+| `text_to_speech` | 语音合成（TTS） | `from veadk.tools.builtin_tools.tts import text_to_speech` |
+| `run_code` | 在 AgentKit 沙箱中执行代码 | `from veadk.tools.builtin_tools.run_code import run_code` |
+| `execute_skills` | 在预制技能沙箱中远程执行 `agent.py` 工作流 | `from veadk.tools.builtin_tools.execute_skills import execute_skills` |
+| `coding` | 在预制 OpenCode 沙箱中执行代码生成工作流 | `from veadk.tools.builtin_tools.coding import coding` |
+| `run_sandbox_agent` | 指定任意 `tool_id` 在远端 AgentKit 沙箱执行 `agent.py` | `from veadk.tools.builtin_tools.run_sandbox_agent import run_sandbox_agent` |
+| `create_mobile_use_tool` | 在云手机上执行手机操作任务 | `from veadk.tools.builtin_tools.mobile_run import create_mobile_use_tool` |
+
+<Callout type="info">
+模型与鉴权配置在多个工具间通用。本页只在第一个用到的工具处完整展示一次 `config.yaml`，后续工具仅列出新增的配置项。完整配置说明见[配置](/cn/docs/framework/configuration)。
+</Callout>
+
+## 网页搜索（web_search）
+
+`web_search` 让 Agent 通过融合信息搜索 API 进行全网搜索。详见[融合信息搜索 API 文档](https://www.volcengine.com/docs/85508/1650263)。
+
+<Callout type="warn" title="附加要求">
+1. 配置火山引擎 AK / SK，或使用火山引擎 IAM 授权的临时 StsToken；
+2. 配置用于 Agent 推理模型的 API Key。
+</Callout>
+
+```python title="examples/tools/web_search/agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.tools.builtin_tools.web_search import web_search
+
+agent = Agent(
+    name="web_search_agent",
+    model_name="doubao-seed-1-8-251228",
+    description="An agent that answers questions with web search.",
+    instruction="You are a helpful assistant. Use the web_search tool when you need fresh information.",
+    tools=[web_search],
+)
+
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory())
+
+
+async def main():
+    response = await runner.run("杭州今天的天气怎么样？")
+    print(response)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+环境变量：
+
+- `MODEL_AGENT_API_KEY`：Agent 推理模型的 API Key
+- `VOLCENGINE_ACCESS_KEY`：火山引擎 AccessKey
+- `VOLCENGINE_SECRET_KEY`：火山引擎 SecretKey
+
+或在 `config.yaml` 中配置（本页后续工具复用此结构）：
+
+```yaml title="config.yaml"
+model:
+  agent:
+    provider: openai
+    name: doubao-seed-1-8-251228
+    api_base: https://ark.cn-beijing.volces.com/api/v3/
+    api_key: your-api-key-here
+volcengine:
+  # 供 Viking DB 与 web_search 等工具使用
+  access_key: your-access-key-here
+  secret_key: your-secret-key-here
+```
+
+![运行结果](/assets/images/tools/web_search.png)
+
+## 火山引擎搜索（vesearch）
+
+`vesearch` 通过火山引擎的[联网问答 Agent](https://www.volcengine.com/docs/85508/1512748) 进行搜索。该工具从环境变量读取自己的凭证，无需在 `Agent` 上传入 `api_key`。
+
+<Callout type="warn" title="附加要求">
+1. 配置用于 Agent 推理模型的 API Key；
+2. 配置联网问答 Agent 的智能体 ID（在[控制台](https://console.volcengine.com/ask-echo/my-agent)创建智能体后获取），写入环境变量 `TOOL_VESEARCH_ENDPOINT`；
+3. 配置联网问答 Agent 的 API Key，写入环境变量 `TOOL_VESEARCH_API_KEY`。
+</Callout>
+
+```python title="examples/tools/vesearch/agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.tools.builtin_tools.vesearch import vesearch
+
+agent = Agent(
+    name="vesearch_agent",
+    model_name="doubao-seed-1-8-251228",
+    description="An agent that answers questions with veSearch.",
+    instruction="You are a helpful assistant. Use the vesearch tool to look things up online.",
+    tools=[vesearch],
+)
+
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory())
+
+
+async def main():
+    response = await runner.run("杭州今天的天气怎么样？")
+    print(response)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+环境变量：
+
+- `MODEL_AGENT_API_KEY`：Agent 推理模型的 API Key
+- `TOOL_VESEARCH_ENDPOINT`：联网问答 Agent 的智能体 ID（**必须配置在环境变量中**）
+- `TOOL_VESEARCH_API_KEY`：联网问答 Agent 的 API Key
+
+![运行结果](/assets/images/tools/vesearch.png)
+
+## 网页读取（link_reader）
+
+`link_reader` 接收一组 URL，读取并解析其网页内容，常与搜索工具搭配，让 Agent 先检索链接再深入阅读。它使用 `MODEL_AGENT_API_KEY` 进行鉴权。
+
+```python title="examples/tools/link_reader/agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.tools.builtin_tools.link_reader import link_reader
+
+agent = Agent(
+    name="link_reader_agent",
+    model_name="doubao-seed-1-8-251228",
+    description="An agent that reads and summarizes web pages.",
+    instruction="Use the link_reader tool to read the given URLs, then summarize them.",
+    tools=[link_reader],
+)
+
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory())
+
+
+async def main():
+    response = await runner.run(
+        "读取 https://www.volcengine.com/docs/85508/1650263 并总结要点"
+    )
+    print(response)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+环境变量：
+
+- `MODEL_AGENT_API_KEY`：Agent 推理模型的 API Key
+
+## 图像生成（image_generate）
+
+`image_generate` 根据文本描述生成图片。图生图编辑见下文的 `image_edit`。
+
+<Callout type="warn" title="附加要求">
+1. 配置用于 Agent 推理模型的 API Key；
+2. 配置用于图像生成的模型名称（`MODEL_IMAGE_NAME`）。
+</Callout>
+
+```python title="examples/tools/image_generate/agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.tools.builtin_tools.image_generate import image_generate
+
+agent = Agent(
+    name="image_generate_agent",
+    model_name="doubao-seed-1-8-251228",
+    description="根据需求生成图片。",
+    instruction="你是一个图片生成专家，根据用户的需求调用 image_generate 工具生成图片。",
+    tools=[image_generate],
+)
+
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory())
+
+
+async def main():
+    response = await runner.run("生成一只可爱的小猫")
+    print(response)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+环境变量：
+
+- `MODEL_AGENT_API_KEY`：Agent 推理模型的 API Key
+- `MODEL_IMAGE_NAME`：图像生成模型名称
+
+新增的 `config.yaml` 配置项：
+
+```yaml title="config.yaml"
+model:
+  image:
+    name: doubao-seedream-4-0-250828
+    api_base: https://ark.cn-beijing.volces.com/api/v3/
+    api_key: your-api-key-here
+```
+
+<Callout type="info">
+`image_generate` 是规范导入名。`from veadk.tools.builtin_tools.generate_image import image_generate` 仍可用，但 `generate_image` 模块已废弃，请改用 `image_generate`。
+</Callout>
+
+![运行结果](/assets/images/tools/cat.jpeg)
+![运行结果](/assets/images/tools/image_generate.png)
+
+## 图像编辑（image_edit）
+
+`image_edit` 在给定原图的基础上按文本指令做图生图编辑（替换元素、改风格等）。Agent 会从用户输入中提取原图与编辑要求，无需你手动构造参数。它使用独立的编辑模型环境变量 `MODEL_EDIT_NAME`（**注意：与 `image_generate` 的 `MODEL_IMAGE_NAME` 不同**）。
+
+<Callout type="warn" title="附加要求">
+1. 配置用于 Agent 推理模型的 API Key；
+2. 配置用于图像编辑的模型名称（`MODEL_EDIT_NAME`）。
+</Callout>
+
+```python title="examples/tools/image_edit/agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.tools.builtin_tools.image_edit import image_edit
+
+agent = Agent(
+    name="image_edit_agent",
+    model_name="doubao-seed-1-8-251228",
+    description="按指令编辑图片。",
+    instruction="你是一个图片编辑专家，根据用户给定的原图与要求调用 image_edit 工具完成编辑。",
+    tools=[image_edit],
+)
+
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory())
+
+
+async def main():
+    response = await runner.run(
+        "把这张图 https://example.com/cat.png 里的猫换成一只小狗"
+    )
+    print(response)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+环境变量：
+
+- `MODEL_AGENT_API_KEY`：Agent 推理模型的 API Key
+- `MODEL_EDIT_NAME`：图像编辑模型名称
+
+新增的 `config.yaml` 配置项：
+
+```yaml title="config.yaml"
+model:
+  edit:
+    name: doubao-seededit-3-0-i2i-250628
+    api_base: https://ark.cn-beijing.volces.com/api/v3/
+    api_key: your-api-key-here
+```
+
+## 视频生成（video_generate）
+
+`video_generate` 根据文本描述生成视频。下面的示例先用 `image_generate` 生成首帧与尾帧，再合成视频。
+
+<Callout type="warn" title="附加要求">
+1. 配置用于 Agent 推理模型的 API Key；
+2. 配置用于视频生成的模型名称（`MODEL_VIDEO_NAME`）；
+3. 若使用首尾帧合成，还需配置图像生成模型名称（`MODEL_IMAGE_NAME`）。
+</Callout>
+
+```python title="examples/tools/video_generate/agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.tools.builtin_tools.image_generate import image_generate
+from veadk.tools.builtin_tools.video_generate import video_generate
+
+agent = Agent(
+    name="video_generate_agent",
+    model_name="doubao-seed-1-8-251228",
+    description="An expert in creating images and videos.",
+    instruction=(
+        "先用 image_generate 生成首帧和尾帧，再用 video_generate 合成视频，"
+        "最后返回视频的绝对路径并简述视频内容。"
+    ),
+    tools=[image_generate, video_generate],
+)
+
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory())
+
+
+async def main():
+    response = await runner.run("生成一只小狗，再生成它飞上天空的画面，最终合成一个视频")
+    print(response)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+环境变量：
+
+- `MODEL_AGENT_API_KEY`：Agent 推理模型的 API Key
+- `MODEL_VIDEO_NAME`：视频生成模型名称
+- `MODEL_IMAGE_NAME`：图像生成模型名称
+
+新增的 `config.yaml` 配置项：
+
+```yaml title="config.yaml"
+model:
+  video:
+    name: doubao-seedance-1-0-pro-250528
+    api_base: https://ark.cn-beijing.volces.com/api/v3/
+    api_key: your-api-key-here
+```
+
+![运行结果](/assets/images/tools/video_generate.gif)
+
+## 语音合成（text_to_speech）
+
+`text_to_speech` 将文本合成为语音，并把音频保存到本地。
+
+<Callout type="warn" title="附加要求">
+1. 配置用于 Agent 推理模型的 API Key；
+2. 配置 VeSpeech 服务的 App ID 与 API Key。
+</Callout>
+
+```python title="examples/tools/tts/agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.tools.builtin_tools.tts import text_to_speech
+
+agent = Agent(
+    name="tts_agent",
+    model_name="doubao-seed-1-8-251228",
+    description="An agent that speaks text aloud.",
+    instruction="Use the text_to_speech tool to synthesize the user's text into speech.",
+    tools=[text_to_speech],
+)
+
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory())
+
+
+async def main():
+    response = await runner.run("把这句话读出来：你好，欢迎使用 VeADK")
+    print(response)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+环境变量：
+
+- `MODEL_AGENT_API_KEY`：Agent 推理模型的 API Key
+- `TOOL_VESPEECH_APP_ID`：VeSpeech 服务的 App ID
+- `TOOL_VESPEECH_API_KEY`：VeSpeech 服务的 API Key
+- `TOOL_VESPEECH_SPEAKER`：音色，默认为 `zh_female_vv_uranus_bigtts`
+- `TOOL_VESPEECH_AUDIO_OUTPUT_PATH`：音频输出目录，默认为系统临时目录
+
+## 代码沙箱
+
+VeADK 提供一组在 [AgentKit 沙箱](https://console.volcengine.com/agentkit)中远程执行任务的工具：
+
+| 工具 | 说明 |
+| :--- | :--- |
+| `run_code` | 执行任意代码，适合计算、数据处理等 |
+| `execute_skills` | 在预制技能沙箱中运行 `agent.py` 工作流 |
+| `coding` | 在 OpenCode 沙箱中运行代码生成工作流 |
+| `run_sandbox_agent` | 指定任意 `tool_id` 在远端沙箱执行 `agent.py` |
+
+<Callout type="warn" title="附加要求">
+1. 配置火山引擎 AK / SK；
+2. 配置用于 Agent 推理模型的 API Key；
+3. 配置 AgentKit Tool ID（见下文）。
+</Callout>
+
+```python title="examples/tools/run_code/agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.tools.builtin_tools.run_code import run_code
+from veadk.tools.builtin_tools.web_search import web_search
+
+agent = Agent(
+    name="data_analysis_agent",
+    model_name="doubao-seed-1-8-251228",
+    description="A data analysis agent for the stock market.",
+    instruction=(
+        "你是一名资深工程师，在沙箱中执行代码。可使用 web_search 搜索公司经营数据，"
+        "可使用 akshare 等库下载股票数据；缺失依赖时用代码在沙箱中安装。"
+    ),
+    tools=[run_code, web_search],
+)
+
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory())
+
+
+async def main():
+    response = await runner.run("分析阳光电源最近的股价走势")
+    print(response)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+环境变量：
+
+- `MODEL_AGENT_API_KEY`：Agent 推理模型的 API Key
+- `VOLCENGINE_ACCESS_KEY` / `VOLCENGINE_SECRET_KEY`：火山引擎 AK / SK
+- `AGENTKIT_TOOL_ID`：默认 AgentKit 沙箱 ID，作为所有沙箱工具的兜底配置
+- `AGENTKIT_TOOL_ID_SCRIPT`：`run_code` 专用沙箱 ID，未配置时回退到 `AGENTKIT_TOOL_ID`
+- `AGENTKIT_TOOL_ID_SKILLS`：`execute_skills` 专用沙箱 ID，未配置时回退到 `AGENTKIT_TOOL_ID`
+- `AGENTKIT_TOOL_ID_OPENCODE`：`coding` 专用沙箱 ID，未配置时回退到 `AGENTKIT_TOOL_ID`
+- `AGENTKIT_TOOL_HOST`：调用 AgentKit Tools 的 Endpoint
+- `AGENTKIT_TOOL_SERVICE_CODE`：调用 AgentKit Tools 的 ServiceCode
+
+新增的 `config.yaml` 配置项：
+
+```yaml title="config.yaml"
+agentkit:
+  tool_id: your-default-tool-id
+  tool_id_script: your-script-tool-id
+  tool_id_skills: your-skills-tool-id
+  tool_id_opencode: your-opencode-tool-id
+```
+
+### 创建沙箱
+
+1. 在控制台创建沙箱工具：自定义名称（如 `AIO_Sandbox_xxxx`），工具集类型选择“一体化工具集”，包含 Browser、Terminal、Code 运行环境。
+
+![创建沙箱](/assets/images/tools/agentkittools1.png)
+![创建沙箱](/assets/images/tools/agentkittools2.png)
+
+2. 创建完成后，在控制台获取沙箱 ID（形如 `t-ye8dj82xxxxx`），填入上面的环境变量或 `config.yaml`。
+
+![获取沙箱 ID](/assets/images/tools/agentkittools3.png)
+
+![运行结果](/assets/images/tools/run_code1.png)
+
+## 手机操作（mobile_run）
+
+`create_mobile_use_tool()` 返回一个让 Agent 在云手机上完成操作任务的工具。
+
+<Callout type="warn" title="附加要求">
+1. 在火山引擎购买云手机服务并订购 pod；
+2. 按需在云手机上配置环境（安装 App、登录账号等）。
+</Callout>
+
+```python title="examples/tools/mobile_run/agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.tools.builtin_tools.mobile_run import create_mobile_use_tool
+
+agent = Agent(
+    name="mobile_agent",
+    model_name="doubao-seed-1-8-251228",
+    description="An agent that operates a cloud phone.",
+    instruction="Use the mobile tool to complete tasks on the cloud phone.",
+    tools=[create_mobile_use_tool()],
+)
+
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory())
+
+
+async def main():
+    response = await runner.run("打开购物 App 搜索“耳机”")
+    print(response)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+环境变量：
+
+- `MODEL_AGENT_API_KEY`：Agent 推理模型的 API Key
+- `TOOL_MOBILE_USE_TOOL_ID`：云手机实例 ID，格式为 `product_id-pod_id`
+- `VOLCENGINE_ACCESS_KEY` / `VOLCENGINE_SECRET_KEY`：火山引擎 AK / SK
+
+`tool_id` 格式为 `product_id-pod_id`，在云手机控制台的实例管理界面获取。
+
+![云手机产品控制界面](/assets/images/tools/mua_1.png)
+![实例管理界面](/assets/images/tools/mua_2.png)
+![运行结果](/assets/images/tools/mua_3.png)
+
+## 下一步
+
+<Cards>
+  <Card title="内置 MCP 工具" href="/cn/docs/framework/tools/builtin-mcp" description="飞书 / Lark、LAS、视频云、MCP Router、Supabase 等。" />
+  <Card title="自定义工具" href="/cn/docs/framework/tools/custom-function" description="把你自己的函数封装成工具。" />
+  <Card title="系统工具" href="/cn/docs/framework/tools/system-tools" description="知识库与长期记忆的自动挂载工具。" />
+</Cards>

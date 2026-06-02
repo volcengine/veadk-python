@@ -1,0 +1,146 @@
+---
+title: "最佳实践"
+description: "组合短期记忆与长期记忆，构建一个有上下文、能跨会话记住用户的客服助手。"
+---
+
+本文把[短期记忆](/cn/docs/framework/memory/short-term)与[长期记忆](/cn/docs/framework/memory/long-term)组合到一个智能体里，构建一个客服助手：在单次会话内保持上下文连贯，并在用户下次回来时记住其偏好。
+
+两种记忆分工明确：
+
+- **短期记忆**保存当前会话的上下文（用户最新问题、已给出的回答、工具调用结果），用 `session_id` 标识。
+- **长期记忆**跨会话保存用户信息（偏好、历史诉求），由智能体通过 `load_memory` 工具检索。
+
+<Callout type="info">
+长期记忆的 `local` 后端会对记忆做向量化，需要安装扩展依赖：`pip install "veadk-python[extensions]"`。生产环境请改用 `viking` 或 `mem0`。
+</Callout>
+
+## 设计思路
+
+1. 用 `sqlite` 短期记忆保证单会话内的多轮连贯（落盘，可跨重启）。
+2. 用 `local`（生产用 `viking`）长期记忆跨会话记住用户偏好，并开启 `auto_save_session=True` 自动归档。
+3. 给智能体一个查询工单状态的工具，演示「记忆 + 工具」协同。
+
+## 实现
+
+### 准备工作
+
+```bash
+pip install "veadk-python[extensions]"
+export MODEL_AGENT_API_KEY="<你的方舟 API Key>"
+```
+
+### 定义工具
+
+一个查询工单状态的简单函数工具（用内存字典模拟工单系统）：
+
+```python
+TICKETS = {
+    "T-1001": "处理中：已分配工程师，预计 24 小时内回复",
+    "T-1002": "已解决：磁盘扩容已完成",
+}
+
+
+def query_ticket(ticket_id: str) -> str:
+    """根据工单号查询当前状态。
+
+    Args:
+        ticket_id: 工单编号，如 "T-1001"。
+
+    Returns:
+        工单的当前状态描述。
+    """
+    return TICKETS.get(ticket_id, f"未找到工单 {ticket_id}")
+```
+
+### 组装智能体
+
+把短期记忆、长期记忆和工具组合到一个 `Agent` 上：
+
+```python
+from veadk import Agent, Runner
+from veadk.memory.long_term_memory import LongTermMemory
+from veadk.memory.short_term_memory import ShortTermMemory
+
+APP_NAME = "support_demo"
+USER_ID = "user-42"
+
+
+def build_runner() -> Runner:
+    short_term_memory = ShortTermMemory(
+        backend="sqlite",
+        local_database_path="./support_short_term.db",
+    )
+    long_term_memory = LongTermMemory(backend="local", app_name=APP_NAME)
+
+    agent = Agent(
+        name="support_agent",
+        description="企业客服助手，处理咨询与工单跟踪。",
+        instruction=(
+            "你是企业客服助手。在同一会话内记住用户已经说过的信息，避免重复询问；"
+            "当用户问起之前会话提到的偏好或诉求时，用 `load_memory` 工具检索；"
+            "需要查询工单状态时，调用 `query_ticket` 工具。"
+        ),
+        short_term_memory=short_term_memory,
+        long_term_memory=long_term_memory,
+        auto_save_session=True,  # 会话结束后自动归档到长期记忆
+        tools=[query_ticket],
+    )
+    return Runner(
+        agent=agent,
+        short_term_memory=short_term_memory,
+        app_name=APP_NAME,
+        user_id=USER_ID,
+    )
+```
+
+### 运行
+
+第一次会话里，用户报告偏好并查询工单（**短期记忆**保证同一会话内的连贯，**工具**返回工单状态）；第二次是全新会话，智能体借助**长期记忆**回忆起用户偏好：
+
+```python
+import asyncio
+
+
+async def main() -> None:
+    runner = build_runner()
+
+    # 会话 1：同一 session_id 内的多轮上下文 + 工具调用
+    print(
+        await runner.run(
+            messages="我是企业版用户，偏好用邮件联系我。我的工单 T-1001 现在什么状态？",
+            session_id="chat-1",
+        )
+    )
+    print(
+        await runner.run(
+            messages="那我之前说的联系方式是什么来着？",  # 引用同会话上下文
+            session_id="chat-1",
+        )
+    )
+
+    # 会话 2：全新会话，依赖长期记忆回忆偏好
+    print(
+        await runner.run(
+            messages="我又来咨询了，记得我希望怎么联系吗？",
+            session_id="chat-2",
+        )
+    )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+## 效果
+
+- **短期记忆**：在 `chat-1` 内，智能体能直接引用用户刚说过的「偏好邮件联系」，无需重复询问；`query_ticket` 返回 `T-1001` 的实时状态。
+- **长期记忆**：到了 `chat-2`（全新 `session_id`），智能体通过 `load_memory` 检索到上一会话归档的偏好，给出个性化回复。
+- **组合效果**：「会话内连续性 + 跨会话知识积累」，提升响应准确性、减少重复操作，并能支撑工单跟踪等持续性业务流程。
+
+## 下一步
+
+<Cards>
+  <Card title="短期记忆" href="/cn/docs/framework/memory/short-term" description="会话级上下文管理。" />
+  <Card title="长期记忆" href="/cn/docs/framework/memory/long-term" description="跨会话保存与检索。" />
+  <Card title="知识库最佳实践" href="/cn/docs/framework/knowledgebase/best-practice" description="把知识库与多智能体结合。" />
+</Cards>

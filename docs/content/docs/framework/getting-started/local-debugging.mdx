@@ -1,0 +1,54 @@
+---
+title: "本地可视化调试"
+description: "使用 VeADK 命令行工具在浏览器中可视化调试你的智能体。"
+---
+
+VeADK 提供了内置的可视化调试界面，让你可以在浏览器中与智能体交互、查看执行过程，便于本地开发与排查问题。
+
+## 项目结构
+
+在启动调试界面前，请确保你的智能体目录符合以下结构：
+
+```bash
+.
+└── my_agent
+    ├── __init__.py
+    └── agent.py
+```
+
+其中 `agent.py` 中需定义一个 `root_agent` 实例。
+
+## 启动调试界面
+
+在 `my_agent` 的**上一级目录**（即包含智能体目录的父目录）中执行：
+
+```bash
+veadk web
+```
+
+启动后，在浏览器中打开 [http://localhost:8000](http://localhost:8000) 即可访问可视化调试界面。
+
+如需将服务绑定到其他主机（例如允许局域网访问），可使用 `--host` 参数：
+
+```bash
+veadk web --host 0.0.0.0
+```
+
+<Callout type="info">
+  默认监听端口为 `8000`。VeADK 会基于当前工作目录自动发现可用的智能体目录。
+</Callout>
+
+## 使用调试界面
+
+进入界面后：
+
+- 在左上角的下拉框中选择要调试的智能体目录（例如 `my_agent`）；
+- 智能体将在你发起第一轮对话时才真正加载；
+- 通过在下拉框中切换不同的目录名称，即可在多个智能体之间切换。
+
+## 下一步
+
+<Cards>
+  <Card title="快速开始" href="/cn/docs/framework/getting-started/quickstart" description="创建并运行你的第一个智能体。" />
+  <Card title="执行引擎" href="/cn/docs/framework/runner" description="了解 Runner 如何驱动智能体运行。" />
+</Cards>

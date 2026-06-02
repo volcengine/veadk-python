@@ -1,0 +1,6 @@
+{
+  "title": "参考",
+  "icon": "BookMarked",
+  "root": true,
+  "pages": ["index", "api", "contributing", "license"]
+}

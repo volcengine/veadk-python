@@ -1,0 +1,473 @@
+---
+title: "VeADK CLI"
+description: "veadk 命令行的完整参考：init、create、web、kb、deploy、prompt、eval、uploadevalset、pipeline 等命令与全部参数。"
+---
+
+`veadk` 命令行覆盖从项目初始化到部署、评测、优化的完整流程。本页是 CLI 各命令与参数的权威参考——框架教程中提到某个命令时，都会链接到这里。
+
+```bash
+veadk --help
+```
+
+## 命令一览
+
+| 命令 | 描述 |
+| :-- | :-- |
+| `veadk init` | 生成可部署到 VeFaaS 的项目脚手架（含示例智能体、部署脚本）。 |
+| `veadk create` | 在当前目录创建一个新的智能体（含 `.env`、`agent.py`）。 |
+| `veadk web` | 启动本地 Web 调试界面，支持记忆、知识库与 SSO。 |
+| `veadk kb` | 知识库相关操作（如向后端添加文档）。 |
+| `veadk deploy` | 将项目部署到火山引擎 FaaS。 |
+| `veadk eval` | 用评测集与指标评估智能体（ADK / DeepEval）。 |
+| `veadk prompt` | 用 PromptPilot 优化智能体系统提示词。 |
+| `veadk uploadevalset` | 将评测集上传到 CozeLoop 平台。 |
+| `veadk pipeline` | 配置火山引擎 CI/CD 流水线，实现自动构建与部署。 |
+| `veadk agentkit` | AgentKit 兼容命令，详见 [AgentKit 命令兼容](/cn/docs/cli/agentkit-cli)。 |
+
+<Callout type="info">
+  此外还有 `veadk update`（更新本地项目模板）、`veadk clean`（清理生成的临时文件）、`veadk frontend`（A2UI 前端）、`veadk rl`（强化学习相关）等命令，可通过 `veadk <command> --help` 查看其参数。
+</Callout>
+
+## veadk init
+
+`veadk init` 通过交互式流程，根据模板初始化一个可部署到火山引擎 FaaS 的新项目，生成完整的目录结构、配置与部署脚本。
+
+**可用模板：**
+
+- `template`（默认）：包含天气预报示例的 A2A/MCP/Web 服务器模板，适用于大多数场景。
+- `web_template`：包含简易博客示例的 Web 应用模板，面向带 UI 的 Web 应用。
+
+### 参数
+
+| 参数 | 类型 | 说明 |
+| :-- | :-- | :-- |
+| `--vefaas-template-type` | TEXT | 使用的模板类型，`template`（默认）或 `web_template`。 |
+| `--help` | | 显示帮助并退出。 |
+
+### 使用示例
+
+启动交互式初始化流程：
+
+```bash
+veadk init
+```
+
+按提示输入本地目录名、火山引擎 FaaS 应用名、API 网关实例 / 服务 / 上游名称，并选择部署模式与鉴权方式。也可以在初始化时直接指定模板：
+
+```bash
+veadk init --vefaas-template-type web_template
+```
+
+执行完成后，以默认目录名 `veadk-cloud-proj` 为例，生成的目录结构如下：
+
+```text
+veadk-cloud-proj/
+├── __init__.py             # 包初始化文件
+├── clean.py                # 清理脚本，删除生成的临时文件
+├── config.yaml.example     # 配置文件示例（复制为 config.yaml 后填写）
+├── deploy.py               # 部署脚本，部署到火山引擎 FaaS
+└── src/                    # 智能体项目源代码目录
+    ├── __init__.py         # 包初始化文件
+    ├── agent.py            # 运行时智能体导出（root_agent）
+    ├── app.py              # Server / Web 应用定义
+    ├── requirements.txt    # 项目依赖
+    ├── run.sh              # 启动脚本
+    └── weather_report/     # 示例智能体模块
+        ├── __init__.py     # 须包含 `from . import agent`
+        └── agent.py        # 智能体定义文件
+```
+
+<Callout type="info">
+  这与[部署到 VeFaaS](/cn/docs/framework/deploy/vefaas) 中描述的项目结构一致。`web_template` 模板的 `src/` 改为面向 Web 应用的结构（含 `Dockerfile`、`models.py`、`templates/` 等）。
+</Callout>
+
+## veadk create
+
+`veadk create` 在当前目录创建一个新的 VeADK 智能体项目，并预置模板文件。命令会通过交互式提问补全缺失参数，并对已存在的目录做安全检查。
+
+### 参数
+
+| 参数 | 类型 | 说明 |
+| :-- | :-- | :-- |
+| `AGENT_NAME` | TEXT | （可选）智能体名称，同时作为目录名。未提供时会交互式询问。 |
+| `--ark-api-key` | TEXT | （可选）用于模型鉴权的方舟 API Key。未提供时可稍后在 `.env` 中配置。 |
+| `--help` | | 显示帮助并退出。 |
+
+<Callout type="info" title="注意">
+  - 智能体名称同时作为目录名与项目标识符。
+  - API Key 可稍后通过编辑 `.env` 文件配置。
+  - 生成的智能体可直接用 `veadk web` 运行。
+</Callout>
+
+### 使用示例
+
+```bash
+# 交互式创建
+veadk create
+
+# 指定名称
+veadk create location-agent
+
+# 同时提供 API Key
+veadk create location-agent --ark-api-key "xxxxxx"
+```
+
+生成的目录结构：
+
+```text
+location-agent/
+├── .env          # 含 API Key 的环境配置
+├── __init__.py   # Python 包初始化文件
+└── agent.py      # 智能体定义文件
+```
+
+随后可用 `veadk web` 运行该智能体。
+
+## veadk web
+
+`veadk web` 启动本地 Web 服务器，在浏览器中与智能体交互、调试。它完全兼容 Google ADK 的 `adk web`，并支持 VeADK 的短期 / 长期记忆与知识库。命令会自动检测当前目录下的智能体（读取 `agent.py` 中的 `root_agent` 全局变量）并配置相应的记忆服务。
+
+启用 Agent Identity（User Pool）后，Web 界面接入 OAuth2/OIDC 单点登录（SSO），自动完成登录重定向与回调处理。
+
+### 参数
+
+| 参数 | 类型 | 说明 |
+| :-- | :-- | :-- |
+| `--port` | INTEGER | Web 服务器端口，默认 `8000`。 |
+| `--host` | TEXT | 绑定的主机地址，默认 `127.0.0.1`。 |
+| `--log-level` | [debug\|info\|warning\|error] | 日志级别，默认 `info`。 |
+| `--oauth2-user-pool` | TEXT | 启用 Agent Identity 的 User Pool 名称。 |
+| `--oauth2-user-pool-client` | TEXT | Agent Identity 的 User Pool Client 名称。 |
+| `--oauth2-redirect-uri` | TEXT | OAuth2 回调地址，默认 `http://{host}:{port}/oauth2/callback`。 |
+| `--help` | | 显示帮助并退出。 |
+
+### 使用示例
+
+```bash
+# 默认配置启动
+veadk web
+
+# 指定端口
+veadk web --port 8080
+
+# 启用基于 Agent Identity 的 SSO
+veadk web --oauth2-user-pool my-user-pool --oauth2-user-pool-client my-web-client
+```
+
+服务启动后，通常可在 `http://127.0.0.1:8000` 访问。在界面左上角的选择框中选择要调试的智能体即可。
+
+## veadk kb
+
+`veadk kb` 是管理 VeADK 知识库的命令集。
+
+### veadk kb add
+
+将文件或目录添加到指定的知识库后端，支持单个文件（PDF、TXT、MD、DOCX 等）或整个目录。
+
+| 参数 | 类型 | 说明 |
+| :-- | :-- | :-- |
+| `--backend` | [local\|opensearch\|viking\|redis] | **（必需）** 知识库后端类型。 |
+| `--app_name` | TEXT | 用于组织和隔离知识库数据的应用标识符。 |
+| `--index` | TEXT | 知识库索引标识符，在 `app_name` 内唯一。 |
+| `--path` | TEXT | **（必需）** 要添加的文件或目录路径。 |
+| `--help` | | 显示帮助并退出。 |
+
+后端类型：
+
+- **local**：基于本地存储，适用于开发和小型部署。
+- **opensearch**：兼容 Elasticsearch 的搜索引擎，推荐用于大量文档的生产环境。
+- **viking**：火山引擎托管的向量数据库，为语义搜索与 RAG 优化。
+- **redis**：带向量搜索的内存数据存储，适用于快速检索、较小的知识库。
+
+<Callout type="info" title="注意">
+  `veadk kb add` 需要用嵌入模型把文档转成向量。请在项目根目录的 `.env` 中设置 `MODEL_EMBEDDING_API_KEY`。选择非本地后端（opensearch、viking、redis）时，还需配置相应后端的连接环境变量。
+</Callout>
+
+#### 使用示例
+
+下面以把单个文件添加到 Redis 后端、并在智能体中检索为例。假设当前目录下有一个 `qa.md`：
+
+````markdown
+# 智能客服知识库
+
+## 1. 公司简介
+
+VE 科技是一家专注于智能客服与知识管理的高科技公司。产品名为 **智能客服系统**，通过自然语言处理与知识库检索，为企业客户提供高效、智能的自动化客服解决方案。
+
+## 2. 产品功能说明
+
+- **自动问答**：基于知识库，快速响应常见问题。
+- **多渠道接入**：支持网页、App、微信、飞书等渠道。
+- **智能推荐**：根据上下文推荐相关答案。
+- **数据分析**：提供用户问题统计与客服绩效报告。
+
+## 3. 常见问题 (FAQ)
+
+### Q1: 智能客服系统支持哪些语言？
+
+A1: 目前支持 **中文** 和 **英文**，后续将逐步增加日语、韩语等多语言支持。
+
+### Q2: 系统可以接入现有的 CRM 吗？
+
+A2: 可以。支持通过 API 与主流 CRM 系统（如 Salesforce、Zoho、金蝶）无缝集成。
+
+## 4. 联系我们
+
+- 官网：https://www.example.com
+- 客服邮箱：support@example.com
+- 服务热线：400-123-4567
+````
+
+将其添加到 Redis 知识库：
+
+```bash
+veadk kb add --backend redis --app_name app --path ./qa.md
+```
+
+<Callout type="info" title="注意">
+  - 使用 Redis 后端时，需事先在 `.env` 中配置 `DATABASE_REDIS_HOST`、`DATABASE_REDIS_PORT`、`DATABASE_REDIS_PASSWORD`（以及可选的 `DATABASE_REDIS_USER`）。
+  - 确认 Redis 服务正常运行、端口与 `.env` 一致，并已开启向量搜索功能。
+</Callout>
+
+接着用如下代码验证知识库是否添加成功：
+
+```python
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.knowledgebase import KnowledgeBase
+from veadk.memory import ShortTermMemory
+
+app_name = "app"
+user_id = "user"
+session_id = "session"
+
+knowledgebase = KnowledgeBase(backend="redis", app_name=app_name, index="v1")
+
+agent = Agent(
+    name="customer_service",
+    instruction="Answer customer's questions according to your knowledgebase.",
+    knowledgebase=knowledgebase,
+)
+root_agent = agent
+
+runner = Runner(
+    agent=agent,
+    short_term_memory=ShortTermMemory(),
+    app_name=app_name,
+    user_id=user_id,
+)
+
+response = asyncio.run(
+    runner.run(messages="你们的产品都有什么功能？", session_id=session_id)
+)
+
+print(response)
+```
+
+<Callout type="info" title="注意">
+  - 运行上述代码时，Redis 服务需正常运行并已开启向量搜索。建议与上面的命令在同一目录运行，以共享同一份 `.env`。
+  - 代码中的 `app_name` 需与命令中的一致（本例为 `app`）。
+</Callout>
+
+## veadk deploy
+
+`veadk deploy` 将一个 VeADK 项目部署到火山引擎 FaaS 平台。命令会从本地项目创建部署包、配置必要的云资源并管理整个部署过程，自动处理 `requirements.txt`，并出于安全原因排除 `config.yaml`。
+
+### 参数
+
+| 参数 | 类型 | 说明 |
+| :-- | :-- | :-- |
+| `--volcengine-access-key` | TEXT | 火山引擎访问密钥 (AK)。未提供时使用环境变量 `VOLCENGINE_ACCESS_KEY`。 |
+| `--volcengine-secret-key` | TEXT | 火山引擎秘密密钥 (SK)。未提供时使用环境变量 `VOLCENGINE_SECRET_KEY`。 |
+| `--vefaas-app-name` | TEXT | **（必需）** 目标火山引擎 FaaS 应用名称。 |
+| `--veapig-instance-name` | TEXT | （可选）API 网关实例名称。 |
+| `--veapig-service-name` | TEXT | （可选）API 网关服务名称。 |
+| `--veapig-upstream-name` | TEXT | （可选）API 网关上游名称。 |
+| `--short-term-memory-backend` | [local\|mysql] | 短期记忆后端，默认 `local`。 |
+| `--use-adk-web` | | 为部署的智能体启用 ADK Web 界面。 |
+| `--auth-method` | [none\|api-key\|oauth2] | 智能体的鉴权方式，默认 `none`。 |
+| `--user-pool-name` | TEXT | Agent Identity 的 User Pool 名称（`oauth2` 时使用）。 |
+| `--client-name` | TEXT | Agent Identity 的 Client 名称（`oauth2` 时使用）。 |
+| `--path` | TEXT | 要部署的本地项目路径，默认当前目录 `.`。 |
+| `--iam-role` | TEXT | VeFaaS 函数使用的 IAM 角色。 |
+| `--help` | | 显示帮助并退出。 |
+
+### 使用示例
+
+```bash
+# 在项目根目录部署（提供 AK/SK 与 FaaS 应用名）
+veadk deploy \
+  --vefaas-app-name my-cloud-app \
+  --volcengine-access-key "YOUR_AK" \
+  --volcengine-secret-key "YOUR_SK"
+
+# 部署指定路径的项目并启用 Web 界面
+veadk deploy \
+  --path ./my-agent-project \
+  --vefaas-app-name my-cloud-app \
+  --use-adk-web \
+  --volcengine-access-key "YOUR_AK" \
+  --volcengine-secret-key "YOUR_SK"
+```
+
+<Callout type="info" title="注意">
+  - 可在 `.env` 中设置 `VOLCENGINE_ACCESS_KEY` 和 `VOLCENGINE_SECRET_KEY`，避免在命令行明文暴露 AK/SK。
+  - 未指定 API 网关实例 / 服务 / 上游名称时，系统会使用默认值并自动创建；也可复用已有实例。
+  - 部署过程中可在 [VeFaaS 控制台](https://console.volcengine.com/vefaas/)查看状态与日志。
+</Callout>
+
+## veadk prompt
+
+`veadk prompt` 使用火山引擎 PromptPilot 服务，根据反馈优化智能体的系统提示词。命令会从指定文件加载智能体，读取其 `Agent` 对象的 `instruction` 作为优化目标。
+
+### 参数
+
+| 参数 | 类型 | 说明 |
+| :-- | :-- | :-- |
+| `--path` | TEXT | 含 `agent=...` 全局变量的智能体文件路径，默认当前目录 `.`。 |
+| `--feedback` | TEXT | 用于优化提示词的反馈与建议。 |
+| `--api-key` | TEXT | PromptPilot 服务的 API Key。 |
+| `--workspace-id` | TEXT | PromptPilot 的工作空间 ID。 |
+| `--model-name` | TEXT | 用于提示词优化的模型名称，默认 `doubao-1.5-pro-32k-250115`。 |
+| `--help` | | 显示帮助并退出。 |
+
+### 使用示例
+
+```bash
+veadk prompt \
+  --path ./weather_reporter/agent.py \
+  --feedback "希望提示词更加具体明确" \
+  --api-key "YOUR_API_KEY" \
+  --workspace-id "YOUR_WORKSPACE_ID"
+```
+
+<Callout type="info" title="注意">
+  - 需先在 [PromptPilot 控制台](https://promptpilot.volcengine.com/)创建项目，获取 API Key 与工作空间 ID。
+  - 也可在 `.env` 中设置 `PROMPTPILOT_API_KEY`，避免在命令行明文暴露。
+</Callout>
+
+## veadk eval
+
+`veadk eval` 使用指定的评测集与指标，综合评估智能体。
+
+**评估模式：**
+
+- **本地评估**：从本地源码加载并评估智能体。
+- **远程评估**：通过 URL 连接并评估已部署为 A2A 模式的智能体。
+
+**评测框架：**
+
+- **adk**：Google ADK 的评估框架，提供标准化指标。
+- **deepeval**：更高级的框架，支持 GEval、工具使用准确性等可定制指标。
+
+### 参数
+
+| 参数 | 类型 | 说明 |
+| :-- | :-- | :-- |
+| `--agent-dir` | TEXT | （本地评估）待评估智能体的本地目录，需包含导出 `root_agent` 的 `agent.py`。默认当前目录 `.`。 |
+| `--agent-a2a-url` | TEXT | （远程评估）已部署的 A2A 模式智能体的完整 URL。 |
+| `--evalset-file` | TEXT | **（必需）** Google ADK 格式的评测集文件路径。 |
+| `--evaluator` | [adk\|deepeval] | **（必需）** 要使用的评测框架。 |
+| `--judge-model-name` | TEXT | 评判用的模型名称，默认 `doubao-1-5-pro-256k-250115`。在 `adk` 评测器下会被忽略。 |
+| `--volcengine-access-key` | TEXT | 火山引擎模型鉴权的访问密钥 (AK)。 |
+| `--volcengine-secret-key` | TEXT | 火山引擎模型鉴权的秘密密钥 (SK)。 |
+| `--help` | | 显示帮助并退出。 |
+
+<Callout type="info" title="注意">
+  - 必须提供 `--agent-dir` 或 `--agent-a2a-url` 其一；两者都提供时，`--agent-a2a-url` 优先。
+  - 评测集文件需为 Google ADK 格式，详见[评测](/cn/docs/framework/eval-optimization/evaluation)。
+</Callout>
+
+### 使用示例
+
+```bash
+# 本地评估
+veadk eval \
+  --agent-dir ./my-agent \
+  --evalset-file ./eval.json \
+  --evaluator adk
+
+# 远程评估
+veadk eval \
+  --agent-a2a-url http://my-agent-url.com/invoke \
+  --evalset-file ./eval.json \
+  --evaluator deepeval \
+  --volcengine-access-key "YOUR_AK" \
+  --volcengine-secret-key "YOUR_SK"
+```
+
+## veadk uploadevalset
+
+`veadk uploadevalset` 将本地 JSON 评测集上传到 CozeLoop 平台。命令会把 Google ADK 格式的评测用例转换为 CozeLoop 期望的格式。
+
+### 参数
+
+| 参数 | 类型 | 说明 |
+| :-- | :-- | :-- |
+| `--file` | TEXT | **（必需）** 包含数据集条目的 JSON 文件路径。 |
+| `--cozeloop-workspace-id` | TEXT | CozeLoop 工作空间 ID。未提供时使用 `OBSERVABILITY_OPENTELEMETRY_COZELOOP_SERVICE_NAME`。 |
+| `--cozeloop-evalset-id` | TEXT | CozeLoop 评测集 ID。未提供时使用 `OBSERVABILITY_OPENTELEMETRY_COZELOOP_EVALSET_ID`。 |
+| `--cozeloop-api-key` | TEXT | CozeLoop API Key。未提供时使用 `OBSERVABILITY_OPENTELEMETRY_COZELOOP_API_KEY`。 |
+| `--help` | | 显示帮助并退出。 |
+
+### 使用示例
+
+```bash
+veadk uploadevalset \
+  --file ./my_eval_set.json \
+  --cozeloop-workspace-id "YOUR_WORKSPACE_ID" \
+  --cozeloop-evalset-id "YOUR_EVALSET_ID" \
+  --cozeloop-api-key "YOUR_API_KEY"
+```
+
+## veadk pipeline
+
+`veadk pipeline` 将 VeADK 项目接入火山引擎流水线，实现自动化 CI/CD。每当变更推送到指定的 GitHub 仓库，流水线会自动构建、容器化并部署你的项目，并创建必要的云基础设施（容器镜像仓库、FaaS 函数、流水线配置）。
+
+### 参数
+
+| 参数 | 类型 | 说明 |
+| :-- | :-- | :-- |
+| `--veadk-version` | TEXT | 用于容器化的基础 VeADK 镜像标签，可为 `preview`、`latest` 或特定版本。 |
+| `--github-url` | TEXT | **（必需）** 项目的 GitHub 仓库 URL。 |
+| `--github-branch` | TEXT | **（必需）** 项目的 GitHub 分支。 |
+| `--github-token` | TEXT | **（必需）** 用于管理项目的 GitHub 令牌。 |
+| `--volcengine-access-key` | TEXT | 火山引擎访问密钥 (AK)。未设置时使用 `VOLCENGINE_ACCESS_KEY`。 |
+| `--volcengine-secret-key` | TEXT | 火山引擎秘密密钥 (SK)。未设置时使用 `VOLCENGINE_SECRET_KEY`。 |
+| `--region` | TEXT | VeFaaS、CR、Pipeline 的地域，默认 `cn-beijing`。 |
+| `--cr-instance-name` | TEXT | 容器镜像仓库 (CR) 实例名称，默认 `veadk-user-instance`。 |
+| `--cr-namespace-name` | TEXT | CR 命名空间名称，默认 `veadk-user-namespace`。 |
+| `--cr-repo-name` | TEXT | CR 仓库名称，默认 `veadk-user-repo`。 |
+| `--vefaas-function-id` | TEXT | VeFaaS 函数 ID。未设置时自动创建新函数。 |
+| `--help` | | 显示帮助并退出。 |
+
+<Callout type="info" title="注意">
+  - GitHub 令牌需具有相应的仓库访问权限。
+  - 所有火山引擎资源都将在指定地域创建。
+  - 流水线创建后会立即触发一次初始部署。
+</Callout>
+
+### 使用示例
+
+```bash
+veadk pipeline \
+  --github-url https://github.com/your-user/your-repo \
+  --github-branch main \
+  --github-token YOUR_GITHUB_TOKEN \
+  --volcengine-access-key YOUR_AK \
+  --volcengine-secret-key YOUR_SK \
+  --region cn-beijing
+```
+
+## AgentKit 命令兼容
+
+VeADK 命令行兼容 AgentKit 命令，只需在 AgentKit 命令前加 `veadk agentkit` 前缀。详见 [AgentKit 命令兼容](/cn/docs/cli/agentkit-cli)。
+
+## 下一步
+
+<Cards>
+  <Card title="快速开始" href="/cn/docs/framework/getting-started/quickstart" description="跑通你的第一个智能体。" />
+  <Card title="部署到 VeFaaS" href="/cn/docs/framework/deploy/vefaas" description="把智能体部署上云。" />
+  <Card title="评测" href="/cn/docs/framework/eval-optimization/evaluation" description="用评测集系统化度量质量。" />
+</Cards>

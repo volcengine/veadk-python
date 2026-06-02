@@ -1,0 +1,101 @@
+---
+title: "Feishu Channel extension"
+description: "Use FeishuChannelExtension to bridge inbound Feishu bot messages into the VeADK Runner."
+---
+
+`veadk.extensions.FeishuChannelExtension` bridges inbound messages from a Feishu (Lark) bot into the VeADK `Runner`.
+
+<Callout type="info">
+This page treats Feishu as an **inbound message channel**: messages from Feishu users trigger your agent. If instead you want the agent to **call Feishu capabilities** (send messages, process cloud docs, manage calendars), see `lark_tools` in [Built-in MCP tools](/en/docs/framework/tools/builtin-mcp).
+</Callout>
+
+By default it works off the `message` event of `lark_oapi.channel.FeishuChannel`, and maps the session identity according to these rules:
+
+- `sender.union_id -> Runner.user_id`
+- `conversation.thread_id -> Runner.session_id`
+- If the thread ID does not exist, it falls back to `chat_id -> Runner.session_id`
+
+This means VeADK's existing short-term memory, long-term memory, tracing, and multi-tenant isolation all carry over directly.
+
+## Installation
+
+```bash
+pip install veadk-python[extensions]
+```
+
+If you only want this capability, install it on its own:
+
+```bash
+pip install lark-oapi
+```
+
+## Configuration
+
+Environment variables:
+
+- `TOOL_FEISHU_CHANNEL_APP_ID`
+- `TOOL_FEISHU_CHANNEL_APP_SECRET`
+- `TOOL_FEISHU_CHANNEL_TRANSPORT`: defaults to `ws`
+- `TOOL_FEISHU_CHANNEL_STREAMING`: whether to enable streaming output, defaults to `false`
+- `TOOL_FEISHU_CHANNEL_REACTIONS`: whether to reply with a "received" reaction on incoming messages, defaults to `false`
+
+Or configure in `config.yaml`:
+
+```yaml title="config.yaml"
+tool:
+  feishu_channel:
+    app_id: cli_xxx
+    app_secret: xxx
+    transport: ws
+    streaming: true
+    reactions: true
+```
+
+## Minimal example
+
+```python title="examples/channel/feishu_bot.py"
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.extensions import FeishuChannelExtension
+from veadk.memory.short_term_memory import ShortTermMemory
+
+agent = Agent(
+    name="feishu_agent",
+    model_name="doubao-seed-1-8-251228",
+    instruction="You are an assistant that talks to users through a Feishu bot.",
+)
+
+runner = Runner(
+    agent=agent,
+    app_name="veadk_feishu_demo",
+    user_id="veadk_feishu_default_user",
+    short_term_memory=ShortTermMemory(),
+)
+
+channel = FeishuChannelExtension(
+    runner=runner,
+    channel_kwargs={"transport": "ws"},
+)
+
+
+async def main():
+    await channel.connect()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+## Notes
+
+- The Feishu `Channel` WebSocket mode is used by default, so as long as the bot has subscribed to message events, you can start the connection directly.
+- By default replies use `reply_to=<original message_id>`, keeping VeADK output attached to the current Feishu message thread.
+- Override the default identity mapping via `session_id_factory` and `user_id_factory`.
+
+## Next steps
+
+<Cards>
+  <Card title="Feishu / Lark MCP tools" href="/en/docs/framework/tools/builtin-mcp" description="The other direction: let the agent call Feishu capabilities." />
+  <Card title="Short-term memory" href="/en/docs/framework/memory/short-term" description="Keep context across multi-turn Feishu conversations." />
+</Cards>

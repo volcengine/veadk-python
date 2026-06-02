@@ -1,0 +1,56 @@
+---
+title: "部署到 AgentKit"
+description: "使用 VeADK 命令行兼容的 AgentKit 命令，生成并部署标准的 AgentKit 项目到火山引擎 AgentKit 平台。"
+---
+
+除了部署到 VeFaaS，你还可以把智能体部署到火山引擎 **AgentKit** 平台。VeADK 命令行兼容 AgentKit 命令——在熟悉的 AgentKit 命令前加上 `veadk` 前缀即可（直接使用 `agentkit` 命令同样有效）。
+
+## 前置条件
+
+- 已安装 VeADK（包含 `agentkit` 依赖）。
+- 已在项目根目录的 `.env` 文件中配置火山引擎访问凭据（Access Key / Secret Key）。
+
+## 步骤
+
+<Steps>
+
+<Step>
+### 创建项目
+
+生成一个标准的 AgentKit 项目：
+
+```bash
+veadk agentkit init
+```
+</Step>
+
+<Step>
+### 配置项目
+
+按需对项目进行配置：
+
+```bash
+veadk agentkit config
+```
+</Step>
+
+<Step>
+### 部署项目
+
+在项目根目录下，将项目部署到火山引擎 AgentKit 平台：
+
+```bash
+veadk agentkit launch
+```
+</Step>
+
+</Steps>
+
+`veadk agentkit` 透传了 AgentKit 的全部子命令（如 `build`、`deploy`、`status`、`destroy` 等）。完整命令列表与说明见 [AgentKit 命令兼容](/cn/docs/cli/agentkit-cli)，更详细的平台部署步骤见 [AgentKit 官方文档](https://volcengine.github.io/agentkit-sdk-python/content/2.agentkit-cli/1.overview.html)。
+
+## 下一步
+
+<Cards>
+  <Card title="AgentKit 命令兼容" href="/cn/docs/cli/agentkit-cli" description="查看全部 veadk agentkit 子命令。" />
+  <Card title="部署到 VeFaaS" href="/cn/docs/framework/deploy/vefaas" description="将智能体部署到火山引擎函数服务。" />
+</Cards>

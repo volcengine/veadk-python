@@ -1,0 +1,6 @@
+{
+  "title": "命令行工具",
+  "icon": "Terminal",
+  "root": true,
+  "pages": ["index", "veadk-cli", "agentkit-cli"]
+}

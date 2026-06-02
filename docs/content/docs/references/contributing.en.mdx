@@ -1,0 +1,103 @@
+---
+title: "Contributing"
+description: "Contribute to VeADK: install from source, run tests, set up pre-commit, and open a pull request."
+---
+
+Contributions to VeADK code and docs are welcome. This page walks you through setting up a local development environment and the submission flow.
+
+## Set up your environment
+
+<Steps>
+
+<Step>
+### Clone and install
+
+VeADK requires Python 3.10+. Install in editable mode with the dev dependencies:
+
+```bash
+git clone https://github.com/volcengine/veadk-python.git
+cd veadk-python
+
+pip install -e ".[dev]"
+```
+
+The repo manages dependencies and a lockfile with `uv`; you can also set everything up (including the `dev` group) in one step:
+
+```bash
+uv sync --extra dev
+```
+
+<Callout type="info">
+  Install optional extras as needed: `extensions` (memory / knowledge-base backends), `eval` (evaluation), `a2ui` (agent-driven UI), and more. For example, `pip install -e ".[dev,eval]"`.
+</Callout>
+</Step>
+
+<Step>
+### Install the pre-commit hooks
+
+`pre-commit` runs Ruff (formatting and linting) and gitleaks (secret-leak detection) before you commit. Commits that fail these checks won't pass GitHub CI and therefore won't be merged.
+
+```bash
+pre-commit install
+```
+
+`pre-commit` is included in the `dev` dependencies. Once installed, every `git commit` runs the hooks automatically; you can also run them across all files manually:
+
+```bash
+pre-commit run --all-files
+```
+</Step>
+
+<Step>
+### Run the tests
+
+Tests live in the `tests/` directory and run with `pytest`:
+
+```bash
+pytest
+```
+
+Run a single file or directory:
+
+```bash
+pytest tests/test_agent.py
+```
+
+<Callout type="warn">
+  Some tests require Volcengine credentials or external backends (such as Redis or OpenSearch). These are skipped or fail without the corresponding environment variables, so focus on the cases relevant to your change before opening a PR.
+</Callout>
+</Step>
+
+</Steps>
+
+## Development conventions
+
+- Follow the [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html).
+- Make sure `pre-commit run --all-files` and `pytest` pass before submitting.
+- When a change affects behavior or interfaces, update `docs/` and `README.md` accordingly.
+
+## Open a pull request
+
+<Steps>
+
+<Step>
+### Fork and branch
+
+```bash
+git checkout -b feat/your-feature
+```
+</Step>
+
+<Step>
+### Commit and push
+
+After pre-commit and the tests pass, commit and push to your fork.
+</Step>
+
+<Step>
+### Open the PR
+
+Open a pull request against the `main` branch of `volcengine/veadk-python`, clearly describing the motivation and the change. Maintainers typically respond within 1 to 2 business days.
+</Step>
+
+</Steps>

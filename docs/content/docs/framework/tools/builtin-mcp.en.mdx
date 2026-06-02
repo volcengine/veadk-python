@@ -1,0 +1,280 @@
+---
+title: "Built-in MCP tools"
+description: "VeADK's built-in tools that connect over MCP (Model Context Protocol): MCP Router, Feishu / Lark, the LAS data lake, Video-on-Demand (VOD), Supabase, and the Trusted MCP toolset."
+---
+
+[MCP (Model Context Protocol)](https://modelcontextprotocol.io/) is an open protocol for connecting large language models to external tools and data sources. On top of Google ADK's `MCPToolset`, VeADK ships a set of built-in MCP tool sets that register tools exposed by a remote MCP Server directly onto your agent.
+
+This page covers the **MCP-based built-in tools**. For the ready-to-use native function tools (web search, image / video generation, code sandboxes, and more), see [Built-in tools](/en/docs/framework/tools/builtin).
+
+Like any tool, an MCP tool set only needs to be placed in `Agent(tools=[...])`. The agent discovers the tools in the set at runtime and calls them as needed.
+
+## Tool overview
+
+| Tool | What it does | Import path |
+| :--- | :--- | :--- |
+| `mcp_router` | Aggregate and forward multiple MCP Servers via the Volcengine MCP Router | `from veadk.tools.builtin_tools.mcp_router import mcp_router` |
+| `lark_tools` | Integrate [Feishu / Lark open capabilities](https://open.larkoffice.com/document/uAjLw4CM/ukTMukTMukTM/mcp_integration/mcp_installation) (docs, chat, calendar) | `from veadk.tools.builtin_tools.lark import lark_tools` |
+| `las` | Manage data via the [AI multimodal data lake LAS](https://www.volcengine.com/mcp-marketplace) | `from veadk.tools.builtin_tools.las import las` |
+| `vod_tools` | Edit and process video via [Video-on-Demand MCP](https://github.com/volcengine/mcp-server/blob/main/server/mcp_server_vod/README_zh.md) | `from veadk.tools.builtin_tools.vod import vod_tools` |
+| `build_supabase_mcptoolset` | Build a tool set that accesses a [Supabase](https://supabase.com/) MCP Server | `from veadk.tools.builtin_tools.supabase_toolset import build_supabase_mcptoolset` |
+| `TrustedMcpToolset` | Access an access-controlled MCP Server | `from veadk.tools.mcp_tool.trusted_mcp_toolset import TrustedMcpToolset` |
+
+## MCP Router
+
+`mcp_router` aggregates and forwards the tools of multiple MCP Servers through the Volcengine MCP Router, which is ideal when you need a single entry point for several MCP services. It works over a streamable HTTP connection (`StreamableHTTPConnectionParams`).
+
+```python
+from veadk import Agent
+from veadk.tools.builtin_tools.mcp_router import mcp_router
+
+agent = Agent(tools=[mcp_router])
+```
+
+Environment variables:
+
+- `TOOL_MCP_ROUTER_URL`: the MCP Router service address
+- `TOOL_MCP_ROUTER_API_KEY`: the API key for authentication, sent as the `Authorization: Bearer <key>` request header
+
+Or configure in `config.yaml`:
+
+```yaml title="config.yaml"
+tool:
+  mcp_router:
+    url: https://your-mcp-router-endpoint
+    api_key: your-api-key-here
+```
+
+## Feishu / Lark MCP tools (lark_tools)
+
+`lark_tools` lets you integrate an AI agent with Feishu / Lark open capabilities for cloud-document processing, chat management, calendar scheduling, and more. It launches a local MCP Server via `npx @larksuiteoapi/lark-mcp`, so `npx` and `lark-mcp` must be installed.
+
+<Callout type="info">
+This tool exposes Feishu capabilities **as tools the agent can call**. If instead you want to route inbound Feishu bot messages into a VeADK `Runner`, see the [Feishu Channel extension](/en/docs/framework/tools/feishu-channel).
+</Callout>
+
+<Callout type="warn" title="Requirements">
+To create an app, see [Lark app creation](https://open.larkoffice.com/document/develop-an-echo-bot/introduction).
+
+1. Configure the API key for the agent's reasoning model.
+2. Configure the Lark service Application ID, API key, and OAuthToken.
+</Callout>
+
+```python title="examples/tools/lark/agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.tools.builtin_tools.lark import lark_tools
+
+agent = Agent(
+    name="lark_agent",
+    model_name="doubao-seed-1-8-251228",
+    description="A Feishu bot.",
+    instruction="You are a Feishu bot. Use lark_tools to send messages to users.",
+    tools=[lark_tools],
+)
+
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory())
+
+
+async def main():
+    response = await runner.run(
+        'Send "Hello, I am the lark agent" to xiangya@bytedance.com'
+    )
+    print(response)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+Environment variables (**must be set as environment variables**):
+
+- `MODEL_AGENT_API_KEY`: API key for the agent's reasoning model
+- `TOOL_LARK_ENDPOINT`: Lark service Application ID
+- `TOOL_LARK_API_KEY`: Lark service API key
+- `TOOL_LARK_TOKEN`: Lark service OAuthToken
+
+![Result](/assets/images/tools/lark1.png)
+![Result](/assets/images/tools/lark2.png)
+
+## LAS data lake (las)
+
+`las` is built on the AI multimodal data lake service LAS, providing creation, preview, query/analysis, editing, and cleaning of multimodal datasets.
+
+<Callout type="warn" title="Requirements">
+1. Configure the API key for the agent's reasoning model.
+2. [Create a LAS general dataset](https://console.volcengine.com/las/region:las+cn-beijing/next/dataset/common/create) in advance and obtain its DatasetId.
+3. Configure the LAS service DatasetId and URL ([how to get the URL](https://www.volcengine.com/mcp-marketplace/detail?name=LAS%20MCP)).
+</Callout>
+
+```python title="examples/tools/las/agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.tools.builtin_tools.las import las
+
+agent = Agent(
+    name="las_agent",
+    model_name="doubao-seed-1-8-251228",
+    description="Answer using data in LAS.",
+    instruction=(
+        "You are a poet. First use the las tool to search the ds_public dataset for "
+        "relevant content, then write a poem based on the results."
+    ),
+    tools=[las],
+)
+
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory())
+
+
+async def main():
+    response = await runner.run("Write a Chinese-style poem about wood and love")
+    print(response)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+Environment variables (**must be set as environment variables**):
+
+- `MODEL_AGENT_API_KEY`: API key for the agent's reasoning model
+- `TOOL_LAS_URL`: LAS MCP Server service address
+- `TOOL_LAS_DATASET_ID`: dataset ID used by the LAS service
+
+![Result](/assets/images/tools/las1.png)
+![Result](/assets/images/tools/las2.png)
+
+## Video-on-Demand MCP tool (vod_tools)
+
+`vod_tools` edits and processes video through the Volcengine Video-on-Demand MCP. See the [VOD MCP Server](https://github.com/volcengine/mcp-server/blob/main/server/mcp_server_vod/README_zh.md).
+
+<Callout type="warn" title="Requirements">
+1. Configure Volcengine AK / SK.
+2. (Optional) Choose capability groups via `TOOL_VOD_GROUPS`: `edit`, `intelligent_slicing`, `intelligent_matting`, `subtitle_processing`, `audio_processing`, `video_enhancement`, `upload`, `video_play`. Join multiple with commas; defaults to `edit,video_play`.
+3. (Optional) `TOOL_VOD_TIMEOUT`, the connection timeout, defaults to 10 seconds.
+4. The VOD tool cannot create a Space — create a [Video Cloud space](https://console.volcengine.com/vod/region:vod+cn-north-1/overview/) in the console first.
+</Callout>
+
+```python title="examples/tools/vod/agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.tools.builtin_tools.vod import vod_tools
+
+agent = Agent(
+    name="vod_agent",
+    model_name="doubao-seed-1-8-251228",
+    description="A video editing assistant.",
+    instruction="Use vod_tools to edit and process videos.",
+    tools=[vod_tools],
+)
+
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory())
+
+
+async def main():
+    response = await runner.run(
+        "Merge these two videos: <your-url1>, <your-url2>, with space_name <your-space-name>"
+    )
+    print(response)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+Environment variables:
+
+- `VOLCENGINE_ACCESS_KEY`: Volcengine AccessKey
+- `VOLCENGINE_SECRET_KEY`: Volcengine SecretKey
+- `TOOL_VOD_GROUPS` (optional): capability groups
+- `TOOL_VOD_TIMEOUT` (optional): connection timeout, defaults to 10.0 seconds
+
+Or configure in `config.yaml`:
+
+```yaml title="config.yaml"
+volcengine:
+  access_key: your-access-key-here
+  secret_key: your-secret-key-here
+tool:
+  vod:
+    groups: edit,video_play
+    timeout: 10.0
+```
+
+<Callout type="info">
+Some video-editing tasks take a while and return a `task_id` immediately. You can keep asking the agent whether the task is finished to retrieve the result.
+</Callout>
+
+## Supabase toolset
+
+`build_supabase_mcptoolset` quickly builds a tool set that accesses a [Supabase](https://supabase.com/) MCP Server. It accepts a `url` and an `api_key`, and returns an `MCPToolset` instance you can register on the agent directly.
+
+```python
+from veadk import Agent
+from veadk.tools.builtin_tools.supabase_toolset import build_supabase_mcptoolset
+
+supabase_toolset = build_supabase_mcptoolset(
+    url="https://your-supabase-mcp-endpoint",
+    api_key="your-api-key-here",
+)
+
+agent = Agent(tools=[supabase_toolset])
+```
+
+## Trusted MCP toolset (TrustedMcpToolset)
+
+When connecting to an MCP Server protected by access control, use `TrustedMcpToolset`. It builds on the standard `McpToolset` and injects authentication into outbound requests, allowing secure access to trusted MCP services. It reuses Google ADK's connection parameters — the example below uses `StreamableHTTPConnectionParams`:
+
+```python
+from veadk import Agent
+from veadk.tools.mcp_tool.trusted_mcp_toolset import TrustedMcpToolset
+from google.adk.tools.mcp_tool.mcp_session_manager import (
+    StreamableHTTPConnectionParams,
+)
+
+toolset = TrustedMcpToolset(
+    connection_params=StreamableHTTPConnectionParams(
+        url="https://your-trusted-mcp-endpoint",
+        headers={"Authorization": "Bearer your-api-key-here"},
+    ),
+)
+
+agent = Agent(tools=[toolset])
+```
+
+## Custom MCP Server
+
+If none of the built-in connectors above meet your needs, connect to any MCP Server directly using Google ADK's `MCPToolset`:
+
+```python
+from veadk import Agent
+from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
+from google.adk.tools.mcp_tool.mcp_session_manager import (
+    StreamableHTTPConnectionParams,
+)
+
+toolset = MCPToolset(
+    connection_params=StreamableHTTPConnectionParams(
+        url="https://your-mcp-endpoint",
+        headers={"Authorization": "Bearer your-api-key-here"},
+    ),
+)
+
+agent = Agent(tools=[toolset])
+```
+
+Once registered, the agent automatically loads the tools exposed by the MCP Server and calls them as needed during reasoning.
+
+## Next steps
+
+<Cards>
+  <Card title="Built-in tools" href="/en/docs/framework/tools/builtin" description="Native function tools: web search, image / video generation, code sandboxes." />
+  <Card title="Feishu Channel extension" href="/en/docs/framework/tools/feishu-channel" description="Route inbound Feishu bot messages into the Runner." />
+  <Card title="Custom tools" href="/en/docs/framework/tools/custom-function" description="Wrap your own functions as tools." />
+</Cards>

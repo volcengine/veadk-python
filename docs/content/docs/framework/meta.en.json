@@ -1,0 +1,33 @@
+{
+  "title": "Framework",
+  "icon": "LayoutGrid",
+  "root": true,
+  "pages": [
+    "index",
+    "---[Rocket]Get started---",
+    "getting-started",
+    "introduction",
+    "configuration",
+    "---[Boxes]Core capabilities---",
+    "agent",
+    "runner",
+    "tools",
+    "memory",
+    "knowledgebase",
+    "---[Puzzle]Extend & UI---",
+    "plugin",
+    "frontend",
+    "---[ShieldCheck]Security---",
+    "security",
+    "---[Activity]Observability---",
+    "observability",
+    "---[CloudUpload]Deploy---",
+    "deploy",
+    "---[LineChart]Evaluate & optimize---",
+    "eval-optimization",
+    "---[Compass]More---",
+    "enterprise-design",
+    "community",
+    "troubleshooting"
+  ]
+}

@@ -1,0 +1,278 @@
+---
+title: "内置 MCP 工具"
+description: "VeADK 基于 MCP（Model Context Protocol）接入的内置工具：MCP Router、飞书 / Lark、LAS 数据湖、视频云 VOD、Supabase 与可信 MCP 工具集。"
+---
+
+[MCP（Model Context Protocol）](https://modelcontextprotocol.io/)是连接大模型与外部工具 / 数据源的开放协议。VeADK 在 Google ADK 的 `MCPToolset` 之上预封装了一组内置 MCP 工具集，把远程 MCP Server 暴露的工具直接注册到 Agent 上。
+
+本页介绍**基于 MCP 接入的内置工具**。开箱即用的原生函数工具（网页搜索、图像 / 视频生成、代码沙箱等）请见[内置工具](/cn/docs/framework/tools/builtin)。
+
+与普通工具一样，MCP 工具集只需放进 `Agent(tools=[...])`，Agent 会在运行时自动发现工具集中的工具并按需调用。
+
+## 工具一览
+
+| 工具 | 功能 | 导入路径 |
+| :--- | :--- | :--- |
+| `mcp_router` | 通过火山引擎 MCP Router 聚合并转发多个 MCP Server | `from veadk.tools.builtin_tools.mcp_router import mcp_router` |
+| `lark_tools` | 集成[飞书 / Lark 开放能力](https://open.larkoffice.com/document/uAjLw4CM/ukTMukTMukTM/mcp_integration/mcp_installation)（文档、会话、日历等） | `from veadk.tools.builtin_tools.lark import lark_tools` |
+| `las` | 基于 [AI 多模态数据湖 LAS](https://www.volcengine.com/mcp-marketplace) 进行数据管理 | `from veadk.tools.builtin_tools.las import las` |
+| `vod_tools` | 通过[视频云 VOD MCP](https://github.com/volcengine/mcp-server/blob/main/server/mcp_server_vod/README_zh.md) 进行视频剪辑处理 | `from veadk.tools.builtin_tools.vod import vod_tools` |
+| `build_supabase_mcptoolset` | 构建访问 [Supabase](https://supabase.com/) MCP Server 的工具集 | `from veadk.tools.builtin_tools.supabase_toolset import build_supabase_mcptoolset` |
+| `TrustedMcpToolset` | 访问受访问控制保护的 MCP Server | `from veadk.tools.mcp_tool.trusted_mcp_toolset import TrustedMcpToolset` |
+
+## MCP Router
+
+`mcp_router` 通过火山引擎 MCP Router 聚合并转发多个 MCP Server 的工具，适合需要统一接入多个 MCP 服务的场景。它基于可流式传输的 HTTP 连接（`StreamableHTTPConnectionParams`）工作。
+
+```python
+from veadk import Agent
+from veadk.tools.builtin_tools.mcp_router import mcp_router
+
+agent = Agent(tools=[mcp_router])
+```
+
+环境变量：
+
+- `TOOL_MCP_ROUTER_URL`：MCP Router 的服务地址
+- `TOOL_MCP_ROUTER_API_KEY`：鉴权 API Key，将作为 `Authorization: Bearer <key>` 请求头发送
+
+或在 `config.yaml` 中配置：
+
+```yaml title="config.yaml"
+tool:
+  mcp_router:
+    url: https://your-mcp-router-endpoint
+    api_key: your-api-key-here
+```
+
+## 飞书 / Lark MCP 工具（lark_tools）
+
+`lark_tools` 帮助你快速集成 AI Agent 与飞书 / Lark 开放能力，实现云文档处理、会话管理、日历安排等自动化场景。它通过 `npx @larksuiteoapi/lark-mcp` 启动本地 MCP Server，因此需要预装 `npx` 与 `lark-mcp`。
+
+<Callout type="info">
+本工具是把飞书能力**作为工具提供给 Agent**。如果你想把飞书机器人的入站消息接入 VeADK `Runner`，请看[飞书 Channel 扩展](/cn/docs/framework/tools/feishu-channel)。
+</Callout>
+
+<Callout type="warn" title="附加要求">
+应用获取方式见 [Lark 创建应用](https://open.larkoffice.com/document/develop-an-echo-bot/introduction)。
+
+1. 配置用于 Agent 推理模型的 API Key；
+2. 配置 Lark 服务的 Application ID、API Key 与 OAuthToken。
+</Callout>
+
+```python title="examples/tools/lark/agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.tools.builtin_tools.lark import lark_tools
+
+agent = Agent(
+    name="lark_agent",
+    model_name="doubao-seed-1-8-251228",
+    description="一个飞书机器人。",
+    instruction="你是一个飞书机器人，通过 lark_tools 给用户发消息。",
+    tools=[lark_tools],
+)
+
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory())
+
+
+async def main():
+    response = await runner.run("给 xiangya@bytedance.com 发送“你好，我是 lark agent”")
+    print(response)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+环境变量（**必须配置在环境变量中**）：
+
+- `MODEL_AGENT_API_KEY`：Agent 推理模型的 API Key
+- `TOOL_LARK_ENDPOINT`：Lark 服务的 Application ID
+- `TOOL_LARK_API_KEY`：Lark 服务的 API Key
+- `TOOL_LARK_TOKEN`：Lark 服务的 OAuthToken
+
+![运行结果](/assets/images/tools/lark1.png)
+![运行结果](/assets/images/tools/lark2.png)
+
+## LAS 数据湖工具（las）
+
+`las` 基于 AI 多模态数据湖服务 LAS，提供多模态数据集的创建、预览、查询分析、编辑与清洗加工能力。
+
+<Callout type="warn" title="附加要求">
+1. 配置用于 Agent 推理模型的 API Key；
+2. 预先[创建 LAS 通用数据集](https://console.volcengine.com/las/region:las+cn-beijing/next/dataset/common/create)并获取 DatasetId；
+3. 配置 LAS 服务的 DatasetId 与 URL（[URL 获取方式](https://www.volcengine.com/mcp-marketplace/detail?name=LAS%20MCP)）。
+</Callout>
+
+```python title="examples/tools/las/agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.tools.builtin_tools.las import las
+
+agent = Agent(
+    name="las_agent",
+    model_name="doubao-seed-1-8-251228",
+    description="使用 LAS 中的数据作答。",
+    instruction=(
+        "你是一个诗人。先用 las 工具在 ds_public 数据集中检索相关内容，"
+        "再基于检索结果写一首诗词。"
+    ),
+    tools=[las],
+)
+
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory())
+
+
+async def main():
+    response = await runner.run("写一首国风、与木头和爱情相关的诗词")
+    print(response)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+环境变量（**必须配置在环境变量中**）：
+
+- `MODEL_AGENT_API_KEY`：Agent 推理模型的 API Key
+- `TOOL_LAS_URL`：LAS MCP Server 服务地址
+- `TOOL_LAS_DATASET_ID`：LAS 服务使用的数据集 ID
+
+![运行结果](/assets/images/tools/las1.png)
+![运行结果](/assets/images/tools/las2.png)
+
+## 视频云 MCP 工具（vod_tools）
+
+`vod_tools` 通过火山引擎视频云 MCP 进行视频剪辑处理，详见 [VOD MCP Server](https://github.com/volcengine/mcp-server/blob/main/server/mcp_server_vod/README_zh.md)。
+
+<Callout type="warn" title="附加要求">
+1. 配置火山引擎 AK / SK；
+2. （可选）通过 `TOOL_VOD_GROUPS` 选择能力组：`edit`、`intelligent_slicing`、`intelligent_matting`、`subtitle_processing`、`audio_processing`、`video_enhancement`、`upload`、`video_play`；多个用逗号连接，未配置时默认 `edit,video_play`；
+3. （可选）`TOOL_VOD_TIMEOUT` 工具连接超时时长，默认 10 秒；
+4. 视频云工具不支持创建 Space，请先在控制台创建[视频云空间](https://console.volcengine.com/vod/region:vod+cn-north-1/overview/)。
+</Callout>
+
+```python title="examples/tools/vod/agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.tools.builtin_tools.vod import vod_tools
+
+agent = Agent(
+    name="vod_agent",
+    model_name="doubao-seed-1-8-251228",
+    description="A video editing assistant.",
+    instruction="Use vod_tools to edit and process videos.",
+    tools=[vod_tools],
+)
+
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory())
+
+
+async def main():
+    response = await runner.run(
+        "将这两个视频合并：<your-url1>, <your-url2>，space_name 为 <your-space-name>"
+    )
+    print(response)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+环境变量：
+
+- `VOLCENGINE_ACCESS_KEY`：火山引擎 AccessKey
+- `VOLCENGINE_SECRET_KEY`：火山引擎 SecretKey
+- `TOOL_VOD_GROUPS`（可选）：能力组
+- `TOOL_VOD_TIMEOUT`（可选）：连接超时时长，默认 10.0 秒
+
+或在 `config.yaml` 中配置：
+
+```yaml title="config.yaml"
+volcengine:
+  access_key: your-access-key-here
+  secret_key: your-secret-key-here
+tool:
+  vod:
+    groups: edit,video_play
+    timeout: 10.0
+```
+
+<Callout type="info">
+有些视频编辑任务耗时较长，会直接返回一个 `task_id`。你可以继续向 Agent 询问任务是否完成，从而获取后续结果。
+</Callout>
+
+## Supabase 工具集
+
+`build_supabase_mcptoolset` 用于快速构建访问 [Supabase](https://supabase.com/) MCP Server 的工具集，接受 `url` 与 `api_key` 两个参数，返回一个可直接注册到 Agent 的 `MCPToolset` 实例。
+
+```python
+from veadk import Agent
+from veadk.tools.builtin_tools.supabase_toolset import build_supabase_mcptoolset
+
+supabase_toolset = build_supabase_mcptoolset(
+    url="https://your-supabase-mcp-endpoint",
+    api_key="your-api-key-here",
+)
+
+agent = Agent(tools=[supabase_toolset])
+```
+
+## 可信 MCP 工具集（TrustedMcpToolset）
+
+连接受访问控制保护的 MCP Server 时，使用 `TrustedMcpToolset`。它在标准 `McpToolset` 的基础上为出站请求注入鉴权信息，从而安全地访问受信任的 MCP 服务。它复用 Google ADK 的连接参数，下面用 `StreamableHTTPConnectionParams` 演示：
+
+```python
+from veadk import Agent
+from veadk.tools.mcp_tool.trusted_mcp_toolset import TrustedMcpToolset
+from google.adk.tools.mcp_tool.mcp_session_manager import (
+    StreamableHTTPConnectionParams,
+)
+
+toolset = TrustedMcpToolset(
+    connection_params=StreamableHTTPConnectionParams(
+        url="https://your-trusted-mcp-endpoint",
+        headers={"Authorization": "Bearer your-api-key-here"},
+    ),
+)
+
+agent = Agent(tools=[toolset])
+```
+
+## 自定义 MCP Server
+
+如果上述内置接入方式都无法满足需求，可直接使用 Google ADK 的 `MCPToolset` 连接任意 MCP Server：
+
+```python
+from veadk import Agent
+from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
+from google.adk.tools.mcp_tool.mcp_session_manager import (
+    StreamableHTTPConnectionParams,
+)
+
+toolset = MCPToolset(
+    connection_params=StreamableHTTPConnectionParams(
+        url="https://your-mcp-endpoint",
+        headers={"Authorization": "Bearer your-api-key-here"},
+    ),
+)
+
+agent = Agent(tools=[toolset])
+```
+
+注册后，Agent 会自动加载 MCP Server 暴露的工具，并在推理过程中按需调用。
+
+## 下一步
+
+<Cards>
+  <Card title="内置工具" href="/cn/docs/framework/tools/builtin" description="网页搜索、图像 / 视频生成、代码沙箱等原生函数工具。" />
+  <Card title="飞书 Channel 扩展" href="/cn/docs/framework/tools/feishu-channel" description="把飞书机器人的入站消息接入 Runner。" />
+  <Card title="自定义工具" href="/cn/docs/framework/tools/custom-function" description="把你自己的函数封装成工具。" />
+</Cards>
