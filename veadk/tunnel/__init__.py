@@ -30,7 +30,7 @@ Enterprise side (run inside your network):
         cloud_url="https://<agent-endpoint>",
         agent="ops",
         token="my-token",
-        servers=[LocalServer(name="db", address="http://mcp.internal:9000/mcp")],
+        servers=[LocalServer(name="db", address="http://your-mcp-host:9000/mcp")],
     ).start()
 """
 

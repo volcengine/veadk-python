@@ -71,7 +71,7 @@ async def main():
         servers=[
             LocalServer(
                 name="ops",
-                address="http://mcp.internal:9000/mcp",  # internal MCP server URL
+                address="http://your-mcp-host:9000/mcp",  # internal MCP server URL
                 # Auth to reach YOUR MCP server (stays on-prem, never leaves):
                 # headers={"Authorization": "Bearer <your-mcp-token>"},
                 # query={"api_key": "<your-key>"},

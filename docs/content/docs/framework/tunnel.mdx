@@ -60,7 +60,7 @@ async def main():
         servers=[
             LocalServer(
                 name="ops",
-                address="http://mcp.internal:9000/mcp",  # 内网 MCP Server 地址
+                address="http://your-mcp-host:9000/mcp",  # 内网 MCP Server 地址
                 # 访问你自己 MCP Server 的鉴权（留在企业侧，不出内网）：
                 # headers={"Authorization": "Bearer <your-mcp-token>"},
                 # query={"api_key": "<your-key>"},
