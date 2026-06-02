@@ -4,12 +4,11 @@
   "root": true,
   "pages": [
     "index",
-    "---[Rocket]Get Started---",
+    "---[Rocket]Get started---",
     "getting-started",
     "introduction",
-    "enterprise-design",
     "configuration",
-    "---[Boxes]Core Capabilities---",
+    "---[Boxes]Core capabilities---",
     "agent",
     "runner",
     "tools",
@@ -18,14 +17,17 @@
     "---[Puzzle]Extend & UI---",
     "plugin",
     "frontend",
-    "---[ShieldCheck]Security & Ops---",
+    "---[ShieldCheck]Security---",
     "security",
+    "---[Activity]Observability---",
     "observability",
+    "---[CloudUpload]Deploy---",
     "deploy",
+    "---[LineChart]Evaluate & optimize---",
     "eval-optimization",
     "---[Compass]More---",
+    "enterprise-design",
     "community",
-    "troubleshooting",
-    "gallery"
+    "troubleshooting"
   ]
 }

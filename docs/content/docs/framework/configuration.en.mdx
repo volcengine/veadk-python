@@ -1,9 +1,9 @@
 ---
-title: "Configuration System"
+title: "Configuration"
 description: "VeADK's configuration priority, environment variable reference, built-in constants, and runtime dynamic configuration."
 ---
 
-To support secure configuration management for enterprise applications, VeADK can read predefined configuration items directly from environment variables, enabling code desensitization.
+VeADK reads configuration from environment variables, `.env`, and `config.yaml`, so you keep secrets and connection details out of your code. This page is the complete reference of configuration items.
 
 ## Priority
 
@@ -13,9 +13,9 @@ VeADK reads environment variables in the following priority order (decreasing):
 2. `.env` file environment variables
 3. Configuration values in the `config.yaml` file
 
-## Environment Variable Reference
+## Environment variable reference
 
-### Volcengine Ecosystem
+### Volcengine ecosystem
 
 Unified prefix: `VOLCENGINE_`
 
@@ -50,7 +50,7 @@ Unified prefix: `MODEL_`
 | | `MODEL_JUDGE_API_BASE` | Access URL |
 | | `MODEL_JUDGE_API_KEY` | Access key |
 
-### Built-in Tools
+### Built-in tools
 
 Unified prefix: `TOOL_`
 
@@ -140,19 +140,19 @@ veidentity:
   endpoint:  # optional; generated automatically if not provided
 ```
 
-## Built-in Constants
+## Built-in constants
 
 In VeADK, if certain values are not explicitly specified and are also absent from the environment variables, the following default values are used:
 
 | Name | Value | Description |
 | :- | :- | :- |
 | DEFAULT_AGENT_NAME | `veAgent` | Default agent name |
-| DEFAULT_MODEL_AGENT_NAME | `doubao-seed-1-6-251015` | Default agent inference model name |
+| DEFAULT_MODEL_AGENT_NAME | `doubao-seed-1-8-251228` | Default agent inference model name |
 | DEFAULT_MODEL_AGENT_PROVIDER | `openai` | Default agent inference model provider. The Ark platform is OpenAI-compatible, so `openai` is the default for Ark. |
-| DEFAULT_MODEL_AGENT_API_BASE | `https://ark.cn-beijing.volces.com/api/v1/` | Model API base URL |
-| DEFAULT_IMAGE_GENERATE_MODEL_NAME | `doubao-seedream-4-5-251128` | Default Ark image model used by the image_generate tool |
+| DEFAULT_MODEL_AGENT_API_BASE | `https://ark.cn-beijing.volces.com/api/v3/` | Model API base URL |
+| DEFAULT_IMAGE_GENERATE_MODEL_NAME | `doubao-seedream-5-0-260128` | Default Ark image model used by the image_generate tool |
 | DEFAULT_IMAGE_GENERATE_MODEL_API_BASE | `https://ark.cn-beijing.volces.com/api/v3/` | Default API base for the Ark image model used by image_generate |
-| DEFAULT_VIDEO_MODEL_NAME | `doubao-seedance-1-5-pro-251215` | Default Ark video model used by the video_generate tool |
+| DEFAULT_VIDEO_MODEL_NAME | `doubao-seedance-2-0-260128` | Default Ark video model used by the video_generate tool |
 | DEFAULT_VIDEO_MODEL_API_BASE | `https://ark.cn-beijing.volces.com/api/v3/` | Default API base for the Ark video model used by video_generate |
 | DEFAULT_APMPLUS_OTEL_EXPORTER_ENDPOINT | `http://apmplus-cn-beijing.volces.com:4317` | APMPlus OpenTelemetry trace export URL |
 | DEFAULT_APMPLUS_OTEL_EXPORTER_SERVICE_NAME | `veadk_tracing` | APMPlus service name |
@@ -167,7 +167,7 @@ In VeADK, if certain values are not explicitly specified and are also absent fro
 | DEFAULT_TOS_BUCKET_NAME | `veadk-default-bucket` | Default TOS bucket name. Since TOS bucket names are globally unique, it is strongly recommended that you customize the bucket name to avoid conflicts with other users that would cause failures. |
 | DEFAULT_COZELOOP_SPACE_NAME | `VeADK Space` | CozeLoop space name |
 
-## Runtime Dynamic Configuration
+## Runtime dynamic configuration
 
 Beyond environment variables and constants, VeADK also supports dynamically updating agent configuration at runtime (hot updates), managed uniformly by the `DynamicConfigManager`. The dynamic configuration uses a JSON structure containing an `agent` array, which can override fields for one or more agents.
 
@@ -196,3 +196,10 @@ Example structure:
   ]
 }
 ```
+
+## Next steps
+
+<Cards>
+  <Card title="Installation" href="/en/docs/framework/getting-started/installation" description="Configure your API key and set up the environment." />
+  <Card title="Create an agent" href="/en/docs/framework/agent/create" description="Configure the model, tools, memory, and knowledge base." />
+</Cards>

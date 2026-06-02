@@ -3,63 +3,109 @@ title: "Prompt 管理"
 description: "通过 CozeLoop 或自定义 Prompt Manager 对 Agent 系统提示词进行版本管理与热更新。"
 ---
 
-在实际生产过程中，Prompt 需要进行版本管理与动态下发，VeADK 提供了 Prompt 管理模块，用户可以通过 Prompt 管理功能来进行 Prompt 的模板化与热更新，在运行时动态切换 Prompt 版本。
+在生产环境中，系统提示词往往需要版本管理与动态下发。VeADK 的 Prompt 管理模块让你在运行时模板化并热更新提示词，而无需修改代码或重启服务。
+
+每次处理用户请求前，VeADK 都会调用 Prompt Manager 的 `get_prompt` 方法获取最新的提示词内容，并将其作为该 Agent 的系统提示词。
 
 ## CozeLoop 提示词管理
 
-您可以通过 CozeLoop 云端提示词管理功能来对接您的 Agent 系统提示词。
+VeADK 内置 `CozeloopPromptManager`，可将 Agent 的系统提示词对接到 [CozeLoop](https://loop.coze.cn/open/docs/cozeloop/what-is-prompt) 云端提示词管理。
 
 ### 准备
 
-在使用 CozeLoop 进行提示词管理前，您需要安装 Python 版本的 `cozeloop` SDK：
+安装 Python 版本的 `cozeloop` SDK：
 
 ```bash
 pip install cozeloop
 ```
 
-### 属性获取
+获取所需属性：
 
-- [了解如何获取 CozeLoop Workspace ID](https://loop.coze.cn/open/docs/cozeloop/authentication-for-sdk#05d27a86)
-- [了解如何获取 CozeLoop Token / API Key](https://loop.coze.cn/open/docs/cozeloop/authentication-for-sdk)
-- 您可以在 CozeLoop 中的 “Prompt 开发” 板块获取 Prompt Key，如下图所示：
+- [获取 CozeLoop Workspace ID](https://loop.coze.cn/open/docs/cozeloop/authentication-for-sdk#05d27a86)
+- [获取 CozeLoop Token / API Key](https://loop.coze.cn/open/docs/cozeloop/authentication-for-sdk)
+- 在 CozeLoop 的「Prompt 开发」板块获取 Prompt Key，如下图所示：
 
 ![CozeLoop Prompt Key](/assets/images/cozeloop_prompt_key.png)
 
 ### 使用方法
 
+将凭证通过环境变量提供，避免在代码中硬编码：
+
+```bash
+export COZELOOP_WORKSPACE_ID="<你的 Workspace ID>"
+export COZELOOP_TOKEN="<你的 CozeLoop Token>"
+```
+
 ```python title="agent.py"
 import asyncio
+import os
 
 from veadk import Agent, Runner
 from veadk.prompts.prompt_manager import CozeloopPromptManager
 
 prompt_manager = CozeloopPromptManager(
-    cozeloop_workspace_id="",   # CozeLoop workspace ID
-    cozeloop_token="",          # CozeLoop token / api key
-    prompt_key="",    # CozeLoop 中创建的 Prompt Key
-    label="production",         # CozeLoop 中创建的 Prompt 标签
+    cozeloop_workspace_id=os.environ["COZELOOP_WORKSPACE_ID"],
+    cozeloop_token=os.environ["COZELOOP_TOKEN"],
+    prompt_key="your_prompt_key",  # CozeLoop 中创建的 Prompt Key
+    label="production",            # CozeLoop 中创建的 Prompt 标签
 )
 
 agent = Agent(name="test_prompt_mgr", prompt_manager=prompt_manager)
 
 runner = Runner(agent=agent)
-
 response = asyncio.run(runner.run(messages="你的任务是什么？"))
 print(response)
 ```
 
 <Callout type="info" title="提示">
-CozeLoop 会在本地进行 Prompt 缓存，**更新时间为 1 分钟**。当获取 Prompt 失败时，会返回 VeADK 默认的 Agent 系统提示词。
+CozeLoop 会在本地缓存 Prompt，**更新间隔为 1 分钟**。当获取 Prompt 失败时，会回退到 VeADK 默认的系统提示词。
 </Callout>
 
-您可以在日志中看到，每次处理用户请求之前，都会执行 `CozeloopPromptManager` 中的 `get_prompt` 方法，来获取最新的 Prompt 模板内容。效果如下：
+每次处理用户请求前，`CozeloopPromptManager.get_prompt` 都会执行，从而拉取最新的 Prompt 模板内容：
 
 ![CozeLoop Prompt Manager](/assets/images/agents/cozeloop_prompt_mgr.png)
 
-更加详细的说明，请参考 [CozeLoop 提示词管理](https://loop.coze.cn/open/docs/cozeloop/what-is-prompt)。
+## 实现自定义 Prompt Manager
 
-## 实现您自己的 Prompt Manager
+若你想从自有的配置中心、数据库或文件加载提示词，可以继承 `BasePromptManager` 并实现 `get_prompt` 方法。该方法在每次处理用户请求前被调用，返回的字符串将作为该 Agent 的系统提示词。
 
-若您想实现更高阶的 Prompt 模板或变量组合，您可以继承 `PromptManager` 类，实现自定义的 Prompt 管理逻辑。
+```python title="custom_prompt_manager.py"
+import asyncio
 
-在实现自定义 Prompt Manager 时，您需要实现 `get_prompt` 方法，该方法会在每次处理用户请求之前被调用，用于获取最新的 Prompt 模板内容。
+from google.adk.agents.readonly_context import ReadonlyContext
+from veadk import Agent, Runner
+from veadk.prompts.prompt_manager import BasePromptManager
+
+
+class FilePromptManager(BasePromptManager):
+    """从本地文件读取系统提示词的 Prompt Manager。"""
+
+    def __init__(self, prompt_path: str) -> None:
+        super().__init__()
+        self.prompt_path = prompt_path
+
+    def get_prompt(self, context: ReadonlyContext, **kwargs) -> str:
+        # 每次请求前重新读取文件，实现热更新。
+        # context.agent_name 可用于按 Agent 区分提示词。
+        with open(self.prompt_path, encoding="utf-8") as f:
+            return f.read()
+
+
+agent = Agent(
+    name="custom_prompt_agent",
+    prompt_manager=FilePromptManager(prompt_path="instruction.txt"),
+)
+
+runner = Runner(agent=agent)
+response = asyncio.run(runner.run(messages="你的任务是什么？"))
+print(response)
+```
+
+`get_prompt` 通过 `context`（`ReadonlyContext`）获取运行时信息，例如用 `context.agent_name` 为不同 Agent 返回不同提示词。建议在加载失败时返回一个安全的默认提示词，避免请求中断。
+
+## 下一步
+
+<Cards>
+  <Card title="构建智能体" href="/cn/docs/framework/agent/create" description="配置模型、工具与元信息。" />
+  <Card title="链路追踪" href="/cn/docs/framework/observability/overview" description="观测每一次提示词加载与模型调用。" />
+</Cards>

@@ -1,60 +1,67 @@
 ---
 title: "系统工具"
-description: "VeADK 在为 Agent 配置知识库或长期记忆时自动挂载的系统工具 load_knowledgebase 与 load_memory。"
+description: "VeADK 在为 Agent 配置知识库或长期记忆时自动挂载的系统工具：load_knowledgebase 与 load_memory。"
 ---
 
-系统工具是 VeADK 根据 Agent 的配置**自动挂载**的内置工具。你无需手动将它们加入 `tools` 列表，只要为 Agent 传入相应的能力（知识库或长期记忆），框架就会自动注册对应的检索工具，Agent 会在运行时自主决定何时调用。
+系统工具是 VeADK 根据 Agent 配置**自动挂载**的内置工具。你无需手动加入 `tools` 列表——只要为 Agent 传入相应能力（知识库或长期记忆），框架就会注册对应的检索工具，Agent 在运行时自主决定何时调用。
 
-| 工具名称 | 触发条件 | 作用 |
+| 工具 | 触发条件 | 作用 |
 | :--- | :--- | :--- |
 | `load_knowledgebase` | 为 Agent 传入 `knowledgebase` 参数 | 在运行时检索知识库内容 |
 | `load_memory` | 为 Agent 传入 `long_term_memory` 参数 | 在运行时检索长期记忆 |
 
 ## load_knowledgebase
 
-当你为 Agent 传入 `knowledgebase` 参数后，VeADK 会自动挂载 `load_knowledgebase` 工具。Agent 会根据用户问题自主决定何时查询知识库、使用哪些关键词进行检索，并将命中的知识作为上下文用于回答。
+为 Agent 传入 `knowledgebase` 后，VeADK 自动挂载 `load_knowledgebase` 工具。Agent 会根据用户问题自主决定何时查询知识库、用什么关键词检索，并把命中的知识作为上下文用于回答。
 
 ```python
 from veadk import Agent, Runner
 from veadk.knowledgebase import KnowledgeBase
 
-# 构建知识库（具体后端与配置见知识库文档）
-knowledgebase = KnowledgeBase(...)
+# 构建知识库（后端类型与数据写入见知识库文档）
+knowledgebase = KnowledgeBase(backend="local", index="company_faq")
 
 agent = Agent(
     name="kb_agent",
-    instruction="回答用户问题时，请在需要时检索知识库。",
-    knowledgebase=knowledgebase,  # 传入后自动挂载 load_knowledgebase 工具
+    model_name="doubao-seed-1-8-251228",
+    instruction="回答用户问题时，在需要的地方检索知识库。",
+    knowledgebase=knowledgebase,  # 传入后自动挂载 load_knowledgebase
 )
 
 runner = Runner(agent=agent)
 ```
 
-关于知识库的后端类型、初始化与数据写入方式，请参阅[知识库文档](/cn/docs/framework/knowledgebase)。
+知识库的后端类型、初始化与数据写入，详见[知识库文档](/cn/docs/framework/knowledgebase/overview)。
 
 ## load_memory
 
-当你为 Agent 传入 `long_term_memory` 参数后，VeADK 会自动挂载 `load_memory` 工具。Agent 会在跨会话场景中自主决定何时查询长期记忆，从而保留用户偏好、历史信息等长期状态。
+为 Agent 传入 `long_term_memory` 后，VeADK 自动挂载 `load_memory` 工具。Agent 会在跨会话场景中自主决定何时查询长期记忆，从而保留用户偏好、历史信息等长期状态。
 
 ```python
 from veadk import Agent, Runner
-from veadk.memory import LongTermMemory
+from veadk.memory.long_term_memory import LongTermMemory
 
-long_term_memory = LongTermMemory(
-    backend="viking", app_name="demo_app", user_id="demo_user"
-)
+long_term_memory = LongTermMemory(backend="local", app_name="ltm_demo")
 
 agent = Agent(
     name="memory_agent",
-    instruction="在需要时检索长期记忆，以提供个性化、连续的回答。",
-    long_term_memory=long_term_memory,  # 传入后自动挂载 load_memory 工具
+    model_name="doubao-seed-1-8-251228",
+    instruction="在需要时检索长期记忆，提供个性化、连续的回答。",
+    long_term_memory=long_term_memory,  # 传入后自动挂载 load_memory
 )
 
 runner = Runner(agent=agent)
 ```
 
-关于长期记忆的后端类型与配置，请参阅[长期记忆文档](/cn/docs/framework/memory/long-term)。
+长期记忆的后端类型与配置，详见[长期记忆文档](/cn/docs/framework/memory/long-term)。
 
 <Callout type="info">
-系统工具由框架自动管理：你只需提供 `knowledgebase` 或 `long_term_memory`，无需显式将 `load_knowledgebase` / `load_memory` 加入 `tools` 列表。Agent 将根据指令与用户输入自主决定何时调用它们。
+系统工具由框架自动管理：你只需提供 `knowledgebase` 或 `long_term_memory`，无需把 `load_knowledgebase` / `load_memory` 显式加入 `tools` 列表。Agent 会根据指令与用户输入自主决定何时调用它们。
 </Callout>
+
+## 下一步
+
+<Cards>
+  <Card title="知识库" href="/cn/docs/framework/knowledgebase/overview" description="为 Agent 接入私有知识，配合 load_knowledgebase 使用。" />
+  <Card title="长期记忆" href="/cn/docs/framework/memory/long-term" description="跨会话保留偏好与历史，配合 load_memory 使用。" />
+</Cards>

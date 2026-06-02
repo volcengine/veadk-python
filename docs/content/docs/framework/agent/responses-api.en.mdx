@@ -206,7 +206,7 @@ You can use the `fps` field to control how often frames are extracted from the v
 
 ```python
 from veadk.utils.misc import upload_to_files_api
-local_path = os.path.abspath("example-data.png")
+local_path = os.path.abspath("example-video.mp4")
 file_id = asyncio.run(upload_to_files_api(local_path, fps=0.3)) # optional `fps`
 message = types.UserContent(
     parts=[
@@ -361,3 +361,10 @@ Note: The `cached_content_token_count` of turn N is not necessarily equal to the
 2. [Volcengine Ark: Context Caching](https://www.volcengine.com/docs/82379/1602228?lang=zh#3e69e743)
 3. [Volcengine Ark: Cached Token Billing](https://www.volcengine.com/docs/82379/1544106?lang=zh)
 4. [Volcengine Ark: Multimodal Understanding](https://www.volcengine.com/docs/82379/1958521?lang=zh)
+
+## Next steps
+
+<Cards>
+  <Card title="Create an agent" href="/en/docs/framework/agent/create" description="Configure the model, tools, and extra parameters." />
+  <Card title="Short-term memory" href="/en/docs/framework/memory/short-term" description="Manage session context across multi-turn conversations." />
+</Cards>

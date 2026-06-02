@@ -138,29 +138,29 @@ The diagram below shows the interaction flow corresponding to the example:
 
 ```mermaid
 sequenceDiagram
-    participant User as 用户
-    participant Client as 客户端应用
+    participant User as User
+    participant Client as Client app
     participant RootAgent as root_agent
     participant RemoteAgent as RemoteVeAgent
-    participant Server as A2A服务端
+    participant Server as A2A server
     participant WeatherAgent as weather_agent
-    participant WeatherTool as get_city_weather工具
+    participant WeatherTool as get_city_weather tool
 
-    User->>Client: 执行查询("What is the weather like of Beijing?")
-    Client->>RootAgent: 创建并配置Agent
-    Client->>RemoteAgent: 创建远程Agent连接(http://localhost:8000/)
-    RootAgent->>RemoteAgent: 添加为子Agent(sub_agents)
-    Client->>RootAgent: 通过Runner执行查询
-    RootAgent->>RemoteAgent: 调用获取天气信息
-    RemoteAgent->>Server: HTTP请求(A2A协议)
-    Server->>WeatherAgent: 转发请求
-    WeatherAgent->>WeatherTool: 调用get_city_weather工具
-    WeatherTool-->>WeatherAgent: 返回天气数据
-    WeatherAgent-->>Server: 处理结果
-    Server-->>RemoteAgent: HTTP响应
-    RemoteAgent-->>RootAgent: 返回处理结果
-    RootAgent-->>Client: 返回最终响应
-    Client-->>User: 显示天气信息
+    User->>Client: Run query ("What is the weather like of Beijing?")
+    Client->>RootAgent: Create and configure the Agent
+    Client->>RemoteAgent: Create remote Agent connection (http://localhost:8000/)
+    RootAgent->>RemoteAgent: Add as sub-agent (sub_agents)
+    Client->>RootAgent: Run the query via Runner
+    RootAgent->>RemoteAgent: Call to fetch weather
+    RemoteAgent->>Server: HTTP request (A2A protocol)
+    Server->>WeatherAgent: Forward the request
+    WeatherAgent->>WeatherTool: Call the get_city_weather tool
+    WeatherTool-->>WeatherAgent: Return weather data
+    WeatherAgent-->>Server: Processed result
+    Server-->>RemoteAgent: HTTP response
+    RemoteAgent-->>RootAgent: Return result
+    RootAgent-->>Client: Return final response
+    Client-->>User: Show weather info
 ```
 
 ## Authentication and Authorization
@@ -221,40 +221,35 @@ You can refer to the example code below to create a custom HTTP client and confi
 - SSL verification options
 
 ```python title="client.py"
-# <...code truncated...>
+import httpx
+
+from veadk.a2a.remote_ve_agent import RemoteVeAgent
 
 # Create a custom httpx.AsyncClient instance
 custom_client = httpx.AsyncClient(
     # Base URL setting
     base_url="https://vefaas.example.com/agents/",
-    
     # Timeout setting (seconds)
     timeout=30.0,
-    
     # Connection-pool settings
     limits=httpx.Limits(
-        max_connections=100,        # Max concurrent connections
-        max_keepalive_connections=20,  # Max keep-alive connections
-        keepalive_expiry=60.0,      # Keep-alive connection expiry
+        max_connections=100,            # Max concurrent connections
+        max_keepalive_connections=20,   # Max keep-alive connections
+        keepalive_expiry=60.0,          # Keep-alive connection expiry
     ),
-    
-    # Retry config (requires httpx >= 0.24.0)
-    follow_redirects=True,        # Follow redirects
-    
+    # Follow redirects
+    follow_redirects=True,
     # Custom default request headers
     headers={
         "User-Agent": "Custom-VeADK-Client/1.0",
-        "X-Custom-Header": "custom-value"
+        "X-Custom-Header": "custom-value",
     },
-    
     # SSL verification option (keep the default True in production)
     verify=True,
-    
-    # Proxy configuration (if a proxy is needed)
-    proxies="http://proxy.example.com:8080",
-    
-    # Concurrency settings
-    http2=True,  # Enable HTTP/2 support
+    # Proxy configuration (if a proxy is needed; httpx >= 0.28 uses the `proxy` parameter)
+    proxy="http://proxy.example.com:8080",
+    # Enable HTTP/2 support
+    http2=True,
 )
 
 # When creating the RemoteVeAgent instance, pass the custom client to httpx_client
@@ -265,6 +260,11 @@ remote_agent = RemoteVeAgent(
     auth_method="header",
     httpx_client=custom_client,
 )
-
-# <...code truncated...>
 ```
+
+## Next steps
+
+<Cards>
+  <Card title="A2A Hub" href="/en/docs/framework/agent/multi-agent/a2a-hub" description="Centrally register and discover agents within a group." />
+  <Card title="Middleware & events" href="/en/docs/framework/agent/multi-agent/middleware-events" description="Auth middleware and message-driven agent collaboration." />
+</Cards>

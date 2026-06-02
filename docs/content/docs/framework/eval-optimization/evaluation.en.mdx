@@ -180,25 +180,13 @@ Although you can generate and manage evalsets locally, uploading them to the [Co
 - **In-depth insights**: By analyzing evaluation data, gain a deep understanding of the agent's tool-call trajectories, response quality, and potential issues, thereby obtaining optimization directions.
 - **Continuous monitoring**: Combine evaluation with the continuous integration (CI) process to achieve automated monitoring and regression testing of agent performance.
 
-With the `veadk uploadevalset` command, you can easily upload a local evalset file to the CozeLoop platform.
-
-**Usage**
+With the `veadk uploadevalset` command, you can upload a local evalset file to the CozeLoop platform:
 
 ```bash
-veadk uploadevalset [OPTIONS]
+veadk uploadevalset --file tests/simple.evalset.json
 ```
 
-**Description**
-
-This command uploads an evaluation dataset in Google ADK format from a JSON file to the CozeLoop platform for agent evaluation and testing.
-
-**Parameters**
-
-- `--file TEXT`: The path to the JSON file containing the dataset [required]
-- `--cozeloop-workspace-id TEXT`: The CozeLoop workspace ID used to organize the evalset. If not provided, the `OBSERVABILITY_OPENTELEMETRY_COZELOOP_SERVICE_NAME` environment variable is used.
-- `--cozeloop-evalset-id TEXT`: The specific evalset ID to upload to. If not provided, the `OBSERVABILITY_OPENTELEMETRY_COZELOOP_EVALSET_ID` environment variable is used.
-- `--cozeloop-api-key TEXT`: The API key used to authenticate with the CozeLoop service. If not provided, the `OBSERVABILITY_OPENTELEMETRY_COZELOOP_API_KEY` environment variable is used.
-- `--help`: Show the help message and exit.
+This command uploads an evalset JSON file in Google ADK format to CozeLoop. For the full parameter reference, see the [VeADK CLI](/en/docs/cli/veadk-cli).
 
 ## Evaluators
 
@@ -229,7 +217,7 @@ class TestAgentEvaluation:
         """Agent evaluation tests using ADKEvaluator"""
         evaluator = ADKEvaluator(agent=root_agent)
         await evaluator.evaluate(
-            eval_set_file_path="tests/simple.test.json",
+            eval_set_file_path="tests/simple.evalset.json",
             response_match_score_threshold=1,
             tool_score_threshold=0.5,
             num_runs=1,
@@ -278,7 +266,7 @@ class TestAgentEvaluation:
             ToolCorrectnessMetric(threshold=0.5, model=evaluator.judge_model),
         ]
         await evaluator.evaluate(
-            eval_set_file_path="tests/simple.test.json",
+            eval_set_file_path="tests/simple.evalset.json",
             metrics=metrics)
 ```
 

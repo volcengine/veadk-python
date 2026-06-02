@@ -1,73 +1,72 @@
 ---
 title: "快速开始"
-description: "安装 VeADK，创建并运行你的第一个智能体。"
+description: "几分钟内创建并运行你的第一个 VeADK 智能体。"
 ---
+
+本指南带你创建并运行第一个智能体。
 
 ## 前置条件
 
-在开始之前，你需要安装 VeADK，并设置 `MODEL_AGENT_API_KEY` 环境变量（火山方舟平台的 API Key）。
+<Steps>
 
-<Tabs items={['pip', '源码预览版']}>
-  <Tab value="pip">
-    ```bash
-    # 稳定版
-    pip install veadk-python
-    ```
-  </Tab>
-  <Tab value="源码预览版">
-    ```bash
-    # 主分支预览版
-    pip install git+https://github.com/volcengine/veadk-python.git@main
-    ```
-  </Tab>
-</Tabs>
+<Step>
+### 安装 VeADK
 
-## 创建一个智能体
-
-通过定义 `Agent` 类即可创建一个简单的对话智能体：
-
-```python
-from veadk import Agent
-
-agent = Agent(
-    name="root_agent",
-    description="A helpful assistant for user questions.",
-    instruction="Answer user questions to the best of your knowledge",
-    model_name="doubao-seed-1-6-250615",
-    model_api_key="...",
-)
+```bash
+pip install veadk-python
 ```
 
-参数说明：
+更多安装方式（源码、镜像）见[安装](/cn/docs/framework/getting-started/installation)。
+</Step>
 
-- `name`：智能体名称，在被调用时用于标识；
-- `description`：智能体描述，在 A2A 场景下用于表明其基本功能；
-- `instruction`：系统提示词，定义智能体的行为与响应方式；
-- `model_name`：智能体使用的模型名称；
-- `model_api_key`：调用模型所使用的 API Key。
+<Step>
+### 配置模型 API Key
 
-## 运行一个智能体
+VeADK 默认从环境变量读取火山方舟（Ark）的 API Key：
 
-VeADK 使用 `Runner` 来执行智能体，并提供了高度封装的 `run` 方法用于本地测试：
+```bash
+export MODEL_AGENT_API_KEY="<你的方舟 API Key>"
+```
+</Step>
+
+</Steps>
+
+## 创建并运行智能体
+
+用 `Agent` 定义智能体，用 `Runner` 运行它。`Runner.run()` 是为本地测试提供的便捷方法：
 
 ```python
 import asyncio
-
 from veadk import Agent, Runner
 
 agent = Agent(
-    name="root_agent",
+    name="assistant",
     description="A helpful assistant for user questions.",
-    instruction="Answer user questions to the best of your knowledge",
-    model_name="doubao-seed-1-6-250615",
-    model_api_key="...",
+    instruction="尽你所知回答用户的问题。",
+    model_name="doubao-seed-1-8-251228",
 )
-runner = Runner(agent=agent)
 
-response = asyncio.run(runner.run("你好"))
+response = asyncio.run(Runner(agent=agent).run("你好，介绍下你自己"))
 print(response)
 ```
 
+`Agent` 的关键参数：
+
+| 参数 | 说明 |
+| :--- | :--- |
+| `name` | 智能体名称，用于标识（A2A 等场景）。 |
+| `description` | 智能体描述，在 A2A 场景下表明其功能。 |
+| `instruction` | 系统提示词，定义行为与回答方式。 |
+| `model_name` | 使用的模型名称。 |
+
 <Callout type="info">
-  更多关于 `Runner` 的用法，请参阅[执行引擎](/cn/docs/framework/runner)章节。
+  模型 API Key 默认来自 `MODEL_AGENT_API_KEY` 环境变量，无需写进代码。也可以用 `config.yaml` 管理，详见[配置](/cn/docs/framework/configuration)。
 </Callout>
+
+## 下一步
+
+<Cards>
+  <Card title="构建智能体" href="/cn/docs/framework/agent/create" description="模型回退、自定义客户端、YAML 配置等。" />
+  <Card title="添加工具" href="/cn/docs/framework/tools/builtin" description="联网搜索、代码沙箱、图像与视频生成等。" />
+  <Card title="本地可视化调试" href="/cn/docs/framework/getting-started/local-debugging" description="用 Web UI 调试智能体。" />
+</Cards>

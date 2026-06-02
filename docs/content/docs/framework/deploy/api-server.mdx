@@ -1,0 +1,86 @@
+---
+title: "API 服务接口"
+description: "智能体以 API Server 模式提供的 HTTP 接口：管理会话、运行智能体（含流式）。"
+---
+
+以 **API Server** 模式运行时，智能体对外暴露一组标准 HTTP 接口，用于管理会话并运行智能体（支持流式）。本地用 `veadk web` 启动，生产环境通过 [VeADK Web 模式部署](/cn/docs/framework/deploy/vefaas)（接口相同，由 API 网关统一鉴权）。
+
+```bash
+veadk web              # 本地启动，默认 http://localhost:8000
+```
+
+<Callout type="info">
+  接口默认无鉴权，仅用于本地开发。对外暴露时请加 [SSO / 入站认证](/cn/docs/framework/security/inbound)。
+</Callout>
+
+## 接口一览
+
+| 方法 | 路径 | 说明 |
+| :-- | :-- | :-- |
+| `GET` | `/list-apps` | 列出可用的智能体应用 |
+| `POST` | `/apps/{app}/users/{user}/sessions` | 新建会话（自动生成 ID） |
+| `POST` | `/apps/{app}/users/{user}/sessions/{session}` | 以指定 ID 新建会话 |
+| `GET` | `/apps/{app}/users/{user}/sessions` | 列出会话 |
+| `GET` | `/apps/{app}/users/{user}/sessions/{session}` | 获取会话（含历史事件） |
+| `DELETE` | `/apps/{app}/users/{user}/sessions/{session}` | 删除会话 |
+| `POST` | `/run` | 运行智能体，一次性返回事件列表 |
+| `POST` | `/run_sse` | 运行智能体，以 SSE 流式返回事件 |
+| `GET` | `/apps/{app}/users/{user}/sessions/{session}/artifacts` | 列出产物（artifacts） |
+| `GET` | `/health`、`/version` | 健康检查与版本 |
+
+> `{app}` 为智能体应用名（即 `--agents-dir` 下的子目录名）。
+
+## 运行智能体
+
+先创建会话，再运行。`/run_sse` 以 [SSE](https://developer.mozilla.org/docs/Web/API/Server-sent_events) 流式返回事件，适合实时展示；`/run` 一次性返回全部事件。
+
+<Steps>
+
+<Step>
+### 创建会话
+
+```bash
+curl -X POST http://localhost:8000/apps/my_agent/users/u1/sessions \
+  -H 'Content-Type: application/json' -d '{}'
+# 返回的 JSON 中包含 id 字段，即 sessionId
+```
+</Step>
+
+<Step>
+### 运行并流式接收
+
+```bash
+curl -N -X POST http://localhost:8000/run_sse \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "appName": "my_agent",
+    "userId": "u1",
+    "sessionId": "<上一步返回的 id>",
+    "newMessage": { "role": "user", "parts": [{ "text": "你好" }] },
+    "streaming": true
+  }'
+```
+
+响应是一串 SSE 事件，每个 `data:` 是一个智能体事件（模型增量、工具调用、最终回复等）：
+
+```text
+data: {"content":{"role":"model","parts":[{"text":"你"}]}, ...}
+data: {"content":{"role":"model","parts":[{"text":"好"}]}, ...}
+```
+</Step>
+
+</Steps>
+
+请求体字段：
+
+| 字段 | 类型 | 说明 |
+| :-- | :-- | :-- |
+| `appName` | string | 智能体应用名 |
+| `userId` | string | 用户 ID |
+| `sessionId` | string | 会话 ID |
+| `newMessage` | Content | 本轮用户消息：`{ "role": "user", "parts": [{ "text": "..." }] }` |
+| `streaming` | bool | 是否在模型层开启增量流式（默认 `false`） |
+
+<Callout type="info">
+  生产环境推荐用 [`CloudApp`](/cn/docs/framework/deploy/vefaas) 通过 A2A 协议调用已部署的智能体，无需手写上述 HTTP 请求。
+</Callout>

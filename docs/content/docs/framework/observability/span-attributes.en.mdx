@@ -7,10 +7,10 @@ description: "Learn the instrumentation timing and span attribute definitions in
 
 To align with the Google ADK instrumentation conventions, the instrumentation timing in VeADK is consistent with Google ADK. Instrumentation mainly happens at the following points:
 
-- [When invoking the agent](https://github.com/google/adk-python/blob/v1.17.0/src/google/adk/runners.py#L373): Instrumented in the Runner's `_run_with_trace` function, with the span named `invocation`
-- [When running the agent](https://github.com/google/adk-python/blob/v1.17.0/src/google/adk/agents/base_agent.py#L285): Instrumented in the agent's `run_async` function, with the span named `invoke_agent {agent.name}`
-- [When calling the model](https://github.com/google/adk-python/blob/v1.17.0/src/google/adk/flows/llm_flows/base_llm_flow.py#L728): Instrumented in BaseLlmFlow's `_call_llm_with_tracing` function, with the span named `call_llm`
-- [When calling a tool](https://github.com/google/adk-python/blob/v1.17.0/src/google/adk/flows/llm_flows/functions.py#L308): Instrumented in BaseLlmFlow's `_execute_single_function_call_async` function, with the span named `execute_tool {tool.name}`
+- [When invoking the agent](https://github.com/google/adk-python/blob/v1.17.0/src/google/adk/runners.py): Instrumented in the Runner's `_run_with_trace` function, with the span named `invocation`
+- [When running the agent](https://github.com/google/adk-python/blob/v1.17.0/src/google/adk/agents/base_agent.py): Instrumented in the agent's `run_async` function, with the span named `invoke_agent {agent.name}`
+- [When calling the model](https://github.com/google/adk-python/blob/v1.17.0/src/google/adk/flows/llm_flows/base_llm_flow.py): Instrumented in BaseLlmFlow's `_call_llm_with_tracing` function, with the span named `call_llm`
+- [When calling a tool](https://github.com/google/adk-python/blob/v1.17.0/src/google/adk/flows/llm_flows/functions.py): Instrumented in BaseLlmFlow's `_execute_single_function_call_async` function, with the span named `execute_tool {tool.name}`
 
 At each point, a span with the corresponding name is created to record the details of that point. When a stage ends, the corresponding instrumentation function is called to record the information of that stage into the span:
 

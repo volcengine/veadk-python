@@ -3,69 +3,55 @@ title: "Outbound Auth with Trusted MCP"
 description: "Use Trusted MCP to build end-to-end encrypted, fully trusted outbound communication for your agent."
 ---
 
-Trusted MCP adds "component identity attestation and verification" on top of the standard MCP protocol and provides end-to-end encrypted communication, building a fully trusted agent runtime. Combined with confidential computing (such as Jeddak AICC) and trusted inference services, it effectively mitigates risks such as untrusted service identity, data tampering, traffic hijacking, and privacy leakage.
+Trusted MCP extends standard MCP with identity attestation between components and end-to-end encrypted communication, preventing service-identity spoofing, data tampering, and traffic hijacking; combined with confidential computing (such as Jeddak AICC) and trusted inference (such as Confidential Doubao), it lets the agent and model run in a trusted environment. VeADK connects to Trusted MCP services natively via the `tools` mechanism. This is the trusted-execution plane from the [security overview](/en/docs/framework/security/overview).
 
-VeADK natively supports connecting to TrustedMCP services. You can enable a trusted channel in your tool-call chain to secure outbound communication.
+## Prerequisites
 
-## Trusted Agent
-
-Backed by confidential computing technology (such as Jeddak AICC), you can run agents and large-model services (such as Confidential Doubao) in a trusted environment and, via TrustedMCP plus end-to-end encrypted communication, build a fully trusted agent. TrustedMCP is Volcengine's trusted MCP: it extends the standard MCP protocol with identity attestation and verification between core components, providing end-to-end communication security between components. It addresses security threats in MCP applications such as untrusted service identity, data tampering, traffic hijacking, and data privacy leakage.
-
-With VeADK you can build a trusted agent and call TrustedMCP services through the `tools` mechanism.
-
-## Connection Setup and Prerequisites
-
-1. Have a working TrustedMCP service address ready, e.g. `wss://your-trusted-mcp.example.com`.
-2. Prepare the AICC configuration file `./aicc_config.json` (used for the confidential environment and remote attestation); refer to the official sample configuration.
-3. Set `x-trusted-mcp: true` in the connection parameters to enable trusted mode.
+1. Have a working Trusted MCP service address, e.g. `wss://your-trusted-mcp.example.com`.
+2. Have an AICC config file `./aicc_config.json` (for the confidential environment and remote attestation); see the [official example](https://github.com/volcengine/AICC-Trusted-MCP/blob/main/README.md).
+3. Set the `x-trusted-mcp: true` request header in the connection params to enable trusted mode.
 
 ## Usage
 
 ```python title="agent.py"
 import asyncio
 
-from veadk import Agent
+from veadk import Agent, Runner
 from veadk.utils.mcp_utils import get_mcp_params
 from veadk.tools.mcp_tool.trusted_mcp_toolset import TrustedMcpToolset
 
 mcp_url = "<TrustedMCP server address>"
 
-# 1. Enable the TrustedMCP feature and related configuration
+# 1. Build connection params and enable trusted mode
 connection_params = get_mcp_params(mcp_url)
 connection_params.headers = {"x-trusted-mcp": "true"}
 
-# 2. Initialize the TrustedMcpToolset
+# 2. Initialize the Trusted MCP toolset
 toolset = TrustedMcpToolset(connection_params=connection_params)
 
-# 3. Initialize the Agent
+# 3. Initialize and run the agent
 agent = Agent(tools=[toolset])
+runner = Runner(agent=agent)
 
-# 4. Run the Agent
-response = asyncio.run(agent.run("What's the weather in Beijing?"))
-
-print(response)  # The weather in Beijing is sunny, 25°C.
+response = asyncio.run(runner.run(messages="What's the weather in Beijing?"))
+print(response)  # It's sunny in Beijing, 25°C.
 ```
 
-## Options
+## Configuration
 
-TrustedMcpToolset supports the following key settings:
+`TrustedMcpToolset` supports these key options:
 
-- `x-trusted-mcp` (Header)
-    - Type: string
-    - Default: `true`
-    - Description: whether to enable the TrustedMCP feature and the trusted channel.
+| Option | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `x-trusted-mcp` (header) | string | `true` | Whether to enable the trusted channel |
+| `aicc_config` (path) | string | `./aicc_config.json` | Path to the AICC config file, used for attestation and policy in the confidential computing environment |
 
-- `aicc_config` (path)
-    - Type: string
-    - Default: `./aicc_config.json`
-    - Description: path to the AICC configuration file, used for attestation and policy configuration of the confidential computing environment.
+For the config file example and details, see [TrustedMCP config](https://github.com/volcengine/AICC-Trusted-MCP/blob/main/README.md).
 
-> For a sample configuration file and details, see: [TrustedMCP configuration file](https://github.com/volcengine/AICC-Trusted-MCP/blob/main/README.md).
+## Next steps
 
-## Related Resources
-
-- [Agent Identity overview](https://www.volcengine.com/docs/86848/2080920?lang=zh)
-- [API Key authentication](/en/docs/framework/security/outbound/api-key)
-- [OAuth2 M2M authentication](/en/docs/framework/security/outbound/oauth2-m2m)
-- [OAuth2 USER_FEDERATION authentication](/en/docs/framework/security/outbound/oauth2-user-federation)
-- [TrustedMCP configuration file and details](https://github.com/volcengine/AICC-Trusted-MCP/blob/main/README.md)
+<Cards>
+  <Card title="Security overview" href="/en/docs/framework/security/overview" description="A map of the four security planes." />
+  <Card title="OAuth2 user federation" href="/en/docs/framework/security/outbound/oauth2-user-federation" description="Access third-party services on a user's behalf." />
+  <Card title="API Key" href="/en/docs/framework/security/outbound/api-key" description="The simplest outbound auth method." />
+</Cards>
