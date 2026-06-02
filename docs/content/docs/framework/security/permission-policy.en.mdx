@@ -1,49 +1,53 @@
 ---
 title: "Permission Policy"
-description: "Configure permission policies covering the full User → Agent → Tool chain using the Cedar declarative authorization language."
+description: "Configure full User → Agent → Tool authorization with AgentKit Runtime and Cedar."
 ---
 
-Agent permission policies are built on the Cedar declarative authorization language, providing a permission-management scheme that covers the full User → Agent → Tool chain. This guide shows you how to enable authorization checks in your agent code and configure permission policies in the console, ensuring an agent is only accessible to authorized users.
+Inbound auth answers "who are you"; permission policy answers "what may you do." VeADK's permission policy builds on [AgentKit Runtime](https://console.volcengine.com/agentkit/region:agentkit+cn-beijing/runtime) and the [Cedar](https://www.cedarpolicy.com/) declarative authorization language to provide end-to-end User → Agent → Tool authorization. This page shows how to define policies in the console and enable checks in code.
 
 ## Prerequisites
 
-Following the [usage docs](https://www.volcengine.com/docs/86848/2123355?lang=zh), log in to the Volcengine Agent Identity and Permission Management platform and create a policy namespace and permission policy as follows:
+Following the [usage docs](https://www.volcengine.com/docs/86848/2123355?lang=zh), sign in to the Volcengine agent identity and permission platform and create a policy namespace and policies:
 
-- Go to "Access Control > Permission Policy" and create a policy namespace (enter a namespace name and description, and choose the owning project and tags);
-- Within the target namespace, create a new permission policy and define rules via "Visual Editor" or "Cedar Statement Editor" (for example: allow a specific user to invoke a given agent);
-- Use the "Simulate Permission Check" feature to verify that the policy behaves as expected.
+1. Go to **Authorization > Permission Policy** and create a policy namespace (name, description, project, and tags).
+2. Add a policy in the namespace using **Visual Editor** or **Cedar Editor** (for example: allow a specific user to invoke a given agent).
+3. Verify the policy with **Simulate Authorization**.
 
 ## Implementation
 
-Before invoking the agent, configure the `RUNTIME_IDENTITY_NAMESPACE` environment variable in the [AgentKit Runtime](https://console.volcengine.com/agentkit/region:agentkit+cn-beijing/runtime) console to specify the policy namespace (defaults to `default`), so that authorization checks match the corresponding policy rules:
+In the [AgentKit Runtime](https://console.volcengine.com/agentkit/region:agentkit+cn-beijing/runtime) console, set the `RUNTIME_IDENTITY_NAMESPACE` environment variable to your policy namespace (defaults to `default`), so checks match the right policy rules:
 
 ```bash
-# Set the policy namespace name (replace with the namespace you actually created)
-RUNTIME_IDENTITY_NAMESPACE="your-policy-namespace-name"
+# set this to the policy namespace you actually created
+export RUNTIME_IDENTITY_NAMESPACE="my-namespace"
 ```
 
-Enable authorization (`enable_authz=True`) when initializing the Agent to trigger the authorization check flow. Below is a code example for deploying to [AgentKit Runtime](https://console.volcengine.com/agentkit/region:agentkit+cn-beijing/runtime):
+Set `enable_authz=True` when initializing the agent to trigger checks. Pass the user ID to authorize at call time:
 
 ```python title="agent.py"
 import asyncio
 
 from veadk import Agent, Runner
 
-# The user ID whose permission is to be checked
+# the user ID to authorize
 user_id = "9d154b10-285f-404c-ba67-0bf648ff9ce0"
 
-# Initialize the Agent with authorization enabled
 agent = Agent(enable_authz=True)
-
 runner = Runner(agent=agent)
 
-# Invoke the agent and pass the user ID (the core basis for the authorization check)
+# user_id is the basis for the authorization check
 response = asyncio.run(runner.run(messages="Hello", user_id=user_id))
-
 print(response)
 ```
 
-Results:
+Outcomes:
 
-- Authorized: if the user has permission to invoke the agent in the policy namespace, the code runs normally and returns the agent's response;
-- Unauthorized: if the user is not authorized to access the agent, a permission exception is raised. Example error message: `Agent <agent role> is not authorized to run by user 9d154b10-285f-404c-ba67-0bf648ff9ce0.`
+- **Authorized**: the user has permission to invoke the agent in the namespace; the response returns normally.
+- **Denied**: the user is not authorized and a permission exception is raised, e.g. `Agent <agent role> is not authorized to run by user 9d154b10-285f-404c-ba67-0bf648ff9ce0.`
+
+## Next steps
+
+<Cards>
+  <Card title="Security overview" href="/en/docs/framework/security/overview" description="A map of the four security planes." />
+  <Card title="Inbound auth" href="/en/docs/framework/security/inbound" description="Verify the caller's identity." />
+</Cards>

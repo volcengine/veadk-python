@@ -1,65 +1,111 @@
 ---
-title: "Prompt Management"
-description: "Version-manage and hot-update an Agent's system prompt via CozeLoop or a custom Prompt Manager."
+title: "Prompt management"
+description: "Version-manage and hot-update an agent's system prompt via CozeLoop or a custom Prompt Manager."
 ---
 
-In real production, prompts need version management and dynamic delivery. VeADK provides a Prompt management module that lets you template and hot-update prompts, and switch prompt versions dynamically at runtime.
+In production, system prompts often need version management and dynamic delivery. VeADK's prompt management module lets you template and hot-update prompts at runtime — without changing code or restarting the service.
 
-## CozeLoop Prompt Management
+Before each user request, VeADK calls the Prompt Manager's `get_prompt` method to fetch the latest prompt and uses it as that agent's system prompt.
 
-You can connect your Agent's system prompt to CozeLoop's cloud prompt management.
+## CozeLoop prompt management
+
+VeADK ships `CozeloopPromptManager`, which connects an agent's system prompt to [CozeLoop](https://loop.coze.cn/open/docs/cozeloop/what-is-prompt) cloud prompt management.
 
 ### Prerequisites
 
-Before using CozeLoop for prompt management, install the Python `cozeloop` SDK:
+Install the Python `cozeloop` SDK:
 
 ```bash
 pip install cozeloop
 ```
 
-### Obtaining the Attributes
+Obtain the required attributes:
 
-- [Learn how to obtain the CozeLoop Workspace ID](https://loop.coze.cn/open/docs/cozeloop/authentication-for-sdk#05d27a86)
-- [Learn how to obtain the CozeLoop Token / API Key](https://loop.coze.cn/open/docs/cozeloop/authentication-for-sdk)
-- You can obtain the Prompt Key in the "Prompt Development" section of CozeLoop, as shown below:
+- [Obtain the CozeLoop Workspace ID](https://loop.coze.cn/open/docs/cozeloop/authentication-for-sdk#05d27a86)
+- [Obtain the CozeLoop Token / API Key](https://loop.coze.cn/open/docs/cozeloop/authentication-for-sdk)
+- Find the Prompt Key in the "Prompt Development" section of CozeLoop, as shown below:
 
 ![CozeLoop Prompt Key](/assets/images/cozeloop_prompt_key.png)
 
 ### Usage
 
+Provide credentials via environment variables instead of hard-coding them:
+
+```bash
+export COZELOOP_WORKSPACE_ID="<your Workspace ID>"
+export COZELOOP_TOKEN="<your CozeLoop Token>"
+```
+
 ```python title="agent.py"
 import asyncio
+import os
 
 from veadk import Agent, Runner
 from veadk.prompts.prompt_manager import CozeloopPromptManager
 
 prompt_manager = CozeloopPromptManager(
-    cozeloop_workspace_id="",   # CozeLoop workspace ID
-    cozeloop_token="",          # CozeLoop token / api key
-    prompt_key="",    # The Prompt Key created in CozeLoop
-    label="production",         # The Prompt label created in CozeLoop
+    cozeloop_workspace_id=os.environ["COZELOOP_WORKSPACE_ID"],
+    cozeloop_token=os.environ["COZELOOP_TOKEN"],
+    prompt_key="your_prompt_key",  # The Prompt Key created in CozeLoop
+    label="production",            # The Prompt label created in CozeLoop
 )
 
 agent = Agent(name="test_prompt_mgr", prompt_manager=prompt_manager)
 
 runner = Runner(agent=agent)
-
 response = asyncio.run(runner.run(messages="What is your task?"))
 print(response)
 ```
 
 <Callout type="info" title="Note">
-CozeLoop caches prompts locally with a **refresh interval of 1 minute**. If fetching a prompt fails, VeADK's default Agent system prompt is returned.
+CozeLoop caches prompts locally with a **refresh interval of 1 minute**. If fetching a prompt fails, VeADK falls back to its default system prompt.
 </Callout>
 
-In the logs you can see that before each user request is processed, the `get_prompt` method of `CozeloopPromptManager` is executed to fetch the latest prompt template content. The result looks like this:
+Before each user request, `CozeloopPromptManager.get_prompt` runs to fetch the latest prompt template content:
 
 ![CozeLoop Prompt Manager](/assets/images/agents/cozeloop_prompt_mgr.png)
 
-For more details, see [CozeLoop Prompt Management](https://loop.coze.cn/open/docs/cozeloop/what-is-prompt).
+## Implement a custom Prompt Manager
 
-## Implement Your Own Prompt Manager
+To load prompts from your own config center, database, or files, subclass `BasePromptManager` and implement `get_prompt`. It is called before each user request, and the returned string becomes that agent's system prompt.
 
-If you want to implement more advanced prompt templates or variable combinations, you can subclass the `PromptManager` class to implement custom prompt management logic.
+```python title="custom_prompt_manager.py"
+import asyncio
 
-When implementing a custom Prompt Manager, you need to implement the `get_prompt` method, which is called before each user request is processed to fetch the latest prompt template content.
+from google.adk.agents.readonly_context import ReadonlyContext
+from veadk import Agent, Runner
+from veadk.prompts.prompt_manager import BasePromptManager
+
+
+class FilePromptManager(BasePromptManager):
+    """A Prompt Manager that reads the system prompt from a local file."""
+
+    def __init__(self, prompt_path: str) -> None:
+        super().__init__()
+        self.prompt_path = prompt_path
+
+    def get_prompt(self, context: ReadonlyContext, **kwargs) -> str:
+        # Re-read the file on every request to enable hot-updates.
+        # context.agent_name lets you vary the prompt per agent.
+        with open(self.prompt_path, encoding="utf-8") as f:
+            return f.read()
+
+
+agent = Agent(
+    name="custom_prompt_agent",
+    prompt_manager=FilePromptManager(prompt_path="instruction.txt"),
+)
+
+runner = Runner(agent=agent)
+response = asyncio.run(runner.run(messages="What is your task?"))
+print(response)
+```
+
+`get_prompt` receives runtime information through `context` (a `ReadonlyContext`) — for example, use `context.agent_name` to return different prompts for different agents. Return a safe default prompt on failure so requests don't break.
+
+## Next steps
+
+<Cards>
+  <Card title="Create an agent" href="/en/docs/framework/agent/create" description="Configure the model, tools, and metadata." />
+  <Card title="Tracing" href="/en/docs/framework/observability/overview" description="Observe every prompt load and model call." />
+</Cards>

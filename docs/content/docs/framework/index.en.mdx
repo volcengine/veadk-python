@@ -1,11 +1,21 @@
 ---
-title: "Welcome to VeADK"
-description: "The Volcengine Agent Development Kit — a cloud-native framework to build, deploy, observe, and evaluate enterprise-grade AI agents."
+title: "VeADK"
+description: "Build, deploy, observe, and evaluate production AI agents with VeADK."
 ---
 
-**VeADK (Volcengine Agent Development Kit)** is an agent framework from **Volcengine** that provides an end-to-end, cloud-native solution covering development, deployment, observability, and evaluation for agent applications. Compared with existing agent frameworks, VeADK is deeply integrated with the Volcengine product ecosystem, helping developers build enterprise-grade AI agent applications more efficiently.
+**VeADK** (Volcengine Agent Development Kit) is Volcengine's framework for building AI agents. It composes models, tools, memory, and knowledge bases into reusable building blocks and integrates deeply with the Volcengine ecosystem, so you ship production agents with less code.
+
+```python
+import asyncio
+from veadk import Agent, Runner
+
+agent = Agent(instruction="You are a helpful assistant.")
+print(asyncio.run(Runner(agent=agent).run("Hi, introduce yourself")))
+```
 
 <Cards>
-  <Card title="Quick Start" href="/en/docs/framework/getting-started/quickstart" description="Build and run your first agent in minutes." />
-  <Card title="GitHub" href="https://github.com/volcengine/veadk-python" description="Browse the source and examples." />
+  <Card title="Quickstart" href="/en/docs/framework/getting-started/quickstart" description="Build and run your first agent in minutes." />
+  <Card title="Introduction" href="/en/docs/framework/introduction" description="Core concepts, architecture, and lifecycle." />
+  <Card title="Create an agent" href="/en/docs/framework/agent/create" description="Configure the model, tools, memory, and knowledge base." />
+  <Card title="Deploy to VeFaaS" href="/en/docs/framework/deploy/vefaas" description="Ship your agent to the cloud." />
 </Cards>

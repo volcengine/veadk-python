@@ -221,40 +221,35 @@ remote_agent = RemoteVeAgent(
 - SSL 验证选项
 
 ```python title="client.py"
-# <...code truncated...>
+import httpx
+
+from veadk.a2a.remote_ve_agent import RemoteVeAgent
 
 # 创建自定义的 httpx.AsyncClient 实例
 custom_client = httpx.AsyncClient(
     # 基础 URL 设置
     base_url="https://vefaas.example.com/agents/",
-    
     # 超时设置（秒）
     timeout=30.0,
-    
     # 连接池设置
     limits=httpx.Limits(
-        max_connections=100,        # 最大并发连接数
-        max_keepalive_connections=20,  # 最大保活连接数
-        keepalive_expiry=60.0,      # 保活连接过期时间
+        max_connections=100,            # 最大并发连接数
+        max_keepalive_connections=20,   # 最大保活连接数
+        keepalive_expiry=60.0,          # 保活连接过期时间
     ),
-    
-    # 重试配置（需要 httpx >= 0.24.0）
-    follow_redirects=True,        # 跟随重定向
-    
+    # 跟随重定向
+    follow_redirects=True,
     # 自定义默认请求头
     headers={
         "User-Agent": "Custom-VeADK-Client/1.0",
-        "X-Custom-Header": "custom-value"
+        "X-Custom-Header": "custom-value",
     },
-    
     # SSL 验证选项（生产环境中建议保持默认的 True）
     verify=True,
-    
-    # 代理配置（如需使用代理）
-    proxies="http://proxy.example.com:8080",
-    
-    # 并发请求设置
-    http2=True,  # 启用 HTTP/2 支持
+    # 代理配置（如需使用代理；httpx >= 0.28 使用 proxy 参数）
+    proxy="http://proxy.example.com:8080",
+    # 启用 HTTP/2 支持
+    http2=True,
 )
 
 # 创建 RemoteVeAgent 实例时，将自定义客户端传递给 httpx_client 参数
@@ -265,6 +260,11 @@ remote_agent = RemoteVeAgent(
     auth_method="header",
     httpx_client=custom_client,
 )
-
-# <...code truncated...>
 ```
+
+## 下一步
+
+<Cards>
+  <Card title="A2A Hub" href="/cn/docs/framework/agent/multi-agent/a2a-hub" description="集中注册与发现分组内的 Agent。" />
+  <Card title="中间件与事件驱动" href="/cn/docs/framework/agent/multi-agent/middleware-events" description="鉴权中间件与消息驱动的 Agent 协作。" />
+</Cards>

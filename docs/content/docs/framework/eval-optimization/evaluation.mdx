@@ -180,25 +180,13 @@ ADK 支持多种基于基准真相的轨迹评估方法：
 - **深入洞察**：通过分析评测数据，深入了解 Agent 的工具调用轨迹、响应质量和潜在问题，从而获得优化方向。
 - **持续监控**：将评测与持续集成（CI）流程相结合，实现对 Agent 性能的自动化监控和回归测试。
 
-通过 `veadk uploadevalset` 命令，您可以轻松地将本地的评测集文件上传到 CozeLoop 平台。
-
-**用法**
+通过 `veadk uploadevalset` 命令，您可以将本地的评测集文件上传到 CozeLoop 平台：
 
 ```bash
-veadk uploadevalset [OPTIONS]
+veadk uploadevalset --file tests/simple.evalset.json
 ```
 
-**说明**
-
-该命令将 Google ADK 格式的评测数据集从 JSON 文件上传到 CozeLoop 平台，用于 Agent 评测和测试。
-
-**参数**
-
-- `--file TEXT`：包含数据集的 JSON 文件的路径 [必需]
-- `--cozeloop-workspace-id TEXT`：用于组织评测集的 CozeLoop 工作区 ID。如果未提供，则使用 `OBSERVABILITY_OPENTELEMETRY_COZELOOP_SERVICE_NAME` 环境变量。
-- `--cozeloop-evalset-id TEXT`：将要上传到的特定评测集 ID。如果未提供，则使用 `OBSERVABILITY_OPENTELEMETRY_COZELOOP_EVALSET_ID` 环境变量。
-- `--cozeloop-api-key TEXT`：用于向 CozeLoop 服务进行身份验证的 API 密钥。如果未提供，则使用 `OBSERVABILITY_OPENTELEMETRY_COZELOOP_API_KEY` 环境变量。
-- `--help`：显示帮助信息并退出。
+该命令将 Google ADK 格式的评测集 JSON 文件上传到 CozeLoop。完整的参数说明见 [VeADK 命令行工具](/cn/docs/cli/veadk-cli)。
 
 ## 评估器
 
@@ -229,7 +217,7 @@ class TestAgentEvaluation:
         """Agent evaluation tests using ADKEvaluator"""
         evaluator = ADKEvaluator(agent=root_agent)
         await evaluator.evaluate(
-            eval_set_file_path="tests/simple.test.json",
+            eval_set_file_path="tests/simple.evalset.json",
             response_match_score_threshold=1,
             tool_score_threshold=0.5,
             num_runs=1,
@@ -278,7 +266,7 @@ class TestAgentEvaluation:
             ToolCorrectnessMetric(threshold=0.5, model=evaluator.judge_model),
         ]
         await evaluator.evaluate(
-            eval_set_file_path="tests/simple.test.json",
+            eval_set_file_path="tests/simple.evalset.json",
             metrics=metrics)
 ```
 
@@ -340,3 +328,10 @@ class MyCustomEvaluator(BaseEvaluator):
 ```
 
 通过继承 `BaseEvaluator`，您可以专注于实现核心评估逻辑，同时复用 VeADK 的数据加载和 Agent 执行能力，从而灵活地扩展评估框架。
+
+## 下一步
+
+<Cards>
+  <Card title="持续优化" href="/cn/docs/framework/eval-optimization/optimization" description="通过 Prompt 调优、强化学习与自我反思优化智能体。" />
+  <Card title="VeADK 命令行工具" href="/cn/docs/cli/veadk-cli" description="查看 veadk eval、uploadevalset 等命令的完整参数。" />
+</Cards>

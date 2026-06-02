@@ -19,11 +19,12 @@ veadk prompt
 
 The options include:
 
-```shell
---path: Specifies the path to the agent file to optimize. Defaults to agent.py in the current directory. Note that the defined agent must be exported as a global variable
---feedback: Specifies feedback on the optimized prompt, used to optimize the model
---api-key: Specifies the API Key of the AgentPilot platform, used to call the optimization model
---model-name: Specifies the name of the optimization model
+```text
+--path           Path to the agent file to optimize. Defaults to agent.py in the current directory. Note: the defined agent must be exported as a global variable
+--feedback       Suggestions for prompt optimization, used to guide the optimization
+--api-key        API key of the PromptPilot platform
+--workspace-id   PromptPilot workspace ID (required)
+--model-name     Name of the model used for optimization
 ```
 
 A typical complete invocation example is as follows:
@@ -82,18 +83,15 @@ The generated project structure is as follows, where the core files include:
 ```shell
 veadk_rl_ark_project
 ├── data
-    ├── *.jsonl # training data
-└── plugins
-    ├── async_weather_rollout.py #
-    ├── config.yaml.example # example VeADK agent configuration
-    ├── random_reward.py # reward rule definition
-    ├── raw_async_veadk_rollout.py # rollout workflow definition
-    ├── raw_rollout.py #
-    └── test_utils.py #
-    └── weather_rollout.py #
-├── job.py # job submission code
-├── job.yaml # job configuration
-├── test_agent.py # VeFaaS test script
+│   └── *.jsonl                       # training data
+├── plugins
+│   ├── config.yaml.example           # example VeADK agent configuration
+│   ├── random_reward.py              # reward rule definition
+│   ├── raw_async_veadk_rollout.py    # rollout workflow definition
+│   └── weather_rollout.py            # rollout example for the weather agent
+├── job.py                            # job submission code
+├── job.yaml                          # job configuration
+└── test_agent.py                     # VeFaaS test script
 ```
 
 #### Best-Practice Example
@@ -156,11 +154,11 @@ The generated project structure is as follows, where the core files include:
 ```shell
 veadk_rl_lightning_project
 ├── data
-    ├── demo_train.parquet # training data, must be in parquet format
-    ├── demo_test.parquet # test data, must be in parquet format
-└── demo_calculate_agent.py # the agent's rollout logic and reward settings
-└── train.sh # training server startup script, sets training-related parameters
-└── restart_ray.sh # script to restart the ray cluster
+│   ├── demo_train.parquet       # training data, must be in parquet format
+│   └── demo_test.parquet        # test data, must be in parquet format
+├── demo_calculate_agent.py      # the agent's rollout logic and reward settings
+├── train.sh                     # training server startup script, sets training-related parameters
+└── restart_ray.sh               # script to restart the ray cluster
 ```
 
 #### Best-Practice Example

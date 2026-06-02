@@ -1,36 +1,103 @@
 ---
 title: "Contributing"
-description: "Learn how to contribute to the VeADK framework and documentation, including building from source, development conventions, and pre-commit setup."
+description: "Contribute to VeADK: install from source, run tests, set up pre-commit, and open a pull request."
 ---
 
-## VeADK
+Contributions to VeADK code and docs are welcome. This page walks you through setting up a local development environment and the submission flow.
 
-<Callout type="info" title="We welcome your contributions to VeADK!" />
+## Set up your environment
 
-### Build and Install from Source
+<Steps>
 
-Download the VeADK source code locally and install it.
+<Step>
+### Clone and install
 
-### Development
-
-Please develop according to the [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html).
-
-### Install `pre-commit`
-
-`pre-commit` runs a series of checks before you commit code, such as code-formatting checks and secret-leak checks. Commits that have not passed `pre-commit` checks will not pass the CI/CD workflow checks on GitHub, which means the code will not be merged.
+VeADK requires Python 3.10+. Install in editable mode with the dev dependencies:
 
 ```bash
-pip install pre-commit
+git clone https://github.com/volcengine/veadk-python.git
+cd veadk-python
 
-pre-commit install .
+pip install -e ".[dev]"
 ```
 
-### Wait for Code Review
+The repo manages dependencies and a lockfile with `uv`; you can also set everything up (including the `dev` group) in one step:
 
-Your contributions will be processed within 1 to 2 business days.
+```bash
+uv sync --extra dev
+```
 
-## VeADK Documentation
+<Callout type="info">
+  Install optional extras as needed: `extensions` (memory / knowledge-base backends), `eval` (evaluation), `a2ui` (agent-driven UI), and more. For example, `pip install -e ".[dev,eval]"`.
+</Callout>
+</Step>
 
-<Callout type="info" title="We welcome your contributions to the VeADK documentation!" />
+<Step>
+### Install the pre-commit hooks
 
-Please follow the development conventions.
+`pre-commit` runs Ruff (formatting and linting) and gitleaks (secret-leak detection) before you commit. Commits that fail these checks won't pass GitHub CI and therefore won't be merged.
+
+```bash
+pre-commit install
+```
+
+`pre-commit` is included in the `dev` dependencies. Once installed, every `git commit` runs the hooks automatically; you can also run them across all files manually:
+
+```bash
+pre-commit run --all-files
+```
+</Step>
+
+<Step>
+### Run the tests
+
+Tests live in the `tests/` directory and run with `pytest`:
+
+```bash
+pytest
+```
+
+Run a single file or directory:
+
+```bash
+pytest tests/test_agent.py
+```
+
+<Callout type="warn">
+  Some tests require Volcengine credentials or external backends (such as Redis or OpenSearch). These are skipped or fail without the corresponding environment variables, so focus on the cases relevant to your change before opening a PR.
+</Callout>
+</Step>
+
+</Steps>
+
+## Development conventions
+
+- Follow the [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html).
+- Make sure `pre-commit run --all-files` and `pytest` pass before submitting.
+- When a change affects behavior or interfaces, update `docs/` and `README.md` accordingly.
+
+## Open a pull request
+
+<Steps>
+
+<Step>
+### Fork and branch
+
+```bash
+git checkout -b feat/your-feature
+```
+</Step>
+
+<Step>
+### Commit and push
+
+After pre-commit and the tests pass, commit and push to your fork.
+</Step>
+
+<Step>
+### Open the PR
+
+Open a pull request against the `main` branch of `volcengine/veadk-python`, clearly describing the motivation and the change. Maintainers typically respond within 1 to 2 business days.
+</Step>
+
+</Steps>

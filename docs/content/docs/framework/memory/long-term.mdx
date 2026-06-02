@@ -1,465 +1,165 @@
 ---
 title: "长期记忆"
-description: "VeADK 长期记忆机制，跨会话保存重要信息以实现个性化、可持续的智能体交互。"
+description: "VeADK 长期记忆跨会话保存重要信息，实现个性化、可持续的智能体交互。"
 ---
 
-本文档介绍 VeADK 系统中的**长期记忆（Long-term Memory）**概念及应用。长期记忆用于跨会话、跨时间保存重要信息，以增强智能体在连续交互中的一致性和智能性。
+长期记忆（Long-term Memory）跨会话、跨时间保存重要信息——用户偏好、任务历史、知识要点或长期状态。[短期记忆](/cn/docs/framework/memory/short-term)只在单次会话内有效，而长期记忆让智能体在**不同会话**之间也能记住事实。
 
-**定义**：长期记忆是智能体用于存储超出单次会话范围的重要信息的机制，可以包含用户偏好、任务历史、知识要点或长期状态。
-
-**为什么重要**：
+为什么需要它：
 
 - 支持跨会话的连续对话体验；
-- 允许智能体在多次交互中保留学习成果和用户特定信息；
-- 减少重复询问，提升用户满意度和效率；
-- 支持长期策略优化，例如个性化推荐或任务追踪。
+- 让智能体在多次交互中保留学习成果和用户特定信息；
+- 减少重复询问，提升满意度与效率；
+- 支撑长期策略优化，如个性化推荐或任务追踪。
 
-智能体用户需要长期记忆来实现更智能、个性化和可持续的交互体验，尤其在多次会话或复杂任务场景中显著提高系统实用性。
+## 支持的后端
 
-## 支持后端类型
+调试可以用 `local` 后端，生产更建议使用 `viking` 或 `mem0`。
 
-调试可以用 `local` 后端。生产更建议使用 `viking` 或 `mem0` 后端。
-
-| 类别 | 说明 |
+| 后端 | 说明 |
 | :----------- | :--------------------------------------------------------- |
-| `local` | 内存跨 Session 记忆，程序结束后即清空（仅适用于本地调试） |
-| `viking` | 使用 VikingDB 记忆库产品作为长期记忆存储（生产推荐） |
-| `mem0` | 使用 Mem0 记忆库产品作为长期记忆存储（生产推荐） |
-| `viking_mem` | 已废弃，设置后将会自动转为 `viking` |
-| `opensearch` | 使用 OpenSearch 作为长期记忆存储，可实现持久化和检索 |
-| `redis` | 使用 Redis 作为长期记忆存储，Redis 需要支持 Rediseach 功能 |
+| `local` | 内存跨会话记忆，进程退出即清空（仅用于本地调试）。需要安装 `veadk-python[extensions]`。 |
+| `viking` | 使用 VikingDB 记忆库作为存储（生产推荐）。 |
+| `mem0` | 使用 Mem0 记忆库作为存储（生产推荐）。 |
+| `opensearch` | 使用 OpenSearch 作为存储，可持久化与检索。 |
+| `redis` | 使用 Redis 作为存储，需支持 RediSearch 功能。 |
+| `viking_mem` | 已废弃，设置后自动转为 `viking`。 |
 
-## 初始化方法
+## 初始化
 
-在使用长期记忆之前，需要实例化 LongTermMemory 对象并指定后端类型。以下代码展示了如何初始化基于 VikingDB 的长期记忆模块，并将其绑定到 Agent：
-
-<Tabs items={['Python', 'Golang']}>
-  <Tab value="Python">
+使用长期记忆前，先实例化 `LongTermMemory` 并指定后端，再把它绑定到 `Agent`。把 `long_term_memory` 传给 `Agent` 后，智能体会自动获得一个 `load_memory` 工具，可在运行时检索过往会话。
 
 ```python
 from veadk import Agent, Runner
-from veadk.memory import LongTermMemory
+from veadk.memory.long_term_memory import LongTermMemory
 
-# 初始化长期记忆
-# backend="viking" 指定使用 VikingDB
-# app_name 和 user_id 用于数据隔离
-long_term_memory = LongTermMemory(
-    backend="viking", app_name="local_memory_demo", user_id="demo_user"
-)
+APP_NAME = "ltm_demo"
 
-# 将长期记忆绑定到 Agent
+# backend="viking" 使用 VikingDB；app_name 用于数据隔离
+long_term_memory = LongTermMemory(backend="viking", app_name=APP_NAME)
+
 root_agent = Agent(
-    name="minimal_agent",
-    instruction="Acknowledge user input and maintain simple conversation.",
-    long_term_memory=long_term_memory,  # 长期记忆实例
+    name="ltm_agent",
+    instruction="回答用户问题。如果答案可能在过往对话里，使用 `load_memory` 工具检索。",
+    long_term_memory=long_term_memory,
 )
 
-runner = Runner(agent=root_agent)
+runner = Runner(agent=root_agent, app_name=APP_NAME)
 ```
 
-  </Tab>
-  <Tab value="Golang">
-
-```go
-package main
-
-import (
-    "log"
-
-    veagent "github.com/volcengine/veadk-go/agent/llmagent"
-    "github.com/volcengine/veadk-go/common"
-    vem "github.com/volcengine/veadk-go/memory"
-    "github.com/volcengine/veadk-go/tool/builtin_tools"
-    "github.com/volcengine/veadk-go/utils"
-    "google.golang.org/adk/runner"
-    "google.golang.org/adk/session"
-    "google.golang.org/adk/tool"
-)
-
-func main() {
-    appName := "ve_agent"
-    memorySearchTool, err := builtin_tools.LoadLongMemoryTool()
-    if err != nil {
-        log.Fatal(err)
-        return
-    }
-
-    cfg := &veagent.Config{
-        ModelName:    common.DEFAULT_MODEL_AGENT_NAME,
-        ModelAPIBase: common.DEFAULT_MODEL_AGENT_API_BASE,
-        ModelAPIKey:  utils.GetEnvWithDefault(common.MODEL_AGENT_API_KEY),
-    }
-    cfg.Name = "MemoryRecallAgent"
-    cfg.Instruction = "Answer the user's question. Use the 'search_past_conversations' tools if the answer might be in past conversations."
-
-    cfg.Tools = []tool.Tool{memorySearchTool}
-
-    memorySearchAgent, err := veagent.New(cfg)
-    if err != nil {
-        log.Printf("NewLLMAgent failed: %v", err)
-        return
-    }
-
-    sessionService := session.InMemoryService()
-    memoryService, err := vem.NewLongTermMemoryService(vem.BackendLongTermViking, nil)
-    if err != nil {
-        log.Printf("NewLongTermMemoryService failed: %v", err)
-        return
-    }
-
-    runner, err := runner.New(runner.Config{
-        AppName:        appName,
-        Agent:          memorySearchAgent,
-        SessionService: sessionService,
-        MemoryService:  memoryService,
-    })
-}
-```
-
-  </Tab>
-</Tabs>
+<Callout type="info">
+`local` / `viking` / `mem0` 等后端会对记忆做向量化（embedding），需要安装扩展依赖：`pip install "veadk-python[extensions]"`，并配置 embedding 模型（缺省时复用 `MODEL_AGENT_API_KEY`）。
+</Callout>
 
 ## 记忆管理
 
 ### 添加会话到长期记忆
 
-在会话（Session）结束或达到特定节点时，需要显式调用 add_session_to_memory 将会话数据持久化。对于 Viking 后端，这一步会触发数据的向量化处理。
-
-<Tabs items={['Python', 'Golang']}>
-  <Tab value="Python">
+会话结束或达到某个节点时，显式调用 `add_session_to_memory` 把会话数据持久化。它是异步方法，需要 `await`。对于 Viking 后端，这一步会触发数据的向量化。
 
 ```python
-# 假设 runner1 已经完成了一次对话
+# 假设 runner 已经完成了一次对话
 completed_session = await runner.session_service.get_session(
-    app_name=APP_NAME, user_id=USER_ID, session_id=session_id
+    app_name=APP_NAME, user_id=USER_ID, session_id=SESSION_ID
 )
 
 # 将完整会话归档到长期记忆
-root_agent.long_term_memory.add_session_to_memory(completed_session)
+await long_term_memory.add_session_to_memory(completed_session)
 ```
-
-  </Tab>
-  <Tab value="Golang">
-
-```go
-appName := "ve_agent"
-userID := "user1111"
-sessionService := session.InMemoryService()
-s, err := sessionService.Create(ctx, &session.CreateRequest{
-    AppName:   appName,
-    UserID:    userID,
-    SessionID: sessionID,
-})
-
-resp, err := sessionService.Get(ctx, &session.GetRequest{AppName: s.Session.AppName(), UserID: s.Session.UserID(), SessionID: s.Session.ID()})
-if err != nil {
-    log.Fatalf("Failed to get completed session: %v", err)
-}
-if err := memoryService.AddSession(ctx, resp.Session); err != nil {
-    log.Fatalf("Failed to add session to memory: %v", err)
-}
-```
-
-  </Tab>
-</Tabs>
 
 ### 检索长期记忆
 
-除了 Agent 在运行时自动检索外，开发者也可以调用 search_memory 接口直接进行语义搜索，用于调试或构建自定义的 RAG（检索增强生成）应用。
-
-<Tabs items={['Python', 'Golang']}>
-  <Tab value="Python">
+除了智能体在运行时通过 `load_memory` 自动检索外，你也可以直接调用 `search_memory` 做语义搜索，用于调试或构建自定义 RAG 应用。该方法是异步的，且参数为关键字参数：
 
 ```python
-query = "favorite project"
-res = await root_agent.long_term_memory.search_memory(
+response = await long_term_memory.search_memory(
     app_name=APP_NAME,
     user_id=USER_ID,
-    query=query
+    query="favorite project",
 )
-
-# 打印检索结果
-print(res)
+print(response.memories)
 ```
 
-  </Tab>
-  <Tab value="Golang">
+## 跨会话示例
 
-```go
-query := "favorite project"
-memoryService.Search(ctx, &memory.SearchRequest{
-    Query:   query,
-    UserID:  userID,
-    AppName: appName,
-})
-```
+下面是一个完整、可运行的端到端流程：在会话 #1 里告诉智能体一个事实，开启 `auto_save_session=True` 让 VeADK 自动归档该会话，然后在**全新的**会话 #2 提问——智能体通过检索长期记忆（而非上下文窗口）回忆起这个事实。
 
-  </Tab>
-</Tabs>
-
-## 使用长期记忆进行会话管理
-
-在单租户场景中，长期记忆可用于管理同一用户的多次会话，确保智能体能够：
-
-- 在新会话中记忆上一次交互内容；
-- 根据历史信息做出个性化响应；
-- 在多轮任务中累积进度信息或中间结果。
-
-### 准备工作
-
-- 为每个用户分配唯一标识（user_id 或 session_owner_id）；
-- 设计长期记忆数据结构以支持多会话信息保存；
-- 配合短期记忆使用，实现会话内上下文快速访问。
-
-### 示例
-
-以下示例演示了一个完整的流程：Runner1 告诉 Agent 一个信息（"My favorite project is Project Alpha"），将会话存入记忆，然后创建一个全新的 Runner2，验证其能否回答相关问题。
-
-<Tabs items={['Python', 'Golang']}>
-  <Tab value="Python">
+这里用 `local` 后端，需要 `pip install "veadk-python[extensions]"`。
 
 ```python
-# --- 阶段 1: 写入记忆 ---
-# Runner1 告诉 Agent 信息
-runner1_question = "My favorite project is Project Alpha."
-user_input = types.Content(role="user", parts=[types.Part(text=runner1_question)])
+import asyncio
 
-async for event in runner1.run_async(user_id=USER_ID, session_id=session_id, new_message=user_input):
-    pass # 处理 Runner1 的响应
+from veadk import Agent, Runner
+from veadk.memory.long_term_memory import LongTermMemory
 
-# 关键步骤：将会话归档到 VikingDB
-completed_session = await runner1.session_service.get_session(app_name=APP_NAME, user_id=USER_ID, session_id=session_id)
-root_agent.long_term_memory.add_session_to_memory(completed_session)
+APP_NAME = "ltm_demo"
+USER_ID = "user-42"
 
-# --- 阶段 2: 跨会话读取 ---
-# 初始化 Runner2 (模拟新的会话或后续交互)
-runner2 = Runner(
-    agent=root_agent,
-    app_name=APP_NAME,
-    user_id=USER_ID,
-    short_term_memory=short_term_memory
-)
 
-# Runner2 提问，依赖长期记忆回答
-qa_question = "favorite project"
-qa_content = types.Content(role="user", parts=[types.Part(text=qa_question)])
+def build_runner() -> Runner:
+    long_term_memory = LongTermMemory(backend="local", app_name=APP_NAME)
+    agent = Agent(
+        name="ltm_agent",
+        instruction=(
+            "你是个人助理。当用户问起之前告诉过你的事情时，"
+            "使用 `load_memory` 工具去回忆。"
+        ),
+        long_term_memory=long_term_memory,
+        auto_save_session=True,  # 每个会话结束后自动写入长期记忆
+    )
+    return Runner(agent=agent, app_name=APP_NAME, user_id=USER_ID)
 
-final_text = None
-async for event in runner2.run_async(user_id=USER_ID, session_id=session_id, new_message=qa_content):
-    if event.is_final_response():
-         final_text = event.content.parts[0].text.strip()
+
+async def main() -> None:
+    runner = build_runner()
+
+    # 会话 #1：告诉它一个事实。auto_save_session 随后会把它存进长期记忆。
+    print(
+        "Session 1 ->",
+        await runner.run(
+            messages="记一下：我对花生过敏，而且我是素食者。",
+            session_id="session-1",
+        ),
+    )
+
+    # 会话 #2：一个全新的会话。智能体必须通过记忆检索来回忆。
+    print(
+        "Session 2 ->",
+        await runner.run(
+            messages="帮我推荐一道适合我的菜，要考虑我的饮食限制。",
+            session_id="session-2",
+        ),
+    )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
-  </Tab>
-  <Tab value="Golang">
+智能体能在会话 #2 中识别同一用户在会话 #1 留下的偏好，给出连贯、个性化的回答（如推荐一道无花生的素食菜品）。
 
-```go
-package main
+## 自动保存会话
 
-import (
-    "context"
-    "log"
-    "strings"
-
-    veagent "github.com/volcengine/veadk-go/agent/llmagent"
-    "github.com/volcengine/veadk-go/common"
-    vem "github.com/volcengine/veadk-go/memory"
-    "github.com/volcengine/veadk-go/tool/builtin_tools"
-    "github.com/volcengine/veadk-go/utils"
-    "google.golang.org/adk/agent"
-    "google.golang.org/adk/agent/llmagent"
-    "google.golang.org/adk/runner"
-    "google.golang.org/adk/session"
-    "google.golang.org/adk/tool"
-    "google.golang.org/genai"
-)
-
-func main() {
-    ctx := context.Background()
-    appName := "ve_agent"
-    userID := "user1111"
-
-    // Define a tools that can search memory.
-    memorySearchTool, err := builtin_tools.LoadLongMemoryTool()
-    if err != nil {
-        log.Fatal(err)
-        return
-    }
-
-    infoCaptureAgent, err := veagent.New(&veagent.Config{
-        Config: llmagent.Config{
-            Name:        "InfoCaptureAgent",
-            Instruction: "Acknowledge the user's statement.",
-        },
-        ModelName:    common.DEFAULT_MODEL_AGENT_NAME,
-        ModelAPIBase: common.DEFAULT_MODEL_AGENT_API_BASE,
-        ModelAPIKey:  utils.GetEnvWithDefault(common.MODEL_AGENT_API_KEY),
-    })
-    if err != nil {
-        log.Printf("NewLLMAgent failed: %v", err)
-        return
-    }
-
-    cfg := &veagent.Config{
-        ModelName:    common.DEFAULT_MODEL_AGENT_NAME,
-        ModelAPIBase: common.DEFAULT_MODEL_AGENT_API_BASE,
-        ModelAPIKey:  utils.GetEnvWithDefault(common.MODEL_AGENT_API_KEY),
-    }
-    cfg.Name = "MemoryRecallAgent"
-    cfg.Instruction = "Answer the user's question. Use the 'search_past_conversations' tools if the answer might be in past conversations."
-
-    cfg.Tools = []tool.Tool{memorySearchTool}
-
-    memorySearchAgent, err := veagent.New(cfg)
-    if err != nil {
-        log.Printf("NewLLMAgent failed: %v", err)
-        return
-    }
-
-    // Use all default config
-    //sessionService, err := vem.NewShortTermMemoryService(vem.BackendShortTermPostgreSQL, nil)
-    //if err != nil {
-    //	log.Printf("NewShortTermMemoryService failed: %v", err)
-    //	return
-    //}
-    sessionService := session.InMemoryService()
-    memoryService, err := vem.NewLongTermMemoryService(vem.BackendLongTermViking, nil)
-    if err != nil {
-        log.Printf("NewLongTermMemoryService failed: %v", err)
-        return
-    }
-
-    runner1, err := runner.New(runner.Config{
-        AppName:        appName,
-        Agent:          infoCaptureAgent,
-        SessionService: sessionService,
-        MemoryService:  memoryService,
-    })
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    SessionID := "session123456789"
-
-    s, err := sessionService.Create(ctx, &session.CreateRequest{
-        AppName:   appName,
-        UserID:    userID,
-        SessionID: SessionID,
-    })
-    if err != nil {
-        log.Fatalf("sessionService.Create error: %v", err)
-    }
-
-    s.Session.State()
-
-    userInput1 := genai.NewContentFromText("My favorite project is Project Alpha.", "user")
-    var finalResponseText string
-    for event, err := range runner1.Run(ctx, userID, SessionID, userInput1, agent.RunConfig{}) {
-        if err != nil {
-            log.Printf("Agent 1 Error: %v", err)
-            continue
-        }
-        if event.Content != nil && !event.LLMResponse.Partial {
-            finalResponseText = strings.Join(textParts(event.LLMResponse.Content), "")
-        }
-    }
-    log.Printf("Agent 1 Response: %s\n", finalResponseText)
-
-    // Add the completed session to the Memory Service
-    log.Println("\n--- Adding Session 1 to Memory ---")
-    resp, err := sessionService.Get(ctx, &session.GetRequest{AppName: s.Session.AppName(), UserID: s.Session.UserID(), SessionID: s.Session.ID()})
-    if err != nil {
-        log.Fatalf("Failed to get completed session: %v", err)
-    }
-    if err := memoryService.AddSession(ctx, resp.Session); err != nil {
-        log.Fatalf("Failed to add session to memory: %v", err)
-    }
-    log.Println("Session added to memory.")
-
-    log.Println("\n--- Turn 2: Recalling Information ---")
-
-    runner2, err := runner.New(runner.Config{
-        AppName:        appName,
-        Agent:          memorySearchAgent,
-        SessionService: sessionService,
-        MemoryService:  memoryService,
-    })
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    s, _ = sessionService.Create(ctx, &session.CreateRequest{
-        AppName:   appName,
-        UserID:    userID,
-        SessionID: "session2222",
-    })
-
-    userInput2 := genai.NewContentFromText("What is my favorite project?", "user")
-
-    var finalResponseText2 []string
-    for event, err := range runner2.Run(ctx, s.Session.UserID(), s.Session.ID(), userInput2, agent.RunConfig{}) {
-        if err != nil {
-            log.Printf("Agent 2 Error: %v", err)
-            continue
-        }
-        if event.Content != nil && !event.LLMResponse.Partial {
-            for _, part := range event.Content.Parts {
-                finalResponseText2 = append(finalResponseText2, part.Text)
-            }
-        }
-    }
-    log.Printf("Agent 2 Response: %s\n", strings.Join(finalResponseText2, ""))
-
-}
-
-func textParts(Content *genai.Content) []string {
-    var texts []string
-    for _, part := range Content.Parts {
-        texts = append(texts, part.Text)
-    }
-    return texts
-}
-```
-
-  </Tab>
-</Tabs>
-
-### 说明 / 结果展示
-
-- 智能体能够识别并关联同一用户的历史交互；
-- 提供连续性强、个性化的多会话交互体验；
-- 为长期任务、学习型应用或持续监控场景提供基础能力。
-
-```text
-[Log Output]
-Runner1 Question: My favorite project is Project Alpha.
-Runner1 Answer: (Acknowledged)
-...
-[Step 4] Archiving session to Long-Term Memory via memory_service
-Session archived to Long-Term Memory
-...
-Runner2 Question: favorite project
-Runner2 Answer: Your favorite project is Project Alpha.
-```
-
-## 自动保存 session 到长期记忆
-
-为简化操作流程，VeADK 的 Agent 模块支持将对话 Session 自动保存至长期记忆。只需在初始化 Agent 时，开启 auto_save_session 属性并完成长期记忆组件的初始化配置即可，具体示例如下：
+如上例所示，在初始化 `Agent` 时开启 `auto_save_session=True`，并完成长期记忆配置，VeADK 就会自动把会话保存到长期记忆，无需手动调用 `add_session_to_memory`。
 
 ```python
 from veadk import Agent
-from veadk.memory import LongTermMemory
+from veadk.memory.long_term_memory import LongTermMemory
 
-# 初始化长期记忆组件
-long_term_memory = LongTermMemory(
-    backend="viking", app_name=APP_NAME, user_id=USER_ID
-)
+long_term_memory = LongTermMemory(backend="viking", app_name="ltm_demo")
 
-# 初始化 Agent 并开启 Session 自动保存
 agent = Agent(
+    name="ltm_agent",
     auto_save_session=True,
-    long_term_memory=long_term_memory
+    long_term_memory=long_term_memory,
 )
 ```
 
-为避免索引被频繁初始化，VeADK 提供 MIN_MESSAGES_THRESHOLD 和 MIN_TIME_THRESHOLD 两个环境变量，支持自定义 Session 保存周期。其中，默认触发保存的条件为累计 10 条 event 或间隔 60 秒；此外，当切换 Session 并发起新的问答请求时，VeADK 会自动将旧 Session 的会话内容保存至长期记忆中。
+为避免索引被频繁初始化，VeADK 提供 `MIN_MESSAGES_THRESHOLD` 和 `MIN_TIME_THRESHOLD` 两个环境变量来自定义保存周期。默认在累计 10 条 event 或间隔 60 秒时触发保存；此外，当切换 `session_id` 并发起新问答时，VeADK 会自动把上一个会话的内容保存到长期记忆。
+
+## 下一步
+
+<Cards>
+  <Card title="短期记忆" href="/cn/docs/framework/memory/short-term" description="单会话内的上下文管理。" />
+  <Card title="记忆最佳实践" href="/cn/docs/framework/memory/best-practice" description="组合短期与长期记忆构建客服助手。" />
+</Cards>

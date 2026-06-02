@@ -1,323 +1,235 @@
 ---
 title: "VeADK CLI"
-description: "The VeADK CLI provides end-to-end commands for project init, agent creation, web debugging, knowledge base, deployment, and evaluation."
+description: "Complete reference for the veadk CLI: init, create, web, kb, deploy, prompt, eval, uploadevalset, pipeline, and all their flags."
 ---
 
-## Overview
+The `veadk` CLI covers the full workflow from project init to deployment, evaluation, and optimization. This page is the authoritative reference for every command and its flags — framework tutorials link here whenever they mention a command.
 
-VeADK provides the following commands to streamline your workflow:
+```bash
+veadk --help
+```
 
-| Command | Description | Notes |
-| :-- | :-- | :-- |
-| `veadk init` | Generate a project scaffold deployable to VeFaaS | Generates a complete project directory structure including agent definition files, deployment config, and dependency files. Supports both standard agent and web application templates. |
-| `veadk create` | Create a new agent in the current directory | Creates the agent project structure, generating a `.env` config file, an `agent.py` agent definition file, and an `__init__.py` package init file. |
-| `veadk web` | A frontend debugging UI with short/long-term memory and knowledge base | Starts a local web server, produces a debugging UI URL, configures memory services and knowledge base integration, and can provide SSO sign-in via Agent Identity. |
-| `veadk kb` | Knowledge base operations | Creates knowledge base index files, supports multiple backend stores, and generates vectorized documents and retrieval config. |
-| `veadk deploy` | Deploy a project to VeFaaS | Generates a deployment package, creates cloud resource config, deploys the agent to Volcengine Function-as-a-Service, and generates an API endpoint. |
-| `veadk eval` | Evaluation with different backends | Generates evaluation report files with performance metrics and test results, supporting both local and remote agent evaluation. |
-| `veadk prompt` | Optimize the agent system prompt | Generates an optimized prompt file and saves optimization records and version history in the PromptPilot workspace. |
-| `veadk uploadevalset` | Eval set operations | Uploads evaluation datasets to the CozeLoop platform, generating eval set records and access permission config on the platform. |
-| `veadk pipeline` | Continuous delivery operations | Creates CI/CD config files and sets up an automated build pipeline. |
+## Command overview
 
-## Project Initialization
+| Command | Description |
+| :-- | :-- |
+| `veadk init` | Generate a project scaffold deployable to VeFaaS (with example agent and deploy scripts). |
+| `veadk create` | Create a new agent in the current directory (with `.env` and `agent.py`). |
+| `veadk web` | Launch a local web debugging UI with memory, knowledge base, and SSO. |
+| `veadk kb` | Knowledge base operations (e.g. add documents to a backend). |
+| `veadk deploy` | Deploy a project to Volcengine FaaS. |
+| `veadk eval` | Evaluate an agent against an eval set and metrics (ADK / DeepEval). |
+| `veadk prompt` | Optimize an agent's system prompt with PromptPilot. |
+| `veadk uploadevalset` | Upload an eval set to the CozeLoop platform. |
+| `veadk pipeline` | Configure a Volcengine CI/CD pipeline for automated build and deploy. |
+| `veadk agentkit` | AgentKit-compatible commands — see [AgentKit Compatibility](/en/docs/cli/agentkit-cli). |
 
-### Introduction
+<Callout type="info">
+  There are also `veadk update` (refresh local project templates), `veadk clean` (clean generated temp files), `veadk frontend` (A2UI frontend), and `veadk rl` (reinforcement-learning helpers). Run `veadk <command> --help` to see their flags.
+</Callout>
 
-The `veadk init` command initializes a new VeADK project that can be deployed to Volcengine FaaS.
+## veadk init
 
-Through an interactive setup flow, this command creates a new VeADK project from a predefined template. It generates a complete project structure with all files, configuration, and deployment scripts required to deploy to the Volcengine cloud platform.
+`veadk init` runs an interactive flow to initialize a new project from a template that can be deployed to Volcengine FaaS. It generates a complete project structure with configuration and deployment scripts.
 
 **Available templates:**
 
-- **'template' (default)**: Creates an A2A/MCP/Web server template with a weather-reporter example, suitable for most agent development scenarios.
-- **'web_template'**: Creates a web application template with a simple blog example, designed for web apps with UI components.
+- `template` (default): an A2A/MCP/Web server template with a weather-reporter example. Suitable for most scenarios.
+- `web_template`: a web application template with a simple-blog example, for web apps with UI.
 
-### Parameters
+### Flags
 
-The `veadk init` command mainly collects project name, description, and other information through interactive prompts, but also accepts the following command-line arguments:
-
-| Parameter | Type | Description |
-| :--- | :--- | :--- |
-| `--vefaas-template-type` | TEXT | Specifies the template type used during project initialization. |
-| `--help` | | Show this help message and exit. |
+| Flag | Type | Description |
+| :-- | :-- | :-- |
+| `--vefaas-template-type` | TEXT | Template type, `template` (default) or `web_template`. |
+| `--help` | | Show help and exit. |
 
 ### Examples
 
-Start the interactive initialization flow:
+Start the interactive init flow:
 
 ```bash
 veadk init
 ```
 
-After running the command above, you will be guided through the project initialization flow. Follow the prompts to enter the project name, local directory name, Volcengine FaaS application name, Volcengine API Gateway instance name, service name, upstream name, and other details. Using the default project name `weather-reporter` as an example:
-
-![veadk_init](/assets/images/cli/cli_veadk_init.gif)
-
-You can also specify the `web_template` template directly during initialization:
+You'll be prompted for the local directory name, the Volcengine FaaS application name, the API Gateway instance / service / upstream names, and the deploy mode and auth method. You can also pick a template directly:
 
 ```bash
 veadk init --vefaas-template-type web_template
 ```
 
-After completion, the generated directory structure is as follows:
+With the default directory name `veadk-cloud-proj`, the generated structure looks like:
 
-```bash
-weather-reporter/
-├────src                    # Agent project source code directory
-│   ├────weather_report     # Weather-reporter agent project directory
-│   │    ├──────agent.py    # Main agent definition file
-│   │    └──────__init__.py # Agent project package init file
-│   ├── agent.py            # Main agent definition file
-│   ├── app.py              # Main web application definition file
-│   ├── requirements.txt    # Project dependency file
-│   ├── run.sh              # Project run script
-│   └── __init__.py         # Agent project package init file
-├────clean.py               # Cleanup script for removing temporary files generated by the project
-├────deploy.py              # Deployment script for deploying the project to Volcengine FaaS
-└────__init__.py            # Agent project package init file
+```text
+veadk-cloud-proj/
+├── __init__.py             # Package init file
+├── clean.py                # Cleanup script for generated temp files
+├── config.yaml.example     # Config example (copy to config.yaml and fill in)
+├── deploy.py               # Deploy script for Volcengine FaaS
+└── src/                    # Agent project source directory
+    ├── __init__.py         # Package init file
+    ├── agent.py            # Runtime agent export (root_agent)
+    ├── app.py              # Server / web application definition
+    ├── requirements.txt    # Project dependencies
+    ├── run.sh              # Startup script
+    └── weather_report/     # Example agent module
+        ├── __init__.py     # Must contain `from . import agent`
+        └── agent.py        # Agent definition file
 ```
 
-## Creating an Agent
+<Callout type="info">
+  This matches the project structure described in [Deploy to VeFaaS](/en/docs/framework/deploy/vefaas). The `web_template` template uses a web-oriented `src/` instead (with `Dockerfile`, `models.py`, `templates/`, etc.).
+</Callout>
 
-### Introduction
+## veadk create
 
-The `veadk create` command creates a new VeADK agent project with template files preset.
+`veadk create` creates a new VeADK agent project in the current directory with template files. It prompts interactively for any missing arguments and safely checks for an existing directory.
 
-This command creates a new agent project directory containing all the files needed to start VeADK agent development, including environment configuration, agent definition, and package init. It handles missing parameters through interactive prompts and performs safety checks on existing directories.
+### Flags
 
-### Parameters
-
-| Parameter | Type | Description |
-| :--- | :--- | :--- |
-| `AGENT_NAME` | TEXT | (Optional) The name of the agent to create, which also serves as the directory name. If not provided on the command line, the user is prompted interactively. |
-| `--ark-api-key` | TEXT | (Optional) The ARK API key used for model authentication. If not provided, the user is prompted or can configure it later. |
-| `--help` | | Show this help message and exit. |
+| Flag | Type | Description |
+| :-- | :-- | :-- |
+| `AGENT_NAME` | TEXT | (Optional) Agent name, also used as the directory name. Prompted interactively if omitted. |
+| `--ark-api-key` | TEXT | (Optional) Ark API key for model authentication. If omitted, configure it later in `.env`. |
+| `--help` | | Show help and exit. |
 
 <Callout type="info" title="Note">
-  - The agent name serves as both the directory name and the project identifier.
+  - The agent name is used as both the directory name and the project identifier.
   - The API key can be configured later by editing the `.env` file.
-  - The generated agent can be run immediately with the `veadk web` command.
+  - The generated agent runs directly with `veadk web`.
 </Callout>
 
 ### Examples
 
-Start the interactive creation flow:
-
 ```bash
+# Interactive create
 veadk create
-```
 
-You can also create an agent by specifying its name directly, for example:
-
-```bash
+# Specify a name
 veadk create location-agent
-```
 
-After running the command above, you will be guided through the agent creation flow. First, the system prompts you to choose how to provide the API Key—you can enter it directly or configure it later, as shown below:
-
-![veadk_create](/assets/images/cli/cli_veadk_create.gif)
-
-You can also provide the API Key while creating:
-
-```bash
+# Provide an API key inline
 veadk create location-agent --ark-api-key "xxxxxx"
 ```
 
-This command creates a `.env` file containing the API Key. You can edit this file later to update the API Key. The full directory structure created by the command is as follows:
+Generated structure:
 
-```bash
+```text
 location-agent/
 ├── .env          # Environment config containing the API key
 ├── __init__.py   # Python package init file
-└── agent.py      # Main agent definition file
+└── agent.py      # Agent definition file
 ```
 
-At this point, you can run the example `location-agent` agent using the `veadk web` command.
+You can then run the agent with `veadk web`.
 
-## Web Debugging UI
+## veadk web
 
-### Introduction
+`veadk web` starts a local web server to interact with and debug your agent in the browser. It's fully compatible with Google ADK's `adk web` and supports VeADK's short-/long-term memory and knowledge base. It auto-detects the agent in the current directory (reading the `root_agent` global from `agent.py`) and configures the matching memory service.
 
-The `veadk web` command starts a local web server so you can interact with and debug your agent in the browser. VeADK is fully compatible with Google ADK's `adk web` command, ensuring seamless integration with the existing Google ADK ecosystem.
+When Agent Identity (User Pool) is enabled, the web UI integrates OAuth2/OIDC single sign-on (SSO), handling the login redirect and callback automatically.
 
-This command starts a web server that supports the agent's short-term and long-term memory features. It automatically detects and loads the agent in the current directory and configures the corresponding memory services.
+### Flags
 
-In addition, `veadk web` supports OAuth2/OIDC SSO sign-in via Agent Identity (User Pool). Once enabled, the web debugging UI integrates with Agent Identity's user pool and client config, automatically handling the login redirect and callback.
-
-### Parameters
-
-The `veadk web` command is fully compatible with Google ADK's `adk web` command, supporting the same parameter interface and behavior.
-
-| Parameter | Type | Description |
-| :--- | :--- | :--- |
-| `--port` | INTEGER | Port the web server listens on. Default: 8000. |
-| `--host` | TEXT | Host address the web server binds to. Default: 127.0.0.1. |
-| `--log-level` | [debug\|info\|warning\|error] | Log output level. Default: info. |
-| `--oauth2-user-pool` | TEXT | The Agent Identity User Pool name to enable. |
-| `--oauth2-user-pool-client` | TEXT | The Agent Identity User Pool Client name to enable. |
-| `--oauth2-redirect-uri` | TEXT | OAuth2 callback URL. Defaults to `http://{host}:{port}/oauth2/callback`. |
-| `--help` | | Show this help message and exit. |
-
-**Short/Long-term memory mechanism**:
-
-The VeADK web debugging UI supports the agent's short-term and long-term memory features, which are passed into the web UI as follows:
-
-**Short-term memory passing**:
-
-- The conversation history produced during interaction is automatically saved as short-term memory.
-- The web UI associates the agent's short-term memory data via the session ID.
-- Each conversation loads the corresponding short-term memory context.
-
-**Long-term memory passing**:
-
-- The agent's knowledge base configuration is passed to the web UI.
-- The web UI supports customizing agent behavior based on long-term memory.
-- Long-term memory data is loaded automatically via the agent config.
-
-**Memory service integration**:
-
-- Automatically detects and configures the corresponding memory backend service.
-- Supports multiple memory storage types (local, mysql, redis, etc.).
-- Memory data is synced and updated in real time in the web UI.
+| Flag | Type | Description |
+| :-- | :-- | :-- |
+| `--port` | INTEGER | Web server port. Default `8000`. |
+| `--host` | TEXT | Host address to bind. Default `127.0.0.1`. |
+| `--log-level` | [debug\|info\|warning\|error] | Log level. Default `info`. |
+| `--oauth2-user-pool` | TEXT | Agent Identity User Pool name to enable. |
+| `--oauth2-user-pool-client` | TEXT | Agent Identity User Pool Client name. |
+| `--oauth2-redirect-uri` | TEXT | OAuth2 callback URI. Default `http://{host}:{port}/oauth2/callback`. |
+| `--help` | | Show help and exit. |
 
 ### Examples
 
-In your agent project root, run the following command to start the web debugging UI:
-
 ```bash
-# Start the web server with default config
+# Start with defaults
 veadk web
-# Specify the port
+
+# Specify a port
 veadk web --port 8080
-```
 
-Enable SSO sign-in via Agent Identity:
-
-```bash
+# Enable Agent Identity SSO
 veadk web --oauth2-user-pool my-user-pool --oauth2-user-pool-client my-web-client
 ```
 
-This command automatically reads the `agent.py` file in the directory where the command runs and loads the `root_agent` global variable from it. After the service starts, it is typically accessible at `http://127.0.0.1:8000`.
+Once started, the UI is typically available at `http://127.0.0.1:8000`. Pick the agent to debug from the selector in the top-left.
 
-An example is shown below:
+## veadk kb
 
-![veadk_web](/assets/images/cli/cli_veadk_web.gif)
+`veadk kb` is the command group for managing VeADK knowledge bases.
 
-In the selector at the top-left of the UI, you can choose the agent to debug. In this example, you can see the `location-agent` agent you created.
+### veadk kb add
 
-## Knowledge Base
+Add a file or directory to a knowledge base backend. Accepts a single file (PDF, TXT, MD, DOCX, etc.) or an entire directory.
 
-The `veadk kb` command is a command set for managing VeADK knowledge bases.
+| Flag | Type | Description |
+| :-- | :-- | :-- |
+| `--backend` | [local\|opensearch\|viking\|redis] | **(Required)** Knowledge base backend type. |
+| `--app_name` | TEXT | Application identifier used to organize and isolate knowledge base data. |
+| `--index` | TEXT | Knowledge base index identifier, unique within `app_name`. |
+| `--path` | TEXT | **(Required)** Path to the file or directory to add. |
+| `--help` | | Show help and exit. |
 
-### `veadk kb add`
+Backend types:
 
-Add a file or directory to the specified knowledge base backend.
-
-#### Introduction
-
-This command supports multiple backend types for storing and indexing knowledge content:
-
-- **local**: SQLite-based local file storage, suitable for development and small deployments.
-- **opensearch**: An Elasticsearch-compatible search engine, recommended for production environments with large document volumes.
-- **viking**: Volcengine's managed vector database service, optimized for semantic search and RAG applications.
-- **redis**: An in-memory data store with vector search, suitable for fast retrieval and smaller knowledge bases.
-
-This command can process a single file (such as PDF, TXT, MD, DOCX, etc.) or an entire directory containing multiple supported files.
-
-#### Parameters
-
-| Parameter | Type | Description |
-| :--- | :--- | :--- |
-| `--backend` | [local\|opensearch\|viking\|redis] | **(Required)** The knowledge base backend type. |
-| `--app_name` | TEXT | The application identifier used to organize and isolate knowledge base data. |
-| `--index` | TEXT | The knowledge base index identifier, unique within `app_name`. |
-| `--path` | TEXT | **(Required)** The file or directory path of the knowledge content to add. |
-| `--help` | | Show this help message and exit. |
-
-The `backend` currently supports 4 types: local, opensearch, viking, and redis.
-
-- **local**: Local in-memory knowledge base storage, suitable for development and small deployments.
-- **opensearch**: An Elasticsearch-compatible search engine, recommended for production environments with large document volumes.
-- **viking**: Volcengine's managed vector database service, optimized for semantic search and RAG applications.
-- **redis**: An in-memory data store with vector search, suitable for fast retrieval and smaller knowledge bases.
+- **local**: local storage, suitable for development and small deployments.
+- **opensearch**: Elasticsearch-compatible search engine, recommended for production with many documents.
+- **viking**: Volcengine's managed vector database, optimized for semantic search and RAG.
+- **redis**: in-memory data store with vector search, suitable for fast retrieval and smaller knowledge bases.
 
 <Callout type="info" title="Note">
-  The `veadk kb add` command needs to convert your document content into vectors. By default, this process uses an Embedding Model service that turns document content into vector representations. You can configure different embedding models as needed, for example Volcengine's Ark large-model platform.
-
-  You can specify the API Key of your embedding model service by setting the `MODEL_EMBEDDING_API_KEY` environment variable in the `.env` file in your project root.
-
-  In addition, if you choose a non-local backend (such as opensearch, viking, redis), you must ensure the relevant environment variables are configured correctly (these can be set in the `.env` file in your project root).
+  `veadk kb add` converts documents into vectors using an embedding model. Set `MODEL_EMBEDDING_API_KEY` in the `.env` file in your project root. For non-local backends (opensearch, viking, redis), also configure that backend's connection environment variables.
 </Callout>
 
-#### Examples
+#### Example
 
-The following example demonstrates adding a single file to a redis-backed knowledge base and using it in subsequent agent calls.
-
-Suppose you have a file named `qa.md` in the current directory with the following content:
+The following adds a single file to a Redis backend and retrieves it from an agent. Assume a `qa.md` in the current directory:
 
 ````markdown
 # Customer Service Knowledge Base
 
-## 1. Company Overview
+## 1. About Us
 
-VE Technology is a high-tech company focused on intelligent customer service and knowledge management. Our product is the **Intelligent Customer Service System**, which provides enterprise customers with efficient, intelligent automated customer service solutions through natural language processing and knowledge base retrieval.
+VE Tech is a high-tech company focused on intelligent customer service and knowledge management. Our product, the **Intelligent Customer Service System**, uses NLP and knowledge-base retrieval to deliver efficient, automated support for enterprise customers.
 
----
+## 2. Features
 
-## 2. Product Features
-
-- **Automated Q&A**: Quickly responds to common questions based on the knowledge base.
-- **Multi-channel access**: Supports web, App, WeChat, Feishu, and other channels.
-- **Smart recommendations**: Recommends relevant answers based on context.
-- **Data analytics**: Provides user question statistics and customer-service performance reports.
-- **Self-service knowledge base management**: Allows non-technical staff to quickly edit knowledge content.
-
----
+- **Automated Q&A**: fast responses to common questions from the knowledge base.
+- **Multi-channel**: web, app, WeChat, Feishu, and more.
+- **Smart recommendations**: context-aware answer suggestions.
+- **Analytics**: question statistics and agent performance reports.
 
 ## 3. FAQ
 
-### Q1: Which languages does the Intelligent Customer Service System support?
+### Q1: Which languages does the system support?
 
-A1: It currently supports **Chinese** and **English**, with Japanese, Korean, and other languages to be added gradually.
+A1: Currently **Chinese** and **English**, with Japanese, Korean, and more to follow.
 
-### Q2: Can the system integrate with an existing CRM?
+### Q2: Can it integrate with an existing CRM?
 
-A2: Yes. Our system supports seamless integration with mainstream CRM systems (such as Salesforce, Zoho, Kingdee) via API.
-
-### Q3: What happens if the bot cannot answer a user's question?
-
-A3: The system automatically transfers the question to a human agent and logs it on the backend, making it easy for administrators to add it to the knowledge base.
-
-### Q4: How often is the knowledge base content updated?
-
-A4: The knowledge base supports **real-time updates**—changes take effect immediately after an administrator submits them.
-
----
+A2: Yes. It integrates with mainstream CRM systems (such as Salesforce, Zoho, Kingdee) via API.
 
 ## 4. Contact Us
 
-- Website: [https://www.example.com](https://www.example.com)
-- Support email: support@ve
+- Website: https://www.example.com
+- Support email: support@example.com
 - Hotline: 400-123-4567
 ````
 
-You can add it to a local knowledge base with the following command:
+Add it to the Redis knowledge base:
 
 ```bash
 veadk kb add --backend redis --app_name app --path ./qa.md
 ```
 
 <Callout type="info" title="Note">
-  - In this example we use the redis backend. You need to configure environment variables such as `DATABASE_REDIS_HOST`, `DATABASE_REDIS_HOST`, `DATABASE_REDIS_PORT`, `DATABASE_REDIS_PASSWORD` (and the optional `DATABASE_REDIS_USER`) in the `.env` file in your local directory beforehand.
-  - You need to confirm that your configured redis service is running normally and that the port matches the one configured in your `.env` file.
-  - You need to ensure that the redis service has vector search enabled.
+  - For the Redis backend, first set `DATABASE_REDIS_HOST`, `DATABASE_REDIS_PORT`, `DATABASE_REDIS_PASSWORD` (and optionally `DATABASE_REDIS_USER`) in `.env`.
+  - Make sure Redis is running, the port matches `.env`, and vector search is enabled.
 </Callout>
 
-The operation is shown below:
-
-![veadk_kb_add](/assets/images/cli/cli_veadk_kb_add.gif)
-
-Next, you can verify that the knowledge base was added successfully with the following code:
+Then verify the knowledge base with the following code:
 
 ```python
 import asyncio
@@ -354,177 +266,129 @@ print(response)
 ```
 
 <Callout type="info" title="Note">
-  - When running the above code, you need to confirm that the redis service is running normally with vector search enabled. This code must also share the same environment configuration as the command above (we recommend running it in the same directory so it can share the same `.env` config file).
-  - The `app_name` in the code must match the `app_name` in the command above; in this example it is `app`.
+  - When running this code, Redis must be running with vector search enabled. Run it in the same directory as the command above so it shares the same `.env`.
+  - The `app_name` in the code must match the command (here, `app`).
 </Callout>
 
-The operation is shown below:
+## veadk deploy
 
-![veadk_kb_test](/assets/images/cli/cli_veadk_kb_test.gif)
+`veadk deploy` deploys a VeADK project to the Volcengine FaaS platform. It builds a deployment package from the local project, provisions the necessary cloud resources, and manages the whole process. It processes `requirements.txt` automatically and excludes `config.yaml` for security.
 
-## Deployment
+### Flags
 
-### Introduction
-
-The `veadk deploy` command deploys a VeADK project to Volcengine's Function-as-a-Service (FaaS) platform.
-
-This command creates a deployment package from the local project, configures the necessary cloud resources, and manages the entire deployment process, including template generation, file copying, and cloud resource configuration. The deployment flow automatically handles the `requirements.txt` file and, for security reasons, excludes `config.yaml`.
-
-### Parameters
-
-| Parameter | Type | Description |
-| :--- | :--- | :--- |
-| `--access-key` | TEXT | Volcengine Access Key (AK). If not provided, the `VOLCENGINE_ACCESS_KEY` environment variable is used. |
-| `--secret-key` | TEXT | Volcengine Secret Key (SK). If not provided, the `VOLCENGINE_SECRET_KEY` environment variable is used. |
-| `--vefaas-app-name` | TEXT | **(Required)** The name of the target Volcengine FaaS application to deploy to. |
-| `--veapig-instance-name` | TEXT | (Optional) The Volcengine API Gateway instance name used to configure external API access. |
-| `--veapig-service-name` | TEXT | (Optional) The Volcengine API Gateway service name. |
-| `--veapig-upstream-name` | TEXT | (Optional) The Volcengine API Gateway upstream name. |
-| `--short-term-memory-backend` | [local\|mysql] | The backend type for short-term memory storage. Default: `local`. |
-| `--use-adk-web` | | Enable the ADK Web UI for the deployed agent. |
-| `--path` | TEXT | The local directory path containing the VeADK project to deploy. Default: the current directory `.`. |
-| `--help` | | Show this help message and exit. |
+| Flag | Type | Description |
+| :-- | :-- | :-- |
+| `--volcengine-access-key` | TEXT | Volcengine access key (AK). Falls back to the `VOLCENGINE_ACCESS_KEY` env var. |
+| `--volcengine-secret-key` | TEXT | Volcengine secret key (SK). Falls back to the `VOLCENGINE_SECRET_KEY` env var. |
+| `--vefaas-app-name` | TEXT | **(Required)** Target Volcengine FaaS application name. |
+| `--veapig-instance-name` | TEXT | (Optional) API Gateway instance name. |
+| `--veapig-service-name` | TEXT | (Optional) API Gateway service name. |
+| `--veapig-upstream-name` | TEXT | (Optional) API Gateway upstream name. |
+| `--short-term-memory-backend` | [local\|mysql] | Short-term memory backend. Default `local`. |
+| `--use-adk-web` | | Enable the ADK Web interface for the deployed agent. |
+| `--auth-method` | [none\|api-key\|oauth2] | Authentication method for the agent. Default `none`. |
+| `--user-pool-name` | TEXT | Agent Identity User Pool name (used with `oauth2`). |
+| `--client-name` | TEXT | Agent Identity Client name (used with `oauth2`). |
+| `--path` | TEXT | Local project path to deploy. Default current directory `.`. |
+| `--iam-role` | TEXT | IAM role for the VeFaaS function. |
+| `--help` | | Show help and exit. |
 
 ### Examples
 
-From the project root, run the deployment (AK/SK and the FaaS app name are required):
-
 ```bash
+# Deploy from the project root (provide AK/SK and the FaaS app name)
 veadk deploy \
   --vefaas-app-name my-cloud-app \
-  --access-key "YOUR_ACCESS_KEY" \
-  --secret-key "YOUR_SECRET_KEY"
-```
+  --volcengine-access-key "YOUR_AK" \
+  --volcengine-secret-key "YOUR_SK"
 
-Deploy a project at a specified path and enable the web UI:
-
-```bash
+# Deploy a project at a specific path and enable the Web UI
 veadk deploy \
   --path ./my-agent-project \
   --vefaas-app-name my-cloud-app \
   --use-adk-web \
-  --access-key "YOUR_ACCESS_KEY" \
-  --secret-key "YOUR_SECRET_KEY"
+  --volcengine-access-key "YOUR_AK" \
+  --volcengine-secret-key "YOUR_SK"
 ```
 
 <Callout type="info" title="Note">
-  - You can also set the `VOLCENGINE_ACCESS_KEY` and `VOLCENGINE_SECRET_KEY` environment variables in the `.env` file in your project root to avoid exposing the AK/SK in plaintext on the command line.
-  - During deployment you can specify `--veapig-instance-name`, `--veapig-service-name`, and `--veapig-upstream-name` to configure external API access. If not specified, the system uses defaults and creates them automatically. You can use an existing VeAPIG instance and service, or have the system create new ones during deployment.
-  - During deployment, you can check the deployment status and logs in the Volcengine [VeFaas Console](https://console.volcengine.com/vefaas/) to confirm a successful deployment.
+  - Set `VOLCENGINE_ACCESS_KEY` and `VOLCENGINE_SECRET_KEY` in `.env` to avoid exposing AK/SK on the command line.
+  - If you omit the API Gateway instance / service / upstream names, defaults are used and resources are created automatically; you can also reuse existing ones.
+  - Track status and logs in the [VeFaaS console](https://console.volcengine.com/vefaas/) during deployment.
 </Callout>
 
-The detailed deployment logs are shown below:
+## veadk prompt
 
-![Deployment logs](/assets/images/cli/cli_veadk_deploy_vefaas_log.png)
+`veadk prompt` optimizes an agent's system prompt using the Volcengine PromptPilot service. It loads the agent from the given file and reads the `instruction` of its `Agent` object as the optimization target.
 
-After a successful deployment, you can view your deployed agent application in the Volcengine [VeFaas Console](https://console.volcengine.com/vefaas/).
+### Flags
 
-## Prompt Optimization
+| Flag | Type | Description |
+| :-- | :-- | :-- |
+| `--path` | TEXT | Path to the agent file with an `agent=...` global. Default current directory `.`. |
+| `--feedback` | TEXT | Feedback and suggestions for prompt optimization. |
+| `--api-key` | TEXT | API key for the PromptPilot service. |
+| `--workspace-id` | TEXT | PromptPilot workspace ID. |
+| `--model-name` | TEXT | Model used for prompt optimization. Default `doubao-1.5-pro-32k-250115`. |
+| `--help` | | Show help and exit. |
 
-### Introduction
-
-The `veadk prompt` command uses Volcengine's PromptPilot service to optimize an agent's system prompt based on feedback and best practices.
-
-This command loads the agent from a specified local file and uses the specified model to intelligently optimize its prompt.
-
-### Parameters
-
-| Parameter | Type | Description |
-| :--- | :--- | :--- |
-| `--path` | TEXT | Path to the agent file containing the `agent=...` global variable. Default: the current directory `.`. |
-| `--feedback` | TEXT | User feedback and suggestions used to optimize the prompt. |
-| `--api-key` | TEXT | The API Key for the PromptPilot service. |
-| `--workspace-id` | TEXT | The PromptPilot workspace ID. |
-| `--model-name` | TEXT | The model name used for prompt optimization. |
-| `--help` | | Show this help message and exit. |
-
-### Examples
-
-Taking the optimization of the `weather_reporter` agent's system prompt as an example:
+### Example
 
 ```bash
-veadk prompt --path ./weather_reporter/agent.py --feedback "Make the prompt more specific and clear" --api-key "YOUR_API_KEY" --workspace-id "YOUR_WORKSPACE_ID"
+veadk prompt \
+  --path ./weather_reporter/agent.py \
+  --feedback "Make the prompt more specific and explicit" \
+  --api-key "YOUR_API_KEY" \
+  --workspace-id "YOUR_WORKSPACE_ID"
 ```
 
 <Callout type="info" title="Note">
-  - You need to first create a project in the Volcengine [PromptPilot Console](https://promptpilot.volcengine.com/) and obtain an API Key and workspace ID.
-  - You can also set the `PROMPTPILOT_API_KEY` environment variable in the `.env` file in your project root to avoid exposing the API Key in plaintext on the command line.
-  - This command automatically reads the `instruction` content of the `Agent` object in the agent code and uses it as the target for prompt optimization.
+  - Create a project in the [PromptPilot console](https://promptpilot.volcengine.com/) first to get an API key and workspace ID.
+  - You can also set `PROMPTPILOT_API_KEY` in `.env` to avoid exposing it on the command line.
 </Callout>
 
-In this example, the original `instruction` content is as follows:
+## veadk eval
 
-```text
-Once user ask you weather of a city, you need to provide the weather report for that city by calling `get_city_weather`
-```
+`veadk eval` evaluates an agent using a given eval set and metrics.
 
-The result of running this command is as follows:
+**Evaluation modes:**
 
-```text
-Optimized prompt for agent weather_reporter:
+- **Local**: load and evaluate the agent from local source code.
+- **Remote**: connect to and evaluate an agent deployed in A2A mode via URL.
 
-# Role
-You are a weather information provider. When the user asks about the weather of a city, your task is to offer an accurate weather report for that city.
+**Evaluation frameworks:**
 
-# Task Requirements
-- **User Inquiry**: Once the user asks about the weather of a specific city, you must call the `get_city_weather` function to obtain the relevant weather data.
-- **Report Content**: The weather report should include at least the current temperature, weather conditions (such as sunny, cloudy, rainy), and wind speed of the city. If available, you can also provide additional information like humidity and air quality.
-- **Format**: Present the weather report in a clear and easy - to - understand format. For example: "In [City Name], the current temperature is [Temperature], the weather condition is [Weather Conditions], and the wind speed is [Wind Speed]."
+- **adk**: Google ADK's evaluation framework with standardized metrics.
+- **deepeval**: a more advanced framework with customizable metrics, including GEval and tool-use correctness.
 
-# Additional Notes
-- If the user's inquiry is not clear about the city name or contains ambiguous information, ask the user to clarify the city name before proceeding.
-- Ensure that the information provided is based on the data obtained from the `get_city_weather` function and is as accurate as possible.
-```
+### Flags
 
-## Evaluation
-
-### Introduction
-
-The `veadk eval` command performs a comprehensive evaluation of an agent using a specified evaluation dataset and metrics.
-
-This command supports two evaluation modes:
-
-- **Local evaluation**: Loads and evaluates the agent from local source code.
-- **Remote evaluation**: Connects to and evaluates an agent deployed in A2A mode via a URL.
-
-It also supports two evaluation frameworks:
-
-- **adk**: Google's Agent Development Kit evaluation framework, providing standardized metrics.
-- **deepeval**: A more advanced evaluation framework supporting customizable metrics including GEval and tool-use accuracy.
-
-### Parameters
-
-| Parameter | Type | Description |
-| :--- | :--- | :--- |
-| `--agent-dir` | TEXT | (Local evaluation) The local directory path of the agent to evaluate. Must contain an `agent.py` file that exports a `root_agent` variable. Default: the current directory `.`. |
-| `--agent-a2a-url` | TEXT | (Remote evaluation) The full URL of a deployed A2A (Agent-to-Agent) mode agent. |
-| `--evalset-file` | TEXT | **(Required)** Path to the evaluation dataset file in Google ADK format. |
-| `--evaluator` | [adk\|deepeval] | **(Required)** The evaluation framework to use—choose `adk` or `deepeval`. |
-| `--judge-model-name` | TEXT | The name of the language model used for evaluation judgment. Default: `doubao-1-5-pro-256k-250115`. This parameter has no effect with the `adk` evaluator. |
-| `--volcengine-access-key` | TEXT | The Access Key (AK) used for Volcengine model authentication. |
-| `--volcengine-secret-key` | TEXT | The Secret Key (SK) used for Volcengine model authentication. |
-| `--help` | | Show this help message and exit. |
+| Flag | Type | Description |
+| :-- | :-- | :-- |
+| `--agent-dir` | TEXT | (Local) Local directory of the agent to evaluate; must contain an `agent.py` exporting `root_agent`. Default current directory `.`. |
+| `--agent-a2a-url` | TEXT | (Remote) Full URL of the deployed A2A-mode agent. |
+| `--evalset-file` | TEXT | **(Required)** Path to the Google ADK-format eval set file. |
+| `--evaluator` | [adk\|deepeval] | **(Required)** Evaluation framework to use. |
+| `--judge-model-name` | TEXT | Judge model name. Default `doubao-1-5-pro-256k-250115`. Ignored under the `adk` evaluator. |
+| `--volcengine-access-key` | TEXT | Volcengine access key (AK) for model authentication. |
+| `--volcengine-secret-key` | TEXT | Volcengine secret key (SK) for model authentication. |
+| `--help` | | Show help and exit. |
 
 <Callout type="info" title="Note">
-  - You must provide either `--agent-dir` or `--agent-a2a-url`.
-  - If both are provided, `--agent-a2a-url` takes precedence.
-  - You need to prepare an evaluation dataset file in advance. Refer to the instructions in [Evaluation](/en/docs/framework/deploy/evaluation) to create a JSON file in Google ADK format.
+  - You must provide one of `--agent-dir` or `--agent-a2a-url`; if both are given, `--agent-a2a-url` takes precedence.
+  - The eval set file must be in Google ADK format — see [Evaluation](/en/docs/framework/eval-optimization/evaluation).
 </Callout>
 
 ### Examples
 
-**Local evaluation example**:
-
 ```bash
+# Local evaluation
 veadk eval \
   --agent-dir ./my-agent \
   --evalset-file ./eval.json \
   --evaluator adk
-```
 
-**Remote evaluation example**:
-
-```bash
+# Remote evaluation
 veadk eval \
   --agent-a2a-url http://my-agent-url.com/invoke \
   --evalset-file ./eval.json \
@@ -533,25 +397,21 @@ veadk eval \
   --volcengine-secret-key "YOUR_SK"
 ```
 
-## Eval Set
+## veadk uploadevalset
 
-### Introduction
+`veadk uploadevalset` uploads a local JSON eval set to the CozeLoop platform, converting Google ADK-format test cases into the format CozeLoop expects.
 
-The `veadk uploadevalset` command uploads evaluation dataset entries from a local JSON file to the CozeLoop platform for agent evaluation and testing.
+### Flags
 
-This command processes evaluation cases in Google ADK format and converts them to the format expected by CozeLoop.
+| Flag | Type | Description |
+| :-- | :-- | :-- |
+| `--file` | TEXT | **(Required)** Path to the JSON file with dataset entries. |
+| `--cozeloop-workspace-id` | TEXT | CozeLoop workspace ID. Falls back to `OBSERVABILITY_OPENTELEMETRY_COZELOOP_SERVICE_NAME`. |
+| `--cozeloop-evalset-id` | TEXT | CozeLoop eval set ID. Falls back to `OBSERVABILITY_OPENTELEMETRY_COZELOOP_EVALSET_ID`. |
+| `--cozeloop-api-key` | TEXT | CozeLoop API key. Falls back to `OBSERVABILITY_OPENTELEMETRY_COZELOOP_API_KEY`. |
+| `--help` | | Show help and exit. |
 
-### Parameters
-
-| Parameter | Type | Description |
-| :--- | :--- | :--- |
-| `--file` | TEXT | **(Required)** Path to the JSON file containing the dataset entries. |
-| `--cozeloop-workspace-id` | TEXT | The CozeLoop workspace ID. If not provided, the `OBSERVABILITY_OPENTELEMETRY_COZELOOP_SERVICE_NAME` environment variable is used. |
-| `--cozeloop-evalset-id` | TEXT | The CozeLoop eval set ID. If not provided, the `OBSERVABILITY_OPENTELEMETRY_COZELOOP_EVALSET_ID` environment variable is used. |
-| `--cozeloop-api-key` | TEXT | The CozeLoop API Key. If not provided, the `OBSERVABILITY_OPENTELEMETRY_COZELOOP_API_KEY` environment variable is used. |
-| `--help` | | Show this help message and exit. |
-
-### Examples
+### Example
 
 ```bash
 veadk uploadevalset \
@@ -561,38 +421,34 @@ veadk uploadevalset \
   --cozeloop-api-key "YOUR_API_KEY"
 ```
 
-## Continuous Delivery
+## veadk pipeline
 
-### Introduction
+`veadk pipeline` connects a VeADK project to a Volcengine pipeline for automated CI/CD. Whenever changes are pushed to the specified GitHub repository, the pipeline automatically builds, containerizes, and deploys your project, creating the necessary cloud infrastructure (Container Registry, FaaS function, pipeline config).
 
-The `veadk pipeline` command integrates your VeADK project with Volcengine Pipelines for automated CI/CD deployment.
+### Flags
 
-This command sets up a complete CI/CD pipeline. Whenever changes are pushed to the specified GitHub repository, the pipeline automatically builds, containerizes, and deploys your VeADK agent project. It creates all the necessary cloud infrastructure, including Container Registry (CR) resources, FaaS functions, and pipeline configuration.
-
-### Parameters
-
-| Parameter | Type | Description |
-| :--- | :--- | :--- |
-| `--veadk-version` | TEXT | The base VeADK image tag used for containerization. Can be 'preview', 'latest', or a specific version. |
-| `--github-url` | TEXT | **(Required)** The GitHub repository URL of your project. |
-| `--github-branch` | TEXT | **(Required)** The GitHub branch of your project. |
-| `--github-token` | TEXT | **(Required)** The GitHub token used to manage your project. |
-| `--volcengine-access-key` | TEXT | Volcengine Access Key (AK). If not set, the `VOLCENGINE_ACCESS_KEY` environment variable is used. |
-| `--volcengine-secret-key` | TEXT | Volcengine Secret Key (SK). If not set, the `VOLCENGINE_SECRET_KEY` environment variable is used. |
-| `--region` | TEXT | The region for Volcengine VeFaaS, CR, and Pipeline. Default: `cn-beijing`. |
-| `--cr-instance-name` | TEXT | The Volcengine Container Registry (CR) instance name. Default: `veadk-user-instance`. |
-| `--cr-namespace-name` | TEXT | The CR namespace name. Default: `veadk-user-namespace`. |
-| `--cr-repo-name` | TEXT | The CR repository name. Default: `veadk-user-repo`. |
-| `--vefaas-function-id` | TEXT | The Volcengine FaaS function ID. If not set, a new function is created automatically. |
-| `--help` | | Show this help message and exit. |
+| Flag | Type | Description |
+| :-- | :-- | :-- |
+| `--veadk-version` | TEXT | Base VeADK image tag for containerization — `preview`, `latest`, or a specific version. |
+| `--github-url` | TEXT | **(Required)** GitHub repository URL of your project. |
+| `--github-branch` | TEXT | **(Required)** GitHub branch of your project. |
+| `--github-token` | TEXT | **(Required)** GitHub token to manage your project. |
+| `--volcengine-access-key` | TEXT | Volcengine access key (AK). Falls back to `VOLCENGINE_ACCESS_KEY`. |
+| `--volcengine-secret-key` | TEXT | Volcengine secret key (SK). Falls back to `VOLCENGINE_SECRET_KEY`. |
+| `--region` | TEXT | Region for VeFaaS, CR, and Pipeline. Default `cn-beijing`. |
+| `--cr-instance-name` | TEXT | Container Registry (CR) instance name. Default `veadk-user-instance`. |
+| `--cr-namespace-name` | TEXT | CR namespace name. Default `veadk-user-namespace`. |
+| `--cr-repo-name` | TEXT | CR repository name. Default `veadk-user-repo`. |
+| `--vefaas-function-id` | TEXT | VeFaaS function ID. A new function is created if unset. |
+| `--help` | | Show help and exit. |
 
 <Callout type="info" title="Note">
-  - The GitHub token must have appropriate repository access permissions.
+  - The GitHub token must have appropriate repository access.
   - All Volcengine resources are created in the specified region.
-  - The pipeline is triggered immediately after creation for the initial deployment.
+  - The pipeline triggers an initial deployment immediately after creation.
 </Callout>
 
-### Examples
+### Example
 
 ```bash
 veadk pipeline \
@@ -604,6 +460,14 @@ veadk pipeline \
   --region cn-beijing
 ```
 
-## AgentKit Command Compatibility
+## AgentKit compatibility
 
-The VeADK CLI is compatible with AgentKit commands—you can simply add the `veadk` prefix to AgentKit-related commands. For details, see [AgentKit Command Compatibility](/en/docs/cli/agentkit-cli).
+The VeADK CLI is compatible with AgentKit commands — just prefix them with `veadk agentkit`. See [AgentKit Compatibility](/en/docs/cli/agentkit-cli).
+
+## Next steps
+
+<Cards>
+  <Card title="Quickstart" href="/en/docs/framework/getting-started/quickstart" description="Run your first agent." />
+  <Card title="Deploy to VeFaaS" href="/en/docs/framework/deploy/vefaas" description="Deploy your agent to the cloud." />
+  <Card title="Evaluation" href="/en/docs/framework/eval-optimization/evaluation" description="Measure quality systematically with eval sets." />
+</Cards>

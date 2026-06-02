@@ -1,465 +1,165 @@
 ---
 title: "Long-term Memory"
-description: "VeADK long-term memory persists important information across sessions to enable personalized, sustainable agent interactions."
+description: "VeADK long-term memory persists important information across sessions for personalized, sustainable agent interactions."
 ---
 
-This document introduces the concept and usage of **Long-term Memory** in VeADK. Long-term memory persists important information across sessions and over time, enhancing the consistency and intelligence of an agent across continuous interactions.
+Long-term memory persists important information across sessions and over time — user preferences, task history, key knowledge points, or long-term state. While [short-term memory](/en/docs/framework/memory/short-term) only lives within a single conversation, long-term memory lets the agent remember facts across **different** sessions.
 
-**Definition**: Long-term memory is the mechanism an agent uses to store important information that extends beyond a single session. It can include user preferences, task history, key knowledge points, or long-term state.
-
-**Why it matters**:
+Why it matters:
 
 - Supports continuous conversational experiences across sessions;
-- Allows the agent to retain learning outcomes and user-specific information across many interactions;
-- Reduces repeated questions, improving user satisfaction and efficiency;
+- Lets the agent retain learning outcomes and user-specific information across many interactions;
+- Reduces repeated questions, improving satisfaction and efficiency;
 - Supports long-term strategy optimization, such as personalized recommendations or task tracking.
 
-Agent users need long-term memory to achieve smarter, more personalized, and sustainable interactions, which significantly improve system usefulness in multi-session or complex-task scenarios.
+## Supported backends
 
-## Supported Backends
+Use the `local` backend for debugging. For production, the `viking` or `mem0` backends are recommended.
 
-You can use the `local` backend for debugging. For production, the `viking` or `mem0` backends are recommended.
-
-| Type | Description |
+| Backend | Description |
 | :----------- | :--------------------------------------------------------- |
-| `local` | In-memory cross-session memory, cleared when the program exits (for local debugging only). |
-| `viking` | Uses the VikingDB memory product as long-term memory storage (recommended for production). |
-| `mem0` | Uses the Mem0 memory product as long-term memory storage (recommended for production). |
+| `local` | In-memory cross-session memory, cleared when the process exits (local debugging only). Requires `veadk-python[extensions]`. |
+| `viking` | Uses VikingDB as storage (recommended for production). |
+| `mem0` | Uses Mem0 as storage (recommended for production). |
+| `opensearch` | Uses OpenSearch as storage, with persistence and retrieval. |
+| `redis` | Uses Redis as storage; Redis must support RediSearch. |
 | `viking_mem` | Deprecated; automatically converted to `viking` when set. |
-| `opensearch` | Uses OpenSearch as long-term memory storage, with persistence and retrieval. |
-| `redis` | Uses Redis as long-term memory storage; Redis must support the Redisearch feature. |
 
 ## Initialization
 
-Before using long-term memory, you need to instantiate a `LongTermMemory` object and specify the backend type. The following code shows how to initialize a VikingDB-based long-term memory module and bind it to an Agent:
-
-<Tabs items={['Python', 'Golang']}>
-  <Tab value="Python">
+Before using long-term memory, instantiate `LongTermMemory`, specify the backend, and bind it to an `Agent`. Passing `long_term_memory` to the `Agent` automatically gives it a `load_memory` tool that can search past sessions at runtime.
 
 ```python
 from veadk import Agent, Runner
-from veadk.memory import LongTermMemory
+from veadk.memory.long_term_memory import LongTermMemory
 
-# Initialize long-term memory
-# backend="viking" specifies the use of VikingDB
-# app_name and user_id are used for data isolation
-long_term_memory = LongTermMemory(
-    backend="viking", app_name="local_memory_demo", user_id="demo_user"
-)
+APP_NAME = "ltm_demo"
 
-# Bind long-term memory to the Agent
+# backend="viking" uses VikingDB; app_name is used for data isolation
+long_term_memory = LongTermMemory(backend="viking", app_name=APP_NAME)
+
 root_agent = Agent(
-    name="minimal_agent",
-    instruction="Acknowledge user input and maintain simple conversation.",
-    long_term_memory=long_term_memory,  # long-term memory instance
+    name="ltm_agent",
+    instruction="Answer the user's question. Use the `load_memory` tool if the answer might be in past conversations.",
+    long_term_memory=long_term_memory,
 )
 
-runner = Runner(agent=root_agent)
+runner = Runner(agent=root_agent, app_name=APP_NAME)
 ```
 
-  </Tab>
-  <Tab value="Golang">
+<Callout type="info">
+Backends like `local`, `viking`, and `mem0` embed memories, so they require the extensions dependency: `pip install "veadk-python[extensions]"`, plus an embedding model config (it reuses `MODEL_AGENT_API_KEY` when omitted).
+</Callout>
 
-```go
-package main
+## Memory management
 
-import (
-    "log"
+### Adding a session to long-term memory
 
-    veagent "github.com/volcengine/veadk-go/agent/llmagent"
-    "github.com/volcengine/veadk-go/common"
-    vem "github.com/volcengine/veadk-go/memory"
-    "github.com/volcengine/veadk-go/tool/builtin_tools"
-    "github.com/volcengine/veadk-go/utils"
-    "google.golang.org/adk/runner"
-    "google.golang.org/adk/session"
-    "google.golang.org/adk/tool"
-)
-
-func main() {
-    appName := "ve_agent"
-    memorySearchTool, err := builtin_tools.LoadLongMemoryTool()
-    if err != nil {
-        log.Fatal(err)
-        return
-    }
-
-    cfg := &veagent.Config{
-        ModelName:    common.DEFAULT_MODEL_AGENT_NAME,
-        ModelAPIBase: common.DEFAULT_MODEL_AGENT_API_BASE,
-        ModelAPIKey:  utils.GetEnvWithDefault(common.MODEL_AGENT_API_KEY),
-    }
-    cfg.Name = "MemoryRecallAgent"
-    cfg.Instruction = "Answer the user's question. Use the 'search_past_conversations' tools if the answer might be in past conversations."
-
-    cfg.Tools = []tool.Tool{memorySearchTool}
-
-    memorySearchAgent, err := veagent.New(cfg)
-    if err != nil {
-        log.Printf("NewLLMAgent failed: %v", err)
-        return
-    }
-
-    sessionService := session.InMemoryService()
-    memoryService, err := vem.NewLongTermMemoryService(vem.BackendLongTermViking, nil)
-    if err != nil {
-        log.Printf("NewLongTermMemoryService failed: %v", err)
-        return
-    }
-
-    runner, err := runner.New(runner.Config{
-        AppName:        appName,
-        Agent:          memorySearchAgent,
-        SessionService: sessionService,
-        MemoryService:  memoryService,
-    })
-}
-```
-
-  </Tab>
-</Tabs>
-
-## Memory Management
-
-### Adding a Session to Long-term Memory
-
-When a session ends or reaches a specific milestone, you need to explicitly call `add_session_to_memory` to persist the session data. For the Viking backend, this step triggers vectorization of the data.
-
-<Tabs items={['Python', 'Golang']}>
-  <Tab value="Python">
+When a session ends or reaches a milestone, explicitly call `add_session_to_memory` to persist the session data. It is an async method, so you must `await` it. For the Viking backend, this step triggers vectorization.
 
 ```python
-# Assume runner1 has completed a conversation
+# Assume runner has completed a conversation
 completed_session = await runner.session_service.get_session(
-    app_name=APP_NAME, user_id=USER_ID, session_id=session_id
+    app_name=APP_NAME, user_id=USER_ID, session_id=SESSION_ID
 )
 
 # Archive the full session to long-term memory
-root_agent.long_term_memory.add_session_to_memory(completed_session)
+await long_term_memory.add_session_to_memory(completed_session)
 ```
 
-  </Tab>
-  <Tab value="Golang">
+### Retrieving long-term memory
 
-```go
-appName := "ve_agent"
-userID := "user1111"
-sessionService := session.InMemoryService()
-s, err := sessionService.Create(ctx, &session.CreateRequest{
-    AppName:   appName,
-    UserID:    userID,
-    SessionID: sessionID,
-})
-
-resp, err := sessionService.Get(ctx, &session.GetRequest{AppName: s.Session.AppName(), UserID: s.Session.UserID(), SessionID: s.Session.ID()})
-if err != nil {
-    log.Fatalf("Failed to get completed session: %v", err)
-}
-if err := memoryService.AddSession(ctx, resp.Session); err != nil {
-    log.Fatalf("Failed to add session to memory: %v", err)
-}
-```
-
-  </Tab>
-</Tabs>
-
-### Retrieving Long-term Memory
-
-In addition to the Agent retrieving memory automatically at runtime, developers can also call the `search_memory` API directly for semantic search, which is useful for debugging or building custom RAG (Retrieval-Augmented Generation) applications.
-
-<Tabs items={['Python', 'Golang']}>
-  <Tab value="Python">
+Besides the agent retrieving memory automatically at runtime via `load_memory`, you can call `search_memory` directly for semantic search — useful for debugging or building custom RAG applications. This method is async and takes keyword arguments:
 
 ```python
-query = "favorite project"
-res = await root_agent.long_term_memory.search_memory(
+response = await long_term_memory.search_memory(
     app_name=APP_NAME,
     user_id=USER_ID,
-    query=query
+    query="favorite project",
 )
-
-# Print the retrieval results
-print(res)
+print(response.memories)
 ```
 
-  </Tab>
-  <Tab value="Golang">
+## Cross-session example
 
-```go
-query := "favorite project"
-memoryService.Search(ctx, &memory.SearchRequest{
-    Query:   query,
-    UserID:  userID,
-    AppName: appName,
-})
-```
+The following is a complete, runnable end-to-end flow: tell the agent a fact in session #1, enable `auto_save_session=True` so VeADK archives the session automatically, then ask a question in a **brand-new** session #2 — the agent recalls the fact by searching long-term memory (not its context window).
 
-  </Tab>
-</Tabs>
-
-## Managing Sessions with Long-term Memory
-
-In single-tenant scenarios, long-term memory can be used to manage multiple sessions for the same user, ensuring the agent can:
-
-- Remember the previous interaction in a new session;
-- Make personalized responses based on historical information;
-- Accumulate progress information or intermediate results across multi-turn tasks.
-
-### Preparation
-
-- Assign a unique identifier to each user (`user_id` or `session_owner_id`);
-- Design the long-term memory data structure to support saving information across multiple sessions;
-- Use it together with short-term memory to enable fast access to in-session context.
-
-### Example
-
-The following example demonstrates a complete flow: Runner1 tells the Agent a piece of information ("My favorite project is Project Alpha"), saves the session to memory, then creates a brand-new Runner2 to verify whether it can answer related questions.
-
-<Tabs items={['Python', 'Golang']}>
-  <Tab value="Python">
+This uses the `local` backend, which requires `pip install "veadk-python[extensions]"`.
 
 ```python
-# --- Phase 1: Write to memory ---
-# Runner1 tells the Agent the information
-runner1_question = "My favorite project is Project Alpha."
-user_input = types.Content(role="user", parts=[types.Part(text=runner1_question)])
+import asyncio
 
-async for event in runner1.run_async(user_id=USER_ID, session_id=session_id, new_message=user_input):
-    pass # Handle Runner1's response
+from veadk import Agent, Runner
+from veadk.memory.long_term_memory import LongTermMemory
 
-# Key step: archive the session to VikingDB
-completed_session = await runner1.session_service.get_session(app_name=APP_NAME, user_id=USER_ID, session_id=session_id)
-root_agent.long_term_memory.add_session_to_memory(completed_session)
+APP_NAME = "ltm_demo"
+USER_ID = "user-42"
 
-# --- Phase 2: Cross-session read ---
-# Initialize Runner2 (simulating a new session or follow-up interaction)
-runner2 = Runner(
-    agent=root_agent,
-    app_name=APP_NAME,
-    user_id=USER_ID,
-    short_term_memory=short_term_memory
-)
 
-# Runner2 asks a question, relying on long-term memory to answer
-qa_question = "favorite project"
-qa_content = types.Content(role="user", parts=[types.Part(text=qa_question)])
+def build_runner() -> Runner:
+    long_term_memory = LongTermMemory(backend="local", app_name=APP_NAME)
+    agent = Agent(
+        name="ltm_agent",
+        instruction=(
+            "You are a personal assistant. When the user asks about something "
+            "they told you before, use the `load_memory` tool to recall it."
+        ),
+        long_term_memory=long_term_memory,
+        auto_save_session=True,  # persist each finished session to long-term memory
+    )
+    return Runner(agent=agent, app_name=APP_NAME, user_id=USER_ID)
 
-final_text = None
-async for event in runner2.run_async(user_id=USER_ID, session_id=session_id, new_message=qa_content):
-    if event.is_final_response():
-         final_text = event.content.parts[0].text.strip()
+
+async def main() -> None:
+    runner = build_runner()
+
+    # Session #1: share a fact. auto_save_session stores it afterwards.
+    print(
+        "Session 1 ->",
+        await runner.run(
+            messages="Note this down: I'm allergic to peanuts and I'm vegetarian.",
+            session_id="session-1",
+        ),
+    )
+
+    # Session #2: a *different* session. The agent must recall via memory search.
+    print(
+        "Session 2 ->",
+        await runner.run(
+            messages="Recommend a dish for me, keeping my dietary restrictions in mind.",
+            session_id="session-2",
+        ),
+    )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
-  </Tab>
-  <Tab value="Golang">
+In session #2 the agent recognizes the preferences the same user left in session #1 and gives a coherent, personalized answer (for example, recommending a peanut-free vegetarian dish).
 
-```go
-package main
+## Automatically saving sessions
 
-import (
-    "context"
-    "log"
-    "strings"
-
-    veagent "github.com/volcengine/veadk-go/agent/llmagent"
-    "github.com/volcengine/veadk-go/common"
-    vem "github.com/volcengine/veadk-go/memory"
-    "github.com/volcengine/veadk-go/tool/builtin_tools"
-    "github.com/volcengine/veadk-go/utils"
-    "google.golang.org/adk/agent"
-    "google.golang.org/adk/agent/llmagent"
-    "google.golang.org/adk/runner"
-    "google.golang.org/adk/session"
-    "google.golang.org/adk/tool"
-    "google.golang.org/genai"
-)
-
-func main() {
-    ctx := context.Background()
-    appName := "ve_agent"
-    userID := "user1111"
-
-    // Define a tools that can search memory.
-    memorySearchTool, err := builtin_tools.LoadLongMemoryTool()
-    if err != nil {
-        log.Fatal(err)
-        return
-    }
-
-    infoCaptureAgent, err := veagent.New(&veagent.Config{
-        Config: llmagent.Config{
-            Name:        "InfoCaptureAgent",
-            Instruction: "Acknowledge the user's statement.",
-        },
-        ModelName:    common.DEFAULT_MODEL_AGENT_NAME,
-        ModelAPIBase: common.DEFAULT_MODEL_AGENT_API_BASE,
-        ModelAPIKey:  utils.GetEnvWithDefault(common.MODEL_AGENT_API_KEY),
-    })
-    if err != nil {
-        log.Printf("NewLLMAgent failed: %v", err)
-        return
-    }
-
-    cfg := &veagent.Config{
-        ModelName:    common.DEFAULT_MODEL_AGENT_NAME,
-        ModelAPIBase: common.DEFAULT_MODEL_AGENT_API_BASE,
-        ModelAPIKey:  utils.GetEnvWithDefault(common.MODEL_AGENT_API_KEY),
-    }
-    cfg.Name = "MemoryRecallAgent"
-    cfg.Instruction = "Answer the user's question. Use the 'search_past_conversations' tools if the answer might be in past conversations."
-
-    cfg.Tools = []tool.Tool{memorySearchTool}
-
-    memorySearchAgent, err := veagent.New(cfg)
-    if err != nil {
-        log.Printf("NewLLMAgent failed: %v", err)
-        return
-    }
-
-    // Use all default config
-    //sessionService, err := vem.NewShortTermMemoryService(vem.BackendShortTermPostgreSQL, nil)
-    //if err != nil {
-    //	log.Printf("NewShortTermMemoryService failed: %v", err)
-    //	return
-    //}
-    sessionService := session.InMemoryService()
-    memoryService, err := vem.NewLongTermMemoryService(vem.BackendLongTermViking, nil)
-    if err != nil {
-        log.Printf("NewLongTermMemoryService failed: %v", err)
-        return
-    }
-
-    runner1, err := runner.New(runner.Config{
-        AppName:        appName,
-        Agent:          infoCaptureAgent,
-        SessionService: sessionService,
-        MemoryService:  memoryService,
-    })
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    SessionID := "session123456789"
-
-    s, err := sessionService.Create(ctx, &session.CreateRequest{
-        AppName:   appName,
-        UserID:    userID,
-        SessionID: SessionID,
-    })
-    if err != nil {
-        log.Fatalf("sessionService.Create error: %v", err)
-    }
-
-    s.Session.State()
-
-    userInput1 := genai.NewContentFromText("My favorite project is Project Alpha.", "user")
-    var finalResponseText string
-    for event, err := range runner1.Run(ctx, userID, SessionID, userInput1, agent.RunConfig{}) {
-        if err != nil {
-            log.Printf("Agent 1 Error: %v", err)
-            continue
-        }
-        if event.Content != nil && !event.LLMResponse.Partial {
-            finalResponseText = strings.Join(textParts(event.LLMResponse.Content), "")
-        }
-    }
-    log.Printf("Agent 1 Response: %s\n", finalResponseText)
-
-    // Add the completed session to the Memory Service
-    log.Println("\n--- Adding Session 1 to Memory ---")
-    resp, err := sessionService.Get(ctx, &session.GetRequest{AppName: s.Session.AppName(), UserID: s.Session.UserID(), SessionID: s.Session.ID()})
-    if err != nil {
-        log.Fatalf("Failed to get completed session: %v", err)
-    }
-    if err := memoryService.AddSession(ctx, resp.Session); err != nil {
-        log.Fatalf("Failed to add session to memory: %v", err)
-    }
-    log.Println("Session added to memory.")
-
-    log.Println("\n--- Turn 2: Recalling Information ---")
-
-    runner2, err := runner.New(runner.Config{
-        AppName:        appName,
-        Agent:          memorySearchAgent,
-        SessionService: sessionService,
-        MemoryService:  memoryService,
-    })
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    s, _ = sessionService.Create(ctx, &session.CreateRequest{
-        AppName:   appName,
-        UserID:    userID,
-        SessionID: "session2222",
-    })
-
-    userInput2 := genai.NewContentFromText("What is my favorite project?", "user")
-
-    var finalResponseText2 []string
-    for event, err := range runner2.Run(ctx, s.Session.UserID(), s.Session.ID(), userInput2, agent.RunConfig{}) {
-        if err != nil {
-            log.Printf("Agent 2 Error: %v", err)
-            continue
-        }
-        if event.Content != nil && !event.LLMResponse.Partial {
-            for _, part := range event.Content.Parts {
-                finalResponseText2 = append(finalResponseText2, part.Text)
-            }
-        }
-    }
-    log.Printf("Agent 2 Response: %s\n", strings.Join(finalResponseText2, ""))
-
-}
-
-func textParts(Content *genai.Content) []string {
-    var texts []string
-    for _, part := range Content.Parts {
-        texts = append(texts, part.Text)
-    }
-    return texts
-}
-```
-
-  </Tab>
-</Tabs>
-
-### Notes / Result
-
-- The agent can recognize and correlate the same user's historical interactions;
-- It provides a highly continuous, personalized multi-session interaction experience;
-- It provides foundational capabilities for long-term tasks, learning applications, or continuous monitoring scenarios.
-
-```text
-[Log Output]
-Runner1 Question: My favorite project is Project Alpha.
-Runner1 Answer: (Acknowledged)
-...
-[Step 4] Archiving session to Long-Term Memory via memory_service
-Session archived to Long-Term Memory
-...
-Runner2 Question: favorite project
-Runner2 Answer: Your favorite project is Project Alpha.
-```
-
-## Automatically Saving Sessions to Long-term Memory
-
-To simplify the workflow, the VeADK Agent module supports automatically saving conversation Sessions to long-term memory. You only need to enable the `auto_save_session` attribute when initializing the Agent and complete the long-term memory component initialization. An example is shown below:
+As shown above, enabling `auto_save_session=True` when initializing the `Agent` (with long-term memory configured) makes VeADK save sessions to long-term memory automatically, without manually calling `add_session_to_memory`.
 
 ```python
 from veadk import Agent
-from veadk.memory import LongTermMemory
+from veadk.memory.long_term_memory import LongTermMemory
 
-# Initialize the long-term memory component
-long_term_memory = LongTermMemory(
-    backend="viking", app_name=APP_NAME, user_id=USER_ID
-)
+long_term_memory = LongTermMemory(backend="viking", app_name="ltm_demo")
 
-# Initialize the Agent and enable automatic session saving
 agent = Agent(
+    name="ltm_agent",
     auto_save_session=True,
-    long_term_memory=long_term_memory
+    long_term_memory=long_term_memory,
 )
 ```
 
-To avoid frequent index initialization, VeADK provides two environment variables, `MIN_MESSAGES_THRESHOLD` and `MIN_TIME_THRESHOLD`, which let you customize the session save cycle. By default, a save is triggered when 10 events have accumulated or 60 seconds have elapsed. In addition, when you switch sessions and initiate a new question-and-answer request, VeADK automatically saves the previous session's content to long-term memory.
+To avoid frequent index initialization, VeADK provides two environment variables, `MIN_MESSAGES_THRESHOLD` and `MIN_TIME_THRESHOLD`, to customize the save cycle. By default a save is triggered after 10 accumulated events or 60 seconds. In addition, when you switch `session_id` and start a new exchange, VeADK automatically saves the previous session's content to long-term memory.
+
+## Next steps
+
+<Cards>
+  <Card title="Short-term Memory" href="/en/docs/framework/memory/short-term" description="In-session context management." />
+  <Card title="Memory Best Practices" href="/en/docs/framework/memory/best-practice" description="Combine short-term and long-term memory in a support assistant." />
+</Cards>

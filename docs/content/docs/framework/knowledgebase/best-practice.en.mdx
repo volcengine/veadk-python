@@ -1,187 +1,216 @@
 ---
 title: "Best Practices"
-description: "Deeply integrate the knowledge base with multiple agents in production to build a knowledge-driven IT operations assistant."
+description: "Combine the knowledge base with multiple agents to build a knowledge-driven IT operations assistant."
 ---
 
-This document explains how to deeply integrate the knowledge base with agents in enterprise or production environments to build complex, multi-step, knowledge-driven applications.
+This page combines the knowledge base with multiple agents to build an IT operations assistant: a root agent routes the user's question to the right department sub-agent (network, host, application, security), and each sub-agent answers strictly from its own knowledge base (its runbooks).
 
 ## Scenario
 
-In this best practice, we act as an enterprise IT operations department building an intelligent operations assistant, with a focus on:
+- **Cross-department knowledge integration**: integrate runbooks from networking, servers, applications, and security;
+- **Intent routing**: the root agent decides which department a question belongs to and calls the corresponding sub-agent;
+- **Actions need confirmation**: for actions like creating a ticket, confirm with the user before calling the tool.
 
-- **Cross-department knowledge integration**: Integrate documents and runbooks from different departments such as networking, servers, software, and access management;
-- **Multi-step task guidance**: After the user describes a problem, the agent can automatically generate operational steps and dynamically adjust them based on execution results;
-- **Issue tracking and knowledge updates**: After each task, automatically record the solution and any anomalies, and update the knowledge base;
-- **Multi-channel interaction**: Support entry points such as a web interface and command-line interaction.
+<Callout type="info">
+The example uses the knowledge base's `local` backend so it runs locally; it embeds documents, so install `pip install "veadk-python[extensions]"`. For production, switch to `viking` or `opensearch`.
+</Callout>
 
-In this scenario, the knowledge base not only stores static documents but also combines with the Agent, tools, and short-term/long-term memory to form a "query—reason—execute—update" closed loop.
+## Step 1: Prepare the knowledge bases
 
-## Design Approach
-
-### Knowledge Organization and Classification
-
-- Classify department documents (networking, servers, application software, etc.);
-- Vectorize the documents for semantic retrieval;
-- For procedural documents, mark operational steps and conditional branches.
-
-### Backend Construction and Integration
-
-- Use a vector database to store vectorized documents;
-- Provide a retrieval interface `query(prompt, context)` that combines context to deliver targeted answers;
-- Support a knowledge-update interface to write new operational experience or exception-handling results back into the knowledge base.
-
-### Combining Agents and Tools
-
-- The Agent calls the knowledge base to obtain operational steps;
-- Use short-term memory to track session state and step completion;
-- Use long-term memory to store cross-session preferences or history;
-- Call tools (such as a Sandbox or system APIs) to execute tasks or simulate operations.
-
-### Multi-step Task Execution and Dynamic Adjustment
-
-- User describes a problem → Agent searches the knowledge base → extracts steps → executes steps → adjusts the next step based on results;
-- Record failures or anomalies, and update successful experience into the knowledge base.
-
-## Outcome
-
-- Achieves unified access to cross-department knowledge;
-- Supports multi-turn, complex operational tasks;
-- Automatically updates the knowledge base after each operation, forming a continuous learning capability.
-
-## Implementing Your IT Operations Assistant
-
-The following implements the intelligent operations assistant step by step.
-
-### Preparing the Knowledge Base
-
-Prepare the following knowledge assets, organized in Markdown:
-
-- Networking documents (such as IP addresses, ports, protocols, etc.);
-- Server documents (such as installation/configuration, monitoring metrics, etc.);
-- Application software documents (such as usage, troubleshooting, etc.);
-- Access-management documents (such as role assignment, access control, etc.).
-
-Example:
+Organize each department's runbooks as Markdown. Examples (excerpts):
 
 ```markdown title="network_sop.md"
-# 网络排障 Runbook（摘要）
+# Network Troubleshooting Runbook (excerpt)
 
-## DNS 解析异常
+## DNS resolution failure
 
-- 检查本机 /etc/resolv.conf；
-- 检查上游 DNS 可达性；
-- 刷新 DNS 缓存：`systemd-resolve --flush-caches`；
-- 如为权威解析变更：确认变更已在权威 DNS 生效，等待 TTL；
-- 如需紧急处理，可调用标准化作业：`dns-cache-flush`
+- Check local /etc/resolv.conf;
+- Check upstream DNS reachability;
+- Flush the DNS cache: `systemd-resolve --flush-caches`;
+- If an authoritative change: confirm it took effect on the authoritative DNS, wait for the TTL.
 ```
 
 ```markdown title="host_sop.md"
-# 主机/中间件 Runbook（摘要）
+# Host/Middleware Runbook (excerpt)
 
-## CPU 飙高
+## High CPU
 
-- top 确认进程；
-- dump/火焰图采集；
-- 参考 SOP：`collect-cpu-profile`
+- Use top to identify the process;
+- Collect a dump / flame graph;
+- See SOP: collect-cpu-profile.
 ```
 
 ```markdown title="app_sop.md"
-# 业务应用 Runbook（摘要）
+# Application Runbook (excerpt)
 
-## 502 网关错误
+## 502 gateway error
 
-- 查看 Nginx/Ingress 错误日志；
-- 回滚至上一稳定版本；
-- 触发金丝雀放量回退；
+- Check Nginx/Ingress error logs;
+- Roll back to the last stable version;
+- Trigger a canary rollback.
 ```
 
 ```markdown title="security_sop.md"
-# 安全事件 Runbook（摘要）
+# Security Incident Runbook (excerpt)
 
-## 失陷主机初步处置
+## Initial handling of a compromised host
 
-- 下线隔离；
-- Hash/IOC 采集；
-- 通报安全应急群；
+- Take it offline and isolate it;
+- Collect hashes / IOCs;
+- Notify the security on-call group.
 ```
 
-Mount the documents above into the VeADK knowledge base:
+Create one knowledge base per department (isolated by a distinct `index`) and ingest the matching documents:
 
 ```python
 from veadk.knowledgebase import KnowledgeBase
 
-kb = KnowledgeBase(
-    backend="viking",
-    index="itops_kb",
-)
 
-kb.add_from_files(
-    [
-        "network_sop.md",
-        "host_sop.md",
-        "app_sop.md",
-        "security_sop.md",
-    ]
-)
+def build_kb(index: str, files: list[str]) -> KnowledgeBase:
+    kb = KnowledgeBase(backend="local", index=index)
+    kb.add_from_files(files)
+    return kb
+
+
+kb_network = build_kb("itops_network", ["network_sop.md"])
+kb_host = build_kb("itops_host", ["host_sop.md"])
+kb_app = build_kb("itops_app", ["app_sop.md"])
+kb_sec = build_kb("itops_security", ["security_sop.md"])
 ```
 
-## Building Multiple Agents with Knowledge Bases
+<Callout type="info">
+`KnowledgeBase` is identified by `index` (you can also pass `app_name`, which falls back to `index` when omitted). Each sub-agent gets its own `index` for department-level knowledge isolation.
+</Callout>
+
+## Step 2: Define action tools
+
+The root agent can call two tools — query the CMDB and create a ticket (mocked with in-memory data here):
 
 ```python
+def query_cmdb(hostname: str) -> str:
+    """Look up asset information for a host in the CMDB.
+
+    Args:
+        hostname: the host name, e.g. "web-01".
+
+    Returns:
+        A description of the asset information.
+    """
+    cmdb = {
+        "web-01": "App server, owner: App team, IP: 192.0.2.21, status: online",
+        "db-01": "DB server, owner: Host team, IP: 192.0.2.11, status: online",
+    }
+    return cmdb.get(hostname, f"Host {hostname} not found in CMDB")
+
+
+def create_ticket(title: str, detail: str) -> str:
+    """Create an operations ticket.
+
+    Args:
+        title: the ticket title.
+        detail: the ticket details.
+
+    Returns:
+        The new ticket's ID and status.
+    """
+    ticket_id = "T-2001"  # example: integrate with your ticketing system in production
+    return f"Created ticket {ticket_id}: {title} ({detail}), status: pending"
+```
+
+## Step 3: Build the multi-agent system with knowledge bases
+
+Each sub-agent gets one department knowledge base; the root agent orchestrates them via `sub_agents` and holds the action tools:
+
+```python
+from veadk import Agent, Runner
+
+MODEL_NAME = "doubao-seed-1-8-251228"
+
 network_agent = Agent(
     name="network_agent",
-    description="Network operations agent focusing on DNS/Connectivity.",
-    instruction="仅根据你的知识库回答网络排障问题。不要臆测，不要编造。必要时建议提交工单。",
+    description="Network operations, focused on DNS and connectivity.",
+    instruction="Answer network troubleshooting questions strictly from your knowledge base. Don't speculate; suggest filing a ticket when needed.",
     knowledgebase=kb_network,
-    model=network_llm,
+    model_name=MODEL_NAME,
 )
 
 host_agent = Agent(
     name="host_agent",
-    description="Host/Middleware operations agent.",
-    instruction="仅根据你的知识库回答主机/中间件排障问题。必要时建议采集证据或提交工单。",
+    description="Host / middleware operations.",
+    instruction="Answer host/middleware troubleshooting questions strictly from your knowledge base. Suggest collecting evidence or filing a ticket when needed.",
     knowledgebase=kb_host,
-    model=host_llm,
+    model_name=MODEL_NAME,
 )
 
 app_agent = Agent(
     name="app_agent",
-    description="Application operations agent.",
-    instruction="仅根据你的知识库回答业务应用排障问题。必要时建议回滚或触发标准化作业。",
+    description="Application operations.",
+    instruction="Answer application troubleshooting questions strictly from your knowledge base. Suggest a rollback or a standard procedure when needed.",
     knowledgebase=kb_app,
-    model=app_llm,
+    model_name=MODEL_NAME,
 )
 
 sec_agent = Agent(
     name="sec_agent",
-    description="Security operations agent.",
-    instruction="仅根据你的知识库回答安全相关问题。对可能的失陷要给出初步处置建议。",
+    description="Security operations.",
+    instruction="Answer security questions strictly from your knowledge base. Give initial handling advice for possible compromises.",
     knowledgebase=kb_sec,
-    model=sec_llm,
+    model_name=MODEL_NAME,
 )
 
 root_agent = Agent(
     name="itops_root",
-    description="Planner that routes user intents to the right department agent.",
+    description="A console that routes user intents to the right department sub-agent.",
     instruction=(
-        "你是 IT 运维总控台。先判断用户问题属于 网络/主机/应用/安全 哪一类，"
-        "然后调用相应子 Agent 获取答案并整合。若问题跨域，可分别调用多个子 Agent 并给出综合结论。"
-        "若涉及动作（如创建工单），请明确说明，并在获得用户确认后再调用相关工具。"
+        "You are the IT operations console. First decide whether the question is "
+        "about network/host/application/security, then call the corresponding "
+        "sub-agent and integrate the answer. For cross-domain questions, call "
+        "multiple sub-agents. For actions (such as creating a ticket), explain "
+        "and confirm with the user before calling the relevant tool."
     ),
-    tools=[create_ticket, query_cmdb],
+    model_name=MODEL_NAME,
+    tools=[query_cmdb, create_ticket],
     sub_agents=[network_agent, host_agent, app_agent, sec_agent],
-    model=planner_llm,
 )
 
-runner = Runner(agent=root_agent, app_name="itops_demo_app", user_id="demo_user")
+runner = Runner(agent=root_agent, app_name="itops_demo", user_id="demo_user")
 ```
 
-## Running Your Agent
+## Step 4: Run
+
+```python
+import asyncio
+
+if __name__ == "__main__":
+    print(
+        asyncio.run(
+            runner.run(
+                messages="DNS resolution is failing in production. How do I troubleshoot?",
+                session_id="itops-1",
+            )
+        )
+    )
+```
+
+You can also run it via VeADK Web or the terminal:
 
 ### Via VeADK Web
 
 ![Running via VeADK Web](/assets/images/knowledge/kb-bp-1.jpeg)
 
-### Via the Terminal
+### Via the terminal
 
 ![Running via the terminal](/assets/images/knowledge/kb-bp-2.jpeg)
+
+## Outcome
+
+- **Unified access to cross-department knowledge**: one entry point routes to the right department knowledge base;
+- **Knowledge isolation**: each sub-agent sees only its own department's runbooks, reducing cross-talk;
+- **Controlled actions**: actions like creating a ticket run only after user confirmation.
+
+## Next steps
+
+<Cards>
+  <Card title="Knowledge Base Overview" href="/en/docs/framework/knowledgebase/overview" description="Features, backends, and configuration." />
+  <Card title="Multi-agent" href="/en/docs/framework/agent/multi-agent/overview" description="Sequential, parallel, and loop orchestration patterns." />
+</Cards>

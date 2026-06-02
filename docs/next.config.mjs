@@ -16,6 +16,8 @@ const config = {
   ...(staticExport ? { output: 'export' } : {}),
   reactStrictMode: true,
   trailingSlash: true,
+  // Allow loading the dev server via 127.0.0.1 (not just localhost).
+  allowedDevOrigins: ['127.0.0.1'],
   turbopack: {
     root: import.meta.dirname,
   },

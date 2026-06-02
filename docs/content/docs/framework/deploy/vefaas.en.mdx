@@ -14,33 +14,18 @@ Before you start deploying, make sure you have completed the following preparati
    - [**Function Service (veFaaS)**](https://console.volcengine.com/vefaas): Hosts and runs your agent application code.
    - [**API Gateway**](https://console.volcengine.com/veapig): Creates and manages APIs so your agent application can be accessed externally.
 
-Before deploying to Volcengine, you need to enable the [Function Service](https://console.volcengine.com/vefaas) and [API Gateway](https://console.volcengine.com/veapig) services in the Volcengine console in advance. If you have already enabled these services, you can skip this step.
-
 ### First-Time Service Authorization
 
-If this is your first time using the above services, the console will guide you through the necessary IAM (Identity and Access Management) role authorization.
+If this is your first time using the above services, the console guides you through the necessary IAM (Identity and Access Management) role authorization. The flow is the same for both services:
 
-1. Visit the console page of [Function Service](https://console.volcengine.com/vefaas) or [API Gateway](https://console.volcengine.com/veapig).
-2. In the authorization prompt that pops up, click **Authorize Now**.
-3. After authorization succeeds, the system automatically redirects to the console home page of the corresponding service, indicating the service has been successfully enabled.
+1. The first time you enter the [Function Service](https://console.volcengine.com/vefaas) or [API Gateway](https://console.volcengine.com/veapig) page, the console prompts you to enable the IAM role. Click **Authorize Now**.
+2. After authorization succeeds, the system automatically redirects back to the corresponding service console, indicating the service is enabled.
+
+![Enable IAM role](/assets/images/deploy/vefaas_attach_role.png)
 
 <Callout type="warn">
   This authorization step is required. It grants the Function Service and API Gateway permission to access other cloud resources, ensuring the application can be deployed and run normally.
 </Callout>
-
-### Function Service
-
-1. When you first enter the [Function Service](https://console.volcengine.com/vefaas) page, the console will prompt you to enable the IAM role. Please click [Authorize Now] to agree to enabling the role.
-![Enable IAM role](/assets/images/deploy/vefaas_attach_role.png)
-2. After clicking, the console will show that you have completed authorization. After a few seconds, it will automatically redirect back to the [Function Service](https://console.volcengine.com/vefaas) console. When the following page is displayed, the [Function Service](https://console.volcengine.com/vefaas) is successfully enabled.
-![Enable IAM role](/assets/images/deploy/vefaas_index.png)
-
-### API Gateway
-
-1. When you first enter the [API Gateway](https://console.volcengine.com/veapig) page, the console will prompt you to enable the IAM role. Please click [Authorize Now] to agree to enabling the role.
-![Enable IAM role](/assets/images/deploy/veapig_attach_role.png)
-2. After clicking, the console will show that you have completed authorization. After a few seconds, it will automatically redirect back to the [API Gateway](https://console.volcengine.com/veapig) console. When the following page is displayed, the [API Gateway](https://console.volcengine.com/veapig) is successfully enabled.
-![Enable IAM role](/assets/images/deploy/veapig_index.png)
 
 ## Deployment Methods Overview
 
@@ -54,7 +39,7 @@ Next, we will detail the steps for each deployment method.
 
 ## Deploy via the Command-Line Tool (CLI)
 
-You can deploy an agent project built with VeADK in the following two ways.
+You can deploy an agent project built with VeADK in the following two ways. For the full parameters of each command, see the [VeADK CLI](/en/docs/cli/veadk-cli).
 
 ### Method 1: Create and Deploy a New Project from Scratch
 
@@ -82,6 +67,11 @@ Choose a deploy mode:
   1. A2A/MCP Server
   2. VeADK Web / Google ADK Web
 Enter your choice (1, 2): 1
+Choose an authentication method:
+  1. None
+  2. API key
+  3. OAuth2
+Enter your choice (1, 2, 3): 1
 Template project has been generated at .../veadk-cloud-proj
 Edit .../veadk-cloud-proj/src to define your agents
 Edit .../veadk-cloud-proj/deploy.py to define your deployment attributes
@@ -96,6 +86,7 @@ Run python `deploy.py` for deployment on Volcengine FaaS platform.
 - **Choose a deploy mode**: Choose the deployment mode.
   - `A2A/MCP Server`: The standard backend agent service mode.
   - `VeADK Web / Google ADK Web`: Choose this if you need a web interaction interface.
+- **Choose an authentication method**: Choose the gateway authentication method. `None` for no auth; `API key` for key authentication; `OAuth2` for Agent Identity single sign-on (`API key` is only available in A2A/MCP mode).
 
 After the project is initialized, you can modify these configurations at any time in the generated `deploy.py` file.
 
@@ -104,18 +95,18 @@ The generated project structure is as follows:
 ```shell
 veadk-cloud-proj
 ├── __init__.py
-├── clean.py # cleanup script
-├── config.yaml.example # define environment variables
-├── deploy.py # deployment script
+├── clean.py              # cleanup script
+├── config.yaml.example   # environment variable example
+├── deploy.py             # deployment script
 └── src
     ├── __init__.py
-    ├── agent.py # agent runtime data export
-    ├── app.py # server definition
-    ├── requirements.txt dependencies
-    ├── run.sh # startup script
-    └── weather_report # agent module
-        ├── __init__.py # must contain `from . import agent`
-        └── agent.py # agent definition
+    ├── agent.py          # agent runtime data export
+    ├── app.py            # server definition
+    ├── requirements.txt  # dependencies
+    ├── run.sh            # startup script
+    └── weather_report    # agent module
+        ├── __init__.py   # must contain `from . import agent`
+        └── agent.py      # agent definition
 ```
 
 #### 2. Configure Environment Variables and Credentials
@@ -236,45 +227,48 @@ After the `deploy` method executes successfully, it returns a `CloudApp` instanc
 
 #### Make Remote Invocations
 
-You can interact with the cloud agent through the `CloudApp` instance. The main methods include creating a session (`create_session`) and sending messages (`invoke`).
+You interact with the cloud agent through the `CloudApp` instance's async `message_send` method. Its signature is `message_send(message, session_id, user_id, timeout=600.0)`, and it returns the agent's response message.
 
 **Code example:**
 
 ```python
+import asyncio
 from veadk.cloud.cloud_app import CloudApp
 
-# Assume cloud_app is the instance returned by engine.deploy()
-cloud_app: CloudApp = CloudApp()
+# Construct CloudApp via the application name returned at deploy time
+# (you can also pass vefaas_endpoint or vefaas_application_id)
+cloud_app = CloudApp(vefaas_application_name="my-python-agent")
 
-# Define session and user information
-USER_ID = "test_user_001"
 SESSION_ID = "test_session_123"
+USER_ID = "test_user_001"
 
-# 1. Make an invocation (send a message)
-response = cloud_app.message_send(
-    user_id=USER_ID,
-    session_id=SESSION_ID,
-    message="请问北京今天天气怎么样？"
-)
+async def main():
+    response = await cloud_app.message_send(
+        "How is the weather like in Beijing?", SESSION_ID, USER_ID
+    )
+    print(f"Agent response: {response}")
 
-print(f"Agent response: {response}")
+asyncio.run(main())
 ```
 
-If you need to interact with an already-deployed application (rather than immediately after deployment), you can also create a `CloudApp` instance by providing the application's access endpoint.
+<Callout type="info">
+  When initializing `CloudApp`, you must provide at least one of `vefaas_endpoint`, `vefaas_application_id`, or `vefaas_application_name`; otherwise it raises `ValueError`.
+</Callout>
+
+If you need to interact with an already-deployed application (rather than immediately after deployment), create a `CloudApp` instance from the application's access endpoint, which you can find in the function service console:
 
 ```python
+import asyncio
 from veadk.cloud.cloud_app import CloudApp
 
-# The application's access endpoint URL, which can be found in the function service console
 APP_ENDPOINT = "<YOUR_APPLICATION_ENDPOINT>"
-SESSION_ID = "<test_session>"
-USER_ID = "<test_user>"
+SESSION_ID = "test_session"
+USER_ID = "test_user"
 
-# Create a CloudApp instance via the endpoint
 app = CloudApp(vefaas_endpoint=APP_ENDPOINT)
 
-# Subsequent invocation is the same
-response = app.message_send(user_id=USER_ID, session_id=SESSION_ID, message="深圳呢？")
+# Same call order: message, session_id, user_id
+response = asyncio.run(app.message_send("And Shenzhen?", SESSION_ID, USER_ID))
 print(f"Agent response: {response}")
 ```
 
@@ -486,23 +480,9 @@ Before using the continuous delivery feature, make sure you have enabled the fol
 - [**Continuous Delivery (CP)**](https://console.volcengine.com/cp)
 - [**Container Registry (CR)**](https://console.volcengine.com/cr)
 
-Similar to the function service and API gateway, when you first access these services, you need to complete the **IAM role authorization** as prompted on the page.
+Similar to the function service and API gateway, the first time you access Continuous Delivery and Container Registry you must complete the **IAM role authorization** as prompted: enter the corresponding service page, click **Authorize Now** (for Continuous Delivery, also click **Apply to Enable**), and after authorization the console redirects back to the service console, indicating success.
 
-#### Continuous Delivery
-
-1. When you first enter the [Continuous Delivery](https://console.volcengine.com/cp) page, the console will prompt you to enable the IAM role. Please click [Authorize Now] to agree to enabling the role.
 ![Enable IAM role](/assets/images/deploy/cp_attach_role.png)
-2. After clicking to authorize, the console will continue to enable the service for you, as shown below.
-![Enable IAM service](/assets/images/deploy/cp_open.png)
-3. After clicking [Apply to Enable], the console will automatically redirect. When the following page is displayed, the [Continuous Delivery](https://console.volcengine.com/cp) service is successfully enabled.
-![Enable IAM role](/assets/images/deploy/cp_index.png)
-
-#### Container Registry
-
-1. When you first enter the [Container Registry](https://console.volcengine.com/cr) page, the console will prompt you to enable the IAM role. Please click [Authorize Now] to agree to enabling the role.
-![Enable IAM role](/assets/images/deploy/cr_attach_role.png)
-2. After clicking to authorize, the console will automatically redirect. When the following page is displayed, the [Container Registry](https://console.volcengine.com/cr) service is successfully enabled.
-![Enable IAM role](/assets/images/deploy/cr_index.png)
 
 ### 2. Attach the Continuous Delivery Pipeline
 
@@ -546,3 +526,10 @@ veadk pipeline --github-url <YOUR_GITHUB_REPO_URL> --github-branch main --github
 | `--cr-namespace-name` | Volcengine container registry namespace | `veadk-user-namespace` |
 | `--cr-repo-name` | Volcengine container registry repo name | veadk-user-repo |
 | `--vefaas-function-id` | Volcengine FaaS function ID (must be an image function); if not set, a new function is created automatically | - |
+
+## Next Steps
+
+<Cards>
+  <Card title="VeADK CLI" href="/en/docs/cli/veadk-cli" description="See the full parameters of veadk init, deploy, pipeline, and more." />
+  <Card title="Deploy to AgentKit" href="/en/docs/framework/deploy/agentkit" description="Deploy to the Volcengine AgentKit platform with AgentKit-compatible commands." />
+</Cards>

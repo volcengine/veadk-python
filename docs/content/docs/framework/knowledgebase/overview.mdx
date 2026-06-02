@@ -1,94 +1,94 @@
 ---
-title: "KnowledgeBase 介绍"
-description: "VeADK 知识库的功能、使用方法，以及 VikingDB 与 OpenSearch 两种后端的开通与配置。"
+title: "概述"
+description: "VeADK 知识库的功能与用法，以及 VikingDB 与 OpenSearch 两种后端的开通与配置。"
 ---
+
+知识库（KnowledgeBase）是智能体的外部知识来源——一个可随时查阅、专门存放静态资料的"图书馆"。把它挂到智能体上，VeADK 会自动赋予智能体一个检索工具，让它在回答前先到你的资料里检索相关片段，从而给出更精准、更有依据的回答（RAG）。
 
 ## 主要功能
 
-KnowledgeBase 在 veadk 框架中扮演 Agent 的外部知识库角色。它像一个可供 Agent 随时查阅的、专门存储静态资料的“图书馆”。其核心功能包括：
-
-1. **知识注入 (Ingestion)**：您可以将外部的、非结构化的文本资料（如产品文档、FAQ、文章、知识片段等）添加进知识库。框架会自动处理这些文本，将其转换为 Agent 可以理解和检索的格式。
-   - 支持从文件导入 (`kb.add_from_files([...])`)。
-   - 支持从内存中的文本字符串导入 (`kb.add_from_text([...])`)。
-
-2. **后端抽象 (Backend Abstraction)**：KnowledgeBase 提供了一个统一的接口，屏蔽了底层向量数据库的实现细节。您只需要在初始化时通过 `backend` 参数指定使用 `viking` 还是 `opensearch`，而无需关心它们各自的 API 调用方式。
-
-3. **知识检索 (Retrieval)**：当 KnowledgeBase 实例被传递给 Agent 后，Agent 会自动获得一个内置的 `knowledgebase_search` 工具。在回答问题时，Agent 可以自主决定是否使用此工具，将用户的问题转化为关键词去知识库中搜索相关信息，从而给出更精准、更具上下文的回答。
-
-4. **与 Agent 无缝集成**：通过在创建 Agent 时传入 `knowledgebase=kb` 参数，Agent 就能自动利用这个知识库来增强其回答能力。
+1. **知识注入（Ingestion）**：把外部、非结构化的文本资料（产品文档、FAQ、文章等）添加进知识库，框架自动转换为可检索的格式。
+   - 从文件导入：`kb.add_from_files([...])`
+   - 从目录导入：`kb.add_from_directory("./docs")`
+   - 从内存文本导入：`kb.add_from_text([...])`
+2. **后端抽象（Backend Abstraction）**：统一接口屏蔽底层向量库差异，初始化时用 `backend` 指定 `local`、`viking`、`opensearch` 或 `redis` 即可，业务代码无需改动。
+3. **知识检索（Retrieval）**：把知识库传给智能体后，智能体会自动获得一个内置的 `load_knowledgebase` 工具。回答问题时，它会自主决定是否检索知识库。
+4. **与 Agent 无缝集成**：创建 `Agent` 时传入 `knowledgebase=kb` 即可。
 
 ## 使用方法
 
-以下是使用 KnowledgeBase 的典型步骤，并对比了 `viking` 和 `opensearch` 的配置差异。
+下面是使用知识库的最小流程。
 
-**第 1 步：配置 config.yaml 文件**
+<Steps>
 
-这是两者最主要的区别所在。您需要在项目根目录的 `config.yaml` 文件中提供对应后端的连接信息：
+<Step>
+### 初始化知识库并注入知识
 
-```yaml
-# config.yaml
-volcengine:
-  access_key: "YOUR_VOLCENGINE_AK" # embedding 仍然需要火山引擎的 ak/sk
-  secret_key: "YOUR_VOLCENGINE_SK"
-
-database:
-  opensearch:
-    host: "your_opensearch_host"
-    port: 9200
-    username: "your_username"
-    password: "your_password"
-```
-
-**第 2 步：在 Python 脚本中初始化 KnowledgeBase**
-
-在代码中，您只需指定 `backend` 名称即可。
-
-**第 3 步：添加知识**
-
-添加知识的方法对于两种后端是完全一样的。
-
-**第 4 步：集成到 Agent**
+`local` 后端无需任何外部服务，最适合上手。它会对文档做向量化，需要安装扩展依赖 `pip install "veadk-python[extensions]"`，并配置 embedding 模型（缺省时复用 `MODEL_AGENT_API_KEY`）。
 
 ```python
+from veadk.knowledgebase import KnowledgeBase
+
+kb = KnowledgeBase(backend="local", index="company_faq")
+
+# 从内存文本注入；也可用 add_from_files / add_from_directory
+kb.add_from_text(
+    [
+        "公司的标准年假为每年 15 天，入职满一年起享受。",
+        "经主管批准后，员工每周最多可远程办公 2 天。",
+    ]
+)
+```
+</Step>
+
+<Step>
+### 集成到 Agent 并运行
+
+```python
+import asyncio
+
 from veadk import Agent, Runner
 
 agent = Agent(
-    name="my_knowledgeable_agent",
-    model_name="doubao-seed-1-6-250615",
-    instruction="你是一个知识渊博的助手，请利用知识库回答问题。",
-    knowledgebase=kb, # 在这里传入
-    # ... 其他参数
+    name="kb_agent",
+    model_name="doubao-seed-1-8-251228",
+    instruction="你是一个知识渊博的助手，请优先利用知识库回答问题。",
+    knowledgebase=kb,  # 自动获得 load_knowledgebase 检索工具
 )
 
-runner = Runner(agent, app_name="your_app_name")
+runner = Runner(agent=agent, app_name="company_faq")
 
-# 之后就可以正常运行 runner
-# ...
+print(asyncio.run(runner.run(messages="年假有多少天？可以远程办公吗？")))
 ```
+</Step>
 
-## 入门示例 (Getting Started)
+</Steps>
+
+切换到生产用的持久化后端（如 `viking`、`opensearch`、`redis`）时，业务代码几乎不变——只改 `backend`，并在 `config.yaml` 里提供对应连接信息。下文介绍这两种后端的开通与配置。
+
+## 入门示例
 
 ### 资源开通
 
-#### vikingDB 开通
+#### VikingDB 开通
 
-1. 登录控制台进入 vikingDB 操作页面。
+1. 登录控制台进入 VikingDB 操作页面。
 
-![vikingDB 操作页面](/assets/images/knowledge/image.png)
+![VikingDB 操作页面](/assets/images/knowledge/image.png)
 
-- 进入控制台后，我们会看到下面的页面。知识库要选中中间红框选择的那个进入。
+- 进入控制台后，选中中间红框处进入知识库。
 
 ![知识库入口](/assets/images/knowledge/image-1.png)
 
-- 进入知识库列表页后，按照下图红框提示进入创建页面：
+- 进入知识库列表页后，按红框提示进入创建页面。
 
 ![知识库列表页](/assets/images/knowledge/image-3.png)
 
-- 点击创建按钮后弹出创建选项如下（一定要选旗舰版本）：
+- 点击创建按钮，弹出创建选项（请选择旗舰版本）。
 
 ![创建选项](/assets/images/knowledge/image-4.png)
 
-- 进入创建详情页，按照提示输入关键信息。具体的核心部分见下图红框部分：
+- 进入创建详情页，按提示输入关键信息，核心部分见红框。
 
 ![创建详情页](/assets/images/knowledge/image-5.png)
 
@@ -98,7 +98,7 @@ runner = Runner(agent, app_name="your_app_name")
 
 ![创建详情页](/assets/images/knowledge/image-8.png)
 
-2. 点击创建知识库按钮，点完后会有一个弹出问是否导入文档，选择暂不导入。
+2. 点击创建知识库；弹出是否导入文档时，选择暂不导入。
 
 ![创建知识库](/assets/images/knowledge/image-9.png)
 
@@ -106,698 +106,247 @@ runner = Runner(agent, app_name="your_app_name")
 
 #### TOS 配置
 
-1. 登陆火山控制台进入 TOS 控制台。
+1. 登录火山控制台进入 TOS 控制台，创建 TOS 桶。
 
 ![TOS 控制台](/assets/images/knowledge/image-11.png)
 
-- 创建 TOS 桶。
+参见 [火山引擎 TOS 文档](https://www.volcengine.com/docs/6349?lang=zh)。
 
-[火山引擎 tos 文档](https://www.volcengine.com/docs/6349?lang=zh)
+#### OpenSearch 开通
 
-#### openSearch 开通
-
-1. 登录火山控制台进入云搜索控制台。
+1. 登录火山控制台进入云搜索控制台，创建 OpenSearch 实例。
 
 ![云搜索控制台](/assets/images/knowledge/image-13.png)
 
-- 进入云搜索控制台后创建 opensearch 实例。
+![创建 OpenSearch 实例](/assets/images/knowledge/image-14.png)
 
-![创建 opensearch 实例](/assets/images/knowledge/image-14.png)
-
-- 输入实例创建信息。
-
-[火山引擎云搜索服务文档：创建实例](https://www.volcengine.com/docs/6465/1117829?lang=zh)
+参见 [火山引擎云搜索服务文档：创建实例](https://www.volcengine.com/docs/6465/1117829?lang=zh)。
 
 ### 代码配置
 
 #### config.yaml
 
-把上面资源开通部分，对应的内容 vikingDB、TOS 和 OpenSearch 对应的内容填入。注意 agent 的 api_base。
-
-api_key 可以直接使用例子中的。access_key 和 secret_key 必须使用开通资源账号的。
+把上面开通的 VikingDB、TOS、OpenSearch 信息填入 `config.yaml`。密钥**不要**写进配置文件——用环境变量引用：
 
 ```yaml
 model:
   agent:
     provider: openai
-    name: doubao-seed-1-6-251015
+    name: doubao-seed-1-8-251228
     api_base: https://ark.cn-beijing.volces.com/api/v3/
-    api_key: **************************
+    api_key: ${MODEL_AGENT_API_KEY}
 
 volcengine:
-  # [optional] for Viking DB and `web_search` tool
-  # 替换为自己的ak/sk
-  access_key: ***********************************
-  secret_key: ***********************************
+  # Viking DB 与 embedding 需要火山引擎 ak/sk
+  access_key: ${VOLCENGINE_ACCESS_KEY}
+  secret_key: ${VOLCENGINE_SECRET_KEY}
 
 database:
   viking:
-    project: default    # user project in Volcengine Viking DB
+    project: default    # Volcengine Viking DB 中的项目
     region: cn-beijing
   tos:
-    endpoint: tos-cn-beijing.volces.com # default Volcengine TOS endpoint
-    region: cn-beijing                  # default Volcengine TOS region
-    bucket: bucket_name
+    endpoint: tos-cn-beijing.volces.com
+    region: cn-beijing
+    bucket: your_bucket_name
   opensearch:
-    host:  opensearch.********.com
-    port:   9200
+    host: your_opensearch_host
+    port: 9200
     username: admin
-    password: *************
+    password: ${DATABASE_OPENSEARCH_PASSWORD}
+```
+
+对应地，在环境变量中提供这些密钥：
+
+```bash
+export MODEL_AGENT_API_KEY="<你的方舟 API Key>"
+export VOLCENGINE_ACCESS_KEY="<你的 AK>"
+export VOLCENGINE_SECRET_KEY="<你的 SK>"
+export DATABASE_OPENSEARCH_PASSWORD="<你的 OpenSearch 密码>"
 ```
 
 ### 演示场景
 
-#### 知识库的内容
+下面用一段心理学家简介作为知识，并配一个计算日期差的工具，演示「检索知识库 + 调用工具」。
 
-把下面的一段话作为知识库的内容：
-
-```python
-"""西格蒙德·弗洛伊德（Sigmund Freud，1856年5月6日-1939年9月23日）是精神分析的创始人。
-精神分析既是一种治疗精神疾病的方法，也是一种解释人类行为的理论。弗洛伊德认为，我们童年时期的经历对我们的成年生活有很大的影响，并且塑造了我们的个性。
-例如，源自人们曾经的创伤经历的焦虑感，会隐藏在意识深处，并且可能在成年期间引起精神问题（以神经症的形式）。""",
-"""阿尔弗雷德·阿德勒（Alfred Adler，1870年2月7日-1937年5月28日），奥地利精神病学家，人本主义心理学先驱，个体心理学的创始人。
-曾追随弗洛伊德探讨神经症问题，但也是精神分析学派内部第一个反对弗洛伊德的心理学体系的心理学家。
-著有《自卑与超越》《人性的研究》《个体心理学的理论与实践》《自卑与生活》等。"""
-```
-
-#### Agent 的角色设定
+知识内容：
 
 ```python
-instruction="""你是一个优秀的助手。当被提问时，请遵循以下步骤：
-1. 首先，根据你的内部知识，生成一个初步的回答。
-2. 然后，查询你的知识库，寻找与问题相关的信息来验证或丰富你的答案。
-3. 最后，结合你的内部知识和知识库中的信息，给出一个全面、准确的最终答案。""",
-```
-
-#### 测试问题
-
-1. 弗洛伊德和阿德勒差了多少岁，多少天？
-2. 弗洛伊德和阿德勒差了多少岁，多少天？他们对后世的影响有多大？
-
-### vikingDB 作为知识库存储
-
-#### 知识库初始化（从变量加载）
-
-<Tabs items={['Python', 'Golang']}>
-  <Tab value="Python">
-
-```python
-APP_NAME = "viking_demo"
-
 mock_data = [
     """西格蒙德·弗洛伊德（Sigmund Freud，1856年5月6日-1939年9月23日）是精神分析的创始人。
-    精神分析既是一种治疗精神疾病的方法，也是一种解释人类行为的理论。弗洛伊德认为，我们童年时期的经历对我们的成年生活有很大的影响，并且塑造了我们的个性。
-    例如，源自人们曾经的创伤经历的焦虑感，会隐藏在意识深处，并且可能在成年期间引起精神问题（以神经症的形式）。""",
-    """阿尔弗雷德·阿德勒（Alfred Adler，1870年2月7日-1937年5月28日），奥地利精神病学家，人本主义心理学先驱，个体心理学的创始人。
-    曾追随弗洛伊德探讨神经症问题，但也是精神分析学派内部第一个反对弗洛伊德的心理学体系的心理学家。
-    著有《自卑与超越》《人性的研究》《个体心理学的理论与实践》《自卑与生活》等。""",
+精神分析既是一种治疗精神疾病的方法，也是一种解释人类行为的理论。""",
+    """阿尔弗雷德·阿德勒（Alfred Adler，1870年2月7日-1937年5月28日），奥地利精神病学家，
+人本主义心理学先驱，个体心理学的创始人。""",
 ]
-kb = KnowledgeBase(
-    backend="viking",  # 这里设置为viking
-    app_name=APP_NAME,
-)
-res = kb.collection_status()
+```
 
-if not res["existed"]:
-    kb.create_collection()  # viking需要专门create一下
+智能体角色设定：
+
+```python
+instruction = """你是一个优秀的助手。当被提问时，请遵循以下步骤：
+1. 先根据内部知识给出初步回答；
+2. 查询知识库，寻找相关信息来验证或丰富答案；
+3. 结合内部知识与知识库信息，给出全面、准确的最终答案。"""
+```
+
+测试问题：
+
+1. 弗洛伊德和阿德勒相差多少岁？
+2. 弗洛伊德和阿德勒相差多少天？他们对后世的影响有多大？
+
+### VikingDB 作为存储
+
+VikingDB 需要在使用前显式创建一次集合。下面从内存文本注入知识：
+
+```python
+from veadk.knowledgebase import KnowledgeBase
+
+APP_NAME = "viking_demo"
+
+kb = KnowledgeBase(backend="viking", index=APP_NAME)
+
+if not kb.collection_status()["existed"]:
+    kb.create_collection()  # Viking 需要显式创建集合
 
 kb.add_from_text(mock_data)
 ```
 
-  </Tab>
-  <Tab value="Golang">
-
-```go
-knowledgeBase, err := knowledgebase.NewKnowledgeBase(
-    ktypes.VikingBackend,
-    knowledgebase.WithBackendConfig(
-        &viking_knowledge_backend.Config{
-            Index:            "veadk_go_test_kg",
-            CreateIfNotExist: true, // 当 Index 不存在时会自动创建
-            TosConfig: &ve_tos.Config{
-                Bucket: "veadk-go-bucket",
-            },
-        }),
-)
-if err != nil {
-    log.Fatal("NewVikingKnowledgeBackend error: ", err)
-}
-
-mock_data := []string{
-    `西格蒙德·弗洛伊德（Sigmund Freud，1856年5月6日-1939年9月23日）是精神分析的创始人。
-精神分析既是一种治疗精神疾病的方法，也是一种解释人类行为的理论。弗洛伊德认为，我们童年时期的经历对我们的成年生活有很大的影响，并且塑造了我们的个性。
-例如，源自人们曾经的创伤经历的焦虑感，会隐藏在意识深处，并且可能在成年期间引起精神问题（以神经症的形式）。`,
-    `阿尔弗雷德·阿德勒（Alfred Adler，1870年2月7日-1937年5月28日），奥地利精神病学家，人本主义心理学先驱，个体心理学的创始人。
-曾追随弗洛伊德探讨神经症问题，但也是精神分析学派内部第一个反对弗洛伊德的心理学体系的心理学家。
-著有《自卑与超越》《人性的研究》《个体心理学的理论与实践》《自卑与生活》等。`}
-
-if err = knowledgeBase.Backend.AddFromText(mock_data); err != nil {
-    log.Fatal("AddFromText error: ", err)
-    return
-}
-```
-
-  </Tab>
-</Tabs>
-
-#### Agent 代码初始化
-
-<Tabs items={['Python', 'Golang']}>
-  <Tab value="Python">
+完整可运行示例（VikingDB 后端，配合一个日期差工具）：
 
 ```python
-agent = Agent(
-   name="chat_agent",
-   model_name="doubao-seed-1-6-250615",
-   description="你是一个优秀的助手，你可以和用户进行对话。",
-   instruction="""你是一个优秀的助手。当被提问时，请遵循以下步骤：
-1. 首先，根据你的内部知识，生成一个初步的回答。
-2. 然后，查询你的知识库，寻找与问题相关的信息来验证或丰富你的答案。
-3. 最后，结合你的内部知识和知识库中的信息，给出一个全面、准确的最终答案。""",
-   knowledgebase=kb,
-   tools=[calculate_date_difference],
-)
-```
-
-  </Tab>
-  <Tab value="Golang">
-
-```go
-cfg := veagent.Config{
-    Config: llmagent.Config{
-        Name:        "chat_agent",
-        Description: "你是一个优秀的助手，你可以和用户进行对话。",
-        Instruction: `你是一个优秀的助手。当被提问时，请遵循以下步骤：\n1. 首先，根据你的内部知识，生成一个初步的回答。\n2. 然后，查询你的知识库，寻找与问题相关的信息来验证或丰富你的答案。\n3. 最后，结合你的内部知识和知识库中的信息，给出一个全面、准确的最终答案。`,
-        Tools:       []tool.Tool{calculateDateDifferenceTool},
-    },
-    ModelName:     "doubao-seed-1-6-250615",
-    KnowledgeBase: knowledgeBase,
-}
-
-veAgent, err := veagent.New(&cfg)
-if err != nil {
-    fmt.Printf("NewLLMAgent failed: %v", err)
-    return
-}
-```
-
-  </Tab>
-</Tabs>
-
-#### 完整代码
-
-<Tabs items={['Python', 'Golang']}>
-  <Tab value="Python">
-
-```python
-import os
-from uuid import uuid4
-import yaml
-
-os.environ["LITELLM_LOGGING"] = "False"
-os.environ["LOGGING_LEVEL"] = "DEBUG"
-
 import asyncio
 from datetime import datetime
 
 from veadk import Agent, Runner
 from veadk.knowledgebase import KnowledgeBase
 
-# 从config.yaml读取配置
-with open('config.yaml', 'r') as f:
-    config = yaml.safe_load(f)
-
-# 打印配置结构用于调试
-print("Config structure:", config)
-
-# 设置环境变量（使用get方法避免KeyError）
-if config.get('database') and config['database'].get('viking'):
-    os.environ["DATABASE_VIKING_PROJECT"] = config['database']['viking'].get('project', 'default')
-    os.environ["DATABASE_VIKING_REGION"] = config['database']['viking'].get('region', 'cn-beijing')
-else:
-    print("Warning: Viking database config not found, using defaults")
-    os.environ["DATABASE_VIKING_PROJECT"] = 'default'
-    os.environ["DATABASE_VIKING_REGION"] = 'cn-beijing'
-
-if config.get('database') and config['database'].get('tos'):
-    os.environ["DATABASE_TOS_BUCKET"] = config['database']['tos'].get('bucket', 'test-wangyue')
-else:
-    print("Warning: TOS config not found, using default")
-    os.environ["DATABASE_TOS_BUCKET"] = 'test-wangyue'
-
-if config.get('volcengine'):
-    os.environ["VOLCENGINE_ACCESS_KEY"] = config['volcengine'].get('access_key', '')
-    os.environ["VOLCENGINE_SECRET_KEY"] = config['volcengine'].get('secret_key', '')
-else:
-    print("Warning: Volcengine config not found")
-    os.environ["VOLCENGINE_ACCESS_KEY"] = ''
-    os.environ["VOLCENGINE_SECRET_KEY"] = ''
-
-# 验证环境变量
-assert os.getenv("DATABASE_VIKING_PROJECT") and os.getenv("DATABASE_VIKING_REGION"), (
-    "请设置config.yaml里的viking参数"
-)
-assert os.getenv("VOLCENGINE_ACCESS_KEY") and os.getenv("VOLCENGINE_SECRET_KEY"), (
-    "请在config.yaml里设置火山ak和sk"
-)
-assert os.getenv("DATABASE_TOS_BUCKET"), "请在config.yaml里设置tos相关的参数"
-
 APP_NAME = "viking_demo"
 
 mock_data = [
-    """西格蒙德·弗洛伊德（Sigmund Freud，1856年5月6日-1939年9月23日）是精神分析的创始人。
-    精神分析既是一种治疗精神疾病的方法，也是一种解释人类行为的理论。弗洛伊德认为，我们童年时期的经历对我们的成年生活有很大的影响，并且塑造了我们的个性。
-    例如，源自人们曾经的创伤经历的焦虑感，会隐藏在意识深处，并且可能在成年期间引起精神问题（以神经症的形式）。""",
-    """阿尔弗雷德·阿德勒（Alfred Adler，1870年2月7日-1937年5月28日），奥地利精神病学家，人本主义心理学先驱，个体心理学的创始人。
-    曾追随弗洛伊德探讨神经症问题，但也是精神分析学派内部第一个反对弗洛伊德的心理学体系的心理学家。
-    著有《自卑与超越》《人性的研究》《个体心理学的理论与实践》《自卑与生活》等。""",
+    "西格蒙德·弗洛伊德（1856年5月6日-1939年9月23日）是精神分析的创始人。",
+    "阿尔弗雷德·阿德勒（1870年2月7日-1937年5月28日）是个体心理学的创始人。",
 ]
-kb = KnowledgeBase(
-    backend="viking",  # 这里设置为viking
-    app_name=APP_NAME,
-)
-res = kb.collection_status()
 
-if not res["existed"]:
-    kb.create_collection()  # viking需要专门create一下
-
+kb = KnowledgeBase(backend="viking", index=APP_NAME)
+if not kb.collection_status()["existed"]:
+    kb.create_collection()
 kb.add_from_text(mock_data)
-#kb.add_from_files(["tmp/demo.txt"])
+
 
 def calculate_date_difference(date1: str, date2: str) -> int:
+    """计算两个日期之间的天数差（绝对值）。
+
+    Args:
+        date1: 第一个日期，格式 "YYYY-MM-DD"。
+        date2: 第二个日期，格式 "YYYY-MM-DD"。
+
+    Returns:
+        两个日期之间的天数差。
     """
-    计算两个日期之间的天数差异
-    参数:
-        date1: 第一个日期，格式为"YYYY-MM-DD"
-        date2: 第二个日期，格式为"YYYY-MM-DD"
-    返回:
-        两个日期之间的天数差异（绝对值）
-    """
-    # 解析日期字符串为datetime对象
-    try:
-        d1 = datetime.strptime(date1, "%Y-%m-%d")
-        d2 = datetime.strptime(date2, "%Y-%m-%d")
-    except ValueError as e:
-        raise ValueError(f"日期格式错误，请使用YYYY-MM-DD格式: {e}")
-    # 计算日期差并返回绝对值
-    delta = d2 - d1
-    return abs(delta.days)
+    d1 = datetime.strptime(date1, "%Y-%m-%d")
+    d2 = datetime.strptime(date2, "%Y-%m-%d")
+    return abs((d2 - d1).days)
+
 
 agent = Agent(
     name="chat_agent",
-    model_name="doubao-seed-1-6-250615",
-    description="你是一个优秀的助手，你可以和用户进行对话。",
-    instruction="你是一个优秀的助手，你可以和用户进行对话。",
+    model_name="doubao-seed-1-8-251228",
+    instruction=(
+        "你是一个优秀的助手。回答时先查询知识库验证或丰富答案，"
+        "再结合内部知识给出全面准确的回答。"
+    ),
     knowledgebase=kb,
     tools=[calculate_date_difference],
 )
 
-runner = Runner(
-    agent,
-    app_name=APP_NAME,
-)
-
-async def main():
-    """
-    主函数，用于运行agent
-    """
-    session_id = uuid4().hex
-    while True:
-        try:
-            print("\n\n您: ", end="")
-            message = input()
-            if message.strip().lower() == "exit":
-                break
-            print("\n\nAgent: ")
-            completion = await runner.run(
-                messages=message,
-                session_id=session_id,
-            )
-            print(completion)
-
-        except (KeyboardInterrupt, EOFError):
-            break
+runner = Runner(agent=agent, app_name=APP_NAME)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    print(asyncio.run(runner.run(messages="弗洛伊德和阿德勒相差多少天？")))
 ```
-
-  </Tab>
-  <Tab value="Golang">
-
-```go title="examples/knowledge/viking_knowledge.go"
-package main
-
-import (
-	"context"
-	"fmt"
-	"log"
-	"math"
-	"os"
-	"strings"
-	"time"
-
-	veagent "github.com/volcengine/veadk-go/agent/llmagent"
-	"github.com/volcengine/veadk-go/integrations/ve_tos"
-	"github.com/volcengine/veadk-go/knowledgebase"
-	"github.com/volcengine/veadk-go/knowledgebase/backend/viking_knowledge_backend"
-	"github.com/volcengine/veadk-go/knowledgebase/ktypes"
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/agent/llmagent"
-	"google.golang.org/adk/cmd/launcher"
-	"google.golang.org/adk/cmd/launcher/full"
-	"google.golang.org/adk/session"
-	"google.golang.org/adk/tool"
-	"google.golang.org/adk/tool/functiontool"
-)
-
-func main() {
-	ctx := context.Background()
-	knowledgeBase, err := knowledgebase.NewKnowledgeBase(
-		ktypes.VikingBackend,
-		knowledgebase.WithBackendConfig(
-			&viking_knowledge_backend.Config{
-				Index:            "veadk_go_test_kg",
-				CreateIfNotExist: true,
-				TosConfig: &ve_tos.Config{
-					Bucket: "veadk-go-bucket",
-				},
-			}),
-	)
-	if err != nil {
-		log.Fatal("NewVikingKnowledgeBackend error: ", err)
-	}
-
-	mock_data := []string{
-		`西格蒙德·弗洛伊德（Sigmund Freud，1856年5月6日-1939年9月23日）是精神分析的创始人。
-	精神分析既是一种治疗精神疾病的方法，也是一种解释人类行为的理论。弗洛伊德认为，我们童年时期的经历对我们的成年生活有很大的影响，并且塑造了我们的个性。
-	例如，源自人们曾经的创伤经历的焦虑感，会隐藏在意识深处，并且可能在成年期间引起精神问题（以神经症的形式）。`,
-		`阿尔弗雷德·阿德勒（Alfred Adler，1870年2月7日-1937年5月28日），奥地利精神病学家，人本主义心理学先驱，个体心理学的创始人。
-	曾追随弗洛伊德探讨神经症问题，但也是精神分析学派内部第一个反对弗洛伊德的心理学体系的心理学家。
-	著有《自卑与超越》《人性的研究》《个体心理学的理论与实践》《自卑与生活》等。`}
-
-	if err = knowledgeBase.Backend.AddFromText(mock_data); err != nil {
-		log.Fatal("AddFromText error: ", err)
-		return
-	}
-
-	calculateDateDifferenceTool, err := CalculateDateDifferenceTool()
-	if err != nil {
-		log.Fatal("CalculateDateDifferenceTool error: ", err)
-		return
-	}
-
-	cfg := veagent.Config{
-		Config: llmagent.Config{
-			Name:        "chat_agent",
-			Description: "你是一个优秀的助手，你可以和用户进行对话。",
-			Instruction: `你是一个优秀的助手。当被提问时，请遵循以下步骤：\n1. 首先，根据你的内部知识，生成一个初步的回答。\n2. 然后，查询你的知识库，寻找与问题相关的信息来验证或丰富你的答案。\n3. 最后，结合你的内部知识和知识库中的信息，给出一个全面、准确的最终答案。`,
-			Tools:       []tool.Tool{calculateDateDifferenceTool},
-		},
-		ModelName:     "doubao-seed-1-6-250615",
-		KnowledgeBase: knowledgeBase,
-	}
-
-	veAgent, err := veagent.New(&cfg)
-	if err != nil {
-		fmt.Printf("NewLLMAgent failed: %v", err)
-		return
-	}
-
-	config := &launcher.Config{
-		AgentLoader:    agent.NewSingleLoader(veAgent),
-		SessionService: session.InMemoryService(),
-	}
-
-	l := full.NewLauncher()
-	if err = l.Execute(ctx, config, os.Args[1:]); err != nil {
-		log.Fatalf("Run failed: %v\n\n%s", err, l.CommandLineSyntax())
-	}
-}
-
-type CalculateDateDifferenceArgs struct {
-	Date1 string `json:"date1" jsonschema:"第一个日期，格式为YYYY-MM-DD"`
-	Date2 string `json:"date2" jsonschema:"第二个日期，格式为YYYY-MM-DD"`
-}
-
-func CalculateDateDifferenceTool() (tool.Tool, error) {
-	handler := func(ctx tool.Context, args CalculateDateDifferenceArgs) (map[string]any, error) {
-		diff, err := CalculateDateDifference(args.Date1, args.Date2)
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"result": diff}, nil
-	}
-	return functiontool.New(
-		functiontool.Config{
-			Name:        "calculate date difference",
-			Description: "计算两个日期之间的天数差异\nArgs:\n\tdate1: 第一个日期，格式为YYYY-MM-DD\n\tdate2: 第二个日期，格式为YYYY-MM-DD\nReturns:\n\t两个日期之间的天数差异（绝对值）",
-		},
-		handler,
-	)
-}
-
-func CalculateDateDifference(date1 string, date2 string) (int, error) {
-	d1, err := time.Parse("2006-01-02", strings.TrimSpace(date1))
-	if err != nil {
-		return 0, fmt.Errorf("日期格式错误，请使用YYYY-MM-DD格式: %v", err)
-	}
-	d2, err := time.Parse("2006-01-02", strings.TrimSpace(date2))
-	if err != nil {
-		return 0, fmt.Errorf("日期格式错误，请使用YYYY-MM-DD格式: %v", err)
-	}
-	delta := d2.Sub(d1)
-	days := int(math.Abs(delta.Hours() / 24))
-	return days, nil
-}
-```
-
-  </Tab>
-</Tabs>
 
 #### 运行结果
 
-**输入问题：**
+下图展示智能体先通过 `load_knowledgebase` 检索知识库，再通过 Function Call 调用 `calculate_date_difference`，最后给出综合回答。
 
 ![输入问题](/assets/images/knowledge/image-17.png)
 
-**执行过程：**
-
-下图红框里面显示了通过搜索知识库获取相关信息，然后大模型调用 calculate_date_difference function call。
-
 ![执行过程](/assets/images/knowledge/image-18.png)
-
-下图显示 Agent 先调用 knowledge 获取相关知识，然后再通过 Function Call 调用 function calculate_date_difference。
 
 ![执行过程](/assets/images/knowledge/image-19.png)
 
-**执行结果：**
-
 ![执行结果](/assets/images/knowledge/image-20.png)
 
-### OpenSearch 作为知识库存储
+### OpenSearch 作为存储
 
-#### 知识库初始化（从文件加载）
-
-在项目目录下新建 tmp 目录，在 tmp 目录新建 demo.txt。它的内容如下：
-
-```text
-西格蒙德·弗洛伊德（Sigmund Freud，1856年5月6日-1939年9月23日）是精神分析的创始人。
-精神分析既是一种治疗精神疾病的方法，也是一种解释人类行为的理论。弗洛伊德认为，我们童年时期的经历对我们的成年生活有很大的影响，并且塑造了我们的个性。
-例如，源自人们曾经的创伤经历的焦虑感，会隐藏在意识深处，并且可能在成年期间引起精神问题（以神经症的形式）。
-
-阿尔弗雷德·阿德勒（Alfred Adler，1870年2月7日-1937年5月28日），奥地利精神病学家，人本主义心理学先驱，个体心理学的创始人。
-曾追随弗洛伊德探讨神经症问题，但也是精神分析学派内部第一个反对弗洛伊德的心理学体系的心理学家。
-著有《自卑与超越》《人性研究》《个体心理学的理论与实践》《自卑与生活》等。
-```
-
-知识库初始化代码：
+OpenSearch 通常自动创建索引，无需显式 create。下面从文件注入知识，并额外挂载真实的 `web_search` 工具，在知识库信息不足时联网补充：
 
 ```python
-APP_NAME = "opensearch_demo"
-
-kb = KnowledgeBase(
-    backend="opensearch",  # 这里设置为opensearch
-    app_name=APP_NAME,
-)
-
-# The file path has been corrected to tmp/demo.txt
-kb.add_from_files(["tmp/demo.txt"])
-```
-
-#### Agent 代码初始化
-
-```python
-agent = Agent(
-    name="chat_agent",
-    model_name="doubao-seed-1-6-250615",
-    description="你是一个优秀的助手，你可以和用户进行对话。",
-    instruction="""你是一个优秀的助手。当被提问时，请遵循以下步骤：
-1. 首先，根据你的内部知识，生成一个初步的回答。
-2. 然后，查询你的知识库，寻找与问题相关的信息来验证或丰富你的答案。
-3. 如果知识库信息不足，或用户问题涉及实时、或知识库外的知识，请使用 `web_search` 工具进行网络搜索。
-4. 最后，结合你的内部知识、知识库信息以及网络搜索结果，给出一个全面、准确的最终答案。""",
-    knowledgebase=kb,
-    tools=[calculate_date_difference, web_search],
-)
-```
-
-#### 完整的代码
-
-```python
-import os
-from uuid import uuid4
-import yaml
-import json
-from datetime import datetime
 import asyncio
-
-os.environ["LITELLM_LOGGING"] = "False"
-os.environ["LOGGING_LEVEL"] = "DEBUG"
+from datetime import datetime
 
 from veadk import Agent, Runner
 from veadk.knowledgebase import KnowledgeBase
-
-# 从config.yaml读取配置
-with open('config.yaml', 'r') as f:
-    config = yaml.safe_load(f)
-
-# 打印配置结构用于调试
-print("Config structure:", config)
-
-if config.get('database') and config['database'].get('opensearch'):
-    os.environ["DATABASE_OPENSEARCH_HOST"] = config['database']['opensearch'].get('host', '')
-    os.environ["DATABASE_OPENSEARCH_PORT"] = str(config['database']['opensearch'].get('port', ''))
-    os.environ["DATABASE_OPENSEARCH_USERNAME"] = config['database']['opensearch'].get('username', '')
-    os.environ["DATABASE_OPENSEARCH_PASSWORD"] = config['database']['opensearch'].get('password', '')
-else:
-    print("Warning: Opensearch config not found")
-
-if config.get('volcengine'):
-    os.environ["VOLCENGINE_ACCESS_KEY"] = config['volcengine'].get('access_key', '')
-    os.environ["VOLCENGINE_SECRET_KEY"] = config['volcengine'].get('secret_key', '')
-else:
-    print("Warning: Volcengine config not found")
-    os.environ["VOLCENGINE_ACCESS_KEY"] = ''
-    os.environ["VOLCENGINE_SECRET_KEY"] = ''
-
-# 验证环境变量
-assert os.getenv("VOLCENGINE_ACCESS_KEY") and os.getenv("VOLCENGINE_SECRET_KEY"), (
-    "请在config.yaml里设置火山ak和sk"
-)
+from veadk.tools.builtin_tools.web_search import web_search
 
 APP_NAME = "opensearch_demo"
 
-kb = KnowledgeBase(
-    backend="opensearch",  # 这里设置为opensearch
-    app_name=APP_NAME,
-)
+kb = KnowledgeBase(backend="opensearch", index=APP_NAME)
+kb.add_from_files(["tmp/demo.txt"])  # 事先把知识写入 tmp/demo.txt
 
-# The file path has been corrected to tmp/demo.txt
-kb.add_from_files(["tmp/demo.txt"])
-
-def web_search(query: str) -> str:
-    """
-    当知识库信息不足时，使用此工具在互联网上搜索实时或外部信息。查询可以是单个字符串，也可以是JSON格式的字符串列表。
-    """
-    # This is a placeholder for the actual web search tool call
-    # In a real scenario, this would be implemented by the environment.
-    print(f"Performing web search for: {query}")
-
-    # The model might send a list of queries directly, or a JSON string of a list.
-    if isinstance(query, list):
-        return f"Web search results for queries: {', '.join(query)}"
-
-    # If it's a string, it could be a JSON list.
-    if isinstance(query, str):
-        try:
-            queries = json.loads(query)
-            if isinstance(queries, list):
-                return f"Web search results for queries: {', '.join(queries)}"
-        except (json.JSONDecodeError, TypeError):
-            # It's just a plain string.
-            pass
-        # Fallthrough for plain string
-        return "Web search results for '" + query + "'"
-
-    # Fallback for any other unexpected type
-    return f"Cannot process web search for unexpected query type: {query}"
 
 def calculate_date_difference(date1: str, date2: str) -> int:
+    """计算两个日期之间的天数差（绝对值）。
+
+    Args:
+        date1: 第一个日期，格式 "YYYY-MM-DD"。
+        date2: 第二个日期，格式 "YYYY-MM-DD"。
+
+    Returns:
+        两个日期之间的天数差。
     """
-    计算两个日期之间的天数差异
-    参数:
-        date1: 第一个日期，格式为"YYYY-MM-DD"
-        date2: 第二个日期，格式为"YYYY-MM-DD"
-    返回:
-        两个日期之间的天数差异（绝对值）
-    """
-    # 解析日期字符串为datetime对象
-    try:
-        d1 = datetime.strptime(date1, "%Y-%m-%d")
-        d2 = datetime.strptime(date2, "%Y-%m-%d")
-    except ValueError as e:
-        raise ValueError(f"日期格式错误，请使用YYYY-MM-DD格式: {e}")
-    # 计算日期差并返回绝对值
-    delta = d2 - d1
-    return abs(delta.days)
+    d1 = datetime.strptime(date1, "%Y-%m-%d")
+    d2 = datetime.strptime(date2, "%Y-%m-%d")
+    return abs((d2 - d1).days)
+
 
 agent = Agent(
     name="chat_agent",
-    model_name="doubao-seed-1-6-250615",
-    description="你是一个优秀的助手，你可以和用户进行对话。",
-    instruction="""你是一个优秀的助手。当被提问时，请遵循以下步骤：
-1. 首先，根据你的内部知识，生成一个初步的回答。
-2. 然后，查询你的知识库，寻找与问题相关的信息来验证或丰富你的答案。
-3. 如果知识库信息不足，或用户问题涉及实时、或知识库外的知识，请使用 `web_search` 工具进行网络搜索。
-4. 最后，结合你的内部知识、知识库信息以及网络搜索结果，给出一个全面、准确的最终答案。""",
+    model_name="doubao-seed-1-8-251228",
+    instruction=(
+        "你是一个优秀的助手。回答时先查询知识库；"
+        "若知识库信息不足或涉及实时信息，使用 `web_search` 联网搜索；"
+        "最后结合各方信息给出全面准确的回答。"
+    ),
     knowledgebase=kb,
     tools=[calculate_date_difference, web_search],
 )
 
-runner = Runner(
-    agent,
-    app_name=APP_NAME,
-)
+runner = Runner(agent=agent, app_name=APP_NAME)
 
 if __name__ == "__main__":
-    session_id = uuid4().hex
-    print("欢迎使用交互式问答 Agent。输入 'exit' 或 'quit' 来结束对话。")
-    while True:
-        try:
-            message = input("您: ")
-            if message.lower() in ["exit", "quit"]:
-                print("再见!")
-                break
-
-            completion = asyncio.run(
-                runner.run(
-                    messages=message,
-                    session_id=session_id,
-                )
-            )
-            print(f"Agent: {completion}")
-        except KeyboardInterrupt:
-            print("\n再见!")
-            break
+    print(asyncio.run(runner.run(messages="弗洛伊德和阿德勒相差多少天？")))
 ```
 
-#### 执行过程
-
 ![执行过程](/assets/images/knowledge/image-21.png)
-
-#### 执行结果
 
 ![执行结果](/assets/images/knowledge/image-22.png)
 
 ## 总结与对比
 
-总而言之，KnowledgeBase 的设计让您可以轻松切换底层向量数据库，而无需更改大部分业务逻辑代码。主要的差异在于前期的配置和 viking 需要显式创建集合这一点。
+知识库的设计让你可以轻松切换底层向量库，而无需改动大部分业务代码。主要差异在于前期配置，以及 Viking 需要显式创建集合。
 
 | 特性 | Viking 后端 | OpenSearch 后端 |
 | :--- | :--- | :--- |
-| **核心优势** | 托管服务，免运维，与火山引擎生态结合紧密。 | 开源、灵活，可私有化部署，社区生态成熟。 |
-| **配置 (`config.yaml`)** | 需要 `viking.project` 和 `viking.region`。 | 需要 `opensearch.host`、`port`、`username`、`password`。 |
-| **初始化** | 需要在使用前手动检查并调用 `kb.create_collection()`。 | 通常自动创建索引，无需额外步骤。 |
-| **代码使用** | **完全一致**。`add_from_files`、`add_from_text` 等方法用法相同。 | **完全一致**。`veadk` 框架的抽象层做得很好。 |
-| **依赖** | 依赖火山引擎的 `ak/sk` 进行认证和 embedding。 | 同样需要 `ak/sk` 来调用 embedding 模型，但数据库本身独立。 |
+| **核心优势** | 托管服务、免运维，与火山引擎生态结合紧密。 | 开源、灵活，可私有化部署，社区成熟。 |
+| **config.yaml** | 需要 `viking.project`、`viking.region` 及 `tos`。 | 需要 `opensearch.host`、`port`、`username`、`password`。 |
+| **初始化** | 使用前需检查并调用 `kb.create_collection()`。 | 通常自动创建索引，无需额外步骤。 |
+| **代码使用** | **完全一致**：`add_from_files`、`add_from_text` 等用法相同。 | **完全一致**：抽象层屏蔽了差异。 |
+| **依赖** | 依赖火山引擎 `ak/sk` 进行认证与 embedding。 | 同样需要 `ak/sk` 调用 embedding 模型，但数据库本身独立。 |
+
+## 下一步
+
+<Cards>
+  <Card title="知识库最佳实践" href="/cn/docs/framework/knowledgebase/best-practice" description="把知识库与多智能体深度结合。" />
+  <Card title="构建智能体" href="/cn/docs/framework/agent/create" description="配置模型、工具、记忆与知识库。" />
+</Cards>

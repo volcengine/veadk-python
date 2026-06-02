@@ -7,7 +7,11 @@ VeADK 在 `veadk.community.langchain_ai` 模块下提供了一系列与 Langchai
 
 ## 模型
 
-`ArkChatModel` 继承自 Langchain 的 `ChatOpenAI`，用于调用火山引擎方舟（Ark）平台上的模型。使用前请配置环境变量 `MODEL_AGENT_API_KEY`。
+`ArkChatModel` 继承自 Langchain 的 `ChatOpenAI`，用于调用火山引擎方舟（Ark）平台上的模型。使用前请先配置环境变量：
+
+```bash
+export MODEL_AGENT_API_KEY="<你的方舟 API Key>"
+```
 
 ```python
 from veadk.community.langchain_ai.models.ark_model import ArkChatModel
@@ -24,28 +28,44 @@ print(response.content)
 
 ## 知识库
 
-`KnowledgeBase` 提供基于向量检索的知识库能力。在 Langchain / LangGraph 中，可以通过 `load_knowledgebase` 工具将知识库的语义检索能力暴露给智能体，智能体便可根据用户问题自动检索相关知识。
+`KnowledgeBase` 提供基于向量检索的知识库能力。在 Langchain / LangGraph 中，可以通过 `load_knowledgebase` 工具将知识库的语义检索能力暴露给智能体。该工具会从运行时上下文（`runtime.context.knowledgebase`）读取知识库实例，因此你需要把配置好的 `KnowledgeBase` 通过 `context` 传入。
 
 ```python
-from veadk.knowledgebase import KnowledgeBase
+from dataclasses import dataclass
 
+from langchain.agents import create_agent
+from veadk.knowledgebase import KnowledgeBase
+from veadk.community.langchain_ai.models.ark_model import ArkChatModel
+from veadk.community.langchain_ai.tools.load_knowledgebase import load_knowledgebase
+
+# 1. 配置知识库实例
 knowledgebase = KnowledgeBase(
     name="preference",
     backend="viking",
     index="viking_demo_create_2",
 )
+
+# 2. 定义上下文 schema，把知识库传给工具
+@dataclass
+class Context:
+    knowledgebase: KnowledgeBase
+
+# 3. 构建 LangGraph 智能体，并把 load_knowledgebase 作为工具
+agent = create_agent(
+    model=ArkChatModel(model="deepseek-v3-1-terminus"),
+    tools=[load_knowledgebase],
+    context_schema=Context,
+)
+
+# 4. 调用时通过 context 注入知识库实例
+result = agent.invoke(
+    {"messages": [{"role": "user", "content": "我的偏好是什么？"}]},
+    context=Context(knowledgebase=knowledgebase),
+)
+print(result["messages"][-1].content)
 ```
 
-将 `load_knowledgebase` 作为工具提供给 LangGraph 智能体：
-
-```python
-from veadk.community.langchain_ai.tools.load_knowledgebase import load_knowledgebase
-
-# 将 load_knowledgebase 作为工具加入到您的 LangGraph 智能体
-tools = [load_knowledgebase]
-```
-
-智能体在运行时会调用 `load_knowledgebase(query)`，对配置的知识库执行语义检索并返回相关片段。
+智能体在运行时会调用 `load_knowledgebase(query)`，对 `context` 中的知识库执行语义检索并返回相关片段。
 
 ## 短期记忆
 
@@ -61,16 +81,38 @@ short_term_memory = ShortTermMemory(backend="sqlite")
 
 ## 长期记忆
 
-长期记忆用于在不同会话之间持久化记忆。VeADK 通过 `VikingMemoryStore` 提供基于火山引擎 Viking 的长期记忆存储，并通过 `load_memory` 工具让智能体检索历史记忆。
+长期记忆用于在不同会话之间持久化记忆。VeADK 通过 `VikingMemoryStore` 提供基于火山引擎 Viking 的长期记忆存储，并通过 `load_memory` 工具让智能体检索历史记忆。`load_memory` 会从运行时读取记忆存储（`runtime.store`）与用户标识（`runtime.context.user_id`），因此你需要把 `VikingMemoryStore` 作为 `store` 传入，并在 `context` 中提供 `user_id`。
 
 ```python
+from dataclasses import dataclass
+
+from langchain.agents import create_agent
+from veadk.community.langchain_ai.models.ark_model import ArkChatModel
 from veadk.community.langchain_ai.tools.load_memory import load_memory
 from veadk.community.langchain_ai.store.memory.viking_memory import VikingMemoryStore
 
+# 1. 配置长期记忆存储
 store = VikingMemoryStore(index="aiops")
 
-# 将 load_memory 作为工具提供给您的 LangGraph 智能体
-tools = [load_memory]
+# 2. 定义上下文 schema，提供 user_id
+@dataclass
+class Context:
+    user_id: str
+
+# 3. 构建 LangGraph 智能体，把 store 与 load_memory 工具接入
+agent = create_agent(
+    model=ArkChatModel(model="deepseek-v3-1-terminus"),
+    tools=[load_memory],
+    context_schema=Context,
+    store=store,
+)
+
+# 4. 调用时通过 context 提供 user_id
+result = agent.invoke(
+    {"messages": [{"role": "user", "content": "我们上次聊到哪了？"}]},
+    context=Context(user_id="user-123"),
+)
+print(result["messages"][-1].content)
 ```
 
 智能体在运行时会调用 `load_memory(query)`，从长期记忆存储中检索与当前问题相关的历史记忆，从而实现跨会话的记忆能力。

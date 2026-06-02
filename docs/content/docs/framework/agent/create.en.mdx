@@ -1,27 +1,19 @@
 ---
-title: "Build Your First Agent"
-description: "Build and run an Agent in the simplest way, either through code or a YAML configuration file."
+title: "Create an agent"
+description: "Define an agent in code or YAML, and configure model fallbacks, custom clients, and extra parameters."
 ---
 
-This document explains how to build and run an Agent in the simplest way. It covers two main definition methods:
+Defining an agent is the starting point of its lifecycle. This page shows how to configure an agent — choose a model, set up fallbacks, customize the model client, and describe an agent declaratively in YAML.
 
-- Definition in code
-- YAML definition based on Agent Builder
+<Callout type="info">
+  Just want to run a minimal example first? Start with the [Quickstart](/en/docs/framework/getting-started/quickstart), then come back here to configure further.
+</Callout>
 
-This document does not depend on any complex external components and aims to help you form an overall understanding of a minimal runnable example.
+VeADK offers two ways to define an agent: the **code approach** and the **YAML approach**. Code is more flexible — easy to adjust parameters dynamically and unit-test. YAML is more concise and suited to declarative configuration management.
 
-## Ways to Define an Agent
+## Build in code
 
-Defining an Agent is the starting point of its lifecycle. Regardless of system scale, the Agent is the subject of task decomposition and planning.
-
-This section introduces two definition approaches: the **code approach** and the **YAML configuration approach**.
-
-### Build in Code
-
-Defining an Agent directly in code is the most common and flexible approach. It makes it easy to dynamically adjust parameters, integrate external modules, and run unit tests. You can create the simplest Agent without any extra setup. **Default Agent attributes come from environment variables or built-in defaults.** The code below implements a minimal Agent definition and run:
-
-<Tabs items={['Python', 'Golang', 'Required environment variables']}>
-<Tab value="Python">
+Defining an agent directly in code is the most common and flexible approach. Default attributes come from environment variables or built-in defaults, so the simplest agent needs no extra setup:
 
 ```python title="agent.py"
 import asyncio
@@ -35,94 +27,22 @@ response = asyncio.run(runner.run(messages="Hi!"))
 print(response)
 ```
 
-</Tab>
-<Tab value="Golang">
+Before running, provide your model inference API key via an environment variable (VeADK reads `MODEL_AGENT_API_KEY` by default):
 
-```go title="agent.go"
-package main
-
-import (
-    "context"
-    "fmt"
-
-    "github.com/google/uuid"
-    _ "github.com/volcengine/veadk-go/agent"
-    veagent "github.com/volcengine/veadk-go/agent/llmagent"
-    "google.golang.org/adk/agent"
-    "google.golang.org/adk/runner"
-    "google.golang.org/adk/session"
-    "google.golang.org/genai"
-)
-
-func main() {
-    ctx := context.Background()
-    veAgent, err := veagent.New(&veagent.Config{})
-    if err != nil {
-        fmt.Printf("NewVeAgent failed: %v", err)
-        return
-    }
-
-    appName := "veAgent_app"
-    userID := "user-1234"
-    sessionId := fmt.Sprintf("%s-%s", session.KeyPrefixTemp, uuid.NewString())
-    sessionService := session.InMemoryService()
-    agentRunner, err := runner.New(runner.Config{
-        AppName:        appName,
-        Agent:          veAgent,
-        SessionService: sessionService,
-    })
-    if err != nil {
-        fmt.Printf("New runner error:%v", err)
-        return
-    }
-
-    _, err = sessionService.Create(ctx, &session.CreateRequest{
-        AppName:   appName,
-        UserID:    userID,
-        SessionID: sessionId,
-    })
-    if err != nil {
-        fmt.Printf("Create session error:%v", err)
-        return
-    }
-
-    for event, err := range agentRunner.Run(ctx, userID, sessionId, genai.NewContentFromText("你好", genai.RoleUser), agent.RunConfig{StreamingMode: agent.StreamingModeNone}) {
-        if err != nil {
-            fmt.Printf("got unexpected error: %v", err)
-        }
-        fmt.Printf("got event: %s\n", event.Content.Parts[0].Text)
-    }
-}
+```bash
+export MODEL_AGENT_API_KEY="<your Ark API key>"
 ```
 
-</Tab>
-<Tab value="Required environment variables">
+<Callout type="info">
+  You can also manage secrets centrally in `config.yaml`; see [Configuration](/en/docs/framework/configuration). **Never hard-code an API key in source.**
+</Callout>
 
-Environment variable list:
+### Set metadata
 
-- `MODEL_AGENT_API_KEY`: API key for the user's Agent inference model
-- ...
-
-Or define them in `config.yaml`:
-
-```yaml title="config.yaml"
-model:
-  agent:
-    api_key: ...
-```
-
-</Tab>
-</Tabs>
-
-#### Set Agent Metadata
-
-You can also set more Agent metadata as follows:
-
-<Tabs items={['Python', 'Golang']}>
-<Tab value="Python">
+Set an agent's metadata with `name`, `description`, and `instruction`:
 
 ```python title="agent.py"
-from veadk import Agent, Runner
+from veadk import Agent
 
 root_agent = Agent(
     name="life_assistant",
@@ -131,106 +51,61 @@ root_agent = Agent(
 )
 ```
 
-</Tab>
-<Tab value="Golang">
+- `name`: the agent's name; uniquely identifies an agent within the agent tree.
+- `description`: a short description of what the agent does (surfaced in A2A and similar scenarios).
+- `instruction`: the system prompt that defines the agent's behavior and response style.
 
-```go title="agent.go"
-cfg := &veagent.Config{}
-cfg.Name = "life_assistant"
-cfg.Description = "Life assistant"
-cfg.Instruction = "You are a life assistant who can answer user questions."
+### Use a different model
 
-veAgent, err := veagent.New(cfg)
-if err != nil {
-    fmt.Printf("NewVeAgent failed: %v", err)
-    return
-}
-```
-
-</Tab>
-</Tabs>
-
-Here, `name` is the Agent's name, `description` is a short description of the Agent's function (it uniquely identifies an Agent within the Agent tree), and `instruction` is the Agent's system prompt that defines its behavior and response style.
-
-#### Use a Different Model
-
-If you want to use a local model or a model from another provider, you can specify the model configuration during initialization:
-
-<Tabs items={['Python', 'Golang']}>
-<Tab value="Python">
+To use another provider or a local model, specify the model configuration at initialization (the API key still comes from the environment variable):
 
 ```python title="agent.py"
 from veadk import Agent
 
 agent = Agent(
-    model_provider="...",
-    model_name="...",
-    model_api_key="...",
-    model_api_base="..."
+    model_provider="openai",
+    model_name="doubao-seed-1-8-251228",
+    model_api_base="https://ark.cn-beijing.volces.com/api/v3/",
 )
 ```
 
-</Tab>
-<Tab value="Golang">
+The inference model in the VeADK Python version is built on [LiteLLM](https://github.com/BerriAI/litellm), so you can use any provider LiteLLM supports. See the [list of providers supported by LiteLLM](https://docs.litellm.ai/docs/providers) to set `model_provider`.
 
-```go title="agent.go"
-cfg := &veagent.Config{
-    ModelName: "...",
-    ModelAPIBase: "...",
-    ModelAPIKey: "...",
-}
+### Model fallbacks
 
-veAgent, err := veagent.New(cfg)
-if err != nil {
-    fmt.Printf("NewVeAgent failed: %v", err)
-    return
-}
-```
-
-</Tab>
-</Tabs>
-
-The Agent inference model in the VeADK Python version is implemented on top of [LiteLLM](https://github.com/BerriAI/litellm), so you can use all model providers that LiteLLM supports. See the [list of providers supported by LiteLLM](https://docs.litellm.ai/docs/providers) to set the `model_provider` parameter.
-
-#### Model Fallbacks
-
-VeADK provides a model fallback mechanism based on LiteLLM [Fallbacks](https://docs.litellm.ai/docs/completion/reliable_completions), which can automatically switch models when a preceding model fails. For example, when the target model still fails after multiple retries, the system automatically switches to a backup model to continue the task:
+VeADK provides model fallbacks based on LiteLLM [Fallbacks](https://docs.litellm.ai/docs/completion/reliable_completions): when the target model still fails after multiple retries, it automatically switches to a backup model to continue. Pass a list to `model_name`:
 
 ```python title="agent.py"
 from veadk import Agent
 
 agent = Agent(
     model_name=[
-        "doubao-seed-1-8-251215",
-        "doubao-seed-1-6-251015",
-        "doubao-seed-1.6-250615",
+        "doubao-seed-1-8-251228",
+        "deepseek-r1-250528",
     ]
 )
 ```
 
-With the configuration above, VeADK first tries the `doubao-seed-1-8-251215` model by default; if it fails, it tries the subsequent models until one succeeds.
+VeADK tries the first model first; if it fails, it tries the subsequent models in order until one succeeds.
 
-#### Customize Your Model Client
+### Customize your model client
 
-VeADK lets you define the LiteLLM client directly for highly customized model configuration:
+For highly customized model configuration, pass a LiteLLM client directly:
 
 ```python title="agent.py"
 from google.adk.models.lite_llm import LiteLlm
 from veadk import Agent
 
 # Customize your model client
-llm = LiteLlm()
+llm = LiteLlm(model="doubao-seed-1-8-251228")
 
 # Pass the model client directly to the Agent
 agent = Agent(model=llm)
 ```
 
-#### Configure Extra Model Parameters
+### Configure extra model parameters
 
-In addition, based on the capabilities of the [Volcengine Ark model platform](https://www.volcengine.com/product/ark), you can specify some [extra options](https://www.volcengine.com/docs/82379/1494384?lang=zh). For example, you can disable the thinking capability of the Doubao 1.6 series models for faster responses:
-
-<Tabs items={['Python', 'Golang']}>
-<Tab value="Python">
+You can also specify [extra options](https://www.volcengine.com/docs/82379/1494384?lang=zh) based on the capabilities of the [Volcengine Ark model platform](https://www.volcengine.com/product/ark). For example, disable the thinking capability for faster responses:
 
 ```python title="agent.py"
 import asyncio
@@ -238,70 +113,103 @@ import asyncio
 from veadk import Agent, Runner
 
 agent = Agent(
-    model_name="doubao-seed-1.6-250615",
+    model_name="doubao-seed-1-8-251228",
     model_extra_config={"extra_body": {"thinking": {"type": "disabled"}}},
 )
 runner = Runner(agent=agent)
 
-response = asyncio.run(runner.run(messages="hi!"))
+response = asyncio.run(runner.run(messages="Hi!"))
 print(response)
 ```
 
-</Tab>
-<Tab value="Golang">
+## Attach tools, memory, and a knowledge base
 
-```go title="agent.go"
-import (
-    _ "github.com/volcengine/veadk-go/agent"
-    veagent "github.com/volcengine/veadk-go/agent/llmagent"
+Of an agent's [four core elements](/en/docs/framework/agent/overview), the model is configured above; the other three are attached at initialization.
+
+### Tools
+
+Put tool functions or tool instances in the `tools` list. VeADK ships built-in tools, and you can also pass plain Python functions as custom tools:
+
+```python title="agent.py"
+from veadk import Agent
+from veadk.tools.demo_tools import get_city_weather
+
+agent = Agent(
+    name="weather_assistant",
+    instruction="Call tools to answer the user's weather questions.",
+    tools=[get_city_weather],
 )
-
-veAgent, err := veagent.New(&veagent.Config{
-    ModelExtraConfig: map[string]any{
-        "extra_body": map[string]any{
-            "thinking": map[string]string{
-                "type": "disabled",
-            },
-        },
-    },
-})
-if err != nil {
-    fmt.Printf("NewVeAgent failed: %v", err)
-    return
-}
 ```
 
-</Tab>
-</Tabs>
+See [Built-in tools](/en/docs/framework/tools/builtin) and [Custom function tools](/en/docs/framework/tools/custom-function).
 
-### Through a Configuration File
+### Memory
 
-When building Agents, you often need a more concise definition and configuration management approach. To support this scenario, VeADK provides a YAML file definition method. This approach describes all the Agent's metadata and behavioral structure with declarative syntax.
+Pass `ShortTermMemory` (single-session context) to the `Runner`, and `LongTermMemory` (cross-session context) to the `Agent`. When long-term memory is attached, VeADK automatically injects the `load_memory` tool so the model can retrieve history on demand:
 
-**Basic structure**: This section gives a simple YAML file `weather_reporter_agent.yaml` to demonstrate how to define an agent that queries weather information.
+```python title="agent.py"
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.memory.long_term_memory import LongTermMemory
+
+agent = Agent(
+    name="assistant",
+    long_term_memory=LongTermMemory(backend="local"),
+)
+
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory(backend="local"))
+```
+
+See [Short-term memory](/en/docs/framework/memory/short-term) and [Long-term memory](/en/docs/framework/memory/long-term).
+
+### Knowledge base
+
+Pass a `KnowledgeBase` to `knowledgebase`. Once attached, VeADK automatically injects the `load_knowledgebase` tool so the model can retrieve relevant snippets before answering:
+
+```python title="agent.py"
+from veadk import Agent
+from veadk.knowledgebase import KnowledgeBase
+
+agent = Agent(
+    name="kb_assistant",
+    instruction="Retrieve from the knowledge base before answering.",
+    knowledgebase=KnowledgeBase(backend="local"),
+)
+```
+
+See [Knowledge base](/en/docs/framework/knowledgebase/overview).
+
+## Through YAML
+
+When you want more concise, declarative configuration management, describe an agent's full metadata and behavioral structure in a YAML file. The `weather_reporter_agent.yaml` below defines an agent that queries the weather:
 
 ```yaml title="weather_reporter_agent.yaml"
 root_agent:
-  type: Agent # Agent | SequencialAgent | LoopAgent | ParallelAgent
+  type: Agent # Agent | SequentialAgent | LoopAgent | ParallelAgent
   name: weather_reporter
-  description: An intelligent_assistant which can provider weather information.
-  instruction: Help user according to your tools.
-  model_name: doubao-1-5-pro-32k-250115
-  model_api_key: ... # Your model API key
+  description: An intelligent assistant that can provide weather information.
+  instruction: Help the user according to your tools.
+  model_name: doubao-seed-1-8-251228
   tools:
     - name: veadk.tools.demo_tools.get_city_weather # The module and function name where the tool lives
 ```
 
-**Structure explanation**:
+Field reference:
 
-- `type`: Agent category
-- `name`: Agent name
-- `description`: Overall description of the Agent
-- `instruction`: The Agent's system prompt
-- `model_name`: Model name, such as doubao-1-5-pro-32k-250115, deepseek-r1-250528, etc.
-- `tools`: Tool list and invocation rules
+| Field | Description |
+| :--- | :--- |
+| `type` | Agent category (`Agent`, `SequentialAgent`, `LoopAgent`, `ParallelAgent`) |
+| `name` | Agent name |
+| `description` | Overall description of the agent |
+| `instruction` | System prompt |
+| `model_name` | Model name, such as `doubao-seed-1-8-251228`, `deepseek-r1-250528`, etc. |
+| `tools` | Tool list and invocation rules |
 
-**Usage**: The following demonstrates how to use this agent to query Beijing's weather based on the `weather_reporter_agent.yaml` file above.
+<Callout type="info">
+  The API key is omitted from YAML and supplied by the `MODEL_AGENT_API_KEY` environment variable.
+</Callout>
+
+Load the YAML with `AgentBuilder` and run it:
 
 ```python title="agent.py"
 import asyncio
@@ -310,23 +218,27 @@ from veadk import Runner
 from veadk.agent_builder import AgentBuilder
 
 agent_builder = AgentBuilder()
-
 agent = agent_builder.build(path="weather_reporter_agent.yaml")
 
 runner = Runner(agent)
 response = asyncio.run(runner.run("What is the weather in Beijing today?"))
-
 print(response)
 ```
 
-## Comparison of Agent Construction Methods
-
-**Summary**:
+## Comparison
 
 | Feature | Code approach | YAML approach |
-| ---- | ----- | ------- |
+| :--- | :--- | :--- |
 | Flexibility | High | Medium |
 | Readability | Medium | High |
 | Maintainability | Medium | High |
 | Dynamic generation | Supported | Limited |
 | Use cases | Development, production | Experimentation, configuration-driven, production |
+
+## Next steps
+
+<Cards>
+  <Card title="Add tools" href="/en/docs/framework/tools/builtin" description="Web search, code sandbox, image & video generation." />
+  <Card title="Prompt management" href="/en/docs/framework/agent/prompt" description="Version-manage and hot-update the system prompt." />
+  <Card title="Multi-agent" href="/en/docs/framework/agent/multi-agent/overview" description="Orchestrate agents with sequential, parallel, and loop patterns." />
+</Cards>

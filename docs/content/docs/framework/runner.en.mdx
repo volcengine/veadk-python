@@ -1,15 +1,15 @@
 ---
-title: "Execution Engine"
-description: "The Runner coordinates Agents, tools, and callbacks, manages information flow and state, and supports enterprise multi-tenant data isolation."
+title: "Runner"
+description: "The Runner coordinates agents, tools, and callbacks, manages information flow and state, and supports enterprise multi-tenant data isolation."
 ---
 
-The `Runner` is a core component of the ADK Runtime. It coordinates the external components you define — Agents, tools, callbacks, and more — so they jointly respond to user input, while managing information flow, state changes, and interactions with external services (such as the LLM and tools) or storage.
+The `Runner` is the core component of the ADK runtime. It coordinates the components you define — agents, tools, callbacks, and more — so they jointly respond to user input, while managing information flow, state changes, and interactions with external services (such as the LLM and tools) and storage.
 
 VeADK's execution engine is fully compatible with the Google ADK Runner. For a complete explanation of the `Runner`'s mechanism and lifecycle, see the [Google ADK Agent Runtime](https://google.github.io/adk-docs/runtime/).
 
-## Multi-Tenant Design
+## Multi-tenant isolation
 
-To meet enterprise multi-tenancy requirements, you can achieve data isolation through three core dimensions — `app_name`, `user_id`, and `session_id`. The isolation scope of each dimension is as follows:
+For enterprise multi-tenant scenarios, the `Runner` isolates data across three dimensions — `app_name`, `user_id`, and `session_id`:
 
 | Data | Isolation dimensions |
 | :- | :- |
@@ -17,15 +17,9 @@ To meet enterprise multi-tenancy requirements, you can achieve data isolation th
 | Long-term memory | `app_name` `user_id` |
 | Knowledge base | `app_name` |
 
-## Simplest Run
+## Simplest run
 
-VeADK provides a simple run interface `Runner.run` to directly run an Agent instance, process user input, and return a response.
-
-<Callout type="warn" title="Usage limitation">
-This run interface is highly encapsulated. If you need more flexible control at production level, we recommend the `Runner.run_async` interface, which processes the Event objects produced at each execution step of the Agent through an async generator.
-</Callout>
-
-Here is a simplest run example:
+`Runner.run()` runs an agent instance directly, processes the input, and returns the final text response — ideal for local testing:
 
 ```python
 import asyncio
@@ -33,19 +27,25 @@ import asyncio
 from veadk import Agent, Runner
 
 agent = Agent()
-
 runner = Runner(agent=agent)
 
-response = asyncio.run(runner.run(messages="What is the weather in Beijing?"))
-
+response = asyncio.run(runner.run("What is the weather in Beijing?"))
 print(response)
 ```
 
-## Production-Level Run
+<Callout type="warn" title="Usage limitation">
+`Runner.run()` is highly encapsulated. If you need finer control over execution in production, use `Runner.run_async()`: it returns an async generator that yields the Event objects produced at each step of the agent's execution.
+</Callout>
 
-Taking image understanding as an example, the following demonstrates how to use `runner.run_async` to process Events:
+## Streaming events
+
+Taking image understanding as an example, the following processes Events one by one with `runner.run_async()` and prints the model's reply when the final event arrives:
 
 ```python
+import asyncio
+from pathlib import Path
+
+from google.adk.agents import RunConfig
 from google.genai.types import Blob, Content, Part
 
 from veadk import Agent, Runner
@@ -55,29 +55,48 @@ USER_ID = "user"
 SESSION_ID = "session"
 
 agent = Agent()
-runner = Runner(agent=agent, app_name=APP_NAME)
+runner = Runner(agent=agent, app_name=APP_NAME, user_id=USER_ID)
+
+image_path = "image.png"
 
 user_message = Content(
-  role="user",
-  parts=[
-    Part(
-      text="Describe everything in this image in detail, including objects, colors, layout, and text (if any)."
-    ),
-    Part(
-      inline_data=Blob(
-        display_name=os.path.basename(image_path),
-        data=read_png_to_bytes(image_path),
-        mime_type="image/png",
-      )
-    ),
-  ],
+    role="user",
+    parts=[
+        Part(text="Describe this image in detail, including objects, colors, layout, and text (if any)."),
+        Part(
+            inline_data=Blob(
+                display_name=Path(image_path).name,
+                data=Path(image_path).read_bytes(),
+                mime_type="image/png",
+            )
+        ),
+    ],
 )
 
-async for event in runner.run_async(
-  user_id=runner.user_id,
-  session_id=session_id,
-  new_message=user_message,
-  run_config=RunConfig(max_llm_calls=1),
-):
-  # Handle your Event here
+
+async def main():
+    async for event in runner.run_async(
+        user_id=USER_ID,
+        session_id=SESSION_ID,
+        new_message=user_message,
+        run_config=RunConfig(max_llm_calls=10),
+    ):
+        if event.is_final_response() and event.content:
+            for part in event.content.parts:
+                if part.text:
+                    print(part.text)
+
+
+asyncio.run(main())
 ```
+
+<Callout type="info">
+`run_async()` expects the session to already exist. When the `Runner` is configured with short-term memory, `run()` auto-creates a session as needed; if you call `run_async()` directly, make sure the session for `session_id` has been created.
+</Callout>
+
+## Next steps
+
+<Cards>
+  <Card title="Local debugging" href="/en/docs/framework/getting-started/local-debugging" description="Watch the Runner's execution in the browser." />
+  <Card title="Short-term memory" href="/en/docs/framework/memory/short-term" description="Configure session-level memory for the Runner." />
+</Cards>

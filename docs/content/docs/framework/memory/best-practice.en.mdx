@@ -1,91 +1,149 @@
 ---
 title: "Best Practices"
-description: "Combine short-term and long-term memory to build efficient, continuous, and personalized enterprise agent experiences."
+description: "Combine short-term and long-term memory to build a support assistant that stays in context and remembers users across sessions."
 ---
 
-This document explains how to combine [short-term memory](/en/docs/framework/memory/short-term) and [long-term memory](/en/docs/framework/memory/long-term) in enterprise scenarios to deliver efficient, continuous, and personalized agent interactions.
+This page combines [short-term memory](/en/docs/framework/memory/short-term) and [long-term memory](/en/docs/framework/memory/long-term) into a single agent — a support assistant that stays coherent within one conversation and remembers a user's preferences when they come back later.
 
-## System Name
+The two kinds of memory have distinct jobs:
 
-Customer Support Assistant
+- **Short-term memory** holds the current session's context (the latest question, answers already given, tool-call results), keyed by `session_id`.
+- **Long-term memory** persists user information (preferences, past requests) across sessions; the agent retrieves it via the `load_memory` tool.
 
-## Scenario
+<Callout type="info">
+The `local` long-term backend embeds memories, so install the extensions dependency: `pip install "veadk-python[extensions]"`. For production, switch to `viking` or `mem0`.
+</Callout>
 
-An enterprise wants to build an intelligent customer service system to handle customer inquiries, issue tracking, and multi-turn interactions.
-The system must meet the following requirements:
+## Design approach
 
-1. **Multi-turn continuity**: Within the same session, the agent should remember the customer's prior questions and context to avoid repeated questions;
-2. **Cross-session memory**: When a customer returns at a different time, the agent should recognize the user's historical information and provide personalized suggestions;
-3. **Tool calls and logging**: The agent can call the internal knowledge base, CRM system, and ticketing system, and save the results in association with the context.
+1. Use a `sqlite` short-term memory to keep multi-turn coherence within a session (persisted, survives restarts).
+2. Use a `local` (or `viking` in production) long-term memory to remember preferences across sessions, with `auto_save_session=True` for automatic archiving.
+3. Give the agent a ticket-status tool to show memory and tools working together.
 
-In this scenario:
+## Implementation
 
-- **Short-term memory** is responsible for storing the current session's context, including the user's latest question, the answers already provided, and tool-call results;
-- **Long-term memory** is responsible for storing cross-session customer information, historical ticket status, preferences, and the knowledge base index for FAQs.
+### Prerequisites
 
-## Agent Design
-
-Design approach:
-
-1. **Initialize the agent and short-term memory**
-   - Short-term memory stores current session information for fast context access, ensuring multi-turn coherence.
-2. **Configure the long-term memory backend**
-   - Long-term memory stores the user's historical data and important cross-session information.
-3. **Interaction flow**
-   - User sends a message → Agent retrieves session context from short-term memory → checks long-term memory for relevant history → performs reasoning and tool calls → updates both short-term and long-term memory.
-
-## Runtime Flow
-
-```text
-# Placeholder: a multi-turn dialogue example showing short-term and long-term memory interaction logic
-# 1. User asks a question
-# 2. Agent retrieves short-term memory
-# 3. Agent queries long-term memory (historical tickets / preferences)
-# 4. Agent calls tools (knowledge base / CRM / ticketing system)
-# 5. Agent replies to the user
-# 6. Update short-term and long-term memory
+```bash
+pip install "veadk-python[extensions]"
+export MODEL_AGENT_API_KEY="<your Ark API key>"
 ```
 
-## Start code!
+### Define a tool
 
-### Preparation
+A simple function tool that looks up ticket status (an in-memory dict stands in for a ticketing system):
 
-### Agent Definition
+```python
+TICKETS = {
+    "T-1001": "In progress: an engineer is assigned, reply expected within 24 hours.",
+    "T-1002": "Resolved: the disk expansion is complete.",
+}
+
+
+def query_ticket(ticket_id: str) -> str:
+    """Look up the current status of a ticket.
+
+    Args:
+        ticket_id: The ticket number, e.g. "T-1001".
+
+    Returns:
+        A description of the ticket's current status.
+    """
+    return TICKETS.get(ticket_id, f"Ticket {ticket_id} not found")
+```
+
+### Assemble the agent
+
+Combine short-term memory, long-term memory, and the tool on a single `Agent`:
+
+```python
+from veadk import Agent, Runner
+from veadk.memory.long_term_memory import LongTermMemory
+from veadk.memory.short_term_memory import ShortTermMemory
+
+APP_NAME = "support_demo"
+USER_ID = "user-42"
+
+
+def build_runner() -> Runner:
+    short_term_memory = ShortTermMemory(
+        backend="sqlite",
+        local_database_path="./support_short_term.db",
+    )
+    long_term_memory = LongTermMemory(backend="local", app_name=APP_NAME)
+
+    agent = Agent(
+        name="support_agent",
+        description="Enterprise support assistant for inquiries and ticket tracking.",
+        instruction=(
+            "You are an enterprise support assistant. Within the same session, "
+            "remember what the user already told you and avoid repeated questions. "
+            "When the user asks about preferences or requests from previous sessions, "
+            "use the `load_memory` tool to recall them. To check ticket status, "
+            "call the `query_ticket` tool."
+        ),
+        short_term_memory=short_term_memory,
+        long_term_memory=long_term_memory,
+        auto_save_session=True,  # archive to long-term memory after each session
+        tools=[query_ticket],
+    )
+    return Runner(
+        agent=agent,
+        short_term_memory=short_term_memory,
+        app_name=APP_NAME,
+        user_id=USER_ID,
+    )
+```
 
 ### Run
 
-## Results
+In the first conversation the user states a preference and checks a ticket (**short-term memory** keeps the session coherent, the **tool** returns ticket status); the second conversation is brand new, and the agent recalls the preference via **long-term memory**:
 
-1. **Short-term memory effect**:
-   - Ensures coherence between questions and context within a single session;
-   - Within the same session, the agent can directly reference information the user provided earlier;
-   - Example: when the user asks "What is the status of the ticket I submitted last time?", the agent can immediately reference the in-session context.
+```python
+import asyncio
 
-2. **Long-term memory effect**:
-   - Records user information and historical actions across sessions;
-   - Example: the next time the user logs in, the agent can recognize the customer and provide personalized recommendations or reminders, such as "The ticket you submitted last time has been resolved. Do you need any further support?"
 
-3. **Combined effect**:
-   - The agent can access both short-term and long-term memory simultaneously, achieving "in-session continuity + cross-session knowledge accumulation";
-   - Improves response accuracy and user satisfaction while reducing repetitive operations and manual intervention;
-   - Supports complex business workflows, such as continuously tracking multiple tickets or managing long-term projects.
+async def main() -> None:
+    runner = build_runner()
 
-```text
-# Placeholder: result diagram or JSON output example
-# {
-#   "user_id": "12345",
-#   "current_session": {
-#       "short_term_memory": {...},
-#       "latest_query": "...",
-#       "tool_calls": [...]
-#   },
-#   "long_term_memory": {
-#       "previous_sessions": [...],
-#       "preferences": {...},
-#       "historical_tickets": [...]
-#   },
-#   "agent_response": "Based on your ticket history, the latest status is..."
-# }
+    # Session 1: multi-turn context within one session_id + a tool call
+    print(
+        await runner.run(
+            messages="I'm an enterprise user and prefer to be contacted by email. "
+            "What's the status of my ticket T-1001?",
+            session_id="chat-1",
+        )
+    )
+    print(
+        await runner.run(
+            messages="What contact method did I mention earlier?",  # references in-session context
+            session_id="chat-1",
+        )
+    )
+
+    # Session 2: a brand-new session, relying on long-term memory
+    print(
+        await runner.run(
+            messages="I'm back with another question. Do you remember how I want to be contacted?",
+            session_id="chat-2",
+        )
+    )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
-In this way, the enterprise agent can respond quickly within the current session while also retaining memory across time and tasks, delivering a high-quality, sustainable customer experience.
+## Results
+
+- **Short-term memory**: within `chat-1`, the agent directly references the "prefers email" detail the user just gave, without asking again; `query_ticket` returns the live status of `T-1001`.
+- **Long-term memory**: in `chat-2` (a brand-new `session_id`), the agent retrieves the preference archived from the previous session via `load_memory` and answers personally.
+- **Combined effect**: "in-session continuity + cross-session knowledge accumulation" improves response accuracy, reduces repetitive work, and supports ongoing workflows such as ticket tracking.
+
+## Next steps
+
+<Cards>
+  <Card title="Short-term Memory" href="/en/docs/framework/memory/short-term" description="Session-level context management." />
+  <Card title="Long-term Memory" href="/en/docs/framework/memory/long-term" description="Persist and retrieve across sessions." />
+  <Card title="Knowledge Base Best Practices" href="/en/docs/framework/knowledgebase/best-practice" description="Combine the knowledge base with multiple agents." />
+</Cards>

@@ -206,7 +206,7 @@ asyncio.run(
 
 ```python
 from veadk.utils.misc import upload_to_files_api
-local_path = os.path.abspath("example-data.png")
+local_path = os.path.abspath("example-video.mp4")
 file_id = asyncio.run(upload_to_files_api(local_path, fps=0.3)) # optional `fps`
 message = types.UserContent(
     parts=[
@@ -361,3 +361,10 @@ asyncio.run(
 2. [火山方舟：上下文缓存](https://www.volcengine.com/docs/82379/1602228?lang=zh#3e69e743)
 3. [火山方舟：缓存 Token 计费说明](https://www.volcengine.com/docs/82379/1544106?lang=zh)
 4. [火山方舟：多模态理解](https://www.volcengine.com/docs/82379/1958521?lang=zh)
+
+## 下一步
+
+<Cards>
+  <Card title="构建智能体" href="/cn/docs/framework/agent/create" description="配置模型、工具与额外参数。" />
+  <Card title="短期记忆" href="/cn/docs/framework/memory/short-term" description="管理多轮对话的会话上下文。" />
+</Cards>

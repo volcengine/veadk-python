@@ -1,22 +1,47 @@
 ---
-title: "IDE 支持"
+title: "IDE 规则 / llms.txt"
 description: "通过 llms.txt 机制为大模型与智能 IDE 提供 VeADK 提示词，自动生成基于 VeADK 的代码。"
 ---
 
-# 系统提示词
+VeADK 通过 [`llms.txt`](https://llmstxt.org/) 机制为大模型和智能 IDE 提供关于 VeADK 的提示词。把这些内容提供给你的大模型或 IDE，即可让它更准确地生成基于 VeADK 的代码。
 
-我们使用 `llms.txt` 机制来提供给大模型、智能 IDE 关于 VeADK 的提示词。
+## 提示词文件
 
-## llms.txt
+VeADK 提供两份提示词文件，按需取用：
 
-`llms.txt` 提供了给大模型、智能 IDE 关于 VeADK 的提示词。您可以将下述内容提供给您的大模型或 IDE 编辑器来自动生成基于 VeADK 的代码。
+| 文件 | 说明 |
+| :-- | :-- |
+| [`llms.txt`](/llms.txt) | 精简版索引，列出 VeADK 的关键概念与文档链接。 |
+| [`llms-full.txt`](/llms-full.txt) | 完整版，包含可直接作为 IDE 规则使用的全部提示词内容。 |
 
-## Trae
+## 在 Trae 中使用
 
-### 使用方法
+以 [Trae](https://www.trae.ai/) 为例，将提示词配置为规则：
 
-1. 下载我们为您准备好的提示词文件：[llms-full.txt](/llms-full.txt)
-2. 打开 Trae 中的设置界面，找到 “规则” 选项
-3. 将文件内容复制到您的 Trae 规则文件中
+<Steps>
 
-![img](/assets/images/trae_rules.png)
+<Step>
+### 下载提示词文件
+
+下载 [`llms-full.txt`](/llms-full.txt)。
+</Step>
+
+<Step>
+### 打开规则设置
+
+打开 Trae 的设置界面，找到 **规则** 选项。
+</Step>
+
+<Step>
+### 写入规则
+
+将文件内容复制到你的 Trae 规则文件中。
+</Step>
+
+</Steps>
+
+![在 Trae 中配置规则](/assets/images/trae_rules.png)
+
+<Callout type="info">
+  其它支持自定义规则 / 系统提示词的 IDE 与编辑器，同样可以将 `llms-full.txt` 的内容粘贴为规则使用。
+</Callout>

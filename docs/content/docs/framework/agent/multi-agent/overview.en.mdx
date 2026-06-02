@@ -1,5 +1,5 @@
 ---
-title: "Multi-Agent Interaction"
+title: "Multi-agent overview"
 description: "Define, coordinate, and run multiple Agents in one system, including autonomous Agents and sequential, loop, and parallel workflow Agents."
 ---
 
@@ -14,32 +14,6 @@ A multi-agent system usually consists of several Agents with independent respons
 - **Autonomous Agent**: A general-purpose Agent based on a large language model, supporting natural-language understanding, reasoning, and generation, and configurable with tools, memory, knowledge base, etc.
 - **Workflow Agent**: An Agent optimized for a specific execution pattern, including sequential, parallel, and loop execution modes, suited to different task-orchestration scenarios.
 
-<Accordions>
-<Accordion title="Common multi-agent issues and solutions">
-
-**Sub-agent returns no result after being invoked**
-
-- Symptom: After the main Agent invokes a sub-agent, there is no response for a long time or it returns an empty value.
-- Solution: Try the Agent-as-a-Tool pattern, invoking the sub-agent as a tool. See the [tools documentation](/en/docs/framework/tools/function).
-
-**Sub-agent is invoked inaccurately or misunderstands the task**
-
-- Symptom: The sub-agent does not correctly understand the task and returns irrelevant content.
-- Solution: Switch to a model with stronger comprehension, such as a thinking or reasoning model.
-
-**Data transfer between sub-agents fails**
-
-- Symptom: The output of the previous Agent cannot be correctly received by the next Agent.
-- Solution: Check that the data formats are consistent, and ensure the output format matches the next Agent's input requirements.
-
-**Loop invocation causes deadlock**
-
-- Symptom: Agents invoke each other, forming an infinite loop.
-- Solution: Set a maximum invocation-depth limit, or use a timeout mechanism.
-
-</Accordion>
-</Accordions>
-
 ### Autonomous Agent
 
 **Definition**: The autonomous Agent is VeADK's core Agent. Built on a large language model, it supports full intelligent conversation, tool calling, and memory management. Based on its configuration, it can **automatically invoke sub-agents or tools** to complete complex tasks.
@@ -48,21 +22,24 @@ A multi-agent system usually consists of several Agents with independent respons
 
 ```mermaid
 graph LR
-    A["用户提问: 北京穿衣建议"] --> B["生活建议助手(主Agent)"]
-    B --> C{"分析需求，自主决策调用子Agent"}
-    C -->|"需要天气信息"| D["天气查询助手(子Agent)"]
-    C -->|"需要穿衣建议"| E["穿衣建议助手(子Agent)"]
-    D --> F["返回: 北京天气信息"]
-    E --> G["返回: 穿衣建议"]
-    F --> H["整合结果"]
+    A["User asks: clothing advice for Beijing"] --> B["Life-advice assistant (main Agent)"]
+    B --> C{"Analyze need, decide which sub-agent to call"}
+    C -->|"Needs weather"| D["Weather Agent (sub-agent)"]
+    C -->|"Needs clothing advice"| E["Suggester Agent (sub-agent)"]
+    D --> F["Return: Beijing weather"]
+    E --> G["Return: clothing advice"]
+    F --> H["Combine results"]
     G --> H
-    H --> I["最终回答: 根据北京天气给出穿衣建议"]
+    H --> I["Final answer: clothing advice based on weather"]
 ```
 
-<Tabs items={['Python', 'Golang', 'Environment variables']}>
-<Tab value="Python">
+Before running, provide your model API key via an environment variable (VeADK reads `MODEL_AGENT_API_KEY` by default):
 
-```python title="examples/agent/agents/llm_agent.py"
+```bash
+export MODEL_AGENT_API_KEY="<your Ark API key>"
+```
+
+```python title="llm_agent.py"
 import asyncio
 
 from veadk import Agent, Runner
@@ -77,129 +54,29 @@ weather_reporter = Agent(
 suggester = Agent(
     name="suggester",
     description="A suggester agent that can give some clothing suggestions according to a city's weather.",
-    instruction="""Provide clothing suggestions based on weather temperature: 
-    wear a coat when temperature is below 15°C, wear long sleeves when temperature is between 15-25°C, 
-    wear short sleeves when temperature is above 25°C.""",
+    instruction=(
+        "Provide clothing suggestions based on weather temperature: "
+        "wear a coat when below 15°C, long sleeves when 15-25°C, "
+        "short sleeves when above 25°C."
+    ),
 )
 
 root_agent = Agent(
     name="planner",
     description="A planner that can generate a suggestion according to a city's weather.",
-    instruction="""Invoke weather reporter agent first to get the weather, 
-                then invoke suggester agent to get the suggestion. Return the final response to user.""",
+    instruction=(
+        "Invoke weather reporter agent first to get the weather, "
+        "then invoke suggester agent to get the suggestion. "
+        "Return the final response to user."
+    ),
     sub_agents=[weather_reporter, suggester],
 )
 
 if __name__ == "__main__":
     runner = Runner(root_agent)
-    response = asyncio.run(runner.run("北京穿衣建议"))
+    response = asyncio.run(runner.run("Clothing advice for Beijing"))
     print(response)
 ```
-
-</Tab>
-<Tab value="Golang">
-
-```go title="examples/agent/agents/llm_agent.go"
-package main
-
-import (
-	"context"
-	"fmt"
-	"log"
-	"os"
-
-	veagent "github.com/volcengine/veadk-go/agent/llmagent"
-	vetool "github.com/volcengine/veadk-go/tool"
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/agent/llmagent"
-	"google.golang.org/adk/cmd/launcher"
-	"google.golang.org/adk/cmd/launcher/full"
-	"google.golang.org/adk/session"
-	"google.golang.org/adk/tool"
-)
-
-func main() {
-	ctx := context.Background()
-
-	getCityWeatherTool, err := vetool.GetCityWeatherTool()
-	if err != nil {
-		fmt.Printf("GetCityWeatherTool failed: %v", err)
-		return
-	}
-
-	weatherReporter, err := veagent.New(&veagent.Config{
-		Config: llmagent.Config{
-			Name:        "weather_reporter",
-			Description: "A weather reporter agent to report the weather.",
-			Tools:       []tool.Tool{getCityWeatherTool},
-		},
-	})
-	if err != nil {
-		fmt.Printf("NewLLMAgent weatherReporter failed: %v", err)
-		return
-	}
-
-	suggester, err := veagent.New(&veagent.Config{
-		Config: llmagent.Config{
-			Name:        "suggester",
-			Description: "A suggester agent that can give some clothing suggestions according to a city's weather.",
-			Instruction: `Provide clothing suggestions based on weather temperature:
-			wear a coat when temperature is below 15°C, wear long sleeves when temperature is between 15-25°C,
-			wear short sleeves when temperature is above 25°C.`,
-		},
-	})
-	if err != nil {
-		fmt.Printf("NewLLMAgent suggester failed: %v", err)
-		return
-	}
-
-	rootAgent, err := veagent.New(&veagent.Config{
-		Config: llmagent.Config{
-			Name:        "planner",
-			Description: "A planner that can generate a suggestion according to a city's weather.",
-			Instruction: `Invoke weather reporter agent first to get the weather,
-			then invoke suggester agent to get the suggestion. Return the final response to user.`,
-			SubAgents: []agent.Agent{weatherReporter, suggester},
-		},
-	})
-	if err != nil {
-		fmt.Printf("NewLLMAgent rootAgent failed: %v", err)
-		return
-	}
-
-	config := &launcher.Config{
-		AgentLoader:    agent.NewSingleLoader(rootAgent),
-		SessionService: session.InMemoryService(),
-	}
-
-	l := full.NewLauncher()
-	if err = l.Execute(ctx, config, os.Args[1:]); err != nil {
-		log.Fatalf("Run failed: %v\n\n%s", err, l.CommandLineSyntax())
-	}
-
-}
-```
-
-</Tab>
-<Tab value="Environment variables">
-
-Environment variable list:
-
-- `MODEL_AGENT_API_KEY`: API key for the Agent inference model
-
-Or define them in `config.yaml`:
-
-```yaml title="config.yaml"
-model:
-  agent:
-    provider: openai
-    name: doubao-seed-1-6-250615
-    api_base: https://ark.cn-beijing.volces.com/api/v3/
-    api_key: your-api-key-here
-```
-
-</Tab>
-</Tabs>
 
 Result:
 
@@ -221,13 +98,13 @@ The following sections explain how to build each of these three types of multi-a
 
 ```mermaid
 graph LR
-    A["用户输入: 你好"] --> B["SequentialAgent(顺序执行)"]
-    B --> C{"按顺序调用子Agent"}
-    C -->|"第一步"| D["greeting_agent(子Agent)"]
-    D --> E["返回: 热情问候"]
-    E -->|"第二步"| F["goodbye_agent(子Agent)"]
-    F --> G["返回: 礼貌告别"]
-    G --> H["最终输出: 问候+告别"]
+    A["User input: Hi"] --> B["SequentialAgent (sequential)"]
+    B --> C{"Call sub-agents in order"}
+    C -->|"Step 1"| D["greeting_agent (sub-agent)"]
+    D --> E["Return: warm greeting"]
+    E -->|"Step 2"| F["goodbye_agent (sub-agent)"]
+    F --> G["Return: polite goodbye"]
+    G --> H["Final output: greeting + goodbye"]
 ```
 
 ```python title="examples/agent/agents/seq_agent.py"
@@ -252,7 +129,7 @@ root_agent = SequentialAgent(sub_agents=[greeting_agent, goodbye_agent])
 
 if __name__ == "__main__":
     runner = Runner(root_agent)
-    response = asyncio.run(runner.run("你好"))
+    response = asyncio.run(runner.run("Hi"))
     print(response)
 ```
 
@@ -273,19 +150,19 @@ As shown in the call diagram, the LoopAgent repeatedly invokes planner_agent and
 
 ```mermaid
 graph LR
-    A["用户输入: 写一首三行秋天小诗"] --> B["LoopAgent(循环执行)"]
-    B --> C{"循环开始"}
-    C --> D["第1步: planner_agent"]
-    D --> E["制定写作计划"]
-    E --> F["第2步: executor_agent"]
-    F --> G{"检查是否完成?"}
-    G -->|"未完成"| H["执行计划/写诗"]
-    H --> I{"循环次数<3?"}
-    I -->|"是"| D
-    I -->|"否"| J["强制退出"]
-    G -->|"完成"| K["调用exit_loop()"]
-    K --> L["循环结束"]
-    L --> M["返回最终诗歌"]
+    A["User input: write a 3-line autumn poem"] --> B["LoopAgent (loop)"]
+    B --> C{"Loop starts"}
+    C --> D["Step 1: planner_agent"]
+    D --> E["Make a writing plan"]
+    E --> F["Step 2: executor_agent"]
+    F --> G{"Done?"}
+    G -->|"Not done"| H["Execute plan / write poem"]
+    H --> I{"Iterations < 3?"}
+    I -->|"Yes"| D
+    I -->|"No"| J["Force exit"]
+    G -->|"Done"| K["Call exit_loop()"]
+    K --> L["Loop ends"]
+    L --> M["Return final poem"]
 ```
 
 ```python title="examples/agent/agents/loop_agent.py"
@@ -325,7 +202,7 @@ root_agent = LoopAgent(
 
 if __name__ == "__main__":
     runner = Runner(root_agent)
-    response = asyncio.run(runner.run("用中文帮我写一首三行的小诗，主题是秋天"))
+    response = asyncio.run(runner.run("Write me a three-line poem about autumn"))
     print(response)
 ```
 
@@ -346,16 +223,16 @@ As shown in the call diagram, the ParallelAgent invokes pros_agent and cons_agen
 
 ```mermaid
 graph LR
-    A["用户输入: 分析LLM-as-a-Judge优劣"] --> B["ParallelAgent(并行执行)"]
-    B --> C{"同时启动子Agent"}
-    C --> D["pros_agent(优点分析)"]
-    C --> E["cons_agent(缺点分析)"]
-    D --> F["列出优势方面"]
-    E --> G["列出劣势方面"]
-    F --> H{"等待所有结果"}
+    A["User input: analyze pros/cons of LLM-as-a-Judge"] --> B["ParallelAgent (parallel)"]
+    B --> C{"Launch sub-agents simultaneously"}
+    C --> D["pros_agent (advantages)"]
+    C --> E["cons_agent (disadvantages)"]
+    D --> F["List advantages"]
+    E --> G["List disadvantages"]
+    F --> H{"Wait for all results"}
     G --> H
-    H --> I["汇总优缺点"]
-    I --> J["返回完整分析"]
+    H --> I["Combine pros & cons"]
+    I --> J["Return full analysis"]
 ```
 
 ```python title="examples/agent/agents/parallel_agent.py"
@@ -380,7 +257,7 @@ root_agent = ParallelAgent(sub_agents=[pros_agent, cons_agent])
 
 if __name__ == "__main__":
     runner = Runner(root_agent)
-    response = asyncio.run(runner.run("请分析 LLM-as-a-Judge 这种评测模式的优劣"))
+    response = asyncio.run(runner.run("Analyze the pros and cons of the LLM-as-a-Judge evaluation pattern"))
     print(response)
 ```
 
@@ -388,21 +265,38 @@ Result:
 
 ![Result](/assets/images/agents/parallel_agent.png)
 
-## Multi-Agent Use Cases
+## FAQ
 
-Here are some scenarios where multi-agent interaction may be useful:
+<Accordions>
+<Accordion title="Common multi-agent issues and solutions">
 
-| Scenario | Description | Typical Agent composition |
-| ----------- | ----------------------------------------- | ---------------------------------------- |
-| **Content generation assistant** | The user inputs a topic, and the system automatically generates an outline, writes the body, then polishes and summarizes it. | Planner → Writer → Editor |
-| **Research assistant** | Automatically retrieves materials based on a research question, summarizes key information, and generates citation formats. | Researcher → Retriever → Summarizer |
-| **Task auto-executor** | The user describes a goal, and the system splits the task and invokes different tools or services to execute it. | Planner → Executor → Auditor |
-| **Customer-service collaboration** | One Agent understands the user's question, another retrieves from the knowledge base and generates a response. | FrontAgent → SupportAgent |
-| **Meeting-minutes assistant** | Transcribes the meeting recording, summarizes key points, and generates an action-item list. | Transcriber → Summarizer → ActionPlanner |
+**Sub-agent returns no result after being invoked**
 
-A multi-agent system typically follows these construction steps:
+- Symptom: After the main Agent invokes a sub-agent, there is no response for a long time or it returns an empty value.
+- Solution: Try the Agent-as-a-Tool pattern, invoking the sub-agent as a tool. See [Custom function tools](/en/docs/framework/tools/custom-function).
 
-1. **Define each Agent**: create a separate config file or instance for each role;
-2. **Define the communication mechanism**: determine how data is passed between Agents (direct call, message queue, or shared memory);
-3. **Set up the collaboration logic**: use a Workflow Agent or a control script to orchestrate the invocation order;
-4. **Configure logging and observability**: ensure every call chain is traceable.
+**Sub-agent is invoked inaccurately or misunderstands the task**
+
+- Symptom: The sub-agent does not correctly understand the task and returns irrelevant content.
+- Solution: Switch to a model with stronger comprehension, such as a thinking or reasoning model.
+
+**Data transfer between sub-agents fails**
+
+- Symptom: The output of the previous Agent cannot be correctly received by the next Agent.
+- Solution: Check that the data formats are consistent, and ensure the output format matches the next Agent's input requirements.
+
+**Loop invocation causes deadlock**
+
+- Symptom: Agents invoke each other, forming an infinite loop.
+- Solution: Set a maximum invocation-depth limit, or use a timeout mechanism.
+
+</Accordion>
+</Accordions>
+
+## Next steps
+
+<Cards>
+  <Card title="A2A Agent" href="/en/docs/framework/agent/multi-agent/a2a" description="Expose agents as services and connect them across the network." />
+  <Card title="A2A Hub" href="/en/docs/framework/agent/multi-agent/a2a-hub" description="Centrally register and discover agents within a group." />
+  <Card title="Middleware & events" href="/en/docs/framework/agent/multi-agent/middleware-events" description="Auth middleware and message-driven agent collaboration." />
+</Cards>

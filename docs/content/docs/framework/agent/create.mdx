@@ -1,27 +1,19 @@
 ---
-title: "构建您的第一个 Agent"
-description: "通过代码或 YAML 配置文件以最简方式构建并运行一个智能体。"
+title: "构建智能体"
+description: "用代码或 YAML 配置定义智能体，并配置模型回退、自定义客户端与额外参数。"
 ---
 
-本文档将阐述如何以最简方式构建并运行一个智能体（Agent）。内容涵盖两种主要定义方法：
+智能体的定义是其生命周期的起点。本页介绍如何配置一个智能体——选择模型、设置回退、自定义模型客户端，以及用 YAML 声明式地描述智能体。
 
-- 代码定义
-- 基于 Agent Builder 的 YAML 定义
+<Callout type="info">
+  只想先跑通一个最小示例？先看[快速开始](/cn/docs/framework/getting-started/quickstart)，再回到本页做进一步配置。
+</Callout>
 
-本文档不依赖任何外部复杂组件，旨在帮助您建立最小可运行样例的整体认知。
+VeADK 提供两种定义方式：**代码方式**与 **YAML 配置方式**。代码方式更灵活，便于动态调整参数与单元测试；YAML 方式更简洁，适合声明式的配置管理。
 
-## Agent 的定义方法
+## 通过代码构建
 
-智能体的定义是其生命周期的起点。无论在何种规模的系统中，智能体都是任务拆解、规划的主体。
-
-本节主要介绍两种定义方式：**代码方式**与 **YAML 配置方式**。
-
-### 通过代码构建
-
-在代码中直接定义智能体是最常见且最灵活的方式。此方法便于动态调整参数、集成外部模块并进行单元测试。您可以创建一个最简单的 Agent，无需额外设置。**Agent 缺省属性将来自环境变量或默认值。** 如下代码实现了一个最简化的 Agent 定义与运行：
-
-<Tabs items={['Python', 'Golang', '所需环境变量']}>
-<Tab value="Python">
+直接在代码中定义智能体是最常见、最灵活的方式。缺省属性来自环境变量或内置默认值，因此最简单的智能体无需任何额外设置：
 
 ```python title="agent.py"
 import asyncio
@@ -35,94 +27,22 @@ response = asyncio.run(runner.run(messages="Hi!"))
 print(response)
 ```
 
-</Tab>
-<Tab value="Golang">
+运行前，请通过环境变量提供模型推理服务的 API Key（VeADK 默认读取 `MODEL_AGENT_API_KEY`）：
 
-```go title="agent.go"
-package main
-
-import (
-    "context"
-    "fmt"
-
-    "github.com/google/uuid"
-    _ "github.com/volcengine/veadk-go/agent"
-    veagent "github.com/volcengine/veadk-go/agent/llmagent"
-    "google.golang.org/adk/agent"
-    "google.golang.org/adk/runner"
-    "google.golang.org/adk/session"
-    "google.golang.org/genai"
-)
-
-func main() {
-    ctx := context.Background()
-    veAgent, err := veagent.New(&veagent.Config{})
-    if err != nil {
-        fmt.Printf("NewVeAgent failed: %v", err)
-        return
-    }
-
-    appName := "veAgent_app"
-    userID := "user-1234"
-    sessionId := fmt.Sprintf("%s-%s", session.KeyPrefixTemp, uuid.NewString())
-    sessionService := session.InMemoryService()
-    agentRunner, err := runner.New(runner.Config{
-        AppName:        appName,
-        Agent:          veAgent,
-        SessionService: sessionService,
-    })
-    if err != nil {
-        fmt.Printf("New runner error:%v", err)
-        return
-    }
-
-    _, err = sessionService.Create(ctx, &session.CreateRequest{
-        AppName:   appName,
-        UserID:    userID,
-        SessionID: sessionId,
-    })
-    if err != nil {
-        fmt.Printf("Create session error:%v", err)
-        return
-    }
-
-    for event, err := range agentRunner.Run(ctx, userID, sessionId, genai.NewContentFromText("你好", genai.RoleUser), agent.RunConfig{StreamingMode: agent.StreamingModeNone}) {
-        if err != nil {
-            fmt.Printf("got unexpected error: %v", err)
-        }
-        fmt.Printf("got event: %s\n", event.Content.Parts[0].Text)
-    }
-}
+```bash
+export MODEL_AGENT_API_KEY="<你的方舟 API Key>"
 ```
 
-</Tab>
-<Tab value="所需环境变量">
+<Callout type="info">
+  也可以在 `config.yaml` 中集中管理密钥，详见[配置](/cn/docs/framework/configuration)。**切勿在代码中硬编码 API Key。**
+</Callout>
 
-环境变量列表：
+### 设置元信息
 
-- `MODEL_AGENT_API_KEY`: 用户 Agent 推理模型的 API Key
-- ...
-
-或在 `config.yaml` 中定义：
-
-```yaml title="config.yaml"
-model:
-  agent:
-    api_key: ...
-```
-
-</Tab>
-</Tabs>
-
-#### 设置 Agent 元信息
-
-您也可以通过以下方式设置更多 Agent 元数据信息：
-
-<Tabs items={['Python', 'Golang']}>
-<Tab value="Python">
+通过 `name`、`description`、`instruction` 设置智能体的元信息：
 
 ```python title="agent.py"
-from veadk import Agent, Runner
+from veadk import Agent
 
 root_agent = Agent(
     name="life_assistant",
@@ -131,106 +51,61 @@ root_agent = Agent(
 )
 ```
 
-</Tab>
-<Tab value="Golang">
+- `name`：智能体名称，在 Agent Tree 中唯一标识某个智能体。
+- `description`：对智能体功能的简短描述（在 A2A 等场景下表明其能力）。
+- `instruction`：系统提示词，定义智能体的行为与响应风格。
 
-```go title="agent.go"
-cfg := &veagent.Config{}
-cfg.Name = "life_assistant"
-cfg.Description = "生活助手"
-cfg.Instruction = "你是一个生活助手，你可以回答用户的问题。"
+### 使用不同模型
 
-veAgent, err := veagent.New(cfg)
-if err != nil {
-    fmt.Printf("NewVeAgent failed: %v", err)
-    return
-}
-```
-
-</Tab>
-</Tabs>
-
-其中，`name` 代表 Agent 的名称，`description` 是对 Agent 功能的简单描述（在 Agent Tree 中唯一标识某个 Agent），`instruction` 是 Agent 的系统提示词，用于定义其行为和响应风格。
-
-#### 使用不同模型
-
-如果您想使用本地模型或其他提供商的模型，可以在初始化时指定模型相关配置：
-
-<Tabs items={['Python', 'Golang']}>
-<Tab value="Python">
+如果想使用其他提供商或本地模型，可在初始化时指定模型相关配置（API Key 仍通过环境变量提供）：
 
 ```python title="agent.py"
 from veadk import Agent
 
 agent = Agent(
-    model_provider="...",
-    model_name="...",
-    model_api_key="...",
-    model_api_base="..."
+    model_provider="openai",
+    model_name="doubao-seed-1-8-251228",
+    model_api_base="https://ark.cn-beijing.volces.com/api/v3/",
 )
 ```
 
-</Tab>
-<Tab value="Golang">
+VeADK Python 版本的推理模型基于 [LiteLLM](https://github.com/BerriAI/litellm) 实现，因此你可以使用 LiteLLM 支持的所有模型提供商。参见 [LiteLLM 支持的模型提供商列表](https://docs.litellm.ai/docs/providers)来设置 `model_provider`。
 
-```go title="agent.go"
-cfg := &veagent.Config{
-    ModelName: "...",
-    ModelAPIBase: "...",
-    ModelAPIKey: "...",
-}
+### 模型容错（Fallbacks）
 
-veAgent, err := veagent.New(cfg)
-if err != nil {
-    fmt.Printf("NewVeAgent failed: %v", err)
-    return
-}
-```
-
-</Tab>
-</Tabs>
-
-VeADK Python 版本中的 Agent 推理模型基于 [LiteLLM](https://github.com/BerriAI/litellm) 实现，因此您可以使用 LiteLLM 支持的所有模型提供商。您可以查看 [LiteLLM 支持的模型提供商列表](https://docs.litellm.ai/docs/providers)来设置 `model_provider` 参数。
-
-#### 模型容错
-
-VeADK 为您提供了基于 LiteLLM 的 [Fallbacks](https://docs.litellm.ai/docs/completion/reliable_completions) 模型容错机制，能够在前序模型访问失败时进行模型自动切换。例如，当目标模型经多次重试仍调用失败时，系统将自动切换至备选模型来继续执行任务：
+VeADK 基于 LiteLLM 的 [Fallbacks](https://docs.litellm.ai/docs/completion/reliable_completions) 提供模型容错：当目标模型经多次重试仍失败时，自动切换到备选模型继续执行。将 `model_name` 传入一个列表即可：
 
 ```python title="agent.py"
 from veadk import Agent
 
 agent = Agent(
     model_name=[
-        "doubao-seed-1-8-251215",
-        "doubao-seed-1-6-251015",
-        "doubao-seed-1.6-250615",
+        "doubao-seed-1-8-251228",
+        "deepseek-r1-250528",
     ]
 )
 ```
 
-在上述配置中，VeADK 默认会首先尝试 `doubao-seed-1-8-251215` 模型，如果失败后会尝试后续模型，直至成功。
+VeADK 会按顺序优先尝试第一个模型，失败后依次尝试后续模型，直至成功。
 
-#### 自定义您的模型客户端
+### 自定义模型客户端
 
-VeADK 支持您直接定义 LiteLLM 的客户端，来实现高度自定义的模型配置：
+如需高度自定义的模型配置，可以直接传入一个 LiteLLM 客户端：
 
 ```python title="agent.py"
 from google.adk.models.lite_llm import LiteLlm
 from veadk import Agent
 
-# 自定义您的模型客户端
-llm = LiteLlm()
+# 自定义你的模型客户端
+llm = LiteLlm(model="doubao-seed-1-8-251228")
 
 # 直接将模型客户端传递给 Agent
 agent = Agent(model=llm)
 ```
 
-#### 配置模型额外参数
+### 配置模型额外参数
 
-此外，您还可以根据[火山引擎方舟大模型平台](https://www.volcengine.com/product/ark)的能力，指定一些[额外选项](https://www.volcengine.com/docs/82379/1494384?lang=zh)，例如您可以禁用豆包 1.6 系列模型的思考能力，以实现更加快速的响应：
-
-<Tabs items={['Python', 'Golang']}>
-<Tab value="Python">
+你还可以根据[火山引擎方舟大模型平台](https://www.volcengine.com/product/ark)的能力指定[额外选项](https://www.volcengine.com/docs/82379/1494384?lang=zh)。例如禁用思考能力以获得更快的响应：
 
 ```python title="agent.py"
 import asyncio
@@ -238,70 +113,103 @@ import asyncio
 from veadk import Agent, Runner
 
 agent = Agent(
-    model_name="doubao-seed-1.6-250615",
+    model_name="doubao-seed-1-8-251228",
     model_extra_config={"extra_body": {"thinking": {"type": "disabled"}}},
 )
 runner = Runner(agent=agent)
 
-response = asyncio.run(runner.run(messages="hi!"))
+response = asyncio.run(runner.run(messages="Hi!"))
 print(response)
 ```
 
-</Tab>
-<Tab value="Golang">
+## 挂载工具、记忆与知识库
 
-```go title="agent.go"
-import (
-    _ "github.com/volcengine/veadk-go/agent"
-    veagent "github.com/volcengine/veadk-go/agent/llmagent"
+智能体的[四个核心要素](/cn/docs/framework/agent/overview)中，模型由上文配置，其余三者在初始化时挂载即可。
+
+### 工具
+
+将工具函数或工具实例放入 `tools` 列表。VeADK 提供内置工具，你也可以传入普通 Python 函数作为自定义工具：
+
+```python title="agent.py"
+from veadk import Agent
+from veadk.tools.demo_tools import get_city_weather
+
+agent = Agent(
+    name="weather_assistant",
+    instruction="根据用户问题调用工具回答天气。",
+    tools=[get_city_weather],
 )
-
-veAgent, err := veagent.New(&veagent.Config{
-    ModelExtraConfig: map[string]any{
-        "extra_body": map[string]any{
-            "thinking": map[string]string{
-                "type": "disabled",
-            },
-        },
-    },
-})
-if err != nil {
-    fmt.Printf("NewVeAgent failed: %v", err)
-    return
-}
 ```
 
-</Tab>
-</Tabs>
+参见[内置工具](/cn/docs/framework/tools/builtin)与[自定义函数工具](/cn/docs/framework/tools/custom-function)。
 
-### 通过配置文件
+### 记忆
 
-在您构建 Agent 过程中，往往需要更加简洁的 Agent 定义方式与配置管理。为了方便这种场景，VeADK 提供了 YAML 文件定义方式。该方法以声明式语法描述智能体的全部元信息与行为结构。
+将 `ShortTermMemory`（单会话上下文）传给 `Runner`，将 `LongTermMemory`（跨会话上下文）传给 `Agent`。挂载长期记忆后，VeADK 会自动为智能体注入 `load_memory` 工具，让模型按需检索历史：
 
-**基本结构**：本小节将给出一个简单的 yaml 文件 `weather_reporter_agent.yaml`，用于演示如何定义一个查询天气信息的 agent。
+```python title="agent.py"
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.memory.long_term_memory import LongTermMemory
+
+agent = Agent(
+    name="assistant",
+    long_term_memory=LongTermMemory(backend="local"),
+)
+
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory(backend="local"))
+```
+
+参见[短期记忆](/cn/docs/framework/memory/short-term)与[长期记忆](/cn/docs/framework/memory/long-term)。
+
+### 知识库
+
+将 `KnowledgeBase` 传给 `knowledgebase`。挂载后，VeADK 会自动注入 `load_knowledgebase` 工具，让模型在回答前检索相关片段：
+
+```python title="agent.py"
+from veadk import Agent
+from veadk.knowledgebase import KnowledgeBase
+
+agent = Agent(
+    name="kb_assistant",
+    instruction="回答前先检索知识库。",
+    knowledgebase=KnowledgeBase(backend="local"),
+)
+```
+
+参见[知识库](/cn/docs/framework/knowledgebase/overview)。
+
+## 通过 YAML 配置
+
+当你需要更简洁、声明式的配置管理时，可用 YAML 文件描述智能体的全部元信息与行为结构。下面的 `weather_reporter_agent.yaml` 定义了一个查询天气的智能体：
 
 ```yaml title="weather_reporter_agent.yaml"
 root_agent:
-  type: Agent # Agent | SequencialAgent | LoopAgent | ParallelAgent
+  type: Agent # Agent | SequentialAgent | LoopAgent | ParallelAgent
   name: weather_reporter
-  description: An intelligent_assistant which can provider weather information.
-  instruction: Help user according to your tools.
-  model_name: doubao-1-5-pro-32k-250115
-  model_api_key: ... # 您的模型 API Key
+  description: An intelligent assistant that can provide weather information.
+  instruction: Help the user according to your tools.
+  model_name: doubao-seed-1-8-251228
   tools:
-    - name: veadk.tools.demo_tools.get_city_weather # tool 所在的模块及函数名称
+    - name: veadk.tools.demo_tools.get_city_weather # 工具所在的模块及函数名称
 ```
 
-**结构说明**：
+字段说明：
 
-- `type`: 智能体类别
-- `name`: 智能体名称
-- `description`: 智能体的总体描述
-- `instruction`：智能体的系统提示词（System prompt）
-- `model_name`: 模型名称，如 doubao-1-5-pro-32k-250115、deepseek-r1-250528 等
-- `tools`: 工具列表与调用规则
+| 字段 | 说明 |
+| :--- | :--- |
+| `type` | 智能体类别（`Agent`、`SequentialAgent`、`LoopAgent`、`ParallelAgent`） |
+| `name` | 智能体名称 |
+| `description` | 智能体的总体描述 |
+| `instruction` | 系统提示词 |
+| `model_name` | 模型名称，如 `doubao-seed-1-8-251228`、`deepseek-r1-250528` 等 |
+| `tools` | 工具列表与调用规则 |
 
-**使用方法**：下面将根据上面的 `weather_reporter_agent.yaml` 文件，演示如何使用该 agent 查询北京的天气。
+<Callout type="info">
+  YAML 中省略了 API Key，由环境变量 `MODEL_AGENT_API_KEY` 提供。
+</Callout>
+
+用 `AgentBuilder` 加载该 YAML 并运行：
 
 ```python title="agent.py"
 import asyncio
@@ -310,23 +218,27 @@ from veadk import Runner
 from veadk.agent_builder import AgentBuilder
 
 agent_builder = AgentBuilder()
-
 agent = agent_builder.build(path="weather_reporter_agent.yaml")
 
 runner = Runner(agent)
 response = asyncio.run(runner.run("今天北京天气如何？"))
-
 print(response)
 ```
 
-## 构建 Agent 的方法对比
-
-**对比总结**：
+## 两种方式对比
 
 | 特性 | 代码方式 | YAML 方式 |
-| ---- | ----- | ------- |
+| :--- | :--- | :--- |
 | 灵活性 | 高 | 中 |
 | 可读性 | 中 | 高 |
 | 可维护性 | 中 | 高 |
 | 动态生成 | 支持 | 一般 |
 | 适用场景 | 开发、生产 | 实验、配置化、生产 |
+
+## 下一步
+
+<Cards>
+  <Card title="添加工具" href="/cn/docs/framework/tools/builtin" description="联网搜索、代码沙箱、图像与视频生成等。" />
+  <Card title="Prompt 管理" href="/cn/docs/framework/agent/prompt" description="对系统提示词进行版本管理与热更新。" />
+  <Card title="多智能体" href="/cn/docs/framework/agent/multi-agent/overview" description="用顺序、并行、循环等模式编排多个智能体。" />
+</Cards>

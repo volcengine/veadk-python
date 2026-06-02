@@ -72,17 +72,24 @@ app.add_middleware(
 
 除了同步的请求/响应调用，VeADK 还支持通过 RocketMQ 消息队列以**事件驱动**的方式连接 Agent。这适用于异步、解耦、可横向扩展的多 Agent 协作场景。
 
-`RocketMQClient` 封装了消息的发送与消费：
+`RocketMQClient` 封装了消息的发送与消费。建议通过环境变量提供凭证，避免在代码中硬编码：
+
+```bash
+export ROCKETMQ_ACCESS_KEY="<access_key>"
+export ROCKETMQ_ACCESS_SECRET="<access_secret>"
+```
 
 ```python title="event_driven.py"
+import os
+
 from veadk.a2a.hub.rocketmq_middleware import RocketMQClient
 
 client = RocketMQClient(
     name="weather_client",
     producer_group="weather_group",
     name_server_addr="<rocketmq-name-server-addr>",
-    access_key="<access_key>",
-    access_secret="<access_secret>",
+    access_key=os.environ["ROCKETMQ_ACCESS_KEY"],
+    access_secret=os.environ["ROCKETMQ_ACCESS_SECRET"],
 )
 
 # 发送一条单向（one-way）消息到某个 topic
@@ -92,25 +99,34 @@ client.send_msg(topic="weather_topic", msg_body="北京天气如何？", key="re
 `RocketMQAgentClient` 是一个抽象基类，将一个 `Agent` 绑定到某个订阅 topic 上。实现其抽象方法 `recv_msg_callback`，即可在收到消息时驱动 Agent 处理，并返回消费状态：
 
 ```python title="event_driven_agent.py"
+import asyncio
+import os
+
 from rocketmq.client import ConsumeStatus, ReceivedMessage
-from veadk import Agent
+from veadk import Agent, Runner
 from veadk.a2a.hub.rocketmq_middleware import RocketMQAgentClient, RocketMQClient
 
 
 class WeatherAgentClient(RocketMQAgentClient):
     def recv_msg_callback(self, msg: ReceivedMessage) -> ConsumeStatus:
-        # 在此处理收到的消息，并驱动 self.agent 执行
-        print(f"收到消息: {msg.body}")
-        # ... 调用 self.agent 处理消息 ...
-        return ConsumeStatus.CONSUME_SUCCESS
+        # 用消息内容驱动 self.agent，并返回消费状态。
+        prompt = msg.body.decode("utf-8")
+        try:
+            runner = Runner(agent=self.agent)
+            response = asyncio.run(runner.run(messages=prompt))
+            print(f"Agent 回复: {response}")
+            return ConsumeStatus.CONSUME_SUCCESS
+        except Exception as e:
+            print(f"处理消息失败，稍后重试: {e}")
+            return ConsumeStatus.RECONSUME_LATER
 
 
 rocketmq_client = RocketMQClient(
     name="weather_client",
     producer_group="weather_group",
     name_server_addr="<rocketmq-name-server-addr>",
-    access_key="<access_key>",
-    access_secret="<access_secret>",
+    access_key=os.environ["ROCKETMQ_ACCESS_KEY"],
+    access_secret=os.environ["ROCKETMQ_ACCESS_SECRET"],
 )
 
 agent_client = WeatherAgentClient(
@@ -124,4 +140,11 @@ agent_client = WeatherAgentClient(
 agent_client.listen()
 ```
 
-调用 `listen()` 后，客户端会在指定 topic 上启动消费者，每当有新消息到达，便回调 `recv_msg_callback` 来驱动 Agent 处理，从而实现 Agent 之间的异步、事件驱动协作。
+调用 `listen()` 后，客户端会在指定 topic 上启动消费者，每当有新消息到达，便回调 `recv_msg_callback` 来驱动 Agent 处理，从而实现 Agent 之间的异步、事件驱动协作。返回 `CONSUME_SUCCESS` 表示消费成功，返回 `RECONSUME_LATER` 则会触发消息重投。
+
+## 下一步
+
+<Cards>
+  <Card title="A2A Agent" href="/cn/docs/framework/agent/multi-agent/a2a" description="将 Agent 开放为服务并跨网络互联。" />
+  <Card title="A2A Hub" href="/cn/docs/framework/agent/multi-agent/a2a-hub" description="集中注册与发现分组内的 Agent。" />
+</Cards>
