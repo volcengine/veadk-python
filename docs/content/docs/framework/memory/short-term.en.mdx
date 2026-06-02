@@ -1,183 +1,106 @@
 ---
 title: "Short-term Memory"
-description: "VeADK short-term memory keeps session-level context to improve consistency across multi-turn interactions."
+description: "VeADK short-term memory keeps session-level context so multi-turn interactions stay coherent."
 ---
 
-This document introduces the **Short-term Memory** mechanism in VeADK and how to use it. The core purpose of short-term memory is to retain "session-level" context so that multi-turn interactions stay consistent and the agent's responses remain coherent.
+Short-term memory keeps "session-level" context so the agent remembers what was said earlier in a conversation. It is essentially the conversation context sent to the model — the system prompt plus message history. VeADK keys it by `session_id`: reuse the same `session_id` and the agent remembers earlier turns.
 
-When a user starts a conversation with your Agent, `ShortTermMemory` or `SessionService` automatically creates a `Session` object. This `Session` tracks and manages all relevant content throughout the conversation.
+When a user starts a conversation, `ShortTermMemory` (or the underlying `SessionService`) automatically creates a `Session` object that tracks and manages all content for that conversation.
 
 <Callout type="info">
-For more information, see [Google ADK Session](https://google.github.io/adk-docs/sessions/session).
+Short-term memory builds on Google ADK's Session mechanism. For background, see [Google ADK Session](https://google.github.io/adk-docs/sessions/session).
 </Callout>
 
-## Using ShortTermMemory
+## Using short-term memory
 
-The following shows how to create and use short-term memory:
-
-<Tabs items={['Python', 'Golang']}>
-  <Tab value="Python">
+The following creates short-term memory with the `sqlite` backend and runs two turns under the same `session_id` — the second turn can reference the first:
 
 ```python
 import asyncio
+
 from veadk import Agent, Runner
 from veadk.memory.short_term_memory import ShortTermMemory
 
-app_name = "app_short_term_1"
-user_id = "user_short_term_1"
-session_id = "session_short_term_1"
+APP_NAME = "memory_demo"
+SESSION_ID = "user-42-chat"
 
-agent = Agent()
-short_term_memory = ShortTermMemory(
-    backend="local", # Specify the ShortTermMemory storage backend
-    # If using sqlite, specify the database path
-    # local_database_path="/tmp/d_persistent_short_term_memory.db",
-)
-runner = Runner(
-    agent=agent, short_term_memory=short_term_memory, app_name=app_name, user_id=user_id
-)
 
-async def main():
-    response1 = await runner.run(
-        messages="I bought 20 ice creams on July 15.", session_id=session_id
+async def main() -> None:
+    # `sqlite` persists the session to a local file; use "local" for a purely
+    # in-memory session that disappears when the process exits.
+    short_term_memory = ShortTermMemory(
+        backend="sqlite",
+        local_database_path="./short_term_memory.db",
     )
-    print(f"response of round 1: {response1}")
 
-    response2 = await runner.run(
-        messages="When did I buy the ice creams?", session_id=session_id
+    agent = Agent(
+        name="memory_agent",
+        instruction="You are a concise assistant. Remember what the user tells you.",
+        short_term_memory=short_term_memory,
     )
-    print(f"response of round 2: {response2}")
+
+    runner = Runner(
+        agent=agent,
+        short_term_memory=short_term_memory,
+        app_name=APP_NAME,
+    )
+
+    # Turn 1: tell the agent something.
+    print(
+        "Turn 1 ->",
+        await runner.run(
+            messages="My name is Xiaoming and my favorite color is blue.",
+            session_id=SESSION_ID,
+        ),
+    )
+
+    # Turn 2: same session_id, so the agent recalls turn 1.
+    print(
+        "Turn 2 ->",
+        await runner.run(
+            messages="What is my name? What color do I like?",
+            session_id=SESSION_ID,
+        ),
+    )
+
 
 if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-  </Tab>
-  <Tab value="Golang">
+<Callout type="info">
+The model API key comes from the `MODEL_AGENT_API_KEY` environment variable by default — you don't need to put it in code. See [Configuration](/en/docs/framework/configuration).
+</Callout>
 
-```go
-package main
+## Short-term memory backends
 
-import (
-    "context"
-    "log"
-    "strings"
+In VeADK you can initialize short-term memory with the following backends:
 
-    veagent "github.com/volcengine/veadk-go/agent/llmagent"
-    "github.com/volcengine/veadk-go/common"
-    "github.com/volcengine/veadk-go/utils"
-    "google.golang.org/adk/agent"
-    "google.golang.org/adk/agent/llmagent"
-    "google.golang.org/adk/runner"
-    "google.golang.org/adk/session"
-    "google.golang.org/genai"
-)
-
-func main() {
-    ctx := context.Background()
-    appName := "ve_agent"
-    userID := "user1111"
-
-    rootAgent, err := veagent.New(&veagent.Config{
-        Config: llmagent.Config{
-            Name:        "RootAgent",
-            Instruction: "Acknowledge the user's statement.",
-        },
-        ModelName:    common.DEFAULT_MODEL_AGENT_NAME,
-        ModelAPIBase: common.DEFAULT_MODEL_AGENT_API_BASE,
-        ModelAPIKey:  utils.GetEnvWithDefault(common.MODEL_AGENT_API_KEY),
-    })
-    if err != nil {
-        log.Printf("NewLLMAgent failed: %v", err)
-        return
-    }
-    sessionService := session.InMemoryService()
-
-    runner1, err := runner.New(runner.Config{
-        AppName:        appName,
-        Agent:          rootAgent,
-        SessionService: sessionService,
-    })
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    sessionID := "session123456789"
-    _, err = sessionService.Create(ctx, &session.CreateRequest{
-        AppName:   appName,
-        UserID:    userID,
-        SessionID: sessionID,
-    })
-    if err != nil {
-        log.Fatalf("sessionService.Create error: %v", err)
-    }
-    userInput1 := genai.NewContentFromText("I bought 20 ice creams on July 15.", "user")
-
-    var finalResponseText string
-    for event, err := range runner1.Run(ctx, userID, sessionID, userInput1, agent.RunConfig{}) {
-        if err != nil {
-            log.Printf("Agent Error: %v", err)
-            continue
-        }
-        if event.Content != nil && !event.LLMResponse.Partial {
-            finalResponseText = strings.Join(textParts(event.LLMResponse.Content), "")
-        }
-    }
-    log.Printf("Agent 1 Response: %s\n", finalResponseText)
-
-    userInput2 := genai.NewContentFromText("When did I buy the ice creams?", "user")
-    var finalResponse2Text string
-    for event, err := range runner1.Run(ctx, userID, sessionID, userInput2, agent.RunConfig{}) {
-        if err != nil {
-            log.Printf("Agent Error: %v", err)
-            continue
-        }
-        if event.Content != nil && !event.LLMResponse.Partial {
-            finalResponse2Text = strings.Join(textParts(event.LLMResponse.Content), "")
-        }
-    }
-    log.Printf("Agent 1 Response: %s\n", finalResponse2Text)
-}
-```
-
-  </Tab>
-</Tabs>
-
-**Example output**
-
-```text
-response of round 1: It sounds like you recorded an ice cream purchase! Would you like to:
-
-1. Calculate the related cost (if you have unit price information)
-2. Record or analyze spending habits
-3. Any other data processing or recording needs related to this purchase?
-
-response of round 2: Based on the information you provided, you bought 20 ice creams on **July 15**.
-```
-
-## Short-term Memory Backends
-
-In VeADK, you can initialize short-term memory with the following backend services:
-
-| Type | Description |
+| Backend | Description |
 | :- | :- |
-| `local` | In-memory short-term memory, cleared when the program exits. Production environments should use a database for persistence to meet distributed architecture requirements. |
-| `mysql` | Stores short-term memory in a MySQL database for persistence. |
-| `sqlite` | Stores short-term memory in a local SQLite database for persistence. |
-| `postgresql` | Stores short-term memory in a PostgreSQL database for persistence. |
+| `local` | In-memory short-term memory, cleared when the process exits. Good for local debugging. |
+| `sqlite` | Persists to a local SQLite file; the session survives process restarts. Good for single-host persistence. |
+| `mysql` | Stores in a MySQL database for distributed persistence. |
+| `postgresql` | Stores in a PostgreSQL database for distributed persistence. |
 
-### Database Backend Configuration
+<Callout type="info">
+Both `local` and `sqlite` require no external service; the difference is that `local` lives only in memory while `sqlite` is written to `local_database_path`. For distributed production architectures, use `mysql` or `postgresql`.
+</Callout>
+
+### Database backend configuration
+
+Provide the connection details for `mysql` and `postgresql` via `config.yaml` (do not hardcode passwords):
 
 <Tabs items={['mysql', 'postgresql']}>
   <Tab value="mysql">
 
 ```yaml
 database:
-    mysql:
-        host:
-        user:
-        password:
-        charset: utf8
+  mysql:
+    host:
+    user:
+    password:
+    charset: utf8
 ```
 
   </Tab>
@@ -185,10 +108,10 @@ database:
 
 ```yaml
 database:
-    postgresql:
-        host: # host or ip
-        user:
-        password:
+  postgresql:
+    host: # host or IP
+    user:
+    password:
 ```
 
   </Tab>
@@ -196,85 +119,98 @@ database:
 
 Provision a database on Volcengine:
 
-- [How to provision a Volcengine MySQL database](https://www.volcengine.com/product/rds-mysql)
-- [How to provision a Volcengine postgresql database](https://www.volcengine.com/product/rds-pg)
+- [Provision a Volcengine MySQL database](https://www.volcengine.com/product/rds-mysql)
+- [Provision a Volcengine PostgreSQL database](https://www.volcengine.com/product/rds-pg)
 
-## Session Management
+## Session management
 
-You usually do not need to create or manage `Session` objects directly. Instead, they are managed through `SessionService`, which handles the full lifecycle of a conversation session.
+You usually do not create or manage `Session` objects directly. Instead, they are managed through `SessionService`, which handles the full session lifecycle. Its core responsibilities include:
 
-Its core responsibilities include:
+1. **Start a new session** `create_session()`: creates a new `Session` when the user begins interacting.
+2. **Resume an existing session** `get_session()`: retrieves a specific `Session` by `session_id`, letting the agent continue from prior progress.
+3. **Save conversation progress** `append_event()`: appends new interaction content (`Event` objects) to the session history. This is also how session state is updated.
+4. **List sessions** `list_sessions()`: queries active sessions for a given user and application.
+5. **Clean up sessions** `delete_session()`: deletes the `Session` and its associated data when the session ends or is no longer needed.
 
-1. **Start a new session** `create_session()`: creates a brand-new Session object when the user begins interacting.
-2. **Resume an existing session** `get_session()`: retrieves a specific Session by `session_id`, allowing the Agent to continue from prior progress.
-3. **Save conversation progress** `append_event()`: appends new interaction content (Event objects) to the session history. This is also the mechanism for updating session state.
-4. **List sessions** `list_sessions()`: queries active sessions for a specific user and application.
-5. **Clean up session data** `delete_session()`: deletes the Session object and its associated data when the session ends or is no longer needed.
+## Context compaction
 
-## Context Compaction
+As a conversation runs, its history keeps growing, which increases the data the model processes and slows responses. Context compaction uses a sliding window to summarize history: when the history exceeds a threshold, older events are compacted automatically.
 
-As an Agent runs, the session history keeps growing, which increases the amount of data the LLM processes and slows down response times. The context compaction feature uses a sliding-window approach to summarize session history; when the history exceeds a predefined threshold, the system automatically compacts older events.
+### Configuring context compaction
 
-### Configuring Context Compaction
-
-Once context compaction is added, the `Runner` automatically compacts the session history each time the interval is reached.
+Once configured, the `Runner` automatically compacts the session history whenever the interval is reached.
 
 ```python
-from google.adk.apps.app import App
-from google.adk.apps.app import EventsCompactionConfig
-from veadk.agent import Agent
+from google.adk.apps.app import App, EventsCompactionConfig
+
+from veadk import Agent
 
 root_agent = Agent(
-    description="hello world agent",
-    instruction="""You are an intelligent assistant who replies to user questions politely in Chinese.""",
+    name="my_agent",
+    instruction="You are an intelligent assistant who replies politely in Chinese.",
 )
 
 app = App(
-    name='my_agent',
+    name="my_agent",
     root_agent=root_agent,
     events_compaction_config=EventsCompactionConfig(
-        compaction_interval=3,  # Trigger compaction every 3 new invocations.
-        overlap_size=1          # Include the last event of the previous window as overlap.
+        compaction_interval=3,  # trigger compaction every 3 new invocations
+        overlap_size=1,         # overlap with the last event of the previous window
+    ),
+)
+```
+
+### Defining a compactor
+
+Use `LlmEventSummarizer` to specify the model and prompt template used for compaction. The model's API key / base URL come from environment variables — read them from `os.environ` rather than hardcoding:
+
+```python
+import os
+
+from google.adk.apps.app import App, EventsCompactionConfig
+from google.adk.apps.llm_event_summarizer import LlmEventSummarizer
+from google.adk.models.lite_llm import LiteLlm
+
+from veadk import Agent
+
+root_agent = Agent(
+    name="my_agent",
+    instruction="You are an intelligent assistant who replies politely in Chinese.",
+)
+
+# Custom model used by the compactor
+summarization_llm = LiteLlm(
+    model="volcengine/doubao-seed-1-8-251228",
+    api_key=os.environ["MODEL_AGENT_API_KEY"],
+    api_base=os.environ.get(
+        "MODEL_AGENT_API_BASE", "https://ark.cn-beijing.volces.com/api/v3/"
     ),
 )
 
-root_agent = agent
-```
-
-### Defining a Compactor
-
-You can use `LlmEventSummarizer` to customize the specific LLM and the compaction structure via `PromptTemplate`.
-
-```python
-from google.adk.apps.app import App
-from google.adk.apps.app import EventsCompactionConfig
-from google.adk.models.lite_llm import LiteLlm
-from google.adk.apps.llm_event_summarizer import LlmEventSummarizer
-
-# Custom AI model used by the compactor
-summarization_llm = LiteLlm(
-                model="volcengine/doubao-seed-1-6-lite-251015",
-                api_key=f"{model_api_key}",
-                api_base=f"{model_api_base}",
-            )
-
-my_compactor = LlmEventSummarizer(llm=summarization_llm,
-# Custom compaction structure
-prompt_template="""
-Please summarize the conversation. Compression Requirements:
-1. Retain key entities, data points, and timelines
-2. Highlight core problems and solutions discussed
-3. Maintain logical coherence and contextual relevance
-4. Eliminate duplicate expressions and redundant details
-""")
+my_compactor = LlmEventSummarizer(
+    llm=summarization_llm,
+    # Custom compaction structure
+    prompt_template="""Please summarize the conversation. Compression requirements:
+1. Retain key entities, data points, and timelines;
+2. Highlight core problems and solutions discussed;
+3. Maintain logical coherence and contextual relevance;
+4. Eliminate duplicate expressions and redundant details.""",
+)
 
 app = App(
-    name='my-agent',
+    name="my_agent",
     root_agent=root_agent,
     events_compaction_config=EventsCompactionConfig(
         compactor=my_compactor,
         compaction_interval=5,
-        overlap_size=1
+        overlap_size=1,
     ),
 )
 ```
+
+## Next steps
+
+<Cards>
+  <Card title="Long-term Memory" href="/en/docs/framework/memory/long-term" description="Persist user preferences and history across sessions." />
+  <Card title="Memory Best Practices" href="/en/docs/framework/memory/best-practice" description="Combine short-term and long-term memory in a support assistant." />
+</Cards>

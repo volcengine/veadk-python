@@ -1,52 +1,43 @@
 ---
-title: "Observability Overview"
+title: "Overview"
 description: "Understand observability in VeADK: record, trace, and analyze your agent's execution through full-chain tracing."
 ---
 
-Observability is one of the core capabilities of enterprise-grade agent applications. By recording the full chain of an agent's execution, it helps developers understand the agent's internal behavior, locate issues, analyze performance, and continuously optimize.
-
-## What Is Observability
-
-In an agent system, observability refers to the **full-chain recording and tracing** of the agent's execution, from receiving a user request to generating the final response. This includes:
-
-- The receipt time and content of user input and requests;
-- The agent's internal reasoning process, such as model calls, tool execution, and policy decisions;
-- The invocation records of each tool, service, or external system interface;
-- The generation of responses and the output results.
-
-With these records, developers can turn the agent's execution process into structured data that is analyzable and traceable.
+Observability records the full chain of an agent's execution so you can understand its internal behavior, locate issues, analyze performance, and keep improving. VeADK's built-in tracing captures every request—from receiving user input, through model reasoning, tool calls, and memory/knowledge-base access, to generating the response—as structured data, then reports it to Volcengine or third-party platforms for observation and analysis.
 
 ## Core Capabilities
 
-VeADK's observability follows the [OpenTelemetry](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/) generative-AI semantic conventions and mainly provides the following capabilities:
+VeADK's observability follows the [OpenTelemetry](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/) generative-AI semantic conventions and mainly provides:
 
 - **Visualized traces**: The complete flow of each request, from intake to response, can be traced;
 - **Structured data**: Records context, state, event types, latency, and more;
 - **Cross-component tracing**: Covers the agent, tools, memory modules, knowledge bases, and external interfaces;
-- **Multi-agent coordination**: Analyzes the invocation relationships and data flow between agents in multi-agent collaboration scenarios.
+- **Multi-agent coordination**: Analyzes the invocation relationships and data flow between agents in multi-agent scenarios.
 
 ## Supported Platforms
 
-By defining different data exporters, VeADK can report tracing data to multiple Volcengine and third-party platforms for observation and analysis:
+Through different data exporters, VeADK reports tracing data to multiple Volcengine and third-party platforms:
 
 <Cards>
-  <Card title="CozeLoop" href="/en/docs/framework/observability/ve-tracing">
+  <Card title="CozeLoop" href="/en/docs/framework/observability/ve-tracing#cozeloop-platform">
     Report trace data to CozeLoop for trace observation and agent evaluation.
   </Card>
-  <Card title="APMPlus" href="/en/docs/framework/observability/ve-tracing">
+  <Card title="APMPlus" href="/en/docs/framework/observability/ve-tracing#apmplus-platform">
     Integrate with the Volcengine APMPlus platform for trace observation and model metrics analysis.
   </Card>
-  <Card title="TLS (Log Service)" href="/en/docs/framework/observability/ve-tracing">
+  <Card title="TLS (Log Service)" href="/en/docs/framework/observability/ve-tracing#tls-platform">
     Integrate with Volcengine Log Service (TLS) for agent execution trace observation.
   </Card>
 </Cards>
 
-## Further Reading
-
-- [Tracing Concepts and How to Enable It](/en/docs/framework/observability/tracing): Learn the core concepts of tracing and how to enable full-chain observability in VeADK.
-- [Observe on Volcengine](/en/docs/framework/observability/ve-tracing): Integrate and observe your agent on platforms such as CozeLoop, APMPlus, and TLS.
-- [Span Attributes](/en/docs/framework/observability/span-attributes): Learn the span attribute definitions for each type of span in VeADK.
-
 <Callout type="info" title="OpenTelemetry Compatibility">
   VeADK's field naming follows the OpenTelemetry generative-AI conventions, so you can import tracing data directly into any OpenTelemetry-compatible system for analysis and visualization.
 </Callout>
+
+## Next Steps
+
+<Cards>
+  <Card title="Tracing" href="/en/docs/framework/observability/tracing" description="Learn the core concepts of tracing and how to enable full-chain observability in VeADK." />
+  <Card title="Observe on Volcengine" href="/en/docs/framework/observability/ve-tracing" description="Integrate and observe your agent on CozeLoop, APMPlus, and TLS." />
+  <Card title="Span Attributes" href="/en/docs/framework/observability/span-attributes" description="Learn when spans are emitted and what attributes they carry." />
+</Cards>

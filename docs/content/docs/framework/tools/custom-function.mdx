@@ -1,21 +1,37 @@
 ---
 title: "自定义工具"
-description: "在 VeADK 中创建并使用自定义工具（普通入参函数、携带上下文的函数、长时运行任务）以扩展智能体能力。"
+description: "在 VeADK 中把你自己的 Python 函数封装成工具：普通入参函数、携带运行时上下文的函数、长时运行任务。"
 ---
 
-本文档介绍如何在智能体系统中创建与使用**自定义工具（Custom Tools）**，以扩展内置能力。
-自定义工具可以满足特定业务逻辑需求，包括普通函数调用、带上下文的函数、以及长时间运行的任务等。
-通过组合自定义工具，VeADK 能够支持开发者构建更复杂、更贴合业务场景的智能体应用。
+当内置工具无法满足业务需求时，你可以把任意 Python 函数封装成**自定义工具**，扩展智能体的能力。本页介绍三种形式：普通入参函数、携带运行时上下文的函数，以及长时运行任务。
 
 ## 普通入参函数
 
-普通入参函数是最基础的自定义工具形式，通过传入参数完成特定计算或逻辑处理。为实现一个普通入参函数，需要完成以下步骤：
+普通入参函数是最基础的自定义工具：定义一个函数、写好类型注解与 Docstring，再注册到 Agent 即可。Agent 会根据函数签名与 Docstring 决定何时调用、如何传参。
 
-1. 定义工具函数，使用简单、易懂的扁平化设计，来规范输入参数及返回类型；
-2. 实现函数中的 Docstring，描述函数功能、参数及返回值；
-3. 将工具注册到 Agent 的工具列表中。
+<Steps>
 
-下面我们将实现一个计算器来说明如何自定义一个普通入参函数，并将这个函数注册到 Agent 中。
+<Step>
+### 定义函数
+
+使用扁平、清晰的入参与返回类型。
+</Step>
+
+<Step>
+### 编写 Docstring
+
+描述函数功能、参数与返回值——模型据此理解工具用途。
+</Step>
+
+<Step>
+### 注册到 Agent
+
+把函数放进 `Agent` 的 `tools` 列表。
+</Step>
+
+</Steps>
+
+下面用一个计算器演示。注意 `divide` 分支：除零时返回 `status: "error"` 且不带 `result`，与其他分支的 `status: "success"` 保持一致。
 
 ```python title="examples/tools/function_tools/simple_function_tool.py"
 import asyncio
@@ -28,17 +44,17 @@ from veadk import Agent, Runner
 def calculator(
     a: float, b: float, operation: str, tool_context: ToolContext
 ) -> Dict[str, Any]:
-    """A simple calculator tool that performs basic arithmetic operations.
+    """A simple calculator that performs a basic arithmetic operation.
 
     Args:
         a (float): The first operand.
         b (float): The second operand.
-        operation (str): The arithmetic operation to perform.
-            Supported operations are "add", "subtract", "multiply", and "divide".
+        operation (str): One of "add", "subtract", "multiply", "divide".
 
     Returns:
-        Dict[str, Any]: A dictionary containing the result of the operation, the operation performed,
-        and the status of the operation ("success" or "error").
+        Dict[str, Any]: On success, contains "result", "operation", and
+        "status" == "success". On failure (unsupported operation or division
+        by zero), contains "status" == "error" and a "message".
     """
     if operation == "add":
         return {"result": a + b, "operation": "+", "status": "success"}
@@ -47,39 +63,29 @@ def calculator(
     if operation == "multiply":
         return {"result": a * b, "operation": "*", "status": "success"}
     if operation == "divide":
-        return {
-            "result": a / b if b != 0 else "Error, divisor cannot be zero",
-            "operation": "/",
-            "status": "success" if b != 0 else "error",
-        }
-    return {"status": "error", "message": "Unsupported operation"}
+        if b == 0:
+            return {"status": "error", "message": "Divisor cannot be zero."}
+        return {"result": a / b, "operation": "/", "status": "success"}
+    return {"status": "error", "message": f"Unsupported operation: {operation}"}
 
 
 agent = Agent(
     name="computing_agent",
-    instruction="Please use the `calculator` tool to perform user-required calculations",
+    model_name="doubao-seed-1-8-251228",
+    instruction="Use the `calculator` tool to perform the calculation the user asks for.",
     tools=[calculator],
 )
 runner = Runner(agent=agent)
 
-response = asyncio.run(runner.run(messages="Add 2 and 3"))
+response = asyncio.run(runner.run("Add 2 and 3"))
 print(response)
 ```
 
-运行后，可以看到如下结果：
-
 ![simple_tool_result.png](/assets/images/tools/function_tools/simple_tool_result.png)
 
-Agent 会根据用户输入调用注册的工具函数，执行相应的计算或逻辑处理。
+## 携带运行时上下文的函数
 
-## 携带运行时上下文信息的函数
-
-在你的工具定义函数中，通过携带 `ToolContext` 类型的入参，能够访问智能体运行时上下文信息（如会话 ID、用户身份、环境变量等），从而实现更智能的决策。相比于定义普通入参函数，你需要额外传入 `ToolContext` 类型的入参，来获取智能体运行时上下文信息：
-
-1. 定义函数时接受 `tool_context: ToolContext` 作为参数；
-2. 在函数逻辑中处理传入的 `tool_context`。
-
-下面通过一个简单的消息验证工具应用来演示如何使用携带有上下文信息 `ToolContext` 的函数。
+在工具函数中加入一个 `tool_context: ToolContext` 参数，就能访问智能体的运行时上下文——会话 ID、用户身份、当前 Agent 等。框架会自动注入该参数，模型不会、也不需要为它传值。
 
 ```python title="examples/tools/function_tools/tool_context_usage.py"
 import asyncio
@@ -88,11 +94,8 @@ from google.adk.tools.tool_context import ToolContext
 from veadk import Agent, Runner
 
 
-def message_checker(
-    user_message: str,
-    tool_context: ToolContext,
-) -> str:
-    """A user message checker tool that checks if the user message is valid.
+def message_checker(user_message: str, tool_context: ToolContext) -> str:
+    """Check a user message and return it normalized.
 
     Args:
         user_message (str): The user message to check.
@@ -100,9 +103,8 @@ def message_checker(
     Returns:
         str: The checked message.
     """
-
     print(f"user_message: {user_message}")
-    print(f"current running agent name: {tool_context._invocation_context.agent.name}")
+    print(f"current agent: {tool_context._invocation_context.agent.name}")
     print(f"app_name: {tool_context._invocation_context.app_name}")
     print(f"user_id: {tool_context._invocation_context.user_id}")
     print(f"session_id: {tool_context._invocation_context.session.id}")
@@ -112,28 +114,27 @@ def message_checker(
 
 agent = Agent(
     name="context_agent",
+    model_name="doubao-seed-1-8-251228",
+    instruction="Use message_checker to check the user message, then show the checked result.",
     tools=[message_checker],
-    instruction="Use message_checker tool to check user message, and show the checked message",
 )
 runner = Runner(agent=agent)
 
-response = asyncio.run(runner.run(messages="Hello world!"))
+response = asyncio.run(runner.run("Hello world!"))
 print(response)
 ```
 
-运行结果如下图所示：
-
 ![tool_context_result.jpg](/assets/images/tools/function_tools/tool_context_result.jpg)
 
-图中可以看到，工具函数中可以访问到智能体运行时上下文信息，例如会话 ID、用户身份、当前所执行的 Agent 信息等。
+工具函数因此可以访问会话 ID、用户身份、当前执行的 Agent 等信息，从而做出更智能的决策。
 
-## 长时运行任务（Long-running Task）
+## 长时运行任务
 
-长时运行任务工具适用于需要耗时处理或异步执行的操作，例如大规模计算、数据分析或批量处理任务。下面，我们将通过构建一个简单的数据处理工具来演示长时运行任务的实现。
+长时运行任务适用于耗时或异步的操作（大规模计算、数据分析、批处理等）。用 `LongRunningFunctionTool` 包装函数：工具先返回一个 `pending` 状态与任务 ID，应用在后台推进任务，再把最终结果回填给 Agent。
 
-**引入必要依赖**
+下面是一个完整可运行的示例：工具返回 `pending`，运行循环捕获 long-running 调用，随后用 `FunctionResponse` 回填 `finish` 状态，让 Agent 给出最终回复。
 
-```python
+```python title="examples/tools/function_tools/long_running_tool.py"
 import asyncio
 from typing import Any
 
@@ -141,22 +142,23 @@ from google.adk.events import Event
 from google.adk.tools.long_running_tool import LongRunningFunctionTool
 from google.genai.types import Content, FunctionCall, FunctionResponse, Part
 from veadk import Agent, Runner
-```
 
-**定义长时任务工具**
+APP_NAME = "long_running_tool_app"
+USER_ID = "long_running_tool_user"
+SESSION_ID = "long_running_tool_session"
 
-```python
+
 def big_data_processing(data_url: str) -> dict[str, Any]:
-    """Process the big data from a specific data url.
+    """Start processing big data located at a URL.
 
     Args:
-        data_url (str): The url of the big data to process.
+        data_url (str): The URL of the big data to process.
 
     Returns:
-        dict[str, Any]: A dictionary containing the result of the big data processing, the data url processed,
-        and the status of the processing ("pending" or "finish").
+        dict[str, Any]: The initial task state, with "status" == "pending",
+        the "data-url", and a "task-id" to track the job.
     """
-    # create a new task for processing big data.
+    # Kick off the long-running job and return its handle immediately.
     return {
         "status": "pending",
         "data-url": data_url,
@@ -165,102 +167,76 @@ def big_data_processing(data_url: str) -> dict[str, Any]:
 
 
 long_running_tool = LongRunningFunctionTool(func=big_data_processing)
-```
-
-**初始化 Agent 及运行时元数据**
-
-```python
-APP_NAME = "long_running_tool_app"
-USER_ID = "long_running_tool_user"
-SESSION_ID = "long_running_tool_session"
 
 agent = Agent(
     name="long_running_tool_agent",
+    model_name="doubao-seed-1-8-251228",
+    instruction="Use long_running_tool to process big data.",
     tools=[long_running_tool],
-    instruction="Use long_running_tool to process big data",
 )
 runner = Runner(agent=agent, app_name=APP_NAME)
 
-# 初始化 Session
-session = asyncio.run(
-    runner.short_term_memory.create_session(
+
+def get_long_running_call(event: Event) -> FunctionCall | None:
+    """Return the long-running function call carried by an event, if any."""
+    if not event.long_running_tool_ids or not event.content or not event.content.parts:
+        return None
+    for part in event.content.parts:
+        if (
+            part.function_call
+            and part.function_call.id in event.long_running_tool_ids
+        ):
+            return part.function_call
+    return None
+
+
+def get_function_response(
+    event: Event, function_call_id: str
+) -> FunctionResponse | None:
+    """Return the function response matching a given call id, if any."""
+    if not event.content or not event.content.parts:
+        return None
+    for part in event.content.parts:
+        if (
+            part.function_response
+            and part.function_response.id == function_call_id
+        ):
+            return part.function_response
+    return None
+
+
+async def main():
+    # Create the session before running.
+    session = await runner.short_term_memory.create_session(
         app_name=APP_NAME, user_id=USER_ID, session_id=SESSION_ID
     )
-)
-```
 
-**定义运行函数并执行**
-
-```python
-async def call_agent_async(query):
-    def get_long_running_function_call(event: Event) -> FunctionCall | None:
-        # Get the long running function call from the event
-        if (
-            not event.long_running_tool_ids
-            or not event.content
-            or not event.content.parts
-        ):
-            return
-        for part in event.content.parts:
-            if (
-                part
-                and part.function_call
-                and event.long_running_tool_ids
-                and part.function_call.id in event.long_running_tool_ids
-            ):
-                return part.function_call
-
-    def get_function_response(
-        event: Event, function_call_id: str
-    ) -> FunctionResponse | None:
-        # Get the function response for the fuction call with specified id.
-        if not event.content or not event.content.parts:
-            return
-        for part in event.content.parts:
-            if (
-                part
-                and part.function_response
-                and part.function_response.id == function_call_id
-            ):
-                return part.function_response
-
+    query = "Process the big data from https://example.com/data.csv"
     content = Content(role="user", parts=[Part(text=query)])
 
     print("Running agent...")
-    events_async = runner.run_async(
+    long_running_call = None
+    long_running_response = None
+    async for event in runner.run_async(
         session_id=session.id, user_id=USER_ID, new_message=content
-    )
-
-    long_running_function_call, long_running_function_response, task_id = (
-        None,
-        None,
-        None,
-    )
-    async for event in events_async:
-        # Use helper to check for the specific auth request event
-        if not long_running_function_call:
-            long_running_function_call = get_long_running_function_call(event)
-        else:
-            _potential_response = get_function_response(
-                event, long_running_function_call.id
-            )
-            if _potential_response:  # Only update if we get a non-None response
-                long_running_function_response = _potential_response
-                task_id = long_running_function_response.response["task-id"]
+    ):
+        if long_running_call is None:
+            long_running_call = get_long_running_call(event)
+        elif long_running_response is None:
+            long_running_response = get_function_response(event, long_running_call.id)
         if event.content and event.content.parts:
             if text := "".join(part.text or "" for part in event.content.parts):
                 print(f"[{event.author}]: {text}")
 
-    if long_running_function_response:
-        # query the status of the correpsonding ticket via tciket_id
-        # send back an intermediate / final response
-        updated_response = long_running_function_response.model_copy(deep=True)
-        updated_response.response = {"status": "finish"}
+    # The task finished in the background; send the final result back to the agent.
+    if long_running_response is not None:
+        updated = long_running_response.model_copy(deep=True)
+        updated.response = {"status": "finish"}
         async for event in runner.run_async(
             session_id=session.id,
             user_id=USER_ID,
             new_message=Content(
-                parts=[Part(function_response=updated_response)], role="user"
+                role="user", parts=[Part(function_response=updated)]
             ),
         ):
             if event.content and event.content.parts:
@@ -268,9 +244,15 @@ async def call_agent_async(query):
                     print(f"[{event.author}]: {text}")
 
 
-asyncio.run(call_agent_async("Process the big data from https://example.com/data.csv"))
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
-执行结果如下图所示：
-
 ![long_running_tool_result](/assets/images/tools/function_tools/long_running_tool_result.jpeg)
+
+## 下一步
+
+<Cards>
+  <Card title="内置工具" href="/cn/docs/framework/tools/builtin" description="网页搜索、图像 / 视频生成、代码沙箱等。" />
+  <Card title="内置 MCP 工具" href="/cn/docs/framework/tools/builtin-mcp" description="飞书 / Lark、LAS、视频云、MCP Router 等。" />
+</Cards>

@@ -1,36 +1,103 @@
 ---
 title: "贡献代码"
-description: "了解如何为 VeADK 框架与文档贡献代码，包括从源码构建、开发规范与 pre-commit 配置。"
+description: "为 VeADK 贡献代码：从源码安装、运行测试、配置 pre-commit，到提交 Pull Request。"
 ---
 
-## VeADK
+欢迎为 VeADK 贡献代码与文档。本页带你完成本地开发环境的搭建和提交流程。
 
-<Callout type="info" title="欢迎您向 VeADK 贡献代码！" />
+## 准备开发环境
 
-### 从源码构建、安装
+<Steps>
 
-下载 VeADK 源码到本地并安装。
+<Step>
+### 克隆并安装
 
-### 开发
-
-请参照 [Google Python 开发规范文档](https://google.github.io/styleguide/pyguide.html)进行开发。
-
-### 安装 `pre-commit`
-
-`pre-commit` 将在您提交代码前进行一系列检查，例如代码格式规范检查、密钥泄漏检查等。未使用 `pre-commit` 检查过的提交将不会通过 Github 中的 CI/CD 工作流检查，这意味着代码将不会被合并。
+VeADK 需要 Python 3.10+。以可编辑模式安装，并带上开发依赖：
 
 ```bash
-pip install pre-commit
+git clone https://github.com/volcengine/veadk-python.git
+cd veadk-python
 
-pre-commit install .
+pip install -e ".[dev]"
 ```
 
-### 等待代码审查
+仓库使用 `uv` 管理依赖与锁文件，你也可以用它一步装好（含 `dev` 分组）：
 
-您提交的代码贡献将会在 1 至 2 个工作日内被处理。
+```bash
+uv sync --extra dev
+```
 
-## VeADK 文档
+<Callout type="info">
+  可选依赖按需安装：`extensions`（记忆 / 知识库后端）、`eval`（评测）、`a2ui`（智能体驱动 UI）等。例如 `pip install -e ".[dev,eval]"`。
+</Callout>
+</Step>
 
-<Callout type="info" title="欢迎您向 VeADK 文档贡献代码！" />
+<Step>
+### 安装 pre-commit 钩子
 
-请参照开发规范。
+`pre-commit` 会在你提交代码前运行 Ruff（格式化与 lint）和 gitleaks（密钥泄漏检查）。未通过这些检查的提交无法通过 GitHub CI，也就无法被合并。
+
+```bash
+pre-commit install
+```
+
+`dev` 依赖里已包含 `pre-commit`。安装后，每次 `git commit` 都会自动运行钩子；也可以手动对全部文件运行一次：
+
+```bash
+pre-commit run --all-files
+```
+</Step>
+
+<Step>
+### 运行测试
+
+测试位于 `tests/` 目录，使用 `pytest`：
+
+```bash
+pytest
+```
+
+只运行某个文件或目录：
+
+```bash
+pytest tests/test_agent.py
+```
+
+<Callout type="warn">
+  部分测试需要火山引擎凭据或外部后端（如 Redis、OpenSearch）。这类测试在缺少对应环境变量时会跳过或失败，提交 PR 前请关注与你改动相关的用例。
+</Callout>
+</Step>
+
+</Steps>
+
+## 开发规范
+
+- 遵循 [Google Python 风格指南](https://google.github.io/styleguide/pyguide.html)。
+- 提交前确保 `pre-commit run --all-files` 与 `pytest` 通过。
+- 改动涉及行为或接口时，同步更新 `docs/` 与 `README.md`。
+
+## 提交 Pull Request
+
+<Steps>
+
+<Step>
+### Fork 并新建分支
+
+```bash
+git checkout -b feat/your-feature
+```
+</Step>
+
+<Step>
+### 提交并推送
+
+确保 pre-commit 与测试通过后提交、推送到你的 Fork。
+</Step>
+
+<Step>
+### 发起 PR
+
+在 GitHub 上向 `volcengine/veadk-python` 的 `main` 分支发起 Pull Request，清晰描述改动动机与内容。维护者通常会在 1 至 2 个工作日内处理。
+</Step>
+
+</Steps>

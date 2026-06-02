@@ -7,7 +7,6 @@
     "---[Rocket]入门---",
     "getting-started",
     "introduction",
-    "enterprise-design",
     "configuration",
     "---[Boxes]核心能力---",
     "agent",
@@ -18,14 +17,17 @@
     "---[Puzzle]扩展与界面---",
     "plugin",
     "frontend",
-    "---[ShieldCheck]安全与运维---",
+    "---[ShieldCheck]安全---",
     "security",
+    "---[Activity]可观测---",
     "observability",
+    "---[CloudUpload]部署---",
     "deploy",
+    "---[LineChart]评测与优化---",
     "eval-optimization",
-    "---[Compass]更多---",
+    "---[Compass]进阶与更多---",
+    "enterprise-design",
     "community",
-    "troubleshooting",
-    "gallery"
+    "troubleshooting"
   ]
 }

@@ -3,43 +3,51 @@ title: "Observe on Volcengine"
 description: "Integrate VeADK agent tracing data into Volcengine platforms such as CozeLoop, APMPlus, and TLS for trace observation."
 ---
 
-## CozeLoop Platform
+VeADK reports tracing data to Volcengine platforms through different exporters. This page covers the integration steps for three platforms: CozeLoop, APMPlus, and TLS. For what each span attribute means, see [Span Attributes](/en/docs/framework/observability/span-attributes).
 
-After connecting a Volcengine agent developed with VeADK to CozeLoop, you can use CozeLoop's evaluation feature to evaluate the agent, or use the Trace feature for trace observation. The trace data of a Volcengine agent can be reported directly to CozeLoop for trace observation; agents registered in CozeLoop can also be evaluated through the observation feature.
+## Shared Configuration
 
-### Preparation
-
-Fill in the cozeloop attributes under the `observability` field of the VeADK configuration file `config.yaml`. For detailed descriptions and examples of the configuration file, refer to the configuration file documentation.
-
-- endpoint: Fixed to `https://api.coze.cn/v1/loop/opentelemetry/v1/traces`
-- api_key: The CozeLoop access key. Personal access tokens, OAuth access tokens, and service access tokens are supported. For how to obtain one, see [Configure a Personal Access Token](https://loop.coze.cn/open/docs/cozeloop/authentication-for-sdk#05d27a86).
-- service_name: The ID of the CozeLoop workspace. After logging into CozeLoop, switch in the top-left corner to the workspace where you want to store the Volcengine agent data, and obtain the workspace ID from the part of the URL after the `space` keyword. For example, in `https://loop.coze.cn/console/enterprise/personal/space/739XXXXXXXX092/pe/prompts`, **739XXXXXXXX092** is the workspace ID.
-
-![CozeLoop workspace](/assets/images/observation/coze-spaceid.png)
+All three platforms share the same `model` and `volcengine` configuration; only the `observability` subtree differs. The shared part is shown below once—each platform section then shows only its own `observability` config:
 
 ```yaml title="config.yaml"
 model:
   agent:
     provider: openai
-    name: doubao-seed-1-6-flash-250828
+    name: doubao-seed-1-8-251228
     api_base: https://ark.cn-beijing.volces.com/api/v3
     api_key: your api_key
 
 volcengine:
   access_key: your ak
   secret_key: your sk
+```
 
+The integration code is also nearly identical: construct the platform's exporter, pass it to `OpentelemetryTracer`, and attach the tracer to your agent.
+
+## CozeLoop Platform
+
+After connecting a VeADK agent to CozeLoop, you can observe its traces with CozeLoop's Trace feature, or evaluate the agent with its evaluation feature.
+
+### Preparation
+
+Fill in the cozeloop attributes under the `observability` field of `config.yaml`:
+
+- `endpoint`: Fixed to `https://api.coze.cn/v1/loop/opentelemetry/v1/traces`
+- `api_key`: The CozeLoop access key. Personal access tokens, OAuth access tokens, and service access tokens are supported. To obtain one, see [Configure a Personal Access Token](https://loop.coze.cn/open/docs/cozeloop/authentication-for-sdk#05d27a86).
+- `service_name`: The CozeLoop workspace ID. After logging in, switch in the top-left corner to the target workspace; the segment after `space` in the URL is the workspace ID. For example, in `https://loop.coze.cn/console/enterprise/personal/space/739XXXXXXXX092/pe/prompts`, **739XXXXXXXX092** is the workspace ID.
+
+![CozeLoop workspace](/assets/images/observation/coze-spaceid.png)
+
+```yaml title="config.yaml (observability subtree)"
 observability:
   opentelemetry:
     cozeloop:
       endpoint: https://api.coze.cn/v1/loop/opentelemetry/v1/traces
-      api_key: your your api_key
+      api_key: your api_key
       service_name: your cozeloop space id
 ```
 
-### Deploy and Run
-
-#### CozeLoop Exporter Integration Code
+### Integration Code
 
 ```python title="agent.py"
 import asyncio
@@ -49,59 +57,42 @@ from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.tools.demo_tools import get_city_weather
 from veadk.tracing.telemetry.exporters.cozeloop_exporter import CozeloopExporter
 from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
-from veadk.tracing.telemetry.exporters.cozeloop_exporter import CozeloopExporterConfig
 
-
-cozeloop_exporter = CozeloopExporter()
-
-exporters = [cozeloop_exporter]
+exporters = [CozeloopExporter()]
 tracer = OpentelemetryTracer(exporters=exporters)
 
 agent = Agent(tools=[get_city_weather], tracers=[tracer])
-
-session_id = "session_id_pj"
 
 runner = Runner(agent=agent, short_term_memory=ShortTermMemory())
 
 prompt = "How is the weather like in Beijing? Besides, tell me which tool you invoked."
 
-asyncio.run(runner.run(messages=prompt, session_id=session_id))
+asyncio.run(runner.run(messages=prompt, session_id="session_id_pj"))
 ```
 
-#### Result
+### Result
 
 ```bash
 python agent.py
 ```
 
-![CozeLoop workspace](/assets/images/observation/coze-console.png)
+![CozeLoop console](/assets/images/observation/coze-console.png)
 
-![CozeLoop workspace](/assets/images/observation/coze-trace.png)
+![CozeLoop trace](/assets/images/observation/coze-trace.png)
 
 ## APMPlus Platform
 
-A Volcengine agent developed with VeADK can be connected to the Volcengine APMPlus platform by defining an APMPlus data exporter, enabling trace observation.
+Define an APMPlus data exporter to connect your agent's trace and metrics data to the Volcengine APMPlus platform.
 
 ### Preparation
 
-- endpoint: Set the APMPlus access point to `http://apmplus-cn-beijing.volces.com:4317`
-- api_key: A valid application key must be filled in.
-- service_name: Specify the service name, which can be modified as needed.
+Fill in the apmplus attributes under the `observability` field of `config.yaml`:
 
-Initialize the APMPlusExporter: use APMPlusExporterConfig to configure the endpoint, application key, and service name, then create an APMPlusExporter instance with the configuration obtained from environment variables. Sample code is as follows:
+- `endpoint`: The APMPlus access point, e.g. `http://apmplus-cn-beijing.volces.com:4317`
+- `api_key`: A valid application key
+- `service_name`: The service name, which can be modified as needed
 
-```yaml title="config.yaml"
-model:
-  agent:
-    provider: openai
-    name: doubao-seed-1-6-flash-250828
-    api_base: https://ark.cn-beijing.volces.com/api/v3
-    api_key: your api_key
-
-volcengine:
-  access_key: your ak
-  secret_key: your sk
-
+```yaml title="config.yaml (observability subtree)"
 observability:
   opentelemetry:
     apmplus:
@@ -109,6 +100,8 @@ observability:
       api_key: your api_key
       service_name: apmplus_veadk_pj
 ```
+
+### Integration Code
 
 ```python title="agent.py"
 import asyncio
@@ -118,68 +111,50 @@ from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.tools.demo_tools import get_city_weather
 from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporter
 from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
-from veadk.tracing.telemetry.exporters.apmplus_exporter import APMPlusExporterConfig
-from os import getenv
 
-
-apmplus_exporter = APMPlusExporter()
-
-exporters = [apmplus_exporter]
-
+exporters = [APMPlusExporter()]
 tracer = OpentelemetryTracer(exporters=exporters)
 
 agent = Agent(tools=[get_city_weather], tracers=[tracer])
 
-session_id = "session_id_pj"
-
 runner = Runner(agent=agent, short_term_memory=ShortTermMemory())
 
 prompt = "How is the weather like in Beijing? Besides, tell me which tool you invoked."
-asyncio.run(runner.run(messages=prompt, session_id=session_id))
+
+asyncio.run(runner.run(messages=prompt, session_id="session_id_pj"))
 ```
 
-### Deploy and Run
+### Result
 
-Run the `agent.py` code above locally to trigger the APMPlus tracer to record the invocation of each node of the agent's execution, and upload metrics information to cloud storage:
+Run the code above locally. The APMPlus tracer records the invocation of each node of the agent's execution and uploads metrics to cloud storage:
 
 ```bash
 python agent.py
 ```
 
-![APMPlus workspace](/assets/images/observation/apm-console.png)
+![APMPlus console](/assets/images/observation/apm-console.png)
 
-#### Session Information
+Session information:
 
-![APMPlus workspace](/assets/images/observation/apm-session.png)
+![APMPlus session](/assets/images/observation/apm-session.png)
 
-#### Trace Information
+Trace information:
 
-![APMPlus workspace](/assets/images/observation/apm-trace.png)
+![APMPlus trace](/assets/images/observation/apm-trace.png)
 
-#### Model Metrics Information
+Model metrics information:
 
-![APMPlus workspace](/assets/images/observation/apm-metrics.png)
+![APMPlus metrics](/assets/images/observation/apm-metrics.png)
 
 ## TLS Platform
 
-A Volcengine agent developed with VeADK can be connected to Volcengine Log Service (TLS) by defining a TLS data exporter, and you can observe the agent's execution traces in the TLS observation module.
+Define a TLS data exporter to connect your agent's execution traces to Volcengine Log Service (TLS) and view them in the TLS observation module.
 
 ### Preparation
 
-#### Create a Tracing Project and Instance in VeADK Code
+Fill in the tls attributes under the `observability` field of `config.yaml`:
 
-```yaml title="config.yaml"
-model:
-  agent:
-    provider: openai
-    name: doubao-seed-1-6-flash-250828
-    api_base: https://ark.cn-beijing.volces.com/api/v3
-    api_key: your api_key
-
-volcengine:
-  access_key: your ak
-  secret_key: your sk
-
+```yaml title="config.yaml (observability subtree)"
 observability:
   opentelemetry:
     tls:
@@ -188,71 +163,50 @@ observability:
       region: cn-beijing
 ```
 
+### Integration Code
+
+TLS integration takes two steps: first use the `VeTLS` client to create a log project and tracing instance, then use `TLSExporter` to report data.
+
 ```python title="agent.py"
 import asyncio
+from os import getenv
 
 from veadk import Agent, Runner
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.tools.demo_tools import get_city_weather
-from veadk.tracing.telemetry.exporters.tls_exporter import TLSExporter
+from veadk.tracing.telemetry.exporters.tls_exporter import TLSExporter, TLSExporterConfig
 from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
-from veadk.tracing.telemetry.exporters.tls_exporter import TLSExporterConfig
 from veadk.integrations.ve_tls.ve_tls import VeTLS
-from os import getenv
 
-# Initialize the VeTLS client to create the log project and tracing instance
+# 1. Create the log project and tracing instance
 ve_tls_client = VeTLS()
-
-# Create the log project
-project_name = "veadk_pj"
-log_project_id = ve_tls_client.create_log_project(project_name)
+log_project_id = ve_tls_client.create_log_project("veadk_pj")
 print(f"Created log project with ID: {log_project_id}")
 
-# Create the tracing instance
 trace_instance_name = getenv("OBSERVABILITY_OPENTELEMETRY_TLS_SERVICE_NAME")
 trace_instance = ve_tls_client.create_tracing_instance(log_project_id, trace_instance_name)
 print(f"Created trace instance with ID: {trace_instance['TraceInstanceId']}")
-```
 
-#### TLS Exporter Integration Code Example
-
-```python title="agent.py"
-import asyncio
-
-from veadk import Agent, Runner
-from veadk.memory.short_term_memory import ShortTermMemory
-from veadk.tools.demo_tools import get_city_weather
-from veadk.tracing.telemetry.exporters.tls_exporter import TLSExporter
-from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
-from veadk.tracing.telemetry.exporters.tls_exporter import TLSExporterConfig
-from veadk.integrations.ve_tls.ve_tls import VeTLS
-from os import getenv
-
-# Initialize the TLSExporter to report tracing data
+# 2. Report tracing data with TLSExporter
 tls_exporter = TLSExporter(
     config=TLSExporterConfig(
-        topic_id=trace_instance.get('TraceTopicId', trace_instance_name),
+        topic_id=trace_instance.get("TraceTopicId", trace_instance_name),
     )
 )
-
-exporters = [tls_exporter]
-
-tracer = OpentelemetryTracer(exporters=exporters)
+tracer = OpentelemetryTracer(exporters=[tls_exporter])
 
 agent = Agent(tools=[get_city_weather], tracers=[tracer])
-
-session_id = "session_id_pj"
 
 runner = Runner(agent=agent, short_term_memory=ShortTermMemory())
 
 prompt = "How is the weather like in Beijing? Besides, tell me which tool you invoked."
 
-asyncio.run(runner.run(messages=prompt, session_id=session_id))
+asyncio.run(runner.run(messages=prompt, session_id="session_id_pj"))
 ```
 
-### Deploy and Run
+### Result
 
-Run the `agent.py` code above locally to trigger the creation of the TLS Project and Topic, and record the invocation of each node of the agent's execution through the tracer:
+Run the code above locally to trigger the creation of the TLS Project and Topic and record the invocation of each node of the agent's execution:
 
 ```bash
 python agent.py
@@ -260,4 +214,11 @@ python agent.py
 
 ![Console output](/assets/images/observation/tls-console.png)
 
-![TLS workspace](/assets/images/observation/tls-trace.png)
+![TLS trace](/assets/images/observation/tls-trace.png)
+
+## Next Steps
+
+<Cards>
+  <Card title="Span Attributes" href="/en/docs/framework/observability/span-attributes" description="Learn when spans are emitted and what attributes they carry." />
+  <Card title="Tracing" href="/en/docs/framework/observability/tracing" description="Learn the core concepts and data structure of tracing." />
+</Cards>

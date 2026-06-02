@@ -1,4 +1,4 @@
 {
   "title": "Deploy",
-  "pages": ["vefaas", "agentkit"]
+  "pages": ["vefaas", "api-server", "agentkit"]
 }

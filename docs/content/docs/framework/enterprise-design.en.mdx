@@ -1,111 +1,88 @@
 ---
-title: "Enterprise Agent Design: From 0 to 1"
-description: "Design paths, design principles, and corresponding VeADK capabilities for enterprise-grade agents."
+title: "Designing enterprise agents"
+description: "A design path for building enterprise agents, reusable principles, and the matching VeADK capabilities."
 ---
 
-Enterprise agent design must be aligned with enterprise application scenarios and business goals. Given the complexity and diversity of enterprise applications, agent design needs to consider the following aspects:
+Putting an agent into enterprise production is more than writing a good prompt. You need to integrate it with existing systems, control access and data security, and keep it observable and measurable. This page lays out a 0-to-1 design path and the VeADK capabilities that support each step.
 
-1. **Good extensibility:** ensure that new features and modules can be added easily to meet the constantly changing business needs of enterprise applications
-2. **Integration with existing enterprise applications:** ensure data exchange and collaboration with other systems
-3. **System architecture and performance:** ensure the system can handle the expected scale of concurrent requests and data processing, and can scale in performance
-4. **Access control and data security:** ensure that the enterprise's core information and sensitive data are not leaked
-5. **Observability and evaluation:** ensure problems can be discovered and located in time, and that system performance and effectiveness can be evaluated and optimized
+When designing an enterprise agent, you typically balance five concerns:
 
-## Design Path
+| Concern | What it means |
+| :- | :- |
+| Extensibility | Add features and modules easily as the business changes |
+| System integration | Exchange data and collaborate with existing systems |
+| Architecture & performance | Handle the expected concurrency and data load, and scale out |
+| Access & data security | Protect core information and sensitive data from leaks |
+| Observability & evaluation | Find and locate issues quickly; quantify and improve quality |
 
-- Capability preparation (converting capability sources and data sources)
-    - Definition and purpose: abstract the enterprise's existing API/non-API capabilities and data sources into tools and knowledge that can be called by agents, and build an evaluation set in advance to support subsequent design and validation.
-    - Input:
-        - Capability sources: the enterprise's existing capability interfaces, including both API and non-API forms.
-        - Data sources: the various data managed by the enterprise's existing storage systems, which can be structured or unstructured.
-    - Output:
-        - Callable tools and knowledge: sandboxed API wrappers, the MCP marketplace, local tools, external tools, vector-retrieval knowledge bases, and templated prompt rule sets.
-        - Evaluation set: real-scenario data collected around bad cases, including exceptions, erroneous operations, and edge conditions.
-    - Dependencies: tool wrapping and interface specifications, data masking and access control, evaluation criteria and sample governance.
+## Design path
 
-- System design (business scenario layering and agent architecture)
-    - Definition and purpose: organize pain points by scenario layers, design the corresponding agent system and interaction flows, and form an implementable architecture diagram with clear responsibility division.
-    - Input: start from real enterprise application scenarios and collect a list of pain points for different scenarios.
-    - Output: a multi-agent system and workflow orchestration plan, e.g., sub-agents for content recognition, passive/proactive replies, and quality review.
-    - Dependencies: the memory module, unified invocation of tools and the knowledge base, and parallel/serial workflow orchestration.
+A typical rollout has five stages that form a continuous, iterative loop:
 
-- System construction (SDK/model/prompt and business goals)
-    - Definition and purpose: complete the SDK selection, model selection, and prompt combination, and ground them in business goals and quantitative metrics.
-    - Input: SDK capability requirements (tool management, context management, knowledge-base management, MCP ecosystem fusion/compatibility, observability, evaluation), a model capability profile, and prompt design methods and templates.
-    - Output:
-        - Agent capability stack: the MCP marketplace, local tools, external tools, context storage (short/long-term memory and expiration policies), vector retrieval and document parsing, observability modules, and evaluation datasets and reporting tools.
-        - Business goals and metrics: information-retrieval efficiency, adoption rate of bypass/proactive replies, etc.
-    - Dependencies: SDK and ecosystem compatibility, integration with internal systems.
+```mermaid
+graph LR
+    A[1. Capability prep] --> B[2. System design];
+    B --> C[3. System build];
+    C --> D[4. Evaluation];
+    D --> E[5. Iteration];
+    E --> A;
+```
 
-- System evaluation (data feedback, methods, and templates)
-    - Definition and purpose: establish an evaluation loop in real delivery to ensure optimization iterations have an objective basis.
-    - Input: feedback data such as user thumbs-up/down and manual annotation, evaluation-set attributes and scale, and evaluation platforms and methods (e.g., vector similarity, LLM-as-a-judge).
-    - Output: a stable evaluation set and reports that drive continuous optimization of features and prompts/models.
-    - Dependencies: observability data collection and evaluation-platform selection, data governance, and security compliance.
+### 1. Capability preparation
 
-- Optimization and iteration (security and self-learning)
-    - Definition and purpose: strengthen security capabilities after launch and explore self-learning (RL) mechanisms.
-    - Input/output: collection and remediation of bad cases based on evaluation and observability; post-launch security policy updates and regression validation.
-    - Dependencies: release and rollback mechanisms, access control and compliance governance, and linkage between evaluation and observability.
+Abstract the enterprise's existing capabilities and data into tools and knowledge the agent can call, and build an evaluation set up front.
 
-- Key shared capabilities
-    - Tool/skill orchestration: support multiple tools, multi-agent concurrent and serial workflow orchestration, and a mix of MCP and tools.
-    - State and memory: short-term memory manages conversation state; long-term memory is used for knowledge accumulation and traceback.
-    - Knowledge access and governance: parallel retrieval and merging across multiple knowledge bases, PDF/Markdown parsing, and version management.
-    - Observability and governance: collection and exposure of metrics, logs, and call traces (Prometheus/OpenTelemetry) to support the evaluation loop.
-    - Quality and security: change-plan risk identification, information security, and access control.
+- **Capability sources** — existing interfaces, both API and non-API. Wrap them as local tools, external tools, or [MCP](/en/docs/framework/tools/builtin-mcp).
+- **Data sources** — structured and unstructured data in existing storage, imported into a [knowledge base](/en/docs/framework/knowledgebase/overview) for vector retrieval.
+- **Evaluation set** — real-scenario data collected around bad cases, covering exceptions, erroneous operations, and edge conditions.
 
-## Main Design Approach
+### 2. System design
 
-The goal is to form a general path from requirements to implementation, with key points demonstrating its reusability.
+Organize pain points by scenario layer and design the corresponding agent system and interaction flows. The output is a [multi-agent](/en/docs/framework/agent/multi-agent/overview) orchestration plan — for example sub-agents for content recognition, passive/proactive replies, and quality review, and the serial/parallel relationships between them.
 
-- Path overview
-    - Enterprise source conversion: identify and wrap capability sources and data sources, completing toolization and knowledge-base creation; build an initial evaluation set in parallel.
-    - System design: organize business feature points by layer, and design the multi-agent architecture and task orchestration.
-    - System construction: complete the SDK/model/prompt combination, and define business goals and quantitative metrics.
-    - System evaluation: establish data feedback and evaluation templates to support continuous iteration.
-    - Optimization and iteration: use security and self-learning as the levers to close the loop on optimizing launch capabilities.
+### 3. System build
 
-- Design principles (reusable)
-    - Goal decomposition and scenario layering: first enumerate feature points, then split subtasks and responsibilities by scenario.
-    - Capability mapping and toolization: decompose non-API capabilities into callable sub-agents/tools, and uniformly wrap API capabilities as MCP or local tools.
-    - Task orchestration (parallel/serial): adopt parallel and multi-agent systems to improve efficiency and reliability.
-    - Human-machine collaboration and memory: conversational handling relies on short-term memory, while knowledge accumulation updates a dedicated knowledge base through review agents.
-    - Criteria and security: strictly limit data sources and access control to ensure information security and compliance.
-    - Measurement and optimization: drive evaluation and optimization with quantitative metrics such as adoption rate and trigger rate.
+Settle on the combination of SDK, model, and prompts, and ground it in quantifiable business goals.
 
-## Corresponding VeADK Capabilities
+- **Capability stack** — tools (MCP / local / external), context storage (short- and long-term [memory](/en/docs/framework/memory/short-term) with expiration policies), vector retrieval and document parsing, [observability](/en/docs/framework/observability/overview), and [evaluation](/en/docs/framework/eval-optimization/evaluation).
+- **Business metrics** — e.g. information-retrieval efficiency, adoption rate of proactive replies.
 
-- Agent paradigms and orchestration
-    - Capability: LLMAgent / CustomAgent / ParallelAgent / ReactiveMultiAgents.
-    - Use cases: content recognition, classification/summarization, parallel detection, conversational passive responses, and business-flow scheduling across multiple sub-agents.
-    - Key interfaces / integration points: custom `_run_async_impl`; concurrent sub-agent management; tool calls (MCP/local).
+### 4. Evaluation
 
-- Memory and context management
-    - Capability: short-term memory (ShortTermMemory), long-term memory (accumulation in a dedicated knowledge base).
-    - Use cases: conversation-state management, context retrieval and association.
-    - Key interfaces / integration points: the context storage engine, TTL expiration and retrieval APIs.
+Establish an evaluation loop in real delivery so every iteration has an objective basis. Feed back user thumbs-up/down and manual annotations, combine methods such as vector similarity and LLM-as-a-judge, and produce a stable evaluation set and reports.
 
-- Knowledge base and retrieval
-    - Capability: a vector-retrieval engine, PDF/Markdown parsing, version control; VeAIOpsKBManager (parallel retrieval and merging across multiple knowledge bases).
-    - Use cases: RAG retrieval and fusion of multiple knowledge sources.
-    - Key interfaces / integration points: VIKING DB integration.
+### 5. Iteration
 
-- Tool management and ecosystem compatibility
-    - Capability: built-in tools plus MCP/local tool extensions; compatible with GoogleADK.
-    - Use cases: log-compliance detection, root-cause localization, change-risk identification, monitoring-policy configuration, and alert delivery.
-    - Key interfaces / integration points: MCP tool extensions, ChatTools reading chat history, web-based configuration of monitoring rules.
+Collect and fix bad cases based on evaluation and observability, update prompts, models, and security policies, then return to capability preparation for the next round.
 
-- Observability and evaluation
-    - Capability: Prometheus metric exposure, OpenTelemetry tracing integration; evaluation-dataset management and automated reporting tools.
-    - Use cases: agent-call measurement, log and call-trace collection, and the evaluation loop.
-    - Key interfaces / integration points: Fornax observability reporting, syncing RDS session data to the data warehouse to form an evaluation set.
+## Reusable design principles
 
-- Access control and security (data and access governance)
-    - Capability: permission callback interfaces plus filters (email/index_name/query); information security and masked display.
-    - Use cases: access control for knowledge retrieval and masking of results.
+Implementation details differ by business, but these principles apply broadly:
 
-- Model and prompt collaboration
-    - Capability: a model-selection profile (e.g., Doubao excels at semantics and summarization; Deepseek excels at tool calling and process planning; the CRISPE prompt framework and templated rules).
-    - Use cases: FAQ aggregation, label construction, content moderation, workflow orchestration and execution, and retrieval-collaboration tasks.
-    - Key interfaces / integration points: prompt specifications and variable rendering; template maintenance and version management.
+- **Goal decomposition and scenario layering** — enumerate feature points first, then split subtasks and responsibilities by scenario.
+- **Capability mapping and toolization** — decompose non-API capabilities into callable sub-agents/tools; wrap API capabilities uniformly as MCP or local tools.
+- **Task orchestration** — use parallel and multi-agent patterns for efficiency and reliability; use serial flows for step dependencies.
+- **Memory and human-machine collaboration** — conversation state relies on short-term memory; knowledge accumulation updates a dedicated knowledge base through review agents.
+- **Criteria and security** — strictly limit data sources and access to ensure information security and compliance.
+- **Measurement and optimization** — drive evaluation and optimization with quantitative metrics such as adoption rate and trigger rate.
+
+## Matching VeADK capabilities
+
+VeADK provides a capability for each stage above:
+
+| Design need | VeADK capability |
+| :- | :- |
+| Agent orchestration | [Multi-agent](/en/docs/framework/agent/multi-agent/overview) (sequential / parallel / loop); custom agents via a custom `_run_async_impl` |
+| Memory and context | [Short-term memory](/en/docs/framework/memory/short-term) for conversation state; [long-term memory](/en/docs/framework/memory/long-term) for knowledge accumulation and traceback |
+| Knowledge base and retrieval | Vector retrieval, document parsing, and RAG in the [knowledge base](/en/docs/framework/knowledgebase/overview) |
+| Tools and ecosystem | [Built-in tools](/en/docs/framework/tools/builtin), [custom function tools](/en/docs/framework/tools/custom-function), and [MCP](/en/docs/framework/tools/builtin-mcp); compatible with Google ADK |
+| Observability and evaluation | [Observability](/en/docs/framework/observability/overview) (logs, tracing, metrics) and the [evaluation](/en/docs/framework/eval-optimization/evaluation) loop |
+| Configuration and security | Environment-variable desensitization and multi-tenant isolation in [Configuration](/en/docs/framework/configuration) |
+
+## Next steps
+
+<Cards>
+  <Card title="Multi-agent" href="/en/docs/framework/agent/multi-agent/overview" description="Orchestrate agents with sequential, parallel, and loop patterns." />
+  <Card title="Knowledge base" href="/en/docs/framework/knowledgebase/overview" description="Add private knowledge to the model with RAG." />
+  <Card title="Observability" href="/en/docs/framework/observability/overview" description="Trace runtime behavior; monitor performance and decisions." />
+</Cards>
