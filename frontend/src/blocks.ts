@@ -14,11 +14,18 @@ import type { A2uiMessage } from "./a2ui/types";
 const A2UI_TOOL = "send_a2ui_json_to_client";
 const VALIDATED_JSON_KEY = "validated_a2ui_json";
 
+export interface AttachmentView {
+  mimeType?: string;
+  data?: string; // base64 (no data: prefix)
+  name?: string;
+}
+
 export type Block =
   | { kind: "thinking"; text: string; done: boolean }
   | { kind: "text"; text: string }
   | { kind: "tool"; name: string; args?: unknown; response?: unknown; done: boolean }
-  | { kind: "a2ui"; messages: A2uiMessage[] };
+  | { kind: "a2ui"; messages: A2uiMessage[] }
+  | { kind: "attachment"; files: AttachmentView[] };
 
 /** Accumulator for one assistant turn. `liveStart` marks where the current
  *  streaming-preview blocks begin (everything before it is finalized). */
@@ -44,6 +51,22 @@ export function emptyAcc(): Acc {
 
 const fnCall = (p: AdkPart) => p.functionCall ?? p.function_call;
 const fnResp = (p: AdkPart) => p.functionResponse ?? p.function_response;
+
+/** Pull file attachments (inline_data) out of a message's parts. */
+export function attachmentsFromParts(parts: AdkPart[]): AttachmentView[] {
+  const files: AttachmentView[] = [];
+  for (const p of parts) {
+    const d = p.inlineData ?? p.inline_data;
+    if (d && d.data) {
+      files.push({
+        mimeType: d.mimeType ?? d.mime_type,
+        data: d.data,
+        name: d.displayName ?? d.display_name,
+      });
+    }
+  }
+  return files;
+}
 
 function appendText(blocks: Block[], kind: "thinking" | "text", text: string) {
   const last = blocks[blocks.length - 1];
@@ -117,11 +140,16 @@ export function eventsToTurns(events: AdkEvent[]): Turn[] {
     // mis-split the assistant turn and drop tool results.
     const isUser = ev.author === "user";
     if (isUser) {
-      const text = (ev.content?.parts ?? [])
+      const parts = ev.content?.parts ?? [];
+      const text = parts
         .map((p) => p.text)
         .filter((t): t is string => !!t)
         .join("");
-      turns.push({ role: "user", blocks: [{ kind: "text", text }], meta: { ts: ev.timestamp } });
+      const files = attachmentsFromParts(parts);
+      const blocks: Block[] = [];
+      if (files.length) blocks.push({ kind: "attachment", files });
+      if (text) blocks.push({ kind: "text", text });
+      turns.push({ role: "user", blocks, meta: { ts: ev.timestamp } });
       acc = emptyAcc();
     } else {
       let last = turns[turns.length - 1];

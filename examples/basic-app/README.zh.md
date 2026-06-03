@@ -13,7 +13,7 @@ basic-app/
 ├── agents/
 │   └── basic_app_agent/         # 后端 Agent（已开启 A2UI），暴露 root_agent
 ├── agentkit.yaml                # AgentKit 部署配置（已接入 build_script）
-├── scripts/install_veadk.sh     # 构建时从 feat/a2ui 安装 veadk[a2ui]
+├── scripts/install_veadk.sh     # 构建时从 feat/a2ui 安装 veadk[a2ui,pdf]
 ├── requirements.txt             # 留空（veadk 由构建脚本安装）
 ├── .dockerignore
 └── .env.example
@@ -47,13 +47,20 @@ cp .env.example .env
 ## 2. 本地运行（可选）
 
 ```bash
-pip install "veadk-python[a2ui]"
+pip install "veadk-python[a2ui,pdf]"
 python app.py            # 或：python -m app
 # 打开 http://127.0.0.1:8000
 ```
 
 你应当能看到 Web UI；试着问“给我一张航班状态卡片”，Agent 会用富 A2UI 作答。
 `/list-apps` 返回 `["basic_app_agent"]`，`/ping` 返回 `{"status": "ok"}`。
+
+### 附件（图片 / PDF）
+
+输入框的 **+** 按钮可上传**图片**与 **PDF**。图片会直接发送给（具备视觉能力的）
+模型；PDF 则由 `before_model_callback`（`veadk.utils.pdf_to_images`）渲染为逐页
+图片后交给模型识别——这需要 `pdf` 额外依赖（已包含在上面的 `[a2ui,pdf]` 中），
+并使用具备视觉能力的模型（默认的 `doubao-seed-1.6` 即可）。
 
 ## 3. 部署到 AgentKit
 

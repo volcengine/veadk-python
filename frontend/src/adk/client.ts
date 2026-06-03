@@ -45,14 +45,32 @@ export interface AdkSession {
   [k: string]: unknown;
 }
 
+export interface AdkInlineData {
+  mimeType?: string;
+  data?: string; // base64 (no data: prefix)
+  displayName?: string;
+  // snake_case fallback (defensive, in case the server echoes snake_case)
+  mime_type?: string;
+  display_name?: string;
+}
+
 export interface AdkPart {
   text?: string;
   thought?: boolean;
+  inlineData?: AdkInlineData;
+  inline_data?: AdkInlineData; // snake_case fallback (defensive)
   functionCall?: { name?: string; args?: Record<string, unknown> };
   functionResponse?: { name?: string; response?: Record<string, unknown> };
   // snake_case fallbacks (defensive)
   function_call?: { name?: string; args?: Record<string, unknown> };
   function_response?: { name?: string; response?: Record<string, unknown> };
+}
+
+/** A file the user attached in the composer, encoded for `/run_sse`. */
+export interface Attachment {
+  mimeType: string;
+  data: string; // base64 (no data: prefix)
+  name?: string;
 }
 
 const API_BASE = ""; // same origin (prod) / proxied (dev)
@@ -123,6 +141,7 @@ export interface RunArgs {
   userId: string;
   sessionId: string;
   text: string;
+  attachments?: Attachment[];
 }
 
 /** Stream agent events for one user turn. */
@@ -131,7 +150,14 @@ export async function* runSSE({
   userId,
   sessionId,
   text,
+  attachments = [],
 }: RunArgs): AsyncGenerator<AdkEvent, void, unknown> {
+  const parts: AdkPart[] = [
+    ...attachments.map((a) => ({
+      inlineData: { mimeType: a.mimeType, data: a.data, displayName: a.name },
+    })),
+    ...(text.trim() ? [{ text }] : []),
+  ];
   const res = await apiFetch(`/run_sse`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -139,7 +165,7 @@ export async function* runSSE({
       app_name: appName,
       user_id: userId,
       session_id: sessionId,
-      new_message: { role: "user", parts: [{ text }] },
+      new_message: { role: "user", parts },
       streaming: true,
     }),
   });
