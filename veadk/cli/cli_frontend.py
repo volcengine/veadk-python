@@ -53,9 +53,12 @@ def _resolve_frontend_dir(arg: str | None) -> Path:
 @click.command()
 @click.option(
     "--agents-dir",
-    default="examples",
+    default=".",
     show_default=True,
-    help="Directory containing agent apps (each subdir exposes a `root_agent`).",
+    help="Directory containing agent apps (like `adk web`): run from the parent "
+    "folder of your agent directories — each subdir with an `agent.py` exposing "
+    "a `root_agent` becomes a selectable app in the UI. Defaults to the current "
+    "directory.",
 )
 @click.option(
     "--frontend-dir",
