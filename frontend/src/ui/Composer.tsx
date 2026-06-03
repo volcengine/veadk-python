@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef } from "react";
 import { ArrowUp, Loader2, Plus } from "lucide-react";
+import { motion } from "motion/react";
 
 export interface ComposerProps {
   value: string;
@@ -34,7 +35,7 @@ export function Composer({ value, onChange, onSubmit, disabled, busy }: Composer
           rows={1}
           value={value}
           disabled={disabled}
-          placeholder={disabled ? "连接中…" : "让智能体用 UI 回答，比如「给我一张航班状态卡片」"}
+          placeholder={disabled ? "连接中…" : "给智能体发消息…"}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -43,15 +44,17 @@ export function Composer({ value, onChange, onSubmit, disabled, busy }: Composer
             }
           }}
         />
-        <button
+        <motion.button
           type="button"
           className="comp-send"
           disabled={!canSend}
           onClick={onSubmit}
           aria-label="发送"
+          whileTap={canSend ? { scale: 0.9 } : undefined}
+          transition={{ type: "spring", stiffness: 600, damping: 22 }}
         >
           {busy ? <Loader2 className="icon spin" /> : <ArrowUp className="icon" />}
-        </button>
+        </motion.button>
       </div>
     </div>
   );

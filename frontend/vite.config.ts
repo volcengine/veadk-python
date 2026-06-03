@@ -15,6 +15,9 @@ export default defineConfig({
       "/apps": API_TARGET,
       "/run_sse": API_TARGET,
       "/run": API_TARGET,
+      "/debug": API_TARGET,
+      "/oauth2": API_TARGET,
+      "/web": API_TARGET,
     },
   },
   build: {

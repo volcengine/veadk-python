@@ -73,7 +73,11 @@ description = "Empty environment variables with KEY pattern"
 regex = '''os\.environ\[".*?KEY"\]\s*=\s*".+"'''
 
 [allowlist]
-paths = ["requirements.txt", "tests", "veadk/realtime/client.py", "veadk/realtime/live.py"]
+# veadk/webui is the built (minified) web UI bundle — generated output reviewed
+# via its source under frontend/, not hand-written. Minified vendor libs
+# (markdown / syntax highlighter) contain words like "transformer"/"tokenizer"
+# that trip the custom rules, so the build directory is excluded from scanning.
+paths = ["requirements.txt", "tests", "veadk/realtime/client.py", "veadk/realtime/live.py", "veadk/webui"]
 # False positives: the docs search config references the @orama/tokenizers
 # package and its createTokenizer() helper. The word "tokenizer" trips
 # token-transformer-id-pattern, but these are library identifiers, not secrets.

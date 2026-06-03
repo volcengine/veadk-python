@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Loader2, MoreHorizontal, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { LogOut, MoreHorizontal, Plus, Trash2 } from "lucide-react";
 import type { AdkSession } from "../adk/client";
 import { sessionTitle } from "../blocks";
+import { displayName } from "../adk/identity";
 
 export interface SidebarProps {
   apps: string[];
@@ -12,8 +13,8 @@ export interface SidebarProps {
   onNewChat: () => void;
   onPickSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
-  onRefresh: () => void;
-  loadingSessions: boolean;
+  userInfo?: Record<string, unknown>;
+  onLogout: () => void;
 }
 
 export function Sidebar({
@@ -25,8 +26,8 @@ export function Sidebar({
   onNewChat,
   onPickSession,
   onDeleteSession,
-  onRefresh,
-  loadingSessions,
+  userInfo,
+  onLogout,
 }: SidebarProps) {
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const sorted = [...sessions].sort(
@@ -36,10 +37,6 @@ export function Sidebar({
     <aside className="sidebar">
       <div className="sidebar-top">
         <div className="brand">VeADK Web</div>
-        <button className="new-chat" onClick={onNewChat}>
-          <Plus className="icon" />
-          新会话
-        </button>
         <select
           className="agent-select"
           value={appName}
@@ -51,18 +48,15 @@ export function Sidebar({
             </option>
           ))}
         </select>
+        <button className="new-chat" onClick={onNewChat}>
+          <Plus className="icon" />
+          新会话
+        </button>
       </div>
 
       <div className="sidebar-history">
         <div className="history-head">
           <span>历史会话</span>
-          <button className="history-refresh" onClick={onRefresh} title="刷新">
-            {loadingSessions ? (
-              <Loader2 className="icon spin" />
-            ) : (
-              <RefreshCw className="icon" />
-            )}
-          </button>
         </div>
         <div className="history-list">
           {sorted.length === 0 && (
@@ -107,6 +101,18 @@ export function Sidebar({
           ))}
         </div>
       </div>
+
+      {userInfo && (
+        <div className="sidebar-user">
+          <div className="user-avatar">{(displayName(userInfo) || "U").slice(0, 1).toUpperCase()}</div>
+          <span className="user-name" title={displayName(userInfo)}>
+            {displayName(userInfo)}
+          </span>
+          <button className="user-logout" title="退出登录" onClick={onLogout}>
+            <LogOut className="icon" />
+          </button>
+        </div>
+      )}
     </aside>
   );
 }

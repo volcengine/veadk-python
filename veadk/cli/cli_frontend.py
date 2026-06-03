@@ -53,9 +53,12 @@ def _resolve_frontend_dir(arg: str | None) -> Path:
 @click.command()
 @click.option(
     "--agents-dir",
-    default="examples",
+    default=".",
     show_default=True,
-    help="Directory containing agent apps (each subdir exposes a `root_agent`).",
+    help="Directory containing agent apps (like `adk web`): run from the parent "
+    "folder of your agent directories — each subdir with an `agent.py` exposing "
+    "a `root_agent` becomes a selectable app in the UI. Defaults to the current "
+    "directory.",
 )
 @click.option(
     "--frontend-dir",
@@ -74,12 +77,62 @@ def _resolve_frontend_dir(arg: str | None) -> Path:
         f"({DEV_SERVER_ORIGIN}). Run `npm run dev` in ./frontend alongside this."
     ),
 )
+@click.option(
+    "--oauth2-user-pool",
+    default=None,
+    help="VeIdentity User Pool NAME. When set (or its UID), enables SSO: "
+    "unauthenticated browsers see a login page and the UI uses the signed-in user.",
+)
+@click.option(
+    "--oauth2-user-pool-client",
+    default=None,
+    help="VeIdentity User Pool client NAME.",
+)
+@click.option(
+    "--oauth2-user-pool-uid",
+    default=None,
+    envvar="OAUTH2_USER_POOL_ID",
+    help="VeIdentity User Pool UID (env: OAUTH2_USER_POOL_ID). Use instead of "
+    "the pool name.",
+)
+@click.option(
+    "--oauth2-user-pool-client-uid",
+    default=None,
+    envvar="OAUTH2_USER_POOL_CLIENT_ID",
+    help="VeIdentity client UID (env: OAUTH2_USER_POOL_CLIENT_ID). Use instead "
+    "of the client name.",
+)
+@click.option(
+    "--oauth2-redirect-uri",
+    default=None,
+    help="OAuth2 redirect URI. Defaults to http://{host}:{port}/oauth2/callback.",
+)
+@click.option(
+    "--oauth2-provider",
+    default="veidentity",
+    show_default=True,
+    help="SSO provider id shown on the login page (e.g. veidentity, github, "
+    "google). Drives the login button's label/icon.",
+)
+@click.option(
+    "--oauth2-provider-label",
+    default=None,
+    help="Display label for the SSO login button (defaults to a name derived "
+    "from --oauth2-provider).",
+)
 def frontend(
     agents_dir: str,
     frontend_dir: str | None,
     host: str,
     port: int,
     dev: bool,
+    oauth2_user_pool: str | None,
+    oauth2_user_pool_client: str | None,
+    oauth2_user_pool_uid: str | None,
+    oauth2_user_pool_client_uid: str | None,
+    oauth2_redirect_uri: str | None,
+    oauth2_provider: str,
+    oauth2_provider_label: str | None,
 ) -> None:
     """Launch the A2UI web UI backed by the ADK agent API server."""
     from google.adk.cli.fast_api import get_fast_api_app
@@ -92,6 +145,62 @@ def frontend(
         allow_origins=allow_origins,
         web=False,  # we serve our own UI, not the bundled ADK dev UI
     )
+
+    pool_ok = oauth2_user_pool or oauth2_user_pool_uid
+    client_ok = oauth2_user_pool_client or oauth2_user_pool_client_uid
+    if pool_ok and client_ok:
+        from veadk.auth.middleware.oauth2_auth import setup_oauth2, OAuth2Config
+
+        redirect_uri = oauth2_redirect_uri or f"http://{host}:{port}/oauth2/callback"
+        oauth2_config = OAuth2Config.from_veidentity(
+            user_pool_name=oauth2_user_pool,
+            user_pool_uid=oauth2_user_pool_uid,
+            client_name=oauth2_user_pool_client,
+            client_uid=oauth2_user_pool_client_uid,
+            redirect_uri=redirect_uri,
+        )
+        # Allow cookies over http for local/non-TLS serving.
+        oauth2_config.cookie_secure = False
+        # Logout clears our session and returns to the app (which then shows the
+        # login page). We skip the IdP end-session redirect because its
+        # post_logout_redirect_uri must be whitelisted in VeIdentity; a local
+        # logout avoids that requirement. Set logout_redirect_url to the app root.
+        oauth2_config.logout_redirect_url = f"http://{host}:{port}/"
+        oauth2_config.end_session_url = None
+
+        # Expose the configured provider(s) to the login page (unauthenticated).
+        default_labels = {
+            "veidentity": "火山引擎 Identity",
+            "github": "GitHub",
+            "google": "Google",
+        }
+        label = (
+            oauth2_provider_label
+            or default_labels.get(oauth2_provider)
+            or oauth2_provider.replace("_", " ").title()
+        )
+        providers = [
+            {"id": oauth2_provider, "label": label, "loginUrl": "/oauth2/login"}
+        ]
+
+        @app.get("/web/auth-config")
+        async def _web_auth_config():
+            return {"providers": providers}
+
+        # Protect the API but exempt the SPA shell + this config endpoint so the
+        # app can load and render its own login page when not signed in.
+        setup_oauth2(
+            app,
+            oauth2_config,
+            exempt_paths={"/", "/index.html", "/favicon.ico", "/web/auth-config"},
+            exempt_prefixes={"/assets"},
+        )
+        logger.info(
+            f"OAuth2 SSO enabled (provider={oauth2_provider}, "
+            f"pool={oauth2_user_pool or oauth2_user_pool_uid}, "
+            f"client={oauth2_user_pool_client or oauth2_user_pool_client_uid}, "
+            f"redirect_uri={redirect_uri})"
+        )
 
     if dev:
         logger.info(
