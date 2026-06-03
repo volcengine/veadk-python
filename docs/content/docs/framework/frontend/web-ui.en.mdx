@@ -36,9 +36,44 @@ cd frontend && npm run dev                    # http://localhost:5173 (proxies A
 | `--host` | `127.0.0.1` | Address to bind. |
 | `--port` | `8000` | Port to bind. |
 | `--dev` | off | Dev mode: serve the API only and allow CORS from the Vite dev server (`http://localhost:5173`). |
+| `--oauth2-user-pool` / `--oauth2-user-pool-client` | — | VeIdentity user pool / client **name**. Enables SSO when set. |
+| `--oauth2-user-pool-uid` / `--oauth2-user-pool-client-uid` | env `OAUTH2_USER_POOL_ID` / `OAUTH2_USER_POOL_CLIENT_ID` | Specify the pool / client by **UID** instead of name. |
+| `--oauth2-provider` / `--oauth2-provider-label` | `veidentity` | Login button provider id and display label. |
+| `--oauth2-redirect-uri` | `http://{host}:{port}/oauth2/callback` | OAuth2 callback URL. |
 
 <Callout type="info">
   Outside dev mode, if the built frontend directory is not found, the command fails and asks you to run `npm run build` first (or use `--dev` with the Vite dev server).
+</Callout>
+
+## Authentication (SSO / local username)
+
+Sessions and memory are scoped by the ADK `user_id`, which comes from the
+signed-in user.
+
+**SSO (VeIdentity OAuth2)** — enable by passing the pool/client. The UI shows a
+login page and redirects through VeIdentity, then uses the `sub` from
+`/oauth2/userinfo` as the `user_id`:
+
+```bash
+veadk frontend --agents-dir examples \
+  --oauth2-user-pool <name> --oauth2-user-pool-client <name>
+# or by UID (env OAUTH2_USER_POOL_ID / OAUTH2_USER_POOL_CLIENT_ID):
+# --oauth2-user-pool-uid <id> --oauth2-user-pool-client-uid <id>
+```
+
+Requires Volcengine credentials (AK/SK) in the environment. The middleware
+protects the API while exempting the SPA shell and `GET /web/auth-config`, so the
+app loads and shows its own login page instead of being bounced to the IdP. The
+login button's label/icon is config-driven (`--oauth2-provider` / `-label`).
+
+**No SSO (local username)** — without those flags, the login page asks for a
+username (letters + digits, ≤16), stored locally and used as the `user_id`.
+
+<Callout type="info">
+  Login state is cached: SSO via the `veadk_session` cookie, local mode via
+  `localStorage`. The session itself is created lazily on the first message (not
+  on page load). Logout is a local logout (clears the session and returns to the
+  login page).
 </Callout>
 
 ## How it works

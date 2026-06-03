@@ -72,7 +72,7 @@ export async function createSession(
   appName: string,
   userId: string,
 ): Promise<string> {
-  const res = await apiFetch(`/apps/${appName}/users/${userId}/sessions`, {
+  const res = await apiFetch(`/apps/${appName}/users/${encodeURIComponent(userId)}/sessions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: "{}",
@@ -86,7 +86,7 @@ export async function listSessions(
   appName: string,
   userId: string,
 ): Promise<AdkSession[]> {
-  const res = await apiFetch(`/apps/${appName}/users/${userId}/sessions`);
+  const res = await apiFetch(`/apps/${appName}/users/${encodeURIComponent(userId)}/sessions`);
   if (!res.ok) throw new Error(`list sessions failed: ${res.status}`);
   return res.json();
 }
@@ -96,7 +96,7 @@ export async function getSession(
   userId: string,
   sessionId: string,
 ): Promise<AdkSession> {
-  const res = await apiFetch(`/apps/${appName}/users/${userId}/sessions/${sessionId}`);
+  const res = await apiFetch(`/apps/${appName}/users/${encodeURIComponent(userId)}/sessions/${sessionId}`);
   if (!res.ok) throw new Error(`get session failed: ${res.status}`);
   return res.json();
 }
@@ -106,7 +106,7 @@ export async function deleteSession(
   userId: string,
   sessionId: string,
 ): Promise<void> {
-  const res = await apiFetch(`/apps/${appName}/users/${userId}/sessions/${sessionId}`, {
+  const res = await apiFetch(`/apps/${appName}/users/${encodeURIComponent(userId)}/sessions/${sessionId}`, {
     method: "DELETE",
   });
   if (!res.ok && res.status !== 404) throw new Error(`delete session failed: ${res.status}`);

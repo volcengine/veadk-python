@@ -36,9 +36,34 @@ cd frontend && npm run dev                    # http://localhost:5173（代理 A
 | `--host` | `127.0.0.1` | 监听地址。 |
 | `--port` | `8000` | 监听端口。 |
 | `--dev` | 关闭 | 开发模式：仅提供 API，并放行来自 Vite 开发服务器（`http://localhost:5173`）的 CORS。 |
+| `--oauth2-user-pool` / `--oauth2-user-pool-client` | — | VeIdentity 用户池 / 客户端**名称**。设置后启用 SSO。 |
+| `--oauth2-user-pool-uid` / `--oauth2-user-pool-client-uid` | 环境变量 `OAUTH2_USER_POOL_ID` / `OAUTH2_USER_POOL_CLIENT_ID` | 用 **UID** 代替名称指定用户池 / 客户端。 |
+| `--oauth2-provider` / `--oauth2-provider-label` | `veidentity` | 登录按钮的 provider 标识与显示文案。 |
+| `--oauth2-redirect-uri` | `http://{host}:{port}/oauth2/callback` | OAuth2 回调地址。 |
 
 <Callout type="info">
   非开发模式下，若未找到已构建的前端目录，命令会报错提示先执行 `npm run build`（或改用 `--dev` 配合 Vite 开发服务器）。
+</Callout>
+
+## 认证（SSO 与本地用户名）
+
+会话与记忆按 ADK 的 `user_id` 隔离，该 `user_id` 来自登录用户。
+
+**SSO（VeIdentity OAuth2）** —— 传入用户池 / 客户端后启用。前端会展示登录页并跳转到 VeIdentity，登录后用 `/oauth2/userinfo` 返回的 `sub` 作为 `user_id`：
+
+```bash
+veadk frontend --agents-dir examples \
+  --oauth2-user-pool <name> --oauth2-user-pool-client <name>
+# 或用 UID（读环境变量 OAUTH2_USER_POOL_ID / OAUTH2_USER_POOL_CLIENT_ID）：
+# --oauth2-user-pool-uid <id> --oauth2-user-pool-client-uid <id>
+```
+
+需要进程能拿到火山引擎凭证（AK/SK）。中间件保护 API、放行 SPA 外壳与 `GET /web/auth-config`，因此应用能加载并展示自己的登录页（而不是被直接重定向到 IdP）。登录按钮的文案/图标由配置驱动（`--oauth2-provider` / `--oauth2-provider-label`）。
+
+**无 SSO（本地用户名）** —— 不传上述参数时，登录页会让用户输入一个用户名（字母 + 数字，≤16 位），保存在本地并作为 `user_id`。
+
+<Callout type="info">
+  登录态会被缓存：SSO 走 `veadk_session` Cookie，本地模式走 `localStorage`。会话本身**在发送第一条消息时才创建**（而非打开页面时）。退出登录为本地登出（清除会话并回到登录页）。
 </Callout>
 
 ## 工作原理

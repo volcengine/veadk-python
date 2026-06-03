@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, Loader2 } from "lucide-react";
+import { motion } from "motion/react";
 import {
   createSession,
   deleteSession,
@@ -14,7 +15,16 @@ import { Sidebar } from "./ui/Sidebar";
 import { Blocks, ThinkingPlaceholder } from "./ui/Blocks";
 import { Composer } from "./ui/Composer";
 import { TraceDrawer } from "./ui/TraceDrawer";
+import { LoginPage } from "./ui/LoginPage";
+import { Markdown } from "./ui/Markdown";
 import { useStickToBottom } from "./ui/useStickToBottom";
+import {
+  clearLocalUser,
+  logout,
+  resolveIdentity,
+  setLocalUser,
+  type AuthStatus,
+} from "./adk/identity";
 import type { A2uiAction, A2uiComponent } from "./a2ui/types";
 
 /** Hand-drawn "tracing / observability" icon (stacked spans). */
@@ -60,12 +70,13 @@ function turnText(turn: Turn): string {
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
-  if (!text) return null;
   return (
     <button
       className="icon-btn"
       title={copied ? "已复制" : "复制"}
+      disabled={!text}
       onClick={async () => {
+        if (!text) return;
         try {
           await navigator.clipboard.writeText(text);
           setCopied(true);
@@ -82,15 +93,14 @@ function CopyButton({ text }: { text: string }) {
 // Side-effect import: registers all A2UI components under a2ui/components/*.
 import "./a2ui/components";
 
-const USER_ID = "web-user";
 
 const GREETINGS = [
   "今天想做点什么？",
   "有什么可以帮你的？",
   "需要我帮你查点什么吗？",
-  "想看看什么样的卡片？",
+  "有问题尽管问我",
   "嗨，我们开始吧",
-  "试试让我用 UI 来回答你",
+  "开始一段新对话吧",
 ];
 const pickGreeting = () => GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
 
@@ -98,7 +108,6 @@ export default function App() {
   const [apps, setApps] = useState<string[]>([]);
   const [appName, setAppName] = useState("");
   const [sessions, setSessions] = useState<AdkSession[]>([]);
-  const [loadingSessions, setLoadingSessions] = useState(false);
   const [sessionId, setSessionId] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
@@ -106,9 +115,44 @@ export default function App() {
   const [error, setError] = useState("");
   const [traceOpen, setTraceOpen] = useState(false);
   const [greeting, setGreeting] = useState(pickGreeting);
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  const [userId, setUserId] = useState("");
+  const [userInfo, setUserInfo] = useState<Record<string, unknown> | undefined>();
+  const [localMode, setLocalMode] = useState(false);
+  const [loadingSession, setLoadingSession] = useState(false);
   const { ref: scrollRef, onScroll } = useStickToBottom<HTMLDivElement>(turns);
 
+  // Resolve SSO identity first; it provides the ADK user_id.
   useEffect(() => {
+    resolveIdentity().then((id) => {
+      setUserId(id.userId);
+      setUserInfo(id.info);
+      setLocalMode(!!id.local);
+      setAuthStatus(id.status);
+    });
+  }, []);
+
+  function onUsername(name: string) {
+    setLocalUser(name);
+    setUserId(name);
+    setUserInfo({ name });
+    setLocalMode(true);
+    setAuthStatus("authenticated");
+  }
+
+  function onLogout() {
+    if (localMode) {
+      clearLocalUser();
+      setUserId("");
+      setUserInfo(undefined);
+      setAuthStatus("unauthenticated");
+    } else {
+      logout();
+    }
+  }
+
+  useEffect(() => {
+    if (authStatus === "unauthenticated") return; // login page is shown instead
     listApps()
       .then((list) => {
         setApps(list);
@@ -116,50 +160,45 @@ export default function App() {
         if (preferred) setAppName(preferred);
       })
       .catch((e) => setError(String(e)));
-  }, []);
+  }, [authStatus]);
 
-  // When the app changes: load its sessions and open a fresh one.
+  // When the app (or resolved user) changes: reset to a fresh chat and list
+  // existing sessions. No session is created until the first message is sent.
   useEffect(() => {
-    if (!appName) return;
-    void startNewChat(appName);
+    if (!appName || !userId) return;
+    startNewChat();
     void refreshSessions(appName);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appName]);
+  }, [appName, userId]);
 
   async function refreshSessions(app: string) {
-    setLoadingSessions(true);
     try {
-      const list = await listSessions(app, USER_ID);
+      const list = await listSessions(app, userId);
       // Hydrate events so the sidebar can show a title per session.
       const hydrated = await Promise.all(
         list.map((s) =>
-          s.events?.length ? Promise.resolve(s) : getSession(app, USER_ID, s.id),
+          s.events?.length ? Promise.resolve(s) : getSession(app, userId, s.id),
         ),
       );
       setSessions(hydrated);
     } catch (e) {
       setError(String(e));
-    } finally {
-      setLoadingSessions(false);
     }
   }
 
-  async function startNewChat(app: string) {
+  // Reset to a fresh, not-yet-created chat. The backend session is created
+  // lazily on the first message (see send()).
+  function startNewChat() {
     setError("");
     setGreeting(pickGreeting());
-    try {
-      const id = await createSession(app, USER_ID);
-      setSessionId(id);
-      setTurns([]);
-    } catch (e) {
-      setError(String(e));
-    }
+    setSessionId("");
+    setTurns([]);
   }
 
   async function removeSession(id: string) {
     try {
-      await deleteSession(appName, USER_ID, id);
-      if (id === sessionId) await startNewChat(appName);
+      await deleteSession(appName, userId, id);
+      if (id === sessionId) startNewChat();
       await refreshSessions(appName);
     } catch (e) {
       setError(String(e));
@@ -167,20 +206,38 @@ export default function App() {
   }
 
   async function pickSession(id: string) {
+    if (id === sessionId) return;
     setError("");
+    setLoadingSession(true);
+    setSessionId(id);
     try {
-      const s = await getSession(appName, USER_ID, id);
-      setSessionId(id);
+      const s = await getSession(appName, userId, id);
       setTurns(eventsToTurns(s.events ?? []));
     } catch (e) {
       setError(String(e));
+    } finally {
+      setLoadingSession(false);
     }
   }
 
   async function send(text: string) {
-    if (!text.trim() || !sessionId || busy) return;
+    if (!text.trim() || busy || !appName || !userId) return;
     setError("");
     setBusy(true);
+
+    // Lazily create the backend session on the first message.
+    let sid = sessionId;
+    if (!sid) {
+      try {
+        sid = await createSession(appName, userId);
+        setSessionId(sid);
+      } catch (e) {
+        setError(String(e));
+        setBusy(false);
+        return;
+      }
+    }
+
     setTurns((t) => [
       ...t,
       { role: "user", blocks: [{ kind: "text", text }], meta: { ts: Date.now() / 1000 } },
@@ -191,7 +248,7 @@ export default function App() {
       let acc = emptyAcc();
       let tokens = 0;
       let ts = Date.now() / 1000;
-      for await (const event of runSSE({ appName, userId: USER_ID, sessionId, text })) {
+      for await (const event of runSSE({ appName, userId, sessionId: sid, text })) {
         acc = applyEvent(acc, event);
         const usage = event.usageMetadata ?? event.usage_metadata;
         if (usage?.totalTokenCount) tokens = usage.totalTokenCount;
@@ -219,6 +276,13 @@ export default function App() {
     send(`[ui-action] ${name}: ${JSON.stringify(context)}`);
   }
 
+  if (authStatus === null) {
+    return <div className="boot" />; // resolving identity
+  }
+  if (authStatus === "unauthenticated") {
+    return <LoginPage onUsername={onUsername} />;
+  }
+
   return (
     <div className="layout">
       <Sidebar
@@ -227,11 +291,11 @@ export default function App() {
         onAppChange={setAppName}
         sessions={sessions}
         currentSessionId={sessionId}
-        onNewChat={() => startNewChat(appName)}
+        onNewChat={() => startNewChat()}
         onPickSession={pickSession}
         onDeleteSession={removeSession}
-        onRefresh={() => refreshSessions(appName)}
-        loadingSessions={loadingSessions}
+        userInfo={userInfo}
+        onLogout={onLogout}
       />
 
       {(() => {
@@ -244,13 +308,18 @@ export default function App() {
               setInput("");
               send(text);
             }}
-            disabled={!sessionId}
+            disabled={!appName || !userId}
             busy={busy}
           />
         );
         return (
           <main className="main">
             {error && <div className="error">{error}</div>}
+            {loadingSession && (
+              <div className="session-loading">
+                <Loader2 className="icon spin" /> 加载会话…
+              </div>
+            )}
 
             {turns.length === 0 ? (
               <div className="welcome">
@@ -265,18 +334,32 @@ export default function App() {
             if (turn.role === "user") {
               const text = turn.blocks.map((b) => ("text" in b ? b.text : "")).join("");
               return (
-                <div key={i} className="turn turn--user">
-                  <div className="bubble">{text}</div>
+                <motion.div
+                  key={i}
+                  className="turn turn--user"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.2, ease: "easeOut" }}
+                >
+                  <div className="bubble">
+                    <Markdown text={text} />
+                  </div>
                   <div className="turn-actions turn-actions--right">
                     {turn.meta?.ts && <span className="meta-text">{fmtTime(turn.meta.ts)}</span>}
                     <CopyButton text={text} />
                   </div>
-                </div>
+                </motion.div>
               );
             }
             const pending = turn.blocks.length === 0;
             return (
-              <div key={i} className="turn turn--assistant">
+              <motion.div
+                key={i}
+                className="turn turn--assistant"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.2, ease: "easeOut" }}
+              >
                 {pending ? (
                   isLast && busy ? <ThinkingPlaceholder /> : null
                 ) : (
@@ -297,7 +380,7 @@ export default function App() {
                     </div>
                   </>
                 )}
-              </div>
+              </motion.div>
             );
           })}
                 </div>
