@@ -34,4 +34,4 @@ done
 
 cd "$SRC"
 git sparse-checkout set veadk
-uv pip install ".[a2ui]"
+uv pip install ".[a2ui,pdf]"
