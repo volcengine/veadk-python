@@ -52,6 +52,13 @@ export function emptyAcc(): Acc {
 const fnCall = (p: AdkPart) => p.functionCall ?? p.function_call;
 const fnResp = (p: AdkPart) => p.functionResponse ?? p.function_response;
 
+/** ADK/genai serialises inline_data bytes as URL-safe base64 (-_), but a
+ *  `data:` URI requires standard base64 (+/). Convert so reloaded images
+ *  render instead of failing to a broken <img>. */
+function toStdBase64(b64: string): string {
+  return b64.replace(/-/g, "+").replace(/_/g, "/");
+}
+
 /** Pull file attachments (inline_data) out of a message's parts. */
 export function attachmentsFromParts(parts: AdkPart[]): AttachmentView[] {
   const files: AttachmentView[] = [];
@@ -60,7 +67,7 @@ export function attachmentsFromParts(parts: AdkPart[]): AttachmentView[] {
     if (d && d.data) {
       files.push({
         mimeType: d.mimeType ?? d.mime_type,
-        data: d.data,
+        data: toStdBase64(d.data),
         name: d.displayName ?? d.display_name,
       });
     }

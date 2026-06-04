@@ -20,6 +20,11 @@ export interface AdkEvent {
   timestamp?: number;
   usageMetadata?: AdkUsage;
   usage_metadata?: AdkUsage;
+  // Set when the model/run fails; /run_sse emits it as a `data: {"error": ...}`
+  // frame (also seen as errorMessage / error_message).
+  error?: string;
+  errorMessage?: string;
+  error_message?: string;
   content?: {
     role?: string;
     parts?: AdkPart[];

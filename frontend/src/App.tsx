@@ -297,6 +297,11 @@ export default function App() {
         text,
         attachments: atts,
       })) {
+        const errMsg = event.error ?? event.errorMessage ?? event.error_message;
+        if (typeof errMsg === "string" && errMsg) {
+          setError(errMsg);
+          break;
+        }
         acc = applyEvent(acc, event);
         const usage = event.usageMetadata ?? event.usage_metadata;
         if (usage?.totalTokenCount) tokens = usage.totalTokenCount;
