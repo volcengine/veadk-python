@@ -231,8 +231,10 @@ def frontend(
 
     # Agent introspection for the UI's agent picker (name, model, tools). Reuses
     # ADK's AgentLoader, which caches each loaded `root_agent`.
-    from fastapi import HTTPException
+    from fastapi import HTTPException, Request
+    from fastapi.responses import Response
     from google.adk.cli.utils.agent_loader import AgentLoader
+    import httpx
 
     _agent_loader = AgentLoader(agents_dir)
 
@@ -350,6 +352,37 @@ def frontend(
         ]
         return {"mounted": True, "results": results}
 
+    # ---- Skill Hub proxy: proxy /skillhub/* to skills.volces.com ----
+    SKILLHUB_TARGET = "https://skills.volces.com"
+
+    @app.api_route("/skillhub/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    async def _skillhub_proxy(request: Request, path: str):
+        """Proxy requests to Volcengine Skill Hub API to avoid CORS issues."""
+        target_url = f"{SKILLHUB_TARGET}/{path}"
+        if request.url.query:
+            target_url += f"?{request.url.query}"
+
+        headers = dict(request.headers)
+        headers.pop("host", None)
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.request(
+                    method=request.method,
+                    url=target_url,
+                    headers=headers,
+                    content=await request.body(),
+                    timeout=30.0,
+                )
+                return Response(
+                    content=response.content,
+                    status_code=response.status_code,
+                    headers=dict(response.headers),
+                )
+        except Exception as e:
+            logger.error(f"Skillhub proxy error: {e}")
+            raise HTTPException(status_code=502, detail=f"Proxy error: {str(e)}")
+
     # ---- SSO (optional): VeIdentity user pool, or a generic provider via env ----
     redirect_uri = oauth2_redirect_uri or f"http://{host}:{port}/oauth2/callback"
     pool_ok = oauth2_user_pool or oauth2_user_pool_uid
@@ -406,7 +439,7 @@ def frontend(
             app,
             oauth2_config,
             exempt_paths={"/", "/index.html", "/favicon.ico", "/web/auth-config"},
-            exempt_prefixes={"/assets"},
+            exempt_prefixes={"/assets", "/skillhub"},
         )
         logger.info(
             f"OAuth2 SSO enabled (provider={provider_id}, redirect_uri={redirect_uri})"
