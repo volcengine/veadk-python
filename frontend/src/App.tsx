@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check, Copy, Loader2 } from "lucide-react";
+import { Check, Copy, FileText, Loader2 } from "lucide-react";
 import { motion } from "motion/react";
 import {
   createSession,
@@ -9,6 +9,7 @@ import {
   listSessions,
   runSSE,
   type AdkSession,
+  type Attachment,
 } from "./adk/client";
 import { applyEvent, emptyAcc, eventsToTurns, type Turn } from "./blocks";
 import { Sidebar } from "./ui/Sidebar";
@@ -104,6 +105,22 @@ const GREETINGS = [
 ];
 const pickGreeting = () => GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
 
+const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20 MB/file (base64 inflates ~33%)
+
+/** Read a File as base64 (without the `data:...;base64,` prefix). */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const res = String(reader.result);
+      const comma = res.indexOf(",");
+      resolve(comma >= 0 ? res.slice(comma + 1) : res);
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function App() {
   const [apps, setApps] = useState<string[]>([]);
   const [appName, setAppName] = useState("");
@@ -111,6 +128,7 @@ export default function App() {
   const [sessionId, setSessionId] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [traceOpen, setTraceOpen] = useState(false);
@@ -220,8 +238,25 @@ export default function App() {
     }
   }
 
-  async function send(text: string) {
-    if (!text.trim() || busy || !appName || !userId) return;
+  async function addFiles(files: FileList | File[]) {
+    const picked: Attachment[] = [];
+    for (const f of Array.from(files)) {
+      if (f.size > MAX_FILE_BYTES) {
+        setError(`文件过大（>20MB）：${f.name}`);
+        continue;
+      }
+      const data = await fileToBase64(f);
+      picked.push({
+        mimeType: f.type || "application/octet-stream",
+        data,
+        name: f.name,
+      });
+    }
+    if (picked.length) setAttachments((a) => [...a, ...picked]);
+  }
+
+  async function send(text: string, atts: Attachment[] = []) {
+    if ((!text.trim() && atts.length === 0) || busy || !appName || !userId) return;
     setError("");
     setBusy(true);
 
@@ -238,9 +273,16 @@ export default function App() {
       }
     }
 
+    const userBlocks: Turn["blocks"] = [];
+    if (atts.length)
+      userBlocks.push({
+        kind: "attachment",
+        files: atts.map((a) => ({ mimeType: a.mimeType, data: a.data, name: a.name })),
+      });
+    if (text.trim()) userBlocks.push({ kind: "text", text });
     setTurns((t) => [
       ...t,
-      { role: "user", blocks: [{ kind: "text", text }], meta: { ts: Date.now() / 1000 } },
+      { role: "user", blocks: userBlocks, meta: { ts: Date.now() / 1000 } },
       { role: "assistant", blocks: [] },
     ]);
 
@@ -248,7 +290,18 @@ export default function App() {
       let acc = emptyAcc();
       let tokens = 0;
       let ts = Date.now() / 1000;
-      for await (const event of runSSE({ appName, userId, sessionId: sid, text })) {
+      for await (const event of runSSE({
+        appName,
+        userId,
+        sessionId: sid,
+        text,
+        attachments: atts,
+      })) {
+        const errMsg = event.error ?? event.errorMessage ?? event.error_message;
+        if (typeof errMsg === "string" && errMsg) {
+          setError(errMsg);
+          break;
+        }
         acc = applyEvent(acc, event);
         const usage = event.usageMetadata ?? event.usage_metadata;
         if (usage?.totalTokenCount) tokens = usage.totalTokenCount;
@@ -305,11 +358,18 @@ export default function App() {
             onChange={setInput}
             onSubmit={() => {
               const text = input;
+              const atts = attachments;
               setInput("");
-              send(text);
+              setAttachments([]);
+              send(text, atts);
             }}
             disabled={!appName || !userId}
             busy={busy}
+            attachments={attachments}
+            onAddFiles={addFiles}
+            onRemoveAttachment={(i) =>
+              setAttachments((a) => a.filter((_, j) => j !== i))
+            }
           />
         );
         return (
@@ -332,7 +392,10 @@ export default function App() {
                   {turns.map((turn, i) => {
             const isLast = i === turns.length - 1;
             if (turn.role === "user") {
-              const text = turn.blocks.map((b) => ("text" in b ? b.text : "")).join("");
+              const text = turn.blocks.map((b) => (b.kind === "text" ? b.text : "")).join("");
+              const atts = turn.blocks.flatMap((b) =>
+                b.kind === "attachment" ? b.files : [],
+              );
               return (
                 <motion.div
                   key={i}
@@ -341,9 +404,30 @@ export default function App() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.2, ease: "easeOut" }}
                 >
-                  <div className="bubble">
-                    <Markdown text={text} />
-                  </div>
+                  {atts.length > 0 && (
+                    <div className="msg-attachments">
+                      {atts.map((f, j) =>
+                        f.mimeType?.startsWith("image/") && f.data ? (
+                          <img
+                            key={j}
+                            className="attachment-thumb"
+                            src={`data:${f.mimeType};base64,${f.data}`}
+                            alt={f.name ?? "image"}
+                          />
+                        ) : (
+                          <div key={j} className="attachment-file">
+                            <FileText className="icon" />
+                            <span className="attachment-file-name">{f.name ?? "文件"}</span>
+                          </div>
+                        ),
+                      )}
+                    </div>
+                  )}
+                  {text && (
+                    <div className="bubble">
+                      <Markdown text={text} />
+                    </div>
+                  )}
                   <div className="turn-actions turn-actions--right">
                     {turn.meta?.ts && <span className="meta-text">{fmtTime(turn.meta.ts)}</span>}
                     <CopyButton text={text} />

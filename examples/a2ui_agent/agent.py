@@ -22,6 +22,7 @@ then open http://127.0.0.1:8000 and ask e.g. "show me a flight status card".
 """
 
 from veadk import Agent
+from veadk.utils.pdf_to_images import pdf_to_images_before_model_callback
 
 INSTRUCTION = """You are a helpful assistant that can render rich UI.
 
@@ -38,6 +39,9 @@ agent = Agent(
     description="Demo agent that replies with A2UI rich UI.",
     instruction=INSTRUCTION,
     enable_a2ui=True,
+    # Uploaded PDFs are rendered to page images so the vision model can read
+    # them. The default model (doubao-seed-1.6) is vision-capable.
+    before_model_callback=pdf_to_images_before_model_callback,
 )
 
 # Required by the Google ADK agent loader.

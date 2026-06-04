@@ -14,7 +14,7 @@ basic-app/
 ├── agents/
 │   └── basic_app_agent/         # backend agent (A2UI on), exposes root_agent
 ├── agentkit.yaml                # AgentKit deployment config (build_script wired)
-├── scripts/install_veadk.sh     # installs veadk[a2ui] from feat/a2ui (build time)
+├── scripts/install_veadk.sh     # installs veadk[a2ui,pdf] (build time)
 ├── requirements.txt             # empty (veadk is installed by the build script)
 ├── .dockerignore
 └── .env.example
@@ -50,7 +50,7 @@ cp .env.example .env
 ## 2. Run locally (optional)
 
 ```bash
-pip install "veadk-python[a2ui]"
+pip install "veadk-python[a2ui,pdf]"
 python app.py            # or: python -m app
 # open http://127.0.0.1:8000
 ```
@@ -58,6 +58,14 @@ python app.py            # or: python -m app
 You should see the web UI; ask e.g. "show me a flight status card" and the agent
 replies with rich A2UI. `/list-apps` returns `["basic_app_agent"]` and `/ping`
 returns `{"status": "ok"}`.
+
+### Attachments (image / PDF)
+
+The composer's **+** button uploads **images** and **PDFs**. Images are sent to
+the (vision-capable) model directly; PDFs are rendered to page images by a
+`before_model_callback` (`veadk.utils.pdf_to_images`) so the model can read them
+— this needs the `pdf` extra (included in `[a2ui,pdf]` above) and a
+vision-capable model (the default `doubao-seed-1.6` is).
 
 ## 3. Deploy to AgentKit
 

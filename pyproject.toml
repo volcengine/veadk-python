@@ -69,6 +69,10 @@ speech = []
 a2ui = [
     "a2ui-agent-sdk>=0.2.1",        # For A2UI agent-driven UI (https://a2ui.org)
 ]
+pdf = [
+    "pypdfium2>=4.30.0",            # For rendering PDF pages to images (Apache/BSD)
+    "pillow>=10.0.0",              # For encoding rendered pages as PNG
+]
 eval = [
     "prometheus-client>=0.22.1",    # For exporting data to Prometheus pushgateway
     "deepeval>=3.2.6",              # For DeepEval-based evaluation

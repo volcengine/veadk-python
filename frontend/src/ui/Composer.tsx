@@ -1,6 +1,7 @@
-import { useLayoutEffect, useRef } from "react";
-import { ArrowUp, Loader2, Plus } from "lucide-react";
+import { useLayoutEffect, useRef, useState } from "react";
+import { ArrowUp, FileText, ImageIcon, Loader2, Plus, X } from "lucide-react";
 import { motion } from "motion/react";
+import type { Attachment } from "../adk/client";
 
 export interface ComposerProps {
   value: string;
@@ -8,10 +9,25 @@ export interface ComposerProps {
   onSubmit: () => void;
   disabled: boolean; // not connected yet
   busy: boolean; // a turn is streaming
+  attachments: Attachment[];
+  onAddFiles: (files: FileList | File[]) => void;
+  onRemoveAttachment: (index: number) => void;
 }
 
-export function Composer({ value, onChange, onSubmit, disabled, busy }: ComposerProps) {
+export function Composer({
+  value,
+  onChange,
+  onSubmit,
+  disabled,
+  busy,
+  attachments,
+  onAddFiles,
+  onRemoveAttachment,
+}: ComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  const imageInput = useRef<HTMLInputElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   // Auto-grow the textarea up to a max height, then scroll.
   useLayoutEffect(() => {
@@ -21,14 +37,72 @@ export function Composer({ value, onChange, onSubmit, disabled, busy }: Composer
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [value]);
 
-  const canSend = !disabled && !busy && value.trim().length > 0;
+  const canSend =
+    !disabled && !busy && (value.trim().length > 0 || attachments.length > 0);
+
+  function pick(input: React.RefObject<HTMLInputElement>) {
+    setMenuOpen(false);
+    input.current?.click();
+  }
+
+  function onInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    if (e.target.files && e.target.files.length) onAddFiles(e.target.files);
+    e.target.value = ""; // allow re-picking the same file
+  }
 
   return (
     <div className="composer">
+      {attachments.length > 0 && (
+        <div className="attachment-row">
+          {attachments.map((a, i) => (
+            <AttachmentChip
+              key={i}
+              mimeType={a.mimeType}
+              data={a.data}
+              name={a.name}
+              onRemove={() => onRemoveAttachment(i)}
+            />
+          ))}
+        </div>
+      )}
+
       <div className="composer-box">
-        <button type="button" className="comp-icon" title="添加" tabIndex={-1}>
-          <Plus className="icon" />
-        </button>
+        <div className="composer-menu-wrap">
+          <button
+            type="button"
+            className="comp-icon"
+            title="添加"
+            aria-label="添加"
+            disabled={disabled}
+            onClick={() => setMenuOpen((o) => !o)}
+          >
+            <Plus className="icon" />
+          </button>
+          {menuOpen && (
+            <>
+              <div className="menu-scrim" onClick={() => setMenuOpen(false)} />
+              <div className="composer-menu" role="menu">
+                <button
+                  type="button"
+                  className="menu-item"
+                  onClick={() => pick(imageInput)}
+                >
+                  <ImageIcon className="icon" />
+                  上传图片
+                </button>
+                <button
+                  type="button"
+                  className="menu-item"
+                  onClick={() => pick(fileInput)}
+                >
+                  <FileText className="icon" />
+                  上传文件 (PDF)
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+
         <textarea
           ref={ref}
           className="comp-input scroll"
@@ -56,6 +130,62 @@ export function Composer({ value, onChange, onSubmit, disabled, busy }: Composer
           {busy ? <Loader2 className="icon spin" /> : <ArrowUp className="icon" />}
         </motion.button>
       </div>
+
+      {/* hidden pickers */}
+      <input
+        ref={imageInput}
+        type="file"
+        accept="image/*"
+        multiple
+        hidden
+        onChange={onInputChange}
+      />
+      <input
+        ref={fileInput}
+        type="file"
+        accept="application/pdf"
+        multiple
+        hidden
+        onChange={onInputChange}
+      />
+    </div>
+  );
+}
+
+function AttachmentChip({
+  mimeType,
+  data,
+  name,
+  onRemove,
+}: {
+  mimeType: string;
+  data: string;
+  name?: string;
+  onRemove: () => void;
+}) {
+  const isImage = mimeType.startsWith("image/");
+  return (
+    <div className={isImage ? "attachment-thumb-wrap" : "attachment-file"}>
+      {isImage ? (
+        <img
+          className="attachment-thumb"
+          src={`data:${mimeType};base64,${data}`}
+          alt={name ?? "image"}
+        />
+      ) : (
+        <>
+          <FileText className="icon" />
+          <span className="attachment-file-name">{name ?? "file.pdf"}</span>
+        </>
+      )}
+      <button
+        type="button"
+        className="attachment-remove"
+        aria-label="移除"
+        onClick={onRemove}
+      >
+        <X className="icon" />
+      </button>
     </div>
   );
 }

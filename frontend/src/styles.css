@@ -657,6 +657,86 @@ body {
 .comp-send:active:not(:disabled) { transform: scale(0.94); }
 .comp-send:disabled { opacity: 0.3; cursor: default; }
 
+/* ---------- composer "+" upload menu ---------- */
+.composer-menu-wrap { position: relative; flex-shrink: 0; }
+.composer-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  z-index: 31;
+  min-width: 168px;
+  margin-bottom: 6px;
+  padding: 4px;
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  box-shadow: 0 6px 20px hsl(var(--foreground) / 0.12);
+}
+
+/* ---------- pending attachments (composer) ---------- */
+.attachment-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 8px 8px;
+}
+.attachment-thumb-wrap { position: relative; }
+.attachment-thumb {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 12px;
+  border: 1px solid hsl(var(--border));
+  display: block;
+}
+.attachment-file {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 200px;
+  padding: 8px 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+  font-size: 13px;
+}
+.attachment-file .icon { width: 16px; height: 16px; flex-shrink: 0; }
+.attachment-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid hsl(var(--border));
+  border-radius: 50%;
+  background: hsl(var(--background));
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+}
+.attachment-remove:hover { color: hsl(var(--foreground)); }
+.attachment-remove .icon { width: 11px; height: 11px; }
+
+/* ---------- attachments on a sent user turn ---------- */
+.msg-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.msg-attachments .attachment-thumb { width: 120px; height: 120px; }
+
 /* ---------- A2UI rendered surfaces ---------- */
 .a2ui-surface { max-width: 360px; width: 100%; font-size: 14px; }
 .a2ui-card {
