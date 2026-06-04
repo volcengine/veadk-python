@@ -1,0 +1,450 @@
+import { useMemo, useRef, useState } from "react";
+import {
+  ChevronRight,
+  Download,
+  File,
+  FilePlus,
+  Folder,
+  Loader2,
+  Pencil,
+  Rocket,
+  Trash2,
+} from "lucide-react";
+// Use the core build + register only the languages we map, so we don't ship
+// all ~190 highlight.js grammars (keeps the bundle small).
+import hljs from "highlight.js/lib/core";
+import python from "highlight.js/lib/languages/python";
+import typescript from "highlight.js/lib/languages/typescript";
+import javascript from "highlight.js/lib/languages/javascript";
+import json from "highlight.js/lib/languages/json";
+import yaml from "highlight.js/lib/languages/yaml";
+import markdown from "highlight.js/lib/languages/markdown";
+import bash from "highlight.js/lib/languages/bash";
+import ini from "highlight.js/lib/languages/ini";
+import dockerfile from "highlight.js/lib/languages/dockerfile";
+import makefile from "highlight.js/lib/languages/makefile";
+hljs.registerLanguage("python", python);
+hljs.registerLanguage("typescript", typescript);
+hljs.registerLanguage("javascript", javascript);
+hljs.registerLanguage("json", json);
+hljs.registerLanguage("yaml", yaml);
+hljs.registerLanguage("markdown", markdown);
+hljs.registerLanguage("bash", bash);
+hljs.registerLanguage("ini", ini);
+hljs.registerLanguage("dockerfile", dockerfile);
+hljs.registerLanguage("makefile", makefile);
+import type { AgentProject, ProjectFile } from "../create/project";
+import { buildZip } from "./zip";
+import "./ProjectPreview.css";
+
+// --- syntax highlighting ----------------------------------------------------
+
+/** Map a file extension (without dot, lowercased) to an hljs language id. */
+const EXT_LANG: Record<string, string> = {
+  py: "python",
+  pyi: "python",
+  ts: "typescript",
+  tsx: "typescript",
+  mts: "typescript",
+  cts: "typescript",
+  js: "javascript",
+  jsx: "javascript",
+  mjs: "javascript",
+  cjs: "javascript",
+  json: "json",
+  jsonc: "json",
+  yaml: "yaml",
+  yml: "yaml",
+  md: "markdown",
+  markdown: "markdown",
+  sh: "bash",
+  bash: "bash",
+  zsh: "bash",
+  toml: "ini",
+  ini: "ini",
+  cfg: "ini",
+  conf: "ini",
+  env: "ini",
+  txt: "plaintext",
+};
+
+/** Map well-known full filenames to an hljs language id. */
+const NAME_LANG: Record<string, string> = {
+  dockerfile: "dockerfile",
+  "requirements.txt": "plaintext",
+  "requirements-dev.txt": "plaintext",
+  ".env": "ini",
+  ".gitignore": "plaintext",
+  "makefile": "makefile",
+};
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+/** Pick an hljs language id for a given file path. Returns null when unknown. */
+function languageFor(path: string): string | null {
+  const file = path.split("/").pop() ?? path;
+  const lower = file.toLowerCase();
+  if (NAME_LANG[lower]) return NAME_LANG[lower];
+  // Handle dotfiles / extensionless names like `.env`, `Dockerfile`.
+  if (lower.startsWith("dockerfile")) return "dockerfile";
+  if (lower.startsWith(".env")) return "ini";
+  const dot = lower.lastIndexOf(".");
+  if (dot === -1) return null;
+  const ext = lower.slice(dot + 1);
+  return EXT_LANG[ext] ?? null;
+}
+
+/** Produce highlighted HTML for the given file content. */
+function highlight(content: string, path: string): string {
+  try {
+    const lang = languageFor(path);
+    if (lang && hljs.getLanguage(lang)) {
+      return hljs.highlight(content, { language: lang, ignoreIllegals: true }).value;
+    }
+    if (lang === null) {
+      // Unknown extension: let hljs guess.
+      return hljs.highlightAuto(content).value;
+    }
+    // Known mapping but language not registered: render as plaintext.
+    return escapeHtml(content);
+  } catch {
+    return escapeHtml(content);
+  }
+}
+
+export interface ProjectPreviewProps {
+  project: AgentProject;
+  /** When provided, files are editable and changes call onChange with the new project. Omit for read-only. */
+  onChange?: (project: AgentProject) => void;
+  /** One-click deploy handler. Omit to hide the deploy button. */
+  onDeploy?: (project: AgentProject) => void | Promise<void>;
+}
+
+// --- tree model -------------------------------------------------------------
+
+interface TreeNode {
+  name: string;
+  /** Full path for file nodes; undefined for folder nodes. */
+  path?: string;
+  children: Map<string, TreeNode>;
+}
+
+function buildTree(files: ProjectFile[]): TreeNode {
+  const root: TreeNode = { name: "", children: new Map() };
+  for (const f of files) {
+    const parts = f.path.split("/").filter(Boolean);
+    let node = root;
+    parts.forEach((part, i) => {
+      let child = node.children.get(part);
+      if (!child) {
+        child = { name: part, children: new Map() };
+        node.children.set(part, child);
+      }
+      if (i === parts.length - 1) child.path = f.path;
+      node = child;
+    });
+  }
+  return root;
+}
+
+function sortedChildren(node: TreeNode): TreeNode[] {
+  return [...node.children.values()].sort((a, b) => {
+    const aFolder = a.children.size > 0 && a.path === undefined;
+    const bFolder = b.children.size > 0 && b.path === undefined;
+    if (aFolder !== bFolder) return aFolder ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+// --- component --------------------------------------------------------------
+
+export function ProjectPreview({ project, onChange, onDeploy }: ProjectPreviewProps) {
+  const editable = typeof onChange === "function";
+
+  const [selected, setSelected] = useState<string | null>(
+    project.files[0]?.path ?? null,
+  );
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [adding, setAdding] = useState(false);
+  const [newPath, setNewPath] = useState("");
+  const [deploying, setDeploying] = useState(false);
+  const [deployError, setDeployError] = useState<string | null>(null);
+  const underlayRef = useRef<HTMLPreElement>(null);
+
+  const tree = useMemo(() => buildTree(project.files), [project.files]);
+
+  const selectedFile =
+    project.files.find((f) => f.path === selected) ?? null;
+
+  function toggleFolder(key: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function commitFiles(files: ProjectFile[], nextSelected?: string | null) {
+    if (!onChange) return;
+    onChange({ ...project, files });
+    if (nextSelected !== undefined) setSelected(nextSelected);
+  }
+
+  function handleEdit(content: string) {
+    if (!selectedFile) return;
+    commitFiles(
+      project.files.map((f) =>
+        f.path === selectedFile.path ? { ...f, content } : f,
+      ),
+    );
+  }
+
+  function handleAddSubmit() {
+    const path = newPath.trim();
+    setAdding(false);
+    setNewPath("");
+    if (!path) return;
+    if (project.files.some((f) => f.path === path)) {
+      setSelected(path);
+      return;
+    }
+    commitFiles([...project.files, { path, content: "" }], path);
+  }
+
+  function handleRename() {
+    if (!selectedFile) return;
+    const next = window.prompt("重命名文件", selectedFile.path);
+    const path = next?.trim();
+    if (!path || path === selectedFile.path) return;
+    if (project.files.some((f) => f.path === path)) return;
+    commitFiles(
+      project.files.map((f) =>
+        f.path === selectedFile.path ? { ...f, path } : f,
+      ),
+      path,
+    );
+  }
+
+  function handleDelete() {
+    if (!selectedFile) return;
+    const remaining = project.files.filter((f) => f.path !== selectedFile.path);
+    commitFiles(remaining, remaining[0]?.path ?? null);
+  }
+
+  async function handleDeploy() {
+    if (!onDeploy || deploying) return;
+    setDeployError(null);
+    setDeploying(true);
+    try {
+      await onDeploy(project);
+    } catch (err) {
+      setDeployError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeploying(false);
+    }
+  }
+
+  function handleDownloadZip() {
+    const blob = buildZip(project.files);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${project.name || "project"}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function renderNode(node: TreeNode, depth: number, prefix: string) {
+    return sortedChildren(node).map((child) => {
+      const key = prefix ? `${prefix}/${child.name}` : child.name;
+      const isFile = child.path !== undefined;
+      const pad = { paddingLeft: 8 + depth * 14 };
+
+      if (isFile) {
+        const active = child.path === selected;
+        return (
+          <button
+            key={key}
+            type="button"
+            className={`pp-row pp-file${active ? " pp-active" : ""}`}
+            style={pad}
+            onClick={() => setSelected(child.path!)}
+            title={child.path}
+          >
+            <File className="pp-ic" />
+            <span className="pp-label">{child.name}</span>
+          </button>
+        );
+      }
+
+      const isCollapsed = collapsed.has(key);
+      return (
+        <div key={key}>
+          <button
+            type="button"
+            className="pp-row pp-folder"
+            style={pad}
+            onClick={() => toggleFolder(key)}
+          >
+            <ChevronRight className={`pp-ic pp-chevron${isCollapsed ? "" : " pp-open"}`} />
+            <Folder className="pp-ic" />
+            <span className="pp-label">{child.name}</span>
+          </button>
+          {!isCollapsed && renderNode(child, depth + 1, key)}
+        </div>
+      );
+    });
+  }
+
+  return (
+    <div className="pp-root">
+      <div className="pp-sidebar">
+        <div className="pp-sidebar-head">
+          <span className="pp-project-name" title={project.name}>
+            {project.name || "Project"}
+          </span>
+          {editable && (
+            <button
+              type="button"
+              className="pp-icon-btn"
+              title="新建文件"
+              onClick={() => {
+                setAdding(true);
+                setNewPath("");
+              }}
+            >
+              <FilePlus className="pp-ic" />
+            </button>
+          )}
+        </div>
+
+        <div className="pp-tree">
+          {adding && (
+            <input
+              className="pp-new-input"
+              autoFocus
+              placeholder="path/to/file.py"
+              value={newPath}
+              onChange={(e) => setNewPath(e.target.value)}
+              onBlur={handleAddSubmit}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleAddSubmit();
+                if (e.key === "Escape") {
+                  setAdding(false);
+                  setNewPath("");
+                }
+              }}
+            />
+          )}
+          {project.files.length === 0 && !adding ? (
+            <div className="pp-empty">暂无文件</div>
+          ) : (
+            renderNode(tree, 0, "")
+          )}
+        </div>
+      </div>
+
+      <div className="pp-main">
+        <div className="pp-main-head">
+          <span className="pp-path" title={selectedFile?.path}>
+            {selectedFile?.path ?? "未选择文件"}
+          </span>
+          <div className="pp-actions">
+            {editable && selectedFile && (
+              <>
+                <button
+                  type="button"
+                  className="pp-icon-btn"
+                  title="重命名"
+                  onClick={handleRename}
+                >
+                  <Pencil className="pp-ic" />
+                </button>
+                <button
+                  type="button"
+                  className="pp-icon-btn pp-danger"
+                  title="删除"
+                  onClick={handleDelete}
+                >
+                  <Trash2 className="pp-ic" />
+                </button>
+              </>
+            )}
+            {project.files.length > 0 && (
+              <button
+                type="button"
+                className="pp-secondary"
+                title="下载 ZIP"
+                onClick={handleDownloadZip}
+              >
+                <Download className="pp-ic" />
+                下载 ZIP
+              </button>
+            )}
+            {onDeploy && (
+              <button
+                type="button"
+                className="pp-deploy"
+                onClick={handleDeploy}
+                disabled={deploying}
+              >
+                {deploying ? (
+                  <Loader2 className="pp-ic spin" />
+                ) : (
+                  <Rocket className="pp-ic" />
+                )}
+                部署到 AgentKit
+              </button>
+            )}
+          </div>
+        </div>
+
+        {deployError && <div className="pp-error">{deployError}</div>}
+
+        <div className="pp-content">
+          {selectedFile == null ? (
+            <div className="pp-placeholder">选择左侧文件以查看内容</div>
+          ) : editable ? (
+            <div className="pp-editor-wrap">
+              <pre className="pp-hl hljs" aria-hidden="true" ref={underlayRef}>
+                <code
+                  dangerouslySetInnerHTML={{
+                    __html: highlight(selectedFile.content, selectedFile.path),
+                  }}
+                />
+              </pre>
+              <textarea
+                className="pp-input"
+                spellCheck={false}
+                value={selectedFile.content}
+                onChange={(e) => handleEdit(e.target.value)}
+                onScroll={(e) => {
+                  const el = underlayRef.current;
+                  if (!el) return;
+                  el.scrollTop = e.currentTarget.scrollTop;
+                  el.scrollLeft = e.currentTarget.scrollLeft;
+                }}
+              />
+            </div>
+          ) : (
+            <pre className="pp-pre hljs">
+              <code
+                dangerouslySetInnerHTML={{
+                  __html: highlight(selectedFile.content, selectedFile.path),
+                }}
+              />
+            </pre>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

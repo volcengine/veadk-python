@@ -144,7 +144,11 @@ export function Blocks({ blocks, onAction }: BlocksProps) {
               <ToolBlock key={i} name={b.name} args={b.args} response={b.response} done={b.done} />
             );
           case "a2ui":
-            return buildSurfaces(b.messages).map((s) => (
+            // Skip surfaces with no renderable root (e.g. a createSurface that
+            // was never followed by updateComponents) so we don't emit an empty box.
+            return buildSurfaces(b.messages)
+              .filter((s) => s.components[s.rootId])
+              .map((s) => (
               <motion.div
                 key={`${i}-${s.surfaceId}`}
                 initial={{ opacity: 0, y: 8, scale: 0.985 }}

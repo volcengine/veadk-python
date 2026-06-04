@@ -1,0 +1,74 @@
+// Serialize an AgentDraft to / from a human-readable "agent structure" YAML.
+// The YAML mirrors the codegen config shape (the same fields normalizeDraft
+// reads + selectedSkills), so it round-trips cleanly and can be imported back
+// into the custom-mode wizard.
+
+import { parse, stringify } from "yaml";
+import { normalizeDraft } from "./codegen";
+import type { AgentDraft } from "./types";
+
+/** Build a clean, minimal config object (omit empty/false fields). */
+function toConfig(draft: AgentDraft): Record<string, unknown> {
+  const o: Record<string, unknown> = {
+    name: draft.name,
+    description: draft.description,
+    instruction: draft.instruction,
+  };
+  if (draft.modelName?.trim()) o.modelName = draft.modelName.trim();
+  if (draft.modelProvider?.trim()) o.modelProvider = draft.modelProvider.trim();
+  if (draft.modelApiBase?.trim()) o.modelApiBase = draft.modelApiBase.trim();
+  if (draft.builtinTools?.length) o.builtinTools = [...draft.builtinTools];
+  if (draft.customTools?.length)
+    o.customTools = draft.customTools.map((t) => ({ name: t.name, description: t.description }));
+  if (draft.mcpTools?.length)
+    o.mcpTools = draft.mcpTools.map((m) => {
+      const e: Record<string, unknown> = { name: m.name, transport: m.transport };
+      if (m.url?.trim()) e.url = m.url.trim();
+      if (m.authToken?.trim()) e.authToken = m.authToken.trim();
+      if (m.command?.trim()) e.command = m.command.trim();
+      if (m.args?.length) e.args = m.args;
+      return e;
+    });
+  if (draft.memory?.shortTerm || draft.memory?.longTerm) {
+    o.memory = { shortTerm: !!draft.memory.shortTerm, longTerm: !!draft.memory.longTerm };
+    if (draft.memory.shortTerm) o.shortTermBackend = draft.shortTermBackend || "local";
+    if (draft.memory.longTerm) {
+      o.longTermBackend = draft.longTermBackend || "local";
+      o.autoSaveSession = !!draft.autoSaveSession;
+    }
+  }
+  if (draft.knowledgebase) {
+    o.knowledgebase = true;
+    o.knowledgebaseBackend = draft.knowledgebaseBackend || "local";
+  }
+  if (draft.tracing && draft.tracingExporters?.length) {
+    o.tracing = true;
+    o.tracingExporters = [...draft.tracingExporters];
+  }
+  if (draft.enableA2ui) o.enableA2ui = true;
+  if (draft.selectedSkills?.length)
+    o.selectedSkills = draft.selectedSkills.map((s) => ({ slug: s.slug, name: s.name, namespace: s.namespace }));
+  if (draft.subAgents?.length)
+    o.subAgents = draft.subAgents.map((sa) => {
+      const s: Record<string, unknown> = { name: sa.name, description: sa.description, instruction: sa.instruction };
+      if (sa.builtinTools?.length) s.builtinTools = [...sa.builtinTools];
+      if (sa.customTools?.length) s.customTools = sa.customTools.map((t) => ({ name: t.name, description: t.description }));
+      return s;
+    });
+  return o;
+}
+
+export function draftToYaml(draft: AgentDraft): string {
+  return (
+    "# VeADK Agent 结构配置\n" +
+    "# 可在「创建 Agent」页通过「导入 YAML」重新载入。\n" +
+    stringify(toConfig(draft))
+  );
+}
+
+/** Parse an agent-structure YAML back into a normalized AgentDraft. Throws on
+ *  invalid YAML. */
+export function yamlToDraft(text: string): AgentDraft {
+  const obj = parse(text);
+  return normalizeDraft(obj);
+}
