@@ -1,0 +1,349 @@
+/* TemplateCreate — preset agent gallery.
+ * Minimal, ChatGPT/OpenAI-style monochrome: restrained grayscale, subtle 1px
+ * borders, soft hover/active tints, no colored backgrounds or badges.
+ * All classes prefixed `tpl-`. */
+
+.tpl-root {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* internal back link (detail → gallery only) */
+.tpl-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 18px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: hsl(var(--muted-foreground));
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.tpl-back:hover {
+  background: hsl(var(--foreground) / 0.05);
+  color: hsl(var(--foreground));
+}
+.tpl-back .icon {
+  width: 15px;
+  height: 15px;
+}
+
+/* scroll region fills the whole panel */
+.tpl-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 24px 28px 40px;
+}
+/* detail view: align the back button's left edge with the Navbar
+ * (.navbar in styles.css has `padding: 10px 14px`, so its content starts
+ * 14px from the panel edge). The back button sits at margin-left: 0, so a
+ * 14px container padding-left puts its left edge exactly on the nav edge.
+ * The centered .tpl-detail keeps its own max-width / auto margins. */
+.tpl-scroll--detail {
+  padding-left: 14px;
+  padding-right: 14px;
+}
+
+/* ---------- gallery ---------- */
+.tpl-head {
+  max-width: 720px;
+  margin: 8px auto 28px;
+  text-align: center;
+}
+.tpl-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: hsl(var(--foreground));
+}
+.tpl-sub {
+  margin: 8px 0 0;
+  font-size: 14px;
+  color: hsl(var(--muted-foreground));
+}
+
+/* responsive card grid — ~5–6 cards per row on a normal-width panel */
+.tpl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 12px;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.tpl-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+  padding: 16px 16px 18px;
+  text-align: left;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  cursor: pointer;
+  font: inherit;
+  transition: background 0.14s, border-color 0.14s;
+}
+.tpl-card:hover {
+  background: hsl(var(--foreground) / 0.05);
+}
+.tpl-card:active {
+  background: hsl(var(--foreground) / 0.08);
+}
+
+.tpl-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  color: hsl(var(--muted-foreground));
+}
+.tpl-card-icon .icon {
+  width: 20px;
+  height: 20px;
+}
+
+.tpl-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: hsl(var(--foreground));
+}
+.tpl-card-desc {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: hsl(var(--muted-foreground));
+}
+
+/* ---------- component tags (monochrome) ---------- */
+.tpl-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.tpl-tags--detail {
+  margin-top: 0;
+}
+.tpl-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 999px;
+  background: none;
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.tpl-tag-icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+/* ---------- detail / preview ---------- */
+.tpl-detail {
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.tpl-detail-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+.tpl-detail-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: none;
+  color: hsl(var(--muted-foreground));
+}
+.tpl-detail-icon .icon {
+  width: 22px;
+  height: 22px;
+}
+.tpl-detail-headtext {
+  min-width: 0;
+}
+.tpl-detail-name {
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: hsl(var(--foreground));
+}
+.tpl-detail-desc {
+  margin-top: 4px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: hsl(var(--muted-foreground));
+}
+
+/* fields */
+.tpl-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tpl-field-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: hsl(var(--muted-foreground));
+}
+.tpl-input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 14px;
+  transition: border-color 0.15s;
+}
+.tpl-input:focus {
+  outline: none;
+  border-color: hsl(var(--ring) / 0.4);
+}
+
+.tpl-instruction {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--foreground) / 0.03);
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+/* meta grid */
+.tpl-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 18px;
+}
+.tpl-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid hsl(var(--border));
+  font-size: 13px;
+}
+.tpl-meta-key {
+  flex-shrink: 0;
+  color: hsl(var(--muted-foreground));
+}
+.tpl-meta-val {
+  text-align: right;
+  word-break: break-word;
+  color: hsl(var(--foreground));
+}
+.tpl-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+/* sub-agents */
+.tpl-subagents {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tpl-subagent {
+  padding: 12px 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--background));
+}
+.tpl-subagent-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tpl-subagent-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+}
+.tpl-subagent-tools {
+  margin-left: auto;
+  font-size: 11px;
+  color: hsl(var(--muted-foreground));
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.tpl-subagent-desc {
+  margin-top: 5px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: hsl(var(--muted-foreground));
+}
+
+/* create button */
+.tpl-create {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 11px 20px;
+  border: none;
+  border-radius: 12px;
+  background: hsl(var(--foreground));
+  color: hsl(var(--background));
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+}
+.tpl-create:hover {
+  opacity: 0.88;
+}
+.tpl-create:active {
+  transform: scale(0.98);
+}
+.tpl-create .icon {
+  width: 17px;
+  height: 17px;
+}
+
+@media (max-width: 560px) {
+  .tpl-meta-grid {
+    grid-template-columns: 1fr;
+  }
+  .tpl-scroll {
+    padding: 20px 16px 32px;
+  }
+}

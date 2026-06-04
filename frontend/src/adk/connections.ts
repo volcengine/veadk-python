@@ -1,0 +1,115 @@
+// Remote AgentKit connections: a URL + API key whose apps are reachable over
+// the ADK protocol (browser-direct, with `Authorization: Bearer <key>`). Stored
+// in localStorage and registered into the client's routing table on load.
+
+import { clearRemoteApps, fetchRemoteApps, registerRemoteApp } from "./client";
+
+export interface RemoteConnection {
+  id: string;
+  name: string;
+  base: string;
+  apiKey: string;
+  apps: string[];
+}
+
+/** An entry in the agent picker — a local app or one remote AgentKit app. */
+export interface AgentEntry {
+  id: string; // selection id passed to the ADK client
+  label: string; // shown in the dropdown
+  app: string; // real ADK app name
+  remote: boolean;
+  host?: string; // remote host, for display
+}
+
+const STORAGE_KEY = "veadk_agentkit_connections";
+
+export function loadConnections(): RemoteConnection[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as RemoteConnection[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persist(list: RemoteConnection[]): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+/** Dropdown id for one remote app (kept distinct from local app names). */
+export function remoteAppId(connId: string, app: string): string {
+  return `agentkit:${connId}:${app}`;
+}
+
+function hostOf(base: string): string {
+  try {
+    return new URL(base).host;
+  } catch {
+    return base;
+  }
+}
+
+/** Register all stored connections' apps into the client routing table. */
+export function registerConnections(conns: RemoteConnection[]): void {
+  clearRemoteApps();
+  for (const c of conns) {
+    for (const app of c.apps) {
+      registerRemoteApp(remoteAppId(c.id, app), { app, base: c.base, apiKey: c.apiKey });
+    }
+  }
+}
+
+/** Validate a remote AgentKit endpoint and persist it. Throws on bad URL/key. */
+export async function addConnection(
+  name: string,
+  base: string,
+  apiKey: string,
+): Promise<RemoteConnection> {
+  const normBase = base.trim().replace(/\/+$/, "");
+  const apps = await fetchRemoteApps(normBase, apiKey.trim());
+  const conn: RemoteConnection = {
+    id: Date.now().toString(36),
+    name: name.trim() || hostOf(normBase),
+    base: normBase,
+    apiKey: apiKey.trim(),
+    apps,
+  };
+  const list = [...loadConnections().filter((c) => c.base !== normBase), conn];
+  persist(list);
+  registerConnections(list);
+  return conn;
+}
+
+export function removeConnection(id: string): RemoteConnection[] {
+  const list = loadConnections().filter((c) => c.id !== id);
+  persist(list);
+  registerConnections(list);
+  return list;
+}
+
+/** Build the full agent-picker list: local apps first, then remote apps. */
+export function buildAgentEntries(
+  localApps: string[],
+  conns: RemoteConnection[],
+): AgentEntry[] {
+  const local: AgentEntry[] = localApps.map((app) => ({
+    id: app,
+    label: app,
+    app,
+    remote: false,
+  }));
+  const remote: AgentEntry[] = conns.flatMap((c) =>
+    c.apps.map((app) => ({
+      id: remoteAppId(c.id, app),
+      label: app,
+      app,
+      remote: true,
+      host: hostOf(c.base),
+    })),
+  );
+  return [...local, ...remote];
+}

@@ -80,8 +80,43 @@ export interface Attachment {
 
 const API_BASE = ""; // same origin (prod) / proxied (dev)
 
-/** fetch wrapper that forwards the gateway auth querystring on every request. */
-function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+/** A resolved ADK endpoint. Empty `base` = the local same-origin server. */
+export interface AdkEndpoint {
+  base?: string;
+  apiKey?: string;
+}
+
+// Routing table for remote AgentKit apps: maps a dropdown id (see
+// adk/connections.ts) to its real ADK app name + endpoint. Local apps are not
+// registered and fall through to the same-origin server.
+interface RemoteApp {
+  app: string;
+  base: string;
+  apiKey: string;
+}
+const remoteApps = new Map<string, RemoteApp>();
+
+export function registerRemoteApp(id: string, info: RemoteApp): void {
+  remoteApps.set(id, info);
+}
+export function clearRemoteApps(): void {
+  remoteApps.clear();
+}
+
+/** Resolve a dropdown id to its real ADK app name + endpoint. */
+function resolve(appName: string): { app: string; ep: AdkEndpoint } {
+  const r = remoteApps.get(appName);
+  return r ? { app: r.app, ep: { base: r.base, apiKey: r.apiKey } } : { app: appName, ep: {} };
+}
+
+/** fetch wrapper: same-origin (forwarding the gateway auth querystring) for the
+ *  local server, or a remote AgentKit base URL with a Bearer API key. */
+function apiFetch(path: string, init: RequestInit = {}, ep: AdkEndpoint = {}): Promise<Response> {
+  if (ep.base) {
+    const headers: Record<string, string> = { ...(init.headers as Record<string, string>) };
+    if (ep.apiKey) headers["Authorization"] = `Bearer ${ep.apiKey}`;
+    return fetch(ep.base.replace(/\/+$/, "") + path, { ...init, headers });
+  }
   return fetch(withAuth(`${API_BASE}${path}`), init);
 }
 
@@ -91,15 +126,23 @@ export async function listApps(): Promise<string[]> {
   return res.json();
 }
 
+/** List the apps a remote AgentKit server exposes (also validates URL + key). */
+export async function fetchRemoteApps(base: string, apiKey: string): Promise<string[]> {
+  const res = await apiFetch(`/list-apps`, {}, { base, apiKey });
+  if (!res.ok) throw new Error(`list-apps failed: ${res.status}`);
+  return res.json();
+}
+
 export async function createSession(
   appName: string,
   userId: string,
 ): Promise<string> {
-  const res = await apiFetch(`/apps/${appName}/users/${encodeURIComponent(userId)}/sessions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: "{}",
-  });
+  const { app, ep } = resolve(appName);
+  const res = await apiFetch(
+    `/apps/${app}/users/${encodeURIComponent(userId)}/sessions`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+    ep,
+  );
   if (!res.ok) throw new Error(`create session failed: ${res.status}`);
   const session = await res.json();
   return session.id;
@@ -109,7 +152,8 @@ export async function listSessions(
   appName: string,
   userId: string,
 ): Promise<AdkSession[]> {
-  const res = await apiFetch(`/apps/${appName}/users/${encodeURIComponent(userId)}/sessions`);
+  const { app, ep } = resolve(appName);
+  const res = await apiFetch(`/apps/${app}/users/${encodeURIComponent(userId)}/sessions`, {}, ep);
   if (!res.ok) throw new Error(`list sessions failed: ${res.status}`);
   return res.json();
 }
@@ -119,7 +163,12 @@ export async function getSession(
   userId: string,
   sessionId: string,
 ): Promise<AdkSession> {
-  const res = await apiFetch(`/apps/${appName}/users/${encodeURIComponent(userId)}/sessions/${sessionId}`);
+  const { app, ep } = resolve(appName);
+  const res = await apiFetch(
+    `/apps/${app}/users/${encodeURIComponent(userId)}/sessions/${sessionId}`,
+    {},
+    ep,
+  );
   if (!res.ok) throw new Error(`get session failed: ${res.status}`);
   return res.json();
 }
@@ -129,15 +178,59 @@ export async function deleteSession(
   userId: string,
   sessionId: string,
 ): Promise<void> {
-  const res = await apiFetch(`/apps/${appName}/users/${encodeURIComponent(userId)}/sessions/${sessionId}`, {
-    method: "DELETE",
-  });
+  const { app, ep } = resolve(appName);
+  const res = await apiFetch(
+    `/apps/${app}/users/${encodeURIComponent(userId)}/sessions/${sessionId}`,
+    { method: "DELETE" },
+    ep,
+  );
   if (!res.ok && res.status !== 404) throw new Error(`delete session failed: ${res.status}`);
 }
 
 export async function getSessionTrace(sessionId: string): Promise<TraceSpan[]> {
   const res = await apiFetch(`/debug/trace/session/${sessionId}`);
   if (!res.ok) throw new Error(`trace failed: ${res.status}`);
+  return res.json();
+}
+
+/** Introspected metadata for an agent app (model, tools), for the picker.
+ *  Only the local server implements `/web/agent-info`; remote AgentKit apps
+ *  will reject this and the caller falls back to a basic flyout. */
+export interface AgentInfo {
+  name: string;
+  description: string;
+  model: string;
+  tools: string[];
+  subAgents: string[];
+}
+
+export async function getAgentInfo(appName: string): Promise<AgentInfo> {
+  const { app, ep } = resolve(appName);
+  const res = await apiFetch(`/web/agent-info/${app}`, {}, ep);
+  if (!res.ok) throw new Error(`agent-info failed: ${res.status}`);
+  return res.json();
+}
+
+/** One web-search hit (Volcengine WebSearch WebItem, trimmed for the UI). */
+export interface WebHit {
+  title: string;
+  url: string;
+  siteName: string;
+  summary: string;
+}
+
+/** Run an agent's web-search tool on the local server (which holds the env
+ *  credentials). `mounted` is false when a known agent has no web-search tool;
+ *  `error` is set when the search ran but the API reported a problem. */
+export async function webSearch(
+  appName: string,
+  query: string,
+): Promise<{ mounted: boolean; results: WebHit[]; error?: string }> {
+  const { app } = resolve(appName);
+  const res = await apiFetch(
+    `/web/search?source=web&app_name=${encodeURIComponent(app)}&q=${encodeURIComponent(query)}`,
+  );
+  if (!res.ok) throw new Error(`web search failed: ${res.status}`);
   return res.json();
 }
 
@@ -157,23 +250,28 @@ export async function* runSSE({
   text,
   attachments = [],
 }: RunArgs): AsyncGenerator<AdkEvent, void, unknown> {
+  const { app, ep } = resolve(appName);
   const parts: AdkPart[] = [
     ...attachments.map((a) => ({
       inlineData: { mimeType: a.mimeType, data: a.data, displayName: a.name },
     })),
     ...(text.trim() ? [{ text }] : []),
   ];
-  const res = await apiFetch(`/run_sse`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      app_name: appName,
-      user_id: userId,
-      session_id: sessionId,
-      new_message: { role: "user", parts },
-      streaming: true,
-    }),
-  });
+  const res = await apiFetch(
+    `/run_sse`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        app_name: app,
+        user_id: userId,
+        session_id: sessionId,
+        new_message: { role: "user", parts },
+        streaming: true,
+      }),
+    },
+    ep,
+  );
   if (!res.ok) throw new Error(`run_sse failed: ${res.status}`);
   for await (const evt of parseSSE(res)) {
     yield evt as AdkEvent;

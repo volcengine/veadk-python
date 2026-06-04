@@ -1,0 +1,307 @@
+.pp-root {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+/* --- sidebar -------------------------------------------------------------- */
+
+.pp-sidebar {
+  width: 240px;
+  flex: 0 0 240px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+}
+
+.pp-sidebar-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 8px 10px 12px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.pp-project-name {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pp-tree {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+
+.pp-empty,
+.pp-placeholder {
+  padding: 16px;
+  font-size: 13px;
+  color: hsl(var(--muted-foreground));
+  text-align: center;
+}
+
+.pp-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px 5px 8px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: hsl(var(--foreground));
+  text-align: left;
+  cursor: pointer;
+}
+
+.pp-row:hover {
+  background: hsl(var(--foreground) / 0.05);
+}
+
+.pp-file.pp-active {
+  background: hsl(var(--foreground) / 0.08);
+}
+
+.pp-label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pp-folder .pp-label {
+  color: hsl(var(--muted-foreground));
+}
+
+.pp-ic {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+.pp-chevron {
+  color: hsl(var(--muted-foreground));
+  transition: transform 0.12s ease;
+}
+
+.pp-chevron.pp-open {
+  transform: rotate(90deg);
+}
+
+.pp-new-input {
+  width: calc(100% - 16px);
+  margin: 0 8px 4px;
+  padding: 5px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: hsl(var(--foreground));
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--ring));
+  border-radius: calc(var(--radius) - 2px);
+  outline: none;
+}
+
+/* --- main pane ------------------------------------------------------------ */
+
+.pp-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.pp-main-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.pp-path {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pp-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pp-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: calc(var(--radius) - 2px);
+  background: none;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+}
+
+.pp-icon-btn:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+
+.pp-icon-btn.pp-danger:hover {
+  color: hsl(var(--destructive));
+}
+
+.pp-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: hsl(var(--foreground));
+  background: hsl(var(--foreground) / 0.06);
+  border: 1px solid hsl(var(--border));
+  border-radius: calc(var(--radius) - 2px);
+  cursor: pointer;
+}
+
+.pp-secondary:hover {
+  background: hsl(var(--foreground) / 0.1);
+}
+
+.pp-deploy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: hsl(var(--primary-foreground));
+  background: hsl(var(--primary));
+  border: none;
+  border-radius: calc(var(--radius) - 2px);
+  cursor: pointer;
+}
+
+.pp-deploy:hover {
+  background: hsl(var(--primary) / 0.9);
+}
+
+.pp-deploy:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.pp-error {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: hsl(var(--destructive));
+  background: hsl(var(--destructive) / 0.08);
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.pp-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* Shared typography for every code surface (read-only pre, overlay pre,
+   editable textarea). These MUST stay identical or the caret drifts. */
+.pp-pre,
+.pp-hl,
+.pp-input {
+  margin: 0;
+  padding: 14px 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre;
+  tab-size: 2;
+  box-sizing: border-box;
+  border: none;
+}
+
+.pp-pre code,
+.pp-hl code,
+.pp-input {
+  font: inherit;
+  tab-size: inherit;
+}
+
+/* --- read-only view ------------------------------------------------------- */
+
+.pp-pre {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  /* .hljs (from github.css) supplies the background + base text color. */
+}
+
+.pp-pre code {
+  background: none;
+  padding: 0;
+}
+
+/* --- editable overlay ----------------------------------------------------- */
+
+.pp-editor-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* Highlighted underlay: fills the wrap, shows colored tokens, ignores input. */
+.pp-hl {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  pointer-events: none;
+  /* .hljs (from github.css) supplies the background + base text color. */
+}
+
+.pp-hl code {
+  background: none;
+  padding: 0;
+}
+
+/* Transparent textarea on top: caret + editing, colored text shows through. */
+.pp-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  resize: none;
+  outline: none;
+  background: transparent;
+  color: transparent;
+  caret-color: hsl(var(--foreground));
+}

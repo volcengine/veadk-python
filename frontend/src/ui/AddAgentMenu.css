@@ -1,0 +1,121 @@
+/* Stacked "long bar" card menu (添加 Agent chooser + create-mode picker). */
+.stk {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0 24px 6vh;
+}
+.stk-head {
+  text-align: center;
+  margin-bottom: 26px;
+}
+.stk-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+.stk-sub {
+  margin: 8px 0 0;
+  font-size: 14px;
+  color: hsl(var(--muted-foreground));
+}
+.stk-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 520px;
+}
+.stk-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 18px 18px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 14px;
+  background: hsl(var(--card));
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.12s;
+}
+.stk-card:hover {
+  border-color: hsl(var(--ring) / 0.35);
+  background: hsl(var(--foreground) / 0.02);
+  box-shadow: 0 8px 24px -16px hsl(var(--foreground) / 0.25);
+}
+.stk-card-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 11px;
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+}
+.stk-card-icon svg {
+  width: 21px;
+  height: 21px;
+}
+.stk-card-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.stk-card-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+.stk-card-desc {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: hsl(var(--muted-foreground));
+}
+.stk-card-arrow {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  color: hsl(var(--muted-foreground));
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: opacity 0.15s, transform 0.15s;
+}
+.stk-card:hover .stk-card-arrow {
+  opacity: 1;
+  transform: translateX(0);
+}
+.stk-footer {
+  margin-top: 18px;
+  width: 100%;
+  max-width: 520px;
+  display: flex;
+  justify-content: center;
+}
+.stk-import {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border: 1px dashed hsl(var(--border));
+  border-radius: 9px;
+  background: none;
+  color: hsl(var(--muted-foreground));
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.stk-import:hover {
+  color: hsl(var(--foreground));
+  border-color: hsl(var(--ring) / 0.4);
+  background: hsl(var(--foreground) / 0.03);
+}
+.stk-import svg { width: 15px; height: 15px; }
