@@ -1,0 +1,1127 @@
+/* CustomCreate — 自定义分步引导 wizard.
+ * Class prefix `cw-` (custom-wizard) to avoid collisions with app styles.
+ * Uses the shadcn CSS variables from src/styles.css :root. */
+
+.cw-root {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  color: hsl(var(--foreground));
+}
+
+/* ---------- header ---------- */
+.cw-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 18px 24px 16px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+.cw-header-title {
+  flex: 1;
+  min-width: 0;
+}
+.cw-header-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: hsl(var(--muted-foreground));
+}
+.cw-title {
+  margin: 5px 0 2px;
+  font-size: 21px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+.cw-subtitle {
+  margin: 0;
+  font-size: 13px;
+  color: hsl(var(--muted-foreground));
+}
+.cw-progress-pill {
+  flex-shrink: 0;
+  margin-top: 2px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: hsl(var(--secondary));
+  color: hsl(var(--secondary-foreground));
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- body: single scroll container ---------- */
+/* The whole form scrolls here; this element is also the IntersectionObserver
+   root for the scroll-spy rail. */
+.cw-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Centers the [form column + rail] group as one unit with a modest gap. */
+.cw-center {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 32px;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 32px 24px 80px;
+}
+
+/* ---------- form column (all sections stacked) ---------- */
+.cw-form-col {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  gap: 44px;
+}
+
+/* ---------- section ---------- */
+.cw-section {
+  scroll-margin-top: 24px;
+}
+.cw-sec-head {
+  margin-bottom: 18px;
+}
+.cw-sec-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: hsl(var(--foreground));
+}
+.cw-sec-required {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: hsl(var(--foreground) / 0.08);
+  color: hsl(var(--muted-foreground));
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.cw-sec-hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: hsl(var(--muted-foreground));
+}
+
+/* ---------- finish action (end of review section) ---------- */
+.cw-finish-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.cw-btn-finish {
+  padding: 11px 22px;
+  font-size: 14px;
+}
+
+/* ---------- right rail (scroll-spy indicator, sticky) ---------- */
+.cw-rail {
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  flex-shrink: 0;
+  width: 208px;
+  padding: 4px 0;
+}
+.cw-steps {
+  position: relative;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+/* Connector line, anchored to the steps list. Rows are a fixed 46px tall with
+   centred markers, so every dot centre sits 23px from its row's top — the line
+   therefore runs exactly from the first dot centre (23px) to the last (bottom
+   23px). Dot column centre = step padding-left (8px) + marker half (11px) = 19px.
+   z-index 0 keeps it BEHIND the dots. */
+.cw-rail-track {
+  position: absolute;
+  left: 18px;
+  top: 23px;
+  bottom: 23px;
+  width: 2px;
+  border-radius: 2px;
+  background: hsl(var(--border));
+  z-index: 0;
+}
+.cw-rail-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  border-radius: 2px;
+  background: hsl(var(--foreground) / 0.55);
+}
+.cw-step {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 46px;
+  padding: 7px 8px;
+  border: none;
+  border-radius: 9px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  transition: background 0.12s;
+}
+.cw-step:hover {
+  background: hsl(var(--foreground) / 0.05);
+}
+.cw-step.is-active {
+  background: hsl(var(--foreground) / 0.06);
+}
+/* Fixed-width column keeps the dot centre constant (so the line aligns). */
+.cw-step-marker {
+  position: relative;
+  z-index: 2; /* above the connector line */
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+}
+/* Simple dot: muted by default, solid black when active/done. */
+.cw-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: hsl(var(--foreground) / 0.25);
+  transition: background 0.15s, width 0.15s, height 0.15s;
+}
+.cw-step.is-done:not(.is-active) .cw-dot {
+  background: hsl(var(--foreground) / 0.7);
+}
+.cw-step.is-active .cw-dot {
+  width: 11px;
+  height: 11px;
+  background: hsl(var(--foreground));
+}
+.cw-step-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.cw-step-labelrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.cw-step-required {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: hsl(var(--foreground) / 0.08);
+  color: hsl(var(--muted-foreground));
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.cw-step.is-active .cw-step-required {
+  background: hsl(var(--foreground) / 0.12);
+  color: hsl(var(--foreground));
+}
+.cw-step-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground));
+  transition: color 0.12s;
+}
+.cw-step.is-active .cw-step-label {
+  color: hsl(var(--foreground));
+  font-weight: 600;
+}
+.cw-step.is-done:not(.is-active) .cw-step-label {
+  color: hsl(var(--foreground) / 0.75);
+}
+.cw-step-hint {
+  font-size: 11px;
+  color: hsl(var(--muted-foreground));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* ---------- forms ---------- */
+.cw-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.cw-section-desc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: hsl(var(--muted-foreground));
+}
+.cw-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.cw-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+}
+.cw-req {
+  margin-left: 2px;
+  color: hsl(var(--destructive));
+}
+.cw-help {
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+  line-height: 1.5;
+}
+.cw-error-text {
+  font-size: 12px;
+  color: hsl(var(--destructive));
+}
+
+.cw-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 14px;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.cw-input::placeholder {
+  color: hsl(var(--muted-foreground));
+}
+.cw-input:focus {
+  outline: none;
+  border-color: hsl(var(--ring) / 0.45);
+  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.12);
+}
+.cw-input.is-error {
+  border-color: hsl(var(--destructive) / 0.6);
+}
+
+.cw-textarea {
+  width: 100%;
+  padding: 11px 13px;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  resize: vertical;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.cw-textarea::placeholder {
+  color: hsl(var(--muted-foreground));
+}
+.cw-textarea:focus {
+  outline: none;
+  border-color: hsl(var(--ring) / 0.45);
+  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.12);
+}
+.cw-textarea.is-error {
+  border-color: hsl(var(--destructive) / 0.6);
+}
+.cw-textarea-sm {
+  min-height: 80px;
+}
+.cw-textarea-lg {
+  min-height: 340px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+}
+
+/* ---------- tag editor ---------- */
+.cw-tag-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.cw-tag-inputrow {
+  display: flex;
+  gap: 8px;
+}
+.cw-tag-inputrow .cw-input {
+  flex: 1;
+}
+.cw-presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+.cw-presets-label {
+  font-size: 11.5px;
+  color: hsl(var(--muted-foreground));
+  margin-right: 2px;
+}
+.cw-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: hsl(var(--secondary));
+  color: hsl(var(--secondary-foreground));
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.cw-chip-ghost {
+  border: 1px dashed hsl(var(--border));
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.cw-chip-ghost:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--foreground));
+  border-color: hsl(var(--ring) / 0.3);
+}
+.cw-chip-sub {
+  background: hsl(var(--primary) / 0.08);
+  color: hsl(var(--foreground));
+}
+.cw-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.cw-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px 5px 12px;
+  border-radius: 999px;
+  background: hsl(var(--secondary));
+  color: hsl(var(--secondary-foreground));
+  font-size: 13px;
+}
+.cw-pill-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: hsl(var(--foreground) / 0.06);
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.cw-pill-x:hover {
+  background: hsl(var(--destructive) / 0.12);
+  color: hsl(var(--destructive));
+}
+.cw-empty-line {
+  margin: 0;
+  font-size: 12.5px;
+  color: hsl(var(--muted-foreground));
+}
+
+/* ---------- checklist (built-in tools / tracing exporters) ---------- */
+.cw-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cw-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--background));
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  transition: background 0.12s, border-color 0.12s;
+}
+.cw-check:hover {
+  background: hsl(var(--foreground) / 0.05);
+}
+.cw-check.is-on {
+  background: hsl(var(--foreground) / 0.08);
+  border-color: hsl(var(--foreground) / 0.18);
+}
+.cw-check-box {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 5px;
+  background: hsl(var(--background));
+  color: hsl(var(--background));
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.cw-check.is-on .cw-check-box {
+  background: hsl(var(--foreground));
+  border-color: hsl(var(--foreground));
+  color: hsl(var(--background));
+}
+.cw-check-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cw-check-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+}
+.cw-check-desc {
+  font-size: 12px;
+  line-height: 1.5;
+  color: hsl(var(--muted-foreground));
+}
+
+/* ---------- segmented backend picker ---------- */
+.cw-segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.cw-seg {
+  flex: 1 1 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 11px 13px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 11px;
+  background: hsl(var(--background));
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  transition: background 0.12s, border-color 0.12s;
+}
+.cw-seg:hover {
+  background: hsl(var(--foreground) / 0.05);
+}
+.cw-seg.is-on {
+  background: hsl(var(--foreground) / 0.08);
+  border-color: hsl(var(--foreground) / 0.18);
+}
+.cw-seg-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+}
+.cw-seg-desc {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: hsl(var(--muted-foreground));
+}
+
+/* ---------- custom function-tool editor ---------- */
+.cw-ctool {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.cw-ctool-inputs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.cw-ctool-inputs .cw-input {
+  flex: 1 1 180px;
+}
+.cw-ctool-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cw-ctool-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 11px;
+  background: hsl(var(--card));
+}
+.cw-ctool-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: hsl(var(--secondary));
+  color: hsl(var(--muted-foreground));
+}
+.cw-ctool-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cw-ctool-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: hsl(var(--foreground));
+  word-break: break-word;
+}
+.cw-ctool-desc {
+  font-size: 12px;
+  line-height: 1.5;
+  color: hsl(var(--muted-foreground));
+}
+
+/* ---------- MCP tool editor ---------- */
+.cw-mcp {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.cw-mcp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.cw-mcp-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--card));
+}
+.cw-mcp-rowhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.cw-mcp-transport {
+  display: inline-flex;
+  gap: 6px;
+}
+.cw-seg-sm {
+  flex: 0 0 auto;
+  min-width: 72px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 6px 16px;
+  border-radius: 9px;
+}
+.cw-seg-sm .cw-seg-title {
+  font-size: 12.5px;
+}
+.cw-mcp .cw-add-sub {
+  margin-top: 0;
+}
+
+/* ---------- conditional sub-fields under a toggle ---------- */
+.cw-subfield {
+  margin: -2px 0 2px;
+  padding: 14px 16px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--foreground) / 0.02);
+}
+
+/* ---------- toggles ---------- */
+.cw-toggle-stack {
+  gap: 14px;
+}
+.cw-toggle {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 16px 18px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 14px;
+  background: hsl(var(--card));
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+.cw-toggle:hover {
+  border-color: hsl(var(--ring) / 0.25);
+}
+.cw-toggle.is-on {
+  border-color: hsl(var(--primary) / 0.4);
+  box-shadow: 0 1px 2px hsl(var(--foreground) / 0.04);
+}
+.cw-toggle-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  background: hsl(var(--secondary));
+  color: hsl(var(--muted-foreground));
+  transition: background 0.15s, color 0.15s;
+}
+.cw-toggle.is-on .cw-toggle-icon {
+  background: hsl(var(--primary) / 0.1);
+  color: hsl(var(--primary));
+}
+.cw-toggle-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.cw-toggle-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+.cw-toggle-desc {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: hsl(var(--muted-foreground));
+}
+.cw-switch {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  width: 42px;
+  height: 24px;
+  padding: 2px;
+  border-radius: 999px;
+  background: hsl(var(--border));
+  transition: background 0.18s;
+}
+.cw-toggle.is-on .cw-switch {
+  background: hsl(var(--primary));
+  justify-content: flex-end;
+}
+.cw-switch-knob {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: hsl(var(--background));
+  box-shadow: 0 1px 2px hsl(var(--foreground) / 0.2);
+}
+
+/* ---------- sub-agents ---------- */
+.cw-sub-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.cw-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 14px;
+  background: hsl(var(--card));
+  box-shadow: 0 1px 2px hsl(var(--foreground) / 0.03);
+}
+.cw-sub-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.cw-sub-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: hsl(var(--primary) / 0.08);
+  color: hsl(var(--foreground));
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.cw-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.cw-icon-danger:hover {
+  background: hsl(var(--destructive) / 0.1);
+  color: hsl(var(--destructive));
+}
+.cw-add-sub {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin-top: 14px;
+  padding: 12px;
+  width: 100%;
+  border: 1px dashed hsl(var(--border));
+  border-radius: 12px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.cw-add-sub:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--foreground));
+  border-color: hsl(var(--ring) / 0.3);
+}
+
+/* ---------- review ---------- */
+.cw-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px;
+  border-radius: var(--radius);
+  background: hsl(var(--destructive) / 0.08);
+  color: hsl(var(--destructive));
+  font-size: 13px;
+  line-height: 1.5;
+}
+.cw-review {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid hsl(var(--border));
+  border-radius: 14px;
+  overflow: hidden;
+  background: hsl(var(--card));
+}
+.cw-review-row {
+  display: flex;
+  gap: 18px;
+  padding: 13px 16px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+.cw-review-row:last-child {
+  border-bottom: none;
+}
+.cw-review-key {
+  flex-shrink: 0;
+  width: 110px;
+  font-size: 13px;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground));
+}
+.cw-review-val {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+}
+.cw-review-strong {
+  font-weight: 600;
+}
+.cw-review-muted {
+  color: hsl(var(--muted-foreground));
+}
+.cw-review-pre {
+  margin: 0;
+  padding: 10px 12px;
+  background: hsl(var(--muted));
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.cw-review-chips,
+.cw-review-subs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.cw-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.cw-tag-on {
+  background: hsl(142 70% 45% / 0.14);
+  color: hsl(142 64% 30%);
+}
+.cw-tag-off {
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+}
+
+/* ---------- buttons ---------- */
+.cw-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 16px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 0.13s, opacity 0.13s, border-color 0.13s, transform 0.1s;
+}
+.cw-btn:active {
+  transform: scale(0.98);
+}
+.cw-btn-primary {
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+.cw-btn-primary:hover:not(:disabled) {
+  opacity: 0.88;
+}
+.cw-btn-primary:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.cw-btn-ghost {
+  background: hsl(var(--background));
+  border-color: hsl(var(--border));
+  color: hsl(var(--foreground));
+}
+.cw-btn-ghost:hover {
+  background: hsl(var(--accent));
+}
+.cw-btn-soft {
+  background: hsl(var(--secondary));
+  color: hsl(var(--secondary-foreground));
+  flex-shrink: 0;
+}
+.cw-btn-soft:hover:not(:disabled) {
+  background: hsl(var(--accent));
+}
+.cw-btn-soft:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ---------- icons ---------- */
+.cw-i {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.cw-i-sm {
+  width: 14px;
+  height: 14px;
+}
+
+/* ---------- finish → project preview ---------- */
+.cw-root-preview {
+  height: 100%;
+}
+.cw-preview-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 24px;
+  border-bottom: 1px solid hsl(var(--border));
+  background: hsl(var(--panel));
+}
+.cw-preview-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+}
+.cw-preview-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.cw-preview-body > * {
+  flex: 1;
+  min-height: 0;
+}
+
+/* ---------- skill hub picker ---------- */
+.cw-skillhub {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.cw-skill-searchrow {
+  display: flex;
+  gap: 8px;
+}
+.cw-skill-searchbox {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+.cw-skill-searchicon {
+  position: absolute;
+  left: 11px;
+  color: hsl(var(--muted-foreground));
+  pointer-events: none;
+}
+.cw-skill-input {
+  padding-left: 36px;
+}
+.cw-skill-selected {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cw-skill-selected-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: hsl(var(--muted-foreground));
+}
+.cw-skill-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cw-skill-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--background));
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  transition: background 0.12s, border-color 0.12s;
+}
+.cw-skill-result:hover {
+  background: hsl(var(--foreground) / 0.05);
+}
+.cw-skill-result.is-on {
+  background: hsl(var(--foreground) / 0.08);
+  border-color: hsl(var(--foreground) / 0.18);
+}
+.cw-skill-result-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-top: 1px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 7px;
+  background: hsl(var(--background));
+  color: hsl(var(--muted-foreground));
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.cw-skill-result.is-on .cw-skill-result-icon {
+  background: hsl(var(--foreground));
+  border-color: hsl(var(--foreground));
+  color: hsl(var(--background));
+}
+.cw-skill-result-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.cw-skill-result-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+  word-break: break-word;
+}
+.cw-skill-result-desc {
+  font-size: 12px;
+  line-height: 1.5;
+  color: hsl(var(--muted-foreground));
+}
+.cw-skill-result-repo {
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: hsl(var(--muted-foreground));
+  word-break: break-all;
+}
+
+/* ---------- spinner ---------- */
+.cw-spin {
+  animation: cw-spin 0.8s linear infinite;
+}
+@keyframes cw-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------- responsive ---------- */
+@media (max-width: 860px) {
+  /* Drop the rail; the form is the single source of navigation by scrolling. */
+  .cw-rail {
+    display: none;
+  }
+  .cw-center {
+    gap: 0;
+    padding: 24px 16px 64px;
+  }
+  .cw-form-col {
+    max-width: 100%;
+  }
+}

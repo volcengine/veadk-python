@@ -5,6 +5,16 @@ description: "内置 React 前端，用于渲染智能体流式返回的 A2UI，
 
 VeADK 自带一个 React 前端，用于渲染智能体经由 Google ADK API Server 流式返回的 [A2UI](/cn/docs/framework/frontend/a2ui)（智能体驱动 UI）。它与 `veadk frontend` 启动的是同一个服务进程，因此**无需单独部署后端**。
 
+## 功能一览
+
+- **对话**：与智能体多轮对话，渲染流式返回的 A2UI 卡片，并展示思考过程、工具调用、Token 与用时。
+- **Agent 选择器**：左上角切换 agent；悬停可查看该 agent 的模型与挂载的工具。
+- **历史会话**：自动保存、按时间排序，可重新打开或删除。
+- **智能搜索**：「会话」源在当前 agent 的历史消息中做全文检索；「网页」源调用该 agent 挂载的联网搜索工具实时检索（使用服务端环境变量里的凭据）。
+- **添加 AgentKit 智能体**：填入访问地址 + API Key，按 ADK 协议接入远程 agent，接入后出现在选择器中。
+- **Tracing 观测**：查看本次会话的调用火焰图。
+- **登录**：支持 SSO（VeIdentity / GitHub / Google / 任意 OIDC）或本地用户名。
+
 ## 运行
 
 先构建前端，再用一条命令同时提供 UI 与智能体 API：
@@ -39,7 +49,8 @@ cd frontend && npm run dev                    # http://localhost:5173（代理 A
 | `--oauth2-user-pool` / `--oauth2-user-pool-client` | — | VeIdentity 用户池 / 客户端**名称**。设置后启用 SSO。 |
 | `--oauth2-user-pool-uid` / `--oauth2-user-pool-client-uid` | 环境变量 `OAUTH2_USER_POOL_ID` / `OAUTH2_USER_POOL_CLIENT_ID` | 用 **UID** 代替名称指定用户池 / 客户端。 |
 | `--oauth2-provider` / `--oauth2-provider-label` | `veidentity` | 登录按钮的 provider 标识与显示文案。 |
-| `--oauth2-redirect-uri` | `http://{host}:{port}/oauth2/callback` | OAuth2 回调地址。 |
+| `--oauth2-redirect-uri` | `http://{host}:{port}/oauth2/callback` | OAuth2 回调地址（环境变量 `OAUTH2_REDIRECT_URI`）。部署到公网 / runtime 时需设置。 |
+| 第三方 / 自定义 provider | 见下文 | 通过环境变量接入 GitHub / Google / 任意 OIDC，详见「认证」一节。 |
 
 <Callout type="info">
   非开发模式下，若未找到已构建的前端目录，命令会报错提示先执行 `npm run build`（或改用 `--dev` 配合 Vite 开发服务器）。
@@ -59,6 +70,34 @@ veadk frontend --agents-dir examples \
 ```
 
 需要进程能拿到火山引擎凭证（AK/SK）。中间件保护 API、放行 SPA 外壳与 `GET /web/auth-config`，因此应用能加载并展示自己的登录页（而不是被直接重定向到 IdP）。登录按钮的文案/图标由配置驱动（`--oauth2-provider` / `--oauth2-provider-label`）。
+
+**第三方 / 自定义 OAuth2（环境变量）** —— 不依赖 VeIdentity 用户池时，只要设置 `OAUTH2_CLIENT_ID`（及密钥），即可接入 GitHub、Google 或任意 OAuth2/OIDC 登录。端点来源按以下顺序确定：内置预设（`OAUTH2_PROVIDER=github` / `google`）→ OIDC 自动发现（设置 `OAUTH2_ISSUER`）→ 显式端点（`OAUTH2_AUTHORIZE_URL` 等）。
+
+| 环境变量 | 说明 |
+| :-- | :-- |
+| `OAUTH2_PROVIDER` | provider 标识：`github`、`google` 或自定义名。决定登录按钮文案与内置预设。 |
+| `OAUTH2_CLIENT_ID` / `OAUTH2_CLIENT_SECRET` | OAuth2 客户端凭据。**设置 `OAUTH2_CLIENT_ID` 即启用通用 provider。** |
+| `OAUTH2_ISSUER` | OIDC issuer 基址，端点自动发现（如 `https://accounts.google.com`）。 |
+| `OAUTH2_AUTHORIZE_URL` / `OAUTH2_TOKEN_URL` / `OAUTH2_USERINFO_URL` | 显式端点（用于非 OIDC provider）。 |
+| `OAUTH2_SCOPE` | 覆盖请求的 scope。 |
+| `OAUTH2_PROVIDER_LABEL` | 覆盖登录按钮文案。 |
+| `OAUTH2_REDIRECT_URI` | **回调地址**。部署到公网 / runtime 时设为公网回调，并在 OAuth 应用中登记同一地址；本地默认 `http://{host}:{port}/oauth2/callback`。 |
+
+GitHub（预设，仅需 id/secret）：
+
+```bash
+export OAUTH2_PROVIDER=github
+export OAUTH2_CLIENT_ID=<github-oauth-client-id>
+export OAUTH2_CLIENT_SECRET=<github-oauth-client-secret>
+export OAUTH2_REDIRECT_URI=http://127.0.0.1:8000/oauth2/callback
+veadk frontend --agents-dir examples
+```
+
+Google 同理，把 `OAUTH2_PROVIDER` 换成 `google`；Keycloak / Auth0 / Okta 等任意 OIDC 则设 `OAUTH2_ISSUER` + 客户端凭据即可。完整示例见仓库 `examples/front_with_sso/`。
+
+<Callout type="info">
+  部署到 runtime / 公网时，OAuth 回调必须指向外部可访问的地址：把 `OAUTH2_REDIRECT_URI` 设为公网回调 URL，并在 OAuth 应用里登记同一地址。Cookie 的 `Secure` 标志会根据该地址是否为 HTTPS 自动开启。
+</Callout>
 
 **无 SSO（本地用户名）** —— 不传上述参数时，登录页会让用户输入一个用户名（字母 + 数字，≤16 位），保存在本地并作为 `user_id`。
 
