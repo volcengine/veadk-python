@@ -355,7 +355,9 @@ def frontend(
     # ---- Skill Hub proxy: proxy /skillhub/* to skills.volces.com ----
     SKILLHUB_TARGET = "https://skills.volces.com"
 
-    @app.api_route("/skillhub/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    @app.api_route(
+        "/skillhub/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"]
+    )
     async def _skillhub_proxy(request: Request, path: str):
         """Proxy requests to Volcengine Skill Hub API to avoid CORS issues."""
         target_url = f"{SKILLHUB_TARGET}/{path}"
