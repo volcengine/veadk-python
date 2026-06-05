@@ -166,8 +166,9 @@ function sortedChildren(node: TreeNode): TreeNode[] {
 export function ProjectPreview({ project, onChange, onDeploy }: ProjectPreviewProps) {
   const editable = typeof onChange === "function";
 
+  // Initialize all hooks BEFORE any conditional returns (React hooks rule)
   const [selected, setSelected] = useState<string | null>(
-    project.files[0]?.path ?? null,
+    project?.files?.[0]?.path ?? null,
   );
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [adding, setAdding] = useState(false);
@@ -176,7 +177,17 @@ export function ProjectPreview({ project, onChange, onDeploy }: ProjectPreviewPr
   const [deployError, setDeployError] = useState<string | null>(null);
   const underlayRef = useRef<HTMLPreElement>(null);
 
-  const tree = useMemo(() => buildTree(project.files), [project.files]);
+  const tree = useMemo(() => {
+    if (!project?.files || !Array.isArray(project.files)) {
+      return { name: "", children: new Map() };
+    }
+    return buildTree(project.files);
+  }, [project?.files]);
+
+  // Validate project structure AFTER all hooks
+  if (!project || !Array.isArray(project.files)) {
+    return <div className="pp-error">项目数据无效</div>;
+  }
 
   const selectedFile =
     project.files.find((f) => f.path === selected) ?? null;
