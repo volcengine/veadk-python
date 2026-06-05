@@ -24,6 +24,7 @@ in the UI's dropdown (it is returned by ``/list-apps``).
 """
 
 from veadk import Agent
+from veadk.utils.pdf_to_images import pdf_to_images_before_model_callback
 
 agent = Agent(
     name="web_demo",
@@ -32,6 +33,7 @@ agent = Agent(
         "You are a helpful assistant. Answer clearly and concisely in the "
         "user's language."
     ),
+    before_model_callback=pdf_to_images_before_model_callback,
 )
 
 # Required by the ADK agent loader.
