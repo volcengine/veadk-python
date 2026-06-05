@@ -113,9 +113,11 @@ function resolve(appName: string): { app: string; ep: AdkEndpoint } {
  *  local server, or a remote AgentKit base URL with a Bearer API key. */
 function apiFetch(path: string, init: RequestInit = {}, ep: AdkEndpoint = {}): Promise<Response> {
   if (ep.base) {
+    // Use backend proxy to avoid CORS issues with remote AgentKit
     const headers: Record<string, string> = { ...(init.headers as Record<string, string>) };
-    if (ep.apiKey) headers["Authorization"] = `Bearer ${ep.apiKey}`;
-    return fetch(ep.base.replace(/\/+$/, "") + path, { ...init, headers });
+    headers["X-AgentKit-Base"] = ep.base;
+    if (ep.apiKey) headers["X-AgentKit-Key"] = ep.apiKey;
+    return fetch(withAuth(`${API_BASE}/agentkit-proxy${path}`), { ...init, headers });
   }
   return fetch(withAuth(`${API_BASE}${path}`), init);
 }
