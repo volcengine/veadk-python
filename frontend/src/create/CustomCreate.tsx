@@ -1013,49 +1013,37 @@ export function CustomCreate({ onBack, onCreate, initialDraft }: CustomCreatePro
     // NOTE: do NOT call onCreate() here — it navigates away from the create
     // view. The generated project preview below IS the outcome of this step.
 
-    try {
-      const proj = generateProject(draft);
+    const proj = generateProject(draft);
 
-      // Validate project structure
-      if (!proj || !proj.name || !Array.isArray(proj.files)) {
-        console.error("[CustomCreate] Invalid project structure:", proj);
-        alert("生成项目失败：项目结构无效");
-        return;
-      }
-
-      // Pull in any Skill Hub selections, downloading their files in parallel.
-      // Per-skill failures are skipped so one bad skill can't abort the build.
-      if (selectedSkills.length > 0) {
-        setBuilding(true);
-        try {
-          const results = await Promise.all(
-            selectedSkills.map((s) =>
-              downloadSkillFiles(s.slug, s.namespace).catch((err) => {
-                console.warn(`下载技能失败：${s.name}`, err);
-                return [];
-              }),
-            ),
-          );
-          const existing = new Set(proj.files.map((f) => f.path));
-          for (const files of results) {
-            for (const f of files) {
-              // Generated files win on collision (unlikely — skills live under skills/).
-              if (!existing.has(f.path)) {
-                proj.files.push(f);
-                existing.add(f.path);
-              }
+    // Pull in any Skill Hub selections, downloading their files in parallel.
+    // Per-skill failures are skipped so one bad skill can't abort the build.
+    if (selectedSkills.length > 0) {
+      setBuilding(true);
+      try {
+        const results = await Promise.all(
+          selectedSkills.map((s) =>
+            downloadSkillFiles(s.slug, s.namespace).catch((err) => {
+              console.warn(`下载技能失败：${s.name}`, err);
+              return [];
+            }),
+          ),
+        );
+        const existing = new Set(proj.files.map((f) => f.path));
+        for (const files of results) {
+          for (const f of files) {
+            // Generated files win on collision (unlikely — skills live under skills/).
+            if (!existing.has(f.path)) {
+              proj.files.push(f);
+              existing.add(f.path);
             }
           }
-        } finally {
-          setBuilding(false);
         }
+      } finally {
+        setBuilding(false);
       }
-
-      setProject(proj);
-    } catch (error) {
-      console.error("[CustomCreate] Error in finish():", error);
-      alert(`生成项目时发生错误：${error instanceof Error ? error.message : String(error)}`);
     }
+
+    setProject(proj);
   };
 
   // Sub-agent mutators.

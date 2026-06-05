@@ -185,13 +185,8 @@ export function ProjectPreview({ project, onChange, onDeploy }: ProjectPreviewPr
   }, [project?.files]);
 
   // Validate project structure AFTER all hooks
-  if (!project) {
-    console.error("[ProjectPreview] Received null/undefined project");
-    return <div className="pp-error">项目数据为空</div>;
-  }
-  if (!Array.isArray(project.files)) {
-    console.error("[ProjectPreview] project.files is not an array:", project.files);
-    return <div className="pp-error">项目文件列表格式错误</div>;
+  if (!project || !Array.isArray(project.files)) {
+    return <div className="pp-error">项目数据无效</div>;
   }
 
   const selectedFile =
