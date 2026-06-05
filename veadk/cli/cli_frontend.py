@@ -385,6 +385,52 @@ def frontend(
             logger.error(f"Skillhub proxy error: {e}")
             raise HTTPException(status_code=502, detail=f"Proxy error: {str(e)}")
 
+    # ---- AgentKit proxy: proxy /agentkit-proxy/* to remote AgentKit ----
+    @app.api_route(
+        "/agentkit-proxy/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"]
+    )
+    async def _agentkit_proxy(request: Request, path: str):
+        """Proxy requests to remote AgentKit APIs to avoid CORS issues."""
+        target_base = request.headers.get("X-AgentKit-Base")
+        api_key = request.headers.get("X-AgentKit-Key")
+        if not target_base:
+            raise HTTPException(status_code=400, detail="Missing X-AgentKit-Base")
+
+        target_url = f"{target_base.rstrip('/')}/{path}"
+        if request.url.query:
+            target_url += f"?{request.url.query}"
+
+        headers = dict(request.headers)
+        # Remove proxy-specific and CORS-related headers
+        headers.pop("host", None)
+        headers.pop("x-agentkit-base", None)
+        headers.pop("x-agentkit-key", None)
+        headers.pop("origin", None)
+        headers.pop("referer", None)
+        headers.pop("sec-fetch-site", None)
+        headers.pop("sec-fetch-mode", None)
+        headers.pop("sec-fetch-dest", None)
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.request(
+                    method=request.method,
+                    url=target_url,
+                    headers=headers,
+                    content=await request.body(),
+                    timeout=30.0,
+                )
+                return Response(
+                    content=response.content,
+                    status_code=response.status_code,
+                    headers=dict(response.headers),
+                )
+        except Exception as e:
+            logger.error(f"AgentKit proxy error: {e}")
+            raise HTTPException(status_code=502, detail=f"Proxy error: {str(e)}")
+
     # ---- SSO (optional): VeIdentity user pool, or a generic provider via env ----
     redirect_uri = oauth2_redirect_uri or f"http://{host}:{port}/oauth2/callback"
     pool_ok = oauth2_user_pool or oauth2_user_pool_uid
