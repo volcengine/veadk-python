@@ -886,6 +886,37 @@ export function CustomCreate({ onBack, onCreate, initialDraft }: CustomCreatePro
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const sectionRefs = useRef<Partial<Record<StepId, HTMLElement | null>>>({});
 
+  // Section wrapper: registers a ref for scroll-spy + renders the heading.
+  // IMPORTANT: keep a STABLE identity (stored in a ref). If this were declared
+  // as a fresh function each render, React would remount every section on every
+  // keystroke — detaching the nodes the IntersectionObserver watches (breaking
+  // the scroll-spy) and dropping input focus.
+  // NOTE: Must be declared before any conditional returns to satisfy React hooks rules.
+  const sectionImpl = useRef<
+    ((p: { meta: StepMeta; children: React.ReactNode }) => React.ReactElement) | null
+  >(null);
+  if (!sectionImpl.current) {
+    sectionImpl.current = ({ meta, children }) => (
+      <section
+        ref={(el) => {
+          sectionRefs.current[meta.id] = el;
+        }}
+        id={`cw-sec-${meta.id}`}
+        data-step-id={meta.id}
+        className="cw-section"
+      >
+        <header className="cw-sec-head">
+          <h2 className="cw-sec-title">
+            {meta.label}
+            {meta.required && <span className="cw-sec-required">必填</span>}
+          </h2>
+          <p className="cw-sec-hint">{meta.hint}</p>
+        </header>
+        {children}
+      </section>
+    );
+  }
+
   const patch = (p: Partial<AgentDraft>) => setDraft((d) => ({ ...d, ...p }));
 
   const builtinTools = draft.builtinTools ?? [];
@@ -1063,35 +1094,6 @@ export function CustomCreate({ onBack, onCreate, initialDraft }: CustomCreatePro
     );
   }
 
-  // Section wrapper: registers a ref for scroll-spy + renders the heading.
-  // IMPORTANT: keep a STABLE identity (stored in a ref). If this were declared
-  // as a fresh function each render, React would remount every section on every
-  // keystroke — detaching the nodes the IntersectionObserver watches (breaking
-  // the scroll-spy) and dropping input focus.
-  const sectionImpl = useRef<
-    ((p: { meta: StepMeta; children: React.ReactNode }) => React.ReactElement) | null
-  >(null);
-  if (!sectionImpl.current) {
-    sectionImpl.current = ({ meta, children }) => (
-      <section
-        ref={(el) => {
-          sectionRefs.current[meta.id] = el;
-        }}
-        id={`cw-sec-${meta.id}`}
-        data-step-id={meta.id}
-        className="cw-section"
-      >
-        <header className="cw-sec-head">
-          <h2 className="cw-sec-title">
-            {meta.label}
-            {meta.required && <span className="cw-sec-required">必填</span>}
-          </h2>
-          <p className="cw-sec-hint">{meta.hint}</p>
-        </header>
-        {children}
-      </section>
-    );
-  }
   const Section = sectionImpl.current;
 
   const metaOf = (id: StepId) => STEPS.find((s) => s.id === id)!;
