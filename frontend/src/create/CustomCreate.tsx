@@ -886,6 +886,37 @@ export function CustomCreate({ onBack, onCreate, initialDraft }: CustomCreatePro
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const sectionRefs = useRef<Partial<Record<StepId, HTMLElement | null>>>({});
 
+  // Section wrapper: registers a ref for scroll-spy + renders the heading.
+  // IMPORTANT: keep a STABLE identity (stored in a ref). If this were declared
+  // as a fresh function each render, React would remount every section on every
+  // keystroke — detaching the nodes the IntersectionObserver watches (breaking
+  // the scroll-spy) and dropping input focus.
+  // NOTE: Must be declared before any conditional returns to satisfy React hooks rules.
+  const sectionImpl = useRef<
+    ((p: { meta: StepMeta; children: React.ReactNode }) => React.ReactElement) | null
+  >(null);
+  if (!sectionImpl.current) {
+    sectionImpl.current = ({ meta, children }) => (
+      <section
+        ref={(el) => {
+          sectionRefs.current[meta.id] = el;
+        }}
+        id={`cw-sec-${meta.id}`}
+        data-step-id={meta.id}
+        className="cw-section"
+      >
+        <header className="cw-sec-head">
+          <h2 className="cw-sec-title">
+            {meta.label}
+            {meta.required && <span className="cw-sec-required">必填</span>}
+          </h2>
+          <p className="cw-sec-hint">{meta.hint}</p>
+        </header>
+        {children}
+      </section>
+    );
+  }
+
   const patch = (p: Partial<AgentDraft>) => setDraft((d) => ({ ...d, ...p }));
 
   const builtinTools = draft.builtinTools ?? [];
@@ -982,37 +1013,49 @@ export function CustomCreate({ onBack, onCreate, initialDraft }: CustomCreatePro
     // NOTE: do NOT call onCreate() here — it navigates away from the create
     // view. The generated project preview below IS the outcome of this step.
 
-    const proj = generateProject(draft);
+    try {
+      const proj = generateProject(draft);
 
-    // Pull in any Skill Hub selections, downloading their files in parallel.
-    // Per-skill failures are skipped so one bad skill can't abort the build.
-    if (selectedSkills.length > 0) {
-      setBuilding(true);
-      try {
-        const results = await Promise.all(
-          selectedSkills.map((s) =>
-            downloadSkillFiles(s.slug, s.namespace).catch((err) => {
-              console.warn(`下载技能失败：${s.name}`, err);
-              return [];
-            }),
-          ),
-        );
-        const existing = new Set(proj.files.map((f) => f.path));
-        for (const files of results) {
-          for (const f of files) {
-            // Generated files win on collision (unlikely — skills live under skills/).
-            if (!existing.has(f.path)) {
-              proj.files.push(f);
-              existing.add(f.path);
+      // Validate project structure
+      if (!proj || !proj.name || !Array.isArray(proj.files)) {
+        console.error("[CustomCreate] Invalid project structure:", proj);
+        alert("生成项目失败：项目结构无效");
+        return;
+      }
+
+      // Pull in any Skill Hub selections, downloading their files in parallel.
+      // Per-skill failures are skipped so one bad skill can't abort the build.
+      if (selectedSkills.length > 0) {
+        setBuilding(true);
+        try {
+          const results = await Promise.all(
+            selectedSkills.map((s) =>
+              downloadSkillFiles(s.slug, s.namespace).catch((err) => {
+                console.warn(`下载技能失败：${s.name}`, err);
+                return [];
+              }),
+            ),
+          );
+          const existing = new Set(proj.files.map((f) => f.path));
+          for (const files of results) {
+            for (const f of files) {
+              // Generated files win on collision (unlikely — skills live under skills/).
+              if (!existing.has(f.path)) {
+                proj.files.push(f);
+                existing.add(f.path);
+              }
             }
           }
+        } finally {
+          setBuilding(false);
         }
-      } finally {
-        setBuilding(false);
       }
-    }
 
-    setProject(proj);
+      setProject(proj);
+    } catch (error) {
+      console.error("[CustomCreate] Error in finish():", error);
+      alert(`生成项目时发生错误：${error instanceof Error ? error.message : String(error)}`);
+    }
   };
 
   // Sub-agent mutators.
@@ -1063,35 +1106,6 @@ export function CustomCreate({ onBack, onCreate, initialDraft }: CustomCreatePro
     );
   }
 
-  // Section wrapper: registers a ref for scroll-spy + renders the heading.
-  // IMPORTANT: keep a STABLE identity (stored in a ref). If this were declared
-  // as a fresh function each render, React would remount every section on every
-  // keystroke — detaching the nodes the IntersectionObserver watches (breaking
-  // the scroll-spy) and dropping input focus.
-  const sectionImpl = useRef<
-    ((p: { meta: StepMeta; children: React.ReactNode }) => React.ReactElement) | null
-  >(null);
-  if (!sectionImpl.current) {
-    sectionImpl.current = ({ meta, children }) => (
-      <section
-        ref={(el) => {
-          sectionRefs.current[meta.id] = el;
-        }}
-        id={`cw-sec-${meta.id}`}
-        data-step-id={meta.id}
-        className="cw-section"
-      >
-        <header className="cw-sec-head">
-          <h2 className="cw-sec-title">
-            {meta.label}
-            {meta.required && <span className="cw-sec-required">必填</span>}
-          </h2>
-          <p className="cw-sec-hint">{meta.hint}</p>
-        </header>
-        {children}
-      </section>
-    );
-  }
   const Section = sectionImpl.current;
 
   const metaOf = (id: StepId) => STEPS.find((s) => s.id === id)!;
