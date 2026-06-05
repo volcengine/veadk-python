@@ -508,6 +508,7 @@ export default function App() {
           setAddAgent(false);
           setAddMenu(false);
           setSearchView(true);
+          setError("");
         }}
         onQuickCreate={() => {
           // "添加 Agent" — open the two-card chooser. Drop any selected session.
@@ -519,6 +520,7 @@ export default function App() {
           setCreateView(null);
           setImportedDraft(null);
           setAddMenu(true);
+          setError("");
         }}
         onSkillCenter={() => {
           setCreateView(null);
@@ -526,6 +528,7 @@ export default function App() {
           setAddMenu(false);
           setSearchView(false);
           setSkillCenter(true);
+          setError("");
         }}
         onAddAgent={() => {
           setCreateView(null);
@@ -535,6 +538,7 @@ export default function App() {
           setTurns([]);
           setAddMenu(false);
           setAddAgent(true);
+          setError("");
         }}
         onPickSession={(id) => {
           setCreateView(null);
@@ -542,6 +546,7 @@ export default function App() {
           setAddAgent(false);
           setAddMenu(false);
           setSearchView(false);
+          setError("");
           pickSession(id);
         }}
         onDeleteSession={removeSession}
