@@ -7,6 +7,7 @@ import {
   Folder,
   Loader2,
   Pencil,
+  Play,
   Rocket,
   Trash2,
 } from "lucide-react";
@@ -35,6 +36,7 @@ hljs.registerLanguage("dockerfile", dockerfile);
 hljs.registerLanguage("makefile", makefile);
 import type { AgentProject, ProjectFile } from "../create/project";
 import { buildZip } from "./zip";
+import { AgentTest } from "./AgentTest";
 import "./ProjectPreview.css";
 
 // --- syntax highlighting ----------------------------------------------------
@@ -175,6 +177,7 @@ export function ProjectPreview({ project, onChange, onDeploy }: ProjectPreviewPr
   const [newPath, setNewPath] = useState("");
   const [deploying, setDeploying] = useState(false);
   const [deployError, setDeployError] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
   const underlayRef = useRef<HTMLPreElement>(null);
 
   const tree = useMemo(() => {
@@ -390,15 +393,27 @@ export function ProjectPreview({ project, onChange, onDeploy }: ProjectPreviewPr
               </>
             )}
             {project.files.length > 0 && (
-              <button
-                type="button"
-                className="pp-secondary"
-                title="下载 ZIP"
-                onClick={handleDownloadZip}
-              >
-                <Download className="pp-ic" />
-                下载 ZIP
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="pp-secondary"
+                  title="测试运行"
+                  onClick={() => setTesting(true)}
+                  disabled={testing}
+                >
+                  <Play className="pp-ic" />
+                  测试运行
+                </button>
+                <button
+                  type="button"
+                  className="pp-secondary"
+                  title="下载 ZIP"
+                  onClick={handleDownloadZip}
+                >
+                  <Download className="pp-ic" />
+                  下载 ZIP
+                </button>
+              </>
             )}
             {onDeploy && (
               <button
@@ -421,7 +436,13 @@ export function ProjectPreview({ project, onChange, onDeploy }: ProjectPreviewPr
         {deployError && <div className="pp-error">{deployError}</div>}
 
         <div className="pp-content">
-          {selectedFile == null ? (
+          {testing ? (
+            <AgentTest
+              projectName={project.name}
+              files={project.files}
+              onClose={() => setTesting(false)}
+            />
+          ) : selectedFile == null ? (
             <div className="pp-placeholder">选择左侧文件以查看内容</div>
           ) : editable ? (
             <div className="pp-editor-wrap">
