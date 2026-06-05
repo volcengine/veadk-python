@@ -24,6 +24,7 @@ the two stay in sync.
 import os
 
 from veadk import Agent
+from veadk.utils.pdf_to_images import pdf_to_images_before_model_callback
 
 # The two builder apps share one instruction. ADK puts the agents dir on
 # sys.path, so the sibling app package is importable; fall back to the
@@ -39,6 +40,7 @@ agent = Agent(
     name="agent_builder_b",
     description="VeADK Agent Builder (B)：A/B 对比中的第二个构建器。",
     instruction=lambda _ctx: INSTRUCTION,
+    before_model_callback=pdf_to_images_before_model_callback,
     **({"model_name": _MODEL_B} if _MODEL_B else {}),
 )
 

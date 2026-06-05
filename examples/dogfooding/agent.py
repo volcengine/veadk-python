@@ -24,6 +24,7 @@ other examples and powers the web UI's "智能模式" (smart mode).
 import os
 
 from veadk import Agent
+from veadk.utils.pdf_to_images import pdf_to_images_before_model_callback
 
 # The schema mirrors the web UI's AgentDraft and the codegen catalog
 # (frontend/src/create/veadkCatalog.ts). Output values MUST come from the
@@ -90,6 +91,7 @@ agent = Agent(
     name="agent_builder",
     description="VeADK Agent Builder：把自然语言需求转化为智能体配置 JSON（前端据此生成 VeADK 项目）。",
     instruction=lambda _ctx: INSTRUCTION,
+    before_model_callback=pdf_to_images_before_model_callback,
     **({"model_name": _MODEL_A} if _MODEL_A else {}),
 )
 

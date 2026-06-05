@@ -20,11 +20,13 @@ the GitHub / Google / custom-OIDC env vars and how to run it.
 """
 
 from veadk import Agent
+from veadk.utils.pdf_to_images import pdf_to_images_before_model_callback
 
 agent = Agent(
     name="sso_demo_agent",
     description="Demo agent served behind an SSO login page.",
     instruction="You are a helpful assistant. Answer concisely.",
+    before_model_callback=pdf_to_images_before_model_callback,
 )
 
 # Required by the Google ADK agent loader.
