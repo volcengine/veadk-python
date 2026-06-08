@@ -218,6 +218,17 @@ def frontend(
     oauth2_provider_label: str | None,
 ) -> None:
     """Launch the A2UI web UI backed by the ADK agent API server."""
+    # Explicitly load .env file before any agent code runs
+    # find_dotenv() searches upward from current directory to find .env
+    from dotenv import find_dotenv, load_dotenv
+
+    env_file_path = find_dotenv()
+    if env_file_path:
+        load_dotenv(env_file_path)
+        logger.info(f"Loaded .env file from {env_file_path}")
+    else:
+        logger.warning("No .env file found in current directory or parent directories")
+
     from google.adk.cli.fast_api import get_fast_api_app
 
     agents_dir = os.path.abspath(agents_dir)
@@ -235,6 +246,20 @@ def frontend(
     from fastapi.responses import Response
     from google.adk.cli.utils.agent_loader import AgentLoader
     import httpx
+
+    _temp_agents: dict[str, str] = {}  # app_name -> temp_dir_path
+
+    # Monkey-patch AgentLoader class to handle temp agents
+    # This way all instances will use the patched version
+    _original_load_agent_method = AgentLoader.load_agent
+
+    def _patched_load_agent_method(self, name: str):
+        if name in _temp_agents:
+            return _load_temp_agent(name)
+        return _original_load_agent_method(self, name)
+
+    AgentLoader.load_agent = _patched_load_agent_method
+    logger.info("Patched AgentLoader.load_agent to support temp agents")
 
     _agent_loader = AgentLoader(agents_dir)
 
@@ -430,6 +455,140 @@ def frontend(
         except Exception as e:
             logger.error(f"AgentKit proxy error: {e}")
             raise HTTPException(status_code=502, detail=f"Proxy error: {str(e)}")
+
+    # ---- Temporary agent deployment for testing generated code ----
+    import tempfile
+    import shutil
+    import importlib.util
+    from pathlib import Path as PathlibPath
+
+    @app.post("/web/deploy-temp-agent")
+    async def _deploy_temp_agent(request: Request):
+        """Deploy a generated agent temporarily for testing.
+
+        Request body: {
+            "name": "agent_name",
+            "files": [{"path": "agent.py", "content": "..."}, ...]
+        }
+        Returns: {"appName": "temp_agent_name"}
+        """
+        try:
+            data = await request.json()
+            agent_name = data.get("name", "").strip()
+            files = data.get("files", [])
+
+            if not agent_name:
+                raise HTTPException(status_code=400, detail="Agent name is required")
+            if not files:
+                raise HTTPException(status_code=400, detail="No files provided")
+
+            # Create a temporary directory
+            temp_dir = tempfile.mkdtemp(prefix=f"veadk_temp_{agent_name}_")
+            logger.info(f"Creating temporary agent at {temp_dir}")
+
+            # Write all files
+            for file_info in files:
+                file_path = file_info.get("path", "")
+                content = file_info.get("content", "")
+                if not file_path:
+                    continue
+
+                full_path = PathlibPath(temp_dir) / file_path
+                full_path.parent.mkdir(parents=True, exist_ok=True)
+                full_path.write_text(content, encoding="utf-8")
+
+            # Verify agent.py exists and has root_agent
+            agent_py = PathlibPath(temp_dir) / "agent.py"
+            if not agent_py.exists():
+                shutil.rmtree(temp_dir)
+                raise HTTPException(
+                    status_code=400, detail="agent.py not found in files"
+                )
+
+            # Try to load the agent to validate it
+            try:
+                spec = importlib.util.spec_from_file_location(
+                    "temp_agent", str(agent_py)
+                )
+                if spec is None or spec.loader is None:
+                    raise ValueError("Failed to create module spec")
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                if not hasattr(module, "root_agent"):
+                    raise ValueError("root_agent not found in agent.py")
+            except Exception as e:
+                shutil.rmtree(temp_dir)
+                raise HTTPException(
+                    status_code=400, detail=f"Failed to load agent: {str(e)}"
+                )
+
+            # Clean up old temp agent if exists
+            app_name = f"_temp_{agent_name}"
+            if app_name in _temp_agents:
+                old_dir = _temp_agents[app_name]
+                if os.path.exists(old_dir):
+                    shutil.rmtree(old_dir)
+
+            # Register the temp agent
+            _temp_agents[app_name] = temp_dir
+
+            logger.info(f"Temporary agent '{app_name}' deployed successfully")
+            return {"appName": app_name}
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error deploying temp agent: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Deployment failed: {str(e)}")
+
+    def _load_temp_agent(app_name: str):
+        """Load a temporary agent from the temp directory.
+
+        Uses environment variables already loaded in the parent process.
+        """
+        if app_name not in _temp_agents:
+            raise ValueError(f"Unknown temp agent: {app_name}")
+
+        temp_dir = _temp_agents[app_name]
+        agent_py = PathlibPath(temp_dir) / "agent.py"
+
+        if not agent_py.exists():
+            raise ValueError(f"agent.py not found in temp dir: {temp_dir}")
+
+        spec = importlib.util.spec_from_file_location(app_name, str(agent_py))
+        if spec is None or spec.loader is None:
+            raise ValueError("Failed to create module spec")
+        module = importlib.util.module_from_spec(spec)
+
+        # Add temp dir to sys.path so imports work
+        import sys
+
+        if temp_dir not in sys.path:
+            sys.path.insert(0, temp_dir)
+
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            if temp_dir in sys.path:
+                sys.path.remove(temp_dir)
+
+        if not hasattr(module, "root_agent"):
+            raise ValueError("root_agent not found in agent.py")
+
+        return module.root_agent
+
+    @app.delete("/web/deploy-temp-agent/{app_name}")
+    async def _delete_temp_agent(app_name: str):
+        """Clean up a temporary agent."""
+        if app_name not in _temp_agents:
+            raise HTTPException(status_code=404, detail=f"Agent '{app_name}' not found")
+
+        temp_dir = _temp_agents.pop(app_name)
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+
+        logger.info(f"Temporary agent '{app_name}' deleted")
+        return {"status": "deleted"}
 
     # ---- SSO (optional): VeIdentity user pool, or a generic provider via env ----
     redirect_uri = oauth2_redirect_uri or f"http://{host}:{port}/oauth2/callback"
