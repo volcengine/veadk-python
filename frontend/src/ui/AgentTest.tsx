@@ -78,7 +78,7 @@ export function AgentTest({ projectName, files, onClose }: AgentTestProps) {
     if (!input.trim() || loading || !appName || !sessionId) return;
 
     const userMessage: Message = { role: "user", content: input };
-    setMessages((prev) => [...prev, userMessage]);
+    const userInput = input;
     setInput("");
     setLoading(true);
 
@@ -87,7 +87,9 @@ export function AgentTest({ projectName, files, onClose }: AgentTestProps) {
       content: "",
       blocks: [],
     };
-    setMessages((prev) => [...prev, assistantMessage]);
+
+    // Add both user and assistant messages at once to avoid state update race
+    setMessages((prev) => [...prev, userMessage, assistantMessage]);
 
     try {
       let acc = emptyAcc();
@@ -97,7 +99,7 @@ export function AgentTest({ projectName, files, onClose }: AgentTestProps) {
         appName,
         userId: "test_user",
         sessionId,
-        text: input,
+        text: userInput,
       })) {
         // Check for errors
         const error = event.error || event.errorMessage || event.error_message;
@@ -188,7 +190,9 @@ export function AgentTest({ projectName, files, onClose }: AgentTestProps) {
                   {msg.role === "user" ? "你" : projectName}
                 </div>
                 <div className="message-content">
-                  {msg.error ? (
+                  {msg.role === "user" ? (
+                    <div className="message-text">{msg.content}</div>
+                  ) : msg.error ? (
                     <div className="message-error">
                       <AlertCircle className="icon" />
                       {msg.error}

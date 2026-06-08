@@ -1,46 +1,50 @@
 .agent-test {
   display: flex;
   flex-direction: column;
+  width: 100%;
   height: 100%;
-  background: var(--bg-base);
-  border-radius: 8px;
+  flex: 1;
+  background: #ffffff;
+  border-radius: 12px;
   overflow: hidden;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.06);
+  border: 1px solid #e8e8e8;
 }
 
 .agent-test-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-subtle);
+  padding: 18px 24px;
+  border-bottom: 1px solid #e8e8e8;
+  background: #fafafa;
 }
 
 .agent-test-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text);
+  font-size: 15px;
+  font-weight: 500;
+  color: #262626;
   margin: 0;
+  letter-spacing: -0.01em;
 }
 
 .agent-test-close {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border: none;
   background: transparent;
-  color: var(--text-muted);
+  color: #8c8c8c;
   border-radius: 6px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all 0.2s;
 }
 
 .agent-test-close:hover {
-  background: var(--bg-hover);
-  color: var(--text);
+  background: #f0f0f0;
+  color: #262626;
 }
 
 .agent-test-loading,
@@ -78,10 +82,11 @@
 .agent-test-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 20px;
+  padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
+  background: #ffffff;
 }
 
 .agent-test-empty {
@@ -89,15 +94,15 @@
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: var(--text-muted);
+  color: #bfbfbf;
   font-size: 14px;
 }
 
 .agent-test-message {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  max-width: 85%;
+  gap: 6px;
+  max-width: 70%;
 }
 
 .agent-test-message.user {
@@ -110,29 +115,37 @@
 
 .message-role {
   font-size: 12px;
-  font-weight: 600;
-  color: var(--text-muted);
-  padding: 0 12px;
+  font-weight: 500;
+  color: #8c8c8c;
+  padding: 0 4px;
 }
 
 .message-content {
-  background: var(--bg-subtle);
-  border-radius: 12px;
+  background: #f5f5f5;
+  border-radius: 16px;
   padding: 12px 16px;
-  color: var(--text);
+  color: #262626;
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.6;
   word-wrap: break-word;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  max-width: 100%;
+  min-height: 20px;
+  display: block;
 }
 
 .agent-test-message.user .message-content {
-  background: var(--primary);
-  color: white;
+  background: #0066ff !important;
+  color: white !important;
+  box-shadow: 0 1px 4px rgba(0, 102, 255, 0.2);
 }
 
 .message-text {
-  white-space: pre-wrap;
+  display: block;
+  min-height: 1em;
 }
+
 
 .message-error {
   display: flex;
@@ -152,25 +165,26 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 16px 20px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-subtle);
+  padding: 16px 24px;
+  border-top: 1px solid #e8e8e8;
+  background: #fafafa;
 }
 
 .agent-test-input .input {
   flex: 1;
   padding: 10px 16px;
-  border: 1px solid var(--border);
+  border: 1px solid #d9d9d9;
   border-radius: 8px;
-  background: var(--bg-base);
-  color: var(--text);
+  background: #ffffff;
+  color: #262626;
   font-size: 14px;
   outline: none;
-  transition: border-color 0.15s;
+  transition: all 0.2s;
 }
 
 .agent-test-input .input:focus {
-  border-color: var(--primary);
+  border-color: #0066ff;
+  box-shadow: 0 0 0 2px rgba(0, 102, 255, 0.1);
 }
 
 .agent-test-input .input:disabled {
@@ -186,15 +200,16 @@
   height: 40px;
   border: none;
   border-radius: 8px;
-  background: var(--primary);
+  background: #0066ff;
   color: white;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all 0.2s;
+  box-shadow: 0 2px 4px rgba(0, 102, 255, 0.2);
 }
 
 .send-button:hover:not(:disabled) {
-  background: var(--primary-hover);
-  transform: translateY(-1px);
+  background: #0052cc;
+  box-shadow: 0 4px 8px rgba(0, 102, 255, 0.3);
 }
 
 .send-button:disabled {
