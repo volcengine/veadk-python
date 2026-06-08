@@ -221,12 +221,13 @@ def frontend(
     # Explicitly load .env file before any agent code runs
     # find_dotenv() searches upward from current directory to find .env
     from dotenv import find_dotenv, load_dotenv
+
     env_file_path = find_dotenv()
     if env_file_path:
         load_dotenv(env_file_path)
         logger.info(f"Loaded .env file from {env_file_path}")
     else:
-        logger.warning(f"No .env file found in current directory or parent directories")
+        logger.warning("No .env file found in current directory or parent directories")
 
     from google.adk.cli.fast_api import get_fast_api_app
 
@@ -501,13 +502,14 @@ def frontend(
             if not agent_py.exists():
                 shutil.rmtree(temp_dir)
                 raise HTTPException(
-                    status_code=400,
-                    detail="agent.py not found in files"
+                    status_code=400, detail="agent.py not found in files"
                 )
 
             # Try to load the agent to validate it
             try:
-                spec = importlib.util.spec_from_file_location("temp_agent", str(agent_py))
+                spec = importlib.util.spec_from_file_location(
+                    "temp_agent", str(agent_py)
+                )
                 if spec is None or spec.loader is None:
                     raise ValueError("Failed to create module spec")
                 module = importlib.util.module_from_spec(spec)
@@ -517,8 +519,7 @@ def frontend(
             except Exception as e:
                 shutil.rmtree(temp_dir)
                 raise HTTPException(
-                    status_code=400,
-                    detail=f"Failed to load agent: {str(e)}"
+                    status_code=400, detail=f"Failed to load agent: {str(e)}"
                 )
 
             # Clean up old temp agent if exists
@@ -561,6 +562,7 @@ def frontend(
 
         # Add temp dir to sys.path so imports work
         import sys
+
         if temp_dir not in sys.path:
             sys.path.insert(0, temp_dir)
 
