@@ -12,7 +12,8 @@ VeADK 的可观测能力遵循 [OpenTelemetry](https://opentelemetry.io/docs/spe
 - **可视化链路**：每次请求从接入到响应的完整流程都可被追踪；
 - **结构化数据**：记录上下文、状态、事件类型、耗时等信息；
 - **跨组件追踪**：覆盖 Agent、工具、记忆模块、知识库以及外部接口；
-- **多 Agent 协调**：在多 Agent 协作场景中分析各 Agent 的调用关系与数据流向。
+- **多 Agent 协调**：在多 Agent 协作场景中分析各 Agent 的调用关系与数据流向；
+- **内容采集控制**：可通过 `observability.opentelemetry.trace_content` 关闭 Agent、LLM 与工具输入输出内容采集，仅保留非内容 Trace 信息。
 
 ## 支持的平台
 
