@@ -18,8 +18,7 @@
 
 - ``"adk"`` (default): Google ADK's built-in ``BaseLlmFlow`` (handled directly in
   :class:`veadk.agent.Agent`, no runtime object).
-- ``"cc"``: the Claude Code SDK as the agent harness.
-- ``"codex"``: reserved for a future Codex SDK runtime.
+- ``"codex"``: the OpenAI Codex SDK as the agent harness.
 """
 
 from __future__ import annotations
@@ -44,17 +43,6 @@ def get_runtime(name: str) -> BaseRuntime:
         NotImplementedError: If ``name`` is a known-but-unimplemented runtime.
         ValueError: If ``name`` is unknown.
     """
-    if name == "cc":
-        try:
-            from veadk.runtime.cc import ClaudeCodeRuntime
-        except ModuleNotFoundError as e:
-            raise ImportError(
-                f"The 'cc' runtime requires extra dependencies (missing: {e.name}). "
-                "Install them with: pip install claude-agent-sdk fastapi uvicorn"
-            ) from e
-
-        return ClaudeCodeRuntime()
-
     if name == "codex":
         try:
             from veadk.runtime.codex import CodexRuntime
