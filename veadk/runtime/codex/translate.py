@@ -68,12 +68,34 @@ def build_prompt(ctx: "InvocationContext") -> str:
     return "\n".join(lines)
 
 
+def _reasoning_summary(result: Any) -> str:
+    """Join the reasoning-summary text from a result's items, if any.
+
+    A reasoning model (e.g. DeepSeek) sometimes ends a turn with only a
+    ``reasoning`` item and no final ``agentMessage``, leaving
+    ``final_response`` empty. In that case the reasoning summary is the only
+    thing the model produced, so we surface it rather than print nothing.
+    """
+    parts: list[str] = []
+    for item in getattr(result, "items", None) or []:
+        data = item.model_dump() if hasattr(item, "model_dump") else item
+        if not isinstance(data, dict) or "reasoning" not in str(data.get("type", "")):
+            continue
+        for entry in data.get("summary") or []:
+            if isinstance(entry, str):
+                parts.append(entry)
+            elif isinstance(entry, dict) and entry.get("text"):
+                parts.append(str(entry["text"]))
+    return "\n".join(p.strip() for p in parts if p and p.strip())
+
+
 def result_to_events(result: Any, author: str, invocation_id: str) -> list[Event]:
     """Convert a Codex run result into ADK events.
 
     The Codex SDK's run result exposes the assistant's final text as
-    ``final_response``. Richer per-item events (tool calls, reasoning) can be
-    added later.
+    ``final_response``. When a turn ends with reasoning but no final message
+    (``final_response`` empty), fall back to the reasoning summary so the
+    caller never receives a silently empty turn.
 
     Args:
         result (Any): The object returned by ``thread.run(...)``.
@@ -82,9 +104,16 @@ def result_to_events(result: Any, author: str, invocation_id: str) -> list[Event
 
     Returns:
         list[google.adk.events.event.Event]: One text event, or empty if the
-        result carried no text.
+        result carried neither a final message nor reasoning.
     """
     text = getattr(result, "final_response", None)
+    if not text:
+        summary = _reasoning_summary(result)
+        if summary:
+            text = (
+                "[The model produced only reasoning, no final answer this turn]\n\n"
+                f"{summary}"
+            )
     if not text:
         return []
 
