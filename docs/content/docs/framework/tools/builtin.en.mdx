@@ -46,6 +46,7 @@ Built-in tools depend on Volcengine services. Enable the corresponding service a
 | `web_scraper` | Aggregated search (invite-only), code [here](https://github.com/volcengine/mcp-server/tree/main/server) | `from veadk.tools.builtin_tools.web_scraper import web_scraper` |
 | `vesearch` | Search via the [web-aware Q&A Agent](https://www.volcengine.com/docs/85508/1512748) | `from veadk.tools.builtin_tools.vesearch import vesearch` |
 | `link_reader` | Read and parse the content of web links | `from veadk.tools.builtin_tools.link_reader import link_reader` |
+| `web_fetch` | Fetch a web page / PDF over HTTP and extract readable content (plain HTTP, no credentials) | `from veadk.tools.builtin_tools.web_fetch import web_fetch` |
 | `image_generate` | [Generate images](https://www.volcengine.com/docs/82379/1541523) from text | `from veadk.tools.builtin_tools.image_generate import image_generate` |
 | `image_edit` | [Edit images](https://www.volcengine.com/docs/82379/1541523) (image-to-image) | `from veadk.tools.builtin_tools.image_edit import image_edit` |
 | `video_generate` | [Generate videos](https://www.volcengine.com/docs/82379/1520757) from text | `from veadk.tools.builtin_tools.video_generate import video_generate` |
@@ -200,6 +201,57 @@ if __name__ == "__main__":
 Environment variables:
 
 - `MODEL_AGENT_API_KEY`: API key for the agent's reasoning model
+
+## Web fetch (web_fetch)
+
+`web_fetch` does a plain HTTP GET on a given URL and extracts its readable content: HTML is converted to markdown or plain text, and PDFs are extracted to text via `pypdf`. It does **not** execute JavaScript, so pages that render entirely client-side or require login may come back incomplete. Unlike `link_reader`, this tool needs **no credentials of its own** (it is a plain HTTP fetch) — use it to let the agent read articles, docs, or any public URL the user references.
+
+Parameters:
+
+- `url`: the `http(s)` URL to fetch;
+- `extract_mode`: `markdown` (default, keeps headings / links / lists) or `text` (plain text);
+- `max_chars`: maximum characters of extracted content (default `50000`).
+
+Returns `{"url", "title", "content", "truncated"}`, or `{"error": ...}` on failure.
+
+<Callout type="info" title="Security & limits">
+- **SSRF protection**: after DNS resolution it blocks private / loopback / link-local / reserved addresses, and re-validates every redirect hop (including `<meta refresh>`), following at most 3 hops.
+- **Limits**: 2 MB download cap for HTML (10 MB for PDFs); 30 s request timeout; results cached in-process for 15 minutes.
+- No JavaScript rendering; no socket-level DNS pinning (resolve-then-revalidate only).
+</Callout>
+
+```python title="examples/tools/web_fetch/agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.tools.builtin_tools.web_fetch import web_fetch
+
+agent = Agent(
+    name="web_fetch_agent",
+    model_name="doubao-seed-1-8-251228",
+    description="An agent that reads web pages and PDFs.",
+    instruction="Use the web_fetch tool to fetch the given URL, then answer based on its content.",
+    tools=[web_fetch],
+)
+
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory())
+
+
+async def main():
+    response = await runner.run(
+        "Fetch https://arxiv.org/pdf/1706.03762 and summarize the paper's core idea"
+    )
+    print(response)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+Environment variables:
+
+- `MODEL_AGENT_API_KEY`: API key for the agent's reasoning model (the `web_fetch` tool itself needs no extra credentials)
 
 ## Image generation (image_generate)
 
