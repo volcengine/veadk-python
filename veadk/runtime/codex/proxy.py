@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, AsyncIterator, cast
+from typing import Any, AsyncIterator
 
 import litellm
 import uvicorn
@@ -95,6 +95,14 @@ class ResponsesShim:
             call_kwargs: dict[str, Any] = {
                 key: body[key] for key in _PASSTHROUGH_KEYS if key in body
             }
+            # Codex injects its built-in tools (e.g. `web_search`) whose schema
+            # carries fields like `external_web_access` that non-OpenAI Responses
+            # backends (Ark) reject. Keep only standard `function` tools, which
+            # the bridged chat backend understands.
+            if isinstance(call_kwargs.get("tools"), list):
+                call_kwargs["tools"] = [
+                    t for t in call_kwargs["tools"] if t.get("type") == "function"
+                ]
             call_kwargs.update(
                 model=f"openai/{model}",
                 api_base=self.api_base,
@@ -102,18 +110,23 @@ class ResponsesShim:
                 custom_llm_provider="openai",
                 drop_params=True,
                 num_retries=0,
+                stream=False,
             )
 
+            # Always call the backend non-streaming. litellm's chat->Responses
+            # bridge can only emit a single degenerate `response.completed`
+            # event when streaming a chat backend, which Codex's strict SSE
+            # parser rejects (surfaced as a generic "high demand" error). So we
+            # fetch the full result and, when Codex asked for a stream,
+            # synthesize the canonical Responses event sequence ourselves.
             result = await litellm.aresponses(**call_kwargs)
+            resp = _to_dict(result)
 
             if stream:
-                stream_iter = cast(AsyncIterator[Any], result).__aiter__()
-                first = await anext(stream_iter, None)
                 return StreamingResponse(
-                    _encode_sse(stream_iter, first),
-                    media_type="text/event-stream",
+                    _synth_sse(resp), media_type="text/event-stream"
                 )
-            return JSONResponse(_to_dict(result))
+            return JSONResponse(resp)
 
         @app.exception_handler(APIError)
         async def _on_api_error(_request: Request, exc: APIError) -> JSONResponse:
@@ -180,41 +193,103 @@ def _to_dict(obj: Any) -> dict[str, Any]:
     return dict(obj)
 
 
-def _encode_chunk(chunk: Any) -> bytes:
-    """Encode one litellm Responses stream chunk as SSE bytes."""
-    if isinstance(chunk, (bytes, bytearray)):
-        return bytes(chunk)
-    if isinstance(chunk, str):
-        return chunk.encode()
-    data = _to_dict(chunk)
-    event_type = data.get("type", "message")
-    return f"event: {event_type}\ndata: {json.dumps(data)}\n\n".encode()
+def _sse(event: dict[str, Any]) -> bytes:
+    """Encode one Responses event dict as an SSE frame."""
+    return f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode()
 
 
-async def _encode_sse(
-    chunks: AsyncIterator[Any], first: Any = None
-) -> AsyncIterator[bytes]:
-    """Re-encode litellm Responses stream chunks as SSE bytes.
+async def _synth_sse(resp: dict[str, Any]) -> AsyncIterator[bytes]:
+    """Synthesize a canonical Responses event stream from a final result.
 
-    ``first`` is the already-pulled leading chunk (or ``None``). A mid-stream
-    backend error is emitted as an ``error`` SSE event so the client sees a
-    terminal error rather than a silently truncated stream.
+    litellm's chat->Responses bridge cannot produce a real streamed event
+    sequence for a chat backend, so we expand the completed response into the
+    ordered events Codex expects: ``response.created`` -> per output item
+    (``output_item.added`` -> text/reasoning deltas -> ``output_item.done``) ->
+    ``response.completed``. Only ``message`` and ``reasoning`` items are
+    emitted (the only kinds the bridged chat backend returns); the completed
+    response is trimmed to match what was streamed.
     """
-    if first is not None:
-        yield _encode_chunk(first)
-    try:
-        async for chunk in chunks:
-            yield _encode_chunk(chunk)
-    except APIError as exc:
-        status = getattr(exc, "status_code", 500) or 500
-        err = {
-            "type": "error",
-            "error": {
-                "type": _error_type(status),
-                "message": getattr(exc, "message", str(exc)),
-            },
-        }
-        yield f"event: error\ndata: {json.dumps(err)}\n\n".encode()
+    seq = 0
+
+    def ev(payload: dict[str, Any]) -> bytes:
+        nonlocal seq
+        payload["sequence_number"] = seq
+        seq += 1
+        return _sse(payload)
+
+    items = [
+        it
+        for it in (resp.get("output") or [])
+        if it.get("type") in ("message", "reasoning")
+    ]
+    in_progress = {**resp, "status": "in_progress", "output": []}
+    yield ev({"type": "response.created", "response": in_progress})
+    yield ev({"type": "response.in_progress", "response": in_progress})
+
+    for idx, item in enumerate(items):
+        item_id = item.get("id", f"item_{idx}")
+        stub = {**item, "status": "in_progress"}
+        if item.get("type") == "message":
+            stub = {**stub, "content": []}
+        else:
+            stub = {**stub, "summary": []}
+        yield ev(
+            {"type": "response.output_item.added", "output_index": idx, "item": stub}
+        )
+
+        if item.get("type") == "message":
+            for cidx, part in enumerate(item.get("content") or []):
+                text = part.get("text", "")
+                base = {"item_id": item_id, "output_index": idx, "content_index": cidx}
+                yield ev(
+                    {
+                        "type": "response.content_part.added",
+                        **base,
+                        "part": {"type": "output_text", "text": "", "annotations": []},
+                    }
+                )
+                yield ev({"type": "response.output_text.delta", **base, "delta": text})
+                yield ev({"type": "response.output_text.done", **base, "text": text})
+                yield ev({"type": "response.content_part.done", **base, "part": part})
+        else:  # reasoning
+            for sidx, summary in enumerate(item.get("summary") or []):
+                text = summary.get("text", "")
+                base = {"item_id": item_id, "output_index": idx, "summary_index": sidx}
+                yield ev(
+                    {
+                        "type": "response.reasoning_summary_part.added",
+                        **base,
+                        "part": {"type": "summary_text", "text": ""},
+                    }
+                )
+                yield ev(
+                    {
+                        "type": "response.reasoning_summary_text.delta",
+                        **base,
+                        "delta": text,
+                    }
+                )
+                yield ev(
+                    {
+                        "type": "response.reasoning_summary_text.done",
+                        **base,
+                        "text": text,
+                    }
+                )
+                yield ev(
+                    {
+                        "type": "response.reasoning_summary_part.done",
+                        **base,
+                        "part": summary,
+                    }
+                )
+
+        yield ev(
+            {"type": "response.output_item.done", "output_index": idx, "item": item}
+        )
+
+    completed = {**resp, "status": "completed", "output": items}
+    yield ev({"type": "response.completed", "response": completed})
 
 
 # Reuse one shim per (api_base, api_key) for the lifetime of the process.
