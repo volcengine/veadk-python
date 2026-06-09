@@ -211,10 +211,11 @@ async def _synth_sse(resp: dict[str, Any]) -> AsyncIterator[bytes]:
     litellm's chat->Responses bridge cannot produce a real streamed event
     sequence for a chat backend, so we expand the completed response into the
     ordered events Codex expects: ``response.created`` -> per output item
-    (``output_item.added`` -> text/reasoning deltas -> ``output_item.done``) ->
-    ``response.completed``. Only ``message`` and ``reasoning`` items are
-    emitted (the only kinds the bridged chat backend returns); the completed
-    response is trimmed to match what was streamed.
+    (``output_item.added`` -> text/reasoning/tool-call deltas ->
+    ``output_item.done``) -> ``response.completed``. ``message``,
+    ``reasoning`` and ``function_call`` items are emitted; the last is what
+    drives Codex's agentic loop (a dropped tool call ends the turn at the
+    preamble). The completed response is trimmed to match what was streamed.
     """
     seq = 0
 
@@ -227,7 +228,7 @@ async def _synth_sse(resp: dict[str, Any]) -> AsyncIterator[bytes]:
     items = [
         it
         for it in (resp.get("output") or [])
-        if it.get("type") in ("message", "reasoning")
+        if it.get("type") in ("message", "reasoning", "function_call")
     ]
     in_progress = {**resp, "status": "in_progress", "output": []}
     yield ev({"type": "response.created", "response": in_progress})
@@ -235,16 +236,37 @@ async def _synth_sse(resp: dict[str, Any]) -> AsyncIterator[bytes]:
 
     for idx, item in enumerate(items):
         item_id = item.get("id", f"item_{idx}")
+        item_type = item.get("type")
         stub = {**item, "status": "in_progress"}
-        if item.get("type") == "message":
+        if item_type == "message":
             stub = {**stub, "content": []}
-        else:
+        elif item_type == "reasoning":
             stub = {**stub, "summary": []}
+        elif item_type == "function_call":
+            stub = {**stub, "arguments": ""}
         yield ev(
             {"type": "response.output_item.added", "output_index": idx, "item": stub}
         )
 
-        if item.get("type") == "message":
+        if item_type == "function_call":
+            # Stream the tool call so Codex executes it and continues the loop.
+            args = item.get("arguments", "") or ""
+            base = {"item_id": item_id, "output_index": idx}
+            yield ev(
+                {
+                    "type": "response.function_call_arguments.delta",
+                    **base,
+                    "delta": args,
+                }
+            )
+            yield ev(
+                {
+                    "type": "response.function_call_arguments.done",
+                    **base,
+                    "arguments": args,
+                }
+            )
+        elif item_type == "message":
             for cidx, part in enumerate(item.get("content") or []):
                 text = part.get("text", "")
                 base = {"item_id": item_id, "output_index": idx, "content_index": cidx}
