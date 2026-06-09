@@ -103,6 +103,20 @@ class ResponsesShim:
                 call_kwargs["tools"] = [
                     t for t in call_kwargs["tools"] if t.get("type") == "function"
                 ]
+            # On multi-step turns Codex replays prior assistant messages in
+            # `input` without a `status` field, but Ark's Responses API
+            # requires `status` on assistant messages (MissingParameter:
+            # input.status). Backfill it so the tool loop survives a model
+            # preamble ("let me look...") followed by a tool call.
+            if isinstance(call_kwargs.get("input"), list):
+                for item in call_kwargs["input"]:
+                    if (
+                        isinstance(item, dict)
+                        and item.get("type") == "message"
+                        and item.get("role") == "assistant"
+                        and "status" not in item
+                    ):
+                        item["status"] = "completed"
             call_kwargs.update(
                 model=f"openai/{model}",
                 api_base=self.api_base,
