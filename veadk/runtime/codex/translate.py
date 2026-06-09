@@ -68,59 +68,127 @@ def build_prompt(ctx: "InvocationContext") -> str:
     return "\n".join(lines)
 
 
-def _reasoning_summary(result: Any) -> str:
-    """Join the reasoning-summary text from a result's items, if any.
+def _item_dict(item: Any) -> dict[str, Any]:
+    """Best-effort plain-dict view of a Codex result item."""
+    if isinstance(item, dict):
+        return item
+    if hasattr(item, "model_dump"):
+        return item.model_dump()
+    return {}
 
-    A reasoning model (e.g. DeepSeek) sometimes ends a turn with only a
-    ``reasoning`` item and no final ``agentMessage``, leaving
-    ``final_response`` empty. In that case the reasoning summary is the only
-    thing the model produced, so we surface it rather than print nothing.
-    """
+
+def _summary_text(item: dict[str, Any]) -> str:
+    """Join a reasoning item's summary entries (str or {"text": ...})."""
     parts: list[str] = []
-    for item in getattr(result, "items", None) or []:
-        data = item.model_dump() if hasattr(item, "model_dump") else item
-        if not isinstance(data, dict) or "reasoning" not in str(data.get("type", "")):
-            continue
-        for entry in data.get("summary") or []:
-            if isinstance(entry, str):
-                parts.append(entry)
-            elif isinstance(entry, dict) and entry.get("text"):
-                parts.append(str(entry["text"]))
+    for entry in item.get("summary") or []:
+        if isinstance(entry, str):
+            parts.append(entry)
+        elif isinstance(entry, dict) and entry.get("text"):
+            parts.append(str(entry["text"]))
     return "\n".join(p.strip() for p in parts if p and p.strip())
 
 
-def result_to_events(result: Any, author: str, invocation_id: str) -> list[Event]:
-    """Convert a Codex run result into ADK events.
+def _event(author: str, invocation_id: str, role: str, part: types.Part) -> Event:
+    return Event(
+        invocation_id=invocation_id,
+        author=author,
+        content=types.Content(role=role, parts=[part]),
+    )
 
-    The Codex SDK's run result exposes the assistant's final text as
-    ``final_response``. When a turn ends with reasoning but no final message
-    (``final_response`` empty), fall back to the reasoning summary so the
-    caller never receives a silently empty turn.
+
+def result_to_events(result: Any, author: str, invocation_id: str) -> list[Event]:
+    """Convert a Codex run result into ADK events, faithfully and in order.
+
+    A Codex turn is multi-step: reasoning, tool (command) executions, and one
+    or more assistant messages. Rather than collapse it to ``final_response``,
+    walk ``result.items`` and forward each step as its own ADK event:
+
+    - ``reasoning`` -> a thought text part,
+    - ``commandExecution`` -> a ``function_call`` part plus a matching
+      ``function_response`` part carrying the command's output,
+    - ``agentMessage`` -> a text part,
+    - any other item with text -> a text part.
+
+    The ``userMessage`` echo is skipped (ADK already owns the user turn). If
+    nothing maps, fall back to ``final_response`` so a turn is never silently
+    empty.
 
     Args:
         result (Any): The object returned by ``thread.run(...)``.
         author (str): Event author (the agent name).
-        invocation_id (str): The ADK invocation id to stamp on the event.
+        invocation_id (str): The ADK invocation id to stamp on each event.
 
     Returns:
-        list[google.adk.events.event.Event]: One text event, or empty if the
-        result carried neither a final message nor reasoning.
+        list[google.adk.events.event.Event]: The turn's events in order.
     """
+    events: list[Event] = []
+    for item in getattr(result, "items", None) or []:
+        data = _item_dict(item)
+        itype = str(data.get("type", ""))
+
+        if itype == "userMessage":
+            continue
+
+        if itype == "reasoning":
+            text = _summary_text(data)
+            if text:
+                events.append(
+                    _event(
+                        author,
+                        invocation_id,
+                        "model",
+                        types.Part(text=text, thought=True),
+                    )
+                )
+        elif itype == "commandExecution":
+            call_id = data.get("id") or f"cmd_{len(events)}"
+            events.append(
+                _event(
+                    author,
+                    invocation_id,
+                    "model",
+                    types.Part(
+                        function_call=types.FunctionCall(
+                            id=call_id,
+                            name="exec_command",
+                            args={
+                                "command": data.get("command", ""),
+                                "cwd": data.get("cwd"),
+                            },
+                        )
+                    ),
+                )
+            )
+            events.append(
+                _event(
+                    author,
+                    invocation_id,
+                    "user",
+                    types.Part(
+                        function_response=types.FunctionResponse(
+                            id=call_id,
+                            name="exec_command",
+                            response={
+                                "output": data.get("aggregated_output", ""),
+                                "exit_code": data.get("exit_code"),
+                                "status": str(data.get("status", "")),
+                            },
+                        )
+                    ),
+                )
+            )
+        elif data.get("text"):  # agentMessage and any other text-bearing item
+            events.append(
+                _event(
+                    author, invocation_id, "model", types.Part(text=str(data["text"]))
+                )
+            )
+
+    if events:
+        return events
+
+    # Fallback: never emit nothing.
     text = getattr(result, "final_response", None)
     if not text:
-        summary = _reasoning_summary(result)
-        if summary:
-            text = (
-                "[The model produced only reasoning, no final answer this turn]\n\n"
-                f"{summary}"
-            )
-    if not text:
         return []
-
-    return [
-        Event(
-            invocation_id=invocation_id,
-            author=author,
-            content=types.Content(role="model", parts=[types.Part(text=text)]),
-        )
-    ]
+    return [_event(author, invocation_id, "model", types.Part(text=text))]
