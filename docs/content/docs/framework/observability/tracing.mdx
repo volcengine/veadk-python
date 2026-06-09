@@ -34,13 +34,13 @@ Tracing（链路追踪）对智能体执行过程进行**全链路记录**，是
 
     - `OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY`：APM 服务的 API Key
     - `OBSERVABILITY_OPENTELEMETRY_APMPLUS_ENDPOINT`：APM 服务的 Endpoint，例如 `http://apmplus-cn-beijing.volces.com:4317`
-    - `OBSERVABILITY_OPENTELEMETRY_APMPLUS_SERVICE_NAME`：APM 的 Service Name，例如 `python_coder_agent`
+    - `OBSERVABILITY_OPENTELEMETRY_APMPLUS_SERVICE_NAME`：APM 的 Service Name，例如 `python_coder_agent    - `OBSERVABILITY_OPENTELEMETRY_TRACE_CONTENT`：是否采集 Agent、LLM 与工具输入输出内容，默认 `true`
 
     或在 `config.yaml` 中定义：
 
     ```yaml title="config.yaml"
     observability:
-      opentelemetry:
+      opentelemetry        trace_content: true
         apmplus:
           endpoint: ...
           api_key: ...

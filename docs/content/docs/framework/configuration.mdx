@@ -104,6 +104,7 @@ volcengine:
 
 | 子类 | 环境变量名称 | 释义 |
 | :- | :- | :- |
+| OpenTelemetry | `OBSERVABILITY_OPENTELEMETRY_TRACE_CONTENT` | 是否采集 Agent、LLM 与工具调用的输入输出内容，默认 `true`；设为 `false` 后仍保留 Span、耗时、模型、Token、工具名等非内容 Trace 信息 |
 | APMPlus | `OBSERVABILITY_OPENTELEMETRY_APMPLUS_ENDPOINT` | APMPlus 上报地址 |
 | | `OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY` | APMPlus 鉴权密钥 |
 | | `OBSERVABILITY_OPENTELEMETRY_APMPLUS_SERVICE_NAME` | APMPlus 服务名称 |

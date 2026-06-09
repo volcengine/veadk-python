@@ -23,12 +23,13 @@ from opentelemetry import trace
 from opentelemetry.context import get_value
 from opentelemetry.sdk.trace import Span, _Span
 
-from veadk.tracing.telemetry.attributes.attributes import ATTRIBUTES
+from veadk.tracing.telemetry.attributes.attributes import ATTRIBUTES, get_attributes
 from veadk.tracing.telemetry.attributes.extractors.types import (
     ExtractorResponse,
     LLMAttributesParams,
     ToolAttributesParams,
 )
+from veadk.tracing.telemetry.content_tracing import should_trace_content
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import safe_json_serialize
 
@@ -130,6 +131,9 @@ def _set_agent_input_attribute(
         - Supports multimodal content (text and images)
         - Follows gen_ai attribute conventions
     """
+    if not should_trace_content():
+        return
+
     event_names = [event.name for event in span.events]
     if "gen_ai.user.message" in event_names:
         return
@@ -146,11 +150,6 @@ def _set_agent_input_attribute(
 
     user_content = invocation_context.user_content
     if user_content and user_content.parts:
-        # set gen_ai.input attribute required by APMPlus
-        span.set_attribute(
-            "gen_ai.input",
-            safe_json_serialize(user_content.model_dump(exclude_none=True)),
-        )
         span.add_event(
             "gen_ai.user.message",
             {
@@ -159,6 +158,12 @@ def _set_agent_input_attribute(
                 "user_id": invocation_context.user_id,
                 "session_id": invocation_context.session.id,
             },
+        )
+
+        # set gen_ai.input attribute required by APMPlus
+        span.set_attribute(
+            "gen_ai.input",
+            safe_json_serialize(user_content.model_dump(exclude_none=True)),
         )
         for idx, part in enumerate(user_content.parts):
             if part.text:
@@ -202,6 +207,9 @@ def _set_agent_output_attribute(span: Span, llm_response: LlmResponse) -> None:
         - Follows gen_ai attribute conventions
         - Handles multipart responses with proper indexing
     """
+    if not should_trace_content():
+        return
+
     content = llm_response.content
     if content and content.parts:
         # set gen_ai.output attribute required by APMPlus
@@ -347,7 +355,7 @@ def trace_tool_call(
 
     set_common_attributes_on_tool_span(current_span=span)  # type: ignore
 
-    tool_attributes_mapping = ATTRIBUTES.get("tool", {})
+    tool_attributes_mapping = get_attributes("tool")
     params = ToolAttributesParams(tool, args, function_response_event)
 
     for attr_name, attr_extractor in tool_attributes_mapping.items():
@@ -417,7 +425,7 @@ def trace_call_llm(
         ),
     )
 
-    llm_attributes_mapping = ATTRIBUTES.get("llm", {})
+    llm_attributes_mapping = get_attributes("llm")
     params = LLMAttributesParams(
         invocation_context=invocation_context,
         event_id=event_id,

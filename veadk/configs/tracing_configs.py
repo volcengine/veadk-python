@@ -31,6 +31,13 @@ from veadk.integrations.ve_cozeloop.ve_cozeloop import VeCozeloop
 from veadk.integrations.ve_tls.ve_tls import VeTLS
 
 
+class OpenTelemetryConfig(BaseSettings):
+    trace_content: bool = Field(
+        default=True,
+        alias="OBSERVABILITY_OPENTELEMETRY_TRACE_CONTENT",
+    )
+
+
 class APMPlusConfig(BaseSettings):
     otel_exporter_endpoint: str = Field(
         default=DEFAULT_APMPLUS_OTEL_EXPORTER_ENDPOINT,

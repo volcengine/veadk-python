@@ -431,23 +431,26 @@ class MeterUploader:
             self.apmplus_span_latency.record(duration, attributes=attributes)
 
         if self.apmplus_tool_token_usage and hasattr(span, "attributes"):
-            tool_input = span.attributes["gen_ai.tool.input"]
-            tool_token_usage_input = (
-                len(tool_input) / 4
-            )  # tool token 数量，使用文本长度/4
-            input_tool_token_attributes = {**attributes, "token_type": "input"}
-            self.apmplus_tool_token_usage.record(
-                tool_token_usage_input, attributes=input_tool_token_attributes
-            )
+            span_attributes = span.attributes or {}
+            tool_input = span_attributes.get("gen_ai.tool.input")
+            if tool_input:
+                tool_token_usage_input = (
+                    len(tool_input) / 4
+                )  # tool token 数量，使用文本长度/4
+                input_tool_token_attributes = {**attributes, "token_type": "input"}
+                self.apmplus_tool_token_usage.record(
+                    tool_token_usage_input, attributes=input_tool_token_attributes
+                )
 
-            tool_output = span.attributes["gen_ai.tool.output"]
-            tool_token_usage_output = (
-                len(tool_output) / 4
-            )  # tool token 数量，使用文本长度/4
-            output_tool_token_attributes = {**attributes, "token_type": "output"}
-            self.apmplus_tool_token_usage.record(
-                tool_token_usage_output, attributes=output_tool_token_attributes
-            )
+            tool_output = span_attributes.get("gen_ai.tool.output")
+            if tool_output:
+                tool_token_usage_output = (
+                    len(tool_output) / 4
+                )  # tool token 数量，使用文本长度/4
+                output_tool_token_attributes = {**attributes, "token_type": "output"}
+                self.apmplus_tool_token_usage.record(
+                    tool_token_usage_output, attributes=output_tool_token_attributes
+                )
 
 
 class APMPlusExporterConfig(BaseModel):
