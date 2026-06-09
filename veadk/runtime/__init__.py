@@ -61,8 +61,8 @@ def get_runtime(name: str) -> BaseRuntime:
         except ModuleNotFoundError as e:
             raise ImportError(
                 f"The 'codex' runtime requires extra dependencies (missing: {e.name}). "
-                "Install the Codex binary and the codex_app_server SDK, plus: "
-                "pip install fastapi uvicorn"
+                "Install them with: pip install openai-codex fastapi uvicorn "
+                "(openai-codex bundles the Codex binary via openai-codex-cli-bin)."
             ) from e
 
         return CodexRuntime()
