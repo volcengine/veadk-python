@@ -23,6 +23,8 @@
 
 from __future__ import annotations
 
+import json
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from google.adk.events.event import Event
@@ -77,15 +79,92 @@ def _item_dict(item: Any) -> dict[str, Any]:
     return {}
 
 
-def _summary_text(item: dict[str, Any]) -> str:
-    """Join a reasoning item's summary entries (str or {"text": ...})."""
+def _scalar(value: Any) -> Any:
+    """Normalize an enum/pydantic value to a JSON-friendly scalar."""
+    if isinstance(value, Enum):
+        return value.value
+    return getattr(value, "value", value)
+
+
+def _join(entries: Any) -> str:
+    """Join a ``list[str]`` (or list of ``{"text": ...}``) into one string."""
     parts: list[str] = []
-    for entry in item.get("summary") or []:
+    for entry in entries or []:
         if isinstance(entry, str):
             parts.append(entry)
         elif isinstance(entry, dict) and entry.get("text"):
             parts.append(str(entry["text"]))
     return "\n".join(p.strip() for p in parts if p and p.strip())
+
+
+def _parse_args(raw: Any) -> dict[str, Any]:
+    """Coerce a tool-call ``arguments`` value into a dict."""
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {"input": parsed}
+        except json.JSONDecodeError:
+            return {"input": raw}
+    return {}
+
+
+def _tool_call(
+    data: dict[str, Any],
+) -> tuple[str, dict[str, Any], dict[str, Any]] | None:
+    """Map a tool-call thread item to ``(name, args, response)``.
+
+    Covers every tool item type the Codex SDK can surface; returns ``None`` for
+    non-tool items.
+    """
+    itype = data.get("type")
+    status = _scalar(data.get("status"))
+    if itype == "commandExecution":
+        return (
+            "exec_command",
+            {"command": data.get("command", ""), "cwd": data.get("cwd")},
+            {
+                "output": data.get("aggregated_output", ""),
+                "exit_code": data.get("exit_code"),
+                "status": status,
+            },
+        )
+    if itype == "mcpToolCall":
+        name = ".".join(p for p in (data.get("server"), data.get("tool")) if p)
+        return (
+            name or "mcp_tool",
+            _parse_args(data.get("arguments")),
+            {
+                "result": data.get("result"),
+                "error": data.get("error"),
+                "status": status,
+            },
+        )
+    if itype == "dynamicToolCall":
+        name = ".".join(p for p in (data.get("namespace"), data.get("tool")) if p)
+        return (
+            name or "tool",
+            _parse_args(data.get("arguments")),
+            {
+                "content": data.get("content_items"),
+                "success": data.get("success"),
+                "status": status,
+            },
+        )
+    if itype == "fileChange":
+        return (
+            "apply_patch",
+            {"changes": data.get("changes")},
+            {"status": status},
+        )
+    if itype == "webSearch":
+        return (
+            "web_search",
+            {"query": data.get("query"), "action": data.get("action")},
+            {"status": "completed"},
+        )
+    return None
 
 
 def _event(author: str, invocation_id: str, role: str, part: types.Part) -> Event:
@@ -99,19 +178,18 @@ def _event(author: str, invocation_id: str, role: str, part: types.Part) -> Even
 def result_to_events(result: Any, author: str, invocation_id: str) -> list[Event]:
     """Convert a Codex run result into ADK events, faithfully and in order.
 
-    A Codex turn is multi-step: reasoning, tool (command) executions, and one
-    or more assistant messages. Rather than collapse it to ``final_response``,
-    walk ``result.items`` and forward each step as its own ADK event:
+    A Codex turn is multi-step. Rather than collapse it to ``final_response``,
+    walk ``result.items`` and forward each step as its own ADK event, mapping
+    Codex thread items onto the genai part the matching ADK event expects:
 
     - ``reasoning`` -> a thought text part,
-    - ``commandExecution`` -> a ``function_call`` part plus a matching
-      ``function_response`` part carrying the command's output,
-    - ``agentMessage`` -> a text part,
-    - any other item with text -> a text part.
+    - tool calls (``commandExecution`` / ``mcpToolCall`` / ``dynamicToolCall``
+      / ``fileChange`` / ``webSearch``) -> a ``function_call`` part plus a
+      matching ``function_response`` part carrying the tool's output,
+    - ``agentMessage`` / ``plan`` / any other text-bearing item -> a text part,
+    - ``userMessage`` -> skipped (ADK already owns the user turn).
 
-    The ``userMessage`` echo is skipped (ADK already owns the user turn). If
-    nothing maps, fall back to ``final_response`` so a turn is never silently
-    empty.
+    If nothing maps, fall back to ``final_response`` so a turn is never empty.
 
     Args:
         result (Any): The object returned by ``thread.run(...)``.
@@ -130,7 +208,7 @@ def result_to_events(result: Any, author: str, invocation_id: str) -> list[Event
             continue
 
         if itype == "reasoning":
-            text = _summary_text(data)
+            text = _join(data.get("summary")) or _join(data.get("content"))
             if text:
                 events.append(
                     _event(
@@ -140,8 +218,12 @@ def result_to_events(result: Any, author: str, invocation_id: str) -> list[Event
                         types.Part(text=text, thought=True),
                     )
                 )
-        elif itype == "commandExecution":
-            call_id = data.get("id") or f"cmd_{len(events)}"
+            continue
+
+        call = _tool_call(data)
+        if call is not None:
+            name, args, response = call
+            call_id = data.get("id") or f"call_{len(events)}"
             events.append(
                 _event(
                     author,
@@ -149,12 +231,7 @@ def result_to_events(result: Any, author: str, invocation_id: str) -> list[Event
                     "model",
                     types.Part(
                         function_call=types.FunctionCall(
-                            id=call_id,
-                            name="exec_command",
-                            args={
-                                "command": data.get("command", ""),
-                                "cwd": data.get("cwd"),
-                            },
+                            id=call_id, name=name, args=args
                         )
                     ),
                 )
@@ -166,18 +243,14 @@ def result_to_events(result: Any, author: str, invocation_id: str) -> list[Event
                     "user",
                     types.Part(
                         function_response=types.FunctionResponse(
-                            id=call_id,
-                            name="exec_command",
-                            response={
-                                "output": data.get("aggregated_output", ""),
-                                "exit_code": data.get("exit_code"),
-                                "status": str(data.get("status", "")),
-                            },
+                            id=call_id, name=name, response=response
                         )
                     ),
                 )
             )
-        elif data.get("text"):  # agentMessage and any other text-bearing item
+            continue
+
+        if data.get("text"):  # agentMessage, plan, and any text-bearing item
             events.append(
                 _event(
                     author, invocation_id, "model", types.Part(text=str(data["text"]))
