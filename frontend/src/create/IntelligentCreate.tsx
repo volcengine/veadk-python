@@ -202,6 +202,38 @@ export function IntelligentCreate({ userId, onBack, onCreate }: IntelligentCreat
     return { project: parseProject(finalText), finalText };
   }
 
+  const handleDeploy = async (proj: AgentProject) => {
+    const response = await fetch("/web/deploy-agentkit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: proj.name,
+        files: proj.files,
+        config: {
+          region: "cn-beijing",
+          projectName: "default",
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "部署失败");
+    }
+
+    const result = await response.json();
+
+    if (!result.success) {
+      throw new Error(result.error || "部署失败");
+    }
+
+    return {
+      apikey: result.apikey,
+      url: result.url,
+      agentName: result.agentName,
+    };
+  };
+
   const send = async () => {
     const text = input.trim();
     if (!text || streaming) return;
@@ -312,10 +344,6 @@ export function IntelligentCreate({ userId, onBack, onCreate }: IntelligentCreat
       void send();
     }
   };
-
-  // The backend `/deploy` endpoint is still being built separately, so we
-  // intentionally pass NO `onDeploy` to ProjectPreview — that hides its
-  // deploy button until the endpoint lands.
 
   return (
     <div className="ic-root">
@@ -433,7 +461,7 @@ export function IntelligentCreate({ userId, onBack, onCreate }: IntelligentCreat
               />
             </div>
           ) : project ? (
-            <ProjectPreview project={project} onChange={setProject} />
+            <ProjectPreview project={project} onChange={setProject} onDeploy={handleDeploy} />
           ) : (
             <div className="ic-preview-empty">
               <div className="ic-preview-empty-icon">

@@ -119,12 +119,18 @@ function highlight(content: string, path: string): string {
   }
 }
 
+export interface DeployResult {
+  apikey: string;
+  url: string;
+  agentName: string;
+}
+
 export interface ProjectPreviewProps {
   project: AgentProject;
   /** When provided, files are editable and changes call onChange with the new project. Omit for read-only. */
   onChange?: (project: AgentProject) => void;
-  /** One-click deploy handler. Omit to hide the deploy button. */
-  onDeploy?: (project: AgentProject) => void | Promise<void>;
+  /** One-click deploy handler. Should return deploy result (URL + API Key). Omit to hide the deploy button. */
+  onDeploy?: (project: AgentProject) => Promise<DeployResult>;
 }
 
 // --- tree model -------------------------------------------------------------
@@ -177,6 +183,8 @@ export function ProjectPreview({ project, onChange, onDeploy }: ProjectPreviewPr
   const [newPath, setNewPath] = useState("");
   const [deploying, setDeploying] = useState(false);
   const [deployError, setDeployError] = useState<string | null>(null);
+  const [deployResult, setDeployResult] = useState<DeployResult | null>(null);
+  const [addingAgent, setAddingAgent] = useState(false);
   const [testing, setTesting] = useState(false);
   const underlayRef = useRef<HTMLPreElement>(null);
 
@@ -254,13 +262,39 @@ export function ProjectPreview({ project, onChange, onDeploy }: ProjectPreviewPr
   async function handleDeploy() {
     if (!onDeploy || deploying) return;
     setDeployError(null);
+    setDeployResult(null);
     setDeploying(true);
     try {
-      await onDeploy(project);
+      const result = await onDeploy(project);
+      setDeployResult(result);
     } catch (err) {
       setDeployError(err instanceof Error ? err.message : String(err));
     } finally {
       setDeploying(false);
+    }
+  }
+
+  async function handleAddAgent() {
+    if (!deployResult || addingAgent) return;
+    setAddingAgent(true);
+    setDeployError(null);
+    try {
+      const { addConnection } = await import("../adk/connections");
+      const conn = await addConnection(
+        deployResult.agentName,
+        deployResult.url,
+        deployResult.apikey
+      );
+      if (conn.apps.length === 0) {
+        setDeployError("连接成功，但该地址未发现任何 Agent（/list-apps 为空）。");
+      } else {
+        // Successfully added - could notify user or switch to the new agent
+        alert(`🎉 Agent "${deployResult.agentName}" 已添加到左上角下拉列表！`);
+      }
+    } catch (err) {
+      setDeployError(`添加 Agent 失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setAddingAgent(false);
     }
   }
 
@@ -434,6 +468,39 @@ export function ProjectPreview({ project, onChange, onDeploy }: ProjectPreviewPr
         </div>
 
         {deployError && <div className="pp-error">{deployError}</div>}
+
+        {deployResult && (
+          <div className="pp-deploy-result">
+            <div className="pp-deploy-result-header">
+              <span className="pp-deploy-result-icon">🎉</span>
+              <span>部署成功！</span>
+            </div>
+            <div className="pp-deploy-result-body">
+              <div className="pp-deploy-result-field">
+                <label>Agent 名称</label>
+                <code>{deployResult.agentName}</code>
+              </div>
+              <div className="pp-deploy-result-field">
+                <label>API 端点</label>
+                <code className="pp-deploy-result-url">{deployResult.url}</code>
+              </div>
+              <div className="pp-deploy-result-field">
+                <label>API Key 名称</label>
+                <code>{deployResult.apikey}</code>
+                <small>（实际密钥请在火山引擎 AgentKit 控制台获取）</small>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="pp-deploy-result-btn"
+              onClick={handleAddAgent}
+              disabled={addingAgent}
+            >
+              {addingAgent ? <Loader2 className="pp-ic spin" /> : null}
+              {addingAgent ? "连接中…" : "添加此 Agent"}
+            </button>
+          </div>
+        )}
 
         <div className="pp-content">
           {testing ? (
