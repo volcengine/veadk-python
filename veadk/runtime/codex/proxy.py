@@ -148,8 +148,15 @@ class ResponsesShim:
         if self.url:
             return self.url
 
+        # The shim app has no startup/shutdown hooks, so disable the lifespan
+        # protocol; otherwise its task lingers and logs a CancelledError
+        # traceback when the event loop is torn down at process exit.
         config = uvicorn.Config(
-            self._app, host="127.0.0.1", port=0, log_level="warning"
+            self._app,
+            host="127.0.0.1",
+            port=0,
+            log_level="warning",
+            lifespan="off",
         )
         server = uvicorn.Server(config)
         server.install_signal_handlers = lambda: None  # type: ignore[method-assign]
