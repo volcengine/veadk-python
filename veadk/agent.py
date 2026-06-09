@@ -169,10 +169,10 @@ class Agent(LlmAgent):
     enable_skills_checklist: bool = False
     _skills_with_checklist: Dict[str, Any] = {}
 
-    runtime: Literal["adk", "cc", "codex"] = "adk"
+    runtime: Literal["adk", "codex"] = "adk"
     """Agent runtime backend. ``"adk"`` (default) uses Google ADK's built-in LLM
-    flow. ``"cc"`` delegates the inner agent loop to the Claude Code SDK; ``"codex"``
-    is reserved. Non-``adk`` runtimes are implemented under :mod:`veadk.runtime`."""
+    flow. ``"codex"`` delegates the inner agent loop to the OpenAI Codex SDK.
+    Non-``adk`` runtimes are implemented under :mod:`veadk.runtime`."""
 
     enable_a2ui: bool = False
     """Enable A2UI (agent-driven UI). When True, a `SendA2uiToClientToolset` is

@@ -15,9 +15,7 @@
 """Translation between ADK and the Codex SDK.
 
 - :func:`build_prompt` flattens an ADK session into a single prompt string
-  (stateless replay; ADK stays the single source of truth). This mirrors the
-  ``cc`` runtime's helper but is duplicated here so the ``codex`` package does
-  not import ``claude_agent_sdk``.
+  (stateless replay; ADK stays the single source of truth).
 - :func:`result_to_events` maps a Codex run result into ADK events.
 """
 

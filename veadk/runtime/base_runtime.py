@@ -70,7 +70,7 @@ class BaseRuntime(ABC):
 
     Attributes:
         name (str): Stable identifier of the runtime, matching the value passed
-            to ``Agent(runtime=...)`` (for example ``"cc"``).
+            to ``Agent(runtime=...)`` (for example ``"codex"``).
     """
 
     name: str = "base"
