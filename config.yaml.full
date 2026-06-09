@@ -110,6 +110,7 @@ tool:
 observability:
   # [optional] for exporting tracing data to Volcengine CozeLoop and APMPlus platform
   opentelemetry:
+    trace_content: true # true | false, collect agent/LLM/tool input and output content in traces
     apmplus:
       endpoint: http://apmplus-cn-beijing.volces.com:4317
       api_key: 

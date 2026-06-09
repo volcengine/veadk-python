@@ -21,9 +21,41 @@ from veadk.tracing.telemetry.attributes.extractors.llm_attributes_extractors imp
 from veadk.tracing.telemetry.attributes.extractors.tool_attributes_extractors import (
     TOOL_ATTRIBUTES,
 )
+from veadk.tracing.telemetry.content_tracing import should_trace_content
 
 ATTRIBUTES = {
     "common": COMMON_ATTRIBUTES,
     "llm": LLM_ATTRIBUTES,
     "tool": TOOL_ATTRIBUTES,
 }
+
+CONTENT_ATTRIBUTES = {
+    "llm": {
+        "gen_ai.prompt",
+        "gen_ai.completion",
+        "gen_ai.messages",
+        "gen_ai.choice",
+    },
+    "tool": {
+        "gen_ai.tool.input",
+        "gen_ai.tool.output",
+        "cozeloop.input",
+        "cozeloop.output",
+        "gen_ai.input",
+        "gen_ai.output",
+    },
+}
+
+
+def get_attributes(kind: str) -> dict:
+    """Return trace attributes, excluding content fields when configured."""
+    attributes = ATTRIBUTES.get(kind, {})
+    content_attributes = CONTENT_ATTRIBUTES.get(kind)
+    if not content_attributes or should_trace_content():
+        return attributes
+
+    return {
+        attr_name: attr_extractor
+        for attr_name, attr_extractor in attributes.items()
+        if attr_name not in content_attributes
+    }

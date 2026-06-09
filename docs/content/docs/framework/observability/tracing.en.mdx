@@ -35,12 +35,14 @@ To enable full-chain observability, attach an `OpentelemetryTracer` with one or 
     - `OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY`: The API key of the APM service
     - `OBSERVABILITY_OPENTELEMETRY_APMPLUS_ENDPOINT`: The endpoint of the APM service, e.g. `http://apmplus-cn-beijing.volces.com:4317`
     - `OBSERVABILITY_OPENTELEMETRY_APMPLUS_SERVICE_NAME`: The service name for APM, e.g. `python_coder_agent`
+    - `OBSERVABILITY_OPENTELEMETRY_TRACE_CONTENT`: Whether to collect Agent, LLM, and tool input/output content, default `true`
 
     Or define them in `config.yaml`:
 
     ```yaml title="config.yaml"
     observability:
       opentelemetry:
+        trace_content: true
         apmplus:
           endpoint: ...
           api_key: ...

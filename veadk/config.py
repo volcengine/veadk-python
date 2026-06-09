@@ -32,6 +32,7 @@ from veadk.configs.tool_configs import BuiltinToolConfigs, PromptPilotConfig
 from veadk.configs.tracing_configs import (
     APMPlusConfig,
     CozeloopConfig,
+    OpenTelemetryConfig,
     PrometheusConfig,
     TLSConfig,
 )
@@ -66,6 +67,9 @@ class VeADKConfig(BaseModel):
     tool: BuiltinToolConfigs = Field(default_factory=BuiltinToolConfigs)
     prompt_pilot: PromptPilotConfig = Field(default_factory=PromptPilotConfig)
 
+    opentelemetry_config: OpenTelemetryConfig = Field(
+        default_factory=OpenTelemetryConfig
+    )
     apmplus_config: APMPlusConfig = Field(default_factory=APMPlusConfig)
     cozeloop_config: CozeloopConfig = Field(default_factory=CozeloopConfig)
     tls_config: TLSConfig = Field(default_factory=TLSConfig)
