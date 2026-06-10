@@ -280,19 +280,22 @@ export function ProjectPreview({ project, onChange, onDeploy }: ProjectPreviewPr
     setDeployError(null);
     try {
       const { addConnection } = await import("../adk/connections");
+
       const conn = await addConnection(
         deployResult.agentName,
         deployResult.url,
         deployResult.apikey
       );
+
       if (conn.apps.length === 0) {
         setDeployError("连接成功，但该地址未发现任何 Agent（/list-apps 为空）。");
       } else {
-        // Successfully added - could notify user or switch to the new agent
         alert(`🎉 Agent "${deployResult.agentName}" 已添加到左上角下拉列表！`);
       }
     } catch (err) {
-      setDeployError(`添加 Agent 失败：${err instanceof Error ? err.message : String(err)}`);
+      setDeployError(
+        `添加 Agent 失败：${err instanceof Error ? err.message : String(err)}`
+      );
     } finally {
       setAddingAgent(false);
     }
@@ -487,7 +490,6 @@ export function ProjectPreview({ project, onChange, onDeploy }: ProjectPreviewPr
               <div className="pp-deploy-result-field">
                 <label>API Key 名称</label>
                 <code>{deployResult.apikey}</code>
-                <small>（实际密钥请在火山引擎 AgentKit 控制台获取）</small>
               </div>
             </div>
             <button

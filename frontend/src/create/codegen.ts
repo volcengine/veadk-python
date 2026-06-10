@@ -280,20 +280,22 @@ export function generateProject(draft: AgentDraft): AgentProject {
   // Build agent definition
   const agentDefinition = acc.preLines.join("\n\n") + "\n\n# ADK 加载器要求：顶层 agent 必须命名为 root_agent\nroot_agent = agent\n";
 
-  // Add deployment entry point (for AgentKit runtime)
-  const deploymentCode = `
+  const agentPy = importBlock + "\n\n" + agentDefinition;
+
+  // Deployment entry point (app.py at root level)
+  const appPy = `${deploymentImports}
 
 # Deployment configuration
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
-AGENTS_DIR = str(Path(__file__).resolve().parent)
+AGENTS_DIR = str(Path(__file__).resolve().parent / "agents")
 
 def build_app():
     """Build FastAPI app for deployment."""
     import veadk
     WEBUI_DIR = Path(veadk.__file__).resolve().parent / "webui"
 
-    # Create FastAPI app with agents_dir pointing to current directory
+    # Create FastAPI app with agents_dir (ADK multi-agent structure)
     app = get_fast_api_app(agents_dir=AGENTS_DIR, web=False)
 
     # Add health check endpoint
@@ -313,11 +315,10 @@ if __name__ == "__main__":
     uvicorn.run(app, host=HOST, port=PORT)
 `;
 
-  const agentPy = importBlock + "\n" + deploymentImports + "\n\n" + agentDefinition + deploymentCode;
-
   const files: ProjectFile[] = [
-    { path: "agent.py", content: agentPy },
-    { path: "__init__.py", content: "from . import agent\n\n__all__ = [\"agent\"]\n" },
+    { path: "app.py", content: appPy },
+    { path: `agents/${pkg}/agent.py`, content: agentPy },
+    { path: `agents/${pkg}/__init__.py`, content: `from .agent import root_agent\n\n__all__ = ["root_agent"]\n` },
     { path: ".env.example", content: renderEnvExample(dedupeEnv(acc.env)) },
     { path: "requirements.txt", content: renderRequirements(acc.extras) },
     { path: "README.md", content: renderReadme(pkg, draft) },
