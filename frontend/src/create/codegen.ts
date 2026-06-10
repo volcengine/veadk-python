@@ -265,17 +265,60 @@ export function generateProject(draft: AgentDraft): AgentProject {
 
   buildAgent(acc, draft, "agent", true);
 
-  // Assemble agent.py
+  // Assemble agent.py with FastAPI deployment support
   const importBlock = ["from veadk import Agent", ...dedupeImports(acc.imports)].join("\n");
-  const agentPy =
-    importBlock +
-    "\n\n" +
-    acc.preLines.join("\n\n") +
-    "\n\n# ADK 加载器要求：顶层 agent 必须命名为 root_agent\nroot_agent = agent\n";
+
+  // Add deployment-specific imports
+  const deploymentImports = [
+    "import os",
+    "from pathlib import Path",
+    "import uvicorn",
+    "from fastapi.staticfiles import StaticFiles",
+    "from google.adk.cli.fast_api import get_fast_api_app",
+  ].join("\n");
+
+  // Build agent definition
+  const agentDefinition = acc.preLines.join("\n\n") + "\n\n# ADK 加载器要求：顶层 agent 必须命名为 root_agent\nroot_agent = agent\n";
+
+  const agentPy = importBlock + "\n\n" + agentDefinition;
+
+  // Deployment entry point (app.py at root level)
+  const appPy = `${deploymentImports}
+
+# Deployment configuration
+HOST = os.getenv("HOST", "0.0.0.0")
+PORT = int(os.getenv("PORT", "8000"))
+AGENTS_DIR = str(Path(__file__).resolve().parent / "agents")
+
+def build_app():
+    """Build FastAPI app for deployment."""
+    import veadk
+    WEBUI_DIR = Path(veadk.__file__).resolve().parent / "webui"
+
+    # Create FastAPI app with agents_dir (ADK multi-agent structure)
+    app = get_fast_api_app(agents_dir=AGENTS_DIR, web=False)
+
+    # Add health check endpoint
+    @app.get("/ping")
+    def ping() -> dict[str, str]:
+        return {"status": "ok"}
+
+    # Mount web UI if available
+    if (WEBUI_DIR / "index.html").is_file():
+        app.mount("/", StaticFiles(directory=str(WEBUI_DIR), html=True), name="webui")
+
+    return app
+
+app = build_app()
+
+if __name__ == "__main__":
+    uvicorn.run(app, host=HOST, port=PORT)
+`;
 
   const files: ProjectFile[] = [
-    { path: "agent.py", content: agentPy },
-    { path: "__init__.py", content: "from . import agent\n\n__all__ = [\"agent\"]\n" },
+    { path: "app.py", content: appPy },
+    { path: `agents/${pkg}/agent.py`, content: agentPy },
+    { path: `agents/${pkg}/__init__.py`, content: `from .agent import root_agent\n\n__all__ = ["root_agent"]\n` },
     { path: ".env.example", content: renderEnvExample(dedupeEnv(acc.env)) },
     { path: "requirements.txt", content: renderRequirements(acc.extras) },
     { path: "README.md", content: renderReadme(pkg, draft) },
