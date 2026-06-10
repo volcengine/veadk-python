@@ -19,7 +19,13 @@ dependencies = [
     "pydantic-settings==2.10.1", # Config management
     "a2a-sdk==0.3.7", # For Google Agent2Agent protocol
     "deprecated==1.2.18",
-    "google-adk==1.32.0", # For basic agent architecture
+    "google-adk>=1.32.0", # For basic agent architecture
+    # litellm and sqlalchemy are required by code paths veadk always uses
+    # (LiteLlm models, sessions). google-adk ships them in base on 1.x but moved
+    # them behind extras ([extensions]/[db]) on 2.x, so declare them directly to
+    # stay compatible across google-adk >= 1.32.0 (including 2.x).
+    "litellm>=1.83.7,<=1.83.14", # google-adk LiteLlm model ([extensions] on 2.x)
+    "sqlalchemy>=2,<3", # google-adk sessions ([db] on 2.x)
     "loguru==0.7.3", # For better logging
     "opentelemetry-exporter-otlp==1.37.0",
     "opentelemetry-instrumentation-logging>=0.56b0",
@@ -51,19 +57,19 @@ veadk = "veadk.cli.cli:veadk"
 extensions = [
     "redis>=5.0",                                           # For Redis database
     "cozeloop>=0.1.21",                                     # For Cozeloop Prompt manager
-    "llama-index==0.14.0",                                  # For KnowledgeBase and LongTermMemory
-    "llama-index-embeddings-openai-like==0.2.2",            # For Embeddings
-    "llama-index-llms-openai-like==0.5.1",                  # For KnowledgeBase and LongTermMemory
+    "llama-index>=0.14.0",                                  # For KnowledgeBase and LongTermMemory
+    "llama-index-embeddings-openai-like>=0.2.2",            # For Embeddings
+    "llama-index-llms-openai-like>=0.5.1",                  # For KnowledgeBase and LongTermMemory
     "llama-index-vector-stores-redis>=0.6.1",               # For Redis database
-    "llama-index-vector-stores-opensearch==0.6.1",          # For Opensearch database
-    "opensearch-py==2.8.0",
+    "llama-index-vector-stores-opensearch>=0.6.1",          # For Opensearch database
+    "opensearch-py>=2.8.0",
     "lark-oapi",
 ]
 database = [
     "redis>=5.0",                   # For Redis database
     "pymysql>=1.1.1",               # For MySQL database
     "volcengine>=1.0.193",          # For Viking DB
-    "mem0ai==0.1.118",              # For mem0
+    "mem0ai>=1.0.0,<2",             # For mem0; >=1.0 lifts the openai<1.110 cap (coexist with litellm openai 2.x), <2 keeps the kwargs add()/search() API veadk uses (2.x switched to an options object)
 ]
 speech = []
 a2ui = [
