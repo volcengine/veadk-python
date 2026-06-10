@@ -24,10 +24,12 @@ API (with CORS allowing the Vite dev server) for React hot reload.
 import os
 import subprocess
 import re
+import json
 
 from pathlib import Path
 
 import click
+import requests
 
 from veadk.utils.logger import get_logger
 
@@ -689,13 +691,27 @@ if __name__ == "__main__":
                     detail=f"Deployment failed: {error_msg[:500]}",
                 )
 
-            # 7. Parse output (extract apikey and url)
+            # 7. Parse output (extract runtime_id, apikey name, and url from CLI)
             output = result.stdout
             logger.info(f"AgentKit launch output: {output}")
 
-            apikey, url = _parse_agentkit_output(output)
+            runtime_id, apikey_name, url = _parse_agentkit_output(output)
+            logger.info(f"Parsed from CLI - RuntimeId: {runtime_id}, Endpoint: {url}")
 
-            # 8. Construct console URL
+            # 8. Try to get actual API key from AgentKit API
+            try:
+                actual_apikey = _get_runtime_apikey(runtime_id, region)
+                if actual_apikey:
+                    apikey = actual_apikey
+                    logger.info(f"Successfully retrieved API key via AgentKit API")
+                else:
+                    apikey = apikey_name or f"API-KEY-{runtime_id}"
+                    logger.warning(f"Could not retrieve API key from AgentKit API, using placeholder: {apikey}")
+            except Exception as e:
+                logger.warning(f"Failed to retrieve API key via AgentKit API: {e}, using placeholder")
+                apikey = apikey_name or f"API-KEY-{runtime_id}"
+
+            # 9. Construct console URL
             console_url = (
                 f"https://console.volcengine.com/agentkit/"
                 f"region:agentkit+{region}/runtime"
@@ -723,57 +739,122 @@ if __name__ == "__main__":
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
-    def _parse_agentkit_output(output: str) -> tuple[str, str]:
-        """Parse CLI output to extract apikey and url.
+    def _parse_agentkit_output(output: str) -> tuple[str, str, str]:
+        """Parse CLI output to extract runtime_id, apikey name, and endpoint.
 
         Actual AgentKit CLI output format:
-        - API Key: "✅ Generated API key name: API-KEY-xxxxx"
+        - Runtime ID: "✅ Runtime created successfully: r-xxxxx"
         - Endpoint: "Endpoint: https://..."
 
-        Also supports legacy formats:
-        1. Key-value pairs: apikey: xxx\\nurl: yyy
-        2. JSON: {"apikey": "xxx", "url": "yyy"}
+        Returns:
+            Tuple of (runtime_id, apikey_name, endpoint)
         """
         output = output.strip()
 
-        # Try 1: AgentKit actual format (API-KEY-xxx + Endpoint:)
-        apikey_match = re.search(r"Generated API key name:\s*(API-KEY-\S+)", output, re.IGNORECASE)
+        # Extract RuntimeId
+        runtime_match = re.search(r"Runtime created successfully:\s*(r-\w+)", output, re.IGNORECASE)
+        runtime_id = runtime_match.group(1) if runtime_match else ""
+
+        # Extract Endpoint (appears multiple times, use the first occurrence)
         endpoint_match = re.search(r"Endpoint:\s*(https?://\S+)", output, re.IGNORECASE)
+        endpoint = endpoint_match.group(1) if endpoint_match else ""
 
-        if apikey_match and endpoint_match:
-            return apikey_match.group(1), endpoint_match.group(1)
+        # Try to extract API key name (may not always be present)
+        apikey_match = re.search(r"Generated API key name:\s*(API-KEY-\S+)", output, re.IGNORECASE)
+        apikey_name = apikey_match.group(1) if apikey_match else ""
 
-        # Try 2: JSON format
+        if not runtime_id or not endpoint:
+            logger.error(f"Cannot parse CLI output: {output}")
+            raise ValueError(
+                f"Failed to parse deployment output. "
+                f"Expected RuntimeId and Endpoint, got: {output[:500]}"
+            )
+
+        return runtime_id, apikey_name, endpoint
+
+    def _get_runtime_apikey(runtime_id: str, region: str) -> str:
+        """Get actual API key from AgentKit Runtime API.
+
+        Args:
+            runtime_id: Runtime ID (e.g., "r-yeo3ym4hkwo2eybtjs36")
+            region: AgentKit region (e.g., "cn-beijing")
+
+        Returns:
+            Actual API key string, or empty string if retrieval fails
+
+        This function calls the Volcengine AgentKit GetRuntime API to retrieve
+        the actual API key after deployment. The API key is in the
+        AuthorizerConfiguration.KeyAuth.ApiKey field.
+        """
         try:
-            import json
+            from volcengine.Credentials import Credentials
+            from volcengine.base.Service import Service
+            from volcengine.ServiceInfo import ServiceInfo
+            from volcengine.ApiInfo import ApiInfo
 
-            data = json.loads(output)
-            return data["apikey"], data["url"]
-        except Exception:
-            pass
+            access_key = os.getenv("VOLCENGINE_ACCESS_KEY")
+            secret_key = os.getenv("VOLCENGINE_SECRET_KEY")
 
-        # Try 3: Key-value format (apikey: / url:)
-        apikey_match = re.search(r"apikey[:\s]+(\S+)", output, re.IGNORECASE)
-        url_match = re.search(r"url[:\s]+(https?://\S+)", output, re.IGNORECASE)
+            if not access_key or not secret_key:
+                logger.warning("VOLCENGINE_ACCESS_KEY or VOLCENGINE_SECRET_KEY not set")
+                return ""
 
-        if apikey_match and url_match:
-            return apikey_match.group(1), url_match.group(1)
+            # Configure AgentKit service
+            service_info = ServiceInfo(
+                host=f"agentkit.{region}.volcengineapi.com",
+                header={},
+                credentials=Credentials(access_key, secret_key, "agentkit", region),
+                connection_timeout=30,
+                socket_timeout=30,
+                scheme='https',  # IMPORTANT: Use HTTPS instead of default HTTP
+            )
 
-        # Try 4: Simple two lines (fallback)
-        lines = [line.strip() for line in output.split("\n") if line.strip()]
-        if len(lines) >= 2:
-            # Assume last two lines are the results
-            potential_apikey = lines[-2]
-            potential_url = lines[-1]
-            if potential_url.startswith("http"):
-                return potential_apikey, potential_url
+            api_info = {
+                "GetRuntime": ApiInfo("POST", "/", {"Action": "GetRuntime", "Version": "2025-10-30"}, {}, {}),
+            }
 
-        # Parse failed
-        logger.error(f"Cannot parse CLI output: {output}")
-        raise ValueError(
-            f"Failed to parse deployment output. "
-            f"Expected API key and endpoint, got: {output[:200]}"
-        )
+            service = Service(service_info, api_info)
+
+            # Call GetRuntime to get API key
+            request_body = {
+                "RuntimeId": runtime_id,
+            }
+
+            logger.debug(f"Calling GetRuntime API for RuntimeId: {runtime_id}")
+            response = service.json("GetRuntime", {}, json.dumps(request_body))
+
+            if not response:
+                logger.error("GetRuntime API returned empty response")
+                return ""
+
+            runtime_data = json.loads(response) if isinstance(response, str) else response
+            logger.debug(f"GetRuntime response keys: {list(runtime_data.keys())}")
+
+            if "ResponseMetadata" in runtime_data and "Error" in runtime_data["ResponseMetadata"]:
+                error = runtime_data["ResponseMetadata"]["Error"]
+                logger.error(f"GetRuntime API error: {error.get('Code')} - {error.get('Message')}")
+                return ""
+
+            result = runtime_data.get("Result", {})
+
+            # Extract API key from AuthorizerConfiguration.KeyAuth.ApiKey
+            authorizer_config = result.get("AuthorizerConfiguration", {})
+            key_auth = authorizer_config.get("KeyAuth", {})
+            api_key = key_auth.get("ApiKey", "")
+
+            if api_key:
+                logger.info(f"Successfully retrieved API key from GetRuntime: {api_key[:10]}...")
+                return api_key
+            else:
+                logger.warning(
+                    f"No API key found in GetRuntime response. "
+                    f"AuthorizerConfiguration: {authorizer_config}"
+                )
+                return ""
+
+        except Exception as e:
+            logger.error(f"Failed to get API key from AgentKit API: {e}", exc_info=True)
+            return ""
 
     def _load_temp_agent(app_name: str):
         """Load a temporary agent from the temp directory.
