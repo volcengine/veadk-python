@@ -204,3 +204,7 @@ cython_debug/
 .trae
 .claude
 .agents
+# AgentKit deploy config (contains account-specific secrets)
+agentkit.yaml
+agentkit*.yaml
+.agentkit/
