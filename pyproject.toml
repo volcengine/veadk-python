@@ -19,7 +19,13 @@ dependencies = [
     "pydantic-settings==2.10.1", # Config management
     "a2a-sdk==0.3.7", # For Google Agent2Agent protocol
     "deprecated==1.2.18",
-    "google-adk==1.32.0", # For basic agent architecture
+    "google-adk>=1.32.0", # For basic agent architecture
+    # litellm and sqlalchemy are required by code paths veadk always uses
+    # (LiteLlm models, sessions). google-adk ships them in base on 1.x but moved
+    # them behind extras ([extensions]/[db]) on 2.x, so declare them directly to
+    # stay compatible across google-adk >= 1.32.0 (including 2.x).
+    "litellm>=1.83.7,<=1.83.14", # google-adk LiteLlm model ([extensions] on 2.x)
+    "sqlalchemy>=2,<3", # google-adk sessions ([db] on 2.x)
     "loguru==0.7.3", # For better logging
     "opentelemetry-exporter-otlp==1.37.0",
     "opentelemetry-instrumentation-logging>=0.56b0",
