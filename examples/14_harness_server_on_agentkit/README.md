@@ -3,6 +3,8 @@
 Deploy VeADK's **Harness server** (`veadk.cloud.harness_app`) to
 [Volcengine AgentKit](https://www.volcengine.com/) and call it over HTTP.
 
+> 中文版见 [README.zh.md](./README.zh.md)
+
 A *harness* is a named agent spec — **model + system prompt + tools**. The
 server lets you register harnesses at runtime (`/harness/add`) and invoke them
 (`/harness/invoke`), with an optional once-time harness that overrides the
