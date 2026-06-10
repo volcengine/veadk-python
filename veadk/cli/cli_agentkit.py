@@ -40,13 +40,20 @@ if isinstance(agentkit_commands, click.Group):
 
 def _harness_request(url: str, path: str, key: str | None, body: dict) -> dict:
     """POST ``body`` to ``url + path`` with optional Bearer auth; return JSON."""
+    import os
+
     import httpx
 
     headers = {"Content-Type": "application/json"}
     if key:
         headers["Authorization"] = f"Bearer {key}"
 
-    resp = httpx.post(url.rstrip("/") + path, json=body, headers=headers, timeout=120)
+    # Tool/skill-driven agent runs can take minutes; allow a generous, tunable
+    # client timeout (HARNESS_TIMEOUT seconds, default 600).
+    timeout = float(os.getenv("HARNESS_TIMEOUT", "600"))
+    resp = httpx.post(
+        url.rstrip("/") + path, json=body, headers=headers, timeout=timeout
+    )
     if resp.status_code != 200:
         raise click.ClickException(
             f"{path} failed: HTTP {resp.status_code} - {resp.text}"
@@ -80,6 +87,11 @@ def harness() -> None:
     help="Comma-separated built-in tool names, e.g. web_search,web_fetch.",
 )
 @click.option(
+    "--skills",
+    default=None,
+    help="Comma-separated skill hub names, e.g. clawhub/lgwventrue/system-file-handler.",
+)
+@click.option(
     "--url",
     required=True,
     envvar="HARNESS_URL",
@@ -91,12 +103,14 @@ def harness() -> None:
     envvar="HARNESS_KEY",
     help="Gateway API key for Bearer auth (or set HARNESS_KEY).",
 )
-def harness_add(name, model_name, system_prompt, tools, url, key) -> None:
+def harness_add(name, model_name, system_prompt, tools, skills, url, key) -> None:
     """Register a new harness on the server."""
     spec: dict = {"system_prompt": system_prompt}
+    # Pass the comma-separated strings through; the server splits them.
     if tools:
-        # Pass the comma-separated string through; the server splits it.
         spec["tools"] = tools
+    if skills:
+        spec["skills"] = skills
     if model_name:
         spec["model_name"] = model_name
     result = _harness_request(
@@ -123,6 +137,16 @@ def harness_add(name, model_name, system_prompt, tools, url, key) -> None:
     help="Override the system prompt for this call (creates a one-time harness).",
 )
 @click.option(
+    "--tools",
+    default=None,
+    help="Override tools for this call, comma-separated (creates a one-time harness).",
+)
+@click.option(
+    "--skills",
+    default=None,
+    help="Override skills for this call, comma-separated (creates a one-time harness).",
+)
+@click.option(
     "--user-id", "user_id", default="cli-user", help="User id for the session."
 )
 @click.option(
@@ -141,7 +165,16 @@ def harness_add(name, model_name, system_prompt, tools, url, key) -> None:
     help="Gateway API key for Bearer auth (or set HARNESS_KEY).",
 )
 def harness_invoke(
-    message, harness_name, model_name, system_prompt, user_id, session_id, url, key
+    message,
+    harness_name,
+    model_name,
+    system_prompt,
+    tools,
+    skills,
+    user_id,
+    session_id,
+    url,
+    key,
 ) -> None:
     """Invoke a harness with MESSAGE and print its output."""
     body: dict = {
@@ -149,14 +182,20 @@ def harness_invoke(
         "harness_name": harness_name,
         "run_agent_request": {"user_id": user_id, "session_id": session_id},
     }
-    # --model-name / --system-prompt build a one-time harness that overrides the
-    # stored one for this single call (the server replaces the whole agent).
-    if model_name or system_prompt:
-        once: dict = {}
-        if model_name:
-            once["model_name"] = model_name
-        if system_prompt:
-            once["system_prompt"] = system_prompt
+    # Any of --model-name/--system-prompt/--tools/--skills builds a one-time
+    # harness that overrides the stored one for this single call (the server
+    # replaces the whole agent). tools/skills are passed through as
+    # comma-separated strings; the server splits them.
+    once: dict = {}
+    if model_name:
+        once["model_name"] = model_name
+    if system_prompt:
+        once["system_prompt"] = system_prompt
+    if tools:
+        once["tools"] = tools
+    if skills:
+        once["skills"] = skills
+    if once:
         body["harness"] = once
     result = _harness_request(url, "/harness/invoke", key, body)
     click.echo(result.get("output", json.dumps(result, ensure_ascii=False)))

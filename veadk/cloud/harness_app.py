@@ -12,35 +12,108 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import io
+import os
+import shutil
+import zipfile
+from pathlib import Path
+
+import frontmatter
+import httpx
 from fastapi import FastAPI
-from pydantic import BaseModel, Field, field_validator
+from google.adk.skills import load_skill_from_dir
+from google.adk.tools.skill_toolset import SkillToolset
+from pydantic import BaseModel, Field
 
 from veadk import Agent
 from veadk.consts import DEFAULT_MODEL_AGENT_NAME
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.runner import Runner
 from veadk.utils.logger import get_logger
+from veadk.utils.misc import formatted_timestamp
 
 logger = get_logger(__name__)
+
+# Skill hub download endpoint. A skill name in a harness is the path after
+# `/download/`, e.g. "clawhub/lgwventrue/system-file-handler".
+SKILL_HUB_DOWNLOAD_URL = os.getenv(
+    "SKILL_HUB_DOWNLOAD_URL", "https://skills.volces.com/v1/skills/download"
+)
+
+
+def _split_csv(value: str) -> list[str]:
+    """Split a comma-separated string into a list of trimmed, non-empty names.
+
+    ``"web_search, web_fetch"`` -> ``["web_search", "web_fetch"]``; ``""`` -> ``[]``.
+    """
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _download_and_extract_skill(skill: str, dest_dir: Path) -> Path:
+    """Download a skill zip from the skill hub and extract it.
+
+    Args:
+        skill: Skill identifier — the hub path after ``/download/``
+            (e.g. ``"clawhub/lgwventrue/system-file-handler"``).
+        dest_dir: Base directory to extract into; the skill is placed in a
+            subdirectory named after the identifier's last path segment.
+
+    Returns:
+        The directory the skill was extracted to. Its name matches the skill's
+        declared name in ``SKILL.md`` (required by ``load_skill_from_dir``).
+    """
+    name = skill.strip("/")
+    url = f"{SKILL_HUB_DOWNLOAD_URL.rstrip('/')}/{name}"
+    logger.info(f"Downloading skill '{skill}' from {url}")
+
+    response = httpx.get(url, timeout=60, follow_redirects=True)
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Failed to download skill '{skill}': HTTP {response.status_code}"
+        )
+
+    # Extract to a staging dir first; the final directory must be named after
+    # the skill's declared name (ADK's load_skill_from_dir enforces this).
+    staging = dest_dir / f"{name.split('/')[-1]}__staging"
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True)
+    staging_root = staging.resolve()
+    with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
+        for member in zf.namelist():
+            # Guard against path traversal (zip-slip).
+            if not (staging / member).resolve().is_relative_to(staging_root):
+                raise RuntimeError(f"Unsafe path in skill '{skill}' zip: {member}")
+        zf.extractall(staging)
+
+    skill_md = staging / "SKILL.md"
+    if not skill_md.exists():
+        skill_md = staging / "skill.md"
+    if not skill_md.exists():
+        raise RuntimeError(f"Skill '{skill}' has no SKILL.md")
+    declared_name = frontmatter.loads(
+        skill_md.read_text(encoding="utf-8")
+    ).metadata.get("name")
+    if not declared_name:
+        raise RuntimeError(f"Skill '{skill}' SKILL.md has no 'name' in frontmatter")
+
+    skill_dir = dest_dir / str(declared_name)
+    if skill_dir.exists():
+        shutil.rmtree(skill_dir)
+    staging.rename(skill_dir)
+
+    logger.info(f"Extracted skill '{skill}' (name='{declared_name}') to {skill_dir}")
+    return skill_dir
 
 
 class Harness(BaseModel):
     model_name: str = Field(default=DEFAULT_MODEL_AGENT_NAME)
-    tools: list[str] = Field(default_factory=list)
+    # `tools` and `skills` are comma-separated strings (e.g. "web_search,web_fetch").
+    # The app splits them into names via _split_csv(); clients (CLI/curl) just
+    # pass the raw string.
+    tools: str = Field(default="")
+    skills: str = Field(default="")
     system_prompt: str = Field(default="You are a helpful assistant.")
-
-    @field_validator("tools", mode="before")
-    @classmethod
-    def _split_tools(cls, value: object) -> object:
-        """Accept a list[str] or a comma-separated string for ``tools``.
-
-        ``"web_search,web_fetch"`` becomes ``["web_search", "web_fetch"]``; a
-        bare name becomes a single-item list. Non-string inputs pass through so
-        Pydantic validates them normally.
-        """
-        if isinstance(value, str):
-            return [name.strip() for name in value.split(",") if name.strip()]
-        return value
 
 
 class AddHarnessRequest(BaseModel):
@@ -138,10 +211,37 @@ class HarnessApp:
                 output=output,
             )
 
+    def _create_skill_toolset(self, skills: list[str]) -> SkillToolset | None:
+        # Pull each skill zip from the hub into a fresh /tmp/<timestamp> dir,
+        # extract it, and load it as an ADK skill. Skills that fail to download
+        # or load (e.g. a malformed SKILL.md name) are skipped with a warning so
+        # the rest still load. Returns None if none loaded.
+        base_dir = Path("/tmp") / formatted_timestamp()
+        loaded_skills = []
+        for skill in skills:
+            try:
+                loaded_skills.append(
+                    load_skill_from_dir(_download_and_extract_skill(skill, base_dir))
+                )
+            except Exception as e:
+                logger.warning(f"Skipping skill '{skill}': {e}")
+
+        if not loaded_skills:
+            logger.warning("No skills loaded successfully; skipping skill toolset.")
+            return None
+        return SkillToolset(skills=loaded_skills)
+
     def _create_agent(self, harness: Harness) -> Agent:
         from veadk.tools import get_builtin_tool
 
-        tools = [get_builtin_tool(name) for name in harness.tools]
+        tools = [get_builtin_tool(name) for name in _split_csv(harness.tools)]
+        skills = _split_csv(harness.skills)
+        if skills:
+            logger.info(f"Loading skills {skills} for harness.")
+            skill_toolset = self._create_skill_toolset(skills)
+            if skill_toolset is not None:
+                tools = tools + [skill_toolset]
+
         agent = Agent(
             name="temp_agent",
             model_name=harness.model_name,
