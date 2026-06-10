@@ -231,6 +231,14 @@ export default function App() {
     setCreateView(null);
     startNewChat();
   }
+
+  // Navigate to a newly added agent: switch app, close create view, start fresh chat.
+  function onAgentAdded(agentId: string, agentName: string) {
+    console.log("Agent added, navigating to:", agentId, agentName);
+    setCreateView(null);
+    setAppName(agentId);
+    // startNewChat will be called automatically by the appName change effect
+  }
   const { ref: scrollRef, onScroll } = useStickToBottom<HTMLDivElement>(turns);
 
   // Resolve SSO identity first; it provides the ADK user_id.
@@ -679,12 +687,13 @@ export default function App() {
                 }}
               />
             ) : createView === "intelligent" ? (
-              <IntelligentCreate userId={userId} onBack={() => setCreateView("menu")} onCreate={onCreate} />
+              <IntelligentCreate userId={userId} onBack={() => setCreateView("menu")} onCreate={onCreate} onAgentAdded={onAgentAdded} />
             ) : createView === "custom" ? (
               <CustomCreate
                 initialDraft={importedDraft ?? undefined}
                 onBack={() => setCreateView("menu")}
                 onCreate={onCreate}
+                onAgentAdded={onAgentAdded}
               />
             ) : createView === "template" ? (
               <TemplateCreate onBack={() => setCreateView("menu")} onCreate={onCreate} />

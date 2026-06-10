@@ -29,7 +29,6 @@ import json
 from pathlib import Path
 
 import click
-import requests
 
 from veadk.utils.logger import get_logger
 
@@ -595,7 +594,9 @@ def frontend(
 
                 # Skip __init__.py to avoid package conflicts with python -m agent
                 if file_path == "__init__.py":
-                    logger.info(f"Skipping {file_path} to ensure proper module execution")
+                    logger.info(
+                        f"Skipping {file_path} to ensure proper module execution"
+                    )
                     continue
 
                 full_path = PathlibPath(temp_dir) / file_path
@@ -606,7 +607,8 @@ def frontend(
             entry_point = "app.py"
             if not (PathlibPath(temp_dir) / "app.py").exists():
                 raise HTTPException(
-                    status_code=400, detail="No app.py found in files (frontend should generate it)"
+                    status_code=400,
+                    detail="No app.py found in files (frontend should generate it)",
                 )
 
             # Verify files in temp_dir
@@ -648,7 +650,7 @@ def frontend(
                 shutil.copy(".env", PathlibPath(temp_dir) / ".env")
 
             # 6. Call veadk agentkit launch
-            logger.info(f"Launching agent via CLI: veadk agentkit launch")
+            logger.info("Launching agent via CLI: veadk agentkit launch")
             result = subprocess.run(
                 ["veadk", "agentkit", "launch"],
                 cwd=temp_dir,
@@ -677,12 +679,16 @@ def frontend(
                 actual_apikey = _get_runtime_apikey(runtime_id, region)
                 if actual_apikey:
                     apikey = actual_apikey
-                    logger.info(f"Successfully retrieved API key via AgentKit API")
+                    logger.info("Successfully retrieved API key via AgentKit API")
                 else:
                     apikey = apikey_name or f"API-KEY-{runtime_id}"
-                    logger.warning(f"Could not retrieve API key from AgentKit API, using placeholder: {apikey}")
+                    logger.warning(
+                        f"Could not retrieve API key from AgentKit API, using placeholder: {apikey}"
+                    )
             except Exception as e:
-                logger.warning(f"Failed to retrieve API key via AgentKit API: {e}, using placeholder")
+                logger.warning(
+                    f"Failed to retrieve API key via AgentKit API: {e}, using placeholder"
+                )
                 apikey = apikey_name or f"API-KEY-{runtime_id}"
 
             # 9. Construct console URL
@@ -726,7 +732,9 @@ def frontend(
         output = output.strip()
 
         # Extract RuntimeId
-        runtime_match = re.search(r"Runtime created successfully:\s*(r-\w+)", output, re.IGNORECASE)
+        runtime_match = re.search(
+            r"Runtime created successfully:\s*(r-\w+)", output, re.IGNORECASE
+        )
         runtime_id = runtime_match.group(1) if runtime_match else ""
 
         # Extract Endpoint (appears multiple times, use the first occurrence)
@@ -734,7 +742,9 @@ def frontend(
         endpoint = endpoint_match.group(1) if endpoint_match else ""
 
         # Try to extract API key name (may not always be present)
-        apikey_match = re.search(r"Generated API key name:\s*(API-KEY-\S+)", output, re.IGNORECASE)
+        apikey_match = re.search(
+            r"Generated API key name:\s*(API-KEY-\S+)", output, re.IGNORECASE
+        )
         apikey_name = apikey_match.group(1) if apikey_match else ""
 
         if not runtime_id or not endpoint:
@@ -780,11 +790,17 @@ def frontend(
                 credentials=Credentials(access_key, secret_key, "agentkit", region),
                 connection_timeout=30,
                 socket_timeout=30,
-                scheme='https',  # IMPORTANT: Use HTTPS instead of default HTTP
+                scheme="https",  # IMPORTANT: Use HTTPS instead of default HTTP
             )
 
             api_info = {
-                "GetRuntime": ApiInfo("POST", "/", {"Action": "GetRuntime", "Version": "2025-10-30"}, {}, {}),
+                "GetRuntime": ApiInfo(
+                    "POST",
+                    "/",
+                    {"Action": "GetRuntime", "Version": "2025-10-30"},
+                    {},
+                    {},
+                ),
             }
 
             service = Service(service_info, api_info)
@@ -801,12 +817,19 @@ def frontend(
                 logger.error("GetRuntime API returned empty response")
                 return ""
 
-            runtime_data = json.loads(response) if isinstance(response, str) else response
+            runtime_data = (
+                json.loads(response) if isinstance(response, str) else response
+            )
             logger.debug(f"GetRuntime response keys: {list(runtime_data.keys())}")
 
-            if "ResponseMetadata" in runtime_data and "Error" in runtime_data["ResponseMetadata"]:
+            if (
+                "ResponseMetadata" in runtime_data
+                and "Error" in runtime_data["ResponseMetadata"]
+            ):
                 error = runtime_data["ResponseMetadata"]["Error"]
-                logger.error(f"GetRuntime API error: {error.get('Code')} - {error.get('Message')}")
+                logger.error(
+                    f"GetRuntime API error: {error.get('Code')} - {error.get('Message')}"
+                )
                 return ""
 
             result = runtime_data.get("Result", {})
@@ -817,7 +840,9 @@ def frontend(
             api_key = key_auth.get("ApiKey", "")
 
             if api_key:
-                logger.info(f"Successfully retrieved API key from GetRuntime: {api_key[:10]}...")
+                logger.info(
+                    f"Successfully retrieved API key from GetRuntime: {api_key[:10]}..."
+                )
                 return api_key
             else:
                 logger.warning(

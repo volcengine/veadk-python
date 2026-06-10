@@ -35,6 +35,8 @@ export interface IntelligentCreateProps {
   /** App-level breadcrumb also handles leaving; kept for parity. */
   onBack: () => void;
   onCreate: (draft: AgentDraft) => void;
+  /** Called after successfully adding an agent to navigate to it. */
+  onAgentAdded?: (agentId: string, agentName: string) => void;
 }
 
 type Role = "assistant" | "user";
@@ -98,7 +100,7 @@ function parseProject(raw: string): AgentProject | null {
   return null;
 }
 
-export function IntelligentCreate({ userId, onBack, onCreate }: IntelligentCreateProps) {
+export function IntelligentCreate({ userId, onBack, onCreate, onAgentAdded }: IntelligentCreateProps) {
   // onBack/onCreate are part of the contract but the deploy/preview is the
   // outcome here, so we don't drive navigation from this component.
   void onBack;
@@ -461,7 +463,7 @@ export function IntelligentCreate({ userId, onBack, onCreate }: IntelligentCreat
               />
             </div>
           ) : project ? (
-            <ProjectPreview project={project} onChange={setProject} onDeploy={handleDeploy} />
+            <ProjectPreview project={project} onChange={setProject} onDeploy={handleDeploy} onAgentAdded={onAgentAdded} />
           ) : (
             <div className="ic-preview-empty">
               <div className="ic-preview-empty-icon">

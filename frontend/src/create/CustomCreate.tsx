@@ -873,7 +873,7 @@ interface CustomCreateProps extends CreateModeProps {
   initialDraft?: AgentDraft;
 }
 
-export function CustomCreate({ onBack, onCreate, initialDraft }: CustomCreateProps) {
+export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft }: CustomCreateProps) {
   void onCreate; // outcome is the in-pane project preview, not a navigation
   void onBack; // no footer nav in the single-scroll layout; back lives in app chrome
   const [draft, setDraft] = useState<AgentDraft>(() => initialDraft ?? emptyDraft());
@@ -1120,7 +1120,7 @@ export function CustomCreate({ onBack, onCreate, initialDraft }: CustomCreatePro
           </button>
         </div>
         <div className="cw-preview-body">
-          <ProjectPreview project={project} onChange={setProject} onDeploy={handleDeploy} />
+          <ProjectPreview project={project} onChange={setProject} onDeploy={handleDeploy} onAgentAdded={onAgentAdded} />
         </div>
       </div>
     );

@@ -131,6 +131,8 @@ export interface ProjectPreviewProps {
   onChange?: (project: AgentProject) => void;
   /** One-click deploy handler. Should return deploy result (URL + API Key). Omit to hide the deploy button. */
   onDeploy?: (project: AgentProject) => Promise<DeployResult>;
+  /** Called after successfully adding the agent to the connection list. */
+  onAgentAdded?: (agentId: string, agentName: string) => void;
 }
 
 // --- tree model -------------------------------------------------------------
@@ -171,7 +173,7 @@ function sortedChildren(node: TreeNode): TreeNode[] {
 
 // --- component --------------------------------------------------------------
 
-export function ProjectPreview({ project, onChange, onDeploy }: ProjectPreviewProps) {
+export function ProjectPreview({ project, onChange, onDeploy, onAgentAdded }: ProjectPreviewProps) {
   const editable = typeof onChange === "function";
 
   // Initialize all hooks BEFORE any conditional returns (React hooks rule)
@@ -279,7 +281,7 @@ export function ProjectPreview({ project, onChange, onDeploy }: ProjectPreviewPr
     setAddingAgent(true);
     setDeployError(null);
     try {
-      const { addConnection } = await import("../adk/connections");
+      const { addConnection, remoteAppId } = await import("../adk/connections");
 
       const conn = await addConnection(
         deployResult.agentName,
@@ -290,7 +292,13 @@ export function ProjectPreview({ project, onChange, onDeploy }: ProjectPreviewPr
       if (conn.apps.length === 0) {
         setDeployError("连接成功，但该地址未发现任何 Agent（/list-apps 为空）。");
       } else {
-        alert(`🎉 Agent "${deployResult.agentName}" 已添加到左上角下拉列表！`);
+        // 如果提供了 onAgentAdded 回调，调用它进行导航；否则显示 alert
+        if (onAgentAdded) {
+          const agentId = remoteAppId(conn.id, conn.apps[0]);
+          onAgentAdded(agentId, deployResult.agentName);
+        } else {
+          alert(`🎉 Agent "${deployResult.agentName}" 已添加到左上角下拉列表！`);
+        }
       }
     } catch (err) {
       setDeployError(
