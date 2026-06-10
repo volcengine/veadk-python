@@ -115,4 +115,6 @@ export interface CreateModeProps {
   onBack: () => void;
   /** Called when the user finishes assembling an agent. */
   onCreate: (draft: AgentDraft) => void;
+  /** Called after successfully adding an agent to navigate to it. */
+  onAgentAdded?: (agentId: string, agentName: string) => void;
 }
