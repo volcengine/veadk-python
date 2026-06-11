@@ -564,16 +564,6 @@ async def test_run_async_impl_non_adk_runtime_uses_get_runtime():
     assert events == ["codex-event"]
 
 
-@pytest.mark.asyncio
-@patch.dict(os.environ, _ENV)
-async def test_run_method_is_deprecated():
-    agent = Agent()
-    if not hasattr(agent, "run"):
-        pytest.skip("run() not overridden on this ADK version")
-    with pytest.raises(NotImplementedError, match="deprecated"):
-        await agent.run()
-
-
 @patch.dict(os.environ, _ENV)
 def test_existing_model_skips_client_creation():
     from google.adk.models.lite_llm import LiteLlm

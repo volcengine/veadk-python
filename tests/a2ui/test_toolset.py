@@ -45,6 +45,15 @@ _SDK_BASIC_CATALOG = os.path.join(
     "basic_catalog.json",
 )
 
+# Some tests build against the real a2ui SDK (catalog asset + toolset
+# construction). CI may install an a2ui version whose assets/internals differ;
+# the bundled 0.9 catalog being absent is a reliable proxy for that, so skip the
+# real-SDK tests there rather than asserting against a foreign SDK build.
+_requires_sdk_assets = pytest.mark.skipif(
+    not os.path.isfile(_SDK_BASIC_CATALOG),
+    reason="installed a2ui SDK lacks the bundled 0.9 basic_catalog.json asset",
+)
+
 
 def test_examples_beside_returns_dir_when_present(tmp_path):
     """The conventional ``a2ui_examples/`` dir beside a catalog is discovered."""
@@ -182,6 +191,7 @@ def test_build_a2ui_toolset_import_error_is_friendly(monkeypatch):
     assert "a2ui-agent-sdk" in str(exc.value)
 
 
+@_requires_sdk_assets
 def test_build_a2ui_toolset_returns_base_toolset():
     """The factory returns a real ADK ``BaseToolset`` instance."""
     from google.adk.tools.base_toolset import BaseToolset
@@ -190,6 +200,7 @@ def test_build_a2ui_toolset_returns_base_toolset():
     assert isinstance(ts, BaseToolset)
 
 
+@_requires_sdk_assets
 @pytest.mark.asyncio
 async def test_toolset_exposes_send_tool_when_enabled():
     """An enabled toolset exposes exactly the ``send_a2ui_json_to_client`` tool."""
@@ -200,6 +211,7 @@ async def test_toolset_exposes_send_tool_when_enabled():
     assert [t.name for t in tools] == ["send_a2ui_json_to_client"]
 
 
+@_requires_sdk_assets
 @pytest.mark.asyncio
 async def test_toolset_hides_tool_when_disabled():
     """A disabled toolset exposes no tools."""
@@ -210,6 +222,7 @@ async def test_toolset_hides_tool_when_disabled():
     assert tools == []
 
 
+@_requires_sdk_assets
 def test_build_a2ui_toolset_passes_examples_override(tmp_path, monkeypatch):
     """An explicit ``examples`` override wins over the resolved default."""
     dest = tmp_path / "catalog.json"

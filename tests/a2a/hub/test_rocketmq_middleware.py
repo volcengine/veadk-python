@@ -17,13 +17,39 @@
 All RocketMQ I/O (Producer/PushConsumer/Message) is mocked; no broker contact.
 """
 
-from unittest.mock import Mock, patch
+import sys
+import types
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-from rocketmq.client import ConsumeStatus, ReceivedMessage
+# rocketmq_middleware (and this test) hard-import `rocketmq.client`, the optional
+# RocketMQ extra. It is absent from the base CI image, so stub it before import
+# when missing; all broker I/O is mocked, so the stub only lets the import chain
+# succeed. A real install (dev env) is used as-is.
+try:
+    import rocketmq.client  # noqa: F401
+except ImportError:
+    _rmq = types.ModuleType("rocketmq")
+    _rmq_client = types.ModuleType("rocketmq.client")
+    for _name in (
+        "ConsumeStatus",
+        "Message",
+        "Producer",
+        "PushConsumer",
+        "ReceivedMessage",
+    ):
+        setattr(_rmq_client, _name, MagicMock(name=_name))
+    _rmq.client = _rmq_client  # type: ignore[attr-defined]
+    sys.modules["rocketmq"] = _rmq
+    sys.modules["rocketmq.client"] = _rmq_client
 
-from veadk.a2a.hub.rocketmq_middleware import RocketMQAgentClient, RocketMQClient
+from rocketmq.client import ConsumeStatus, ReceivedMessage  # noqa: E402
+
+from veadk.a2a.hub.rocketmq_middleware import (  # noqa: E402
+    RocketMQAgentClient,
+    RocketMQClient,
+)
 
 MODULE = "veadk.a2a.hub.rocketmq_middleware"
 
