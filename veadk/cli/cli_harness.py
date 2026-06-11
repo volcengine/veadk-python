@@ -496,19 +496,13 @@ def deploy(
         raise click.ClickException(f"Harness deploy failed: {result.error}")
 
     deploy_result = result.deploy_result
-    # The AgentKit runner records the created runtime's id / endpoint / api key in
-    # the deploy result's config_updates (key auth). Surface them so the user can
-    # invoke immediately.
-    updates = (
-        deploy_result.config_updates.updates
-        if deploy_result and deploy_result.config_updates
-        else {}
-    )
-    endpoint = (deploy_result.endpoint_url if deploy_result else None) or updates.get(
-        "runtime_endpoint"
-    )
-    apikey = updates.get("runtime_apikey")
-    runtime_id = updates.get("runtime_id")
+    # The AgentKit runner returns the created runtime's id / endpoint / api key in
+    # the deploy result's metadata (key auth). Surface them so the user can invoke
+    # immediately.
+    meta = deploy_result.metadata if (deploy_result and deploy_result.metadata) else {}
+    endpoint = deploy_result.endpoint_url if deploy_result else None
+    apikey = meta.get("runtime_apikey")
+    runtime_id = meta.get("runtime_id")
 
     lines = [f"Harness runtime deployed: name={runtime_name}"]
     if runtime_id:
