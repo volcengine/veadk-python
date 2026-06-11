@@ -31,7 +31,7 @@ Two kinds of fields are converted differently:
   ``config.yaml``): nested keys joined with ``_``, then upper-cased, lists
   comma-joined. So ``model: {name: x}`` -> ``MODEL_NAME``, ``tools: [a, b]`` ->
   ``TOOLS``.
-* **Component sections** (``knowledge_base`` / ``long_term_memory`` /
+* **Component sections** (``knowledgebase`` / ``long_term_memory`` /
   ``short_term_memory``): ``type`` becomes the harness selector env, and the
   remaining connection params are mapped to the VeADK env vars the backend
   actually reads via :data:`BACKEND_ENV` — these can't be derived by a generic
@@ -51,7 +51,7 @@ from veadk.utils.misc import flatten_dict
 # Component section -> the harness selector env naming its backend ``type``
 # (read by :func:`veadk.cloud.harness_app.utils.config_from_env`).
 COMPONENT_TYPE_ENV: dict[str, str] = {
-    "knowledge_base": "KNOWLEDGE_BASE_TYPE",
+    "knowledgebase": "KNOWLEDGEBASE_TYPE",
     "long_term_memory": "LONG_TERM_MEMORY_TYPE",
     "short_term_memory": "SHORT_TERM_MEMORY_TYPE",
 }
@@ -113,7 +113,7 @@ BACKEND_ENV: dict[str, dict[str, str]] = {
 # flags and lets a component offer only its relevant params). Backends with no
 # connection params (local / sqlite / tos_vector / context_search) are omitted.
 COMPONENT_BACKENDS: dict[str, list[str]] = {
-    "knowledge_base": ["viking", "opensearch", "redis"],
+    "knowledgebase": ["viking", "opensearch", "redis"],
     "long_term_memory": ["viking", "opensearch", "redis", "mem0"],
     "short_term_memory": ["mysql", "postgresql"],
 }

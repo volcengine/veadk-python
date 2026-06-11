@@ -72,7 +72,7 @@ _ENV_FIELDS = {
     "system_prompt": "SYSTEM_PROMPT",
     "runtime": "RUNTIME",
     "name": "HARNESS_NAME",
-    "knowledgebase_type": "KNOWLEDGE_BASE_TYPE",
+    "knowledgebase_type": "KNOWLEDGEBASE_TYPE",
     "longterm_memory_type": "LONG_TERM_MEMORY_TYPE",
     "shortterm_memory_type": "SHORT_TERM_MEMORY_TYPE",
 }

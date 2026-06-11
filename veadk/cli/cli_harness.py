@@ -47,9 +47,10 @@ from veadk.cloud.harness_app.types import HarnessOverrides
 _DEFAULT_HARNESS_NAME = "default"
 
 # Blank `harness.yaml` template written by `create`. Layered sections map to the
-# flattened runtime env names consumed by `veadk.cloud.harness_app` (see
-# `flatten`): `model.name` -> MODEL_NAME, `knowledge_base.type` ->
-# KNOWLEDGE_BASE_TYPE, etc. Empty values are skipped on flatten.
+# runtime env names consumed by `veadk.cloud.harness_app` (see env_mapping):
+# `model.name` -> MODEL_NAME, `knowledgebase.type` -> KNOWLEDGEBASE_TYPE, a
+# backend's params -> DATABASE_<BACKEND>_*. Each line is annotated with its env
+# var and the `veadk harness add` flag that sets it.
 _HARNESS_YAML = """\
 # =============================================================================
 # VeADK harness configuration.
@@ -61,46 +62,48 @@ _HARNESS_YAML = """\
 # viking `project` -> DATABASE_VIKING_PROJECT). Empty values are skipped, so
 # VeADK falls back to its own defaults.
 #
-# Fill this in with `veadk harness add ...` or by editing the file. For a
+# Configure with `veadk harness add ...` or by editing this file. For a
 # component, uncomment the params under the backend you set as `type`.
 # =============================================================================
 
-# Logical harness name; also the AgentKit runtime name and the knowledge-base /
-# long-term-memory index name. Defaults to "default" when empty.  -> HARNESS_NAME
+# Harness / runtime name (also the knowledgebase & long-term-memory index name).
+#   env: HARNESS_NAME          flag: --name
 harness_name: ""
 
-# Reasoning model. Only the name is needed; on the AgentKit runtime Ark auth is
-# resolved from the runtime's IAM role.                            -> MODEL_NAME
+# Reasoning model name (Ark auth comes from the runtime's IAM role on deploy).
+#   env: MODEL_NAME            flag: --model-name
 model:
   name: ""
 
-# Built-in tool names.                  -> TOOLS   e.g. [web_search, link_reader]
+# Built-in tool names.   env: TOOLS   flag: --tools (comma-separated)
 tools: []
 
-# Skill hub names.                      -> SKILLS  e.g. [clawhub/foo/bar]
+# Skill hub names.       env: SKILLS  flag: --skills (comma-separated)
 skills: []
 
-# Agent instruction. Empty uses the VeADK default.                 -> SYSTEM_PROMPT
+# Agent instruction (empty = VeADK default).
+#   env: SYSTEM_PROMPT         flag: --system-prompt
 system_prompt: ""
 
-# Agent runtime backend: adk (default) | codex.                    -> RUNTIME
+# Agent runtime backend: adk (default) | codex.
+#   env: RUNTIME               flag: --runtime
 runtime: adk
 
 # --- Knowledge base ----------------------------------------------------------
-# type: "" disables it. Supported: viking | opensearch | redis |
-#       tos_vector | context_search. Uncomment the params for your chosen type.
-knowledge_base:
+#   type -> env: KNOWLEDGEBASE_TYPE   flag: --knowledgebase-type
+#   "" disables it. Supported: viking | opensearch | redis | tos_vector | context_search
+knowledgebase:
   type: ""
-  # -- viking --      (-> DATABASE_VIKING_*; creds from VOLCENGINE_ACCESS/SECRET_KEY)
+  # -- viking --      env DATABASE_VIKING_*    flags: --knowledgebase-project / --knowledgebase-region
   # project: my-project
   # region: cn-beijing
-  # -- opensearch --  (-> DATABASE_OPENSEARCH_*)
+  # -- opensearch --  env DATABASE_OPENSEARCH_*  flags: --knowledgebase-host / -port / -username / -password / -use-ssl
   # host: 1.2.3.4
   # port: 9200
   # username: admin
   # password: ""
   # use_ssl: true
-  # -- redis --       (-> DATABASE_REDIS_*)
+  # -- redis --       env DATABASE_REDIS_*     flags: --knowledgebase-host / -port / -username / -password / -db
   # host: 1.2.3.4
   # port: 6379
   # username: default
@@ -108,39 +111,41 @@ knowledge_base:
   # db: 0
 
 # --- Long-term memory --------------------------------------------------------
-# type: "" disables it. Supported: viking | opensearch | redis | mem0.
+#   type -> env: LONG_TERM_MEMORY_TYPE   flag: --long-term-memory-type
+#   "" disables it. Supported: viking | opensearch | redis | mem0
 long_term_memory:
   type: ""
-  # -- viking --      (-> DATABASE_VIKING_*)
+  # -- viking --      env DATABASE_VIKING_*    flags: --long-term-memory-project / --long-term-memory-region
   # project: my-project
   # region: cn-beijing
-  # -- opensearch --  (-> DATABASE_OPENSEARCH_*)
+  # -- opensearch --  env DATABASE_OPENSEARCH_*  flags: --long-term-memory-host / -port / -username / -password
   # host: 1.2.3.4
   # port: 9200
   # username: admin
   # password: ""
-  # -- redis --       (-> DATABASE_REDIS_*)
+  # -- redis --       env DATABASE_REDIS_*     flags: --long-term-memory-host / -port / -password / -db
   # host: 1.2.3.4
   # port: 6379
   # password: ""
   # db: 0
-  # -- mem0 --        (-> DATABASE_MEM0_*)
+  # -- mem0 --        env DATABASE_MEM0_*      flags: --long-term-memory-api-key / -api-key-id / -project-id / -base-url
   # api_key: ""
   # api_key_id: ""
   # project_id: ""
   # base_url: https://api.mem0.ai/v1
 
 # --- Short-term memory (session store) ---------------------------------------
-# type: local (default) | sqlite | mysql | postgresql.
+#   type -> env: SHORT_TERM_MEMORY_TYPE   flag: --short-term-memory-type
+#   local (default) | sqlite | mysql | postgresql
 short_term_memory:
   type: local
-  # -- mysql --       (-> DATABASE_MYSQL_*)
+  # -- mysql --       env DATABASE_MYSQL_*     flags: --short-term-memory-host / -user / -password / -database / -charset
   # host: 1.2.3.4
   # user: root
   # password: ""
   # database: harness
   # charset: utf8
-  # -- postgresql --  (-> DATABASE_POSTGRESQL_*)
+  # -- postgresql --  env DATABASE_POSTGRESQL_*  flags: --short-term-memory-host / -port / -user / -password / -database
   # host: 1.2.3.4
   # port: 5432
   # user: postgres
@@ -279,20 +284,34 @@ def _load_harness_yaml(path: Path) -> dict:
     return yaml.safe_load(path.read_text()) or {}
 
 
-def _append_dedup(data: dict, key: str, values: tuple[str, ...]) -> None:
-    """Append ``values`` to the list at ``data[key]``, preserving order, deduped."""
-    existing = data.get(key) or []
-    if not isinstance(existing, list):
-        existing = [existing]
-    for value in values:
-        if value not in existing:
-            existing.append(value)
-    data[key] = existing
-
-
 def _conn_dest(component: str, param: str) -> str:
     """Click dest for a connection flag, e.g. ('long_term_memory','project')."""
     return f"conn__{component}__{param}"
+
+
+def _is_blank(value: object) -> bool:
+    return value is None or value == "" or value == [] or value == {}
+
+
+def _prune_empty(data: dict) -> None:
+    """Drop unset fields so `add` writes only what's configured.
+
+    Empty scalars/lists are removed; a component section with no `type` is
+    dropped entirely. ``short_term_memory`` is always kept (its `local` default
+    is shown).
+    """
+    for key in list(data):
+        if key == "short_term_memory":
+            continue
+        value = data[key]
+        if isinstance(value, dict):
+            for sub in list(value):
+                if _is_blank(value[sub]):
+                    del value[sub]
+            if (key in COMPONENT_TYPE_ENV and not value.get("type")) or not value:
+                del data[key]
+        elif _is_blank(value):
+            del data[key]
 
 
 def _connection_options(func):
@@ -314,29 +333,42 @@ def _connection_options(func):
     return func
 
 
+def _override_options(func):
+    """Attach a ``--flag`` for every :class:`HarnessOverrides` field.
+
+    Shared by ``add`` and ``invoke`` so their model / tools / skills /
+    system-prompt / runtime flags stay identical and in sync with the model —
+    adding a field to ``HarnessOverrides`` exposes the flag in both. Each flag
+    defaults to ``None`` (unset → not applied).
+    """
+    for name, field in reversed(list(HarnessOverrides.model_fields.items())):
+        option: dict = {
+            "default": None,
+            "help": field.description or f"`{name}`.",
+        }
+        if typing.get_origin(field.annotation) is typing.Literal:
+            option["type"] = click.Choice(
+                [str(arg) for arg in typing.get_args(field.annotation)]
+            )
+        func = click.option("--" + name.replace("_", "-"), name, **option)(func)
+    return func
+
+
 @harness.command("add")
-@click.option("--harness-name", default=None, help="Logical harness / runtime name.")
-@click.option("--model-name", default=None, help="Reasoning model name.")
 @click.option(
-    "--tool",
-    "tools",
-    multiple=True,
-    help="Built-in tool name to append to `tools` (repeatable).",
-)
-@click.option(
-    "--skill",
-    "skills",
-    multiple=True,
-    help="Skill hub name to append to `skills` (repeatable).",
-)
-@click.option("--system-prompt", default=None, help="System prompt / instruction.")
-@click.option(
-    "--runtime",
-    type=click.Choice(["adk", "codex"]),
+    "--name",
+    "--harness-name",
+    "harness_name",
     default=None,
-    help="Agent runtime backend.",
+    help="Logical harness / runtime name.",
 )
-@click.option("--knowledge-base-type", default=None, help="Knowledge base backend.")
+@_override_options
+@click.option(
+    "--knowledgebase-type",
+    "knowledgebase_type",
+    default=None,
+    help="Knowledge base backend.",
+)
 @click.option("--long-term-memory-type", default=None, help="Long-term memory backend.")
 @click.option(
     "--short-term-memory-type", default=None, help="Short-term memory backend."
@@ -349,24 +381,23 @@ def _connection_options(func):
 )
 def add(
     harness_name: str | None,
-    model_name: str | None,
-    tools: tuple[str, ...],
-    skills: tuple[str, ...],
-    system_prompt: str | None,
-    runtime: str | None,
-    knowledge_base_type: str | None,
+    knowledgebase_type: str | None,
     long_term_memory_type: str | None,
     short_term_memory_type: str | None,
     path: str,
+    model_name: str | None,
+    tools: str | None,
+    skills: str | None,
+    system_prompt: str | None,
+    runtime: str | None,
     **connection: str | None,
 ) -> None:
     """Write agent parameters into `harness.yaml`.
 
-    Scalar options SET their value; `--tool` / `--skill` are repeatable and APPEND
-    to the lists (deduped). Each backend connection param has its own flag, e.g.
-    `--long-term-memory-project`, `--short-term-memory-host` (see `--help`), which
-    is written under the matching component section. Operates on
-    `<path>/harness.yaml`; fast-fails when the file is missing.
+    Options SET their value; `--tools` / `--skills` take comma-separated lists.
+    Each backend connection param has its own flag, e.g. `--long-term-memory-project`,
+    `--short-term-memory-host` (see `--help`), written under the matching component
+    section. Operates on `<path>/harness.yaml`; fast-fails when the file is missing.
     """
     yaml_path = Path(path).resolve() / "harness.yaml"
     data = _load_harness_yaml(yaml_path)
@@ -386,7 +417,7 @@ def add(
     # Set only the backend `type`, preserving any connection params already set
     # under the component section.
     for type_value, section_key in (
-        (knowledge_base_type, "knowledge_base"),
+        (knowledgebase_type, "knowledgebase"),
         (long_term_memory_type, "long_term_memory"),
         (short_term_memory_type, "short_term_memory"),
     ):
@@ -397,10 +428,10 @@ def add(
             section["type"] = type_value
             data[section_key] = section
 
-    if tools:
-        _append_dedup(data, "tools", tools)
-    if skills:
-        _append_dedup(data, "skills", skills)
+    if tools is not None:
+        data["tools"] = [t.strip() for t in tools.split(",") if t.strip()]
+    if skills is not None:
+        data["skills"] = [s.strip() for s in skills.split(",") if s.strip()]
 
     # Connection params (e.g. --long-term-memory-project) land under their
     # component section, alongside the `type` set above.
@@ -415,7 +446,12 @@ def add(
                 data[component] = section
             section[param] = value
 
-    yaml_path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
+    _prune_empty(data)
+    yaml_path.write_text(
+        yaml.safe_dump(
+            data, sort_keys=False, allow_unicode=True, default_flow_style=None
+        )
+    )
     click.secho(f"Updated {yaml_path}", fg="green")
 
 
@@ -568,31 +604,14 @@ def deploy(
     )
 
 
-def _override_options(func):
-    """Attach a ``--flag`` for every :class:`HarnessOverrides` field.
-
-    The override flags are generated from the model, so adding a field to
-    ``HarnessOverrides`` exposes a new CLI flag automatically — there is no second
-    place to update. Each flag defaults to ``None`` (unset → omitted from the
-    request), preserving the server's partial-override semantics.
-    """
-    for name, field in reversed(list(HarnessOverrides.model_fields.items())):
-        option: dict = {
-            "default": None,
-            "help": field.description or f"Override `{name}` for this call.",
-        }
-        if typing.get_origin(field.annotation) is typing.Literal:
-            option["type"] = click.Choice(
-                [str(arg) for arg in typing.get_args(field.annotation)]
-            )
-        func = click.option("--" + name.replace("_", "-"), name, **option)(func)
-    return func
-
-
 @harness.command("invoke")
 @click.argument("message")
 @click.option(
-    "--harness", "harness_name", required=True, help="Harness name to invoke."
+    "--name",
+    "--harness",
+    "harness_name",
+    required=True,
+    help="Harness name to invoke.",
 )
 @click.option(
     "--user-id", "user_id", default="cli-user", help="User id for the session."

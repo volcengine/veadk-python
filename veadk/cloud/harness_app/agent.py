@@ -27,7 +27,7 @@ Environment variables:
     RUNTIME                 Agent runtime backend: "adk" (default) or "codex".
     HARNESS_NAME            App/index name for the knowledge base and long-term memory
                             (also the served harness name). Default: "harness_app".
-    KNOWLEDGE_BASE_TYPE     Knowledge base backend (e.g. "viking"). Unset disables it.
+    KNOWLEDGEBASE_TYPE      Knowledge base backend (e.g. "viking"). Unset disables it.
     LONG_TERM_MEMORY_TYPE   Long-term memory backend (e.g. "viking"). Unset disables it.
     SHORT_TERM_MEMORY_TYPE  Short-term memory backend (e.g. "sqlite"). Default: "local".
 """

@@ -17,7 +17,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # `[extensions]` pulls llama-index / redis / opensearch, required when the
-# KNOWLEDGE_BASE_TYPE or LONG_TERM_MEMORY_TYPE env vars enable those components.
+# KNOWLEDGEBASE_TYPE or LONG_TERM_MEMORY_TYPE env vars enable those components.
 # (Viking / MySQL / PostgreSQL backends are already in the base dependencies.)
 RUN apt-get update && apt-get install -y --no-install-recommends git && \
     pip3 install --no-cache-dir "veadk-python[extensions] @ git+https://github.com/volcengine/veadk-python.git" && \
