@@ -314,6 +314,14 @@ def _append_dedup(data: dict, key: str, values: tuple[str, ...]) -> None:
     "--short-term-memory-type", default=None, help="Short-term memory backend."
 )
 @click.option(
+    "--set",
+    "set_params",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help="Set any nested field via a dotted path (repeatable), e.g. "
+    "--set long_term_memory.project=my-proj --set knowledge_base.region=cn-beijing.",
+)
+@click.option(
     "--path",
     default=".",
     help="Harness directory containing harness.yaml (default: current dir).",
@@ -328,13 +336,16 @@ def add(
     knowledge_base_type: str | None,
     long_term_memory_type: str | None,
     short_term_memory_type: str | None,
+    set_params: tuple[str, ...],
     path: str,
 ) -> None:
     """Write agent parameters into `harness.yaml`.
 
-    Scalar options SET their value; `--tool` / `--skill` are repeatable and
-    APPEND to the existing lists (deduped). Operates on `./harness.yaml` unless
-    `--path` is given; fast-fails when the file is missing.
+    Scalar options SET their value; `--tool` / `--skill` are repeatable and APPEND
+    to the lists (deduped). `--set KEY=VALUE` sets any nested field by dotted path
+    (e.g. a backend's connection params: `--set long_term_memory.project=my-proj`);
+    values are parsed as YAML scalars (so `6379` is an int, `true` a bool).
+    Operates on `<path>/harness.yaml`; fast-fails when the file is missing.
     """
     yaml_path = Path(path).resolve() / "harness.yaml"
     data = _load_harness_yaml(yaml_path)
@@ -369,6 +380,23 @@ def add(
         _append_dedup(data, "tools", tools)
     if skills:
         _append_dedup(data, "skills", skills)
+
+    # Generic nested setter, e.g. "long_term_memory.project=my-proj". Values are
+    # parsed as YAML scalars so ints/bools stay typed. Applied last so it can fill
+    # connection params under the component sections set above.
+    for item in set_params:
+        dotted, sep, raw = item.partition("=")
+        keys = [k for k in dotted.strip().split(".") if k]
+        if not sep or not keys:
+            raise click.ClickException(f"Invalid --set '{item}'; expected KEY=VALUE.")
+        target = data
+        for key in keys[:-1]:
+            child = target.get(key)
+            if not isinstance(child, dict):
+                child = {}
+                target[key] = child
+            target = child
+        target[keys[-1]] = yaml.safe_load(raw)
 
     yaml_path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
     click.secho(f"Updated {yaml_path}", fg="green")
