@@ -73,7 +73,7 @@ def harness() -> None:
     "--model-name",
     "model_name",
     default=None,
-    help="Model name for the harness (defaults to the server's MODEL_AGENT_NAME).",
+    help="Model name for the harness (defaults to the server's MODEL_NAME).",
 )
 @click.option(
     "--system-prompt",

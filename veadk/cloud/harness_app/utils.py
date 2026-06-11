@@ -66,15 +66,15 @@ SKILL_HUB_DOWNLOAD_URL = os.getenv(
 # populated via its "name" alias. Only variables that are set are passed, so the
 # model's own defaults apply to everything else.
 _ENV_FIELDS = {
-    "model_name": "MODEL_AGENT_NAME",
+    "model_name": "MODEL_NAME",
     "tools": "TOOLS",
     "skills": "SKILLS",
     "system_prompt": "SYSTEM_PROMPT",
     "runtime": "RUNTIME",
-    "name": "APP_NAME",
-    "knowledgebase_type": "KNOWLEDGEBASE_TYPE",
-    "longterm_memory_type": "LONGTERM_MEM_TYPE",
-    "shortterm_memory_type": "SHORTTERM_MEM_TYPE",
+    "name": "HARNESS_NAME",
+    "knowledgebase_type": "KNOWLEDGE_BASE_TYPE",
+    "longterm_memory_type": "LONG_TERM_MEMORY_TYPE",
+    "shortterm_memory_type": "SHORT_TERM_MEMORY_TYPE",
 }
 
 

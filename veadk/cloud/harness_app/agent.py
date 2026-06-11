@@ -20,16 +20,16 @@ long-term memory are only created when their backend is set; the short-term
 memory backend defaults to ``local``.
 
 Environment variables:
-    MODEL_AGENT_NAME    Reasoning model name. Default: VeADK default model.
-    SYSTEM_PROMPT       Agent instruction. Default: VeADK default instruction.
-    TOOLS               Comma-separated built-in tool names, e.g. "web_search,link_reader".
-    SKILLS              Comma-separated skill names, e.g. "data-visualization-cloud,...".
-    RUNTIME             Agent runtime backend: "adk" (default) or "codex".
-    APP_NAME            App/index name for the knowledge base and long-term memory.
-                        Default: "harness_app".
-    KNOWLEDGEBASE_TYPE  Knowledge base backend (e.g. "viking"). Unset disables it.
-    LONGTERM_MEM_TYPE   Long-term memory backend (e.g. "viking"). Unset disables it.
-    SHORTTERM_MEM_TYPE  Short-term memory backend (e.g. "sqlite"). Default: "local".
+    MODEL_NAME              Reasoning model name. Default: VeADK default model.
+    SYSTEM_PROMPT           Agent instruction. Default: VeADK default instruction.
+    TOOLS                   Comma-separated built-in tool names, e.g. "web_search,link_reader".
+    SKILLS                  Comma-separated skill names, e.g. "data-visualization-cloud,...".
+    RUNTIME                 Agent runtime backend: "adk" (default) or "codex".
+    HARNESS_NAME            App/index name for the knowledge base and long-term memory
+                            (also the served harness name). Default: "harness_app".
+    KNOWLEDGE_BASE_TYPE     Knowledge base backend (e.g. "viking"). Unset disables it.
+    LONG_TERM_MEMORY_TYPE   Long-term memory backend (e.g. "viking"). Unset disables it.
+    SHORT_TERM_MEMORY_TYPE  Short-term memory backend (e.g. "sqlite"). Default: "local".
 """
 
 from veadk.cloud.harness_app.utils import init_harness_agent

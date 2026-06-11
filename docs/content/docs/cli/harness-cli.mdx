@@ -18,11 +18,14 @@ description: "通过命令行注册并调用部署在 Harness server 上的 harn
 | 命令 | 描述 |
 | :-- | :-- |
 | `veadk harness create <dir>` | 生成一个可部署的 harness 目录。 |
-| `veadk harness deploy` | 构建并推送 harness 镜像，然后创建一个 AgentKit runtime。 |
+| `veadk harness add` | 将智能体参数写入 `harness.yaml`。 |
+| `veadk harness deploy` | 云端构建镜像并创建一个 AgentKit runtime。 |
 
-### `harness create`
+智能体通过分层的 `harness.yaml` 进行配置。
 
-生成一个部署目录，并在其中以注释形式说明所有 harness 环境变量：
+### `veadk harness create`
+
+生成一个部署目录：
 
 ```bash
 veadk harness create my-harness
@@ -30,38 +33,78 @@ veadk harness create my-harness
 
 该命令会写入：
 
-- `.env.example` —— 列出全部 harness 环境变量（`MODEL_AGENT_NAME`、`MODEL_AGENT_API_KEY`、`MODEL_AGENT_API_BASE`、`MODEL_AGENT_PROVIDER`、`SYSTEM_PROMPT`、`TOOLS`、`SKILLS`、`RUNTIME`、`APP_NAME`、`KNOWLEDGEBASE_TYPE`、`LONGTERM_MEM_TYPE`、`SHORTTERM_MEM_TYPE`、`HARNESS_NAME`、`SKILL_HUB_DOWNLOAD_URL`、`SERVER_HOST`、`SERVER_PORT`），并附带注释与占位值。
-- `Dockerfile` —— 构建提供 harness 应用服务的镜像。
-- `agentkit.yaml` —— AgentKit 构建配置（hybrid：本地构建 + 推送到容器镜像仓库 CR），其中 `ve_runtime_name` 默认为 harness 名称。
+- `harness.yaml` —— 智能体配置模板（见下）。
+- `.env.example` —— 仅包含火山引擎部署凭证（`VOLCENGINE_ACCESS_KEY`、`VOLCENGINE_SECRET_KEY`，以及可选的 `VOLCENGINE_REGION`）。模型/智能体配置位于 `harness.yaml`。
+- `Dockerfile` —— 构建 harness 服务镜像。
 - `README.md` —— 快速开始说明。
 
-### `harness deploy`
+#### `harness.yaml`
 
-将 `.env.example` 复制为 `.env` 并填好（务必设置 `HARNESS_NAME`），并在 `agentkit.yaml` 中设置一个真实的 `cr_instance_name`（或运行 `agentkit config`），然后在该目录内执行：
+分层配置文件。`deploy` 会将其展平为 runtime 的环境变量：嵌套键以 `_` 连接并转为大写，列表转为逗号分隔字符串，空值会被跳过。
+
+```yaml
+harness_name: ""          # -> HARNESS_NAME（runtime 名 + 知识库/记忆索引名）
+model:
+  name: ""                # -> MODEL_NAME
+tools: []                 # -> TOOLS（逗号连接）
+skills: []                # -> SKILLS（逗号连接）
+system_prompt: ""         # -> SYSTEM_PROMPT
+runtime: adk              # -> RUNTIME（"adk" 或 "codex"）
+knowledge_base:
+  type: ""                # -> KNOWLEDGE_BASE_TYPE
+long_term_memory:
+  type: ""                # -> LONG_TERM_MEMORY_TYPE
+short_term_memory:
+  type: local             # -> SHORT_TERM_MEMORY_TYPE
+```
+
+在 AgentKit runtime 上，Ark 鉴权由 runtime 的 IAM 角色解析，因此此处无需配置模型 API Key。未来的参数（额外的记忆/知识库设置）可以在各分段下扩展。
+
+### `veadk harness add`
+
+将智能体参数写入 `./harness.yaml`（或 `--path`）。标量选项为「设置」语义；`--tool` / `--skill` 可重复，向列表「追加」（去重）。当 `harness.yaml` 不存在时快速失败。
 
 ```bash
 cd my-harness
-cp .env.example .env   # 然后编辑它（设置 HARNESS_NAME）
-# 编辑 agentkit.yaml：设置 cr_instance_name（或运行 `agentkit config`）
+veadk harness add \
+  --harness-name research-agent \
+  --model-name doubao-seed-1-6-250615 \
+  --system-prompt "You are a research assistant." \
+  --tool web_search --tool web_fetch \
+  --runtime adk
+```
+
+| 选项 | 说明 |
+| :-- | :-- |
+| `--harness-name` | 逻辑 harness / runtime 名（设置 `harness_name`）。 |
+| `--model-name` | 推理模型名（设置 `model.name`）。 |
+| `--tool` | 追加到 `tools` 的内置工具名（可重复）。 |
+| `--skill` | 追加到 `skills` 的技能名（可重复）。 |
+| `--system-prompt` | 系统提示词 / 指令。 |
+| `--runtime` | 智能体 runtime，`adk` 或 `codex`。 |
+| `--knowledge-base-type` | 知识库后端（设置 `knowledge_base.type`）。 |
+| `--long-term-memory-type` | 长期记忆后端（设置 `long_term_memory.type`）。 |
+| `--short-term-memory-type` | 短期记忆后端（设置 `short_term_memory.type`）。 |
+| `--path` | `harness.yaml` 路径，默认 `./harness.yaml`。 |
+
+### `veadk harness deploy`
+
+填好部署凭证后，在该目录内执行：
+
+```bash
+cd my-harness
+cp .env.example .env   # 然后设置 VOLCENGINE_ACCESS_KEY / VOLCENGINE_SECRET_KEY
 veadk harness deploy
 ```
 
 | 选项 | 必填 | 说明 |
 | :-- | :-- | :-- |
-| `--volcengine-access-key` | 否 | 火山引擎 Access Key（默认读取 `VOLCENGINE_ACCESS_KEY` / `VOLC_ACCESSKEY`）。 |
-| `--volcengine-secret-key` | 否 | 火山引擎 Secret Key（默认读取 `VOLCENGINE_SECRET_KEY` / `VOLC_SECRETKEY`）。 |
+| `--volcengine-access-key` | 否 | 火山引擎 Access Key（默认读取 `VOLCENGINE_ACCESS_KEY`）。 |
+| `--volcengine-secret-key` | 否 | 火山引擎 Secret Key（默认读取 `VOLCENGINE_SECRET_KEY`）。 |
 | `--region` | 否 | AgentKit 区域（默认 `cn-beijing` 或 `VOLCENGINE_REGION`）。 |
-| `--role-name` | 否 | runtime IAM 角色名（默认自动生成，或读取 `HARNESS_RUNTIME_ROLE`）。 |
 | `--path` | 否 | harness 目录，默认 `.`。 |
 
-`deploy` 会通过 AgentKit 的 hybrid 构建（本地 `docker build` + 推送到容器镜像仓库 CR）构建并推送 harness 镜像，然后调用 AgentKit 的 `CreateRuntime` 创建一个 runtime：
-
-- **Name** 取自 `.env` 中的 `HARNESS_NAME`（未设置时默认 `default`）；
-- **Tags** 携带一个内容为字面量 `Harness` 的标签（仅 Key，无 Value）；
-- **Envs** 取自该目录的 `.env`；
-- **ArtifactType** 为 `image`，**ArtifactUrl** 为刚推送的镜像地址。
-
-成功后会打印 runtime 的 name 与 id；可在 AgentKit 控制台或通过 AgentKit SDK（`GetRuntime`）查询其 Endpoint，再传给 `veadk agentkit harness invoke --url ...`。
+`deploy` 会加载 `harness.yaml`，将其展平为 runtime 的环境变量，并执行 AgentKit 的**云端**构建（无需本地 Docker）以及 runtime 创建。runtime 以 `harness_name` 命名（默认 `default`）。成功后会打印 runtime 名及其服务 Endpoint；也可在 AgentKit 控制台查询 Endpoint，再传给 `veadk agentkit harness invoke --url ...`。
 
 ## 客户端命令一览
 
@@ -98,7 +141,7 @@ veadk agentkit harness add \
 | 选项 | 必填 | 说明 |
 | :-- | :-- | :-- |
 | `--name` | 是 | harness（智能体）名称。 |
-| `--model-name` | 否 | 模型名称，缺省使用服务端的 `MODEL_AGENT_NAME`。 |
+| `--model-name` | 否 | 模型名称，缺省使用服务端的 `MODEL_NAME`。 |
 | `--system-prompt` | 否 | 系统提示词，默认 `You are a helpful assistant.`。 |
 | `--tools` | 否 | 逗号分隔的内置工具名，如 `web_search,web_fetch`。 |
 | `--skills` | 否 | 逗号分隔的技能 hub 名，如 `clawhub/lgwventrue/system-file-handler`。 |

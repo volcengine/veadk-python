@@ -14,14 +14,15 @@
 
 """Top-level ``veadk harness`` command group.
 
-Two subcommands scaffold and deploy the harness server
-(:mod:`veadk.cloud.harness_app`):
+Subcommands scaffold, configure, and deploy the harness server
+(:mod:`veadk.cloud.harness_app`) from a layered ``harness.yaml``:
 
-* ``veadk harness create <dir>`` writes a deployable directory documenting every
-  harness environment variable in ``.env.example`` (plus a ``Dockerfile`` and an
-  ``agentkit.yaml`` preconfigured for an AgentKit runtime deploy).
-* ``veadk harness deploy`` builds and pushes the harness Docker image via
-  AgentKit, then creates an **AgentKit runtime** from that image.
+* ``veadk harness create <dir>`` writes a deployable directory: a blank
+  ``harness.yaml`` template, a ``.env.example`` (deploy credentials only), a
+  ``Dockerfile``, and a short ``README.md``.
+* ``veadk harness add`` writes agent parameters into ``harness.yaml``.
+* ``veadk harness deploy`` flattens ``harness.yaml`` into runtime env vars and
+  performs a cloud AgentKit build + runtime create (no local Docker).
 
 This group is independent of ``veadk agentkit harness``, which is an HTTP client
 for an *already deployed* server.
@@ -32,176 +33,155 @@ import typing
 from pathlib import Path
 
 import click
+import yaml
 
+from veadk.cloud.harness_app.env_mapping import to_runtime_env
 from veadk.cloud.harness_app.types import HarnessOverrides
 
-# AgentKit runtime artifact type for a container image (defined in
-# `agentkit/toolkit/runners/ve_agentkit.py::ARTIFACT_TYPE_DOCKER_IMAGE`).
-_ARTIFACT_TYPE_IMAGE = "image"
-
-# Tag attached to every harness runtime so it can be discovered later. The
-# locked requirement is a single tag whose key is the literal "Harness" with no
-# value.
-_HARNESS_TAG_KEY = "Harness"
-
-# Default harness/runtime name when `HARNESS_NAME` is unset in the `.env`
+# Default harness/runtime name when `harness_name` is unset in `harness.yaml`
 # (mirrors `veadk.cloud.harness_app.app.HARNESS_NAME`).
 _DEFAULT_HARNESS_NAME = "default"
 
-# Documents every harness env var read by `veadk.cloud.harness_app.agent`
-# (authoritative source: `harness_app/utils.py::_ENV_FIELDS` and the
-# `agent.py` module docstring). Placeholder values are safe defaults; the
-# server falls back to VeADK defaults for anything left unset.
+# Blank `harness.yaml` template written by `create`. Layered sections map to the
+# flattened runtime env names consumed by `veadk.cloud.harness_app` (see
+# `flatten`): `model.name` -> MODEL_NAME, `knowledge_base.type` ->
+# KNOWLEDGE_BASE_TYPE, etc. Empty values are skipped on flatten.
+_HARNESS_YAML = """\
+# VeADK harness configuration. `veadk harness deploy` flattens this file into the
+# runtime's environment variables (nested keys joined with `_` and upper-cased;
+# lists become comma-separated; empty values are skipped).
+
+# Logical harness name; also the runtime name and the knowledge-base / long-term
+# memory index name. Defaults to "default" when empty.
+harness_name: ""
+
+# Reasoning model. On the AgentKit runtime, Ark auth is resolved from the
+# runtime's IAM role, so only the model name is needed here. Extra model
+# settings can be added under this section in the future.
+model:
+  name: ""
+
+# Comma-flattened built-in tool names, e.g. [web_search, web_fetch].
+tools: []
+
+# Skill hub names, e.g. [clawhub/lgwventrue/system-file-handler].
+skills: []
+
+# System prompt / instruction. Empty uses the VeADK default instruction.
+system_prompt: ""
+
+# Agent runtime backend: "adk" (default) or "codex". "codex" requires the
+# optional codex extra installed on the server image.
+runtime: adk
+
+# Knowledge base backend (e.g. "viking"). Empty disables it. Extra backend
+# settings can be added under this section in the future.
+knowledge_base:
+  type: ""
+
+# Long-term memory backend (e.g. "viking"). Empty disables it.
+long_term_memory:
+  type: ""
+
+# Short-term memory backend (e.g. "local", "mysql"). Defaults to "local".
+short_term_memory:
+  type: local
+"""
+
+# `.env.example` carries ONLY deploy credentials. All model / agent config lives
+# in `harness.yaml`; on the runtime, Ark auth is resolved from the IAM role.
 _ENV_EXAMPLE = """\
-# ---------------------------------------------------------------------------
-# Harness server environment variables.
-# Copy to `.env` and fill in. Only set what you need; unset vars fall back to
-# the VeADK defaults documented below.
-# ---------------------------------------------------------------------------
-
-# --- Reasoning model -------------------------------------------------------
-# Model name. Unset uses the VeADK default model.
-MODEL_AGENT_NAME=doubao-seed-1-6-250615
-# Model API credentials / endpoint (Volcengine Ark by default).
-MODEL_AGENT_API_KEY=your-ark-api-key
-MODEL_AGENT_API_BASE=https://ark.cn-beijing.volces.com/api/v3
-MODEL_AGENT_PROVIDER=openai
-
-# --- Agent definition ------------------------------------------------------
-# System prompt / instruction. Unset uses the VeADK default instruction.
-SYSTEM_PROMPT=You are a helpful assistant.
-# Comma-separated built-in tool names, e.g. "web_search,web_fetch".
-TOOLS=
-# Comma-separated skill hub names, e.g. "clawhub/lgwventrue/system-file-handler".
-SKILLS=
-# Agent runtime backend: "adk" (default) or "codex".
-# "codex" requires the optional codex extra installed on the server.
-RUNTIME=adk
-
-# --- Knowledge base & memory ----------------------------------------------
-# App/index name for the knowledge base and long-term memory. Default: harness_app.
-APP_NAME=harness_app
-# Knowledge base backend (e.g. "viking"). Leave empty to disable.
-KNOWLEDGEBASE_TYPE=
-# Long-term memory backend (e.g. "viking"). Leave empty to disable.
-LONGTERM_MEM_TYPE=
-# Short-term memory backend (e.g. "local", "mysql"). Default: local.
-SHORTTERM_MEM_TYPE=local
-
-# --- Server ----------------------------------------------------------------
-# Logical harness name reported in invoke responses. Default: default.
-HARNESS_NAME=default
-# Skill hub download endpoint. Unset uses the public skill hub.
-SKILL_HUB_DOWNLOAD_URL=https://skills.volces.com/v1/skills/download
-# Bind host/port. On VeFaaS these are set automatically from the runtime port.
-SERVER_HOST=0.0.0.0
-SERVER_PORT=8000
+# Volcengine deploy credentials for `veadk harness deploy`. Copy to `.env` and
+# fill in. These authenticate the AgentKit cloud build + runtime create.
+VOLCENGINE_ACCESS_KEY=
+VOLCENGINE_SECRET_KEY=
+# VOLCENGINE_REGION=cn-beijing
 """
 
-# Container image entrypoint, mirroring `veadk/cloud/harness_app/Dockerfile`
-# but importing the app from the installed package (no source files copied).
+# Container image for the harness server. The base image's apt mirror is an
+# unreachable internal host, so apt is repointed at aliyun; the source branch is
+# cloned via the ghfast proxy with a github fallback; uv installs from aliyun.
 _DOCKERFILE = """\
-FROM python:3.12-slim
-
+FROM agentkit-cn-beijing.cr.volces.com/base/py-simple:python3.12-bookworm-slim-latest
+ENV PYTHONUNBUFFERED=1
+RUN set -eux; \\
+    rm -f /etc/apt/sources.list.d/*; \\
+    printf 'deb http://mirrors.aliyun.com/debian bookworm main contrib non-free non-free-firmware\\n\\
+deb http://mirrors.aliyun.com/debian bookworm-updates main contrib non-free non-free-firmware\\n\\
+deb http://mirrors.aliyun.com/debian-security bookworm-security main contrib non-free non-free-firmware\\n' \\
+        > /etc/apt/sources.list; \\
+    apt-get update; \\
+    apt-get install -y --no-install-recommends git ca-certificates; \\
+    rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-
-# `[extensions]` pulls llama-index / redis / opensearch, required when the
-# KNOWLEDGEBASE_TYPE or LONGTERM_MEM_TYPE env vars enable those components.
-RUN apt-get update && apt-get install -y --no-install-recommends git && \\
-    pip3 install --no-cache-dir \\
-      "veadk-python[extensions] @ git+https://github.com/volcengine/veadk-python.git" && \\
-    apt-get purge -y git && apt-get autoremove -y && \\
-    apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# To run with the "codex" runtime (RUNTIME=codex), also install:
-#   pip3 install --no-cache-dir openai-codex
-
+RUN set -eux; \\
+    for url in \\
+        https://ghfast.top/https://github.com/volcengine/veadk-python.git \\
+        https://github.com/volcengine/veadk-python.git ; do \\
+      for i in 1 2 3; do \\
+        git clone --depth 1 -b feat/harness-runtime "$url" src && break 2 || sleep 8; \\
+      done; \\
+    done; \\
+    test -d src/veadk
+RUN uv pip install --system --index-url https://mirrors.aliyun.com/pypi/simple/ \\
+        ./src fastapi "uvicorn[standard]"
 EXPOSE 8000
-
-CMD ["python", "-m", "uvicorn", "veadk.cloud.harness_app.app:app", \\
-     "--host", "0.0.0.0", "--port", "8000"]
-"""
-
-# AgentKit deploy config consumed by `agentkit.toolkit.sdk.build`. `launch_type:
-# hybrid` builds the image locally with Docker and pushes it to Container
-# Registry, which yields the pushed image URL `veadk harness deploy` feeds to
-# CreateRuntime. The hand-written `Dockerfile` above has no AgentKit metadata
-# header, so AgentKit keeps it as-is (KEEP_USER_CUSTOM) instead of regenerating.
-# `ve_runtime_name` defaults to the harness name; `veadk harness deploy`
-# overrides it from `HARNESS_NAME` in the `.env` anyway.
-_AGENTKIT_YAML = """\
-# AgentKit build config for `veadk harness deploy`. `deploy` runs the hybrid
-# build (local Docker build + push to Container Registry) and then creates an
-# AgentKit runtime from the pushed image. Set a real `cr_instance_name` (or run
-# `agentkit config`) so the image can be pushed; `Auto` skips the push.
-common:
-  agent_name: harness
-  entry_point: app.py
-  description: VeADK harness server
-  language: Python
-  language_version: "3.12"
-  launch_type: hybrid
-launch_types:
-  hybrid:
-    region: cn-beijing
-    ve_runtime_name: {runtime_name}
-    cr_instance_name: Auto
-    cr_namespace_name: agentkit
-    cr_repo_name: harness
+CMD ["python", "-m", "uvicorn", "veadk.cloud.harness_app.app:app", "--host", "0.0.0.0", "--port", "8000"]
 """
 
 _README = """\
 # Harness deployment directory
 
-This directory deploys the VeADK harness server
-(`veadk.cloud.harness_app.app:app`) as a Volcengine **AgentKit runtime**.
+Deploys the VeADK harness server (`veadk.cloud.harness_app.app:app`) as a
+Volcengine **AgentKit runtime** (cloud build, no local Docker).
 
 ## Files
 
-- `.env.example` — every harness env var; copy to `.env` and fill in.
-- `Dockerfile` — builds the image that serves the harness app.
-- `agentkit.yaml` — AgentKit build config (hybrid: local build + push to
-  Container Registry). `ve_runtime_name` defaults to the harness name.
+- `harness.yaml` — agent configuration; flattened into runtime env vars.
+- `.env.example` — Volcengine deploy credentials; copy to `.env` and fill in.
+- `Dockerfile` — builds the harness server image.
 - `README.md` — this file.
 
 ## Usage
 
-1. Copy `.env.example` to `.env` and fill in the values (model key, tools,
-   skills…). Set `HARNESS_NAME`; it becomes the runtime's name (defaults to
-   `default` when unset).
-2. Set a real Container Registry instance in `agentkit.yaml` (`cr_instance_name`)
-   or run `agentkit config` — `Auto` skips the image push and the build cannot
-   produce an image URL.
-3. From inside this directory, run:
+1. Configure the agent:
+
+   ```bash
+   veadk harness add --harness-name my-harness --model-name doubao-seed-1-6-250615 \\
+     --tool web_search --system-prompt "You are a helpful assistant."
+   ```
+
+2. Fill in deploy credentials:
+
+   ```bash
+   cp .env.example .env   # then set VOLCENGINE_ACCESS_KEY / VOLCENGINE_SECRET_KEY
+   ```
+
+3. Deploy (cloud build + runtime create):
 
    ```bash
    veadk harness deploy
    ```
-
-`deploy` builds and pushes the Docker image via AgentKit, then creates an
-AgentKit runtime named after `HARNESS_NAME` with a `Harness` tag. The env vars
-in `.env` become the runtime's environment, so the cloud agent is assembled
-exactly as configured here.
 """
 
 _CREATE_SUCCESS = """\
 Harness deployment directory created at {target}:
-- .env.example   (copy to .env and fill in)
+- harness.yaml   (agent configuration)
+- .env.example   (copy to .env and set VOLCENGINE_ACCESS_KEY / SECRET_KEY)
 - Dockerfile     (builds the harness image)
-- agentkit.yaml  (AgentKit build config; set a real cr_instance_name)
 - README.md
 
 Next steps:
   cd {name}
-  cp .env.example .env   # then edit it (set HARNESS_NAME)
-  # edit agentkit.yaml: set cr_instance_name (or run `agentkit config`)
+  veadk harness add --harness-name my-harness --model-name <model>
+  cp .env.example .env   # then set VOLCENGINE_ACCESS_KEY / VOLCENGINE_SECRET_KEY
   veadk harness deploy
 """
 
 
 @click.group()
 def harness() -> None:
-    """Create and deploy a VeADK harness server."""
+    """Create, configure, and deploy a VeADK harness server."""
     pass
 
 
@@ -210,10 +190,9 @@ def harness() -> None:
 def create(dir_name: str) -> None:
     """Scaffold a deployable harness directory at DIR_NAME.
 
-    Writes a `.env.example` documenting every harness environment variable, a
-    `Dockerfile` that builds the harness image, an `agentkit.yaml` build config,
-    and a short README. Copy `.env.example` to `.env`, fill it in, then run
-    `veadk harness deploy` from inside the directory.
+    Writes a blank `harness.yaml` template, a `.env.example` (deploy credentials
+    only), a `Dockerfile`, and a short README. Configure the agent with
+    `veadk harness add`, fill in `.env`, then run `veadk harness deploy`.
     """
     target = Path.cwd() / dir_name
     if target.exists() and any(target.iterdir()):
@@ -223,106 +202,165 @@ def create(dir_name: str) -> None:
         )
 
     target.mkdir(parents=True, exist_ok=True)
+    (target / "harness.yaml").write_text(_HARNESS_YAML)
     (target / ".env.example").write_text(_ENV_EXAMPLE)
     (target / "Dockerfile").write_text(_DOCKERFILE)
-    (target / "agentkit.yaml").write_text(
-        _AGENTKIT_YAML.format(runtime_name=_DEFAULT_HARNESS_NAME)
-    )
     (target / "README.md").write_text(_README)
 
     click.secho(_CREATE_SUCCESS.format(target=target, name=dir_name), fg="green")
 
 
-def _read_env_file(env_path: Path) -> dict[str, str]:
-    """Parse the harness directory's `.env` into a flat ``{KEY: VALUE}`` dict.
-
-    Returns an empty dict when no `.env` exists. Used both to derive the runtime
-    name (`HARNESS_NAME`) and as the runtime's `Envs`.
-    """
-    from dotenv import dotenv_values
-
-    if not env_path.is_file():
-        return {}
-    return {k: v for k, v in dotenv_values(env_path).items() if v is not None}
-
-
-def _build_harness_image(proj_dir: Path) -> str:
-    """Build and push the harness image via AgentKit; return the pushed image URL.
-
-    Reuses AgentKit's `sdk.build` (hybrid strategy: local Docker build + push to
-    Container Registry). The pushed image URL is read from the build result's
-    `metadata["cr_image_url"]` (the push step records it there), falling back to
-    the local image's full name. Fast-fails when the build did not push an image.
-    """
-    from agentkit.toolkit import sdk
-    from agentkit.toolkit.reporter import LoggingReporter
-
-    config_file = proj_dir / "agentkit.yaml"
-    if not config_file.is_file():
+def _load_harness_yaml(path: Path) -> dict:
+    """Load ``harness.yaml`` into a dict; fast-fail when it is missing."""
+    if not path.is_file():
         raise click.ClickException(
-            f"No `agentkit.yaml` in '{proj_dir}'. Run `veadk harness create` first."
+            f"No `harness.yaml` at '{path}'. Run `veadk harness create` first."
         )
-
-    result = sdk.build(config_file=str(config_file), reporter=LoggingReporter())
-    if not result.success:
-        raise click.ClickException(f"Harness image build failed: {result.error}")
-
-    image_url = (result.metadata or {}).get("cr_image_url")
-    if not image_url:
-        raise click.ClickException(
-            "Build succeeded but no image was pushed to Container Registry. Set a "
-            "real `cr_instance_name` in `agentkit.yaml` (or run `agentkit config`)."
-        )
-    return image_url
+    return yaml.safe_load(path.read_text()) or {}
 
 
-def _create_harness_runtime(
-    *,
-    runtime_name: str,
-    role_name: str,
-    image_url: str,
-    envs: dict[str, str],
-    region: str,
-) -> str:
-    """Create an AgentKit runtime for the harness image; return its runtime id.
+def _append_dedup(data: dict, key: str, values: tuple[str, ...]) -> None:
+    """Append ``values`` to the list at ``data[key]``, preserving order, deduped."""
+    existing = data.get(key) or []
+    if not isinstance(existing, list):
+        existing = [existing]
+    for value in values:
+        if value not in existing:
+            existing.append(value)
+    data[key] = existing
 
-    Ensures the IAM role exists (CreateRuntime requires it), then issues
-    CreateRuntime with the harness name, a `Harness` tag, the `.env` as `Envs`,
-    and the pushed image as an `image` artifact.
+
+@harness.command("add")
+@click.option("--harness-name", default=None, help="Logical harness / runtime name.")
+@click.option("--model-name", default=None, help="Reasoning model name.")
+@click.option(
+    "--tool",
+    "tools",
+    multiple=True,
+    help="Built-in tool name to append to `tools` (repeatable).",
+)
+@click.option(
+    "--skill",
+    "skills",
+    multiple=True,
+    help="Skill hub name to append to `skills` (repeatable).",
+)
+@click.option("--system-prompt", default=None, help="System prompt / instruction.")
+@click.option(
+    "--runtime",
+    type=click.Choice(["adk", "codex"]),
+    default=None,
+    help="Agent runtime backend.",
+)
+@click.option("--knowledge-base-type", default=None, help="Knowledge base backend.")
+@click.option("--long-term-memory-type", default=None, help="Long-term memory backend.")
+@click.option(
+    "--short-term-memory-type", default=None, help="Short-term memory backend."
+)
+@click.option(
+    "--path",
+    default=".",
+    help="Harness directory containing harness.yaml (default: current dir).",
+)
+def add(
+    harness_name: str | None,
+    model_name: str | None,
+    tools: tuple[str, ...],
+    skills: tuple[str, ...],
+    system_prompt: str | None,
+    runtime: str | None,
+    knowledge_base_type: str | None,
+    long_term_memory_type: str | None,
+    short_term_memory_type: str | None,
+    path: str,
+) -> None:
+    """Write agent parameters into `harness.yaml`.
+
+    Scalar options SET their value; `--tool` / `--skill` are repeatable and
+    APPEND to the existing lists (deduped). Operates on `./harness.yaml` unless
+    `--path` is given; fast-fails when the file is missing.
     """
-    from agentkit.sdk.runtime import types as rt
-    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
-    from agentkit.toolkit.volcengine.iam import VeIAM
-    from agentkit.utils.misc import generate_apikey_name, generate_client_token
+    yaml_path = Path(path).resolve() / "harness.yaml"
+    data = _load_harness_yaml(yaml_path)
 
-    if not VeIAM(region=region).ensure_role_for_agentkit(role_name):
-        raise click.ClickException(
-            f"Failed to create or ensure the runtime IAM role `{role_name}`."
-        )
+    if harness_name is not None:
+        data["harness_name"] = harness_name
+    if model_name is not None:
+        model = data.get("model")
+        if not isinstance(model, dict):
+            model = {}
+        model["name"] = model_name
+        data["model"] = model
+    if system_prompt is not None:
+        data["system_prompt"] = system_prompt
+    if runtime is not None:
+        data["runtime"] = runtime
+    # Set only the backend `type`, preserving any connection params already set
+    # under the component section.
+    for type_value, section_key in (
+        (knowledge_base_type, "knowledge_base"),
+        (long_term_memory_type, "long_term_memory"),
+        (short_term_memory_type, "short_term_memory"),
+    ):
+        if type_value is not None:
+            section = data.get(section_key)
+            if not isinstance(section, dict):
+                section = {}
+            section["type"] = type_value
+            data[section_key] = section
 
-    client = AgentkitRuntimeClient(region=region)
-    # The runtime types use by-alias (PascalCase) fields with `populate_by_name`;
-    # build the request from an alias-keyed dict via `model_validate` so static
-    # type checking matches the API field names exactly.
-    request = rt.CreateRuntimeRequest.model_validate(
-        {
-            "Name": runtime_name,
-            "RoleName": role_name,
-            "ArtifactType": _ARTIFACT_TYPE_IMAGE,
-            "ArtifactUrl": image_url,
-            "Envs": [{"Key": k, "Value": v} for k, v in envs.items()],
-            "Tags": [{"Key": _HARNESS_TAG_KEY}],
-            "AuthorizerConfiguration": {
-                "KeyAuth": {
-                    "ApiKeyName": generate_apikey_name(),
-                    "ApiKeyLocation": "HEADER",
-                }
-            },
-            "ClientToken": generate_client_token(),
-        }
-    )
-    response = client.create_runtime(request)
-    return response.runtime_id or ""
+    if tools:
+        _append_dedup(data, "tools", tools)
+    if skills:
+        _append_dedup(data, "skills", skills)
+
+    yaml_path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
+    click.secho(f"Updated {yaml_path}", fg="green")
+
+
+def _build_agentkit_config(
+    runtime_name: str, region: str, envs: dict[str, str]
+) -> dict:
+    """Build the cloud AgentKit launch config dict (auto-provision).
+
+    Mirrors the structure `agentkit init` produces for `launch_type: cloud`. The
+    `{{account_id}}` / `{{timestamp}}` templates are resolved by AgentKit at
+    deploy time and are passed through literally.
+    """
+    return {
+        "common": {
+            "agent_name": runtime_name,
+            "entry_point": "app.py",
+            "description": "VeADK harness server",
+            "language": "Python",
+            "language_version": "3.12",
+            "runtime_envs": envs,
+            "launch_type": "cloud",
+        },
+        "launch_types": {
+            "cloud": {
+                "region": region,
+                "tos_bucket": "agentkit-platform-{{account_id}}",
+                "tos_prefix": "agentkit-builds",
+                "image_tag": "{{timestamp}}",
+                "cr_instance_name": "agentkit-platform-{{account_id}}",
+                "cr_namespace_name": "agentkit",
+                "cr_repo_name": runtime_name,
+                "cr_auto_create_instance_type": "Micro",
+                "build_timeout": 3600,
+                "cp_workspace_name": "agentkit-cli-workspace",
+                "cp_pipeline_name": "Auto",
+                "runtime_id": "Auto",
+                "runtime_name": runtime_name,
+                "runtime_role_name": "Auto",
+                "runtime_auth_type": "key_auth",
+                "runtime_apikey_name": "Auto",
+                "runtime_apikey": "Auto",
+                "runtime_jwt_allowed_clients": [],
+            }
+        },
+        "docker_build": {},
+    }
 
 
 @harness.command("deploy")
@@ -334,11 +372,6 @@ def _create_harness_runtime(
     help="AgentKit region (default `cn-beijing` or VOLCENGINE_REGION).",
 )
 @click.option(
-    "--role-name",
-    default=None,
-    help="Runtime IAM role name (default: auto-generated or HARNESS_RUNTIME_ROLE).",
-)
-@click.option(
     "--path",
     default=".",
     help="Harness directory (created by `veadk harness create`).",
@@ -347,21 +380,19 @@ def deploy(
     volcengine_access_key: str | None,
     volcengine_secret_key: str | None,
     region: str | None,
-    role_name: str | None,
     path: str,
 ) -> None:
-    """Build the harness image and deploy it as an AgentKit runtime.
+    """Deploy the harness as an AgentKit runtime (cloud build, no local Docker).
 
-    Run this from inside a directory created by `veadk harness create` (with a
-    filled-in `.env` and an `agentkit.yaml`). It builds and pushes the harness
-    Docker image via AgentKit, then creates an AgentKit runtime whose:
-
-    * Name is the harness name (`HARNESS_NAME` in the `.env`, default `default`),
-    * Envs are the directory's `.env`,
-    * Tags carry a single `Harness` tag,
-    * artifact is the pushed image.
+    Loads `harness.yaml`, flattens it into the runtime's environment, and runs an
+    AgentKit cloud build + runtime create. Run from inside a directory created by
+    `veadk harness create` (containing `harness.yaml` and the `Dockerfile`).
     """
     import os
+
+    from agentkit.toolkit import sdk
+    from agentkit.toolkit.models import PreflightMode
+    from agentkit.toolkit.reporter import LoggingReporter
 
     from veadk.utils.logger import get_logger
 
@@ -371,9 +402,13 @@ def deploy(
     if not proj_dir.is_dir():
         raise click.ClickException(f"Path '{proj_dir}' is not a directory.")
 
-    # AgentKit's build/runtime clients authenticate via the Volcengine SDK, which
-    # reads VOLC_ACCESSKEY / VOLC_SECRETKEY from the environment. Mirror whatever
-    # AK/SK was passed (or already set as VOLCENGINE_*) into those names.
+    data = _load_harness_yaml(proj_dir / "harness.yaml")
+    runtime_envs = to_runtime_env(data)
+    runtime_name = data.get("harness_name") or _DEFAULT_HARNESS_NAME
+
+    # AgentKit authenticates via the Volcengine SDK, which reads VOLC_ACCESSKEY /
+    # VOLC_SECRETKEY from the environment. Mirror whatever AK/SK was passed (or
+    # already set as VOLCENGINE_*) into those names.
     access_key = volcengine_access_key or os.getenv("VOLCENGINE_ACCESS_KEY", "")
     secret_key = volcengine_secret_key or os.getenv("VOLCENGINE_SECRET_KEY", "")
     if access_key and secret_key:
@@ -383,35 +418,32 @@ def deploy(
         raise click.ClickException(
             "Volcengine credentials are required. Pass --volcengine-access-key / "
             "--volcengine-secret-key, or set VOLCENGINE_ACCESS_KEY / "
-            "VOLCENGINE_SECRET_KEY (or VOLC_ACCESSKEY / VOLC_SECRETKEY)."
+            "VOLCENGINE_SECRET_KEY."
         )
 
-    envs = _read_env_file(proj_dir / ".env")
-    runtime_name = envs.get("HARNESS_NAME") or _DEFAULT_HARNESS_NAME
     resolved_region = region or os.getenv("VOLCENGINE_REGION") or "cn-beijing"
-    resolved_role = role_name or os.getenv("HARNESS_RUNTIME_ROLE")
-    if not resolved_role:
-        from agentkit.utils.misc import generate_runtime_role_name
+    cfg = _build_agentkit_config(runtime_name, resolved_region, runtime_envs)
 
-        resolved_role = generate_runtime_role_name()
+    logger.info(f"Deploying harness runtime '{runtime_name}' from {proj_dir}")
+    cwd = os.getcwd()
+    os.chdir(proj_dir)
+    try:
+        result = sdk.launch(
+            config_dict=cfg,
+            preflight_mode=PreflightMode.WARN,
+            reporter=LoggingReporter(),
+        )
+    finally:
+        os.chdir(cwd)
 
-    logger.info(f"Building harness image from {proj_dir}")
-    image_url = _build_harness_image(proj_dir)
-    logger.info(f"Built harness image: {image_url}")
+    if not result.success:
+        raise click.ClickException(f"Harness deploy failed: {result.error}")
 
-    runtime_id = _create_harness_runtime(
-        runtime_name=runtime_name,
-        role_name=resolved_role,
-        image_url=image_url,
-        envs=envs,
-        region=resolved_region,
-    )
-
+    deploy_result = result.deploy_result
+    endpoint = deploy_result.endpoint_url if deploy_result else None
     click.secho(
-        f"Harness runtime created: name={runtime_name} id={runtime_id}\n"
-        f"Image: {image_url}\n"
-        f"Tagged `{_HARNESS_TAG_KEY}`. Find its endpoint in the AgentKit console "
-        "or via the AgentKit SDK (GetRuntime).",
+        f"Harness runtime deployed: name={runtime_name}\n"
+        f"Endpoint: {endpoint or '(see AgentKit console)'}",
         fg="green",
     )
 
