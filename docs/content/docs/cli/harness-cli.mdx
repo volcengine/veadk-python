@@ -19,6 +19,7 @@ description: "通过命令行注册并调用部署在 Harness server 上的 harn
 | :-- | :-- |
 | `veadk harness create <dir>` | 生成一个可部署的 harness 目录。 |
 | `veadk harness add` | 将智能体参数写入 `harness.yaml`。 |
+| `veadk harness show` | 展示已配置参数以及可在调用时覆盖的参数。 |
 | `veadk harness deploy` | 云端构建镜像并创建一个 AgentKit runtime。 |
 
 智能体通过分层的 `harness.yaml` 进行配置。
@@ -86,6 +87,23 @@ veadk harness add \
 | `--long-term-memory-type` | 长期记忆后端（设置 `long_term_memory.type`）。 |
 | `--short-term-memory-type` | 短期记忆后端（设置 `short_term_memory.type`）。 |
 | `--path` | `harness.yaml` 路径，默认 `./harness.yaml`。 |
+
+### `veadk harness show`
+
+打印 `harness.yaml` 中已配置的参数，以及可在每次调用时覆盖的参数。当 `harness.yaml` 不存在时快速失败。
+
+```bash
+veadk harness show --path my-harness
+```
+
+该命令打印两个分段：
+
+1. **已配置的智能体参数** —— `harness.yaml` 的内容：`harness_name`、`model`、`tools`、`skills`、`system_prompt`、`runtime`，以及已配置的 `knowledgebase` / `long_term_memory` / `short_term_memory` 组件。
+2. **可在调用时覆盖的参数** —— 由 `HarnessOverrides` 派生的每个 `--<flag>`（`--model-name`、`--tools`、`--skills`、`--system-prompt`、`--runtime`）及其说明。这些参数可通过 `veadk harness invoke ... --<flag>` 按次覆盖；记忆与知识库**不可**覆盖。
+
+| 选项 | 说明 |
+| :-- | :-- |
+| `--path` | 包含 `harness.yaml` 的 harness 目录，默认 `.`。 |
 
 ### `veadk harness deploy`
 

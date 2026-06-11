@@ -27,6 +27,7 @@ below). The agent is configured through a layered `harness.yaml`.
 | :-- | :-- |
 | `veadk harness create <dir>` | Scaffold a deployable harness directory. |
 | `veadk harness add` | Write agent parameters into `harness.yaml`. |
+| `veadk harness show` | Show the configured params and the per-invoke overridable ones. |
 | `veadk harness deploy` | Cloud-build the image and create an AgentKit runtime. |
 
 ### `veadk harness create`
@@ -100,6 +101,30 @@ veadk harness add \
 | `--long-term-memory-type` | Long-term memory backend (sets `long_term_memory.type`). |
 | `--short-term-memory-type` | Short-term memory backend (sets `short_term_memory.type`). |
 | `--path` | Path to `harness.yaml`, default `./harness.yaml`. |
+
+### `veadk harness show`
+
+Print the parameters configured in `harness.yaml` plus the params that can be
+overridden per call. Fast-fails when `harness.yaml` is missing.
+
+```bash
+veadk harness show --path my-harness
+```
+
+It prints two sections:
+
+1. **Configured agent params** — the `harness.yaml` contents: `harness_name`,
+   `model`, `tools`, `skills`, `system_prompt`, `runtime`, and any configured
+   `knowledgebase` / `long_term_memory` / `short_term_memory` components.
+2. **Overridable at invoke time** — each `--<flag>` derived from
+   `HarnessOverrides` (`--model-name`, `--tools`, `--skills`, `--system-prompt`,
+   `--runtime`) with its description. These can be overridden per call via
+   `veadk harness invoke ... --<flag>`; memory and the knowledge base are **not**
+   overridable.
+
+| Option | Description |
+| :-- | :-- |
+| `--path` | Harness directory containing `harness.yaml`, default `.`. |
 
 ### `veadk harness deploy`
 

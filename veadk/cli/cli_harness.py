@@ -455,6 +455,41 @@ def add(
     click.secho(f"Updated {yaml_path}", fg="green")
 
 
+@harness.command("show")
+@click.option(
+    "--path",
+    default=".",
+    help="Harness directory containing harness.yaml (default: current dir).",
+)
+def show(path: str) -> None:
+    """Show the configured agent params and the per-invoke overridable params.
+
+    Reads `<path>/harness.yaml` (fast-fails when missing) and prints (1) the
+    currently configured agent parameters and components, and (2) the params that
+    can be overridden per call via `veadk harness invoke`.
+    """
+    yaml_path = Path(path).resolve() / "harness.yaml"
+    data = _load_harness_yaml(yaml_path)
+
+    click.secho(f"Configured agent params ({yaml_path}):", fg="green", bold=True)
+    click.echo(
+        yaml.safe_dump(
+            data, sort_keys=False, allow_unicode=True, default_flow_style=None
+        ).rstrip()
+    )
+
+    click.echo("")
+    click.secho("Overridable at invoke time:", fg="green", bold=True)
+    for name, field in HarnessOverrides.model_fields.items():
+        flag = "--" + name.replace("_", "-")
+        click.echo(f"  {flag}: {field.description or name}")
+    click.echo("")
+    click.echo(
+        "Override per call via `veadk harness invoke ... --<flag>`. "
+        "Memory and knowledgebase are NOT overridable."
+    )
+
+
 def _build_agentkit_config(
     runtime_name: str, region: str, envs: dict[str, str]
 ) -> dict:
