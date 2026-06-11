@@ -54,6 +54,7 @@ veadk agentkit harness add \
 | `--system-prompt` | No | System prompt; defaults to `You are a helpful assistant.`. |
 | `--tools` | No | Comma-separated built-in tool names, e.g. `web_search,web_fetch`. |
 | `--skills` | No | Comma-separated skill hub names, e.g. `clawhub/lgwventrue/system-file-handler`. |
+| `--runtime` | No | Agent runtime backend, `adk` (default) or `codex`. `codex` requires the optional codex extra on the server. |
 
 <Callout type="warn">
   If a harness with the same name already exists, the server returns `code: 400`
@@ -82,13 +83,14 @@ veadk agentkit harness invoke \
 | `--system-prompt` | No | Override the system prompt for this call only (creates a one-time harness). |
 | `--tools` | No | Override tools for this call only, comma-separated (creates a one-time harness). |
 | `--skills` | No | Override skills for this call only, comma-separated (creates a one-time harness). |
+| `--runtime` | No | Override the runtime for this call only, `adk` or `codex` (creates a one-time harness). |
 
 ### One-time harness override
 
-If any of `--model-name` / `--system-prompt` / `--tools` / `--skills` is passed
-to `invoke`, the server builds a **one-time harness** from those fields that
-applies to this single call only — the stored harness of the same name is left
-untouched:
+If any of `--model-name` / `--system-prompt` / `--tools` / `--skills` / `--runtime`
+is passed to `invoke`, the server builds a **one-time harness** from those fields
+that applies to this single call only — the stored harness of the same name is
+left untouched:
 
 ```bash
 veadk agentkit harness invoke \

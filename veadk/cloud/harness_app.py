@@ -17,6 +17,7 @@ import os
 import shutil
 import zipfile
 from pathlib import Path
+from typing import Literal
 
 import frontmatter
 import httpx
@@ -114,6 +115,9 @@ class Harness(BaseModel):
     tools: str = Field(default="")
     skills: str = Field(default="")
     system_prompt: str = Field(default="You are a helpful assistant.")
+    # Agent runtime backend: "adk" (default) or "codex". Passed through to the
+    # Agent; "codex" requires the optional codex extra on the server.
+    runtime: Literal["adk", "codex"] = Field(default="adk")
 
 
 class AddHarnessRequest(BaseModel):
@@ -247,6 +251,7 @@ class HarnessApp:
             model_name=harness.model_name,
             instruction=harness.system_prompt,
             tools=tools,
+            runtime=harness.runtime,
         )
         return agent
 

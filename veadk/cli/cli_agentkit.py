@@ -92,6 +92,12 @@ def harness() -> None:
     help="Comma-separated skill hub names, e.g. clawhub/lgwventrue/system-file-handler.",
 )
 @click.option(
+    "--runtime",
+    default=None,
+    type=click.Choice(["adk", "codex"]),
+    help="Agent runtime backend (defaults to the server's 'adk').",
+)
+@click.option(
     "--url",
     required=True,
     envvar="HARNESS_URL",
@@ -103,7 +109,9 @@ def harness() -> None:
     envvar="HARNESS_KEY",
     help="Gateway API key for Bearer auth (or set HARNESS_KEY).",
 )
-def harness_add(name, model_name, system_prompt, tools, skills, url, key) -> None:
+def harness_add(
+    name, model_name, system_prompt, tools, skills, runtime, url, key
+) -> None:
     """Register a new harness on the server."""
     spec: dict = {"system_prompt": system_prompt}
     # Pass the comma-separated strings through; the server splits them.
@@ -113,6 +121,8 @@ def harness_add(name, model_name, system_prompt, tools, skills, url, key) -> Non
         spec["skills"] = skills
     if model_name:
         spec["model_name"] = model_name
+    if runtime:
+        spec["runtime"] = runtime
     result = _harness_request(
         url, "/harness/add", key, {"harness_name": name, "harness": spec}
     )
@@ -147,6 +157,12 @@ def harness_add(name, model_name, system_prompt, tools, skills, url, key) -> Non
     help="Override skills for this call, comma-separated (creates a one-time harness).",
 )
 @click.option(
+    "--runtime",
+    default=None,
+    type=click.Choice(["adk", "codex"]),
+    help="Override the runtime for this call (creates a one-time harness).",
+)
+@click.option(
     "--user-id", "user_id", default="cli-user", help="User id for the session."
 )
 @click.option(
@@ -171,6 +187,7 @@ def harness_invoke(
     system_prompt,
     tools,
     skills,
+    runtime,
     user_id,
     session_id,
     url,
@@ -182,9 +199,9 @@ def harness_invoke(
         "harness_name": harness_name,
         "run_agent_request": {"user_id": user_id, "session_id": session_id},
     }
-    # Any of --model-name/--system-prompt/--tools/--skills builds a one-time
-    # harness that overrides the stored one for this single call (the server
-    # replaces the whole agent). tools/skills are passed through as
+    # Any of --model-name/--system-prompt/--tools/--skills/--runtime builds a
+    # one-time harness that overrides the stored one for this single call (the
+    # server replaces the whole agent). tools/skills are passed through as
     # comma-separated strings; the server splits them.
     once: dict = {}
     if model_name:
@@ -195,6 +212,8 @@ def harness_invoke(
         once["tools"] = tools
     if skills:
         once["skills"] = skills
+    if runtime:
+        once["runtime"] = runtime
     if once:
         body["harness"] = once
     result = _harness_request(url, "/harness/invoke", key, body)

@@ -21,6 +21,7 @@ rather than in production. No network or model access is required.
 """
 
 import inspect
+from unittest import mock
 
 from veadk.cloud import harness_app
 from veadk.cloud.harness_app import (
@@ -47,6 +48,7 @@ class TestHarnessModel:
             "tools",
             "skills",
             "system_prompt",
+            "runtime",
         }
 
     def test_defaults(self):
@@ -55,6 +57,7 @@ class TestHarnessModel:
         assert fields["tools"].default == ""
         assert fields["skills"].default == ""
         assert fields["system_prompt"].default == "You are a helpful assistant."
+        assert fields["runtime"].default == "adk"
 
     def test_tools_and_skills_are_csv_strings(self):
         # The server splits these with _split_csv(); they must stay plain
@@ -109,6 +112,20 @@ class TestHarnessApp:
         app = HarnessApp()
         paths = {getattr(route, "path", None) for route in app.app.routes}
         assert {"/harness/add", "/harness/invoke"} <= paths
+
+    def test_create_agent_passes_runtime(self):
+        # _create_agent must forward the harness runtime to the Agent. Mock Agent
+        # so no model client is built (keeps the test offline).
+        app = HarnessApp()
+        with mock.patch.object(harness_app, "Agent") as agent_cls:
+            app._create_agent(Harness(runtime="codex"))
+        assert agent_cls.call_args.kwargs["runtime"] == "codex"
+
+    def test_create_agent_defaults_runtime_to_adk(self):
+        app = HarnessApp()
+        with mock.patch.object(harness_app, "Agent") as agent_cls:
+            app._create_agent(Harness())
+        assert agent_cls.call_args.kwargs["runtime"] == "adk"
 
 
 class TestSplitCsv:

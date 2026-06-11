@@ -48,6 +48,7 @@ veadk agentkit harness add \
 | `--system-prompt` | 否 | 系统提示词，默认 `You are a helpful assistant.`。 |
 | `--tools` | 否 | 逗号分隔的内置工具名，如 `web_search,web_fetch`。 |
 | `--skills` | 否 | 逗号分隔的技能 hub 名，如 `clawhub/lgwventrue/system-file-handler`。 |
+| `--runtime` | 否 | 智能体运行时，`adk`（默认）或 `codex`。`codex` 需服务端安装对应可选依赖。 |
 
 <Callout type="warn">
   若同名 harness 已存在，服务端返回 `code: 400`，不会覆盖。
@@ -74,10 +75,11 @@ veadk agentkit harness invoke \
 | `--system-prompt` | 否 | 仅本次调用覆盖系统提示词（生成一次性 harness）。 |
 | `--tools` | 否 | 仅本次调用覆盖工具，逗号分隔（生成一次性 harness）。 |
 | `--skills` | 否 | 仅本次调用覆盖技能，逗号分隔（生成一次性 harness）。 |
+| `--runtime` | 否 | 仅本次调用覆盖运行时，`adk` 或 `codex`（生成一次性 harness）。 |
 
 ### 一次性 harness 覆盖
 
-`invoke` 时若提供了 `--model-name` / `--system-prompt` / `--tools` / `--skills` 中的任意一个，服务端会用这些字段构造一个**一次性 harness**，仅对本次调用生效，不影响已注册的同名 harness：
+`invoke` 时若提供了 `--model-name` / `--system-prompt` / `--tools` / `--skills` / `--runtime` 中的任意一个，服务端会用这些字段构造一个**一次性 harness**，仅对本次调用生效，不影响已注册的同名 harness：
 
 ```bash
 veadk agentkit harness invoke \

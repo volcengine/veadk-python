@@ -46,6 +46,7 @@ class TestHarnessAdd:
             "system_prompt",
             "tools",
             "skills",
+            "runtime",
             "url",
             "key",
         }
@@ -54,8 +55,19 @@ class TestHarnessAdd:
         assert self.opts["name"].required is True
         assert self.opts["url"].required is True
         # Optional ones must stay optional.
-        for name in ("model_name", "system_prompt", "tools", "skills", "key"):
+        for name in (
+            "model_name",
+            "system_prompt",
+            "tools",
+            "skills",
+            "runtime",
+            "key",
+        ):
             assert self.opts[name].required is False
+
+    def test_runtime_choices(self):
+        assert isinstance(self.opts["runtime"].type, click.Choice)
+        assert set(self.opts["runtime"].type.choices) == {"adk", "codex"}
 
     def test_default_system_prompt(self):
         assert self.opts["system_prompt"].default == "You are a helpful assistant."
@@ -79,6 +91,7 @@ class TestHarnessInvoke:
             "system_prompt",
             "tools",
             "skills",
+            "runtime",
             "user_id",
             "session_id",
             "url",

@@ -36,7 +36,8 @@ python -m veadk.cloud.harness_app   # 在 0.0.0.0:8000 提供 API
   `{prompt, harness_name, harness?, run_agent_request}`，运行一个**已注册**的
   harness。请求里带非空 `harness` 则对本次调用临时覆盖（`overwrite: true`）。
 
-`harness` 字段：`model_name`、`system_prompt`、`tools`。`tools` 既接受数组
+`harness` 字段：`model_name`、`system_prompt`、`tools`、`skills`、`runtime`
+（运行时，默认 `"adk"`，可传 `"codex"`）。`tools` 既接受数组
 （`["web_search", "web_fetch"]`）也接受逗号分隔字符串（`"web_search,web_fetch"`）。
 `run_agent_request` 字段：`user_id`、`session_id`。
 

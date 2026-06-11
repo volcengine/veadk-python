@@ -39,8 +39,9 @@ python -m veadk.cloud.harness_app   # serves the API on 0.0.0.0:8000
   added** harness. A non-null `harness` overrides the stored one for this call
   (`overwrite: true`).
 
-`harness` fields: `model_name`, `system_prompt`, and `tools`. `tools` accepts
-either a list (`["web_search", "web_fetch"]`) or a comma-separated string
+`harness` fields: `model_name`, `system_prompt`, `tools`, `skills`, and
+`runtime` (`"adk"` default, or `"codex"`). `tools` accepts either a list
+(`["web_search", "web_fetch"]`) or a comma-separated string
 (`"web_search,web_fetch"`). `run_agent_request` fields: `user_id`, `session_id`.
 
 Built-in tool names come from `veadk.tools.list_builtin_tools()` (e.g.
