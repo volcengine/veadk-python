@@ -29,52 +29,9 @@ def _options(command: click.Command) -> dict[str | None, click.Parameter]:
     return {param.name: param for param in command.params}
 
 
-def test_harness_is_a_group_with_add_and_invoke():
+def test_harness_is_a_group_with_invoke():
     assert isinstance(harness, click.Group)
-    assert set(harness.commands) == {"add", "invoke"}
-
-
-class TestHarnessAdd:
-    def setup_method(self):
-        self.cmd = harness.commands["add"]
-        self.opts = _options(self.cmd)
-
-    def test_option_names(self):
-        assert set(self.opts) == {
-            "name",
-            "model_name",
-            "system_prompt",
-            "tools",
-            "skills",
-            "runtime",
-            "url",
-            "key",
-        }
-
-    def test_required_flags(self):
-        assert self.opts["name"].required is True
-        assert self.opts["url"].required is True
-        # Optional ones must stay optional.
-        for name in (
-            "model_name",
-            "system_prompt",
-            "tools",
-            "skills",
-            "runtime",
-            "key",
-        ):
-            assert self.opts[name].required is False
-
-    def test_runtime_choices(self):
-        assert isinstance(self.opts["runtime"].type, click.Choice)
-        assert set(self.opts["runtime"].type.choices) == {"adk", "codex"}
-
-    def test_default_system_prompt(self):
-        assert self.opts["system_prompt"].default == "You are a helpful assistant."
-
-    def test_env_var_bindings(self):
-        assert self.opts["url"].envvar == "HARNESS_URL"
-        assert self.opts["key"].envvar == "HARNESS_KEY"
+    assert set(harness.commands) == {"invoke"}
 
 
 class TestHarnessInvoke:
