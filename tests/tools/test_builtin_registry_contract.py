@@ -20,10 +20,17 @@ These tests pin the registry API and the set of advertised names.
 """
 
 import inspect
+import os
 
 import pytest
 
-from veadk.tools import get_builtin_tool, list_builtin_tools
+# Some generation tools (image/video) read ``settings.model.api_key`` at import
+# time, which fetches a live ARK token over the network when MODEL_AGENT_API_KEY
+# is unset (e.g. in CI). Provide a dummy so resolving every tool stays offline;
+# a real value in the local environment is preserved by setdefault.
+os.environ.setdefault("MODEL_AGENT_API_KEY", "test-model-api-key")
+
+from veadk.tools import get_builtin_tool, list_builtin_tools  # noqa: E402
 
 # Names that callers (harnesses, docs, examples) rely on. New tools may be
 # added freely; removing/renaming one should be a deliberate, reviewed change
