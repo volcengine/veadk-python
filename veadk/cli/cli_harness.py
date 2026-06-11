@@ -35,7 +35,11 @@ from pathlib import Path
 import click
 import yaml
 
-from veadk.cloud.harness_app.env_mapping import to_runtime_env
+from veadk.cloud.harness_app.env_mapping import (
+    COMPONENT_TYPE_ENV,
+    component_connection_params,
+    to_runtime_env,
+)
 from veadk.cloud.harness_app.types import HarnessOverrides
 
 # Default harness/runtime name when `harness_name` is unset in `harness.yaml`
@@ -286,6 +290,30 @@ def _append_dedup(data: dict, key: str, values: tuple[str, ...]) -> None:
     data[key] = existing
 
 
+def _conn_dest(component: str, param: str) -> str:
+    """Click dest for a connection flag, e.g. ('long_term_memory','project')."""
+    return f"conn__{component}__{param}"
+
+
+def _connection_options(func):
+    """Attach one explicit ``--<component>-<param>`` flag per backend connection param.
+
+    Generated from :data:`env_mapping.COMPONENT_BACKENDS` so the flags stay in sync
+    with the backends; each lands in the command's ``**connection`` kwargs.
+    """
+    for component in reversed(list(COMPONENT_TYPE_ENV)):
+        label = component.replace("_", " ")
+        for param in reversed(component_connection_params(component)):
+            flag = f"--{component.replace('_', '-')}-{param.replace('_', '-')}"
+            func = click.option(
+                flag,
+                _conn_dest(component, param),
+                default=None,
+                help=f"{label} `{param}` (used when its type needs it).",
+            )(func)
+    return func
+
+
 @harness.command("add")
 @click.option("--harness-name", default=None, help="Logical harness / runtime name.")
 @click.option("--model-name", default=None, help="Reasoning model name.")
@@ -313,14 +341,7 @@ def _append_dedup(data: dict, key: str, values: tuple[str, ...]) -> None:
 @click.option(
     "--short-term-memory-type", default=None, help="Short-term memory backend."
 )
-@click.option(
-    "--set",
-    "set_params",
-    multiple=True,
-    metavar="KEY=VALUE",
-    help="Set any nested field via a dotted path (repeatable), e.g. "
-    "--set long_term_memory.project=my-proj --set knowledge_base.region=cn-beijing.",
-)
+@_connection_options
 @click.option(
     "--path",
     default=".",
@@ -336,16 +357,16 @@ def add(
     knowledge_base_type: str | None,
     long_term_memory_type: str | None,
     short_term_memory_type: str | None,
-    set_params: tuple[str, ...],
     path: str,
+    **connection: str | None,
 ) -> None:
     """Write agent parameters into `harness.yaml`.
 
     Scalar options SET their value; `--tool` / `--skill` are repeatable and APPEND
-    to the lists (deduped). `--set KEY=VALUE` sets any nested field by dotted path
-    (e.g. a backend's connection params: `--set long_term_memory.project=my-proj`);
-    values are parsed as YAML scalars (so `6379` is an int, `true` a bool).
-    Operates on `<path>/harness.yaml`; fast-fails when the file is missing.
+    to the lists (deduped). Each backend connection param has its own flag, e.g.
+    `--long-term-memory-project`, `--short-term-memory-host` (see `--help`), which
+    is written under the matching component section. Operates on
+    `<path>/harness.yaml`; fast-fails when the file is missing.
     """
     yaml_path = Path(path).resolve() / "harness.yaml"
     data = _load_harness_yaml(yaml_path)
@@ -381,22 +402,18 @@ def add(
     if skills:
         _append_dedup(data, "skills", skills)
 
-    # Generic nested setter, e.g. "long_term_memory.project=my-proj". Values are
-    # parsed as YAML scalars so ints/bools stay typed. Applied last so it can fill
-    # connection params under the component sections set above.
-    for item in set_params:
-        dotted, sep, raw = item.partition("=")
-        keys = [k for k in dotted.strip().split(".") if k]
-        if not sep or not keys:
-            raise click.ClickException(f"Invalid --set '{item}'; expected KEY=VALUE.")
-        target = data
-        for key in keys[:-1]:
-            child = target.get(key)
-            if not isinstance(child, dict):
-                child = {}
-                target[key] = child
-            target = child
-        target[keys[-1]] = yaml.safe_load(raw)
+    # Connection params (e.g. --long-term-memory-project) land under their
+    # component section, alongside the `type` set above.
+    for component in COMPONENT_TYPE_ENV:
+        for param in component_connection_params(component):
+            value = connection.get(_conn_dest(component, param))
+            if value is None:
+                continue
+            section = data.get(component)
+            if not isinstance(section, dict):
+                section = {}
+                data[component] = section
+            section[param] = value
 
     yaml_path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
     click.secho(f"Updated {yaml_path}", fg="green")

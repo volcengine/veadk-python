@@ -109,6 +109,34 @@ BACKEND_ENV: dict[str, dict[str, str]] = {
 }
 
 
+# Backends each component supports (drives the `veadk harness add` connection
+# flags and lets a component offer only its relevant params). Backends with no
+# connection params (local / sqlite / tos_vector / context_search) are omitted.
+COMPONENT_BACKENDS: dict[str, list[str]] = {
+    "knowledge_base": ["viking", "opensearch", "redis"],
+    "long_term_memory": ["viking", "opensearch", "redis", "mem0"],
+    "short_term_memory": ["mysql", "postgresql"],
+}
+
+# Credentials come from the shared top-level VOLCENGINE_* vars (the deploy `.env`),
+# not from per-component CLI flags.
+_CREDENTIAL_PARAMS = frozenset({"access_key", "secret_key"})
+
+
+def component_connection_params(component: str) -> list[str]:
+    """Ordered, de-duplicated connection-param names a component's backends accept.
+
+    Used by ``veadk harness add`` to generate one explicit flag per param
+    (e.g. ``--long-term-memory-project``). Credential params are excluded.
+    """
+    params: dict[str, None] = {}
+    for backend in COMPONENT_BACKENDS.get(component, []):
+        for param in BACKEND_ENV.get(backend, {}):
+            if param not in _CREDENTIAL_PARAMS:
+                params.setdefault(param, None)
+    return list(params)
+
+
 def _is_empty(value: Any) -> bool:
     return value is None or value == "" or value == [] or value == {}
 
