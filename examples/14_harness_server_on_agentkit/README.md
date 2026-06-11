@@ -1,136 +1,115 @@
 # harness-server · Deploy the Harness server to Volcengine AgentKit
 
 Deploy VeADK's **Harness server** (`veadk.cloud.harness_app`) to
-[Volcengine AgentKit](https://www.volcengine.com/) and call it over HTTP.
+[Volcengine AgentKit](https://www.volcengine.com/) and call it over HTTP, using
+the `veadk harness` CLI — no app code to write and no local Docker.
 
 > 中文版见 [README.zh.md](./README.zh.md)
 
-A *harness* is a named agent spec — **model + system prompt + tools**. The
-server lets you register harnesses at runtime (`/harness/add`) and invoke them
-(`/harness/invoke`), with an optional once-time harness that overrides the
-stored one for a single call.
+A *harness* is an agent spec — **model + system prompt + tools + skills**, plus a
+knowledge base and long/short-term memory bound at creation time. You describe it
+in a layered `harness.yaml`; `deploy` flattens it into the runtime's environment
+variables, and the server assembles the agent from them at startup and serves it
+at `POST /harness/invoke`.
 
-The server is shipped inside the `veadk` package, so there is **no app code to
-write** — the runtime just runs the module:
+The flow is **`create` → `add` → `deploy` → `invoke`**. See the full CLI
+reference in the docs (`docs/content/docs/cli/harness-cli`).
+
+## 1. Scaffold
 
 ```bash
-python -m veadk.cloud.harness_app   # serves the API on 0.0.0.0:8000
+veadk harness create harness-server
+cd harness-server
 ```
 
-## What's in this directory
+This writes `harness.yaml` (the agent config), `.env.example` (Volcengine deploy
+credentials only), a `Dockerfile`, and a `README.md`.
 
-```text
-14_harness_server_on_agentkit/
-├── README.md          # this file
-├── .env.example       # model + Volcengine credentials (placeholders)
-└── requirements.txt   # veadk-python (installed into the image)
+## 2. Configure the agent
+
+Set parameters into `harness.yaml` with `veadk harness add` (or edit the file):
+
+```bash
+veadk harness add \
+  --name research-agent \
+  --model-name doubao-seed-1-6-250615 \
+  --system-prompt "You are a research assistant." \
+  --tools web_search,web_fetch \
+  --runtime adk
 ```
-
-> `veadk agentkit config` / `launch` will generate `agentkit.yaml`, a
-> `Dockerfile`, and a `.agentkit/` dir here — those are build artifacts and are
-> gitignored, not part of the example.
-
-## API
-
-- `POST /harness/add` — body `{harness_name, harness}`. Register a harness;
-  returns `code: 400` if the name already exists.
-- `POST /harness/invoke` — body
-  `{prompt, harness_name, harness?, run_agent_request}`. Run a **previously
-  added** harness. A non-null `harness` overrides the stored one for this call
-  (`overwrite: true`).
-
-`harness` fields: `model_name`, `system_prompt`, `tools`, `skills`, and
-`runtime` (`"adk"` default, or `"codex"`). `tools` accepts either a list
-(`["web_search", "web_fetch"]`) or a comma-separated string
-(`"web_search,web_fetch"`). `run_agent_request` fields: `user_id`, `session_id`.
 
 Built-in tool names come from `veadk.tools.list_builtin_tools()` (e.g.
 `web_search`, `web_fetch`, `vesearch`, `link_reader`, `run_code`, `coding`,
-`image_generate`, `image_edit`, `video_generate`, `text_to_speech`).
-
-## 1. Configure
-
-```bash
-cd examples/14_harness_server_on_agentkit
-cp .env.example .env
-# edit .env: MODEL_AGENT_API_KEY + VOLCENGINE_ACCESS_KEY / VOLCENGINE_SECRET_KEY
-```
-
-The cloud function has no `.env`, so the model credentials are baked into the
-runtime as env vars at config time:
+`image_generate`, `image_edit`, `video_generate`, `text_to_speech`). On an
+AgentKit runtime Ark auth is resolved by the runtime's IAM role, so the model
+needs no API key — only its name. Review what's configured with:
 
 ```bash
-veadk agentkit config \
-  --agent_name harness-server \
-  --entry_point veadk.cloud.harness_app.py \
-  --language Python --language_version 3.12 \
-  --launch_type cloud --region cn-beijing \
-  --dependencies_file requirements.txt \
-  -e MODEL_AGENT_PROVIDER="$MODEL_AGENT_PROVIDER" \
-  -e MODEL_AGENT_NAME="$MODEL_AGENT_NAME" \
-  -e MODEL_AGENT_API_BASE="$MODEL_AGENT_API_BASE" \
-  -e MODEL_AGENT_API_KEY="$MODEL_AGENT_API_KEY"
-```
-
-`entry_point` is a dotted module path (the trailing `.py` is stripped), so
-AgentKit runs the container with `python -m veadk.cloud.harness_app`.
-
-> **Tip (CN build network):** if `pip`/`uv` is slow pulling dependencies, point
-> the build at a domestic mirror, e.g. set a `PIP_INDEX_URL` /
-> `UV_INDEX_URL=https://mirrors.volces.com/pypi/simple/` runtime/build env.
-
-## 2. Run locally (optional)
-
-```bash
-python -m veadk.cloud.harness_app   # http://127.0.0.1:8000
+veadk harness show
 ```
 
 ## 3. Deploy
 
 ```bash
-veadk agentkit launch   # builds the image and deploys; prints the endpoint URL
+cp .env.example .env   # then set VOLCENGINE_ACCESS_KEY / VOLCENGINE_SECRET_KEY
+veadk harness deploy
 ```
 
-## 4. Test
+`deploy` runs an AgentKit **cloud** build (no local Docker) and creates a runtime
+named after `harness_name`. On success the endpoint and gateway API key are
+recorded into **`harness.json`** (`{name: {url, key, runtime_id}}`), so the next
+step needs no manual URL/key copying.
 
-Replace `<ENDPOINT>` with the URL printed by `launch` and `<API_KEY>` with the
-runtime's gateway key (`veadk agentkit runtime get -r <runtime-id>` →
-`AuthorizerConfiguration.KeyAuth.ApiKey`).
+> **Tip (CN build network):** if `pip`/`uv` is slow pulling dependencies, point
+> the build at a domestic mirror, e.g.
+> `UV_INDEX_URL=https://mirrors.volces.com/pypi/simple/`.
 
-With the VeADK CLI:
+## 4. Invoke
 
 ```bash
-veadk agentkit harness add \
-  --name research-agent \
-  --model-name doubao-seed-1-6-250615 \
-  --system-prompt "You are a research assistant." \
-  --tools web_search,web_fetch \
-  --url "<ENDPOINT>" --key "<API_KEY>"
-
-veadk agentkit harness invoke \
-  --harness research-agent \
-  --url "<ENDPOINT>" --key "<API_KEY>" \
-  "Summarize the latest on reinforcement learning."
+veadk harness invoke --name research-agent \
+  --message "Summarize the latest on reinforcement learning."
 ```
 
-`--url` / `--key` can also be supplied via `HARNESS_URL` / `HARNESS_KEY`.
+`url`/`key` are read from `harness.json` by `--name`; pass `--url` / `--key`
+(or `HARNESS_URL` / `HARNESS_KEY`) to target a server explicitly.
 
-Or with `curl` (gateway auth is `Authorization: Bearer <API_KEY>`):
+### Once-time overrides
+
+Passing any of `--model-name` / `--tools` / `--skills` / `--system-prompt` /
+`--runtime` clones the deployed agent and applies the override **for that single
+call only** (tools/skills are added incrementally; memory and the knowledge base
+are never overridable):
 
 ```bash
-curl -s -X POST "<ENDPOINT>/harness/add" \
-  -H "Authorization: Bearer <API_KEY>" -H "Content-Type: application/json" \
-  -d '{"harness_name":"bot","harness":{"system_prompt":"Be concise."}}'
+veadk harness invoke --name research-agent \
+  --tools get_city_weather \
+  --message "What's the weather in Beijing today?"
+```
 
+## API
+
+The server exposes a single endpoint:
+
+- `POST /harness/invoke` — body
+  `{prompt, harness_name, harness?, run_agent_request}`. Runs the deployed agent;
+  a non-null `harness` is the once-time override for this call (response
+  `overwrite: true`). `harness` fields: `model_name`, `system_prompt`, `tools`,
+  `skills`, `runtime` (`tools`/`skills` are comma-separated strings).
+  `run_agent_request` fields: `user_id`, `session_id`.
+
+`curl` equivalent (gateway auth is `Authorization: Bearer <API_KEY>`):
+
+```bash
 curl -s -X POST "<ENDPOINT>/harness/invoke" \
   -H "Authorization: Bearer <API_KEY>" -H "Content-Type: application/json" \
-  -d '{"prompt":"Hello","harness_name":"bot","run_agent_request":{"user_id":"u1","session_id":"s1"}}'
+  -d '{"prompt":"Hello","harness_name":"research-agent","run_agent_request":{"user_id":"u1","session_id":"s1"}}'
 ```
 
 ## Note on scaling
 
-The harness registry is held **in memory per instance**. If the runtime scales
-to multiple instances, an `add` on one instance is not visible to an `invoke`
-routed to another. For a registered-then-invoked workflow, pin the runtime to a
-single instance (`MinInstance = MaxInstance = 1`), or externalize the registry
-(DB / cache) to share state across instances.
+The short-term memory is held **in memory per instance**. If the runtime scales
+to multiple instances, a session served by one instance is not visible to another.
+To keep multi-turn sessions consistent, pin the runtime to a single instance
+(`MinInstance = MaxInstance = 1`), or configure a shared `short_term_memory`
+backend (e.g. `mysql` / `postgresql`) in `harness.yaml`.
