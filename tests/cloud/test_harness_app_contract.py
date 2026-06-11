@@ -12,28 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Contract tests for the Harness server (``veadk.cloud.harness_app``).
+"""Contract tests for the Harness server schemas (``veadk.cloud.harness_app``).
 
-These pin the HTTP request/response *schemas* and the ``HarnessApp`` surface so
-that a change to a model field name, default, or route silently breaking the
-deployed server (or the ``veadk agentkit harness`` CLI client) is caught here
-rather than in production. No network or model access is required.
+These pin the per-invocation override schema, the full creation-time config, and
+the HTTP request/response models so that a change to a field name, default, or
+the overridable/fixed split silently breaking the deployed server (or the
+``veadk harness`` CLI, whose flags are generated from these fields) is caught
+here rather than in production.
+
+Only ``types`` and ``utils`` are imported: ``app.py`` builds the live agent at
+import time, so it is intentionally left out to keep these tests offline.
 """
 
-import inspect
-from unittest import mock
-
-from veadk.cloud import harness_app
-from veadk.cloud.harness_app import (
-    AddHarnessRequest,
-    AddHarnessResponse,
-    Harness,
-    HarnessApp,
+from veadk.cloud.harness_app.types import (
+    HarnessConfig,
+    HarnessOverrides,
     InvokeHarnessRequest,
     InvokeHarnessResponse,
     RunAgentRequest,
 )
+from veadk.cloud.harness_app.utils import split_csv
 from veadk.consts import DEFAULT_MODEL_AGENT_NAME
+from veadk.prompts.agent_default_prompt import DEFAULT_INSTRUCTION
 
 
 def _fields(model) -> dict:
@@ -41,9 +41,9 @@ def _fields(model) -> dict:
     return dict(model.model_fields)
 
 
-class TestHarnessModel:
+class TestHarnessOverrides:
     def test_fields(self):
-        assert set(_fields(Harness)) == {
+        assert set(_fields(HarnessOverrides)) == {
             "model_name",
             "tools",
             "skills",
@@ -52,7 +52,7 @@ class TestHarnessModel:
         }
 
     def test_defaults(self):
-        fields = _fields(Harness)
+        fields = _fields(HarnessOverrides)
         assert fields["model_name"].default == DEFAULT_MODEL_AGENT_NAME
         assert fields["tools"].default == ""
         assert fields["skills"].default == ""
@@ -60,22 +60,48 @@ class TestHarnessModel:
         assert fields["runtime"].default == "adk"
 
     def test_tools_and_skills_are_csv_strings(self):
-        # The server splits these with _split_csv(); they must stay plain
-        # strings, not lists, to keep the CLI/curl pass-through contract.
-        h = Harness()
+        # The server splits these with split_csv(); they must stay plain strings,
+        # not lists, to keep the CLI/curl pass-through contract.
+        h = HarnessOverrides()
         assert isinstance(h.tools, str)
         assert isinstance(h.skills, str)
 
+    def test_every_field_has_a_description(self):
+        # Descriptions are the single source of truth for the generated
+        # `veadk harness invoke` flags, so each field must carry one.
+        for name, field in _fields(HarnessOverrides).items():
+            assert field.description, f"{name} is missing a description"
+
+
+class TestHarnessConfig:
+    def test_extends_overrides(self):
+        assert issubclass(HarnessConfig, HarnessOverrides)
+
+    def test_adds_creation_time_fields(self):
+        assert set(_fields(HarnessConfig)) == set(_fields(HarnessOverrides)) | {
+            "app_name",
+            "knowledgebase_type",
+            "longterm_memory_type",
+            "shortterm_memory_type",
+        }
+
+    def test_component_defaults(self):
+        fields = _fields(HarnessConfig)
+        # Empty backend = component disabled; short-term memory defaults to local.
+        assert fields["knowledgebase_type"].default == ""
+        assert fields["longterm_memory_type"].default == ""
+        assert fields["shortterm_memory_type"].default == "local"
+
+    def test_system_prompt_default_is_veadk_instruction(self):
+        # HarnessConfig overrides the override-layer default with VeADK's own.
+        assert _fields(HarnessConfig)["system_prompt"].default == DEFAULT_INSTRUCTION
+
+    def test_app_name_populated_via_name_alias(self):
+        assert HarnessConfig(name="research-agent").app_name == "research-agent"
+        assert HarnessConfig().app_name == "harness_app"
+
 
 class TestRequestResponseSchemas:
-    def test_add_request_fields(self):
-        assert set(_fields(AddHarnessRequest)) == {"harness_name", "harness"}
-
-    def test_add_response_fields_and_defaults(self):
-        fields = _fields(AddHarnessResponse)
-        assert set(fields) == {"code", "msg", "harness_name"}
-        assert fields["code"].default == 200
-
     def test_run_agent_request_fields(self):
         assert set(_fields(RunAgentRequest)) == {"user_id", "session_id"}
 
@@ -87,10 +113,12 @@ class TestRequestResponseSchemas:
             "run_agent_request",
         }
 
-    def test_invoke_request_harness_is_optional(self):
-        # A null `harness` means "use the stored one"; a non-null one is the
-        # once-time override. The field must therefore allow None.
-        assert _fields(InvokeHarnessRequest)["harness"].default is None
+    def test_invoke_request_harness_is_optional_override(self):
+        # A null `harness` means "use the served agent"; a non-null one is the
+        # once-time override. The field must therefore allow None and default to it.
+        field = _fields(InvokeHarnessRequest)["harness"]
+        assert field.default is None
+        assert field.annotation == (HarnessOverrides | None)
 
     def test_invoke_response_fields_and_defaults(self):
         fields = _fields(InvokeHarnessResponse)
@@ -98,45 +126,12 @@ class TestRequestResponseSchemas:
         assert fields["overwrite"].default is False
 
 
-class TestHarnessApp:
-    def test_public_methods_exist(self):
-        for name in ("mount", "serve"):
-            assert callable(getattr(HarnessApp, name))
-
-    def test_serve_signature_defaults(self):
-        sig = inspect.signature(HarnessApp.serve)
-        assert sig.parameters["host"].default == "0.0.0.0"
-        assert sig.parameters["port"].default == 8000
-
-    def test_routes_registered(self):
-        app = HarnessApp()
-        paths = {getattr(route, "path", None) for route in app.app.routes}
-        assert {"/harness/add", "/harness/invoke"} <= paths
-
-    def test_create_agent_passes_runtime(self):
-        # _create_agent must forward the harness runtime to the Agent. Mock Agent
-        # so no model client is built (keeps the test offline).
-        app = HarnessApp()
-        with mock.patch.object(harness_app, "Agent") as agent_cls:
-            app._create_agent(Harness(runtime="codex"))
-        assert agent_cls.call_args.kwargs["runtime"] == "codex"
-
-    def test_create_agent_defaults_runtime_to_adk(self):
-        app = HarnessApp()
-        with mock.patch.object(harness_app, "Agent") as agent_cls:
-            app._create_agent(Harness())
-        assert agent_cls.call_args.kwargs["runtime"] == "adk"
-
-
 class TestSplitCsv:
     def test_splits_and_trims(self):
-        assert harness_app._split_csv("web_search, web_fetch") == [
-            "web_search",
-            "web_fetch",
-        ]
+        assert split_csv("web_search, web_fetch") == ["web_search", "web_fetch"]
 
     def test_empty_string_is_empty_list(self):
-        assert harness_app._split_csv("") == []
+        assert split_csv("") == []
 
     def test_drops_blank_segments(self):
-        assert harness_app._split_csv("a,,  ,b") == ["a", "b"]
+        assert split_csv("a,,  ,b") == ["a", "b"]
