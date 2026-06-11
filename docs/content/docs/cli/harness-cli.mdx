@@ -8,10 +8,64 @@ description: "通过命令行注册并调用部署在 Harness server 上的 harn
 一个 *harness* 就是一份具名的智能体规格 —— **模型 + 系统提示词 + 工具 + 技能**。Harness server 暴露 `/harness/add` 与 `/harness/invoke` 两个接口，让你在运行时动态注册并调用 harness，无需重新部署。
 
 <Callout type="info">
-  使用前需先把 Harness server 部署到火山引擎 AgentKit（参见示例 [`14_harness_server_on_agentkit`](https://github.com/volcengine/veadk-python/tree/main/examples/14_harness_server_on_agentkit)），并拿到服务的 **Endpoint URL** 与网关 **API Key**。
+  使用前需先把 Harness server 部署到火山引擎 AgentKit（参见下方 [部署 Harness server](#部署-harness-server)，或示例 [`14_harness_server_on_agentkit`](https://github.com/volcengine/veadk-python/tree/main/examples/14_harness_server_on_agentkit)），并拿到服务的 **Endpoint URL** 与网关 **API Key**。
 </Callout>
 
-## 命令一览
+## 部署 Harness server
+
+顶层命令组 `veadk harness` 用于脚手架生成并部署 Harness server 本身（与下文的 `veadk agentkit harness` 客户端命令相互独立）。
+
+| 命令 | 描述 |
+| :-- | :-- |
+| `veadk harness create <dir>` | 生成一个可部署的 harness 目录。 |
+| `veadk harness deploy` | 构建并推送 harness 镜像，然后创建一个 AgentKit runtime。 |
+
+### `harness create`
+
+生成一个部署目录，并在其中以注释形式说明所有 harness 环境变量：
+
+```bash
+veadk harness create my-harness
+```
+
+该命令会写入：
+
+- `.env.example` —— 列出全部 harness 环境变量（`MODEL_AGENT_NAME`、`MODEL_AGENT_API_KEY`、`MODEL_AGENT_API_BASE`、`MODEL_AGENT_PROVIDER`、`SYSTEM_PROMPT`、`TOOLS`、`SKILLS`、`RUNTIME`、`APP_NAME`、`KNOWLEDGEBASE_TYPE`、`LONGTERM_MEM_TYPE`、`SHORTTERM_MEM_TYPE`、`HARNESS_NAME`、`SKILL_HUB_DOWNLOAD_URL`、`SERVER_HOST`、`SERVER_PORT`），并附带注释与占位值。
+- `Dockerfile` —— 构建提供 harness 应用服务的镜像。
+- `agentkit.yaml` —— AgentKit 构建配置（hybrid：本地构建 + 推送到容器镜像仓库 CR），其中 `ve_runtime_name` 默认为 harness 名称。
+- `README.md` —— 快速开始说明。
+
+### `harness deploy`
+
+将 `.env.example` 复制为 `.env` 并填好（务必设置 `HARNESS_NAME`），并在 `agentkit.yaml` 中设置一个真实的 `cr_instance_name`（或运行 `agentkit config`），然后在该目录内执行：
+
+```bash
+cd my-harness
+cp .env.example .env   # 然后编辑它（设置 HARNESS_NAME）
+# 编辑 agentkit.yaml：设置 cr_instance_name（或运行 `agentkit config`）
+veadk harness deploy
+```
+
+| 选项 | 必填 | 说明 |
+| :-- | :-- | :-- |
+| `--volcengine-access-key` | 否 | 火山引擎 Access Key（默认读取 `VOLCENGINE_ACCESS_KEY` / `VOLC_ACCESSKEY`）。 |
+| `--volcengine-secret-key` | 否 | 火山引擎 Secret Key（默认读取 `VOLCENGINE_SECRET_KEY` / `VOLC_SECRETKEY`）。 |
+| `--region` | 否 | AgentKit 区域（默认 `cn-beijing` 或 `VOLCENGINE_REGION`）。 |
+| `--role-name` | 否 | runtime IAM 角色名（默认自动生成，或读取 `HARNESS_RUNTIME_ROLE`）。 |
+| `--path` | 否 | harness 目录，默认 `.`。 |
+
+`deploy` 会通过 AgentKit 的 hybrid 构建（本地 `docker build` + 推送到容器镜像仓库 CR）构建并推送 harness 镜像，然后调用 AgentKit 的 `CreateRuntime` 创建一个 runtime：
+
+- **Name** 取自 `.env` 中的 `HARNESS_NAME`（未设置时默认 `default`）；
+- **Tags** 携带一个内容为字面量 `Harness` 的标签（仅 Key，无 Value）；
+- **Envs** 取自该目录的 `.env`；
+- **ArtifactType** 为 `image`，**ArtifactUrl** 为刚推送的镜像地址。
+
+成功后会打印 runtime 的 name 与 id；可在 AgentKit 控制台或通过 AgentKit SDK（`GetRuntime`）查询其 Endpoint，再传给 `veadk agentkit harness invoke --url ...`。
+
+## 客户端命令一览
+
+服务部署完成后，`veadk agentkit harness` 是用于在运行时注册并调用 harness 的 HTTP 客户端。
 
 | 命令 | 描述 |
 | :-- | :-- |

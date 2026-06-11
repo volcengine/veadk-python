@@ -11,12 +11,80 @@ The Harness server exposes `/harness/add` and `/harness/invoke`, letting you
 register and invoke harnesses at runtime without redeploying.
 
 <Callout type="info">
-  Before you start, deploy the Harness server to Volcengine AgentKit (see the
+  Before you start, deploy the Harness server to Volcengine AgentKit (see
+  [Deploying the Harness server](#deploying-the-harness-server) below, or the
   [`14_harness_server_on_agentkit`](https://github.com/volcengine/veadk-python/tree/main/examples/14_harness_server_on_agentkit)
   example) and grab its **endpoint URL** and gateway **API key**.
 </Callout>
 
-## Command reference
+## Deploying the Harness server
+
+The top-level `veadk harness` group scaffolds and deploys the Harness server
+itself (this is separate from the `veadk agentkit harness` client below).
+
+| Command | Description |
+| :-- | :-- |
+| `veadk harness create <dir>` | Scaffold a deployable harness directory. |
+| `veadk harness deploy` | Build and push the harness image, then create an AgentKit runtime. |
+
+### `harness create`
+
+Create a deployment directory documenting every harness environment variable:
+
+```bash
+veadk harness create my-harness
+```
+
+This writes:
+
+- `.env.example` — every harness env var (`MODEL_AGENT_NAME`, `MODEL_AGENT_API_KEY`,
+  `MODEL_AGENT_API_BASE`, `MODEL_AGENT_PROVIDER`, `SYSTEM_PROMPT`, `TOOLS`, `SKILLS`,
+  `RUNTIME`, `APP_NAME`, `KNOWLEDGEBASE_TYPE`, `LONGTERM_MEM_TYPE`,
+  `SHORTTERM_MEM_TYPE`, `HARNESS_NAME`, `SKILL_HUB_DOWNLOAD_URL`, `SERVER_HOST`,
+  `SERVER_PORT`) with comments and placeholders.
+- `Dockerfile` — builds the image that serves the harness app.
+- `agentkit.yaml` — AgentKit build config (hybrid: local build + push to
+  Container Registry); `ve_runtime_name` defaults to the harness name.
+- `README.md` — quickstart.
+
+### `harness deploy`
+
+Copy `.env.example` to `.env`, fill it in (set `HARNESS_NAME`), set a real
+`cr_instance_name` in `agentkit.yaml` (or run `agentkit config`), then from
+inside the directory:
+
+```bash
+cd my-harness
+cp .env.example .env   # then edit it (set HARNESS_NAME)
+# edit agentkit.yaml: set cr_instance_name (or run `agentkit config`)
+veadk harness deploy
+```
+
+| Option | Required | Description |
+| :-- | :-- | :-- |
+| `--volcengine-access-key` | No | Volcengine access key (defaults to `VOLCENGINE_ACCESS_KEY` / `VOLC_ACCESSKEY`). |
+| `--volcengine-secret-key` | No | Volcengine secret key (defaults to `VOLCENGINE_SECRET_KEY` / `VOLC_SECRETKEY`). |
+| `--region` | No | AgentKit region (default `cn-beijing` or `VOLCENGINE_REGION`). |
+| `--role-name` | No | Runtime IAM role name (default: auto-generated or `HARNESS_RUNTIME_ROLE`). |
+| `--path` | No | Harness directory, default `.`. |
+
+`deploy` builds and pushes the harness image via AgentKit's hybrid build (local
+`docker build` + push to Container Registry), then calls AgentKit's
+`CreateRuntime` to create a runtime whose:
+
+- **Name** is `HARNESS_NAME` from your `.env` (default `default` when unset),
+- **Tags** carry a single tag whose key is the literal `Harness` (key only, no value),
+- **Envs** are the directory's `.env`,
+- **ArtifactType** is `image` and **ArtifactUrl** is the freshly pushed image.
+
+On success it prints the runtime's name and id; look up its endpoint in the
+AgentKit console or via the AgentKit SDK (`GetRuntime`), then pass it to
+`veadk agentkit harness invoke --url ...`.
+
+## Client command reference
+
+Once the server is deployed, `veadk agentkit harness` is the HTTP client used to
+register and invoke harnesses against it at runtime.
 
 | Command | Description |
 | :-- | :-- |
