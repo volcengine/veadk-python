@@ -47,45 +47,101 @@ _DEFAULT_HARNESS_NAME = "default"
 # `flatten`): `model.name` -> MODEL_NAME, `knowledge_base.type` ->
 # KNOWLEDGE_BASE_TYPE, etc. Empty values are skipped on flatten.
 _HARNESS_YAML = """\
-# VeADK harness configuration. `veadk harness deploy` flattens this file into the
-# runtime's environment variables (nested keys joined with `_` and upper-cased;
-# lists become comma-separated; empty values are skipped).
+# =============================================================================
+# VeADK harness configuration.
+#
+# `veadk harness deploy` converts this file into the runtime's environment
+# variables: top-level fields and `model` are flattened (model.name -> MODEL_NAME,
+# tools -> TOOLS, ...); each component's `type` selects its backend, and the
+# component's other params map to the VeADK env vars that backend reads (e.g.
+# viking `project` -> DATABASE_VIKING_PROJECT). Empty values are skipped, so
+# VeADK falls back to its own defaults.
+#
+# Fill this in with `veadk harness add ...` or by editing the file. For a
+# component, uncomment the params under the backend you set as `type`.
+# =============================================================================
 
-# Logical harness name; also the runtime name and the knowledge-base / long-term
-# memory index name. Defaults to "default" when empty.
+# Logical harness name; also the AgentKit runtime name and the knowledge-base /
+# long-term-memory index name. Defaults to "default" when empty.  -> HARNESS_NAME
 harness_name: ""
 
-# Reasoning model. On the AgentKit runtime, Ark auth is resolved from the
-# runtime's IAM role, so only the model name is needed here. Extra model
-# settings can be added under this section in the future.
+# Reasoning model. Only the name is needed; on the AgentKit runtime Ark auth is
+# resolved from the runtime's IAM role.                            -> MODEL_NAME
 model:
   name: ""
 
-# Comma-flattened built-in tool names, e.g. [web_search, web_fetch].
+# Built-in tool names.                  -> TOOLS   e.g. [web_search, link_reader]
 tools: []
 
-# Skill hub names, e.g. [clawhub/lgwventrue/system-file-handler].
+# Skill hub names.                      -> SKILLS  e.g. [clawhub/foo/bar]
 skills: []
 
-# System prompt / instruction. Empty uses the VeADK default instruction.
+# Agent instruction. Empty uses the VeADK default.                 -> SYSTEM_PROMPT
 system_prompt: ""
 
-# Agent runtime backend: "adk" (default) or "codex". "codex" requires the
-# optional codex extra installed on the server image.
+# Agent runtime backend: adk (default) | codex.                    -> RUNTIME
 runtime: adk
 
-# Knowledge base backend (e.g. "viking"). Empty disables it. Extra backend
-# settings can be added under this section in the future.
+# --- Knowledge base ----------------------------------------------------------
+# type: "" disables it. Supported: viking | opensearch | redis |
+#       tos_vector | context_search. Uncomment the params for your chosen type.
 knowledge_base:
   type: ""
+  # -- viking --      (-> DATABASE_VIKING_*; creds from VOLCENGINE_ACCESS/SECRET_KEY)
+  # project: my-project
+  # region: cn-beijing
+  # -- opensearch --  (-> DATABASE_OPENSEARCH_*)
+  # host: 1.2.3.4
+  # port: 9200
+  # username: admin
+  # password: ""
+  # use_ssl: true
+  # -- redis --       (-> DATABASE_REDIS_*)
+  # host: 1.2.3.4
+  # port: 6379
+  # username: default
+  # password: ""
+  # db: 0
 
-# Long-term memory backend (e.g. "viking"). Empty disables it.
+# --- Long-term memory --------------------------------------------------------
+# type: "" disables it. Supported: viking | opensearch | redis | mem0.
 long_term_memory:
   type: ""
+  # -- viking --      (-> DATABASE_VIKING_*)
+  # project: my-project
+  # region: cn-beijing
+  # -- opensearch --  (-> DATABASE_OPENSEARCH_*)
+  # host: 1.2.3.4
+  # port: 9200
+  # username: admin
+  # password: ""
+  # -- redis --       (-> DATABASE_REDIS_*)
+  # host: 1.2.3.4
+  # port: 6379
+  # password: ""
+  # db: 0
+  # -- mem0 --        (-> DATABASE_MEM0_*)
+  # api_key: ""
+  # api_key_id: ""
+  # project_id: ""
+  # base_url: https://api.mem0.ai/v1
 
-# Short-term memory backend (e.g. "local", "mysql"). Defaults to "local".
+# --- Short-term memory (session store) ---------------------------------------
+# type: local (default) | sqlite | mysql | postgresql.
 short_term_memory:
   type: local
+  # -- mysql --       (-> DATABASE_MYSQL_*)
+  # host: 1.2.3.4
+  # user: root
+  # password: ""
+  # database: harness
+  # charset: utf8
+  # -- postgresql --  (-> DATABASE_POSTGRESQL_*)
+  # host: 1.2.3.4
+  # port: 5432
+  # user: postgres
+  # password: ""
+  # database: harness
 """
 
 # `.env.example` carries ONLY deploy credentials. All model / agent config lives
@@ -440,10 +496,35 @@ def deploy(
         raise click.ClickException(f"Harness deploy failed: {result.error}")
 
     deploy_result = result.deploy_result
-    endpoint = deploy_result.endpoint_url if deploy_result else None
+    # The AgentKit runner records the created runtime's id / endpoint / api key in
+    # the deploy result's config_updates (key auth). Surface them so the user can
+    # invoke immediately.
+    updates = (
+        deploy_result.config_updates.updates
+        if deploy_result and deploy_result.config_updates
+        else {}
+    )
+    endpoint = (deploy_result.endpoint_url if deploy_result else None) or updates.get(
+        "runtime_endpoint"
+    )
+    apikey = updates.get("runtime_apikey")
+    runtime_id = updates.get("runtime_id")
+
+    lines = [f"Harness runtime deployed: name={runtime_name}"]
+    if runtime_id:
+        lines.append(f"Runtime id: {runtime_id}")
+    lines.append(f"Endpoint:   {endpoint or '(see AgentKit console)'}")
+    if apikey:
+        lines.append(f"API key:    {apikey}")
+    if endpoint and apikey:
+        lines.append("")
+        lines.append("Invoke it with:")
+        lines.append(
+            f'  veadk harness invoke "<message>" --harness {runtime_name} '
+            f'--url "{endpoint}" --key "{apikey}"'
+        )
     click.secho(
-        f"Harness runtime deployed: name={runtime_name}\n"
-        f"Endpoint: {endpoint or '(see AgentKit console)'}",
+        "\n".join(lines),
         fg="green",
     )
 
