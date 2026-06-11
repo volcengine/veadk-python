@@ -500,6 +500,27 @@ def _build_agentkit_config(
     }
 
 
+def _harness_json_path(directory: str) -> Path:
+    return Path(directory).resolve() / "harness.json"
+
+
+def _load_harness_json(directory: str) -> dict:
+    """Load the `{name: {url, key, runtime_id}}` registry, or {} if absent."""
+    path = _harness_json_path(directory)
+    return json.loads(path.read_text()) if path.is_file() else {}
+
+
+def _record_harness(
+    directory: str, name: str, url: str, key: str, runtime_id: str
+) -> Path:
+    """Record/replace a deployed harness's url + key + id in `harness.json`."""
+    path = _harness_json_path(directory)
+    data = _load_harness_json(directory)
+    data[name] = {"url": url, "key": key, "runtime_id": runtime_id}
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    return path
+
+
 @harness.command("deploy")
 @click.option("--volcengine-access-key", default=None, help="Volcengine access key.")
 @click.option("--volcengine-secret-key", default=None, help="Volcengine secret key.")
@@ -592,11 +613,13 @@ def deploy(
     if apikey:
         lines.append(f"API key:    {apikey}")
     if endpoint and apikey:
+        json_path = _record_harness(
+            path, runtime_name, endpoint, apikey, runtime_id or ""
+        )
         lines.append("")
-        lines.append("Invoke it with:")
+        lines.append(f"Recorded in {json_path}. Invoke it with:")
         lines.append(
-            f'  veadk harness invoke "<message>" --harness {runtime_name} '
-            f'--url "{endpoint}" --key "{apikey}"'
+            f'  veadk harness invoke --name {runtime_name} --message "<message>"'
         )
     click.secho(
         "\n".join(lines),
@@ -605,14 +628,15 @@ def deploy(
 
 
 @harness.command("invoke")
-@click.argument("message")
+@click.argument("message_arg", metavar="[MESSAGE]", required=False)
 @click.option(
     "--name",
     "--harness",
     "harness_name",
     required=True,
-    help="Harness name to invoke.",
+    help="Harness name; its url/key are read from harness.json unless overridden.",
 )
+@click.option("--message", "-m", "message_opt", default=None, help="Message to send.")
 @click.option(
     "--user-id", "user_id", default="cli-user", help="User id for the session."
 )
@@ -624,26 +648,55 @@ def deploy(
 )
 @click.option(
     "--url",
-    required=True,
+    default=None,
     envvar="HARNESS_URL",
-    help="Harness server base URL (or set HARNESS_URL).",
+    help="Harness URL (default: harness.json[name], or HARNESS_URL).",
 )
 @click.option(
     "--key",
     default=None,
     envvar="HARNESS_KEY",
-    help="Gateway API key for Bearer auth (or set HARNESS_KEY).",
+    help="API key for Bearer auth (default: harness.json[name], or HARNESS_KEY).",
+)
+@click.option(
+    "--path", default=".", help="Dir containing harness.json (default: current dir)."
 )
 @_override_options
-def invoke(message, harness_name, user_id, session_id, url, key, **overrides) -> None:
-    """Invoke a deployed harness with MESSAGE and print its output.
+def invoke(
+    message_arg,
+    harness_name,
+    message_opt,
+    user_id,
+    session_id,
+    url,
+    key,
+    path,
+    **overrides,
+) -> None:
+    """Invoke a deployed harness and print its output.
 
-    Any override flag (generated from ``HarnessOverrides``) applies a once-time
-    override on top of the deployed agent for this single call; unset flags are
-    omitted, so the server keeps its configured values (memory and the knowledge
-    base are never overridable).
+    Pass the prompt as the MESSAGE argument or via `--message`. The harness `url`
+    and `key` are read from `harness.json` (written by `deploy`) by `--name`,
+    unless given explicitly. Any override flag (generated from ``HarnessOverrides``,
+    e.g. `--tools`, `--system-prompt`) applies a once-time override on top of the
+    deployed agent for this single call; memory and the knowledge base are never
+    overridable.
     """
     from veadk.cli.cli_agentkit import _harness_request
+
+    message = message_opt or message_arg
+    if not message:
+        raise click.ClickException("Provide a prompt (MESSAGE argument or --message).")
+
+    if not url or not key:
+        record = _load_harness_json(path).get(harness_name, {})
+        url = url or record.get("url")
+        key = key or record.get("key")
+    if not url:
+        raise click.ClickException(
+            f"No URL for '{harness_name}'. Deploy it first (records harness.json) "
+            "or pass --url/--key."
+        )
 
     body: dict = {
         "prompt": message,
