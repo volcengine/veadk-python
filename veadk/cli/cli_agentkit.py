@@ -33,9 +33,9 @@ if isinstance(agentkit_commands, click.Group):
 
 
 # --- Harness server client -------------------------------------------------
-# A thin HTTP client for a deployed Harness server (veadk/cloud/harness_app.py),
-# which exposes `/harness/add` and `/harness/invoke`. Lives under a dedicated
-# `harness` subgroup so it does not shadow the external AgentKit `invoke`.
+# A thin HTTP client for a deployed Harness server (veadk/cloud/harness_app),
+# which exposes `/harness/invoke`. Lives under a dedicated `harness` subgroup so
+# it does not shadow the external AgentKit `invoke`.
 
 
 def _harness_request(url: str, path: str, key: str | None, body: dict) -> dict:
@@ -67,58 +67,6 @@ def harness() -> None:
     pass
 
 
-@harness.command("add")
-@click.option("--name", required=True, help="Harness (agent) name.")
-@click.option(
-    "--model-name",
-    "model_name",
-    default=None,
-    help="Model name for the harness (defaults to the server's MODEL_AGENT_NAME).",
-)
-@click.option(
-    "--system-prompt",
-    "system_prompt",
-    default="You are a helpful assistant.",
-    help="System prompt for the harness.",
-)
-@click.option(
-    "--tools",
-    default=None,
-    help="Comma-separated built-in tool names, e.g. web_search,web_fetch.",
-)
-@click.option(
-    "--skills",
-    default=None,
-    help="Comma-separated skill hub names, e.g. clawhub/lgwventrue/system-file-handler.",
-)
-@click.option(
-    "--url",
-    required=True,
-    envvar="HARNESS_URL",
-    help="Harness server base URL (or set HARNESS_URL).",
-)
-@click.option(
-    "--key",
-    default=None,
-    envvar="HARNESS_KEY",
-    help="Gateway API key for Bearer auth (or set HARNESS_KEY).",
-)
-def harness_add(name, model_name, system_prompt, tools, skills, url, key) -> None:
-    """Register a new harness on the server."""
-    spec: dict = {"system_prompt": system_prompt}
-    # Pass the comma-separated strings through; the server splits them.
-    if tools:
-        spec["tools"] = tools
-    if skills:
-        spec["skills"] = skills
-    if model_name:
-        spec["model_name"] = model_name
-    result = _harness_request(
-        url, "/harness/add", key, {"harness_name": name, "harness": spec}
-    )
-    click.echo(json.dumps(result, ensure_ascii=False))
-
-
 @harness.command("invoke")
 @click.argument("message")
 @click.option(
@@ -147,6 +95,12 @@ def harness_add(name, model_name, system_prompt, tools, skills, url, key) -> Non
     help="Override skills for this call, comma-separated (creates a one-time harness).",
 )
 @click.option(
+    "--runtime",
+    default=None,
+    type=click.Choice(["adk", "codex"]),
+    help="Override the runtime for this call (creates a one-time harness).",
+)
+@click.option(
     "--user-id", "user_id", default="cli-user", help="User id for the session."
 )
 @click.option(
@@ -171,6 +125,7 @@ def harness_invoke(
     system_prompt,
     tools,
     skills,
+    runtime,
     user_id,
     session_id,
     url,
@@ -182,9 +137,9 @@ def harness_invoke(
         "harness_name": harness_name,
         "run_agent_request": {"user_id": user_id, "session_id": session_id},
     }
-    # Any of --model-name/--system-prompt/--tools/--skills builds a one-time
-    # harness that overrides the stored one for this single call (the server
-    # replaces the whole agent). tools/skills are passed through as
+    # Any of --model-name/--system-prompt/--tools/--skills/--runtime builds a
+    # one-time harness that overrides the stored one for this single call (the
+    # server replaces the whole agent). tools/skills are passed through as
     # comma-separated strings; the server splits them.
     once: dict = {}
     if model_name:
@@ -195,6 +150,8 @@ def harness_invoke(
         once["tools"] = tools
     if skills:
         once["skills"] = skills
+    if runtime:
+        once["runtime"] = runtime
     if once:
         body["harness"] = once
     result = _harness_request(url, "/harness/invoke", key, body)

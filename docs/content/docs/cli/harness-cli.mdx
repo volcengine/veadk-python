@@ -1,90 +1,208 @@
 ---
 title: "Harness 命令"
-description: "通过命令行注册并调用部署在 Harness server 上的 harness（智能体规格）。"
+description: "脚手架生成、配置、部署并调用一个 VeADK Harness server。"
 ---
 
-`veadk agentkit harness` 是一组轻量的 HTTP 客户端命令，用于操作已部署的 **Harness server**（`veadk.cloud.harness_app`）。
+`veadk harness` 是一组命令，用于**脚手架生成、配置、部署并调用**一个 VeADK **Harness server**（`veadk.cloud.harness_app`）。
 
-一个 *harness* 就是一份具名的智能体规格 —— **模型 + 系统提示词 + 工具 + 技能**。Harness server 暴露 `/harness/add` 与 `/harness/invoke` 两个接口，让你在运行时动态注册并调用 harness，无需重新部署。
+一个 *harness* 就是一份智能体规格 —— **模型 + 系统提示词 + 工具 + 技能**，外加创建时绑定的**知识库与长/短期记忆**。整个规格通过分层的 `harness.yaml` 描述；`deploy` 会把它展平成 runtime 的环境变量，由 Harness server 在启动时组装成一个智能体，并通过 `POST /harness/invoke` 对外服务。
 
 <Callout type="info">
-  使用前需先把 Harness server 部署到火山引擎 AgentKit（参见示例 [`14_harness_server_on_agentkit`](https://github.com/volcengine/veadk-python/tree/main/examples/14_harness_server_on_agentkit)），并拿到服务的 **Endpoint URL** 与网关 **API Key**。
+  部署需要火山引擎 AgentKit 凭证（`VOLCENGINE_ACCESS_KEY` / `VOLCENGINE_SECRET_KEY`）。端到端示例参见 [`14_harness_server_on_agentkit`](https://github.com/volcengine/veadk-python/tree/main/examples/14_harness_server_on_agentkit)。
 </Callout>
 
 ## 命令一览
 
 | 命令 | 描述 |
 | :-- | :-- |
-| `veadk agentkit harness add` | 在服务端注册一个新的 harness。 |
-| `veadk agentkit harness invoke` | 调用一个 harness 并打印输出。 |
+| `veadk harness create <dir>` | 生成一个可部署的 harness 目录。 |
+| `veadk harness add` | 将智能体参数写入 `harness.yaml`。 |
+| `veadk harness show` | 展示已配置参数，以及可在调用时覆盖的参数。 |
+| `veadk harness deploy` | 云端构建镜像并创建 AgentKit runtime（无需本地 Docker）。 |
+| `veadk harness invoke` | 调用一个已部署的 harness 并打印输出。 |
 
-## 连接参数
+典型流程：**`create` → `add` → `deploy` → `invoke`**。
 
-两个命令都需要指定 Harness server 的地址与鉴权，可通过命令行选项或环境变量提供：
+## `veadk harness create`
 
-| 选项 | 环境变量 | 说明 |
-| :-- | :-- | :-- |
-| `--url` | `HARNESS_URL` | Harness server 的基础 URL（必填）。 |
-| `--key` | `HARNESS_KEY` | 网关 API Key，用于 Bearer 鉴权（可选）。 |
-| — | `HARNESS_TIMEOUT` | 客户端请求超时秒数，默认 `600`（智能体执行可能耗时较长）。 |
-
-## `harness add`
-
-在服务端注册一个具名 harness。
+生成一个部署目录：
 
 ```bash
-veadk agentkit harness add \
+veadk harness create my-harness
+```
+
+该命令会写入：
+
+- `harness.yaml` —— 智能体配置模板（见下）。
+- `.env.example` —— 仅含火山引擎部署凭证（`VOLCENGINE_ACCESS_KEY`、`VOLCENGINE_SECRET_KEY`，以及可选的 `VOLCENGINE_REGION`）。模型/智能体配置都在 `harness.yaml`。
+- `Dockerfile` —— 构建 harness 服务镜像。
+- `README.md` —— 快速开始说明。
+
+### `harness.yaml`
+
+分层配置文件，每个组件自包含。`deploy` 会将其转换为 runtime 的环境变量：顶层字段与 `model` 直接展平（`model.name` → `MODEL_NAME`，`tools` → `TOOLS` 等），列表转为逗号分隔字符串；每个组件的 `type` 选择后端，组件下的其余参数映射为该后端实际读取的 VeADK 环境变量（如 viking 的 `project` → `DATABASE_VIKING_PROJECT`）。空值会被跳过，VeADK 回退到自身默认值。
+
+```yaml
+harness_name: ""          # -> HARNESS_NAME（runtime 名 + 知识库/长期记忆索引名）
+model:
+  name: ""                # -> MODEL_NAME（Ark 鉴权在部署后由 runtime 的 IAM 角色解析）
+tools: []                 # -> TOOLS（逗号连接）
+skills: []                # -> SKILLS（逗号连接）
+system_prompt: ""         # -> SYSTEM_PROMPT（空 = VeADK 默认）
+runtime: adk              # -> RUNTIME（"adk" 或 "codex"）
+knowledgebase:
+  type: ""                # -> KNOWLEDGEBASE_TYPE（空 = 不创建）
+long_term_memory:
+  type: ""                # -> LONG_TERM_MEMORY_TYPE（空 = 不创建）
+short_term_memory:
+  type: local             # -> SHORT_TERM_MEMORY_TYPE
+```
+
+每个组件下，按你设置的 `type` 取消对应后端参数的注释即可（模板里已逐项标注了环境变量与命令行 flag）。在 AgentKit runtime 上 Ark 鉴权由 IAM 角色解析，因此模型无需配置 API Key。
+
+## `veadk harness add`
+
+将智能体参数写入 `./harness.yaml`（或 `--path` 指定的目录）。当 `harness.yaml` 不存在时快速失败。
+
+```bash
+cd my-harness
+veadk harness add \
   --name research-agent \
   --model-name doubao-seed-1-6-250615 \
   --system-prompt "You are a research assistant." \
   --tools web_search,web_fetch \
-  --url "<ENDPOINT>" --key "<API_KEY>"
+  --runtime adk
 ```
 
-| 选项 | 必填 | 说明 |
-| :-- | :-- | :-- |
-| `--name` | 是 | harness（智能体）名称。 |
-| `--model-name` | 否 | 模型名称，缺省使用服务端的 `MODEL_AGENT_NAME`。 |
-| `--system-prompt` | 否 | 系统提示词，默认 `You are a helpful assistant.`。 |
-| `--tools` | 否 | 逗号分隔的内置工具名，如 `web_search,web_fetch`。 |
-| `--skills` | 否 | 逗号分隔的技能 hub 名，如 `clawhub/lgwventrue/system-file-handler`。 |
+| 选项 | 说明 |
+| :-- | :-- |
+| `--name` / `--harness-name` | 逻辑 harness / runtime 名（设置 `harness_name`）。 |
+| `--model-name` | 推理模型名（设置 `model.name`）。 |
+| `--tools` | 逗号分隔的内置工具名，如 `web_search,web_fetch`（设置 `tools`）。 |
+| `--skills` | 逗号分隔的技能 hub 名（设置 `skills`）。 |
+| `--system-prompt` | 系统提示词 / 指令。 |
+| `--runtime` | 智能体 runtime，`adk`（默认）或 `codex`。 |
+| `--knowledgebase-type` | 知识库后端（设置 `knowledgebase.type`）。 |
+| `--long-term-memory-type` | 长期记忆后端（设置 `long_term_memory.type`）。 |
+| `--short-term-memory-type` | 短期记忆后端（设置 `short_term_memory.type`）。 |
+| `--path` | 包含 `harness.yaml` 的目录，默认 `.`。 |
 
-<Callout type="warn">
-  若同名 harness 已存在，服务端返回 `code: 400`，不会覆盖。
-</Callout>
+#### 组件连接参数
 
-## `harness invoke`
-
-调用一个**已注册**的 harness，并打印其输出。消息作为位置参数传入。
+每个组件还会按其支持的后端，自动生成形如 `--<组件>-<参数>` 的连接参数 flag，例如：
 
 ```bash
-veadk agentkit harness invoke \
-  --harness research-agent \
-  --url "<ENDPOINT>" --key "<API_KEY>" \
-  "总结一下强化学习的最新进展。"
+veadk harness add --name kb-agent \
+  --knowledgebase-type viking \
+  --knowledgebase-project my-project --knowledgebase-region cn-beijing
+```
+
+| 组件前缀 | 可用 flag（取决于后端） |
+| :-- | :-- |
+| `--knowledgebase-*` | `project` / `region`（viking）、`host` / `port` / `username` / `password` / `use-ssl` / `cert-path` / `secret-token`（opensearch）、`host` / `port` / `username` / `password` / `db`（redis） |
+| `--long-term-memory-*` | 同上各后端，外加 `api-key` / `api-key-id` / `project-id` / `base-url`（mem0） |
+| `--short-term-memory-*` | `host` / `user` / `password` / `database` / `charset` / `port`（mysql / postgresql） |
+
+凭证（access key / secret key）不通过这些 flag 传入，而是复用部署时 `.env` 里的 `VOLCENGINE_*`。
+
+## `veadk harness show`
+
+打印 `harness.yaml` 中已配置的参数，以及可在每次调用时覆盖的参数。`harness.yaml` 不存在时快速失败。
+
+```bash
+veadk harness show --path my-harness
+```
+
+该命令打印两段：
+
+1. **已配置的智能体参数** —— `harness.yaml` 的内容（`harness_name`、`model`、`tools`、`skills`、`system_prompt`、`runtime`，以及已配置的 `knowledgebase` / `long_term_memory` / `short_term_memory`）。
+2. **可在调用时覆盖的参数** —— 由 `HarnessOverrides` 派生的每个 `--<flag>`（`--model-name`、`--tools`、`--skills`、`--system-prompt`、`--runtime`）及其说明。记忆与知识库**不可**覆盖。
+
+| 选项 | 说明 |
+| :-- | :-- |
+| `--path` | 包含 `harness.yaml` 的目录，默认 `.`。 |
+
+## `veadk harness deploy`
+
+填好部署凭证后，在该目录内执行：
+
+```bash
+cd my-harness
+cp .env.example .env   # 然后设置 VOLCENGINE_ACCESS_KEY / VOLCENGINE_SECRET_KEY
+veadk harness deploy
 ```
 
 | 选项 | 必填 | 说明 |
 | :-- | :-- | :-- |
-| `MESSAGE`（位置参数） | 是 | 发送给 harness 的消息。 |
-| `--harness` | 是 | 要调用的 harness 名称。 |
+| `--volcengine-access-key` | 否 | 火山引擎 Access Key（默认读 `VOLCENGINE_ACCESS_KEY`）。 |
+| `--volcengine-secret-key` | 否 | 火山引擎 Secret Key（默认读 `VOLCENGINE_SECRET_KEY`）。 |
+| `--region` | 否 | AgentKit 区域（默认 `cn-beijing` 或 `VOLCENGINE_REGION`）。 |
+| `--path` | 否 | harness 目录，默认 `.`。 |
+| `--discovery-url` | 否 | OIDC discovery URL，启用 OAuth2/JWT 鉴权（覆盖 `auth.discovery_url`）。 |
+| `--allowed-id` | 否 | 逗号分隔的允许 client ID，用于 OAuth2/JWT 鉴权（覆盖 `auth.allowed_ids`）。 |
+
+`deploy` 会加载 `harness.yaml`，将其展平为 runtime 环境变量，执行 AgentKit 的**云端**构建（无需本地 Docker）并创建 runtime。runtime 以 `harness_name` 命名。
+
+成功后，端点与网关 API Key 会被记录到目录下的 **`harness.json`**（结构为 `{name: {url, key, runtime_id}}`），随后即可用 `veadk harness invoke --name <name>` 直接调用，无需手动复制 URL / Key：
+
+```text
+Harness runtime deployed: name=research-agent
+Runtime id: r-xxxx
+Endpoint:   https://xxxx.apigateway-cn-beijing.volceapi.com
+API key:    ****
+
+Recorded in .../harness.json. Invoke it with:
+  veadk harness invoke --name research-agent --message "<message>"
+```
+
+### OAuth2 / JWT 鉴权部署（可选）
+
+默认用网关 API Key（key_auth）。若想用**火山引擎 Identity 用户池**做 OAuth2/JWT 门禁，在 `harness.yaml` 加一个 `auth` 段即可——**有 `auth` 段就走 custom_jwt，没有就走默认 key_auth**：
+
+```yaml
+auth:
+  discovery_url: "https://userpool-<池子id>.userpool.auth.id.cn-beijing.volces.com/.well-known/openid-configuration"
+  allowed_ids: ["<client-id>"]   # 控制台建的客户端 client_id；网关只放行 aud 命中的 token
+```
+
+也可用 `--discovery-url` / `--allowed-id` 在 deploy 时覆盖。`auth` 段**不会**写入容器环境变量，只用于配置 runtime 网关的 authorizer。
+
+- 用户池、客户端、外部身份提供商（如飞书）在 **Identity 控制台**一次性建好，CLI 只**引用** `discovery_url` + `allowed_ids`，**不涉及任何 secret**。
+- custom_jwt 部署后 `harness.json` 记录 `{url, runtime_id, auth_type, discovery_url, allowed_ids}`（无 key）。调用该 runtime 需自带 `Authorization: Bearer <用户池签发的 JWT>`，CLI 不代为获取。
+
+## `veadk harness invoke`
+
+调用一个**已部署**的 harness 并打印输出。`url` 与 `key` 默认按 `--name` 从 `harness.json`（由 `deploy` 写入）解析，无需显式传入。
+
+```bash
+veadk harness invoke --name research-agent --message "总结一下强化学习的最新进展。"
+```
+
+消息既可用 `--message` / `-m`，也可作为位置参数传入。
+
+| 选项 | 必填 | 说明 |
+| :-- | :-- | :-- |
+| `--name` / `--harness` | 是 | harness 名称；其 `url`/`key` 默认从 `harness.json` 读取。 |
+| `MESSAGE`（位置参数）或 `--message` / `-m` | 是 | 发送给 harness 的消息。 |
 | `--user-id` | 否 | 会话所属用户 id，默认 `cli-user`。 |
-| `--session-id` | 否 | 本次调用的会话 id，默认 `cli-session`。 |
-| `--model-name` | 否 | 仅本次调用覆盖模型（生成一次性 harness）。 |
-| `--system-prompt` | 否 | 仅本次调用覆盖系统提示词（生成一次性 harness）。 |
-| `--tools` | 否 | 仅本次调用覆盖工具，逗号分隔（生成一次性 harness）。 |
-| `--skills` | 否 | 仅本次调用覆盖技能，逗号分隔（生成一次性 harness）。 |
+| `--session-id` | 否 | 本次调用的会话 id。 |
+| `--url` | 否 | Harness URL（默认 `harness.json[name]`，或 `HARNESS_URL`）。 |
+| `--key` | 否 | Bearer 鉴权 API Key（默认 `harness.json[name]`，或 `HARNESS_KEY`）。 |
+| `--path` | 否 | 包含 `harness.json` 的目录，默认 `.`。 |
+| `--model-name` | 否 | 仅本次调用覆盖模型。 |
+| `--tools` | 否 | 仅本次调用覆盖工具（逗号分隔）。 |
+| `--skills` | 否 | 仅本次调用覆盖技能（逗号分隔）。 |
+| `--system-prompt` | 否 | 仅本次调用覆盖系统提示词。 |
+| `--runtime` | 否 | 仅本次调用覆盖运行时（`adk` / `codex`）。 |
 
-### 一次性 harness 覆盖
+### 一次性覆盖
 
-`invoke` 时若提供了 `--model-name` / `--system-prompt` / `--tools` / `--skills` 中的任意一个，服务端会用这些字段构造一个**一次性 harness**，仅对本次调用生效，不影响已注册的同名 harness：
+若提供了 `--model-name` / `--tools` / `--skills` / `--system-prompt` / `--runtime` 中的任意一个，服务端会克隆已部署的智能体并叠加这些覆盖，**仅对本次调用生效**：工具与技能为**增量**叠加（与已有同名项去重），记忆与知识库**永不**可覆盖。
 
 ```bash
-veadk agentkit harness invoke \
-  --harness research-agent \
-  --system-prompt "只用一句话回答。" \
-  --url "<ENDPOINT>" --key "<API_KEY>" \
-  "什么是强化学习？"
+veadk harness invoke --name research-agent \
+  --tools get_city_weather \
+  --message "北京今天天气怎么样？"
 ```
 
 ## 完整示例
