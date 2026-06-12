@@ -159,7 +159,11 @@ def to_runtime_env(spec: dict[str, Any]) -> dict[str, str]:
     env: dict[str, str] = {}
 
     # Non-component fields: reuse VeADK's flatten_dict (same as config.yaml).
-    rest = {k: v for k, v in spec.items() if k not in COMPONENT_TYPE_ENV}
+    # The `auth` block is excluded too: it configures the runtime's gateway
+    # authorizer at deploy time (custom_jwt), not the container environment.
+    rest = {
+        k: v for k, v in spec.items() if k not in COMPONENT_TYPE_ENV and k != "auth"
+    }
     for key, value in flatten_dict(rest).items():
         if _is_empty(value):
             continue

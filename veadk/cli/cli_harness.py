@@ -151,6 +151,17 @@ short_term_memory:
   # user: postgres
   # password: ""
   # database: harness
+
+# --- Authentication (optional) -----------------------------------------------
+# Omit this block to deploy with the default API-key auth (key_auth). Add it to
+# gate the runtime with OAuth2/JWT (custom_jwt): the API gateway then only accepts
+# tokens issued by `discovery_url`'s user pool whose audience is one of
+# `allowed_ids`. Set up the user pool / client / external IdP in the Volcengine
+# Identity console; the CLI only references them (no secret involved).
+#   flags: --discovery-url / --allowed-id
+# auth:
+#   discovery_url: "https://userpool-<id>.userpool.auth.id.cn-beijing.volces.com/.well-known/openid-configuration"
+#   allowed_ids: ["<client-id>"]
 """
 
 # `.env.example` carries ONLY deploy credentials. All model / agent config lives
@@ -491,46 +502,54 @@ def show(path: str) -> None:
 
 
 def _build_agentkit_config(
-    runtime_name: str, region: str, envs: dict[str, str]
+    runtime_name: str, region: str, envs: dict[str, str], auth: dict | None = None
 ) -> dict:
     """Build the cloud AgentKit launch config dict (auto-provision).
 
     Mirrors the structure `agentkit init` produces for `launch_type: cloud`. The
     `{{account_id}}` / `{{timestamp}}` templates are resolved by AgentKit at
     deploy time and are passed through literally.
+
+    When ``auth`` (a normalized ``{discovery_url, allowed_ids}`` block) is given,
+    the runtime is gated by OAuth2/JWT (``custom_jwt``); otherwise it keeps the
+    default API-key auth (``key_auth``).
     """
+    cloud = {
+        "region": region,
+        "tos_bucket": "agentkit-platform-{{account_id}}",
+        "tos_prefix": "agentkit-builds",
+        "image_tag": "{{timestamp}}",
+        "cr_instance_name": "agentkit-platform-{{account_id}}",
+        "cr_namespace_name": "agentkit",
+        "cr_repo_name": runtime_name,
+        "cr_auto_create_instance_type": "Micro",
+        "build_timeout": 3600,
+        "cp_workspace_name": "agentkit-cli-workspace",
+        "cp_pipeline_name": "Auto",
+        "runtime_id": "Auto",
+        "runtime_name": runtime_name,
+        "runtime_role_name": "Auto",
+    }
+    if auth:
+        cloud["runtime_auth_type"] = "custom_jwt"
+        cloud["runtime_jwt_discovery_url"] = auth["discovery_url"]
+        cloud["runtime_jwt_allowed_clients"] = auth["allowed_ids"]
+    else:
+        cloud["runtime_auth_type"] = "key_auth"
+        cloud["runtime_apikey_name"] = "Auto"
+        cloud["runtime_apikey"] = "Auto"
+        cloud["runtime_jwt_allowed_clients"] = []
     return {
         "common": {
             "agent_name": runtime_name,
             "entry_point": "app.py",
-            "description": "VeADK harness server",
+            "description": "Harness Server - VeADK",
             "language": "Python",
             "language_version": "3.12",
             "runtime_envs": envs,
             "launch_type": "cloud",
         },
-        "launch_types": {
-            "cloud": {
-                "region": region,
-                "tos_bucket": "agentkit-platform-{{account_id}}",
-                "tos_prefix": "agentkit-builds",
-                "image_tag": "{{timestamp}}",
-                "cr_instance_name": "agentkit-platform-{{account_id}}",
-                "cr_namespace_name": "agentkit",
-                "cr_repo_name": runtime_name,
-                "cr_auto_create_instance_type": "Micro",
-                "build_timeout": 3600,
-                "cp_workspace_name": "agentkit-cli-workspace",
-                "cp_pipeline_name": "Auto",
-                "runtime_id": "Auto",
-                "runtime_name": runtime_name,
-                "runtime_role_name": "Auto",
-                "runtime_auth_type": "key_auth",
-                "runtime_apikey_name": "Auto",
-                "runtime_apikey": "Auto",
-                "runtime_jwt_allowed_clients": [],
-            }
-        },
+        "launch_types": {"cloud": cloud},
         "docker_build": {},
     }
 
@@ -546,14 +565,60 @@ def _load_harness_json(directory: str) -> dict:
 
 
 def _record_harness(
-    directory: str, name: str, url: str, key: str, runtime_id: str
+    directory: str,
+    name: str,
+    url: str,
+    runtime_id: str,
+    *,
+    key: str | None = None,
+    auth: dict | None = None,
 ) -> Path:
-    """Record/replace a deployed harness's url + key + id in `harness.json`."""
+    """Record/replace a deployed harness in `harness.json`.
+
+    key_auth records `{url, key, runtime_id}`; custom_jwt records
+    `{url, runtime_id, auth_type, discovery_url, allowed_ids}` (no key — a
+    user-pool JWT is supplied per request, not stored).
+    """
     path = _harness_json_path(directory)
     data = _load_harness_json(directory)
-    data[name] = {"url": url, "key": key, "runtime_id": runtime_id}
+    if auth:
+        data[name] = {
+            "url": url,
+            "runtime_id": runtime_id,
+            "auth_type": "custom_jwt",
+            "discovery_url": auth["discovery_url"],
+            "allowed_ids": auth["allowed_ids"],
+        }
+    else:
+        data[name] = {"url": url, "key": key or "", "runtime_id": runtime_id}
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
     return path
+
+
+def _resolve_auth(
+    yaml_auth: dict | None, discovery_url: str | None, allowed_id: str | None
+) -> dict | None:
+    """Merge the `harness.yaml` `auth` block with deploy flag overrides.
+
+    Returns a normalized ``{discovery_url, allowed_ids}`` to deploy with OAuth2/JWT
+    (custom_jwt), or ``None`` to keep the default API-key auth — the presence of an
+    `auth` block (or the flags) is the switch. Fails fast on a partial config.
+    """
+    auth = dict(yaml_auth) if yaml_auth else {}
+    if discovery_url:
+        auth["discovery_url"] = discovery_url
+    if allowed_id:
+        auth["allowed_ids"] = [s.strip() for s in allowed_id.split(",") if s.strip()]
+    if not auth:
+        return None
+    discovery = auth.get("discovery_url")
+    allowed = auth.get("allowed_ids") or []
+    if not discovery or not allowed:
+        raise click.ClickException(
+            "OAuth deploy needs both `auth.discovery_url` and `auth.allowed_ids` "
+            "(or --discovery-url and --allowed-id)."
+        )
+    return {"discovery_url": discovery, "allowed_ids": list(allowed)}
 
 
 @harness.command("deploy")
@@ -569,11 +634,23 @@ def _record_harness(
     default=".",
     help="Harness directory (created by `veadk harness create`).",
 )
+@click.option(
+    "--discovery-url",
+    default=None,
+    help="OIDC discovery URL; enables OAuth2/JWT auth (overrides `auth.discovery_url`).",
+)
+@click.option(
+    "--allowed-id",
+    default=None,
+    help="Comma-separated allowed client IDs for OAuth2/JWT auth (overrides `auth.allowed_ids`).",
+)
 def deploy(
     volcengine_access_key: str | None,
     volcengine_secret_key: str | None,
     region: str | None,
     path: str,
+    discovery_url: str | None,
+    allowed_id: str | None,
 ) -> None:
     """Deploy the harness as an AgentKit runtime (cloud build, no local Docker).
 
@@ -598,6 +675,7 @@ def deploy(
     data = _load_harness_yaml(proj_dir / "harness.yaml")
     runtime_envs = to_runtime_env(data)
     runtime_name = data.get("harness_name") or _DEFAULT_HARNESS_NAME
+    auth = _resolve_auth(data.get("auth"), discovery_url, allowed_id)
 
     # AgentKit authenticates via the Volcengine SDK, which reads VOLC_ACCESSKEY /
     # VOLC_SECRETKEY from the environment. Mirror whatever AK/SK was passed (or
@@ -615,7 +693,7 @@ def deploy(
         )
 
     resolved_region = region or os.getenv("VOLCENGINE_REGION") or "cn-beijing"
-    cfg = _build_agentkit_config(runtime_name, resolved_region, runtime_envs)
+    cfg = _build_agentkit_config(runtime_name, resolved_region, runtime_envs, auth)
 
     logger.info(f"Deploying harness runtime '{runtime_name}' from {proj_dir}")
     cwd = os.getcwd()
@@ -645,17 +723,28 @@ def deploy(
     if runtime_id:
         lines.append(f"Runtime id: {runtime_id}")
     lines.append(f"Endpoint:   {endpoint or '(see AgentKit console)'}")
-    if apikey:
+    if auth:
+        lines.append("Auth:       custom_jwt (OAuth2/JWT gateway)")
+        lines.append(f"Discovery:  {auth['discovery_url']}")
+        lines.append(f"Allowed ids: {', '.join(auth['allowed_ids'])}")
+    elif apikey:
         lines.append(f"API key:    {apikey}")
-    if endpoint and apikey:
+
+    if endpoint:
         json_path = _record_harness(
-            path, runtime_name, endpoint, apikey, runtime_id or ""
+            path, runtime_name, endpoint, runtime_id or "", key=apikey, auth=auth
         )
         lines.append("")
-        lines.append(f"Recorded in {json_path}. Invoke it with:")
-        lines.append(
-            f'  veadk harness invoke --name {runtime_name} --message "<message>"'
-        )
+        if auth:
+            lines.append(
+                f"Recorded in {json_path}. Auth is OAuth2/JWT — invoking requires an "
+                "`Authorization: Bearer <user-pool JWT>` header (the CLI does not mint it)."
+            )
+        else:
+            lines.append(f"Recorded in {json_path}. Invoke it with:")
+            lines.append(
+                f'  veadk harness invoke --name {runtime_name} --message "<message>"'
+            )
     click.secho(
         "\n".join(lines),
         fg="green",
@@ -694,7 +783,9 @@ def deploy(
     help="API key for Bearer auth (default: harness.json[name], or HARNESS_KEY).",
 )
 @click.option(
-    "--path", default=".", help="Dir containing harness.json (default: current dir)."
+    "--path",
+    default=".",
+    help="Dir containing harness.json (default: current dir).",
 )
 @_override_options
 def invoke(

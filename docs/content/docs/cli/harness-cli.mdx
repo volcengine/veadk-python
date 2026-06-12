@@ -138,6 +138,8 @@ veadk harness deploy
 | `--volcengine-secret-key` | 否 | 火山引擎 Secret Key（默认读 `VOLCENGINE_SECRET_KEY`）。 |
 | `--region` | 否 | AgentKit 区域（默认 `cn-beijing` 或 `VOLCENGINE_REGION`）。 |
 | `--path` | 否 | harness 目录，默认 `.`。 |
+| `--discovery-url` | 否 | OIDC discovery URL，启用 OAuth2/JWT 鉴权（覆盖 `auth.discovery_url`）。 |
+| `--allowed-id` | 否 | 逗号分隔的允许 client ID，用于 OAuth2/JWT 鉴权（覆盖 `auth.allowed_ids`）。 |
 
 `deploy` 会加载 `harness.yaml`，将其展平为 runtime 环境变量，执行 AgentKit 的**云端**构建（无需本地 Docker）并创建 runtime。runtime 以 `harness_name` 命名。
 
@@ -152,6 +154,21 @@ API key:    ****
 Recorded in .../harness.json. Invoke it with:
   veadk harness invoke --name research-agent --message "<message>"
 ```
+
+### OAuth2 / JWT 鉴权部署（可选）
+
+默认用网关 API Key（key_auth）。若想用**火山引擎 Identity 用户池**做 OAuth2/JWT 门禁，在 `harness.yaml` 加一个 `auth` 段即可——**有 `auth` 段就走 custom_jwt，没有就走默认 key_auth**：
+
+```yaml
+auth:
+  discovery_url: "https://userpool-<池子id>.userpool.auth.id.cn-beijing.volces.com/.well-known/openid-configuration"
+  allowed_ids: ["<client-id>"]   # 控制台建的客户端 client_id；网关只放行 aud 命中的 token
+```
+
+也可用 `--discovery-url` / `--allowed-id` 在 deploy 时覆盖。`auth` 段**不会**写入容器环境变量，只用于配置 runtime 网关的 authorizer。
+
+- 用户池、客户端、外部身份提供商（如飞书）在 **Identity 控制台**一次性建好，CLI 只**引用** `discovery_url` + `allowed_ids`，**不涉及任何 secret**。
+- custom_jwt 部署后 `harness.json` 记录 `{url, runtime_id, auth_type, discovery_url, allowed_ids}`（无 key）。调用该 runtime 需自带 `Authorization: Bearer <用户池签发的 JWT>`，CLI 不代为获取。
 
 ## `veadk harness invoke`
 

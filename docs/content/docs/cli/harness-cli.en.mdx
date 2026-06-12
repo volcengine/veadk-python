@@ -138,6 +138,8 @@ veadk harness deploy
 | `--volcengine-secret-key` | No | Volcengine secret key (defaults to `VOLCENGINE_SECRET_KEY`). |
 | `--region` | No | AgentKit region (defaults to `cn-beijing` or `VOLCENGINE_REGION`). |
 | `--path` | No | Harness directory, default `.`. |
+| `--discovery-url` | No | OIDC discovery URL; enables OAuth2/JWT auth (overrides `auth.discovery_url`). |
+| `--allowed-id` | No | Comma-separated allowed client IDs for OAuth2/JWT auth (overrides `auth.allowed_ids`). |
 
 `deploy` loads `harness.yaml`, flattens it into the runtime environment, runs an AgentKit **cloud** build (no local Docker), and creates the runtime. The runtime is named after `harness_name`.
 
@@ -152,6 +154,30 @@ API key:    ****
 Recorded in .../harness.json. Invoke it with:
   veadk harness invoke --name research-agent --message "<message>"
 ```
+
+### OAuth2 / JWT auth deploy (optional)
+
+By default the gateway uses an API key (key_auth). To gate the runtime with
+OAuth2/JWT backed by a **Volcengine Identity user pool**, add an `auth` block to
+`harness.yaml` — **its presence switches to custom_jwt; without it, the default
+key_auth is used**:
+
+```yaml
+auth:
+  discovery_url: "https://userpool-<pool-id>.userpool.auth.id.cn-beijing.volces.com/.well-known/openid-configuration"
+  allowed_ids: ["<client-id>"]   # a client created in the console; the gateway only admits tokens whose aud matches
+```
+
+You can also override it at deploy time with `--discovery-url` / `--allowed-id`.
+The `auth` block is **not** written into the container environment — it only
+configures the runtime's gateway authorizer.
+
+- The user pool, client, and external IdP (e.g. Feishu) are set up once in the
+  **Identity console**; the CLI only references `discovery_url` + `allowed_ids`
+  and **never touches a secret**.
+- A custom_jwt deploy records `{url, runtime_id, auth_type, discovery_url, allowed_ids}`
+  in `harness.json` (no key). Calling such a runtime requires your own
+  `Authorization: Bearer <user-pool JWT>` header — the CLI does not mint it.
 
 ## `veadk harness invoke`
 
