@@ -554,6 +554,29 @@ def _build_agentkit_config(
     }
 
 
+def _harness_request(url: str, path: str, key: str | None, body: dict) -> dict:
+    """POST ``body`` to ``url + path`` with optional Bearer auth; return JSON."""
+    import os
+
+    import httpx
+
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+
+    # Tool/skill-driven agent runs can take minutes; allow a generous, tunable
+    # client timeout (HARNESS_TIMEOUT seconds, default 600).
+    timeout = float(os.getenv("HARNESS_TIMEOUT", "600"))
+    resp = httpx.post(
+        url.rstrip("/") + path, json=body, headers=headers, timeout=timeout
+    )
+    if resp.status_code != 200:
+        raise click.ClickException(
+            f"{path} failed: HTTP {resp.status_code} - {resp.text}"
+        )
+    return resp.json()
+
+
 def _harness_json_path(directory: str) -> Path:
     return Path(directory).resolve() / "harness.json"
 
@@ -808,8 +831,6 @@ def invoke(
     deployed agent for this single call; memory and the knowledge base are never
     overridable.
     """
-    from veadk.cli.cli_agentkit import _harness_request
-
     message = message_opt or message_arg
     if not message:
         raise click.ClickException("Provide a prompt (MESSAGE argument or --message).")
