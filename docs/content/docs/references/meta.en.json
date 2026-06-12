@@ -2,5 +2,5 @@
   "title": "Reference",
   "icon": "BookMarked",
   "root": true,
-  "pages": ["index", "api", "contributing", "license"]
+  "pages": ["index", "api", "configuration", "contributing", "license"]
 }

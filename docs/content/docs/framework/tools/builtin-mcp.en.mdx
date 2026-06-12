@@ -1,6 +1,5 @@
 ---
 title: "Built-in MCP tools"
-description: "VeADK's built-in tools that connect over MCP (Model Context Protocol): MCP Router, Feishu / Lark, the LAS data lake, Video-on-Demand (VOD), Supabase, and the Trusted MCP toolset."
 ---
 
 [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) is an open protocol for connecting large language models to external tools and data sources. On top of Google ADK's `MCPToolset`, VeADK ships a set of built-in MCP tool sets that register tools exposed by a remote MCP Server directly onto your agent.
@@ -270,11 +269,3 @@ agent = Agent(tools=[toolset])
 ```
 
 Once registered, the agent automatically loads the tools exposed by the MCP Server and calls them as needed during reasoning.
-
-## Next steps
-
-<Cards>
-  <Card title="Built-in tools" href="/en/docs/framework/tools/builtin" description="Native function tools: web search, image / video generation, code sandboxes." />
-  <Card title="Feishu Channel extension" href="/en/docs/framework/tools/feishu-channel" description="Route inbound Feishu bot messages into the Runner." />
-  <Card title="Custom tools" href="/en/docs/framework/tools/custom-function" description="Wrap your own functions as tools." />
-</Cards>

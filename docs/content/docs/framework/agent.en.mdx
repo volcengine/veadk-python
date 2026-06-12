@@ -1,0 +1,789 @@
+---
+title: "Agent"
+---
+
+The agent is the core of VeADK: driven by a model, with tools, memory, a knowledge base, and skills attached. `Agent` extends Google ADK's `LlmAgent`, adding model fallbacks, memory, knowledge base, skills, tracing, and a pluggable runtime. This page is organized by constructor parameters, explaining each group with examples.
+
+<Callout type="info">
+  Almost every parameter has a sensible default (mostly from environment variables or built-in defaults). The simplest `Agent()` runs with no arguments — start with the [Quickstart](/en/docs/framework/quickstart), then come back to configure.
+</Callout>
+
+```python title="agent.py"
+import asyncio
+from veadk import Agent, Runner
+
+agent = Agent()
+response = asyncio.run(Runner(agent=agent).run("Hi!"))
+print(response)
+```
+
+Before running, provide the model API key via an environment variable (`MODEL_AGENT_API_KEY` by default):
+
+```bash
+export MODEL_AGENT_API_KEY="<your Ark API key>"
+```
+
+<Callout type="info">
+  Keys can also be managed centrally in `config.yaml`; see [Configuration](/en/docs/references/configuration). **Never hard-code an API key in source.**
+</Callout>
+
+## Metadata
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `name` | `str` | `veAgent` | Agent name; uniquely identifies an agent in the Agent Tree, used as the identity for transfers, A2A, and tracing. |
+| `description` | `str` | built-in | Short description of the agent's capabilities; used by parents/peers to decide transfers in multi-agent and A2A. |
+| `instruction` | `str \| InstructionProvider` | built-in | System prompt. A string, or a callable that builds the prompt dynamically from context. |
+| `id` | `str` | auto | Instance ID; rarely set by hand. |
+
+```python title="agent.py"
+root_agent = Agent(
+    name="life_assistant",
+    description="Life assistant",
+    instruction="You are a life assistant who answers everyday questions.",
+)
+```
+
+## Model
+
+VeADK builds the model client on [LiteLLM](https://github.com/BerriAI/litellm) by default, so every LiteLLM provider is supported.
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `model_name` | `str \| list[str]` | env `MODEL_AGENT_NAME` | Model name. **A list enables fallbacks**: the first is primary, the rest are tried in order. |
+| `model_provider` | `str` | `MODEL_AGENT_PROVIDER` | Provider, e.g. `openai`. See the [LiteLLM provider list](https://docs.litellm.ai/docs/providers). |
+| `model_api_base` | `str` | `MODEL_AGENT_API_BASE` | Base URL of the model API. |
+| `model_api_key` | `str` | `MODEL_AGENT_API_KEY` | Model API key. **Never hard-code it** — use env vars or `config.yaml`. |
+| `model_extra_config` | `dict` | `{}` | Extra config forwarded to model requests; supports `extra_headers` and `extra_body`, merged with VeADK defaults. |
+| `model` | `LiteLlm` | `None` | A pre-built LiteLLM client. **Once set, the `model_*` fields are ignored.** |
+| `enable_responses` | `bool` | `False` | Use the Ark Responses API; see [Responses API](#responses-api). |
+| `enable_responses_cache` | `bool` | `True` | Reuse `previous_response_id` for multi-turn continuation and caching; only when `enable_responses=True`. |
+| `context_cache_config` | `ContextCacheConfig` | `None` | Context-cache config to reduce repeated computation on long contexts. |
+
+### Use a different model
+
+Specify a provider or local model (the API key still comes from the environment):
+
+```python title="agent.py"
+agent = Agent(
+    model_provider="openai",
+    model_name="doubao-seed-1-8-251228",
+    model_api_base="https://ark.cn-beijing.volces.com/api/v3/",
+)
+```
+
+### Model fallbacks
+
+Pass a list to `model_name`: the first model is tried first; on failure the next is tried, until one succeeds.
+
+```python title="agent.py"
+agent = Agent(model_name=["doubao-seed-1-8-251228", "deepseek-r1-250528"])
+```
+
+### Customize the model client
+
+For full control, pass a LiteLLM client directly:
+
+```python title="agent.py"
+from google.adk.models.lite_llm import LiteLlm
+
+agent = Agent(model=LiteLlm(model="doubao-seed-1-8-251228"))
+```
+
+### Extra parameters
+
+Specify extra options based on [Ark platform](https://www.volcengine.com/product/ark) capabilities — for example, disable thinking for faster responses:
+
+```python title="agent.py"
+agent = Agent(
+    model_name="doubao-seed-1-8-251228",
+    model_extra_config={"extra_body": {"thinking": {"type": "disabled"}}},
+)
+```
+
+## Tools, memory, and knowledge base
+
+Mounting these capabilities makes VeADK **auto-inject the corresponding tool or callback**.
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `tools` | `list[ToolUnion]` | `[]` | Tool list: plain functions, tool instances, toolsets, MCP tools, etc. |
+| `sub_agents` | `list[BaseAgent]` | `[]` | Sub-agents, for building [multi-agent](/en/docs/framework/multi-agent/overview) systems. |
+| `knowledgebase` | `KnowledgeBase \| None` | `None` | Attach a knowledge base. **Auto-injects the `load_knowledgebase` tool.** |
+| `short_term_memory` | `ShortTermMemory \| None` | `None` | Short-term (single-session) memory, usually passed to `Runner`. |
+| `long_term_memory` | `LongTermMemory \| None` | `None` | Long-term (cross-session) memory. **Auto-injects the `load_memory` tool.** |
+| `auto_save_session` | `bool` | `False` | Persist the session to long-term memory on finish; requires `long_term_memory`. |
+| `example_store` | `BaseExampleProvider \| None` | `None` | Few-shot example provider; injects an `ExampleTool` when set. |
+| `prompt_manager` | `BasePromptManager \| None` | `None` | Prompt manager; see [Prompt management](#prompt-management). |
+
+### Tools
+
+```python title="agent.py"
+from veadk.tools.demo_tools import get_city_weather
+
+agent = Agent(instruction="Call tools to answer weather questions.", tools=[get_city_weather])
+```
+
+See [Built-in tools](/en/docs/framework/tools/builtin) and [Custom function tools](/en/docs/framework/tools/custom-function).
+
+### Memory
+
+Pass short-term memory to `Runner` and long-term memory to `Agent`:
+
+```python title="agent.py"
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.memory.long_term_memory import LongTermMemory
+
+agent = Agent(long_term_memory=LongTermMemory(backend="local"))
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory(backend="local"))
+```
+
+See [Short-term memory](/en/docs/framework/memory/short-term) and [Long-term memory](/en/docs/framework/memory/long-term).
+
+### Knowledge base
+
+```python title="agent.py"
+from veadk.knowledgebase import KnowledgeBase
+
+agent = Agent(
+    instruction="Retrieve from the knowledge base before answering.",
+    knowledgebase=KnowledgeBase(backend="local"),
+)
+```
+
+See [Knowledge base](/en/docs/framework/knowledgebase/overview).
+
+## Runtime & request processing
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `runtime` | `"adk" \| "cc" \| "codex"` | `"adk"` | Inner-loop runtime backend. `adk` uses ADK's built-in flow; `cc` delegates to the Claude Code SDK; `codex` is reserved. |
+| `run_processor` | `BaseRunProcessor \| None` | `None` | A run processor for cross-cutting concerns (auth, logging, retries, monitoring) on the execution flow. |
+
+## Tracing & observability
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `tracers` | `list[BaseTracer]` | `[]` | Tracer list. If an exporter is enabled via env and none is passed, VeADK auto-creates one. |
+
+VeADK reads these env vars to auto-attach exporters:
+
+| Env var | Effect |
+| :--- | :--- |
+| `ENABLE_APMPLUS` | Enable the APMPlus exporter |
+| `ENABLE_COZELOOP` | Enable the CozeLoop exporter |
+| `ENABLE_TLS` | Enable the TLS (Log Service) exporter |
+
+See [Observability · Overview](/en/docs/framework/observability/overview).
+
+## Advanced switches
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `enable_authz` | `bool` | `False` | Enable authorization checks; injects `check_agent_authorization` into `before_agent_callback`. |
+| `enable_supervisor` | `bool` | `False` | Enable the supervisor flow for supervised orchestration of sub-agents. |
+| `enable_ghostchar` | `bool` | `False` | Enable the ghost-char tool, embedding a marker in text responses. |
+| `enable_dataset_gen` | `bool` | `False` | Enable automatic dataset generation; collects session data via callback for evaluation/fine-tuning. |
+| `enable_a2ui` | `bool` | `False` | Enable A2UI (agent-driven UI), returning declarative UI rendered by a client. Requires `veadk-python[a2ui]`. |
+| `a2ui_catalog` | `Any` | `None` | A2UI component catalog; only used when `enable_a2ui=True`. Auto-discovers `catalog.json` next to the agent when unset. |
+| `enable_tunnel` | `bool` | `False` | Enable the tunnel, surfacing on-prem resource servers (e.g. MCP) connected via `veadk.tunnel` as tools. |
+
+See [A2UI](/en/docs/framework/frontend) and [On-prem MCP tunnel](/en/docs/framework/tunnel).
+
+## Commonly used inherited ADK fields
+
+`Agent` extends `LlmAgent`, so these ADK fields are also frequently used:
+
+| Parameter | Type | Description |
+| :--- | :--- | :--- |
+| `output_schema` | `type[BaseModel]` | Constrain the output to a structured object (Pydantic model). |
+| `before_agent_callback` / `after_agent_callback` | `Callable \| list` | Callbacks before/after the agent runs; several VeADK switches append here. |
+| `before_tool_callback` / `after_tool_callback` | `Callable \| list` | Callbacks before/after a tool call, often for guardrails. |
+| `before_model_callback` / `after_model_callback` | `Callable \| list` | Callbacks before/after a model call. |
+| `disallow_transfer_to_parent` / `disallow_transfer_to_peers` | `bool` | Forbid transfer to parent/peers in multi-agent setups. |
+
+<Callout type="warn">
+  When a switch appends a callback, VeADK merges intelligently: a single callback becomes a list, an existing list is appended to — your callbacks are never overwritten.
+</Callout>
+
+## Methods
+
+| Method | Signature | Description |
+| :--- | :--- | :--- |
+| `update_model` | `update_model(model_name)` | Switch the model at runtime. |
+| `load_skills` | `load_skills()` | Load the skills declared in `skills` (usually called automatically at init). |
+| `run` | — | **Deprecated** (since 0.5.6); use `runner.run_async` / `runner.run`. |
+
+Agents are driven by the [`Runner`](/en/docs/framework/runner).
+
+## Prompt management
+
+In production, system prompts often need version management and dynamic delivery. VeADK's prompt management module lets you template and hot-update prompts at runtime — without changing code or restarting the service.
+
+Before each user request, VeADK calls the Prompt Manager's `get_prompt` method to fetch the latest prompt and uses it as that agent's system prompt.
+
+### CozeLoop prompt management
+
+VeADK ships `CozeloopPromptManager`, which connects an agent's system prompt to [CozeLoop](https://loop.coze.cn/open/docs/cozeloop/what-is-prompt) cloud prompt management.
+
+#### Prerequisites
+
+Install the Python `cozeloop` SDK:
+
+```bash
+pip install cozeloop
+```
+
+Obtain the required attributes:
+
+- [Obtain the CozeLoop Workspace ID](https://loop.coze.cn/open/docs/cozeloop/authentication-for-sdk#05d27a86)
+- [Obtain the CozeLoop Token / API Key](https://loop.coze.cn/open/docs/cozeloop/authentication-for-sdk)
+- Find the Prompt Key in the "Prompt Development" section of CozeLoop, as shown below:
+
+![CozeLoop Prompt Key](/assets/images/cozeloop_prompt_key.png)
+
+#### Usage
+
+Provide credentials via environment variables instead of hard-coding them:
+
+```bash
+export COZELOOP_WORKSPACE_ID="<your Workspace ID>"
+export COZELOOP_TOKEN="<your CozeLoop Token>"
+```
+
+```python title="agent.py"
+import asyncio
+import os
+
+from veadk import Agent, Runner
+from veadk.prompts.prompt_manager import CozeloopPromptManager
+
+prompt_manager = CozeloopPromptManager(
+    cozeloop_workspace_id=os.environ["COZELOOP_WORKSPACE_ID"],
+    cozeloop_token=os.environ["COZELOOP_TOKEN"],
+    prompt_key="your_prompt_key",  # The Prompt Key created in CozeLoop
+    label="production",            # The Prompt label created in CozeLoop
+)
+
+agent = Agent(name="test_prompt_mgr", prompt_manager=prompt_manager)
+
+runner = Runner(agent=agent)
+response = asyncio.run(runner.run(messages="What is your task?"))
+print(response)
+```
+
+<Callout type="info" title="Note">
+CozeLoop caches prompts locally with a **refresh interval of 1 minute**. If fetching a prompt fails, VeADK falls back to its default system prompt.
+</Callout>
+
+Before each user request, `CozeloopPromptManager.get_prompt` runs to fetch the latest prompt template content:
+
+![CozeLoop Prompt Manager](/assets/images/agents/cozeloop_prompt_mgr.png)
+
+### Implement a custom Prompt Manager
+
+To load prompts from your own config center, database, or files, subclass `BasePromptManager` and implement `get_prompt`. It is called before each user request, and the returned string becomes that agent's system prompt.
+
+```python title="custom_prompt_manager.py"
+import asyncio
+
+from google.adk.agents.readonly_context import ReadonlyContext
+from veadk import Agent, Runner
+from veadk.prompts.prompt_manager import BasePromptManager
+
+
+class FilePromptManager(BasePromptManager):
+    """A Prompt Manager that reads the system prompt from a local file."""
+
+    def __init__(self, prompt_path: str) -> None:
+        super().__init__()
+        self.prompt_path = prompt_path
+
+    def get_prompt(self, context: ReadonlyContext, **kwargs) -> str:
+        # Re-read the file on every request to enable hot-updates.
+        # context.agent_name lets you vary the prompt per agent.
+        with open(self.prompt_path, encoding="utf-8") as f:
+            return f.read()
+
+
+agent = Agent(
+    name="custom_prompt_agent",
+    prompt_manager=FilePromptManager(prompt_path="instruction.txt"),
+)
+
+runner = Runner(agent=agent)
+response = asyncio.run(runner.run(messages="What is your task?"))
+print(response)
+```
+
+`get_prompt` receives runtime information through `context` (a `ReadonlyContext`) — for example, use `context.agent_name` to return different prompts for different agents. Return a safe default prompt on failure so requests don't break.
+
+
+## Skills
+
+Skills are reusable "prompt packages" that inject specific domain knowledge, operating procedures, and scripts into an Agent. Instead of stuffing all prompts into `instruction` at once, skills use **progressive prompt loading**: the Agent loads a skill's full content only when needed, which keeps the context length under control and improves execution accuracy.
+
+VeADK provides three skill execution modes:
+
+| Mode | Description |
+| :- | :- |
+| `local` | Skills live in a local directory and are loaded and executed locally by the Agent. |
+| `skills_sandbox` | Skills are hosted in a cloud Skill Space and executed in a sandbox through the `execute_skills` tool. |
+| `aio_sandbox` | All-in-one sandbox mode, suitable for the AgentKit-hosted tool runtime. |
+
+When `skills_mode` is not set explicitly, VeADK infers it from the runtime environment: local runs default to `local`; in the AgentKit tool runtime, it automatically selects `skills_sandbox` or `aio_sandbox` based on the tool type.
+
+### Skill Directory Structure
+
+A local skill consists of its own directory containing a single `SKILL.md` file:
+
+```bash
+skills/
+└── kb_skill/
+    └── SKILL.md
+```
+
+`SKILL.md` declares `name` and `description` in frontmatter, followed by the skill body:
+
+```markdown title="skills/kb_skill/SKILL.md"
+---
+name: kb_skill
+description: Help the user create a knowledge base
+---
+
+...body (operating steps, constraints, script descriptions, etc.)
+```
+
+<Callout type="warn" title="Naming requirement">
+The `name` in `SKILL.md` must match the directory name.
+</Callout>
+
+### Local Mode
+
+In `local` mode, pass the skill directory path to `skills` and set `skills_mode` to `local`:
+
+```python
+from veadk import Agent
+
+agent = Agent(
+    skills=["/abs/path/to/skills/kb_skill"],
+    skills_mode="local",
+)
+```
+
+During initialization, the Agent loads each skill's metadata (`name` and `description`) and injects it into the system prompt, guiding the model to invoke the corresponding skill at the right time. In local mode, VeADK also automatically mounts a set of supporting tools (read/write files, edit files, run shell commands, register skills, etc.) for the Agent to use when executing a skill.
+
+### Sandbox Mode
+
+In `skills_sandbox` mode, skills are hosted in a cloud Skill Space. Pass the cloud skill space identifier to `skills` and add the `execute_skills` tool; the Agent invokes that tool to execute the chosen skill in the sandbox when needed:
+
+```python
+from veadk import Agent
+from veadk.tools.builtin_tools.execute_skills import execute_skills
+
+agent = Agent(
+    skills=[skill_space_id],
+    tools=[execute_skills],
+)
+```
+
+### Skill Checklist
+
+A skill can carry a checklist in its definition to constrain the Agent to complete the task step by step. When enabled, the Agent must complete each checklist item while executing the skill, and mark each item as done through the `update_check_list` tool:
+
+```python
+from veadk import Agent
+
+agent = Agent(
+    skills=["/abs/path/to/skills/kb_skill"],
+    skills_mode="local",
+    enable_skills_checklist=True,
+)
+```
+
+When a skill defines a checklist, VeADK automatically initializes the state of all checklist items when the skill is invoked, and prompts the model in the system prompt to complete them one by one.
+
+### Dynamically Loading Skills
+
+With `enable_dynamic_load_skills=True`, new skills can be discovered and loaded at runtime, without declaring all skills up front at Agent initialization:
+
+```python
+from veadk import Agent
+
+agent = Agent(
+    skills_mode="local",
+    enable_dynamic_load_skills=True,
+)
+```
+
+### Parameter Overview
+
+| Parameter | Type | Description |
+| :- | :- | :- |
+| `skills` | `list[str]` | The skill list; each element is a local skill directory path or a cloud skill space identifier. |
+| `skills_mode` | `"local" \| "skills_sandbox" \| "aio_sandbox"` | Skill execution mode; inferred automatically when omitted. |
+| `enable_skills_checklist` | `bool` | Whether to enable the skill checklist; defaults to `False`. |
+| `enable_dynamic_load_skills` | `bool` | Whether to enable dynamic loading of skills; defaults to `False`. |
+
+
+## Responses API
+
+The Responses API is the latest API released by Volcengine Ark. It natively supports efficient context management and offers a more concise input/output format. Its tool-calling approach is more convenient — it preserves the ease of use of the Chat API while combining stronger agentic capabilities.
+
+As foundation model technology keeps advancing, the Responses API provides a more flexible foundation for building action-oriented applications of all kinds, and supports a variety of tool-calling extensions, making it well suited for building intelligent assistants, automation tools, and similar scenarios.
+
+### Tutorial
+
+Currently only the `veadk-python` version supports the Responses API, and it has a specific requirement on the `google-adk` version (`google-adk>=1.21.0`). Make sure your environment meets the requirement.
+
+<Tabs items={['pip', 'uv']}>
+<Tab value="pip">
+
+```bash
+pip install "google-adk>=1.21.0"
+```
+
+</Tab>
+<Tab value="uv">
+
+```bash
+uv pip install "google-adk>=1.21.0"
+```
+
+</Tab>
+</Tabs>
+
+#### Quick Start
+
+**Enable the Responses API**
+
+Just set `enable_responses=True`.
+
+```python
+from veadk import Agent
+
+root_agent = Agent(
+    enable_responses=True, # Enable the Responses API
+)
+```
+
+**Result**
+
+![responses-api](/assets/images/agents/responses_api.png)
+
+#### Multimodal Support
+
+Beyond text interaction, the Responses API also supports multimodal understanding of images, video, and files. You can use the `google.genai.types.FileData` field to pass multimodal data (such as an image path, a video URL, or a file_id generated by the Files API).
+
+`FileData` supports the following ways of passing data:
+
+1. **Files API resource (`file_id`)**
+    - Passed via `file_data`; you must add a specific scheme prefix in `file_uri` to distinguish it.
+    - Format: `file_uri="file_id://xxxxxxx"`; this value is automatically mapped to the `file_id` field.
+
+2. **Generic resource identifier (URI)**
+    All file upload methods supported by Volcengine Ark (including `image_url`, `video_url`, `file_url`) can be handled uniformly through `file_data`.
+    1. **Network URL**
+        - The system automatically detects the resource type (video, image, file, etc.) based on `mime_type`.
+        - Format: `file_uri="https://..."`
+    2. **Local file path**
+        - Use the local file path directly as `file_uri`; the underlying layer automatically calls the Files API to complete the upload.
+        - Format: `file_uri=f"file://{local_path}"`
+    3. **Base64 Data URI**
+        - Supports passing Base64-encoded data.
+        - Reference: [Volcengine Ark: Image Understanding - Base64 Encoding](https://www.volcengine.com/docs/82379/1362931?lang=zh#477e51ce)
+
+##### Example Code
+
+**Note**: All example code below is based on the following `Agent` configuration and `main` function:
+
+```python
+import os
+import asyncio
+import uuid
+
+from google.adk.events import Event
+from google.genai import types
+from google.genai.types import FileData
+
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+
+agent = Agent(
+    enable_responses=True
+)
+short_term_memory = ShortTermMemory()
+runner = Runner(
+    agent=agent,
+    short_term_memory=short_term_memory,
+)
+
+async def main(message: types.Content):
+    session_id = uuid.uuid4().hex
+    await short_term_memory.session_service.create_session(
+        app_name=runner.app_name, user_id=runner.user_id, session_id=session_id
+    )
+
+    async for event in runner.run_async(
+        user_id=runner.user_id,
+        session_id=session_id,
+        new_message=message,
+    ):
+        if isinstance(event, Event) and event.is_final_response():
+            if event.content and event.content.parts:
+                if not event.content.parts[0].thought:
+                    print(event.content.parts[0].text)
+                elif len(event.content.parts) > 1:
+                    print(event.content.parts[1].text)
+```
+
+##### Image Understanding
+
+<Tabs items={['Local path', 'Files API', 'Image URL']}>
+<Tab value="Local path">
+
+Supports image files up to **512MB**.
+
+This approach passes a local file path directly; the system automatically calls the Files API to upload it, then calls the Responses API for analysis.
+
+```python
+local_path = os.path.abspath("example-data.png")
+message = types.UserContent(
+    parts=[
+        types.Part(text="Describe this image"),
+        types.Part(
+            file_data=FileData(
+                file_uri=f"file://{local_path}",
+                mime_type="image/png"
+            )
+        )
+    ],
+)
+asyncio.run(
+    main(message)
+)
+```
+
+</Tab>
+<Tab value="Files API">
+
+Upload the file via the Volcengine Ark Files API. Supports image files up to **512MB**.
+
+```python
+from veadk.utils.misc import upload_to_files_api
+local_path = os.path.abspath("example-data.png")
+file_id = asyncio.run(upload_to_files_api(local_path))
+message = types.UserContent(
+    parts=[
+        types.Part(text="Describe this image"),
+        types.Part(
+            file_data=FileData(
+                file_uri=f"file_id://{file_id}",
+                mime_type="image/png"
+            )
+        )
+    ],
+)
+asyncio.run(
+    main(message)
+)
+```
+
+</Tab>
+<Tab value="Image URL">
+
+Supports image files up to **10MB**.
+
+```python
+image_url = "<your-url>"
+message = types.UserContent(
+    parts=[
+        types.Part(text="Describe this image"),
+        types.Part(
+            file_data=FileData(
+                file_uri=f"{image_url}",
+                mime_type="image/png"
+            )
+        )
+    ],
+)
+asyncio.run(
+    main(message)
+)
+```
+
+</Tab>
+</Tabs>
+
+##### Video Understanding
+
+<Tabs items={['Files API', 'Video URL']}>
+<Tab value="Files API">
+
+Upload the file via the Volcengine Ark Files API. Supports video files up to **512MB**.
+
+When passing a video file in `file_data`, you may optionally add the `video_metadata` field to specify the video frame rate (fps).
+
+You can use the `fps` field to control how often frames are extracted from the video. The default is 1, i.e. one frame is extracted per second and fed to the model for visual understanding. Adjust the `fps` field to balance video length against model processing efficiency.
+
+- When the video changes rapidly or you need to track frame changes (e.g. counting a character's actions), increase `fps` (up to 5) to prevent missing content due to too-sparse sampling.
+- When the video changes slowly or frame changes are not important (e.g. analyzing a person's behavior), lower `fps` appropriately (down to 0.2) to balance video length and processing efficiency.
+
+```python
+from veadk.utils.misc import upload_to_files_api
+local_path = os.path.abspath("example-video.mp4")
+file_id = asyncio.run(upload_to_files_api(local_path, fps=0.3)) # optional `fps`
+message = types.UserContent(
+    parts=[
+        types.Part(text="Describe this video"),
+        types.Part(
+            file_data=FileData(
+                file_uri=f"file_id://{file_id}",
+                mime_type="video/mp4"
+            ),
+            video_metadata={        # optional
+                "fps": 0.3
+            }
+        )
+    ],
+)
+asyncio.run(
+    main(message)
+)
+```
+
+</Tab>
+<Tab value="Video URL">
+
+Supports video files up to **50MB**.
+
+```python
+video_url = "<your-video-url>"
+message = types.UserContent(
+    parts=[
+        types.Part(text="Describe this video"),
+        types.Part(
+            file_data=FileData(
+                file_uri=f"{video_url}",
+                mime_type="video/mp4"
+            )
+        )
+    ],
+)
+asyncio.run(
+    main(message)
+)
+```
+
+</Tab>
+</Tabs>
+
+##### Document Understanding
+
+Some models support processing PDF documents; the system understands the entire document's context through its vision capabilities. When a PDF document is passed in, the model paginates the file into multiple images, analyzes and interprets the text and image information within, and combines this information to complete the document-understanding task.
+
+<Tabs items={['Files API', 'Document URL']}>
+<Tab value="Files API">
+
+Upload the file via the Volcengine Ark Files API. Supports documents up to **512MB**.
+
+```python
+from veadk.utils.misc import upload_to_files_api
+local_path = os.path.abspath("example-pdf.pdf")
+file_id = asyncio.run(upload_to_files_api(local_path))
+message = types.UserContent(
+    parts=[
+        types.Part(text="Please summarize the content of the document"),
+        types.Part(
+            file_data=FileData(
+                file_uri=f"file_id://{file_id}",
+                mime_type="application/pdf"
+            )
+        )
+    ],
+)
+asyncio.run(
+    main(message)
+)
+```
+
+</Tab>
+<Tab value="Document URL">
+
+Supports documents up to **50MB**.
+
+```python
+message2 = types.UserContent(
+    parts=[
+        types.Part(text="Please summarize this document"),
+        types.Part(
+            file_data=FileData(
+                file_uri="<your-file-url>",
+                mime_type="application/pdf"
+            )
+        )
+    ],
+)
+asyncio.run(
+    main(message2)
+)
+```
+
+</Tab>
+</Tabs>
+
+### Context Caching
+
+In Responses API mode, VeADK enables session caching by default. This mechanism automatically stores the initial context and dynamically updates it on each conversation turn. On subsequent requests, the system merges the cached content with the new input before sending it to the model for inference. This is especially useful for long-context scenarios such as multi-turn conversations and complex tool calls.
+
+#### Viewing Cache Information
+
+You can inspect token usage and cache hits through the returned `Event.usage_metadata` field.
+
+Here is an example `usage_metadata` from a conversation with two turns:
+
+```json
+{"cached_content_token_count":0,"candidates_token_count":87,"prompt_token_count":210,"total_token_count":297}
+{"cached_content_token_count":297,"candidates_token_count":181,"prompt_token_count":314,"total_token_count":495}
+```
+
+**Field descriptions:**
+
+- `cached_content_token_count`: Number of cached tokens hit (i.e. tokens read from the cache).
+- `candidates_token_count`: Number of tokens generated by the model (output tokens).
+- `prompt_token_count`: Total number of input tokens sent to the model (including both cached and uncached parts).
+- `total_token_count`: Total tokens consumed (input + output).
+
+**Caching mechanism notes:**
+
+- Caching only affects input (prompt) tokens, not output (completion) tokens.
+- The **cache hit rate** reflects the effectiveness of the caching strategy; the higher the hit rate, the greater the token cost savings.
+  - Formula: `cache hit rate = (cached_content_token_count / prompt_token_count) × 100%`
+- Input token cost-saving rate: used to quantify the cache benefit across the whole session. It is the core business-facing metric and supports session-level aggregation.
+
+#### Cost Savings Example
+
+Based on the sample data above, the cache hit rate is computed as follows:
+
+- **First turn**: 0% (initial state, no cache)
+- **Second turn**: `297 / 314 * 100% ≈ 94.58%`
+
+Input token cost-saving rate: `(0 + 297) / (210 + 314) ≈ 56.68%`
+
+This means that with caching enabled, the session's **input token cache hit rate reached 56.68%**, greatly reducing the computation overhead of repeated content. [Volcengine Ark: Cached Token Billing](https://www.volcengine.com/docs/82379/1544106?lang=zh)
+
+Note: The `cached_content_token_count` of turn N is not necessarily equal to the `total_token_count` of turn N-1; if thinking is enabled, the two are not equal.
+
+### Notes
+
+1. **Version requirement**: You must ensure `google-adk>=1.21.0`.
+2. **Model support**: Make sure the model you use supports the Responses API (note: Doubao series models after version 0615 generally support it unless otherwise stated).
+3. **Caching mechanism**: When VeADK enables the Responses API with a Volcengine Ark model, context (session) caching is enabled by default. However, if `output_schema` is set on the Agent, caching is automatically disabled because that field conflicts with the caching mechanism.
+
+### References
+
+1. [Volcengine Ark: Responses API Migration Guide](https://www.volcengine.com/docs/82379/1585128?lang=zh)
+2. [Volcengine Ark: Context Caching](https://www.volcengine.com/docs/82379/1602228?lang=zh#3e69e743)
+3. [Volcengine Ark: Cached Token Billing](https://www.volcengine.com/docs/82379/1544106?lang=zh)
+4. [Volcengine Ark: Multimodal Understanding](https://www.volcengine.com/docs/82379/1958521?lang=zh)

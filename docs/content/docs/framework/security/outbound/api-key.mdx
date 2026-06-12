@@ -1,6 +1,5 @@
 ---
 title: "使用 API Key 进行出站认证"
-description: "用 API Key 实现最简单的出站认证，适用于固定凭证与服务间通信。"
 ---
 
 API Key 是最简单的出站认证方式，适用于固定凭证、服务间通信的场景。凭据由 Agent Identity 加密托管，不出现在代码中。本页只讲 API Key 特有的部分；`VeIdentityFunctionTool` / `VeIdentityMcpToolset` 的通用用法、`into` 默认值与常见问题见[安全概述](/cn/docs/framework/security/overview#出站认证)。
@@ -58,11 +57,3 @@ toolset = VeIdentityMcpToolset(
 ## 何时选 API Key
 
 API Key 凭证固定、用法最简单，适合无需令牌刷新的场景。需要短期令牌与自动刷新时改用 [OAuth2 M2M](/cn/docs/framework/security/outbound/oauth2-m2m)；需代表某个用户访问时改用 [OAuth2 用户委托](/cn/docs/framework/security/outbound/oauth2-user-federation)。
-
-## 下一步
-
-<Cards>
-  <Card title="OAuth2 M2M" href="/cn/docs/framework/security/outbound/oauth2-m2m" description="服务间认证，支持令牌刷新。" />
-  <Card title="OAuth2 用户委托" href="/cn/docs/framework/security/outbound/oauth2-user-federation" description="代表用户访问第三方服务。" />
-  <Card title="安全概述" href="/cn/docs/framework/security/overview" description="四个安全平面的整体地图。" />
-</Cards>

@@ -1,6 +1,5 @@
 ---
 title: "System tools"
-description: "The VeADK system tools load_knowledgebase and load_memory, mounted automatically when an agent is configured with a knowledge base or long-term memory."
 ---
 
 System tools are built-in tools that VeADK mounts **automatically** based on the agent's configuration. You don't add them to the `tools` list yourself — once you give the agent the corresponding capability (a knowledge base or long-term memory), the framework registers the matching retrieval tool, and the agent decides when to call it at runtime.
@@ -58,10 +57,3 @@ For long-term memory backends and configuration, see the [long-term memory docs]
 <Callout type="info">
 System tools are managed by the framework: just provide a `knowledgebase` or `long_term_memory` — you don't add `load_knowledgebase` / `load_memory` to the `tools` list yourself. The agent decides when to call them based on its instruction and user input.
 </Callout>
-
-## Next steps
-
-<Cards>
-  <Card title="Knowledge base" href="/en/docs/framework/knowledgebase/overview" description="Give the agent private knowledge, used together with load_knowledgebase." />
-  <Card title="Long-term memory" href="/en/docs/framework/memory/long-term" description="Keep preferences and history across sessions, used together with load_memory." />
-</Cards>

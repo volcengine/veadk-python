@@ -1,6 +1,5 @@
 ---
 title: "Overview"
-description: "A map of VeADK security: inbound auth, outbound auth, permission policy, and trusted execution."
 ---
 
 VeADK security covers four sides of an agent: **who can call your agent** (inbound auth), **how the agent securely calls external services** (outbound auth / credential brokering), **who is authorized to do what** (permission policy), and **how execution runs over a verifiable trusted channel** (trusted execution). The first three build on Volcengine [Agent Identity](https://console.volcengine.com/)—it assigns digital identities to agents and tools, encrypts and hosts third-party credentials, and authorizes dynamically based on attributes and context.
@@ -110,11 +109,3 @@ See [Permission policy](/en/docs/framework/security/permission-policy).
 When you need end-to-end encryption and verified identity on both ends of a connection, use Trusted MCP—it extends standard MCP with identity attestation and an encrypted channel between components. Combined with confidential computing, it lets the agent and the model run in a trusted environment.
 
 See [Trusted MCP](/en/docs/framework/security/outbound/trusted-mcp).
-
-## Next steps
-
-<Cards>
-  <Card title="Inbound auth" href="/en/docs/framework/security/inbound" description="Protect access to your agent with API Key or OAuth2." />
-  <Card title="Outbound: API Key" href="/en/docs/framework/security/outbound/api-key" description="The simplest outbound auth method." />
-  <Card title="Permission policy" href="/en/docs/framework/security/permission-policy" description="Fine-grained authorization with Cedar." />
-</Cards>

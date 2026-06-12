@@ -1,6 +1,5 @@
 ---
 title: "Overview"
-description: "Features and usage of the VeADK KnowledgeBase, plus provisioning and configuration for the VikingDB and OpenSearch backends."
 ---
 
 The KnowledgeBase is an agent's external source of knowledge — a "library" of static material it can consult at any time. Attach it to an agent and VeADK automatically gives the agent a retrieval tool, so it can look up relevant passages from your content before answering, producing more precise, grounded responses (RAG).
@@ -344,10 +343,3 @@ The KnowledgeBase design lets you switch the underlying vector store without cha
 | **Initialization** | Check and call `kb.create_collection()` before use. | Usually creates the index automatically, with no extra steps. |
 | **Code usage** | **Identical**: `add_from_files`, `add_from_text`, etc. are used the same way. | **Identical**: the abstraction layer hides the differences. |
 | **Dependencies** | Relies on Volcengine `ak/sk` for authentication and embedding. | Also requires `ak/sk` to call the embedding model, but the database itself is independent. |
-
-## Next steps
-
-<Cards>
-  <Card title="Knowledge Base Best Practices" href="/en/docs/framework/knowledgebase/best-practice" description="Deeply integrate the knowledge base with multiple agents." />
-  <Card title="Build an Agent" href="/en/docs/framework/agent/create" description="Configure models, tools, memory, and knowledge bases." />
-</Cards>

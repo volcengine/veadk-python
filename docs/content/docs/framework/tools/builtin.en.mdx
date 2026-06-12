@@ -1,6 +1,5 @@
 ---
 title: "Built-in tools"
-description: "VeADK's native function tools: web search, vector retrieval, link reading, image / video generation, code sandboxes, mobile control, and text-to-speech."
 ---
 
 Built-in tools are native function tools that VeADK ships ready to use, giving your agent Volcengine capabilities — web search, code execution, image / video generation, and more — without writing the underlying logic yourself.
@@ -35,7 +34,7 @@ agent = Agent(tools=[web_search])
 Once registered, the agent decides on its own — based on user input and its instruction — whether to call the tool. The framework executes it automatically when called.
 
 <Callout type="warn">
-Built-in tools depend on Volcengine services. Enable the corresponding service and configure authentication (AK/SK, API keys — see each tool's "Environment variables" notes) before use. See [Configuration](/en/docs/framework/configuration).
+Built-in tools depend on Volcengine services. Enable the corresponding service and configure authentication (AK/SK, API keys — see each tool's "Environment variables" notes) before use. See [Configuration](/en/docs/references/configuration).
 </Callout>
 
 ## Tool overview
@@ -57,7 +56,7 @@ Built-in tools depend on Volcengine services. Enable the corresponding service a
 | `create_mobile_use_tool` | Operate a cloud phone | `from veadk.tools.builtin_tools.mobile_run import create_mobile_use_tool` |
 
 <Callout type="info">
-Model and authentication settings are shared across many tools. This page shows the full `config.yaml` once, at the first tool that needs it; later tools list only the additional keys. See [Configuration](/en/docs/framework/configuration) for the full reference.
+Model and authentication settings are shared across many tools. This page shows the full `config.yaml` once, at the first tool that needs it; later tools list only the additional keys. See [Configuration](/en/docs/references/configuration) for the full reference.
 </Callout>
 
 ## Web search (web_search)
@@ -548,11 +547,3 @@ The `tool_id` has the form `product_id-pod_id`; find it on the instance manageme
 ![Cloud phone console](/assets/images/tools/mua_1.png)
 ![Instance management](/assets/images/tools/mua_2.png)
 ![Result](/assets/images/tools/mua_3.png)
-
-## Next steps
-
-<Cards>
-  <Card title="Built-in MCP tools" href="/en/docs/framework/tools/builtin-mcp" description="Feishu / Lark, LAS, VOD, MCP Router, Supabase, and more." />
-  <Card title="Custom tools" href="/en/docs/framework/tools/custom-function" description="Wrap your own functions as tools." />
-  <Card title="System tools" href="/en/docs/framework/tools/system-tools" description="Auto-mounted tools for knowledge base and long-term memory." />
-</Cards>

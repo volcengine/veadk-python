@@ -1,0 +1,789 @@
+---
+title: "智能体"
+---
+
+智能体（Agent）是 VeADK 的核心：由模型驱动，并可挂载工具、记忆、知识库与技能。`Agent` 继承自 Google ADK 的 `LlmAgent`，在其之上增加模型容错、记忆、知识库、技能、追踪与可插拔运行时等能力。本页按构造参数分组，逐组说明含义并给出示例。
+
+<Callout type="info">
+  绝大多数参数都有合理默认值（多来自环境变量或内置默认）。最简单的 `Agent()` 无需任何参数即可运行——先看[快速开始](/cn/docs/framework/quickstart)，再回到本页按需配置。
+</Callout>
+
+```python title="agent.py"
+import asyncio
+from veadk import Agent, Runner
+
+agent = Agent()
+response = asyncio.run(Runner(agent=agent).run("Hi!"))
+print(response)
+```
+
+运行前通过环境变量提供模型 API Key（默认读取 `MODEL_AGENT_API_KEY`）：
+
+```bash
+export MODEL_AGENT_API_KEY="<你的方舟 API Key>"
+```
+
+<Callout type="info">
+  密钥也可在 `config.yaml` 中集中管理，详见[配置](/cn/docs/references/configuration)。**切勿在代码中硬编码 API Key。**
+</Callout>
+
+## 元信息
+
+| 参数 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `name` | `str` | `veAgent` | 智能体名称，在 Agent Tree 中唯一标识一个智能体；在多智能体转交、A2A、追踪中作为标识。 |
+| `description` | `str` | 内置默认 | 智能体能力的简短描述。在多智能体与 A2A 场景中，父智能体/对端据此判断是否转交。 |
+| `instruction` | `str \| InstructionProvider` | 内置默认 | 系统提示词。可传字符串，也可传一个根据上下文动态生成提示词的可调用对象。 |
+| `id` | `str` | 自动生成 | 智能体实例 ID，一般无需手动设置。 |
+
+```python title="agent.py"
+root_agent = Agent(
+    name="life_assistant",
+    description="生活助手",
+    instruction="你是一个生活助手，回答用户的日常问题。",
+)
+```
+
+## 模型
+
+VeADK 默认基于 [LiteLLM](https://github.com/BerriAI/litellm) 构建模型客户端，因此支持 LiteLLM 的所有提供商。
+
+| 参数 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `model_name` | `str \| list[str]` | 环境变量 `MODEL_AGENT_NAME` | 模型名称。**传入列表即开启容错**：第一个为主模型，其余作为 fallback 依次重试。 |
+| `model_provider` | `str` | `MODEL_AGENT_PROVIDER` | 模型提供商，如 `openai`。参见 [LiteLLM 提供商列表](https://docs.litellm.ai/docs/providers)。 |
+| `model_api_base` | `str` | `MODEL_AGENT_API_BASE` | 模型 API 的 base URL。 |
+| `model_api_key` | `str` | `MODEL_AGENT_API_KEY` | 模型 API Key。**切勿硬编码**，通过环境变量或 `config.yaml` 提供。 |
+| `model_extra_config` | `dict` | `{}` | 透传给模型请求的额外配置，支持 `extra_headers` 与 `extra_body`，会与 VeADK 默认值合并。 |
+| `model` | `LiteLlm` | `None` | 直接传入构造好的 LiteLLM 客户端。**一旦设置，上面的 `model_*` 字段将被忽略**。 |
+| `enable_responses` | `bool` | `False` | 启用方舟 Responses API，详见 [Responses API 支持](#responses-api-支持)。 |
+| `enable_responses_cache` | `bool` | `True` | 在 Responses API 下复用 `previous_response_id` 做多轮续接与缓存，仅在 `enable_responses=True` 时生效。 |
+| `context_cache_config` | `ContextCacheConfig` | `None` | 上下文缓存配置，用于降低长上下文的重复计算成本。 |
+
+### 使用不同模型
+
+指定提供商或本地模型（API Key 仍通过环境变量提供）：
+
+```python title="agent.py"
+agent = Agent(
+    model_provider="openai",
+    model_name="doubao-seed-1-8-251228",
+    model_api_base="https://ark.cn-beijing.volces.com/api/v3/",
+)
+```
+
+### 模型容错（Fallbacks）
+
+将 `model_name` 传入列表即开启容错：按顺序优先尝试第一个模型，失败后依次尝试后续模型，直至成功。
+
+```python title="agent.py"
+agent = Agent(model_name=["doubao-seed-1-8-251228", "deepseek-r1-250528"])
+```
+
+### 自定义模型客户端
+
+如需高度自定义，直接传入一个 LiteLLM 客户端：
+
+```python title="agent.py"
+from google.adk.models.lite_llm import LiteLlm
+
+agent = Agent(model=LiteLlm(model="doubao-seed-1-8-251228"))
+```
+
+### 配置额外参数
+
+根据[方舟平台](https://www.volcengine.com/product/ark)能力指定额外选项。例如关闭思考以获得更快响应：
+
+```python title="agent.py"
+agent = Agent(
+    model_name="doubao-seed-1-8-251228",
+    model_extra_config={"extra_body": {"thinking": {"type": "disabled"}}},
+)
+```
+
+## 工具、记忆与知识库
+
+挂载这些能力时，VeADK 会**自动注入对应的工具或回调**。
+
+| 参数 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `tools` | `list[ToolUnion]` | `[]` | 工具列表。可放入普通函数、工具实例、Toolset、MCP 工具等。 |
+| `sub_agents` | `list[BaseAgent]` | `[]` | 子智能体列表，用于构建[多智能体](/cn/docs/framework/multi-agent/overview)系统。 |
+| `knowledgebase` | `KnowledgeBase \| None` | `None` | 挂载知识库。**自动注入 `load_knowledgebase` 工具**。 |
+| `short_term_memory` | `ShortTermMemory \| None` | `None` | 短期记忆（单会话上下文），通常传给 `Runner`。 |
+| `long_term_memory` | `LongTermMemory \| None` | `None` | 长期记忆（跨会话上下文）。**自动注入 `load_memory` 工具**。 |
+| `auto_save_session` | `bool` | `False` | 会话结束后自动写入长期记忆，需先配置 `long_term_memory`。 |
+| `example_store` | `BaseExampleProvider \| None` | `None` | 少样本示例提供器，设置后注入 `ExampleTool`。 |
+| `prompt_manager` | `BasePromptManager \| None` | `None` | 提示词管理器，详见 [Prompt 管理](#prompt-管理)。 |
+
+### 工具
+
+```python title="agent.py"
+from veadk.tools.demo_tools import get_city_weather
+
+agent = Agent(instruction="根据用户问题调用工具回答天气。", tools=[get_city_weather])
+```
+
+参见[内置工具](/cn/docs/framework/tools/builtin)与[自定义函数工具](/cn/docs/framework/tools/custom-function)。
+
+### 记忆
+
+短期记忆传给 `Runner`，长期记忆传给 `Agent`：
+
+```python title="agent.py"
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.memory.long_term_memory import LongTermMemory
+
+agent = Agent(long_term_memory=LongTermMemory(backend="local"))
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory(backend="local"))
+```
+
+参见[短期记忆](/cn/docs/framework/memory/short-term)与[长期记忆](/cn/docs/framework/memory/long-term)。
+
+### 知识库
+
+```python title="agent.py"
+from veadk.knowledgebase import KnowledgeBase
+
+agent = Agent(
+    instruction="回答前先检索知识库。",
+    knowledgebase=KnowledgeBase(backend="local"),
+)
+```
+
+参见[知识库](/cn/docs/framework/knowledgebase/overview)。
+
+## 运行时与请求处理
+
+| 参数 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `runtime` | `"adk" \| "cc" \| "codex"` | `"adk"` | 内层循环的运行时后端。`adk` 使用 Google ADK 内置 LLM 流程；`cc` 委托给 Claude Code SDK；`codex` 预留。 |
+| `run_processor` | `BaseRunProcessor \| None` | `None` | 运行处理器，用于在执行流程上插入鉴权、日志、重试、监控等横切逻辑。 |
+
+## 追踪与可观测
+
+| 参数 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `tracers` | `list[BaseTracer]` | `[]` | 追踪器列表。若通过环境变量启用了导出器且未显式传入，VeADK 会自动创建一个。 |
+
+VeADK 读取以下环境变量自动挂载导出器：
+
+| 环境变量 | 作用 |
+| :--- | :--- |
+| `ENABLE_APMPLUS` | 启用 APMPlus 导出器 |
+| `ENABLE_COZELOOP` | 启用 CozeLoop 导出器 |
+| `ENABLE_TLS` | 启用 TLS（日志服务）导出器 |
+
+参见[可观测 · 概览](/cn/docs/framework/observability/overview)。
+
+## 高级能力开关
+
+| 参数 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `enable_authz` | `bool` | `False` | 启用授权校验，注入 `check_agent_authorization` 到 `before_agent_callback`。 |
+| `enable_supervisor` | `bool` | `False` | 启用 supervisor 流程，对子智能体进行监督式编排。 |
+| `enable_ghostchar` | `bool` | `False` | 启用幽灵字符工具，在文本响应中嵌入特定标记。 |
+| `enable_dataset_gen` | `bool` | `False` | 启用数据集自动生成，运行后通过回调收集会话数据用于评测/微调。 |
+| `enable_a2ui` | `bool` | `False` | 启用 A2UI（智能体驱动 UI），让智能体返回可被前端渲染的声明式 UI。需安装 `veadk-python[a2ui]`。 |
+| `a2ui_catalog` | `Any` | `None` | A2UI 组件目录，仅在 `enable_a2ui=True` 时生效。为空时自动发现智能体目录下的 `catalog.json`。 |
+| `enable_tunnel` | `bool` | `False` | 启用隧道，把通过 `veadk.tunnel` 接入的本地资源服务器（如 MCP）暴露为工具。 |
+
+参见 [A2UI](/cn/docs/framework/frontend) 与[本地 MCP 隧道](/cn/docs/framework/tunnel)。
+
+## 继承自 ADK 的常用字段
+
+`Agent` 继承自 `LlmAgent`，以下 ADK 字段也很常用：
+
+| 参数 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `output_schema` | `type[BaseModel]` | 约束模型输出为结构化对象（Pydantic 模型）。 |
+| `before_agent_callback` / `after_agent_callback` | `Callable \| list` | 执行前/后的回调。VeADK 的多个开关会自动向其中追加回调。 |
+| `before_tool_callback` / `after_tool_callback` | `Callable \| list` | 工具调用前/后的回调，常用于护栏。 |
+| `before_model_callback` / `after_model_callback` | `Callable \| list` | 模型调用前/后的回调。 |
+| `disallow_transfer_to_parent` / `disallow_transfer_to_peers` | `bool` | 在多智能体中禁止向父/同级转交。 |
+
+<Callout type="warn">
+  当某个开关需要追加回调时，VeADK 会智能合并：已有单个回调则组成列表，已是列表则追加，你的回调不会被覆盖。
+</Callout>
+
+## 方法
+
+| 方法 | 签名 | 说明 |
+| :--- | :--- | :--- |
+| `update_model` | `update_model(model_name)` | 运行期切换模型。 |
+| `load_skills` | `load_skills()` | 加载 `skills` 中声明的技能（通常由初始化自动调用）。 |
+| `run` | — | **已废弃**（自 0.5.6），请改用 `runner.run_async` / `runner.run`。 |
+
+智能体的实际执行由 [`Runner`](/cn/docs/framework/runner) 驱动。
+
+## Prompt 管理
+
+在生产环境中，系统提示词往往需要版本管理与动态下发。VeADK 的 Prompt 管理模块让你在运行时模板化并热更新提示词，而无需修改代码或重启服务。
+
+每次处理用户请求前，VeADK 都会调用 Prompt Manager 的 `get_prompt` 方法获取最新的提示词内容，并将其作为该 Agent 的系统提示词。
+
+### CozeLoop 提示词管理
+
+VeADK 内置 `CozeloopPromptManager`，可将 Agent 的系统提示词对接到 [CozeLoop](https://loop.coze.cn/open/docs/cozeloop/what-is-prompt) 云端提示词管理。
+
+#### 准备
+
+安装 Python 版本的 `cozeloop` SDK：
+
+```bash
+pip install cozeloop
+```
+
+获取所需属性：
+
+- [获取 CozeLoop Workspace ID](https://loop.coze.cn/open/docs/cozeloop/authentication-for-sdk#05d27a86)
+- [获取 CozeLoop Token / API Key](https://loop.coze.cn/open/docs/cozeloop/authentication-for-sdk)
+- 在 CozeLoop 的「Prompt 开发」板块获取 Prompt Key，如下图所示：
+
+![CozeLoop Prompt Key](/assets/images/cozeloop_prompt_key.png)
+
+#### 使用方法
+
+将凭证通过环境变量提供，避免在代码中硬编码：
+
+```bash
+export COZELOOP_WORKSPACE_ID="<你的 Workspace ID>"
+export COZELOOP_TOKEN="<你的 CozeLoop Token>"
+```
+
+```python title="agent.py"
+import asyncio
+import os
+
+from veadk import Agent, Runner
+from veadk.prompts.prompt_manager import CozeloopPromptManager
+
+prompt_manager = CozeloopPromptManager(
+    cozeloop_workspace_id=os.environ["COZELOOP_WORKSPACE_ID"],
+    cozeloop_token=os.environ["COZELOOP_TOKEN"],
+    prompt_key="your_prompt_key",  # CozeLoop 中创建的 Prompt Key
+    label="production",            # CozeLoop 中创建的 Prompt 标签
+)
+
+agent = Agent(name="test_prompt_mgr", prompt_manager=prompt_manager)
+
+runner = Runner(agent=agent)
+response = asyncio.run(runner.run(messages="你的任务是什么？"))
+print(response)
+```
+
+<Callout type="info" title="提示">
+CozeLoop 会在本地缓存 Prompt，**更新间隔为 1 分钟**。当获取 Prompt 失败时，会回退到 VeADK 默认的系统提示词。
+</Callout>
+
+每次处理用户请求前，`CozeloopPromptManager.get_prompt` 都会执行，从而拉取最新的 Prompt 模板内容：
+
+![CozeLoop Prompt Manager](/assets/images/agents/cozeloop_prompt_mgr.png)
+
+### 实现自定义 Prompt Manager
+
+若你想从自有的配置中心、数据库或文件加载提示词，可以继承 `BasePromptManager` 并实现 `get_prompt` 方法。该方法在每次处理用户请求前被调用，返回的字符串将作为该 Agent 的系统提示词。
+
+```python title="custom_prompt_manager.py"
+import asyncio
+
+from google.adk.agents.readonly_context import ReadonlyContext
+from veadk import Agent, Runner
+from veadk.prompts.prompt_manager import BasePromptManager
+
+
+class FilePromptManager(BasePromptManager):
+    """从本地文件读取系统提示词的 Prompt Manager。"""
+
+    def __init__(self, prompt_path: str) -> None:
+        super().__init__()
+        self.prompt_path = prompt_path
+
+    def get_prompt(self, context: ReadonlyContext, **kwargs) -> str:
+        # 每次请求前重新读取文件，实现热更新。
+        # context.agent_name 可用于按 Agent 区分提示词。
+        with open(self.prompt_path, encoding="utf-8") as f:
+            return f.read()
+
+
+agent = Agent(
+    name="custom_prompt_agent",
+    prompt_manager=FilePromptManager(prompt_path="instruction.txt"),
+)
+
+runner = Runner(agent=agent)
+response = asyncio.run(runner.run(messages="你的任务是什么？"))
+print(response)
+```
+
+`get_prompt` 通过 `context`（`ReadonlyContext`）获取运行时信息，例如用 `context.agent_name` 为不同 Agent 返回不同提示词。建议在加载失败时返回一个安全的默认提示词，避免请求中断。
+
+
+## Agent 技能（Skills）
+
+技能（Skills）是一种可复用的「提示词包」，用于为 Agent 注入特定的领域知识、操作流程与脚本。与一次性把所有提示词塞入 `instruction` 不同，技能采用**渐进式加载（progressive prompt loading）**：Agent 仅在需要时才加载某个技能的完整内容，从而控制上下文长度、提升执行准确性。
+
+VeADK 提供三种技能运行模式：
+
+| 模式 | 说明 |
+| :- | :- |
+| `local` | 技能位于本地目录，直接由 Agent 加载并在本地执行。 |
+| `skills_sandbox` | 技能托管在云端技能空间（Skill Space），通过 `execute_skills` 工具在沙箱中执行。 |
+| `aio_sandbox` | All-in-one 沙箱模式，适用于 AgentKit 托管的工具运行时。 |
+
+未显式设置 `skills_mode` 时，VeADK 会根据运行环境自动推断：本地运行默认为 `local`；在 AgentKit 工具运行时中，会根据工具类型自动选择 `skills_sandbox` 或 `aio_sandbox`。
+
+### 技能目录结构
+
+一个本地技能由独立目录构成，目录中包含一个 `SKILL.md` 文件：
+
+```bash
+skills/
+└── kb_skill/
+    └── SKILL.md
+```
+
+`SKILL.md` 使用 frontmatter 声明 `name` 与 `description`，其后为技能正文：
+
+```markdown title="skills/kb_skill/SKILL.md"
+---
+name: kb_skill
+description: 帮助用户创建知识库
+---
+
+...正文部分（操作步骤、约束、脚本说明等）
+```
+
+<Callout type="warn" title="命名要求">
+`SKILL.md` 中的 `name` 必须与所在目录名保持一致。
+</Callout>
+
+### 本地模式
+
+在 `local` 模式下，向 `skills` 传入技能目录的路径，并将 `skills_mode` 设置为 `local`：
+
+```python
+from veadk import Agent
+
+agent = Agent(
+    skills=["/abs/path/to/skills/kb_skill"],
+    skills_mode="local",
+)
+```
+
+Agent 在初始化时会加载技能元信息（`name` 与 `description`）并将其注入系统提示词，引导模型在合适的时机调用对应技能。本地模式下，VeADK 还会自动挂载一组配套工具（读写文件、编辑文件、执行 Shell 命令、注册技能等），供 Agent 在执行技能时使用。
+
+### 沙箱模式
+
+在 `skills_sandbox` 模式下，技能托管在云端技能空间。向 `skills` 传入云端技能空间标识，并引入 `execute_skills` 工具，Agent 会在需要时调用该工具在沙箱中执行所选技能：
+
+```python
+from veadk import Agent
+from veadk.tools.builtin_tools.execute_skills import execute_skills
+
+agent = Agent(
+    skills=[skill_space_id],
+    tools=[execute_skills],
+)
+```
+
+### 技能检查清单（Checklist）
+
+技能可在其定义中携带一份检查清单（checklist），用于约束 Agent 按步骤完成任务。开启后，Agent 在执行技能时需逐项完成检查项，并通过 `update_check_list` 工具将每一项标记为已完成：
+
+```python
+from veadk import Agent
+
+agent = Agent(
+    skills=["/abs/path/to/skills/kb_skill"],
+    skills_mode="local",
+    enable_skills_checklist=True,
+)
+```
+
+当某个技能定义了 checklist 时，VeADK 会在该技能被调用时自动初始化所有检查项的状态，并在系统提示词中提示模型逐项完成。
+
+### 动态加载技能
+
+通过 `enable_dynamic_load_skills=True`，可在运行时动态发现并加载新的技能，而无需在 Agent 初始化时一次性声明全部技能：
+
+```python
+from veadk import Agent
+
+agent = Agent(
+    skills_mode="local",
+    enable_dynamic_load_skills=True,
+)
+```
+
+### 参数总览
+
+| 参数 | 类型 | 说明 |
+| :- | :- | :- |
+| `skills` | `list[str]` | 技能列表，元素为本地技能目录路径或云端技能空间标识。 |
+| `skills_mode` | `"local" \| "skills_sandbox" \| "aio_sandbox"` | 技能运行模式，缺省时自动推断。 |
+| `enable_skills_checklist` | `bool` | 是否启用技能检查清单，默认 `False`。 |
+| `enable_dynamic_load_skills` | `bool` | 是否启用技能的动态加载，默认 `False`。 |
+
+
+## Responses API 支持
+
+Responses API 是火山方舟最新推出的 API 接口，原生支持高效的上下文管理，具备更简洁的输入输出格式。其工具调用方式更加便捷，不仅延续了 Chat API 的易用性，还结合了更强的智能代理能力。
+
+随着大模型技术不断升级，Responses API 为开发各类面向实际行动的应用提供了更灵活的基础，并支持多种工具调用扩展能力，非常适合搭建智能助手、自动化工具等场景。
+
+### 使用教程
+
+目前仅 `veadk-python` 版本支持 Responses API，且对 `google-adk` 版本有特定要求（`google-adk>=1.21.0`）。请确保您的环境符合要求。
+
+<Tabs items={['pip', 'uv']}>
+<Tab value="pip">
+
+```bash
+pip install "google-adk>=1.21.0"
+```
+
+</Tab>
+<Tab value="uv">
+
+```bash
+uv pip install "google-adk>=1.21.0"
+```
+
+</Tab>
+</Tabs>
+
+#### 快速开始
+
+**开启 Responses API**
+
+只需配置 `enable_responses=True` 即可。
+
+```python
+from veadk import Agent
+
+root_agent = Agent(
+    enable_responses=True, # 开启 Responses API
+)
+```
+
+**效果展示**
+
+![responses-api](/assets/images/agents/responses_api.png)
+
+#### 多模态能力支持
+
+Responses API 除文本交互外，还具备图片、视频和文件等多模态理解能力。您可以使用 `google.genai.types.FileData` 字段传递多模态数据（如图片路径、视频 URL、Files API 生成的 file_id 等）。
+
+`FileData` 支持以下数据传递方式：
+
+1. **Files API 资源 (`file_id`)**
+    - 通过 `file_data` 传递，需在 `file_uri` 中添加特定 Scheme 前缀以区分。
+    - 格式：`file_uri="file_id://xxxxxxx"`，该值将被自动映射到 `file_id` 字段。
+
+2. **通用资源标识符 (URI)**
+    火山方舟支持的所有文件上传方式（包括 `image_url`、`video_url`、`file_url`）均可通过 `file_data` 统一处理。
+    1. **网络 URL**
+        - 系统根据 `mime_type` 自动识别资源类型（视频、图片、文件等）。
+        - 格式：`file_uri="https://..."`
+    2. **本地文件路径**
+        - 直接使用本地文件路径作为 `file_uri`，底层会自动调用 Files API 完成上传。
+        - 格式：`file_uri=f"file://{local_path}"`
+    3. **Base64 Data URI**
+        - 支持传入 Base64 编码的数据。
+        - 参考：[火山方舟：图片理解-Base64 编码](https://www.volcengine.com/docs/82379/1362931?lang=zh#477e51ce)
+
+##### 样例代码
+
+**注**：以下所有示例代码均基于下述 `Agent` 配置与 `main` 函数：
+
+```python
+import os
+import asyncio
+import uuid
+
+from google.adk.events import Event
+from google.genai import types
+from google.genai.types import FileData
+
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+
+agent = Agent(
+    enable_responses=True
+)
+short_term_memory = ShortTermMemory()
+runner = Runner(
+    agent=agent,
+    short_term_memory=short_term_memory,
+)
+
+async def main(message: types.Content):
+    session_id = uuid.uuid4().hex
+    await short_term_memory.session_service.create_session(
+        app_name=runner.app_name, user_id=runner.user_id, session_id=session_id
+    )
+
+    async for event in runner.run_async(
+        user_id=runner.user_id,
+        session_id=session_id,
+        new_message=message,
+    ):
+        if isinstance(event, Event) and event.is_final_response():
+            if event.content and event.content.parts:
+                if not event.content.parts[0].thought:
+                    print(event.content.parts[0].text)
+                elif len(event.content.parts) > 1:
+                    print(event.content.parts[1].text)
+```
+
+##### 图片理解
+
+<Tabs items={['本地路径', 'Files API', '图片 URL']}>
+<Tab value="本地路径">
+
+支持处理**最大 512MB** 的图片文件。
+
+该方式直接传入本地文件路径，系统会自动调用 Files API 完成上传，随后调用 Responses API 进行分析。
+
+```python
+local_path = os.path.abspath("example-data.png")
+message = types.UserContent(
+    parts=[
+        types.Part(text="描述一下这张图片"),
+        types.Part(
+            file_data=FileData(
+                file_uri=f"file://{local_path}",
+                mime_type="image/png"
+            )
+        )
+    ],
+)
+asyncio.run(
+    main(message)
+)
+```
+
+</Tab>
+<Tab value="Files API">
+
+通过火山方舟 Files API 上传文件，支持处理**最大 512MB** 的图片文件。
+
+```python
+from veadk.utils.misc import upload_to_files_api
+local_path = os.path.abspath("example-data.png")
+file_id = asyncio.run(upload_to_files_api(local_path))
+message = types.UserContent(
+    parts=[
+        types.Part(text="描述一下这张图片"),
+        types.Part(
+            file_data=FileData(
+                file_uri=f"file_id://{file_id}",
+                mime_type="image/png"
+            )
+        )
+    ],
+)
+asyncio.run(
+    main(message)
+)
+```
+
+</Tab>
+<Tab value="图片 URL">
+
+支持处理**最大 10MB** 的图片文件。
+
+```python
+image_url = "<your-url>"
+message = types.UserContent(
+    parts=[
+        types.Part(text="描述一下这张图片"),
+        types.Part(
+            file_data=FileData(
+                file_uri=f"{image_url}",
+                mime_type="image/png"
+            )
+        )
+    ],
+)
+asyncio.run(
+    main(message)
+)
+```
+
+</Tab>
+</Tabs>
+
+##### 视频理解
+
+<Tabs items={['Files API', '视频 URL']}>
+<Tab value="Files API">
+
+通过火山方舟 Files API 上传文件，支持处理**最大 512MB** 的视频文件。
+
+在 `file_data` 中传递视频文件时，可选择添加 `video_metadata` 字段，指定视频的帧率（fps）。
+
+您可以通过 `fps` 字段，控制从视频中抽取图像的频率，默认为 1，即每秒从视频中抽取一帧图像，输入给模型进行视觉理解。可通过 fps 字段调整抽取频率，以平衡视频长度与模型处理效率。
+
+- 当视频画面变化剧烈或需要关注画面变化，如计算视频中角色动作次数，可以调高 fps 的设置（最高为 5），防止抽帧频率过快导致模型无法准确理解视频内容。
+- 当视频画面变化缓慢或不需要关注画面变化，如分析视频中人物行为，可适当降低 fps 的设置（最低为 0.2），以平衡视频长度与模型处理效率。
+
+```python
+from veadk.utils.misc import upload_to_files_api
+local_path = os.path.abspath("example-video.mp4")
+file_id = asyncio.run(upload_to_files_api(local_path, fps=0.3)) # optional `fps`
+message = types.UserContent(
+    parts=[
+        types.Part(text="描述一下这个视频"),
+        types.Part(
+            file_data=FileData(
+                file_uri=f"file_id://{file_id}",
+                mime_type="video/mp4"
+            ),
+            video_metadata={        # optional
+                "fps": 0.3
+            }
+        )
+    ],
+)
+asyncio.run(
+    main(message)
+)
+```
+
+</Tab>
+<Tab value="视频 URL">
+
+支持处理**最大 50MB** 的视频文件。
+
+```python
+video_url = "<your-video-url>"
+message = types.UserContent(
+    parts=[
+        types.Part(text="描述一下这个视频"),
+        types.Part(
+            file_data=FileData(
+                file_uri=f"{video_url}",
+                mime_type="video/mp4"
+            )
+        )
+    ],
+)
+asyncio.run(
+    main(message)
+)
+```
+
+</Tab>
+</Tabs>
+
+##### 文档理解
+
+部分模型支持处理 PDF 格式的文档，系统会通过视觉功能理解整个文档的上下文。当传入 PDF 文档时，大模型会将文件分页处理成多张图片，分析解读其中的文本与图片信息，并结合这些信息完成文档理解任务。
+
+<Tabs items={['Files API', '文档 URL']}>
+<Tab value="Files API">
+
+通过火山方舟 Files API 上传文件，支持处理**最大 512MB** 的文档。
+
+```python
+from veadk.utils.misc import upload_to_files_api
+local_path = os.path.abspath("example-pdf.pdf")
+file_id = asyncio.run(upload_to_files_api(local_path))
+message = types.UserContent(
+    parts=[
+        types.Part(text="请概括总结文档的内容"),
+        types.Part(
+            file_data=FileData(
+                file_uri=f"file_id://{file_id}",
+                mime_type="application/pdf"
+            )
+        )
+    ],
+)
+asyncio.run(
+    main(message)
+)
+```
+
+</Tab>
+<Tab value="文档 URL">
+
+支持处理**最大 50MB** 的文档。
+
+```python
+message2 = types.UserContent(
+    parts=[
+        types.Part(text="请总结概括本文档"),
+        types.Part(
+            file_data=FileData(
+                file_uri="<your-file-url>",
+                mime_type="application/pdf"
+            )
+        )
+    ],
+)
+asyncio.run(
+    main(message2)
+)
+```
+
+</Tab>
+</Tabs>
+
+### 上下文缓存
+
+在 Responses API 模式下，VeADK 默认开启会话缓存（Session Caching）。该机制会自动存储初始上下文信息，并在每一轮对话中动态更新。在后续请求中，系统会将缓存内容与新输入合并后发送给模型推理。此功能特别适用于多轮对话、复杂工具调用等长上下文场景。
+
+#### 缓存信息查看
+
+您可以通过返回的 `Event.usage_metadata` 字段查看 Token 使用及缓存命中情况。
+
+以下是一次包含两轮对话的 `usage_metadata` 示例：
+
+```json
+{"cached_content_token_count":0,"candidates_token_count":87,"prompt_token_count":210,"total_token_count":297}
+{"cached_content_token_count":297,"candidates_token_count":181,"prompt_token_count":314,"total_token_count":495}
+```
+
+**字段说明：**
+
+- `cached_content_token_count`：命中缓存的 Token 数量（即从缓存中读取的 Token 数）。
+- `candidates_token_count`：模型生成的 Token 数量（输出 Token）。
+- `prompt_token_count`：输入给模型的总 Token 数量（包含已缓存和未缓存部分）。
+- `total_token_count`：总消耗 Token 数量（输入 + 输出）。
+
+**缓存机制说明：**
+
+- 缓存仅影响输入（Prompt）Token，不影响输出（Completion）Token。
+- **缓存命中率**反映了缓存策略的有效性，命中率越高，Token 成本节省越多。
+  - 计算公式：`缓存命中率 = (cached_content_token_count / prompt_token_count) × 100%`
+- 输入 Token 成本节约率：用于量化整个会话的缓存收益，是面向业务侧的核心指标，支持会话级汇总计算。
+
+#### 成本节省示例
+
+基于上述样例数据，缓存命中率计算如下：
+
+- **第一轮对话**：0%（初始状态，无缓存）
+- **第二轮对话**：`297 / 314 * 100% ≈ 94.58%`
+
+输入 Token 成本节约率：`(0 + 297) / (210 + 314) ≈ 56.68%`
+
+这意味着在开启缓存后，该次会话的 **输入 Token 缓存命中率达到了 56.68%**，大幅减少了重复内容的计算开销。[火山方舟：缓存 Token 计费说明](https://www.volcengine.com/docs/82379/1544106?lang=zh)
+
+注：第 N 轮的 `cached_content_token_count` 不一定等于第 N-1 轮的 `total_token_count`，如果开启了 thinking，二者不等。
+
+### 注意事项
+
+1. **版本要求**：必须保证 `google-adk>=1.21.0`。
+2. **模型支持**：请确保使用的模型支持 Responses API（注：Doubao 系列模型 0615 版本之后，除特殊说明外均支持）。
+3. **缓存机制**：VeADK 开启 Responses API 并使用火山方舟模型时默认开启上下文缓存（Session 缓存）。但若在 Agent 中设置了 `output_schema`，因该字段与缓存机制冲突，系统将自动关闭缓存。
+
+### 参考文档
+
+1. [火山方舟：Responses API 迁移文档](https://www.volcengine.com/docs/82379/1585128?lang=zh)
+2. [火山方舟：上下文缓存](https://www.volcengine.com/docs/82379/1602228?lang=zh#3e69e743)
+3. [火山方舟：缓存 Token 计费说明](https://www.volcengine.com/docs/82379/1544106?lang=zh)
+4. [火山方舟：多模态理解](https://www.volcengine.com/docs/82379/1958521?lang=zh)

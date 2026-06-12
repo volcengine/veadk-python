@@ -1,6 +1,5 @@
 ---
 title: "Outbound Auth with API Key"
-description: "Use an API Key for the simplest outbound auth, ideal for fixed credentials and service-to-service calls."
 ---
 
 API Key is the simplest outbound auth method, ideal for fixed credentials and service-to-service calls. Credentials are encrypted and hosted by Agent Identity, never appearing in your code. This page covers only what is specific to API Key; the shared `VeIdentityFunctionTool` / `VeIdentityMcpToolset` usage, the `into` default, and the common FAQ live in the [security overview](/en/docs/framework/security/overview#outbound-authentication).
@@ -58,11 +57,3 @@ toolset = VeIdentityMcpToolset(
 ## When to choose API Key
 
 API Key is the simplest option with a fixed credential, ideal when no token refresh is needed. For short-lived, auto-refreshed tokens, use [OAuth2 M2M](/en/docs/framework/security/outbound/oauth2-m2m); to act on behalf of a specific user, use [OAuth2 user federation](/en/docs/framework/security/outbound/oauth2-user-federation).
-
-## Next steps
-
-<Cards>
-  <Card title="OAuth2 M2M" href="/en/docs/framework/security/outbound/oauth2-m2m" description="Service-to-service auth with token refresh." />
-  <Card title="OAuth2 user federation" href="/en/docs/framework/security/outbound/oauth2-user-federation" description="Access third-party services on a user's behalf." />
-  <Card title="Security overview" href="/en/docs/framework/security/overview" description="A map of the four security planes." />
-</Cards>

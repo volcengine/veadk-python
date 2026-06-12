@@ -1,6 +1,5 @@
 ---
 title: "Outbound Auth with OAuth2 User Federation"
-description: "Use OAuth2 user federation (USER_FEDERATION) so your agent can access third-party services on behalf of a user."
 ---
 
 OAuth2 user federation (`USER_FEDERATION`) lets your agent access third-party services **on behalf of a specific user** (for example, that user's GitHub repos or Volcengine resources). Unlike [M2M](/en/docs/framework/security/outbound/oauth2-m2m), it requires a **first-time user consent**: the agent returns an authorization link, and the token becomes usable only after the user approves. The consent flow is driven at runtime by `AuthRequestProcessor`. For the shared `VeIdentityFunctionTool` / `VeIdentityMcpToolset` usage, see the [security overview](/en/docs/framework/security/overview#outbound-authentication).
@@ -119,11 +118,3 @@ A: When a tool needs authorization that isn't yet granted, `AuthRequestProcessor
 **Q: What if the user revokes consent?**
 
 A: Agent Identity returns an authorization error; your app should prompt the user to re-authorize—which triggers the authorization-link flow above again.
-
-## Next steps
-
-<Cards>
-  <Card title="OAuth2 M2M" href="/en/docs/framework/security/outbound/oauth2-m2m" description="Service-to-service auth with no user involved." />
-  <Card title="Trusted MCP" href="/en/docs/framework/security/outbound/trusted-mcp" description="An end-to-end encrypted trusted channel." />
-  <Card title="Security overview" href="/en/docs/framework/security/overview" description="A map of the four security planes." />
-</Cards>

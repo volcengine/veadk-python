@@ -1,0 +1,44 @@
+---
+title: "OpenSearch（opensearch）"
+---
+
+`opensearch` 后端（`OpensearchLTMBackend`）使用 OpenSearch 作为向量存储。记忆经 embedding 后写入 OpenSearch，按用户隔离索引（`{index}_{user_id}`），检索时按相似度召回。它是 `LongTermMemory` 的**默认后端**。
+
+## 何时使用
+
+- 已有 OpenSearch 集群，希望自建向量检索；
+- 需要持久化且对索引/检索有完全掌控。
+
+## 依赖
+
+```bash
+pip install "veadk-python[extensions]"
+```
+
+## 配置
+
+OpenSearch 连接用 `OpensearchConfig` 读取，环境变量前缀 `DATABASE_OPENSEARCH_`；embedding 用 `MODEL_EMBEDDING_*`。
+
+| 配置项 | 环境变量 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `host` | `DATABASE_OPENSEARCH_HOST` | `""` | OpenSearch 主机。 |
+| `port` | `DATABASE_OPENSEARCH_PORT` | `9200` | 端口。 |
+| `username` | `DATABASE_OPENSEARCH_USERNAME` | `""` | 用户名。 |
+| `password` | `DATABASE_OPENSEARCH_PASSWORD` | `""` | 密码。 |
+| `use_ssl` | `DATABASE_OPENSEARCH_USE_SSL` | `true` | 是否启用 SSL。 |
+| `cert_path` | `DATABASE_OPENSEARCH_CERT_PATH` | `""` | CA 证书路径；为空时不校验证书（有安全风险，会告警）。 |
+
+## 用法
+
+```python
+from veadk import Agent
+from veadk.memory.long_term_memory import LongTermMemory
+
+# index 需为小写，仅含 a-z0-9_-.，且不以 _ 或 - 开头
+ltm = LongTermMemory(backend="opensearch", index="ltm_demo")
+agent = Agent(name="demo", long_term_memory=ltm)
+```
+
+<Callout type="warn">
+`index` 必须符合 OpenSearch 命名规则：全小写，仅含 `a-z0-9_-.`，且不以 `_` 或 `-` 开头，否则会抛出 `ValueError`。生产环境请配置 `cert_path` 以启用证书校验。
+</Callout>

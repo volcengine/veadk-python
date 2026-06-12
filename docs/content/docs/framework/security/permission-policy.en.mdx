@@ -1,6 +1,5 @@
 ---
 title: "Permission Policy"
-description: "Configure full User → Agent → Tool authorization with AgentKit Runtime and Cedar."
 ---
 
 Inbound auth answers "who are you"; permission policy answers "what may you do." VeADK's permission policy builds on [AgentKit Runtime](https://console.volcengine.com/agentkit/region:agentkit+cn-beijing/runtime) and the [Cedar](https://www.cedarpolicy.com/) declarative authorization language to provide end-to-end User → Agent → Tool authorization. This page shows how to define policies in the console and enable checks in code.
@@ -44,10 +43,3 @@ Outcomes:
 
 - **Authorized**: the user has permission to invoke the agent in the namespace; the response returns normally.
 - **Denied**: the user is not authorized and a permission exception is raised, e.g. `Agent <agent role> is not authorized to run by user 9d154b10-285f-404c-ba67-0bf648ff9ce0.`
-
-## Next steps
-
-<Cards>
-  <Card title="Security overview" href="/en/docs/framework/security/overview" description="A map of the four security planes." />
-  <Card title="Inbound auth" href="/en/docs/framework/security/inbound" description="Verify the caller's identity." />
-</Cards>

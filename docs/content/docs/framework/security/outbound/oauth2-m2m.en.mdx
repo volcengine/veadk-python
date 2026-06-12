@@ -1,6 +1,5 @@
 ---
 title: "Outbound Auth with OAuth2 M2M"
-description: "Use OAuth2 machine-to-machine auth for secure service-to-service communication with automatic token refresh."
 ---
 
 OAuth2 M2M (machine-to-machine) is for backend-to-backend authentication—more secure than an API Key and with automatic token refresh. No user is involved: the credential is obtained from the client's own Client ID / Secret. For scenarios that require user consent, see [OAuth2 user federation](/en/docs/framework/security/outbound/oauth2-user-federation). This page covers only what is specific to M2M; the shared `VeIdentityFunctionTool` / `VeIdentityMcpToolset` usage, the `into` default, and the common FAQ live in the [security overview](/en/docs/framework/security/overview#outbound-authentication).
@@ -57,11 +56,3 @@ auth_config = oauth2_auth(
 ## How it differs from API Key
 
 An API Key is a fixed credential; M2M exchanges a Client ID / Secret for a short-lived token that Agent Identity refreshes automatically—better suited to production. M2M is the service's own identity and involves no user login; to act on behalf of a specific user, use [OAuth2 user federation](/en/docs/framework/security/outbound/oauth2-user-federation).
-
-## Next steps
-
-<Cards>
-  <Card title="OAuth2 user federation" href="/en/docs/framework/security/outbound/oauth2-user-federation" description="Access third-party services on a user's behalf." />
-  <Card title="API Key" href="/en/docs/framework/security/outbound/api-key" description="The simplest outbound auth method." />
-  <Card title="Security overview" href="/en/docs/framework/security/overview" description="A map of the four security planes." />
-</Cards>

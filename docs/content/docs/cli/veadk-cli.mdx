@@ -1,6 +1,5 @@
 ---
 title: "VeADK CLI"
-description: "veadk 命令行的完整参考：init、create、web、kb、deploy、prompt、eval、uploadevalset、pipeline 等命令与全部参数。"
 ---
 
 `veadk` 命令行覆盖从项目初始化到部署、评测、优化的完整流程。本页是 CLI 各命令与参数的权威参考——框架教程中提到某个命令时，都会链接到这里。
@@ -78,7 +77,7 @@ veadk-cloud-proj/
 ```
 
 <Callout type="info">
-  这与[部署到 VeFaaS](/cn/docs/framework/deploy/vefaas) 中描述的项目结构一致。`web_template` 模板的 `src/` 改为面向 Web 应用的结构（含 `Dockerfile`、`models.py`、`templates/` 等）。
+  这与[部署到 VeFaaS](/cn/docs/framework/vefaas) 中描述的项目结构一致。`web_template` 模板的 `src/` 改为面向 Web 应用的结构（含 `Dockerfile`、`models.py`、`templates/` 等）。
 </Callout>
 
 ## veadk create
@@ -376,7 +375,7 @@ veadk prompt \
 
 <Callout type="info" title="注意">
   - 必须提供 `--agent-dir` 或 `--agent-a2a-url` 其一；两者都提供时，`--agent-a2a-url` 优先。
-  - 评测集文件需为 Google ADK 格式，详见[评测](/cn/docs/framework/eval-optimization/evaluation)。
+  - 评测集文件需为 Google ADK 格式，详见[评测](/cn/docs/framework/evaluation)。
 </Callout>
 
 ### 使用示例
@@ -463,11 +462,3 @@ veadk pipeline \
 ## AgentKit 命令兼容
 
 VeADK 命令行兼容 AgentKit 命令，只需在 AgentKit 命令前加 `veadk agentkit` 前缀。详见 [AgentKit 命令兼容](/cn/docs/cli/agentkit-cli)。
-
-## 下一步
-
-<Cards>
-  <Card title="快速开始" href="/cn/docs/framework/getting-started/quickstart" description="跑通你的第一个智能体。" />
-  <Card title="部署到 VeFaaS" href="/cn/docs/framework/deploy/vefaas" description="把智能体部署上云。" />
-  <Card title="评测" href="/cn/docs/framework/eval-optimization/evaluation" description="用评测集系统化度量质量。" />
-</Cards>

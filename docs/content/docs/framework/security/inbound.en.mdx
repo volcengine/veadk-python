@@ -1,6 +1,5 @@
 ---
 title: "Inbound Authentication"
-description: "Verify the caller's identity and protect access to your agent with API Key or OAuth2."
 ---
 
 Inbound authentication controls who can call your agent—one of the four planes in the [security overview](/en/docs/framework/security/overview). VeADK supports two methods: **API Key** (simple, for A2A/MCP Servers) and **OAuth2** (recommended, with single sign-on). This page covers how to set up each. For the outbound direction (an agent calling external services), see [outbound authentication](/en/docs/framework/security/overview#outbound-authentication).
@@ -13,7 +12,7 @@ VeADK passes the API Key in the URL `token` query parameter, which the API gatew
 API Key only applies to A2A/MCP Server deployments. For VeADK Web deployments, prefer OAuth2.
 </Callout>
 
-Choose API Key auth when creating the agent, or add [`--auth-method=api-key`](/en/docs/framework/deploy/vefaas) when deploying an existing project. When a user accesses the app, the API gateway validates the API Key in the `token` parameter.
+Choose API Key auth when creating the agent, or add [`--auth-method=api-key`](/en/docs/framework/vefaas) when deploying an existing project. When a user accesses the app, the API gateway validates the API Key in the `token` parameter.
 
 ## OAuth2 single sign-on
 
@@ -32,7 +31,7 @@ The API gateway handles the OAuth2 flow, for VeADK Web apps deployed via VeFaaS.
 Requires API gateway version 4.0.0 or later.
 </Callout>
 
-Choose OAuth2 auth when creating the agent, or add [`--auth-method=oauth2`](/en/docs/framework/deploy/vefaas) when deploying; VeADK automatically creates an Identity user pool and client. To reuse existing resources, pass `--user-pool-name` and `--client-name`.
+Choose OAuth2 auth when creating the agent, or add [`--auth-method=oauth2`](/en/docs/framework/vefaas) when deploying; VeADK automatically creates an Identity user pool and client. To reuse existing resources, pass `--user-pool-name` and `--client-name`.
 
 After deploying, create users under **Identity Auth > User Pool Management** in the Agent Identity console. When a user accesses the app, the API gateway leads them through login, after which you can read the user's JWT from the `Authorization` request header.
 
@@ -130,7 +129,7 @@ setup_oauth2(app, config, state_store=RedisStateStore(redis_client))
 
 ## OAuth2 JWT authentication
 
-A2A/MCP Servers support carrying the OAuth2 authorization token as a JWT. Choose OAuth2 auth when creating the agent, or add [`--auth-method=oauth2`](/en/docs/framework/deploy/vefaas) when deploying; VeADK automatically creates an Identity user pool. To reuse an existing pool, pass `--user-pool-name`.
+A2A/MCP Servers support carrying the OAuth2 authorization token as a JWT. Choose OAuth2 auth when creating the agent, or add [`--auth-method=oauth2`](/en/docs/framework/vefaas) when deploying; VeADK automatically creates an Identity user pool. To reuse an existing pool, pass `--user-pool-name`.
 
 After deploying, create an M2M-type client under **Identity Auth > User Pool Management** in the Agent Identity console, then generate a JWT with:
 
@@ -147,11 +146,3 @@ curl --location "https://userpool-${USER_POOL_ID}.userpool.auth.id.${REGION}.vol
 ```
 
 When a user accesses the app, the API gateway validates the JWT; you can read the token from the `Authorization` request header.
-
-## Next steps
-
-<Cards>
-  <Card title="Security overview" href="/en/docs/framework/security/overview" description="A map of the four security planes." />
-  <Card title="Outbound: API Key" href="/en/docs/framework/security/outbound/api-key" description="Let your agent call external services securely." />
-  <Card title="Permission policy" href="/en/docs/framework/security/permission-policy" description="Fine-grained authorization with Cedar." />
-</Cards>

@@ -1,6 +1,5 @@
 ---
 title: "概述"
-description: "VeADK 安全的整体地图：入站认证、出站认证、权限策略与可信执行。"
 ---
 
 VeADK 的安全能力覆盖智能体的四个方面：**谁能调用你的智能体**（入站认证）、**智能体如何安全地调用外部服务**（出站认证 / 凭据托管）、**谁被授权做哪些操作**（权限策略），以及**如何在可验证的可信通道中执行**（可信执行）。前三者都构建在火山引擎 [Agent Identity](https://console.volcengine.com/) 之上——为智能体与工具分配数字身份、加密托管第三方凭据、按属性与上下文动态授权。
@@ -110,11 +109,3 @@ A：凭证固定、无需刷新选 [API Key](/cn/docs/framework/security/outboun
 需要端到端加密、并验证通信双方身份时，用 Trusted MCP——在标准 MCP 之上扩展组件间的身份证明与加密通道。结合机密计算可让智能体与模型运行在可信环境中。
 
 参见 [Trusted MCP](/cn/docs/framework/security/outbound/trusted-mcp)。
-
-## 下一步
-
-<Cards>
-  <Card title="入站认证" href="/cn/docs/framework/security/inbound" description="用 API Key 或 OAuth2 保护对智能体的访问。" />
-  <Card title="出站认证：API Key" href="/cn/docs/framework/security/outbound/api-key" description="最简单的出站认证方式。" />
-  <Card title="权限策略" href="/cn/docs/framework/security/permission-policy" description="基于 Cedar 的细粒度授权。" />
-</Cards>

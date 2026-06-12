@@ -1,0 +1,50 @@
+---
+title: "内置默认值"
+---
+
+VeADK 为常用配置预置了合理的默认值。某一项在代码与环境变量中均未指定时，采用这些缺省值——默认值是兜底，环境变量是覆盖。
+
+下表按用途列出主要默认项。这些值面向火山引擎方舟平台优化，开箱即用；如需替换，按[环境变量](/cn/docs/references/configuration/environment-variables)覆盖。
+
+## 智能体与模型
+
+| 配置 | 默认值 | 说明 |
+| :- | :- | :- |
+| 智能体名称 | `veAgent` | 未命名时智能体的缺省名称 |
+| 推理模型 | `doubao-seed-1-8-251228` | 默认的推理模型 |
+| 模型提供商 | `openai` | 方舟兼容 OpenAI 规范，故默认按 `openai` 接入 |
+| 模型访问地址 | `https://ark.cn-beijing.volces.com/api/v3/` | 方舟平台 API 基础地址 |
+
+## 多模态生成
+
+| 配置 | 默认值 | 说明 |
+| :- | :- | :- |
+| 生图模型 | `doubao-seedream-5-0-260128` | 图像生成工具默认使用的方舟模型 |
+| 视频生成模型 | `doubao-seedance-2-0-260128` | 视频生成工具默认使用的方舟模型 |
+| 生成模型访问地址 | `https://ark.cn-beijing.volces.com/api/v3/` | 上述模型的 API 基础地址 |
+
+## 可观测上报
+
+| 配置 | 默认值 | 说明 |
+| :- | :- | :- |
+| APMPlus 上报地址 | `http://apmplus-cn-beijing.volces.com:4317` | 链路追踪导出地址 |
+| APMPlus 服务名 | `veadk_tracing` | 默认服务名 |
+| CozeLoop 上报地址 | `https://api.coze.cn/v1/loop/opentelemetry/v1/traces` | 链路追踪上报地址 |
+| CozeLoop 空间名 | `VeADK Space` | 默认空间名称 |
+| TLS 上报地址 | `https://tls-cn-beijing.volces.com:4318/v1/traces` | 链路追踪上报地址 |
+| TLS 区域 | `cn-beijing` | 默认区域 |
+| 日志项目名 | `veadk-logs` | TLS 日志项目名称 |
+| 追踪实例名 | `veadk-tracing` | TLS Tracing 实例名称 |
+
+## 部署相关
+
+| 配置 | 默认值 | 说明 |
+| :- | :- | :- |
+| 对象存储桶名 | `veadk-default-bucket` | 默认 TOS 桶名 |
+| 镜像仓库实例 | `veadk-user-instance` | 容器镜像仓库实例名 |
+| 镜像仓库命名空间 | `veadk-user-namespace` | 容器镜像仓库命名空间 |
+| 镜像仓库名称 | `veadk-user-repo` | 容器镜像仓库名称 |
+
+<Callout type="warn">
+对象存储桶名全球唯一，强烈建议自定义一个专属桶名，避免与其他用户冲突导致运行失败。
+</Callout>

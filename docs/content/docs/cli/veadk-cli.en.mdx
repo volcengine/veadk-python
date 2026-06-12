@@ -1,6 +1,5 @@
 ---
 title: "VeADK CLI"
-description: "Complete reference for the veadk CLI: init, create, web, kb, deploy, prompt, eval, uploadevalset, pipeline, and all their flags."
 ---
 
 The `veadk` CLI covers the full workflow from project init to deployment, evaluation, and optimization. This page is the authoritative reference for every command and its flags — framework tutorials link here whenever they mention a command.
@@ -78,7 +77,7 @@ veadk-cloud-proj/
 ```
 
 <Callout type="info">
-  This matches the project structure described in [Deploy to VeFaaS](/en/docs/framework/deploy/vefaas). The `web_template` template uses a web-oriented `src/` instead (with `Dockerfile`, `models.py`, `templates/`, etc.).
+  This matches the project structure described in [Deploy to VeFaaS](/en/docs/framework/vefaas). The `web_template` template uses a web-oriented `src/` instead (with `Dockerfile`, `models.py`, `templates/`, etc.).
 </Callout>
 
 ## veadk create
@@ -376,7 +375,7 @@ veadk prompt \
 
 <Callout type="info" title="Note">
   - You must provide one of `--agent-dir` or `--agent-a2a-url`; if both are given, `--agent-a2a-url` takes precedence.
-  - The eval set file must be in Google ADK format — see [Evaluation](/en/docs/framework/eval-optimization/evaluation).
+  - The eval set file must be in Google ADK format — see [Evaluation](/en/docs/framework/evaluation).
 </Callout>
 
 ### Examples
@@ -463,11 +462,3 @@ veadk pipeline \
 ## AgentKit compatibility
 
 The VeADK CLI is compatible with AgentKit commands — just prefix them with `veadk agentkit`. See [AgentKit Compatibility](/en/docs/cli/agentkit-cli).
-
-## Next steps
-
-<Cards>
-  <Card title="Quickstart" href="/en/docs/framework/getting-started/quickstart" description="Run your first agent." />
-  <Card title="Deploy to VeFaaS" href="/en/docs/framework/deploy/vefaas" description="Deploy your agent to the cloud." />
-  <Card title="Evaluation" href="/en/docs/framework/eval-optimization/evaluation" description="Measure quality systematically with eval sets." />
-</Cards>

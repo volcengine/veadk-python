@@ -1,0 +1,123 @@
+---
+title: "环境变量"
+---
+
+环境变量是最主要的配置方式，提供密钥、连接信息与服务地址。变量名按领域前缀分组：火山引擎账号、模型、内置工具、数据库、可观测各成一类。每个环境变量都能在 `config.yaml` 中以对应层级结构表达，两者等价。
+
+<Callout type="info">
+密钥统一通过环境变量或 `config.yaml` 提供。下表按领域列出常用变量，仅需配置实际用到的能力对应项。
+</Callout>
+
+## 火山引擎账号
+
+统一前缀 `VOLCENGINE_`，用于访问火山引擎各类云服务。
+
+| 环境变量 | 释义 |
+| :- | :- |
+| `VOLCENGINE_ACCESS_KEY` | 火山引擎 Access Key |
+| `VOLCENGINE_SECRET_KEY` | 火山引擎 Secret Key |
+
+```yaml title="config.yaml"
+volcengine:
+  access_key:
+  secret_key:
+```
+
+## 模型
+
+统一前缀 `MODEL_`，区分推理、向量化（embedding）、评测三类模型。
+
+| 子类 | 环境变量 | 释义 |
+| :- | :- | :- |
+| 推理模型 | `MODEL_AGENT_NAME` | 模型名称 |
+| | `MODEL_AGENT_PROVIDER` | 符合 LiteLLM 规范的模型提供商 |
+| | `MODEL_AGENT_API_BASE` | 访问地址 |
+| | `MODEL_AGENT_API_KEY` | 访问密钥 |
+| 向量化模型 | `MODEL_EMBEDDING_NAME` | Embedding 模型名称 |
+| | `MODEL_EMBEDDING_DIM` | Embedding 维度 |
+| | `MODEL_EMBEDDING_API_BASE` | 访问地址 |
+| | `MODEL_EMBEDDING_API_KEY` | 访问密钥 |
+| 评测模型 | `MODEL_JUDGE_NAME` | 模型名称 |
+| | `MODEL_JUDGE_API_BASE` | 访问地址 |
+| | `MODEL_JUDGE_API_KEY` | 访问密钥 |
+
+## 内置工具
+
+统一前缀 `TOOL_`，仅在使用对应工具时配置。
+
+| 子类 | 环境变量 | 释义 |
+| :- | :- | :- |
+| VeSearch | `TOOL_VESEARCH_ENDPOINT` | 火山引擎搜索机器人 ID |
+| | `TOOL_VESEARCH_API_KEY` | 火山引擎搜索服务密钥 |
+| WebScraper | `TOOL_WEB_SCRAPER_ENDPOINT` | WebScraper 端点 |
+| | `TOOL_WEB_SCRAPER_API_KEY` | WebScraper 密钥 |
+| Lark | `TOOL_LARK_ENDPOINT` | Lark 应用 ID |
+| | `TOOL_LARK_API_KEY` | Lark 应用密钥 |
+| | `TOOL_LARK_TOKEN` | Lark 用户 token |
+| Feishu Channel | `TOOL_FEISHU_CHANNEL_APP_ID` | 飞书机器人应用 ID |
+| | `TOOL_FEISHU_CHANNEL_APP_SECRET` | 飞书机器人应用密钥 |
+| | `TOOL_FEISHU_CHANNEL_TRANSPORT` | 传输模式，默认 `ws` |
+| LAS | `TOOL_LAS_URL` | LAS SSE 服务地址（含 token） |
+| | `TOOL_LAS_DATASET_ID` | LAS 数据集 ID |
+| VOD | `TOOL_VOD_GROUPS` | 视频编辑能力组 |
+| | `TOOL_VOD_TIMEOUT` | 连接超时时长 |
+
+## 数据库
+
+统一前缀 `DATABASE_`，按存储类型分组。记忆与知识库按所选后端读取对应配置。
+
+| 子类 | 环境变量 | 释义 |
+| :- | :- | :- |
+| OpenSearch | `DATABASE_OPENSEARCH_HOST` | 主机地址（不含协议头） |
+| | `DATABASE_OPENSEARCH_PORT` | 端口，默认 9200 |
+| | `DATABASE_OPENSEARCH_USERNAME` | 用户名 |
+| | `DATABASE_OPENSEARCH_PASSWORD` | 密码 |
+| | `DATABASE_OPENSEARCH_CERT_PATH` | 证书路径（生产环境建议配置） |
+| | `DATABASE_OPENSEARCH_USE_SSL` | 是否启用 SSL，默认 True |
+| MySQL | `DATABASE_MYSQL_HOST` | 主机地址 |
+| | `DATABASE_MYSQL_USER` | 用户名 |
+| | `DATABASE_MYSQL_PASSWORD` | 密码 |
+| | `DATABASE_MYSQL_DATABASE` | 数据库名 |
+| | `DATABASE_MYSQL_CHARSET` | 字符集，默认 utf8 |
+| Redis | `DATABASE_REDIS_HOST` | 主机地址 |
+| | `DATABASE_REDIS_PORT` | 端口，默认 6379 |
+| | `DATABASE_REDIS_PASSWORD` | 密码 |
+| | `DATABASE_REDIS_DB` | 数据库编号，默认 0 |
+| VikingDB | `DATABASE_VIKING_PROJECT` | 项目名称 |
+| | `DATABASE_VIKING_REGION` | 区域 |
+| TOS | `DATABASE_TOS_ENDPOINT` | 访问端点 |
+| | `DATABASE_TOS_REGION` | 区域 |
+| | `DATABASE_TOS_BUCKET` | 桶名称 |
+
+## 可观测
+
+统一前缀 `OBSERVABILITY_`，配置追踪与指标的上报目标。
+
+| 子类 | 环境变量 | 释义 |
+| :- | :- | :- |
+| APMPlus | `OBSERVABILITY_OPENTELEMETRY_APMPLUS_ENDPOINT` | 上报地址 |
+| | `OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY` | 鉴权密钥 |
+| | `OBSERVABILITY_OPENTELEMETRY_APMPLUS_SERVICE_NAME` | 服务名称 |
+| CozeLoop | `OBSERVABILITY_OPENTELEMETRY_COZELOOP_ENDPOINT` | 上报地址 |
+| | `OBSERVABILITY_OPENTELEMETRY_COZELOOP_API_KEY` | 鉴权密钥 |
+| | `OBSERVABILITY_OPENTELEMETRY_COZELOOP_SERVICE_NAME` | 服务空间 ID |
+| TLS | `OBSERVABILITY_OPENTELEMETRY_TLS_ENDPOINT` | 上报地址 |
+| | `OBSERVABILITY_OPENTELEMETRY_TLS_SERVICE_NAME` | topic_id |
+| | `OBSERVABILITY_OPENTELEMETRY_TLS_REGION` | 区域 |
+| Prometheus | `OBSERVABILITY_PROMETHEUS_PUSHGATEWAY_URL` | Pushgateway 地址 |
+| | `OBSERVABILITY_PROMETHEUS_USERNAME` | 用户名 |
+| | `OBSERVABILITY_PROMETHEUS_PASSWORD` | 密码 |
+
+## 其他
+
+| 环境变量 | 释义 |
+| :- | :- |
+| `PROMPT_PILOT_API_KEY` | Prompt Pilot 产品密钥 |
+| `VEIDENTITY_REGION` | 身份认证服务区域，默认 cn-beijing |
+| `VEIDENTITY_ENDPOINT` | 身份认证服务端点（可选，不填自动生成） |
+
+```yaml title="config.yaml"
+veidentity:
+  region: cn-beijing
+  endpoint:  # 可选，不提供时自动生成
+```

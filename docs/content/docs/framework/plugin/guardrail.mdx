@@ -1,6 +1,5 @@
 ---
 title: "护栏工具"
-description: "VeADK 基于火山大模型应用防火墙的内容安全护栏工具 content_safety，对 Agent 生命周期的各阶段进行内容审计。"
 ---
 
 `content_safety` 是 VeADK 基于 Agent 插件机制提供的内容安全护栏工具：它挂到 Agent 执行流程的回调上，借助[火山大模型应用防火墙](https://www.volcengine.com/product/LLM-FW)对各阶段内容做合规审查，拦截不安全的输入与输出。
@@ -73,10 +72,3 @@ print(response)
 <Callout type="info" title="路线图：Agent 级回调">
 `content_safety` 还提供 `before_agent_callback` 与 `after_agent_callback`，但目前是占位实现（返回 `None`，不做任何检测），尚未启用。Agent 级的输入校验与上下文分析在规划中，暂时无需挂载这两个回调。
 </Callout>
-
-## 下一步
-
-<Cards>
-  <Card title="内置工具" href="/cn/docs/framework/tools/builtin" description="网页搜索、图像 / 视频生成、代码沙箱等。" />
-  <Card title="构建智能体" href="/cn/docs/framework/agent/create" description="了解 Agent 的回调与生命周期。" />
-</Cards>

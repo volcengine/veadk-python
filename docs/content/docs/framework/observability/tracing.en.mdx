@@ -1,6 +1,5 @@
 ---
 title: "Tracing"
-description: "Learn the concept of tracing in agent systems and how to enable full-chain observability in VeADK."
 ---
 
 Tracing records the **full chain** of an agent's execution and is the core of observability in enterprise-grade agent applications. It turns a request's complete flow—user input, model reasoning, tool calls, memory and knowledge-base access, response generation—into analyzable, traceable structured data, providing a basis for debugging, monitoring, and optimization.
@@ -162,10 +161,3 @@ In a multi-agent scenario, spans are linked through `parent_span_id`, showing th
 <Callout type="info" title="OpenTelemetry Compatibility">
   VeADK's field naming follows the OpenTelemetry generative-AI conventions, so you can import tracing data directly into any OpenTelemetry-compatible system for analysis and visualization.
 </Callout>
-
-## Next Steps
-
-<Cards>
-  <Card title="Observe on Volcengine" href="/en/docs/framework/observability/ve-tracing" description="Integrate and observe your agent on CozeLoop, APMPlus, and TLS." />
-  <Card title="Span Attributes" href="/en/docs/framework/observability/span-attributes" description="Learn when spans are emitted and what attributes they carry." />
-</Cards>

@@ -1,6 +1,5 @@
 ---
 title: "在火山引擎观测"
-description: "将 VeADK 智能体的 Tracing 数据接入 CozeLoop、APMPlus、TLS 等火山引擎平台，实现调用链路观测。"
 ---
 
 VeADK 通过不同的 Exporter 把 Tracing 数据上报至火山引擎平台。本页介绍 CozeLoop、APMPlus、TLS 三个平台的接入方式。各 Span 的字段含义见[埋点字段说明](/cn/docs/framework/observability/span-attributes)。
@@ -215,10 +214,3 @@ python agent.py
 ![控制台打印](/assets/images/observation/tls-console.png)
 
 ![tls trace](/assets/images/observation/tls-trace.png)
-
-## 下一步
-
-<Cards>
-  <Card title="埋点字段说明" href="/cn/docs/framework/observability/span-attributes" description="了解各类 Span 的埋点时机与字段定义。" />
-  <Card title="链路追踪" href="/cn/docs/framework/observability/tracing" description="了解 Tracing 的核心概念与数据结构。" />
-</Cards>

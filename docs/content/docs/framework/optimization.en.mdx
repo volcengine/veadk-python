@@ -1,0 +1,247 @@
+---
+title: "Continuous Optimization"
+---
+
+VeADK provides multiple capabilities for continuously optimizing agents, mainly including **prompt tuning**, **reinforcement learning**, and **agent self-reflection**.
+
+## Prompt Optimization
+
+The prompt is the core input instruction for a large model and directly affects the model's understanding accuracy and output quality. A high-quality prompt can significantly improve a large language model's ability to handle complex tasks.
+
+[PromptPilot](https://www.volcengine.com/docs/82379/1399495?lang=zh) provides full-process intelligent optimization, covering all stages of generation, tuning, evaluation, and management.
+
+### Usage
+
+```shell
+veadk prompt
+```
+
+The options include:
+
+```text
+--path           Path to the agent file to optimize. Defaults to agent.py in the current directory. Note: the defined agent must be exported as a global variable
+--feedback       Suggestions for prompt optimization, used to guide the optimization
+--api-key        API key of the PromptPilot platform
+--workspace-id   PromptPilot workspace ID (required)
+--model-name     Name of the model used for optimization
+```
+
+A typical complete invocation example is as follows:
+
+```bash
+veadk prompt --path ./weather_reporter/agent.py \
+  --feedback "希望提示词能够更加具体明确" \
+  --api-key "YOUR_API_KEY" \
+  --workspace-id "YOUR_WORKSPACE_ID"
+```
+
+## Reinforcement Learning
+
+In complex business scenarios with high requirements for effectiveness and generalization, reinforcement learning (RL) has a higher ceiling than approaches such as PE, SFT, and DPO, and is more aligned with core business needs:
+
+- A feedback-iteration-based training mode better stimulates the model's reasoning and generalization capabilities;
+- It requires no large amount of labeled data, resulting in lower cost and simpler implementation;
+- It supports optimization by scoring based on business-metric feedback, directly driving metric improvements.
+
+To address the above issues and needs, VeADK provides built-in reinforcement learning solutions, including:
+
+- A solution based on [Ark Platform Reinforcement Learning](https://www.volcengine.com/docs/82379/1099460)
+- A solution based on [Agent Lightning](https://github.com/microsoft/agent-lightning)
+
+### Reinforcement Learning Based on the Ark Platform
+
+Ark RL encapsulates the reinforcement learning process to a certain extent, reducing complexity. Users mainly need to focus on the agent logic in the rollout, the construction of the reward function, and the selection of training samples.
+
+VeADK integrates with the Ark platform's Agent RL. Using the scaffolding provided by VeADK, users can develop a VeADK agent and then submit a job to the Ark platform for reinforcement learning optimization.
+
+#### Preparation
+
+Run the following command in your terminal to initialize a reinforcement learning project:
+
+```bash
+veadk rl init --platform ark --workspace veadk_rl_ark_project
+```
+
+This command creates a folder named `veadk_rl_ark_project` in the current directory, containing a basic reinforcement learning project structure. Then run the following commands in the terminal to submit the job to the Ark platform:
+
+```bash
+cd veadk_rl_ark_project
+veadk rl submit --platform ark
+```
+
+#### How It Works
+
+The generated project structure is as follows, where the core files include:
+
+- Dataset: `data/*.jsonl`
+- The rollout and reward under the `/plugins` folder:
+  - rollout: Defines the agent's workflow. `raw_async_veadk_rollout.py` provides an example of using a veadk agent in Ark RL
+  - reward: Provides the reward value required for reinforcement learning. An example is given in `random_reward.py`
+- `job.py` or `job.yaml`: Configures training parameters and specifies the rollout and reward to use
+
+```shell
+veadk_rl_ark_project
+├── data
+│   └── *.jsonl                       # training data
+├── plugins
+│   ├── config.yaml.example           # example VeADK agent configuration
+│   ├── random_reward.py              # reward rule definition
+│   ├── raw_async_veadk_rollout.py    # rollout workflow definition
+│   └── weather_rollout.py            # rollout example for the weather agent
+├── job.py                            # job submission code
+├── job.yaml                          # job configuration
+└── test_agent.py                     # VeFaaS test script
+```
+
+#### Best-Practice Example
+
+1. In the scaffolding, optimize a VeADK-based weather-query agent with reinforcement learning
+2. Submit the job (`veadk rl submit --platform ark`)
+
+![Submit job](/assets/images/optimization/submit_task.png)
+
+![Training](/assets/images/optimization/training.png)
+
+3. View the training logs and timeline
+
+![View training logs](/assets/images/optimization/logs.png)
+
+![View training timeline](/assets/images/optimization/timeline.png)
+
+### Agent Lightning
+
+Agent Lightning provides a flexible and extensible framework that fully decouples the agent (client) and training (server). VeADK integrates with Agent Lightning. Using the scaffolding provided by VeADK, users can develop a VeADK agent and then run the client and server for reinforcement learning optimization.
+
+#### Preparation
+
+Run the following command in your terminal to initialize an Agent Lightning project:
+
+```bash
+veadk rl init --platform lightning --workspace veadk_rl_lightning_project
+```
+
+This command creates a folder named `veadk_rl_lightning_project` in the current directory, containing a basic reinforcement learning project structure based on VeADK and Agent Lightning. Then run the following command in terminal 1 to start the client:
+
+```bash
+cd veadk_rl_lightning_project
+python veadk_agent.py
+```
+
+Then run the following commands in terminal 2:
+
+- First, restart the ray cluster:
+
+```bash
+cd veadk_rl_lightning_project
+bash restart_ray.sh
+```
+
+- Start the server:
+
+```bash
+cd veadk_rl_lightning_project
+bash train.sh
+```
+
+#### How It Works
+
+The generated project structure is as follows, where the core files include:
+
+- agent_client: `*_agent.py` defines the agent's rollout logic and reward rules
+- training_server: `train.sh` defines the training-related parameters and is used to start the training server
+
+```shell
+veadk_rl_lightning_project
+├── data
+│   ├── demo_train.parquet       # training data, must be in parquet format
+│   └── demo_test.parquet        # test data, must be in parquet format
+├── demo_calculate_agent.py      # the agent's rollout logic and reward settings
+├── train.sh                     # training server startup script, sets training-related parameters
+└── restart_ray.sh               # script to restart the ray cluster
+```
+
+#### Best-Practice Example
+
+1. In the scaffolding, optimize a VeADK-based arithmetic agent with reinforcement learning
+2. Start the client (`python demo_calculate_agent.py`), restart the ray cluster (`bash restart_ray.sh`), and finally start the training server (`bash train.sh`), running the above commands in terminal 1 and terminal 2 respectively
+
+![Start client](/assets/images/optimization/lightning_client.png)
+
+![Start server](/assets/images/optimization/lightning_training_server.png)
+
+## Agent Self-Reflection
+
+VeADK supports self-reflection based on tracing file data, using a third-party agent's reasoning to generate an optimized system prompt.
+
+### Usage
+
+At an appropriate time, you can submit the tracing file data obtained from the agent's reasoning to the `reflector` for self-reflection, as in the following code:
+
+```python
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.reflector.local_reflector import LocalReflector
+from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
+
+agent = Agent(tracers=[OpentelemetryTracer()])
+reflector = LocalReflector(agent=agent)
+
+app_name = "app"
+user_id = "user"
+session_id = "session"
+
+
+async def main():
+    runner = Runner(agent=agent, app_name=app_name)
+
+    await runner.run(
+        messages="你好，我觉得你的回答不够礼貌",
+        user_id=user_id,
+        session_id=session_id,
+    )
+
+    trace_file = runner.save_tracing_file(session_id=session_id)
+
+    response = await reflector.reflect(
+        trace_file=trace_file
+    )
+    print(response)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### Result Explanation
+
+The original prompt:
+
+```text
+You an AI agent created by the VeADK team.
+
+You excel at the following tasks:
+1. Data science
+- Information gathering and fact-checking
+- Data processing and analysis
+2. Documentation
+- Writing multi-chapter articles and in-depth research reports
+3. Coding & Programming
+- Creating websites, applications, and tools
+- Solve problems and bugs in code (e.g., Python, JavaScript, SQL, ...)
+- If necessary, using programming to solve various problems beyond development
+4. If user gives you tools, finish various tasks that can be accomplished using tools and available resources
+```
+
+After optimization, you will see output similar to the following:
+
+```text
+optimized_prompt='You are an AI agent created by the VeADK team. Your core mission is to assist users with expertise in data science, documentation, and coding, while maintaining a warm, respectful, and engaging communication style.\n\nYou excel at the following tasks:\n1. Data science\n- Information gathering and fact-checking\n- Data processing and analysis\n2. Documentation\n- Writing multi-chapter articles and in-depth research reports\n3. Coding & Programming\n- Creating websites, applications, and tools\n- Solving problems and bugs in code (e.g., Python, JavaScript, SQL, ...)\n- Using programming to solve various problems beyond development\n4. Tool usage\n- Effectively using provided tools and available resources to accomplish tasks\n\nCommunication Guidelines:\n- Always use polite and warm language (e.g., appropriate honorifics, friendly tone)\n- Show appreciation for user feedback and suggestions\n- Proactively confirm user needs and preferences\n- Maintain a helpful and encouraging attitude throughout interactions\n\nYour responses should be both technically accurate and conversationally pleasant, ensuring users feel valued and supported.'
+
+reason="The trace shows a user complaint about the agent's lack of politeness in responses. The agent's current system prompt focuses exclusively on technical capabilities without addressing communication style. The optimized prompt adds explicit communication guidelines to ensure the agent maintains a warm, respectful tone while preserving all technical capabilities. This addresses the user's feedback directly while maintaining the agent's core functionality."
+```
+
+The output is divided into two parts:
+
+- `optimized_prompt`: The optimized system prompt
+- `reason`: The reason for the optimization

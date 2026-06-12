@@ -1,0 +1,44 @@
+---
+title: "Redis (redis)"
+---
+
+The `redis` backend (`RedisLTMBackend`) uses Redis as the vector store, with a per-user index (`veadk-ltm/{index}/{user_id}`). Memories are embedded and written; retrieval recalls by similarity (cosine).
+
+## When to use
+
+- You already run Redis with the **RediSearch** module enabled;
+- You want Redis as a low-latency vector-search backend.
+
+## Dependencies
+
+```bash
+pip install "veadk-python[extensions]"
+```
+
+Redis must support RediSearch (vector search).
+
+## Configuration
+
+Redis connection is read via `RedisConfig` (env prefix `DATABASE_REDIS_`); embedding via `MODEL_EMBEDDING_*`.
+
+| Field | Env var | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `host` | `DATABASE_REDIS_HOST` | `""` | Redis host. |
+| `port` | `DATABASE_REDIS_PORT` | `6379` | Port. |
+| `username` | `DATABASE_REDIS_USERNAME` | `None` | Username (optional). |
+| `password` | `DATABASE_REDIS_PASSWORD` | `""` | Password. |
+| `db` | `DATABASE_REDIS_DB` | `0` | Database number. |
+
+## Usage
+
+```python
+from veadk import Agent
+from veadk.memory.long_term_memory import LongTermMemory
+
+ltm = LongTermMemory(backend="redis", index="ltm_demo")
+agent = Agent(name="demo", long_term_memory=ltm)
+```
+
+<Callout type="info">
+The vector dimension comes from the embedding config (`MODEL_EMBEDDING_DIM`), and the distance metric is cosine. An index is created per user.
+</Callout>

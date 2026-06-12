@@ -1,6 +1,5 @@
 ---
 title: "权限策略"
-description: "基于 AgentKit Runtime 与 Cedar，配置覆盖 User → Agent → Tool 全链路的权限策略。"
 ---
 
 入站认证回答“你是谁”，权限策略回答“你能做什么”。VeADK 的权限策略基于 [AgentKit Runtime](https://console.volcengine.com/agentkit/region:agentkit+cn-beijing/runtime) 与 [Cedar](https://www.cedarpolicy.com/) 声明式授权语言，提供覆盖 User → Agent → Tool 全链路的授权方案。本页介绍如何在控制台配置策略，并在代码中启用校验。
@@ -44,10 +43,3 @@ print(response)
 
 - **授权通过**：用户在策略空间中拥有调用该智能体的权限，正常返回响应。
 - **授权失败**：用户未被授权，抛出权限异常，例如 `Agent <agent role> is not authorized to run by user 9d154b10-285f-404c-ba67-0bf648ff9ce0.`
-
-## 下一步
-
-<Cards>
-  <Card title="安全概述" href="/cn/docs/framework/security/overview" description="四个安全平面的整体地图。" />
-  <Card title="入站认证" href="/cn/docs/framework/security/inbound" description="验证调用方身份。" />
-</Cards>

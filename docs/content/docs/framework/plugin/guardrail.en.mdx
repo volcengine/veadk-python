@@ -1,6 +1,5 @@
 ---
 title: "Guardrail tool"
-description: "The VeADK content_safety guardrail tool, built on the Volcengine LLM Application Firewall, audits content across the agent lifecycle."
 ---
 
 `content_safety` is a content-safety guardrail tool that VeADK provides through the agent plugin mechanism: it hooks into the agent's execution callbacks and uses the [Volcengine LLM Application Firewall](https://www.volcengine.com/product/LLM-FW) to review content at each stage and block unsafe input and output.
@@ -73,10 +72,3 @@ print(response)
 <Callout type="info" title="Roadmap: agent-level callbacks">
 `content_safety` also exposes `before_agent_callback` and `after_agent_callback`, but these are placeholder implementations today (they return `None` and perform no checks) and are not yet active. Agent-level input validation and context analysis are planned; for now you don't need to wire up these two callbacks.
 </Callout>
-
-## Next steps
-
-<Cards>
-  <Card title="Built-in tools" href="/en/docs/framework/tools/builtin" description="Web search, image / video generation, code sandboxes, and more." />
-  <Card title="Create an agent" href="/en/docs/framework/agent/create" description="Learn about agent callbacks and the lifecycle." />
-</Cards>
