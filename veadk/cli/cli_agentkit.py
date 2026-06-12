@@ -25,6 +25,9 @@ def agentkit():
 
 agentkit_commands = get_command(agentkit_typer_app)
 
-if isinstance(agentkit_commands, click.Group):
-    for cmd_name, cmd in agentkit_commands.commands.items():
-        agentkit.add_command(cmd, name=cmd_name)
+# Re-export the AgentKit CLI's subcommands under `veadk agentkit`. Iterate by
+# duck-typing on `.commands` rather than gating on `isinstance(..., click.Group)`:
+# since Typer 0.26 a TyperGroup is no longer a click.Group subclass, so the
+# isinstance check silently evaluates False and drops every command.
+for cmd_name, cmd in getattr(agentkit_commands, "commands", {}).items():
+    agentkit.add_command(cmd, name=cmd_name)
