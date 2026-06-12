@@ -1,3 +1,0 @@
-# Installed into the AgentKit image build. veadk-python ships the Harness
-# server (veadk.cloud.harness_app) and pulls FastAPI/uvicorn transitively.
-veadk-python

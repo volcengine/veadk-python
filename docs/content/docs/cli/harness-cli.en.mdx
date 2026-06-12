@@ -1,105 +1,219 @@
 ---
 title: "Harness Commands"
-description: "Register and invoke harnesses (agent specs) on a deployed Harness server from the CLI."
+description: "Scaffold, configure, deploy, and invoke a VeADK Harness server."
 ---
 
-`veadk agentkit harness` is a thin set of HTTP client commands for a deployed
-**Harness server** (`veadk.cloud.harness_app`).
+`veadk harness` is a group of commands to **scaffold, configure, deploy, and invoke** a VeADK **Harness server** (`veadk.cloud.harness_app`).
 
-A *harness* is a named agent spec — **model + system prompt + tools + skills**.
-The Harness server exposes `/harness/add` and `/harness/invoke`, letting you
-register and invoke harnesses at runtime without redeploying.
+A *harness* is an agent specification — **model + system prompt + tools + skills**, plus a knowledge base and long/short-term memory bound at creation time. The whole spec is described by a layered `harness.yaml`; `deploy` flattens it into the runtime's environment variables, the Harness server assembles an agent from them at startup, and serves it over `POST /harness/invoke`.
 
 <Callout type="info">
-  Before you start, deploy the Harness server to Volcengine AgentKit (see the
-  [`14_harness_server_on_agentkit`](https://github.com/volcengine/veadk-python/tree/main/examples/14_harness_server_on_agentkit)
-  example) and grab its **endpoint URL** and gateway **API key**.
+  Deploying requires Volcengine AgentKit credentials (`VOLCENGINE_ACCESS_KEY` / `VOLCENGINE_SECRET_KEY`). For an end-to-end example see [`14_harness_server_on_agentkit`](https://github.com/volcengine/veadk-python/tree/main/examples/14_harness_server_on_agentkit).
 </Callout>
 
-## Command reference
+## Commands at a glance
 
 | Command | Description |
 | :-- | :-- |
-| `veadk agentkit harness add` | Register a new harness on the server. |
-| `veadk agentkit harness invoke` | Invoke a harness and print its output. |
+| `veadk harness create <dir>` | Scaffold a deployable harness directory. |
+| `veadk harness add` | Write agent parameters into `harness.yaml`. |
+| `veadk harness show` | Show configured params and the per-invoke overridable params. |
+| `veadk harness deploy` | Cloud-build the image and create an AgentKit runtime (no local Docker). |
+| `veadk harness invoke` | Invoke a deployed harness and print its output. |
 
-## Connection options
+Typical flow: **`create` → `add` → `deploy` → `invoke`**.
 
-Both commands need the server address and auth, supplied via options or
-environment variables:
+## `veadk harness create`
 
-| Option | Env var | Description |
-| :-- | :-- | :-- |
-| `--url` | `HARNESS_URL` | Harness server base URL (required). |
-| `--key` | `HARNESS_KEY` | Gateway API key for Bearer auth (optional). |
-| — | `HARNESS_TIMEOUT` | Client request timeout in seconds, default `600` (agent runs can be slow). |
-
-## `harness add`
-
-Register a named harness on the server.
+Scaffold a deployment directory:
 
 ```bash
-veadk agentkit harness add \
+veadk harness create my-harness
+```
+
+It writes:
+
+- `harness.yaml` — the agent config template (see below).
+- `.env.example` — Volcengine deploy credentials only (`VOLCENGINE_ACCESS_KEY`, `VOLCENGINE_SECRET_KEY`, and optional `VOLCENGINE_REGION`). Model/agent config lives in `harness.yaml`.
+- `Dockerfile` — builds the harness server image.
+- `README.md` — quick-start notes.
+
+### `harness.yaml`
+
+A layered, self-contained-per-component config. `deploy` converts it into the runtime's environment variables: top-level fields and `model` are flattened (`model.name` → `MODEL_NAME`, `tools` → `TOOLS`, …) with lists comma-joined; each component's `type` selects its backend, and the component's other params map to the VeADK env vars that backend actually reads (e.g. viking `project` → `DATABASE_VIKING_PROJECT`). Empty values are skipped, so VeADK falls back to its own defaults.
+
+```yaml
+harness_name: ""          # -> HARNESS_NAME (runtime name + knowledgebase/long-term-memory index name)
+model:
+  name: ""                # -> MODEL_NAME (Ark auth is resolved by the runtime's IAM role after deploy)
+tools: []                 # -> TOOLS (comma-joined)
+skills: []                # -> SKILLS (comma-joined)
+system_prompt: ""         # -> SYSTEM_PROMPT (empty = VeADK default)
+runtime: adk              # -> RUNTIME ("adk" or "codex")
+knowledgebase:
+  type: ""                # -> KNOWLEDGEBASE_TYPE (empty = not created)
+long_term_memory:
+  type: ""                # -> LONG_TERM_MEMORY_TYPE (empty = not created)
+short_term_memory:
+  type: local             # -> SHORT_TERM_MEMORY_TYPE
+```
+
+Under each component, uncomment the params for the backend you set as `type` (the template annotates the env var and CLI flag for every field). On an AgentKit runtime Ark auth is resolved by the IAM role, so the model needs no API key here.
+
+## `veadk harness add`
+
+Write agent parameters into `./harness.yaml` (or the directory given by `--path`). Fails fast if `harness.yaml` does not exist.
+
+```bash
+cd my-harness
+veadk harness add \
   --name research-agent \
   --model-name doubao-seed-1-6-250615 \
   --system-prompt "You are a research assistant." \
   --tools web_search,web_fetch \
-  --url "<ENDPOINT>" --key "<API_KEY>"
+  --runtime adk
 ```
 
-| Option | Required | Description |
-| :-- | :-- | :-- |
-| `--name` | Yes | Harness (agent) name. |
-| `--model-name` | No | Model name; defaults to the server's `MODEL_AGENT_NAME`. |
-| `--system-prompt` | No | System prompt; defaults to `You are a helpful assistant.`. |
-| `--tools` | No | Comma-separated built-in tool names, e.g. `web_search,web_fetch`. |
-| `--skills` | No | Comma-separated skill hub names, e.g. `clawhub/lgwventrue/system-file-handler`. |
+| Option | Description |
+| :-- | :-- |
+| `--name` / `--harness-name` | Logical harness / runtime name (sets `harness_name`). |
+| `--model-name` | Reasoning model name (sets `model.name`). |
+| `--tools` | Comma-separated built-in tool names, e.g. `web_search,web_fetch` (sets `tools`). |
+| `--skills` | Comma-separated skill hub names (sets `skills`). |
+| `--system-prompt` | System prompt / instruction. |
+| `--runtime` | Agent runtime, `adk` (default) or `codex`. |
+| `--knowledgebase-type` | Knowledge base backend (sets `knowledgebase.type`). |
+| `--long-term-memory-type` | Long-term memory backend (sets `long_term_memory.type`). |
+| `--short-term-memory-type` | Short-term memory backend (sets `short_term_memory.type`). |
+| `--path` | Directory containing `harness.yaml`, default `.`. |
 
-<Callout type="warn">
-  If a harness with the same name already exists, the server returns `code: 400`
-  and does not overwrite it.
-</Callout>
+#### Component connection params
 
-## `harness invoke`
-
-Invoke an **already-registered** harness and print its output. The message is a
-positional argument.
+Each component also auto-generates `--<component>-<param>` connection flags for the backends it supports, e.g.:
 
 ```bash
-veadk agentkit harness invoke \
-  --harness research-agent \
-  --url "<ENDPOINT>" --key "<API_KEY>" \
-  "Summarize the latest on reinforcement learning."
+veadk harness add --name kb-agent \
+  --knowledgebase-type viking \
+  --knowledgebase-project my-project --knowledgebase-region cn-beijing
+```
+
+| Component prefix | Available flags (depend on backend) |
+| :-- | :-- |
+| `--knowledgebase-*` | `project` / `region` (viking); `host` / `port` / `username` / `password` / `use-ssl` / `cert-path` / `secret-token` (opensearch); `host` / `port` / `username` / `password` / `db` (redis) |
+| `--long-term-memory-*` | the same per-backend params, plus `api-key` / `api-key-id` / `project-id` / `base-url` (mem0) |
+| `--short-term-memory-*` | `host` / `user` / `password` / `database` / `charset` / `port` (mysql / postgresql) |
+
+Credentials (access key / secret key) are not passed via these flags; they reuse the `VOLCENGINE_*` values from the deploy `.env`.
+
+## `veadk harness show`
+
+Print the params configured in `harness.yaml`, plus the params overridable per invocation. Fails fast if `harness.yaml` does not exist.
+
+```bash
+veadk harness show --path my-harness
+```
+
+It prints two sections:
+
+1. **Configured agent params** — the contents of `harness.yaml` (`harness_name`, `model`, `tools`, `skills`, `system_prompt`, `runtime`, and any configured `knowledgebase` / `long_term_memory` / `short_term_memory`).
+2. **Overridable at invoke time** — each `--<flag>` derived from `HarnessOverrides` (`--model-name`, `--tools`, `--skills`, `--system-prompt`, `--runtime`) and its description. Memory and the knowledge base are **not** overridable.
+
+| Option | Description |
+| :-- | :-- |
+| `--path` | Directory containing `harness.yaml`, default `.`. |
+
+## `veadk harness deploy`
+
+With deploy credentials in place, run inside the directory:
+
+```bash
+cd my-harness
+cp .env.example .env   # then set VOLCENGINE_ACCESS_KEY / VOLCENGINE_SECRET_KEY
+veadk harness deploy
 ```
 
 | Option | Required | Description |
 | :-- | :-- | :-- |
-| `MESSAGE` (positional) | Yes | The message to send to the harness. |
-| `--harness` | Yes | Harness name to invoke. |
+| `--volcengine-access-key` | No | Volcengine access key (defaults to `VOLCENGINE_ACCESS_KEY`). |
+| `--volcengine-secret-key` | No | Volcengine secret key (defaults to `VOLCENGINE_SECRET_KEY`). |
+| `--region` | No | AgentKit region (defaults to `cn-beijing` or `VOLCENGINE_REGION`). |
+| `--path` | No | Harness directory, default `.`. |
+| `--discovery-url` | No | OIDC discovery URL; enables OAuth2/JWT auth (overrides `auth.discovery_url`). |
+| `--allowed-id` | No | Comma-separated allowed client IDs for OAuth2/JWT auth (overrides `auth.allowed_ids`). |
+
+`deploy` loads `harness.yaml`, flattens it into the runtime environment, runs an AgentKit **cloud** build (no local Docker), and creates the runtime. The runtime is named after `harness_name`.
+
+On success the endpoint and gateway API key are recorded into **`harness.json`** in the directory (shape `{name: {url, key, runtime_id}}`), so you can invoke it with `veadk harness invoke --name <name>` without copying the URL / key by hand:
+
+```text
+Harness runtime deployed: name=research-agent
+Runtime id: r-xxxx
+Endpoint:   https://xxxx.apigateway-cn-beijing.volceapi.com
+API key:    ****
+
+Recorded in .../harness.json. Invoke it with:
+  veadk harness invoke --name research-agent --message "<message>"
+```
+
+### OAuth2 / JWT auth deploy (optional)
+
+By default the gateway uses an API key (key_auth). To gate the runtime with
+OAuth2/JWT backed by a **Volcengine Identity user pool**, add an `auth` block to
+`harness.yaml` — **its presence switches to custom_jwt; without it, the default
+key_auth is used**:
+
+```yaml
+auth:
+  discovery_url: "https://userpool-<pool-id>.userpool.auth.id.cn-beijing.volces.com/.well-known/openid-configuration"
+  allowed_ids: ["<client-id>"]   # a client created in the console; the gateway only admits tokens whose aud matches
+```
+
+You can also override it at deploy time with `--discovery-url` / `--allowed-id`.
+The `auth` block is **not** written into the container environment — it only
+configures the runtime's gateway authorizer.
+
+- The user pool, client, and external IdP (e.g. Feishu) are set up once in the
+  **Identity console**; the CLI only references `discovery_url` + `allowed_ids`
+  and **never touches a secret**.
+- A custom_jwt deploy records `{url, runtime_id, auth_type, discovery_url, allowed_ids}`
+  in `harness.json` (no key). Calling such a runtime requires your own
+  `Authorization: Bearer <user-pool JWT>` header — the CLI does not mint it.
+
+## `veadk harness invoke`
+
+Invoke a **deployed** harness and print its output. The `url` and `key` are resolved from `harness.json` (written by `deploy`) by `--name`, so you need not pass them explicitly.
+
+```bash
+veadk harness invoke --name research-agent --message "Summarize recent progress in RL."
+```
+
+The message may be given via `--message` / `-m` or as a positional argument.
+
+| Option | Required | Description |
+| :-- | :-- | :-- |
+| `--name` / `--harness` | Yes | Harness name; its `url`/`key` are read from `harness.json`. |
+| `MESSAGE` (positional) or `--message` / `-m` | Yes | The message to send to the harness. |
 | `--user-id` | No | User id for the session, default `cli-user`. |
-| `--session-id` | No | Session id for the call, default `cli-session`. |
-| `--model-name` | No | Override the model for this call only (creates a one-time harness). |
-| `--system-prompt` | No | Override the system prompt for this call only (creates a one-time harness). |
-| `--tools` | No | Override tools for this call only, comma-separated (creates a one-time harness). |
-| `--skills` | No | Override skills for this call only, comma-separated (creates a one-time harness). |
+| `--session-id` | No | Session id for the call. |
+| `--url` | No | Harness URL (default `harness.json[name]`, or `HARNESS_URL`). |
+| `--key` | No | API key for Bearer auth (default `harness.json[name]`, or `HARNESS_KEY`). |
+| `--path` | No | Directory containing `harness.json`, default `.`. |
+| `--model-name` | No | Override the model for this call only. |
+| `--tools` | No | Override tools for this call only (comma-separated). |
+| `--skills` | No | Override skills for this call only (comma-separated). |
+| `--system-prompt` | No | Override the system prompt for this call only. |
+| `--runtime` | No | Override the runtime for this call only (`adk` / `codex`). |
 
-### One-time harness override
+### Once-time overrides
 
-If any of `--model-name` / `--system-prompt` / `--tools` / `--skills` is passed
-to `invoke`, the server builds a **one-time harness** from those fields that
-applies to this single call only — the stored harness of the same name is left
-untouched:
+If any of `--model-name` / `--tools` / `--skills` / `--system-prompt` / `--runtime` is given, the server clones the deployed agent and applies the overrides **for that single call only**: tools and skills are added **incrementally** (deduped against existing ones), while memory and the knowledge base are **never** overridable.
 
 ```bash
-veadk agentkit harness invoke \
-  --harness research-agent \
-  --system-prompt "Answer in one sentence." \
-  --url "<ENDPOINT>" --key "<API_KEY>" \
-  "What is reinforcement learning?"
+veadk harness invoke --name research-agent \
+  --tools get_city_weather \
+  --message "What's the weather in Beijing today?"
 ```
 
 ## Full example
 
-For the end-to-end deploy-and-invoke flow (including the `curl` equivalents),
-see the [`14_harness_server_on_agentkit`](https://github.com/volcengine/veadk-python/tree/main/examples/14_harness_server_on_agentkit)
-example.
+For the end-to-end deploy-and-invoke flow (with `curl` equivalents) see the example [`14_harness_server_on_agentkit`](https://github.com/volcengine/veadk-python/tree/main/examples/14_harness_server_on_agentkit).
