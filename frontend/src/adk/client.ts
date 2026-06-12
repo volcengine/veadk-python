@@ -20,6 +20,11 @@ export interface AdkEvent {
   timestamp?: number;
   usageMetadata?: AdkUsage;
   usage_metadata?: AdkUsage;
+  // Set when the model/run fails; /run_sse emits it as a `data: {"error": ...}`
+  // frame (also seen as errorMessage / error_message).
+  error?: string;
+  errorMessage?: string;
+  error_message?: string;
   content?: {
     role?: string;
     parts?: AdkPart[];
@@ -45,9 +50,20 @@ export interface AdkSession {
   [k: string]: unknown;
 }
 
+export interface AdkInlineData {
+  mimeType?: string;
+  data?: string; // base64 (no data: prefix)
+  displayName?: string;
+  // snake_case fallback (defensive, in case the server echoes snake_case)
+  mime_type?: string;
+  display_name?: string;
+}
+
 export interface AdkPart {
   text?: string;
   thought?: boolean;
+  inlineData?: AdkInlineData;
+  inline_data?: AdkInlineData; // snake_case fallback (defensive)
   functionCall?: { name?: string; args?: Record<string, unknown> };
   functionResponse?: { name?: string; response?: Record<string, unknown> };
   // snake_case fallbacks (defensive)
@@ -55,10 +71,54 @@ export interface AdkPart {
   function_response?: { name?: string; response?: Record<string, unknown> };
 }
 
+/** A file the user attached in the composer, encoded for `/run_sse`. */
+export interface Attachment {
+  mimeType: string;
+  data: string; // base64 (no data: prefix)
+  name?: string;
+}
+
 const API_BASE = ""; // same origin (prod) / proxied (dev)
 
-/** fetch wrapper that forwards the gateway auth querystring on every request. */
-function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+/** A resolved ADK endpoint. Empty `base` = the local same-origin server. */
+export interface AdkEndpoint {
+  base?: string;
+  apiKey?: string;
+}
+
+// Routing table for remote AgentKit apps: maps a dropdown id (see
+// adk/connections.ts) to its real ADK app name + endpoint. Local apps are not
+// registered and fall through to the same-origin server.
+interface RemoteApp {
+  app: string;
+  base: string;
+  apiKey: string;
+}
+const remoteApps = new Map<string, RemoteApp>();
+
+export function registerRemoteApp(id: string, info: RemoteApp): void {
+  remoteApps.set(id, info);
+}
+export function clearRemoteApps(): void {
+  remoteApps.clear();
+}
+
+/** Resolve a dropdown id to its real ADK app name + endpoint. */
+function resolve(appName: string): { app: string; ep: AdkEndpoint } {
+  const r = remoteApps.get(appName);
+  return r ? { app: r.app, ep: { base: r.base, apiKey: r.apiKey } } : { app: appName, ep: {} };
+}
+
+/** fetch wrapper: same-origin (forwarding the gateway auth querystring) for the
+ *  local server, or a remote AgentKit base URL with a Bearer API key. */
+function apiFetch(path: string, init: RequestInit = {}, ep: AdkEndpoint = {}): Promise<Response> {
+  if (ep.base) {
+    // Use backend proxy to avoid CORS issues with remote AgentKit
+    const headers: Record<string, string> = { ...(init.headers as Record<string, string>) };
+    headers["X-AgentKit-Base"] = ep.base;
+    if (ep.apiKey) headers["X-AgentKit-Key"] = ep.apiKey;
+    return fetch(withAuth(`${API_BASE}/agentkit-proxy${path}`), { ...init, headers });
+  }
   return fetch(withAuth(`${API_BASE}${path}`), init);
 }
 
@@ -68,15 +128,23 @@ export async function listApps(): Promise<string[]> {
   return res.json();
 }
 
+/** List the apps a remote AgentKit server exposes (also validates URL + key). */
+export async function fetchRemoteApps(base: string, apiKey: string): Promise<string[]> {
+  const res = await apiFetch(`/list-apps`, {}, { base, apiKey });
+  if (!res.ok) throw new Error(`list-apps failed: ${res.status}`);
+  return res.json();
+}
+
 export async function createSession(
   appName: string,
   userId: string,
 ): Promise<string> {
-  const res = await apiFetch(`/apps/${appName}/users/${userId}/sessions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: "{}",
-  });
+  const { app, ep } = resolve(appName);
+  const res = await apiFetch(
+    `/apps/${app}/users/${encodeURIComponent(userId)}/sessions`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+    ep,
+  );
   if (!res.ok) throw new Error(`create session failed: ${res.status}`);
   const session = await res.json();
   return session.id;
@@ -86,7 +154,8 @@ export async function listSessions(
   appName: string,
   userId: string,
 ): Promise<AdkSession[]> {
-  const res = await apiFetch(`/apps/${appName}/users/${userId}/sessions`);
+  const { app, ep } = resolve(appName);
+  const res = await apiFetch(`/apps/${app}/users/${encodeURIComponent(userId)}/sessions`, {}, ep);
   if (!res.ok) throw new Error(`list sessions failed: ${res.status}`);
   return res.json();
 }
@@ -96,7 +165,12 @@ export async function getSession(
   userId: string,
   sessionId: string,
 ): Promise<AdkSession> {
-  const res = await apiFetch(`/apps/${appName}/users/${userId}/sessions/${sessionId}`);
+  const { app, ep } = resolve(appName);
+  const res = await apiFetch(
+    `/apps/${app}/users/${encodeURIComponent(userId)}/sessions/${sessionId}`,
+    {},
+    ep,
+  );
   if (!res.ok) throw new Error(`get session failed: ${res.status}`);
   return res.json();
 }
@@ -106,9 +180,12 @@ export async function deleteSession(
   userId: string,
   sessionId: string,
 ): Promise<void> {
-  const res = await apiFetch(`/apps/${appName}/users/${userId}/sessions/${sessionId}`, {
-    method: "DELETE",
-  });
+  const { app, ep } = resolve(appName);
+  const res = await apiFetch(
+    `/apps/${app}/users/${encodeURIComponent(userId)}/sessions/${sessionId}`,
+    { method: "DELETE" },
+    ep,
+  );
   if (!res.ok && res.status !== 404) throw new Error(`delete session failed: ${res.status}`);
 }
 
@@ -118,11 +195,53 @@ export async function getSessionTrace(sessionId: string): Promise<TraceSpan[]> {
   return res.json();
 }
 
+/** Introspected metadata for an agent app (model, tools), for the picker.
+ *  Only the local server implements `/web/agent-info`; remote AgentKit apps
+ *  will reject this and the caller falls back to a basic flyout. */
+export interface AgentInfo {
+  name: string;
+  description: string;
+  model: string;
+  tools: string[];
+  subAgents: string[];
+}
+
+export async function getAgentInfo(appName: string): Promise<AgentInfo> {
+  const { app, ep } = resolve(appName);
+  const res = await apiFetch(`/web/agent-info/${app}`, {}, ep);
+  if (!res.ok) throw new Error(`agent-info failed: ${res.status}`);
+  return res.json();
+}
+
+/** One web-search hit (Volcengine WebSearch WebItem, trimmed for the UI). */
+export interface WebHit {
+  title: string;
+  url: string;
+  siteName: string;
+  summary: string;
+}
+
+/** Run an agent's web-search tool on the local server (which holds the env
+ *  credentials). `mounted` is false when a known agent has no web-search tool;
+ *  `error` is set when the search ran but the API reported a problem. */
+export async function webSearch(
+  appName: string,
+  query: string,
+): Promise<{ mounted: boolean; results: WebHit[]; error?: string }> {
+  const { app } = resolve(appName);
+  const res = await apiFetch(
+    `/web/search?source=web&app_name=${encodeURIComponent(app)}&q=${encodeURIComponent(query)}`,
+  );
+  if (!res.ok) throw new Error(`web search failed: ${res.status}`);
+  return res.json();
+}
+
 export interface RunArgs {
   appName: string;
   userId: string;
   sessionId: string;
   text: string;
+  attachments?: Attachment[];
 }
 
 /** Stream agent events for one user turn. */
@@ -131,20 +250,60 @@ export async function* runSSE({
   userId,
   sessionId,
   text,
+  attachments = [],
 }: RunArgs): AsyncGenerator<AdkEvent, void, unknown> {
-  const res = await apiFetch(`/run_sse`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      app_name: appName,
-      user_id: userId,
-      session_id: sessionId,
-      new_message: { role: "user", parts: [{ text }] },
-      streaming: true,
-    }),
-  });
+  const { app, ep } = resolve(appName);
+  const parts: AdkPart[] = [
+    ...attachments.map((a) => ({
+      inlineData: { mimeType: a.mimeType, data: a.data, displayName: a.name },
+    })),
+    ...(text.trim() ? [{ text }] : []),
+  ];
+  const res = await apiFetch(
+    `/run_sse`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        app_name: app,
+        user_id: userId,
+        session_id: sessionId,
+        new_message: { role: "user", parts },
+        streaming: true,
+      }),
+    },
+    ep,
+  );
   if (!res.ok) throw new Error(`run_sse failed: ${res.status}`);
   for await (const evt of parseSSE(res)) {
     yield evt as AdkEvent;
+  }
+}
+
+/** Deploy a temporary agent for testing. */
+export async function deployTempAgent(
+  name: string,
+  files: { path: string; content: string }[],
+): Promise<string> {
+  const res = await apiFetch("/web/deploy-temp-agent", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, files }),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Deploy failed: ${err}`);
+  }
+  const data = await res.json();
+  return data.appName;
+}
+
+/** Delete a temporary agent. */
+export async function deleteTempAgent(appName: string): Promise<void> {
+  const res = await apiFetch(`/web/deploy-temp-agent/${appName}`, {
+    method: "DELETE",
+  });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`Delete failed: ${res.status}`);
   }
 }

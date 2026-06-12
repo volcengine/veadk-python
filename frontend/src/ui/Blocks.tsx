@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight, Loader2, Wrench } from "lucide-react";
+import { ChevronRight } from "lucide-react";
+import { motion } from "motion/react";
 import type { Block } from "../blocks";
 import { buildSurfaces, SurfaceView } from "../a2ui/Surface";
 import { useStickToBottom } from "./useStickToBottom";
+import { Markdown } from "./Markdown";
 import type { A2uiAction, A2uiComponent } from "../a2ui/types";
 
 const A2UI_TOOL = "send_a2ui_json_to_client";
@@ -55,22 +57,64 @@ export function ThinkingPlaceholder() {
   return <ThinkingBlock text="" done={false} />;
 }
 
-function ToolBlock({ name, args, done }: { name: string; args?: unknown; done: boolean }) {
+/** Generic tool-call row. Visual treatment mirrors the janus-ee extension's
+ *  `tool_pair` renderer (extension/src/components/event-renderer.tsx
+ *  lines 922-980): a small status dot (running → done), the tool name with a
+ *  shimmer while pending, a chevron, and a grid-rows collapse holding
+ *  "参数" (args) and "返回" (result) sections in muted code blocks. The A2UI
+ *  tool is shown as "渲染 UI" and hidden once done (handled by the caller). */
+function ToolBlock({
+  name,
+  args,
+  response,
+  done,
+}: {
+  name: string;
+  args?: unknown;
+  response?: unknown;
+  done: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const label = name === A2UI_TOOL ? "渲染 UI" : name;
+  const respText =
+    response == null
+      ? null
+      : typeof response === "string"
+        ? response
+        : JSON.stringify(response, null, 2);
+  const truncated =
+    respText && respText.length > 2000 ? respText.slice(0, 2000) + "\n…（已截断）" : respText;
   return (
-    <div className="block-tool">
+    <motion.div
+      className="block-tool"
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2, ease: "easeOut" }}
+    >
       <button className="tool-head" onClick={() => setOpen((o) => !o)} type="button">
-        {done ? <Wrench className="chev" /> : <Loader2 className="chev spin" />}
-        <span className="tool-name">{label}</span>
+        <span className={`tool-dot ${done ? "tool-dot--done" : "tool-dot--running"}`} aria-hidden />
+        <span className={`tool-name ${done ? "" : "shimmer"}`}>{label}</span>
         <ChevronRight className={`chev ${open ? "open" : ""}`} />
       </button>
       <div className={`think-collapse ${open ? "open" : ""}`}>
         <div className="think-collapse-inner">
-          {args != null && <pre className="tool-args">{JSON.stringify(args, null, 2)}</pre>}
+          <div className="tool-detail">
+            {args != null && (
+              <div className="tool-section">
+                <div className="tool-section-label">参数</div>
+                <pre className="tool-args">{JSON.stringify(args, null, 2)}</pre>
+              </div>
+            )}
+            {truncated != null && (
+              <div className="tool-section">
+                <div className="tool-section-label">返回</div>
+                <pre className="tool-args tool-result">{truncated}</pre>
+              </div>
+            )}
+          </div>
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 }
 
@@ -90,16 +134,29 @@ export function Blocks({ blocks, onAction }: BlocksProps) {
             const t = b.text.replace(/^\s+/, "");
             return t ? (
               <div key={i} className="bubble">
-                {t}
+                <Markdown text={t} />
               </div>
             ) : null;
           }
           case "tool":
             if (b.name === A2UI_TOOL && b.done) return null;
-            return <ToolBlock key={i} name={b.name} args={b.args} done={b.done} />;
+            return (
+              <ToolBlock key={i} name={b.name} args={b.args} response={b.response} done={b.done} />
+            );
           case "a2ui":
-            return buildSurfaces(b.messages).map((s) => (
-              <SurfaceView key={`${i}-${s.surfaceId}`} surface={s} onAction={onAction} />
+            // Skip surfaces with no renderable root (e.g. a createSurface that
+            // was never followed by updateComponents) so we don't emit an empty box.
+            return buildSurfaces(b.messages)
+              .filter((s) => s.components[s.rootId])
+              .map((s) => (
+              <motion.div
+                key={`${i}-${s.surfaceId}`}
+                initial={{ opacity: 0, y: 8, scale: 0.985 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={{ type: "spring", stiffness: 380, damping: 30 }}
+              >
+                <SurfaceView surface={s} onAction={onAction} />
+              </motion.div>
             ));
           default:
             return null;

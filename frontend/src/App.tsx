@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
-import { Check, Copy } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Check, Copy, FileText, Loader2 } from "lucide-react";
+import { motion } from "motion/react";
 import {
   createSession,
   deleteSession,
@@ -8,14 +9,87 @@ import {
   listSessions,
   runSSE,
   type AdkSession,
+  type Attachment,
 } from "./adk/client";
 import { applyEvent, emptyAcc, eventsToTurns, type Turn } from "./blocks";
 import { Sidebar } from "./ui/Sidebar";
+import { Navbar } from "./ui/Navbar";
+import { SkillCenterView } from "./ui/SkillCenter";
+import { AddAgentKitView } from "./ui/AddAgentKit";
+import { SearchView } from "./ui/Search";
+import {
+  buildAgentEntries,
+  loadConnections,
+  registerConnections,
+  remoteAppId,
+  type RemoteConnection,
+} from "./adk/connections";
 import { Blocks, ThinkingPlaceholder } from "./ui/Blocks";
 import { Composer } from "./ui/Composer";
+import { QuickCreate, type QuickCreateKind } from "./ui/QuickCreate";
+import { StackCards } from "./ui/AddAgentMenu";
+import { IntelligentCreate } from "./create/IntelligentCreate";
+import { CustomCreate } from "./create/CustomCreate";
+import { TemplateCreate } from "./create/TemplateCreate";
+import { WorkflowCreate } from "./create/WorkflowCreate";
+import type { AgentDraft } from "./create/types";
+
+// Breadcrumb root label for the create flow and the per-mode leaf labels.
+const CREATE_ROOT = "创建 Agent";
+const MODE_LABEL: Record<QuickCreateKind, string> = {
+  intelligent: "智能模式",
+  custom: "自定义",
+  template: "从模板新建",
+  workflow: "工作流",
+};
+
+type CreateView = "menu" | QuickCreateKind | null;
+
+// Persist the last view so a page refresh restores where the user was.
+const LS = { app: "veadk.appName", view: "veadk.view", session: "veadk.sessionId" } as const;
+function loadView(): CreateView {
+  const v = typeof localStorage !== "undefined" ? localStorage.getItem(LS.view) : null;
+  return v === "menu" || v === "intelligent" || v === "custom" || v === "template" || v === "workflow"
+    ? v
+    : null;
+}
 import { TraceDrawer } from "./ui/TraceDrawer";
+import { LoginPage } from "./ui/LoginPage";
+import { Markdown } from "./ui/Markdown";
 import { useStickToBottom } from "./ui/useStickToBottom";
+import {
+  clearLocalUser,
+  logout,
+  resolveIdentity,
+  setLocalUser,
+  type AuthStatus,
+} from "./adk/identity";
 import type { A2uiAction, A2uiComponent } from "./a2ui/types";
+
+/** Hand-drawn "AgentKit" mark: a little agent/robot module with side ports —
+ *  a packaged remote agent you plug into. */
+function AgentKitIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="5" y="7.5" width="14" height="10.5" rx="3.2" />
+      <circle cx="9.6" cy="12.6" r="1.25" fill="currentColor" stroke="none" />
+      <circle cx="14.4" cy="12.6" r="1.25" fill="currentColor" stroke="none" />
+      <path d="M12 7.5V4.4" />
+      <circle cx="12" cy="3.4" r="1.15" fill="currentColor" stroke="none" />
+      <path d="M5 13.2H2.8M19 13.2h2.2" />
+    </svg>
+  );
+}
+
+/** Hand-drawn "from zero" mark: a "0" ring with a creativity spark inside. */
+function ScratchIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <ellipse cx="12" cy="12" rx="6.6" ry="8.2" />
+      <path d="M12 8.2l1.05 2.75 2.75 1.05-2.75 1.05L12 15.8l-1.05-2.75L8.2 12l2.75-1.05z" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
 
 /** Hand-drawn "tracing / observability" icon (stacked spans). */
 function TraceIcon() {
@@ -60,12 +134,13 @@ function turnText(turn: Turn): string {
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
-  if (!text) return null;
   return (
     <button
       className="icon-btn"
       title={copied ? "已复制" : "复制"}
+      disabled={!text}
       onClick={async () => {
+        if (!text) return;
         try {
           await navigator.clipboard.writeText(text);
           setCopied(true);
@@ -82,84 +157,217 @@ function CopyButton({ text }: { text: string }) {
 // Side-effect import: registers all A2UI components under a2ui/components/*.
 import "./a2ui/components";
 
-const USER_ID = "web-user";
 
 const GREETINGS = [
   "今天想做点什么？",
   "有什么可以帮你的？",
   "需要我帮你查点什么吗？",
-  "想看看什么样的卡片？",
+  "有问题尽管问我",
   "嗨，我们开始吧",
-  "试试让我用 UI 来回答你",
+  "开始一段新对话吧",
 ];
 const pickGreeting = () => GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
+
+const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20 MB/file (base64 inflates ~33%)
+
+/** Read a File as base64 (without the `data:...;base64,` prefix). */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const res = String(reader.result);
+      const comma = res.indexOf(",");
+      resolve(comma >= 0 ? res.slice(comma + 1) : res);
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
 
 export default function App() {
   const [apps, setApps] = useState<string[]>([]);
   const [appName, setAppName] = useState("");
   const [sessions, setSessions] = useState<AdkSession[]>([]);
-  const [loadingSessions, setLoadingSessions] = useState(false);
   const [sessionId, setSessionId] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [traceOpen, setTraceOpen] = useState(false);
   const [greeting, setGreeting] = useState(pickGreeting);
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  const [userId, setUserId] = useState("");
+  const [userInfo, setUserInfo] = useState<Record<string, unknown> | undefined>();
+  const [localMode, setLocalMode] = useState(false);
+  const [loadingSession, setLoadingSession] = useState(false);
+  const [createView, setCreateView] = useState<CreateView>(loadView);
+  const [skillCenter, setSkillCenter] = useState(false);
+  const [addAgent, setAddAgent] = useState(false);
+  // The "添加 Agent" chooser (two cards: AgentKit / 从 0 快速创建).
+  const [addMenu, setAddMenu] = useState(false);
+  // A draft imported from YAML, used to pre-fill the custom wizard once.
+  const [importedDraft, setImportedDraft] = useState<AgentDraft | null>(null);
+  const [searchView, setSearchView] = useState(false);
+  // A search result may belong to a different agent; remember it so the
+  // agent-switch effect opens it instead of resetting to a fresh chat.
+  const pendingOpenRef = useRef<{ app: string; sid: string } | null>(null);
+  // Remote AgentKit connections (persisted); register them into the ADK client
+  // routing table once, synchronously, so remote app ids resolve immediately.
+  const [connections, setConnections] = useState<RemoteConnection[]>(() => {
+    const c = loadConnections();
+    registerConnections(c);
+    return c;
+  });
+  // Shown when the user clicks the breadcrumb root to leave a create mode;
+  // warns that the in-progress draft will be discarded.
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  // Restore the previously-open session only once, after apps/user resolve.
+  const restoredRef = useRef(false);
+
+  // Placeholder: persisting/registering the created agent is a follow-up.
+  function onCreate(draft: AgentDraft) {
+    console.log("create agent draft:", draft);
+    setCreateView(null);
+    startNewChat();
+  }
+
+  // Navigate to a newly added agent: switch app, close create view, start fresh chat.
+  function onAgentAdded(agentId: string, agentName: string) {
+    console.log("Agent added, navigating to:", agentId, agentName);
+    setCreateView(null);
+    setAppName(agentId);
+    // startNewChat will be called automatically by the appName change effect
+  }
   const { ref: scrollRef, onScroll } = useStickToBottom<HTMLDivElement>(turns);
 
+  // Resolve SSO identity first; it provides the ADK user_id.
   useEffect(() => {
-    listApps()
-      .then((list) => {
-        setApps(list);
-        const preferred = list.find((a) => a.includes("a2ui")) ?? list[0];
-        if (preferred) setAppName(preferred);
-      })
-      .catch((e) => setError(String(e)));
+    resolveIdentity().then((id) => {
+      setUserId(id.userId);
+      setUserInfo(id.info);
+      setLocalMode(!!id.local);
+      setAuthStatus(id.status);
+    });
   }, []);
 
-  // When the app changes: load its sessions and open a fresh one.
-  useEffect(() => {
-    if (!appName) return;
-    void startNewChat(appName);
-    void refreshSessions(appName);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appName]);
+  function onUsername(name: string) {
+    setLocalUser(name);
+    setUserId(name);
+    setUserInfo({ name });
+    setLocalMode(true);
+    setAuthStatus("authenticated");
+  }
 
-  async function refreshSessions(app: string) {
-    setLoadingSessions(true);
-    try {
-      const list = await listSessions(app, USER_ID);
-      // Hydrate events so the sidebar can show a title per session.
-      const hydrated = await Promise.all(
-        list.map((s) =>
-          s.events?.length ? Promise.resolve(s) : getSession(app, USER_ID, s.id),
-        ),
-      );
-      setSessions(hydrated);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoadingSessions(false);
+  function onLogout() {
+    if (localMode) {
+      clearLocalUser();
+      setUserId("");
+      setUserInfo(undefined);
+      setAuthStatus("unauthenticated");
+    } else {
+      logout();
     }
   }
 
-  async function startNewChat(app: string) {
-    setError("");
-    setGreeting(pickGreeting());
+  useEffect(() => {
+    if (authStatus === "unauthenticated") return; // login page is shown instead
+    listApps()
+      .then((list) => {
+        setApps(list);
+        // Restore the last-used agent; otherwise pick the first one.
+        const saved = localStorage.getItem(LS.app);
+        const remoteIds = connections.flatMap((c) => c.apps.map((a) => remoteAppId(c.id, a)));
+        const valid = saved && (list.includes(saved) || remoteIds.includes(saved));
+        const preferred = valid ? saved : list[0];
+        if (preferred) setAppName(preferred);
+      })
+      .catch((e) => setError(String(e)));
+  }, [authStatus]);
+
+  // Persist the current view/agent/session so a refresh restores them.
+  useEffect(() => {
+    if (appName) localStorage.setItem(LS.app, appName);
+  }, [appName]);
+  useEffect(() => {
+    localStorage.setItem(LS.view, createView ?? "chat");
+  }, [createView]);
+  useEffect(() => {
+    localStorage.setItem(LS.session, sessionId);
+  }, [sessionId]);
+
+  // When the app (or resolved user) changes, list existing sessions. On the
+  // very first resolve, restore the previously-open session (if it still
+  // exists and we weren't on a create view); otherwise start a fresh chat.
+  useEffect(() => {
+    if (!appName || !userId) return;
+    (async () => {
+      const list = await refreshSessions(appName);
+      if (!restoredRef.current) {
+        restoredRef.current = true;
+        const savedId = localStorage.getItem(LS.session) || "";
+        if (loadView() === null && savedId && list.some((s) => s.id === savedId)) {
+          void pickSession(savedId);
+          return;
+        }
+      }
+      startNewChat();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appName, userId]);
+
+  // After switching agent from a search result, open the target session (runs
+  // after the agent-switch effect above, so it wins over its startNewChat()).
+  useEffect(() => {
+    const p = pendingOpenRef.current;
+    if (p && p.app === appName) {
+      pendingOpenRef.current = null;
+      void pickSession(p.sid);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appName]);
+
+  // Open a session surfaced by search, switching agent first if needed.
+  function openFromSearch(app: string, sid: string) {
+    setSearchView(false);
+    if (app === appName) {
+      void pickSession(sid);
+    } else {
+      pendingOpenRef.current = { app, sid };
+      setAppName(app);
+    }
+  }
+
+  async function refreshSessions(app: string): Promise<AdkSession[]> {
     try {
-      const id = await createSession(app, USER_ID);
-      setSessionId(id);
-      setTurns([]);
+      const list = await listSessions(app, userId);
+      // Hydrate events so the sidebar can show a title per session.
+      const hydrated = await Promise.all(
+        list.map((s) =>
+          s.events?.length ? Promise.resolve(s) : getSession(app, userId, s.id),
+        ),
+      );
+      setSessions(hydrated);
+      return hydrated;
     } catch (e) {
       setError(String(e));
+      return [];
     }
+  }
+
+  // Reset to a fresh, not-yet-created chat. The backend session is created
+  // lazily on the first message (see send()).
+  function startNewChat() {
+    setError("");
+    setGreeting(pickGreeting());
+    setSessionId("");
+    setTurns([]);
   }
 
   async function removeSession(id: string) {
     try {
-      await deleteSession(appName, USER_ID, id);
-      if (id === sessionId) await startNewChat(appName);
+      await deleteSession(appName, userId, id);
+      if (id === sessionId) startNewChat();
       await refreshSessions(appName);
     } catch (e) {
       setError(String(e));
@@ -167,23 +375,75 @@ export default function App() {
   }
 
   async function pickSession(id: string) {
+    if (id === sessionId) return;
     setError("");
+    setLoadingSession(true);
+    setSessionId(id);
     try {
-      const s = await getSession(appName, USER_ID, id);
-      setSessionId(id);
+      const s = await getSession(appName, userId, id);
       setTurns(eventsToTurns(s.events ?? []));
     } catch (e) {
       setError(String(e));
+    } finally {
+      setLoadingSession(false);
     }
   }
 
-  async function send(text: string) {
-    if (!text.trim() || !sessionId || busy) return;
+  async function addFiles(files: FileList | File[]) {
+    const picked: Attachment[] = [];
+    for (const f of Array.from(files)) {
+      if (f.size > MAX_FILE_BYTES) {
+        setError(`文件过大（>20MB）：${f.name}`);
+        continue;
+      }
+      const data = await fileToBase64(f);
+      picked.push({
+        mimeType: f.type || "application/octet-stream",
+        data,
+        name: f.name,
+      });
+    }
+    if (picked.length) setAttachments((a) => [...a, ...picked]);
+  }
+
+  async function send(text: string, atts: Attachment[] = []) {
+    if ((!text.trim() && atts.length === 0) || busy || !appName || !userId) return;
     setError("");
     setBusy(true);
+
+    // Lazily create the backend session on the first message.
+    let sid = sessionId;
+    if (!sid) {
+      try {
+        sid = await createSession(appName, userId);
+        setSessionId(sid);
+        // Show the session in the sidebar immediately (titled with this first
+        // message) instead of waiting for the reply to finish; the post-stream
+        // refreshSessions() below reconciles it with the server.
+        const now = Date.now() / 1000;
+        const optimistic: AdkSession = {
+          id: sid,
+          lastUpdateTime: now,
+          events: [{ author: "user", timestamp: now, content: { role: "user", parts: [{ text }] } }],
+        };
+        setSessions((prev) => [optimistic, ...prev.filter((s) => s.id !== sid)]);
+      } catch (e) {
+        setError(String(e));
+        setBusy(false);
+        return;
+      }
+    }
+
+    const userBlocks: Turn["blocks"] = [];
+    if (atts.length)
+      userBlocks.push({
+        kind: "attachment",
+        files: atts.map((a) => ({ mimeType: a.mimeType, data: a.data, name: a.name })),
+      });
+    if (text.trim()) userBlocks.push({ kind: "text", text });
     setTurns((t) => [
       ...t,
-      { role: "user", blocks: [{ kind: "text", text }], meta: { ts: Date.now() / 1000 } },
+      { role: "user", blocks: userBlocks, meta: { ts: Date.now() / 1000 } },
       { role: "assistant", blocks: [] },
     ]);
 
@@ -191,7 +451,18 @@ export default function App() {
       let acc = emptyAcc();
       let tokens = 0;
       let ts = Date.now() / 1000;
-      for await (const event of runSSE({ appName, userId: USER_ID, sessionId, text })) {
+      for await (const event of runSSE({
+        appName,
+        userId,
+        sessionId: sid,
+        text,
+        attachments: atts,
+      })) {
+        const errMsg = event.error ?? event.errorMessage ?? event.error_message;
+        if (typeof errMsg === "string" && errMsg) {
+          setError(errMsg);
+          break;
+        }
         acc = applyEvent(acc, event);
         const usage = event.usageMetadata ?? event.usage_metadata;
         if (usage?.totalTokenCount) tokens = usage.totalTokenCount;
@@ -219,19 +490,74 @@ export default function App() {
     send(`[ui-action] ${name}: ${JSON.stringify(context)}`);
   }
 
+  if (authStatus === null) {
+    return <div className="boot" />; // resolving identity
+  }
+  if (authStatus === "unauthenticated") {
+    return <LoginPage onUsername={onUsername} />;
+  }
+
   return (
     <div className="layout">
       <Sidebar
-        apps={apps}
-        appName={appName}
-        onAppChange={setAppName}
         sessions={sessions}
         currentSessionId={sessionId}
-        onNewChat={() => startNewChat(appName)}
-        onPickSession={pickSession}
+        onNewChat={() => {
+          setCreateView(null);
+          setSkillCenter(false);
+          setAddAgent(false);
+          setAddMenu(false);
+          setSearchView(false);
+          startNewChat();
+        }}
+        onSearch={() => {
+          setCreateView(null);
+          setSkillCenter(false);
+          setAddAgent(false);
+          setAddMenu(false);
+          setSearchView(true);
+          setError("");
+        }}
+        onQuickCreate={() => {
+          // "添加 Agent" — open the two-card chooser. Drop any selected session.
+          setSessionId("");
+          setTurns([]);
+          setSkillCenter(false);
+          setAddAgent(false);
+          setSearchView(false);
+          setCreateView(null);
+          setImportedDraft(null);
+          setAddMenu(true);
+          setError("");
+        }}
+        onSkillCenter={() => {
+          setCreateView(null);
+          setAddAgent(false);
+          setAddMenu(false);
+          setSearchView(false);
+          setSkillCenter(true);
+          setError("");
+        }}
+        onAddAgent={() => {
+          setCreateView(null);
+          setSkillCenter(false);
+          setSearchView(false);
+          setSessionId("");
+          setTurns([]);
+          setAddMenu(false);
+          setAddAgent(true);
+          setError("");
+        }}
+        onPickSession={(id) => {
+          setCreateView(null);
+          setSkillCenter(false);
+          setAddAgent(false);
+          setAddMenu(false);
+          setSearchView(false);
+          setError("");
+          pickSession(id);
+        }}
         onDeleteSession={removeSession}
-        onRefresh={() => refreshSessions(appName)}
-        loadingSessions={loadingSessions}
       />
 
       {(() => {
@@ -241,18 +567,139 @@ export default function App() {
             onChange={setInput}
             onSubmit={() => {
               const text = input;
+              const atts = attachments;
               setInput("");
-              send(text);
+              setAttachments([]);
+              send(text, atts);
             }}
-            disabled={!sessionId}
+            disabled={!appName || !userId}
             busy={busy}
+            attachments={attachments}
+            onAddFiles={addFiles}
+            onRemoveAttachment={(i) =>
+              setAttachments((a) => a.filter((_, j) => j !== i))
+            }
           />
         );
+        const agentEntries = buildAgentEntries(apps, connections);
+        const labelOf = (id: string) => agentEntries.find((e) => e.id === id)?.label ?? id;
         return (
           <main className="main">
+            <Navbar
+              apps={agentEntries.map((e) => e.id)}
+              appName={appName}
+              onAppChange={setAppName}
+              agentLabel={labelOf}
+              userInfo={userInfo}
+              onLogout={onLogout}
+              title={
+                addMenu
+                  ? "添加 Agent"
+                  : addAgent
+                    ? "添加 AgentKit 智能体"
+                    : skillCenter
+                      ? "技能中心"
+                      : undefined
+              }
+              crumbs={
+                searchView || addAgent || skillCenter || addMenu || !createView
+                  ? undefined
+                  : createView === "menu"
+                    ? [
+                        {
+                          label: CREATE_ROOT,
+                          onClick: () => {
+                            setCreateView(null);
+                            setImportedDraft(null);
+                            setAddMenu(true);
+                          },
+                        },
+                        { label: "从 0 快速创建" },
+                      ]
+                    : [
+                        { label: "从 0 快速创建", onClick: () => setConfirmLeave(true) },
+                        { label: MODE_LABEL[createView] },
+                      ]
+              }
+            />
             {error && <div className="error">{error}</div>}
+            {loadingSession && (
+              <div className="session-loading">
+                <Loader2 className="icon spin" /> 加载会话…
+              </div>
+            )}
 
-            {turns.length === 0 ? (
+            {addMenu ? (
+              <StackCards
+                title="您想以哪种方式添加 Agent 来运行？"
+                sub="选择最适合你的方式，下一步即可开始"
+                cards={[
+                  {
+                    key: "agentkit",
+                    icon: AgentKitIcon,
+                    title: "添加 AgentKit 智能体",
+                    desc: "连接已部署在火山引擎 AgentKit 上的远程智能体。",
+                    onClick: () => {
+                      setAddMenu(false);
+                      setAddAgent(true);
+                    },
+                  },
+                  {
+                    key: "scratch",
+                    icon: ScratchIcon,
+                    title: "从 0 快速创建",
+                    desc: "用智能 / 自定义 / 模板 / 工作流的方式从零创建一个 Agent。",
+                    onClick: () => {
+                      setAddMenu(false);
+                      setImportedDraft(null);
+                      setCreateView("menu");
+                    },
+                  },
+                ]}
+              />
+            ) : searchView ? (
+              <SearchView
+                userId={userId}
+                appId={appName}
+                agentLabel={labelOf}
+                onOpenSession={openFromSearch}
+              />
+            ) : addAgent ? (
+              <AddAgentKitView
+                onAdded={(id) => {
+                  setConnections(loadConnections());
+                  setAddAgent(false);
+                  setAppName(id);
+                }}
+                onCancel={() => setAddAgent(false)}
+              />
+            ) : skillCenter ? (
+              <SkillCenterView />
+            ) : createView === "menu" ? (
+              <QuickCreate
+                onSelect={(k) => {
+                  setImportedDraft(null);
+                  setCreateView(k);
+                }}
+                onImport={(d) => {
+                  setImportedDraft(d);
+                  setCreateView("custom");
+                }}
+              />
+            ) : createView === "intelligent" ? (
+              <IntelligentCreate userId={userId} onBack={() => setCreateView("menu")} onCreate={onCreate} onAgentAdded={onAgentAdded} />
+            ) : createView === "custom" ? (
+              <CustomCreate
+                initialDraft={importedDraft ?? undefined}
+                onBack={() => setCreateView("menu")}
+                onCreate={onCreate}
+                onAgentAdded={onAgentAdded}
+              />
+            ) : createView === "template" ? (
+              <TemplateCreate onBack={() => setCreateView("menu")} onCreate={onCreate} />
+            ) : createView === "workflow" ? (
+              <WorkflowCreate onBack={() => setCreateView("menu")} onCreate={onCreate} />
+            ) : turns.length === 0 ? (
               <div className="welcome">
                 <h1 className="welcome-title">{greeting}</h1>
                 {composer}
@@ -263,20 +710,58 @@ export default function App() {
                   {turns.map((turn, i) => {
             const isLast = i === turns.length - 1;
             if (turn.role === "user") {
-              const text = turn.blocks.map((b) => ("text" in b ? b.text : "")).join("");
+              const text = turn.blocks.map((b) => (b.kind === "text" ? b.text : "")).join("");
+              const atts = turn.blocks.flatMap((b) =>
+                b.kind === "attachment" ? b.files : [],
+              );
               return (
-                <div key={i} className="turn turn--user">
-                  <div className="bubble">{text}</div>
+                <motion.div
+                  key={i}
+                  className="turn turn--user"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.2, ease: "easeOut" }}
+                >
+                  {atts.length > 0 && (
+                    <div className="msg-attachments">
+                      {atts.map((f, j) =>
+                        f.mimeType?.startsWith("image/") && f.data ? (
+                          <img
+                            key={j}
+                            className="attachment-thumb"
+                            src={`data:${f.mimeType};base64,${f.data}`}
+                            alt={f.name ?? "image"}
+                          />
+                        ) : (
+                          <div key={j} className="attachment-file">
+                            <FileText className="icon" />
+                            <span className="attachment-file-name">{f.name ?? "文件"}</span>
+                          </div>
+                        ),
+                      )}
+                    </div>
+                  )}
+                  {text && (
+                    <div className="bubble">
+                      <Markdown text={text} />
+                    </div>
+                  )}
                   <div className="turn-actions turn-actions--right">
                     {turn.meta?.ts && <span className="meta-text">{fmtTime(turn.meta.ts)}</span>}
                     <CopyButton text={text} />
                   </div>
-                </div>
+                </motion.div>
               );
             }
             const pending = turn.blocks.length === 0;
             return (
-              <div key={i} className="turn turn--assistant">
+              <motion.div
+                key={i}
+                className="turn turn--assistant"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.2, ease: "easeOut" }}
+              >
                 {pending ? (
                   isLast && busy ? <ThinkingPlaceholder /> : null
                 ) : (
@@ -297,7 +782,7 @@ export default function App() {
                     </div>
                   </>
                 )}
-              </div>
+              </motion.div>
             );
           })}
                 </div>
@@ -310,6 +795,30 @@ export default function App() {
 
       {traceOpen && sessionId && (
         <TraceDrawer sessionId={sessionId} onClose={() => setTraceOpen(false)} />
+      )}
+
+      {confirmLeave && (
+        <div className="confirm-scrim" onClick={() => setConfirmLeave(false)}>
+          <div className="confirm-box" onClick={(e) => e.stopPropagation()}>
+            <div className="confirm-title">返回创建首页？</div>
+            <div className="confirm-text">返回后当前填写的内容将会丢失，确定要返回吗？</div>
+            <div className="confirm-actions">
+              <button className="confirm-btn" onClick={() => setConfirmLeave(false)}>
+                取消
+              </button>
+              <button
+                className="confirm-btn confirm-btn--danger"
+                onClick={() => {
+                  setImportedDraft(null);
+                  setCreateView("menu");
+                  setConfirmLeave(false);
+                }}
+              >
+                确定返回
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

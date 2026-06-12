@@ -45,6 +45,7 @@ agent = Agent(tools=[web_search])
 | `web_scraper` | 聚合搜索（邀测），代码见[此处](https://github.com/volcengine/mcp-server/tree/main/server) | `from veadk.tools.builtin_tools.web_scraper import web_scraper` |
 | `vesearch` | 调用[联网问答 Agent](https://www.volcengine.com/docs/85508/1512748) 进行搜索 | `from veadk.tools.builtin_tools.vesearch import vesearch` |
 | `link_reader` | 读取并解析网页链接内容 | `from veadk.tools.builtin_tools.link_reader import link_reader` |
+| `web_fetch` | 直接抓取网页 / PDF 并抽取正文（纯 HTTP，工具自身无需凭证） | `from veadk.tools.builtin_tools.web_fetch import web_fetch` |
 | `image_generate` | 根据文本描述[生成图片](https://www.volcengine.com/docs/82379/1541523) | `from veadk.tools.builtin_tools.image_generate import image_generate` |
 | `image_edit` | [编辑图片](https://www.volcengine.com/docs/82379/1541523)（图生图） | `from veadk.tools.builtin_tools.image_edit import image_edit` |
 | `video_generate` | 根据文本描述[生成视频](https://www.volcengine.com/docs/82379/1520757) | `from veadk.tools.builtin_tools.video_generate import video_generate` |
@@ -199,6 +200,57 @@ if __name__ == "__main__":
 环境变量：
 
 - `MODEL_AGENT_API_KEY`：Agent 推理模型的 API Key
+
+## 网页抓取（web_fetch）
+
+`web_fetch` 对给定 URL 发起一次普通 HTTP GET 并抽取正文：HTML 转 Markdown 或纯文本，PDF 用 `pypdf` 抽取文字。它**不执行 JavaScript**——纯前端渲染或需要登录的页面可能抽取不全。与 `link_reader` 不同，该工具**自身无需任何凭证**（纯 HTTP 抓取），适合让 Agent 阅读用户给出的文章、文档或任意公开链接。
+
+参数：
+
+- `url`：要抓取的 `http(s)` 链接；
+- `extract_mode`：`markdown`（默认，保留标题 / 链接 / 列表）或 `text`（纯文本）；
+- `max_chars`：抽取内容的最大字符数（默认 `50000`）。
+
+返回 `{"url", "title", "content", "truncated"}`，失败时返回 `{"error": ...}`。
+
+<Callout type="info" title="安全与限制">
+- **SSRF 防护**：解析域名后拦截私网 / 环回 / 链路本地 / 保留地址，并对每一跳重定向（含 `<meta refresh>`）重新校验，最多跟随 3 跳。
+- **上限**：HTML 下载上限 2MB、PDF 10MB；请求超时 30 秒；结果在进程内缓存 15 分钟。
+- 不渲染 JavaScript；未做 socket 级 DNS pinning（仅“解析后校验”）。
+</Callout>
+
+```python title="examples/tools/web_fetch/agent.py"
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.tools.builtin_tools.web_fetch import web_fetch
+
+agent = Agent(
+    name="web_fetch_agent",
+    model_name="doubao-seed-1-8-251228",
+    description="An agent that reads web pages and PDFs.",
+    instruction="Use the web_fetch tool to fetch the given URL, then answer based on its content.",
+    tools=[web_fetch],
+)
+
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory())
+
+
+async def main():
+    response = await runner.run(
+        "抓取 https://arxiv.org/pdf/1706.03762 并总结这篇论文的核心思想"
+    )
+    print(response)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+环境变量：
+
+- `MODEL_AGENT_API_KEY`：Agent 推理模型的 API Key（`web_fetch` 工具本身无需额外凭证）
 
 ## 图像生成（image_generate）
 

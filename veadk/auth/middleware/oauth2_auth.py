@@ -276,6 +276,9 @@ class OAuth2Config(BaseModel):
     redirect_uri: str
     extra_authorize_params: dict[str, str] = Field(default_factory=dict)
     extra_token_params: dict[str, str] = Field(default_factory=dict)
+    # Extra HTTP headers for the token request. Needed for providers like GitHub
+    # that only return JSON (instead of form-encoded) when sent Accept: application/json.
+    extra_token_headers: dict[str, str] = Field(default_factory=dict)
     use_pkce: bool = False
 
     # Session + cookie configuration
@@ -816,6 +819,7 @@ class OAuth2Handler:
         token_data.update(self.config.extra_token_params)
 
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        headers.update(self.config.extra_token_headers)
 
         # Use Basic Auth for client credentials when possible.
         if self.config.client_secret:

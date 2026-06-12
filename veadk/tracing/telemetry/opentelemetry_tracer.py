@@ -144,6 +144,15 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         # provider conflicts
         self._init_global_tracer_provider()
 
+        # Record the model provider's response id (e.g. Ark's x-request-id) on
+        # the LLM span as `gen_ai.response.id`. Registered only when a tracer is
+        # used; a no-op otherwise.
+        from veadk.tracing.telemetry.litellm_response_id import (
+            register as _register_response_id_callback,
+        )
+
+        _register_response_id_callback()
+
     def _init_global_tracer_provider(self) -> None:
         """Initialize the global OpenTelemetry tracer provider with configured exporters.
 
@@ -239,7 +248,11 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
                 placeholder string if trace ID cannot be retrieved
         """
         try:
-            trace_id = hex(int(self._inmemory_exporter._exporter.trace_id))[2:]  # type: ignore
+            # OTel/W3C trace ids are 128-bit -> 32 lowercase hex chars,
+            # zero-padded. `hex(...)[2:]` drops leading zeros (yielding a
+            # 31-char id when the high nibble is 0), so format with `032x` to
+            # match what the cloud exporters report.
+            trace_id = format(int(self._inmemory_exporter._exporter.trace_id), "032x")  # type: ignore
             return trace_id
         except Exception as e:
             logger.error(f"Failed to get trace_id from InMemoryExporter: {e}")

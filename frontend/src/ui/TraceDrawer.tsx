@@ -1,14 +1,6 @@
-import { useEffect, useState } from "react";
-import { Loader2, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ChevronRight, Loader2, X } from "lucide-react";
 import { getSessionTrace, type TraceSpan } from "../adk/client";
-
-interface Row {
-  span: TraceSpan;
-  depth: number;
-  left: number; // 0..1 offset of bar start
-  width: number; // 0..1 bar width
-  durMs: number;
-}
 
 const COLORS = ["#5b8def", "#56b87f", "#e0a32e", "#c062d8", "#e06c5e", "#3fb6c4"];
 function colorFor(name: string): string {
@@ -17,45 +9,67 @@ function colorFor(name: string): string {
   return COLORS[h % COLORS.length];
 }
 
-/** Build an ordered waterfall: every span on its own row (so nothing is clipped
- *  regardless of how skewed the durations are), with a proportional time bar. */
-function buildRows(spans: TraceSpan[]): { rows: Row[]; totalMs: number } {
-  if (!spans.length) return { rows: [], totalMs: 0 };
-  const min = Math.min(...spans.map((s) => s.start_time));
-  const max = Math.max(...spans.map((s) => s.end_time));
-  const total = max - min || 1;
-
-  const byId = new Map<number, TraceSpan>();
-  for (const s of spans) byId.set(s.span_id, s);
-  const depthOf = (s: TraceSpan): number => {
-    let d = 0;
-    let cur: TraceSpan | undefined = s;
-    const seen = new Set<number>();
-    while (cur?.parent_span_id != null && byId.has(cur.parent_span_id) && !seen.has(cur.span_id)) {
-      seen.add(cur.span_id);
-      d++;
-      cur = byId.get(cur.parent_span_id);
-    }
-    return d;
-  };
-
-  const rows = spans
-    .map((s) => ({
-      span: s,
-      depth: depthOf(s),
-      left: (s.start_time - min) / total,
-      width: Math.max((s.end_time - s.start_time) / total, 0.012),
-      durMs: (s.end_time - s.start_time) / 1e6,
-    }))
-    .sort((a, b) => a.span.start_time - b.span.start_time || a.depth - b.depth);
-
-  return { rows, totalMs: total / 1e6 };
+interface TNode {
+  span: TraceSpan;
+  depth: number;
+  children: TNode[];
 }
 
-function attrLines(attrs: Record<string, unknown>): string[] {
-  return Object.keys(attrs)
-    .filter((k) => typeof attrs[k] !== "object")
-    .map((k) => `${k}: ${attrs[k]}`);
+function buildTree(spans: TraceSpan[]) {
+  const byId = new Map<number, TraceSpan>();
+  spans.forEach((s) => byId.set(s.span_id, s));
+  const kids = new Map<number, TraceSpan[]>();
+  const roots: TraceSpan[] = [];
+  for (const s of spans) {
+    if (s.parent_span_id != null && byId.has(s.parent_span_id)) {
+      (kids.get(s.parent_span_id) ?? kids.set(s.parent_span_id, []).get(s.parent_span_id)!).push(s);
+    } else {
+      roots.push(s);
+    }
+  }
+  const byStart = (a: TraceSpan, b: TraceSpan) => a.start_time - b.start_time;
+  const make = (s: TraceSpan, depth: number): TNode => ({
+    span: s,
+    depth,
+    children: (kids.get(s.span_id) ?? []).sort(byStart).map((c) => make(c, depth + 1)),
+  });
+  const rootNodes = roots.sort(byStart).map((s) => make(s, 0));
+  const min = spans.length ? Math.min(...spans.map((s) => s.start_time)) : 0;
+  const max = spans.length ? Math.max(...spans.map((s) => s.end_time)) : 1;
+  return { rootNodes, min, total: max - min || 1 };
+}
+
+function flatten(roots: TNode[], collapsed: Set<number>): TNode[] {
+  const out: TNode[] = [];
+  const walk = (n: TNode) => {
+    out.push(n);
+    if (!collapsed.has(n.span.span_id)) n.children.forEach(walk);
+  };
+  roots.forEach(walk);
+  return out;
+}
+
+function fmtMs(ns: number): string {
+  const ms = ns / 1e6;
+  if (ms >= 1000) return `${(ms / 1000).toFixed(2)} s`;
+  return `${ms.toFixed(ms < 10 ? 2 : 1)} ms`;
+}
+
+const shortKey = (k: string) => k.replace(/^(gen_ai|a2ui|adk)\./, "");
+
+interface Attr {
+  key: string;
+  value: string;
+  long: boolean;
+}
+function attrs(span: TraceSpan): Attr[] {
+  return Object.entries(span.attributes)
+    .filter(([, v]) => v != null && typeof v !== "object")
+    .map(([k, v]) => {
+      const value = String(v);
+      return { key: shortKey(k), value, long: value.length > 80 || value.includes("\n") };
+    })
+    .sort((a, b) => Number(a.long) - Number(b.long)); // short props first
 }
 
 export interface TraceDrawerProps {
@@ -66,23 +80,36 @@ export interface TraceDrawerProps {
 export function TraceDrawer({ sessionId, onClose }: TraceDrawerProps) {
   const [spans, setSpans] = useState<TraceSpan[] | null>(null);
   const [err, setErr] = useState("");
-  const [selected, setSelected] = useState<Row | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
+  const [selectedId, setSelectedId] = useState<number | null>(null);
 
   useEffect(() => {
     setSpans(null);
     setErr("");
-    setSelected(null);
     getSessionTrace(sessionId)
-      .then(setSpans)
+      .then((s) => {
+        setSpans(s);
+        setSelectedId(s.length ? s.reduce((a, b) => (a.start_time <= b.start_time ? a : b)).span_id : null);
+      })
       .catch((e) => setErr(String(e)));
   }, [sessionId]);
 
-  const { rows, totalMs } = buildRows(spans ?? []);
+  const { rootNodes, min, total } = useMemo(() => buildTree(spans ?? []), [spans]);
+  const rows = useMemo(() => flatten(rootNodes, collapsed), [rootNodes, collapsed]);
+  const selected = spans?.find((s) => s.span_id === selectedId) ?? null;
+  const totalMs = total / 1e6;
+
+  const toggle = (id: number) =>
+    setCollapsed((c) => {
+      const n = new Set(c);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
 
   return (
     <>
       <div className="drawer-scrim" onClick={onClose} />
-      <aside className="drawer">
+      <aside className="drawer drawer--trace">
         <header className="drawer-head">
           <div>
             <div className="drawer-title">Tracing 观测</div>
@@ -95,56 +122,95 @@ export function TraceDrawer({ sessionId, onClose }: TraceDrawerProps) {
           </button>
         </header>
 
-        <div className="drawer-body scroll">
-          {spans == null && !err && (
-            <div className="drawer-loading">
-              <Loader2 className="icon spin" /> 加载 trace…
-            </div>
-          )}
-          {err && <div className="error">{err}</div>}
-          {spans && spans.length === 0 && (
-            <div className="drawer-empty">该会话暂无 trace（可能尚未产生调用）。</div>
-          )}
+        {spans == null && !err && (
+          <div className="drawer-loading">
+            <Loader2 className="icon spin" /> 加载 trace…
+          </div>
+        )}
+        {err && <div className="error">{err}</div>}
+        {spans && spans.length === 0 && (
+          <div className="drawer-empty">该会话暂无 trace（可能尚未产生调用）。</div>
+        )}
 
-          {rows.length > 0 && (
-            <div className="waterfall">
-              {rows.map((r) => (
-                <div
-                  key={r.span.span_id}
-                  className={`wf-row ${selected?.span.span_id === r.span.span_id ? "active" : ""}`}
-                  onClick={() => setSelected((s) => (s?.span.span_id === r.span.span_id ? null : r))}
-                >
-                  <div className="wf-name" style={{ paddingLeft: r.depth * 14 }} title={r.span.name}>
-                    {r.span.name}
-                  </div>
-                  <div className="wf-track">
-                    <div
-                      className="wf-bar"
-                      style={{
-                        left: `${r.left * 100}%`,
-                        width: `${r.width * 100}%`,
-                        background: colorFor(r.span.name),
-                      }}
-                    />
-                  </div>
-                  <div className="wf-dur">{r.durMs.toFixed(1)}ms</div>
-                </div>
-              ))}
+        {rows.length > 0 && (
+          <div className="trace-split">
+            {/* left: span tree + timeline */}
+            <div className="trace-tree scroll">
+              {rows.map((n) => {
+                const s = n.span;
+                const left = ((s.start_time - min) / total) * 100;
+                const width = Math.max(((s.end_time - s.start_time) / total) * 100, 0.6);
+                const hasKids = n.children.length > 0;
+                return (
+                  <button
+                    key={s.span_id}
+                    className={`trace-row ${selectedId === s.span_id ? "active" : ""}`}
+                    onClick={() => setSelectedId(s.span_id)}
+                  >
+                    <span className="trace-label" style={{ paddingLeft: n.depth * 14 }}>
+                      <span
+                        className={`trace-caret ${hasKids ? "" : "hidden"} ${collapsed.has(s.span_id) ? "" : "open"}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (hasKids) toggle(s.span_id);
+                        }}
+                      >
+                        <ChevronRight className="chev" />
+                      </span>
+                      <span className="trace-dot" style={{ background: colorFor(s.name) }} />
+                      <span className="trace-name" title={s.name}>
+                        {s.name}
+                      </span>
+                    </span>
+                    <span className="trace-dur">{fmtMs(s.end_time - s.start_time)}</span>
+                    <span className="trace-track">
+                      <span
+                        className="trace-bar"
+                        style={{ left: `${left}%`, width: `${width}%`, background: colorFor(s.name) }}
+                      />
+                    </span>
+                  </button>
+                );
+              })}
             </div>
-          )}
 
-          {selected && (
-            <div className="span-detail">
-              <div className="span-detail-name">{selected.span.name}</div>
-              <div className="span-detail-dur">{selected.durMs.toFixed(2)} ms</div>
-              {attrLines(selected.span.attributes).map((a) => (
-                <div key={a} className="span-attr">
-                  {a}
-                </div>
-              ))}
+            {/* right: selected span detail */}
+            <div className="trace-detail scroll">
+              {selected ? (
+                <>
+                  <div className="td-title">{selected.name}</div>
+                  <div className="td-dur">
+                    <span className="td-dot" style={{ background: colorFor(selected.name) }} />
+                    {fmtMs(selected.end_time - selected.start_time)}
+                  </div>
+
+                  <div className="td-section">Properties</div>
+                  <div className="td-props">
+                    {attrs(selected)
+                      .filter((a) => !a.long)
+                      .map((a) => (
+                        <div key={a.key} className="td-prop">
+                          <span className="td-key">{a.key}</span>
+                          <span className="td-val">{a.value}</span>
+                        </div>
+                      ))}
+                  </div>
+
+                  {attrs(selected)
+                    .filter((a) => a.long)
+                    .map((a) => (
+                      <div key={a.key} className="td-block">
+                        <div className="td-section">{a.key}</div>
+                        <pre className="td-pre">{a.value}</pre>
+                      </div>
+                    ))}
+                </>
+              ) : (
+                <div className="drawer-empty">选择左侧的一个 span 查看详情</div>
+              )}
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </aside>
     </>
   );

@@ -1,33 +1,56 @@
 import { useState } from "react";
-import { Loader2, MoreHorizontal, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { MoreHorizontal, Plus, Trash2 } from "lucide-react";
 import type { AdkSession } from "../adk/client";
 import { sessionTitle } from "../blocks";
+import { SkillCenterButton } from "./SkillCenter";
+import { SearchButton } from "./Search";
+import volcengineLogo from "../assets/volcengine.svg";
+
+/** Hand-drawn "quick create" mark: a lightning bolt (speed) with a spark. */
+function QuickCreateIcon() {
+  return (
+    <svg
+      className="icon"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12.5 3 5.5 13h5l-1 8 8-11h-5l.5-7z" fill="currentColor" stroke="none" />
+      <path d="M19 4.5v3M17.5 6h3" opacity="0.85" />
+    </svg>
+  );
+}
 
 export interface SidebarProps {
-  apps: string[];
-  appName: string;
-  onAppChange: (app: string) => void;
   sessions: AdkSession[];
   currentSessionId: string;
   onNewChat: () => void;
+  onSearch: () => void;
+  onQuickCreate: () => void;
+  onSkillCenter: () => void;
+  onAddAgent: () => void;
   onPickSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
-  onRefresh: () => void;
-  loadingSessions: boolean;
 }
 
 export function Sidebar({
-  apps,
-  appName,
-  onAppChange,
   sessions,
   currentSessionId,
   onNewChat,
+  onSearch,
+  onQuickCreate,
+  onSkillCenter,
+  onAddAgent,
   onPickSession,
   onDeleteSession,
-  onRefresh,
-  loadingSessions,
 }: SidebarProps) {
+  // onAddAgent is now reached through the "添加 Agent" chooser, not a direct
+  // sidebar button; kept in the props contract for the App-level handler.
+  void onAddAgent;
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const sorted = [...sessions].sort(
     (a, b) => (b.lastUpdateTime ?? 0) - (a.lastUpdateTime ?? 0),
@@ -35,34 +58,25 @@ export function Sidebar({
   return (
     <aside className="sidebar">
       <div className="sidebar-top">
-        <div className="brand">VeADK Web</div>
+        <div className="brand">
+          <img className="brand-logo" src={volcengineLogo} alt="" aria-hidden />
+          VeADK
+        </div>
         <button className="new-chat" onClick={onNewChat}>
           <Plus className="icon" />
           新会话
         </button>
-        <select
-          className="agent-select"
-          value={appName}
-          onChange={(e) => onAppChange(e.target.value)}
-        >
-          {apps.map((a) => (
-            <option key={a} value={a}>
-              {a}
-            </option>
-          ))}
-        </select>
+        <SearchButton onClick={onSearch} />
+        <button className="new-chat" onClick={onQuickCreate}>
+          <QuickCreateIcon />
+          添加 Agent
+        </button>
+        <SkillCenterButton onClick={onSkillCenter} />
       </div>
 
       <div className="sidebar-history">
         <div className="history-head">
           <span>历史会话</span>
-          <button className="history-refresh" onClick={onRefresh} title="刷新">
-            {loadingSessions ? (
-              <Loader2 className="icon spin" />
-            ) : (
-              <RefreshCw className="icon" />
-            )}
-          </button>
         </div>
         <div className="history-list">
           {sorted.length === 0 && (

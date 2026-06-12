@@ -11,7 +11,8 @@ VeADK's observability follows the [OpenTelemetry](https://opentelemetry.io/docs/
 - **Visualized traces**: The complete flow of each request, from intake to response, can be traced;
 - **Structured data**: Records context, state, event types, latency, and more;
 - **Cross-component tracing**: Covers the agent, tools, memory modules, knowledge bases, and external interfaces;
-- **Multi-agent coordination**: Analyzes the invocation relationships and data flow between agents in multi-agent scenarios.
+- **Multi-agent coordination**: Analyzes the invocation relationships and data flow between agents in multi-agent scenarios;
+- **Content collection control**: Disable Agent, LLM, and tool input/output content collection with `observability.opentelemetry.trace_content` while keeping non-content trace data.
 
 ## Supported Platforms
 

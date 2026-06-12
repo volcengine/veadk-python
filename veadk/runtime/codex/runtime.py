@@ -28,7 +28,8 @@ Key guarantees (mirroring the ``cc`` runtime):
 - Codex only speaks the Responses API, so requests are routed through an
   in-process Responses→chat shim (see :mod:`veadk.runtime.codex.proxy`).
 
-Note: this requires the Codex binary on PATH and the ``codex_app_server`` SDK.
+Note: this requires the ``openai-codex`` SDK (``pip install openai-codex``),
+which bundles the Codex CLI binary via its ``openai-codex-cli-bin`` dependency.
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ import os
 import tempfile
 from typing import TYPE_CHECKING, AsyncGenerator
 
-from codex_app_server import AsyncCodex  # type: ignore[import-not-found]
+from openai_codex import AsyncCodex  # type: ignore[import-not-found]
 
 from veadk.runtime.base_runtime import BaseRuntime, build_system_append
 from veadk.runtime.codex.proxy import get_shim_url
