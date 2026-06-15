@@ -1,0 +1,50 @@
+---
+title: "Built-in defaults"
+---
+
+VeADK ships sensible defaults for common settings. When a value is specified neither in code nor in environment variables, the default applies — defaults are the fallback, environment variables are the override.
+
+The tables below list the main defaults by purpose. They are tuned for the Volcengine Ark platform and work out of the box; override any of them via [environment variables](/en/docs/references/configuration/environment-variables).
+
+## Agent and model
+
+| Setting | Default | Meaning |
+| :- | :- | :- |
+| Agent name | `veAgent` | Default name for an unnamed agent |
+| Inference model | `doubao-seed-1-8-251228` | Default inference model |
+| Model provider | `openai` | Ark is OpenAI-compatible, so `openai` by default |
+| Model API base | `https://ark.cn-beijing.volces.com/api/v3/` | Ark API base URL |
+
+## Multimodal generation
+
+| Setting | Default | Meaning |
+| :- | :- | :- |
+| Image model | `doubao-seedream-5-0-260128` | Default Ark model for image generation |
+| Video model | `doubao-seedance-2-0-260128` | Default Ark model for video generation |
+| Generation API base | `https://ark.cn-beijing.volces.com/api/v3/` | API base for the models above |
+
+## Observability reporting
+
+| Setting | Default | Meaning |
+| :- | :- | :- |
+| APMPlus endpoint | `http://apmplus-cn-beijing.volces.com:4317` | Trace export endpoint |
+| APMPlus service name | `veadk_tracing` | Default service name |
+| CozeLoop endpoint | `https://api.coze.cn/v1/loop/opentelemetry/v1/traces` | Trace report endpoint |
+| CozeLoop space name | `VeADK Space` | Default space name |
+| TLS endpoint | `https://tls-cn-beijing.volces.com:4318/v1/traces` | Trace report endpoint |
+| TLS region | `cn-beijing` | Default region |
+| Log project name | `veadk-logs` | TLS log project name |
+| Tracing instance name | `veadk-tracing` | TLS tracing instance name |
+
+## Deployment
+
+| Setting | Default | Meaning |
+| :- | :- | :- |
+| Object storage bucket | `veadk-default-bucket` | Default TOS bucket name |
+| Image repo instance | `veadk-user-instance` | Container registry instance name |
+| Image repo namespace | `veadk-user-namespace` | Container registry namespace |
+| Image repo name | `veadk-user-repo` | Container registry repository name |
+
+<Callout type="warn">
+Object storage bucket names are globally unique. Set a dedicated bucket name to avoid conflicts with other users that would cause failures.
+</Callout>

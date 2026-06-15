@@ -1,4 +1,0 @@
-{
-  "title": "可观测",
-  "pages": ["overview", "tracing", "ve-tracing", "span-attributes"]
-}

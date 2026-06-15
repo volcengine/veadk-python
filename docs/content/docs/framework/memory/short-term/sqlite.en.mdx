@@ -1,0 +1,42 @@
+---
+title: "SQLite (sqlite)"
+---
+
+The `sqlite` backend persists sessions to a local SQLite file, backed by Google ADK's `DatabaseSessionService`. It needs no external database service, but unlike `local`, sessions are written to disk and therefore **survive across processes and restarts**.
+
+## When to use
+
+- Single-node deployments that need persistence;
+- Local development where you want to keep past sessions;
+- Small data volumes with no need for distributed access.
+
+## Usage
+
+```python
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+
+stm = ShortTermMemory(
+    backend="sqlite",
+    local_database_path="./short_term_memory.db",  # DB file location
+)
+
+agent = Agent(name="demo")
+runner = Runner(agent=agent, short_term_memory=stm, app_name="memory_demo")
+```
+
+If the DB file doesn't exist, VeADK creates it automatically (including any parent directories).
+
+## Parameters
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `local_database_path` | `str` | `/tmp/veadk_local_database.db` | SQLite file path; resolved to an absolute path. |
+
+For the remaining common parameters, see [Short-term memory · Parameters](/en/docs/framework/memory/short-term#parameters).
+
+<Callout type="info">
+You can also pass a connection string directly via `db_url`, e.g. `ShortTermMemory(db_url="sqlite:///./test.db")`; then `backend` and `local_database_path` are ignored.
+</Callout>
+
+Need distributed persistence? Use [MySQL](/en/docs/framework/memory/short-term/mysql) or [PostgreSQL](/en/docs/framework/memory/short-term/postgresql).

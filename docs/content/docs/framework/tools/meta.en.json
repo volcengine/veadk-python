@@ -1,4 +1,4 @@
 {
   "title": "Tools",
-  "pages": ["builtin", "builtin-mcp", "custom-function", "feishu-channel", "system-tools"]
+  "pages": ["builtin", "builtin-mcp", "custom-function", "feishu-channel", "system-tools", "guardrail"]
 }

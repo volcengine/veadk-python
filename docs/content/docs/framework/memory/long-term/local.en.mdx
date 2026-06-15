@@ -1,0 +1,39 @@
+---
+title: "In-memory (local)"
+---
+
+The `local` backend (`InMemoryLTMBackend`) keeps a vector index in process memory for long-term memory. Memories are embedded and written to the in-memory vector store; retrieval recalls by similarity. Everything is cleared when the process exits.
+
+## When to use
+
+- Local development and debugging;
+- Validating the end-to-end long-term memory flow (write → cross-session retrieval) without standing up an external service.
+
+## Dependencies
+
+```bash
+pip install "veadk-python[extensions]"
+```
+
+And configure an embedding model (falls back to `MODEL_AGENT_API_KEY`):
+
+| Field | Env var | Description |
+| :--- | :--- | :--- |
+| `name` | `MODEL_EMBEDDING_NAME` | Embedding model name |
+| `dim` | `MODEL_EMBEDDING_DIM` | Vector dimension (varies by model) |
+| `api_base` | `MODEL_EMBEDDING_API_BASE` | Embedding API base |
+| `api_key` | `MODEL_EMBEDDING_API_KEY` | Embedding API key |
+
+## Usage
+
+```python
+from veadk import Agent
+from veadk.memory.long_term_memory import LongTermMemory
+
+ltm = LongTermMemory(backend="local", app_name="ltm_demo")
+agent = Agent(name="demo", long_term_memory=ltm)
+```
+
+For a full cross-session example, see [Long-term memory · Cross-session example](/en/docs/framework/memory/long-term#cross-session-example).
+
+Need persistence or multi-instance sharing? Use [VikingDB](/en/docs/framework/memory/long-term/vikingdb), [Mem0](/en/docs/framework/memory/long-term/mem0), [OpenSearch](/en/docs/framework/memory/long-term/opensearch), or [Redis](/en/docs/framework/memory/long-term/redis).

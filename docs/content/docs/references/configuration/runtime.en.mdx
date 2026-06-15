@@ -1,0 +1,47 @@
+---
+title: "Runtime dynamic config"
+---
+
+Environment variables and defaults are fixed at startup and don't change once the process is running. Production often calls for adjusting an agent without restarting or redeploying — swapping the prompt temporarily, or switching models to compare results. Runtime dynamic config (hot-update) addresses this.
+
+## How it works
+
+Mutable settings are hosted in a config center, in three steps:
+
+1. **Publish**: push a config describing the agent's settings to the config center;
+2. **Subscribe**: the running agent subscribes to that config;
+3. **Apply**: when the config changes, the agent fetches and updates in place, with no restart.
+
+It is backed by Volcengine's managed config service; credentials are supplied via environment variables or injected automatically by the platform in cloud deployments, so connection details need no attention.
+
+<Callout type="info">
+Dynamic config suits frequently changing content (prompt, model). Startup-time config such as secrets and connection details remains managed by [environment variables](/en/docs/references/configuration/environment-variables).
+</Callout>
+
+## Hot-updatable fields
+
+The config is JSON, with an `agent` array describing one or more agents. Each entry may include:
+
+| Field | Meaning |
+| :- | :- |
+| `id` | The target agent's identifier; must match a running agent for precise matching |
+| `name` | Name (for display and logs) |
+| `description` | Description (for display and logs) |
+| `model_name` | Model name; changing it switches the agent's model |
+| `instruction` | System prompt defining the agent's behavior |
+
+```json
+{
+  "agent": [
+    {
+      "id": "...",
+      "name": "...",
+      "description": "...",
+      "model_name": "...",
+      "instruction": "..."
+    }
+  ]
+}
+```
+
+Updates match an agent by `id`; on a match, name, description, model, and prompt are replaced immediately, with a model change triggering a smooth model switch.

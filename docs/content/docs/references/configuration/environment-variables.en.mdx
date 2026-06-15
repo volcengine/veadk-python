@@ -1,0 +1,123 @@
+---
+title: "Environment variables"
+---
+
+Environment variables are the primary configuration method, supplying secrets, connection details, and service addresses. Names are grouped by domain prefix: Volcengine account, models, built-in tools, databases, and observability. Every variable can also be expressed as the equivalent nested structure in `config.yaml`.
+
+<Callout type="info">
+Supply secrets through environment variables or `config.yaml`. The tables below list common variables by domain; configure only those for the capabilities actually used.
+</Callout>
+
+## Volcengine account
+
+Prefix `VOLCENGINE_`, for accessing Volcengine cloud services.
+
+| Variable | Meaning |
+| :- | :- |
+| `VOLCENGINE_ACCESS_KEY` | Volcengine Access Key |
+| `VOLCENGINE_SECRET_KEY` | Volcengine Secret Key |
+
+```yaml title="config.yaml"
+volcengine:
+  access_key:
+  secret_key:
+```
+
+## Models
+
+Prefix `MODEL_`, split into inference, embedding, and judge models.
+
+| Group | Variable | Meaning |
+| :- | :- | :- |
+| Inference | `MODEL_AGENT_NAME` | Model name |
+| | `MODEL_AGENT_PROVIDER` | LiteLLM-compatible provider |
+| | `MODEL_AGENT_API_BASE` | API base URL |
+| | `MODEL_AGENT_API_KEY` | API key |
+| Embedding | `MODEL_EMBEDDING_NAME` | Embedding model name |
+| | `MODEL_EMBEDDING_DIM` | Embedding dimension |
+| | `MODEL_EMBEDDING_API_BASE` | API base URL |
+| | `MODEL_EMBEDDING_API_KEY` | API key |
+| Judge | `MODEL_JUDGE_NAME` | Model name |
+| | `MODEL_JUDGE_API_BASE` | API base URL |
+| | `MODEL_JUDGE_API_KEY` | API key |
+
+## Built-in tools
+
+Prefix `TOOL_`, configured only when the corresponding tool is used.
+
+| Group | Variable | Meaning |
+| :- | :- | :- |
+| VeSearch | `TOOL_VESEARCH_ENDPOINT` | Volcengine search bot ID |
+| | `TOOL_VESEARCH_API_KEY` | Volcengine search service key |
+| WebScraper | `TOOL_WEB_SCRAPER_ENDPOINT` | WebScraper endpoint |
+| | `TOOL_WEB_SCRAPER_API_KEY` | WebScraper key |
+| Lark | `TOOL_LARK_ENDPOINT` | Lark app ID |
+| | `TOOL_LARK_API_KEY` | Lark app secret |
+| | `TOOL_LARK_TOKEN` | Lark user token |
+| Feishu Channel | `TOOL_FEISHU_CHANNEL_APP_ID` | Feishu bot app ID |
+| | `TOOL_FEISHU_CHANNEL_APP_SECRET` | Feishu bot app secret |
+| | `TOOL_FEISHU_CHANNEL_TRANSPORT` | Transport mode, default `ws` |
+| LAS | `TOOL_LAS_URL` | LAS SSE service URL (with token) |
+| | `TOOL_LAS_DATASET_ID` | LAS dataset ID |
+| VOD | `TOOL_VOD_GROUPS` | Video editing capability groups |
+| | `TOOL_VOD_TIMEOUT` | Connection timeout |
+
+## Databases
+
+Prefix `DATABASE_`, grouped by storage type. Memory and the knowledge base read the matching config based on the selected backend.
+
+| Group | Variable | Meaning |
+| :- | :- | :- |
+| OpenSearch | `DATABASE_OPENSEARCH_HOST` | Host (without scheme) |
+| | `DATABASE_OPENSEARCH_PORT` | Port, default 9200 |
+| | `DATABASE_OPENSEARCH_USERNAME` | Username |
+| | `DATABASE_OPENSEARCH_PASSWORD` | Password |
+| | `DATABASE_OPENSEARCH_CERT_PATH` | Cert path (recommended in production) |
+| | `DATABASE_OPENSEARCH_USE_SSL` | Enable SSL, default True |
+| MySQL | `DATABASE_MYSQL_HOST` | Host |
+| | `DATABASE_MYSQL_USER` | Username |
+| | `DATABASE_MYSQL_PASSWORD` | Password |
+| | `DATABASE_MYSQL_DATABASE` | Database name |
+| | `DATABASE_MYSQL_CHARSET` | Charset, default utf8 |
+| Redis | `DATABASE_REDIS_HOST` | Host |
+| | `DATABASE_REDIS_PORT` | Port, default 6379 |
+| | `DATABASE_REDIS_PASSWORD` | Password |
+| | `DATABASE_REDIS_DB` | Database number, default 0 |
+| VikingDB | `DATABASE_VIKING_PROJECT` | Project name |
+| | `DATABASE_VIKING_REGION` | Region |
+| TOS | `DATABASE_TOS_ENDPOINT` | Endpoint |
+| | `DATABASE_TOS_REGION` | Region |
+| | `DATABASE_TOS_BUCKET` | Bucket name |
+
+## Observability
+
+Prefix `OBSERVABILITY_`, configuring where traces and metrics are reported.
+
+| Group | Variable | Meaning |
+| :- | :- | :- |
+| APMPlus | `OBSERVABILITY_OPENTELEMETRY_APMPLUS_ENDPOINT` | Report endpoint |
+| | `OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY` | Auth key |
+| | `OBSERVABILITY_OPENTELEMETRY_APMPLUS_SERVICE_NAME` | Service name |
+| CozeLoop | `OBSERVABILITY_OPENTELEMETRY_COZELOOP_ENDPOINT` | Report endpoint |
+| | `OBSERVABILITY_OPENTELEMETRY_COZELOOP_API_KEY` | Auth key |
+| | `OBSERVABILITY_OPENTELEMETRY_COZELOOP_SERVICE_NAME` | Space ID |
+| TLS | `OBSERVABILITY_OPENTELEMETRY_TLS_ENDPOINT` | Report endpoint |
+| | `OBSERVABILITY_OPENTELEMETRY_TLS_SERVICE_NAME` | topic_id |
+| | `OBSERVABILITY_OPENTELEMETRY_TLS_REGION` | Region |
+| Prometheus | `OBSERVABILITY_PROMETHEUS_PUSHGATEWAY_URL` | Pushgateway URL |
+| | `OBSERVABILITY_PROMETHEUS_USERNAME` | Username |
+| | `OBSERVABILITY_PROMETHEUS_PASSWORD` | Password |
+
+## Others
+
+| Variable | Meaning |
+| :- | :- |
+| `PROMPT_PILOT_API_KEY` | Prompt Pilot product key |
+| `VEIDENTITY_REGION` | Identity service region, default cn-beijing |
+| `VEIDENTITY_ENDPOINT` | Identity service endpoint (optional, auto-generated if omitted) |
+
+```yaml title="config.yaml"
+veidentity:
+  region: cn-beijing
+  endpoint:  # optional, auto-generated if omitted
+```

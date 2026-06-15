@@ -1,0 +1,52 @@
+---
+title: "Advanced"
+---
+
+## Advanced switches
+
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `enable_authz` | `bool` | `False` | Enable authorization checks; injects `check_agent_authorization` into `before_agent_callback`. |
+| `enable_supervisor` | `bool` | `False` | Enable the supervisor flow for supervised orchestration of sub-agents. |
+| `enable_ghostchar` | `bool` | `False` | Enable the ghost-char tool, embedding a marker in text responses. |
+| `enable_dataset_gen` | `bool` | `False` | Enable automatic dataset generation; collects session data via callback for evaluation/fine-tuning. |
+| `enable_a2ui` | `bool` | `False` | Enable A2UI (agent-driven UI), returning declarative UI rendered by a client. Requires `veadk-python[a2ui]`. |
+| `a2ui_catalog` | `Any` | `None` | A2UI component catalog; only used when `enable_a2ui=True`. Auto-discovers `catalog.json` next to the agent when unset. |
+| `enable_tunnel` | `bool` | `False` | Enable the tunnel, surfacing on-prem resource servers (e.g. MCP) connected via `veadk.tunnel` as tools. |
+
+See [A2UI](/en/docs/framework/a2ui) and [On-prem MCP tunnel](/en/docs/framework/tunnel).
+
+## Tracing & observability
+
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `tracers` | `list[BaseTracer]` | `[]` | Tracer list. If an exporter is enabled via env and none is passed, VeADK auto-creates one. |
+
+VeADK reads these env vars to auto-attach exporters:
+
+| Env var | Effect |
+| :--- | :--- |
+| `ENABLE_APMPLUS` | Enable the APMPlus exporter |
+| `ENABLE_COZELOOP` | Enable the CozeLoop exporter |
+| `ENABLE_TLS` | Enable the TLS (Log Service) exporter |
+
+See [Observability · Overview](/en/docs/framework/observability).
+
+## Commonly used inherited ADK fields
+
+
+`Agent` extends `LlmAgent`, so these ADK fields are also frequently used:
+
+| Parameter | Type | Description |
+| :--- | :--- | :--- |
+| `output_schema` | `type[BaseModel]` | Constrain the output to a structured object (Pydantic model). |
+| `before_agent_callback` / `after_agent_callback` | `Callable \| list` | Callbacks before/after the agent runs; several VeADK switches append here. |
+| `before_tool_callback` / `after_tool_callback` | `Callable \| list` | Callbacks before/after a tool call, often for guardrails. |
+| `before_model_callback` / `after_model_callback` | `Callable \| list` | Callbacks before/after a model call. |
+| `disallow_transfer_to_parent` / `disallow_transfer_to_peers` | `bool` | Forbid transfer to parent/peers in multi-agent setups. |
+
+<Callout type="warn">
+  When a switch appends a callback, VeADK merges intelligently: a single callback becomes a list, an existing list is appended to — your callbacks are never overwritten.
+</Callout>

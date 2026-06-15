@@ -1,99 +1,44 @@
 ---
 title: "Runtime"
-description: "Switch the runtime that drives the agent loop via Agent(runtime=...): adk by default, or codex."
+status: new
 ---
 
-VeADK's agent loop is driven by a **pluggable runtime**. `Agent(runtime=...)`
-selects which one executes that loop, while the surrounding
-[`Runner`](/en/docs/framework/runner) always owns session, memory, and tracing —
-switching runtimes does not change those.
+The runtime decides how an agent's inner loop runs — how each turn calls the model, parses intent, and invokes tools. The default runtime is built on Google ADK's execution flow and works out of the box. You can also switch to another execution backend, or insert shared processing into the flow (auth, logging, retries) without touching the agent itself.
 
-| Runtime | Description | Dependencies |
-| :-- | :-- | :-- |
-| `adk` (default) | Google ADK's built-in `BaseLlmFlow`, driven directly by `Agent`; no separate runtime object. | none |
-| `codex` | Uses the OpenAI Codex SDK as the agent harness for the invocation. | optional `openai-codex` extras |
+## Basic usage
 
-## Switching the runtime
+The ADK runtime is the default — no extra configuration needed:
 
-```python
+```python title="agent.py"
+import asyncio
+from veadk import Agent, Runner
+
+agent = Agent(name="assistant")  # uses the ADK runtime by default
+print(asyncio.run(Runner(agent=agent).run("Hello")))
+```
+
+## Switch the execution backend
+
+Use `runtime` to choose the inner-loop backend:
+
+```python title="agent.py"
+agent = Agent(name="assistant", runtime="codex")
+```
+
+| Value | Description |
+| :--- | :--- |
+| `adk` (default) | Google ADK's built-in execution flow; fits almost every case. |
+| `codex` | An alternative backend for advanced customization. |
+
+## Request processing
+
+Insert shared, cross-cutting processing into every run — auth, logging, retries, performance monitoring — without touching business logic. Pass a processor to `run_processor`, for example to enforce login via identity auth:
+
+```python title="agent.py"
 from veadk import Agent
+from veadk.integrations.ve_identity import AuthRequestProcessor
 
-# Default runtime: adk
-agent = Agent(name="assistant")
-
-# Switch to the codex runtime
-agent = Agent(name="coder", runtime="codex")
+agent = Agent(name="assistant", run_processor=AuthRequestProcessor())
 ```
 
-The `runtime` field is `Literal["adk", "codex"]`, default `"adk"`.
-
-## adk runtime (default)
-
-The default; no extra configuration or dependencies. The agent loop runs on
-Google ADK's built-in LLM flow — identical to omitting `runtime`.
-
-## codex runtime
-
-Drives the agent loop with the OpenAI Codex SDK as the harness.
-
-### Dependencies
-
-The `codex` runtime needs optional extras (it **fails fast** with an install
-hint when they are missing):
-
-```bash
-pip install openai-codex fastapi uvicorn
-```
-
-`openai-codex` bundles the Codex CLI binary via `openai-codex-cli-bin`.
-
-### Configuration
-
-```python
-agent = Agent(
-    name="coder",
-    runtime="codex",
-    model_name="<your-model>",
-    model_api_base="<chat-endpoint-base-url>",
-    model_api_key="<api-key>",
-)
-```
-
-- **Model**: taken from `Agent(model_name=...)` (first entry if a list), else the
-  `OPENAI_MODEL` env var; fails fast if neither resolves.
-- **Endpoint**: the `codex` runtime requires `model_api_base` and
-  `model_api_key` (or `OPENAI_BASE_URL` / `OPENAI_API_KEY`). Missing either is an
-  error.
-
-### How it works
-
-- Codex speaks only the **Responses API**, whereas the backend is typically a
-  Chat endpoint, so requests are routed through an **in-process Responses→Chat
-  shim** (`veadk.runtime.codex.proxy`).
-- The Codex subprocess is isolated from the host's `~/.codex` via a dedicated
-  `CODEX_HOME` with a generated `config.toml`; the backend credential is injected
-  through the provider's `env_key`.
-- Because Codex has no clean channel to append to its system prompt, the agent's
-  identity/instruction is folded into a leading preamble of the input rather than
-  the transcript.
-- The surrounding `Runner` still owns session, memory, and tracing.
-
-<Callout type="warn">
-  Codex may issue requests for an auxiliary model (e.g. `codex-auto-review`)
-  during a run; if your endpoint/account lacks access to it, those steps fail.
-  Make sure the endpoint can serve the models Codex requires.
-</Callout>
-
-## Using it on the Harness server
-
-The deployed [Harness server](/en/docs/cli/harness-cli) exposes the same switch:
-the harness spec's `runtime` field, and the `--runtime` option on
-`veadk harness add/invoke` (`adk` or `codex`).
-
-## Adding a custom runtime
-
-Runtimes are resolved via `veadk.runtime.get_runtime(name)` and implement the
-`veadk.runtime.base_runtime.BaseRuntime` abstract base (an async
-`run_async(agent, ctx)` event generator). `adk` is handled inline by `Agent` and
-never goes through the registry; other runtimes (like `codex`) are resolved
-there.
+When unset, a default no-op processor is used and behavior is unchanged.

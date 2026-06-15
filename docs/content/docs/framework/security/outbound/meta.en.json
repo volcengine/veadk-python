@@ -1,4 +1,0 @@
-{
-  "title": "Outbound Auth",
-  "pages": ["api-key", "oauth2-m2m", "oauth2-user-federation", "trusted-mcp"]
-}

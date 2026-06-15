@@ -1,0 +1,52 @@
+---
+title: "进阶能力"
+---
+
+## 高级能力开关
+
+
+| 参数 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `enable_authz` | `bool` | `False` | 启用授权校验，注入 `check_agent_authorization` 到 `before_agent_callback`。 |
+| `enable_supervisor` | `bool` | `False` | 启用 supervisor 流程，对子智能体进行监督式编排。 |
+| `enable_ghostchar` | `bool` | `False` | 启用幽灵字符工具，在文本响应中嵌入特定标记。 |
+| `enable_dataset_gen` | `bool` | `False` | 启用数据集自动生成，运行后通过回调收集会话数据用于评测/微调。 |
+| `enable_a2ui` | `bool` | `False` | 启用 A2UI（智能体驱动 UI），让智能体返回可被前端渲染的声明式 UI。需安装 `veadk-python[a2ui]`。 |
+| `a2ui_catalog` | `Any` | `None` | A2UI 组件目录，仅在 `enable_a2ui=True` 时生效。为空时自动发现智能体目录下的 `catalog.json`。 |
+| `enable_tunnel` | `bool` | `False` | 启用隧道，把通过 `veadk.tunnel` 接入的本地资源服务器（如 MCP）暴露为工具。 |
+
+参见 [A2UI](/cn/docs/framework/a2ui) 与[本地 MCP 隧道](/cn/docs/framework/tunnel)。
+
+## 追踪与可观测
+
+
+| 参数 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `tracers` | `list[BaseTracer]` | `[]` | 追踪器列表。若通过环境变量启用了导出器且未显式传入，VeADK 会自动创建一个。 |
+
+VeADK 读取以下环境变量自动挂载导出器：
+
+| 环境变量 | 作用 |
+| :--- | :--- |
+| `ENABLE_APMPLUS` | 启用 APMPlus 导出器 |
+| `ENABLE_COZELOOP` | 启用 CozeLoop 导出器 |
+| `ENABLE_TLS` | 启用 TLS（日志服务）导出器 |
+
+参见[可观测 · 概览](/cn/docs/framework/observability)。
+
+## 继承自 ADK 的常用字段
+
+
+`Agent` 继承自 `LlmAgent`，以下 ADK 字段也很常用：
+
+| 参数 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `output_schema` | `type[BaseModel]` | 约束模型输出为结构化对象（Pydantic 模型）。 |
+| `before_agent_callback` / `after_agent_callback` | `Callable \| list` | 执行前/后的回调。VeADK 的多个开关会自动向其中追加回调。 |
+| `before_tool_callback` / `after_tool_callback` | `Callable \| list` | 工具调用前/后的回调，常用于护栏。 |
+| `before_model_callback` / `after_model_callback` | `Callable \| list` | 模型调用前/后的回调。 |
+| `disallow_transfer_to_parent` / `disallow_transfer_to_peers` | `bool` | 在多智能体中禁止向父/同级转交。 |
+
+<Callout type="warn">
+  当某个开关需要追加回调时，VeADK 会智能合并：已有单个回调则组成列表，已是列表则追加，你的回调不会被覆盖。
+</Callout>

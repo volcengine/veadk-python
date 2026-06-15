@@ -1,6 +1,5 @@
 ---
 title: "执行引擎"
-description: "Runner 协调 Agent、工具与回调，管理信息流与状态，并支持企业级多租户数据隔离。"
 ---
 
 `Runner` 是 ADK 运行时的核心组件：它协调你定义的 Agent、工具、回调等组件，让它们共同响应用户输入，同时管理信息流、状态变化，以及与外部服务（如 LLM、工具）和存储的交互。
@@ -93,10 +92,3 @@ asyncio.run(main())
 <Callout type="info">
 `run_async()` 在调用前需存在对应会话。当 `Runner` 配置了短期记忆时，`run()` 会按需自动创建会话；若直接使用 `run_async()`，请确保 `session_id` 对应的会话已创建。
 </Callout>
-
-## 下一步
-
-<Cards>
-  <Card title="本地可视化调试" href="/cn/docs/framework/getting-started/local-debugging" description="在浏览器中观察 Runner 的执行过程。" />
-  <Card title="短期记忆" href="/cn/docs/framework/memory/short-term" description="为 Runner 配置会话级记忆。" />
-</Cards>

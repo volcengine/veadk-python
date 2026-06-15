@@ -1,0 +1,34 @@
+---
+title: "配置"
+---
+
+VeADK 将配置与代码分离。模型密钥、数据库连接、服务地址会随环境变化，也不宜写入源码，因此统一由配置提供。同一份代码即可在本地、测试与生产间迁移，密钥也不会进入代码仓库。
+
+配置分为三层，由静到动：
+
+- **环境变量**：启动时读取，最常用。存放模型密钥与连接信息，可通过系统环境变量、`.env` 或 `config.yaml` 提供。
+- **内置默认值**：常用项均有合理缺省，零配置即可运行。
+- **运行时动态配置**：部署后无需重启，热更新提示词、模型等设定。
+
+## 优先级
+
+同一项配置在多处出现时，按以下顺序取值（越靠前优先级越高）：
+
+1. 系统环境变量
+2. 项目根目录下的 `.env` 文件
+3. `config.yaml` 文件
+4. 框架内置默认值
+
+`config.yaml` 适合集中管理大部分配置，系统环境变量用于在特定环境临时覆盖个别项；未提供的项回落到内置默认值。
+
+<Callout type="warn">
+密钥应放入环境变量或 `config.yaml`，**切勿硬编码到代码**。`.env` 与 `config.yaml` 都应加入 `.gitignore`，避免提交到代码仓库。
+</Callout>
+
+## 三层配置
+
+<Cards>
+  <Card title="环境变量" href="/cn/docs/references/configuration/environment-variables" description="按领域分组的环境变量与 config.yaml 对照，存放密钥与连接信息。" />
+  <Card title="内置默认值" href="/cn/docs/references/configuration/constants" description="零配置即可运行：框架为常用项预置的缺省值。" />
+  <Card title="运行时动态配置" href="/cn/docs/references/configuration/runtime" description="部署后无需重启，热更新提示词与模型等设定。" />
+</Cards>

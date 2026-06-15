@@ -1,0 +1,39 @@
+---
+title: "本地内存（local）"
+---
+
+`local` 后端（`InMemoryLTMBackend`）在进程内存中维护一个向量索引来存取长期记忆。记忆会被 embedding 后写入内存向量库，检索时按相似度召回。进程退出即清空。
+
+## 何时使用
+
+- 本地开发与调试；
+- 验证长期记忆的端到端流程（写入 → 跨会话检索），无需搭建外部服务。
+
+## 依赖
+
+```bash
+pip install "veadk-python[extensions]"
+```
+
+并配置 embedding 模型（缺省时复用 `MODEL_AGENT_API_KEY`）：
+
+| 配置项 | 环境变量 | 说明 |
+| :--- | :--- | :--- |
+| `name` | `MODEL_EMBEDDING_NAME` | embedding 模型名 |
+| `dim` | `MODEL_EMBEDDING_DIM` | 向量维度（随模型不同而不同） |
+| `api_base` | `MODEL_EMBEDDING_API_BASE` | embedding API base |
+| `api_key` | `MODEL_EMBEDDING_API_KEY` | embedding API Key |
+
+## 用法
+
+```python
+from veadk import Agent
+from veadk.memory.long_term_memory import LongTermMemory
+
+ltm = LongTermMemory(backend="local", app_name="ltm_demo")
+agent = Agent(name="demo", long_term_memory=ltm)
+```
+
+完整跨会话示例见[长期记忆 · 跨会话示例](/cn/docs/framework/memory/long-term#跨会话示例)。
+
+需要持久化或多实例共享？请改用 [VikingDB](/cn/docs/framework/memory/long-term/vikingdb)、[Mem0](/cn/docs/framework/memory/long-term/mem0)、[OpenSearch](/cn/docs/framework/memory/long-term/opensearch) 或 [Redis](/cn/docs/framework/memory/long-term/redis)。

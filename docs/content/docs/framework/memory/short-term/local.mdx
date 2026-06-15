@@ -1,0 +1,33 @@
+---
+title: "本地内存（local）"
+---
+
+`local` 后端把会话保存在进程内存中，底层使用 Google ADK 的 `InMemorySessionService`。它不依赖任何外部服务，也不落盘——进程退出，会话即清空。
+
+## 何时使用
+
+- 本地开发与调试；
+- 单元测试、示例脚本等临时场景；
+- 不需要会话跨进程/跨重启保留时。
+
+## 用法
+
+```python
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+
+stm = ShortTermMemory(backend="local")  # 默认即为 local
+
+agent = Agent(name="demo")
+runner = Runner(agent=agent, short_term_memory=stm)
+```
+
+<Callout type="info">
+`local` 是 `ShortTermMemory` 的默认后端。若 `Runner` 未收到任何短期记忆或会话服务，也会自动创建一个 `local` 实例兜底。
+</Callout>
+
+## 参数
+
+`local` 后端无需额外配置，仅使用 `ShortTermMemory` 的通用参数。详见[短期记忆 · 参数](/cn/docs/framework/memory/short-term#参数)。
+
+需要会话在重启后仍然保留？请改用 [SQLite](/cn/docs/framework/memory/short-term/sqlite)。

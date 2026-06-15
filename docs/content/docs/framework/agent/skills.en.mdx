@@ -1,6 +1,5 @@
 ---
-title: "Agent Skills"
-description: "Inject reusable domain knowledge and scripts into an Agent on demand, with local and sandbox execution modes."
+title: "Skills"
 ---
 
 Skills are reusable "prompt packages" that inject specific domain knowledge, operating procedures, and scripts into an Agent. Instead of stuffing all prompts into `instruction` at once, skills use **progressive prompt loading**: the Agent loads a skill's full content only when needed, which keeps the context length under control and improves execution accuracy.
@@ -19,18 +18,19 @@ When `skills_mode` is not set explicitly, VeADK infers it from the runtime envir
 
 A local skill consists of its own directory containing a single `SKILL.md` file:
 
-```bash
-skills/
-└── kb_skill/
-    └── SKILL.md
-```
+<Files>
+  <Folder name="skills" defaultOpen>
+    <Folder name="kb_skill" defaultOpen>
+      <File name="SKILL.md" />
+    </Folder>
+  </Folder>
+</Files>
 
 `SKILL.md` declares `name` and `description` in frontmatter, followed by the skill body:
 
 ```markdown title="skills/kb_skill/SKILL.md"
 ---
 name: kb_skill
-description: Help the user create a knowledge base
 ---
 
 ...body (operating steps, constraints, script descriptions, etc.)
@@ -106,10 +106,3 @@ agent = Agent(
 | `skills_mode` | `"local" \| "skills_sandbox" \| "aio_sandbox"` | Skill execution mode; inferred automatically when omitted. |
 | `enable_skills_checklist` | `bool` | Whether to enable the skill checklist; defaults to `False`. |
 | `enable_dynamic_load_skills` | `bool` | Whether to enable dynamic loading of skills; defaults to `False`. |
-
-## Next steps
-
-<Cards>
-  <Card title="Create an agent" href="/en/docs/framework/agent/create" description="Configure the model, tools, and metadata for an agent." />
-  <Card title="Add tools" href="/en/docs/framework/tools/builtin" description="Web search, code sandbox, image & video generation." />
-</Cards>

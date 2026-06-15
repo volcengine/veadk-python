@@ -1,0 +1,43 @@
+---
+title: "A2UI（智能体驱动 UI）"
+status: new
+---
+
+A2UI 让智能体不只返回纯文本，还能返回**富交互界面**——卡片、表单、行列布局等，由前端以原生组件渲染。适合状态卡片、信息摘要、选项列表、简单表单等天然适合可视化的场景。
+
+<Callout type="info">
+  A2UI 依赖可选组件包：`pip install "veadk-python[a2ui]"`。
+</Callout>
+
+## 启用
+
+创建智能体时设置 `enable_a2ui=True`，智能体即可在合适的时候返回界面。默认使用内置的基础组件集，包含卡片、文本、按钮、分割线等常用组件：
+
+```python title="agent.py"
+from veadk import Agent
+
+agent = Agent(
+    name="ui_agent",
+    instruction="当答案天然适合可视化（状态卡片、摘要、选项、简单表单）时，用富界面回复；其余情况用纯文本。",
+    enable_a2ui=True,
+)
+```
+
+是否返回界面由模型按 `instruction` 判断——在提示词里说明「何时该用界面」，效果最佳。
+
+## 查看效果
+
+A2UI 界面由前端渲染。用 [VeADK Frontend](/cn/docs/framework/frontend) 启动界面，与智能体对话即可看到返回的卡片等组件。
+
+## 自定义组件
+
+内置组件之外，企业可以扩展自己的组件（如营收图表、订单卡片）。一个自定义组件分两部分：
+
+- **后端**：声明一份组件清单，告诉模型有哪些可用组件；
+- **前端**：为每个组件提供一个渲染器。
+
+把自定义组件清单传给智能体的 `a2ui_catalog` 即可启用。前端渲染器的接入方式见 [VeADK Frontend · 添加企业自定义组件](/cn/docs/framework/frontend#添加企业自定义组件)。
+
+<Callout type="info">
+  未提供渲染器的组件会回退为可折叠的 JSON 视图，因此不会导致界面出错。
+</Callout>

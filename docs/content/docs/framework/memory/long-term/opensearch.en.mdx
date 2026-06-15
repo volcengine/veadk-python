@@ -1,0 +1,44 @@
+---
+title: "OpenSearch (opensearch)"
+---
+
+The `opensearch` backend (`OpensearchLTMBackend`) uses OpenSearch as the vector store. Memories are embedded and written to OpenSearch, with a per-user index (`{index}_{user_id}`), and retrieved by similarity. It is the **default backend** for `LongTermMemory`.
+
+## When to use
+
+- You already run an OpenSearch cluster and want self-hosted vector search;
+- You need persistence with full control over indexing/retrieval.
+
+## Dependencies
+
+```bash
+pip install "veadk-python[extensions]"
+```
+
+## Configuration
+
+OpenSearch connection is read via `OpensearchConfig` (env prefix `DATABASE_OPENSEARCH_`); embedding via `MODEL_EMBEDDING_*`.
+
+| Field | Env var | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `host` | `DATABASE_OPENSEARCH_HOST` | `""` | OpenSearch host. |
+| `port` | `DATABASE_OPENSEARCH_PORT` | `9200` | Port. |
+| `username` | `DATABASE_OPENSEARCH_USERNAME` | `""` | Username. |
+| `password` | `DATABASE_OPENSEARCH_PASSWORD` | `""` | Password. |
+| `use_ssl` | `DATABASE_OPENSEARCH_USE_SSL` | `true` | Whether to enable SSL. |
+| `cert_path` | `DATABASE_OPENSEARCH_CERT_PATH` | `""` | CA cert path; when empty, certificates are not verified (a security risk; warns). |
+
+## Usage
+
+```python
+from veadk import Agent
+from veadk.memory.long_term_memory import LongTermMemory
+
+# index must be lowercase, only a-z0-9_-., and not start with _ or -
+ltm = LongTermMemory(backend="opensearch", index="ltm_demo")
+agent = Agent(name="demo", long_term_memory=ltm)
+```
+
+<Callout type="warn">
+`index` must follow OpenSearch naming rules: all lowercase, only `a-z0-9_-.`, and not starting with `_` or `-`, otherwise a `ValueError` is raised. In production, set `cert_path` to enable certificate verification.
+</Callout>

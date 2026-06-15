@@ -1,0 +1,50 @@
+---
+title: "PostgreSQL (postgresql)"
+---
+
+The `postgresql` backend stores sessions in a PostgreSQL database, backed by Google ADK's `DatabaseSessionService`. Multiple agent instances can connect to the same database for shared, distributed persistence.
+
+## When to use
+
+- Production, multi-instance / distributed deployments;
+- Teams already using PostgreSQL as shared storage.
+
+## Configuration
+
+Provide connection details via `config.yaml` (or the matching environment variables) — **never hard-code the password**. VeADK reads them through `PostgreSqlConfig`, with the env prefix `DATABASE_POSTGRESQL_`:
+
+```yaml title="config.yaml"
+database:
+  postgresql:
+    host:       # host or IP
+    port: 5432
+    user:
+    password:
+    database:
+```
+
+| Field | Env var | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `host` | `DATABASE_POSTGRESQL_HOST` | `""` | Database host. |
+| `port` | `DATABASE_POSTGRESQL_PORT` | `5432` | Port. |
+| `user` | `DATABASE_POSTGRESQL_USER` | `""` | Username. |
+| `password` | `DATABASE_POSTGRESQL_PASSWORD` | `""` | Password. |
+| `database` | `DATABASE_POSTGRESQL_DATABASE` | `""` | Database name. |
+
+## Usage
+
+```python
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+
+stm = ShortTermMemory(backend="postgresql")  # connection details from config.yaml / env
+
+agent = Agent(name="demo")
+runner = Runner(agent=agent, short_term_memory=stm, app_name="memory_demo")
+```
+
+To forward driver args such as connection pooling, use `db_kwargs`.
+
+<Callout type="info">
+VeADK auto-selects the sync or async PostgreSQL driver (`psycopg`/`asyncpg`) based on the runtime. Special characters in the username/password are URL-encoded automatically. You can [provision PostgreSQL on Volcengine](https://www.volcengine.com/product/rds-pg).
+</Callout>

@@ -1,0 +1,120 @@
+---
+title: "使用 OAuth2 用户委托进行出站认证"
+---
+
+OAuth2 用户委托（`USER_FEDERATION`）用于让智能体**代表某个用户**访问第三方服务（如该用户的 GitHub 仓库、火山引擎资源）。与 [M2M](/cn/docs/framework/oauth2-m2m) 不同，它需要用户**首次授权**：智能体返回一个授权链接，用户同意后令牌才可用。授权流程由 `AuthRequestProcessor` 在运行时驱动。`VeIdentityFunctionTool` / `VeIdentityMcpToolset` 的通用用法见[安全概述](/cn/docs/framework/security#出站认证)。
+
+## 创建 OAuth2 用户委托凭据
+
+1. 登录火山引擎控制台，进入 **Agent Identity** 服务。
+2. 选择 **身份认证 > 出站凭据托管 > OAuth Client**。
+3. 点击 **新建 > 新建 OAuth Client**。
+4. 在 **OAuth2 流程** 中选择 **用户委托（USER_FEDERATION）**。
+
+配置 Provider 时除 Client ID / Secret 等信息外，还需填写**回调 URL**（见下）。可选三种来源：内置 Vendor（Lark / Coze / Google / GitHub）、OIDC 配置（自定义，填 Discovery URL）、自定义 OAuth2 配置（填 Issuer、授权端点、令牌端点）。
+
+## 回调地址
+
+在第三方 OAuth2 提供商中配置回调地址时，使用对应区域的 Agent Identity 回调地址：
+
+- **北京**：`https://auth.id.cn-beijing.volces.com/api/v1/oauth2callback`
+- **上海**：`https://auth.id.cn-shanghai.volces.com/api/v1/oauth2callback`
+- **广州**：`https://auth.id.cn-guangzhou.volces.com/api/v1/oauth2callback`
+
+用户授权后，提供商将授权码（`code`）和状态（`state`）重定向到该地址，Agent Identity 负责后续的令牌交换与凭据托管。
+
+## 在函数工具中使用
+
+用 `oauth2_auth(..., auth_flow="USER_FEDERATION", callback_url=...)` 创建配置。令牌默认注入到 `access_token` 参数：
+
+```python
+from veadk.integrations.ve_identity import VeIdentityFunctionTool, oauth2_auth
+import aiohttp
+
+async def access_github(access_token: str, repo_owner: str, repo_name: str):
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    url = f"https://api.github.com/repos/{repo_owner}/{repo_name}"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as resp:
+            return await resp.json()
+
+tool = VeIdentityFunctionTool(
+    func=access_github,
+    auth_config=oauth2_auth(
+        provider_name="github-oauth2-provider",
+        scopes=["repo", "user"],
+        auth_flow="USER_FEDERATION",
+        callback_url="https://your-app.com/oauth/callback",
+    ),
+)
+```
+
+## 用 AuthRequestProcessor 驱动授权流程
+
+用户委托需要在运行时处理授权：把 `AuthRequestProcessor()` 传给 `Agent` 的 `run_processor`，它会拦截执行、在缺少授权时返回授权链接，引导用户完成授权。下例用 `Agent` + `Runner` 接入两个 MCP 服务——注意**每个服务用各自的 Provider 名称**：
+
+```python
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.integrations.ve_identity import VeIdentityMcpToolset, oauth2_auth
+from veadk.integrations.ve_identity.auth_processor import AuthRequestProcessor
+from google.adk.tools.mcp_tool.mcp_session_manager import (
+    StreamableHTTPConnectionParams,
+)
+
+# ECS 工具集
+ecs_tools = VeIdentityMcpToolset(
+    auth_config=oauth2_auth(
+        provider_name="volc-ecs-oauth2-provider",
+        scopes=["read"],
+        auth_flow="USER_FEDERATION",
+    ),
+    connection_params=StreamableHTTPConnectionParams(
+        url="https://ecs.mcp.volcbiz.com/ecs/mcp",
+    ),
+)
+
+# 云助手工具集（不同服务用不同的 Provider 名称）
+cloud_assistant_tools = VeIdentityMcpToolset(
+    auth_config=oauth2_auth(
+        provider_name="volc-cloud-assistant-oauth2-provider",
+        scopes=["read"],
+        auth_flow="USER_FEDERATION",
+    ),
+    connection_params=StreamableHTTPConnectionParams(
+        url="https://ecs.mcp.volcbiz.com/cloud_assistant/mcp",
+    ),
+)
+
+agent = Agent(
+    tools=[ecs_tools, cloud_assistant_tools],
+    instruction="你是火山引擎 ECS 助手，可以查询 ECS 实例信息并执行服务器命令。",
+    run_processor=AuthRequestProcessor(),  # 驱动用户授权流程
+)
+
+runner = Runner(agent=agent)
+asyncio.run(
+    runner.run(
+        messages="先查询我的 ECS 实例列表，然后选择一个运行中的实例，"
+        "在上面执行 'uname -a && df -h && free -m' 检查系统、磁盘和内存。"
+    )
+)
+```
+
+<Callout type="info">
+`AuthRequestProcessor` 是用户委托特有的运行时处理器：它检测到工具需要授权时返回授权链接，用户授权后令牌被托管并在后续调用中自动复用。也可在 `Runner.run(..., run_processor=...)` 传入。
+</Callout>
+
+## 常见问题
+
+**Q：用户首次使用时会发生什么？**
+
+A：当工具需要授权而尚未授权时，`AuthRequestProcessor` 返回一个授权链接。用户在第三方服务中同意后，令牌被托管，后续调用自动复用。
+
+**Q：用户撤销授权了怎么办？**
+
+A：Agent Identity 会返回授权错误，应用应提示用户重新授权——再次触发上面的授权链接流程。

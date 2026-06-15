@@ -1,0 +1,58 @@
+---
+title: "模型管理"
+---
+
+VeADK 默认基于 [LiteLLM](https://github.com/BerriAI/litellm) 构建模型客户端，因此支持 LiteLLM 的所有提供商。
+
+| 参数 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `model_name` | `str \| list[str]` | 环境变量 `MODEL_AGENT_NAME` | 模型名称。**传入列表即开启容错**：第一个为主模型，其余作为 fallback 依次重试。 |
+| `model_provider` | `str` | `MODEL_AGENT_PROVIDER` | 模型提供商，如 `openai`。参见 [LiteLLM 提供商列表](https://docs.litellm.ai/docs/providers)。 |
+| `model_api_base` | `str` | `MODEL_AGENT_API_BASE` | 模型 API 的 base URL。 |
+| `model_api_key` | `str` | `MODEL_AGENT_API_KEY` | 模型 API Key。**切勿硬编码**，通过环境变量或 `config.yaml` 提供。 |
+| `model_extra_config` | `dict` | `{}` | 透传给模型请求的额外配置，支持 `extra_headers` 与 `extra_body`，会与 VeADK 默认值合并。 |
+| `model` | `LiteLlm` | `None` | 直接传入构造好的 LiteLLM 客户端。**一旦设置，上面的 `model_*` 字段将被忽略**。 |
+| `enable_responses` | `bool` | `False` | 启用方舟 Responses API，详见 [Responses API 支持](/cn/docs/framework/agent/responses-api)。 |
+| `enable_responses_cache` | `bool` | `True` | 在 Responses API 下复用 `previous_response_id` 做多轮续接与缓存，仅在 `enable_responses=True` 时生效。 |
+| `context_cache_config` | `ContextCacheConfig` | `None` | 上下文缓存配置，用于降低长上下文的重复计算成本。 |
+
+## 使用不同模型
+
+指定提供商或本地模型（API Key 仍通过环境变量提供）：
+
+```python title="agent.py"
+agent = Agent(
+    model_provider="openai",
+    model_name="doubao-seed-1-8-251228",
+    model_api_base="https://ark.cn-beijing.volces.com/api/v3/",
+)
+```
+
+## 模型容错（Fallbacks）
+
+将 `model_name` 传入列表即开启容错：按顺序优先尝试第一个模型，失败后依次尝试后续模型，直至成功。
+
+```python title="agent.py"
+agent = Agent(model_name=["doubao-seed-1-8-251228", "deepseek-r1-250528"])
+```
+
+## 自定义模型客户端
+
+如需高度自定义，直接传入一个 LiteLLM 客户端：
+
+```python title="agent.py"
+from google.adk.models.lite_llm import LiteLlm
+
+agent = Agent(model=LiteLlm(model="doubao-seed-1-8-251228"))
+```
+
+## 配置额外参数
+
+根据[方舟平台](https://www.volcengine.com/product/ark)能力指定额外选项。例如关闭思考以获得更快响应：
+
+```python title="agent.py"
+agent = Agent(
+    model_name="doubao-seed-1-8-251228",
+    model_extra_config={"extra_body": {"thinking": {"type": "disabled"}}},
+)
+```

@@ -1,0 +1,85 @@
+---
+title: "API server"
+---
+
+In **API Server** mode, your agent exposes a standard set of HTTP endpoints for managing sessions and running the agent (with streaming). Start it locally with `veadk web`; in production, [deploy in VeADK Web mode](/en/docs/framework/vefaas) (same endpoints, with auth handled by the API Gateway).
+
+```bash
+veadk web              # local, defaults to http://localhost:8000
+```
+
+<Callout type="info">
+  The endpoints are unauthenticated by default — for local development only. Add [SSO / inbound auth](/en/docs/framework/inbound) before exposing them.
+</Callout>
+
+## Endpoints
+
+| Method | Path | Description |
+| :-- | :-- | :-- |
+| `GET` | `/list-apps` | List available agent apps |
+| `POST` | `/apps/{app}/users/{user}/sessions` | Create a session (auto ID) |
+| `POST` | `/apps/{app}/users/{user}/sessions/{session}` | Create a session with a given ID |
+| `GET` | `/apps/{app}/users/{user}/sessions` | List sessions |
+| `GET` | `/apps/{app}/users/{user}/sessions/{session}` | Get a session (with its events) |
+| `DELETE` | `/apps/{app}/users/{user}/sessions/{session}` | Delete a session |
+| `POST` | `/run` | Run the agent; returns the full event list |
+| `POST` | `/run_sse` | Run the agent; stream events as SSE |
+| `GET` | `/apps/{app}/users/{user}/sessions/{session}/artifacts` | List artifacts |
+| `GET` | `/health`, `/version` | Health check and version |
+
+> `{app}` is the agent app name (the subdirectory name under `--agents-dir`).
+
+## Run an agent
+
+Create a session first, then run. `/run_sse` streams events as [SSE](https://developer.mozilla.org/docs/Web/API/Server-sent_events) for real-time UIs; `/run` returns all events at once.
+
+<Steps>
+
+<Step>
+### Create a session
+
+```bash
+curl -X POST http://localhost:8000/apps/my_agent/users/u1/sessions \
+  -H 'Content-Type: application/json' -d '{}'
+# the returned JSON includes an `id` field — that's the sessionId
+```
+</Step>
+
+<Step>
+### Run and stream
+
+```bash
+curl -N -X POST http://localhost:8000/run_sse \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "appName": "my_agent",
+    "userId": "u1",
+    "sessionId": "<id from the previous step>",
+    "newMessage": { "role": "user", "parts": [{ "text": "Hello" }] },
+    "streaming": true
+  }'
+```
+
+The response is a stream of SSE events; each `data:` is one agent event (model delta, tool call, final reply, …):
+
+```text
+data: {"content":{"role":"model","parts":[{"text":"He"}]}, ...}
+data: {"content":{"role":"model","parts":[{"text":"llo"}]}, ...}
+```
+</Step>
+
+</Steps>
+
+Request body fields:
+
+| Field | Type | Description |
+| :-- | :-- | :-- |
+| `appName` | string | Agent app name |
+| `userId` | string | User ID |
+| `sessionId` | string | Session ID |
+| `newMessage` | Content | The user message: `{ "role": "user", "parts": [{ "text": "..." }] }` |
+| `streaming` | bool | Stream model deltas (default `false`) |
+
+<Callout type="info">
+  In production, prefer calling a deployed agent over A2A with [`CloudApp`](/en/docs/framework/vefaas) instead of hand-writing these HTTP requests.
+</Callout>

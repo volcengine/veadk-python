@@ -1,0 +1,50 @@
+---
+title: "PostgreSQL（postgresql）"
+---
+
+`postgresql` 后端把会话存储到 PostgreSQL 数据库，底层使用 Google ADK 的 `DatabaseSessionService`。多个智能体实例可连接同一数据库，实现会话共享与分布式持久化。
+
+## 何时使用
+
+- 生产环境、多实例/分布式部署；
+- 团队已使用 PostgreSQL 作为统一存储。
+
+## 配置
+
+连接信息通过 `config.yaml`（或对应环境变量）提供，**不要把密码写进代码**。VeADK 用 `PostgreSqlConfig` 读取，环境变量前缀为 `DATABASE_POSTGRESQL_`：
+
+```yaml title="config.yaml"
+database:
+  postgresql:
+    host:       # 主机或 IP
+    port: 5432
+    user:
+    password:
+    database:
+```
+
+| 配置项 | 环境变量 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `host` | `DATABASE_POSTGRESQL_HOST` | `""` | 数据库主机。 |
+| `port` | `DATABASE_POSTGRESQL_PORT` | `5432` | 端口。 |
+| `user` | `DATABASE_POSTGRESQL_USER` | `""` | 用户名。 |
+| `password` | `DATABASE_POSTGRESQL_PASSWORD` | `""` | 密码。 |
+| `database` | `DATABASE_POSTGRESQL_DATABASE` | `""` | 数据库名。 |
+
+## 用法
+
+```python
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+
+stm = ShortTermMemory(backend="postgresql")  # 连接信息来自 config.yaml / 环境变量
+
+agent = Agent(name="demo")
+runner = Runner(agent=agent, short_term_memory=stm, app_name="memory_demo")
+```
+
+如需透传连接池等驱动参数，可使用 `db_kwargs`。
+
+<Callout type="info">
+VeADK 会根据运行环境自动选择同步或异步 PostgreSQL 驱动（`psycopg`/`asyncpg`）。用户名/密码中的特殊字符会被自动 URL 编码。可在火山引擎[开通 PostgreSQL 数据库](https://www.volcengine.com/product/rds-pg)。
+</Callout>

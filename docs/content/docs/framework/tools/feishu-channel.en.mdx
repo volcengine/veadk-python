@@ -1,6 +1,5 @@
 ---
 title: "Feishu Channel extension"
-description: "Use FeishuChannelExtension to bridge inbound Feishu bot messages into the VeADK Runner."
 ---
 
 `veadk.extensions.FeishuChannelExtension` bridges inbound messages from a Feishu (Lark) bot into the VeADK `Runner`.
@@ -92,10 +91,3 @@ if __name__ == "__main__":
 - The Feishu `Channel` WebSocket mode is used by default, so as long as the bot has subscribed to message events, you can start the connection directly.
 - By default replies use `reply_to=<original message_id>`, keeping VeADK output attached to the current Feishu message thread.
 - Override the default identity mapping via `session_id_factory` and `user_id_factory`.
-
-## Next steps
-
-<Cards>
-  <Card title="Feishu / Lark MCP tools" href="/en/docs/framework/tools/builtin-mcp" description="The other direction: let the agent call Feishu capabilities." />
-  <Card title="Short-term memory" href="/en/docs/framework/memory/short-term" description="Keep context across multi-turn Feishu conversations." />
-</Cards>

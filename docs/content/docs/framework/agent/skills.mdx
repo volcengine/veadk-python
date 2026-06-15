@@ -1,6 +1,5 @@
 ---
-title: "Agent 技能（Skills）"
-description: "通过可复用的技能包为 Agent 按需注入领域知识与脚本，支持本地与沙箱两种运行模式。"
+title: "技能"
 ---
 
 技能（Skills）是一种可复用的「提示词包」，用于为 Agent 注入特定的领域知识、操作流程与脚本。与一次性把所有提示词塞入 `instruction` 不同，技能采用**渐进式加载（progressive prompt loading）**：Agent 仅在需要时才加载某个技能的完整内容，从而控制上下文长度、提升执行准确性。
@@ -19,18 +18,19 @@ VeADK 提供三种技能运行模式：
 
 一个本地技能由独立目录构成，目录中包含一个 `SKILL.md` 文件：
 
-```bash
-skills/
-└── kb_skill/
-    └── SKILL.md
-```
+<Files>
+  <Folder name="skills" defaultOpen>
+    <Folder name="kb_skill" defaultOpen>
+      <File name="SKILL.md" />
+    </Folder>
+  </Folder>
+</Files>
 
 `SKILL.md` 使用 frontmatter 声明 `name` 与 `description`，其后为技能正文：
 
 ```markdown title="skills/kb_skill/SKILL.md"
 ---
 name: kb_skill
-description: 帮助用户创建知识库
 ---
 
 ...正文部分（操作步骤、约束、脚本说明等）
@@ -106,10 +106,3 @@ agent = Agent(
 | `skills_mode` | `"local" \| "skills_sandbox" \| "aio_sandbox"` | 技能运行模式，缺省时自动推断。 |
 | `enable_skills_checklist` | `bool` | 是否启用技能检查清单，默认 `False`。 |
 | `enable_dynamic_load_skills` | `bool` | 是否启用技能的动态加载，默认 `False`。 |
-
-## 下一步
-
-<Cards>
-  <Card title="构建智能体" href="/cn/docs/framework/agent/create" description="为智能体配置模型、工具与元信息。" />
-  <Card title="添加工具" href="/cn/docs/framework/tools/builtin" description="联网搜索、代码沙箱、图像与视频生成等。" />
-</Cards>
