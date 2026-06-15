@@ -74,11 +74,19 @@ class HarnessConfig(HarnessOverrides):
     longterm_memory_type: str = Field(default="")
     shortterm_memory_type: str = Field(default="local")
     runtime: Literal["adk", "codex"] = Field(default="adk")
+    max_llm_calls: int | None = Field(
+        default=None,
+        description="Default max LLM calls per run; unset follows ADK RunConfig's default. Overridable per invocation.",
+    )
 
 
 class RunAgentRequest(BaseModel):
     user_id: str
     session_id: str
+    max_llm_calls: int | None = Field(
+        default=None,
+        description="Override max LLM calls for this single call (falls back to the harness default, then ADK's).",
+    )
 
 
 class InvokeHarnessRequest(BaseModel):

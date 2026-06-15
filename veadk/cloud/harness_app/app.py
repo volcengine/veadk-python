@@ -29,6 +29,7 @@ import tempfile
 from pathlib import Path
 
 from fastapi import FastAPI
+from google.adk.agents import RunConfig
 
 from veadk import Agent
 from veadk.cloud.harness_app.agent import agent, short_term_memory
@@ -36,7 +37,7 @@ from veadk.cloud.harness_app.types import (
     InvokeHarnessRequest,
     InvokeHarnessResponse,
 )
-from veadk.cloud.harness_app.utils import spawn_harness_agent
+from veadk.cloud.harness_app.utils import SkillLoadError, spawn_harness_agent
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.runner import Runner
 from veadk.utils.logger import get_logger
@@ -44,6 +45,11 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 HARNESS_NAME = os.getenv("HARNESS_NAME", "default")
+# Optional harness default max LLM calls per run, from harness.yaml (overridable
+# per invocation). Unset -> falls through to ADK RunConfig's own default.
+DEFAULT_MAX_LLM_CALLS = (
+    int(os.environ["MAX_LLM_CALLS"]) if os.environ.get("MAX_LLM_CALLS") else None
+)
 
 
 class HarnessApp:
@@ -52,11 +58,13 @@ class HarnessApp:
         agent: Agent,
         short_term_memory: ShortTermMemory,
         harness_name: str = "default",
+        max_llm_calls: int | None = None,
     ):
         self.app = FastAPI()
         self.agent = agent
         self.short_term_memory = short_term_memory
         self.harness_name = harness_name
+        self.max_llm_calls = max_llm_calls
         self.runner = Runner(
             agent=agent,
             short_term_memory=short_term_memory,
@@ -70,6 +78,17 @@ class HarnessApp:
         async def invoke_harness(
             request: InvokeHarnessRequest,
         ) -> InvokeHarnessResponse:
+            # max LLM calls: per-call override, else the harness default; if
+            # neither is set, fall through to ADK RunConfig's own default.
+            max_llm_calls = (
+                request.run_agent_request.max_llm_calls or self.max_llm_calls
+            )
+            run_config = (
+                RunConfig(max_llm_calls=max_llm_calls)
+                if max_llm_calls is not None
+                else RunConfig()
+            )
+
             if request.harness is not None:
                 logger.info(f"Applying once-time harness override: {request.harness}")
                 # The override clones the base agent and may download incremental
@@ -77,9 +96,19 @@ class HarnessApp:
                 # the agent runs, so the dir is removed (and the one-off agent +
                 # runner dropped) only after the run finishes.
                 with tempfile.TemporaryDirectory(prefix="harness_invoke_") as work_dir:
-                    agent = spawn_harness_agent(
-                        self.agent, request.harness, download_dir=Path(work_dir)
-                    )
+                    try:
+                        agent = spawn_harness_agent(
+                            self.agent, request.harness, download_dir=Path(work_dir)
+                        )
+                    except SkillLoadError as e:
+                        # A once-time skill failed to load; return the reason to
+                        # the caller instead of running with a wrong skill set.
+                        logger.error(f"Once-time skill load failed: {e}")
+                        return InvokeHarnessResponse(
+                            harness_name=self.harness_name,
+                            overwrite=True,
+                            output=str(e),
+                        )
                     runner = Runner(
                         agent=agent,
                         short_term_memory=self.short_term_memory,
@@ -89,12 +118,14 @@ class HarnessApp:
                         messages=[request.prompt],
                         user_id=request.run_agent_request.user_id,
                         session_id=request.run_agent_request.session_id,
+                        run_config=run_config,
                     )
             else:
                 output = await self.runner.run(
                     messages=[request.prompt],
                     user_id=request.run_agent_request.user_id,
                     session_id=request.run_agent_request.session_id,
+                    run_config=run_config,
                 )
 
             return InvokeHarnessResponse(
@@ -109,7 +140,9 @@ class HarnessApp:
         uvicorn.run(self.app, host=host, port=port)
 
 
-harness_app = HarnessApp(agent, short_term_memory, HARNESS_NAME)
+harness_app = HarnessApp(
+    agent, short_term_memory, HARNESS_NAME, max_llm_calls=DEFAULT_MAX_LLM_CALLS
+)
 app = harness_app.app
 
 
