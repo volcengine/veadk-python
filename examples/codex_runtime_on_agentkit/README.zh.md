@@ -74,18 +74,25 @@ veadk agentkit status                       # 等到 Ready
 veadk agentkit invoke "你好，你叫什么"      # 测试
 ```
 
-如果你改用 `veadk agentkit config` **交互式**向导，关键几项这样选：
+各字段分为**必填**和**可选**（交互式 `agentkit config` 向导问的也是这些）：
 
-- **部署方式 / launch type** → `cloud`（部署到 AgentKit 云端 runtime）。
-- **入口 / entry point** → `app.py`（本示例的部署入口）。
-- **TOS bucket** → `Auto`。否则上传会卡在 bucket 所有权（`ListBuckets`）校验，
-  除非你的 AK/SK 有 `tos:ListBuckets` 权限。
-- **鉴权 / auth type** → API Key（默认）。`custom_jwt` 还要额外配 JWT discovery
-  URL 和 client ID。
-- **API key 名** → `Auto`（自动生成）。
-- **runtime 角色** → 你账号里的 AgentKit runtime 服务角色（创建 runtime 必需）。
-- **环境变量** → 上面那组 `MODEL_AGENT_*`。必填：codex 运行时需要
-  `MODEL_AGENT_API_BASE` + `MODEL_AGENT_API_KEY`，否则无法开始一轮。
+**必填**（必须设置）：
+
+- `--agent_name`、`--entry_point app.py`、`--launch_type cloud`、`--region`。
+- `--tos_bucket Auto` —— 不设 `Auto` 的话，上传会卡在 bucket 所有权
+  （`ListBuckets`）校验，除非你的 AK/SK 有 `tos:ListBuckets` 权限。
+- `--runtime_role_name` —— 你账号里的 AgentKit runtime 服务角色。
+- `--runtime_envs` 里的 `MODEL_AGENT_NAME`、`MODEL_AGENT_API_BASE`、
+  `MODEL_AGENT_API_KEY` —— 缺了模型的 base URL + key，codex 运行时无法开始一轮。
+
+**可选**（不填走默认）：
+
+- `--language` / `--language_version` —— 默认 Python 3.12。
+- `--runtime_name` / `--runtime_apikey_name Auto` —— 不填会自动生成。
+- 鉴权方式 —— 默认 **API Key**；`custom_jwt` 还要额外配 JWT discovery URL 和
+  client ID。
+- `--runtime_envs MODEL_AGENT_PROVIDER=openai`（默认 `openai`）和
+  `OTEL_SDK_DISABLED=true`（建议加，避免 OTel 连接报错）。
 
 `veadk agentkit launch` = `build` + `deploy`。用 `veadk agentkit destroy` 拆除。
 

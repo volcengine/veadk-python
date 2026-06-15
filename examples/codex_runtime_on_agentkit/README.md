@@ -79,21 +79,27 @@ veadk agentkit status                       # wait until Ready
 veadk agentkit invoke "你好，你叫什么"      # test it
 ```
 
-If you run `veadk agentkit config` **interactively** instead, the choices
-that matter:
+The fields split into **required** and **optional** (these are the same
+things the interactive `agentkit config` wizard asks for):
 
-- **Launch type** → `cloud` (deploy to an AgentKit cloud runtime).
-- **Entry point** → `app.py` (this example's deploy entry).
-- **TOS bucket** → `Auto`. Otherwise the upload fails the bucket-ownership
-  (`ListBuckets`) check, unless your AK/SK has `tos:ListBuckets`.
-- **Auth type** → API Key (the default). `custom_jwt` additionally needs a
-  JWT discovery URL and client IDs.
-- **API key name** → `Auto` (auto-generated).
-- **Runtime role** → your account's AgentKit runtime service role (required
-  to create the runtime).
-- **Runtime env vars** → the `MODEL_AGENT_*` set shown above. Required: the
-  codex runtime needs `MODEL_AGENT_API_BASE` + `MODEL_AGENT_API_KEY`, or it
-  fails to start a turn.
+**Required** — you must set these:
+
+- `--agent_name`, `--entry_point app.py`, `--launch_type cloud`, `--region`.
+- `--tos_bucket Auto` — without `Auto`, the upload fails the bucket-ownership
+  (`ListBuckets`) check unless your AK/SK has `tos:ListBuckets`.
+- `--runtime_role_name` — your account's AgentKit runtime service role.
+- `--runtime_envs` for `MODEL_AGENT_NAME`, `MODEL_AGENT_API_BASE`,
+  `MODEL_AGENT_API_KEY` — the codex runtime can't start a turn without the
+  model's base URL + key.
+
+**Optional** — sensible defaults if omitted:
+
+- `--language` / `--language_version` — default to Python 3.12.
+- `--runtime_name` / `--runtime_apikey_name Auto` — auto-generated if omitted.
+- Auth type — defaults to **API Key**; `custom_jwt` also needs a JWT discovery
+  URL and client IDs.
+- `--runtime_envs MODEL_AGENT_PROVIDER=openai` (defaults to `openai`) and
+  `OTEL_SDK_DISABLED=true` (recommended — silences OTel connection errors).
 
 `veadk agentkit launch` = `build` + `deploy`. Use `veadk agentkit destroy` to
 tear the runtime down.
