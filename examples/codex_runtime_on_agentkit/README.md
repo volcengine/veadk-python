@@ -57,8 +57,9 @@ the bundled Codex binary spawns.
 ## 3. Deploy to AgentKit
 
 `agentkit config` writes `agentkit.yaml`; `agentkit launch` then builds and
-deploys from it. The fastest, mistake-proof path is to configure
-**non-interactively** (fill in the three `<...>` placeholders):
+deploys from it. The model config (`MODEL_AGENT_*`) is read from the `.env`
+from step 1, which is bundled into the image, so it need not go in
+`--runtime_envs`. A minimal config:
 
 ```bash
 veadk agentkit config \
@@ -67,11 +68,6 @@ veadk agentkit config \
   --launch_type cloud --region cn-beijing \
   --tos_bucket Auto \
   --runtime_name codex-runtime-demo --runtime_apikey_name Auto \
-  --runtime_role_name <your-AgentKit-runtime-service-role> \
-  --runtime_envs MODEL_AGENT_PROVIDER=openai \
-  --runtime_envs MODEL_AGENT_NAME=<your-model> \
-  --runtime_envs MODEL_AGENT_API_BASE=https://ark.cn-beijing.volces.com/api/v3/\
-  --runtime_envs MODEL_AGENT_API_KEY=<your-ark-api-key> \
   --runtime_envs OTEL_SDK_DISABLED=true
 
 veadk agentkit launch                       # build + deploy in one step
@@ -79,27 +75,21 @@ veadk agentkit status                       # wait until Ready
 veadk agentkit invoke "你好，你叫什么"      # test it
 ```
 
-The fields split into **required** and **optional** (these are the same
-things the interactive `agentkit config` wizard asks for):
-
-**Required** — you must set these:
+**Required** — set these:
 
 - `--agent_name`, `--entry_point app.py`, `--launch_type cloud`, `--region`.
+- `--language` / `--language_version`.
 - `--tos_bucket Auto` — without `Auto`, the upload fails the bucket-ownership
   (`ListBuckets`) check unless your AK/SK has `tos:ListBuckets`.
-- `--runtime_role_name` — your account's AgentKit runtime service role.
-- `--runtime_envs` for `MODEL_AGENT_NAME`, `MODEL_AGENT_API_BASE`,
-  `MODEL_AGENT_API_KEY` — the codex runtime can't start a turn without the
-  model's base URL + key.
+- `--runtime_name` / `--runtime_apikey_name Auto`.
 
-**Optional** — sensible defaults if omitted:
+**Optional** — omit and AgentKit handles it:
 
-- `--language` / `--language_version` — default to Python 3.12.
-- `--runtime_name` / `--runtime_apikey_name Auto` — auto-generated if omitted.
+- `--runtime_role_name` — auto-selected/created if omitted.
+- `MODEL_AGENT_*` — read from the bundled `.env`, so not needed in
+  `--runtime_envs` (`OTEL_SDK_DISABLED=true` is worth passing to silence OTel).
 - Auth type — defaults to **API Key**; `custom_jwt` also needs a JWT discovery
   URL and client IDs.
-- `--runtime_envs MODEL_AGENT_PROVIDER=openai` (defaults to `openai`) and
-  `OTEL_SDK_DISABLED=true` (recommended — silences OTel connection errors).
 
 `veadk agentkit launch` = `build` + `deploy`. Use `veadk agentkit destroy` to
 tear the runtime down.

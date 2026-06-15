@@ -52,8 +52,9 @@ python app.py            # 或：python -m app
 
 ## 3. 部署到 AgentKit
 
-`agentkit config` 写出 `agentkit.yaml`，`agentkit launch` 再据此构建并部署。最快、
-最不容易选错的方式是**非交互式**配置（填好三个 `<...>` 占位符）：
+`agentkit config` 写出 `agentkit.yaml`，`agentkit launch` 再据此构建并部署。模型
+配置（`MODEL_AGENT_*`）从第 1 步的 `.env` 读取（它会被打包进镜像），所以**不必**
+再写进 `--runtime_envs`。最小配置：
 
 ```bash
 veadk agentkit config \
@@ -62,11 +63,6 @@ veadk agentkit config \
   --launch_type cloud --region cn-beijing \
   --tos_bucket Auto \
   --runtime_name codex-runtime-demo --runtime_apikey_name Auto \
-  --runtime_role_name <你账号的-AgentKit-runtime-服务角色> \
-  --runtime_envs MODEL_AGENT_PROVIDER=openai \
-  --runtime_envs MODEL_AGENT_NAME=<你的模型> \
-  --runtime_envs MODEL_AGENT_API_BASE=https://ark.cn-beijing.volces.com/api/v3/\
-  --runtime_envs MODEL_AGENT_API_KEY=<你的-ark-key> \
   --runtime_envs OTEL_SDK_DISABLED=true
 
 veadk agentkit launch                       # 一步完成构建 + 部署
@@ -74,25 +70,21 @@ veadk agentkit status                       # 等到 Ready
 veadk agentkit invoke "你好，你叫什么"      # 测试
 ```
 
-各字段分为**必填**和**可选**（交互式 `agentkit config` 向导问的也是这些）：
-
-**必填**（必须设置）：
+**必填**（要设置）：
 
 - `--agent_name`、`--entry_point app.py`、`--launch_type cloud`、`--region`。
+- `--language` / `--language_version`。
 - `--tos_bucket Auto` —— 不设 `Auto` 的话，上传会卡在 bucket 所有权
   （`ListBuckets`）校验，除非你的 AK/SK 有 `tos:ListBuckets` 权限。
-- `--runtime_role_name` —— 你账号里的 AgentKit runtime 服务角色。
-- `--runtime_envs` 里的 `MODEL_AGENT_NAME`、`MODEL_AGENT_API_BASE`、
-  `MODEL_AGENT_API_KEY` —— 缺了模型的 base URL + key，codex 运行时无法开始一轮。
+- `--runtime_name` / `--runtime_apikey_name Auto`。
 
-**可选**（不填走默认）：
+**可选**（不填由 AgentKit 自动处理）：
 
-- `--language` / `--language_version` —— 默认 Python 3.12。
-- `--runtime_name` / `--runtime_apikey_name Auto` —— 不填会自动生成。
+- `--runtime_role_name` —— 不填会自动选/建。
+- `MODEL_AGENT_*` —— 从打包进镜像的 `.env` 读取，不必写进 `--runtime_envs`
+  （`OTEL_SDK_DISABLED=true` 建议带上，避免 OTel 连接报错）。
 - 鉴权方式 —— 默认 **API Key**；`custom_jwt` 还要额外配 JWT discovery URL 和
   client ID。
-- `--runtime_envs MODEL_AGENT_PROVIDER=openai`（默认 `openai`）和
-  `OTEL_SDK_DISABLED=true`（建议加，避免 OTel 连接报错）。
 
 `veadk agentkit launch` = `build` + `deploy`。用 `veadk agentkit destroy` 拆除。
 
