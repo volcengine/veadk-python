@@ -71,10 +71,21 @@ _ENV_FIELDS = {
     "skills": "SKILLS",
     "system_prompt": "SYSTEM_PROMPT",
     "runtime": "RUNTIME",
+    "structured_tool_calls": "STRUCTURED_TOOL_CALLS",
+    "include_tools_every_turn": "INCLUDE_TOOLS_EVERY_TURN",
     "name": "HARNESS_NAME",
     "knowledgebase_type": "KNOWLEDGEBASE_TYPE",
     "longterm_memory_type": "LONG_TERM_MEMORY_TYPE",
     "shortterm_memory_type": "SHORT_TERM_MEMORY_TYPE",
+    "registry_type": "REGISTRY_TYPE",
+    "registry_space_id": "REGISTRY_SPACE_ID",
+    "registry_endpoint": "REGISTRY_ENDPOINT",
+    "registry_version": "REGISTRY_VERSION",
+    "registry_service_name": "REGISTRY_SERVICE_NAME",
+    "registry_region": "REGISTRY_REGION",
+    "registry_top_k": "REGISTRY_TOP_K",
+    "registry_timeout_ms": "REGISTRY_TIMEOUT_MS",
+    "registry_poll_interval_ms": "REGISTRY_POLL_INTERVAL_MS",
 }
 
 
@@ -203,6 +214,28 @@ def _assemble_agent(config: HarnessConfig) -> tuple[Agent, ShortTermMemory]:
         if skill_toolset is not None:
             tools.append(skill_toolset)
 
+    if config.registry_type:
+        from veadk.a2a.registry_client import AgentKitA2ARegistryConfig
+        from veadk.tools.builtin_tools.a2a_registry import (
+            build_a2a_registry_tools,
+        )
+
+        logger.info(f"Mounting A2A registry tools: type={config.registry_type}")
+        tools.extend(
+            build_a2a_registry_tools(
+                AgentKitA2ARegistryConfig(
+                    space_id=config.registry_space_id,
+                    endpoint=config.registry_endpoint,
+                    version=config.registry_version,
+                    service_name=config.registry_service_name,
+                    region=config.registry_region,
+                    top_k=config.registry_top_k,
+                    timeout_ms=config.registry_timeout_ms,
+                    poll_interval_ms=config.registry_poll_interval_ms,
+                )
+            )
+        )
+
     knowledgebase = None
     if config.knowledgebase_type:
         logger.info(
@@ -238,6 +271,8 @@ def _assemble_agent(config: HarnessConfig) -> tuple[Agent, ShortTermMemory]:
         instruction=config.system_prompt,
         tools=tools,
         runtime=config.runtime,
+        enable_responses=config.structured_tool_calls,
+        enable_responses_cache=not config.include_tools_every_turn,
         knowledgebase=knowledgebase,
         long_term_memory=long_term_memory,
         short_term_memory=short_term_memory,

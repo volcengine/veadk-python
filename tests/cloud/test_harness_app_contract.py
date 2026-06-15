@@ -31,7 +31,9 @@ from veadk.cloud.harness_app.types import (
     InvokeHarnessResponse,
     RunAgentRequest,
 )
-from veadk.cloud.harness_app.utils import split_csv
+from veadk.cloud.harness_app import utils as harness_utils
+from veadk.cloud.harness_app.env_mapping import to_runtime_env
+from veadk.cloud.harness_app.utils import config_from_env, split_csv
 from veadk.consts import DEFAULT_MODEL_AGENT_NAME
 from veadk.prompts.agent_default_prompt import DEFAULT_INSTRUCTION
 
@@ -83,6 +85,17 @@ class TestHarnessConfig:
             "knowledgebase_type",
             "longterm_memory_type",
             "shortterm_memory_type",
+            "structured_tool_calls",
+            "include_tools_every_turn",
+            "registry_type",
+            "registry_space_id",
+            "registry_endpoint",
+            "registry_version",
+            "registry_service_name",
+            "registry_region",
+            "registry_top_k",
+            "registry_timeout_ms",
+            "registry_poll_interval_ms",
         }
 
     def test_component_defaults(self):
@@ -91,6 +104,12 @@ class TestHarnessConfig:
         assert fields["knowledgebase_type"].default == ""
         assert fields["longterm_memory_type"].default == ""
         assert fields["shortterm_memory_type"].default == "local"
+        assert fields["structured_tool_calls"].default is False
+        assert fields["include_tools_every_turn"].default is True
+        assert fields["registry_type"].default == ""
+        assert fields["registry_top_k"].default == 3
+        assert fields["registry_timeout_ms"].default == 60000
+        assert fields["registry_poll_interval_ms"].default == 5000
 
     def test_system_prompt_default_is_veadk_instruction(self):
         # HarnessConfig overrides the override-layer default with VeADK's own.
@@ -99,6 +118,56 @@ class TestHarnessConfig:
     def test_app_name_populated_via_name_alias(self):
         assert HarnessConfig(name="research-agent").app_name == "research-agent"
         assert HarnessConfig().app_name == "harness_app"
+
+    def test_registry_yaml_maps_to_runtime_env(self):
+        envs = to_runtime_env(
+            {
+                "registry": {
+                    "type": "agentkit_a2a",
+                    "space_id": "space-test",
+                    "top_k": 5,
+                    "region": "cn-beijing",
+                }
+            }
+        )
+
+        assert envs["REGISTRY_TYPE"] == "agentkit_a2a"
+        assert envs["REGISTRY_SPACE_ID"] == "space-test"
+        assert envs["REGISTRY_TOP_K"] == "5"
+        assert envs["REGISTRY_REGION"] == "cn-beijing"
+
+    def test_tool_calling_yaml_maps_to_runtime_env(self):
+        envs = to_runtime_env(
+            {
+                "structured_tool_calls": True,
+                "include_tools_every_turn": True,
+            }
+        )
+
+        assert envs["STRUCTURED_TOOL_CALLS"] == "true"
+        assert envs["INCLUDE_TOOLS_EVERY_TURN"] == "true"
+
+    def test_config_from_env_reads_registry_fields(self, monkeypatch):
+        monkeypatch.setenv("REGISTRY_TYPE", "agentkit_a2a")
+        monkeypatch.setenv("REGISTRY_SPACE_ID", "space-test")
+        monkeypatch.setenv("REGISTRY_TOP_K", "5")
+        monkeypatch.setenv("REGISTRY_REGION", "cn-beijing")
+
+        config = config_from_env()
+
+        assert config.registry_type == "agentkit_a2a"
+        assert config.registry_space_id == "space-test"
+        assert config.registry_top_k == 5
+        assert config.registry_region == "cn-beijing"
+
+    def test_config_from_env_reads_tool_calling_fields(self, monkeypatch):
+        monkeypatch.setenv("STRUCTURED_TOOL_CALLS", "true")
+        monkeypatch.setenv("INCLUDE_TOOLS_EVERY_TURN", "true")
+
+        config = config_from_env()
+
+        assert config.structured_tool_calls is True
+        assert config.include_tools_every_turn is True
 
 
 class TestRequestResponseSchemas:
@@ -135,3 +204,24 @@ class TestSplitCsv:
 
     def test_drops_blank_segments(self):
         assert split_csv("a,,  ,b") == ["a", "b"]
+
+
+class TestAgentAssembly:
+    def test_maps_tool_calling_fields_to_agent_responses_flags(self, monkeypatch):
+        captured = {}
+
+        class DummyAgent:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        monkeypatch.setattr(harness_utils, "Agent", DummyAgent)
+        monkeypatch.setattr(
+            harness_utils, "ShortTermMemory", lambda backend: object()
+        )
+
+        harness_utils._assemble_agent(
+            HarnessConfig(structured_tool_calls=True, include_tools_every_turn=True)
+        )
+
+        assert captured["enable_responses"] is True
+        assert captured["enable_responses_cache"] is False

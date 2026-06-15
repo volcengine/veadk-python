@@ -74,6 +74,17 @@ class HarnessConfig(HarnessOverrides):
     longterm_memory_type: str = Field(default="")
     shortterm_memory_type: str = Field(default="local")
     runtime: Literal["adk", "codex"] = Field(default="adk")
+    structured_tool_calls: bool = Field(default=False)
+    include_tools_every_turn: bool = Field(default=True)
+    registry_type: Literal["", "agentkit_a2a"] = Field(default="")
+    registry_space_id: str = Field(default="")
+    registry_endpoint: str = Field(default="")
+    registry_version: str = Field(default="")
+    registry_service_name: str = Field(default="")
+    registry_region: str = Field(default="")
+    registry_top_k: int = Field(default=3)
+    registry_timeout_ms: int = Field(default=60000)
+    registry_poll_interval_ms: int = Field(default=5000)
 
 
 class RunAgentRequest(BaseModel):

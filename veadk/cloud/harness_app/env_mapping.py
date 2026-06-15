@@ -26,7 +26,7 @@ layout for users::
 Two kinds of fields are converted differently:
 
 * **Everything except the component sections** (``harness_name``, ``model``,
-  ``tools``, ``skills``, ``system_prompt``, ``runtime``) is flattened with VeADK's
+  ``tools``, ``skills``, ``system_prompt``, ``runtime``, ``registry``) is flattened with VeADK's
   own :func:`veadk.utils.misc.flatten_dict` (the flattener ``set_envs`` uses for
   ``config.yaml``): nested keys joined with ``_``, then upper-cased, lists
   comma-joined. So ``model: {name: x}`` -> ``MODEL_NAME``, ``tools: [a, b]`` ->

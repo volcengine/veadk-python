@@ -31,6 +31,7 @@ for an *already deployed* server.
 import json
 import typing
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import click
 import yaml
@@ -88,6 +89,36 @@ system_prompt: ""
 # Agent runtime backend: adk (default) | codex.
 #   env: RUNTIME               flag: --runtime
 runtime: adk
+
+# Ask the model to return real structured tool calls instead of text that only
+# looks like a function call. Currently implemented with Ark Responses API.
+#   env: STRUCTURED_TOOL_CALLS
+#   flags: --structured-tool-calls / --no-structured-tool-calls
+structured_tool_calls: false
+
+# Include tool definitions on every model turn. Keep this true for multi-step
+# tool chains such as search -> create -> poll.
+#   env: INCLUDE_TOOLS_EVERY_TURN
+#   flags: --include-tools-every-turn / --reuse-tool-context
+include_tools_every_turn: true
+
+# --- Remote A2A Agent discovery / delegation --------------------------------
+#   type -> env: REGISTRY_TYPE   flag: --registry
+#   "" disables it. Currently supported: agentkit_a2a
+# Example:
+#   veadk harness add --registry "agentkit://a2a-registry?space_id=xxx&top_k=3"
+registry:
+  type: ""
+  # -- agentkit_a2a -- env REGISTRY_* flags:
+  #    --registry-space-id / --registry-top-k / --registry-region
+  # space_id: xxx
+  # top_k: 3
+  # region: cn-beijing
+  # endpoint: http://volcengineapi.byted.org/
+  # version: "2025-10-30"
+  # service_name: agentkit
+  # timeout_ms: 60000
+  # poll_interval_ms: 5000
 
 # --- Knowledge base ----------------------------------------------------------
 #   type -> env: KNOWLEDGEBASE_TYPE   flag: --knowledgebase-type
@@ -319,10 +350,135 @@ def _prune_empty(data: dict) -> None:
             for sub in list(value):
                 if _is_blank(value[sub]):
                     del value[sub]
-            if (key in COMPONENT_TYPE_ENV and not value.get("type")) or not value:
+            if (
+                (key in COMPONENT_TYPE_ENV or key == "registry")
+                and not value.get("type")
+            ) or not value:
                 del data[key]
         elif _is_blank(value):
             del data[key]
+
+
+_REGISTRY_QUERY_KEYS = {
+    "space_id",
+    "top_k",
+    "endpoint",
+    "version",
+    "service_name",
+    "region",
+    "timeout_ms",
+    "poll_interval_ms",
+}
+_REGISTRY_INT_KEYS = {"top_k", "timeout_ms", "poll_interval_ms"}
+
+
+def _parse_registry_uri(value: str) -> dict:
+    """Parse the supported AgentKit A2A registry URI into a YAML section."""
+    raw = value.strip()
+    if raw.lower() in {"", "none", "disabled", "off"}:
+        return {"type": ""}
+
+    parsed = urlparse(raw)
+    if (
+        parsed.scheme != "agentkit"
+        or parsed.netloc != "a2a-registry"
+        or parsed.path not in {"", "/"}
+    ):
+        raise click.ClickException(
+            "Unsupported registry URI. Currently only "
+            "`agentkit://a2a-registry?space_id=xxx&top_k=3` is supported."
+        )
+
+    query = {
+        key.replace("-", "_"): values[-1]
+        for key, values in parse_qs(parsed.query, keep_blank_values=False).items()
+        if values and values[-1] != ""
+    }
+    unknown = sorted(set(query) - _REGISTRY_QUERY_KEYS)
+    if unknown:
+        raise click.ClickException(
+            f"Unsupported registry query param(s): {', '.join(unknown)}. "
+            f"Known: {', '.join(sorted(_REGISTRY_QUERY_KEYS))}"
+        )
+
+    section: dict = {"type": "agentkit_a2a"}
+    for key, raw_value in query.items():
+        section[key] = _parse_registry_int(key, raw_value)
+    return section
+
+
+def _parse_registry_int(key: str, value: object) -> object:
+    if key not in _REGISTRY_INT_KEYS:
+        return value
+    try:
+        return int(str(value))
+    except ValueError as exc:
+        raise click.ClickException(
+            f"Registry param `{key}` must be an integer, got {value!r}."
+        ) from exc
+
+
+def _set_registry_value(section: dict, key: str, value: object | None) -> None:
+    if value is not None:
+        section[key] = _parse_registry_int(key, value)
+
+
+def _apply_registry_config(
+    data: dict,
+    registry: str | None,
+    registry_space_id: str | None,
+    registry_top_k: int | None,
+    registry_endpoint: str | None,
+    registry_version: str | None,
+    registry_service_name: str | None,
+    registry_region: str | None,
+    registry_timeout_ms: int | None,
+    registry_poll_interval_ms: int | None,
+) -> None:
+    has_registry_update = any(
+        value is not None
+        for value in [
+            registry,
+            registry_space_id,
+            registry_top_k,
+            registry_endpoint,
+            registry_version,
+            registry_service_name,
+            registry_region,
+            registry_timeout_ms,
+            registry_poll_interval_ms,
+        ]
+    )
+    if not has_registry_update:
+        return
+
+    section = data.get("registry")
+    if not isinstance(section, dict):
+        section = {}
+
+    if registry is not None:
+        section.update(_parse_registry_uri(registry))
+
+    _set_registry_value(section, "space_id", registry_space_id)
+    _set_registry_value(section, "top_k", registry_top_k)
+    _set_registry_value(section, "endpoint", registry_endpoint)
+    _set_registry_value(section, "version", registry_version)
+    _set_registry_value(section, "service_name", registry_service_name)
+    _set_registry_value(section, "region", registry_region)
+    _set_registry_value(section, "timeout_ms", registry_timeout_ms)
+    _set_registry_value(section, "poll_interval_ms", registry_poll_interval_ms)
+
+    if section.get("type") != "":
+        section["type"] = "agentkit_a2a"
+
+    if section.get("type") == "agentkit_a2a" and not section.get("space_id"):
+        raise click.ClickException(
+            "Registry space_id is required. Use "
+            '`--registry "agentkit://a2a-registry?space_id=xxx"` '
+            "or `--registry-space-id xxx`."
+        )
+
+    data["registry"] = section
 
 
 def _connection_options(func):
@@ -384,6 +540,56 @@ def _override_options(func):
 @click.option(
     "--short-term-memory-type", default=None, help="Short-term memory backend."
 )
+@click.option(
+    "--structured-tool-calls/--no-structured-tool-calls",
+    default=None,
+    help="Ask the model to return executable structured tool calls.",
+)
+@click.option(
+    "--include-tools-every-turn/--reuse-tool-context",
+    default=None,
+    help="Include tool definitions on every model turn.",
+)
+@click.option(
+    "--registry",
+    default=None,
+    help='AgentKit A2A registry URI, e.g. "agentkit://a2a-registry?space_id=xxx&top_k=3".',
+)
+@click.option("--registry-space-id", default=None, help="AgentKit A2A SpaceId.")
+@click.option(
+    "--registry-top-k",
+    type=int,
+    default=None,
+    help="Number of candidate AgentCards to retrieve from the registry.",
+)
+@click.option(
+    "--registry-endpoint",
+    default=None,
+    help="AgentKit OpenAPI endpoint for A2A registry.",
+)
+@click.option(
+    "--registry-version",
+    default=None,
+    help="AgentKit OpenAPI version for A2A registry.",
+)
+@click.option(
+    "--registry-service-name",
+    default=None,
+    help="AgentKit OpenAPI service name for A2A registry.",
+)
+@click.option("--registry-region", default=None, help="AgentKit OpenAPI region.")
+@click.option(
+    "--registry-timeout-ms",
+    type=int,
+    default=None,
+    help="A2A registry request / polling timeout in milliseconds.",
+)
+@click.option(
+    "--registry-poll-interval-ms",
+    type=int,
+    default=None,
+    help="A2A task polling interval in milliseconds.",
+)
 @_connection_options
 @click.option(
     "--path",
@@ -395,6 +601,17 @@ def add(
     knowledgebase_type: str | None,
     long_term_memory_type: str | None,
     short_term_memory_type: str | None,
+    structured_tool_calls: bool | None,
+    include_tools_every_turn: bool | None,
+    registry: str | None,
+    registry_space_id: str | None,
+    registry_top_k: int | None,
+    registry_endpoint: str | None,
+    registry_version: str | None,
+    registry_service_name: str | None,
+    registry_region: str | None,
+    registry_timeout_ms: int | None,
+    registry_poll_interval_ms: int | None,
     path: str,
     model_name: str | None,
     tools: str | None,
@@ -408,10 +625,13 @@ def add(
     Options SET their value; `--tools` / `--skills` take comma-separated lists.
     Each backend connection param has its own flag, e.g. `--long-term-memory-project`,
     `--short-term-memory-host` (see `--help`), written under the matching component
-    section. Operates on `<path>/harness.yaml`; fast-fails when the file is missing.
+    section. `--registry` enables AgentKit A2A registry discovery/delegation.
+    Operates on `<path>/harness.yaml`; fast-fails when the file is missing.
     """
     yaml_path = Path(path).resolve() / "harness.yaml"
     data = _load_harness_yaml(yaml_path)
+    data.pop("enable_responses", None)
+    data.pop("enable_responses_cache", None)
 
     if harness_name is not None:
         data["harness_name"] = harness_name
@@ -425,6 +645,10 @@ def add(
         data["system_prompt"] = system_prompt
     if runtime is not None:
         data["runtime"] = runtime
+    if structured_tool_calls is not None:
+        data["structured_tool_calls"] = structured_tool_calls
+    if include_tools_every_turn is not None:
+        data["include_tools_every_turn"] = include_tools_every_turn
     # Set only the backend `type`, preserving any connection params already set
     # under the component section.
     for type_value, section_key in (
@@ -443,6 +667,19 @@ def add(
         data["tools"] = [t.strip() for t in tools.split(",") if t.strip()]
     if skills is not None:
         data["skills"] = [s.strip() for s in skills.split(",") if s.strip()]
+
+    _apply_registry_config(
+        data,
+        registry,
+        registry_space_id,
+        registry_top_k,
+        registry_endpoint,
+        registry_version,
+        registry_service_name,
+        registry_region,
+        registry_timeout_ms,
+        registry_poll_interval_ms,
+    )
 
     # Connection params (e.g. --long-term-memory-project) land under their
     # component section, alongside the `type` set above.
@@ -497,7 +734,7 @@ def show(path: str) -> None:
     click.echo("")
     click.echo(
         "Override per call via `veadk harness invoke ... --<flag>`. "
-        "Memory and knowledgebase are NOT overridable."
+        "Memory, knowledgebase, and registry are NOT overridable."
     )
 
 
