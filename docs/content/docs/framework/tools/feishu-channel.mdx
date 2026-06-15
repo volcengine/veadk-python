@@ -1,6 +1,5 @@
 ---
 title: "飞书 Channel 扩展"
-description: "用 FeishuChannelExtension 把飞书机器人的入站消息桥接到 VeADK Runner。"
 ---
 
 `veadk.extensions.FeishuChannelExtension` 把飞书机器人的入站消息桥接到 VeADK `Runner`。
@@ -92,10 +91,3 @@ if __name__ == "__main__":
 - 默认使用飞书 `Channel` 的 WebSocket 模式，因此只要机器人已订阅消息事件，即可直接启动连接。
 - 默认回复使用 `reply_to=原消息 message_id`，让 VeADK 的输出挂在当前飞书消息线程下。
 - 你可以通过 `session_id_factory` 与 `user_id_factory` 覆盖默认的身份映射逻辑。
-
-## 下一步
-
-<Cards>
-  <Card title="飞书 / Lark MCP 工具" href="/cn/docs/framework/tools/builtin-mcp" description="反过来：让 Agent 调用飞书能力。" />
-  <Card title="短期记忆" href="/cn/docs/framework/memory/short-term" description="为多轮飞书对话保留上下文。" />
-</Cards>

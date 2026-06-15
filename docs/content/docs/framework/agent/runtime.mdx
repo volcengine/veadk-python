@@ -1,77 +1,44 @@
 ---
 title: "运行时"
-description: "通过 Agent(runtime=...) 切换驱动智能体循环的运行时：默认 adk，或 codex。"
+status: new
 ---
 
-VeADK 的智能体循环由**可插拔运行时（Pluggable Runtime）**驱动。`Agent(runtime=...)` 决定由谁来执行这层循环，而外层的 [`Runner`](/cn/docs/framework/runner) 始终负责会话、记忆与链路追踪 —— 切换运行时不影响这些能力。
+运行时决定智能体「内层循环」如何执行——也就是每一轮怎样调用模型、解析意图、调用工具。默认运行时基于 Google ADK 的内置执行流程，开箱即用。你也可以切换到其他执行后端，或在执行流程上插入统一的处理逻辑（如鉴权、日志、重试），而无需改动智能体本身。
 
-| 运行时 | 说明 | 依赖 |
-| :-- | :-- | :-- |
-| `adk`（默认） | Google ADK 内置的 `BaseLlmFlow`，由 `Agent` 直接驱动，无需额外运行时对象。 | 无 |
-| `codex` | 以 OpenAI Codex SDK 作为智能体 harness 来驱动这次调用。 | `openai-codex` 等可选依赖 |
+## 基本使用
 
-## 切换运行时
+默认即为 ADK 运行时，无需任何额外配置：
 
-```python
+```python title="agent.py"
+import asyncio
+from veadk import Agent, Runner
+
+agent = Agent(name="assistant")  # 默认使用 ADK 运行时
+print(asyncio.run(Runner(agent=agent).run("你好")))
+```
+
+## 切换执行后端
+
+通过 `runtime` 选择内层循环的执行后端：
+
+```python title="agent.py"
+agent = Agent(name="assistant", runtime="codex")
+```
+
+| 取值 | 说明 |
+| :--- | :--- |
+| `adk`（默认） | 使用 Google ADK 内置的执行流程，适用于绝大多数场景。 |
+| `codex` | 其他执行后端，面向高级定制场景。 |
+
+## 请求处理
+
+在不侵入业务逻辑的前提下，可为每次执行插入统一的横切处理——鉴权、日志、重试、性能监控等。把处理器传入 `run_processor` 即可，例如接入身份认证做登录态校验：
+
+```python title="agent.py"
 from veadk import Agent
+from veadk.integrations.ve_identity import AuthRequestProcessor
 
-# 默认运行时：adk
-agent = Agent(name="assistant")
-
-# 切换到 codex 运行时
-agent = Agent(name="coder", runtime="codex")
+agent = Agent(name="assistant", run_processor=AuthRequestProcessor())
 ```
 
-`runtime` 字段类型为 `Literal["adk", "codex"]`，默认 `"adk"`。
-
-## adk 运行时（默认）
-
-默认值，无需任何额外配置或依赖。智能体循环交给 Google ADK 内置的 LLM flow 执行，行为与不传 `runtime` 完全一致。
-
-## codex 运行时
-
-以 OpenAI Codex SDK 作为 harness 来驱动智能体循环。
-
-### 依赖
-
-`codex` 运行时需要额外的可选依赖（缺失时会**快速失败**并给出安装提示）：
-
-```bash
-pip install openai-codex fastapi uvicorn
-```
-
-`openai-codex` 通过 `openai-codex-cli-bin` 自带 Codex CLI 二进制。
-
-### 配置
-
-```python
-agent = Agent(
-    name="coder",
-    runtime="codex",
-    model_name="<your-model>",
-    model_api_base="<chat-endpoint-base-url>",
-    model_api_key="<api-key>",
-)
-```
-
-- **模型**：取 `Agent(model_name=...)`（列表则取第一个），否则回退到环境变量 `OPENAI_MODEL`；都没有则快速失败。
-- **接入点**：`codex` 运行时要求 `model_api_base` 与 `model_api_key`（也可分别由 `OPENAI_BASE_URL` / `OPENAI_API_KEY` 提供）。缺失即报错。
-
-### 工作原理
-
-- Codex 只使用 **Responses API**，而后端通常是 Chat 接口，因此请求会经由一个**进程内的 Responses→Chat 转换层**（`veadk.runtime.codex.proxy`）。
-- Codex 子进程通过独立的 `CODEX_HOME` 与生成的 `config.toml` 与宿主机 `~/.codex` 隔离，后端凭证经由 provider 的 `env_key` 注入。
-- 由于 Codex 没有干净的「追加系统提示」通道，智能体的身份/指令会被折叠进输入的前置区块（labelled preamble），而非写入对话历史。
-- 外层 `Runner` 依旧负责会话、记忆与追踪。
-
-<Callout type="warn">
-  Codex 在运行中可能发起对辅助模型（如 `codex-auto-review`）的请求；若你的接入点/账号没有该模型权限，相应步骤会失败。请确保接入点具备 Codex 所需模型的访问权限。
-</Callout>
-
-## 在 Harness Server 中使用
-
-部署的 [Harness server](/cn/docs/cli/harness-cli) 也暴露了运行时开关：harness 规格的 `runtime` 字段，以及 `veadk harness add/invoke` 的 `--runtime` 选项（`adk` 或 `codex`）。
-
-## 扩展自定义运行时
-
-运行时通过 `veadk.runtime.get_runtime(name)` 解析，并实现 `veadk.runtime.base_runtime.BaseRuntime` 抽象基类（核心是一个异步的 `run_async(agent, ctx)` 事件生成器）。`adk` 由 `Agent` 内联处理、不经过该注册表；其余运行时（如 `codex`）由此解析。
+不设置时使用默认的空处理器，不改变任何行为。

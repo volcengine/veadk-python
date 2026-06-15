@@ -1,0 +1,33 @@
+---
+title: "In-memory (local)"
+---
+
+The `local` backend keeps sessions in process memory, backed by Google ADK's `InMemorySessionService`. It needs no external service and never touches disk — when the process exits, sessions are gone.
+
+## When to use
+
+- Local development and debugging;
+- Unit tests, example scripts, and other ephemeral scenarios;
+- When sessions don't need to survive across processes or restarts.
+
+## Usage
+
+```python
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+
+stm = ShortTermMemory(backend="local")  # local is the default
+
+agent = Agent(name="demo")
+runner = Runner(agent=agent, short_term_memory=stm)
+```
+
+<Callout type="info">
+`local` is the default backend for `ShortTermMemory`. If the `Runner` receives no short-term memory or session service, it also falls back to creating a `local` instance.
+</Callout>
+
+## Parameters
+
+The `local` backend needs no extra configuration; it only uses `ShortTermMemory`'s common parameters. See [Short-term memory · Parameters](/en/docs/framework/memory/short-term#parameters).
+
+Need sessions to survive restarts? Use [SQLite](/en/docs/framework/memory/short-term/sqlite) instead.

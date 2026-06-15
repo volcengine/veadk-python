@@ -1,0 +1,34 @@
+---
+title: "Configuration"
+---
+
+VeADK separates configuration from code. Model keys, database connections, and service addresses change across environments and don't belong in source, so configuration supplies them. The same code then moves cleanly between local, staging, and production. Secrets stay out of the repository.
+
+Configuration comes in three layers, from static to dynamic:
+
+- **Environment variables**: read at startup, the most common layer. Holds model keys and connection details, supplied via system environment variables, `.env`, or `config.yaml`.
+- **Built-in defaults**: sensible defaults for common settings, so it runs with zero configuration.
+- **Runtime dynamic config**: hot-update the prompt, model, and other settings after deployment, with no restart.
+
+## Priority
+
+When a setting appears in more than one place, the value is taken in this order (higher first):
+
+1. System environment variables
+2. The `.env` file in the project root
+3. The `config.yaml` file
+4. Built-in defaults
+
+`config.yaml` suits centralized management of most settings; system environment variables override individual ones in a specific environment; anything unset falls back to built-in defaults.
+
+<Callout type="warn">
+Put secrets in environment variables or `config.yaml` — **never hard-code them**. Add both `.env` and `config.yaml` to `.gitignore` so they don't reach the repository.
+</Callout>
+
+## The three layers
+
+<Cards>
+  <Card title="Environment variables" href="/en/docs/references/configuration/environment-variables" description="Domain-grouped variables and their config.yaml mapping — for secrets and connection details." />
+  <Card title="Built-in defaults" href="/en/docs/references/configuration/constants" description="Run with zero config: the defaults the framework ships for common settings." />
+  <Card title="Runtime dynamic config" href="/en/docs/references/configuration/runtime" description="Hot-update the prompt and model after deployment, without a restart." />
+</Cards>

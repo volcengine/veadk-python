@@ -1,0 +1,54 @@
+---
+title: "MySQL（mysql）"
+---
+
+`mysql` 后端把会话存储到 MySQL 数据库，底层使用 Google ADK 的 `DatabaseSessionService`。多个智能体实例可连接同一数据库，实现会话共享与分布式持久化。
+
+## 何时使用
+
+- 生产环境、多实例/分布式部署；
+- 需要由统一的 MySQL 集中管理会话数据。
+
+## 配置
+
+连接信息通过 `config.yaml`（或对应环境变量）提供，**不要把密码写进代码**。VeADK 用 `MysqlConfig` 读取，环境变量前缀为 `DATABASE_MYSQL_`：
+
+```yaml title="config.yaml"
+database:
+  mysql:
+    host:       # 主机或 IP
+    user:
+    password:
+    database:
+    charset: utf8
+```
+
+| 配置项 | 环境变量 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `host` | `DATABASE_MYSQL_HOST` | `""` | 数据库主机。 |
+| `user` | `DATABASE_MYSQL_USER` | `""` | 用户名。 |
+| `password` | `DATABASE_MYSQL_PASSWORD` | `""` | 密码。 |
+| `database` | `DATABASE_MYSQL_DATABASE` | `""` | 数据库名。 |
+| `charset` | `DATABASE_MYSQL_CHARSET` | `utf8` | 字符集。 |
+
+## 用法
+
+```python
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+
+stm = ShortTermMemory(backend="mysql")  # 连接信息来自 config.yaml / 环境变量
+
+agent = Agent(name="demo")
+runner = Runner(agent=agent, short_term_memory=stm, app_name="memory_demo")
+```
+
+如需透传连接池等驱动参数，可使用 `db_kwargs`：
+
+```python
+stm = ShortTermMemory(backend="mysql", db_kwargs={"pool_size": 10, "pool_recycle": 3600})
+```
+
+<Callout type="info">
+VeADK 会根据运行环境自动选择同步或异步 MySQL 驱动（`pymysql` 或 `aiomysql`）。用户名/密码中的特殊字符会被自动 URL 编码。可在火山引擎[开通 MySQL 数据库](https://www.volcengine.com/product/rds-mysql)。
+</Callout>

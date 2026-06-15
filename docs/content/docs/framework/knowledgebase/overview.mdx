@@ -1,6 +1,5 @@
 ---
 title: "概述"
-description: "VeADK 知识库的功能与用法，以及 VikingDB 与 OpenSearch 两种后端的开通与配置。"
 ---
 
 知识库（KnowledgeBase）是智能体的外部知识来源——一个可随时查阅、专门存放静态资料的"图书馆"。把它挂到智能体上，VeADK 会自动赋予智能体一个检索工具，让它在回答前先到你的资料里检索相关片段，从而给出更精准、更有依据的回答（RAG）。
@@ -343,10 +342,3 @@ if __name__ == "__main__":
 | **初始化** | 使用前需检查并调用 `kb.create_collection()`。 | 通常自动创建索引，无需额外步骤。 |
 | **代码使用** | **完全一致**：`add_from_files`、`add_from_text` 等用法相同。 | **完全一致**：抽象层屏蔽了差异。 |
 | **依赖** | 依赖火山引擎 `ak/sk` 进行认证与 embedding。 | 同样需要 `ak/sk` 调用 embedding 模型，但数据库本身独立。 |
-
-## 下一步
-
-<Cards>
-  <Card title="知识库最佳实践" href="/cn/docs/framework/knowledgebase/best-practice" description="把知识库与多智能体深度结合。" />
-  <Card title="构建智能体" href="/cn/docs/framework/agent/create" description="配置模型、工具、记忆与知识库。" />
-</Cards>

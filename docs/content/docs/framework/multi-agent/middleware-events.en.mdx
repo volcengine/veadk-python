@@ -1,0 +1,142 @@
+---
+title: "Middleware and Event-Driven Collaboration"
+---
+
+In distributed multi-agent systems, beyond point-to-point A2A calls and service discovery, VeADK also provides two kinds of middleware capabilities:
+
+- **A2A auth middleware**: Transparently extracts, parses, and stores identity credentials on the A2A server side.
+- **RocketMQ event-driven middleware**: Lets Agents collaborate asynchronously in an **event-driven** manner through a message queue.
+
+## A2A Auth Middleware
+
+`A2AAuthMiddleware` is a Starlette/FastAPI-based middleware that, on the A2A server side, extracts authentication tokens from inbound requests and writes credentials into the credential service for downstream handlers to use. It will:
+
+1. Extract the auth token from the `Authorization` header or a query parameter;
+2. Parse the JWT to extract `user_id` and the delegation chain;
+3. Build an `AuthConfig` based on the auth method and store the credential in the credential service;
+4. Extract the TIP token from the `X-Ve-TIP-Token` header for trust propagation;
+5. Exchange the TIP token for a workload access token via `IdentityClient` and set it in `request.scope["auth"]`.
+
+It is recommended to create the middleware class with the factory function `build_a2a_auth_middleware(...)`, then register it with FastAPI's `add_middleware`:
+
+```python title="server.py"
+from fastapi import FastAPI
+from veadk.a2a.ve_middlewares import build_a2a_auth_middleware
+from veadk.auth.ve_credential_service import VeCredentialService
+
+app = FastAPI()
+credential_service = VeCredentialService()
+
+# Header method (Authorization: Bearer <token>)
+app.add_middleware(
+    build_a2a_auth_middleware(
+        app_name="my_app",
+        credential_service=credential_service,
+        auth_method="header",
+    )
+)
+
+# Or QueryString method (?token=<token>)
+app.add_middleware(
+    build_a2a_auth_middleware(
+        app_name="my_app",
+        credential_service=credential_service,
+        auth_method="querystring",
+        token_param="token",
+    )
+)
+```
+
+Main parameters of `build_a2a_auth_middleware`:
+
+| Parameter | Type | Description |
+| :- | :- | :- |
+| `app_name` | `str` | Application name for credential storage. |
+| `credential_service` | `VeCredentialService` | Credential service used to store credentials. |
+| `auth_method` | `"header" \| "querystring"` | Authentication method; defaults to `header`. |
+| `token_param` | `str` | Query parameter name holding the token in `querystring` mode; defaults to `token`. |
+| `credential_key` | `str` | Key identifying this credential in the store; defaults to `inbound_auth`. |
+| `identity_client` | `Optional[IdentityClient]` | Identity client for TIP token exchange; uses the global `IdentityClient` if not provided. |
+
+After successful authentication, the middleware sets the following attributes on the request for downstream handlers to read:
+
+- `request.scope["user"]`: a `SimpleUser` instance carrying the `user_id` parsed from the JWT;
+- `request.scope["auth"]`: a `WorkloadToken` object containing the `workload_access_token`.
+
+<Callout type="info" title="Note">
+This middleware corresponds to the `RemoteVeAgent` auth methods (`auth_method` of `header` / `querystring`) described in [A2A Agent](/en/docs/framework/multi-agent/a2a): the client carries the token, and the server-side middleware parses and stores it.
+</Callout>
+
+## RocketMQ Event-Driven Middleware
+
+Beyond synchronous request/response calls, VeADK also supports connecting Agents in an **event-driven** manner through a RocketMQ message queue. This suits asynchronous, decoupled, and horizontally scalable multi-agent collaboration scenarios.
+
+`RocketMQClient` wraps message sending and consumption. Provide credentials via environment variables instead of hard-coding them:
+
+```bash
+export ROCKETMQ_ACCESS_KEY="<access_key>"
+export ROCKETMQ_ACCESS_SECRET="<access_secret>"
+```
+
+```python title="event_driven.py"
+import os
+
+from veadk.a2a.hub.rocketmq_middleware import RocketMQClient
+
+client = RocketMQClient(
+    name="weather_client",
+    producer_group="weather_group",
+    name_server_addr="<rocketmq-name-server-addr>",
+    access_key=os.environ["ROCKETMQ_ACCESS_KEY"],
+    access_secret=os.environ["ROCKETMQ_ACCESS_SECRET"],
+)
+
+# Send a one-way message to a topic
+client.send_msg(topic="weather_topic", msg_body="What is the weather in Beijing?", key="req-1", tag="query")
+```
+
+`RocketMQAgentClient` is an abstract base class that binds an `Agent` to a subscribed topic. Implement its abstract method `recv_msg_callback` to drive the Agent when a message arrives and return a consume status:
+
+```python title="event_driven_agent.py"
+import asyncio
+import os
+
+from rocketmq.client import ConsumeStatus, ReceivedMessage
+from veadk import Agent, Runner
+from veadk.a2a.hub.rocketmq_middleware import RocketMQAgentClient, RocketMQClient
+
+
+class WeatherAgentClient(RocketMQAgentClient):
+    def recv_msg_callback(self, msg: ReceivedMessage) -> ConsumeStatus:
+        # Drive self.agent with the message body and return a consume status.
+        prompt = msg.body.decode("utf-8")
+        try:
+            runner = Runner(agent=self.agent)
+            response = asyncio.run(runner.run(messages=prompt))
+            print(f"Agent reply: {response}")
+            return ConsumeStatus.CONSUME_SUCCESS
+        except Exception as e:
+            print(f"Failed to process message, will retry later: {e}")
+            return ConsumeStatus.RECONSUME_LATER
+
+
+rocketmq_client = RocketMQClient(
+    name="weather_client",
+    producer_group="weather_group",
+    name_server_addr="<rocketmq-name-server-addr>",
+    access_key=os.environ["ROCKETMQ_ACCESS_KEY"],
+    access_secret=os.environ["ROCKETMQ_ACCESS_SECRET"],
+)
+
+agent_client = WeatherAgentClient(
+    agent=Agent(name="weather_agent"),
+    rocketmq_client=rocketmq_client,
+    subscribe_topic="weather_topic",
+    group="weather_consumer_group",
+)
+
+# Start listening on the subscribed topic (blocking)
+agent_client.listen()
+```
+
+After calling `listen()`, the client starts a consumer on the specified topic. Whenever a new message arrives, it invokes `recv_msg_callback` to drive the Agent, achieving asynchronous, event-driven collaboration between Agents. Returning `CONSUME_SUCCESS` marks the message consumed; returning `RECONSUME_LATER` triggers redelivery.

@@ -1,0 +1,46 @@
+---
+title: "VikingDB (viking)"
+---
+
+The `viking` backend (`VikingDBLTMBackend`) uses Volcengine [VikingDB memory](https://www.volcengine.com/product/vikingdb) as long-term storage. It is a managed service requiring no self-hosted vector store or local embedding — **recommended for production**. This backend also supports user profiles (`get_user_profile`).
+
+## When to use
+
+- Production with persistence and managed operations;
+- When you want Volcengine's memory capabilities (including user profiles).
+
+## Configuration
+
+Authenticated via Volcengine AK/SK. VeADK reads AK/SK from environment variables first, falling back to VeFaaS IAM credentials (for cloud deployments).
+
+| Field | Env var | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `volcengine_access_key` | `VOLCENGINE_ACCESS_KEY` | — | Volcengine Access Key. |
+| `volcengine_secret_key` | `VOLCENGINE_SECRET_KEY` | — | Volcengine Secret Key. |
+| `volcengine_project` | `DATABASE_VIKINGMEM_PROJECT` | `default` | VikingDB memory project. |
+| `region` | `DATABASE_VIKING_REGION` | `cn-beijing` (`cn-hongkong` for byteplus) | Region. |
+| `memory_type` | `DATABASE_VIKINGMEM_MEMORY_TYPE` | `["sys_event_v1", "sys_profile_v1"]` | Memory type list; a comma-separated env var is parsed into a list. |
+
+## Usage
+
+```python
+from veadk import Agent
+from veadk.memory.long_term_memory import LongTermMemory
+
+# index must start with a letter, contain only letters/digits/underscores, length 1–128
+ltm = LongTermMemory(backend="viking", app_name="ltm_demo")
+agent = Agent(name="demo", long_term_memory=ltm)
+```
+
+At init, if the collection doesn't exist, VeADK creates it from `memory_type`.
+
+### Get a user profile
+
+```python
+profile = ltm.get_user_profile(user_id="user-42")
+print(profile)
+```
+
+<Callout type="info">
+`index` (the collection name) must follow VikingDB rules: start with an English letter, contain only letters, digits, and underscores, length 1–128.
+</Callout>

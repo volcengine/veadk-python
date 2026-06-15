@@ -1,6 +1,6 @@
 ---
 title: "Tunnel"
-description: "Connect on-prem / private resource servers to a cloud agent through an outbound tunnel — no inbound port. The resource type is selected by a protocol; MCP is the first supported one and it's extensible."
+status: new
 ---
 
 A cloud agent wants to use resource servers (MCP servers, internal APIs, ...)
@@ -19,11 +19,20 @@ more can be added by implementing `BaseProtocol` (see [Protocols](#protocol)).
 
 ## How it works
 
-```text
-        enterprise network                  │            cloud (ADK server)
-  resource server(s) ◀─ connector ─outbound WSS─▶ /tunnel/connect ─ registry
-  (MCP / ...)            (registers to agent) │     agent + TunnelToolset
-                                              │       (mounts tools per turn, per protocol)
+```mermaid
+flowchart LR
+    subgraph onprem["Enterprise network"]
+        R["Resource servers<br/>(MCP / internal APIs)"]
+        C["connector"]
+        R --> C
+    end
+    subgraph cloud["Cloud (ADK server)"]
+        E["/tunnel/connect"]
+        G["registry"]
+        A["Agent + TunnelToolset<br/>(mounts tools per turn, per protocol)"]
+        E --> G --> A
+    end
+    C -- "outbound WSS · registers to agent" --> E
 ```
 
 - An agent opts in with `Agent(enable_tunnel=True)` and gets a `TunnelToolset`.

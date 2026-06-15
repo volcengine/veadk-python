@@ -1,0 +1,46 @@
+---
+title: "VikingDB（viking）"
+---
+
+`viking` 后端（`VikingDBLTMBackend`）使用火山引擎 [VikingDB 记忆库](https://www.volcengine.com/product/vikingdb)作为长期记忆存储。它是托管服务，无需自建向量库或本地 embedding，**生产推荐**。该后端还支持获取用户画像（`get_user_profile`）。
+
+## 何时使用
+
+- 生产环境、需要持久化与托管运维；
+- 希望使用火山引擎的记忆库能力（含用户画像）。
+
+## 配置
+
+通过火山引擎 AK/SK 鉴权。VeADK 会优先从环境变量读取 AK/SK，未设置时尝试从 VeFaaS IAM 获取凭证（云上部署场景）。
+
+| 配置项 | 环境变量 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `volcengine_access_key` | `VOLCENGINE_ACCESS_KEY` | — | 火山引擎 Access Key。 |
+| `volcengine_secret_key` | `VOLCENGINE_SECRET_KEY` | — | 火山引擎 Secret Key。 |
+| `volcengine_project` | `DATABASE_VIKINGMEM_PROJECT` | `default` | VikingDB 记忆库项目。 |
+| `region` | `DATABASE_VIKING_REGION` | `cn-beijing`（byteplus 为 `cn-hongkong`） | 区域。 |
+| `memory_type` | `DATABASE_VIKINGMEM_MEMORY_TYPE` | `["sys_event_v1", "sys_profile_v1"]` | 记忆类型列表，逗号分隔的环境变量会被解析为列表。 |
+
+## 用法
+
+```python
+from veadk import Agent
+from veadk.memory.long_term_memory import LongTermMemory
+
+# index 必须以字母开头，仅含字母、数字、下划线，长度 1–128
+ltm = LongTermMemory(backend="viking", app_name="ltm_demo")
+agent = Agent(name="demo", long_term_memory=ltm)
+```
+
+初始化时若集合（collection）不存在，VeADK 会按 `memory_type` 自动创建。
+
+### 获取用户画像
+
+```python
+profile = ltm.get_user_profile(user_id="user-42")
+print(profile)
+```
+
+<Callout type="info">
+`index`（即集合名）需满足 VikingDB 命名规则：以英文字母开头，仅包含字母、数字和下划线，长度 1–128。
+</Callout>

@@ -1,0 +1,41 @@
+---
+title: "Mem0 (mem0)"
+---
+
+The `mem0` backend (`Mem0LTMBackend`) uses [Mem0](https://mem0.ai/) as long-term storage. It is a managed service requiring no self-hosted vector store or local embedding — **recommended for production**.
+
+## When to use
+
+- Production needing a managed memory service;
+- You already have a Mem0 account and API key.
+
+## Configuration
+
+VeADK reads config via `Mem0Config`, with the env prefix `DATABASE_MEM0_`:
+
+| Field | Env var | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `api_key` | `DATABASE_MEM0_API_KEY` | `""` | Mem0 API key. |
+| `api_key_id` | `DATABASE_MEM0_API_KEY_ID` | `""` | Used to auto-fetch the API key (alternative to `project_id`). |
+| `project_id` | `DATABASE_MEM0_PROJECT_ID` | `""` | Used to auto-fetch the API key. |
+| `base_url` | `DATABASE_MEM0_BASE_URL` | `""` | Mem0 service endpoint. |
+
+<Callout type="info">
+If `api_key` isn't provided directly, VeADK tries to obtain it via `api_key_id` or `project_id`; an error is raised if neither is set.
+</Callout>
+
+## Usage
+
+```python
+from veadk import Agent
+from veadk.memory.long_term_memory import LongTermMemory
+
+ltm = LongTermMemory(backend="mem0", app_name="ltm_demo")
+agent = Agent(name="demo", long_term_memory=ltm)
+```
+
+Install the dependency:
+
+```bash
+pip install mem0
+```

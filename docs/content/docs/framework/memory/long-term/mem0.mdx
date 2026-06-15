@@ -1,0 +1,41 @@
+---
+title: "Mem0（mem0）"
+---
+
+`mem0` 后端（`Mem0LTMBackend`）使用 [Mem0](https://mem0.ai/) 记忆库作为长期记忆存储。它是托管服务，无需自建向量库或本地 embedding，**生产推荐**。
+
+## 何时使用
+
+- 生产环境、需要托管的记忆服务；
+- 已有 Mem0 账号与 API Key。
+
+## 配置
+
+VeADK 用 `Mem0Config` 读取配置，环境变量前缀为 `DATABASE_MEM0_`：
+
+| 配置项 | 环境变量 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `api_key` | `DATABASE_MEM0_API_KEY` | `""` | Mem0 API Key。 |
+| `api_key_id` | `DATABASE_MEM0_API_KEY_ID` | `""` | 用于自动获取 API Key（与 `project_id` 二选一）。 |
+| `project_id` | `DATABASE_MEM0_PROJECT_ID` | `""` | 用于自动获取 API Key。 |
+| `base_url` | `DATABASE_MEM0_BASE_URL` | `""` | Mem0 服务端点。 |
+
+<Callout type="info">
+若未直接提供 `api_key`，VeADK 会尝试用 `api_key_id` 或 `project_id` 自动换取；两者都没有则报错。
+</Callout>
+
+## 用法
+
+```python
+from veadk import Agent
+from veadk.memory.long_term_memory import LongTermMemory
+
+ltm = LongTermMemory(backend="mem0", app_name="ltm_demo")
+agent = Agent(name="demo", long_term_memory=ltm)
+```
+
+依赖安装：
+
+```bash
+pip install mem0
+```

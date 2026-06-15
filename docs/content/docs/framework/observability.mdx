@@ -1,0 +1,35 @@
+---
+title: "概述"
+---
+
+可观测性（Observability）通过对智能体执行过程的全链路记录，帮助你理解智能体的内部行为、定位问题、分析性能并持续优化。VeADK 内置的 Tracing 能力会把每一次请求——从接收用户输入，到模型推理、工具调用、记忆与知识库读写，再到生成响应——记录为结构化数据，并上报至火山引擎或第三方平台进行观测与分析。
+
+## 核心能力
+
+VeADK 的可观测能力遵循 [OpenTelemetry](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/) 生成式 AI 语义规范，主要提供：
+
+- **可视化链路**：每次请求从接入到响应的完整流程都可被追踪；
+- **结构化数据**：记录上下文、状态、事件类型、耗时等信息；
+- **跨组件追踪**：覆盖 Agent、工具、记忆模块、知识库以及外部接口；
+- **多 Agent 协调**：在多 Agent 协作场景中分析各 Agent 的调用关系与数据流向；
+- **内容采集控制**：可通过 `observability.opentelemetry.trace_content` 关闭 Agent、LLM 与工具输入输出内容采集，仅保留非内容 Trace 信息。
+
+## 支持的平台
+
+VeADK 通过不同的数据导出器（Exporter），将 Tracing 数据上报至多个火山引擎及第三方平台：
+
+<Cards>
+  <Card title="CozeLoop（扣子罗盘）" href="/cn/docs/framework/ve-tracing#cozeloop-平台">
+    将 Trace 数据上报至扣子罗盘，实现调用链路观测与 Agent 评测。
+  </Card>
+  <Card title="APMPlus" href="/cn/docs/framework/ve-tracing#apmplus-平台">
+    接入火山引擎 APMPlus 平台，实现调用链路观测与模型指标分析。
+  </Card>
+  <Card title="TLS（日志服务）" href="/cn/docs/framework/ve-tracing#tls-平台">
+    接入火山引擎日志服务 TLS，进行 Agent 执行链路观测。
+  </Card>
+</Cards>
+
+<Callout type="info" title="与 OpenTelemetry 的兼容性">
+  VeADK 的字段命名遵循 OpenTelemetry 生成式 AI 规范，你可以直接将 Tracing 数据导入到 OpenTelemetry 兼容的系统中进行分析和可视化。
+</Callout>

@@ -1,0 +1,84 @@
+---
+title: "快速开始"
+---
+
+本指南带你创建并运行第一个智能体。开始前请先完成[安装](/cn/docs/framework/installation)。
+
+## 创建并运行智能体
+
+用 `Agent` 定义智能体，用 `Runner` 运行它。`Runner.run()` 是为本地测试提供的便捷方法。将 `model_api_key` 替换为你的火山方舟（Ark）API Key：
+
+```python title="agent.py"
+import asyncio
+from veadk import Agent, Runner
+
+agent = Agent(
+    name="assistant",
+    description="A helpful assistant for user questions.",
+    instruction="尽你所知回答用户的问题。",
+    model_name="doubao-seed-1-8-251228",
+    model_api_key="<你的方舟 API Key>",  # [!code highlight]
+)
+
+response = asyncio.run(Runner(agent=agent).run("你好，介绍下你自己"))
+print(response)
+```
+
+`Agent` 的关键参数：
+
+| 参数 | 说明 |
+| :--- | :--- |
+| `name` | 智能体名称，用于标识（A2A 等场景） |
+| `description` | 智能体描述，在 A2A 场景下表明其功能 |
+| `instruction` | 系统提示词，定义行为与回答方式 |
+| `model_name` | 使用的模型名称 |
+| `model_api_key` | 模型 API Key |
+
+<Callout type="info">
+  生产环境请勿在代码中硬编码 API Key，改用环境变量或 `config.yaml`，详见[配置](/cn/docs/references/configuration)。
+</Callout>
+
+## 本地可视化调试
+
+VeADK 提供内置的可视化调试界面，可在浏览器中与智能体交互、查看执行过程，便于本地开发与排查问题。
+
+### 项目结构
+
+启动调试界面前，确保智能体目录符合以下结构：
+
+<Files>
+  <Folder name="my_agent" defaultOpen>
+    <File name="__init__.py" />
+    <File name="agent.py" />
+  </Folder>
+</Files>
+
+`agent.py` 中需定义一个 `root_agent` 实例。
+
+### 启动调试界面
+
+在 `my_agent` 的上一级目录（即包含智能体目录的父目录）中执行：
+
+```bash
+veadk web
+```
+
+启动后，在浏览器中打开 [http://localhost:8000](http://localhost:8000) 即可访问可视化调试界面。
+
+绑定到其他主机（例如允许局域网访问）使用 `--host` 参数：
+
+```bash
+veadk web --host 0.0.0.0
+```
+
+<Callout type="info">
+  默认监听端口为 `8000`。VeADK 会基于当前工作目录自动发现可用的智能体目录。
+</Callout>
+
+### 使用调试界面
+
+进入界面后：
+
+- 在左上角的下拉框中选择要调试的智能体目录（例如 `my_agent`）；
+- 智能体在你发起第一轮对话时才真正加载；
+- 通过在下拉框中切换不同的目录名称，在多个智能体之间切换。

@@ -1,0 +1,84 @@
+---
+title: "Quickstart"
+---
+
+This guide walks you through creating and running your first agent. Complete the [installation](/en/docs/framework/installation) first.
+
+## Create and run an agent
+
+Define an agent with `Agent` and run it with `Runner`. `Runner.run()` is a convenience method for local testing. Replace `model_api_key` with your Volcengine Ark API key:
+
+```python title="agent.py"
+import asyncio
+from veadk import Agent, Runner
+
+agent = Agent(
+    name="assistant",
+    description="A helpful assistant for user questions.",
+    instruction="Answer user questions to the best of your knowledge.",
+    model_name="doubao-seed-1-8-251228",
+    model_api_key="<your Ark API key>",  # [!code highlight]
+)
+
+response = asyncio.run(Runner(agent=agent).run("Hi, introduce yourself"))
+print(response)
+```
+
+Key `Agent` parameters:
+
+| Parameter | Description |
+| :--- | :--- |
+| `name` | Agent name, used for identification (e.g. in A2A) |
+| `description` | What the agent does; surfaced in A2A scenarios |
+| `instruction` | System prompt that defines behavior and responses |
+| `model_name` | The model the agent uses |
+| `model_api_key` | The model API key |
+
+<Callout type="info">
+  In production, don't hard-code the API key — use an environment variable or `config.yaml` instead; see [Configuration](/en/docs/references/configuration).
+</Callout>
+
+## Local visual debugging
+
+VeADK ships with a built-in visual debugging interface to interact with your agent and inspect its execution in the browser — handy for local development and troubleshooting.
+
+### Project structure
+
+Before launching the interface, make sure your agent directory follows this structure:
+
+<Files>
+  <Folder name="my_agent" defaultOpen>
+    <File name="__init__.py" />
+    <File name="agent.py" />
+  </Folder>
+</Files>
+
+`agent.py` should define a `root_agent` instance.
+
+### Launch the interface
+
+From the parent directory of `my_agent` (the directory that contains your agent folder), run:
+
+```bash
+veadk web
+```
+
+Then open [http://localhost:8000](http://localhost:8000) in your browser to access the interface.
+
+To bind the service to a different host (for example, to allow LAN access), use `--host`:
+
+```bash
+veadk web --host 0.0.0.0
+```
+
+<Callout type="info">
+  The default port is `8000`. VeADK discovers available agent directories based on your current working directory.
+</Callout>
+
+### Using the interface
+
+Once the interface loads:
+
+- Select the agent directory to debug from the dropdown in the top-left corner (e.g. `my_agent`);
+- The agent loads only when you start the first conversation;
+- Switch between agents by choosing a different directory name in the dropdown.

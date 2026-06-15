@@ -1,0 +1,177 @@
+---
+title: "Short-term memory"
+---
+
+Short-term memory holds **session-level** context so an agent remembers what was said across turns. It is essentially the conversation context sent to the model — the system prompt plus the message history — keyed by `session_id`: reuse the same `session_id` and the agent remembers earlier turns.
+
+When a user starts a conversation, `ShortTermMemory` (or the underlying `SessionService`) automatically creates a `Session` object and tracks everything in that conversation.
+
+<Callout type="info">
+Short-term memory builds on Google ADK's Session mechanism. For background, see [Google ADK Session](https://google.github.io/adk-docs/sessions/session).
+</Callout>
+
+## Single entry point: `ShortTermMemory`
+
+Whatever backend you use, you interact with one class — `veadk.memory.short_term_memory.ShortTermMemory`. It selects and initializes the underlying session service based on `backend` (or `db_url`) and exposes a uniform session-management surface.
+
+```python
+from veadk.memory.short_term_memory import ShortTermMemory
+
+# Select the implementation via backend
+stm = ShortTermMemory(backend="sqlite", local_database_path="./stm.db")
+```
+
+### Parameters
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `backend` | `"local" \| "sqlite" \| "mysql" \| "postgresql" \| "database"` | `"local"` | Selects the backend. `database` is deprecated and equivalent to `sqlite`. |
+| `db_url` | `str` | `""` | A database connection string (e.g. `sqlite:///./test.db`). **Once set, `backend` is ignored** and ADK's `DatabaseSessionService` is used directly. |
+| `backend_configs` | `dict` | `{}` | Config passed to the backend constructor (e.g. overriding the `mysql`/`postgresql` config). |
+| `db_kwargs` | `dict` | `{}` | Extra args forwarded to the underlying database session service/driver (e.g. connection pool settings). |
+| `local_database_path` | `str` | `/tmp/veadk_local_database.db` | Local DB file path, used only by `sqlite`. |
+| `after_load_memory_callback` | `Callable \| None` | `None` | Callback invoked after a session is loaded; receives the loaded `Session`. |
+
+<Callout type="warn">
+If a username or password in the connection string contains special characters such as `@` or `:`, URL-encode it with `urllib.parse.quote_plus` first (e.g. `p@ssword` → `p%40ssword`), otherwise parsing fails.
+</Callout>
+
+## Backend abstraction: `BaseShortTermMemoryBackend`
+
+Every persistent backend extends `BaseShortTermMemoryBackend`, whose only contract is to expose a Google ADK `BaseSessionService`.
+
+```python
+class BaseShortTermMemoryBackend(ABC, BaseModel):
+    @cached_property
+    @abstractmethod
+    def session_service(self) -> BaseSessionService:
+        """Return the underlying session service instance."""
+```
+
+So:
+
+- `local` uses ADK's `InMemorySessionService` directly;
+- `sqlite` / `mysql` / `postgresql` each build a connection string and return an instance backed by ADK's `DatabaseSessionService`.
+
+This means **every backend behaves the same to the layers above**; only the persistence location and connection differ. To add a custom backend, subclass this base and implement `session_service`.
+
+## Choosing a backend
+
+| Backend | Persistent | External service | Use case | Docs |
+| :--- | :--- | :--- | :--- | :--- |
+| `local` | No (memory only) | None | Local debugging, ephemeral sessions | [In-memory](/en/docs/framework/memory/short-term/local) |
+| `sqlite` | Yes (local file) | None | Single-node persistence | [SQLite](/en/docs/framework/memory/short-term/sqlite) |
+| `mysql` | Yes | MySQL | Distributed persistence | [MySQL](/en/docs/framework/memory/short-term/mysql) |
+| `postgresql` | Yes | PostgreSQL | Distributed persistence | [PostgreSQL](/en/docs/framework/memory/short-term/postgresql) |
+
+## Working with the Runner
+
+Short-term memory is usually passed to the `Runner`, which pulls `session_service` from it to auto-create/restore sessions. Reuse the same `session_id` at run time to continue the context.
+
+```python
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+
+stm = ShortTermMemory(backend="sqlite", local_database_path="./stm.db")
+agent = Agent(name="memory_agent", instruction="Remember what the user tells you.")
+runner = Runner(agent=agent, short_term_memory=stm, app_name="memory_demo")
+
+async def main():
+    sid = "user-42-chat"
+    print(await runner.run(messages="My name is Ming and my favorite color is blue.", session_id=sid))
+    print(await runner.run(messages="What's my name? What's my favorite color?", session_id=sid))
+
+asyncio.run(main())
+```
+
+<Callout type="info">
+If you pass neither `short_term_memory` nor `session_service` to the `Runner`, it falls back to creating a `local` (in-memory) short-term memory automatically.
+</Callout>
+
+## Session management interface
+
+You rarely create or manage a `Session` directly; instead you use `session_service` to manage the full lifecycle:
+
+1. **Start a session** `create_session()`: create a new `Session` when the user starts interacting.
+2. **Resume a session** `get_session()`: retrieve a `Session` by `session_id` to continue.
+3. **Save progress** `append_event()`: append a new interaction (`Event`) to the history.
+4. **List sessions** `list_sessions()`: query active sessions for a user and app.
+5. **Clean up** `delete_session()`: delete a `Session` and its associated data.
+
+Under a database backend, `ShortTermMemory.create_session()` first lists and reuses an existing session with the same `session_id` to avoid duplicates.
+
+## Context compaction
+
+As a conversation grows, the history keeps expanding, increasing what the model must process and slowing responses. Context compaction summarizes the history with a sliding window: when the history exceeds a threshold, older events are compacted automatically.
+
+### Configure compaction
+
+Once configured, the `Runner` compacts the history each time the interval is reached.
+
+```python
+from google.adk.apps.app import App, EventsCompactionConfig
+
+from veadk import Agent
+
+root_agent = Agent(
+    name="my_agent",
+    instruction="You are a helpful assistant who answers politely.",
+)
+
+app = App(
+    name="my_agent",
+    root_agent=root_agent,
+    events_compaction_config=EventsCompactionConfig(
+        compaction_interval=3,  # compact every 3 new calls
+        overlap_size=1,         # overlap with the last event of the previous window
+    ),
+)
+```
+
+### Custom compactor
+
+Use `LlmEventSummarizer` to set the model and prompt template for compaction. Provide the model's API key / base via environment variables (read from `os.environ`, never hard-code):
+
+```python
+import os
+
+from google.adk.apps.app import App, EventsCompactionConfig
+from google.adk.apps.llm_event_summarizer import LlmEventSummarizer
+from google.adk.models.lite_llm import LiteLlm
+
+from veadk import Agent
+
+root_agent = Agent(
+    name="my_agent",
+    instruction="You are a helpful assistant who answers politely.",
+)
+
+summarization_llm = LiteLlm(
+    model="volcengine/doubao-seed-1-8-251228",
+    api_key=os.environ["MODEL_AGENT_API_KEY"],
+    api_base=os.environ.get(
+        "MODEL_AGENT_API_BASE", "https://ark.cn-beijing.volces.com/api/v3/"
+    ),
+)
+
+my_compactor = LlmEventSummarizer(
+    llm=summarization_llm,
+    prompt_template="""Summarize this conversation:
+1. Keep key entities, data points, and timeline;
+2. Highlight the core problems discussed and their solutions;
+3. Stay logically coherent and context-relevant;
+4. Remove repetition and redundant details.""",
+)
+
+app = App(
+    name="my_agent",
+    root_agent=root_agent,
+    events_compaction_config=EventsCompactionConfig(
+        compactor=my_compactor,
+        compaction_interval=5,
+        overlap_size=1,
+    ),
+)
+```

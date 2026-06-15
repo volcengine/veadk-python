@@ -1,6 +1,5 @@
 ---
 title: "内置 MCP 工具"
-description: "VeADK 基于 MCP（Model Context Protocol）接入的内置工具：MCP Router、飞书 / Lark、LAS 数据湖、视频云 VOD、Supabase 与可信 MCP 工具集。"
 ---
 
 [MCP（Model Context Protocol）](https://modelcontextprotocol.io/)是连接大模型与外部工具 / 数据源的开放协议。VeADK 在 Google ADK 的 `MCPToolset` 之上预封装了一组内置 MCP 工具集，把远程 MCP Server 暴露的工具直接注册到 Agent 上。
@@ -268,11 +267,3 @@ agent = Agent(tools=[toolset])
 ```
 
 注册后，Agent 会自动加载 MCP Server 暴露的工具，并在推理过程中按需调用。
-
-## 下一步
-
-<Cards>
-  <Card title="内置工具" href="/cn/docs/framework/tools/builtin" description="网页搜索、图像 / 视频生成、代码沙箱等原生函数工具。" />
-  <Card title="飞书 Channel 扩展" href="/cn/docs/framework/tools/feishu-channel" description="把飞书机器人的入站消息接入 Runner。" />
-  <Card title="自定义工具" href="/cn/docs/framework/tools/custom-function" description="把你自己的函数封装成工具。" />
-</Cards>
