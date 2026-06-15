@@ -45,8 +45,9 @@ and forwards that header to the container:
 
 - A VeIdentity user pool and one of its `WEB_APPLICATION` clients
   (<https://console.volcengine.com/veidentity>) — note both **UIDs**.
-- Your account AK/SK, for the local `veadk agentkit` build & deploy. The model
-  and runtime credentials are provided by the AgentKit runtime — nothing to set.
+- Your account AK/SK — used both by the local `veadk agentkit` build & deploy
+  and by the runtime to call the VeIdentity API (the runtime has no usable role
+  credentials, so they must be injected). The model is provided by the runtime.
 
 ```bash
 cd examples/sso_frontend_on_agentkit
@@ -60,8 +61,9 @@ set -a && source .env && set +a
 ## 2. Configure (non-interactive)
 
 Account-specific fields (container registry, runtime role, …) are auto-created
-when omitted. The runtime only needs the two UIDs — the model and access
-credentials are provided by the runtime, so they are not in `--runtime_envs`:
+when omitted. The runtime needs the two UIDs and AK/SK — it has no usable role
+credentials, so AK/SK must be injected to call the VeIdentity API. The model is
+provided by the runtime, so it is not in `--runtime_envs`:
 
 ```bash
 veadk agentkit config \
@@ -73,6 +75,8 @@ veadk agentkit config \
   --runtime_auth_type key_auth \
   --runtime_envs OAUTH2_USER_POOL_ID="$OAUTH2_USER_POOL_ID" \
   --runtime_envs OAUTH2_USER_POOL_CLIENT_ID="$OAUTH2_USER_POOL_CLIENT_ID" \
+  --runtime_envs VOLCENGINE_ACCESS_KEY="$VOLCENGINE_ACCESS_KEY" \
+  --runtime_envs VOLCENGINE_SECRET_KEY="$VOLCENGINE_SECRET_KEY" \
   --runtime_envs OTEL_SDK_DISABLED=true \
   --runtime_envs VEADK_DISABLE_EXPIRE_AT=true
 ```
@@ -118,9 +122,10 @@ cookie and the UI and agent API work.
 
 - **Model**: provided by the AgentKit runtime; to pin one, add
   `--runtime_envs MODEL_AGENT_NAME=... --runtime_envs MODEL_AGENT_API_KEY=...`.
-- **AK/SK**: used only by the local `veadk agentkit` build & deploy; on the
-  runtime the VeIdentity API calls (resolve the pool, register the callback) use
-  the runtime's service-role credentials, so AK/SK are not injected.
+- **AK/SK**: used by the local `veadk agentkit` build & deploy **and** on the
+  runtime for the VeIdentity API calls (resolve the pool, register the callback).
+  The runtime has no usable role credentials (IMDS times out), so AK/SK must be
+  injected or the container crashes on startup.
 - **Redeploy**: after changing an env var, merge it with
   `veadk agentkit config --runtime_envs K=V` and re-run `veadk agentkit deploy`
   (image layers are reused). Tear down with `veadk agentkit destroy`.

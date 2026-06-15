@@ -39,8 +39,8 @@ key 放在 `Authorization: Bearer <key>` 请求头里，并把该头透传给容
 
 - 一个 VeIdentity 用户池及其下的一个 `WEB_APPLICATION` 客户端
   （控制台：<https://console.volcengine.com/veidentity>），记下两者的 **UID**。
-- 账号的 AK/SK，供本地 `veadk agentkit` 构建与部署鉴权。模型与运行时凭证由
-  AgentKit 运行时提供，无需手动设置。
+- 账号的 AK/SK：本地 `veadk agentkit` 构建部署，以及运行时调用 VeIdentity API
+  都要用（运行时取不到角色凭证，必须注入）。模型由 AgentKit 运行时提供。
 
 ```bash
 cd examples/sso_frontend_on_agentkit
@@ -53,8 +53,9 @@ set -a && source .env && set +a
 
 ## 2. 生成配置（非交互）
 
-账号相关字段（镜像仓库、运行时角色等）省略即自动创建。运行时只需两个 UID
-——模型和访问凭证由运行时提供，无需写进 `--runtime_envs`：
+账号相关字段（镜像仓库、运行时角色等）省略即自动创建。运行时需要两个 UID 和
+AK/SK——运行时取不到角色凭证，调用 VeIdentity API 必须注入 AK/SK；模型由运行时
+提供，无需写进 `--runtime_envs`：
 
 ```bash
 veadk agentkit config \
@@ -66,6 +67,8 @@ veadk agentkit config \
   --runtime_auth_type key_auth \
   --runtime_envs OAUTH2_USER_POOL_ID="$OAUTH2_USER_POOL_ID" \
   --runtime_envs OAUTH2_USER_POOL_CLIENT_ID="$OAUTH2_USER_POOL_CLIENT_ID" \
+  --runtime_envs VOLCENGINE_ACCESS_KEY="$VOLCENGINE_ACCESS_KEY" \
+  --runtime_envs VOLCENGINE_SECRET_KEY="$VOLCENGINE_SECRET_KEY" \
   --runtime_envs OTEL_SDK_DISABLED=true \
   --runtime_envs VEADK_DISABLE_EXPIRE_AT=true
 ```
@@ -106,7 +109,7 @@ Authorization: Bearer <your-runtime-key>
 
 - **模型**：由 AgentKit 运行时提供；如需指定，可自行加
   `--runtime_envs MODEL_AGENT_NAME=... --runtime_envs MODEL_AGENT_API_KEY=...`。
-- **AK/SK**：仅本地 `veadk agentkit` 构建部署使用；运行时调用 VeIdentity API
-  （解析用户池、注册回调）走运行时角色凭证，无需注入。
+- **AK/SK**：本地构建部署要用；运行时调用 VeIdentity API（解析用户池、注册回调）
+  也要用——运行时取不到角色凭证（IMDS 超时），必须注入 `runtime_envs`，否则容器启动即崩。
 - **重新部署**：改动环境变量后，`veadk agentkit config --runtime_envs K=V` 合并后重跑
   `veadk agentkit deploy` 即可，镜像层会复用。用 `veadk agentkit destroy` 拆除。
