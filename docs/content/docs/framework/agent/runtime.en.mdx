@@ -1,0 +1,44 @@
+---
+title: "Runtime"
+status: new
+---
+
+The runtime decides how an agent's inner loop runs — how each turn calls the model, parses intent, and invokes tools. The default runtime is built on Google ADK's execution flow and works out of the box. You can also switch to another execution backend, or insert shared processing into the flow (auth, logging, retries) without touching the agent itself.
+
+## Basic usage
+
+The ADK runtime is the default — no extra configuration needed:
+
+```python title="agent.py"
+import asyncio
+from veadk import Agent, Runner
+
+agent = Agent(name="assistant")  # uses the ADK runtime by default
+print(asyncio.run(Runner(agent=agent).run("Hello")))
+```
+
+## Switch the execution backend
+
+Use `runtime` to choose the inner-loop backend:
+
+```python title="agent.py"
+agent = Agent(name="assistant", runtime="codex")
+```
+
+| Value | Description |
+| :--- | :--- |
+| `adk` (default) | Google ADK's built-in execution flow; fits almost every case. |
+| `codex` | An alternative backend for advanced customization. |
+
+## Request processing
+
+Insert shared, cross-cutting processing into every run — auth, logging, retries, performance monitoring — without touching business logic. Pass a processor to `run_processor`, for example to enforce login via identity auth:
+
+```python title="agent.py"
+from veadk import Agent
+from veadk.integrations.ve_identity import AuthRequestProcessor
+
+agent = Agent(name="assistant", run_processor=AuthRequestProcessor())
+```
+
+When unset, a default no-op processor is used and behavior is unchanged.

@@ -1,0 +1,35 @@
+---
+title: "Overview"
+---
+
+Observability records the full chain of an agent's execution so you can understand its internal behavior, locate issues, analyze performance, and keep improving. VeADK's built-in tracing captures every request—from receiving user input, through model reasoning, tool calls, and memory/knowledge-base access, to generating the response—as structured data, then reports it to Volcengine or third-party platforms for observation and analysis.
+
+## Core Capabilities
+
+VeADK's observability follows the [OpenTelemetry](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/) generative-AI semantic conventions and mainly provides:
+
+- **Visualized traces**: The complete flow of each request, from intake to response, can be traced;
+- **Structured data**: Records context, state, event types, latency, and more;
+- **Cross-component tracing**: Covers the agent, tools, memory modules, knowledge bases, and external interfaces;
+- **Multi-agent coordination**: Analyzes the invocation relationships and data flow between agents in multi-agent scenarios;
+- **Content collection control**: Disable Agent, LLM, and tool input/output content collection with `observability.opentelemetry.trace_content` while keeping non-content trace data.
+
+## Supported Platforms
+
+Through different data exporters, VeADK reports tracing data to multiple Volcengine and third-party platforms:
+
+<Cards>
+  <Card title="CozeLoop" href="/en/docs/framework/ve-tracing#cozeloop-platform">
+    Report trace data to CozeLoop for trace observation and agent evaluation.
+  </Card>
+  <Card title="APMPlus" href="/en/docs/framework/ve-tracing#apmplus-platform">
+    Integrate with the Volcengine APMPlus platform for trace observation and model metrics analysis.
+  </Card>
+  <Card title="TLS (Log Service)" href="/en/docs/framework/ve-tracing#tls-platform">
+    Integrate with Volcengine Log Service (TLS) for agent execution trace observation.
+  </Card>
+</Cards>
+
+<Callout type="info" title="OpenTelemetry Compatibility">
+  VeADK's field naming follows the OpenTelemetry generative-AI conventions, so you can import tracing data directly into any OpenTelemetry-compatible system for analysis and visualization.
+</Callout>

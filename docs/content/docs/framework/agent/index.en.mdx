@@ -1,0 +1,100 @@
+---
+title: "Basic components"
+---
+
+The agent is the core of VeADK: driven by a model, with tools, memory, a knowledge base, and skills attached. `Agent` extends Google ADK's `LlmAgent`, adding model fallbacks, memory, knowledge base, skills, tracing, and a pluggable runtime. This page is organized by constructor parameters, explaining each group with examples.
+
+<Callout type="info">
+  Almost every parameter has a sensible default (mostly from environment variables or built-in defaults). The simplest `Agent()` runs with no arguments — start with the [Quickstart](/en/docs/framework/quickstart), then come back to configure.
+</Callout>
+
+```python title="agent.py"
+import asyncio
+from veadk import Agent, Runner
+
+agent = Agent()
+response = asyncio.run(Runner(agent=agent).run("Hi!"))
+print(response)
+```
+
+Before running, provide the model API key via an environment variable (`MODEL_AGENT_API_KEY` by default):
+
+```bash
+export MODEL_AGENT_API_KEY="<your Ark API key>"
+```
+
+<Callout type="info">
+  Keys can also be managed centrally in `config.yaml`; see [Configuration](/en/docs/references/configuration). **Never hard-code an API key in source.**
+</Callout>
+
+## Metadata
+
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `name` | `str` | `veAgent` | Agent name; uniquely identifies an agent in the Agent Tree, used as the identity for transfers, A2A, and tracing. |
+| `description` | `str` | built-in | Short description of the agent's capabilities; used by parents/peers to decide transfers in multi-agent and A2A. |
+| `instruction` | `str \| InstructionProvider` | built-in | System prompt. A string, or a callable that builds the prompt dynamically from context. |
+| `id` | `str` | auto | Instance ID; rarely set by hand. |
+
+```python title="agent.py"
+root_agent = Agent(
+    name="life_assistant",
+    description="Life assistant",
+    instruction="You are a life assistant who answers everyday questions.",
+)
+```
+
+## Tools, memory, and knowledge base
+
+
+Mounting these capabilities makes VeADK **auto-inject the corresponding tool or callback**.
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `tools` | `list[ToolUnion]` | `[]` | Tool list: plain functions, tool instances, toolsets, MCP tools, etc. |
+| `sub_agents` | `list[BaseAgent]` | `[]` | Sub-agents, for building [multi-agent](/en/docs/framework/multi-agent/overview) systems. |
+| `knowledgebase` | `KnowledgeBase \| None` | `None` | Attach a knowledge base. **Auto-injects the `load_knowledgebase` tool.** |
+| `short_term_memory` | `ShortTermMemory \| None` | `None` | Short-term (single-session) memory, usually passed to `Runner`. |
+| `long_term_memory` | `LongTermMemory \| None` | `None` | Long-term (cross-session) memory. **Auto-injects the `load_memory` tool.** |
+| `auto_save_session` | `bool` | `False` | Persist the session to long-term memory on finish; requires `long_term_memory`. |
+| `example_store` | `BaseExampleProvider \| None` | `None` | Few-shot example provider; injects an `ExampleTool` when set. |
+| `prompt_manager` | `BasePromptManager \| None` | `None` | Prompt manager; see [Prompt management](/en/docs/framework/prompt). |
+
+### Tools
+
+```python title="agent.py"
+from veadk.tools.demo_tools import get_city_weather
+
+agent = Agent(instruction="Call tools to answer weather questions.", tools=[get_city_weather])
+```
+
+See [Built-in tools](/en/docs/framework/tools/builtin) and [Custom function tools](/en/docs/framework/tools/custom-function).
+
+### Memory
+
+Pass short-term memory to `Runner` and long-term memory to `Agent`:
+
+```python title="agent.py"
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.memory.long_term_memory import LongTermMemory
+
+agent = Agent(long_term_memory=LongTermMemory(backend="local"))
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory(backend="local"))
+```
+
+See [Short-term memory](/en/docs/framework/memory/short-term) and [Long-term memory](/en/docs/framework/memory/long-term).
+
+### Knowledge base
+
+```python title="agent.py"
+from veadk.knowledgebase import KnowledgeBase
+
+agent = Agent(
+    instruction="Retrieve from the knowledge base before answering.",
+    knowledgebase=KnowledgeBase(backend="local"),
+)
+```
+
+See [Knowledge base](/en/docs/framework/knowledgebase/overview).

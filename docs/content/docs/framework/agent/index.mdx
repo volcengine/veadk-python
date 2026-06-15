@@ -1,0 +1,100 @@
+---
+title: "基本组件"
+---
+
+智能体（Agent）是 VeADK 的核心：由模型驱动，并可挂载工具、记忆、知识库与技能。`Agent` 继承自 Google ADK 的 `LlmAgent`，在其之上增加模型容错、记忆、知识库、技能、追踪与可插拔运行时等能力。本页按构造参数分组，逐组说明含义并给出示例。
+
+<Callout type="info">
+  绝大多数参数都有合理默认值（多来自环境变量或内置默认）。最简单的 `Agent()` 无需任何参数即可运行——先看[快速开始](/cn/docs/framework/quickstart)，再回到本页按需配置。
+</Callout>
+
+```python title="agent.py"
+import asyncio
+from veadk import Agent, Runner
+
+agent = Agent()
+response = asyncio.run(Runner(agent=agent).run("Hi!"))
+print(response)
+```
+
+运行前通过环境变量提供模型 API Key（默认读取 `MODEL_AGENT_API_KEY`）：
+
+```bash
+export MODEL_AGENT_API_KEY="<你的方舟 API Key>"
+```
+
+<Callout type="info">
+  密钥也可在 `config.yaml` 中集中管理，详见[配置](/cn/docs/references/configuration)。**切勿在代码中硬编码 API Key。**
+</Callout>
+
+## 元信息
+
+
+| 参数 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `name` | `str` | `veAgent` | 智能体名称，在 Agent Tree 中唯一标识一个智能体；在多智能体转交、A2A、追踪中作为标识。 |
+| `description` | `str` | 内置默认 | 智能体能力的简短描述。在多智能体与 A2A 场景中，父智能体/对端据此判断是否转交。 |
+| `instruction` | `str \| InstructionProvider` | 内置默认 | 系统提示词。可传字符串，也可传一个根据上下文动态生成提示词的可调用对象。 |
+| `id` | `str` | 自动生成 | 智能体实例 ID，一般无需手动设置。 |
+
+```python title="agent.py"
+root_agent = Agent(
+    name="life_assistant",
+    description="生活助手",
+    instruction="你是一个生活助手，回答用户的日常问题。",
+)
+```
+
+## 工具、记忆与知识库
+
+
+挂载这些能力时，VeADK 会**自动注入对应的工具或回调**。
+
+| 参数 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `tools` | `list[ToolUnion]` | `[]` | 工具列表。可放入普通函数、工具实例、Toolset、MCP 工具等。 |
+| `sub_agents` | `list[BaseAgent]` | `[]` | 子智能体列表，用于构建[多智能体](/cn/docs/framework/multi-agent/overview)系统。 |
+| `knowledgebase` | `KnowledgeBase \| None` | `None` | 挂载知识库。**自动注入 `load_knowledgebase` 工具**。 |
+| `short_term_memory` | `ShortTermMemory \| None` | `None` | 短期记忆（单会话上下文），通常传给 `Runner`。 |
+| `long_term_memory` | `LongTermMemory \| None` | `None` | 长期记忆（跨会话上下文）。**自动注入 `load_memory` 工具**。 |
+| `auto_save_session` | `bool` | `False` | 会话结束后自动写入长期记忆，需先配置 `long_term_memory`。 |
+| `example_store` | `BaseExampleProvider \| None` | `None` | 少样本示例提供器，设置后注入 `ExampleTool`。 |
+| `prompt_manager` | `BasePromptManager \| None` | `None` | 提示词管理器，详见 [Prompt 管理](/cn/docs/framework/prompt)。 |
+
+### 工具
+
+```python title="agent.py"
+from veadk.tools.demo_tools import get_city_weather
+
+agent = Agent(instruction="根据用户问题调用工具回答天气。", tools=[get_city_weather])
+```
+
+参见[内置工具](/cn/docs/framework/tools/builtin)与[自定义函数工具](/cn/docs/framework/tools/custom-function)。
+
+### 记忆
+
+短期记忆传给 `Runner`，长期记忆传给 `Agent`：
+
+```python title="agent.py"
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.memory.long_term_memory import LongTermMemory
+
+agent = Agent(long_term_memory=LongTermMemory(backend="local"))
+runner = Runner(agent=agent, short_term_memory=ShortTermMemory(backend="local"))
+```
+
+参见[短期记忆](/cn/docs/framework/memory/short-term)与[长期记忆](/cn/docs/framework/memory/long-term)。
+
+### 知识库
+
+```python title="agent.py"
+from veadk.knowledgebase import KnowledgeBase
+
+agent = Agent(
+    instruction="回答前先检索知识库。",
+    knowledgebase=KnowledgeBase(backend="local"),
+)
+```
+
+参见[知识库](/cn/docs/framework/knowledgebase/overview)。

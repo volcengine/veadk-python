@@ -59,22 +59,25 @@ veadk init --vefaas-template-type web_template
 
 执行完成后，以默认目录名 `veadk-cloud-proj` 为例，生成的目录结构如下：
 
-```text
-veadk-cloud-proj/
-├── __init__.py             # 包初始化文件
-├── clean.py                # 清理脚本，删除生成的临时文件
-├── config.yaml.example     # 配置文件示例（复制为 config.yaml 后填写）
-├── deploy.py               # 部署脚本，部署到火山引擎 FaaS
-└── src/                    # 智能体项目源代码目录
-    ├── __init__.py         # 包初始化文件
-    ├── agent.py            # 运行时智能体导出（root_agent）
-    ├── app.py              # Server / Web 应用定义
-    ├── requirements.txt    # 项目依赖
-    ├── run.sh              # 启动脚本
-    └── weather_report/     # 示例智能体模块
-        ├── __init__.py     # 须包含 `from . import agent`
-        └── agent.py        # 智能体定义文件
-```
+<Files>
+  <Folder name="veadk-cloud-proj" defaultOpen>
+    <File name="__init__.py" />
+    <File name="clean.py" />
+    <File name="config.yaml.example" />
+    <File name="deploy.py" />
+    <Folder name="src" defaultOpen>
+      <File name="__init__.py" />
+      <File name="agent.py" />
+      <File name="app.py" />
+      <File name="requirements.txt" />
+      <File name="run.sh" />
+      <Folder name="weather_report" defaultOpen>
+        <File name="__init__.py" />
+        <File name="agent.py" />
+      </Folder>
+    </Folder>
+  </Folder>
+</Files>
 
 <Callout type="info">
   这与[部署到 VeFaaS](/cn/docs/framework/vefaas) 中描述的项目结构一致。`web_template` 模板的 `src/` 改为面向 Web 应用的结构（含 `Dockerfile`、`models.py`、`templates/` 等）。
@@ -113,12 +116,13 @@ veadk create location-agent --ark-api-key "xxxxxx"
 
 生成的目录结构：
 
-```text
-location-agent/
-├── .env          # 含 API Key 的环境配置
-├── __init__.py   # Python 包初始化文件
-└── agent.py      # 智能体定义文件
-```
+<Files>
+  <Folder name="location-agent" defaultOpen>
+    <File name=".env" />
+    <File name="__init__.py" />
+    <File name="agent.py" />
+  </Folder>
+</Files>
 
 随后可用 `veadk web` 运行该智能体。
 

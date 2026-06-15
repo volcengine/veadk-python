@@ -91,22 +91,25 @@ After the project is initialized, you can modify these configurations at any tim
 
 The generated project structure is as follows:
 
-```shell
-veadk-cloud-proj
-├── __init__.py
-├── clean.py              # cleanup script
-├── config.yaml.example   # environment variable example
-├── deploy.py             # deployment script
-└── src
-    ├── __init__.py
-    ├── agent.py          # agent runtime data export
-    ├── app.py            # server definition
-    ├── requirements.txt  # dependencies
-    ├── run.sh            # startup script
-    └── weather_report    # agent module
-        ├── __init__.py   # must contain `from . import agent`
-        └── agent.py      # agent definition
-```
+<Files>
+  <Folder name="veadk-cloud-proj" defaultOpen>
+    <File name="__init__.py" />
+    <File name="clean.py" />
+    <File name="config.yaml.example" />
+    <File name="deploy.py" />
+    <Folder name="src" defaultOpen>
+      <File name="__init__.py" />
+      <File name="agent.py" />
+      <File name="app.py" />
+      <File name="requirements.txt" />
+      <File name="run.sh" />
+      <Folder name="weather_report" defaultOpen>
+        <File name="__init__.py" />
+        <File name="agent.py" />
+      </Folder>
+    </Folder>
+  </Folder>
+</Files>
 
 #### 2. Configure Environment Variables and Credentials
 

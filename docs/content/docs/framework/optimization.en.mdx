@@ -79,19 +79,22 @@ The generated project structure is as follows, where the core files include:
   - reward: Provides the reward value required for reinforcement learning. An example is given in `random_reward.py`
 - `job.py` or `job.yaml`: Configures training parameters and specifies the rollout and reward to use
 
-```shell
-veadk_rl_ark_project
-├── data
-│   └── *.jsonl                       # training data
-├── plugins
-│   ├── config.yaml.example           # example VeADK agent configuration
-│   ├── random_reward.py              # reward rule definition
-│   ├── raw_async_veadk_rollout.py    # rollout workflow definition
-│   └── weather_rollout.py            # rollout example for the weather agent
-├── job.py                            # job submission code
-├── job.yaml                          # job configuration
-└── test_agent.py                     # VeFaaS test script
-```
+<Files>
+  <Folder name="veadk_rl_ark_project" defaultOpen>
+    <Folder name="data" defaultOpen>
+      <File name="*.jsonl" />
+    </Folder>
+    <Folder name="plugins" defaultOpen>
+      <File name="config.yaml.example" />
+      <File name="random_reward.py" />
+      <File name="raw_async_veadk_rollout.py" />
+      <File name="weather_rollout.py" />
+    </Folder>
+    <File name="job.py" />
+    <File name="job.yaml" />
+    <File name="test_agent.py" />
+  </Folder>
+</Files>
 
 #### Best-Practice Example
 
@@ -150,15 +153,17 @@ The generated project structure is as follows, where the core files include:
 - agent_client: `*_agent.py` defines the agent's rollout logic and reward rules
 - training_server: `train.sh` defines the training-related parameters and is used to start the training server
 
-```shell
-veadk_rl_lightning_project
-├── data
-│   ├── demo_train.parquet       # training data, must be in parquet format
-│   └── demo_test.parquet        # test data, must be in parquet format
-├── demo_calculate_agent.py      # the agent's rollout logic and reward settings
-├── train.sh                     # training server startup script, sets training-related parameters
-└── restart_ray.sh               # script to restart the ray cluster
-```
+<Files>
+  <Folder name="veadk_rl_lightning_project" defaultOpen>
+    <Folder name="data" defaultOpen>
+      <File name="demo_train.parquet" />
+      <File name="demo_test.parquet" />
+    </Folder>
+    <File name="demo_calculate_agent.py" />
+    <File name="train.sh" />
+    <File name="restart_ray.sh" />
+  </Folder>
+</Files>
 
 #### Best-Practice Example
 

@@ -79,19 +79,22 @@ veadk rl submit --platform ark
   - reward：给出强化学习所需的奖励值，在 `random_reward.py` 给出了示例
 - `job.py` 或 `job.yaml`：用以配置训练参数，并指定需要使用的 rollout 和 reward
 
-```shell
-veadk_rl_ark_project
-├── data
-│   └── *.jsonl                       # 训练数据
-├── plugins
-│   ├── config.yaml.example           # VeADK agent 配置信息示例
-│   ├── random_reward.py              # reward 规则设定
-│   ├── raw_async_veadk_rollout.py    # rollout 工作流设定
-│   └── weather_rollout.py            # 天气查询 agent 的 rollout 示例
-├── job.py                            # 任务提交代码
-├── job.yaml                          # 任务配置
-└── test_agent.py                     # VeFaaS 测试脚本
-```
+<Files>
+  <Folder name="veadk_rl_ark_project" defaultOpen>
+    <Folder name="data" defaultOpen>
+      <File name="*.jsonl" />
+    </Folder>
+    <Folder name="plugins" defaultOpen>
+      <File name="config.yaml.example" />
+      <File name="random_reward.py" />
+      <File name="raw_async_veadk_rollout.py" />
+      <File name="weather_rollout.py" />
+    </Folder>
+    <File name="job.py" />
+    <File name="job.yaml" />
+    <File name="test_agent.py" />
+  </Folder>
+</Files>
 
 #### 最佳实践案例
 
@@ -150,15 +153,17 @@ bash train.sh
 - agent_client：`*_agent.py` 中定义了 agent 的 rollout 逻辑和 reward 规则
 - training_server：`train.sh` 定义了训练相关参数，用于启动训练服务器
 
-```shell
-veadk_rl_lightning_project
-├── data
-│   ├── demo_train.parquet       # 训练数据，必须为 parquet 格式
-│   └── demo_test.parquet        # 测试数据，必须为 parquet 格式
-├── demo_calculate_agent.py      # agent 的 rollout 逻辑与 reward 设定
-├── train.sh                     # 训练服务器启动脚本，设定训练相关参数
-└── restart_ray.sh               # 重启 ray 集群脚本
-```
+<Files>
+  <Folder name="veadk_rl_lightning_project" defaultOpen>
+    <Folder name="data" defaultOpen>
+      <File name="demo_train.parquet" />
+      <File name="demo_test.parquet" />
+    </Folder>
+    <File name="demo_calculate_agent.py" />
+    <File name="train.sh" />
+    <File name="restart_ray.sh" />
+  </Folder>
+</Files>
 
 #### 最佳实践案例
 

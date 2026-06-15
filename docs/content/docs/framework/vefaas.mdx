@@ -91,22 +91,25 @@ Run python `deploy.py` for deployment on Volcengine FaaS platform.
 
 生成后的项目结构如下：
 
-```shell
-veadk-cloud-proj
-├── __init__.py
-├── clean.py              # 清除脚本
-├── config.yaml.example   # 环境变量示例
-├── deploy.py             # 部署脚本
-└── src
-    ├── __init__.py
-    ├── agent.py          # agent 运行时数据导出
-    ├── app.py            # Server 定义
-    ├── requirements.txt  # 依赖
-    ├── run.sh            # 启动脚本
-    └── weather_report    # agent module
-        ├── __init__.py   # 必须包含 `from . import agent`
-        └── agent.py      # agent 定义
-```
+<Files>
+  <Folder name="veadk-cloud-proj" defaultOpen>
+    <File name="__init__.py" />
+    <File name="clean.py" />
+    <File name="config.yaml.example" />
+    <File name="deploy.py" />
+    <Folder name="src" defaultOpen>
+      <File name="__init__.py" />
+      <File name="agent.py" />
+      <File name="app.py" />
+      <File name="requirements.txt" />
+      <File name="run.sh" />
+      <Folder name="weather_report" defaultOpen>
+        <File name="__init__.py" />
+        <File name="agent.py" />
+      </Folder>
+    </Folder>
+  </Folder>
+</Files>
 
 #### 2. 配置环境变量与凭证
 

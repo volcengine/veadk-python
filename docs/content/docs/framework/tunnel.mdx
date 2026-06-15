@@ -1,5 +1,6 @@
 ---
 title: "隧道（Tunnel）"
+status: new
 ---
 
 云端的 Agent 想使用部署在企业**内网**里的资源服务（MCP Server、内部 API 等），但内网通常不允许外部直接访问。VeADK 的 `veadk.tunnel` 提供一条**由企业侧主动向外建立**的隧道：连接器（connector）从内网出站连到云端 Agent，把一个或多个本地资源服务**注册**上去；Agent 在运行时自动感知并以**工具**形式调用。因为连接是出站的，所以**无需在企业侧开放入站端口**，天然穿透 NAT / 防火墙。
@@ -8,11 +9,20 @@ title: "隧道（Tunnel）"
 
 ## 工作原理
 
-```text
-        企业内网                            │            云端 (ADK server)
-  资源服务(s)    ◀── connector ──出站WSS──▶  /tunnel/connect ─ registry
-  (MCP / ...)         (按名字注册到 Agent)   │   Agent + TunnelToolset
-                                            │     (每轮对话按 protocol 动态挂载工具)
+```mermaid
+flowchart LR
+    subgraph onprem["企业内网"]
+        R["资源服务<br/>（MCP / 内部 API）"]
+        C["connector"]
+        R --> C
+    end
+    subgraph cloud["云端（ADK server）"]
+        E["/tunnel/connect"]
+        G["registry 注册表"]
+        A["Agent + TunnelToolset<br/>（每轮按 protocol 动态挂载工具）"]
+        E --> G --> A
+    end
+    C -- "出站 WSS · 按名字注册到 Agent" --> E
 ```
 
 - Agent 用 `Agent(enable_tunnel=True)` 开启隧道，自动获得一个 `TunnelToolset`。

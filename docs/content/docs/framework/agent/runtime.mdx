@@ -1,0 +1,44 @@
+---
+title: "运行时"
+status: new
+---
+
+运行时决定智能体「内层循环」如何执行——也就是每一轮怎样调用模型、解析意图、调用工具。默认运行时基于 Google ADK 的内置执行流程，开箱即用。你也可以切换到其他执行后端，或在执行流程上插入统一的处理逻辑（如鉴权、日志、重试），而无需改动智能体本身。
+
+## 基本使用
+
+默认即为 ADK 运行时，无需任何额外配置：
+
+```python title="agent.py"
+import asyncio
+from veadk import Agent, Runner
+
+agent = Agent(name="assistant")  # 默认使用 ADK 运行时
+print(asyncio.run(Runner(agent=agent).run("你好")))
+```
+
+## 切换执行后端
+
+通过 `runtime` 选择内层循环的执行后端：
+
+```python title="agent.py"
+agent = Agent(name="assistant", runtime="codex")
+```
+
+| 取值 | 说明 |
+| :--- | :--- |
+| `adk`（默认） | 使用 Google ADK 内置的执行流程，适用于绝大多数场景。 |
+| `codex` | 其他执行后端，面向高级定制场景。 |
+
+## 请求处理
+
+在不侵入业务逻辑的前提下，可为每次执行插入统一的横切处理——鉴权、日志、重试、性能监控等。把处理器传入 `run_processor` 即可，例如接入身份认证做登录态校验：
+
+```python title="agent.py"
+from veadk import Agent
+from veadk.integrations.ve_identity import AuthRequestProcessor
+
+agent = Agent(name="assistant", run_processor=AuthRequestProcessor())
+```
+
+不设置时使用默认的空处理器，不改变任何行为。

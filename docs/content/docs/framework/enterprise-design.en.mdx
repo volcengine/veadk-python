@@ -43,7 +43,7 @@ Organize pain points by scenario layer and design the corresponding agent system
 
 Settle on the combination of SDK, model, and prompts, and ground it in quantifiable business goals.
 
-- **Capability stack** — tools (MCP / local / external), context storage (short- and long-term [memory](/en/docs/framework/memory/short-term) with expiration policies), vector retrieval and document parsing, [observability](/en/docs/framework/observability/overview), and [evaluation](/en/docs/framework/evaluation).
+- **Capability stack** — tools (MCP / local / external), context storage (short- and long-term [memory](/en/docs/framework/memory/short-term) with expiration policies), vector retrieval and document parsing, [observability](/en/docs/framework/observability), and [evaluation](/en/docs/framework/evaluation).
 - **Business metrics** — e.g. information-retrieval efficiency, adoption rate of proactive replies.
 
 ### 4. Evaluation
@@ -75,5 +75,5 @@ VeADK provides a capability for each stage above:
 | Memory and context | [Short-term memory](/en/docs/framework/memory/short-term) for conversation state; [long-term memory](/en/docs/framework/memory/long-term) for knowledge accumulation and traceback |
 | Knowledge base and retrieval | Vector retrieval, document parsing, and RAG in the [knowledge base](/en/docs/framework/knowledgebase/overview) |
 | Tools and ecosystem | [Built-in tools](/en/docs/framework/tools/builtin), [custom function tools](/en/docs/framework/tools/custom-function), and [MCP](/en/docs/framework/tools/builtin-mcp); compatible with Google ADK |
-| Observability and evaluation | [Observability](/en/docs/framework/observability/overview) (logs, tracing, metrics) and the [evaluation](/en/docs/framework/evaluation) loop |
+| Observability and evaluation | [Observability](/en/docs/framework/observability) (logs, tracing, metrics) and the [evaluation](/en/docs/framework/evaluation) loop |
 | Configuration and security | Environment-variable desensitization and multi-tenant isolation in [Configuration](/en/docs/references/configuration) |

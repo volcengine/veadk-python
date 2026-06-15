@@ -59,22 +59,25 @@ veadk init --vefaas-template-type web_template
 
 With the default directory name `veadk-cloud-proj`, the generated structure looks like:
 
-```text
-veadk-cloud-proj/
-├── __init__.py             # Package init file
-├── clean.py                # Cleanup script for generated temp files
-├── config.yaml.example     # Config example (copy to config.yaml and fill in)
-├── deploy.py               # Deploy script for Volcengine FaaS
-└── src/                    # Agent project source directory
-    ├── __init__.py         # Package init file
-    ├── agent.py            # Runtime agent export (root_agent)
-    ├── app.py              # Server / web application definition
-    ├── requirements.txt    # Project dependencies
-    ├── run.sh              # Startup script
-    └── weather_report/     # Example agent module
-        ├── __init__.py     # Must contain `from . import agent`
-        └── agent.py        # Agent definition file
-```
+<Files>
+  <Folder name="veadk-cloud-proj" defaultOpen>
+    <File name="__init__.py" />
+    <File name="clean.py" />
+    <File name="config.yaml.example" />
+    <File name="deploy.py" />
+    <Folder name="src" defaultOpen>
+      <File name="__init__.py" />
+      <File name="agent.py" />
+      <File name="app.py" />
+      <File name="requirements.txt" />
+      <File name="run.sh" />
+      <Folder name="weather_report" defaultOpen>
+        <File name="__init__.py" />
+        <File name="agent.py" />
+      </Folder>
+    </Folder>
+  </Folder>
+</Files>
 
 <Callout type="info">
   This matches the project structure described in [Deploy to VeFaaS](/en/docs/framework/vefaas). The `web_template` template uses a web-oriented `src/` instead (with `Dockerfile`, `models.py`, `templates/`, etc.).
@@ -113,12 +116,13 @@ veadk create location-agent --ark-api-key "xxxxxx"
 
 Generated structure:
 
-```text
-location-agent/
-├── .env          # Environment config containing the API key
-├── __init__.py   # Python package init file
-└── agent.py      # Agent definition file
-```
+<Files>
+  <Folder name="location-agent" defaultOpen>
+    <File name=".env" />
+    <File name="__init__.py" />
+    <File name="agent.py" />
+  </Folder>
+</Files>
 
 You can then run the agent with `veadk web`.
 
