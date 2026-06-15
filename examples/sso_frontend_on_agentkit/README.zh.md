@@ -39,19 +39,22 @@ key 放在 `Authorization: Bearer <key>` 请求头里，并把该头透传给容
 
 - 一个 VeIdentity 用户池及其下的一个 `WEB_APPLICATION` 客户端
   （控制台：<https://console.volcengine.com/veidentity>），记下两者的 **UID**。
-- 一个火山引擎 Ark 模型 API Key，以及账号的 AK/SK。
+- 账号的 AK/SK，供本地 `veadk agentkit` 构建与部署鉴权。模型与运行时凭证由
+  AgentKit 运行时提供，无需手动设置。
 
 ```bash
 cd examples/sso_frontend_on_agentkit
 cp .env.example .env
-# 编辑 .env：MODEL_AGENT_API_KEY、VOLCENGINE_ACCESS_KEY/SECRET_KEY、
-#           OAUTH2_USER_POOL_ID、OAUTH2_USER_POOL_CLIENT_ID
+# 编辑 .env：
+#   VOLCENGINE_ACCESS_KEY / VOLCENGINE_SECRET_KEY  （本地部署鉴权用）
+#   OAUTH2_USER_POOL_ID / OAUTH2_USER_POOL_CLIENT_ID  （用户池、客户端的 UID）
 set -a && source .env && set +a
 ```
 
 ## 2. 生成配置（非交互）
 
-账号相关字段（镜像仓库、运行时角色等）省略即自动创建，无需逐项填写：
+账号相关字段（镜像仓库、运行时角色等）省略即自动创建。运行时只需两个 UID
+——模型和访问凭证由运行时提供，无需写进 `--runtime_envs`：
 
 ```bash
 veadk agentkit config \
@@ -61,14 +64,8 @@ veadk agentkit config \
   --launch_type cloud --region cn-beijing \
   --runtime_name sso-frontend-demo \
   --runtime_auth_type key_auth \
-  --runtime_envs MODEL_AGENT_PROVIDER="$MODEL_AGENT_PROVIDER" \
-  --runtime_envs MODEL_AGENT_NAME="$MODEL_AGENT_NAME" \
-  --runtime_envs MODEL_AGENT_API_BASE="$MODEL_AGENT_API_BASE" \
-  --runtime_envs MODEL_AGENT_API_KEY="$MODEL_AGENT_API_KEY" \
   --runtime_envs OAUTH2_USER_POOL_ID="$OAUTH2_USER_POOL_ID" \
   --runtime_envs OAUTH2_USER_POOL_CLIENT_ID="$OAUTH2_USER_POOL_CLIENT_ID" \
-  --runtime_envs VOLCENGINE_ACCESS_KEY="$VOLCENGINE_ACCESS_KEY" \
-  --runtime_envs VOLCENGINE_SECRET_KEY="$VOLCENGINE_SECRET_KEY" \
   --runtime_envs OTEL_SDK_DISABLED=true \
   --runtime_envs VEADK_DISABLE_EXPIRE_AT=true
 ```
@@ -88,7 +85,9 @@ veadk agentkit config \
 veadk agentkit deploy
 ```
 
-回调地址会自动注册到用户池客户端，云端无需手动添加。
+本地启动时默认回调即 `http://127.0.0.1:8000/oauth2/callback`，无需设置；部署后浏览器
+访问的是公网 endpoint，而它只在运行时创建后才知道，因此这一步单独设置——回调会自动
+注册到用户池客户端，云端无需手动添加。
 
 ## 4. 访问
 
@@ -105,8 +104,9 @@ Authorization: Bearer <your-runtime-key>
 
 ## 注意
 
-- **模型**：`MODEL_AGENT_*` 用普通的火山引擎 Ark chat 模型即可。
-- **AK/SK**：既供 `veadk agentkit` 构建部署使用，也注入运行时，供应用调用 VeIdentity API
-  （解析用户池、注册回调）。
+- **模型**：由 AgentKit 运行时提供；如需指定，可自行加
+  `--runtime_envs MODEL_AGENT_NAME=... --runtime_envs MODEL_AGENT_API_KEY=...`。
+- **AK/SK**：仅本地 `veadk agentkit` 构建部署使用；运行时调用 VeIdentity API
+  （解析用户池、注册回调）走运行时角色凭证，无需注入。
 - **重新部署**：改动环境变量后，`veadk agentkit config --runtime_envs K=V` 合并后重跑
   `veadk agentkit deploy` 即可，镜像层会复用。用 `veadk agentkit destroy` 拆除。

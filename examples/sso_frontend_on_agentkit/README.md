@@ -45,20 +45,23 @@ and forwards that header to the container:
 
 - A VeIdentity user pool and one of its `WEB_APPLICATION` clients
   (<https://console.volcengine.com/veidentity>) — note both **UIDs**.
-- A Volcengine Ark model API key and your account AK/SK.
+- Your account AK/SK, for the local `veadk agentkit` build & deploy. The model
+  and runtime credentials are provided by the AgentKit runtime — nothing to set.
 
 ```bash
 cd examples/sso_frontend_on_agentkit
 cp .env.example .env
-# Fill: MODEL_AGENT_API_KEY, VOLCENGINE_ACCESS_KEY/SECRET_KEY,
-#       OAUTH2_USER_POOL_ID, OAUTH2_USER_POOL_CLIENT_ID
+# Edit .env:
+#   VOLCENGINE_ACCESS_KEY / VOLCENGINE_SECRET_KEY   (local deploy auth)
+#   OAUTH2_USER_POOL_ID / OAUTH2_USER_POOL_CLIENT_ID  (pool & client UIDs)
 set -a && source .env && set +a
 ```
 
 ## 2. Configure (non-interactive)
 
 Account-specific fields (container registry, runtime role, …) are auto-created
-when omitted, so there is nothing to fill in by hand:
+when omitted. The runtime only needs the two UIDs — the model and access
+credentials are provided by the runtime, so they are not in `--runtime_envs`:
 
 ```bash
 veadk agentkit config \
@@ -68,14 +71,8 @@ veadk agentkit config \
   --launch_type cloud --region cn-beijing \
   --runtime_name sso-frontend-demo \
   --runtime_auth_type key_auth \
-  --runtime_envs MODEL_AGENT_PROVIDER="$MODEL_AGENT_PROVIDER" \
-  --runtime_envs MODEL_AGENT_NAME="$MODEL_AGENT_NAME" \
-  --runtime_envs MODEL_AGENT_API_BASE="$MODEL_AGENT_API_BASE" \
-  --runtime_envs MODEL_AGENT_API_KEY="$MODEL_AGENT_API_KEY" \
   --runtime_envs OAUTH2_USER_POOL_ID="$OAUTH2_USER_POOL_ID" \
   --runtime_envs OAUTH2_USER_POOL_CLIENT_ID="$OAUTH2_USER_POOL_CLIENT_ID" \
-  --runtime_envs VOLCENGINE_ACCESS_KEY="$VOLCENGINE_ACCESS_KEY" \
-  --runtime_envs VOLCENGINE_SECRET_KEY="$VOLCENGINE_SECRET_KEY" \
   --runtime_envs OTEL_SDK_DISABLED=true \
   --runtime_envs VEADK_DISABLE_EXPIRE_AT=true
 ```
@@ -96,7 +93,10 @@ veadk agentkit config \
 veadk agentkit deploy
 ```
 
-The callback URL is registered with the user pool client automatically.
+Locally the callback defaults to `http://127.0.0.1:8000/oauth2/callback`, so no
+env var is needed; once deployed the browser hits the public endpoint, which is
+only known after the runtime is created — hence this separate step. The callback
+is registered with the user pool client automatically.
 
 ## 4. Access
 
@@ -116,10 +116,11 @@ cookie and the UI and agent API work.
 
 ## Notes
 
-- **Model**: any Volcengine Ark chat model for `MODEL_AGENT_*`.
-- **AK/SK**: used by `veadk agentkit` to build and deploy, and injected into the
-  runtime so the app can call the VeIdentity API (resolve the pool, register the
-  callback).
+- **Model**: provided by the AgentKit runtime; to pin one, add
+  `--runtime_envs MODEL_AGENT_NAME=... --runtime_envs MODEL_AGENT_API_KEY=...`.
+- **AK/SK**: used only by the local `veadk agentkit` build & deploy; on the
+  runtime the VeIdentity API calls (resolve the pool, register the callback) use
+  the runtime's service-role credentials, so AK/SK are not injected.
 - **Redeploy**: after changing an env var, merge it with
   `veadk agentkit config --runtime_envs K=V` and re-run `veadk agentkit deploy`
   (image layers are reused). Tear down with `veadk agentkit destroy`.
