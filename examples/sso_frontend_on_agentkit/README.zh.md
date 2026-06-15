@@ -2,7 +2,7 @@
 
 将 VeADK 的 Web 界面（A2UI）连同 **VeIdentity 单点登录** 一起部署到
 [火山引擎 AgentKit](https://www.volcengine.com/) 运行时。未登录的浏览器看到登录页，
-登录后以登录用户的身份使用界面与后端 Agent。
+登录后以登录用户的身份使用界面与后端 Agent。全程非交互，复制命令即可部署。
 
 > English version: [README.md](./README.md)
 
@@ -32,6 +32,9 @@ key 放在 `Authorization: Bearer <key>` 请求头里，并把该头透传给容
 - **静态资源透传 querystring**：若网关改为从查询串取 key，浏览器加载 `/assets/*`
   也需带上 key。返回的 `index.html` 会把页面的查询串拼到各静态资源 URL 上。
 
+> 这两处适配自下一个版本起已内置进 `veadk frontend`，本示例自带它们以便在当前
+> 发布版上直接运行。
+
 ## 1. 前置准备
 
 - 一个 VeIdentity 用户池及其下的一个 `WEB_APPLICATION` 客户端
@@ -46,29 +49,28 @@ cp .env.example .env
 set -a && source .env && set +a
 ```
 
-## 2. 生成配置
+## 2. 生成配置（非交互）
 
-交互式生成 `agentkit.yaml`（按提示填写区域、镜像仓库、运行时角色等账号相关字段）：
+账号相关字段（镜像仓库、运行时角色等）省略即自动创建，无需逐项填写：
 
 ```bash
-veadk agentkit config
-```
-
-随后在生成的 `agentkit.yaml` 的 `common.runtime_envs` 下补齐以下环境变量
-（`OAUTH2_REDIRECT_URI` 先留空，部署拿到地址后再填）：
-
-```yaml
-    runtime_envs:
-      MODEL_AGENT_PROVIDER: openai
-      MODEL_AGENT_NAME: deepseek-v4-flash-260425
-      MODEL_AGENT_API_BASE: https://ark.cn-beijing.volces.com/api/v3/
-      MODEL_AGENT_API_KEY: <your-ark-api-key>
-      OAUTH2_USER_POOL_ID: <your-user-pool-uid>
-      OAUTH2_USER_POOL_CLIENT_ID: <your-user-pool-client-uid>
-      VOLCENGINE_ACCESS_KEY: <your-ak>
-      VOLCENGINE_SECRET_KEY: <your-sk>
-      OTEL_SDK_DISABLED: 'true'
-      VEADK_DISABLE_EXPIRE_AT: 'true'
+veadk agentkit config \
+  --agent_name sso-frontend-demo \
+  --entry_point app.py \
+  --language Python --language_version 3.12 \
+  --launch_type cloud --region cn-beijing \
+  --runtime_name sso-frontend-demo \
+  --runtime_auth_type key_auth \
+  --runtime_envs MODEL_AGENT_PROVIDER="$MODEL_AGENT_PROVIDER" \
+  --runtime_envs MODEL_AGENT_NAME="$MODEL_AGENT_NAME" \
+  --runtime_envs MODEL_AGENT_API_BASE="$MODEL_AGENT_API_BASE" \
+  --runtime_envs MODEL_AGENT_API_KEY="$MODEL_AGENT_API_KEY" \
+  --runtime_envs OAUTH2_USER_POOL_ID="$OAUTH2_USER_POOL_ID" \
+  --runtime_envs OAUTH2_USER_POOL_CLIENT_ID="$OAUTH2_USER_POOL_CLIENT_ID" \
+  --runtime_envs VOLCENGINE_ACCESS_KEY="$VOLCENGINE_ACCESS_KEY" \
+  --runtime_envs VOLCENGINE_SECRET_KEY="$VOLCENGINE_SECRET_KEY" \
+  --runtime_envs OTEL_SDK_DISABLED=true \
+  --runtime_envs VEADK_DISABLE_EXPIRE_AT=true
 ```
 
 ## 3. 部署
@@ -78,11 +80,11 @@ veadk agentkit config
 veadk agentkit launch
 ```
 
-把上一步输出的 endpoint 写回回调地址，再更新一次运行时：
+把上一步输出的 endpoint 填入回调地址（会合并进现有 `runtime_envs`），再更新运行时：
 
 ```bash
-# 在 agentkit.yaml 的 runtime_envs 里加一行：
-#   OAUTH2_REDIRECT_URI: https://<your-endpoint>/oauth2/callback
+veadk agentkit config \
+  --runtime_envs OAUTH2_REDIRECT_URI=https://<your-endpoint>/oauth2/callback
 veadk agentkit deploy
 ```
 
@@ -106,5 +108,5 @@ Authorization: Bearer <your-runtime-key>
 - **模型**：`MODEL_AGENT_*` 用普通的火山引擎 Ark chat 模型即可。
 - **AK/SK**：既供 `veadk agentkit` 构建部署使用，也注入运行时，供应用调用 VeIdentity API
   （解析用户池、注册回调）。
-- **重新部署**：改动 `agentkit.yaml` 的 `runtime_envs` 后重跑 `veadk agentkit deploy`
-  即可，镜像层会复用，速度很快。用 `veadk agentkit destroy` 拆除。
+- **重新部署**：改动环境变量后，`veadk agentkit config --runtime_envs K=V` 合并后重跑
+  `veadk agentkit deploy` 即可，镜像层会复用。用 `veadk agentkit destroy` 拆除。

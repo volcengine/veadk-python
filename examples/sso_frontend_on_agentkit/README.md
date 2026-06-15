@@ -3,7 +3,7 @@
 Deploy the VeADK web UI (A2UI) together with **VeIdentity single sign-on** to
 a [Volcengine AgentKit](https://www.volcengine.com/) runtime. Unauthenticated
 browsers see a login page; after sign-in the UI and backend agent run as the
-logged-in user.
+logged-in user. Fully non-interactive — copy the commands to deploy.
 
 > 中文版：[README.zh.md](./README.zh.md)
 
@@ -38,6 +38,9 @@ and forwards that header to the container:
   the key from the query string, the served `index.html` appends the page's
   querystring to its `/assets/*` URLs so subresource requests carry it too.
 
+> Both adaptations are built into `veadk frontend` from the next release; this
+> example self-contains them so it runs on the current release.
+
 ## 1. Prerequisites
 
 - A VeIdentity user pool and one of its `WEB_APPLICATION` clients
@@ -52,30 +55,29 @@ cp .env.example .env
 set -a && source .env && set +a
 ```
 
-## 2. Configure
+## 2. Configure (non-interactive)
 
-Generate `agentkit.yaml` interactively (region, container registry, runtime
-role, …):
+Account-specific fields (container registry, runtime role, …) are auto-created
+when omitted, so there is nothing to fill in by hand:
 
 ```bash
-veadk agentkit config
-```
-
-Then add these to `common.runtime_envs` in the generated `agentkit.yaml`
-(leave `OAUTH2_REDIRECT_URI` until after the first deploy):
-
-```yaml
-    runtime_envs:
-      MODEL_AGENT_PROVIDER: openai
-      MODEL_AGENT_NAME: deepseek-v4-flash-260425
-      MODEL_AGENT_API_BASE: https://ark.cn-beijing.volces.com/api/v3/
-      MODEL_AGENT_API_KEY: <your-ark-api-key>
-      OAUTH2_USER_POOL_ID: <your-user-pool-uid>
-      OAUTH2_USER_POOL_CLIENT_ID: <your-user-pool-client-uid>
-      VOLCENGINE_ACCESS_KEY: <your-ak>
-      VOLCENGINE_SECRET_KEY: <your-sk>
-      OTEL_SDK_DISABLED: 'true'
-      VEADK_DISABLE_EXPIRE_AT: 'true'
+veadk agentkit config \
+  --agent_name sso-frontend-demo \
+  --entry_point app.py \
+  --language Python --language_version 3.12 \
+  --launch_type cloud --region cn-beijing \
+  --runtime_name sso-frontend-demo \
+  --runtime_auth_type key_auth \
+  --runtime_envs MODEL_AGENT_PROVIDER="$MODEL_AGENT_PROVIDER" \
+  --runtime_envs MODEL_AGENT_NAME="$MODEL_AGENT_NAME" \
+  --runtime_envs MODEL_AGENT_API_BASE="$MODEL_AGENT_API_BASE" \
+  --runtime_envs MODEL_AGENT_API_KEY="$MODEL_AGENT_API_KEY" \
+  --runtime_envs OAUTH2_USER_POOL_ID="$OAUTH2_USER_POOL_ID" \
+  --runtime_envs OAUTH2_USER_POOL_CLIENT_ID="$OAUTH2_USER_POOL_CLIENT_ID" \
+  --runtime_envs VOLCENGINE_ACCESS_KEY="$VOLCENGINE_ACCESS_KEY" \
+  --runtime_envs VOLCENGINE_SECRET_KEY="$VOLCENGINE_SECRET_KEY" \
+  --runtime_envs OTEL_SDK_DISABLED=true \
+  --runtime_envs VEADK_DISABLE_EXPIRE_AT=true
 ```
 
 ## 3. Deploy
@@ -85,11 +87,12 @@ Then add these to `common.runtime_envs` in the generated `agentkit.yaml`
 veadk agentkit launch
 ```
 
-Set the callback to the printed endpoint and update the runtime once more:
+Set the callback to the printed endpoint (merged into the existing
+`runtime_envs`) and update the runtime once more:
 
 ```bash
-# Add to runtime_envs in agentkit.yaml:
-#   OAUTH2_REDIRECT_URI: https://<your-endpoint>/oauth2/callback
+veadk agentkit config \
+  --runtime_envs OAUTH2_REDIRECT_URI=https://<your-endpoint>/oauth2/callback
 veadk agentkit deploy
 ```
 
@@ -117,5 +120,6 @@ cookie and the UI and agent API work.
 - **AK/SK**: used by `veadk agentkit` to build and deploy, and injected into the
   runtime so the app can call the VeIdentity API (resolve the pool, register the
   callback).
-- **Redeploy**: after editing `runtime_envs`, re-run `veadk agentkit deploy`
+- **Redeploy**: after changing an env var, merge it with
+  `veadk agentkit config --runtime_envs K=V` and re-run `veadk agentkit deploy`
   (image layers are reused). Tear down with `veadk agentkit destroy`.
