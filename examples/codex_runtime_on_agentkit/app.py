@@ -34,7 +34,7 @@ PORT = int(os.getenv("PORT", "8000"))
 
 
 def build_app():
-    app = get_fast_api_app(agents_dir=AGENTS_DIR, web=False)
+    app = get_fast_api_app(agents_dir=AGENTS_DIR, allow_origins=["*"], web=False)
 
     # A simple health endpoint for the runtime's liveness checks.
     @app.get("/ping")
