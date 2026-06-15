@@ -52,17 +52,40 @@ python app.py            # 或：python -m app
 
 ## 3. 部署到 AgentKit
 
+`agentkit config` 写出 `agentkit.yaml`，`agentkit launch` 再据此构建并部署。最快、
+最不容易选错的方式是**非交互式**配置（填好三个 `<...>` 占位符）：
+
 ```bash
-# 交互式填写 agentkit.yaml 中与账号相关的字段
-veadk agentkit config
+veadk agentkit config \
+  --agent_name codex-runtime-demo --entry_point app.py \
+  --language Python --language_version 3.12 \
+  --launch_type cloud --region cn-beijing \
+  --tos_bucket Auto \
+  --runtime_name codex-runtime-demo --runtime_apikey_name Auto \
+  --runtime_role_name <你账号的-AgentKit-runtime-服务角色> \
+  --runtime_envs MODEL_AGENT_PROVIDER=openai \
+  --runtime_envs MODEL_AGENT_NAME=<你的模型> \
+  --runtime_envs MODEL_AGENT_API_BASE=https://ark.cn-beijing.volces.com/api/v3/\
+  --runtime_envs MODEL_AGENT_API_KEY=<你的-ark-key> \
+  --runtime_envs OTEL_SDK_DISABLED=true
 
-# 一步完成镜像构建与部署
-veadk agentkit launch
-
-# 上线后查看状态 / 发测试请求
-veadk agentkit status
-veadk agentkit invoke "你好，你叫什么"
+veadk agentkit launch                       # 一步完成构建 + 部署
+veadk agentkit status                       # 等到 Ready
+veadk agentkit invoke "你好，你叫什么"      # 测试
 ```
+
+如果你改用 `veadk agentkit config` **交互式**向导，关键几项这样选：
+
+- **部署方式 / launch type** → `cloud`（部署到 AgentKit 云端 runtime）。
+- **入口 / entry point** → `app.py`（本示例的部署入口）。
+- **TOS bucket** → `Auto`。否则上传会卡在 bucket 所有权（`ListBuckets`）校验，
+  除非你的 AK/SK 有 `tos:ListBuckets` 权限。
+- **鉴权 / auth type** → API Key（默认）。`custom_jwt` 还要额外配 JWT discovery
+  URL 和 client ID。
+- **API key 名** → `Auto`（自动生成）。
+- **runtime 角色** → 你账号里的 AgentKit runtime 服务角色（创建 runtime 必需）。
+- **环境变量** → 上面那组 `MODEL_AGENT_*`。必填：codex 运行时需要
+  `MODEL_AGENT_API_BASE` + `MODEL_AGENT_API_KEY`，否则无法开始一轮。
 
 `veadk agentkit launch` = `build` + `deploy`。用 `veadk agentkit destroy` 拆除。
 

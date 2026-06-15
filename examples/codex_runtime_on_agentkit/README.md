@@ -56,17 +56,44 @@ the bundled Codex binary spawns.
 
 ## 3. Deploy to AgentKit
 
+`agentkit config` writes `agentkit.yaml`; `agentkit launch` then builds and
+deploys from it. The fastest, mistake-proof path is to configure
+**non-interactively** (fill in the three `<...>` placeholders):
+
 ```bash
-# fill in account-specific fields in agentkit.yaml (interactive)
-veadk agentkit config
+veadk agentkit config \
+  --agent_name codex-runtime-demo --entry_point app.py \
+  --language Python --language_version 3.12 \
+  --launch_type cloud --region cn-beijing \
+  --tos_bucket Auto \
+  --runtime_name codex-runtime-demo --runtime_apikey_name Auto \
+  --runtime_role_name <your-AgentKit-runtime-service-role> \
+  --runtime_envs MODEL_AGENT_PROVIDER=openai \
+  --runtime_envs MODEL_AGENT_NAME=<your-model> \
+  --runtime_envs MODEL_AGENT_API_BASE=https://ark.cn-beijing.volces.com/api/v3/\
+  --runtime_envs MODEL_AGENT_API_KEY=<your-ark-api-key> \
+  --runtime_envs OTEL_SDK_DISABLED=true
 
-# build the image and deploy in one step
-veadk agentkit launch
-
-# check status / send a test request once it's live
-veadk agentkit status
-veadk agentkit invoke "你好，你叫什么"
+veadk agentkit launch                       # build + deploy in one step
+veadk agentkit status                       # wait until Ready
+veadk agentkit invoke "你好，你叫什么"      # test it
 ```
+
+If you run `veadk agentkit config` **interactively** instead, the choices
+that matter:
+
+- **Launch type** → `cloud` (deploy to an AgentKit cloud runtime).
+- **Entry point** → `app.py` (this example's deploy entry).
+- **TOS bucket** → `Auto`. Otherwise the upload fails the bucket-ownership
+  (`ListBuckets`) check, unless your AK/SK has `tos:ListBuckets`.
+- **Auth type** → API Key (the default). `custom_jwt` additionally needs a
+  JWT discovery URL and client IDs.
+- **API key name** → `Auto` (auto-generated).
+- **Runtime role** → your account's AgentKit runtime service role (required
+  to create the runtime).
+- **Runtime env vars** → the `MODEL_AGENT_*` set shown above. Required: the
+  codex runtime needs `MODEL_AGENT_API_BASE` + `MODEL_AGENT_API_KEY`, or it
+  fails to start a turn.
 
 `veadk agentkit launch` = `build` + `deploy`. Use `veadk agentkit destroy` to
 tear the runtime down.
