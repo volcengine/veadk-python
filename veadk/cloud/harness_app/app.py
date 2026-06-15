@@ -45,9 +45,11 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 HARNESS_NAME = os.getenv("HARNESS_NAME", "default")
-# Default max LLM calls per run, baked into the runtime from harness.yaml
-# (overridable per invocation via run_agent_request.max_llm_calls).
-DEFAULT_MAX_LLM_CALLS = int(os.getenv("MAX_LLM_CALLS", "100"))
+# Optional harness default max LLM calls per run, from harness.yaml (overridable
+# per invocation). Unset -> falls through to ADK RunConfig's own default.
+DEFAULT_MAX_LLM_CALLS = (
+    int(os.environ["MAX_LLM_CALLS"]) if os.environ.get("MAX_LLM_CALLS") else None
+)
 
 
 class HarnessApp:
@@ -56,7 +58,7 @@ class HarnessApp:
         agent: Agent,
         short_term_memory: ShortTermMemory,
         harness_name: str = "default",
-        max_llm_calls: int = 100,
+        max_llm_calls: int | None = None,
     ):
         self.app = FastAPI()
         self.agent = agent
@@ -76,11 +78,16 @@ class HarnessApp:
         async def invoke_harness(
             request: InvokeHarnessRequest,
         ) -> InvokeHarnessResponse:
-            # max LLM calls: per-call override, else the harness default.
+            # max LLM calls: per-call override, else the harness default; if
+            # neither is set, fall through to ADK RunConfig's own default.
             max_llm_calls = (
                 request.run_agent_request.max_llm_calls or self.max_llm_calls
             )
-            run_config = RunConfig(max_llm_calls=max_llm_calls)
+            run_config = (
+                RunConfig(max_llm_calls=max_llm_calls)
+                if max_llm_calls is not None
+                else RunConfig()
+            )
 
             if request.harness is not None:
                 logger.info(f"Applying once-time harness override: {request.harness}")
