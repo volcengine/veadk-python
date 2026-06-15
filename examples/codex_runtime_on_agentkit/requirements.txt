@@ -1,0 +1,4 @@
+# veadk-python (with the codex runtime) and openai-codex are installed from
+# `main` by the build script (scripts/install_veadk.sh, wired via
+# docker_build.build_script in agentkit.yaml). openai-codex is not a veadk
+# dependency, so it is installed explicitly there. Nothing to install here.
