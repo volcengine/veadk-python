@@ -56,17 +56,40 @@ the bundled Codex binary spawns.
 
 ## 3. Deploy to AgentKit
 
+`agentkit config` writes `agentkit.yaml`; `agentkit launch` then builds and
+deploys from it. The model config (`MODEL_AGENT_*`) is read from the `.env`
+from step 1, which is bundled into the image, so it need not go in
+`--runtime_envs`. A minimal config:
+
 ```bash
-# fill in account-specific fields in agentkit.yaml (interactive)
-veadk agentkit config
+veadk agentkit config \
+  --agent_name codex-runtime-demo --entry_point app.py \
+  --language Python --language_version 3.12 \
+  --launch_type cloud --region cn-beijing \
+  --tos_bucket Auto \
+  --runtime_name codex-runtime-demo --runtime_apikey_name Auto \
+  --runtime_envs OTEL_SDK_DISABLED=true
 
-# build the image and deploy in one step
-veadk agentkit launch
-
-# check status / send a test request once it's live
-veadk agentkit status
-veadk agentkit invoke "你好，你叫什么"
+veadk agentkit launch                       # build + deploy in one step
+veadk agentkit status                       # wait until Ready
+veadk agentkit invoke "你好，你叫什么"      # test it
 ```
+
+**Required** — set these:
+
+- `--agent_name`, `--entry_point app.py`, `--launch_type cloud`, `--region`.
+- `--language` / `--language_version`.
+- `--tos_bucket Auto` — without `Auto`, the upload fails the bucket-ownership
+  (`ListBuckets`) check unless your AK/SK has `tos:ListBuckets`.
+- `--runtime_name` / `--runtime_apikey_name Auto`.
+
+**Optional** — omit and AgentKit handles it:
+
+- `--runtime_role_name` — auto-selected/created if omitted.
+- `MODEL_AGENT_*` — read from the bundled `.env`, so not needed in
+  `--runtime_envs` (`OTEL_SDK_DISABLED=true` is worth passing to silence OTel).
+- Auth type — defaults to **API Key**; `custom_jwt` also needs a JWT discovery
+  URL and client IDs.
 
 `veadk agentkit launch` = `build` + `deploy`. Use `veadk agentkit destroy` to
 tear the runtime down.
