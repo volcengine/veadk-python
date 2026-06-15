@@ -1,0 +1,7 @@
+# Installed in the image by AgentKit's default `uv pip install -r requirements.txt`.
+#
+# veadk-python >= 0.5.39 ships the web UI (veadk/webui) and the VeIdentity OAuth2
+# middleware (veadk.auth.middleware.oauth2_auth). The gateway-specific handling
+# (querystring-into-assets, stripping the gateway key from Authorization) lives in
+# app.py, so no patched veadk build is needed.
+veadk-python>=0.5.39

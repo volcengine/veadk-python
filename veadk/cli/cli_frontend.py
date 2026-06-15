@@ -972,6 +972,9 @@ def frontend(
             f"run `cd frontend && npm run dev` and open {DEV_SERVER_ORIGIN}"
         )
     else:
+        import re as _re
+
+        from fastapi.responses import FileResponse, HTMLResponse
         from fastapi.staticfiles import StaticFiles
 
         webui = _resolve_frontend_dir(frontend_dir)
@@ -981,8 +984,44 @@ def frontend(
                 "cd frontend && npm install && npm run build "
                 "(or use --dev for the Vite dev server)."
             )
-        # Mount last so it doesn't shadow the API routes registered above.
-        app.mount("/", StaticFiles(directory=str(webui), html=True), name="frontend")
+
+        _index_html = (webui / "index.html").read_text(encoding="utf-8")
+        _ASSET_REF = _re.compile(r'((?:src|href)=")(/[^"?]+)(")')
+
+        def _render_index(request: Request) -> HTMLResponse:
+            # When behind a query-string API gateway (e.g. an AgentKit runtime
+            # with the key in the query string), the browser's subresource
+            # requests for /assets/* must also carry the key. The key arrives as
+            # the page's querystring; forward it onto every same-origin asset URL
+            # in the served HTML so those requests pass the gateway too. (The
+            # app's own API/navigation requests already forward it via auth.ts.)
+            qs = request.url.query
+            if not qs:
+                return HTMLResponse(_index_html)
+            html = _ASSET_REF.sub(
+                lambda m: f"{m.group(1)}{m.group(2)}?{qs}{m.group(3)}", _index_html
+            )
+            return HTMLResponse(html)
+
+        # Built assets (the gateway has already authorized the request).
+        app.mount(
+            "/assets", StaticFiles(directory=str(webui / "assets")), name="assets"
+        )
+
+        @app.get("/")
+        async def _spa_root(request: Request):
+            return _render_index(request)
+
+        # SPA fallback: serve real static files as-is, otherwise return the
+        # (querystring-injected) HTML shell. Registered last so it never shadows
+        # the API routes above.
+        @app.get("/{path:path}")
+        async def _spa_fallback(path: str, request: Request):
+            candidate = webui / path
+            if path and candidate.is_file():
+                return FileResponse(str(candidate))
+            return _render_index(request)
+
         logger.info(
             f"A2UI UI + API serving on http://{host}:{port} (UI: {webui}, agents: {agents_dir})"
         )

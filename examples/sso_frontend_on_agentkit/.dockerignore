@@ -1,0 +1,28 @@
+# AgentKit configuration
+agentkit.yaml
+agentkit*.yaml
+.agentkit/
+
+# Local secrets — never ship into the image (envs are injected by the runtime)
+.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE / git
+.vscode/
+.idea/
+.git/
+.gitignore
+
+# Docker
+Dockerfile*
+.dockerignore

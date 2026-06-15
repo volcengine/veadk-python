@@ -1688,6 +1688,16 @@ def create_oauth2_middleware(
             return await call_next(request)
 
         authorization = request.headers.get("authorization")
+        # Behind an API gateway that authenticates with a key in the Authorization
+        # header (e.g. an AgentKit runtime) the opaque gateway key arrives here. It
+        # is not the user's access token, and unless token introspection is enabled
+        # it cannot be a valid one (access tokens are JWTs). Ignore a non-JWT bearer
+        # so authentication falls back to the session cookie instead of failing with
+        # "Invalid JWT format"; a genuine user JWT is left untouched.
+        if authorization and not config.use_introspection:
+            _bearer = _extract_bearer_token(authorization)
+            if _bearer and len(_bearer.split(".")) != 3:
+                authorization = None
         if authorization:
             token = _extract_bearer_token(authorization)
             if not token:
