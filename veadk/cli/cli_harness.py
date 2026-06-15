@@ -718,9 +718,27 @@ def deploy(
     resolved_region = region or os.getenv("VOLCENGINE_REGION") or "cn-beijing"
     cfg = _build_agentkit_config(runtime_name, resolved_region, runtime_envs, auth)
 
+    # AgentKit's launch path exposes no hook for runtime tags, so tag the runtime
+    # at creation by wrapping the SDK's create_runtime: every harness runtime is
+    # tagged `agentkit:agenttype=harness`. Scoped to this deploy and restored after.
+    from agentkit.sdk.runtime import types as _rt_types
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient as _RtClient
+
+    _orig_create_runtime = _RtClient.create_runtime
+
+    def _create_runtime_with_harness_tag(self, request):
+        request.tags = [
+            *(request.tags or []),
+            _rt_types.TagsItemForCreateRuntime.model_validate(
+                {"Key": "agentkit:agenttype", "Value": "harness"}
+            ),
+        ]
+        return _orig_create_runtime(self, request)
+
     logger.info(f"Deploying harness runtime '{runtime_name}' from {proj_dir}")
     cwd = os.getcwd()
     os.chdir(proj_dir)
+    _RtClient.create_runtime = _create_runtime_with_harness_tag
     try:
         result = sdk.launch(
             config_dict=cfg,
@@ -728,6 +746,7 @@ def deploy(
             reporter=LoggingReporter(),
         )
     finally:
+        _RtClient.create_runtime = _orig_create_runtime
         os.chdir(cwd)
 
     if not result.success:
