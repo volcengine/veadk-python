@@ -83,6 +83,7 @@ class TestHarnessConfig:
             "knowledgebase_type",
             "longterm_memory_type",
             "shortterm_memory_type",
+            "max_llm_calls",
         }
 
     def test_component_defaults(self):
@@ -103,7 +104,11 @@ class TestHarnessConfig:
 
 class TestRequestResponseSchemas:
     def test_run_agent_request_fields(self):
-        assert set(_fields(RunAgentRequest)) == {"user_id", "session_id"}
+        assert set(_fields(RunAgentRequest)) == {
+            "user_id",
+            "session_id",
+            "max_llm_calls",
+        }
 
     def test_invoke_request_fields(self):
         assert set(_fields(InvokeHarnessRequest)) == {

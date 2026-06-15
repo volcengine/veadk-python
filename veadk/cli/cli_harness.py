@@ -384,6 +384,13 @@ def _override_options(func):
 @click.option(
     "--short-term-memory-type", default=None, help="Short-term memory backend."
 )
+@click.option(
+    "--max-llm-calls",
+    "max_llm_calls",
+    type=int,
+    default=None,
+    help="Default max LLM calls per run (overridable per invocation).",
+)
 @_connection_options
 @click.option(
     "--path",
@@ -395,6 +402,7 @@ def add(
     knowledgebase_type: str | None,
     long_term_memory_type: str | None,
     short_term_memory_type: str | None,
+    max_llm_calls: int | None,
     path: str,
     model_name: str | None,
     tools: str | None,
@@ -415,6 +423,8 @@ def add(
 
     if harness_name is not None:
         data["harness_name"] = harness_name
+    if max_llm_calls is not None:
+        data["max_llm_calls"] = max_llm_calls
     if model_name is not None:
         model = data.get("model")
         if not isinstance(model, dict):
@@ -813,6 +823,13 @@ def deploy(
     help="Session id for the call.",
 )
 @click.option(
+    "--max-llm-calls",
+    "max_llm_calls",
+    type=int,
+    default=None,
+    help="Override max LLM calls for this call (falls back to the harness default).",
+)
+@click.option(
     "--url",
     default=None,
     envvar="HARNESS_URL",
@@ -836,6 +853,7 @@ def invoke(
     message_opt,
     user_id,
     session_id,
+    max_llm_calls,
     url,
     key,
     path,
@@ -864,10 +882,13 @@ def invoke(
             "or pass --url/--key."
         )
 
+    run_agent_request: dict = {"user_id": user_id, "session_id": session_id}
+    if max_llm_calls is not None:
+        run_agent_request["max_llm_calls"] = max_llm_calls
     body: dict = {
         "prompt": message,
         "harness_name": harness_name,
-        "run_agent_request": {"user_id": user_id, "session_id": session_id},
+        "run_agent_request": run_agent_request,
     }
     override = {name: value for name, value in overrides.items() if value is not None}
     if override:
