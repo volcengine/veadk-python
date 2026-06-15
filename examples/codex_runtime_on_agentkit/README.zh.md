@@ -13,8 +13,7 @@ codex_runtime_on_agentkit/
 ├── app.py                       # 部署入口（ADK Agent API 服务）
 ├── agents/
 │   └── codex_agent/             # Agent —— Agent(runtime="codex")
-├── scripts/install_veadk.sh     # 安装 veadk（从 main）+ openai-codex
-├── requirements.txt             # 空（依赖由构建脚本安装）
+├── requirements.txt             # veadk-python>=0.5.39 + openai-codex
 ├── .env.example
 └── .dockerignore
 ```
@@ -25,12 +24,13 @@ codex_runtime_on_agentkit/
   仍负责 session、记忆与 tracing；Codex 只驱动单轮（推理 + 工具调用）。
 - Codex 只讲 OpenAI **Responses** API，所以 VeADK 起了一个进程内 shim，把你的
   `MODEL_AGENT_*` chat 端点（火山引擎 Ark）桥接过去。普通 Ark chat 模型无需改动即可用。
-- **`openai-codex` 不是 veadk 的依赖**，所以构建时显式安装
-  （`scripts/install_veadk.sh`）。它会带上 `openai-codex-cli-bin`——以
-  **manylinux wheel** 形式打包了 Codex 二进制，Linux 构建里无需单独装二进制。
+- **`openai-codex` 不是 veadk 的依赖**，所以在 `requirements.txt` 里显式列出。它会带上
+  `openai-codex-cli-bin`——以 **manylinux wheel** 形式打包了 Codex 二进制，Linux
+  构建里无需单独装二进制。它当前是 pre-release，连同其二进制依赖都**钉死到精确的
+  预发布版本**，这样 `uv pip install` 无需全局 `--prerelease=allow` 也能装上。
 
-> codex 运行时的修复在 `main` 上，所以构建从 `main`（而非 PyPI）以浅克隆 + 稀疏
-> 检出 `veadk/` 包的方式安装 veadk。
+> codex 运行时自 **0.5.39** 起已包含在 `veadk-python`（PyPI）中，所以镜像通过默认的
+> `uv pip install -r requirements.txt` 全部从 PyPI 安装——无需构建脚本或 git clone。
 
 ## 1. 配置
 
@@ -43,7 +43,7 @@ cp .env.example .env
 ## 2. 本地运行（可选）
 
 ```bash
-pip install "veadk-python" openai-codex
+pip install "veadk-python>=0.5.39" openai-codex
 python app.py            # 或：python -m app
 # 打开 http://127.0.0.1:8000；POST /run_sse，或 GET /ping -> {"status":"ok"}
 ```
@@ -65,8 +65,6 @@ veadk agentkit invoke "你好，你叫什么"
 ```
 
 `veadk agentkit launch` = `build` + `deploy`。用 `veadk agentkit destroy` 拆除。
-`scripts/install_veadk.sh` 通过 `agentkit.yaml` 的 `docker_build.build_script`
-在镜像构建时执行。
 
 ## 注意
 
@@ -75,3 +73,5 @@ veadk agentkit invoke "你好，你叫什么"
 - **工具 / 沙箱**：Codex 在容器内用自己的沙箱执行工具（如 shell）。对需要文件系统/
   网络访问的重工具 Agent，运行时可能需要授予相应权限。
 - **首请求延迟**：Codex app-server 二进制在首次使用时启动，首轮比后续慢。
+- **构建耗时**：从 PyPI 安装 veadk + openai-codex 可能要几分钟；若 CLI 的构建等待超时，
+  重跑 `veadk agentkit launch` 会复用已缓存的镜像层，很快完成。

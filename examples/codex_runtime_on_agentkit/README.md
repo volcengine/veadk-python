@@ -13,8 +13,7 @@ codex_runtime_on_agentkit/
 ├── app.py                       # deploy entry point (ADK agent API server)
 ├── agents/
 │   └── codex_agent/             # the agent — Agent(runtime="codex")
-├── scripts/install_veadk.sh     # installs veadk (from main) + openai-codex
-├── requirements.txt             # empty (deps installed by the build script)
+├── requirements.txt             # veadk-python>=0.5.39 + openai-codex
 ├── .env.example
 └── .dockerignore
 ```
@@ -27,13 +26,14 @@ codex_runtime_on_agentkit/
 - Codex speaks the OpenAI **Responses** API, so VeADK stands up an in-process
   shim that bridges your `MODEL_AGENT_*` chat endpoint (Volcengine Ark) to it.
   A normal Ark chat model therefore works unchanged.
-- **`openai-codex` is not a veadk dependency**, so the build installs it
-  explicitly (`scripts/install_veadk.sh`). It pulls in `openai-codex-cli-bin`,
-  which ships the Codex CLI binary as a **manylinux wheel** — no separate
-  binary install is needed in the Linux build.
+- **`openai-codex` is not a veadk dependency**, so `requirements.txt` lists it
+  explicitly. It pulls in `openai-codex-cli-bin`, which ships the Codex CLI
+  binary as a **manylinux wheel** — no separate binary install in the Linux
+  build.
 
-> The codex runtime fixes live on `main`, so the build installs veadk from
-> `main` (not PyPI) via a shallow + sparse clone of the `veadk/` package.
+> The codex runtime is included in `veadk-python` since **0.5.39** (on PyPI), so
+> the image installs everything from PyPI via the default
+> `uv pip install -r requirements.txt` — no build script or git clone needed.
 
 ## 1. Configure
 
@@ -46,7 +46,7 @@ cp .env.example .env
 ## 2. Run locally (optional)
 
 ```bash
-pip install "veadk-python" openai-codex
+pip install "veadk-python>=0.5.39" openai-codex
 python app.py            # or: python -m app
 # open http://127.0.0.1:8000 ; POST /run_sse, or GET /ping -> {"status":"ok"}
 ```
@@ -69,8 +69,7 @@ veadk agentkit invoke "你好，你叫什么"
 ```
 
 `veadk agentkit launch` = `build` + `deploy`. Use `veadk agentkit destroy` to
-tear the runtime down. `scripts/install_veadk.sh` is wired via
-`docker_build.build_script` in `agentkit.yaml` and runs during the image build.
+tear the runtime down.
 
 ## Notes
 
@@ -81,3 +80,6 @@ tear the runtime down. `scripts/install_veadk.sh` is wired via
   access, the runtime may need to be granted the corresponding permissions.
 - **First request latency**: the Codex app-server binary is spawned on first
   use, so the first turn is slower than subsequent ones.
+- **Build time**: installing veadk + openai-codex from PyPI can take several
+  minutes; if the CLI's build wait expires, re-running `veadk agentkit launch`
+  reuses the cached image layers and finishes quickly.
