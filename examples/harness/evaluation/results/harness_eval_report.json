@@ -1,0 +1,429 @@
+{
+  "context_engine": {
+    "baseline": {
+      "acceptance_visibility_rate": 0.0,
+      "anchor_contract_rate": 0.0,
+      "budget_compliance_rate": 0.8333333333333334,
+      "case_count": 6,
+      "control_pollution_rate": 0.3333333333333333,
+      "evidence_before_history_rate": 0.0,
+      "evidence_visibility_rate": 0.0,
+      "quality_score": 0.0
+    },
+    "cases": [
+      {
+        "baseline": {
+          "acceptance_visible": false,
+          "anchor_contract": false,
+          "anchor_text_present": true,
+          "budget_compliant": true,
+          "control_polluted": false,
+          "evidence_before_history": false,
+          "evidence_visible": false,
+          "expects_evidence": false,
+          "id": "follow-up-anchor",
+          "is_harness": false,
+          "prompt_chars": 91,
+          "turn_type": ""
+        },
+        "checks": [
+          "anchor_contract",
+          "acceptance_visible"
+        ],
+        "harness": {
+          "acceptance_visible": true,
+          "anchor_contract": true,
+          "anchor_text_present": true,
+          "budget_compliant": true,
+          "control_polluted": false,
+          "estimated_tokens": 148,
+          "evidence_before_history": true,
+          "evidence_visible": false,
+          "expects_evidence": false,
+          "id": "follow-up-anchor",
+          "is_harness": true,
+          "omitted_count": 0,
+          "prompt_chars": 586,
+          "truncated": false,
+          "turn_type": "follow_up"
+        },
+        "id": "follow-up-anchor",
+        "include_in_summary": false,
+        "scenario": "Core context: follow-up task anchor"
+      },
+      {
+        "baseline": {
+          "acceptance_visible": false,
+          "anchor_contract": false,
+          "anchor_text_present": true,
+          "budget_compliant": true,
+          "control_polluted": true,
+          "evidence_before_history": false,
+          "evidence_visible": false,
+          "expects_evidence": false,
+          "id": "control-message-filter",
+          "is_harness": false,
+          "prompt_chars": 93,
+          "turn_type": ""
+        },
+        "checks": [
+          "no_control_pollution"
+        ],
+        "harness": {
+          "acceptance_visible": true,
+          "anchor_contract": true,
+          "anchor_text_present": true,
+          "budget_compliant": true,
+          "control_polluted": false,
+          "estimated_tokens": 104,
+          "evidence_before_history": true,
+          "evidence_visible": false,
+          "expects_evidence": false,
+          "id": "control-message-filter",
+          "is_harness": true,
+          "omitted_count": 0,
+          "prompt_chars": 489,
+          "truncated": false,
+          "turn_type": "follow_up"
+        },
+        "id": "control-message-filter",
+        "include_in_summary": false,
+        "scenario": "Core context: control message filtering"
+      },
+      {
+        "baseline": {
+          "acceptance_visible": false,
+          "anchor_contract": false,
+          "anchor_text_present": true,
+          "budget_compliant": false,
+          "control_polluted": false,
+          "evidence_before_history": false,
+          "evidence_visible": false,
+          "expects_evidence": false,
+          "id": "budgeted-follow-up",
+          "is_harness": false,
+          "prompt_chars": 10046,
+          "turn_type": ""
+        },
+        "checks": [
+          "budget_compliant",
+          "anchor_contract"
+        ],
+        "harness": {
+          "acceptance_visible": true,
+          "anchor_contract": true,
+          "anchor_text_present": true,
+          "budget_compliant": true,
+          "control_polluted": false,
+          "estimated_tokens": 93,
+          "evidence_before_history": true,
+          "evidence_visible": false,
+          "expects_evidence": false,
+          "id": "budgeted-follow-up",
+          "is_harness": true,
+          "omitted_count": 20,
+          "prompt_chars": 443,
+          "truncated": true,
+          "turn_type": "follow_up"
+        },
+        "id": "budgeted-follow-up",
+        "include_in_summary": false,
+        "scenario": "Core context: prompt budget control"
+      },
+      {
+        "baseline": {
+          "acceptance_visible": false,
+          "anchor_contract": false,
+          "anchor_text_present": true,
+          "budget_compliant": true,
+          "control_polluted": false,
+          "evidence_before_history": false,
+          "evidence_visible": false,
+          "expects_evidence": true,
+          "id": "evidence-first",
+          "is_harness": false,
+          "prompt_chars": 77,
+          "turn_type": ""
+        },
+        "checks": [
+          "evidence_visible",
+          "evidence_before_history"
+        ],
+        "harness": {
+          "acceptance_visible": true,
+          "anchor_contract": true,
+          "anchor_text_present": true,
+          "budget_compliant": true,
+          "control_polluted": false,
+          "estimated_tokens": 129,
+          "evidence_before_history": true,
+          "evidence_visible": true,
+          "expects_evidence": true,
+          "id": "evidence-first",
+          "is_harness": true,
+          "omitted_count": 0,
+          "prompt_chars": 613,
+          "truncated": false,
+          "turn_type": "follow_up"
+        },
+        "id": "evidence-first",
+        "include_in_summary": false,
+        "scenario": "Core context: evidence before history"
+      },
+      {
+        "baseline": {
+          "acceptance_visible": false,
+          "anchor_contract": false,
+          "anchor_text_present": true,
+          "budget_compliant": true,
+          "control_polluted": true,
+          "evidence_before_history": false,
+          "evidence_visible": false,
+          "expects_evidence": false,
+          "id": "production-group-chat-anchor",
+          "is_harness": false,
+          "prompt_chars": 205,
+          "turn_type": ""
+        },
+        "checks": [
+          "anchor_contract",
+          "no_control_pollution"
+        ],
+        "harness": {
+          "acceptance_visible": true,
+          "anchor_contract": true,
+          "anchor_text_present": true,
+          "budget_compliant": true,
+          "control_polluted": false,
+          "estimated_tokens": 124,
+          "evidence_before_history": true,
+          "evidence_visible": false,
+          "expects_evidence": false,
+          "id": "production-group-chat-anchor",
+          "is_harness": true,
+          "omitted_count": 0,
+          "prompt_chars": 496,
+          "truncated": false,
+          "turn_type": "follow_up"
+        },
+        "id": "production-group-chat-anchor",
+        "include_in_summary": true,
+        "scenario": "Channel and cron context anchoring"
+      },
+      {
+        "baseline": {
+          "acceptance_visible": false,
+          "anchor_contract": false,
+          "anchor_text_present": true,
+          "budget_compliant": true,
+          "control_polluted": false,
+          "evidence_before_history": false,
+          "evidence_visible": false,
+          "expects_evidence": true,
+          "id": "production-rag-evidence-first",
+          "is_harness": false,
+          "prompt_chars": 113,
+          "turn_type": ""
+        },
+        "checks": [
+          "anchor_contract",
+          "evidence_visible",
+          "evidence_before_history"
+        ],
+        "harness": {
+          "acceptance_visible": true,
+          "anchor_contract": true,
+          "anchor_text_present": true,
+          "budget_compliant": true,
+          "control_polluted": false,
+          "estimated_tokens": 155,
+          "evidence_before_history": true,
+          "evidence_visible": true,
+          "expects_evidence": true,
+          "id": "production-rag-evidence-first",
+          "is_harness": true,
+          "omitted_count": 0,
+          "prompt_chars": 709,
+          "truncated": false,
+          "turn_type": "follow_up"
+        },
+        "id": "production-rag-evidence-first",
+        "include_in_summary": true,
+        "scenario": "RAG evidence beats stale memory"
+      }
+    ],
+    "delta": {
+      "anchor_contract_rate_pp": 100.0,
+      "budget_compliance_rate_pp": 16.7,
+      "control_pollution_rate_reduction_pp": 33.3,
+      "quality_score_pp": 100.0
+    },
+    "harness": {
+      "acceptance_visibility_rate": 1.0,
+      "anchor_contract_rate": 1.0,
+      "budget_compliance_rate": 1.0,
+      "case_count": 6,
+      "control_pollution_rate": 0.0,
+      "evidence_before_history_rate": 1.0,
+      "evidence_visibility_rate": 1.0,
+      "quality_score": 1.0
+    }
+  },
+  "generated_at": "2026-06-12T08:46:09.937706+00:00",
+  "method": {
+    "baseline": "raw history plus current prompt; non-empty final answer is trusted",
+    "harness": "ContextEngine context assembly plus ResultVerifier deterministic checks",
+    "model_dependency": "none"
+  },
+  "result_verifier": {
+    "baseline": {
+      "accuracy": 0.2,
+      "case_count": 10,
+      "safe_case_count": 2,
+      "safe_pass_rate": 1.0,
+      "unsafe_case_count": 8,
+      "unsafe_detection_precision": 0.0,
+      "unsafe_false_accept_rate": 1.0,
+      "unsafe_recall": 0.0
+    },
+    "cases": [
+      {
+        "baseline_done": true,
+        "expected_done": false,
+        "failure_mode": "fabricated_url",
+        "harness_done": false,
+        "harness_missing_requirements": [
+          "Answer cites URL(s) not present in evidence/source: https://fake.example/policy"
+        ],
+        "id": "fabricated-url",
+        "include_in_summary": false,
+        "scenario": "Core guardrail: fabricated source URL"
+      },
+      {
+        "baseline_done": true,
+        "expected_done": false,
+        "failure_mode": "missing_evidence",
+        "harness_done": false,
+        "harness_missing_requirements": [
+          "External/current factual task has no tool evidence or source receipt.",
+          "Key fact(s) not found in evidence text: 2026-06"
+        ],
+        "id": "no-evidence-current-fact",
+        "include_in_summary": false,
+        "scenario": "Core guardrail: current fact without evidence"
+      },
+      {
+        "baseline_done": true,
+        "expected_done": false,
+        "failure_mode": "unsupported_key_fact",
+        "harness_done": false,
+        "harness_missing_requirements": [
+          "Key fact(s) not found in evidence text: 2026-07-01"
+        ],
+        "id": "unsupported-date",
+        "include_in_summary": false,
+        "scenario": "Core guardrail: unsupported date fact"
+      },
+      {
+        "baseline_done": true,
+        "expected_done": false,
+        "failure_mode": "format_mismatch",
+        "harness_done": false,
+        "harness_missing_requirements": [
+          "Answer does not satisfy requested JSON output format."
+        ],
+        "id": "format-mismatch-json",
+        "include_in_summary": false,
+        "scenario": "Core guardrail: requested JSON contract"
+      },
+      {
+        "baseline_done": true,
+        "expected_done": true,
+        "failure_mode": "safe",
+        "harness_done": true,
+        "harness_missing_requirements": [],
+        "id": "grounded-policy",
+        "include_in_summary": false,
+        "scenario": "Core guardrail: grounded policy answer"
+      },
+      {
+        "baseline_done": true,
+        "expected_done": true,
+        "failure_mode": "safe",
+        "harness_done": true,
+        "harness_missing_requirements": [],
+        "id": "grounded-list",
+        "include_in_summary": false,
+        "scenario": "Core guardrail: grounded sourced list"
+      },
+      {
+        "baseline_done": true,
+        "expected_done": false,
+        "failure_mode": "production_missing_current_kb_evidence",
+        "harness_done": false,
+        "harness_missing_requirements": [
+          "External/current factual task has no tool evidence or source receipt."
+        ],
+        "id": "production-rag-stale-memory",
+        "include_in_summary": true,
+        "scenario": "RAG memory freshness"
+      },
+      {
+        "baseline_done": true,
+        "expected_done": false,
+        "failure_mode": "production_failed_tool_claimed_success",
+        "harness_done": false,
+        "harness_missing_requirements": [
+          "Answer claims the operation completed despite failed tool receipt(s): mock_skill_runner(ValidationError)"
+        ],
+        "id": "production-tool-failed-but-passed",
+        "include_in_summary": true,
+        "scenario": "Tool failure claimed as success"
+      },
+      {
+        "baseline_done": true,
+        "expected_done": false,
+        "failure_mode": "production_security_failed_tool_claimed_success",
+        "harness_done": false,
+        "harness_missing_requirements": [
+          "Answer claims the operation completed despite failed tool receipt(s): mock_tool_call(SecurityPolicyBlocked)"
+        ],
+        "id": "production-security-blocked-but-passed",
+        "include_in_summary": true,
+        "scenario": "Security over-blocking of allowed tools"
+      },
+      {
+        "baseline_done": true,
+        "expected_done": false,
+        "failure_mode": "production_unsupported_runtime_parameter",
+        "harness_done": false,
+        "harness_missing_requirements": [
+          "Key fact(s) not found in evidence text: 8192"
+        ],
+        "id": "production-model-runtime-token-mismatch",
+        "include_in_summary": true,
+        "scenario": "Model runtime parameter drift"
+      }
+    ],
+    "delta": {
+      "accuracy_pp": 80.0,
+      "unsafe_false_accept_rate_pp": 100.0,
+      "unsafe_recall_pp": 100.0
+    },
+    "harness": {
+      "accuracy": 1.0,
+      "case_count": 10,
+      "safe_case_count": 2,
+      "safe_pass_rate": 1.0,
+      "unsafe_case_count": 8,
+      "unsafe_detection_precision": 1.0,
+      "unsafe_false_accept_rate": 0.0,
+      "unsafe_recall": 1.0
+    }
+  },
+  "summary": {
+    "context_quality_gain_pp": 100.0,
+    "result_accuracy_gain_pp": 80.0,
+    "unsafe_false_accept_rate_reduction_pp": 100.0
+  }
+}
