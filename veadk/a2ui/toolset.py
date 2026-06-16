@@ -96,9 +96,7 @@ class _FallbackSendA2uiToClientToolset(base_toolset.BaseToolset):
     ):
         super().__init__()
         self._a2ui_enabled = a2ui_enabled
-        self._ui_tools = [
-            self._SendA2uiJsonToClientTool(a2ui_catalog, a2ui_examples)
-        ]
+        self._ui_tools = [self._SendA2uiJsonToClientTool(a2ui_catalog, a2ui_examples)]
 
     async def get_tools(self, readonly_context=None):
         if self._a2ui_enabled:
@@ -162,9 +160,7 @@ class _FallbackSendA2uiToClientToolset(base_toolset.BaseToolset):
             try:
                 a2ui_json = args.get(self.A2UI_JSON_ARG_NAME)
                 if not a2ui_json:
-                    raise ValueError(
-                        f"Missing required arg {self.A2UI_JSON_ARG_NAME}"
-                    )
+                    raise ValueError(f"Missing required arg {self.A2UI_JSON_ARG_NAME}")
 
                 a2ui_json_payload = parse_and_fix(a2ui_json)
                 self._a2ui_catalog.validator.validate(a2ui_json_payload)
