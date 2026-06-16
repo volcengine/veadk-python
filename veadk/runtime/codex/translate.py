@@ -173,21 +173,79 @@ def _event(author: str, invocation_id: str, role: str, part: types.Part) -> Even
     )
 
 
-def result_to_events(result: Any, author: str, invocation_id: str) -> list[Event]:
-    """Convert a Codex run result into ADK events, faithfully and in order.
+def item_to_events(item: Any, author: str, invocation_id: str) -> list[Event]:
+    """Convert a single Codex thread item into ADK events.
 
-    A Codex turn is multi-step. Rather than collapse it to ``final_response``,
-    walk ``result.items`` and forward each step as its own ADK event, mapping
-    Codex thread items onto the genai part the matching ADK event expects:
+    Maps one item onto the genai part the matching ADK event expects:
 
     - ``reasoning`` -> a thought text part,
     - tool calls (``commandExecution`` / ``mcpToolCall`` / ``dynamicToolCall``
       / ``fileChange`` / ``webSearch``) -> a ``function_call`` part plus a
       matching ``function_response`` part carrying the tool's output,
     - ``agentMessage`` / ``plan`` / any other text-bearing item -> a text part,
-    - ``userMessage`` -> skipped (ADK already owns the user turn).
+    - ``userMessage`` (and anything else) -> nothing.
 
-    If nothing maps, fall back to ``final_response`` so a turn is never empty.
+    Returning per-item keeps the conversion reusable both for the streaming
+    path (emit as each item completes) and the batch path below.
+
+    Args:
+        item (Any): A Codex ``ThreadItem`` (model or dict).
+        author (str): Event author (the agent name).
+        invocation_id (str): The ADK invocation id to stamp on each event.
+
+    Returns:
+        list[google.adk.events.event.Event]: 0-2 events for this item.
+    """
+    data = _item_dict(item)
+    itype = str(data.get("type", ""))
+
+    if itype == "reasoning":
+        text = _join(data.get("summary")) or _join(data.get("content"))
+        if not text:
+            return []
+        return [
+            _event(author, invocation_id, "model", types.Part(text=text, thought=True))
+        ]
+
+    call = _tool_call(data)
+    if call is not None:
+        name, args, response = call
+        call_id = data.get("id") or f"call_{itype}"
+        return [
+            _event(
+                author,
+                invocation_id,
+                "model",
+                types.Part(
+                    function_call=types.FunctionCall(id=call_id, name=name, args=args)
+                ),
+            ),
+            _event(
+                author,
+                invocation_id,
+                "user",
+                types.Part(
+                    function_response=types.FunctionResponse(
+                        id=call_id, name=name, response=response
+                    )
+                ),
+            ),
+        ]
+
+    if itype != "userMessage" and data.get("text"):
+        return [
+            _event(author, invocation_id, "model", types.Part(text=str(data["text"])))
+        ]
+
+    return []
+
+
+def result_to_events(result: Any, author: str, invocation_id: str) -> list[Event]:
+    """Convert a whole Codex run result into ADK events, in order.
+
+    Walks ``result.items`` through :func:`item_to_events`. Falls back to
+    ``final_response`` so a turn is never empty. (The streaming runtime path
+    calls :func:`item_to_events` per completed item instead of this.)
 
     Args:
         result (Any): The object returned by ``thread.run(...)``.
@@ -199,61 +257,7 @@ def result_to_events(result: Any, author: str, invocation_id: str) -> list[Event
     """
     events: list[Event] = []
     for item in getattr(result, "items", None) or []:
-        data = _item_dict(item)
-        itype = str(data.get("type", ""))
-
-        if itype == "userMessage":
-            continue
-
-        if itype == "reasoning":
-            text = _join(data.get("summary")) or _join(data.get("content"))
-            if text:
-                events.append(
-                    _event(
-                        author,
-                        invocation_id,
-                        "model",
-                        types.Part(text=text, thought=True),
-                    )
-                )
-            continue
-
-        call = _tool_call(data)
-        if call is not None:
-            name, args, response = call
-            call_id = data.get("id") or f"call_{len(events)}"
-            events.append(
-                _event(
-                    author,
-                    invocation_id,
-                    "model",
-                    types.Part(
-                        function_call=types.FunctionCall(
-                            id=call_id, name=name, args=args
-                        )
-                    ),
-                )
-            )
-            events.append(
-                _event(
-                    author,
-                    invocation_id,
-                    "user",
-                    types.Part(
-                        function_response=types.FunctionResponse(
-                            id=call_id, name=name, response=response
-                        )
-                    ),
-                )
-            )
-            continue
-
-        if data.get("text"):  # agentMessage, plan, and any text-bearing item
-            events.append(
-                _event(
-                    author, invocation_id, "model", types.Part(text=str(data["text"]))
-                )
-            )
+        events.extend(item_to_events(item, author, invocation_id))
 
     if events:
         return events

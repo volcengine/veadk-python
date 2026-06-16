@@ -39,10 +39,14 @@ import tempfile
 from typing import TYPE_CHECKING, AsyncGenerator
 
 from openai_codex import AsyncCodex  # type: ignore[import-not-found]
+from openai_codex.generated.v2_all import (  # type: ignore[import-not-found]
+    ItemCompletedNotification,
+    TurnCompletedNotification,
+)
 
 from veadk.runtime.base_runtime import BaseRuntime, build_system_append
 from veadk.runtime.codex.proxy import get_shim_url
-from veadk.runtime.codex.translate import build_prompt, result_to_events
+from veadk.runtime.codex.translate import build_prompt, item_to_events
 from veadk.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -98,18 +102,44 @@ class CodexRuntime(BaseRuntime):
         os.environ["CODEX_HOME"] = codex_home
         os.environ[_KEY_ENV] = _LOCAL_SHIM_TOKEN
         try:
+            # Stream the turn: emit ADK events as each Codex item completes
+            # (reasoning, tool calls, messages) instead of collecting the whole
+            # turn first. This keeps the BaseRuntime async-generator contract
+            # truly incremental, so thinking/tool steps show up live (a blocking
+            # thread.run() would leave the client silent for the whole turn).
             async with AsyncCodex() as codex:
                 thread = await codex.thread_start(model=model)
-                result = await thread.run(prompt)
+                turn = await thread.turn(prompt)
+                stream = turn.stream()
+                try:
+                    async for note in stream:
+                        payload = note.payload
+                        if (
+                            isinstance(payload, ItemCompletedNotification)
+                            and payload.turn_id == turn.id
+                        ):
+                            for event in item_to_events(
+                                payload.item, agent.name, ctx.invocation_id
+                            ):
+                                yield event
+                        elif (
+                            isinstance(payload, TurnCompletedNotification)
+                            and payload.turn.id == turn.id
+                            and payload.turn.error
+                        ):
+                            raise RuntimeError(payload.turn.error.message)
+                finally:
+                    # stream() is an async generator at runtime; close it to
+                    # unregister the turn's notification listener.
+                    aclose = getattr(stream, "aclose", None)
+                    if aclose is not None:
+                        await aclose()
         finally:
             for key, value in previous.items():
                 if value is None:
                     os.environ.pop(key, None)
                 else:
                     os.environ[key] = value
-
-        for event in result_to_events(result, agent.name, ctx.invocation_id):
-            yield event
 
     def _resolve_model(self, agent: "Agent") -> str:
         name = agent.model_name
