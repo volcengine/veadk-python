@@ -41,7 +41,7 @@ from veadk.cloud.harness_app.types import HarnessConfig, HarnessOverrides
 from veadk.knowledgebase import KnowledgeBase
 from veadk.memory.long_term_memory import LongTermMemory
 from veadk.memory.short_term_memory import ShortTermMemory
-from veadk.tools import get_builtin_tool
+from veadk.tools import get_builtin_tool, list_builtin_tools
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -52,10 +52,32 @@ __all__ = [
     "split_csv",
     "build_skill_toolset",
     "SkillLoadError",
+    "ToolLoadError",
     "config_from_env",
     "init_harness_agent",
     "spawn_harness_agent",
 ]
+
+
+class ToolLoadError(RuntimeError):
+    """A requested built-in tool is not supported.
+
+    Raised instead of failing with an opaque ``KeyError`` so the unsupported
+    tool name surfaces — at server startup for a base tool, or in the invoke
+    response for a per-call override.
+    """
+
+
+def _load_builtin_tool(name: str) -> Any:
+    """Resolve a built-in tool by name, raising :class:`ToolLoadError` if unknown."""
+    try:
+        return get_builtin_tool(name)
+    except KeyError as e:
+        raise ToolLoadError(
+            f"Tool '{name}' is not a supported built-in tool. "
+            f"Available: {', '.join(list_builtin_tools())}"
+        ) from e
+
 
 # Skill hub download endpoint. A skill name in a harness is the path after
 # `/download/`, e.g. "clawhub/lgwventrue/system-file-handler".
@@ -205,7 +227,7 @@ def _assemble_agent(config: HarnessConfig) -> tuple[Agent, ShortTermMemory]:
     base / long-term memory. Backend values are validated by each component's
     pydantic model (fast-fail on an unknown value).
     """
-    tools = [get_builtin_tool(name) for name in split_csv(config.tools)]
+    tools = [_load_builtin_tool(name) for name in split_csv(config.tools)]
 
     skills = split_csv(config.skills)
     if skills:
@@ -278,7 +300,7 @@ def _add_incremental_tools(agent: Agent, tool_names: list[str]) -> None:
         if name in existing:
             logger.info(f"Tool '{name}' already on the agent; skipping.")
             continue
-        agent.tools.append(get_builtin_tool(name))
+        agent.tools.append(_load_builtin_tool(name))
         existing.add(name)
 
 
