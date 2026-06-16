@@ -27,7 +27,13 @@ const ICONS: Record<string, string> = {
 export function Icon({ node }: ComponentRendererProps) {
   const name = (node.name as string) ?? "";
   return (
-    <span className="a2ui-icon" title={name} aria-label={name}>
+    <span
+      className="a2ui-icon"
+      title={name}
+      aria-label={name}
+      data-a2ui-id={node.id}
+      data-a2ui-component={node.component}
+    >
       {ICONS[name] ?? "•"}
     </span>
   );

@@ -7,5 +7,13 @@ export function Text({ node, ctx }: ComponentRendererProps) {
   const variant = (node.variant as string) ?? "body";
   const text = ctx.resolveString(node.text as DynamicValue);
   const Tag = (HEADINGS.has(variant) ? variant : "p") as keyof JSX.IntrinsicElements;
-  return <Tag className={`a2ui-text a2ui-text--${variant}`}>{text}</Tag>;
+  return (
+    <Tag
+      className={`a2ui-text a2ui-text--${variant}`}
+      data-a2ui-id={node.id}
+      data-a2ui-component={node.component}
+    >
+      {text}
+    </Tag>
+  );
 }
