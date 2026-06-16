@@ -10,6 +10,7 @@ export interface StackCardDef {
   title: string;
   desc: string;
   onClick: () => void;
+  disabled?: boolean;
 }
 
 /** A vertical list of wide "long bar" cards — used for the 添加 Agent chooser
@@ -31,8 +32,9 @@ export function StackCards({ title, sub, cards, footer }: {
           <motion.button
             key={c.key}
             type="button"
-            className="stk-card"
-            onClick={c.onClick}
+            className={`stk-card ${c.disabled ? "stk-card-disabled" : ""}`}
+            onClick={c.disabled ? undefined : c.onClick}
+            disabled={c.disabled}
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.18, ease: "easeOut", delay: i * 0.04 }}
