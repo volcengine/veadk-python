@@ -307,3 +307,51 @@ export async function deleteTempAgent(appName: string): Promise<void> {
     throw new Error(`Delete failed: ${res.status}`);
   }
 }
+
+export interface DeployAgentkitResult {
+  apikey: string;
+  url: string;
+  agentName: string;
+}
+
+interface DeployAgentkitResponse extends Partial<DeployAgentkitResult> {
+  success?: boolean;
+  error?: string;
+  detail?: string;
+}
+
+export async function deployAgentkitProject(
+  name: string,
+  files: { path: string; content: string }[],
+  config: { region: string; projectName: string },
+): Promise<DeployAgentkitResult> {
+  const res = await apiFetch("/web/deploy-agentkit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, files, config }),
+  });
+
+  const text = await res.text();
+  let data: DeployAgentkitResponse = {};
+  try {
+    data = text ? (JSON.parse(text) as DeployAgentkitResponse) : {};
+  } catch {
+    throw new Error(text || `部署失败 (${res.status})`);
+  }
+
+  if (!res.ok) {
+    throw new Error(data.error || data.detail || "部署失败");
+  }
+  if (!data.success) {
+    throw new Error(data.error || "部署失败");
+  }
+  if (!data.apikey || !data.url || !data.agentName) {
+    throw new Error("部署失败：返回缺少 AgentKit 连接信息");
+  }
+
+  return {
+    apikey: data.apikey,
+    url: data.url,
+    agentName: data.agentName,
+  };
+}

@@ -42,6 +42,7 @@ import { draftToYaml } from "./configYaml";
 import { searchSkills, downloadSkillFiles, type SkillHit } from "./skills";
 import type { AgentProject } from "./project";
 import { ProjectPreview } from "../ui/ProjectPreview";
+import { deployAgentkitProject } from "../adk/client";
 import "./CustomCreate.css";
 
 /** Trigger a browser download of a text file. */
@@ -1061,35 +1062,10 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft }: C
   // ----------------------------------------------------------------
   if (project) {
     const handleDeploy = async (proj: AgentProject) => {
-      const response = await fetch("/web/deploy-agentkit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: proj.name,
-          files: proj.files,
-          config: {
-            region: "cn-beijing",
-            projectName: "default",
-          },
-        }),
+      return deployAgentkitProject(proj.name, proj.files, {
+        region: "cn-beijing",
+        projectName: "default",
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "部署失败");
-      }
-
-      const result = await response.json();
-
-      if (!result.success) {
-        throw new Error(result.error || "部署失败");
-      }
-
-      return {
-        apikey: result.apikey,
-        url: result.url,
-        agentName: result.agentName,
-      };
     };
 
     return (
