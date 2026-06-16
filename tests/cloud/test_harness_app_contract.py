@@ -127,8 +127,10 @@ class TestRequestResponseSchemas:
 
     def test_invoke_response_fields_and_defaults(self):
         fields = _fields(InvokeHarnessResponse)
-        assert set(fields) == {"harness_name", "overwrite", "output"}
+        assert set(fields) == {"harness_name", "overwrite", "output", "error"}
         assert fields["overwrite"].default is False
+        # `error` is unset on success and carries the message verbatim on failure.
+        assert fields["error"].default is None
 
 
 class TestSplitCsv:
