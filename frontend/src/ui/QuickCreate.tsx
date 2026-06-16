@@ -6,11 +6,11 @@ import type { AgentDraft } from "../create/types";
 
 export type QuickCreateKind = "intelligent" | "custom" | "template" | "workflow";
 
-const MODES: { kind: QuickCreateKind; icon: StackCardDef["icon"]; title: string; desc: string }[] = [
-  { kind: "intelligent", icon: MessagesSquare, title: "智能模式", desc: "通过对话描述需求，让 AI 帮你生成 Agent 项目。" },
+const MODES: { kind: QuickCreateKind; icon: StackCardDef["icon"]; title: string; desc: string; disabled?: boolean }[] = [
+  { kind: "intelligent", icon: MessagesSquare, title: "智能模式", desc: "通过对话描述需求,让 AI 帮你生成 Agent 项目。" },
   { kind: "custom", icon: Wand2, title: "自定义", desc: "分步配置模型、工具、记忆、知识库等组件。" },
   { kind: "template", icon: LayoutTemplate, title: "从模板新建", desc: "基于预置模板快速搭建。" },
-  { kind: "workflow", icon: Workflow, title: "工作流", desc: "拖拽编排多步骤、多 Agent 的流程。" },
+  { kind: "workflow", icon: Workflow, title: "工作流", desc: "敬请期待", disabled: true },
 ];
 
 export interface QuickCreateProps {
@@ -28,6 +28,7 @@ export function QuickCreate({ onSelect, onImport }: QuickCreateProps) {
     icon: m.icon,
     title: m.title,
     desc: m.desc,
+    disabled: m.disabled,
     onClick: () => onSelect(m.kind),
   }));
 
