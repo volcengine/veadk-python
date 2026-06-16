@@ -82,6 +82,46 @@ _PROVIDER_LABELS = {
 }
 
 
+def _agentkit_authorization_header(api_key: str) -> str:
+    """Normalize AgentKit credential input to an Authorization header value."""
+    value = api_key.strip()
+    if value.lower().startswith("bearer "):
+        return value
+    return f"Bearer {value}"
+
+
+def _build_agentkit_proxy_headers(
+    incoming_headers: dict[str, str], api_key: str | None
+) -> dict[str, str]:
+    """Return headers safe to forward from the local proxy to AgentKit."""
+    excluded_headers = {
+        # Host/proxy control.
+        "host",
+        "connection",
+        "content-length",
+        "x-agentkit-base",
+        "x-agentkit-key",
+        # Local VeADK/SSO credentials must not leak to the remote runtime.
+        "authorization",
+        "cookie",
+        # Browser-only CORS/fetch metadata for the local origin.
+        "origin",
+        "referer",
+        "sec-fetch-site",
+        "sec-fetch-mode",
+        "sec-fetch-dest",
+        "sec-fetch-user",
+    }
+    headers = {
+        key: value
+        for key, value in incoming_headers.items()
+        if key.lower() not in excluded_headers
+    }
+    if api_key and api_key.strip():
+        headers["Authorization"] = _agentkit_authorization_header(api_key)
+    return headers
+
+
 def _build_generic_oauth2(provider_id: str, redirect_uri: str):
     """Build an OAuth2Config from env vars for a non-VeIdentity provider.
 
@@ -424,22 +464,13 @@ def frontend(
         if not target_base:
             raise HTTPException(status_code=400, detail="Missing X-AgentKit-Base")
 
+        # The local frontend may append SSO gateway query params to authenticate
+        # this same-origin proxy request. Do not forward those params to the
+        # remote AgentKit runtime, where names such as "token" can be interpreted
+        # as the runtime credential and cause a false 401.
         target_url = f"{target_base.rstrip('/')}/{path}"
-        if request.url.query:
-            target_url += f"?{request.url.query}"
 
-        headers = dict(request.headers)
-        # Remove proxy-specific and CORS-related headers
-        headers.pop("host", None)
-        headers.pop("x-agentkit-base", None)
-        headers.pop("x-agentkit-key", None)
-        headers.pop("origin", None)
-        headers.pop("referer", None)
-        headers.pop("sec-fetch-site", None)
-        headers.pop("sec-fetch-mode", None)
-        headers.pop("sec-fetch-dest", None)
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+        headers = _build_agentkit_proxy_headers(dict(request.headers), api_key)
 
         try:
             async with httpx.AsyncClient() as client:
