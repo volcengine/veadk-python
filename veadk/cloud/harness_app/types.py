@@ -103,3 +103,11 @@ class InvokeHarnessResponse(BaseModel):
     harness_name: str
     overwrite: bool = Field(default=False)
     output: str
+    error: str | None = Field(
+        default=None,
+        description=(
+            "Error message when the invocation fails (unsupported tool, skill "
+            "load failure, or a runtime error). Passed through verbatim; `output` "
+            "is empty when set."
+        ),
+    )
