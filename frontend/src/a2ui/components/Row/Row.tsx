@@ -6,6 +6,8 @@ export function Row({ node, ctx }: ComponentRendererProps) {
   return (
     <div
       className="a2ui-row"
+      data-a2ui-id={node.id}
+      data-a2ui-component={node.component}
       style={{
         display: "flex",
         flexDirection: "row",
