@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Send, Sparkles, Bot, FolderTree, AlertCircle, Loader2 } from "lucide-react";
-import { createSession, runSSE, getAgentInfo } from "../adk/client";
+import { createSession, runSSE, getAgentInfo, deployAgentkitProject } from "../adk/client";
 import { applyEvent, emptyAcc, type Acc } from "../blocks";
 import { Markdown } from "../ui/Markdown";
 import { ProjectPreview } from "../ui/ProjectPreview";
@@ -205,35 +205,10 @@ export function IntelligentCreate({ userId, onBack, onCreate, onAgentAdded }: In
   }
 
   const handleDeploy = async (proj: AgentProject) => {
-    const response = await fetch("/web/deploy-agentkit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: proj.name,
-        files: proj.files,
-        config: {
-          region: "cn-beijing",
-          projectName: "default",
-        },
-      }),
+    return deployAgentkitProject(proj.name, proj.files, {
+      region: "cn-beijing",
+      projectName: "default",
     });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || "部署失败");
-    }
-
-    const result = await response.json();
-
-    if (!result.success) {
-      throw new Error(result.error || "部署失败");
-    }
-
-    return {
-      apikey: result.apikey,
-      url: result.url,
-      agentName: result.agentName,
-    };
   };
 
   const send = async () => {
