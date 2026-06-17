@@ -702,7 +702,9 @@ def frontend(
             output = result.stdout
             logger.info(f"AgentKit launch output: {output}")
 
-            runtime_id, apikey_name, url = _parse_agentkit_output(output)
+            runtime_id, apikey_name, url, actual_agent_name = _parse_agentkit_output(
+                output
+            )
             logger.info(f"Parsed from CLI - RuntimeId: {runtime_id}, Endpoint: {url}")
 
             # 8. Try to get actual API key from AgentKit API
@@ -731,7 +733,7 @@ def frontend(
 
             return {
                 "success": True,
-                "agentName": agent_name,
+                "agentName": actual_agent_name or agent_name,
                 "apikey": apikey,
                 "url": url,
                 "consoleUrl": console_url,
@@ -750,15 +752,16 @@ def frontend(
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
-    def _parse_agentkit_output(output: str) -> tuple[str, str, str]:
-        """Parse CLI output to extract runtime_id, apikey name, and endpoint.
+    def _parse_agentkit_output(output: str) -> tuple[str, str, str, str]:
+        """Parse CLI output to extract runtime_id, apikey name, endpoint, and actual agent name.
 
         Actual AgentKit CLI output format:
         - Runtime ID: "✅ Runtime created successfully: r-xxxxx"
         - Endpoint: "Endpoint: https://..."
+        - Agent name: "Creating Runtime: a_111-8pi9eche" or "Creating new pipeline: a_111-8pi9eche"
 
         Returns:
-            Tuple of (runtime_id, apikey_name, endpoint)
+            Tuple of (runtime_id, apikey_name, endpoint, actual_agent_name)
         """
         output = output.strip()
 
@@ -778,6 +781,19 @@ def frontend(
         )
         apikey_name = apikey_match.group(1) if apikey_match else ""
 
+        # Extract actual agent name (pipeline/runtime name with suffix)
+        # Try multiple patterns: "Creating Runtime: xxx" or "Creating new pipeline: xxx"
+        agent_name = ""
+        for pattern in [
+            r"Creating Runtime:\s*([a-zA-Z0-9_-]+)",
+            r"Creating new pipeline:\s*([a-zA-Z0-9_-]+)",
+            r"Pipeline created successfully:\s*([a-zA-Z0-9_-]+)",
+        ]:
+            name_match = re.search(pattern, output, re.IGNORECASE)
+            if name_match:
+                agent_name = name_match.group(1)
+                break
+
         if not runtime_id or not endpoint:
             logger.error(f"Cannot parse CLI output: {output}")
             raise ValueError(
@@ -785,7 +801,7 @@ def frontend(
                 f"Expected RuntimeId and Endpoint, got: {output[:500]}"
             )
 
-        return runtime_id, apikey_name, endpoint
+        return runtime_id, apikey_name, endpoint, agent_name
 
     def _get_runtime_apikey(runtime_id: str, region: str) -> str:
         """Get actual API key from AgentKit Runtime API.

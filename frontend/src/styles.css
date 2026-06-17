@@ -1032,6 +1032,7 @@ body {
   z-index: 31;
   min-width: 240px;
   max-width: 360px;
+  max-height: 70vh;
   padding: 6px;
   background: hsl(var(--panel));
   border: 1px solid hsl(var(--border));
@@ -1040,6 +1041,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  overflow-y: auto;
   animation: ddpop 0.14s ease;
 }
 @keyframes ddpop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
@@ -1082,8 +1084,8 @@ body {
 /* hover flyout: model + tools for the agent under the cursor */
 .agent-dd-flyout {
   position: absolute;
-  top: -6px;
-  left: calc(100% + 8px);
+  /* top is set dynamically via inline style */
+  left: 248px; /* min-width of menu (240px) + gap (8px) */
   z-index: 32;
   width: 280px;
   padding: 12px 14px;

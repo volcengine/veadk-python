@@ -235,6 +235,7 @@ export default function App() {
   // Navigate to a newly added agent: switch app, close create view, start fresh chat.
   function onAgentAdded(agentId: string, agentName: string) {
     console.log("Agent added, navigating to:", agentId, agentName);
+    setConnections(loadConnections()); // Refresh connections to pick up the new agent
     setCreateView(null);
     setAppName(agentId);
     // startNewChat will be called automatically by the appName change effect
