@@ -46,8 +46,18 @@ export function AgentTest({ projectName, files, onClose }: AgentTestProps) {
         setDeploying(true);
         setDeployError(null);
 
+        // Transform multi-agent structure to single-agent for testing
+        // agents/{name}/agent.py -> agent.py
+        // agents/{name}/__init__.py -> __init__.py
+        const testFiles = files.map(f => {
+          if (f.path.startsWith(`agents/${projectName}/`)) {
+            return { ...f, path: f.path.replace(`agents/${projectName}/`, '') };
+          }
+          return f;
+        });
+
         // Deploy the agent
-        const name = await deployTempAgent(projectName, files);
+        const name = await deployTempAgent(projectName, testFiles);
         setAppName(name);
 
         // Create a session
