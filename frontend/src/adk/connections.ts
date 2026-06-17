@@ -10,6 +10,8 @@ export interface RemoteConnection {
   base: string;
   apiKey: string;
   apps: string[];
+  /** Optional app ID -> friendly name mapping (e.g., "a_1" -> "a_1-4zkzsezc") */
+  appLabels?: Record<string, string>;
 }
 
 /** An entry in the agent picker — a local app or one remote AgentKit app. */
@@ -68,6 +70,7 @@ export async function addConnection(
   name: string,
   base: string,
   apiKey: string,
+  appLabel?: string,
 ): Promise<RemoteConnection> {
   const normBase = base.trim().replace(/\/+$/, "");
   const apps = await fetchRemoteApps(normBase, apiKey.trim());
@@ -77,6 +80,7 @@ export async function addConnection(
     base: normBase,
     apiKey: apiKey.trim(),
     apps,
+    appLabels: appLabel && apps.length > 0 ? { [apps[0]]: appLabel } : undefined,
   };
   const list = [...loadConnections().filter((c) => c.base !== normBase), conn];
   persist(list);
@@ -103,13 +107,16 @@ export function buildAgentEntries(
     remote: false,
   }));
   const remote: AgentEntry[] = conns.flatMap((c) =>
-    c.apps.map((app) => ({
-      id: remoteAppId(c.id, app),
-      label: app,
-      app,
-      remote: true,
-      host: hostOf(c.base),
-    })),
+    c.apps.map((app) => {
+      const label = c.appLabels?.[app] ?? app;
+      return {
+        id: remoteAppId(c.id, app),
+        label,
+        app,
+        remote: true,
+        host: hostOf(c.base),
+      };
+    }),
   );
   return [...local, ...remote];
 }

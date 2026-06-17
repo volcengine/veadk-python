@@ -281,17 +281,34 @@ export function ProjectPreview({ project, onChange, onDeploy, onAgentAdded }: Pr
     setAddingAgent(true);
     setDeployError(null);
     try {
-      const { addConnection, remoteAppId } = await import("../adk/connections");
+      const { addConnection, remoteAppId, loadConnections } = await import("../adk/connections");
 
+      // 先调用 addConnection 获取实际的 apps 列表
       const conn = await addConnection(
         deployResult.agentName,
         deployResult.url,
-        deployResult.apikey
+        deployResult.apikey,
+        "" // 先不传 appLabel，等拿到真实的 app 名称后再更新
       );
 
       if (conn.apps.length === 0) {
         setDeployError("连接成功，但该地址未发现任何 Agent（/list-apps 为空）。");
       } else {
+        // 更新 connection，将第一个 app 的 label 设置为部署返回的真实名称
+        const updatedConn = {
+          ...conn,
+          appLabels: { [conn.apps[0]]: deployResult.agentName }
+        };
+
+        // 重新保存到 localStorage
+        const allConns = loadConnections();
+        const updatedList = allConns.map(c => c.id === conn.id ? updatedConn : c);
+        localStorage.setItem("veadk_agentkit_connections", JSON.stringify(updatedList));
+
+        // 重新注册连接以更新路由表
+        const { registerConnections } = await import("../adk/connections");
+        registerConnections(updatedList);
+
         // 如果提供了 onAgentAdded 回调，调用它进行导航；否则显示 alert
         if (onAgentAdded) {
           const agentId = remoteAppId(conn.id, conn.apps[0]);
