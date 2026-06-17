@@ -55,7 +55,7 @@ export function AddAgentKitView({ onAdded, onCancel }: AddAgentKitViewProps) {
     setBusy(true);
     setError("");
     try {
-      const conn = await addConnection(name, url, apiKey);
+      const conn = await addConnection(name, url, apiKey, name);
       if (conn.apps.length === 0) {
         setError("连接成功，但该地址未发现任何 Agent（/list-apps 为空）。");
         setBusy(false);

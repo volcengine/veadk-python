@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Cpu, Loader2, LogOut, Wrench } from "lucide-react";
 import { getAgentInfo, type AgentInfo } from "../adk/client";
 import { displayName } from "../adk/identity";
@@ -65,10 +65,22 @@ function AgentSelect({
   const [open, setOpen] = useState(false);
   const [hovered, setHovered] = useState<string | null>(null);
   const [cache, setCache] = useState<Record<string, InfoState>>({});
+  const [flyoutTop, setFlyoutTop] = useState<number>(0);
+  const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const label = (id: string) => (agentLabel ? agentLabel(id) : id);
 
   function loadInfo(app: string) {
     setHovered(app);
+    const rowEl = rowRefs.current[app];
+    if (rowEl) {
+      const rect = rowEl.getBoundingClientRect();
+      const ddEl = rowEl.closest('.agent-dd');
+      if (ddEl) {
+        const ddRect = ddEl.getBoundingClientRect();
+        // Position relative to .agent-dd container, accounting for menu's top offset
+        setFlyoutTop(rect.top - ddRect.top);
+      }
+    }
     if (cache[app] !== undefined) return;
     setCache((c) => ({ ...c, [app]: "loading" }));
     getAgentInfo(app)
@@ -94,6 +106,7 @@ function AgentSelect({
             {apps.map((a) => (
               <div
                 key={a}
+                ref={(el) => (rowRefs.current[a] = el)}
                 className="agent-dd-row"
                 onMouseEnter={() => loadInfo(a)}
                 onMouseLeave={() => setHovered((h) => (h === a ? null : h))}
@@ -108,19 +121,19 @@ function AgentSelect({
                   <span className="agent-dd-item-name">{label(a)}</span>
                   {a === appName && <span className="agent-dd-item-dot" aria-label="当前" />}
                 </button>
-                {hovered === a && <AgentFlyout state={cache[a]} />}
               </div>
             ))}
           </div>
+          {hovered && <AgentFlyout state={cache[hovered]} top={flyoutTop} />}
         </>
       )}
     </div>
   );
 }
 
-function AgentFlyout({ state }: { state: InfoState }) {
+function AgentFlyout({ state, top }: { state: InfoState; top: number }) {
   return (
-    <div className="agent-dd-flyout">
+    <div className="agent-dd-flyout" style={{ top: `${top}px` }}>
       {state === undefined || state === "loading" ? (
         <div className="agent-dd-fly-loading">
           <Loader2 className="icon spin" /> 加载中…
