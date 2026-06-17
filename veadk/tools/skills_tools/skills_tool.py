@@ -129,19 +129,10 @@ class SkillsTool(BaseTool):
                 )
 
                 try:
-                    from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
                     from veadk.integrations.ve_tos.ve_tos import VeTOS
+                    from veadk.skills.utils import _get_cloud_credentials
 
-                    access_key = os.getenv("VOLCENGINE_ACCESS_KEY")
-                    secret_key = os.getenv("VOLCENGINE_SECRET_KEY")
-                    session_token = ""
-
-                    if not (access_key and secret_key):
-                        # Try to get from vefaas iam
-                        cred = get_credential_from_vefaas_iam()
-                        access_key = cred.access_key_id
-                        secret_key = cred.secret_access_key
-                        session_token = cred.session_token
+                    access_key, secret_key, session_token = _get_cloud_credentials()
 
                     tos_skills_dir = os.getenv(
                         "TOS_SKILLS_DIR"
@@ -230,56 +221,55 @@ class SkillsTool(BaseTool):
                     f"Attempting to download skill '{skill_name}' from skill space..."
                 )
                 try:
-                    from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
-                    from veadk.integrations.ve_tos.ve_tos import VeTOS
-
-                    access_key = os.getenv("VOLCENGINE_ACCESS_KEY")
-                    secret_key = os.getenv("VOLCENGINE_SECRET_KEY")
-                    session_token = ""
-
-                    if not (access_key and secret_key):
-                        # Try to get from vefaas iam
-                        cred = get_credential_from_vefaas_iam()
-                        access_key = cred.access_key_id
-                        secret_key = cred.secret_access_key
-                        session_token = cred.session_token
-
-                    tos_bucket, tos_path = skill.bucket_name, skill.path
-
                     save_path = skill_dir / f"{skill_name}.zip"
 
-                    cloud_provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
-                    if cloud_provider == "vestack":
-                        success = self._download_skill_via_vestack(
-                            skill=skill,
-                            tos_path=tos_path,
-                            cloud_provider=cloud_provider,
-                            access_key=access_key,
-                            secret_key=secret_key,
-                            session_token=session_token,
-                            skill_name=skill_name,
-                            save_path=save_path,
-                        )
-                    else:
-                        # Initialize VeTOS client
-                        tos_client = VeTOS(
-                            ak=access_key,
-                            sk=secret_key,
-                            session_token=session_token,
-                            bucket_name=tos_bucket,
-                            region=region,
-                        )
+                    if skill.source_type == "skillhub":
+                        from veadk.skills.utils import download_skillhub_skill
 
-                        success = tos_client.download(
-                            bucket_name=tos_bucket,
-                            object_key=tos_path,
-                            save_path=save_path,
-                        )
+                        success = download_skillhub_skill(skill, save_path)
+                    else:
+                        from veadk.integrations.ve_tos.ve_tos import VeTOS
+                        from veadk.skills.utils import _get_cloud_credentials
+
+                        access_key, secret_key, session_token = _get_cloud_credentials()
+
+                        tos_bucket, tos_path = skill.bucket_name, skill.path
+
+                        cloud_provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
+                        if cloud_provider == "vestack":
+                            success = self._download_skill_via_vestack(
+                                skill=skill,
+                                tos_path=tos_path,
+                                cloud_provider=cloud_provider,
+                                access_key=access_key,
+                                secret_key=secret_key,
+                                session_token=session_token,
+                                skill_name=skill_name,
+                                save_path=save_path,
+                            )
+                        else:
+                            # Initialize VeTOS client
+                            tos_client = VeTOS(
+                                ak=access_key,
+                                sk=secret_key,
+                                session_token=session_token,
+                                bucket_name=tos_bucket,
+                                region=region,
+                            )
+
+                            success = tos_client.download(
+                                bucket_name=tos_bucket,
+                                object_key=tos_path,
+                                save_path=save_path,
+                            )
 
                     if not success:
-                        return (
-                            f"Error: Failed to download skill '{skill_name}' from TOS."
+                        source_desc = (
+                            "SkillHub"
+                            if skill.source_type == "skillhub"
+                            else "TOS"
                         )
+                        return f"Error: Failed to download skill '{skill_name}' from {source_desc}."
 
                     # Extract downloaded zip into the skill directory
                     import zipfile
@@ -299,8 +289,18 @@ class SkillsTool(BaseTool):
                             )
 
                     try:
-                        with zipfile.ZipFile(save_path, "r") as z:
-                            z.extractall(path=str(skill_dir))
+                        if skill.source_type == "skillhub":
+                            # SkillHub zips may contain files at archive root.
+                            # Extract them into the skill-specific directory so
+                            # they do not spill into the shared session skills dir.
+                            target_skill_dir.mkdir(parents=True, exist_ok=True)
+                            extract_dir = target_skill_dir
+                        else:
+                            # Legacy skill-space zips already include their
+                            # top-level skill directory; keep the previous
+                            # extraction location to avoid changing behavior.
+                            extract_dir = skill_dir
+                        self._safe_extract_zip(save_path, extract_dir)
                     except zipfile.BadZipFile:
                         logger.error(
                             f"Downloaded file for '{skill_name}' is not a valid zip"
@@ -344,7 +344,7 @@ class SkillsTool(BaseTool):
                             f"Failed to create skills symlink for {str(skills_mount)}: {e}"
                         )
 
-        skill_file = skill_dir / skill_name / "SKILL.md"
+        skill_file = self._find_skill_file(skill_dir, skill_name)
         if not skill_file.exists():
             return f"Error: Skill '{skill_name}' has no SKILL.md file."
 
@@ -362,6 +362,42 @@ class SkillsTool(BaseTool):
         except Exception as e:
             logger.error(f"Failed to invoke skill {skill_name}: {e}")
             return f"Error invoking skill '{skill_name}': {e}"
+
+    def _find_skill_file(self, skill_dir: Path, skill_name: str) -> Path:
+        skill_root = skill_dir / skill_name
+        skill_file = skill_root / "SKILL.md"
+        if skill_file.exists():
+            return skill_file
+
+        if skill_root.exists():
+            # Pick the shallowest SKILL.md to avoid matching nested examples,
+            # and sort for deterministic results.
+            nested_skill_files = sorted(
+                skill_root.rglob("SKILL.md"),
+                key=lambda p: (len(p.relative_to(skill_root).parts), str(p)),
+            )
+            if nested_skill_files:
+                return nested_skill_files[0]
+
+        return skill_file
+
+    def _safe_extract_zip(self, zip_path: Path, dest_dir: Path) -> None:
+        """Extract a zip archive while guarding against path traversal.
+
+        Rejects any member whose resolved path would escape ``dest_dir``
+        (e.g. absolute paths or paths containing ``..``).
+        """
+        import zipfile
+
+        dest_root = Path(dest_dir).resolve()
+        with zipfile.ZipFile(zip_path, "r") as z:
+            for member in z.namelist():
+                target = (dest_root / member).resolve()
+                if target != dest_root and dest_root not in target.parents:
+                    raise ValueError(
+                        f"Unsafe path detected in zip archive: '{member}'"
+                    )
+            z.extractall(path=str(dest_root))
 
     def _download_skill_via_vestack(
         self,
