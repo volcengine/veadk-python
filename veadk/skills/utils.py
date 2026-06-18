@@ -306,9 +306,7 @@ def _load_skills_from_space_id(skill_space_id: str) -> list[Skill]:
                 f"Successfully loaded skill {skill.name} from skill space={skill_space_id}, name={skill.name}, description={skill.description}"
             )
     except Exception as e:
-        logger.error(
-            f"Failed to load skills from skill space={skill_space_id}: {e}"
-        )
+        logger.error(f"Failed to load skills from skill space={skill_space_id}: {e}")
 
     return skills
 

@@ -265,9 +265,7 @@ class SkillsTool(BaseTool):
 
                     if not success:
                         source_desc = (
-                            "SkillHub"
-                            if skill.source_type == "skillhub"
-                            else "TOS"
+                            "SkillHub" if skill.source_type == "skillhub" else "TOS"
                         )
                         return f"Error: Failed to download skill '{skill_name}' from {source_desc}."
 
@@ -394,9 +392,7 @@ class SkillsTool(BaseTool):
             for member in z.namelist():
                 target = (dest_root / member).resolve()
                 if target != dest_root and dest_root not in target.parents:
-                    raise ValueError(
-                        f"Unsafe path detected in zip archive: '{member}'"
-                    )
+                    raise ValueError(f"Unsafe path detected in zip archive: '{member}'")
             z.extractall(path=str(dest_root))
 
     def _download_skill_via_vestack(
