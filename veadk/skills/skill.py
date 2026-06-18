@@ -24,6 +24,9 @@ class Skill(BaseModel):
     bucket_name: Optional[str] = None
     checklist: List[Dict[str, str]] = []
     id: Optional[str] = None
+    slug: Optional[str] = None
+    source_type: Optional[str] = None
+    version_id: Optional[str] = None
 
     def get_checklist_items(self) -> List[str]:
         return [item.get("item", item.get("id", "")) for item in self.checklist]
