@@ -14,10 +14,18 @@
 
 """Harness server: serve the env-assembled agent over HTTP.
 
-The agent is built once from the environment (see ``agent.py``) and served at
-``POST /harness/invoke``. A request may carry a once-time ``harness`` override:
-the base agent is cloned, the override applied, and a throwaway runner drives
-that clone for the single call.
+The agent is built once from the environment (see ``agent.py``) and exposed three
+ways on a single FastAPI app:
+
+* ``POST /harness/invoke`` — the harness entry point, with once-time ``harness``
+  overrides (clone the base agent, apply the override, run a throwaway runner).
+* The Google ADK web/api routes (``/run``, ``/run_sse``, ``/list-apps``, session
+  management, …), served by an ``AdkWebServer`` over the single in-memory agent.
+* The A2A protocol routes (agent card at ``/.well-known/agent-card.json`` plus the
+  JSON-RPC endpoint), mounted at ``/`` for the base agent.
+
+The ADK and A2A surfaces serve the base agent only; once-time overrides are a
+``/harness/invoke`` feature.
 
 Run with either:
     python app.py
@@ -26,12 +34,28 @@ Run with either:
 
 import os
 import tempfile
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
 from google.adk.agents import RunConfig
+from google.adk.agents.base_agent import BaseAgent
+from google.adk.artifacts.in_memory_artifact_service import InMemoryArtifactService
+from google.adk.auth.credential_service.in_memory_credential_service import (
+    InMemoryCredentialService,
+)
+from google.adk.cli.adk_web_server import AdkWebServer
+from google.adk.cli.utils.base_agent_loader import BaseAgentLoader
+from google.adk.evaluation.local_eval_set_results_manager import (
+    LocalEvalSetResultsManager,
+)
+from google.adk.evaluation.local_eval_sets_manager import LocalEvalSetsManager
+from google.adk.memory.in_memory_memory_service import InMemoryMemoryService
+from typing_extensions import override
 
 from veadk import Agent
+from veadk.a2a.utils.agent_to_a2a import to_a2a
 from veadk.cloud.harness_app.agent import agent, short_term_memory
 from veadk.cloud.harness_app.types import (
     InvokeHarnessRequest,
@@ -56,6 +80,39 @@ DEFAULT_MAX_LLM_CALLS = (
 )
 
 
+class _HarnessAgentLoader(BaseAgentLoader):
+    """Serve the single env-built harness agent to the ADK web server.
+
+    The harness builds one agent in-process from the environment, so this loader
+    just returns that agent for the harness app name (ADK's web server otherwise
+    expects a directory of agents).
+    """
+
+    def __init__(self, agent: BaseAgent, app_name: str) -> None:
+        super().__init__()
+        self._agent = agent
+        self._app_name = app_name
+
+    @override
+    def load_agent(self, agent_name: str) -> BaseAgent:
+        return self._agent
+
+    @override
+    def list_agents(self) -> list[str]:
+        return [self._app_name]
+
+    @override
+    def list_agents_detailed(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "name": self._app_name,
+                "root_agent_name": self._agent.name,
+                "description": getattr(self._agent, "description", "") or "",
+                "language": "python",
+            }
+        ]
+
+
 class HarnessApp:
     def __init__(
         self,
@@ -64,7 +121,6 @@ class HarnessApp:
         harness_name: str = "default",
         max_llm_calls: int | None = None,
     ):
-        self.app = FastAPI()
         self.agent = agent
         self.short_term_memory = short_term_memory
         self.harness_name = harness_name
@@ -75,7 +131,36 @@ class HarnessApp:
             app_name=harness_name,
         )
 
+        # ADK web/api server over the single in-memory agent (reuses the harness
+        # session service so sessions are shared; long-term memory if configured).
+        self._server = AdkWebServer(
+            agent_loader=_HarnessAgentLoader(agent, harness_name),
+            session_service=short_term_memory.session_service,
+            memory_service=getattr(agent, "long_term_memory", None)
+            or InMemoryMemoryService(),
+            artifact_service=InMemoryArtifactService(),
+            credential_service=InMemoryCredentialService(),
+            eval_sets_manager=LocalEvalSetsManager(agents_dir="."),
+            eval_set_results_manager=LocalEvalSetResultsManager(agents_dir="."),
+            agents_dir=".",
+        )
+
+        # A2A protocol app for the base agent (agent card + JSON-RPC).
+        self._a2a_app = to_a2a(agent, runner=self.runner)
+
+        @asynccontextmanager
+        async def lifespan(app: FastAPI):
+            # A mounted sub-app's startup handlers are not run automatically, so
+            # trigger the A2A app's startup from the parent app's lifespan.
+            for handler in self._a2a_app.router.on_startup:
+                await handler()
+            yield
+
+        # Base app = ADK api routes; then add /harness/invoke; mount A2A last so
+        # it catches the well-known / RPC paths the ADK routes don't claim.
+        self.app = self._server.get_fast_api_app(lifespan=lifespan)
         self.mount()
+        self.app.mount("/", self._a2a_app)
 
     def mount(self):
         @self.app.post("/harness/invoke")
