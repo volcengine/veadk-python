@@ -36,9 +36,9 @@ from veadk.prompts.agent_default_prompt import DEFAULT_INSTRUCTION
 class HarnessOverrides(BaseModel):
     """Harness parameters that may be overridden on a per-invocation basis.
 
-    Field descriptions are the single source of truth for both the FastAPI schema
-    and the ``veadk harness invoke`` CLI flags (which are generated from these
-    fields), so adding a field here exposes a new override everywhere.
+    Field descriptions are the source of truth for the FastAPI schema and most
+    ``veadk harness invoke`` CLI flags. ``registry_*`` fields are accepted for
+    AgentKit's harness invoke API but intentionally hidden from the VeADK CLI.
     """
 
     model_name: str = Field(
@@ -55,6 +55,18 @@ class HarnessOverrides(BaseModel):
     )
     runtime: Literal["adk", "codex"] = Field(
         default="adk", description="Agent runtime backend."
+    )
+    registry_space_id: str = Field(
+        default="", description="Override the AgentKit A2A registry space id."
+    )
+    registry_endpoint: str = Field(
+        default="", description="Override the AgentKit A2A registry OpenAPI endpoint."
+    )
+    registry_region: str = Field(
+        default="", description="Override the AgentKit A2A registry OpenAPI region."
+    )
+    registry_top_k: int = Field(
+        default=3, description="Override the number of A2A AgentCards to retrieve."
     )
 
 
@@ -81,12 +93,8 @@ class HarnessConfig(HarnessOverrides):
     structured_tool_calls: bool = Field(default=False)
     include_tools_every_turn: bool = Field(default=True)
     registry_type: Literal["", "agentkit_a2a"] = Field(default="")
-    registry_space_id: str = Field(default="")
-    registry_endpoint: str = Field(default="")
     registry_version: str = Field(default="")
     registry_service_name: str = Field(default="")
-    registry_region: str = Field(default="")
-    registry_top_k: int = Field(default=3)
     registry_timeout_ms: int = Field(default=60000)
     registry_poll_interval_ms: int = Field(default=5000)
 

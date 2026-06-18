@@ -20,7 +20,7 @@ from click.testing import CliRunner
 from veadk.cli.cli_harness import harness
 
 
-def test_harness_add_registry_uri_writes_agentkit_a2a_section():
+def test_harness_add_no_longer_exposes_registry_flags():
     runner = CliRunner()
     with runner.isolated_filesystem():
         create_result = runner.invoke(harness, ["create", "harness-app"])
@@ -32,66 +32,25 @@ def test_harness_add_registry_uri_writes_agentkit_a2a_section():
                 "add",
                 "--path",
                 "harness-app",
-                "--registry",
-                "agentkit://a2a-registry?space_id=space-test&top_k=5&region=cn-beijing",
-            ],
-        )
-
-        assert result.exit_code == 0, result.output
-        data = yaml.safe_load((Path("harness-app") / "harness.yaml").read_text())
-        assert data["registry"] == {
-            "type": "agentkit_a2a",
-            "space_id": "space-test",
-            "top_k": 5,
-            "region": "cn-beijing",
-        }
-
-
-def test_harness_add_registry_flags_override_uri_values():
-    runner = CliRunner()
-    with runner.isolated_filesystem():
-        runner.invoke(harness, ["create", "harness-app"])
-
-        result = runner.invoke(
-            harness,
-            [
-                "add",
-                "--path",
-                "harness-app",
-                "--registry",
-                "agentkit://a2a-registry?space_id=from-uri&top_k=2",
                 "--registry-space-id",
-                "from-flag",
-                "--registry-top-k",
-                "7",
-            ],
-        )
-
-        assert result.exit_code == 0, result.output
-        data = yaml.safe_load((Path("harness-app") / "harness.yaml").read_text())
-        assert data["registry"]["type"] == "agentkit_a2a"
-        assert data["registry"]["space_id"] == "from-flag"
-        assert data["registry"]["top_k"] == 7
-
-
-def test_harness_add_registry_rejects_direct_agent_card_url():
-    runner = CliRunner()
-    with runner.isolated_filesystem():
-        runner.invoke(harness, ["create", "harness-app"])
-
-        result = runner.invoke(
-            harness,
-            [
-                "add",
-                "--path",
-                "harness-app",
-                "--registry",
-                "https://example.test/.well-known/agent-card.json",
+                "space-test",
             ],
         )
 
         assert result.exit_code != 0
-        assert "only `agentkit://a2a-registry" in result.output
+        assert "No such option" in result.output
+
+
+def test_harness_show_does_not_list_registry_override_flags():
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        runner.invoke(harness, ["create", "harness-app"])
+
+        result = runner.invoke(harness, ["show", "--path", "harness-app"])
+
+        assert result.exit_code == 0, result.output
+        assert "--registry-space-id" not in result.output
+        assert "--registry-top-k" not in result.output
 
 
 def test_harness_add_tool_calling_flags_write_top_level_config():

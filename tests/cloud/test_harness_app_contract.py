@@ -24,6 +24,8 @@ Only ``types`` and ``utils`` are imported: ``app.py`` builds the live agent at
 import time, so it is intentionally left out to keep these tests offline.
 """
 
+from pathlib import Path
+
 from veadk.cloud.harness_app.types import (
     HarnessConfig,
     HarnessOverrides,
@@ -50,6 +52,10 @@ class TestHarnessOverrides:
             "skills",
             "system_prompt",
             "runtime",
+            "registry_space_id",
+            "registry_endpoint",
+            "registry_region",
+            "registry_top_k",
         }
 
     def test_defaults(self):
@@ -59,6 +65,10 @@ class TestHarnessOverrides:
         assert fields["skills"].default == ""
         assert fields["system_prompt"].default == "You are a helpful assistant."
         assert fields["runtime"].default == "adk"
+        assert fields["registry_space_id"].default == ""
+        assert fields["registry_endpoint"].default == ""
+        assert fields["registry_region"].default == ""
+        assert fields["registry_top_k"].default == 3
 
     def test_tools_and_skills_are_csv_strings(self):
         # The server splits these with split_csv(); they must stay plain strings,
@@ -88,12 +98,8 @@ class TestHarnessConfig:
             "structured_tool_calls",
             "include_tools_every_turn",
             "registry_type",
-            "registry_space_id",
-            "registry_endpoint",
             "registry_version",
             "registry_service_name",
-            "registry_region",
-            "registry_top_k",
             "registry_timeout_ms",
             "registry_poll_interval_ms",
         }
@@ -168,6 +174,13 @@ class TestHarnessConfig:
 
         assert config.structured_tool_calls is True
         assert config.include_tools_every_turn is False
+
+    def test_registry_overrides_remount_registry_tools(self):
+        source = Path("veadk/cloud/harness_app/utils.py").read_text()
+
+        assert "_apply_registry_overrides(" in source
+        assert "_remove_a2a_registry_tools(" in source
+        assert "build_a2a_registry_tools(overridden_config)" in source
 
 
 class TestRequestResponseSchemas:
