@@ -150,11 +150,11 @@ class HarnessApp:
 
         @asynccontextmanager
         async def lifespan(app: FastAPI):
-            # A mounted sub-app's startup handlers are not run automatically, so
-            # trigger the A2A app's startup from the parent app's lifespan.
-            for handler in self._a2a_app.router.on_startup:
-                await handler()
-            yield
+            # A mounted sub-app's lifespan is not run automatically. The A2A app
+            # registers its routes (agent card + RPC) inside its lifespan, so
+            # enter it here or those routes never appear.
+            async with self._a2a_app.router.lifespan_context(self._a2a_app):
+                yield
 
         # Base app = ADK api routes; then add /harness/invoke; mount A2A last so
         # it catches the well-known / RPC paths the ADK routes don't claim.
