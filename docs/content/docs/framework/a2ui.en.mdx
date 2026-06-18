@@ -1,0 +1,43 @@
+---
+title: "A2UI (Agent-Driven UI)"
+status: new
+---
+
+A2UI lets an agent return **rich, interactive UI** — cards, forms, row/column layouts — rendered natively by the frontend, instead of plain text only. It suits naturally visual answers: status cards, summaries, option lists, and small forms.
+
+<Callout type="info">
+  A2UI needs the optional component package: `pip install "veadk-python[a2ui]"`.
+</Callout>
+
+## Enable
+
+Set `enable_a2ui=True` when creating the agent, and it can reply with UI when appropriate. It uses a built-in basic component set by default (card, text, button, divider, and other common components):
+
+```python title="agent.py"
+from veadk import Agent
+
+agent = Agent(
+    name="ui_agent",
+    instruction="When the answer is naturally visual (a status card, summary, options, a small form), reply with rich UI; otherwise reply in plain text.",
+    enable_a2ui=True,
+)
+```
+
+The model decides whether to return UI based on the `instruction` — stating *when* to use UI works best.
+
+## See it rendered
+
+A2UI is rendered by the frontend. Launch [VeADK Frontend](/en/docs/framework/frontend) and chat with the agent to see the returned cards and other components.
+
+## Custom components
+
+Beyond the built-in set, you can add your own components (a revenue chart, an order card, …). A custom component has two parts:
+
+- **Backend**: declare a component catalog that tells the model which components are available;
+- **Frontend**: provide a renderer for each component.
+
+Pass your catalog to the agent's `a2ui_catalog` to enable it. For the frontend renderer, see [VeADK Frontend · Add enterprise components](/en/docs/framework/frontend#add-enterprise-components).
+
+<Callout type="info">
+  Components without a renderer fall back to a collapsible JSON view, so a mismatch never breaks the UI.
+</Callout>

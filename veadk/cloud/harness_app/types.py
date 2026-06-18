@@ -74,6 +74,10 @@ class HarnessConfig(HarnessOverrides):
     longterm_memory_type: str = Field(default="")
     shortterm_memory_type: str = Field(default="local")
     runtime: Literal["adk", "codex"] = Field(default="adk")
+    max_llm_calls: int | None = Field(
+        default=None,
+        description="Default max LLM calls per run; unset follows ADK RunConfig's default. Overridable per invocation.",
+    )
     structured_tool_calls: bool = Field(default=False)
     include_tools_every_turn: bool = Field(default=True)
     registry_type: Literal["", "agentkit_a2a"] = Field(default="")
@@ -90,6 +94,10 @@ class HarnessConfig(HarnessOverrides):
 class RunAgentRequest(BaseModel):
     user_id: str
     session_id: str
+    max_llm_calls: int | None = Field(
+        default=None,
+        description="Override max LLM calls for this single call (falls back to the harness default, then ADK's).",
+    )
 
 
 class InvokeHarnessRequest(BaseModel):
@@ -106,3 +114,11 @@ class InvokeHarnessResponse(BaseModel):
     harness_name: str
     overwrite: bool = Field(default=False)
     output: str
+    error: str | None = Field(
+        default=None,
+        description=(
+            "Error message when the invocation fails (unsupported tool, skill "
+            "load failure, or a runtime error). Passed through verbatim; `output` "
+            "is empty when set."
+        ),
+    )

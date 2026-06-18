@@ -1,0 +1,55 @@
+---
+title: "安装"
+---
+
+<Callout title="前置条件">
+
+- Python `3.10` 或更高版本
+- 火山方舟（Volcengine Ark）平台的 API Key
+
+</Callout>
+
+## 安装
+
+### PIP
+
+```bash
+# 稳定版
+pip install -U veadk-python
+
+# 含知识库等可选能力的扩展包
+pip install -U "veadk-python[extensions]"
+```
+
+安装后验证：
+
+```bash
+veadk --version
+```
+
+偏好 `uv` 时，使用 `uv add veadk-python`（或 `uv add "veadk-python[extensions]"`）。
+
+### 源码
+
+```bash
+# 主分支预览版
+pip install git+https://github.com/volcengine/veadk-python.git@main
+
+# 指定分支
+pip install git+https://github.com/volcengine/veadk-python.git@[branch-name]
+```
+
+### 镜像
+
+官方提供 Python 版镜像，可直接用作基础镜像：
+
+```bash
+# 稳定版
+veadk-cn-beijing.cr.volces.com/veadk/veadk-python:latest
+
+# 主分支预览版
+veadk-cn-beijing.cr.volces.com/veadk/veadk-python:preview
+
+# 指定版本
+veadk-cn-beijing.cr.volces.com/veadk/veadk-python:<version>
+```

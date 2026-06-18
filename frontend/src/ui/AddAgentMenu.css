@@ -92,6 +92,18 @@
   opacity: 1;
   transform: translateX(0);
 }
+.stk-card-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.stk-card-disabled:hover {
+  border-color: hsl(var(--border));
+  background: hsl(var(--card));
+  box-shadow: none;
+}
+.stk-card-disabled .stk-card-arrow {
+  display: none;
+}
 .stk-footer {
   margin-top: 18px;
   width: 100%;

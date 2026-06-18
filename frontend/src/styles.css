@@ -749,7 +749,7 @@ body {
 .a2ui-card {
   background: hsl(var(--card));
   border: 1px solid hsl(var(--border));
-  border-radius: 16px;
+  border-radius: 8px;
   padding: 18px;
   box-shadow: 0 1px 2px hsl(var(--foreground) / 0.04), 0 8px 24px -16px hsl(var(--foreground) / 0.18);
 }
@@ -757,11 +757,11 @@ body {
 .a2ui-column { gap: 10px; }
 .a2ui-row { gap: 10px; }
 
-.a2ui-text { line-height: 1.5; color: hsl(var(--foreground)); }
-.a2ui-text--h1 { font-size: 19px; font-weight: 650; letter-spacing: -0.015em; }
-.a2ui-text--h2 { font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
+.a2ui-text { margin: 0; line-height: 1.5; color: hsl(var(--foreground)); }
+.a2ui-text--h1 { font-size: 19px; font-weight: 650; letter-spacing: 0; }
+.a2ui-text--h2 { font-size: 16px; font-weight: 650; letter-spacing: 0; }
 .a2ui-text--h3 { font-size: 14px; font-weight: 600; }
-.a2ui-text--h4 { font-size: 12px; font-weight: 600; color: hsl(var(--muted-foreground)); text-transform: uppercase; letter-spacing: 0.04em; }
+.a2ui-text--h4 { font-size: 12px; font-weight: 600; color: hsl(var(--muted-foreground)); text-transform: uppercase; letter-spacing: 0; }
 .a2ui-text--caption { font-size: 12px; color: hsl(var(--muted-foreground)); }
 .a2ui-text--body { font-size: 14px; }
 
@@ -796,6 +796,171 @@ body {
 .a2ui-button--primary:hover { background: hsl(var(--primary)); opacity: 0.88; }
 .a2ui-button--borderless { background: transparent; color: hsl(var(--foreground)); }
 .a2ui-button--borderless:hover { background: hsl(var(--accent)); }
+
+/* ---------- A2UI flight card polish ---------- */
+.a2ui-surface[data-a2ui-surface^="flight-"] {
+  max-width: 520px;
+}
+.a2ui-surface[data-a2ui-surface^="flight-"] .a2ui-card {
+  padding: 0;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, hsl(204 80% 98%) 0%, hsl(var(--card)) 42%),
+    hsl(var(--card));
+  border-color: hsl(210 32% 88%);
+  box-shadow:
+    0 1px 2px hsl(var(--foreground) / 0.05),
+    0 18px 48px -28px hsl(210 35% 24% / 0.35);
+}
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-content"] {
+  gap: 16px;
+  padding: 18px;
+}
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-top"] {
+  gap: 12px;
+}
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-brand"] {
+  min-width: 0;
+}
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-brand-icon"] {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: hsl(211 100% 45% / 0.1);
+  color: hsl(211 100% 32%);
+}
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-title"] {
+  font-size: 13px;
+  color: hsl(220 9% 28%);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-status-chip"] {
+  flex-shrink: 0;
+  gap: 6px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: hsl(151 58% 93%);
+  border: 1px solid hsl(151 48% 82%);
+}
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-status-chip"] .a2ui-icon,
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-status-text"] {
+  color: hsl(151 72% 25%);
+}
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-hero"] {
+  position: relative;
+  gap: 16px;
+  padding: 18px;
+  border-radius: 8px;
+  background: hsl(var(--background) / 0.88);
+  border: 1px solid hsl(210 32% 90%);
+}
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-origin"],
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-destination"] {
+  flex: 1 1 0;
+  min-width: 0;
+  gap: 2px;
+}
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-origin-code"],
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-destination-code"] {
+  font-size: 34px;
+  line-height: 1;
+  font-weight: 760;
+  color: hsl(220 18% 12%);
+}
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-origin-label"],
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-destination-label"] {
+  font-size: 11px;
+  font-weight: 700;
+  color: hsl(220 8% 48%);
+}
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-origin-city"],
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-destination-city"] {
+  font-size: 13px;
+  color: hsl(220 9% 36%);
+}
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-route-mark"] {
+  flex: 0 0 auto;
+  gap: 3px;
+  padding: 0 4px;
+}
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-route-icon"] {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: hsl(211 100% 45% / 0.12);
+  color: hsl(211 100% 34%);
+}
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-duration"],
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-aircraft"] {
+  font-size: 11px;
+  white-space: nowrap;
+}
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-times"],
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-details"] {
+  gap: 10px;
+}
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-departure-time"],
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-arrival-time"],
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-terminal"],
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-gate"],
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-boarding"] {
+  flex: 1 1 0;
+  min-width: 0;
+  gap: 2px;
+  padding: 11px 12px;
+  border-radius: 8px;
+  background: hsl(220 14% 96%);
+  border: 1px solid hsl(220 13% 91%);
+}
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-departure-value"],
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-arrival-value"] {
+  font-size: 14px;
+}
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-departure-airport"],
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-arrival-airport"] {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-terminal-value"],
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-gate-value"],
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-boarding-value"] {
+  font-size: 20px;
+  line-height: 1.15;
+}
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-footer"] {
+  gap: 10px;
+}
+.a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-divider"] {
+  margin: 0;
+  background: hsl(210 25% 88%);
+}
+@media (max-width: 520px) {
+  .a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-content"] {
+    padding: 14px;
+  }
+  .a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-hero"],
+  .a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-times"],
+  .a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-details"] {
+    flex-wrap: wrap;
+  }
+  .a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-route-mark"] {
+    order: 3;
+    width: 100%;
+  }
+  .a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-terminal"],
+  .a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-gate"],
+  .a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-boarding"] {
+    min-width: 120px;
+  }
+  .a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-origin-code"],
+  .a2ui-surface[data-a2ui-surface^="flight-"] [data-a2ui-id="flight-destination-code"] {
+    font-size: 34px;
+  }
+}
 
 .a2ui-fallback {
   background: hsl(var(--muted));
@@ -867,6 +1032,7 @@ body {
   z-index: 31;
   min-width: 240px;
   max-width: 360px;
+  max-height: 70vh;
   padding: 6px;
   background: hsl(var(--panel));
   border: 1px solid hsl(var(--border));
@@ -875,6 +1041,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  overflow-y: auto;
   animation: ddpop 0.14s ease;
 }
 @keyframes ddpop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
@@ -917,8 +1084,8 @@ body {
 /* hover flyout: model + tools for the agent under the cursor */
 .agent-dd-flyout {
   position: absolute;
-  top: -6px;
-  left: calc(100% + 8px);
+  /* top is set dynamically via inline style */
+  left: 248px; /* min-width of menu (240px) + gap (8px) */
   z-index: 32;
   width: 280px;
   padding: 12px 14px;

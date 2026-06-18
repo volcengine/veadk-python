@@ -6,6 +6,8 @@ export function Column({ node, ctx }: ComponentRendererProps) {
   return (
     <div
       className="a2ui-column"
+      data-a2ui-id={node.id}
+      data-a2ui-component={node.component}
       style={{
         display: "flex",
         flexDirection: "column",

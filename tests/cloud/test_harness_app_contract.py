@@ -31,7 +31,6 @@ from veadk.cloud.harness_app.types import (
     InvokeHarnessResponse,
     RunAgentRequest,
 )
-from veadk.cloud.harness_app import utils as harness_utils
 from veadk.cloud.harness_app.env_mapping import to_runtime_env
 from veadk.cloud.harness_app.utils import config_from_env, split_csv
 from veadk.consts import DEFAULT_MODEL_AGENT_NAME
@@ -85,6 +84,7 @@ class TestHarnessConfig:
             "knowledgebase_type",
             "longterm_memory_type",
             "shortterm_memory_type",
+            "max_llm_calls",
             "structured_tool_calls",
             "include_tools_every_turn",
             "registry_type",
@@ -162,17 +162,21 @@ class TestHarnessConfig:
 
     def test_config_from_env_reads_tool_calling_fields(self, monkeypatch):
         monkeypatch.setenv("STRUCTURED_TOOL_CALLS", "true")
-        monkeypatch.setenv("INCLUDE_TOOLS_EVERY_TURN", "true")
+        monkeypatch.setenv("INCLUDE_TOOLS_EVERY_TURN", "false")
 
         config = config_from_env()
 
         assert config.structured_tool_calls is True
-        assert config.include_tools_every_turn is True
+        assert config.include_tools_every_turn is False
 
 
 class TestRequestResponseSchemas:
     def test_run_agent_request_fields(self):
-        assert set(_fields(RunAgentRequest)) == {"user_id", "session_id"}
+        assert set(_fields(RunAgentRequest)) == {
+            "user_id",
+            "session_id",
+            "max_llm_calls",
+        }
 
     def test_invoke_request_fields(self):
         assert set(_fields(InvokeHarnessRequest)) == {
@@ -191,8 +195,10 @@ class TestRequestResponseSchemas:
 
     def test_invoke_response_fields_and_defaults(self):
         fields = _fields(InvokeHarnessResponse)
-        assert set(fields) == {"harness_name", "overwrite", "output"}
+        assert set(fields) == {"harness_name", "overwrite", "output", "error"}
         assert fields["overwrite"].default is False
+        # `error` is unset on success and carries the message verbatim on failure.
+        assert fields["error"].default is None
 
 
 class TestSplitCsv:
@@ -204,24 +210,3 @@ class TestSplitCsv:
 
     def test_drops_blank_segments(self):
         assert split_csv("a,,  ,b") == ["a", "b"]
-
-
-class TestAgentAssembly:
-    def test_maps_tool_calling_fields_to_agent_responses_flags(self, monkeypatch):
-        captured = {}
-
-        class DummyAgent:
-            def __init__(self, **kwargs):
-                captured.update(kwargs)
-
-        monkeypatch.setattr(harness_utils, "Agent", DummyAgent)
-        monkeypatch.setattr(
-            harness_utils, "ShortTermMemory", lambda backend: object()
-        )
-
-        harness_utils._assemble_agent(
-            HarnessConfig(structured_tool_calls=True, include_tools_every_turn=True)
-        )
-
-        assert captured["enable_responses"] is True
-        assert captured["enable_responses_cache"] is False

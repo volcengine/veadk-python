@@ -82,6 +82,46 @@ _PROVIDER_LABELS = {
 }
 
 
+def _agentkit_authorization_header(api_key: str) -> str:
+    """Normalize AgentKit credential input to an Authorization header value."""
+    value = api_key.strip()
+    if value.lower().startswith("bearer "):
+        return value
+    return f"Bearer {value}"
+
+
+def _build_agentkit_proxy_headers(
+    incoming_headers: dict[str, str], api_key: str | None
+) -> dict[str, str]:
+    """Return headers safe to forward from the local proxy to AgentKit."""
+    excluded_headers = {
+        # Host/proxy control.
+        "host",
+        "connection",
+        "content-length",
+        "x-agentkit-base",
+        "x-agentkit-key",
+        # Local VeADK/SSO credentials must not leak to the remote runtime.
+        "authorization",
+        "cookie",
+        # Browser-only CORS/fetch metadata for the local origin.
+        "origin",
+        "referer",
+        "sec-fetch-site",
+        "sec-fetch-mode",
+        "sec-fetch-dest",
+        "sec-fetch-user",
+    }
+    headers = {
+        key: value
+        for key, value in incoming_headers.items()
+        if key.lower() not in excluded_headers
+    }
+    if api_key and api_key.strip():
+        headers["Authorization"] = _agentkit_authorization_header(api_key)
+    return headers
+
+
 def _build_generic_oauth2(provider_id: str, redirect_uri: str):
     """Build an OAuth2Config from env vars for a non-VeIdentity provider.
 
@@ -424,22 +464,13 @@ def frontend(
         if not target_base:
             raise HTTPException(status_code=400, detail="Missing X-AgentKit-Base")
 
+        # The local frontend may append SSO gateway query params to authenticate
+        # this same-origin proxy request. Do not forward those params to the
+        # remote AgentKit runtime, where names such as "token" can be interpreted
+        # as the runtime credential and cause a false 401.
         target_url = f"{target_base.rstrip('/')}/{path}"
-        if request.url.query:
-            target_url += f"?{request.url.query}"
 
-        headers = dict(request.headers)
-        # Remove proxy-specific and CORS-related headers
-        headers.pop("host", None)
-        headers.pop("x-agentkit-base", None)
-        headers.pop("x-agentkit-key", None)
-        headers.pop("origin", None)
-        headers.pop("referer", None)
-        headers.pop("sec-fetch-site", None)
-        headers.pop("sec-fetch-mode", None)
-        headers.pop("sec-fetch-dest", None)
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+        headers = _build_agentkit_proxy_headers(dict(request.headers), api_key)
 
         try:
             async with httpx.AsyncClient() as client:
@@ -671,7 +702,9 @@ def frontend(
             output = result.stdout
             logger.info(f"AgentKit launch output: {output}")
 
-            runtime_id, apikey_name, url = _parse_agentkit_output(output)
+            runtime_id, apikey_name, url, actual_agent_name = _parse_agentkit_output(
+                output
+            )
             logger.info(f"Parsed from CLI - RuntimeId: {runtime_id}, Endpoint: {url}")
 
             # 8. Try to get actual API key from AgentKit API
@@ -700,7 +733,7 @@ def frontend(
 
             return {
                 "success": True,
-                "agentName": agent_name,
+                "agentName": actual_agent_name or agent_name,
                 "apikey": apikey,
                 "url": url,
                 "consoleUrl": console_url,
@@ -719,15 +752,16 @@ def frontend(
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
-    def _parse_agentkit_output(output: str) -> tuple[str, str, str]:
-        """Parse CLI output to extract runtime_id, apikey name, and endpoint.
+    def _parse_agentkit_output(output: str) -> tuple[str, str, str, str]:
+        """Parse CLI output to extract runtime_id, apikey name, endpoint, and actual agent name.
 
         Actual AgentKit CLI output format:
         - Runtime ID: "✅ Runtime created successfully: r-xxxxx"
         - Endpoint: "Endpoint: https://..."
+        - Agent name: "Creating Runtime: a_111-8pi9eche" or "Creating new pipeline: a_111-8pi9eche"
 
         Returns:
-            Tuple of (runtime_id, apikey_name, endpoint)
+            Tuple of (runtime_id, apikey_name, endpoint, actual_agent_name)
         """
         output = output.strip()
 
@@ -747,6 +781,19 @@ def frontend(
         )
         apikey_name = apikey_match.group(1) if apikey_match else ""
 
+        # Extract actual agent name (pipeline/runtime name with suffix)
+        # Try multiple patterns: "Creating Runtime: xxx" or "Creating new pipeline: xxx"
+        agent_name = ""
+        for pattern in [
+            r"Creating Runtime:\s*([a-zA-Z0-9_-]+)",
+            r"Creating new pipeline:\s*([a-zA-Z0-9_-]+)",
+            r"Pipeline created successfully:\s*([a-zA-Z0-9_-]+)",
+        ]:
+            name_match = re.search(pattern, output, re.IGNORECASE)
+            if name_match:
+                agent_name = name_match.group(1)
+                break
+
         if not runtime_id or not endpoint:
             logger.error(f"Cannot parse CLI output: {output}")
             raise ValueError(
@@ -754,7 +801,7 @@ def frontend(
                 f"Expected RuntimeId and Endpoint, got: {output[:500]}"
             )
 
-        return runtime_id, apikey_name, endpoint
+        return runtime_id, apikey_name, endpoint, agent_name
 
     def _get_runtime_apikey(runtime_id: str, region: str) -> str:
         """Get actual API key from AgentKit Runtime API.
@@ -927,6 +974,13 @@ def frontend(
         oauth2_config = _build_generic_oauth2(provider_id or "custom", redirect_uri)
         provider_id = provider_id or "custom"
 
+    # The SPA fetches /web/auth-config and /oauth2/userinfo on every startup, so
+    # both must always return JSON. With SSO off we answer with an empty provider
+    # list and a 401 (unauthenticated), and the app renders its normal no-login
+    # UI; otherwise the SPA-fallback serves the HTML shell for these paths and the
+    # app's `await res.json()` throws, leaving a white screen.
+    providers: list[dict] = []
+
     if oauth2_config is not None:
         from urllib.parse import urlsplit
 
@@ -950,10 +1004,6 @@ def frontend(
         )
         providers = [{"id": provider_id, "label": label, "loginUrl": "/oauth2/login"}]
 
-        @app.get("/web/auth-config")
-        async def _web_auth_config():
-            return {"providers": providers}
-
         # Protect the API but exempt the SPA shell + this config endpoint so the
         # app can load and render its own login page when not signed in.
         setup_oauth2(
@@ -965,6 +1015,19 @@ def frontend(
         logger.info(
             f"OAuth2 SSO enabled (provider={provider_id}, redirect_uri={redirect_uri})"
         )
+    else:
+        from fastapi.responses import JSONResponse
+
+        @app.get("/oauth2/userinfo")
+        async def _userinfo_no_sso():
+            # No SSO configured: report unauthenticated (401) so the SPA's auth
+            # check resolves cleanly instead of parsing the HTML shell as JSON.
+            return JSONResponse({"status": "unauthenticated"}, status_code=401)
+
+    @app.get("/web/auth-config")
+    async def _web_auth_config():
+        # Empty provider list when SSO is off -> the SPA shows its normal UI.
+        return {"providers": providers}
 
     if dev:
         logger.info(
@@ -972,6 +1035,9 @@ def frontend(
             f"run `cd frontend && npm run dev` and open {DEV_SERVER_ORIGIN}"
         )
     else:
+        import re as _re
+
+        from fastapi.responses import FileResponse, HTMLResponse
         from fastapi.staticfiles import StaticFiles
 
         webui = _resolve_frontend_dir(frontend_dir)
@@ -981,8 +1047,44 @@ def frontend(
                 "cd frontend && npm install && npm run build "
                 "(or use --dev for the Vite dev server)."
             )
-        # Mount last so it doesn't shadow the API routes registered above.
-        app.mount("/", StaticFiles(directory=str(webui), html=True), name="frontend")
+
+        _index_html = (webui / "index.html").read_text(encoding="utf-8")
+        _ASSET_REF = _re.compile(r'((?:src|href)=")(/[^"?]+)(")')
+
+        def _render_index(request: Request) -> HTMLResponse:
+            # When behind a query-string API gateway (e.g. an AgentKit runtime
+            # with the key in the query string), the browser's subresource
+            # requests for /assets/* must also carry the key. The key arrives as
+            # the page's querystring; forward it onto every same-origin asset URL
+            # in the served HTML so those requests pass the gateway too. (The
+            # app's own API/navigation requests already forward it via auth.ts.)
+            qs = request.url.query
+            if not qs:
+                return HTMLResponse(_index_html)
+            html = _ASSET_REF.sub(
+                lambda m: f"{m.group(1)}{m.group(2)}?{qs}{m.group(3)}", _index_html
+            )
+            return HTMLResponse(html)
+
+        # Built assets (the gateway has already authorized the request).
+        app.mount(
+            "/assets", StaticFiles(directory=str(webui / "assets")), name="assets"
+        )
+
+        @app.get("/")
+        async def _spa_root(request: Request):
+            return _render_index(request)
+
+        # SPA fallback: serve real static files as-is, otherwise return the
+        # (querystring-injected) HTML shell. Registered last so it never shadows
+        # the API routes above.
+        @app.get("/{path:path}")
+        async def _spa_fallback(path: str, request: Request):
+            candidate = webui / path
+            if path and candidate.is_file():
+                return FileResponse(str(candidate))
+            return _render_index(request)
+
         logger.info(
             f"A2UI UI + API serving on http://{host}:{port} (UI: {webui}, agents: {agents_dir})"
         )

@@ -90,16 +90,10 @@ system_prompt: ""
 #   env: RUNTIME               flag: --runtime
 runtime: adk
 
-# Ask the model to return real structured tool calls instead of text that only
-# looks like a function call. Currently implemented with Ark Responses API.
-#   env: STRUCTURED_TOOL_CALLS
-#   flags: --structured-tool-calls / --no-structured-tool-calls
+# Structured tool calls via Ark Responses API.
+#   env: STRUCTURED_TOOL_CALLS       flag: --structured-tool-calls
+#   env: INCLUDE_TOOLS_EVERY_TURN    flag: --include-tools-every-turn
 structured_tool_calls: false
-
-# Include tool definitions on every model turn. Keep this true for multi-step
-# tool chains such as search -> create -> poll.
-#   env: INCLUDE_TOOLS_EVERY_TURN
-#   flags: --include-tools-every-turn / --reuse-tool-context
 include_tools_every_turn: true
 
 # --- Remote A2A Agent discovery / delegation --------------------------------
@@ -114,11 +108,6 @@ registry:
   # space_id: xxx
   # top_k: 3
   # region: cn-beijing
-  # endpoint: http://volcengineapi.byted.org/
-  # version: "2025-10-30"
-  # service_name: agentkit
-  # timeout_ms: 60000
-  # poll_interval_ms: 5000
 
 # --- Knowledge base ----------------------------------------------------------
 #   type -> env: KNOWLEDGEBASE_TYPE   flag: --knowledgebase-type
@@ -372,6 +361,17 @@ _REGISTRY_QUERY_KEYS = {
 _REGISTRY_INT_KEYS = {"top_k", "timeout_ms", "poll_interval_ms"}
 
 
+def _parse_registry_int(key: str, value: object) -> object:
+    if key not in _REGISTRY_INT_KEYS:
+        return value
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise click.ClickException(
+            f"Registry field `{key}` must be an integer, got {value!r}."
+        ) from exc
+
+
 def _parse_registry_uri(value: str) -> dict:
     """Parse the supported AgentKit A2A registry URI into a YAML section."""
     raw = value.strip()
@@ -390,9 +390,8 @@ def _parse_registry_uri(value: str) -> dict:
         )
 
     query = {
-        key.replace("-", "_"): values[-1]
-        for key, values in parse_qs(parsed.query, keep_blank_values=False).items()
-        if values and values[-1] != ""
+        key: values[-1]
+        for key, values in parse_qs(parsed.query, keep_blank_values=True).items()
     }
     unknown = sorted(set(query) - _REGISTRY_QUERY_KEYS)
     if unknown:
@@ -405,17 +404,6 @@ def _parse_registry_uri(value: str) -> dict:
     for key, raw_value in query.items():
         section[key] = _parse_registry_int(key, raw_value)
     return section
-
-
-def _parse_registry_int(key: str, value: object) -> object:
-    if key not in _REGISTRY_INT_KEYS:
-        return value
-    try:
-        return int(str(value))
-    except ValueError as exc:
-        raise click.ClickException(
-            f"Registry param `{key}` must be an integer, got {value!r}."
-        ) from exc
 
 
 def _set_registry_value(section: dict, key: str, value: object | None) -> None:
@@ -541,12 +529,21 @@ def _override_options(func):
     "--short-term-memory-type", default=None, help="Short-term memory backend."
 )
 @click.option(
-    "--structured-tool-calls/--no-structured-tool-calls",
+    "--max-llm-calls",
+    "max_llm_calls",
+    type=int,
     default=None,
-    help="Ask the model to return executable structured tool calls.",
+    help="Default max LLM calls per run (overridable per invocation).",
 )
 @click.option(
-    "--include-tools-every-turn/--reuse-tool-context",
+    "--structured-tool-calls",
+    is_flag=True,
+    default=None,
+    help="Use Ark Responses API for structured tool calling.",
+)
+@click.option(
+    "--include-tools-every-turn",
+    is_flag=True,
     default=None,
     help="Include tool definitions on every model turn.",
 )
@@ -601,6 +598,7 @@ def add(
     knowledgebase_type: str | None,
     long_term_memory_type: str | None,
     short_term_memory_type: str | None,
+    max_llm_calls: int | None,
     structured_tool_calls: bool | None,
     include_tools_every_turn: bool | None,
     registry: str | None,
@@ -635,6 +633,12 @@ def add(
 
     if harness_name is not None:
         data["harness_name"] = harness_name
+    if max_llm_calls is not None:
+        data["max_llm_calls"] = max_llm_calls
+    if structured_tool_calls is not None:
+        data["structured_tool_calls"] = structured_tool_calls
+    if include_tools_every_turn is not None:
+        data["include_tools_every_turn"] = include_tools_every_turn
     if model_name is not None:
         model = data.get("model")
         if not isinstance(model, dict):
@@ -645,10 +649,6 @@ def add(
         data["system_prompt"] = system_prompt
     if runtime is not None:
         data["runtime"] = runtime
-    if structured_tool_calls is not None:
-        data["structured_tool_calls"] = structured_tool_calls
-    if include_tools_every_turn is not None:
-        data["include_tools_every_turn"] = include_tools_every_turn
     # Set only the backend `type`, preserving any connection params already set
     # under the component section.
     for type_value, section_key in (
@@ -789,6 +789,29 @@ def _build_agentkit_config(
         "launch_types": {"cloud": cloud},
         "docker_build": {},
     }
+
+
+def _harness_request(url: str, path: str, key: str | None, body: dict) -> dict:
+    """POST ``body`` to ``url + path`` with optional Bearer auth; return JSON."""
+    import os
+
+    import httpx
+
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+
+    # Tool/skill-driven agent runs can take minutes; allow a generous, tunable
+    # client timeout (HARNESS_TIMEOUT seconds, default 600).
+    timeout = float(os.getenv("HARNESS_TIMEOUT", "600"))
+    resp = httpx.post(
+        url.rstrip("/") + path, json=body, headers=headers, timeout=timeout
+    )
+    if resp.status_code != 200:
+        raise click.ClickException(
+            f"{path} failed: HTTP {resp.status_code} - {resp.text}"
+        )
+    return resp.json()
 
 
 def _harness_json_path(directory: str) -> Path:
@@ -932,9 +955,27 @@ def deploy(
     resolved_region = region or os.getenv("VOLCENGINE_REGION") or "cn-beijing"
     cfg = _build_agentkit_config(runtime_name, resolved_region, runtime_envs, auth)
 
+    # AgentKit's launch path exposes no hook for runtime tags, so tag the runtime
+    # at creation by wrapping the SDK's create_runtime: every harness runtime is
+    # tagged `agentkit:agenttype=harness`. Scoped to this deploy and restored after.
+    from agentkit.sdk.runtime import types as _rt_types
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient as _RtClient
+
+    _orig_create_runtime = _RtClient.create_runtime
+
+    def _create_runtime_with_harness_tag(self, request):
+        request.tags = [
+            *(request.tags or []),
+            _rt_types.TagsItemForCreateRuntime.model_validate(
+                {"Key": "agentkit:agenttype", "Value": "harness"}
+            ),
+        ]
+        return _orig_create_runtime(self, request)
+
     logger.info(f"Deploying harness runtime '{runtime_name}' from {proj_dir}")
     cwd = os.getcwd()
     os.chdir(proj_dir)
+    _RtClient.create_runtime = _create_runtime_with_harness_tag
     try:
         result = sdk.launch(
             config_dict=cfg,
@@ -942,6 +983,7 @@ def deploy(
             reporter=LoggingReporter(),
         )
     finally:
+        _RtClient.create_runtime = _orig_create_runtime
         os.chdir(cwd)
 
     if not result.success:
@@ -1008,6 +1050,13 @@ def deploy(
     help="Session id for the call.",
 )
 @click.option(
+    "--max-llm-calls",
+    "max_llm_calls",
+    type=int,
+    default=None,
+    help="Override max LLM calls for this call (falls back to the harness default).",
+)
+@click.option(
     "--url",
     default=None,
     envvar="HARNESS_URL",
@@ -1031,6 +1080,7 @@ def invoke(
     message_opt,
     user_id,
     session_id,
+    max_llm_calls,
     url,
     key,
     path,
@@ -1045,8 +1095,6 @@ def invoke(
     deployed agent for this single call; memory and the knowledge base are never
     overridable.
     """
-    from veadk.cli.cli_agentkit import _harness_request
-
     message = message_opt or message_arg
     if not message:
         raise click.ClickException("Provide a prompt (MESSAGE argument or --message).")
@@ -1061,10 +1109,13 @@ def invoke(
             "or pass --url/--key."
         )
 
+    run_agent_request: dict = {"user_id": user_id, "session_id": session_id}
+    if max_llm_calls is not None:
+        run_agent_request["max_llm_calls"] = max_llm_calls
     body: dict = {
         "prompt": message,
         "harness_name": harness_name,
-        "run_agent_request": {"user_id": user_id, "session_id": session_id},
+        "run_agent_request": run_agent_request,
     }
     override = {name: value for name, value in overrides.items() if value is not None}
     if override:

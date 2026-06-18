@@ -1,4 +1,4 @@
 {
   "title": "Agent",
-  "pages": ["overview", "create", "prompt", "skills", "responses-api", "multi-agent"]
+  "pages": ["index", "model", "responses-api", "runtime", "advanced", "skills"]
 }

@@ -1,0 +1,44 @@
+---
+title: "Redis（redis）"
+---
+
+`redis` 后端（`RedisLTMBackend`）使用 Redis 作为向量存储，按用户隔离索引（`veadk-ltm/{index}/{user_id}`）。记忆经 embedding 后写入，检索时按相似度（cosine）召回。
+
+## 何时使用
+
+- 已有 Redis 且开启了 **RediSearch** 模块；
+- 希望用 Redis 作为低延迟的向量检索后端。
+
+## 依赖
+
+```bash
+pip install "veadk-python[extensions]"
+```
+
+Redis 需支持 RediSearch（向量检索）能力。
+
+## 配置
+
+Redis 连接用 `RedisConfig` 读取，环境变量前缀 `DATABASE_REDIS_`；embedding 用 `MODEL_EMBEDDING_*`。
+
+| 配置项 | 环境变量 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `host` | `DATABASE_REDIS_HOST` | `""` | Redis 主机。 |
+| `port` | `DATABASE_REDIS_PORT` | `6379` | 端口。 |
+| `username` | `DATABASE_REDIS_USERNAME` | `None` | 用户名（可选）。 |
+| `password` | `DATABASE_REDIS_PASSWORD` | `""` | 密码。 |
+| `db` | `DATABASE_REDIS_DB` | `0` | 数据库编号。 |
+
+## 用法
+
+```python
+from veadk import Agent
+from veadk.memory.long_term_memory import LongTermMemory
+
+ltm = LongTermMemory(backend="redis", index="ltm_demo")
+agent = Agent(name="demo", long_term_memory=ltm)
+```
+
+<Callout type="info">
+向量维度取自 embedding 配置（`MODEL_EMBEDDING_DIM`），距离度量为 cosine。索引会为每个用户单独创建。
+</Callout>

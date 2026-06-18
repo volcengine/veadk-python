@@ -41,7 +41,7 @@ from veadk.cloud.harness_app.types import HarnessConfig, HarnessOverrides
 from veadk.knowledgebase import KnowledgeBase
 from veadk.memory.long_term_memory import LongTermMemory
 from veadk.memory.short_term_memory import ShortTermMemory
-from veadk.tools import get_builtin_tool
+from veadk.tools import get_builtin_tool, list_builtin_tools
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -51,10 +51,33 @@ __all__ = [
     "HarnessOverrides",
     "split_csv",
     "build_skill_toolset",
+    "SkillLoadError",
+    "ToolLoadError",
     "config_from_env",
     "init_harness_agent",
     "spawn_harness_agent",
 ]
+
+
+class ToolLoadError(RuntimeError):
+    """A requested built-in tool is not supported.
+
+    Raised instead of failing with an opaque ``KeyError`` so the unsupported
+    tool name surfaces — at server startup for a base tool, or in the invoke
+    response for a per-call override.
+    """
+
+
+def _load_builtin_tool(name: str) -> Any:
+    """Resolve a built-in tool by name, raising :class:`ToolLoadError` if unknown."""
+    try:
+        return get_builtin_tool(name)
+    except KeyError as e:
+        raise ToolLoadError(
+            f"Tool '{name}' is not a supported built-in tool. "
+            f"Available: {', '.join(list_builtin_tools())}"
+        ) from e
+
 
 # Skill hub download endpoint. A skill name in a harness is the path after
 # `/download/`, e.g. "clawhub/lgwventrue/system-file-handler".
@@ -77,6 +100,7 @@ _ENV_FIELDS = {
     "knowledgebase_type": "KNOWLEDGEBASE_TYPE",
     "longterm_memory_type": "LONG_TERM_MEMORY_TYPE",
     "shortterm_memory_type": "SHORT_TERM_MEMORY_TYPE",
+    "max_llm_calls": "MAX_LLM_CALLS",
     "registry_type": "REGISTRY_TYPE",
     "registry_space_id": "REGISTRY_SPACE_ID",
     "registry_endpoint": "REGISTRY_ENDPOINT",
@@ -154,6 +178,14 @@ def _download_and_extract_skill(skill: str, dest_dir: Path) -> Path:
     return skill_dir
 
 
+class SkillLoadError(RuntimeError):
+    """A skill failed to download or load (e.g. a malformed ``SKILL.md``).
+
+    Raised instead of silently skipping so the failure surfaces — at the server
+    startup for a base skill, or in the invoke response for a per-call override.
+    """
+
+
 def build_skill_toolset(
     skills: list[str], download_dir: Path | None = None
 ) -> SkillToolset | None:
@@ -163,13 +195,18 @@ def build_skill_toolset(
     and loaded via ``load_skill_from_dir``. The directory is **not** cleaned up
     here: a skill's scripts/assets are read from disk while the agent runs, so
     the caller owns the directory's lifetime (the base agent keeps its skills for
-    the server's lifetime; a per-invoke override cleans up after the run). Skills
-    that fail to download or load (e.g. a malformed ``SKILL.md``) are skipped with
-    a warning so the rest still load.
+    the server's lifetime; a per-invoke override cleans up after the run).
+
+    Fast-fail: if *any* skill fails to download or load (e.g. a ``SKILL.md`` whose
+    description exceeds ADK's limit), a :class:`SkillLoadError` is raised naming
+    the skill and the reason — the whole call is aborted rather than running with
+    a partial skill set.
 
     Returns:
-        A :class:`SkillToolset` of the loaded skills, or ``None`` if none loaded.
+        A :class:`SkillToolset` of the loaded skills, or ``None`` for no skills.
     """
+    if not skills:
+        return None
     if download_dir is None:
         download_dir = Path(tempfile.mkdtemp(prefix="harness_skills_"))
     loaded_skills = []
@@ -179,11 +216,7 @@ def build_skill_toolset(
                 load_skill_from_dir(_download_and_extract_skill(skill, download_dir))
             )
         except Exception as e:
-            logger.warning(f"Skipping skill '{skill}': {e}")
-
-    if not loaded_skills:
-        logger.warning("No skills loaded successfully; skipping skill toolset.")
-        return None
+            raise SkillLoadError(f"Skill '{skill}' failed to load: {e}") from e
     return SkillToolset(skills=loaded_skills)
 
 
@@ -205,7 +238,7 @@ def _assemble_agent(config: HarnessConfig) -> tuple[Agent, ShortTermMemory]:
     base / long-term memory. Backend values are validated by each component's
     pydantic model (fast-fail on an unknown value).
     """
-    tools = [get_builtin_tool(name) for name in split_csv(config.tools)]
+    tools = [_load_builtin_tool(name) for name in split_csv(config.tools)]
 
     skills = split_csv(config.skills)
     if skills:
@@ -302,7 +335,7 @@ def _add_incremental_tools(agent: Agent, tool_names: list[str]) -> None:
         if name in existing:
             logger.info(f"Tool '{name}' already on the agent; skipping.")
             continue
-        agent.tools.append(get_builtin_tool(name))
+        agent.tools.append(_load_builtin_tool(name))
         existing.add(name)
 
 

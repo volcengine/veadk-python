@@ -1,6 +1,5 @@
 ---
 title: "内置工具"
-description: "VeADK 内置的原生函数工具：网页搜索、向量检索、网页读取、图像 / 视频生成、代码沙箱、手机操作、语音合成等。"
 ---
 
 内置工具是 VeADK 预先封装好的原生函数工具，开箱即用，让 Agent 获得网页搜索、代码执行、图像 / 视频生成等火山引擎能力，无需自己实现底层逻辑。
@@ -35,7 +34,7 @@ agent = Agent(tools=[web_search])
 注册后，Agent 会根据用户输入与指令**自主决定**是否调用工具，框架在调用时自动执行。
 
 <Callout type="warn">
-内置工具依赖火山引擎相关服务。使用前请开通对应服务，并完成 AK/SK、API Key 等鉴权配置（见每个工具的“环境变量”说明），详见[配置](/cn/docs/framework/configuration)。
+内置工具依赖火山引擎相关服务。使用前请开通对应服务，并完成 AK/SK、API Key 等鉴权配置（见每个工具的“环境变量”说明），详见[配置](/cn/docs/references/configuration)。
 </Callout>
 
 ## 工具一览
@@ -58,7 +57,7 @@ agent = Agent(tools=[web_search])
 | `create_mobile_use_tool` | 在云手机上执行手机操作任务 | `from veadk.tools.builtin_tools.mobile_run import create_mobile_use_tool` |
 
 <Callout type="info">
-模型与鉴权配置在多个工具间通用。本页只在第一个用到的工具处完整展示一次 `config.yaml`，后续工具仅列出新增的配置项。完整配置说明见[配置](/cn/docs/framework/configuration)。
+模型与鉴权配置在多个工具间通用。本页只在第一个用到的工具处完整展示一次 `config.yaml`，后续工具仅列出新增的配置项。完整配置说明见[配置](/cn/docs/references/configuration)。
 </Callout>
 
 ## 网页搜索（web_search）
@@ -596,11 +595,3 @@ if __name__ == "__main__":
 ![云手机产品控制界面](/assets/images/tools/mua_1.png)
 ![实例管理界面](/assets/images/tools/mua_2.png)
 ![运行结果](/assets/images/tools/mua_3.png)
-
-## 下一步
-
-<Cards>
-  <Card title="内置 MCP 工具" href="/cn/docs/framework/tools/builtin-mcp" description="飞书 / Lark、LAS、视频云、MCP Router、Supabase 等。" />
-  <Card title="自定义工具" href="/cn/docs/framework/tools/custom-function" description="把你自己的函数封装成工具。" />
-  <Card title="系统工具" href="/cn/docs/framework/tools/system-tools" description="知识库与长期记忆的自动挂载工具。" />
-</Cards>

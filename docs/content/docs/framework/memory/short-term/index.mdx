@@ -1,0 +1,177 @@
+---
+title: "短期记忆"
+---
+
+短期记忆（Short-term Memory）保存「会话级」上下文，让智能体在多轮交互中记住之前说过的话。它本质上就是发送给模型的对话上下文——系统提示词加历史消息——VeADK 用 `session_id` 来标识：复用同一个 `session_id`，智能体就能记住之前的轮次。
+
+当用户开启对话时，`ShortTermMemory`（或底层的 `SessionService`）会自动创建一个 `Session` 对象，全程跟踪并管理该会话的所有内容。
+
+<Callout type="info">
+短期记忆基于 Google ADK 的 Session 机制，更多背景见 [Google ADK Session](https://google.github.io/adk-docs/sessions/session)。
+</Callout>
+
+## 统一入口：`ShortTermMemory`
+
+无论用哪种后端，你都只与一个类打交道——`veadk.memory.short_term_memory.ShortTermMemory`。它根据 `backend`（或 `db_url`）选择并初始化底层的会话服务，对外暴露统一的会话管理能力。
+
+```python
+from veadk.memory.short_term_memory import ShortTermMemory
+
+# 通过 backend 选择实现
+stm = ShortTermMemory(backend="sqlite", local_database_path="./stm.db")
+```
+
+### 参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `backend` | `"local" \| "sqlite" \| "mysql" \| "postgresql" \| "database"` | `"local"` | 选择后端实现。`database` 已废弃，等价于 `sqlite`。 |
+| `db_url` | `str` | `""` | 直接给出数据库连接串（如 `sqlite:///./test.db`）。**一旦设置，将忽略 `backend`**，直接用 ADK 的 `DatabaseSessionService`。 |
+| `backend_configs` | `dict` | `{}` | 传给后端构造函数的配置（如 `mysql`/`postgresql` 的 config 覆盖）。 |
+| `db_kwargs` | `dict` | `{}` | 透传给底层数据库会话服务/驱动的额外参数（如连接池配置）。 |
+| `local_database_path` | `str` | `/tmp/veadk_local_database.db` | 仅 `sqlite` 使用的本地数据库文件路径。 |
+| `after_load_memory_callback` | `Callable \| None` | `None` | 读取会话后触发的回调，入参为加载到的 `Session`。 |
+
+<Callout type="warn">
+当连接串里的用户名或密码包含 `@`、`:` 等特殊字符时，请先用 `urllib.parse.quote_plus` 编码（例如 `p@ssword` → `p%40ssword`），否则解析会出错。
+</Callout>
+
+## 后端抽象：`BaseShortTermMemoryBackend`
+
+所有持久化后端都继承自 `BaseShortTermMemoryBackend`，其契约只有一项：暴露一个 Google ADK 的 `BaseSessionService`。
+
+```python
+class BaseShortTermMemoryBackend(ABC, BaseModel):
+    @cached_property
+    @abstractmethod
+    def session_service(self) -> BaseSessionService:
+        """返回底层的会话服务实例。"""
+```
+
+这意味着：
+
+- `local` 直接使用 ADK 的 `InMemorySessionService`；
+- `sqlite` / `mysql` / `postgresql` 各自构造连接串，返回基于 ADK `DatabaseSessionService` 的实例。
+
+因此**所有后端对上层的行为是一致的**，区别只在于持久化位置与连接方式。要自定义后端，继承该基类并实现 `session_service` 即可。
+
+## 选择后端
+
+| 后端 | 是否持久化 | 依赖外部服务 | 适用场景 | 文档 |
+| :--- | :--- | :--- | :--- | :--- |
+| `local` | 否（仅内存） | 无 | 本地调试、临时会话 | [本地内存](/cn/docs/framework/memory/short-term/local) |
+| `sqlite` | 是（本地文件） | 无 | 单机持久化 | [SQLite](/cn/docs/framework/memory/short-term/sqlite) |
+| `mysql` | 是 | MySQL | 分布式持久化 | [MySQL](/cn/docs/framework/memory/short-term/mysql) |
+| `postgresql` | 是 | PostgreSQL | 分布式持久化 | [PostgreSQL](/cn/docs/framework/memory/short-term/postgresql) |
+
+## 与 Runner 协作
+
+短期记忆通常传给 `Runner`：`Runner` 会从中取出 `session_service` 来自动创建/恢复会话。运行时复用相同的 `session_id` 即可延续上下文。
+
+```python
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+
+stm = ShortTermMemory(backend="sqlite", local_database_path="./stm.db")
+agent = Agent(name="memory_agent", instruction="记住用户告诉你的信息。")
+runner = Runner(agent=agent, short_term_memory=stm, app_name="memory_demo")
+
+async def main():
+    sid = "user-42-chat"
+    print(await runner.run(messages="我叫小明，最喜欢蓝色。", session_id=sid))
+    print(await runner.run(messages="我叫什么？喜欢什么颜色？", session_id=sid))
+
+asyncio.run(main())
+```
+
+<Callout type="info">
+若既没给 `Runner` 传 `short_term_memory` 也没传 `session_service`，`Runner` 会自动创建一个 `local`（内存）短期记忆兜底。
+</Callout>
+
+## 会话管理接口
+
+你通常无需直接创建或管理 `Session`，而是通过 `session_service` 管理整个会话生命周期：
+
+1. **启动新会话** `create_session()`：用户发起交互时创建新的 `Session`。
+2. **恢复已有会话** `get_session()`：通过 `session_id` 检索特定 `Session`，接续之前的进度。
+3. **保存进度** `append_event()`：把新的交互（`Event`）追加到会话历史。
+4. **列出会话** `list_sessions()`：查询某用户与应用下的活跃会话。
+5. **清理会话** `delete_session()`：删除 `Session` 及其关联数据。
+
+`ShortTermMemory.create_session()` 在数据库后端下会先列出并复用同 `session_id` 的已有会话，避免重复创建。
+
+## 上下文压缩
+
+随着会话进行，历史会不断增长，导致模型处理的数据变多、响应变慢。上下文压缩用滑动窗口汇总历史：当会话历史超过设定阈值时，自动压缩较早的事件。
+
+### 配置上下文压缩
+
+配置后，`Runner` 会在每次达到间隔时自动压缩会话历史。
+
+```python
+from google.adk.apps.app import App, EventsCompactionConfig
+
+from veadk import Agent
+
+root_agent = Agent(
+    name="my_agent",
+    instruction="你是一个智能助手，擅长用中文礼貌地回复用户问题。",
+)
+
+app = App(
+    name="my_agent",
+    root_agent=root_agent,
+    events_compaction_config=EventsCompactionConfig(
+        compaction_interval=3,  # 每 3 次新调用触发一次压缩
+        overlap_size=1,         # 与上一个窗口的最后一个事件重叠
+    ),
+)
+```
+
+### 自定义压缩器
+
+用 `LlmEventSummarizer` 指定压缩使用的模型和提示词模板。模型的 API Key / API Base 通过环境变量提供，这里从 `os.environ` 读取，不要硬编码：
+
+```python
+import os
+
+from google.adk.apps.app import App, EventsCompactionConfig
+from google.adk.apps.llm_event_summarizer import LlmEventSummarizer
+from google.adk.models.lite_llm import LiteLlm
+
+from veadk import Agent
+
+root_agent = Agent(
+    name="my_agent",
+    instruction="你是一个智能助手，擅长用中文礼貌地回复用户问题。",
+)
+
+summarization_llm = LiteLlm(
+    model="volcengine/doubao-seed-1-8-251228",
+    api_key=os.environ["MODEL_AGENT_API_KEY"],
+    api_base=os.environ.get(
+        "MODEL_AGENT_API_BASE", "https://ark.cn-beijing.volces.com/api/v3/"
+    ),
+)
+
+my_compactor = LlmEventSummarizer(
+    llm=summarization_llm,
+    prompt_template="""请总结这段对话，压缩要求：
+1. 保留关键实体、数据点和时间线；
+2. 突出讨论过的核心问题与解决方案；
+3. 保持逻辑连贯与上下文相关；
+4. 去除重复表达和冗余细节。""",
+)
+
+app = App(
+    name="my_agent",
+    root_agent=root_agent,
+    events_compaction_config=EventsCompactionConfig(
+        compactor=my_compactor,
+        compaction_interval=5,
+        overlap_size=1,
+    ),
+)
+```

@@ -1,0 +1,192 @@
+---
+title: "Long-term memory"
+---
+
+Long-term memory persists important information across sessions and over time — user preferences, task history, key facts, or long-lived state. [Short-term memory](/en/docs/framework/memory/short-term) only lives within a single session; long-term memory lets an agent remember facts **across different sessions**.
+
+Why you need it:
+
+- Continuous conversation experience across sessions;
+- Retain learnings and user-specific information over many interactions;
+- Avoid repetitive questions, improving satisfaction and efficiency;
+- Support long-term strategy optimization such as personalization or task tracking.
+
+## Single entry point: `LongTermMemory`
+
+Whatever backend you use, you interact with `veadk.memory.long_term_memory.LongTermMemory`. It implements Google ADK's `BaseMemoryService` (so it plugs straight in as the agent's memory service) and selects/initializes the underlying implementation by `backend`.
+
+```python
+from veadk.memory.long_term_memory import LongTermMemory
+
+ltm = LongTermMemory(backend="viking", app_name="ltm_demo")
+```
+
+### Parameters
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `backend` | `"local" \| "opensearch" \| "redis" \| "viking" \| "mem0"` or a backend instance | `"opensearch"` | Selects the backend, or pass a `BaseLongTermMemoryBackend` instance directly. `viking_mem` is deprecated and maps to `viking`. |
+| `backend_config` | `dict` | `{}` | Config passed to the backend constructor; if it lacks `index`, it's filled from `index` or `app_name`. |
+| `top_k` | `int` | `5` | Number of most-similar chunks to retrieve. |
+| `index` | `str` | `""` | Index/collection name for storing memories. Falls back to `app_name`, then `default_app`. |
+| `app_name` | `str` | `""` | The owning application name; used for data isolation and as the `index` fallback. |
+| `user_id` | `str` | `""` | **Deprecated**, kept only for backward compatibility. |
+
+<Callout type="info">
+Vector backends (`local`, `opensearch`, `redis`) embed memories, which requires `pip install "veadk-python[extensions]"` and an embedding model (env prefix `MODEL_EMBEDDING_`, falling back to `MODEL_AGENT_API_KEY`). `viking` and `mem0` are managed services and need no local embedding.
+</Callout>
+
+## Backend contract: `BaseLongTermMemoryBackend`
+
+Every backend extends `BaseLongTermMemoryBackend` and implements three methods:
+
+```python
+class BaseLongTermMemoryBackend(ABC, BaseModel):
+    index: str
+
+    @abstractmethod
+    def precheck_index_naming(self): ...
+    """Validate the index name."""
+
+    @abstractmethod
+    def save_memory(self, user_id: str, event_strings: list[str], **kwargs) -> bool: ...
+    """Write memories to the backend."""
+
+    @abstractmethod
+    def search_memory(self, user_id: str, query: str, top_k: int, **kwargs) -> list[str]: ...
+    """Semantically retrieve memories from the backend."""
+```
+
+`LongTermMemory` filters and serializes session events before handing them to the backend's `save_memory`, and wraps `search_memory` results into ADK `MemoryEntry` objects. So **the usage above the backend is backend-agnostic**; only the storage medium and retrieval implementation differ. To add a custom backend, subclass this base, implement the three methods, and pass the instance via `LongTermMemory(backend=<instance>)`.
+
+## Choosing a backend
+
+Use `local` for debugging; prefer `viking` or `mem0` in production.
+
+| Backend | Storage | Requires | Use case | Docs |
+| :--- | :--- | :--- | :--- | :--- |
+| `local` | In-memory vector index | `extensions` + embedding | Local debugging | [In-memory](/en/docs/framework/memory/long-term/local) |
+| `viking` | VikingDB memory (managed) | Volcengine account | Recommended for production | [VikingDB](/en/docs/framework/memory/long-term/vikingdb) |
+| `mem0` | Mem0 memory (managed) | Mem0 API key | Recommended for production | [Mem0](/en/docs/framework/memory/long-term/mem0) |
+| `opensearch` | OpenSearch vector store | OpenSearch + embedding | Self-hosted vector search | [OpenSearch](/en/docs/framework/memory/long-term/opensearch) |
+| `redis` | Redis vector store | Redis (RediSearch) + embedding | Self-hosted vector search | [Redis](/en/docs/framework/memory/long-term/redis) |
+
+## Binding to an Agent
+
+Passing `long_term_memory` to an `Agent` **auto-injects the `load_memory` tool** so the agent can retrieve past sessions at run time.
+
+```python
+from veadk import Agent, Runner
+from veadk.memory.long_term_memory import LongTermMemory
+
+APP_NAME = "ltm_demo"
+ltm = LongTermMemory(backend="viking", app_name=APP_NAME)
+
+root_agent = Agent(
+    name="ltm_agent",
+    instruction="Answer the user. If the answer might be in past conversations, use the `load_memory` tool.",
+    long_term_memory=ltm,
+)
+runner = Runner(agent=root_agent, app_name=APP_NAME)
+```
+
+## Managing memory
+
+### Write: `add_session_to_memory`
+
+When a session ends or hits a checkpoint, call the async `add_session_to_memory` to persist it. `LongTermMemory` first filters events (keeping user text events to improve retrieval quality), then hands them to the backend.
+
+```python
+completed_session = await runner.session_service.get_session(
+    app_name=APP_NAME, user_id=USER_ID, session_id=SESSION_ID
+)
+await ltm.add_session_to_memory(completed_session)
+```
+
+### Retrieve: `search_memory`
+
+Besides the agent's automatic retrieval via `load_memory`, you can call the async `search_memory` directly for semantic search — useful for debugging or custom RAG:
+
+```python
+response = await ltm.search_memory(
+    app_name=APP_NAME,
+    user_id=USER_ID,
+    query="favorite project",
+)
+print(response.memories)
+```
+
+<Callout type="info">
+`get_user_profile(user_id)` is supported only by the `viking` backend; others return an empty string.
+</Callout>
+
+## Auto-save sessions
+
+Set `auto_save_session=True` on the `Agent` with long-term memory configured, and VeADK persists sessions automatically — no manual `add_session_to_memory`.
+
+```python
+from veadk import Agent
+from veadk.memory.long_term_memory import LongTermMemory
+
+agent = Agent(
+    name="ltm_agent",
+    auto_save_session=True,
+    long_term_memory=LongTermMemory(backend="viking", app_name="ltm_demo"),
+)
+```
+
+To avoid frequent index re-initialization, VeADK exposes `MIN_MESSAGES_THRESHOLD` and `MIN_TIME_THRESHOLD` env vars to tune the save cadence: by default it saves after 10 accumulated events or a 60-second interval; additionally, when you switch `session_id` and start a new turn, VeADK saves the previous session to long-term memory.
+
+## Cross-session example
+
+An end-to-end flow: session #1 tells the agent a fact and auto-archives it, then a **brand-new** session #2 asks a question — and the agent recalls the fact via memory retrieval (not the context window). This uses the `local` backend, which needs `pip install "veadk-python[extensions]"`.
+
+```python
+import asyncio
+
+from veadk import Agent, Runner
+from veadk.memory.long_term_memory import LongTermMemory
+
+APP_NAME = "ltm_demo"
+USER_ID = "user-42"
+
+
+def build_runner() -> Runner:
+    ltm = LongTermMemory(backend="local", app_name=APP_NAME)
+    agent = Agent(
+        name="ltm_agent",
+        instruction=(
+            "You are a personal assistant. When the user asks about something they "
+            "told you earlier, use the `load_memory` tool to recall it."
+        ),
+        long_term_memory=ltm,
+        auto_save_session=True,
+    )
+    return Runner(agent=agent, app_name=APP_NAME, user_id=USER_ID)
+
+
+async def main() -> None:
+    runner = build_runner()
+
+    print(
+        "Session 1 ->",
+        await runner.run(
+            messages="Note this: I'm allergic to peanuts and I'm vegetarian.",
+            session_id="session-1",
+        ),
+    )
+
+    print(
+        "Session 2 ->",
+        await runner.run(
+            messages="Recommend a dish for me, considering my dietary restrictions.",
+            session_id="session-2",
+        ),
+    )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+In session #2 the agent recognizes the same user's preferences left in session #1 and answers coherently and personally (e.g. a peanut-free vegetarian dish).

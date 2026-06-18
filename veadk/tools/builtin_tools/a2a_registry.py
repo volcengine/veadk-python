@@ -40,8 +40,8 @@ def build_a2a_registry_tools(
     ) -> dict[str, Any]:
         """Search the AgentKit A2A registry for remote agents that can handle a task.
 
-        Use this when you determine that a remote A2A Agent may be needed for
-        the task, such as when specialist capabilities, delegation, or agent
+        Use this first when you determine that a remote A2A Agent may be needed
+        for the task, such as when specialist capabilities, delegation, or agent
         discovery could improve the result. Pass the user's task or intent in
         `prompt`; `query` is accepted as a compatibility alias. Inspect the
         returned `agents` list, compare each agent's `name`, `description`, and

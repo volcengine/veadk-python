@@ -1,6 +1,5 @@
 ---
 title: "企业级 Agent 设计"
-description: "面向企业场景设计 Agent 的设计路径、可复用原则，以及对应的 VeADK 能力。"
 ---
 
 把一个 Agent 用于企业生产，不只是写好提示词。你需要把它对接现有系统、控制权限与数据安全、并能持续观测与评测。本页给出一条从 0 到 1 的设计路径，以及它在 VeADK 中对应的能力。
@@ -38,13 +37,13 @@ graph LR
 
 ### 2. 系统设计
 
-按业务场景分层梳理痛点，设计对应的 Agent 体系与交互流程。输出一套[多智能体](/cn/docs/framework/agent/multi-agent/overview)编排方案——例如内容识别、被动 / 主动回复、质量评审等子智能体，以及它们之间的串行 / 并行关系。
+按业务场景分层梳理痛点，设计对应的 Agent 体系与交互流程。输出一套[多智能体](/cn/docs/framework/multi-agent/overview)编排方案——例如内容识别、被动 / 主动回复、质量评审等子智能体，以及它们之间的串行 / 并行关系。
 
 ### 3. 系统搭建
 
 确定 SDK、模型与提示词的组合，并落到可量化的业务目标上。
 
-- **能力栈**：工具（MCP / 本地 / 外部）、上下文存储（短期与长期[记忆](/cn/docs/framework/memory/short-term)及过期策略）、向量检索与文档解析、[可观测](/cn/docs/framework/observability/overview)与[评测](/cn/docs/framework/eval-optimization/evaluation)。
+- **能力栈**：工具（MCP / 本地 / 外部）、上下文存储（短期与长期[记忆](/cn/docs/framework/memory/short-term)及过期策略）、向量检索与文档解析、[可观测](/cn/docs/framework/observability)与[评测](/cn/docs/framework/evaluation)。
 - **业务指标**：如信息获取效率、主动回复采纳率等。
 
 ### 4. 系统评测
@@ -72,17 +71,9 @@ VeADK 为上述每个阶段提供了对应能力：
 
 | 设计需求 | VeADK 能力 |
 | :- | :- |
-| 智能体编排 | [多智能体](/cn/docs/framework/agent/multi-agent/overview)（顺序 / 并行 / 循环）；通过自定义 `_run_async_impl` 实现自定义智能体 |
+| 智能体编排 | [多智能体](/cn/docs/framework/multi-agent/overview)（顺序 / 并行 / 循环）；通过自定义 `_run_async_impl` 实现自定义智能体 |
 | 记忆与上下文 | [短期记忆](/cn/docs/framework/memory/short-term)管理会话状态，[长期记忆](/cn/docs/framework/memory/long-term)用于知识沉淀与回溯 |
 | 知识库与检索 | [知识库](/cn/docs/framework/knowledgebase/overview)的向量检索、文档解析与 RAG |
 | 工具与生态 | [内置工具](/cn/docs/framework/tools/builtin)、[自定义函数工具](/cn/docs/framework/tools/custom-function)与 [MCP](/cn/docs/framework/tools/builtin-mcp)，兼容 Google ADK |
-| 可观测与评测 | [可观测](/cn/docs/framework/observability/overview)（日志、链路追踪、指标）与[评测](/cn/docs/framework/eval-optimization/evaluation)闭环 |
-| 配置与安全 | [配置](/cn/docs/framework/configuration)中的环境变量脱敏与多租户隔离 |
-
-## 下一步
-
-<Cards>
-  <Card title="多智能体" href="/cn/docs/framework/agent/multi-agent/overview" description="用顺序、并行、循环模式编排多个智能体。" />
-  <Card title="知识库" href="/cn/docs/framework/knowledgebase/overview" description="用 RAG 为模型补充私有知识。" />
-  <Card title="可观测" href="/cn/docs/framework/observability/overview" description="追踪运行时行为，监控性能与决策。" />
-</Cards>
+| 可观测与评测 | [可观测](/cn/docs/framework/observability)（日志、链路追踪、指标）与[评测](/cn/docs/framework/evaluation)闭环 |
+| 配置与安全 | [配置](/cn/docs/references/configuration)中的环境变量脱敏与多租户隔离 |

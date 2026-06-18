@@ -1,0 +1,12 @@
+# Installed in the image by AgentKit's default `uv pip install -r requirements.txt`.
+#
+# veadk-python >= 0.5.39 ships the codex runtime (veadk/runtime/codex).
+#
+# openai-codex is NOT a veadk dependency, so it is listed explicitly. It is
+# currently a pre-release, and so is its bundled-binary dependency
+# openai-codex-cli-bin (the Codex CLI as a manylinux wheel). Both are pinned to
+# exact pre-release versions so `uv pip install` accepts them without needing a
+# global --prerelease=allow flag.
+veadk-python>=0.5.39
+openai-codex==0.1.0b3
+openai-codex-cli-bin==0.137.0a4

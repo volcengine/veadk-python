@@ -97,5 +97,9 @@ export function SurfaceView({ surface, onAction }: SurfaceViewProps) {
     },
   };
 
-  return <div className="a2ui-surface">{ctx.render(surface.rootId)}</div>;
+  return (
+    <div className="a2ui-surface" data-a2ui-surface={surface.surfaceId}>
+      {ctx.render(surface.rootId)}
+    </div>
+  );
 }

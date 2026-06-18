@@ -1,0 +1,55 @@
+---
+title: "Installation"
+---
+
+<Callout title="Prerequisites">
+
+- Python `3.10` or later
+- An API key for the Volcengine Ark platform
+
+</Callout>
+
+## Install
+
+### PIP
+
+```bash
+# Stable release
+pip install -U veadk-python
+
+# With optional extras such as the knowledge base
+pip install -U "veadk-python[extensions]"
+```
+
+Verify the install:
+
+```bash
+veadk --version
+```
+
+If you prefer `uv`, use `uv add veadk-python` (or `uv add "veadk-python[extensions]"`).
+
+### Source
+
+```bash
+# Main-branch preview
+pip install git+https://github.com/volcengine/veadk-python.git@main
+
+# A specific branch
+pip install git+https://github.com/volcengine/veadk-python.git@[branch-name]
+```
+
+### Image
+
+An official Python image is available for use as a base image:
+
+```bash
+# Stable
+veadk-cn-beijing.cr.volces.com/veadk/veadk-python:latest
+
+# Main-branch preview
+veadk-cn-beijing.cr.volces.com/veadk/veadk-python:preview
+
+# A specific version
+veadk-cn-beijing.cr.volces.com/veadk/veadk-python:<version>
+```

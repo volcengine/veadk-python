@@ -1,0 +1,54 @@
+---
+title: "MySQL (mysql)"
+---
+
+The `mysql` backend stores sessions in a MySQL database, backed by Google ADK's `DatabaseSessionService`. Multiple agent instances can connect to the same database for shared, distributed persistence.
+
+## When to use
+
+- Production, multi-instance / distributed deployments;
+- When sessions are centrally managed by a shared MySQL.
+
+## Configuration
+
+Provide connection details via `config.yaml` (or the matching environment variables) — **never hard-code the password**. VeADK reads them through `MysqlConfig`, with the env prefix `DATABASE_MYSQL_`:
+
+```yaml title="config.yaml"
+database:
+  mysql:
+    host:       # host or IP
+    user:
+    password:
+    database:
+    charset: utf8
+```
+
+| Field | Env var | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `host` | `DATABASE_MYSQL_HOST` | `""` | Database host. |
+| `user` | `DATABASE_MYSQL_USER` | `""` | Username. |
+| `password` | `DATABASE_MYSQL_PASSWORD` | `""` | Password. |
+| `database` | `DATABASE_MYSQL_DATABASE` | `""` | Database name. |
+| `charset` | `DATABASE_MYSQL_CHARSET` | `utf8` | Character set. |
+
+## Usage
+
+```python
+from veadk import Agent, Runner
+from veadk.memory.short_term_memory import ShortTermMemory
+
+stm = ShortTermMemory(backend="mysql")  # connection details from config.yaml / env
+
+agent = Agent(name="demo")
+runner = Runner(agent=agent, short_term_memory=stm, app_name="memory_demo")
+```
+
+To forward driver args such as connection pooling, use `db_kwargs`:
+
+```python
+stm = ShortTermMemory(backend="mysql", db_kwargs={"pool_size": 10, "pool_recycle": 3600})
+```
+
+<Callout type="info">
+VeADK auto-selects the sync or async MySQL driver (`pymysql` or `aiomysql`) based on the runtime. Special characters in the username/password are URL-encoded automatically. You can [provision MySQL on Volcengine](https://www.volcengine.com/product/rds-mysql).
+</Callout>

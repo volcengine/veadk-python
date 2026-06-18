@@ -1,0 +1,58 @@
+---
+title: "Model"
+---
+
+VeADK builds the model client on [LiteLLM](https://github.com/BerriAI/litellm) by default, so every LiteLLM provider is supported.
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `model_name` | `str \| list[str]` | env `MODEL_AGENT_NAME` | Model name. **A list enables fallbacks**: the first is primary, the rest are tried in order. |
+| `model_provider` | `str` | `MODEL_AGENT_PROVIDER` | Provider, e.g. `openai`. See the [LiteLLM provider list](https://docs.litellm.ai/docs/providers). |
+| `model_api_base` | `str` | `MODEL_AGENT_API_BASE` | Base URL of the model API. |
+| `model_api_key` | `str` | `MODEL_AGENT_API_KEY` | Model API key. **Never hard-code it** — use env vars or `config.yaml`. |
+| `model_extra_config` | `dict` | `{}` | Extra config forwarded to model requests; supports `extra_headers` and `extra_body`, merged with VeADK defaults. |
+| `model` | `LiteLlm` | `None` | A pre-built LiteLLM client. **Once set, the `model_*` fields are ignored.** |
+| `enable_responses` | `bool` | `False` | Use the Ark Responses API; see [Responses API](/en/docs/framework/agent/responses-api). |
+| `enable_responses_cache` | `bool` | `True` | Reuse `previous_response_id` for multi-turn continuation and caching; only when `enable_responses=True`. |
+| `context_cache_config` | `ContextCacheConfig` | `None` | Context-cache config to reduce repeated computation on long contexts. |
+
+## Use a different model
+
+Specify a provider or local model (the API key still comes from the environment):
+
+```python title="agent.py"
+agent = Agent(
+    model_provider="openai",
+    model_name="doubao-seed-1-8-251228",
+    model_api_base="https://ark.cn-beijing.volces.com/api/v3/",
+)
+```
+
+## Model fallbacks
+
+Pass a list to `model_name`: the first model is tried first; on failure the next is tried, until one succeeds.
+
+```python title="agent.py"
+agent = Agent(model_name=["doubao-seed-1-8-251228", "deepseek-r1-250528"])
+```
+
+## Customize the model client
+
+For full control, pass a LiteLLM client directly:
+
+```python title="agent.py"
+from google.adk.models.lite_llm import LiteLlm
+
+agent = Agent(model=LiteLlm(model="doubao-seed-1-8-251228"))
+```
+
+## Extra parameters
+
+Specify extra options based on [Ark platform](https://www.volcengine.com/product/ark) capabilities — for example, disable thinking for faster responses:
+
+```python title="agent.py"
+agent = Agent(
+    model_name="doubao-seed-1-8-251228",
+    model_extra_config={"extra_body": {"thinking": {"type": "disabled"}}},
+)
+```

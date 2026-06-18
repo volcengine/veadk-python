@@ -1,6 +1,5 @@
 ---
 title: "Runner"
-description: "The Runner coordinates agents, tools, and callbacks, manages information flow and state, and supports enterprise multi-tenant data isolation."
 ---
 
 The `Runner` is the core component of the ADK runtime. It coordinates the components you define — agents, tools, callbacks, and more — so they jointly respond to user input, while managing information flow, state changes, and interactions with external services (such as the LLM and tools) and storage.
@@ -93,10 +92,3 @@ asyncio.run(main())
 <Callout type="info">
 `run_async()` expects the session to already exist. When the `Runner` is configured with short-term memory, `run()` auto-creates a session as needed; if you call `run_async()` directly, make sure the session for `session_id` has been created.
 </Callout>
-
-## Next steps
-
-<Cards>
-  <Card title="Local debugging" href="/en/docs/framework/getting-started/local-debugging" description="Watch the Runner's execution in the browser." />
-  <Card title="Short-term memory" href="/en/docs/framework/memory/short-term" description="Configure session-level memory for the Runner." />
-</Cards>
