@@ -1,0 +1,1 @@
+{"name":"default_plugin_order","input":{"components":"invocation_context,compactor,response_verification"},"expected":{"plugins":["harness_invocation_context_plugin","harness_compress_plugin","harness_response_verification_plugin"]}}

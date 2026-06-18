@@ -1,0 +1,1 @@
+{"name":"chart_task_anchor","input":{"goal":"Create a chart from the CSV data","user_input":"Please plot this CSV file."},"expected":{"contains":["[Harness Context]","task_goal: Create a chart from the CSV data","[Harness Artifact Mode]"]}}

@@ -1,0 +1,1 @@
+{"name":"large_tool_result_saving","input":{"old_tool_chars":5000,"latest_tool":"latest status: complete"},"expected":{"min_saving_ratio":0.5,"latest_tool_retained":true}}

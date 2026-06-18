@@ -1,0 +1,1 @@
+{"name":"unsupported_completion_claim","input":{"answer":"Done, I created the report.","receipts":[]},"expected":{"status":"fail"}}
