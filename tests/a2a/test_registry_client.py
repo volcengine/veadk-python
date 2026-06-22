@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import inspect
 import json
 from unittest.mock import Mock, patch
 
@@ -273,6 +274,8 @@ def test_a2a_registry_tool_descriptions_guide_model_flow():
 
     search_doc = " ".join((search_tool.__doc__ or "").split())
     assert "Use this first" in search_doc
+    assert "concise search prompt" in search_doc
+    assert "must not exceed 2048 bytes" in search_doc
     assert "agents" in search_doc
     assert "a2a_registry_task_create" in search_doc
 
@@ -289,15 +292,30 @@ def test_a2a_registry_tool_descriptions_guide_model_flow():
 
 
 @patch("veadk.tools.builtin_tools.a2a_registry.search_agent_cards")
-def test_search_tool_accepts_query_alias(search: Mock):
+def test_search_tool_accepts_prompt(search: Mock):
     config = AgentKitA2ARegistryConfig(space_id="space-test")
     search.return_value = {"outcome": "success", "agents": []}
     tool = build_a2a_registry_tools(config)[0]
 
-    result = tool(query="三亚五日游")
+    result = tool(prompt="三亚五日游")
 
     assert result["outcome"] == "success"
-    search.assert_called_once_with("三亚五日游", 3, config)
+    search.assert_called_once_with("三亚五日游", None, config)
+
+
+@patch("veadk.tools.builtin_tools.a2a_registry.search_agent_cards")
+def test_search_tool_does_not_expose_top_k_to_model(search: Mock):
+    config = AgentKitA2ARegistryConfig(space_id="space-test", top_k=7)
+    search.return_value = {"outcome": "success", "agents": []}
+    tool = build_a2a_registry_tools(config)[0]
+
+    assert "top_k" not in inspect.signature(tool).parameters
+    assert "query" not in inspect.signature(tool).parameters
+
+    result = tool(prompt="财务报销")
+
+    assert result["outcome"] == "success"
+    search.assert_called_once_with("财务报销", None, config)
 
 
 def test_agent_auth_headers_extracts_api_key_header():

@@ -35,22 +35,22 @@ def build_a2a_registry_tools(
 
     resolved_config = config or registry_config_from_env()
 
-    def a2a_registry_search_agent_cards(
-        prompt: str = "", top_k: int = 3, query: str = ""
-    ) -> dict[str, Any]:
+    def a2a_registry_search_agent_cards(prompt: str = "") -> dict[str, Any]:
         """Search the AgentKit A2A registry for remote agents that can handle a task.
 
         Use this first when you determine that a remote A2A Agent may be needed
         for the task, such as when specialist capabilities, delegation, or agent
-        discovery could improve the result. Pass the user's task or intent in
-        `prompt`; `query` is accepted as a compatibility alias. Inspect the
+        discovery could improve the result. Pass a concise search prompt, not
+        the complete user request. If the user's request is long, summarize it
+        into keywords or a short task description before calling this tool.
+        The UTF-8 encoded `prompt` must not exceed 2048 bytes. Inspect the
         returned `agents` list, compare each agent's `name`, `description`, and
         `skills`, then choose the best `agent_name` for
         `a2a_registry_task_create` if a suitable agent is available.
         """
 
         try:
-            return search_agent_cards(prompt or query, top_k, resolved_config)
+            return search_agent_cards(prompt, None, resolved_config)
         except RegistryError as exc:
             return failure(exc.code, exc.message, exc.diagnostics)
         except Exception as exc:  # noqa: BLE001 - tool calls should return safely.
