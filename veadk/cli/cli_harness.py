@@ -89,6 +89,12 @@ system_prompt: ""
 #   env: RUNTIME               flag: --runtime
 runtime: adk
 
+# Structured tool calls via Ark Responses API.
+#   env: STRUCTURED_TOOL_CALLS       flag: --structured-tool-calls
+#   env: INCLUDE_TOOLS_EVERY_TURN    flag: --include-tools-every-turn
+structured_tool_calls: false
+include_tools_every_turn: true
+
 # --- Knowledge base ----------------------------------------------------------
 #   type -> env: KNOWLEDGEBASE_TYPE   flag: --knowledgebase-type
 #   "" disables it. Supported: viking | opensearch | redis | tos_vector | context_search
@@ -319,7 +325,10 @@ def _prune_empty(data: dict) -> None:
             for sub in list(value):
                 if _is_blank(value[sub]):
                     del value[sub]
-            if (key in COMPONENT_TYPE_ENV and not value.get("type")) or not value:
+            if (
+                (key in COMPONENT_TYPE_ENV or key == "registry")
+                and not value.get("type")
+            ) or not value:
                 del data[key]
         elif _is_blank(value):
             del data[key]
@@ -348,11 +357,14 @@ def _override_options(func):
     """Attach a ``--flag`` for every :class:`HarnessOverrides` field.
 
     Shared by ``add`` and ``invoke`` so their model / tools / skills /
-    system-prompt / runtime flags stay identical and in sync with the model —
-    adding a field to ``HarnessOverrides`` exposes the flag in both. Each flag
-    defaults to ``None`` (unset → not applied).
+    system-prompt / runtime flags stay identical and in sync with the model.
+    ``registry_*`` overrides are accepted by the HTTP API for AgentKit, but are
+    intentionally hidden from the VeADK CLI. Each exposed flag defaults to
+    ``None`` (unset → not applied).
     """
     for name, field in reversed(list(HarnessOverrides.model_fields.items())):
+        if name.startswith("registry_"):
+            continue
         option: dict = {
             "default": None,
             "help": field.description or f"`{name}`.",
@@ -391,6 +403,18 @@ def _override_options(func):
     default=None,
     help="Default max LLM calls per run (overridable per invocation).",
 )
+@click.option(
+    "--structured-tool-calls",
+    is_flag=True,
+    default=None,
+    help="Use Ark Responses API for structured tool calling.",
+)
+@click.option(
+    "--include-tools-every-turn",
+    is_flag=True,
+    default=None,
+    help="Include tool definitions on every model turn.",
+)
 @_connection_options
 @click.option(
     "--path",
@@ -403,6 +427,8 @@ def add(
     long_term_memory_type: str | None,
     short_term_memory_type: str | None,
     max_llm_calls: int | None,
+    structured_tool_calls: bool | None,
+    include_tools_every_turn: bool | None,
     path: str,
     model_name: str | None,
     tools: str | None,
@@ -420,11 +446,17 @@ def add(
     """
     yaml_path = Path(path).resolve() / "harness.yaml"
     data = _load_harness_yaml(yaml_path)
+    data.pop("enable_responses", None)
+    data.pop("enable_responses_cache", None)
 
     if harness_name is not None:
         data["harness_name"] = harness_name
     if max_llm_calls is not None:
         data["max_llm_calls"] = max_llm_calls
+    if structured_tool_calls is not None:
+        data["structured_tool_calls"] = structured_tool_calls
+    if include_tools_every_turn is not None:
+        data["include_tools_every_turn"] = include_tools_every_turn
     if model_name is not None:
         model = data.get("model")
         if not isinstance(model, dict):
@@ -502,12 +534,14 @@ def show(path: str) -> None:
     click.echo("")
     click.secho("Overridable at invoke time:", fg="green", bold=True)
     for name, field in HarnessOverrides.model_fields.items():
+        if name.startswith("registry_"):
+            continue
         flag = "--" + name.replace("_", "-")
         click.echo(f"  {flag}: {field.description or name}")
     click.echo("")
     click.echo(
         "Override per call via `veadk harness invoke ... --<flag>`. "
-        "Memory and knowledgebase are NOT overridable."
+        "Memory, knowledgebase, and registry are not exposed as VeADK CLI overrides."
     )
 
 
