@@ -79,11 +79,20 @@ def _load_builtin_tool(name: str) -> Any:
         ) from e
 
 
-# Skill hub download endpoint. A skill name in a harness is the path after
-# `/download/`, e.g. "clawhub/lgwventrue/system-file-handler".
+# Skill hub endpoints. A harness lists a skill by its human *name* (e.g.
+# "web-scraper"); the hub downloads by *slug* (e.g.
+# "clawhub/yinanping-cpu/web-scraper"). We resolve name -> slug via the search
+# API, then download by slug. Both are env-overridable.
 SKILL_HUB_DOWNLOAD_URL = os.getenv(
     "SKILL_HUB_DOWNLOAD_URL", "https://skills.volces.com/v1/skills/download"
 )
+SKILL_HUB_SEARCH_URL = os.getenv(
+    "SKILL_HUB_SEARCH_URL", "https://skills.volces.com/v1/skills"
+)
+# Top-N search results scanned for an exact name match. The top hit is not always
+# the exact one (e.g. "web-scraper" ranks below "smart-web-scraper"), so we scan
+# the whole (small) page rather than trusting the first result.
+_SKILL_SEARCH_PAGE_SIZE = 3
 
 # Maps HarnessConfig field names to their environment variables. ``app_name`` is
 # populated via its "name" alias. Only variables that are set are passed, so the
@@ -110,12 +119,49 @@ def split_csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _resolve_skill_slug(skill: str) -> str:
+    """Resolve a skill *name* to its hub *slug* via the search API.
+
+    A harness lists skills by name (e.g. ``"web-scraper"``) but the hub downloads
+    by slug (e.g. ``"clawhub/yinanping-cpu/web-scraper"``). A value already given
+    as a slug (contains ``"/"``) is used as-is. Otherwise the hub is searched and
+    the result whose ``Name`` matches exactly is taken — the top hit is not always
+    the exact one, so all results on the page are scanned.
+
+    Raises:
+        RuntimeError: the search failed, or no result's ``Name`` matched exactly.
+    """
+    name = skill.strip("/")
+    if "/" in name:
+        return name  # already a slug (e.g. "clawhub/org/skill")
+
+    response = httpx.get(
+        SKILL_HUB_SEARCH_URL,
+        params={"query": name, "pageNumber": 1, "pageSize": _SKILL_SEARCH_PAGE_SIZE},
+        timeout=60,
+        follow_redirects=True,
+    )
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Skill search for '{skill}' failed: HTTP {response.status_code}"
+        )
+    results = response.json().get("Skills") or []
+    for entry in results:
+        if entry.get("Name") == name and entry.get("Slug"):
+            return str(entry["Slug"])
+    seen = ", ".join(repr(e.get("Name")) for e in results) or "no results"
+    raise RuntimeError(
+        f"Skill '{skill}' not found in the skill hub (search returned: {seen}). "
+        f"Check the skill name, or pass its full slug (e.g. 'clawhub/<org>/<name>')."
+    )
+
+
 def _download_and_extract_skill(skill: str, dest_dir: Path) -> Path:
-    """Download a skill zip from the skill hub and extract it.
+    """Resolve a skill name to its hub slug, download the zip, and extract it.
 
     Args:
-        skill: Skill identifier — the hub path after ``/download/``
-            (e.g. ``"clawhub/lgwventrue/system-file-handler"``).
+        skill: Skill name (e.g. ``"web-scraper"``) or full hub slug (e.g.
+            ``"clawhub/lgwventrue/system-file-handler"``).
         dest_dir: Base directory to extract into; the skill is placed in a
             subdirectory named after its declared name in ``SKILL.md``.
 
@@ -123,19 +169,27 @@ def _download_and_extract_skill(skill: str, dest_dir: Path) -> Path:
         The directory the skill was extracted to. Its name matches the skill's
         declared name in ``SKILL.md`` (required by ``load_skill_from_dir``).
     """
-    name = skill.strip("/")
-    url = f"{SKILL_HUB_DOWNLOAD_URL.rstrip('/')}/{name}"
-    logger.info(f"Downloading skill '{skill}' from {url}")
+    slug = _resolve_skill_slug(skill)
+    url = f"{SKILL_HUB_DOWNLOAD_URL.rstrip('/')}/{slug}"
+    logger.info(f"Downloading skill '{skill}' (slug='{slug}') from {url}")
 
     response = httpx.get(url, timeout=60, follow_redirects=True)
     if response.status_code != 200:
         raise RuntimeError(
             f"Failed to download skill '{skill}': HTTP {response.status_code}"
         )
+    # The hub may answer 200 with a JSON error body instead of a zip; surface that
+    # clearly rather than letting zipfile fail with "File is not a zip file".
+    if response.content[:2] != b"PK":
+        ct = response.headers.get("content-type", "")
+        raise RuntimeError(
+            f"Skill '{skill}' (slug='{slug}') download did not return a zip "
+            f"(content-type={ct!r}, {len(response.content)} bytes)"
+        )
 
     # Extract to a staging dir first; the final directory must be named after
     # the skill's declared name (ADK's load_skill_from_dir enforces this).
-    staging = dest_dir / f"{name.split('/')[-1]}__staging"
+    staging = dest_dir / f"{slug.split('/')[-1]}__staging"
     if staging.exists():
         shutil.rmtree(staging)
     staging.mkdir(parents=True)
