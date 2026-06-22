@@ -24,6 +24,8 @@ Only ``types`` and ``utils`` are imported: ``app.py`` builds the live agent at
 import time, so it is intentionally left out to keep these tests offline.
 """
 
+import pytest
+
 from veadk.cloud.harness_app.types import (
     HarnessConfig,
     HarnessOverrides,
@@ -31,7 +33,11 @@ from veadk.cloud.harness_app.types import (
     InvokeHarnessResponse,
     RunAgentRequest,
 )
-from veadk.cloud.harness_app.utils import split_csv
+from veadk.cloud.harness_app.utils import (
+    _download_and_extract_skill,
+    _resolve_skill_slug,
+    split_csv,
+)
 from veadk.consts import DEFAULT_MODEL_AGENT_NAME
 from veadk.prompts.agent_default_prompt import DEFAULT_INSTRUCTION
 
@@ -142,3 +148,79 @@ class TestSplitCsv:
 
     def test_drops_blank_segments(self):
         assert split_csv("a,,  ,b") == ["a", "b"]
+
+
+class _FakeResp:
+    """Minimal stand-in for an ``httpx.Response``."""
+
+    def __init__(self, *, status_code=200, json_data=None, content=b"", headers=None):
+        self.status_code = status_code
+        self._json = json_data
+        self.content = content
+        self.headers = headers or {}
+
+    def json(self):
+        return self._json
+
+
+class TestResolveSkillSlug:
+    def test_exact_name_match_wins_even_when_not_first(self, monkeypatch):
+        # The hub ranks "smart-web-scraper" above the exact "web-scraper"; the
+        # exact Name match must still win (we scan the whole page, not just [0]).
+        def fake_get(url, params=None, **kwargs):
+            assert params["query"] == "web-scraper"
+            return _FakeResp(
+                json_data={
+                    "Skills": [
+                        {
+                            "Name": "smart-web-scraper",
+                            "Slug": "clawhub/m/smart-web-scraper",
+                        },
+                        {"Name": "web-scraper", "Slug": "clawhub/y/web-scraper"},
+                    ]
+                }
+            )
+
+        monkeypatch.setattr("veadk.cloud.harness_app.utils.httpx.get", fake_get)
+        assert _resolve_skill_slug("web-scraper") == "clawhub/y/web-scraper"
+
+    def test_value_with_slash_is_treated_as_explicit_slug(self, monkeypatch):
+        def boom(*args, **kwargs):
+            raise AssertionError("must not search when given an explicit slug")
+
+        monkeypatch.setattr("veadk.cloud.harness_app.utils.httpx.get", boom)
+        assert _resolve_skill_slug("clawhub/org/my-skill") == "clawhub/org/my-skill"
+
+    def test_no_exact_match_raises(self, monkeypatch):
+        monkeypatch.setattr(
+            "veadk.cloud.harness_app.utils.httpx.get",
+            lambda *a, **k: _FakeResp(
+                json_data={"Skills": [{"Name": "other", "Slug": "clawhub/o/other"}]}
+            ),
+        )
+        with pytest.raises(RuntimeError, match="not found in the skill hub"):
+            _resolve_skill_slug("nonexistent-skill")
+
+    def test_search_http_error_raises(self, monkeypatch):
+        monkeypatch.setattr(
+            "veadk.cloud.harness_app.utils.httpx.get",
+            lambda *a, **k: _FakeResp(status_code=500, json_data={}),
+        )
+        with pytest.raises(RuntimeError, match="failed: HTTP 500"):
+            _resolve_skill_slug("whatever")
+
+
+class TestDownloadNonZip:
+    def test_non_zip_200_gives_clear_error(self, monkeypatch, tmp_path):
+        # An explicit slug skips the search; a 200 JSON error body (not a zip)
+        # must surface clearly rather than as a BadZipFile.
+        monkeypatch.setattr(
+            "veadk.cloud.harness_app.utils.httpx.get",
+            lambda *a, **k: _FakeResp(
+                status_code=200,
+                content=b'{"Error":{"Code":"InternalError"}}',
+                headers={"content-type": "application/json"},
+            ),
+        )
+        with pytest.raises(RuntimeError, match="did not return a zip"):
+            _download_and_extract_skill("clawhub/org/my-skill", tmp_path)
