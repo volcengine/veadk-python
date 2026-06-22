@@ -166,14 +166,33 @@ def _prepare_codex_home(shim_url: str, model: str) -> str:
         return cached
 
     home = tempfile.mkdtemp(prefix="veadk-codex-")
+    # Defaults tuned for a server-side agent on a single chat backend:
+    # - review_model points the auto-review reviewer at the configured model;
+    #   Codex's default reviewer ("codex-auto-review") is not a real model on
+    #   the backend and would 404 through the shim.
+    # - approval_policy=never + sandbox_mode=danger-full-access let the agent
+    #   read, write, run commands and reach the network (e.g. fetch from
+    #   arXiv) without an approval round-trip.
+    # - disable_response_storage: the chat-backed Responses shim has no
+    #   server-side response store.
     config = (
         f'model = "{model}"\n'
-        f'model_provider = "{_PROVIDER_ID}"\n\n'
+        f'model_provider = "{_PROVIDER_ID}"\n'
+        f'review_model = "{model}"\n'
+        f'approval_policy = "never"\n'
+        f'sandbox_mode = "danger-full-access"\n'
+        f"disable_response_storage = true\n"
+        f'model_reasoning_effort = "medium"\n'
+        f'personality = "pragmatic"\n\n'
         f"[model_providers.{_PROVIDER_ID}]\n"
         f'name = "{_PROVIDER_ID}"\n'
         f'base_url = "{shim_url}/v1"\n'
         f'env_key = "{_KEY_ENV}"\n'
-        f'wire_api = "responses"\n'
+        f'wire_api = "responses"\n\n'
+        # Only consulted under sandbox_mode="workspace-write"; harmless under
+        # full-access, but lets a narrower mode still reach the network.
+        f"[sandbox_workspace_write]\n"
+        f"network_access = true\n"
     )
     with open(os.path.join(home, "config.toml"), "w", encoding="utf-8") as f:
         f.write(config)
