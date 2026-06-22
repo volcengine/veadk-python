@@ -62,6 +62,23 @@ Prefix `TOOL_`, configured only when the corresponding tool is used.
 | VOD | `TOOL_VOD_GROUPS` | Video editing capability groups |
 | | `TOOL_VOD_TIMEOUT` | Connection timeout |
 
+## Harness Extension
+
+Prefix `HARNESS_`, used to attach optional Harness plugins to HarnessApp Runtime or `Runner`. The Harness Extension is bundled with VeADK; install the `veadk-python[harness]` extra only when you want the optional `headroom` compaction provider.
+
+| Variable | Meaning |
+| :- | :- |
+| `HARNESS_ENHANCE_ENABLED` | Enable Harness plugins; accepts `true` / `false`. |
+| `HARNESS_ENHANCE_COMPONENTS` | Enabled components, comma-separated; common value: `invocation_context,compactor,response_verification`. |
+| `HARNESS_PROFILE` | Plugin runtime profile for policy selection; default `default`. |
+| `HARNESS_COMPRESSION_PROVIDER` | Tool-result compaction provider, default `builtin`; optional `headroom`. |
+| `HARNESS_MAX_CONTEXT_CHARS` | Context compaction threshold, default `24000`. |
+| `HARNESS_MAX_TOOL_RESULT_CHARS` | Single tool-result compaction threshold, default `4000`. |
+| `HARNESS_VERIFIER_MODE` | Final-response verification mode, `observe` or `block`; default `observe`. |
+| `HARNESS_STORE_PATH` | Optional JSONL event store path; in-memory store is used when unset. |
+
+The `harness_enhance` block maps to these environment variables when deploying a HarnessApp Runtime. Prefer `harness.yaml` or `veadk agentkit invoke` flags for normal developer workflows; use environment variables for platform integration and container runtimes.
+
 ## Databases
 
 Prefix `DATABASE_`, grouped by storage type. Memory and the knowledge base read the matching config based on the selected backend.

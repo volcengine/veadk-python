@@ -34,6 +34,7 @@ import zipfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import frontmatter
 import httpx
@@ -100,9 +101,12 @@ def _load_builtin_tool(name: str) -> Any:
 
 
 # Skill hub download endpoint. A skill name in a harness is the path after
-# `/download/`, e.g. "clawhub/lgwventrue/system-file-handler".
+# `/download/`, e.g. "namespace/owner/skill-name".
 SKILL_HUB_DOWNLOAD_URL = os.getenv(
     "SKILL_HUB_DOWNLOAD_URL", "https://skills.volces.com/v1/skills/download"
+)
+SKILL_HUB_SEARCH_URL = os.getenv(
+    "SKILL_HUB_SEARCH_URL", "https://skills.volces.com/v1/skills"
 )
 
 # Maps HarnessConfig field names to their environment variables. ``app_name`` is
@@ -165,7 +169,7 @@ def _download_and_extract_skill(skill: str, dest_dir: Path) -> Path:
 
     Args:
         skill: Skill identifier — the hub path after ``/download/``
-            (e.g. ``"clawhub/lgwventrue/system-file-handler"``).
+            (e.g. ``"namespace/owner/skill-name"``).
         dest_dir: Base directory to extract into; the skill is placed in a
             subdirectory named after its declared name in ``SKILL.md``.
 
@@ -173,15 +177,7 @@ def _download_and_extract_skill(skill: str, dest_dir: Path) -> Path:
         The directory the skill was extracted to. Its name matches the skill's
         declared name in ``SKILL.md`` (required by ``load_skill_from_dir``).
     """
-    name = skill.strip("/")
-    url = f"{SKILL_HUB_DOWNLOAD_URL.rstrip('/')}/{name}"
-    logger.info(f"Downloading skill '{skill}' from {url}")
-
-    response = httpx.get(url, timeout=60, follow_redirects=True)
-    if response.status_code != 200:
-        raise RuntimeError(
-            f"Failed to download skill '{skill}': HTTP {response.status_code}"
-        )
+    name, archive = _download_skill_archive(skill)
 
     # Extract to a staging dir first; the final directory must be named after
     # the skill's declared name (ADK's load_skill_from_dir enforces this).
@@ -190,7 +186,7 @@ def _download_and_extract_skill(skill: str, dest_dir: Path) -> Path:
         shutil.rmtree(staging)
     staging.mkdir(parents=True)
     staging_root = staging.resolve()
-    with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
+    with zipfile.ZipFile(io.BytesIO(archive)) as zf:
         for member in zf.namelist():
             # Guard against path traversal (zip-slip).
             if not (staging / member).resolve().is_relative_to(staging_root):
@@ -215,6 +211,89 @@ def _download_and_extract_skill(skill: str, dest_dir: Path) -> Path:
 
     logger.info(f"Extracted skill '{skill}' (name='{declared_name}') to {skill_dir}")
     return skill_dir
+
+
+def _download_skill_archive(skill: str) -> tuple[str, bytes]:
+    name = skill.strip("/")
+    response = _download_skill_response(name)
+    if response.status_code == 200 and _looks_like_zip(response.content):
+        return name, response.content
+
+    resolved_name = _resolve_skill_download_name(name)
+    if resolved_name and resolved_name != name:
+        response = _download_skill_response(resolved_name)
+        if response.status_code == 200 and _looks_like_zip(response.content):
+            return resolved_name, response.content
+
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Failed to download skill '{skill}': HTTP {response.status_code}"
+        )
+    raise RuntimeError(
+        f"Failed to download skill '{skill}': response is not a zip archive"
+    )
+
+
+def _download_skill_response(name: str) -> httpx.Response:
+    url = f"{SKILL_HUB_DOWNLOAD_URL.rstrip('/')}/{name}"
+    logger.info(f"Downloading skill '{name}' from {url}")
+    return httpx.get(url, timeout=60, follow_redirects=True)
+
+
+def _looks_like_zip(content: bytes) -> bool:
+    return content.startswith(b"PK\x03\x04") or content.startswith(b"PK\x05\x06")
+
+
+def _resolve_skill_download_name(name: str) -> str | None:
+    if "/" in name:
+        return None
+
+    query = urlencode({"query": name, "pageNumber": 1, "pageSize": 10})
+    url = f"{SKILL_HUB_SEARCH_URL.rstrip('/')}?{query}"
+    try:
+        response = httpx.get(url, timeout=30, follow_redirects=True)
+        if response.status_code != 200:
+            return None
+        data = response.json()
+    except Exception:
+        return None
+
+    for item in _skill_search_items(data):
+        slug = _skill_item_text(item, "Slug")
+        if slug and _skill_item_matches(name, item):
+            logger.info(f"Resolved skill short name '{name}' to '{slug}'")
+            return slug.strip("/")
+    return None
+
+
+def _skill_search_items(data: object) -> list[dict[str, object]]:
+    if not isinstance(data, dict):
+        return []
+    items = data.get("Skills") or data.get("Items") or data.get("skills")
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _skill_item_matches(name: str, item: dict[str, object]) -> bool:
+    normalized = _normalize_skill_token(name)
+    tokens = {
+        _normalize_skill_token(_skill_item_text(item, "Name")),
+        _normalize_skill_token(_skill_item_text(item, "Slug")),
+        _normalize_skill_token(_skill_item_text(item, "Slug").rsplit("/", 1)[-1]),
+        _normalize_skill_token(_skill_item_text(item, "SourceRepo")),
+        _normalize_skill_token(_skill_item_text(item, "SourceRepo").rsplit("/", 1)[-1]),
+    }
+    return normalized in tokens
+
+
+def _skill_item_text(item: dict[str, object], key: str) -> str:
+    value = item.get(key) or item.get(key.lower())
+    return value if isinstance(value, str) else ""
+
+
+def _normalize_skill_token(value: str) -> str:
+    return value.strip().lower().replace("_", "-")
 
 
 class SkillLoadError(RuntimeError):

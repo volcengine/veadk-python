@@ -38,6 +38,35 @@ veadk agentkit init
 veadk agentkit launch
 ```
 
+## Invoke HarnessApp Runtime
+
+`veadk agentkit invoke` can call a HarnessApp Runtime directly and enable Harness Extension for a single request. Common flags:
+
+| Flag | Description |
+| :-- | :-- |
+| `--harness` | Agent name inside HarnessApp. |
+| `--endpoint` | Runtime endpoint. |
+| `--apikey` | Runtime API key. |
+| `--model-id` | One-shot model override. |
+| `--tools` | One-shot tool override, comma-separated. |
+| `--skills` | One-shot skill override, comma-separated. |
+| `--enable-harness-enhance` | Enable Harness Extension for this request. |
+| `--harness-components` | Enabled Harness components for this request, comma-separated. |
+| `--harness-profile` | Optional runtime profile. |
+| `--harness-compression-provider` | Optional compaction provider, default `builtin`. |
+
+```bash
+veadk agentkit invoke \
+  --harness research-agent \
+  --endpoint "$HARNESS_URL" \
+  --apikey "$HARNESS_KEY" \
+  --model-id "your-model-id" \
+  --tools web_search,run_code \
+  --enable-harness-enhance \
+  --harness-components "invocation_context,compactor,response_verification" \
+  "Summarize the tool results with evidence."
+```
+
 ## Further reference
 
 For the full parameter details of each subcommand, see the [AgentKit CLI](https://volcengine.github.io/agentkit-sdk-python/content/2.agentkit-cli/1.overview.html).
