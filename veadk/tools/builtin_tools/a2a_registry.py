@@ -79,14 +79,14 @@ def build_a2a_registry_tools(
     def a2a_registry_task_poll(
         agent_name: str, task_id: str, history_length: int = 10
     ) -> dict[str, Any]:
-        """Check the status of an existing remote A2A task once.
+        """Check the status of an existing remote A2A task.
 
         Use this after `a2a_registry_task_create` returns a `task.id` without a
-        final response. This calls A2A `tasks/get` once for the same
+        final response. This tool calls A2A `tasks/get` once with the same
         `agent_name` and `task_id`. If `is_terminal` is false, do not create a
-        new task; call this tool again with the same `task_id` until the status
-        is one of `completed`, `failed`, `canceled`, or `rejected`. When the task
-        is terminal, use `response.text` if present to answer the user.
+        new task; call this tool again with the same `task_id` until the task
+        reaches a terminal state. When the task is terminal, return the A2A
+        task's query result to the user.
         """
 
         try:
