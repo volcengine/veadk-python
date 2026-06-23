@@ -27,8 +27,12 @@ from veadk.a2a.registry_client import (
     create_task,
     poll_task,
     search_agent_cards,
+    truncate_utf8_bytes,
 )
-from veadk.tools.builtin_tools.a2a_registry import build_a2a_registry_tools
+from veadk.tools.builtin_tools.a2a_registry import (
+    build_a2a_registry_tools,
+    build_remote_a2a_agent_tools,
+)
 
 
 def _mock_response(payload: dict, status_code: int = 200) -> Mock:
@@ -104,6 +108,37 @@ def test_search_agent_cards_sanitizes_and_signs_request(post: Mock):
     assert "secret-token" not in serialized
     assert "Authorization" not in serialized
     assert "https://example.test/a2a" not in serialized
+
+
+@patch.dict(
+    "os.environ",
+    {
+        "AGENTKIT_ACCESS_KEY": "ak-test",
+        "AGENTKIT_SECRET_KEY": "sk-test",
+    },
+    clear=False,
+)
+@patch("veadk.a2a.registry_client.requests.post")
+def test_search_agent_cards_truncates_prompt_to_2048_utf8_bytes(post: Mock):
+    card = _agent_card()
+    post.return_value = _mock_response(
+        {
+            "ResponseMetadata": {"RequestId": "req-1"},
+            "Result": {"AgentCards": [json.dumps(card)], "TotalCount": 1},
+        }
+    )
+    prompt = "番茄炒蛋" * 300
+
+    search_agent_cards(
+        prompt,
+        3,
+        AgentKitA2ARegistryConfig(space_id="space-test"),
+    )
+
+    request_body = json.loads(post.call_args.kwargs["data"].decode("utf-8"))
+    request_prompt = request_body["Prompt"]
+    assert len(request_prompt.encode("utf-8")) <= 2048
+    assert request_prompt == truncate_utf8_bytes(prompt, 2048)
 
 
 @patch.dict(
@@ -236,9 +271,7 @@ def test_poll_task_returns_terminal_without_sleep(post: Mock, sleep: Mock):
                 "result": {
                     "id": "task-1",
                     "status": {"state": "completed"},
-                    "artifacts": [
-                        {"parts": [{"kind": "text", "text": "任务完成。"}]}
-                    ],
+                    "artifacts": [{"parts": [{"kind": "text", "text": "任务完成。"}]}],
                 }
             }
         ),
@@ -289,6 +322,77 @@ def test_a2a_registry_tool_descriptions_guide_model_flow():
     assert "do not create a new task" in poll_doc
     assert "completed" in poll_doc
     assert "rejected" in poll_doc
+
+
+@patch.dict(
+    "os.environ",
+    {
+        "AGENTKIT_ACCESS_KEY": "ak-test",
+        "AGENTKIT_SECRET_KEY": "sk-test",
+    },
+    clear=False,
+)
+@patch("veadk.a2a.registry_client.requests.post")
+def test_build_remote_a2a_agent_tools_searches_gets_and_sends(post: Mock):
+    card = _agent_card()
+    post.side_effect = [
+        _mock_response(
+            {
+                "ResponseMetadata": {"RequestId": "search-req"},
+                "Result": {"AgentCards": [json.dumps(card)], "TotalCount": 1},
+            }
+        ),
+        _mock_response(
+            {
+                "ResponseMetadata": {"RequestId": "get-req"},
+                "Result": {
+                    "Id": "agent-id",
+                    "Status": "running",
+                    "AgentCard": json.dumps(card),
+                },
+            }
+        ),
+        _mock_response(
+            {
+                "result": {
+                    "kind": "message",
+                    "parts": [{"kind": "text", "text": "今天北京晴。"}],
+                }
+            }
+        ),
+    ]
+    config = AgentKitA2ARegistryConfig(space_id="space-test", top_k=7)
+
+    tools = build_remote_a2a_agent_tools("北京天气", config)
+    assert [tool.__name__ for tool in tools] == ["remote_a2a_weather_a2a_agent"]
+    assert post.call_count == 1
+    assert post.call_args_list[0].kwargs["params"]["Action"] == "SearchAgentCards"
+
+    result = tools[0](input="北京天气")
+    tool_doc = " ".join((tools[0].__doc__ or "").split())
+
+    search_body = json.loads(post.call_args_list[0].kwargs["data"].decode("utf-8"))
+    assert search_body["TopK"] == 7
+    assert "Weather agent" in tool_doc
+    assert "a2a_registry_task_poll" in tool_doc
+    assert "Weather-A2A-Agent" in tool_doc
+    assert result["outcome"] == "success"
+    assert result["selected_agent"]["name"] == "Weather-A2A-Agent"
+    assert result["response"]["text"] == "今天北京晴。"
+    assert post.call_args_list[0].kwargs["params"]["Action"] == "SearchAgentCards"
+    assert post.call_args_list[1].kwargs["params"]["Action"] == "GetA2aAgent"
+    assert post.call_args_list[2].args[0] == "https://example.test/a2a"
+
+
+@patch("veadk.tools.builtin_tools.a2a_registry.search_agent_cards")
+def test_build_remote_a2a_agent_tools_returns_empty_on_search_failure(search: Mock):
+    search.side_effect = RegistryError("AGENT_NOT_FOUND", "no agents")
+
+    tools = build_remote_a2a_agent_tools(
+        "unknown task", AgentKitA2ARegistryConfig(space_id="space-test")
+    )
+
+    assert tools == []
 
 
 @patch("veadk.tools.builtin_tools.a2a_registry.search_agent_cards")
@@ -363,11 +467,14 @@ def test_agentkit_http_error_uses_safe_diagnostics():
         "401 Client Error", response=response
     )
 
-    with patch.dict(
-        "os.environ",
-        {"AGENTKIT_ACCESS_KEY": "ak-test", "AGENTKIT_SECRET_KEY": "sk-test"},
-        clear=False,
-    ), patch("veadk.a2a.registry_client.requests.post", return_value=response):
+    with (
+        patch.dict(
+            "os.environ",
+            {"AGENTKIT_ACCESS_KEY": "ak-test", "AGENTKIT_SECRET_KEY": "sk-test"},
+            clear=False,
+        ),
+        patch("veadk.a2a.registry_client.requests.post", return_value=response),
+    ):
         with pytest.raises(RegistryError) as ctx:
             search_agent_cards(
                 "weather",
@@ -378,9 +485,7 @@ def test_agentkit_http_error_uses_safe_diagnostics():
     assert ctx.value.code == "AGENTKIT_OPENAPI_FAILED"
     assert ctx.value.diagnostics["status_code"] == 401
     assert ctx.value.diagnostics["request_id"] == "req-401"
-    assert ctx.value.diagnostics["response_error"]["Code"] == (
-        "SignatureDoesNotMatch"
-    )
+    assert ctx.value.diagnostics["response_error"]["Code"] == ("SignatureDoesNotMatch")
     serialized = json.dumps(ctx.value.diagnostics, ensure_ascii=False)
     assert "Authorization" not in serialized
     assert "ak-test" not in serialized

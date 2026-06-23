@@ -20,12 +20,14 @@ ways on a single FastAPI app:
 * ``POST /harness/invoke`` — the harness entry point, with once-time ``harness``
   overrides (clone the base agent, apply the override, run a throwaway runner).
 * The Google ADK web/api routes (``/run``, ``/run_sse``, ``/list-apps``, session
-  management, …), served by an ``AdkWebServer`` over the single in-memory agent.
+  management, …), served by an ``AdkWebServer`` over the single in-memory agent;
+  ``/run_sse`` is wrapped so harness overrides and per-turn registry tools can
+  be applied before the model call.
 * The A2A protocol routes (agent card at ``/.well-known/agent-card.json`` plus the
   JSON-RPC endpoint), mounted at ``/`` for the base agent.
 
-The ADK and A2A surfaces serve the base agent only; once-time overrides are a
-``/harness/invoke`` feature.
+The A2A protocol surface serves the base agent only. Harness once-time overrides
+are available through ``/harness/invoke`` and the wrapped ``/run_sse`` route.
 
 Run with either:
     python app.py
@@ -69,7 +71,8 @@ from veadk.cloud.harness_app.types import (
 from veadk.cloud.harness_app.utils import (
     SkillLoadError,
     ToolLoadError,
-    spawn_harness_agent,
+    has_a2a_registry_config,
+    spawn_harness_run_agent,
 )
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.runner import Runner
@@ -83,6 +86,16 @@ HARNESS_NAME = os.getenv("HARNESS_NAME", "default")
 DEFAULT_MAX_LLM_CALLS = (
     int(os.environ["MAX_LLM_CALLS"]) if os.environ.get("MAX_LLM_CALLS") else None
 )
+
+
+def _content_text(content: Any) -> str:
+    parts = getattr(content, "parts", None) or []
+    texts = []
+    for part in parts:
+        text = getattr(part, "text", None)
+        if text:
+            texts.append(text)
+    return "\n".join(texts)
 
 
 class _HarnessAgentLoader(BaseAgentLoader):
@@ -122,7 +135,8 @@ class HarnessRunAgentRequest(RunAgentRequest):
     """ADK ``/run_sse`` request plus an optional once-time harness override.
 
     When ``harness`` is set, the streaming run uses a spawned agent (base agent
-    cloned with the override applied); otherwise it uses the base agent.
+    cloned with the override applied). A registry-enabled base agent is also
+    cloned per turn so dynamic remote A2A tools stay scoped to that turn.
     """
 
     harness: HarnessOverrides | None = None
@@ -206,8 +220,11 @@ class HarnessApp:
                     with tempfile.TemporaryDirectory(
                         prefix="harness_invoke_"
                     ) as work_dir:
-                        agent = spawn_harness_agent(
-                            self.agent, request.harness, download_dir=Path(work_dir)
+                        agent = spawn_harness_run_agent(
+                            self.agent,
+                            request.prompt,
+                            request.harness,
+                            download_dir=Path(work_dir),
                         )
                         runner = Runner(
                             agent=agent,
@@ -220,6 +237,19 @@ class HarnessApp:
                             session_id=request.run_agent_request.session_id,
                             run_config=run_config,
                         )
+                elif has_a2a_registry_config(self.agent):
+                    agent = spawn_harness_run_agent(self.agent, request.prompt)
+                    runner = Runner(
+                        agent=agent,
+                        short_term_memory=self.short_term_memory,
+                        app_name=self.harness_name,
+                    )
+                    output = await runner.run(
+                        messages=[request.prompt],
+                        user_id=request.run_agent_request.user_id,
+                        session_id=request.run_agent_request.session_id,
+                        run_config=run_config,
+                    )
                 else:
                     output = await self.runner.run(
                         messages=[request.prompt],
@@ -258,9 +288,10 @@ class HarnessApp:
         """Override ADK's ``/run_sse`` so it honors once-time harness overrides.
 
         ADK's default ``/run_sse`` always runs the served (base) agent. We wrap it:
-        when the request carries a ``harness`` override, stream a *spawned* agent
-        (base cloned + override applied); otherwise **delegate to ADK's original
-        handler unchanged** — so the no-override path is identical to stock run_sse.
+        when the request carries a ``harness`` override or the base agent has an
+        A2A registry, stream a *spawned* agent (base cloned + override and/or
+        dynamic remote A2A tools applied); otherwise delegate to ADK's original
+        handler unchanged.
         """
         # Capture ADK's default /run_sse handler to delegate to when there is no
         # override (keeps the base path bit-for-bit ADK behavior).
@@ -274,7 +305,11 @@ class HarnessApp:
 
         @self.app.post("/run_sse")
         async def run_sse(req: HarnessRunAgentRequest):
-            if req.harness is None and adk_run_sse is not None:
+            if (
+                req.harness is None
+                and not has_a2a_registry_config(self.agent)
+                and adk_run_sse is not None
+            ):
                 # No override -> exactly ADK's default /run_sse.
                 return await adk_run_sse(req)
             return StreamingResponse(
@@ -297,6 +332,7 @@ class HarnessApp:
             streaming_mode=StreamingMode.SSE if req.streaming else StreamingMode.NONE
         )
         work_dir_ctx = None
+        prompt = _content_text(req.new_message)
         try:
             if req.harness is not None:
                 logger.info(f"run_sse once-time override: {req.harness}")
@@ -304,8 +340,9 @@ class HarnessApp:
                 # run, so keep it alive for the whole stream.
                 work_dir_ctx = tempfile.TemporaryDirectory(prefix="harness_run_sse_")
                 try:
-                    agent = spawn_harness_agent(
+                    agent = spawn_harness_run_agent(
                         self.agent,
+                        prompt,
                         req.harness,
                         download_dir=Path(work_dir_ctx.name),
                     )
@@ -313,6 +350,8 @@ class HarnessApp:
                     logger.error(f"Once-time override failed to load: {e}")
                     yield f"data: {json.dumps({'error': str(e)})}\n\n"
                     return
+            elif has_a2a_registry_config(self.agent):
+                agent = spawn_harness_run_agent(self.agent, prompt)
             else:
                 agent = self.agent
 
