@@ -366,10 +366,13 @@ def test_build_remote_a2a_agent_tools_searches_gets_and_sends(post: Mock):
     config = AgentKitA2ARegistryConfig(space_id="space-test", top_k=7)
 
     tools = build_remote_a2a_agent_tools("北京天气", config)
+    assert [tool.__name__ for tool in tools] == ["remote_a2a_weather_a2a_agent"]
+    assert post.call_count == 1
+    assert post.call_args_list[0].kwargs["params"]["Action"] == "SearchAgentCards"
+
     result = tools[0](input="北京天气")
     tool_doc = " ".join((tools[0].__doc__ or "").split())
 
-    assert [tool.__name__ for tool in tools] == ["remote_a2a_weather_a2a_agent"]
     search_body = json.loads(post.call_args_list[0].kwargs["data"].decode("utf-8"))
     assert search_body["TopK"] == 7
     assert "Weather agent" in tool_doc

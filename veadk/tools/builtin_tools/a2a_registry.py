@@ -15,18 +15,12 @@
 from __future__ import annotations
 
 import re
-import time
 from collections.abc import Callable
 from typing import Any
 
 from veadk.a2a.registry_client import (
     AgentKitA2ARegistryConfig,
     RegistryError,
-    _get_a2a_agent,
-    _request_id,
-    _sanitize_get_agent_result,
-    _send_message,
-    _task_or_message_success,
     create_task,
     failure,
     poll_task,
@@ -144,25 +138,11 @@ def build_remote_a2a_agent_tools(
             continue
         seen_agent_names.add(agent_name)
 
-        try:
-            result, card, response, get_duration_ms = _get_a2a_agent(
-                agent_name, resolved_config
-            )
-        except RegistryError as exc:
-            logger.warning(
-                "Skipping dynamic A2A agent tool for "
-                f"{agent_name}: {exc.code}: {exc.message}"
-            )
-            continue
-
         tool_name = _unique_remote_a2a_tool_name(agent_name, index, seen_tool_names)
         tools.append(
             _make_remote_a2a_agent_tool(
                 tool_name=tool_name,
-                result=result,
-                card=card,
-                response=response,
-                get_duration_ms=get_duration_ms,
+                agent=agent,
                 config=resolved_config,
             )
         )
@@ -192,18 +172,14 @@ def _unique_remote_a2a_tool_name(
 def _make_remote_a2a_agent_tool(
     *,
     tool_name: str,
-    result: dict[str, Any],
-    card: dict[str, Any],
-    response: dict[str, Any],
-    get_duration_ms: int,
+    agent: dict[str, Any],
     config: AgentKitA2ARegistryConfig,
 ) -> Callable[..., dict[str, Any]]:
-    selected_agent = _sanitize_get_agent_result(result, card)
-    agent_name = selected_agent.get("name") or result.get("Name") or tool_name
-    agent_description = selected_agent.get("description") or ""
+    agent_name = agent.get("name") or tool_name
+    agent_description = agent.get("description") or ""
     skill_descriptions = "; ".join(
         skill.get("description", "")
-        for skill in selected_agent.get("skills", [])
+        for skill in agent.get("skills", [])
         if isinstance(skill, dict) and skill.get("description")
     )
 
@@ -214,17 +190,7 @@ def _make_remote_a2a_agent_tool(
             if not input or not input.strip():
                 return failure("INVALID_ARGUMENT", "input is required")
 
-            started = time.monotonic()
-            a2a_result = _send_message(card, input, config, task_id=task_id)
-            return _task_or_message_success(
-                a2a_result,
-                selected_agent,
-                {
-                    "get_request_id": _request_id(response),
-                    "get_duration_ms": get_duration_ms,
-                    "duration_ms": int((time.monotonic() - started) * 1000),
-                },
-            )
+            return create_task(agent_name, input, task_id, config)
         except RegistryError as exc:
             return failure(exc.code, exc.message, exc.diagnostics)
         except Exception as exc:  # noqa: BLE001
