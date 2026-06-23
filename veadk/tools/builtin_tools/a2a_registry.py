@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -26,6 +27,9 @@ from veadk.a2a.registry_client import (
     registry_config_from_env,
     search_agent_cards,
 )
+from veadk.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def build_a2a_registry_tools(
@@ -85,8 +89,9 @@ def build_a2a_registry_tools(
         final response. This tool calls A2A `tasks/get` once with the same
         `agent_name` and `task_id`. If `is_terminal` is false, do not create a
         new task; call this tool again with the same `task_id` until the task
-        reaches a terminal state. When the task is terminal, return the A2A
-        task's query result to the user.
+        reaches a terminal state such as `completed`, `failed`, `canceled`, or
+        `rejected`. When the task is terminal, return the A2A task's query
+        result to the user.
         """
 
         try:
@@ -101,3 +106,103 @@ def build_a2a_registry_tools(
         a2a_registry_task_create,
         a2a_registry_task_poll,
     ]
+
+
+def build_remote_a2a_agent_tools(
+    prompt: str,
+    config: AgentKitA2ARegistryConfig | None = None,
+) -> list[Callable[..., dict[str, Any]]]:
+    """Build one-turn remote A2A agent tools from a registry semantic search."""
+
+    resolved_config = config or registry_config_from_env()
+    try:
+        search_result = search_agent_cards(
+            prompt,
+            None,
+            resolved_config,
+            strip_prompt=False,
+        )
+    except RegistryError as exc:
+        logger.warning(f"Skipping dynamic A2A agent tools: {exc.code}: {exc.message}")
+        return []
+
+    agents = search_result.get("agents") or []
+    tools: list[Callable[..., dict[str, Any]]] = []
+    seen_agent_names: set[str] = set()
+    seen_tool_names: set[str] = set()
+    for index, agent in enumerate(agents):
+        agent_name = agent.get("name") if isinstance(agent, dict) else ""
+        if not agent_name or agent_name in seen_agent_names:
+            continue
+        seen_agent_names.add(agent_name)
+
+        tool_name = _unique_remote_a2a_tool_name(agent_name, index, seen_tool_names)
+        tools.append(
+            _make_remote_a2a_agent_tool(
+                tool_name=tool_name,
+                agent=agent,
+                config=resolved_config,
+            )
+        )
+
+    return tools
+
+
+def _unique_remote_a2a_tool_name(
+    agent_name: str, index: int, seen_names: set[str]
+) -> str:
+    normalized = re.sub(r"[^0-9A-Za-z_]+", "_", agent_name).strip("_").lower()
+    if not normalized:
+        normalized = f"agent_{index + 1}"
+    if normalized[0].isdigit():
+        normalized = f"agent_{normalized}"
+
+    base_name = f"remote_a2a_{normalized}"
+    name = base_name
+    suffix = 2
+    while name in seen_names:
+        name = f"{base_name}_{suffix}"
+        suffix += 1
+    seen_names.add(name)
+    return name
+
+
+def _make_remote_a2a_agent_tool(
+    *,
+    tool_name: str,
+    agent: dict[str, Any],
+    config: AgentKitA2ARegistryConfig,
+) -> Callable[..., dict[str, Any]]:
+    agent_name = agent.get("name") or tool_name
+    agent_description = agent.get("description") or ""
+    skill_descriptions = "; ".join(
+        skill.get("description", "")
+        for skill in agent.get("skills", [])
+        if isinstance(skill, dict) and skill.get("description")
+    )
+
+    def remote_a2a_agent_tool(input: str, task_id: str | None = None) -> dict[str, Any]:
+        try:
+            if not input or not input.strip():
+                return failure("INVALID_ARGUMENT", "input is required")
+
+            return create_task(agent_name, input, task_id, config)
+        except RegistryError as exc:
+            return failure(exc.code, exc.message, exc.diagnostics)
+        except Exception as exc:  # noqa: BLE001
+            return failure("INTERNAL_ERROR", str(exc))
+
+    remote_a2a_agent_tool.__name__ = tool_name
+    remote_a2a_agent_tool.__qualname__ = tool_name
+    remote_a2a_agent_tool.__doc__ = (
+        f"Remote A2A agent `{agent_name}`. "
+        f"{agent_description or 'Use this tool when the request matches this remote agent.'} "
+        f"Skills: {skill_descriptions or 'No skills listed.'} "
+        "Put the full user request in `input`. If continuing an existing remote "
+        "task, pass its `task_id`; otherwise leave `task_id` empty. The tool "
+        "returns either `response.text` or a remote `task.id`. If it returns a "
+        f"`task.id` without `response.text`, call `a2a_registry_task_poll` with "
+        f"`agent_name` set to `{agent_name}` and the returned `task_id` until "
+        "the task reaches a terminal state."
+    )
+    return remote_a2a_agent_tool

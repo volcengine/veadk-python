@@ -182,6 +182,15 @@ class TestHarnessConfig:
         assert "_remove_a2a_registry_tools(" in source
         assert "build_a2a_registry_tools(overridden_config)" in source
 
+    def test_registry_dynamic_tools_are_added_per_run(self):
+        utils_source = Path("veadk/cloud/harness_app/utils.py").read_text()
+        app_source = Path("veadk/cloud/harness_app/app.py").read_text()
+
+        assert "build_remote_a2a_agent_tools(prompt, registry_config)" in utils_source
+        assert "def spawn_harness_run_agent(" in utils_source
+        assert "has_a2a_registry_config(self.agent)" in app_source
+        assert "spawn_harness_run_agent(" in app_source
+
 
 class TestRequestResponseSchemas:
     def test_run_agent_request_fields(self):
