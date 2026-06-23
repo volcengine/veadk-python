@@ -484,9 +484,7 @@ def test_agentkit_http_error_uses_safe_diagnostics():
     assert ctx.value.code == "AGENTKIT_OPENAPI_FAILED"
     assert ctx.value.diagnostics["status_code"] == 401
     assert ctx.value.diagnostics["request_id"] == "req-401"
-    assert ctx.value.diagnostics["response_error"]["Code"] == (
-        "SignatureDoesNotMatch"
-    )
+    assert ctx.value.diagnostics["response_error"]["Code"] == ("SignatureDoesNotMatch")
     serialized = json.dumps(ctx.value.diagnostics, ensure_ascii=False)
     assert "Authorization" not in serialized
     assert "ak-test" not in serialized

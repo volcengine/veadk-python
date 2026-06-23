@@ -230,7 +230,8 @@ def _resolve_config(
         space_id=config.space_id or env_config.space_id,
         endpoint=config.endpoint or env_config.endpoint or DEFAULT_ENDPOINT,
         version=config.version or env_config.version or DEFAULT_VERSION,
-        service_name=config.service_name or env_config.service_name
+        service_name=config.service_name
+        or env_config.service_name
         or DEFAULT_SERVICE_NAME,
         region=config.region or env_config.region or DEFAULT_REGION,
         top_k=max(1, min(int(config.top_k or env_config.top_k or DEFAULT_TOP_K), 20)),

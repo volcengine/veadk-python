@@ -123,9 +123,7 @@ def build_remote_a2a_agent_tools(
             strip_prompt=False,
         )
     except RegistryError as exc:
-        logger.warning(
-            f"Skipping dynamic A2A agent tools: {exc.code}: {exc.message}"
-        )
+        logger.warning(f"Skipping dynamic A2A agent tools: {exc.code}: {exc.message}")
         return []
 
     agents = search_result.get("agents") or []
@@ -183,9 +181,7 @@ def _make_remote_a2a_agent_tool(
         if isinstance(skill, dict) and skill.get("description")
     )
 
-    def remote_a2a_agent_tool(
-        input: str, task_id: str | None = None
-    ) -> dict[str, Any]:
+    def remote_a2a_agent_tool(input: str, task_id: str | None = None) -> dict[str, Any]:
         try:
             if not input or not input.strip():
                 return failure("INVALID_ARGUMENT", "input is required")
