@@ -12,11 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from veadk.skills.exceptions import SkillLoadError, SkillMaterializeError
-from veadk.skills.registry import VeSkillRegistry
+"""Exceptions raised while loading skills through the ADK-compatible path."""
 
-__all__ = [
-    "SkillLoadError",
-    "SkillMaterializeError",
-    "VeSkillRegistry",
-]
+
+class SkillLoadError(RuntimeError):
+    """A skill source failed to materialize or load as a Google ADK skill."""
+
+
+class SkillMaterializeError(SkillLoadError):
+    """A skill source could not be converted into local ADK skill directories."""

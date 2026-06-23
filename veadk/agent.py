@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import os
+import warnings
 from typing import TYPE_CHECKING, AsyncGenerator, Dict, Literal, Optional, Union
 
 from google.adk.flows.llm_flows.base_llm_flow import BaseLlmFlow
@@ -496,6 +497,19 @@ class Agent(LlmAgent):
                         "Custom tool detected, default skills_mode is skills_sandbox; set skills_mode to aio_sandbox if you want to run skills with aio_sandbox"
                     )
             logger.info(f"Determined skills_mode: {self.skills_mode}")
+
+        if self.skills_mode == "local":
+            warning_message = (
+                "Agent(skills=..., skills_mode='local') is deprecated for legacy "
+                "local skill loading, including local paths and remote sources "
+                "loaded for local execution. For Google ADK-compatible local "
+                "skills, load skills with google.adk.skills.load_skill_from_dir. "
+                "For remote skill spaces, use veadk.skills.VeSkillRegistry "
+                "with google.adk.tools.skill_toolset.SkillToolset via "
+                "Agent(tools=[...])."
+            )
+            warnings.warn(warning_message, DeprecationWarning, stacklevel=2)
+            logger.warning(warning_message)
 
         for item in self.skills:
             if not item or str(item).strip() == "":
