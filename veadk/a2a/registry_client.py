@@ -36,6 +36,7 @@ DEFAULT_REGION = "cn-beijing"
 DEFAULT_TOP_K = 3
 DEFAULT_TIMEOUT_MS = 60000
 DEFAULT_POLL_INTERVAL_MS = 5000
+SEARCH_PROMPT_MAX_BYTES = 2048
 TERMINAL_STATES = {"completed", "failed", "canceled", "rejected"}
 
 
@@ -99,6 +100,8 @@ def search_agent_cards(
     prompt: str,
     top_k: int | None = None,
     config: AgentKitA2ARegistryConfig | None = None,
+    *,
+    strip_prompt: bool = True,
 ) -> dict[str, Any]:
     """Search AgentKit A2A registry by prompt and return sanitized AgentCards."""
 
@@ -109,10 +112,12 @@ def search_agent_cards(
     _require_space_id(config)
 
     safe_top_k = max(1, min(int(top_k or config.top_k or DEFAULT_TOP_K), 20))
+    request_prompt = prompt.strip() if strip_prompt else prompt
+    request_prompt = truncate_utf8_bytes(request_prompt, SEARCH_PROMPT_MAX_BYTES)
     response, request_duration_ms = _agentkit_post(
         config,
         "SearchAgentCards",
-        {"SpaceId": config.space_id, "Prompt": prompt.strip(), "TopK": safe_top_k},
+        {"SpaceId": config.space_id, "Prompt": request_prompt, "TopK": safe_top_k},
     )
     result = response.get("Result") or {}
     raw_cards = result.get("AgentCards") or []
@@ -143,6 +148,15 @@ def search_agent_cards(
             },
         }
     )
+
+
+def truncate_utf8_bytes(text: str, max_bytes: int = SEARCH_PROMPT_MAX_BYTES) -> str:
+    """Return ``text`` truncated to at most ``max_bytes`` UTF-8 bytes."""
+
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
 
 
 def create_task(

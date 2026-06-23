@@ -21,6 +21,8 @@ Two factory functions cover the two creation paths:
   from the skill hub and mounting them as an ADK skill toolset.
 * :func:`spawn_harness_agent` — temporary, one-off creation that clones the base
   agent and applies a per-request override (incremental tools/skills on top).
+* :func:`spawn_harness_run_agent` — per-turn clone that also attaches dynamic
+  registry-discovered remote A2A tools for the current user message.
 """
 
 import io
@@ -70,6 +72,8 @@ __all__ = [
     "config_from_env",
     "init_harness_agent",
     "spawn_harness_agent",
+    "spawn_harness_run_agent",
+    "has_a2a_registry_config",
 ]
 
 
@@ -422,6 +426,36 @@ def _apply_registry_overrides(
     setattr(agent, _REGISTRY_CONFIG_ATTR, overridden_config)
 
 
+def has_a2a_registry_config(agent: Agent) -> bool:
+    """Return whether ``agent`` has an AgentKit A2A registry configured."""
+
+    return getattr(agent, _REGISTRY_CONFIG_ATTR, None) is not None
+
+
+def _add_dynamic_a2a_agent_tools(agent: Agent, prompt: str) -> None:
+    registry_config = getattr(agent, _REGISTRY_CONFIG_ATTR, None)
+    if registry_config is None or not prompt or not prompt.strip():
+        return
+
+    from veadk.tools.builtin_tools.a2a_registry import build_remote_a2a_agent_tools
+
+    dynamic_tools = build_remote_a2a_agent_tools(prompt, registry_config)
+    if not dynamic_tools:
+        return
+
+    existing = {name for tool in agent.tools if (name := _tool_name(tool))}
+    attached = 0
+    for tool in dynamic_tools:
+        name = _tool_name(tool)
+        if not name or name in existing:
+            continue
+        agent.tools.append(tool)
+        existing.add(name)
+        attached += 1
+    if attached:
+        logger.info(f"Attached {attached} dynamic A2A agent tools for this turn.")
+
+
 def spawn_harness_agent(
     base_agent: Agent, overrides: HarnessOverrides, download_dir: Path | None = None
 ) -> Agent:
@@ -461,4 +495,21 @@ def spawn_harness_agent(
         overrides,
     )
 
+    return cloned
+
+
+def spawn_harness_run_agent(
+    base_agent: Agent,
+    prompt: str,
+    overrides: HarnessOverrides | None = None,
+    download_dir: Path | None = None,
+) -> Agent:
+    """Clone a harness agent for one run and attach per-turn dynamic tools."""
+
+    if overrides is not None:
+        cloned = spawn_harness_agent(base_agent, overrides, download_dir=download_dir)
+    else:
+        cloned = base_agent.clone(update={})
+
+    _add_dynamic_a2a_agent_tools(cloned, prompt)
     return cloned
