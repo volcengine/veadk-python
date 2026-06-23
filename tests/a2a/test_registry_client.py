@@ -271,9 +271,7 @@ def test_poll_task_returns_terminal_without_sleep(post: Mock, sleep: Mock):
                 "result": {
                     "id": "task-1",
                     "status": {"state": "completed"},
-                    "artifacts": [
-                        {"parts": [{"kind": "text", "text": "任务完成。"}]}
-                    ],
+                    "artifacts": [{"parts": [{"kind": "text", "text": "任务完成。"}]}],
                 }
             }
         ),
@@ -469,11 +467,14 @@ def test_agentkit_http_error_uses_safe_diagnostics():
         "401 Client Error", response=response
     )
 
-    with patch.dict(
-        "os.environ",
-        {"AGENTKIT_ACCESS_KEY": "ak-test", "AGENTKIT_SECRET_KEY": "sk-test"},
-        clear=False,
-    ), patch("veadk.a2a.registry_client.requests.post", return_value=response):
+    with (
+        patch.dict(
+            "os.environ",
+            {"AGENTKIT_ACCESS_KEY": "ak-test", "AGENTKIT_SECRET_KEY": "sk-test"},
+            clear=False,
+        ),
+        patch("veadk.a2a.registry_client.requests.post", return_value=response),
+    ):
         with pytest.raises(RegistryError) as ctx:
             search_agent_cards(
                 "weather",
