@@ -34,7 +34,11 @@ from veadk.cloud.harness_app.types import (
     RunAgentRequest,
 )
 from veadk.cloud.harness_app.env_mapping import to_runtime_env
-from veadk.cloud.harness_app.utils import config_from_env, split_csv
+from veadk.cloud.harness_app.utils import (
+    agent_name_from_harness,
+    config_from_env,
+    split_csv,
+)
 from veadk.consts import DEFAULT_MODEL_AGENT_NAME
 from veadk.prompts.agent_default_prompt import DEFAULT_INSTRUCTION
 
@@ -91,6 +95,7 @@ class TestHarnessConfig:
     def test_adds_creation_time_fields(self):
         assert set(_fields(HarnessConfig)) == set(_fields(HarnessOverrides)) | {
             "app_name",
+            "description",
             "knowledgebase_type",
             "longterm_memory_type",
             "shortterm_memory_type",
@@ -232,3 +237,26 @@ class TestSplitCsv:
 
     def test_drops_blank_segments(self):
         assert split_csv("a,,  ,b") == ["a", "b"]
+
+
+class TestAgentNameFromHarness:
+    """The agent name (and thus the A2A card name) is derived from the harness
+    name, normalized to a valid ADK identifier."""
+
+    def test_identifier_passes_through(self):
+        assert agent_name_from_harness("harness_app") == "harness_app"
+
+    def test_hyphens_become_underscores(self):
+        assert agent_name_from_harness("oauth-test") == "oauth_test"
+
+    def test_leading_digit_is_prefixed(self):
+        assert agent_name_from_harness("2048-bot") == "_2048_bot"
+
+    def test_reserved_user_is_escaped(self):
+        assert agent_name_from_harness("user") == "user_"
+
+    def test_result_is_always_a_valid_identifier(self):
+        for raw in ["oauth-test", "2048-bot", "user", "a.b c", ""]:
+            name = agent_name_from_harness(raw)
+            assert name.isidentifier(), raw
+            assert name != "user"

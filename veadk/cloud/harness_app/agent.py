@@ -22,6 +22,7 @@ memory backend defaults to ``local``.
 Environment variables:
     MODEL_NAME              Reasoning model name. Default: VeADK default model.
     SYSTEM_PROMPT           Agent instruction. Default: VeADK default instruction.
+    DESCRIPTION             Agent description (e.g. for A2A discovery). Default: VeADK default description.
     TOOLS                   Comma-separated built-in tool names, e.g. "web_search,link_reader".
     SKILLS                  Comma-separated skill names, e.g. "data-visualization-cloud,...".
     RUNTIME                 Agent runtime backend: "adk" (default) or "codex".
