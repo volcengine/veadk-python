@@ -27,6 +27,7 @@ Two factory functions cover the two creation paths:
 
 import io
 import os
+import re
 import shutil
 import tempfile
 import zipfile
@@ -66,6 +67,7 @@ __all__ = [
     "HarnessConfig",
     "HarnessOverrides",
     "split_csv",
+    "agent_name_from_harness",
     "build_skill_toolset",
     "SkillLoadError",
     "ToolLoadError",
@@ -138,6 +140,24 @@ def split_csv(value: str) -> list[str]:
     ``"web_search, web_fetch"`` -> ``["web_search", "web_fetch"]``; ``""`` -> ``[]``.
     """
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def agent_name_from_harness(harness_name: str) -> str:
+    """Derive a valid ADK agent name from the harness name.
+
+    The agent name becomes the A2A agent card's ``name``, so it should reflect
+    the harness rather than a shared constant. ADK requires the agent ``name``
+    to be a Python identifier (letters, digits, underscores; not starting with a
+    digit) and forbids ``"user"``, while harness names also allow ``-`` and may
+    start with a digit. Normalize: map every non-identifier char to ``_`` and
+    prefix a digit-leading or empty name with ``_``.
+
+    ``"oauth-test"`` -> ``"oauth_test"``; ``"2048-bot"`` -> ``"_2048_bot"``.
+    """
+    name = re.sub(r"[^0-9A-Za-z_]", "_", harness_name or "")
+    if not name or name[0].isdigit():
+        name = f"_{name}"
+    return f"{name}_" if name == "user" else name
 
 
 def _download_and_extract_skill(skill: str, dest_dir: Path) -> Path:
@@ -316,7 +336,7 @@ def _assemble_agent(config: HarnessConfig) -> tuple[Agent, ShortTermMemory]:
     )
 
     agent = Agent(
-        name="harness_agent",
+        name=agent_name_from_harness(config.app_name),
         model_name=config.model_name,
         instruction=config.system_prompt,
         description=config.description,
