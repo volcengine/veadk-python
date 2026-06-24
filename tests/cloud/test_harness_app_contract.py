@@ -91,6 +91,7 @@ class TestHarnessConfig:
     def test_adds_creation_time_fields(self):
         assert set(_fields(HarnessConfig)) == set(_fields(HarnessOverrides)) | {
             "app_name",
+            "description",
             "knowledgebase_type",
             "longterm_memory_type",
             "shortterm_memory_type",
