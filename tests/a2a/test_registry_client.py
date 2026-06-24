@@ -22,6 +22,7 @@ import requests
 from veadk.a2a.registry_client import (
     AgentKitA2ARegistryConfig,
     RegistryError,
+    _OAUTH_TOKEN_CACHE,
     _agent_auth_headers,
     _volc_sign_v4,
     create_task,
@@ -63,6 +64,41 @@ def _agent_card() -> dict:
                 "name": "Weather",
                 "description": "Query weather",
                 "tags": ["weather"],
+            }
+        ],
+    }
+
+
+def _oauth_agent_card() -> dict:
+    token_url = (
+        "https://userpool-61597ac7-4bcb-4acf-a1d8-fdbfb95333ad."
+        "userpool.auth.id.cn-beijing.volces.com/oauth/token"
+    )
+    return {
+        "name": "Finance Policy Remote Agent",
+        "description": "Finance policy agent",
+        "version": "1.0.0",
+        "url": " https://oauth-agent.test/a2a/ ",
+        "security": [{"oauth2": []}],
+        "securitySchemes": {
+            "oauth2": {
+                "type": "oauth2",
+                "description": "OAuth2 client credentials flow",
+                "flows": {
+                    "clientCredentials": {
+                        "tokenUrl": f" `{token_url}` ",
+                        "refreshUrl": f" `{token_url}` ",
+                        "scopes": {},
+                    }
+                },
+            }
+        },
+        "skills": [
+            {
+                "id": "finance-policy",
+                "name": "Finance policy",
+                "description": "Answer finance policy questions",
+                "tags": ["finance", "policy"],
             }
         ],
     }
@@ -188,6 +224,82 @@ def test_create_task_gets_agent_and_sends_message(post: Mock):
     serialized = json.dumps(result, ensure_ascii=False)
     assert "secret-token" not in serialized
     assert "Authorization" not in serialized
+
+
+@patch.dict(
+    "os.environ",
+    {
+        "AGENTKIT_ACCESS_KEY": "ak-test",
+        "AGENTKIT_SECRET_KEY": "sk-test",
+    },
+    clear=False,
+)
+@patch("veadk.a2a.registry_client.requests.post")
+def test_create_task_gets_oauth_agent_token_and_sends_message(post: Mock):
+    _OAUTH_TOKEN_CACHE.clear()
+    card = _oauth_agent_card()
+    post.side_effect = [
+        _mock_response(
+            {
+                "ResponseMetadata": {"RequestId": "get-req"},
+                "Result": {
+                    "Id": "agent-id",
+                    "Status": "running",
+                    "AgentCard": json.dumps(card),
+                },
+            }
+        ),
+        _mock_response(
+            {
+                "ResponseMetadata": {"RequestId": "list-client-req"},
+                "Result": {"Data": [{"Uid": "m2m-client-id"}]},
+            }
+        ),
+        _mock_response(
+            {
+                "ResponseMetadata": {"RequestId": "get-client-req"},
+                "Result": {"ClientSecret": "m2m-client-secret"},
+            }
+        ),
+        _mock_response({"access_token": "oauth-access-token", "expires_in": 3600}),
+        _mock_response(
+            {
+                "result": {
+                    "kind": "message",
+                    "parts": [{"kind": "text", "text": "需要财务审批。"}],
+                }
+            }
+        ),
+    ]
+
+    result = create_task(
+        "Finance Policy Remote Agent",
+        "这笔支出是否需要审批？",
+        config=AgentKitA2ARegistryConfig(
+            space_id="space-test",
+            endpoint="https://open.volcengineapi.com/",
+        ),
+    )
+
+    assert result["outcome"] == "success"
+    assert result["selected_agent"]["name"] == "Finance Policy Remote Agent"
+    assert result["response"]["text"] == "需要财务审批。"
+
+    assert post.call_args_list[0].kwargs["params"]["Action"] == "GetA2aAgent"
+    assert post.call_args_list[1].kwargs["params"]["Action"] == "ListUserPoolClients"
+    assert post.call_args_list[2].kwargs["params"]["Action"] == "GetUserPoolClient"
+    assert post.call_args_list[3].args[0].endswith("/oauth/token")
+    assert post.call_args_list[3].kwargs["headers"]["Authorization"].startswith(
+        "Basic "
+    )
+    assert post.call_args_list[4].args[0] == "https://oauth-agent.test/a2a/"
+    assert post.call_args_list[4].kwargs["headers"]["Authorization"] == (
+        "Bearer oauth-access-token"
+    )
+
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert "oauth-access-token" not in serialized
+    assert "m2m-client-secret" not in serialized
 
 
 @patch.dict(
