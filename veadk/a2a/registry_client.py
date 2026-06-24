@@ -837,11 +837,8 @@ def _agent_auth_headers(
                 if isinstance(token, str) and token:
                     headers[header_name] = token
             elif scheme_type == "oauth2":
-                headers["Authorization"] = (
-                    "Bearer "
-                    + _oauth2_client_credentials_token(
-                        scheme, _resolve_config(config)
-                    )
+                headers["Authorization"] = "Bearer " + _oauth2_client_credentials_token(
+                    scheme, _resolve_config(config)
                 )
 
     if security and not headers:
@@ -907,9 +904,7 @@ def _oauth2_client_credentials_token(
         {"UserPoolUid": user_pool_id, "ClientUid": client_uid},
     )
     client_result = client_response.get("Result") or {}
-    client_secret = client_result.get("ClientSecret") or client_result.get(
-        "Secret"
-    )
+    client_secret = client_result.get("ClientSecret") or client_result.get("Secret")
     if not client_secret:
         raise RegistryError(
             "AGENT_OAUTH_CLIENT_INVALID",
