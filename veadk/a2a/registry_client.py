@@ -33,6 +33,7 @@ from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 
 DEFAULT_ENDPOINT = "http://volcengineapi.byted.org/"
 DEFAULT_VERSION = "2025-10-30"
+IDENTITY_VERSION = "2025-10-30"
 DEFAULT_SERVICE_NAME = "agentkit"
 DEFAULT_REGION = "cn-beijing"
 DEFAULT_TOP_K = 3
@@ -353,7 +354,7 @@ def _identity_post(
         endpoint=_identity_endpoint(config),
         service_name="id",
         action=action,
-        version=config.version,
+        version=IDENTITY_VERSION,
         body=body,
     )
 

@@ -287,7 +287,9 @@ def test_create_task_gets_oauth_agent_token_and_sends_message(post: Mock):
 
     assert post.call_args_list[0].kwargs["params"]["Action"] == "GetA2aAgent"
     assert post.call_args_list[1].kwargs["params"]["Action"] == "ListUserPoolClients"
+    assert post.call_args_list[1].kwargs["params"]["Version"] == "2025-10-30"
     assert post.call_args_list[2].kwargs["params"]["Action"] == "GetUserPoolClient"
+    assert post.call_args_list[2].kwargs["params"]["Version"] == "2025-10-30"
     assert post.call_args_list[3].args[0].endswith("/oauth/token")
     assert post.call_args_list[3].kwargs["headers"]["Authorization"].startswith(
         "Basic "
