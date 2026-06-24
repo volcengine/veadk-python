@@ -30,7 +30,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from veadk.consts import DEFAULT_MODEL_AGENT_NAME
-from veadk.prompts.agent_default_prompt import DEFAULT_INSTRUCTION
+from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INSTRUCTION
 
 
 class HarnessOverrides(BaseModel):
@@ -82,6 +82,7 @@ class HarnessConfig(HarnessOverrides):
 
     app_name: str = Field(default="harness_app", alias="name")
     system_prompt: str = Field(default=DEFAULT_INSTRUCTION)
+    description: str = Field(default=DEFAULT_DESCRIPTION)
     knowledgebase_type: str = Field(default="")
     longterm_memory_type: str = Field(default="")
     shortterm_memory_type: str = Field(default="local")
