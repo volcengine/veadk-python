@@ -100,6 +100,30 @@ class HarnessConfig(HarnessOverrides):
     registry_poll_interval_ms: int = Field(default=5000)
 
 
+class HarnessEnhanceOverrides(BaseModel):
+    """Per-invocation Harness enhancement options.
+
+    This mirrors the runtime ``harness_enhance`` section but is intentionally
+    small: callers can enable the plugin bundle, choose components, select a
+    profile, and choose the compaction provider. Runtime limits keep their
+    deploy-time defaults.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable Harness plugins for this single invocation.",
+    )
+    components: str = Field(
+        default="invocation_context,compactor,response_verification",
+        description="Comma-separated Harness plugin components.",
+    )
+    profile: str = Field(default="default", description="Harness profile name.")
+    compression_provider: str | None = Field(
+        default=None,
+        description="Tool-result compaction provider, e.g. builtin or headroom.",
+    )
+
+
 class RunAgentRequest(BaseModel):
     user_id: str
     session_id: str
@@ -109,6 +133,55 @@ class RunAgentRequest(BaseModel):
     )
 
 
+class LlmUsageMetrics(BaseModel):
+    """Aggregated model usage for one HarnessApp invocation."""
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cached_tokens: int = 0
+    usage_event_count: int = 0
+
+    def add(self, value: "LlmUsageMetrics") -> None:
+        self.prompt_tokens += value.prompt_tokens
+        self.completion_tokens += value.completion_tokens
+        self.total_tokens += value.total_tokens
+        self.cached_tokens += value.cached_tokens
+        self.usage_event_count += value.usage_event_count
+
+    def has_tokens(self) -> bool:
+        return bool(self.total_tokens or self.prompt_tokens or self.completion_tokens)
+
+
+class HarnessCompactionMetric(BaseModel):
+    """Compaction accounting exposed by HarnessApp diagnostics."""
+
+    provider: str = ""
+    original_chars: int = 0
+    compressed_chars: int = 0
+    changed: bool = False
+    tokens_before: int = 0
+    tokens_after: int = 0
+    tokens_saved: int = 0
+    compression_ratio: float = 0.0
+    transforms_applied: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class HarnessPluginMetrics(BaseModel):
+    """Harness plugin diagnostics for one invocation."""
+
+    names: list[str] = Field(default_factory=list)
+    compaction_reports: list[HarnessCompactionMetric] = Field(default_factory=list)
+
+
+class HarnessResponseMetrics(BaseModel):
+    """Optional machine-readable metrics returned by HarnessApp Runtime."""
+
+    llm_usage: LlmUsageMetrics = Field(default_factory=LlmUsageMetrics)
+    harness_plugins: HarnessPluginMetrics = Field(default_factory=HarnessPluginMetrics)
+
+
 class InvokeHarnessRequest(BaseModel):
     prompt: str
     harness_name: str
@@ -116,6 +189,7 @@ class InvokeHarnessRequest(BaseModel):
     # this single call. Only the fields actually set are applied; memory and the
     # knowledge base are never overridable (absent from HarnessOverrides).
     harness: HarnessOverrides | None = None
+    harness_enhance: HarnessEnhanceOverrides | None = None
     run_agent_request: RunAgentRequest
 
 
@@ -123,6 +197,10 @@ class InvokeHarnessResponse(BaseModel):
     harness_name: str
     overwrite: bool = Field(default=False)
     output: str
+    metrics: HarnessResponseMetrics | None = Field(
+        default=None,
+        description="Optional runtime metrics, enabled by HARNESS_APP_RETURN_LLM_USAGE.",
+    )
     error: str | None = Field(
         default=None,
         description=(

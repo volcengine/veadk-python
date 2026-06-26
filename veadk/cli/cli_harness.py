@@ -19,7 +19,7 @@ Subcommands scaffold, configure, and deploy the harness server
 
 * ``veadk harness create <dir>`` writes a deployable directory: a blank
   ``harness.yaml`` template, a ``.env.example`` (deploy credentials only), a
-  ``Dockerfile``, and a short ``README.md``.
+  ``Dockerfile``, a ``.gitignore``, and a short ``README.md``.
 * ``veadk harness add`` writes agent parameters into ``harness.yaml``.
 * ``veadk harness deploy`` flattens ``harness.yaml`` into runtime env vars and
   performs a cloud AgentKit build + runtime create (no local Docker).
@@ -94,6 +94,19 @@ runtime: adk
 #   env: INCLUDE_TOOLS_EVERY_TURN    flag: --include-tools-every-turn
 structured_tool_calls: false
 include_tools_every_turn: true
+
+# --- Harness enhance (optional) ---------------------------------------------
+# Enables composable Runner plugins for context engineering, tool-result
+# compression, and answer verification inside the runtime. Edit this block
+# directly in harness.yaml, or override it per request through AgentKit invoke.
+#   env: HARNESS_ENHANCE_ENABLED
+#   env: HARNESS_ENHANCE_COMPONENTS
+#   env: HARNESS_ENHANCE_PROFILE
+harness_enhance:
+  enabled: false
+  components: [invocation_context, compactor, response_verification]
+  profile: default
+  compression_provider: builtin
 
 # --- Knowledge base ----------------------------------------------------------
 #   type -> env: KNOWLEDGEBASE_TYPE   flag: --knowledgebase-type
@@ -180,12 +193,25 @@ VOLCENGINE_SECRET_KEY=
 # VOLCENGINE_REGION=cn-beijing
 """
 
-# Container image for the harness server. The base image's apt mirror is an
-# unreachable internal host, so apt is repointed at aliyun; the source branch is
-# cloned via the ghfast proxy with a github fallback; uv installs from aliyun.
+_GITIGNORE = """\
+# Local deploy credentials and generated runtime metadata.
+.env
+.env.*
+!.env.example
+harness.json
+agentkit.yaml
+agentkit*.yaml
+.agentkit/
+"""
+
+# Container image for the harness server. The base image's default apt source
+# can be unreachable in some environments, so apt is repointed at a public
+# mirror. The source branch is cloned through an acceleration URL with an
+# official GitHub fallback, and uv installs from a public Python mirror.
 _DOCKERFILE = """\
 FROM agentkit-cn-beijing.cr.volces.com/base/py-simple:python3.12-bookworm-slim-latest
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app/src
 RUN set -eux; \\
     rm -f /etc/apt/sources.list.d/*; \\
     printf 'deb http://mirrors.aliyun.com/debian bookworm main contrib non-free non-free-firmware\\n\\
@@ -196,17 +222,18 @@ deb http://mirrors.aliyun.com/debian-security bookworm-security main contrib non
     apt-get install -y --no-install-recommends git ca-certificates; \\
     rm -rf /var/lib/apt/lists/*
 WORKDIR /app
+ARG VEADK_REF=main
 RUN set -eux; \\
     for url in \\
         https://ghfast.top/https://github.com/volcengine/veadk-python.git \\
         https://github.com/volcengine/veadk-python.git ; do \\
       for i in 1 2 3; do \\
-        git clone --depth 1 -b feat/harness-runtime "$url" src && break 2 || sleep 8; \\
+        git clone --depth 1 -b "$VEADK_REF" "$url" src && break 2 || sleep 8; \\
       done; \\
     done; \\
     test -d src/veadk
 RUN uv pip install --system --index-url https://mirrors.aliyun.com/pypi/simple/ \\
-        ./src fastapi "uvicorn[standard]"
+        "./src[harness]" fastapi "uvicorn[standard]"
 EXPOSE 8000
 CMD ["python", "-m", "uvicorn", "veadk.cloud.harness_app.app:app", "--host", "0.0.0.0", "--port", "8000"]
 """
@@ -221,6 +248,7 @@ Volcengine **AgentKit runtime** (cloud build, no local Docker).
 
 - `harness.yaml` — agent configuration; flattened into runtime env vars.
 - `.env.example` — Volcengine deploy credentials; copy to `.env` and fill in.
+- `.gitignore` — keeps local credentials and generated deploy metadata out of git.
 - `Dockerfile` — builds the harness server image.
 - `README.md` — this file.
 
@@ -250,6 +278,7 @@ _CREATE_SUCCESS = """\
 Harness deployment directory created at {target}:
 - harness.yaml   (agent configuration)
 - .env.example   (copy to .env and set VOLCENGINE_ACCESS_KEY / SECRET_KEY)
+- .gitignore     (ignores local credentials and generated deploy metadata)
 - Dockerfile     (builds the harness image)
 - README.md
 
@@ -286,6 +315,7 @@ def create(dir_name: str) -> None:
     target.mkdir(parents=True, exist_ok=True)
     (target / "harness.yaml").write_text(_HARNESS_YAML)
     (target / ".env.example").write_text(_ENV_EXAMPLE)
+    (target / ".gitignore").write_text(_GITIGNORE)
     (target / "Dockerfile").write_text(_DOCKERFILE)
     (target / "README.md").write_text(_README)
 
@@ -467,6 +497,7 @@ def add(
         data["system_prompt"] = system_prompt
     if runtime is not None:
         data["runtime"] = runtime
+
     # Set only the backend `type`, preserving any connection params already set
     # under the component section.
     for type_value, section_key in (
@@ -814,7 +845,7 @@ def deploy(
         lines.append(f"Discovery:  {auth['discovery_url']}")
         lines.append(f"Allowed ids: {', '.join(auth['allowed_ids'])}")
     elif apikey:
-        lines.append(f"API key:    {apikey}")
+        lines.append("API key:    saved in local harness.json (not printed)")
 
     if endpoint:
         json_path = _record_harness(

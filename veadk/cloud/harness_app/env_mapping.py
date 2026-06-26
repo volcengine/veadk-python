@@ -169,6 +169,8 @@ def to_runtime_env(spec: dict[str, Any]) -> dict[str, str]:
             continue
         env[key.upper()] = _stringify(value)
 
+    _add_harness_enhance_aliases(env, spec)
+
     # Component sections: `type` selector + backend-specific connection params.
     for component, type_env in COMPONENT_TYPE_ENV.items():
         section: dict[str, Any] = spec.get(component) or {}
@@ -195,3 +197,43 @@ def to_runtime_env(spec: dict[str, Any]) -> dict[str, str]:
             env[env_name] = _stringify(value)
 
     return env
+
+
+def _add_harness_enhance_aliases(env: dict[str, str], spec: dict[str, Any]) -> None:
+    """Expose harness_enhance fields under the SDK's generic env names too."""
+
+    section = spec.get("harness_enhance")
+    if not isinstance(section, dict):
+        return
+    compression = section.get("compression")
+    if not isinstance(compression, dict):
+        compression = {}
+    verifier = section.get("verifier")
+    if not isinstance(verifier, dict):
+        verifier = {}
+
+    aliases = {
+        "components": "HARNESS_COMPONENTS",
+        "profile": "HARNESS_PROFILE",
+        "compression_provider": "HARNESS_COMPRESSION_PROVIDER",
+        "max_context_chars": "HARNESS_MAX_CONTEXT_CHARS",
+        "max_tool_result_chars": "HARNESS_MAX_TOOL_RESULT_CHARS",
+        "verifier_mode": "HARNESS_VERIFIER_MODE",
+        "store_path": "HARNESS_STORE_PATH",
+    }
+    nested_aliases = {
+        "provider": "HARNESS_COMPRESSION_PROVIDER",
+        "max_context_chars": "HARNESS_MAX_CONTEXT_CHARS",
+        "max_tool_result_chars": "HARNESS_MAX_TOOL_RESULT_CHARS",
+    }
+    for key, env_name in aliases.items():
+        value = section.get(key)
+        if not _is_empty(value):
+            env[env_name] = _stringify(value)
+    for key, env_name in nested_aliases.items():
+        value = compression.get(key)
+        if not _is_empty(value):
+            env[env_name] = _stringify(value)
+    verifier_mode = verifier.get("mode")
+    if not _is_empty(verifier_mode):
+        env["HARNESS_VERIFIER_MODE"] = _stringify(verifier_mode)

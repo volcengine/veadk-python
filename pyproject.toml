@@ -84,6 +84,9 @@ eval = [
     "deepeval>=3.2.6",              # For DeepEval-based evaluation
     "google-adk[eval]",             # For Google ADK-based evaluation
 ]
+harness = [
+    "headroom",
+]
 cli = []
 dev = [
     "pre-commit>=4.2.0",            # Format checking

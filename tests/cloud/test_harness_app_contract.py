@@ -27,10 +27,15 @@ import time, so it is intentionally left out to keep these tests offline.
 from pathlib import Path
 
 from veadk.cloud.harness_app.types import (
+    HarnessCompactionMetric,
     HarnessConfig,
+    HarnessEnhanceOverrides,
     HarnessOverrides,
+    HarnessPluginMetrics,
+    HarnessResponseMetrics,
     InvokeHarnessRequest,
     InvokeHarnessResponse,
+    LlmUsageMetrics,
     RunAgentRequest,
 )
 from veadk.cloud.harness_app.env_mapping import to_runtime_env
@@ -205,11 +210,20 @@ class TestRequestResponseSchemas:
             "max_llm_calls",
         }
 
+    def test_enhance_override_defaults(self):
+        assert HarnessEnhanceOverrides().model_dump() == {
+            "enabled": False,
+            "components": "invocation_context,compactor,response_verification",
+            "profile": "default",
+            "compression_provider": None,
+        }
+
     def test_invoke_request_fields(self):
         assert set(_fields(InvokeHarnessRequest)) == {
             "prompt",
             "harness_name",
             "harness",
+            "harness_enhance",
             "run_agent_request",
         }
 
@@ -222,10 +236,68 @@ class TestRequestResponseSchemas:
 
     def test_invoke_response_fields_and_defaults(self):
         fields = _fields(InvokeHarnessResponse)
-        assert set(fields) == {"harness_name", "overwrite", "output", "error"}
+        assert set(fields) == {
+            "harness_name",
+            "overwrite",
+            "output",
+            "metrics",
+            "error",
+        }
         assert fields["overwrite"].default is False
+        assert fields["metrics"].default is None
         # `error` is unset on success and carries the message verbatim on failure.
         assert fields["error"].default is None
+
+    def test_usage_metrics_accumulate(self):
+        usage = LlmUsageMetrics(prompt_tokens=10, total_tokens=12, usage_event_count=1)
+        usage.add(
+            LlmUsageMetrics(
+                prompt_tokens=20,
+                completion_tokens=5,
+                total_tokens=25,
+                cached_tokens=3,
+                usage_event_count=1,
+            )
+        )
+
+        assert HarnessResponseMetrics(llm_usage=usage).model_dump() == {
+            "llm_usage": {
+                "prompt_tokens": 30,
+                "completion_tokens": 5,
+                "total_tokens": 37,
+                "cached_tokens": 3,
+                "usage_event_count": 2,
+            },
+            "harness_plugins": {
+                "names": [],
+                "compaction_reports": [],
+            },
+        }
+
+    def test_harness_plugin_metrics_are_structured(self):
+        metrics = HarnessResponseMetrics(
+            harness_plugins=HarnessPluginMetrics(
+                names=["harness_compress_plugin"],
+                compaction_reports=[
+                    HarnessCompactionMetric(
+                        provider="builtin",
+                        original_chars=8000,
+                        compressed_chars=400,
+                        changed=True,
+                        tokens_before=2000,
+                        tokens_after=100,
+                        tokens_saved=1900,
+                        compression_ratio=0.05,
+                        transforms_applied=["builtin_tool_fact_compaction"],
+                    )
+                ],
+            )
+        )
+
+        report = metrics.harness_plugins.compaction_reports[0]
+        assert metrics.harness_plugins.names == ["harness_compress_plugin"]
+        assert report.changed is True
+        assert report.compressed_chars < report.original_chars
 
 
 class TestSplitCsv:
