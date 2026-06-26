@@ -198,6 +198,12 @@ def web(
         adk_web_server.AdkWebServer.get_runner_async
     )
 
+    from google.adk.cli.dev_server import DevServer
+
+    DevServer.get_runner_async = before_get_runner_async(
+        DevServer.get_runner_async
+    )
+
     patch_adkwebserver_disable_openapi()
 
     from google.adk.cli.cli_tools_click import cli_web
