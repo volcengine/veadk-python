@@ -41,30 +41,40 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from google.adk.agents import RunConfig
-from google.adk.agents.run_config import StreamingMode
 from google.adk.agents.base_agent import BaseAgent
+from google.adk.agents.run_config import StreamingMode
 from google.adk.artifacts.in_memory_artifact_service import InMemoryArtifactService
 from google.adk.auth.credential_service.in_memory_credential_service import (
     InMemoryCredentialService,
 )
 from google.adk.cli.adk_web_server import AdkWebServer, RunAgentRequest
 from google.adk.cli.utils.base_agent_loader import BaseAgentLoader
-from google.adk.utils.context_utils import Aclosing
 from google.adk.evaluation.local_eval_set_results_manager import (
     LocalEvalSetResultsManager,
 )
 from google.adk.evaluation.local_eval_sets_manager import LocalEvalSetsManager
 from google.adk.memory.in_memory_memory_service import InMemoryMemoryService
+from google.adk.plugins import BasePlugin
+from google.adk.utils.context_utils import Aclosing
 from typing_extensions import override
 
 from veadk import Agent
 from veadk.a2a.utils.agent_to_a2a import to_a2a
 from veadk.cloud.harness_app.agent import agent, short_term_memory
+from veadk.cloud.harness_app.harness_plugins import (
+    build_harness_plugins_from_enhance,
+    build_harness_plugins_from_headers,
+    build_harness_plugins_from_runtime_env,
+)
+from veadk.cloud.harness_app.metrics import HarnessLlmUsagePlugin
 from veadk.cloud.harness_app.types import (
+    HarnessCompactionMetric,
     HarnessOverrides,
+    HarnessPluginMetrics,
+    HarnessResponseMetrics,
     InvokeHarnessRequest,
     InvokeHarnessResponse,
 )
@@ -86,6 +96,12 @@ HARNESS_NAME = os.getenv("HARNESS_NAME", "default")
 DEFAULT_MAX_LLM_CALLS = (
     int(os.environ["MAX_LLM_CALLS"]) if os.environ.get("MAX_LLM_CALLS") else None
 )
+RETURN_LLM_USAGE = os.getenv("HARNESS_APP_RETURN_LLM_USAGE", "").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 def _content_text(content: Any) -> str:
@@ -154,10 +170,13 @@ class HarnessApp:
         self.short_term_memory = short_term_memory
         self.harness_name = harness_name
         self.max_llm_calls = max_llm_calls
+        self.return_llm_usage = RETURN_LLM_USAGE
+        self.plugins = build_harness_plugins_from_runtime_env()
         self.runner = Runner(
             agent=agent,
             short_term_memory=short_term_memory,
             app_name=harness_name,
+            plugins=self.plugins,
         )
 
         # ADK web/api server over the single in-memory agent (reuses the harness
@@ -196,6 +215,7 @@ class HarnessApp:
         @self.app.post("/harness/invoke")
         async def invoke_harness(
             request: InvokeHarnessRequest,
+            http_request: Request,
         ) -> InvokeHarnessResponse:
             # max LLM calls: per-call override, else the harness default; if
             # neither is set, fall through to ADK RunConfig's own default.
@@ -209,6 +229,30 @@ class HarnessApp:
             )
 
             try:
+                header_plugins = build_harness_plugins_from_headers(
+                    http_request.headers
+                )
+                body_plugins = build_harness_plugins_from_enhance(
+                    request.harness_enhance
+                )
+                usage_plugin = (
+                    HarnessLlmUsagePlugin() if self.return_llm_usage else None
+                )
+                harness_plugins = body_plugins or header_plugins or self.plugins
+                self._reset_plugin_diagnostics(harness_plugins)
+                if harness_plugins:
+                    logger.info(
+                        "Harness plugins enabled for invocation: "
+                        + ", ".join(self._plugin_names(harness_plugins))
+                    )
+                plugins = self._plugins_for_run(harness_plugins, usage_plugin)
+                has_registry = has_a2a_registry_config(self.agent)
+                needs_scoped_runner = (
+                    has_registry
+                    or bool(body_plugins)
+                    or bool(header_plugins)
+                    or usage_plugin is not None
+                )
                 if request.harness is not None:
                     logger.info(
                         f"Applying once-time harness override: {request.harness}"
@@ -230,6 +274,7 @@ class HarnessApp:
                             agent=agent,
                             short_term_memory=self.short_term_memory,
                             app_name=self.harness_name,
+                            plugins=plugins,
                         )
                         output = await runner.run(
                             messages=[request.prompt],
@@ -237,12 +282,17 @@ class HarnessApp:
                             session_id=request.run_agent_request.session_id,
                             run_config=run_config,
                         )
-                elif has_a2a_registry_config(self.agent):
-                    agent = spawn_harness_run_agent(self.agent, request.prompt)
+                elif needs_scoped_runner:
+                    run_agent = (
+                        spawn_harness_run_agent(self.agent, request.prompt)
+                        if has_registry
+                        else self.agent
+                    )
                     runner = Runner(
-                        agent=agent,
+                        agent=run_agent,
                         short_term_memory=self.short_term_memory,
                         app_name=self.harness_name,
+                        plugins=plugins,
                     )
                     output = await runner.run(
                         messages=[request.prompt],
@@ -282,6 +332,11 @@ class HarnessApp:
                 harness_name=self.harness_name,
                 overwrite=request.harness is not None,
                 output=output,
+                metrics=(
+                    self._response_metrics(harness_plugins, usage_plugin)
+                    if usage_plugin
+                    else None
+                ),
             )
 
     def _mount_run_sse_override(self):
@@ -392,6 +447,59 @@ class HarnessApp:
         finally:
             if work_dir_ctx is not None:
                 work_dir_ctx.cleanup()
+
+    def _plugins_for_run(
+        self,
+        plugins: list[BasePlugin],
+        usage_plugin: HarnessLlmUsagePlugin | None,
+    ) -> list[BasePlugin]:
+        if usage_plugin is None:
+            return plugins
+        return [*plugins, usage_plugin]
+
+    def _response_metrics(
+        self,
+        plugins: list[BasePlugin],
+        usage_plugin: HarnessLlmUsagePlugin,
+    ) -> HarnessResponseMetrics:
+        return HarnessResponseMetrics(
+            llm_usage=usage_plugin.metrics,
+            harness_plugins=HarnessPluginMetrics(
+                names=self._plugin_names(plugins),
+                compaction_reports=self._compaction_reports(plugins),
+            ),
+        )
+
+    def _plugin_names(self, plugins: list[BasePlugin]) -> list[str]:
+        return [
+            str(getattr(plugin, "name", plugin.__class__.__name__))
+            for plugin in plugins
+        ]
+
+    def _reset_plugin_diagnostics(self, plugins: list[BasePlugin]) -> None:
+        for plugin in plugins:
+            reset_diagnostics = getattr(plugin, "reset_diagnostics", None)
+            if callable(reset_diagnostics):
+                reset_diagnostics()
+
+    def _compaction_reports(
+        self, plugins: list[BasePlugin]
+    ) -> list[HarnessCompactionMetric]:
+        metrics: list[HarnessCompactionMetric] = []
+        for plugin in plugins:
+            reports = getattr(plugin, "compaction_reports", None)
+            if not isinstance(reports, list):
+                continue
+            for report in reports:
+                if hasattr(report, "model_dump"):
+                    metrics.append(
+                        HarnessCompactionMetric.model_validate(
+                            report.model_dump(mode="json")
+                        )
+                    )
+                elif isinstance(report, dict):
+                    metrics.append(HarnessCompactionMetric.model_validate(report))
+        return metrics
 
     def serve(self, host: str = "0.0.0.0", port: int = 8000) -> None:
         import uvicorn

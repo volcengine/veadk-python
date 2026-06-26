@@ -62,6 +62,23 @@ volcengine:
 | VOD | `TOOL_VOD_GROUPS` | 视频编辑能力组 |
 | | `TOOL_VOD_TIMEOUT` | 连接超时时长 |
 
+## Harness Extension
+
+统一前缀 `HARNESS_`，用于给 HarnessApp Runtime 或 `Runner` 挂载可选的 Harness 插件能力。Harness Extension 随 VeADK 安装；只有当选择 `headroom` 压缩 provider 时，才需要安装 `veadk-python[harness]` 额外依赖。
+
+| 环境变量 | 释义 |
+| :- | :- |
+| `HARNESS_ENHANCE_ENABLED` | 是否启用 Harness 插件，支持 `true` / `false`。 |
+| `HARNESS_ENHANCE_COMPONENTS` | 启用的组件，逗号分隔；常用值为 `invocation_context,compactor,response_verification`。 |
+| `HARNESS_PROFILE` | 插件运行 profile，用于区分运行策略；默认 `default`。 |
+| `HARNESS_COMPRESSION_PROVIDER` | 工具结果压缩 provider，默认 `builtin`；可选 `headroom`。 |
+| `HARNESS_MAX_CONTEXT_CHARS` | 上下文压缩阈值，默认 `24000`。 |
+| `HARNESS_MAX_TOOL_RESULT_CHARS` | 单个工具结果压缩阈值，默认 `4000`。 |
+| `HARNESS_VERIFIER_MODE` | 最终回答校验模式，`observe` 或 `block`，默认 `observe`。 |
+| `HARNESS_STORE_PATH` | 可选 JSONL 事件存储路径；不设置时使用内存存储。 |
+
+`harness_enhance` 配置块会在 HarnessApp Runtime 部署时映射为这些环境变量。推荐开发者优先通过 `harness.yaml` 或 `veadk agentkit invoke` 参数启用，环境变量适合平台集成和镜像运行时。
+
 ## 数据库
 
 统一前缀 `DATABASE_`，按存储类型分组。记忆与知识库按所选后端读取对应配置。
