@@ -14,16 +14,18 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlparse, urlunparse
 
 import requests
 
@@ -31,6 +33,7 @@ from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 
 DEFAULT_ENDPOINT = "http://volcengineapi.byted.org/"
 DEFAULT_VERSION = "2025-10-30"
+IDENTITY_VERSION = "2025-10-30"
 DEFAULT_SERVICE_NAME = "agentkit"
 DEFAULT_REGION = "cn-beijing"
 DEFAULT_TOP_K = 3
@@ -38,6 +41,7 @@ DEFAULT_TIMEOUT_MS = 60000
 DEFAULT_POLL_INTERVAL_MS = 5000
 SEARCH_PROMPT_MAX_BYTES = 2048
 TERMINAL_STATES = {"completed", "failed", "canceled", "rejected"}
+_OAUTH_TOKEN_CACHE: dict[str, tuple[str, float]] = {}
 
 
 class RegistryError(Exception):
@@ -332,14 +336,46 @@ def _request_id(response: dict[str, Any]) -> str | None:
 def _agentkit_post(
     config: AgentKitA2ARegistryConfig, action: str, body: dict[str, Any]
 ) -> tuple[dict[str, Any], int]:
+    return _signed_openapi_post(
+        config=config,
+        endpoint=config.endpoint,
+        service_name=config.service_name,
+        action=action,
+        version=config.version,
+        body=body,
+    )
+
+
+def _identity_post(
+    config: AgentKitA2ARegistryConfig, action: str, body: dict[str, Any]
+) -> tuple[dict[str, Any], int]:
+    return _signed_openapi_post(
+        config=config,
+        endpoint=_identity_endpoint(config),
+        service_name="id",
+        action=action,
+        version=IDENTITY_VERSION,
+        body=body,
+    )
+
+
+def _signed_openapi_post(
+    *,
+    config: AgentKitA2ARegistryConfig,
+    endpoint: str,
+    service_name: str,
+    action: str,
+    version: str,
+    body: dict[str, Any],
+) -> tuple[dict[str, Any], int]:
     _require_space_id(config)
     credentials = _resolve_credentials()
     started = time.monotonic()
     body_str = json.dumps(body, ensure_ascii=False)
     body_bytes = body_str.encode("utf-8")
-    parsed = urlparse(config.endpoint)
+    parsed = urlparse(endpoint)
     path = parsed.path or "/"
-    query = {"Action": action, "Version": config.version}
+    query = {"Action": action, "Version": version}
     headers_to_sign = {
         "Host": parsed.netloc,
         "Content-Type": "application/json",
@@ -347,7 +383,7 @@ def _agentkit_post(
     auth_headers = _volc_sign_v4(
         access_key=credentials.access_key,
         secret_key=credentials.secret_key,
-        service=config.service_name,
+        service=service_name,
         region=config.region,
         method="POST",
         path=path,
@@ -366,7 +402,7 @@ def _agentkit_post(
     response = None
     try:
         response = requests.post(
-            config.endpoint,
+            endpoint,
             params=query,
             headers=request_headers,
             data=body_bytes,
@@ -398,6 +434,21 @@ def _agentkit_post(
             "AGENTKIT_RESPONSE_INVALID", "Agent-A2A center response missing Result"
         )
     return data, duration_ms
+
+
+def _identity_endpoint(config: AgentKitA2ARegistryConfig) -> str:
+    explicit = _first_env(
+        ["REGISTRY_ID_ENDPOINT", "AGENTKIT_ID_ENDPOINT", "ID_OPENAPI_ENDPOINT"]
+    )
+    if explicit:
+        return explicit
+
+    parsed = urlparse(config.endpoint)
+    host = parsed.netloc
+    if host.startswith("agentkit."):
+        host = "id." + host.split(".", 1)[1]
+        return urlunparse(parsed._replace(netloc=host))
+    return config.endpoint
 
 
 def _agentkit_http_diagnostics(
@@ -459,6 +510,8 @@ def _get_a2a_agent(
     card = _parse_json_object(
         result.get("AgentCard"), "AGENT_CARD_PARSE_FAILED", "Result.AgentCard"
     )
+    if "url" in card:
+        card["url"] = _clean_config_url(card.get("url", ""))
     if not card.get("url"):
         raise RegistryError(
             "AGENT_URL_MISSING", f"Agent {agent_name} AgentCard missing url"
@@ -486,7 +539,7 @@ def _send_message(
             card["url"],
             "message/send",
             {"message": message, "configuration": {"blocking": False}},
-            _agent_auth_headers(card),
+            _agent_auth_headers(card, config),
             config,
         )
     except RegistryError as exc:
@@ -514,7 +567,7 @@ def _poll_card(
         card["url"],
         "tasks/get",
         {"id": task_id.strip(), "historyLength": max(0, int(history_length))},
-        _agent_auth_headers(card),
+        _agent_auth_headers(card, config),
         config,
     )
     state = _task_state(a2a_result)
@@ -761,7 +814,9 @@ def _sanitize_get_agent_result(
     }
 
 
-def _agent_auth_headers(card: dict[str, Any]) -> dict[str, str]:
+def _agent_auth_headers(
+    card: dict[str, Any], config: AgentKitA2ARegistryConfig | None = None
+) -> dict[str, str]:
     security = card.get("security") or []
     schemes = card.get("securitySchemes") or {}
     headers: dict[str, str] = {}
@@ -771,16 +826,20 @@ def _agent_auth_headers(card: dict[str, Any]) -> dict[str, str]:
             continue
         for scheme_name, credentials in requirement.items():
             scheme = schemes.get(scheme_name) or {}
-            if scheme.get("type") != "apiKey" or scheme.get("in") != "header":
-                continue
-            header_name = scheme.get("name") or "Authorization"
-            token = (
-                credentials[0]
-                if isinstance(credentials, list) and credentials
-                else credentials
-            )
-            if isinstance(token, str) and token:
-                headers[header_name] = token
+            scheme_type = str(scheme.get("type") or "").lower()
+            if scheme_type == "apikey" and scheme.get("in") == "header":
+                header_name = scheme.get("name") or "Authorization"
+                token = (
+                    credentials[0]
+                    if isinstance(credentials, list) and credentials
+                    else credentials
+                )
+                if isinstance(token, str) and token:
+                    headers[header_name] = token
+            elif scheme_type == "oauth2":
+                headers["Authorization"] = "Bearer " + _oauth2_client_credentials_token(
+                    scheme, _resolve_config(config)
+                )
 
     if security and not headers:
         raise RegistryError(
@@ -788,6 +847,161 @@ def _agent_auth_headers(card: dict[str, Any]) -> dict[str, str]:
             "AgentCard has security config but no usable header credential",
         )
     return headers
+
+
+def _oauth2_client_credentials_token(
+    scheme: dict[str, Any], config: AgentKitA2ARegistryConfig
+) -> str:
+    token_url = _oauth2_token_url(scheme)
+    if not token_url:
+        raise RegistryError(
+            "AGENT_OAUTH_CONFIG_INVALID",
+            "OAuth2 AgentCard missing clientCredentials tokenUrl",
+        )
+
+    cached = _OAUTH_TOKEN_CACHE.get(token_url)
+    now = time.time()
+    if cached and cached[1] > now:
+        return cached[0]
+
+    user_pool_id = _user_pool_id_from_token_url(token_url)
+    if not user_pool_id:
+        raise RegistryError(
+            "AGENT_OAUTH_CONFIG_INVALID",
+            "OAuth2 tokenUrl does not contain a Volcengine user pool id",
+            {"token_url_host": urlparse(token_url).netloc},
+        )
+
+    clients_response, _ = _identity_post(
+        config,
+        "ListUserPoolClients",
+        {
+            "UserPoolUid": user_pool_id,
+            "PageSize": 10,
+            "PageNumber": 1,
+            "Filter": {"ClientTypes": ["MACHINE_TO_MACHINE"]},
+        },
+    )
+    clients_result = clients_response.get("Result") or {}
+    clients = clients_result.get("Data") or clients_result.get("Items") or []
+    if not clients:
+        raise RegistryError(
+            "AGENT_OAUTH_CLIENT_MISSING",
+            "OAuth2 user pool has no MACHINE_TO_MACHINE client",
+            {"user_pool_id": user_pool_id},
+        )
+
+    client_uid = str(clients[0].get("Uid") or clients[0].get("ClientUid") or "")
+    if not client_uid:
+        raise RegistryError(
+            "AGENT_OAUTH_CLIENT_INVALID",
+            "OAuth2 MACHINE_TO_MACHINE client response missing Uid",
+        )
+
+    client_response, _ = _identity_post(
+        config,
+        "GetUserPoolClient",
+        {"UserPoolUid": user_pool_id, "ClientUid": client_uid},
+    )
+    client_result = client_response.get("Result") or {}
+    client_secret = client_result.get("ClientSecret") or client_result.get("Secret")
+    if not client_secret:
+        raise RegistryError(
+            "AGENT_OAUTH_CLIENT_INVALID",
+            "OAuth2 MACHINE_TO_MACHINE client response missing ClientSecret",
+        )
+
+    token_response = _fetch_oauth_access_token(
+        token_url, client_uid, str(client_secret), config
+    )
+    access_token = token_response.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        raise RegistryError(
+            "AGENT_OAUTH_TOKEN_INVALID",
+            "OAuth2 token endpoint response missing access_token",
+        )
+
+    expires_in = token_response.get("expires_in", 3600)
+    try:
+        ttl = max(60, int(expires_in) - 60)
+    except (TypeError, ValueError):
+        ttl = 3540
+    _OAUTH_TOKEN_CACHE[token_url] = (access_token, now + ttl)
+    return access_token
+
+
+def _oauth2_token_url(scheme: dict[str, Any]) -> str:
+    flows = scheme.get("flows") or {}
+    client_credentials = flows.get("clientCredentials") or flows.get(
+        "client_credentials"
+    )
+    if not isinstance(client_credentials, dict):
+        return ""
+    return _clean_config_url(
+        client_credentials.get("tokenUrl")
+        or client_credentials.get("token_url")
+        or client_credentials.get("refreshUrl")
+        or client_credentials.get("refresh_url")
+        or ""
+    )
+
+
+def _clean_config_url(value: Any) -> str:
+    if value is None:
+        return ""
+    cleaned = str(value).strip()
+    while cleaned and cleaned[0] in {"`", '"', "'"}:
+        cleaned = cleaned[1:].strip()
+    while cleaned and cleaned[-1] in {"`", '"', "'"}:
+        cleaned = cleaned[:-1].strip()
+    return cleaned
+
+
+def _user_pool_id_from_token_url(token_url: str) -> str:
+    host = urlparse(token_url).netloc
+    match = re.match(r"userpool-([^.]+)\.userpool\.auth\.id\.", host)
+    return match.group(1) if match else ""
+
+
+def _fetch_oauth_access_token(
+    token_url: str,
+    client_id: str,
+    client_secret: str,
+    config: AgentKitA2ARegistryConfig,
+) -> dict[str, Any]:
+    credentials = f"{client_id}:{client_secret}".encode("utf-8")
+    encoded_credentials = base64.b64encode(credentials).decode("ascii")
+    response = None
+    try:
+        response = requests.post(
+            token_url,
+            headers={
+                "Authorization": f"Basic {encoded_credentials}",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            data={"grant_type": "client_credentials"},
+            timeout=_timeout_seconds(config),
+        )
+        response.raise_for_status()
+        data = response.json()
+    except requests.RequestException as exc:
+        raise RegistryError(
+            "AGENT_OAUTH_TOKEN_FAILED",
+            f"OAuth2 token request failed: {exc}",
+            _http_response_diagnostics(exc, response),
+        ) from exc
+    except ValueError as exc:
+        raise RegistryError(
+            "AGENT_OAUTH_TOKEN_INVALID",
+            "OAuth2 token endpoint returned non-JSON response",
+        ) from exc
+
+    if not isinstance(data, dict):
+        raise RegistryError(
+            "AGENT_OAUTH_TOKEN_INVALID",
+            "OAuth2 token endpoint response is not an object",
+        )
+    return data
 
 
 def _text_from_parts(parts: list[Any]) -> str:
