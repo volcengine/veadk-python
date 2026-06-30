@@ -169,6 +169,12 @@ auth:
 - 用户池、客户端、外部身份提供商（如飞书）在 **Identity 控制台**一次性建好，CLI 只**引用** `discovery_url` + `allowed_ids`，**不涉及任何 secret**。
 - custom_jwt 部署后 `harness.json` 记录 `{url, runtime_id, auth_type, discovery_url, allowed_ids}`（无 key）。调用该 runtime 需自带 `Authorization: Bearer <用户池签发的 JWT>`，CLI 不代为获取。
 
+### A2A Registry 调用 OAuth remote-agent
+
+当 Harness 启用 `agentkit_a2a` registry 后，运行时会通过 `SearchAgentCards` / `GetA2aAgent` 动态发现并挂载 `remote_a2a_*` 工具。命中的远程 Agent 如果是 `apiKey` 鉴权，会按 AgentCard 的 `securitySchemes` 注入对应 header；如果是 `oauth2` 且声明了 `clientCredentials.tokenUrl`，运行时会自动从 token URL 解析火山引擎 Identity UserPool，查询其中的 `MACHINE_TO_MACHINE` client，使用 `client_credentials` 换取 access token，并以 `Authorization: Bearer <access_token>` 调用远程 Agent 的 `message/send` / `tasks/get`。
+
+通常只需要确保 Harness Runtime 有权限调用 AgentKit A2A Registry 和 Identity OpenAPI。若 registry endpoint 使用了自定义域名且不能同时访问 Identity OpenAPI，可通过 `REGISTRY_ID_ENDPOINT` 或 `AGENTKIT_ID_ENDPOINT` 指定 Identity OpenAPI 地址。
+
 ## `veadk harness invoke`
 
 调用一个**已部署**的 harness 并打印输出。`url` 与 `key` 默认按 `--name` 从 `harness.json`（由 `deploy` 写入）解析，无需显式传入。
