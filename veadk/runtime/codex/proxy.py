@@ -218,9 +218,7 @@ class ResponsesShim:
                 kept = [t for t in inbound if t.get("type") == "function"]
                 if wants_web and _shim_max_tool_iters() > 0:
                     have = {t.get("name") for t in kept}
-                    kept.extend(
-                        t for t in _EXECUTABLE_TOOLS if t["name"] not in have
-                    )
+                    kept.extend(t for t in _EXECUTABLE_TOOLS if t["name"] not in have)
                 call_kwargs["tools"] = kept
             # On multi-step turns Codex replays prior assistant messages in
             # `input` without a `status` field, but Ark's Responses API
