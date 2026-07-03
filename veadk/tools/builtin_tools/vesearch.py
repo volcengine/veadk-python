@@ -41,7 +41,7 @@ def vesearch(query: str) -> str:
         "messages": [{"role": "user", "content": query}],
     }
 
-    response = requests.post(URL, json=data, headers=headers)
+    response = requests.post(URL, json=data, headers=headers, timeout=30)
     if response.status_code == 200:
         result = response.json()
         return result["choices"][0]["message"]["content"]

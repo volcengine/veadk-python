@@ -52,7 +52,7 @@ def web_scraper(query: str) -> dict[str, Any]:
                 {"key": "filter", "value": 1},
             ],
         }
-        response = requests.post(url, headers=headers, json=data, verify=False)
+        response = requests.post(url, headers=headers, json=data, timeout=30)
 
         response.raise_for_status()
 
