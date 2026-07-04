@@ -202,6 +202,10 @@ export default function App() {
   const [localMode, setLocalMode] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
   const [createView, setCreateView] = useState<CreateView>(loadView);
+  // Whether the server has Volcengine AK/SK. The agent-creation workbench needs
+  // them; assume present until the runtime-config check says otherwise (avoids
+  // flashing the notice in the common, configured case).
+  const [hasCreds, setHasCreds] = useState(true);
   const [skillCenter, setSkillCenter] = useState(false);
   const [addAgent, setAddAgent] = useState(false);
   // The "添加 Agent" chooser (two cards: AgentKit / 从 0 快速创建).
@@ -250,6 +254,16 @@ export default function App() {
       setLocalMode(!!id.local);
       setAuthStatus(id.status);
     });
+  }, []);
+
+  // Check whether the server has Volcengine AK/SK (needed by the workbench).
+  useEffect(() => {
+    fetch("/web/runtime-config")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d) setHasCreds(!!d.credentials);
+      })
+      .catch(() => {});
   }, []);
 
   function onUsername(name: string) {
@@ -676,6 +690,30 @@ export default function App() {
               />
             ) : skillCenter ? (
               <SkillCenterView />
+            ) : createView !== null && !hasCreds ? (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 12,
+                  height: "100%",
+                  padding: 24,
+                  textAlign: "center",
+                  color: "var(--text-secondary, #6b7280)",
+                }}
+              >
+                <div style={{ fontSize: 18, fontWeight: 600 }}>
+                  需要配置火山引擎 AK/SK
+                </div>
+                <div style={{ maxWidth: 420, lineHeight: 1.6 }}>
+                  智能体工作台需要 Volcengine 凭据才能使用。请在运行环境中设置
+                  {" "}
+                  <code>VOLCENGINE_ACCESS_KEY</code> 与{" "}
+                  <code>VOLCENGINE_SECRET_KEY</code> 后重试。
+                </div>
+              </div>
             ) : createView === "menu" ? (
               <QuickCreate
                 onSelect={(k) => {

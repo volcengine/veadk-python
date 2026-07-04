@@ -34,6 +34,34 @@ from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+
+def _claims_from_forwarded_jwt(authorization: str | None) -> dict | None:
+    """Decode the JWT an upstream API gateway forwarded in the Authorization
+    header, WITHOUT re-verifying its signature.
+
+    Used only in ``--auth-mode gateway``: the AgentKit runtime gateway has
+    already authenticated the user and validated the token against the user
+    pool before forwarding it, so this server trusts the payload for identity.
+    Returns the claims dict, or None when there is no usable bearer JWT.
+    """
+    if not authorization:
+        return None
+    from veadk.utils.auth import strip_bearer_prefix
+
+    token = strip_bearer_prefix(authorization)
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    import base64
+    import json
+
+    payload = parts[1] + "=" * (-len(parts[1]) % 4)
+    try:
+        return json.loads(base64.urlsafe_b64decode(payload).decode("utf-8"))
+    except Exception:
+        return None
+
+
 DEV_SERVER_ORIGIN = "http://localhost:5173"
 
 # Built UI shipped inside the package (output of `npm run build`).
@@ -246,6 +274,18 @@ def _build_generic_oauth2(provider_id: str, redirect_uri: str):
     envvar="OAUTH2_PROVIDER_LABEL",
     help="Display label for the SSO login button (env: OAUTH2_PROVIDER_LABEL).",
 )
+@click.option(
+    "--auth-mode",
+    type=click.Choice(["frontend", "gateway"]),
+    default="frontend",
+    show_default=True,
+    envvar="VEADK_FRONTEND_AUTH_MODE",
+    help="How the UI obtains the signed-in user (env: VEADK_FRONTEND_AUTH_MODE). "
+    "'frontend' (default): this server runs its own OAuth2 login. 'gateway': "
+    "trust the identity an upstream API gateway already authenticated and "
+    "forwards as an Authorization: Bearer <JWT> — parse the user from it and run "
+    "no in-app login (use when deployed behind the AgentKit runtime gateway).",
+)
 def frontend(
     agents_dir: str,
     frontend_dir: str | None,
@@ -259,6 +299,7 @@ def frontend(
     oauth2_redirect_uri: str | None,
     oauth2_provider: str | None,
     oauth2_provider_label: str | None,
+    auth_mode: str,
 ) -> None:
     """Launch the A2UI web UI backed by the ADK agent API server."""
     # Explicitly load .env file before any agent code runs
@@ -951,83 +992,126 @@ def frontend(
         logger.info(f"Temporary agent '{app_name}' deleted")
         return {"status": "deleted"}
 
-    # ---- SSO (optional): VeIdentity user pool, or a generic provider via env ----
-    redirect_uri = oauth2_redirect_uri or f"http://{host}:{port}/oauth2/callback"
-    pool_ok = oauth2_user_pool or oauth2_user_pool_uid
-    client_ok = oauth2_user_pool_client or oauth2_user_pool_client_uid
-    provider_id = oauth2_provider or ""
-
-    oauth2_config = None
-    if pool_ok and client_ok:
-        from veadk.auth.middleware.oauth2_auth import OAuth2Config
-
-        oauth2_config = OAuth2Config.from_veidentity(
-            user_pool_name=oauth2_user_pool,
-            user_pool_uid=oauth2_user_pool_uid,
-            client_name=oauth2_user_pool_client,
-            client_uid=oauth2_user_pool_client_uid,
-            redirect_uri=redirect_uri,
-        )
-        provider_id = provider_id or "veidentity"
-    else:
-        # Generic provider (github / google / any OIDC / custom) from env vars.
-        oauth2_config = _build_generic_oauth2(provider_id or "custom", redirect_uri)
-        provider_id = provider_id or "custom"
-
-    # The SPA fetches /web/auth-config and /oauth2/userinfo on every startup, so
-    # both must always return JSON. With SSO off we answer with an empty provider
-    # list and a 401 (unauthenticated), and the app renders its normal no-login
-    # UI; otherwise the SPA-fallback serves the HTML shell for these paths and the
-    # app's `await res.json()` throws, leaving a white screen.
-    providers: list[dict] = []
-
-    if oauth2_config is not None:
-        from urllib.parse import urlsplit
-
-        from veadk.auth.middleware.oauth2_auth import setup_oauth2
-
-        # Cookies require Secure over HTTPS (runtime deploys) but must also work
-        # over plain HTTP for local serving.
-        oauth2_config.cookie_secure = redirect_uri.lower().startswith("https://")
-        # After logout, return to the app root derived from the callback origin
-        # (so it is correct behind a public host), skipping the IdP end-session
-        # redirect (its post-logout URL must be whitelisted by the IdP).
-        origin = urlsplit(redirect_uri)
-        oauth2_config.logout_redirect_url = f"{origin.scheme}://{origin.netloc}/"
-        oauth2_config.end_session_url = None
-
-        # Expose the configured provider to the login page (unauthenticated).
-        label = (
-            oauth2_provider_label
-            or _PROVIDER_LABELS.get(provider_id)
-            or provider_id.replace("_", " ").title()
-        )
-        providers = [{"id": provider_id, "label": label, "loginUrl": "/oauth2/login"}]
-
-        # Protect the API but exempt the SPA shell + this config endpoint so the
-        # app can load and render its own login page when not signed in.
-        setup_oauth2(
-            app,
-            oauth2_config,
-            exempt_paths={"/", "/index.html", "/favicon.ico", "/web/auth-config"},
-            exempt_prefixes={"/assets", "/skillhub"},
-        )
-        logger.info(
-            f"OAuth2 SSO enabled (provider={provider_id}, redirect_uri={redirect_uri})"
-        )
-    else:
+    # ---- Auth ----------------------------------------------------------------
+    # 'gateway' mode: an upstream API gateway (the AgentKit runtime gateway) has
+    # already authenticated the user and forwards the identity as an
+    # `Authorization: Bearer <JWT>`. Trust it — resolve the user from the token's
+    # claims and run no in-app login. 'frontend' (default) keeps the existing
+    # behavior where this server runs its own OAuth2 login.
+    if auth_mode == "gateway":
         from fastapi.responses import JSONResponse
 
         @app.get("/oauth2/userinfo")
-        async def _userinfo_no_sso():
-            # No SSO configured: report unauthenticated (401) so the SPA's auth
-            # check resolves cleanly instead of parsing the HTML shell as JSON.
-            return JSONResponse({"status": "unauthenticated"}, status_code=401)
+        async def _userinfo_gateway(request: Request):
+            claims = _claims_from_forwarded_jwt(request.headers.get("authorization"))
+            if not claims:
+                # Gateway should always forward a token; if absent, report
+                # unauthenticated so the SPA's auth check resolves cleanly.
+                return JSONResponse({"status": "unauthenticated"}, status_code=401)
+            uid = claims.get("sub") or claims.get("user_id") or claims.get("email")
+            return {
+                "sub": uid,
+                "user_id": uid,
+                "email": claims.get("email"),
+                "name": claims.get("name") or claims.get("preferred_username"),
+            }
 
-    @app.get("/web/auth-config")
-    async def _web_auth_config():
-        # Empty provider list when SSO is off -> the SPA shows its normal UI.
-        return {"providers": providers}
+        @app.get("/web/auth-config")
+        async def _web_auth_config_gateway():
+            # The gateway already authenticated the user — no in-app login buttons.
+            return {"providers": []}
+
+        logger.info("Auth mode: gateway (trusting upstream-forwarded JWT identity)")
+    else:
+        # ---- SSO (optional): VeIdentity user pool, or a generic provider via env ----
+        redirect_uri = oauth2_redirect_uri or f"http://{host}:{port}/oauth2/callback"
+        pool_ok = oauth2_user_pool or oauth2_user_pool_uid
+        client_ok = oauth2_user_pool_client or oauth2_user_pool_client_uid
+        provider_id = oauth2_provider or ""
+
+        oauth2_config = None
+        if pool_ok and client_ok:
+            from veadk.auth.middleware.oauth2_auth import OAuth2Config
+
+            oauth2_config = OAuth2Config.from_veidentity(
+                user_pool_name=oauth2_user_pool,
+                user_pool_uid=oauth2_user_pool_uid,
+                client_name=oauth2_user_pool_client,
+                client_uid=oauth2_user_pool_client_uid,
+                redirect_uri=redirect_uri,
+            )
+            provider_id = provider_id or "veidentity"
+        else:
+            # Generic provider (github / google / any OIDC / custom) from env vars.
+            oauth2_config = _build_generic_oauth2(provider_id or "custom", redirect_uri)
+            provider_id = provider_id or "custom"
+
+        # The SPA fetches /web/auth-config and /oauth2/userinfo on every startup, so
+        # both must always return JSON. With SSO off we answer with an empty provider
+        # list and a 401 (unauthenticated), and the app renders its normal no-login
+        # UI; otherwise the SPA-fallback serves the HTML shell for these paths and the
+        # app's `await res.json()` throws, leaving a white screen.
+        providers: list[dict] = []
+
+        if oauth2_config is not None:
+            from urllib.parse import urlsplit
+
+            from veadk.auth.middleware.oauth2_auth import setup_oauth2
+
+            # Cookies require Secure over HTTPS (runtime deploys) but must also work
+            # over plain HTTP for local serving.
+            oauth2_config.cookie_secure = redirect_uri.lower().startswith("https://")
+            # After logout, return to the app root derived from the callback origin
+            # (so it is correct behind a public host), skipping the IdP end-session
+            # redirect (its post-logout URL must be whitelisted by the IdP).
+            origin = urlsplit(redirect_uri)
+            oauth2_config.logout_redirect_url = f"{origin.scheme}://{origin.netloc}/"
+            oauth2_config.end_session_url = None
+
+            # Expose the configured provider to the login page (unauthenticated).
+            label = (
+                oauth2_provider_label
+                or _PROVIDER_LABELS.get(provider_id)
+                or provider_id.replace("_", " ").title()
+            )
+            providers = [
+                {"id": provider_id, "label": label, "loginUrl": "/oauth2/login"}
+            ]
+
+            # Protect the API but exempt the SPA shell + this config endpoint so the
+            # app can load and render its own login page when not signed in.
+            setup_oauth2(
+                app,
+                oauth2_config,
+                exempt_paths={"/", "/index.html", "/favicon.ico", "/web/auth-config"},
+                exempt_prefixes={"/assets", "/skillhub"},
+            )
+            logger.info(
+                f"OAuth2 SSO enabled (provider={provider_id}, redirect_uri={redirect_uri})"
+            )
+        else:
+            from fastapi.responses import JSONResponse
+
+            @app.get("/oauth2/userinfo")
+            async def _userinfo_no_sso():
+                # No SSO configured: report unauthenticated (401) so the SPA's auth
+                # check resolves cleanly instead of parsing the HTML shell as JSON.
+                return JSONResponse({"status": "unauthenticated"}, status_code=401)
+
+        @app.get("/web/auth-config")
+        async def _web_auth_config():
+            # Empty provider list when SSO is off -> the SPA shows its normal UI.
+            return {"providers": providers}
+
+    @app.get("/web/runtime-config")
+    async def _web_runtime_config():
+        # Report whether Volcengine AK/SK are present in the server environment.
+        # The agent-creation workbench needs them to call Volcengine services, so
+        # the SPA shows a "set AK/SK" notice when they are absent.
+        has_creds = bool(
+            os.getenv("VOLCENGINE_ACCESS_KEY") and os.getenv("VOLCENGINE_SECRET_KEY")
+        )
+        return {"credentials": has_creds}
 
     if dev:
         logger.info(
