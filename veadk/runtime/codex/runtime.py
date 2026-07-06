@@ -46,6 +46,7 @@ from openai_codex.generated.v2_all import (  # type: ignore[import-not-found]
 
 from veadk.runtime.base_runtime import BaseRuntime, build_system_append
 from veadk.runtime.codex.proxy import get_shim_url
+from veadk.runtime.codex.skills import sync_skills_to_codex_home
 from veadk.runtime.codex.translate import build_prompt, item_to_events
 from veadk.utils.logger import get_logger
 
@@ -84,6 +85,13 @@ class CodexRuntime(BaseRuntime):
 
         shim_url = await get_shim_url(api_base, api_key)
         codex_home = _prepare_codex_home(shim_url, model)
+        # Expose the agent's skills to Codex by materializing them under
+        # `$CODEX_HOME/skills/`, where Codex's native skill system discovers
+        # them. Best-effort: a skill failure must not abort the turn.
+        try:
+            sync_skills_to_codex_home(agent, codex_home)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"codex: skill sync skipped: {e}")
 
         # Codex has no clean SDK channel to append to its base system prompt, so
         # the agent identity/instruction is folded into a leading block of the
