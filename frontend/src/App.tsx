@@ -149,6 +149,12 @@ function turnHasVisibleContent(turn: Turn): boolean {
   });
 }
 
+/** True while a turn is paused on an unresolved OAuth card — like streaming, we
+ *  hide the actions/timestamp row until authorization completes. */
+function turnAwaitingAuth(turn: Turn): boolean {
+  return turn.blocks.some((b) => b.kind === "auth" && !b.done);
+}
+
 /** Open the OAuth authorize URL in a popup and resolve with the full callback
  *  URL. Auto-captures when the provider redirects back to our origin (poll +
  *  postMessage); if the popup closes without capture (cross-origin redirect),
@@ -616,10 +622,26 @@ export default function App() {
     const callbackUrl = await runOAuthPopup(block.authUri);
     const response = withAuthResponseUri(block.authConfig, callbackUrl);
 
-    // Base = the current assistant turn's blocks (keeps the thinking + auth card);
-    // the resumed run's events are appended after it.
+    // The moment we have the callback, mark the auth card resolved so it
+    // collapses to a compact "已授权" row immediately — rather than sitting on
+    // "等待授权…" until the whole reply finishes streaming.
+    const resolveAuth = (bs: Block[]) =>
+      bs.map((b) => (b.kind === "auth" && !b.done ? { ...b, done: true } : b));
+    setTurns((t) => {
+      const next = t.slice();
+      const last = next[next.length - 1];
+      if (last?.role === "assistant") {
+        next[next.length - 1] = { ...last, blocks: resolveAuth(last.blocks) };
+      }
+      return next;
+    });
+
+    // Base = the current assistant turn's blocks (keeps the thinking + resolved
+    // auth card); the resumed run's events are appended after it.
     const lastTurn = turns[turns.length - 1];
-    const base = lastTurn && lastTurn.role === "assistant" ? lastTurn.blocks : [];
+    const base = resolveAuth(
+      lastTurn && lastTurn.role === "assistant" ? lastTurn.blocks : [],
+    );
 
     setBusy(true);
     try {
@@ -966,8 +988,9 @@ export default function App() {
                       <div className="turn-empty">本次没有返回可显示的内容。</div>
                     )}
                     {/* Hide the actions/timestamp row while this turn is still
-                        thinking/streaming; reveal it only once the reply is done. */}
-                    {!(isLast && busy) && (
+                        thinking/streaming or waiting on an OAuth card; reveal it
+                        only once the reply is done. */}
+                    {!(isLast && busy) && !turnAwaitingAuth(turn) && (
                       <div className="turn-meta">
                         <div className="turn-actions">
                           <button

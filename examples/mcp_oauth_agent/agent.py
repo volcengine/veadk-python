@@ -1,0 +1,80 @@
+"""Agent whose MCP tool is protected by ADK-native OAuth (OIDC).
+
+Some MCP servers enforce inbound auth: a `tools/call` returns 401 unless an
+`Authorization: Bearer <token>` from an OAuth/OIDC provider is present. Instead
+of any provider-specific SDK, this uses google-adk's built-in OAuth2 handling —
+give the toolset an OpenID Connect scheme plus client credentials and, on the
+first tool call, ADK emits an `adk_request_credential` event carrying an
+authorize URL. The web UI (`veadk frontend`) renders an authorization card; the
+user logs in at the provider; ADK exchanges the returned code for a token and
+replays the call with the bearer header. No extra client code is required.
+
+Configure via environment variables (e.g. in a `.env` file):
+
+    MCP_OAUTH_URL       the MCP server URL (StreamableHTTP), including any path
+    OIDC_ISSUER         the provider's issuer, e.g. https://<pool>.../  — the
+                        authorize/token endpoints are derived from it, or set
+                        them explicitly with the two vars below
+    OIDC_AUTHORIZATION_ENDPOINT   (optional) overrides "<issuer>/authorize"
+    OIDC_TOKEN_ENDPOINT           (optional) overrides "<issuer>/oauth/token"
+    OIDC_SCOPES         (optional) space-separated, default "openid profile email"
+    OIDC_CLIENT_ID      OAuth client id registered with the provider
+    OIDC_CLIENT_SECRET  its client secret
+    OIDC_REDIRECT_URI   a redirect URI registered on that client; default
+                        http://localhost:5173/ so the web UI popup can capture
+                        the ?code=... callback on its own origin
+"""
+
+import os
+
+from google.adk.auth import AuthCredential, AuthCredentialTypes
+from google.adk.auth.auth_credential import OAuth2Auth
+from google.adk.auth.auth_schemes import OpenIdConnectWithConfig
+from google.adk.tools.mcp_tool.mcp_session_manager import (
+    StreamableHTTPConnectionParams,
+)
+from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
+
+from veadk import Agent
+
+_issuer = os.getenv("OIDC_ISSUER", "").rstrip("/")
+_auth_endpoint = os.getenv("OIDC_AUTHORIZATION_ENDPOINT") or f"{_issuer}/authorize"
+_token_endpoint = os.getenv("OIDC_TOKEN_ENDPOINT") or f"{_issuer}/oauth/token"
+_scopes = os.getenv("OIDC_SCOPES", "openid profile email").split()
+
+auth_scheme = OpenIdConnectWithConfig(
+    authorization_endpoint=_auth_endpoint,
+    token_endpoint=_token_endpoint,
+    scopes=_scopes,
+)
+
+auth_credential = AuthCredential(
+    auth_type=AuthCredentialTypes.OPEN_ID_CONNECT,
+    oauth2=OAuth2Auth(
+        client_id=os.getenv("OIDC_CLIENT_ID", ""),
+        client_secret=os.getenv("OIDC_CLIENT_SECRET", ""),
+        redirect_uri=os.getenv("OIDC_REDIRECT_URI", "http://localhost:5173/"),
+    ),
+)
+
+mcp_tool = McpToolset(
+    connection_params=StreamableHTTPConnectionParams(
+        url=os.getenv("MCP_OAUTH_URL", "")
+    ),
+    auth_scheme=auth_scheme,
+    auth_credential=auth_credential,
+)
+
+agent = Agent(
+    name="mcp_oauth_agent",
+    description="An agent whose MCP tool is protected by ADK-native OAuth (OIDC).",
+    instruction=(
+        "You can call the connected MCP tools to help the user. Call the "
+        "relevant tool directly to obtain real results; do not ask the user "
+        "whether they are authorized — the authorization flow is started "
+        "automatically when a tool requires it."
+    ),
+    tools=[mcp_tool],
+)
+
+root_agent = agent

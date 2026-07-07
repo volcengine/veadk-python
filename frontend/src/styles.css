@@ -445,9 +445,9 @@ body {
 /* ---------- MCP / tool OAuth card ---------- */
 .auth-card {
   width: 100%;
-  max-width: 480px;
+  max-width: 640px;
   margin: 2px 0;
-  padding: 16px;
+  padding: 18px 20px;
   border: 1px solid hsl(var(--border));
   border-radius: 12px;
   background: hsl(var(--card));
@@ -458,7 +458,30 @@ body {
   gap: 8px;
   margin-bottom: 6px;
 }
-.auth-card-icon { width: 18px; height: 18px; color: hsl(258 89% 62%); }
+.auth-card-icon { width: 18px; height: 18px; color: hsl(38 92% 50%); }
+.auth-card-icon--done { color: hsl(142 71% 40%); }
+.auth-card-collapsed {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 2px 0;
+  padding: 6px 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 9px;
+  background: hsl(var(--card));
+  font-size: 13px;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground));
+}
+.auth-card-code {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
 .auth-card-title { font-size: 14px; font-weight: 600; }
 .auth-card-desc {
   margin: 0 0 14px;

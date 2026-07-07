@@ -40,7 +40,15 @@ export type Block =
   | { kind: "tool"; name: string; args?: unknown; response?: unknown; done: boolean }
   | { kind: "a2ui"; messages: A2uiMessage[] }
   | { kind: "attachment"; files: AttachmentView[] }
-  | { kind: "auth"; callId: string; authUri?: string; authConfig: unknown; done: boolean };
+  | {
+      kind: "auth";
+      callId: string;
+      /** The toolset requesting auth (e.g. "McpToolset"), from functionCallId. */
+      label?: string;
+      authUri?: string;
+      authConfig: unknown;
+      done: boolean;
+    };
 
 /** Accumulator for one assistant turn. `liveStart` marks where the current
  *  streaming-preview blocks begin (everything before it is finalized). */
@@ -130,9 +138,14 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
         // MCP/tool OAuth: render a dedicated auth card instead of a tool row.
         const args = (fc.args ?? {}) as Record<string, any>;
         const authConfig = args.authConfig ?? args.auth_config ?? args;
+        // functionCallId looks like "_adk_toolset_auth_McpToolset"; surface the
+        // toolset name so the card can say what is being authorized.
+        const rawId = String(args.functionCallId ?? args.function_call_id ?? "");
+        const label = rawId.replace(/^_adk_toolset_auth_/, "") || undefined;
         blocks.push({
           kind: "auth",
           callId: fc.id ?? "",
+          label,
           authUri: authUriOf(authConfig),
           authConfig,
           done: false,

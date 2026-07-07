@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronRight, Loader2, ShieldCheck } from "lucide-react";
+import { ChevronRight, Loader2, ShieldCheck } from "lucide-react";
 import { motion } from "motion/react";
 import type { Block } from "../blocks";
 import { buildSurfaces, SurfaceView } from "../a2ui/Surface";
@@ -134,6 +134,15 @@ function AuthCard({
   );
   const [err, setErr] = useState("");
 
+  const toolLabel = block.label || "MCP 工具集";
+  const provider = (() => {
+    try {
+      return block.authUri ? new URL(block.authUri).host : "";
+    } catch {
+      return "";
+    }
+  })();
+
   const go = async () => {
     if (!onAuth) return;
     setErr("");
@@ -147,6 +156,24 @@ function AuthCard({
     }
   };
 
+  // Resolved as soon as the credential comes back (block.done is set the moment
+  // the callback is captured, before the reply finishes streaming). Collapse the
+  // full card into a compact green "已授权" row.
+  const resolved = block.done || status === "done";
+  if (resolved) {
+    return (
+      <motion.div
+        className="auth-card-collapsed"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.2 }}
+      >
+        <ShieldCheck className="auth-card-icon auth-card-icon--done" />
+        <span>已授权 · {toolLabel}</span>
+      </motion.div>
+    );
+  }
+
   return (
     <motion.div
       className="auth-card"
@@ -156,31 +183,32 @@ function AuthCard({
     >
       <div className="auth-card-head">
         <ShieldCheck className="auth-card-icon" />
-        <span className="auth-card-title">该工具需要授权</span>
+        <span className="auth-card-title">{toolLabel} 需要授权</span>
       </div>
       <p className="auth-card-desc">
-        这个工具（MCP）需要通过 OAuth 授权后才能继续。点击下方按钮完成授权，随后对话会自动继续。
+        工具集 <code className="auth-card-code">{toolLabel}</code> 使用 OAuth 保护，
+        需登录授权后方可调用。
+        {provider && (
+          <>
+            {" "}将跳转至 <code className="auth-card-code">{provider}</code> 完成登录，
+          </>
+        )}
+        授权完成后对话自动继续。
       </p>
-      {status === "done" ? (
-        <div className="auth-card-done">
-          <Check className="cw-i" /> 已授权
-        </div>
-      ) : (
-        <button
-          className="auth-card-btn"
-          onClick={go}
-          disabled={status === "authorizing" || !block.authUri}
-        >
-          {status === "authorizing" ? (
-            <>
-              <Loader2 className="cw-i spin" /> 等待授权…
-            </>
-          ) : (
-            <>去授权</>
-          )}
-        </button>
-      )}
-      {!block.authUri && status !== "done" && (
+      <button
+        className="auth-card-btn"
+        onClick={go}
+        disabled={status === "authorizing" || !block.authUri}
+      >
+        {status === "authorizing" ? (
+          <>
+            <Loader2 className="cw-i spin" /> 等待授权…
+          </>
+        ) : (
+          <>去授权</>
+        )}
+      </button>
+      {!block.authUri && (
         <div className="auth-card-err">未在事件中找到授权地址。</div>
       )}
       {err && <div className="auth-card-err">{err}</div>}
