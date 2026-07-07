@@ -89,83 +89,9 @@ def _shim_timeout() -> float:
         return 0.0
 
 
-def _shim_max_tool_iters() -> int:
-    """Max shim-internal web tool round-trips per request (``0`` = disabled).
-
-    Codex only speaks the Responses API and its hosted ``web_search`` tool is
-    stripped before Ark (Ark rejects its schema), so a Codex+Ark agent has no
-    web capability. When this is > 0, the shim translates the hosted web tools
-    into Ark-accepted ``function`` tools, executes the veADK builtins itself,
-    and loops until the model stops calling them. Default ``0`` keeps the path
-    byte-identical to before. Env-tunable via ``CODEX_SHIM_MAX_TOOL_ITERS``
-    (recommended 6 when enabling).
-    """
-    try:
-        return max(0, int(os.getenv("CODEX_SHIM_MAX_TOOL_ITERS", "0")))
-    except ValueError:
-        return 0
-
-
-# Hosted web tools (Codex emits these; Ark rejects their schema) translated to
-# plain Responses ``function`` tools that the shim executes against veADK's own
-# builtins. Kept minimal — the builtins own the real parameter handling.
-_EXECUTABLE_TOOLS: list[dict[str, Any]] = [
-    {
-        "type": "function",
-        "name": "web_search",
-        "description": "Search the web for a query and return result documents.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "The search query."}
-            },
-            "required": ["query"],
-        },
-    },
-    {
-        "type": "function",
-        "name": "web_fetch",
-        "description": (
-            "Fetch a public web page or PDF over HTTP(S) and return its "
-            "readable main content."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "url": {"type": "string", "description": "The http(s) URL to fetch."},
-                "extract_mode": {
-                    "type": "string",
-                    "enum": ["markdown", "text"],
-                    "description": "Output format; defaults to markdown.",
-                },
-                "max_chars": {
-                    "type": "integer",
-                    "description": "Truncate content to at most this many chars.",
-                },
-            },
-            "required": ["url"],
-        },
-    },
-]
-
-_EXECUTABLE_TOOL_NAMES = {t["name"] for t in _EXECUTABLE_TOOLS}
-
-
-async def _run_tool(name: str, args: dict[str, Any]) -> str:
-    """Execute a veADK built-in web tool and return a JSON string.
-
-    The web builtins use blocking ``requests``, so they run in a worker thread
-    to avoid stalling the shim's event loop. Any error is returned as a JSON
-    payload (never raised) so the model can recover on the next turn.
-    """
-    try:
-        from veadk.tools import get_builtin_tool
-
-        fn = get_builtin_tool(name)
-        result = await asyncio.to_thread(fn, **args)
-        return json.dumps(result, ensure_ascii=False, default=str)
-    except Exception as e:  # noqa: BLE001 - surfaced to the model, not raised
-        return json.dumps({"error": str(e)})
+# Cap on shim-internal tool round-trips per turn — bounds runaway loops while
+# allowing several tool calls per turn.
+_AGENT_TOOL_MAX_ITERS = 8
 
 
 class ResponsesShim:
@@ -187,7 +113,19 @@ class ResponsesShim:
         self.url: str | None = None
         self._server: uvicorn.Server | None = None
         self._task: asyncio.Task[Any] | None = None
+        # The current turn's agent tools, advertised to the backend as plain
+        # `function` tools and executed here (invisibly to Codex). Set per turn
+        # via set_agent_tools(); see veadk.runtime.codex.tools_bridge.
+        self._agent_specs: list[dict[str, Any]] = []
+        self._agent_executors: dict[str, Any] = {}
         self._app = self._build_app()
+
+    def set_agent_tools(
+        self, specs: list[dict[str, Any]], executors: dict[str, Any]
+    ) -> None:
+        """Register (or clear) the agent tools the shim should inject + execute."""
+        self._agent_specs = specs or []
+        self._agent_executors = executors or {}
 
     def _build_app(self) -> FastAPI:
         app = FastAPI()
@@ -201,25 +139,19 @@ class ResponsesShim:
             call_kwargs: dict[str, Any] = {
                 key: body[key] for key in _PASSTHROUGH_KEYS if key in body
             }
-            # Codex injects its built-in tools (e.g. `web_search`) whose schema
-            # carries fields like `external_web_access` that non-OpenAI Responses
-            # backends (Ark) reject. Keep only standard `function` tools, which
-            # the bridged chat backend understands. When the tool loop is enabled
-            # (CODEX_SHIM_MAX_TOOL_ITERS > 0), additionally translate the stripped
-            # hosted web tools into Ark-accepted `function` tools that the shim
-            # executes itself (see the tool loop below), so a Codex+Ark agent
-            # regains web search/fetch.
+            # Advertise the agent's ADK tools to the backend as plain `function`
+            # tools; the shim executes them itself (see the tool loop below).
+            # Codex's own non-`function` tools are dropped, since Ark rejects
+            # their schema (e.g. the hosted `web_search`'s `external_web_access`);
+            # this leaves Codex's web search disabled on a chat backend.
+            agent_executors: dict[str, Any] = self._agent_executors
             if isinstance(call_kwargs.get("tools"), list):
-                inbound = call_kwargs["tools"]
-                wants_web = any(
-                    t.get("type") in ("web_search", "web_search_preview")
-                    for t in inbound
-                )
-                kept = [t for t in inbound if t.get("type") == "function"]
-                if wants_web and _shim_max_tool_iters() > 0:
-                    have = {t.get("name") for t in kept}
-                    kept.extend(t for t in _EXECUTABLE_TOOLS if t["name"] not in have)
+                kept = [t for t in call_kwargs["tools"] if t.get("type") == "function"]
+                have = {t.get("name") for t in kept}
+                kept.extend(t for t in self._agent_specs if t.get("name") not in have)
                 call_kwargs["tools"] = kept
+            elif self._agent_specs:
+                call_kwargs["tools"] = list(self._agent_specs)
             # On multi-step turns Codex replays prior assistant messages in
             # `input` without a `status` field, but Ark's Responses API
             # requires `status` on assistant messages (MissingParameter:
@@ -261,7 +193,10 @@ class ResponsesShim:
             # of executable function_calls in the fresh output — the always-empty
             # `message` item is ignored. The loop is invisible to Codex: only the
             # final, tool-free turn is returned/synthesized.
-            max_iters = _shim_max_tool_iters()
+            # The shim resolves the agent's tools itself; with none registered
+            # the loop is disabled and the path is unchanged for tool-less runs.
+            exec_names = set(agent_executors)
+            max_iters = _AGENT_TOOL_MAX_ITERS if agent_executors else 0
             iters = 0
             while True:
                 result = await litellm.aresponses(**call_kwargs)
@@ -275,7 +210,7 @@ class ResponsesShim:
                     it
                     for it in (resp.get("output") or [])
                     if it.get("type") == "function_call"
-                    and it.get("name") in _EXECUTABLE_TOOL_NAMES
+                    and it.get("name") in exec_names
                 ]
                 if not calls:
                     break
@@ -285,7 +220,7 @@ class ResponsesShim:
                         args = json.loads(fc.get("arguments") or "{}")
                     except json.JSONDecodeError:
                         args = {}
-                    out = await _run_tool(fc["name"], args)
+                    out = await agent_executors[fc["name"]](args)
                     conv.append(
                         {
                             "type": "function_call",
@@ -308,13 +243,13 @@ class ResponsesShim:
             # If we broke at the iteration cap with an executable function_call
             # still pending, strip it so it never leaks to Codex (which cannot
             # run it and would desync the next turn / emit a null delta).
-            if max_iters > 0 and isinstance(resp.get("output"), list):
+            if exec_names and isinstance(resp.get("output"), list):
                 resp["output"] = [
                     it
                     for it in resp["output"]
                     if not (
                         it.get("type") == "function_call"
-                        and it.get("name") in _EXECUTABLE_TOOL_NAMES
+                        and it.get("name") in exec_names
                     )
                 ]
 
@@ -521,11 +456,18 @@ async def _synth_sse(resp: dict[str, Any]) -> AsyncIterator[bytes]:
 _SHIMS: dict[tuple[str, str], ResponsesShim] = {}
 
 
-async def get_shim_url(api_base: str, api_key: str) -> str:
-    """Return a started shim URL for the given backend, creating it if needed."""
+async def get_shim(api_base: str, api_key: str) -> ResponsesShim:
+    """Return a started shim for the given backend, creating it if needed."""
     key = (api_base, api_key)
     shim = _SHIMS.get(key)
     if shim is None:
         shim = ResponsesShim(api_base=api_base, api_key=api_key)
         _SHIMS[key] = shim
-    return await shim.start()
+    await shim.start()
+    return shim
+
+
+async def get_shim_url(api_base: str, api_key: str) -> str:
+    """Return a started shim URL for the given backend, creating it if needed."""
+    shim = await get_shim(api_base, api_key)
+    return shim.url or ""

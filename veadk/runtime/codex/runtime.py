@@ -45,8 +45,9 @@ from openai_codex.generated.v2_all import (  # type: ignore[import-not-found]
 )
 
 from veadk.runtime.base_runtime import BaseRuntime, build_system_append
-from veadk.runtime.codex.proxy import get_shim_url
+from veadk.runtime.codex.proxy import get_shim
 from veadk.runtime.codex.skills import sync_skills_to_codex_home
+from veadk.runtime.codex.tools_bridge import build_executable_tools, close_toolsets
 from veadk.runtime.codex.translate import build_prompt, item_to_events
 from veadk.utils.logger import get_logger
 
@@ -83,7 +84,8 @@ class CodexRuntime(BaseRuntime):
                 "(the chat endpoint Codex is bridged onto)."
             )
 
-        shim_url = await get_shim_url(api_base, api_key)
+        shim = await get_shim(api_base, api_key)
+        shim_url = shim.url or ""
         codex_home = _prepare_codex_home(shim_url, model)
         # Expose the agent's skills to Codex by materializing them under
         # `$CODEX_HOME/skills/`, where Codex's native skill system discovers
@@ -92,6 +94,15 @@ class CodexRuntime(BaseRuntime):
             sync_skills_to_codex_home(agent, codex_home)
         except Exception as e:  # noqa: BLE001
             logger.warning(f"codex: skill sync skipped: {e}")
+
+        # Bridge the agent's ADK tools (function/MCP) to the shim: it advertises
+        # them to the backend as plain `function` tools and executes them itself,
+        # so they never reach Codex (whose `namespace` MCP form Ark rejects). See
+        # veadk.runtime.codex.tools_bridge / proxy.
+        tool_specs, tool_executors, opened_toolsets = await build_executable_tools(
+            agent, ctx
+        )
+        shim.set_agent_tools(tool_specs, tool_executors)
 
         # Codex has no clean SDK channel to append to its base system prompt, so
         # the agent identity/instruction is folded into a leading block of the
@@ -143,6 +154,10 @@ class CodexRuntime(BaseRuntime):
                     if aclose is not None:
                         await aclose()
         finally:
+            # Drop this turn's tools from the (shared) shim and release any MCP
+            # sessions opened for them.
+            shim.set_agent_tools([], {})
+            await close_toolsets(opened_toolsets)
             for key, value in previous.items():
                 if value is None:
                     os.environ.pop(key, None)
