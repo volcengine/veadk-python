@@ -13,6 +13,20 @@ import type { A2uiMessage } from "./a2ui/types";
 
 const A2UI_TOOL = "send_a2ui_json_to_client";
 const VALIDATED_JSON_KEY = "validated_a2ui_json";
+/** ADK's special function call that requests OAuth/credentials for a tool. */
+const REQUEST_EUC = "adk_request_credential";
+
+/** Pull the OAuth2 authorize URL out of an ADK AuthConfig (camelCase over
+ *  /run_sse, snake_case in stored history — handle both). */
+export function authUriOf(authConfig: unknown): string | undefined {
+  const c = authConfig as Record<string, any> | undefined;
+  const o =
+    c?.exchangedAuthCredential?.oauth2 ??
+    c?.exchanged_auth_credential?.oauth2 ??
+    c?.rawAuthCredential?.oauth2 ??
+    c?.raw_auth_credential?.oauth2;
+  return o?.authUri ?? o?.auth_uri;
+}
 
 export interface AttachmentView {
   mimeType?: string;
@@ -25,7 +39,16 @@ export type Block =
   | { kind: "text"; text: string }
   | { kind: "tool"; name: string; args?: unknown; response?: unknown; done: boolean }
   | { kind: "a2ui"; messages: A2uiMessage[] }
-  | { kind: "attachment"; files: AttachmentView[] };
+  | { kind: "attachment"; files: AttachmentView[] }
+  | {
+      kind: "auth";
+      callId: string;
+      /** The toolset requesting auth (e.g. "McpToolset"), from functionCallId. */
+      label?: string;
+      authUri?: string;
+      authConfig: unknown;
+      done: boolean;
+    };
 
 /** Accumulator for one assistant turn. `liveStart` marks where the current
  *  streaming-preview blocks begin (everything before it is finalized). */
@@ -111,9 +134,37 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
       appendText(blocks, p.thought ? "thinking" : "text", p.text);
     } else if (fc) {
       closeThinking(blocks);
-      blocks.push({ kind: "tool", name: fc.name ?? "", args: fc.args, done: false });
+      if (fc.name === REQUEST_EUC) {
+        // MCP/tool OAuth: render a dedicated auth card instead of a tool row.
+        const args = (fc.args ?? {}) as Record<string, any>;
+        const authConfig = args.authConfig ?? args.auth_config ?? args;
+        // functionCallId looks like "_adk_toolset_auth_McpToolset"; surface the
+        // toolset name so the card can say what is being authorized.
+        const rawId = String(args.functionCallId ?? args.function_call_id ?? "");
+        const label = rawId.replace(/^_adk_toolset_auth_/, "") || undefined;
+        blocks.push({
+          kind: "auth",
+          callId: fc.id ?? "",
+          label,
+          authUri: authUriOf(authConfig),
+          authConfig,
+          done: false,
+        });
+      } else {
+        blocks.push({ kind: "tool", name: fc.name ?? "", args: fc.args, done: false });
+      }
     } else if (fr) {
       closeThinking(blocks);
+      // A credential response resolves the matching auth card.
+      if (fr.name === REQUEST_EUC) {
+        for (let i = blocks.length - 1; i >= 0; i--) {
+          const b = blocks[i];
+          if (b.kind === "auth" && !b.done) {
+            b.done = true;
+            break;
+          }
+        }
+      }
       for (let i = blocks.length - 1; i >= 0; i--) {
         const b = blocks[i];
         if (b.kind === "tool" && !b.done && b.name === fr.name) {
@@ -148,11 +199,28 @@ export function eventsToTurns(events: AdkEvent[]): Turn[] {
     const isUser = ev.author === "user";
     if (isUser) {
       const parts = ev.content?.parts ?? [];
+      // A credential (adk_request_credential) response is an internal resume,
+      // not a user message — resolve the prior assistant turn's auth card.
+      if (parts.some((p) => fnResp(p)?.name === REQUEST_EUC)) {
+        for (let i = turns.length - 1; i >= 0; i--) {
+          if (turns[i].role !== "assistant") continue;
+          for (let j = turns[i].blocks.length - 1; j >= 0; j--) {
+            const b = turns[i].blocks[j];
+            if (b.kind === "auth") { b.done = true; break; }
+          }
+          break;
+        }
+      }
       const text = parts
         .map((p) => p.text)
         .filter((t): t is string => !!t)
         .join("");
       const files = attachmentsFromParts(parts);
+      // Skip pure function-response turns (no text/files) — they're internal.
+      if (!text && !files.length) {
+        acc = emptyAcc();
+        continue;
+      }
       const blocks: Block[] = [];
       if (files.length) blocks.push({ kind: "attachment", files });
       if (text) blocks.push({ kind: "text", text });

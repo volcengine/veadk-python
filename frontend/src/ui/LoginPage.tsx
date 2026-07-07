@@ -78,9 +78,11 @@ export function LoginPage({ onUsername }: LoginPageProps) {
                   <ArrowRight className="icon" />
                 </button>
               </form>
-              {name && !valid && (
-                <p className="login-hint">只能包含大小写字母和数字，最多 16 位。</p>
-              )}
+              {/* Always rendered so the error appearing doesn't shift the input;
+                  the line's height is reserved via CSS min-height. */}
+              <p className="login-hint" aria-live="polite">
+                {name && !valid ? "只能包含大小写字母和数字，最多 16 位。" : ""}
+              </p>
             </>
           )}
 

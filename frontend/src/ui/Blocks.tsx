@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Loader2, ShieldCheck } from "lucide-react";
 import { motion } from "motion/react";
 import type { Block } from "../blocks";
 import { buildSurfaces, SurfaceView } from "../a2ui/Surface";
@@ -118,12 +118,112 @@ function ToolBlock({
   );
 }
 
+type AuthBlock = Extract<Block, { kind: "auth" }>;
+
+/** OAuth authorization card for an `adk_request_credential` request (MCP/tool
+ *  OAuth). Clicking runs the app's onAuth handler (popup + callback + resume). */
+function AuthCard({
+  block,
+  onAuth,
+}: {
+  block: AuthBlock;
+  onAuth?: (block: AuthBlock) => Promise<void>;
+}) {
+  const [status, setStatus] = useState<"idle" | "authorizing" | "done" | "error">(
+    block.done ? "done" : "idle",
+  );
+  const [err, setErr] = useState("");
+
+  const toolLabel = block.label || "MCP 工具集";
+  const provider = (() => {
+    try {
+      return block.authUri ? new URL(block.authUri).host : "";
+    } catch {
+      return "";
+    }
+  })();
+
+  const go = async () => {
+    if (!onAuth) return;
+    setErr("");
+    setStatus("authorizing");
+    try {
+      await onAuth(block);
+      setStatus("done");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setStatus("idle");
+    }
+  };
+
+  // Resolved as soon as the credential comes back (block.done is set the moment
+  // the callback is captured, before the reply finishes streaming). Collapse the
+  // full card into a compact green "已授权" row.
+  const resolved = block.done || status === "done";
+  if (resolved) {
+    return (
+      <motion.div
+        className="auth-card-collapsed"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.2 }}
+      >
+        <ShieldCheck className="auth-card-icon auth-card-icon--done" />
+        <span>已授权 · {toolLabel}</span>
+      </motion.div>
+    );
+  }
+
+  return (
+    <motion.div
+      className="auth-card"
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2, ease: "easeOut" }}
+    >
+      <div className="auth-card-head">
+        <ShieldCheck className="auth-card-icon" />
+        <span className="auth-card-title">{toolLabel} 需要授权</span>
+      </div>
+      <p className="auth-card-desc">
+        工具集 <code className="auth-card-code">{toolLabel}</code> 使用 OAuth 保护，
+        需登录授权后方可调用。
+        {provider && (
+          <>
+            {" "}将跳转至 <code className="auth-card-code">{provider}</code> 完成登录，
+          </>
+        )}
+        授权完成后对话自动继续。
+      </p>
+      <button
+        className="auth-card-btn"
+        onClick={go}
+        disabled={status === "authorizing" || !block.authUri}
+      >
+        {status === "authorizing" ? (
+          <>
+            <Loader2 className="cw-i spin" /> 等待授权…
+          </>
+        ) : (
+          <>去授权</>
+        )}
+      </button>
+      {!block.authUri && (
+        <div className="auth-card-err">未在事件中找到授权地址。</div>
+      )}
+      {err && <div className="auth-card-err">{err}</div>}
+    </motion.div>
+  );
+}
+
 export interface BlocksProps {
   blocks: Block[];
   onAction: (action: A2uiAction | undefined, node: A2uiComponent) => void;
+  /** Handle an MCP/tool OAuth request (opens auth URL, resumes the run). */
+  onAuth?: (block: AuthBlock) => Promise<void>;
 }
 
-export function Blocks({ blocks, onAction }: BlocksProps) {
+export function Blocks({ blocks, onAction, onAuth }: BlocksProps) {
   return (
     <>
       {blocks.map((b, i) => {
@@ -143,6 +243,8 @@ export function Blocks({ blocks, onAction }: BlocksProps) {
             return (
               <ToolBlock key={i} name={b.name} args={b.args} response={b.response} done={b.done} />
             );
+          case "auth":
+            return <AuthCard key={i} block={b} onAuth={onAuth} />;
           case "a2ui":
             // Skip surfaces with no renderable root (e.g. a createSurface that
             // was never followed by updateComponents) so we don't emit an empty box.

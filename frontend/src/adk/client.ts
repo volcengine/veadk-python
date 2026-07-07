@@ -64,11 +64,11 @@ export interface AdkPart {
   thought?: boolean;
   inlineData?: AdkInlineData;
   inline_data?: AdkInlineData; // snake_case fallback (defensive)
-  functionCall?: { name?: string; args?: Record<string, unknown> };
-  functionResponse?: { name?: string; response?: Record<string, unknown> };
+  functionCall?: { id?: string; name?: string; args?: Record<string, unknown> };
+  functionResponse?: { id?: string; name?: string; response?: Record<string, unknown> };
   // snake_case fallbacks (defensive)
-  function_call?: { name?: string; args?: Record<string, unknown> };
-  function_response?: { name?: string; response?: Record<string, unknown> };
+  function_call?: { id?: string; name?: string; args?: Record<string, unknown> };
+  function_response?: { id?: string; name?: string; response?: Record<string, unknown> };
 }
 
 /** A file the user attached in the composer, encoded for `/run_sse`. */
@@ -242,6 +242,9 @@ export interface RunArgs {
   sessionId: string;
   text: string;
   attachments?: Attachment[];
+  /** Function responses to send instead of/alongside text — used to resume a
+   *  long-running call (e.g. answering ADK's `adk_request_credential`). */
+  functionResponses?: { id: string; name: string; response: unknown }[];
 }
 
 /** Stream agent events for one user turn. */
@@ -251,11 +254,15 @@ export async function* runSSE({
   sessionId,
   text,
   attachments = [],
+  functionResponses = [],
 }: RunArgs): AsyncGenerator<AdkEvent, void, unknown> {
   const { app, ep } = resolve(appName);
-  const parts: AdkPart[] = [
+  const parts: Record<string, unknown>[] = [
     ...attachments.map((a) => ({
       inlineData: { mimeType: a.mimeType, data: a.data, displayName: a.name },
+    })),
+    ...functionResponses.map((fr) => ({
+      functionResponse: { id: fr.id, name: fr.name, response: fr.response },
     })),
     ...(text.trim() ? [{ text }] : []),
   ];

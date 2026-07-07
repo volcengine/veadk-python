@@ -15,7 +15,7 @@
   --border: 240 5.9% 90%;
   --ring: 240 5.9% 10%;
   --radius: 0.5rem;
-  --canvas: 36 18% 96.5%; /* warm neutral window bg; main floats on top of it */
+  --canvas: 240 5% 97.3%; /* light neutral-gray window bg; main floats on top (LobeChat-style) */
   --panel: 0 0% 100%; /* the floating main panel */
 
   color-scheme: light;
@@ -53,7 +53,10 @@ body {
 *::-webkit-scrollbar-thumb:hover { background: hsl(var(--foreground) / 0.32); background-clip: content-box; }
 *::-webkit-scrollbar-corner { background: transparent; }
 
-/* ---------- layout ---------- */
+/* ---------- layout ----------
+ * One big rounded "window": the whole app (sidebar + main) is a single rounded
+ * panel floating on the gray canvas, with the gray showing as a margin all
+ * around (LobeChat-style). */
 .layout { display: flex; height: 100vh; }
 
 /* ---------- sidebar ---------- */
@@ -113,7 +116,7 @@ body {
   color: hsl(var(--muted-foreground)); display: flex;
 }
 .history-refresh:hover { color: hsl(var(--foreground)); }
-.history-list { flex: 1; overflow-y: auto; padding: 4px 10px 12px; }
+.history-list { flex: 1; overflow-y: auto; padding: 4px 10px 12px; display: flex; flex-direction: column; gap: 2px; }
 .history-empty { padding: 16px 8px; font-size: 13px; color: hsl(var(--muted-foreground)); text-align: center; }
 .history-item {
   position: relative;
@@ -198,13 +201,10 @@ body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  margin: 10px 10px 10px 0; /* gap to canvas + sidebar; floats as a panel */
+  margin: 10px; /* floats as a rounded panel on the gray canvas */
   background: hsl(var(--panel));
   border: 1px solid hsl(var(--border));
   border-radius: 12px;
-  box-shadow:
-    0 1px 2px hsl(var(--foreground) / 0.04),
-    0 12px 32px -16px hsl(var(--foreground) / 0.12);
   overflow: hidden; /* clip inner scroll regions to the rounded corners */
 }
 
@@ -434,6 +434,92 @@ body {
   color: hsl(var(--muted-foreground));
   opacity: 0;
   transition: opacity 0.15s;
+}
+.turn-empty {
+  margin-top: 2px;
+  font-size: 13px;
+  font-style: italic;
+  color: hsl(var(--muted-foreground));
+}
+
+/* ---------- MCP / tool OAuth card ---------- */
+.auth-card {
+  width: 100%;
+  max-width: 640px;
+  margin: 2px 0;
+  padding: 18px 20px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--card));
+}
+.auth-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.auth-card-icon { width: 18px; height: 18px; color: hsl(38 92% 50%); }
+.auth-card-icon--done { color: hsl(142 71% 40%); }
+.auth-card-collapsed {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 2px 0;
+  padding: 6px 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 9px;
+  background: hsl(var(--card));
+  font-size: 13px;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground));
+}
+.auth-card-code {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+.auth-card-title { font-size: 14px; font-weight: 600; }
+.auth-card-desc {
+  margin: 0 0 14px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: hsl(var(--muted-foreground));
+}
+.auth-card-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 9px;
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.12s;
+}
+.auth-card-btn:hover:not(:disabled) { opacity: 0.88; }
+.auth-card-btn:disabled { opacity: 0.55; cursor: default; }
+.auth-card-btn .cw-i { width: 15px; height: 15px; }
+.auth-card-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: hsl(142 71% 40%);
+}
+.auth-card-done .cw-i { width: 16px; height: 16px; }
+.auth-card-err {
+  margin-top: 8px;
+  font-size: 12px;
+  color: hsl(var(--destructive));
 }
 .turn-actions { display: inline-flex; align-items: center; gap: 2px; }
 .turn-actions--right {
@@ -1197,6 +1283,47 @@ body {
 .account-logout:hover { background: hsl(var(--foreground) / 0.05); }
 .account-logout .icon { width: 16px; height: 16px; color: hsl(var(--muted-foreground)); }
 
+/* ---------- sidebar account footer ---------- */
+.sidebar-user {
+  position: relative;
+  flex-shrink: 0;
+  margin-top: auto; /* pin to the bottom of the sidebar */
+  padding: 8px 10px 12px;
+}
+.sidebar-user-btn {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  border-radius: 10px;
+  background: none;
+  color: hsl(var(--foreground));
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.sidebar-user-btn:hover { background: hsl(var(--foreground) / 0.05); }
+.sidebar-user-name {
+  min-width: 0;
+  flex: 1;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* popover opens UPWARD (the footer is at the very bottom) */
+.sidebar-user-pop {
+  position: absolute;
+  bottom: calc(100% - 4px);
+  top: auto;
+  left: 10px;
+  right: 10px;
+}
+
 /* ---------- skill center (external iframe filling the main panel) ---------- */
 .skill-frame {
   flex: 1;
@@ -1450,10 +1577,14 @@ a.search-result { text-decoration: none; color: inherit; }
 
 /* ---------- login page (LobeHub-style) ---------- */
 .login {
-  height: 100vh;
+  position: fixed;
+  inset: 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 14px;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
-  background: hsl(var(--background));
+  background: hsl(var(--panel));
   color: hsl(var(--foreground));
 }
 .login-top { padding: 18px 24px; }
@@ -1531,7 +1662,13 @@ a.search-result { text-decoration: none; color: inherit; }
 }
 .login-name-go .icon { width: 18px; height: 18px; }
 .login-name-go:disabled { opacity: 0.35; cursor: default; }
-.login-hint { margin: 10px 0 0; font-size: 12px; color: hsl(var(--destructive)); }
+.login-hint {
+  margin: 8px 0 0;
+  min-height: 16px; /* reserve the line so showing/hiding the error never shifts the input */
+  line-height: 16px;
+  font-size: 12px;
+  color: hsl(var(--destructive));
+}
 
 /* session-loading overlay (shown while opening a history session) */
 .session-loading {

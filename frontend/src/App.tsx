@@ -11,7 +11,7 @@ import {
   type AdkSession,
   type Attachment,
 } from "./adk/client";
-import { applyEvent, emptyAcc, eventsToTurns, type Turn } from "./blocks";
+import { applyEvent, emptyAcc, eventsToTurns, type Block, type Turn } from "./blocks";
 import { Sidebar } from "./ui/Sidebar";
 import { Navbar } from "./ui/Navbar";
 import { SkillCenterView } from "./ui/SkillCenter";
@@ -65,6 +65,7 @@ import {
   type AuthStatus,
 } from "./adk/identity";
 import type { A2uiAction, A2uiComponent } from "./a2ui/types";
+import { buildSurfaces } from "./a2ui/Surface";
 
 /** Hand-drawn "AgentKit" mark: a little agent/robot module with side ports —
  *  a packaged remote agent you plug into. */
@@ -130,6 +131,106 @@ function turnText(turn: Turn): string {
     .map((b) => (b.kind === "text" ? b.text : ""))
     .join("")
     .trim();
+}
+
+const A2UI_TOOL_NAME = "send_a2ui_json_to_client";
+
+/** Whether a finalized assistant turn has anything visible to render — non-empty
+ *  text, a renderable A2UI surface, or a non-A2UI tool. Thinking, the hidden
+ *  (done) A2UI tool, and empty A2UI surfaces don't count, so a reply that was
+ *  ONLY thinking + an empty surface returns false (→ we show a fallback). */
+function turnHasVisibleContent(turn: Turn): boolean {
+  return turn.blocks.some((b) => {
+    if (b.kind === "text") return b.text.trim().length > 0;
+    if (b.kind === "tool") return !(b.name === A2UI_TOOL_NAME && b.done);
+    if (b.kind === "a2ui") return buildSurfaces(b.messages).some((s) => s.components[s.rootId]);
+    if (b.kind === "auth") return true; // the OAuth card counts as content
+    return false; // thinking is not an answer
+  });
+}
+
+/** True while a turn is paused on an unresolved OAuth card — like streaming, we
+ *  hide the actions/timestamp row until authorization completes. */
+function turnAwaitingAuth(turn: Turn): boolean {
+  return turn.blocks.some((b) => b.kind === "auth" && !b.done);
+}
+
+/** Open the OAuth authorize URL in a popup and resolve with the full callback
+ *  URL. Auto-captures when the provider redirects back to our origin (poll +
+ *  postMessage); if the popup closes without capture (cross-origin redirect),
+ *  falls back to asking the user to paste the callback URL. */
+function runOAuthPopup(authUri: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const popup = window.open(authUri, "veadk_oauth", "width=520,height=720");
+    if (!popup) {
+      reject(new Error("弹窗被拦截，请允许弹窗后重试。"));
+      return;
+    }
+    let done = false;
+    const cleanup = () => {
+      clearInterval(timer);
+      window.removeEventListener("message", onMsg);
+    };
+    const finish = (url: string) => {
+      if (done) return;
+      done = true;
+      cleanup();
+      try {
+        popup.close();
+      } catch {
+        /* ignore */
+      }
+      resolve(url);
+    };
+    const onMsg = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin) return;
+      const d = e.data as { veadkOAuth?: boolean; url?: string } | null;
+      if (d && d.veadkOAuth && typeof d.url === "string") finish(d.url);
+    };
+    window.addEventListener("message", onMsg);
+    const timer = setInterval(() => {
+      if (done) return;
+      if (popup.closed) {
+        cleanup();
+        const pasted = window.prompt(
+          "授权完成后，请粘贴回调页面（浏览器地址栏）的完整 URL：",
+        );
+        if (pasted && pasted.trim()) {
+          done = true;
+          resolve(pasted.trim());
+        } else {
+          reject(new Error("授权已取消。"));
+        }
+        return;
+      }
+      try {
+        const href = popup.location.href; // throws while cross-origin
+        if (
+          href &&
+          href !== "about:blank" &&
+          new URL(href).origin === window.location.origin &&
+          /[?&](code|state|error)=/.test(href)
+        ) {
+          finish(href);
+        }
+      } catch {
+        /* still on the provider's origin — keep polling */
+      }
+    }, 500);
+  });
+}
+
+/** Clone an ADK AuthConfig and set the OAuth2 callback URL, so ADK can exchange
+ *  the code for a token when we send it back as the credential response. */
+function withAuthResponseUri(authConfig: unknown, callbackUrl: string): unknown {
+  const cfg = JSON.parse(JSON.stringify(authConfig ?? {})) as Record<string, any>;
+  const cred = cfg.exchangedAuthCredential ?? cfg.exchanged_auth_credential ?? {};
+  const o = cred.oauth2 ?? {};
+  o.authResponseUri = callbackUrl;
+  o.auth_response_uri = callbackUrl;
+  cred.oauth2 = o;
+  cfg.exchangedAuthCredential = cred;
+  return cfg;
 }
 
 function CopyButton({ text }: { text: string }) {
@@ -290,11 +391,17 @@ export default function App() {
     listApps()
       .then((list) => {
         setApps(list);
-        // Restore the last-used agent; otherwise pick the first one.
+        // Restore the last-used agent; otherwise land on a known-good default
+        // (prefer a servable, conversational agent — numbered examples like
+        // 01_quickstart are standalone scripts with no root_agent and can't load).
         const saved = localStorage.getItem(LS.app);
         const remoteIds = connections.flatMap((c) => c.apps.map((a) => remoteAppId(c.id, a)));
         const valid = saved && (list.includes(saved) || remoteIds.includes(saved));
-        const preferred = valid ? saved : list[0];
+        const fallback =
+          ["web_search_agent", "web_demo"].find((a) => list.includes(a)) ??
+          list.find((a) => !/^\d/.test(a)) ??
+          list[0];
+        const preferred = valid ? saved : fallback;
         if (preferred) setAppName(preferred);
       })
       .catch((e) => setError(String(e)));
@@ -505,6 +612,75 @@ export default function App() {
     send(`[ui-action] ${name}: ${JSON.stringify(context)}`);
   }
 
+  /** Complete an MCP/tool OAuth request: open the authorize URL, capture the
+   *  callback, then send the credential back as a function response — ADK
+   *  exchanges the code for a token and resumes the paused tool call. The
+   *  continuation streams into the same assistant turn. */
+  async function onAuth(block: Extract<Block, { kind: "auth" }>) {
+    if (!block.authUri) throw new Error("事件中没有授权地址。");
+    if (!appName || !userId || !sessionId) throw new Error("会话尚未就绪。");
+    const callbackUrl = await runOAuthPopup(block.authUri);
+    const response = withAuthResponseUri(block.authConfig, callbackUrl);
+
+    // The moment we have the callback, mark the auth card resolved so it
+    // collapses to a compact "已授权" row immediately — rather than sitting on
+    // "等待授权…" until the whole reply finishes streaming.
+    const resolveAuth = (bs: Block[]) =>
+      bs.map((b) => (b.kind === "auth" && !b.done ? { ...b, done: true } : b));
+    setTurns((t) => {
+      const next = t.slice();
+      const last = next[next.length - 1];
+      if (last?.role === "assistant") {
+        next[next.length - 1] = { ...last, blocks: resolveAuth(last.blocks) };
+      }
+      return next;
+    });
+
+    // Base = the current assistant turn's blocks (keeps the thinking + resolved
+    // auth card); the resumed run's events are appended after it.
+    const lastTurn = turns[turns.length - 1];
+    const base = resolveAuth(
+      lastTurn && lastTurn.role === "assistant" ? lastTurn.blocks : [],
+    );
+
+    setBusy(true);
+    try {
+      let acc = emptyAcc();
+      let tokens = 0;
+      let ts = Date.now() / 1000;
+      for await (const event of runSSE({
+        appName,
+        userId,
+        sessionId,
+        text: "",
+        functionResponses: [
+          { id: block.callId, name: "adk_request_credential", response },
+        ],
+      })) {
+        acc = applyEvent(acc, event);
+        const usage = event.usageMetadata ?? event.usage_metadata;
+        if (usage?.totalTokenCount) tokens = usage.totalTokenCount;
+        if (event.timestamp) ts = event.timestamp;
+        const blocks = [...base, ...acc.blocks];
+        setTurns((t) => {
+          const next = t.slice();
+          const last = next[next.length - 1];
+          if (last?.role === "assistant") {
+            next[next.length - 1] = {
+              ...last,
+              blocks,
+              meta: { tokens: tokens || last.meta?.tokens, ts },
+            };
+          }
+          return next;
+        });
+      }
+      void refreshSessions(appName);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (authStatus === null) {
     return <div className="boot" />; // resolving identity
   }
@@ -573,6 +749,8 @@ export default function App() {
           pickSession(id);
         }}
         onDeleteSession={removeSession}
+        userInfo={userInfo}
+        onLogout={onLogout}
       />
 
       {(() => {
@@ -605,8 +783,6 @@ export default function App() {
               appName={appName}
               onAppChange={setAppName}
               agentLabel={labelOf}
-              userInfo={userInfo}
-              onLogout={onLogout}
               title={
                 addMenu
                   ? "添加 Agent"
@@ -805,20 +981,30 @@ export default function App() {
                   isLast && busy ? <ThinkingPlaceholder /> : null
                 ) : (
                   <>
-                    <Blocks blocks={turn.blocks} onAction={onAction} />
-                    <div className="turn-meta">
-                      <div className="turn-actions">
-                        <button
-                          className="icon-btn"
-                          title="Tracing 火焰图"
-                          onClick={() => setTraceOpen(true)}
-                        >
-                          <TraceIcon />
-                        </button>
-                        <CopyButton text={turnText(turn)} />
+                    <Blocks blocks={turn.blocks} onAction={onAction} onAuth={onAuth} />
+                    {/* Finalized turn that produced no visible answer (e.g. only
+                        thinking + an empty A2UI surface) — show a fallback note. */}
+                    {!(isLast && busy) && !turnHasVisibleContent(turn) && (
+                      <div className="turn-empty">本次没有返回可显示的内容。</div>
+                    )}
+                    {/* Hide the actions/timestamp row while this turn is still
+                        thinking/streaming or waiting on an OAuth card; reveal it
+                        only once the reply is done. */}
+                    {!(isLast && busy) && !turnAwaitingAuth(turn) && (
+                      <div className="turn-meta">
+                        <div className="turn-actions">
+                          <button
+                            className="icon-btn"
+                            title="Tracing 火焰图"
+                            onClick={() => setTraceOpen(true)}
+                          >
+                            <TraceIcon />
+                          </button>
+                          <CopyButton text={turnText(turn)} />
+                        </div>
+                        {turn.meta && <span className="meta-text">{fmtMeta(turn.meta)}</span>}
                       </div>
-                      {turn.meta && <span className="meta-text">{fmtMeta(turn.meta)}</span>}
-                    </div>
+                    )}
                   </>
                 )}
               </motion.div>

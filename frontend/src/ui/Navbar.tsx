@@ -1,7 +1,6 @@
 import { Fragment, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Cpu, Loader2, LogOut, Wrench } from "lucide-react";
+import { ChevronDown, ChevronRight, Cpu, Loader2, Wrench } from "lucide-react";
 import { getAgentInfo, type AgentInfo } from "../adk/client";
-import { displayName } from "../adk/identity";
 
 export interface Crumb {
   label: string;
@@ -15,16 +14,15 @@ export interface NavbarProps {
   onAppChange: (app: string) => void;
   /** Map a picker id to its display label (e.g. remote AgentKit apps). */
   agentLabel?: (id: string) => string;
-  userInfo?: Record<string, unknown>;
-  onLogout: () => void;
   /** When set, the left side shows this title instead of the agent picker. */
   title?: string;
   /** When set, the left side shows a breadcrumb trail (takes priority over title). */
   crumbs?: Crumb[];
 }
 
-/** Top bar inside the main panel: agent picker on the left, account on the right. */
-export function Navbar({ apps, appName, onAppChange, agentLabel, userInfo, onLogout, title, crumbs }: NavbarProps) {
+/** Top bar inside the main panel: agent picker / title / breadcrumb on the left.
+ *  (The account block lives at the bottom of the sidebar.) */
+export function Navbar({ apps, appName, onAppChange, agentLabel, title, crumbs }: NavbarProps) {
   return (
     <div className="navbar">
       {crumbs && crumbs.length > 0 ? (
@@ -47,7 +45,6 @@ export function Navbar({ apps, appName, onAppChange, agentLabel, userInfo, onLog
       ) : (
         <AgentSelect apps={apps} appName={appName} onAppChange={onAppChange} agentLabel={agentLabel} />
       )}
-      <Account userInfo={userInfo} onLogout={onLogout} />
     </div>
   );
 }
@@ -174,41 +171,3 @@ function AgentFlyout({ state, top }: { state: InfoState; top: number }) {
   );
 }
 
-/** Avatar-only account button; clicking opens a small panel with name + logout. */
-function Account({ userInfo, onLogout }: Pick<NavbarProps, "userInfo" | "onLogout">) {
-  const [open, setOpen] = useState(false);
-  if (!userInfo) return null;
-  const name = displayName(userInfo);
-  const email = String(userInfo.email ?? userInfo.sub ?? "");
-  const initial = (name || "U").slice(0, 1).toUpperCase();
-  return (
-    <div className="account">
-      <button className="account-avatar" title={name} onClick={() => setOpen((o) => !o)}>
-        {initial}
-      </button>
-      {open && (
-        <>
-          <div className="menu-scrim" onClick={() => setOpen(false)} />
-          <div className="account-pop">
-            <div className="account-head">
-              <div className="account-avatar account-avatar--lg">{initial}</div>
-              <div className="account-id">
-                <div className="account-name">{name}</div>
-                {email && email !== name && <div className="account-sub">{email}</div>}
-              </div>
-            </div>
-            <button
-              className="account-logout"
-              onClick={() => {
-                setOpen(false);
-                onLogout();
-              }}
-            >
-              <LogOut className="icon" /> 退出登录
-            </button>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
