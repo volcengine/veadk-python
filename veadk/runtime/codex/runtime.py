@@ -46,6 +46,7 @@ from openai_codex.generated.v2_all import (  # type: ignore[import-not-found]
 
 from veadk.runtime.base_runtime import BaseRuntime, build_system_append
 from veadk.runtime.codex.proxy import get_shim
+from veadk.runtime.codex.skills import sync_skills_to_codex_home
 from veadk.runtime.codex.tools_bridge import build_executable_tools, close_toolsets
 from veadk.runtime.codex.translate import build_prompt, item_to_events
 from veadk.utils.logger import get_logger
@@ -86,6 +87,13 @@ class CodexRuntime(BaseRuntime):
         shim = await get_shim(api_base, api_key)
         shim_url = shim.url or ""
         codex_home = _prepare_codex_home(shim_url, model)
+        # Expose the agent's skills to Codex by materializing them under
+        # `$CODEX_HOME/skills/`, where Codex's native skill system discovers
+        # them. Best-effort: a skill failure must not abort the turn.
+        try:
+            sync_skills_to_codex_home(agent, codex_home)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"codex: skill sync skipped: {e}")
 
         # Bridge the agent's ADK tools (function/MCP) to the shim: it advertises
         # them to the backend as plain `function` tools and executes them itself,
