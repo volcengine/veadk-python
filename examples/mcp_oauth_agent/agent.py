@@ -21,8 +21,9 @@ Configure via environment variables (e.g. in a `.env` file):
     OIDC_CLIENT_ID      OAuth client id registered with the provider
     OIDC_CLIENT_SECRET  its client secret
     OIDC_REDIRECT_URI   a redirect URI registered on that client; default
-                        http://localhost:5173/ so the web UI popup can capture
-                        the ?code=... callback on its own origin
+                        http://localhost:8000/ — where `veadk frontend` serves
+                        the UI — so the popup captures the ?code=... callback on
+                        its own origin (use http://localhost:5173/ with `--dev`)
 """
 
 import os
@@ -53,7 +54,7 @@ auth_credential = AuthCredential(
     oauth2=OAuth2Auth(
         client_id=os.getenv("OIDC_CLIENT_ID", ""),
         client_secret=os.getenv("OIDC_CLIENT_SECRET", ""),
-        redirect_uri=os.getenv("OIDC_REDIRECT_URI", "http://localhost:5173/"),
+        redirect_uri=os.getenv("OIDC_REDIRECT_URI", "http://localhost:8000/"),
     ),
 )
 
