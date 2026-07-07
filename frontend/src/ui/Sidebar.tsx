@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { MoreHorizontal, Plus, Trash2 } from "lucide-react";
+import { LogOut, MoreHorizontal, Plus, Trash2 } from "lucide-react";
 import type { AdkSession } from "../adk/client";
 import { sessionTitle } from "../blocks";
+import { displayName } from "../adk/identity";
 import { SkillCenterButton } from "./SkillCenter";
 import { SearchButton } from "./Search";
 import volcengineLogo from "../assets/volcengine.svg";
@@ -35,6 +36,52 @@ export interface SidebarProps {
   onAddAgent: () => void;
   onPickSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
+  userInfo?: Record<string, unknown>;
+  onLogout: () => void;
+}
+
+/** Account block pinned at the bottom of the sidebar: avatar + name, with a
+ *  popover (opening upward) holding the full identity + logout. */
+function SidebarUser({
+  userInfo,
+  onLogout,
+}: Pick<SidebarProps, "userInfo" | "onLogout">) {
+  const [open, setOpen] = useState(false);
+  if (!userInfo) return null;
+  const name = displayName(userInfo);
+  const email = String(userInfo.email ?? userInfo.sub ?? "");
+  const initial = (name || "U").slice(0, 1).toUpperCase();
+  return (
+    <div className="sidebar-user">
+      <button className="sidebar-user-btn" onClick={() => setOpen((o) => !o)}>
+        <span className="account-avatar">{initial}</span>
+        <span className="sidebar-user-name">{name}</span>
+      </button>
+      {open && (
+        <>
+          <div className="menu-scrim" onClick={() => setOpen(false)} />
+          <div className="account-pop sidebar-user-pop">
+            <div className="account-head">
+              <div className="account-avatar account-avatar--lg">{initial}</div>
+              <div className="account-id">
+                <div className="account-name">{name}</div>
+                {email && email !== name && <div className="account-sub">{email}</div>}
+              </div>
+            </div>
+            <button
+              className="account-logout"
+              onClick={() => {
+                setOpen(false);
+                onLogout();
+              }}
+            >
+              <LogOut className="icon" /> 退出登录
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 export function Sidebar({
@@ -47,6 +94,8 @@ export function Sidebar({
   onAddAgent,
   onPickSession,
   onDeleteSession,
+  userInfo,
+  onLogout,
 }: SidebarProps) {
   // onAddAgent is now reached through the "添加 Agent" chooser, not a direct
   // sidebar button; kept in the props contract for the App-level handler.
@@ -121,6 +170,8 @@ export function Sidebar({
           ))}
         </div>
       </div>
+
+      <SidebarUser userInfo={userInfo} onLogout={onLogout} />
     </aside>
   );
 }
