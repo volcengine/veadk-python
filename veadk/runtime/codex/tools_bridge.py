@@ -85,6 +85,12 @@ async def build_executable_tools(
         executors[name] = _make_executor(tool, ctx, ToolContext)
 
     for entry in getattr(agent, "tools", None) or []:
+        # Skill toolsets are handled by the skill materialization path
+        # (veadk.runtime.codex.skills → $CODEX_HOME/skills), driven by Codex's
+        # own skill system. Skip them here so their internal tools
+        # (list_skills / load_skill / ...) aren't also exposed via the shim.
+        if type(entry).__name__ in ("SkillToolset", "SkillsToolset"):
+            continue
         if isinstance(entry, BaseToolset):
             try:
                 tools = await entry.get_tools()
