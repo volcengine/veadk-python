@@ -22,7 +22,7 @@ import click
 @click.option(
     "--backend",
     type=click.Choice(
-        ["local", "opensearch", "viking", "redis"],
+        ["local", "opensearch", "viking", "redis", "milvus"],
         case_sensitive=False,
     ),
     required=True,
@@ -43,7 +43,7 @@ import click
     help="Knowledge file or directory path",
 )
 def add(
-    backend: Literal["local", "opensearch", "viking", "redis"],
+    backend: Literal["local", "opensearch", "viking", "redis", "milvus"],
     app_name: str,
     index: str,
     path: str,
@@ -52,7 +52,7 @@ def add(
 
     This command adds files or directories to a specified knowledgebase backend.
     It supports various backend types including local storage, OpenSearch, Viking,
-    and Redis for storing and indexing knowledge content.
+    Redis, and Milvus for storing and indexing knowledge content.
 
     Args:
         backend: The knowledgebase backend type to use for storing and indexing documents.
@@ -68,6 +68,7 @@ def add(
             - 'redis': In-memory data structure store with vector search capabilities.
               Fast retrieval but limited by memory capacity. Good for frequently
               accessed, smaller knowledge bases.
+            - 'milvus': Dedicated vector database for persistent semantic search.
         app_name: Application identifier for organizing and isolating knowledgebase
             data. Used to create logical separation between different applications
             or environments. Must be consistent across operations for the same knowledge base.

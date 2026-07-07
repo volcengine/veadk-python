@@ -272,6 +272,28 @@ export const KB_BACKENDS: BackendOption[] = [
     needsEmbedding: true,
   },
   {
+    id: "milvus",
+    label: "Milvus",
+    desc: "Milvus 向量检索。",
+    env: [
+      {
+        key: "DATABASE_MILVUS_URI",
+        required: true,
+        placeholder: "./milvus_veadk.db or http://host:19530",
+      },
+      { key: "DATABASE_MILVUS_TOKEN", required: false },
+      {
+        key: "DATABASE_MILVUS_DB_NAME",
+        required: false,
+        placeholder: "default",
+      },
+      { key: "DATABASE_MILVUS_OUTPUT_FIELDS", required: false, placeholder: "text" },
+      ...EMBEDDING_ENV,
+    ],
+    pipExtra: "extensions",
+    needsEmbedding: true,
+  },
+  {
     id: "viking",
     label: "VikingDB Knowledge",
     desc: "火山 VikingDB 知识库。",

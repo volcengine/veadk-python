@@ -97,7 +97,7 @@ include_tools_every_turn: true
 
 # --- Knowledge base ----------------------------------------------------------
 #   type -> env: KNOWLEDGEBASE_TYPE   flag: --knowledgebase-type
-#   "" disables it. Supported: viking | opensearch | redis | tos_vector | context_search
+#   "" disables it. Supported: viking | opensearch | redis | milvus | tos_vector | context_search
 knowledgebase:
   type: ""
   # -- viking --      env DATABASE_VIKING_*    flags: --knowledgebase-project / --knowledgebase-region
@@ -115,6 +115,15 @@ knowledgebase:
   # username: default
   # password: ""
   # db: 0
+  # -- milvus --      env DATABASE_MILVUS_*    flags: --knowledgebase-uri / -token / -user / -password / -db-name / -overwrite / -timeout / -output-fields
+  # uri: ./milvus_veadk.db
+  # token: ""
+  # user: ""
+  # password: ""
+  # db_name: default
+  # overwrite: false
+  # timeout:
+  # output_fields: text
 
 # --- Long-term memory --------------------------------------------------------
 #   type -> env: LONG_TERM_MEMORY_TYPE   flag: --long-term-memory-type

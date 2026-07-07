@@ -47,6 +47,12 @@ def _get_backend_cls(backend: str) -> type[BaseKnowledgebaseBackend]:
                 )
 
                 return RedisKnowledgeBackend
+            case "milvus":
+                from veadk.knowledgebase.backends.milvus_backend import (
+                    MilvusKnowledgeBackend,
+                )
+
+                return MilvusKnowledgeBackend
             case "tos_vector":
                 from veadk.knowledgebase.backends.tos_vector_backend import (
                     TosVectorKnowledgeBackend,
@@ -87,12 +93,13 @@ class KnowledgeBase(BaseModel):
     Attributes:
         name (str): The name of the knowledge base. Default is "user_knowledgebase".
         description (str): A description of the knowledge base. Default is "This knowledgebase stores some user-related information."
-        backend (Union[Literal["local", "opensearch", "viking", "redis"], BaseKnowledgebaseBackend]):
+        backend (Union[Literal["local", "opensearch", "viking", "redis", "milvus"], BaseKnowledgebaseBackend]):
             The type of backend to use for storing and querying the knowledge base. Supported options include:
             - 'local' for in-memory storage (data is lost when the program exits).
             - 'opensearch' for OpenSearch (requires OpenSearch cluster).
             - 'viking' for Volcengine VikingDB (requires VikingDB service).
             - 'redis' for Redis with vector search capability (requires Redis).
+            - 'milvus' for Milvus vector database (requires Milvus).
             Default is 'local'.
         backend_config (dict): Configuration dictionary for the selected backend.
         top_k (int): The number of top similar documents to retrieve during a search. Default is 10.
@@ -109,7 +116,13 @@ class KnowledgeBase(BaseModel):
 
     backend: Union[
         Literal[
-            "local", "opensearch", "viking", "redis", "tos_vector", "context_search"
+            "local",
+            "opensearch",
+            "viking",
+            "redis",
+            "milvus",
+            "tos_vector",
+            "context_search",
         ],
         BaseKnowledgebaseBackend,
     ] = "local"

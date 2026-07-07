@@ -74,6 +74,16 @@ BACKEND_ENV: dict[str, dict[str, str]] = {
         "password": "DATABASE_REDIS_PASSWORD",
         "db": "DATABASE_REDIS_DB",
     },
+    "milvus": {
+        "uri": "DATABASE_MILVUS_URI",
+        "token": "DATABASE_MILVUS_TOKEN",
+        "user": "DATABASE_MILVUS_USER",
+        "password": "DATABASE_MILVUS_PASSWORD",
+        "db_name": "DATABASE_MILVUS_DB_NAME",
+        "overwrite": "DATABASE_MILVUS_OVERWRITE",
+        "timeout": "DATABASE_MILVUS_TIMEOUT",
+        "output_fields": "DATABASE_MILVUS_OUTPUT_FIELDS",
+    },
     "opensearch": {
         "host": "DATABASE_OPENSEARCH_HOST",
         "port": "DATABASE_OPENSEARCH_PORT",
@@ -113,7 +123,7 @@ BACKEND_ENV: dict[str, dict[str, str]] = {
 # flags and lets a component offer only its relevant params). Backends with no
 # connection params (local / sqlite / tos_vector / context_search) are omitted.
 COMPONENT_BACKENDS: dict[str, list[str]] = {
-    "knowledgebase": ["viking", "opensearch", "redis"],
+    "knowledgebase": ["viking", "opensearch", "redis", "milvus"],
     "long_term_memory": ["viking", "opensearch", "redis", "mem0"],
     "short_term_memory": ["mysql", "postgresql"],
 }

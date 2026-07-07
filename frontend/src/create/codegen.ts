@@ -339,7 +339,13 @@ function dedupeImports(imports: string[]): string[] {
  * ------------------------------------------------------------------ */
 const STM_IDS = new Set(["local", "sqlite", "mysql", "postgresql"]);
 const LTM_IDS = new Set(["local", "opensearch", "redis", "viking", "mem0"]);
-const KB_IDS = new Set(["local", "opensearch", "viking", "context_search"]);
+const KB_IDS = new Set([
+  "local",
+  "opensearch",
+  "milvus",
+  "viking",
+  "context_search",
+]);
 const EXPORTER_IDS = new Set(["apmplus", "cozeloop", "tls"]);
 const TOOL_IDS = new Set(BUILTIN_TOOLS_IDS());
 

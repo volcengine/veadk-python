@@ -33,7 +33,11 @@ from veadk.cloud.harness_app.types import (
     InvokeHarnessResponse,
     RunAgentRequest,
 )
-from veadk.cloud.harness_app.env_mapping import to_runtime_env
+from veadk.cloud.harness_app.env_mapping import (
+    COMPONENT_BACKENDS,
+    component_connection_params,
+    to_runtime_env,
+)
 from veadk.cloud.harness_app.utils import (
     agent_name_from_harness,
     config_from_env,
@@ -157,6 +161,40 @@ class TestHarnessConfig:
 
         assert envs["STRUCTURED_TOOL_CALLS"] == "true"
         assert envs["INCLUDE_TOOLS_EVERY_TURN"] == "true"
+
+    def test_milvus_knowledgebase_yaml_maps_to_runtime_env(self):
+        envs = to_runtime_env(
+            {
+                "knowledgebase": {
+                    "type": "milvus",
+                    "uri": "http://localhost:19530",
+                    "token": "token",
+                    "db_name": "default",
+                    "overwrite": True,
+                    "timeout": 5,
+                    "output_fields": "text,metadata",
+                }
+            }
+        )
+
+        assert envs["KNOWLEDGEBASE_TYPE"] == "milvus"
+        assert envs["DATABASE_MILVUS_URI"] == "http://localhost:19530"
+        assert envs["DATABASE_MILVUS_TOKEN"] == "token"
+        assert envs["DATABASE_MILVUS_DB_NAME"] == "default"
+        assert envs["DATABASE_MILVUS_OVERWRITE"] == "true"
+        assert envs["DATABASE_MILVUS_TIMEOUT"] == "5"
+        assert envs["DATABASE_MILVUS_OUTPUT_FIELDS"] == "text,metadata"
+
+    def test_knowledgebase_supports_milvus_connection_flags(self):
+        assert "milvus" in COMPONENT_BACKENDS["knowledgebase"]
+        params = component_connection_params("knowledgebase")
+
+        assert "uri" in params
+        assert "token" in params
+        assert "db_name" in params
+        assert "overwrite" in params
+        assert "timeout" in params
+        assert "output_fields" in params
 
     def test_config_from_env_reads_registry_fields(self, monkeypatch):
         monkeypatch.setenv("REGISTRY_TYPE", "agentkit_a2a")
