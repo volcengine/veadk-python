@@ -69,6 +69,12 @@ class PostgreSqlConfig(BaseSettings):
 
     database: str = ""
 
+    schema: str = ""
+    """Optional PostgreSQL schema to isolate this deployment's short-term memory
+    tables in. When set, the connection's search_path is pinned to it (and the
+    schema is created if absent), so several deployments can share one database
+    while keeping their sessions in separate schemas. Env: DATABASE_POSTGRESQL_SCHEMA."""
+
     secret_token: str = ""
 
 
