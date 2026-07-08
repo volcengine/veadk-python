@@ -118,7 +118,7 @@ class LLMShieldPlugin(BasePlugin):
         version = "2025-08-31"
 
         # Check if using API key authentication
-        logger.debug(f"API key value: {self.api_key}, type: {type(self.api_key)}")
+        logger.debug(f"API key configured: {bool(self.api_key)}")
         if self.api_key and self.api_key != "":
             logger.debug("Using API key authentication (no AK/SK signature)")
             # Use API key authentication only - match curl command headers exactly

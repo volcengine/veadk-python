@@ -197,7 +197,7 @@ class VeCredentialService(BaseCredentialService):
                 credential_key="bearer_token"
             )
             if credential:
-                print(f"Found token: {credential.bearer_token}")
+                print("Credential found")
             ```
         """
         return self._credentials.get(app_name, {}).get(user_id, {}).get(credential_key)

@@ -21,6 +21,11 @@ from urllib.parse import quote
 
 import requests
 
+# Bounded default (connect, read) timeout in seconds for Volcengine API calls, so a
+# hung endpoint cannot block the caller forever. Callers with slow control-plane
+# operations (deploys, large uploads) can override via the ``timeout`` parameter.
+DEFAULT_REQUEST_TIMEOUT: tuple[float, float] = (10, 60)
+
 Service = ""
 Version = ""
 Region = ""
@@ -107,6 +112,7 @@ def volcengine_signed_request(
     scheme: Literal["http", "https"] = "https",
     unsigned_payload: bool = False,
     response_type: Literal["json", "content", "response"] = "json",
+    timeout: float | tuple[float, float] | None = DEFAULT_REQUEST_TIMEOUT,
 ):
     """Send a Volcengine SigV4 request to a concrete path.
 
@@ -203,6 +209,7 @@ def volcengine_signed_request(
         headers=header,
         params=query,
         data=body,
+        timeout=timeout,
     )
     response.raise_for_status()
     if response_type == "content":
@@ -226,6 +233,7 @@ def request(
     action,
     body,
     scheme: Literal["http", "https"] = "https",
+    timeout: float | tuple[float, float] | None = DEFAULT_REQUEST_TIMEOUT,
 ):
     # 第三步：创建身份证明。其中的 Service 和 Region 字段是固定的。ak 和 sk 分别代表
     # AccessKeyID 和 SecretAccessKey。同时需要初始化签名结构体。一些签名计算时需要的属性也在这里处理。
@@ -322,6 +330,7 @@ def request(
         headers=header,
         params=request_param["query"],
         data=request_param["body"],
+        timeout=timeout,
     )
     try:
         return r.json()
