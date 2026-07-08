@@ -114,7 +114,13 @@ class Agent(LlmAgent):
     )
     model_provider: str = Field(default_factory=lambda: settings.model.provider)
     model_api_base: str = Field(default_factory=lambda: settings.model.api_base)
-    model_api_key: str = Field(default_factory=lambda: settings.model.api_key)
+    model_api_key: str = ""
+    """The API key for accessing the model. Resolved at init if left empty:
+    by `model_api_key_name` if set, otherwise the configured/first ARK key."""
+    model_api_key_name: str = Field(default_factory=lambda: settings.model.api_key_name)
+    """Name of the ARK API key to resolve the value from (defaults to env
+    MODEL_AGENT_API_KEY_NAME). A key value always wins over a key name, so this
+    is ignored when `model_api_key` or the MODEL_AGENT_API_KEY env is set."""
     model_extra_config: dict = Field(default_factory=dict)
 
     tools: list[ToolUnion] = []
@@ -201,6 +207,23 @@ class Agent(LlmAgent):
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init
+
+        # Resolve the model API key when not set explicitly. A key value always
+        # wins over a key name. Precedence:
+        #   explicit model_api_key
+        #   > MODEL_AGENT_API_KEY env
+        #   > model_api_key_name / MODEL_AGENT_API_KEY_NAME (resolved by name)
+        #   > first ARK key in the account
+        if not self.model_api_key:
+            env_key = os.getenv("MODEL_AGENT_API_KEY")
+            if env_key:
+                self.model_api_key = env_key
+            elif self.model_api_key_name:
+                from veadk.auth.veauth.ark_veauth import get_ark_token
+
+                self.model_api_key = get_ark_token(api_key_name=self.model_api_key_name)
+            else:
+                self.model_api_key = settings.model.api_key
 
         # Initialize run_processor if not provided
         if self.run_processor is None:

@@ -40,9 +40,18 @@ class ModelConfig(BaseSettings):
     api_base: str = DEFAULT_MODEL_AGENT_API_BASE
     """The api base of the model for agent reasoning."""
 
+    api_key_name: str = ""
+    """Name of the ARK API key to use (env MODEL_AGENT_API_KEY_NAME). When set
+    and no explicit MODEL_AGENT_API_KEY is provided, the key value is resolved by
+    name at runtime instead of defaulting to the first key in the account."""
+
     @cached_property
     def api_key(self) -> str:
-        return os.getenv("MODEL_AGENT_API_KEY") or get_ark_token()
+        if explicit := os.getenv("MODEL_AGENT_API_KEY"):
+            return explicit
+        if self.api_key_name:
+            return get_ark_token(api_key_name=self.api_key_name)
+        return get_ark_token()
 
 
 class EmbeddingModelConfig(BaseSettings):
