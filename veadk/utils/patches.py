@@ -116,3 +116,83 @@ def patch_tracer() -> None:
                         ),
                     )
                     logger.debug(f"Patch {mod_name} {var_name} with VeADK tracer.")
+
+
+# Substrings / exception type names that signal a dead MCP session (server
+# restart, scale-down, idle expiry) or a broken transport — all recoverable by
+# dropping the cached session and reconnecting.
+_MCP_DEAD_MSGS = (
+    "invalid session id",
+    "session may have expired or does not exist",
+    "session terminated",
+    "connection lost",
+)
+_MCP_DEAD_TYPES = frozenset(
+    {
+        "BrokenResourceError",
+        "ClosedResourceError",
+        "EndOfStream",
+        "RemoteProtocolError",
+        "ReadError",
+        "ConnectError",
+    }
+)
+
+
+def _is_dead_mcp_session(error: BaseException) -> bool:
+    message = str(error).lower()
+    return (
+        isinstance(error, ConnectionError)
+        or type(error).__name__ in _MCP_DEAD_TYPES
+        or any(s in message for s in _MCP_DEAD_MSGS)
+    )
+
+
+def _retry_once_on_dead_mcp_session(func):
+    """Wrap an MCP coroutine so that, on a dead-session/broken-transport error,
+    it closes the manager's cached sessions (recreated lazily) and retries once.
+
+    Applies to any object exposing ``_mcp_session_manager`` (McpTool, McpToolset).
+    """
+    import functools
+
+    @functools.wraps(func)
+    async def wrapper(self, *args, **kwargs):
+        try:
+            return await func(self, *args, **kwargs)
+        except Exception as error:
+            task = asyncio.current_task()
+            cancelling = getattr(task, "cancelling", None)  # py>=3.11
+            if (cancelling and cancelling() > 0) or not _is_dead_mcp_session(error):
+                raise
+            logger.info(f"Reconnecting MCP after dead session: {func.__qualname__}")
+            await self._mcp_session_manager.close()  # drop all stale sessions
+            return await func(self, *args, **kwargs)
+
+    return wrapper
+
+
+def patch_mcp_session_retry() -> None:
+    """Reconnect to an MCP server after it drops the session.
+
+    ADK caches MCP sessions but does not recreate them when the server restarts
+    or scales down, so calls fail with "Session terminated" / broken transport.
+    This wraps ``McpTool._run_async_impl`` and ``McpToolset.get_tools`` to drop
+    the dead session and retry once. No-op if the google-adk internals are
+    unavailable (e.g. after an incompatible upgrade).
+    """
+    try:
+        from google.adk.tools.mcp_tool.mcp_tool import McpTool
+        from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
+
+        # McpTool is the base for MCPTool (which does not override the method).
+        for cls, method in ((McpTool, "_run_async_impl"), (McpToolset, "get_tools")):
+            if getattr(cls, "_veadk_mcp_retry_patched", False):
+                continue
+            original = getattr(
+                getattr(cls, method), "__wrapped__", getattr(cls, method)
+            )
+            setattr(cls, method, _retry_once_on_dead_mcp_session(original))
+            cls._veadk_mcp_retry_patched = True
+    except Exception as e:  # pragma: no cover - defensive across adk versions
+        logger.warning(f"Skip MCP session-retry patch: {e}")
