@@ -52,7 +52,11 @@ from veadk.prompts.prompt_manager import BasePromptManager
 from veadk.tracing.base_tracer import BaseTracer
 from veadk.utils.adk_compat import is_adk_gte
 from veadk.utils.logger import get_logger
-from veadk.utils.patches import patch_asyncio, patch_tracer
+from veadk.utils.patches import (
+    patch_asyncio,
+    patch_mcp_session_retry,
+    patch_tracer,
+)
 from veadk.version import VERSION
 
 if TYPE_CHECKING:
@@ -61,6 +65,7 @@ if TYPE_CHECKING:
 
 patch_tracer()
 patch_asyncio()
+patch_mcp_session_retry()
 logger = get_logger(__name__)
 
 
