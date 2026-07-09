@@ -757,5 +757,5 @@ class Runner(ADKRunner):
             )
             return
 
-        await self.long_term_memory.add_session_to_memory(session, kwargs=kwargs)
+        await self.long_term_memory.add_session_to_memory(session, **kwargs)
         logger.info(f"Add session `{session.id}` to long term memory.")

@@ -118,7 +118,7 @@ knowledgebase:
 
 # --- Long-term memory --------------------------------------------------------
 #   type -> env: LONG_TERM_MEMORY_TYPE   flag: --long-term-memory-type
-#   "" disables it. Supported: viking | opensearch | redis | mem0
+#   "" disables it. Supported: viking | opensearch | redis | mem0 | openviking
 long_term_memory:
   type: ""
   # -- viking --      env DATABASE_VIKING_*    flags: --long-term-memory-project / --long-term-memory-region
@@ -139,6 +139,9 @@ long_term_memory:
   # api_key_id: ""
   # project_id: ""
   # base_url: https://api.mem0.ai/v1
+  # -- openviking -- env DATABASE_OPENVIKING_* flags: --long-term-memory-url / --long-term-memory-api-key
+  # url: https://openviking.example.com
+  # api_key: ""
 
 # --- Short-term memory (session store) ---------------------------------------
 #   type -> env: SHORT_TERM_MEMORY_TYPE   flag: --short-term-memory-type

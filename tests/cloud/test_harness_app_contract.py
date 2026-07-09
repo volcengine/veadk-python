@@ -33,7 +33,11 @@ from veadk.cloud.harness_app.types import (
     InvokeHarnessResponse,
     RunAgentRequest,
 )
-from veadk.cloud.harness_app.env_mapping import to_runtime_env
+from veadk.cloud.harness_app.env_mapping import (
+    COMPONENT_BACKENDS,
+    component_connection_params,
+    to_runtime_env,
+)
 from veadk.cloud.harness_app.utils import (
     agent_name_from_harness,
     config_from_env,
@@ -157,6 +161,28 @@ class TestHarnessConfig:
 
         assert envs["STRUCTURED_TOOL_CALLS"] == "true"
         assert envs["INCLUDE_TOOLS_EVERY_TURN"] == "true"
+
+    def test_openviking_long_term_memory_yaml_maps_to_runtime_env(self):
+        envs = to_runtime_env(
+            {
+                "long_term_memory": {
+                    "type": "openviking",
+                    "url": "https://openviking.example.com",
+                    "api_key": "owner-key",
+                }
+            }
+        )
+
+        assert envs["LONG_TERM_MEMORY_TYPE"] == "openviking"
+        assert envs["DATABASE_OPENVIKING_URL"] == "https://openviking.example.com"
+        assert envs["DATABASE_OPENVIKING_API_KEY"] == "owner-key"
+
+    def test_long_term_memory_supports_openviking_connection_flags(self):
+        assert "openviking" in COMPONENT_BACKENDS["long_term_memory"]
+        params = component_connection_params("long_term_memory")
+
+        assert "url" in params
+        assert "api_key" in params
 
     def test_config_from_env_reads_registry_fields(self, monkeypatch):
         monkeypatch.setenv("REGISTRY_TYPE", "agentkit_a2a")

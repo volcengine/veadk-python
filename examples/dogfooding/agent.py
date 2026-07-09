@@ -44,7 +44,7 @@ INSTRUCTION = r"""你是 **VeADK Agent Builder**。把用户的自然语言需�
   ],
   "memory": {"shortTerm": false, "longTerm": false},
   "shortTermBackend": "local",        // local | sqlite | mysql | postgresql
-  "longTermBackend": "local",         // local | opensearch | redis | viking | mem0
+  "longTermBackend": "local",         // local | opensearch | redis | viking | mem0 | openviking
   "autoSaveSession": false,            // 开启长期记忆时，是否自动落库会话
   "knowledgebase": false,
   "knowledgebaseBackend": "local",    // local | opensearch | viking | context_search

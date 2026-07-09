@@ -103,6 +103,10 @@ BACKEND_ENV: dict[str, dict[str, str]] = {
         "project_id": "DATABASE_MEM0_PROJECT_ID",
         "base_url": "DATABASE_MEM0_BASE_URL",
     },
+    "openviking": {
+        "url": "DATABASE_OPENVIKING_URL",
+        "api_key": "DATABASE_OPENVIKING_API_KEY",
+    },
     # In-memory / file backends take no connection params.
     "local": {},
     "sqlite": {},
@@ -114,7 +118,7 @@ BACKEND_ENV: dict[str, dict[str, str]] = {
 # connection params (local / sqlite / tos_vector / context_search) are omitted.
 COMPONENT_BACKENDS: dict[str, list[str]] = {
     "knowledgebase": ["viking", "opensearch", "redis"],
-    "long_term_memory": ["viking", "opensearch", "redis", "mem0"],
+    "long_term_memory": ["viking", "opensearch", "redis", "mem0", "openviking"],
     "short_term_memory": ["mysql", "postgresql"],
 }
 
