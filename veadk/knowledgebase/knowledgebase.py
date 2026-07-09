@@ -71,6 +71,12 @@ def _get_backend_cls(backend: str) -> type[BaseKnowledgebaseBackend]:
                 )
 
                 return ContextSearchBackend
+            case "openviking":
+                from veadk.knowledgebase.backends.openviking_backend import (
+                    OpenVikingKnowledgeBackend,
+                )
+
+                return OpenVikingKnowledgeBackend
             case _:
                 raise ValueError(f"Unsupported knowledgebase backend: {backend}")
     except ImportError as e:
@@ -86,20 +92,24 @@ class KnowledgeBase(BaseModel):
     """A knowledge base for storing user-related information.
 
     This class represents a knowledge base used to store and retrieve user-specific data.
-    It supports multiple backend options, including in-memory, OpenSearch, Redis, and Volcengine's
-    VikingDB. The knowledge base allows for efficient document retrieval based on similarity,
-    with the ability to configure backend-specific settings.
+    It supports multiple backend options, including in-memory, OpenSearch, Redis,
+    Volcengine VikingDB, Context Search, and OpenViking resources. The knowledge
+    base allows document retrieval through the selected backend, with backend-
+    specific settings.
 
     Attributes:
         name (str): The name of the knowledge base. Default is "user_knowledgebase".
         description (str): A description of the knowledge base. Default is "This knowledgebase stores some user-related information."
-        backend (Union[Literal["local", "opensearch", "viking", "redis", "milvus"], BaseKnowledgebaseBackend]):
+        backend (Union[Literal["local", "opensearch", "viking", "redis", "milvus", "tos_vector", "context_search", "openviking"], BaseKnowledgebaseBackend]):
             The type of backend to use for storing and querying the knowledge base. Supported options include:
             - 'local' for in-memory storage (data is lost when the program exits).
             - 'opensearch' for OpenSearch (requires OpenSearch cluster).
             - 'viking' for Volcengine VikingDB (requires VikingDB service).
             - 'redis' for Redis with vector search capability (requires Redis).
             - 'milvus' for Milvus vector database (requires Milvus).
+            - 'tos_vector' for TOS-backed vector retrieval.
+            - 'context_search' for Volcengine Context Search.
+            - 'openviking' for OpenViking resources-based retrieval.
             Default is 'local'.
         backend_config (dict): Configuration dictionary for the selected backend.
         top_k (int): The number of top similar documents to retrieve during a search. Default is 10.
@@ -107,7 +117,9 @@ class KnowledgeBase(BaseModel):
         index (str): The name of the knowledge base index.
 
     Notes:
-        Please ensure that you have set the embedding-related configurations in environment variables.
+        Vector backends such as 'local', 'opensearch', and 'redis' require
+        embedding-related environment variables. Resource/search-service backends
+        such as 'openviking' and 'context_search' use their own service configs.
     """
 
     name: str = "user_knowledgebase"
@@ -123,6 +135,7 @@ class KnowledgeBase(BaseModel):
             "milvus",
             "tos_vector",
             "context_search",
+            "openviking",
         ],
         BaseKnowledgebaseBackend,
     ] = "local"
