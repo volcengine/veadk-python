@@ -27,6 +27,7 @@ from veadk.a2a.registry_client import (
     _volc_sign_v4,
     create_task,
     poll_task,
+    registry_tip_token_from_headers,
     search_agent_cards,
     truncate_utf8_bytes,
 )
@@ -34,6 +35,7 @@ from veadk.tools.builtin_tools.a2a_registry import (
     build_a2a_registry_tools,
     build_remote_a2a_agent_tools,
 )
+from veadk.utils.auth import VE_TIP_TOKEN_HEADER
 
 
 def _mock_response(payload: dict, status_code: int = 200) -> Mock:
@@ -404,6 +406,100 @@ def test_poll_task_returns_terminal_without_sleep(post: Mock, sleep: Mock):
     sleep.assert_not_called()
 
 
+@patch.dict(
+    "os.environ",
+    {
+        "AGENTKIT_ACCESS_KEY": "ak-test",
+        "AGENTKIT_SECRET_KEY": "sk-test",
+    },
+    clear=False,
+)
+@patch("veadk.a2a.registry_client.requests.post")
+def test_registry_task_create_tool_forwards_tip_token(post: Mock):
+    card = _agent_card()
+    post.side_effect = [
+        _mock_response(
+            {
+                "ResponseMetadata": {"RequestId": "get-req"},
+                "Result": {
+                    "Id": "agent-id",
+                    "Status": "running",
+                    "AgentCard": json.dumps(card),
+                },
+            }
+        ),
+        _mock_response(
+            {
+                "result": {
+                    "kind": "message",
+                    "parts": [{"kind": "text", "text": "今天北京晴。"}],
+                }
+            }
+        ),
+    ]
+    tools = build_a2a_registry_tools(
+        AgentKitA2ARegistryConfig(
+            space_id="space-test",
+            upstream_tip_token="tip-from-config",
+        )
+    )
+
+    result = tools[1]("Weather-A2A-Agent", "北京天气")
+
+    assert result["outcome"] == "success"
+    assert post.call_args_list[1].kwargs["headers"][VE_TIP_TOKEN_HEADER] == (
+        "tip-from-config"
+    )
+
+
+@patch.dict(
+    "os.environ",
+    {
+        "AGENTKIT_ACCESS_KEY": "ak-test",
+        "AGENTKIT_SECRET_KEY": "sk-test",
+    },
+    clear=False,
+)
+@patch("veadk.a2a.registry_client.time.sleep")
+@patch("veadk.a2a.registry_client.requests.post")
+def test_registry_task_poll_tool_forwards_tip_token(post: Mock, sleep: Mock):
+    card = _agent_card()
+    post.side_effect = [
+        _mock_response(
+            {
+                "ResponseMetadata": {"RequestId": "get-req"},
+                "Result": {
+                    "Id": "agent-id",
+                    "Status": "running",
+                    "AgentCard": json.dumps(card),
+                },
+            }
+        ),
+        _mock_response(
+            {
+                "result": {
+                    "id": "task-1",
+                    "status": {"state": "completed"},
+                }
+            }
+        ),
+    ]
+    tools = build_a2a_registry_tools(
+        AgentKitA2ARegistryConfig(
+            space_id="space-test",
+            upstream_tip_token="tip-from-config",
+        )
+    )
+
+    result = tools[2]("Weather-A2A-Agent", "task-1")
+
+    assert result["outcome"] == "success"
+    assert post.call_args_list[1].kwargs["headers"][VE_TIP_TOKEN_HEADER] == (
+        "tip-from-config"
+    )
+    sleep.assert_not_called()
+
+
 def test_build_a2a_registry_tools_exposes_mcp_compatible_names():
     tools = build_a2a_registry_tools(AgentKitA2ARegistryConfig(space_id="space-test"))
 
@@ -498,6 +594,57 @@ def test_build_remote_a2a_agent_tools_searches_gets_and_sends(post: Mock):
     assert post.call_args_list[2].args[0] == "https://example.test/a2a"
 
 
+@patch.dict(
+    "os.environ",
+    {
+        "AGENTKIT_ACCESS_KEY": "ak-test",
+        "AGENTKIT_SECRET_KEY": "sk-test",
+    },
+    clear=False,
+)
+@patch("veadk.a2a.registry_client.requests.post")
+def test_dynamic_remote_a2a_tool_forwards_config_tip_token(post: Mock):
+    card = _agent_card()
+    post.side_effect = [
+        _mock_response(
+            {
+                "ResponseMetadata": {"RequestId": "search-req"},
+                "Result": {"AgentCards": [json.dumps(card)], "TotalCount": 1},
+            }
+        ),
+        _mock_response(
+            {
+                "ResponseMetadata": {"RequestId": "get-req"},
+                "Result": {
+                    "Id": "agent-id",
+                    "Status": "running",
+                    "AgentCard": json.dumps(card),
+                },
+            }
+        ),
+        _mock_response(
+            {
+                "result": {
+                    "kind": "message",
+                    "parts": [{"kind": "text", "text": "今天北京晴。"}],
+                }
+            }
+        ),
+    ]
+    config = AgentKitA2ARegistryConfig(
+        space_id="space-test",
+        upstream_tip_token="tip-from-config",
+    )
+
+    tools = build_remote_a2a_agent_tools("北京天气", config)
+    result = tools[0](input="北京天气")
+
+    assert result["outcome"] == "success"
+    assert post.call_args_list[2].kwargs["headers"][VE_TIP_TOKEN_HEADER] == (
+        "tip-from-config"
+    )
+
+
 @patch("veadk.tools.builtin_tools.a2a_registry.search_agent_cards")
 def test_build_remote_a2a_agent_tools_returns_empty_on_search_failure(search: Mock):
     search.side_effect = RegistryError("AGENT_NOT_FOUND", "no agents")
@@ -536,12 +683,14 @@ def test_search_tool_does_not_expose_top_k_to_model(search: Mock):
     search.assert_called_once_with("财务报销", None, config)
 
 
+@patch.dict("os.environ", {}, clear=True)
 def test_agent_auth_headers_extracts_api_key_header():
     assert _agent_auth_headers(_agent_card()) == {
         "Authorization": "Bearer secret-token"
     }
 
 
+@patch.dict("os.environ", {}, clear=True)
 def test_agent_auth_headers_rejects_unusable_security():
     with pytest.raises(RegistryError) as ctx:
         _agent_auth_headers(
@@ -557,6 +706,13 @@ def test_agent_auth_headers_rejects_unusable_security():
             }
         )
     assert ctx.value.code == "AGENT_AUTH_MISSING"
+
+
+def test_registry_tip_token_from_headers_is_case_insensitive():
+    assert (
+        registry_tip_token_from_headers({"x-ve-tip-token": " tip-from-header "})
+        == "tip-from-header"
+    )
 
 
 def test_agentkit_http_error_uses_safe_diagnostics():

@@ -527,6 +527,23 @@ def _apply_registry_overrides(
     setattr(agent, _REGISTRY_CONFIG_ATTR, overridden_config)
 
 
+def _apply_registry_tip_token(agent: Agent, tip_token: str = "") -> None:
+    cleaned_tip_token = (tip_token or "").strip()
+    if not cleaned_tip_token:
+        return
+
+    from veadk.tools.builtin_tools.a2a_registry import build_a2a_registry_tools
+
+    config = getattr(agent, _REGISTRY_CONFIG_ATTR, None)
+    if config is None:
+        return
+
+    updated_config = replace(config, upstream_tip_token=cleaned_tip_token)
+    _remove_a2a_registry_tools(agent)
+    agent.tools.extend(build_a2a_registry_tools(updated_config))
+    setattr(agent, _REGISTRY_CONFIG_ATTR, updated_config)
+
+
 def has_a2a_registry_config(agent: Agent) -> bool:
     """Return whether ``agent`` has an AgentKit A2A registry configured."""
 
@@ -604,6 +621,7 @@ def spawn_harness_run_agent(
     prompt: str,
     overrides: HarnessOverrides | None = None,
     download_dir: Path | None = None,
+    registry_tip_token: str = "",
 ) -> Agent:
     """Clone a harness agent for one run and attach per-turn dynamic tools."""
 
@@ -612,5 +630,6 @@ def spawn_harness_run_agent(
     else:
         cloned = base_agent.clone(update={})
 
+    _apply_registry_tip_token(cloned, registry_tip_token)
     _add_dynamic_a2a_agent_tools(cloned, prompt)
     return cloned

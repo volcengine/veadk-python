@@ -62,6 +62,7 @@ from google.adk.utils.context_utils import Aclosing
 from typing_extensions import override
 
 from veadk import Agent
+from veadk.a2a.registry_client import registry_tip_token_from_headers
 from veadk.a2a.utils.agent_to_a2a import to_a2a
 from veadk.cloud.harness_app.agent import agent, short_term_memory
 from veadk.cloud.harness_app.harness_plugins import (
@@ -229,6 +230,7 @@ class HarnessApp:
             )
 
             try:
+                tip_token = registry_tip_token_from_headers(http_request.headers)
                 header_plugins = build_harness_plugins_from_headers(
                     http_request.headers
                 )
@@ -269,6 +271,7 @@ class HarnessApp:
                             request.prompt,
                             request.harness,
                             download_dir=Path(work_dir),
+                            registry_tip_token=tip_token,
                         )
                         runner = Runner(
                             agent=agent,
@@ -283,11 +286,14 @@ class HarnessApp:
                             run_config=run_config,
                         )
                 elif needs_scoped_runner:
-                    run_agent = (
-                        spawn_harness_run_agent(self.agent, request.prompt)
-                        if has_registry
-                        else self.agent
-                    )
+                    if has_registry:
+                        run_agent = spawn_harness_run_agent(
+                            self.agent,
+                            request.prompt,
+                            registry_tip_token=tip_token,
+                        )
+                    else:
+                        run_agent = self.agent
                     runner = Runner(
                         agent=run_agent,
                         short_term_memory=self.short_term_memory,
@@ -359,7 +365,7 @@ class HarnessApp:
                 break
 
         @self.app.post("/run_sse")
-        async def run_sse(req: HarnessRunAgentRequest):
+        async def run_sse(req: HarnessRunAgentRequest, http_request: Request):
             if (
                 req.harness is None
                 and not has_a2a_registry_config(self.agent)
@@ -367,8 +373,9 @@ class HarnessApp:
             ):
                 # No override -> exactly ADK's default /run_sse.
                 return await adk_run_sse(req)
+            tip_token = registry_tip_token_from_headers(http_request.headers)
             return StreamingResponse(
-                self._run_sse_events(req), media_type="text/event-stream"
+                self._run_sse_events(req, tip_token), media_type="text/event-stream"
             )
 
         # Move ours to the front so it wins (Starlette matches the first route),
@@ -381,7 +388,7 @@ class HarnessApp:
                 routes.insert(0, routes.pop(i))
                 break
 
-    async def _run_sse_events(self, req: "HarnessRunAgentRequest"):
+    async def _run_sse_events(self, req: "HarnessRunAgentRequest", tip_token: str = ""):
         """Yield SSE ``data:`` lines for a run, spawning the agent on override."""
         run_config = RunConfig(
             streaming_mode=StreamingMode.SSE if req.streaming else StreamingMode.NONE
@@ -400,13 +407,18 @@ class HarnessApp:
                         prompt,
                         req.harness,
                         download_dir=Path(work_dir_ctx.name),
+                        registry_tip_token=tip_token,
                     )
                 except (SkillLoadError, ToolLoadError) as e:
                     logger.error(f"Once-time override failed to load: {e}")
                     yield f"data: {json.dumps({'error': str(e)})}\n\n"
                     return
             elif has_a2a_registry_config(self.agent):
-                agent = spawn_harness_run_agent(self.agent, prompt)
+                agent = spawn_harness_run_agent(
+                    self.agent,
+                    prompt,
+                    registry_tip_token=tip_token,
+                )
             else:
                 agent = self.agent
 
