@@ -69,6 +69,7 @@ class AgentKitA2ARegistryConfig:
     timeout_ms: int = DEFAULT_TIMEOUT_MS
     poll_interval_ms: int = DEFAULT_POLL_INTERVAL_MS
     upstream_tip_token: str = ""
+    upstream_authorization: str = ""
 
 
 @dataclass(frozen=True)
@@ -118,6 +119,21 @@ def registry_tip_token_from_headers(headers: Mapping[str, str]) -> str:
 
     normalized = {str(key).lower(): str(value) for key, value in headers.items()}
     return normalized.get(VE_TIP_TOKEN_HEADER.lower(), "").strip()
+
+
+def registry_authorization_from_headers(headers: Mapping[str, str]) -> str:
+    """Extract a bearer Authorization header for downstream A2A calls."""
+
+    normalized = {str(key).lower(): str(value) for key, value in headers.items()}
+    for header_name in (
+        "authorization",
+        "x-forwarded-authorization",
+        "x-original-authorization",
+    ):
+        value = _normalize_bearer_authorization(normalized.get(header_name, ""))
+        if value:
+            return value
+    return ""
 
 
 def search_agent_cards(
@@ -273,6 +289,9 @@ def _resolve_config(
         upstream_tip_token=(
             config.upstream_tip_token or env_config.upstream_tip_token
         ).strip(),
+        upstream_authorization=_normalize_bearer_authorization(
+            config.upstream_authorization or env_config.upstream_authorization
+        ),
     )
 
 
@@ -557,15 +576,25 @@ def _send_message(
     if task_id:
         message["taskId"] = task_id
 
+    headers: dict[str, str] = {}
     try:
+        headers = _agent_auth_headers(card, config)
         return _a2a_jsonrpc(
             card["url"],
             "message/send",
             {"message": message, "configuration": {"blocking": False}},
-            _agent_auth_headers(card, config),
+            headers,
             config,
         )
     except RegistryError as exc:
+        if _should_retry_with_m2m(exc, card, config, headers):
+            return _a2a_jsonrpc(
+                card["url"],
+                "message/send",
+                {"message": message, "configuration": {"blocking": False}},
+                _agent_auth_headers(card, config, force_m2m=True),
+                config,
+            )
         if exc.code in {
             "A2A_HTTP_FAILED",
             "A2A_RESPONSE_PARSE_FAILED",
@@ -586,13 +615,25 @@ def _poll_card(
     started: float | None = None,
 ) -> dict[str, Any]:
     started = started or time.monotonic()
-    a2a_result = _a2a_jsonrpc(
-        card["url"],
-        "tasks/get",
-        {"id": task_id.strip(), "historyLength": max(0, int(history_length))},
-        _agent_auth_headers(card, config),
-        config,
-    )
+    headers = _agent_auth_headers(card, config)
+    try:
+        a2a_result = _a2a_jsonrpc(
+            card["url"],
+            "tasks/get",
+            {"id": task_id.strip(), "historyLength": max(0, int(history_length))},
+            headers,
+            config,
+        )
+    except RegistryError as exc:
+        if not _should_retry_with_m2m(exc, card, config, headers):
+            raise
+        a2a_result = _a2a_jsonrpc(
+            card["url"],
+            "tasks/get",
+            {"id": task_id.strip(), "historyLength": max(0, int(history_length))},
+            _agent_auth_headers(card, config, force_m2m=True),
+            config,
+        )
     state = _task_state(a2a_result)
     is_terminal = state in TERMINAL_STATES
     payload: dict[str, Any] = {
@@ -838,12 +879,18 @@ def _sanitize_get_agent_result(
 
 
 def _agent_auth_headers(
-    card: dict[str, Any], config: AgentKitA2ARegistryConfig | None = None
+    card: dict[str, Any],
+    config: AgentKitA2ARegistryConfig | None = None,
+    *,
+    force_m2m: bool = False,
 ) -> dict[str, str]:
     resolved_config = _resolve_config(config)
     security = card.get("security") or []
     schemes = card.get("securitySchemes") or {}
     headers: dict[str, str] = {}
+    upstream_authorization = _normalize_bearer_authorization(
+        resolved_config.upstream_authorization
+    )
 
     for requirement in security:
         if not isinstance(requirement, dict):
@@ -861,9 +908,13 @@ def _agent_auth_headers(
                 if isinstance(token, str) and token:
                     headers[header_name] = token
             elif scheme_type == "oauth2":
-                headers["Authorization"] = "Bearer " + _oauth2_client_credentials_token(
-                    scheme, resolved_config
-                )
+                if upstream_authorization and not force_m2m:
+                    headers["Authorization"] = upstream_authorization
+                else:
+                    headers["Authorization"] = (
+                        "Bearer "
+                        + _oauth2_client_credentials_token(scheme, resolved_config)
+                    )
 
     tip_token = resolved_config.upstream_tip_token
     if tip_token:
@@ -875,6 +926,38 @@ def _agent_auth_headers(
             "AgentCard has security config but no usable header credential",
         )
     return headers
+
+
+def _should_retry_with_m2m(
+    exc: RegistryError,
+    card: dict[str, Any],
+    config: AgentKitA2ARegistryConfig | None,
+    headers: dict[str, str],
+) -> bool:
+    if exc.code != "A2A_HTTP_FAILED" or exc.diagnostics.get("status_code") != 401:
+        return False
+
+    resolved_config = _resolve_config(config)
+    upstream_authorization = _normalize_bearer_authorization(
+        resolved_config.upstream_authorization
+    )
+    if not upstream_authorization:
+        return False
+    if headers.get("Authorization") != upstream_authorization:
+        return False
+    return _has_oauth2_security(card)
+
+
+def _has_oauth2_security(card: dict[str, Any]) -> bool:
+    schemes = card.get("securitySchemes") or {}
+    for requirement in card.get("security") or []:
+        if not isinstance(requirement, dict):
+            continue
+        for scheme_name in requirement:
+            scheme = schemes.get(scheme_name) or {}
+            if str(scheme.get("type") or "").lower() == "oauth2":
+                return True
+    return False
 
 
 def _oauth2_client_credentials_token(
@@ -983,6 +1066,16 @@ def _clean_config_url(value: Any) -> str:
     while cleaned and cleaned[-1] in {"`", '"', "'"}:
         cleaned = cleaned[:-1].strip()
     return cleaned
+
+
+def _normalize_bearer_authorization(value: Any) -> str:
+    cleaned = _clean_config_url(value)
+    if not cleaned:
+        return ""
+    parts = cleaned.split(None, 1)
+    if len(parts) == 2 and parts[0].lower() == "bearer" and parts[1].strip():
+        return f"Bearer {parts[1].strip()}"
+    return ""
 
 
 def _user_pool_id_from_token_url(token_url: str) -> str:

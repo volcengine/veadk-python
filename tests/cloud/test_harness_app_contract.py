@@ -201,14 +201,18 @@ class TestHarnessConfig:
         assert "has_a2a_registry_config(self.agent)" in app_source
         assert "spawn_harness_run_agent(" in app_source
 
-    def test_registry_tip_token_is_bound_to_run_agent_config(self):
+    def test_registry_request_auth_is_bound_to_run_agent_config(self):
         registry_source = Path("veadk/a2a/registry_client.py").read_text()
         utils_source = Path("veadk/cloud/harness_app/utils.py").read_text()
         app_source = Path("veadk/cloud/harness_app/app.py").read_text()
 
-        assert "_apply_registry_tip_token(" in utils_source
+        assert "_apply_registry_request_auth(" in utils_source
         assert "upstream_tip_token=cleaned_tip_token" in utils_source
+        assert "upstream_authorization=cleaned_authorization" in utils_source
         assert "registry_tip_token=tip_token" in app_source
+        assert "registry_authorization=auth_header" in app_source
+        assert "registry_authorization_from_headers" in app_source
+        assert "registry_authorization_from_headers(" in registry_source
         assert "ContextVar" not in registry_source
         assert "use_registry_tip_token" not in registry_source
         assert "use_registry_tip_token" not in app_source

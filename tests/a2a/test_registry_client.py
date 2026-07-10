@@ -27,6 +27,7 @@ from veadk.a2a.registry_client import (
     _volc_sign_v4,
     create_task,
     poll_task,
+    registry_authorization_from_headers,
     registry_tip_token_from_headers,
     search_agent_cards,
     truncate_utf8_bytes,
@@ -304,6 +305,130 @@ def test_create_task_gets_oauth_agent_token_and_sends_message(post: Mock):
     serialized = json.dumps(result, ensure_ascii=False)
     assert "oauth-access-token" not in serialized
     assert "m2m-client-secret" not in serialized
+
+
+@patch.dict(
+    "os.environ",
+    {
+        "AGENTKIT_ACCESS_KEY": "ak-test",
+        "AGENTKIT_SECRET_KEY": "sk-test",
+    },
+    clear=False,
+)
+@patch("veadk.a2a.registry_client.requests.post")
+def test_create_task_prefers_upstream_authorization_for_oauth_agent(post: Mock):
+    _OAUTH_TOKEN_CACHE.clear()
+    card = _oauth_agent_card()
+    post.side_effect = [
+        _mock_response(
+            {
+                "ResponseMetadata": {"RequestId": "get-req"},
+                "Result": {
+                    "Id": "agent-id",
+                    "Status": "running",
+                    "AgentCard": json.dumps(card),
+                },
+            }
+        ),
+        _mock_response(
+            {
+                "result": {
+                    "kind": "message",
+                    "parts": [{"kind": "text", "text": "用户 JWT 已通过。"}],
+                }
+            }
+        ),
+    ]
+
+    result = create_task(
+        "Finance Policy Remote Agent",
+        "这笔支出是否需要审批？",
+        config=AgentKitA2ARegistryConfig(
+            space_id="space-test",
+            endpoint="https://open.volcengineapi.com/",
+            upstream_authorization="Bearer user-jwt",
+        ),
+    )
+
+    assert result["outcome"] == "success"
+    assert post.call_count == 2
+    assert post.call_args_list[1].kwargs["headers"]["Authorization"] == (
+        "Bearer user-jwt"
+    )
+
+
+@patch.dict(
+    "os.environ",
+    {
+        "AGENTKIT_ACCESS_KEY": "ak-test",
+        "AGENTKIT_SECRET_KEY": "sk-test",
+    },
+    clear=False,
+)
+@patch("veadk.a2a.registry_client.requests.post")
+def test_create_task_falls_back_to_m2m_when_upstream_authorization_is_401(
+    post: Mock,
+):
+    _OAUTH_TOKEN_CACHE.clear()
+    card = _oauth_agent_card()
+    unauthorized = _mock_response({"detail": "unauthorized"}, status_code=401)
+    unauthorized.raise_for_status.side_effect = requests.HTTPError(
+        "401 Client Error", response=unauthorized
+    )
+    post.side_effect = [
+        _mock_response(
+            {
+                "ResponseMetadata": {"RequestId": "get-req"},
+                "Result": {
+                    "Id": "agent-id",
+                    "Status": "running",
+                    "AgentCard": json.dumps(card),
+                },
+            }
+        ),
+        unauthorized,
+        _mock_response(
+            {
+                "ResponseMetadata": {"RequestId": "list-client-req"},
+                "Result": {"Data": [{"Uid": "m2m-client-id"}]},
+            }
+        ),
+        _mock_response(
+            {
+                "ResponseMetadata": {"RequestId": "get-client-req"},
+                "Result": {"ClientSecret": "m2m-client-secret"},
+            }
+        ),
+        _mock_response({"access_token": "oauth-access-token", "expires_in": 3600}),
+        _mock_response(
+            {
+                "result": {
+                    "kind": "message",
+                    "parts": [{"kind": "text", "text": "M2M fallback 已通过。"}],
+                }
+            }
+        ),
+    ]
+
+    result = create_task(
+        "Finance Policy Remote Agent",
+        "这笔支出是否需要审批？",
+        config=AgentKitA2ARegistryConfig(
+            space_id="space-test",
+            endpoint="https://open.volcengineapi.com/",
+            upstream_authorization="Bearer user-jwt",
+        ),
+    )
+
+    assert result["outcome"] == "success"
+    assert result["response"]["text"] == "M2M fallback 已通过。"
+    assert post.call_args_list[1].kwargs["headers"]["Authorization"] == (
+        "Bearer user-jwt"
+    )
+    assert post.call_args_list[2].kwargs["params"]["Action"] == "ListUserPoolClients"
+    assert post.call_args_list[5].kwargs["headers"]["Authorization"] == (
+        "Bearer oauth-access-token"
+    )
 
 
 @patch.dict(
@@ -691,6 +816,16 @@ def test_agent_auth_headers_extracts_api_key_header():
 
 
 @patch.dict("os.environ", {}, clear=True)
+def test_agent_auth_headers_prefers_upstream_authorization_for_oauth():
+    assert _agent_auth_headers(
+        _oauth_agent_card(),
+        AgentKitA2ARegistryConfig(
+            space_id="space-test", upstream_authorization="Bearer user-jwt"
+        ),
+    ) == {"Authorization": "Bearer user-jwt"}
+
+
+@patch.dict("os.environ", {}, clear=True)
 def test_agent_auth_headers_rejects_unusable_security():
     with pytest.raises(RegistryError) as ctx:
         _agent_auth_headers(
@@ -713,6 +848,13 @@ def test_registry_tip_token_from_headers_is_case_insensitive():
         registry_tip_token_from_headers({"x-ve-tip-token": " tip-from-header "})
         == "tip-from-header"
     )
+
+
+def test_registry_authorization_from_headers_accepts_bearer_only():
+    assert registry_authorization_from_headers(
+        {"Authorization": " bearer user-jwt "}
+    ) == ("Bearer user-jwt")
+    assert registry_authorization_from_headers({"Authorization": "Basic abc"}) == ""
 
 
 def test_agentkit_http_error_uses_safe_diagnostics():

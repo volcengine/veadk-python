@@ -62,7 +62,10 @@ from google.adk.utils.context_utils import Aclosing
 from typing_extensions import override
 
 from veadk import Agent
-from veadk.a2a.registry_client import registry_tip_token_from_headers
+from veadk.a2a.registry_client import (
+    registry_authorization_from_headers,
+    registry_tip_token_from_headers,
+)
 from veadk.a2a.utils.agent_to_a2a import to_a2a
 from veadk.cloud.harness_app.agent import agent, short_term_memory
 from veadk.cloud.harness_app.harness_plugins import (
@@ -231,6 +234,7 @@ class HarnessApp:
 
             try:
                 tip_token = registry_tip_token_from_headers(http_request.headers)
+                auth_header = registry_authorization_from_headers(http_request.headers)
                 header_plugins = build_harness_plugins_from_headers(
                     http_request.headers
                 )
@@ -272,6 +276,7 @@ class HarnessApp:
                             request.harness,
                             download_dir=Path(work_dir),
                             registry_tip_token=tip_token,
+                            registry_authorization=auth_header,
                         )
                         runner = Runner(
                             agent=agent,
@@ -291,6 +296,7 @@ class HarnessApp:
                             self.agent,
                             request.prompt,
                             registry_tip_token=tip_token,
+                            registry_authorization=auth_header,
                         )
                     else:
                         run_agent = self.agent
@@ -374,8 +380,10 @@ class HarnessApp:
                 # No override -> exactly ADK's default /run_sse.
                 return await adk_run_sse(req)
             tip_token = registry_tip_token_from_headers(http_request.headers)
+            auth_header = registry_authorization_from_headers(http_request.headers)
             return StreamingResponse(
-                self._run_sse_events(req, tip_token), media_type="text/event-stream"
+                self._run_sse_events(req, tip_token, auth_header),
+                media_type="text/event-stream",
             )
 
         # Move ours to the front so it wins (Starlette matches the first route),
@@ -388,7 +396,12 @@ class HarnessApp:
                 routes.insert(0, routes.pop(i))
                 break
 
-    async def _run_sse_events(self, req: "HarnessRunAgentRequest", tip_token: str = ""):
+    async def _run_sse_events(
+        self,
+        req: "HarnessRunAgentRequest",
+        tip_token: str = "",
+        auth_header: str = "",
+    ):
         """Yield SSE ``data:`` lines for a run, spawning the agent on override."""
         run_config = RunConfig(
             streaming_mode=StreamingMode.SSE if req.streaming else StreamingMode.NONE
@@ -408,6 +421,7 @@ class HarnessApp:
                         req.harness,
                         download_dir=Path(work_dir_ctx.name),
                         registry_tip_token=tip_token,
+                        registry_authorization=auth_header,
                     )
                 except (SkillLoadError, ToolLoadError) as e:
                     logger.error(f"Once-time override failed to load: {e}")
@@ -418,6 +432,7 @@ class HarnessApp:
                     self.agent,
                     prompt,
                     registry_tip_token=tip_token,
+                    registry_authorization=auth_header,
                 )
             else:
                 agent = self.agent
