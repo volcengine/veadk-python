@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from google.adk.models.llm_request import LlmRequest
@@ -161,6 +162,6 @@ The user profile is :
         A list of knowledgebase results.
         """
         logger.info(f"Search knowledgebase: {self.knowledgebase.name}")
-        response = self.knowledgebase.search(query)
+        response = await asyncio.to_thread(self.knowledgebase.search, query)
         logger.info(f"Loaded {len(response)} knowledgebase entries for query: {query}")
         return LoadKnowledgebaseResponse(knowledges=response)

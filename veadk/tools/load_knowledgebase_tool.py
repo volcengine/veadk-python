@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 import wrapt
@@ -55,7 +56,7 @@ async def search_knowledgebase(
 ) -> SearchKnowledgebaseResponse:
     """Searches the knowledgebase of the current user."""
     if isinstance(knowledgebase, KnowledgeBase):
-        entry_list = knowledgebase.search(query)
+        entry_list = await asyncio.to_thread(knowledgebase.search, query)
         return SearchKnowledgebaseResponse(knowledges=entry_list)
     else:
         return SearchKnowledgebaseResponse(knowledges=[])
