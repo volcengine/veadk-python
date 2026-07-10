@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from veadk.configs.auth_configs import VeIdentityConfig
 from veadk.configs.model_configs import RealtimeModelConfig
 from veadk.configs.database_configs import (
+    MilvusConfig,
     MysqlConfig,
     OpensearchConfig,
     RedisConfig,
@@ -79,6 +80,7 @@ class VeADKConfig(BaseModel):
     opensearch: OpensearchConfig = Field(default_factory=OpensearchConfig)
     mysql: MysqlConfig = Field(default_factory=MysqlConfig)
     redis: RedisConfig = Field(default_factory=RedisConfig)
+    milvus: MilvusConfig = Field(default_factory=MilvusConfig)
     viking_knowledgebase: VikingKnowledgebaseConfig = Field(
         default_factory=VikingKnowledgebaseConfig
     )

@@ -15,6 +15,7 @@
 import os
 from functools import cached_property
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from veadk.consts import DEFAULT_TOS_BUCKET_NAME
@@ -93,6 +94,26 @@ class RedisConfig(BaseSettings):
 
     secret_token: str = ""
     """STS token for Redis auth, not supported yet."""
+
+
+class MilvusConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="DATABASE_MILVUS_")
+
+    uri: str = ""
+
+    token: str = ""
+
+    user: str = ""
+
+    password: str = ""
+
+    db_name: str = "default"
+
+    overwrite: bool = False
+
+    timeout: float | None = None
+
+    output_fields: list[str] | str = Field(default_factory=list)
 
 
 class Mem0Config(BaseSettings):

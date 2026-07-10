@@ -62,6 +62,8 @@ extensions = [
     "llama-index-llms-openai-like>=0.5.1",                  # For KnowledgeBase and LongTermMemory
     "llama-index-vector-stores-redis>=0.6.1",               # For Redis database
     "llama-index-vector-stores-opensearch>=0.6.1",          # For Opensearch database
+    "llama-index-vector-stores-milvus>=0.4",                # For Milvus database
+    "pymilvus>=2.4",                                        # For Milvus database
     "opensearch-py>=2.8.0",
     "lark-oapi",
 ]
