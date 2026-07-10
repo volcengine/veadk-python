@@ -129,6 +129,16 @@ class Mem0Config(BaseSettings):
     base_url: str = ""  # "https://api.mem0.ai/v1"
 
 
+class OpenVikingConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="DATABASE_OPENVIKING_")
+
+    url: str = ""
+    """OpenViking server base URL"""
+
+    api_key: str = ""
+    """OpenViking service owner user key"""
+
+
 class VikingKnowledgebaseConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="DATABASE_VIKING_")
 
