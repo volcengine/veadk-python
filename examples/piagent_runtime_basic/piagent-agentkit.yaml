@@ -1,0 +1,31 @@
+common:
+  agent_name: piagent-runtime-basic
+  entry_point: app.py
+  description: Minimal VeADK agent running with runtime="piagent".
+  language: Python
+  language_version: '3.12'
+  agent_type: Basic App
+  dependencies_file: requirements.txt
+  launch_type: cloud
+launch_types:
+  cloud:
+    region: cn-beijing
+    tos_bucket: agentkit-platform-{{account_id}}
+    tos_prefix: agentkit-builds
+    image_tag: '{{timestamp}}'
+    cr_instance_name: agentkit-platform-{{account_id}}
+    cr_namespace_name: agentkit
+    cr_repo_name: piagent-runtime-basic
+    cr_auto_create_instance_type: Micro
+    build_timeout: 3600
+    cp_workspace_name: agentkit-cli-workspace
+    cp_pipeline_name: Auto
+    runtime_id: Auto
+    runtime_name: piagent-runtime-basic
+    runtime_role_name: Auto
+    runtime_auth_type: key_auth
+    runtime_apikey_name: Auto
+    runtime_apikey: Auto
+    runtime_jwt_allowed_clients: []
+docker_build:
+  platform: linux/amd64

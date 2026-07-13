@@ -25,7 +25,7 @@ Environment variables:
     DESCRIPTION             Agent description (e.g. for A2A discovery). Default: VeADK default description.
     TOOLS                   Comma-separated built-in tool names, e.g. "web_search,link_reader".
     SKILLS                  Comma-separated skill names, e.g. "data-visualization-cloud,...".
-    RUNTIME                 Agent runtime backend: "adk" (default) or "codex".
+    RUNTIME                 Agent runtime backend: "adk" (default), "codex", or "piagent".
     HARNESS_NAME            App/index name for the knowledge base and long-term memory
                             (also the served harness name). Default: "harness_app".
     KNOWLEDGEBASE_TYPE      Knowledge base backend (e.g. "viking"). Unset disables it.
