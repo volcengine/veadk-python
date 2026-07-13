@@ -195,6 +195,19 @@ export async function getSessionTrace(sessionId: string): Promise<TraceSpan[]> {
   return res.json();
 }
 
+/** The agent-type vocabulary shared with the create wizard. */
+export type AgentNodeType = "llm" | "sequential" | "parallel" | "loop" | "a2a";
+
+/** One node of the recursive agent topology returned by `/web/agent-info`. */
+export interface AgentNode {
+  name: string;
+  description: string;
+  type: AgentNodeType;
+  model: string;
+  tools: string[];
+  children: AgentNode[];
+}
+
 /** Introspected metadata for an agent app (model, tools), for the picker.
  *  Only the local server implements `/web/agent-info`; remote AgentKit apps
  *  will reject this and the caller falls back to a basic flyout. */
@@ -204,6 +217,8 @@ export interface AgentInfo {
   model: string;
   tools: string[];
   subAgents: string[];
+  /** Recursive typed tree; only the local server provides it. */
+  graph?: AgentNode;
 }
 
 export async function getAgentInfo(appName: string): Promise<AgentInfo> {
@@ -245,6 +260,8 @@ export interface RunArgs {
   /** Function responses to send instead of/alongside text — used to resume a
    *  long-running call (e.g. answering ADK's `adk_request_credential`). */
   functionResponses?: { id: string; name: string; response: unknown }[];
+  /** Abort the stream (e.g. when the user switches to another session). */
+  signal?: AbortSignal;
 }
 
 /** Stream agent events for one user turn. */
@@ -255,6 +272,7 @@ export async function* runSSE({
   text,
   attachments = [],
   functionResponses = [],
+  signal,
 }: RunArgs): AsyncGenerator<AdkEvent, void, unknown> {
   const { app, ep } = resolve(appName);
   const parts: Record<string, unknown>[] = [
@@ -278,6 +296,7 @@ export async function* runSSE({
         new_message: { role: "user", parts },
         streaming: true,
       }),
+      signal,
     },
     ep,
   );

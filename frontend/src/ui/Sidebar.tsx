@@ -29,6 +29,8 @@ function QuickCreateIcon() {
 export interface SidebarProps {
   sessions: AdkSession[];
   currentSessionId: string;
+  /** Session ids that are currently streaming a reply (shows a live dot). */
+  streamingSids?: Set<string>;
   onNewChat: () => void;
   onSearch: () => void;
   onQuickCreate: () => void;
@@ -87,6 +89,7 @@ function SidebarUser({
 export function Sidebar({
   sessions,
   currentSessionId,
+  streamingSids,
   onNewChat,
   onSearch,
   onQuickCreate,
@@ -141,6 +144,9 @@ export function Sidebar({
                 onClick={() => onPickSession(s.id)}
                 title={s.id}
               >
+                {streamingSids?.has(s.id) && (
+                  <span className="history-streaming" title="正在生成…" aria-label="正在生成" />
+                )}
                 <span className="history-title">{sessionTitle(s.events)}</span>
               </button>
               <button

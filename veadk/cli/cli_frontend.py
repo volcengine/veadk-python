@@ -81,6 +81,36 @@ def _resolve_frontend_dir(arg: str | None) -> Path:
     return (Path.cwd() / "frontend" / "dist").resolve()
 
 
+def _open_browser_when_ready(
+    url: str, host: str, port: int, timeout: float = 15.0
+) -> None:
+    """Open ``url`` in the default browser once the server accepts connections.
+
+    Polls the TCP port (up to ``timeout`` seconds) so the tab lands on a ready
+    server rather than a connection error. Runs on a daemon thread; any failure
+    is logged and ignored — a browser that will not open must never block the
+    server from serving.
+    """
+    import socket
+    import time
+    import webbrowser
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=0.5):
+                break
+        except OSError:
+            time.sleep(0.25)
+    else:
+        logger.warning("Server not ready in time; skipped opening the browser.")
+        return
+    try:
+        webbrowser.open(url)
+    except Exception as e:  # noqa: BLE001 - opening a browser is best-effort
+        logger.warning(f"Could not open the browser automatically: {e}")
+
+
 # Built-in provider presets so users only need to supply client id/secret.
 # Google is OIDC (endpoints come from discovery via OAUTH2_ISSUER); GitHub is
 # not OIDC, so its endpoints are explicit and it needs Accept: application/json
@@ -286,6 +316,15 @@ def _build_generic_oauth2(provider_id: str, redirect_uri: str):
     "forwards as an Authorization: Bearer <JWT> — parse the user from it and run "
     "no in-app login (use when deployed behind the AgentKit runtime gateway).",
 )
+@click.option(
+    "--open/--no-open",
+    "open_browser",
+    default=False,
+    show_default=True,
+    help="Open the web UI in your default browser once the server is ready. "
+    "Off by default (typical server-hosted deployments have no local browser); "
+    "pass --open for local use. Ignored with --dev.",
+)
 def frontend(
     agents_dir: str,
     frontend_dir: str | None,
@@ -300,6 +339,7 @@ def frontend(
     oauth2_provider: str | None,
     oauth2_provider_label: str | None,
     auth_mode: str,
+    open_browser: bool,
 ) -> None:
     """Launch the A2UI web UI backed by the ADK agent API server."""
     # Explicitly load .env file before any agent code runs
@@ -345,6 +385,51 @@ def frontend(
         name = getattr(tool, "name", None) or getattr(tool, "__name__", None)
         return str(name or type(tool).__name__)
 
+    def _agent_type(agent: object) -> str:
+        # Map an ADK agent instance to the same type vocabulary the create
+        # wizard uses: llm | sequential | parallel | loop | a2a.
+        try:
+            from google.adk.agents import (
+                LoopAgent,
+                ParallelAgent,
+                SequentialAgent,
+            )
+
+            if isinstance(agent, LoopAgent):
+                return "loop"
+            if isinstance(agent, SequentialAgent):
+                return "sequential"
+            if isinstance(agent, ParallelAgent):
+                return "parallel"
+        except Exception:
+            pass
+        try:
+            from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
+
+            if isinstance(agent, RemoteA2aAgent):
+                return "a2a"
+        except Exception:
+            pass
+        return "llm"
+
+    def _agent_node(agent: object, depth: int = 0) -> dict:
+        # Recursive typed tree for the conversation topology panel. Depth is
+        # bounded so a pathological sub_agents cycle can't spin forever.
+        children = []
+        if depth < 8:
+            children = [
+                _agent_node(s, depth + 1)
+                for s in getattr(agent, "sub_agents", []) or []
+            ]
+        return {
+            "name": getattr(agent, "name", "") or "",
+            "description": getattr(agent, "description", "") or "",
+            "type": _agent_type(agent),
+            "model": _model_name(getattr(agent, "model", "")),
+            "tools": [_tool_label(t) for t in getattr(agent, "tools", []) or []],
+            "children": children,
+        }
+
     @app.get("/web/agent-info/{app_name}")
     async def _web_agent_info(app_name: str):
         try:
@@ -354,11 +439,14 @@ def frontend(
         return {
             "name": getattr(agent, "name", app_name),
             "description": getattr(agent, "description", "") or "",
+            "type": _agent_type(agent),
             "model": _model_name(getattr(agent, "model", "")),
             "tools": [_tool_label(t) for t in getattr(agent, "tools", []) or []],
             "subAgents": [
                 getattr(s, "name", "") for s in getattr(agent, "sub_agents", []) or []
             ],
+            # Recursive typed tree used by the conversation topology panel.
+            "graph": _agent_node(agent),
         }
 
     # Tool names that count as "web search is mounted" on an agent.
@@ -1057,6 +1145,20 @@ def frontend(
         logger.info(
             f"A2UI UI + API serving on http://{host}:{port} (UI: {webui}, agents: {agents_dir})"
         )
+
+    # Open the UI in the browser once the server is up. Only in non-dev mode,
+    # where this server serves the UI; with --dev the Vite dev server owns it.
+    if open_browser and not dev:
+        import threading
+
+        browse_host = "127.0.0.1" if host in ("0.0.0.0", "", "::") else host
+        url = f"http://{browse_host}:{port}"
+        threading.Thread(
+            target=_open_browser_when_ready,
+            args=(url, browse_host, port),
+            daemon=True,
+        ).start()
+        logger.info(f"Opening {url} in your browser…")
 
     import uvicorn
 

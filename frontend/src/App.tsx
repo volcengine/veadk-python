@@ -14,6 +14,7 @@ import {
 import { applyEvent, emptyAcc, eventsToTurns, type Block, type Turn } from "./blocks";
 import { Sidebar } from "./ui/Sidebar";
 import { Navbar } from "./ui/Navbar";
+import { AgentTopology } from "./ui/AgentTopology";
 import { SkillCenterView } from "./ui/SkillCenter";
 import { AddAgentKitView } from "./ui/AddAgentKit";
 import { SearchView } from "./ui/Search";
@@ -47,6 +48,7 @@ type CreateView = "menu" | QuickCreateKind | null;
 
 // Persist the last view so a page refresh restores where the user was.
 const LS = { app: "veadk.appName", view: "veadk.view", session: "veadk.sessionId" } as const;
+const EMPTY_STRING_SET: Set<string> = new Set<string>();
 function loadView(): CreateView {
   const v = typeof localStorage !== "undefined" ? localStorage.getItem(LS.view) : null;
   return v === "menu" || v === "intelligent" || v === "custom" || v === "template" || v === "workflow"
@@ -290,10 +292,43 @@ export default function App() {
   const [appName, setAppName] = useState("");
   const [sessions, setSessions] = useState<AdkSession[]>([]);
   const [sessionId, setSessionId] = useState("");
-  const [turns, setTurns] = useState<Turn[]>([]);
+  // Turns are stored PER SESSION, so a background stream can keep updating its
+  // own session's transcript while you view another one — no cross-session
+  // leak, no data loss, and no re-fetch when you switch back (its entry is
+  // already live). The view shows the active session's entry.
+  const [turnsBySession, setTurnsBySession] = useState<Record<string, Turn[]>>(
+    {},
+  );
+  const turns = turnsBySession[sessionId] ?? [];
+  const setTurnsFor = (
+    sid: string,
+    updater: Turn[] | ((prev: Turn[]) => Turn[]),
+  ) =>
+    setTurnsBySession((m) => ({
+      ...m,
+      [sid]: typeof updater === "function" ? updater(m[sid] ?? []) : updater,
+    }));
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [busy, setBusy] = useState(false);
+  // Streaming state is PER SESSION so multiple sessions can stream at once
+  // (each /run_sse is an independent request). `streamingSids` = which sessions
+  // are currently streaming; the AbortControllers let unmount / delete cancel
+  // a specific session's stream. A normal switch does NOT abort — the stream
+  // keeps running and persisting.
+  const [streamingSids, setStreamingSids] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const streamAbortsRef = useRef<Map<string, AbortController>>(new Map());
+  const setStreaming = (sid: string, on: boolean) =>
+    setStreamingSids((s) => {
+      const n = new Set(s);
+      if (on) n.add(sid);
+      else n.delete(sid);
+      return n;
+    });
+  // The session currently on screen — used to gate the single global error
+  // banner (per-session transcripts/topology don't need it).
+  const viewSidRef = useRef("");
   const [error, setError] = useState("");
   const [traceOpen, setTraceOpen] = useState(false);
   const [greeting, setGreeting] = useState(pickGreeting);
@@ -302,6 +337,20 @@ export default function App() {
   const [userInfo, setUserInfo] = useState<Record<string, unknown> | undefined>();
   const [localMode, setLocalMode] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
+  // The executing sub-agent (ADK event.author) and everyone who emitted this
+  // turn — PER SESSION, so each session's topology highlights its own stream.
+  const [activeAgentBySession, setActiveAgentBySession] = useState<
+    Record<string, string>
+  >({});
+  const [seenAgentsBySession, setSeenAgentsBySession] = useState<
+    Record<string, Set<string>>
+  >({});
+
+  // Everything the view needs for the ACTIVE session, derived from the
+  // per-session maps above.
+  const busy = streamingSids.has(sessionId);
+  const activeAgent = activeAgentBySession[sessionId] ?? "";
+  const seenAgents = seenAgentsBySession[sessionId] ?? EMPTY_STRING_SET;
   const [createView, setCreateView] = useState<CreateView>(loadView);
   // Whether the server has Volcengine AK/SK. The agent-creation workbench needs
   // them; assume present until the runtime-config check says otherwise (avoids
@@ -416,7 +465,15 @@ export default function App() {
   }, [createView]);
   useEffect(() => {
     localStorage.setItem(LS.session, sessionId);
+    // Keep the stream-write guard in sync with the displayed session (backup for
+    // any navigation path that doesn't set it synchronously).
+    viewSidRef.current = sessionId;
   }, [sessionId]);
+  // Abort the in-flight stream when the whole view unmounts.
+  useEffect(
+    () => () => streamAbortsRef.current.forEach((c) => c.abort()),
+    [],
+  );
 
   // When the app (or resolved user) changes, list existing sessions. On the
   // very first resolve, restore the previously-open session (if it still
@@ -478,17 +535,24 @@ export default function App() {
   }
 
   // Reset to a fresh, not-yet-created chat. The backend session is created
-  // lazily on the first message (see send()).
+  // lazily on the first message (see send()). A background stream (if any)
+  // keeps running and persisting — its writes are suppressed here by viewSidRef.
   function startNewChat() {
     setError("");
     setGreeting(pickGreeting());
+    viewSidRef.current = "";
     setSessionId("");
-    setTurns([]);
   }
 
   async function removeSession(id: string) {
     try {
+      // Deleting a session with a running stream — abort just that one.
+      streamAbortsRef.current.get(id)?.abort();
       await deleteSession(appName, userId, id);
+      setTurnsBySession((m) => {
+        const { [id]: _drop, ...rest } = m;
+        return rest;
+      });
       if (id === sessionId) startNewChat();
       await refreshSessions(appName);
     } catch (e) {
@@ -498,12 +562,17 @@ export default function App() {
 
   async function pickSession(id: string) {
     if (id === sessionId) return;
+    viewSidRef.current = id;
     setError("");
-    setLoadingSession(true);
     setSessionId(id);
+    // Already have this session's turns (it's cached, or streaming in the
+    // background)? Show them instantly and let any live stream keep updating —
+    // no re-fetch, no "loading" flash, streaming stays visible.
+    if (turnsBySession[id] !== undefined) return;
+    setLoadingSession(true);
     try {
       const s = await getSession(appName, userId, id);
-      setTurns(eventsToTurns(s.events ?? []));
+      setTurnsFor(id, eventsToTurns(s.events ?? []));
     } catch (e) {
       setError(String(e));
     } finally {
@@ -529,9 +598,10 @@ export default function App() {
   }
 
   async function send(text: string, atts: Attachment[] = []) {
+    // `busy` here = the CURRENT session is already streaming (can't double-send
+    // to it). Other sessions can stream concurrently.
     if ((!text.trim() && atts.length === 0) || busy || !appName || !userId) return;
     setError("");
-    setBusy(true);
 
     // Lazily create the backend session on the first message.
     let sid = sessionId;
@@ -551,10 +621,15 @@ export default function App() {
         setSessions((prev) => [optimistic, ...prev.filter((s) => s.id !== sid)]);
       } catch (e) {
         setError(String(e));
-        setBusy(false);
         return;
       }
     }
+
+    // Register this session's own stream (concurrent with other sessions').
+    const ctrl = new AbortController();
+    streamAbortsRef.current.set(sid, ctrl);
+    setStreaming(sid, true);
+    viewSidRef.current = sid;
 
     const userBlocks: Turn["blocks"] = [];
     if (atts.length)
@@ -563,11 +638,13 @@ export default function App() {
         files: atts.map((a) => ({ mimeType: a.mimeType, data: a.data, name: a.name })),
       });
     if (text.trim()) userBlocks.push({ kind: "text", text });
-    setTurns((t) => [
+    setTurnsFor(sid, (t) => [
       ...t,
       { role: "user", blocks: userBlocks, meta: { ts: Date.now() / 1000 } },
       { role: "assistant", blocks: [] },
     ]);
+    setActiveAgentBySession((m) => ({ ...m, [sid]: "" }));
+    setSeenAgentsBySession((m) => ({ ...m, [sid]: new Set() }));
 
     try {
       let acc = emptyAcc();
@@ -579,11 +656,23 @@ export default function App() {
         sessionId: sid,
         text,
         attachments: atts,
+        signal: ctrl.signal,
       })) {
+        if (ctrl.signal.aborted) break;
         const errMsg = event.error ?? event.errorMessage ?? event.error_message;
         if (typeof errMsg === "string" && errMsg) {
-          setError(errMsg);
+          if (viewSidRef.current === sid) setError(errMsg);
           break;
+        }
+        // Topology highlight is per-session (keyed by sid), so it never clashes
+        // with another session's concurrent stream.
+        if (event.author && event.author !== "user") {
+          const who = event.author;
+          setActiveAgentBySession((m) => ({ ...m, [sid]: who }));
+          setSeenAgentsBySession((m) => ({
+            ...m,
+            [sid]: new Set(m[sid] ?? []).add(who),
+          }));
         }
         acc = applyEvent(acc, event);
         const usage = event.usageMetadata ?? event.usage_metadata;
@@ -591,7 +680,7 @@ export default function App() {
         if (event.timestamp) ts = event.timestamp;
         const blocks = acc.blocks;
         const meta = { tokens: tokens || undefined, ts };
-        setTurns((t) => {
+        setTurnsFor(sid, (t) => {
           const next = t.slice();
           const last = next[next.length - 1];
           if (last?.role === "assistant") next[next.length - 1] = { ...last, blocks, meta };
@@ -600,9 +689,19 @@ export default function App() {
       }
       void refreshSessions(appName);
     } catch (e) {
-      setError(String(e));
+      // An abort (unmount / session delete) is expected — surface only real
+      // errors, and only while this session is on screen.
+      if (
+        (e as Error)?.name !== "AbortError" &&
+        !ctrl.signal.aborted &&
+        viewSidRef.current === sid
+      ) {
+        setError(String(e));
+      }
     } finally {
-      setBusy(false);
+      if (streamAbortsRef.current.get(sid) === ctrl) streamAbortsRef.current.delete(sid);
+      setStreaming(sid, false);
+      setActiveAgentBySession((m) => ({ ...m, [sid]: "" }));
     }
   }
 
@@ -619,6 +718,7 @@ export default function App() {
   async function onAuth(block: Extract<Block, { kind: "auth" }>) {
     if (!block.authUri) throw new Error("事件中没有授权地址。");
     if (!appName || !userId || !sessionId) throw new Error("会话尚未就绪。");
+    const sid = sessionId;
     const callbackUrl = await runOAuthPopup(block.authUri);
     const response = withAuthResponseUri(block.authConfig, callbackUrl);
 
@@ -627,7 +727,7 @@ export default function App() {
     // "等待授权…" until the whole reply finishes streaming.
     const resolveAuth = (bs: Block[]) =>
       bs.map((b) => (b.kind === "auth" && !b.done ? { ...b, done: true } : b));
-    setTurns((t) => {
+    setTurnsFor(sid, (t) => {
       const next = t.slice();
       const last = next[next.length - 1];
       if (last?.role === "assistant") {
@@ -643,7 +743,9 @@ export default function App() {
       lastTurn && lastTurn.role === "assistant" ? lastTurn.blocks : [],
     );
 
-    setBusy(true);
+    const ctrl = new AbortController();
+    streamAbortsRef.current.set(sid, ctrl);
+    setStreaming(sid, true);
     try {
       let acc = emptyAcc();
       let tokens = 0;
@@ -656,13 +758,23 @@ export default function App() {
         functionResponses: [
           { id: block.callId, name: "adk_request_credential", response },
         ],
+        signal: ctrl.signal,
       })) {
+        if (ctrl.signal.aborted) break;
+        if (event.author && event.author !== "user") {
+          const who = event.author;
+          setActiveAgentBySession((m) => ({ ...m, [sid]: who }));
+          setSeenAgentsBySession((m) => ({
+            ...m,
+            [sid]: new Set(m[sid] ?? []).add(who),
+          }));
+        }
         acc = applyEvent(acc, event);
         const usage = event.usageMetadata ?? event.usage_metadata;
         if (usage?.totalTokenCount) tokens = usage.totalTokenCount;
         if (event.timestamp) ts = event.timestamp;
         const blocks = [...base, ...acc.blocks];
-        setTurns((t) => {
+        setTurnsFor(sid, (t) => {
           const next = t.slice();
           const last = next[next.length - 1];
           if (last?.role === "assistant") {
@@ -676,8 +788,18 @@ export default function App() {
         });
       }
       void refreshSessions(appName);
+    } catch (e) {
+      if (
+        (e as Error)?.name !== "AbortError" &&
+        !ctrl.signal.aborted &&
+        viewSidRef.current === sid
+      ) {
+        setError(String(e));
+      }
     } finally {
-      setBusy(false);
+      if (streamAbortsRef.current.get(sid) === ctrl) streamAbortsRef.current.delete(sid);
+      setStreaming(sid, false);
+      setActiveAgentBySession((m) => ({ ...m, [sid]: "" }));
     }
   }
 
@@ -693,6 +815,7 @@ export default function App() {
       <Sidebar
         sessions={sessions}
         currentSessionId={sessionId}
+        streamingSids={streamingSids}
         onNewChat={() => {
           setCreateView(null);
           setSkillCenter(false);
@@ -711,8 +834,8 @@ export default function App() {
         }}
         onQuickCreate={() => {
           // "添加 Agent" — open the two-card chooser. Drop any selected session.
+          viewSidRef.current = "";
           setSessionId("");
-          setTurns([]);
           setSkillCenter(false);
           setAddAgent(false);
           setSearchView(false);
@@ -730,11 +853,11 @@ export default function App() {
           setError("");
         }}
         onAddAgent={() => {
+          viewSidRef.current = "";
           setCreateView(null);
           setSkillCenter(false);
           setSearchView(false);
           setSessionId("");
-          setTurns([]);
           setAddMenu(false);
           setAddAgent(true);
           setError("");
@@ -781,7 +904,13 @@ export default function App() {
             <Navbar
               apps={agentEntries.map((e) => e.id)}
               appName={appName}
-              onAppChange={setAppName}
+              onAppChange={(id) => {
+                // Switching agent starts a fresh chat; any background stream
+                // keeps persisting to its own (old) session.
+                viewSidRef.current = "";
+                setSessionId("");
+                setAppName(id);
+              }}
               agentLabel={labelOf}
               title={
                 addMenu
@@ -915,10 +1044,19 @@ export default function App() {
             ) : createView === "workflow" ? (
               <WorkflowCreate onBack={() => setCreateView("menu")} onCreate={onCreate} />
             ) : turns.length === 0 ? (
-              <div className="welcome">
-                <h1 className="welcome-title">{greeting}</h1>
-                {composer}
-              </div>
+              <>
+                <div className="welcome">
+                  <h1 className="welcome-title">{greeting}</h1>
+                  {composer}
+                </div>
+                {/* Show the agent's structure as soon as it's selected, before
+                    any conversation — only renders when it has sub-agents. */}
+                <AgentTopology
+                  appName={appName}
+                  activeAgent={activeAgent}
+                  seenAgents={seenAgents}
+                />
+              </>
             ) : (
               <>
                 <div className="transcript" ref={scrollRef} onScroll={onScroll}>
@@ -1011,6 +1149,11 @@ export default function App() {
             );
           })}
                 </div>
+                <AgentTopology
+                  appName={appName}
+                  activeAgent={activeAgent}
+                  seenAgents={seenAgents}
+                />
                 {composer}
               </>
             )}
