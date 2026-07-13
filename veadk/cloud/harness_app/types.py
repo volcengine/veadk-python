@@ -23,6 +23,7 @@ The parameters split into two groups:
   bound when the agent is built and therefore **cannot** be overridden per request.
 
 ``tools`` and ``skills`` are comma-separated strings (e.g. ``"web_search,web_fetch"``).
+Skills may be SkillHub names/slugs or skills-center refs prefixed with ``space:``.
 """
 
 from typing import Literal
@@ -48,7 +49,13 @@ class HarnessOverrides(BaseModel):
         default="",
         description="Comma-separated built-in tool names, e.g. web_search,web_fetch.",
     )
-    skills: str = Field(default="", description="Comma-separated skill hub names.")
+    skills: str = Field(
+        default="",
+        description=(
+            "Comma-separated skill hub names/slugs or skills-center refs, "
+            "e.g. data-visualization-cloud,space:ss-xxx."
+        ),
+    )
     system_prompt: str = Field(
         default="You are a helpful assistant.",
         description="System prompt / instruction.",
