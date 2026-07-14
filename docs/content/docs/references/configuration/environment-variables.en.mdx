@@ -100,11 +100,59 @@ Prefix `DATABASE_`, grouped by storage type. Memory and the knowledge base read 
 | | `DATABASE_REDIS_PORT` | Port, default 6379 |
 | | `DATABASE_REDIS_PASSWORD` | Password |
 | | `DATABASE_REDIS_DB` | Database number, default 0 |
+| Milvus | `DATABASE_MILVUS_URI` | Milvus address; local Milvus Lite file path or remote URI |
+| | `DATABASE_MILVUS_TOKEN` | Auth token; takes precedence over user/password (optional) |
+| | `DATABASE_MILVUS_USER` | Username (optional) |
+| | `DATABASE_MILVUS_PASSWORD` | Password (optional) |
+| | `DATABASE_MILVUS_DB_NAME` | Database name, default `default` |
+| | `DATABASE_MILVUS_OVERWRITE` | Overwrite the collection, default `false` |
+| | `DATABASE_MILVUS_TIMEOUT` | Connection/request timeout (optional) |
+| | `DATABASE_MILVUS_OUTPUT_FIELDS` | Comma-separated retrieval output fields (optional) |
 | VikingDB | `DATABASE_VIKING_PROJECT` | Project name |
 | | `DATABASE_VIKING_REGION` | Region |
 | TOS | `DATABASE_TOS_ENDPOINT` | Endpoint |
 | | `DATABASE_TOS_REGION` | Region |
 | | `DATABASE_TOS_BUCKET` | Bucket name |
+| OpenViking | `DATABASE_OPENVIKING_URL` | OpenViking HTTP server URL |
+| | `DATABASE_OPENVIKING_API_KEY` | OpenViking service owner API key |
+| | `DATABASE_OPENVIKING_ACCOUNT` | Optional account for multi-tenant or trusted gateway setups |
+| | `DATABASE_OPENVIKING_USER` | Optional user for multi-tenant or trusted gateway setups |
+| | `DATABASE_OPENVIKING_ACTOR_PEER_ID` | Optional caller agent or peer identifier |
+| | `DATABASE_OPENVIKING_TARGET_URI` | Knowledge resource directory, default `viking://resources/{index}/` |
+| | `DATABASE_OPENVIKING_WAIT` | Wait for resource parsing and indexing on import, default `true` |
+| | `DATABASE_OPENVIKING_IMPORT_TIMEOUT` | Import wait timeout in seconds, default `300` |
+| | `DATABASE_OPENVIKING_HYDRATE_RESULTS` | Read full content or overview after search hits, default `true` |
+| | `DATABASE_OPENVIKING_READ_LIMIT` | Maximum lines to read from file content, default `200` |
+| | `DATABASE_OPENVIKING_SCORE_THRESHOLD` | Optional minimum retrieval score |
+| | `DATABASE_OPENVIKING_USE_CONTEXT_SEARCH` | Use context-aware search, default `false` |
+
+```yaml title="config.yaml"
+database:
+  milvus:
+    uri: ./milvus.db
+    # token:
+    # user:
+    # password:
+    # db_name: default
+    # overwrite: false
+    # timeout: 5.0
+    # output_fields: text,metadata
+```
+
+```yaml title="config.yaml"
+database:
+  openviking:
+    url: http://127.0.0.1:1933
+    api_key: your-openviking-api-key
+    # Optional for KnowledgeBase(backend="openviking"):
+    # target_uri: viking://resources/my_app/
+    # wait: true
+    # import_timeout: 300
+    # hydrate_results: true
+    # read_limit: 200
+    # score_threshold: 0.3
+    # use_context_search: false
+```
 
 ## Observability
 

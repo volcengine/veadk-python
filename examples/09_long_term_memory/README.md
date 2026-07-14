@@ -49,5 +49,5 @@ preference from session #1.
 
 - Short-term vs long-term: see [03](../03_short_term_memory/) for the
   in-session kind.
-- Swap `backend="local"` for a persistent store (`viking`, `redis`, `opensearch`,
-  `mem0`) so memories survive process restarts.
+- Swap `backend="local"` for a persistent store (`openviking`, `viking`,
+  `redis`, `opensearch`, `mem0`) so memories survive process restarts.

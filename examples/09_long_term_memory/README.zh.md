@@ -43,5 +43,5 @@ python main.py
 ## 下一步
 
 - 短期 vs 长期：会话内的记忆见 [03](../03_short_term_memory/)。
-- 把 `backend="local"` 换成持久化存储（`viking`、`redis`、`opensearch`、`mem0`），
-  让记忆在进程重启后依然存在。
+- 把 `backend="local"` 换成持久化存储（`openviking`、`viking`、`redis`、
+  `opensearch`、`mem0`），让记忆在进程重启后依然存在。

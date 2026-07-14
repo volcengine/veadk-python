@@ -156,6 +156,16 @@ database:
     port: 6379  # default Redis port
     password: 
     db: 0       # default 
+  # [optional] for KnowledgeBase(backend="milvus")
+  milvus:
+    uri: ./milvus.db # local Milvus Lite file path or remote URI, for example http://localhost:19530
+    # token: # optional; takes precedence over user/password
+    # user:
+    # password:
+    # db_name: default
+    # overwrite: false
+    # timeout: 5.0
+    # output_fields: text,metadata
   # [optional] for knowledgebase (https://console.volcengine.com/vikingdb)
   viking:
     project: default    # user project in Volcengine Viking DB
@@ -168,6 +178,21 @@ database:
   mem0:
     base_url: # default "https://api.mem0.ai/v1", using full https url including port
     api_key:  #api_key
+  # [optional] for KnowledgeBase(backend="openviking") and LongTermMemory(backend="openviking")
+  openviking:
+    url: http://127.0.0.1:1933 # OpenViking HTTP server base URL
+    api_key: your-openviking-api-key # OpenViking service owner API key
+    # Optional knowledgebase settings:
+    # account:
+    # user:
+    # actor_peer_id:
+    # target_uri: viking://resources/{index}/
+    # wait: true
+    # import_timeout: 300
+    # hydrate_results: true
+    # read_limit: 200
+    # score_threshold: 0.3
+    # use_context_search: false
   tos_vector:
     endpoint: tosvectors-cn-beijing.volces.com # default Volcengine TOS Vector endpoint
     region: cn-beijing                  # default Volcengine TOS Vector region
