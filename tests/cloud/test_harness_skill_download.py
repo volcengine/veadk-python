@@ -22,6 +22,7 @@ import zipfile
 import httpx
 
 from veadk.cloud.harness_app import utils
+from veadk.skills.skill import Skill as VeADKSkill
 
 
 def _skill_zip_bytes(name: str) -> bytes:
@@ -32,6 +33,14 @@ def _skill_zip_bytes(name: str) -> bytes:
             f"---\nname: {name}\ndescription: Test skill.\n---\n\n# {name}\n",
         )
     return buffer.getvalue()
+
+
+def _write_adk_skill(path, *, name: str) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: Test skill.\n---\n\n# {name}\n",
+        encoding="utf-8",
+    )
 
 
 def test_download_skill_resolves_short_name_to_exact_slug(monkeypatch, tmp_path):
@@ -84,3 +93,50 @@ def test_download_skill_resolves_short_name_to_exact_slug(monkeypatch, tmp_path)
         "https://skills.volces.com/v1/skills?query=web-scraper&pageNumber=1&pageSize=10",
         "https://skills.volces.com/v1/skills/download/clawhub/example/web-scraper",
     ]
+
+
+def test_build_skill_toolset_loads_skills_center_space(monkeypatch, tmp_path):
+    calls: list[str] = []
+    remote_skill = VeADKSkill(
+        name="center-skill",
+        description="Center skill.",
+        path="skills/s-123/v1/center-skill.zip",
+        skill_space_id="ss-test",
+        bucket_name="bucket",
+        id="s-123",
+    )
+
+    def fake_load_skills_from_space_id(skill_space_id: str) -> list[VeADKSkill]:
+        calls.append(skill_space_id)
+        return [remote_skill]
+
+    def fake_materialize_remote_skill(
+        skill: VeADKSkill,
+        *,
+        cache_dir=None,
+    ):
+        assert skill == remote_skill
+        assert cache_dir == tmp_path
+        skill_dir = tmp_path / skill.name
+        _write_adk_skill(skill_dir, name=skill.name)
+        return skill_dir
+
+    def fail_skillhub_download(*args, **kwargs):
+        raise AssertionError("skills-center refs must not use SkillHub download")
+
+    monkeypatch.setattr(
+        utils,
+        "_load_skills_from_space_id",
+        fake_load_skills_from_space_id,
+    )
+    monkeypatch.setattr(
+        utils,
+        "materialize_remote_skill",
+        fake_materialize_remote_skill,
+    )
+    monkeypatch.setattr(utils, "_download_and_extract_skill", fail_skillhub_download)
+
+    toolset = utils.build_skill_toolset(["space:ss-test"], download_dir=tmp_path)
+
+    assert calls == ["ss-test"]
+    assert [skill.name for skill in toolset._list_skills()] == ["center-skill"]
