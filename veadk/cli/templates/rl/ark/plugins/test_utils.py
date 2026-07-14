@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import logging
 import os
 from ark_sdk.core.plugin.rollout.proxy import InferenceProxy, Mode
 from ark_sdk.types.pipeline_plugin.rollout import (
@@ -21,8 +22,9 @@ from ark_sdk.types.pipeline_plugin.rollout import (
 )
 import json
 
-from loguru import logger
 import contextvars
+
+logger = logging.getLogger(__name__)
 
 
 async def test_with_dataset(
