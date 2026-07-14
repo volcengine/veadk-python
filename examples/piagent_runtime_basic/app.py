@@ -14,7 +14,11 @@
 
 """Deployable API server for the piagent runtime example."""
 
+import logging
 import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import uvicorn
@@ -24,16 +28,83 @@ AGENTS_DIR = str(Path(__file__).resolve().parent / "agents")
 
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
+logger = logging.getLogger("uvicorn.error")
 
 
 def build_app():
     app = get_fast_api_app(agents_dir=AGENTS_DIR, allow_origins=["*"], web=False)
+
+    @app.on_event("startup")
+    async def log_piagent_agentkit_startup() -> None:
+        _log_piagent_agentkit_state()
 
     @app.get("/ping")
     def ping() -> dict[str, str]:
         return {"status": "ok"}
 
     return app
+
+
+def _log_piagent_agentkit_state() -> None:
+    binary = os.getenv("PIAGENT_BINARY")
+    binary_source = "PIAGENT_BINARY"
+    if not binary:
+        binary = shutil.which("pi")
+        binary_source = "PATH"
+
+    logger.info(
+        "piagent AgentKit startup: "
+        f"python={sys.version.split()[0]} cwd={Path.cwd()} agents_dir={AGENTS_DIR}"
+    )
+    _log_binary_state(binary, binary_source)
+    _log_agent_dir_state(os.getenv("PIAGENT_AGENT_DIR"))
+
+
+def _log_binary_state(binary: str | None, source: str) -> None:
+    if not binary:
+        logger.warning("piagent AgentKit startup: Pi binary is not configured")
+        return
+
+    path = Path(binary).expanduser()
+    exists = path.exists()
+    executable = os.access(path, os.X_OK) if exists else False
+    logger.info(
+        "piagent AgentKit startup: "
+        f"binary_source={source} binary={path} exists={exists} executable={executable}"
+    )
+    if not exists or not executable:
+        return
+
+    try:
+        result = subprocess.run(
+            [str(path), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except Exception as e:  # noqa: BLE001 - startup diagnostics only
+        logger.warning(f"piagent AgentKit startup: Pi version check failed: {e}")
+        return
+
+    output = (result.stdout or result.stderr).strip().splitlines()
+    logger.info(
+        "piagent AgentKit startup: "
+        f"Pi version check returncode={result.returncode} "
+        f"output={output[0][:300] if output else '<empty>'}"
+    )
+
+
+def _log_agent_dir_state(agent_dir: str | None) -> None:
+    if not agent_dir:
+        logger.warning("piagent AgentKit startup: PIAGENT_AGENT_DIR is not configured")
+        return
+
+    path = Path(agent_dir).expanduser()
+    logger.info(
+        "piagent AgentKit startup: "
+        f"agent_dir={path} exists={path.exists()} writable={os.access(path, os.W_OK)}"
+    )
 
 
 app = build_app()

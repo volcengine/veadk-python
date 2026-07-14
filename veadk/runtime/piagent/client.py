@@ -65,6 +65,13 @@ class PiAgentRpcClient:
         ]
         if self.config.disable_tools:
             args.append("--no-tools")
+        else:
+            if self.config.disable_builtin_tools:
+                args.append("--no-builtin-tools")
+            for extension in self.config.extensions:
+                args.extend(["--extension", extension])
+            if self.config.allowed_tools:
+                args.extend(["--tools", ",".join(self.config.allowed_tools)])
 
         env = os.environ.copy()
         env["PI_CODING_AGENT_DIR"] = str(self.config.agent_dir)

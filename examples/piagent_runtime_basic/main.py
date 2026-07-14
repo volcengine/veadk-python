@@ -34,7 +34,10 @@ from examples.piagent_runtime_basic.agent import agent
 
 
 async def main() -> None:
-    message = " ".join(sys.argv[1:]).strip() or "用一句话介绍火山引擎。"
+    message = (
+        " ".join(sys.argv[1:]).strip()
+        or "请查询订单 A10086 的状态。你必须先调用工具，再回答。"
+    )
 
     runner = Runner(agent=agent, app_name="piagent_runtime_basic")
     answer = await runner.run(

@@ -20,6 +20,7 @@ import json
 import os
 import tempfile
 from dataclasses import dataclass
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -106,6 +107,9 @@ class PiAgentConfig:
     timeout_seconds: float
     model: PiAgentModelConfig
     disable_tools: bool = True
+    disable_builtin_tools: bool = False
+    extensions: tuple[str, ...] = ()
+    allowed_tools: tuple[str, ...] = ()
 
     @classmethod
     def from_agent(cls, agent: "Agent", binary_path: str) -> "PiAgentConfig":
@@ -125,6 +129,17 @@ class PiAgentConfig:
             timeout_seconds=timeout,
             model=PiAgentModelConfig.from_agent(agent),
             disable_tools=_env_flag_enabled("PIAGENT_DISABLE_TOOLS", default=True),
+        )
+
+    def with_tools(
+        self, *, extensions: list[str], allowed_tools: list[str]
+    ) -> "PiAgentConfig":
+        return replace(
+            self,
+            disable_tools=False,
+            disable_builtin_tools=True,
+            extensions=tuple(extensions),
+            allowed_tools=tuple(allowed_tools),
         )
 
     @property

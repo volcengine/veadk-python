@@ -22,6 +22,11 @@ from veadk.runtime.base_runtime import BaseRuntime, build_system_append
 from veadk.runtime.piagent.client import PiAgentRpcClient
 from veadk.runtime.piagent.config import PiAgentConfig, prepare_piagent_home
 from veadk.runtime.piagent.installer import resolve_or_install_piagent_binary
+from veadk.runtime.piagent.tool_runtime import PiToolRuntime
+from veadk.runtime.piagent.tools_bridge import (
+    build_executable_tools,
+    close_toolsets,
+)
 from veadk.runtime.piagent.translate import PiEventTranslator, build_prompt
 from veadk.utils.logger import get_logger
 
@@ -45,6 +50,7 @@ class PiAgentRuntime(BaseRuntime):
         binary_path = resolve_or_install_piagent_binary()
         config = PiAgentConfig.from_agent(agent, binary_path)
         prepare_piagent_home(config)
+        tool_bundle = await build_executable_tools(agent, ctx)
 
         prompt = build_prompt(ctx)
         append_text = build_system_append(agent)
@@ -61,7 +67,19 @@ class PiAgentRuntime(BaseRuntime):
             author=agent.name,
             invocation_id=ctx.invocation_id,
         )
-        async with PiAgentRpcClient(config) as client:
-            async for pi_event in client.prompt(prompt):
-                for event in translator.event_to_adk_events(pi_event):
-                    yield event
+        try:
+            async with PiToolRuntime(tool_bundle) as tools:
+                run_config = (
+                    config.with_tools(
+                        extensions=[tools.extension_path],
+                        allowed_tools=tools.tool_names,
+                    )
+                    if tools.enabled
+                    else config
+                )
+                async with PiAgentRpcClient(run_config) as client:
+                    async for pi_event in client.prompt(prompt):
+                        for event in translator.event_to_adk_events(pi_event):
+                            yield event
+        finally:
+            await close_toolsets(tool_bundle.opened_toolsets)

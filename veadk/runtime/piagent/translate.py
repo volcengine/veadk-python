@@ -73,6 +73,10 @@ class PiEventTranslator:
         event_type = event.get("type")
         if event_type == "message_update":
             return self._message_update_to_events(event)
+        if event_type == "tool_execution_start":
+            return [self._tool_call_event(event)]
+        if event_type == "tool_execution_end":
+            return [self._tool_response_event(event)]
         if event_type in {"message_end", "turn_end"} and not self.emitted_text:
             text = _message_text(event.get("message"))
             if text:
@@ -110,6 +114,47 @@ class PiEventTranslator:
             raise RuntimeError(f"Pi assistant error: {reason}")
         return []
 
+    def _tool_call_event(self, event: dict[str, Any]) -> Event:
+        return Event(
+            invocation_id=self.invocation_id,
+            author=self.author,
+            content=types.Content(
+                role="model",
+                parts=[
+                    types.Part(
+                        function_call=types.FunctionCall(
+                            id=str(event.get("toolCallId") or ""),
+                            name=str(event.get("toolName") or "tool"),
+                            args=_dict_or_empty(event.get("args")),
+                        )
+                    )
+                ],
+            ),
+        )
+
+    def _tool_response_event(self, event: dict[str, Any]) -> Event:
+        name = str(event.get("toolName") or "tool")
+        response = {
+            "result": _tool_result_to_response(event.get("result")),
+            "is_error": bool(event.get("isError")),
+        }
+        return Event(
+            invocation_id=self.invocation_id,
+            author=self.author,
+            content=types.Content(
+                role="user",
+                parts=[
+                    types.Part(
+                        function_response=types.FunctionResponse(
+                            id=str(event.get("toolCallId") or ""),
+                            name=name,
+                            response=response,
+                        )
+                    )
+                ],
+            ),
+        )
+
 
 def _message_text(message: Any) -> str:
     if not isinstance(message, dict) or message.get("role") != "assistant":
@@ -134,3 +179,28 @@ def _last_assistant_text(messages: Any) -> str:
         if text:
             return text
     return ""
+
+
+def _dict_or_empty(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _tool_result_to_response(result: Any) -> Any:
+    if not isinstance(result, dict):
+        return result
+    content = result.get("content")
+    response: dict[str, Any] = {}
+    if isinstance(content, list):
+        texts: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                texts.append(str(item.get("text") or ""))
+        if texts:
+            response["content"] = "".join(texts)
+    if "structuredContent" in result:
+        response["structured_content"] = result["structuredContent"]
+    if "details" in result:
+        response["details"] = result.get("details") or {}
+    if "isError" in result:
+        response["is_error"] = bool(result.get("isError"))
+    return response or result

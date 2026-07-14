@@ -1,14 +1,15 @@
 # piagent_runtime_basic
 
-A minimal VeADK agent with `runtime="piagent"`.
+A minimal VeADK agent with `runtime="piagent"` and one demo ADK function tool.
 
-This example is for local manual testing of Phase 1:
+This example is for local manual testing of the piagent runtime:
 
 - local Pi binary starts successfully
 - VeADK can send a text message through `Runner.run(...)`
 - Pi uses the normal VeADK model config from `.env`, `config.yaml`, or
   environment variables such as `MODEL_AGENT_NAME` and `MODEL_AGENT_API_KEY`
-- no ADK tools or skills are bridged in this phase
+- Pi can call the demo `get_order_status` ADK tool through the piagent runtime
+  tool bridge
 
 ## Setup
 
@@ -26,7 +27,8 @@ VeADK `.env` / `config.yaml` settings, including `MODEL_AGENT_NAME`,
 ## Run
 
 ```bash
-.venv/bin/python examples/piagent_runtime_basic/main.py "hello"
+.venv/bin/python examples/piagent_runtime_basic/main.py \
+  "请查询订单 A10086 的状态。你必须先调用工具，再回答。"
 ```
 
 ## Run in the VeADK frontend
@@ -53,11 +55,37 @@ veadk frontend --agents-dir .
 Do not set `--agents-dir examples/piagent_runtime_basic`; `veadk frontend`
 expects the parent folder of agent apps, not a single agent app folder.
 
+Use this prompt in the frontend to verify tool calling:
+
+```text
+请查询订单 A10086 的状态。你必须调用 get_order_status 工具，不要自己编造。
+```
+
+Expected answer should mention the deterministic tool result:
+
+```text
+order_id: A10086
+status: paid
+shipping: will arrive tomorrow
+```
+
+The terminal running `veadk frontend` should also log lines similar to:
+
+```text
+piagent: bridging 1 agent tool(s): ['get_order_status']
+piagent: generated tool extension for ['get_order_status']
+```
+
 ## Deploy to AgentKit
 
 This example includes `piagent-agentkit.yaml` and `Dockerfile` for AgentKit
-deployment. The image build downloads the Linux x64 Pi standalone binary from GitHub
-Release, verifies its sha256, extracts it to `/opt/piagent/pi/pi`, and sets:
+deployment.
+
+Temporary AgentKit test note: the image currently copies a vendored
+`vendor/pi-linux-x64.tar.gz` archive into the image instead of downloading it
+from GitHub Release during cloud build. This avoids Code Pipeline timeouts when
+the build environment cannot reach GitHub reliably. The Dockerfile still
+verifies the archive sha256, extracts it to `/opt/piagent/pi/pi`, and sets:
 
 ```text
 PIAGENT_BINARY=/opt/piagent/pi/pi
@@ -73,12 +101,17 @@ the piagent runtime. Before the feature is released to PyPI, replace
 `veadk-python` in `requirements.txt` with a pushed git branch or an internal
 wheel URL for cloud testing.
 
+Later, when TOS or another stable artifact source is ready, replace the vendored
+archive with a build-time download from that source to avoid committing the
+binary archive.
+
 From this directory:
 
 ```bash
 veadk agentkit launch --config-file piagent-agentkit.yaml --platform linux/amd64
 veadk agentkit status --config-file piagent-agentkit.yaml
-veadk agentkit invoke --config-file piagent-agentkit.yaml "你好，你能做什么"
+veadk agentkit invoke --config-file piagent-agentkit.yaml \
+  "请查询订单 A10086 的状态。你必须先调用工具，再回答。"
 ```
 
 Inspect the generated Pi model config:

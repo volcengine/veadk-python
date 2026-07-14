@@ -11,25 +11,20 @@ ENV OTEL_SDK_DISABLED=true
 
 WORKDIR /app
 
+COPY vendor/pi-linux-x64.tar.gz /tmp/pi-linux-x64.tar.gz
+
 RUN PIAGENT_VERSION="${PIAGENT_VERSION}" PIAGENT_SHA256="${PIAGENT_SHA256}" python - <<'PY'
 import hashlib
 import os
-import shutil
 import tarfile
-import urllib.request
 from pathlib import Path
 
 version = os.environ["PIAGENT_VERSION"]
 sha256 = os.environ["PIAGENT_SHA256"]
-url = f"https://github.com/earendil-works/pi/releases/download/v{version}/pi-linux-x64.tar.gz"
 archive = Path("/tmp/pi-linux-x64.tar.gz")
 target = Path("/opt/piagent")
 
-print(f"Downloading Pi binary from {url}")
-with urllib.request.urlopen(url, timeout=120) as response:
-    with archive.open("wb") as out:
-        shutil.copyfileobj(response, out)
-
+print(f"Installing vendored Pi binary archive for version {version}")
 digest = hashlib.sha256(archive.read_bytes()).hexdigest()
 if digest != sha256:
     raise SystemExit(f"Pi binary sha256 mismatch: expected {sha256}, got {digest}")
