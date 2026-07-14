@@ -282,9 +282,16 @@ def test_pi_event_translator_streaming_text_and_thinking():
     )
     flushed = translator.event_to_adk_events({"type": "agent_settled"})
 
-    assert thinking == []
-    assert text == []
+    assert len(thinking) == 1
+    assert thinking[0].partial is True
+    assert thinking[0].content.parts[0].text == "plan"
+    assert thinking[0].content.parts[0].thought is True
+    assert len(text) == 1
+    assert text[0].partial is True
+    assert text[0].content.parts[0].text == "answer"
+    assert text[0].content.parts[0].thought is not True
     assert len(flushed) == 1
+    assert flushed[0].partial is not True
     assert flushed[0].is_final_response() is True
     assert [part.text for part in flushed[0].content.parts] == ["plan", "answer"]
     assert flushed[0].content.parts[0].thought is True
@@ -295,22 +302,23 @@ def test_pi_event_translator_coalesces_text_deltas():
     translator = PiEventTranslator(author="agent", invocation_id="inv-1")
 
     for delta in ["你", "好", "，", "世界"]:
-        assert (
-            translator.event_to_adk_events(
-                {
-                    "type": "message_update",
-                    "assistantMessageEvent": {
-                        "type": "text_delta",
-                        "delta": delta,
-                    },
-                }
-            )
-            == []
+        streamed = translator.event_to_adk_events(
+            {
+                "type": "message_update",
+                "assistantMessageEvent": {
+                    "type": "text_delta",
+                    "delta": delta,
+                },
+            }
         )
+        assert len(streamed) == 1
+        assert streamed[0].partial is True
+        assert streamed[0].content.parts[0].text == delta
 
     flushed = translator.event_to_adk_events({"type": "agent_settled"})
 
     assert len(flushed) == 1
+    assert flushed[0].partial is not True
     assert flushed[0].content.parts[0].text == "你好，世界"
     assert flushed[0].content.parts[0].thought is not True
 
@@ -319,18 +327,19 @@ def test_pi_event_translator_does_not_emit_thinking_only_final_event():
     translator = PiEventTranslator(author="agent", invocation_id="inv-1")
 
     for delta in ["我", "是", " PiAgent"]:
-        assert (
-            translator.event_to_adk_events(
-                {
-                    "type": "message_update",
-                    "assistantMessageEvent": {
-                        "type": "thinking_delta",
-                        "delta": delta,
-                    },
-                }
-            )
-            == []
+        streamed = translator.event_to_adk_events(
+            {
+                "type": "message_update",
+                "assistantMessageEvent": {
+                    "type": "thinking_delta",
+                    "delta": delta,
+                },
+            }
         )
+        assert len(streamed) == 1
+        assert streamed[0].partial is True
+        assert streamed[0].content.parts[0].text == delta
+        assert streamed[0].content.parts[0].thought is True
 
     flushed = translator.event_to_adk_events({"type": "agent_settled"})
 
@@ -340,7 +349,7 @@ def test_pi_event_translator_does_not_emit_thinking_only_final_event():
 def test_pi_event_translator_prefers_message_end_text():
     translator = PiEventTranslator(author="agent", invocation_id="inv-1")
 
-    translator.event_to_adk_events(
+    streamed = translator.event_to_adk_events(
         {
             "type": "message_update",
             "assistantMessageEvent": {
@@ -350,6 +359,10 @@ def test_pi_event_translator_prefers_message_end_text():
         }
     )
 
+    assert len(streamed) == 1
+    assert streamed[0].partial is True
+    assert streamed[0].content.parts[0].text == "partial"
+
     flushed = translator.event_to_adk_events(
         {
             "type": "message_end",
@@ -358,6 +371,7 @@ def test_pi_event_translator_prefers_message_end_text():
     )
 
     assert len(flushed) == 1
+    assert flushed[0].partial is not True
     assert flushed[0].content.parts[0].text == "final answer"
 
 
@@ -368,7 +382,7 @@ def test_pi_event_translator_does_not_reuse_thinking_after_tool_call():
         "参数是city为北京。"
     )
 
-    translator.event_to_adk_events(
+    streamed_thinking = translator.event_to_adk_events(
         {
             "type": "message_update",
             "assistantMessageEvent": {
@@ -422,14 +436,20 @@ def test_pi_event_translator_does_not_reuse_thinking_after_tool_call():
     )
     settled = translator.event_to_adk_events({"type": "agent_settled"})
 
+    assert len(streamed_thinking) == 1
+    assert streamed_thinking[0].partial is True
+    assert streamed_thinking[0].content.parts[0].text == thought
+    assert streamed_thinking[0].content.parts[0].thought is True
     assert thinking == []
     assert call[0].is_final_response() is False
+    assert call[0].partial is not True
     assert call[0].content.parts[0].text == thought
     assert call[0].content.parts[0].thought is True
     assert call[0].content.parts[1].function_call.name == "get_weather"
     assert response[0].content.parts[0].function_response.name == "get_weather"
     assert duplicate_thinking_end == []
     assert len(final) == 1
+    assert final[0].partial is not True
     assert final[0].content.parts[0].text == "北京今天晴，28 C。"
     assert final[0].content.parts[0].thought is not True
     assert settled == []
@@ -893,10 +913,17 @@ async def test_piagent_runtime_text_only_end_to_end(tmp_path, monkeypatch):
 
     events = [event async for event in PiAgentRuntime().run_async(agent, ctx)]
 
-    assert len(events) == 1
-    assert [part.text for part in events[0].content.parts] == ["checking", "pong"]
+    assert len(events) == 3
+    assert events[0].partial is True
+    assert events[0].content.parts[0].text == "checking"
     assert events[0].content.parts[0].thought is True
-    assert events[0].content.parts[1].thought is not True
+    assert events[1].partial is True
+    assert events[1].content.parts[0].text == "pong"
+    assert events[1].content.parts[0].thought is not True
+    assert events[2].partial is not True
+    assert [part.text for part in events[2].content.parts] == ["checking", "pong"]
+    assert events[2].content.parts[0].thought is True
+    assert events[2].content.parts[1].thought is not True
     models = json.loads((agent_dir / "models.json").read_text(encoding="utf-8"))
     assert models["providers"]["veadk"]["models"][0]["id"] == "model-a"
 
@@ -932,8 +959,13 @@ async def test_piagent_runtime_closes_opened_toolsets(tmp_path, monkeypatch):
 
     events = [event async for event in PiAgentRuntime().run_async(agent, ctx)]
 
-    assert len(events) == 1
-    assert [part.text for part in events[0].content.parts] == ["checking", "pong"]
+    assert len(events) == 3
+    assert events[0].partial is True
+    assert events[0].content.parts[0].text == "checking"
+    assert events[1].partial is True
+    assert events[1].content.parts[0].text == "pong"
+    assert events[2].partial is not True
+    assert [part.text for part in events[2].content.parts] == ["checking", "pong"]
     assert toolset.closed is True
 
 

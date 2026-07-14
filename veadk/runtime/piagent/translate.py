@@ -69,21 +69,32 @@ def _content_text(content: Any) -> str:
 
 
 def make_text_event(
-    text: str, author: str, invocation_id: str, *, thought: bool = False
+    text: str,
+    author: str,
+    invocation_id: str,
+    *,
+    thought: bool = False,
+    partial: bool = False,
 ) -> Event:
     return make_model_event(
         [types.Part(text=text, thought=thought)],
         author=author,
         invocation_id=invocation_id,
+        partial=partial,
     )
 
 
 def make_model_event(
-    parts: list[types.Part], *, author: str, invocation_id: str
+    parts: list[types.Part],
+    *,
+    author: str,
+    invocation_id: str,
+    partial: bool = False,
 ) -> Event:
     return Event(
         invocation_id=invocation_id,
         author=author,
+        partial=partial,
         content=types.Content(role="model", parts=parts),
     )
 
@@ -128,11 +139,28 @@ class PiEventTranslator:
 
         update_type = update.get("type")
         if update_type == "text_delta" and update.get("delta"):
-            self._text_parts.append(str(update["delta"]))
-            return []
+            delta = str(update["delta"])
+            self._text_parts.append(delta)
+            return [
+                make_text_event(
+                    delta,
+                    author=self.author,
+                    invocation_id=self.invocation_id,
+                    partial=True,
+                )
+            ]
         if update_type == "thinking_delta" and update.get("delta"):
-            self._thinking_parts.append(str(update["delta"]))
-            return []
+            delta = str(update["delta"])
+            self._thinking_parts.append(delta)
+            return [
+                make_text_event(
+                    delta,
+                    author=self.author,
+                    invocation_id=self.invocation_id,
+                    thought=True,
+                    partial=True,
+                )
+            ]
         if update_type == "error":
             reason = update.get("reason") or "error"
             raise RuntimeError(f"Pi assistant error: {reason}")

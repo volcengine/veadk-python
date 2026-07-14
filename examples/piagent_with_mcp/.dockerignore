@@ -6,6 +6,9 @@ __pycache__/
 # Runtime state
 .adk/
 pipeline_failed_*.log
+.env
+.env.*
+!.env.example
 
 # Virtual environments
 .venv/
