@@ -29,6 +29,16 @@ export interface AdkEvent {
     role?: string;
     parts?: AdkPart[];
   };
+  // Control-flow signals from ADK EventActions. `transfer_to_agent` names the
+  // delegation target when an LLM hands off; end_of_agent / escalate mark an
+  // agent finishing or a loop exiting. (API may send camel or snake case.)
+  actions?: {
+    transferToAgent?: string;
+    transfer_to_agent?: string;
+    endOfAgent?: boolean;
+    end_of_agent?: boolean;
+    escalate?: boolean;
+  };
   [k: string]: unknown;
 }
 
@@ -195,6 +205,19 @@ export async function getSessionTrace(sessionId: string): Promise<TraceSpan[]> {
   return res.json();
 }
 
+/** The agent-type vocabulary shared with the create wizard. */
+export type AgentNodeType = "llm" | "sequential" | "parallel" | "loop" | "a2a";
+
+/** One node of the recursive agent topology returned by `/web/agent-info`. */
+export interface AgentNode {
+  name: string;
+  description: string;
+  type: AgentNodeType;
+  model: string;
+  tools: string[];
+  children: AgentNode[];
+}
+
 /** Introspected metadata for an agent app (model, tools), for the picker.
  *  Only the local server implements `/web/agent-info`; remote AgentKit apps
  *  will reject this and the caller falls back to a basic flyout. */
@@ -204,6 +227,8 @@ export interface AgentInfo {
   model: string;
   tools: string[];
   subAgents: string[];
+  /** Recursive typed tree; only the local server provides it. */
+  graph?: AgentNode;
 }
 
 export async function getAgentInfo(appName: string): Promise<AgentInfo> {
@@ -245,6 +270,8 @@ export interface RunArgs {
   /** Function responses to send instead of/alongside text — used to resume a
    *  long-running call (e.g. answering ADK's `adk_request_credential`). */
   functionResponses?: { id: string; name: string; response: unknown }[];
+  /** Abort the stream (e.g. when the user switches to another session). */
+  signal?: AbortSignal;
 }
 
 /** Stream agent events for one user turn. */
@@ -255,6 +282,7 @@ export async function* runSSE({
   text,
   attachments = [],
   functionResponses = [],
+  signal,
 }: RunArgs): AsyncGenerator<AdkEvent, void, unknown> {
   const { app, ep } = resolve(appName);
   const parts: Record<string, unknown>[] = [
@@ -278,6 +306,7 @@ export async function* runSSE({
         new_message: { role: "user", parts },
         streaming: true,
       }),
+      signal,
     },
     ep,
   );
@@ -291,46 +320,199 @@ export interface DeployAgentkitResult {
   apikey: string;
   url: string;
   agentName: string;
+  runtimeId?: string;
+  consoleUrl?: string;
 }
 
-interface DeployAgentkitResponse extends Partial<DeployAgentkitResult> {
+/** One live progress frame streamed during a deployment. */
+export interface DeployStage {
+  level: "info" | "success" | "warning" | "error";
+  phase: "build" | "deploy" | "publish" | string;
+  message: string;
+  pct?: number;
+}
+
+interface DeployFrame extends Partial<DeployAgentkitResult> {
+  done?: boolean;
   success?: boolean;
   error?: string;
-  detail?: string;
+  phase?: string;
 }
 
+/** Deploy to AgentKit, consuming the server's SSE progress stream. `onStage`
+ *  is called for each build/deploy/publish step; resolves with the connection
+ *  info once the terminal frame arrives. */
 export async function deployAgentkitProject(
   name: string,
   files: { path: string; content: string }[],
   config: { region: string; projectName: string },
+  opts?: { author?: string; onStage?: (s: DeployStage) => void },
 ): Promise<DeployAgentkitResult> {
   const res = await apiFetch("/web/deploy-agentkit", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, files, config }),
+    body: JSON.stringify({ name, files, config, author: opts?.author ?? "" }),
   });
-
-  const text = await res.text();
-  let data: DeployAgentkitResponse = {};
-  try {
-    data = text ? (JSON.parse(text) as DeployAgentkitResponse) : {};
-  } catch {
-    throw new Error(text || `部署失败 (${res.status})`);
-  }
-
   if (!res.ok) {
-    throw new Error(data.error || data.detail || "部署失败");
+    const t = await res.text().catch(() => "");
+    throw new Error(t || `部署失败 (${res.status})`);
   }
-  if (!data.success) {
-    throw new Error(data.error || "部署失败");
+
+  let final: DeployFrame | null = null;
+  for await (const raw of parseSSE(res)) {
+    const ev = raw as DeployFrame & DeployStage;
+    if (ev && ev.done) {
+      final = ev;
+      break;
+    }
+    if (ev && ev.message) opts?.onStage?.(ev);
   }
-  if (!data.apikey || !data.url || !data.agentName) {
+
+  if (!final) throw new Error("部署失败：连接中断");
+  if (!final.success) throw new Error(final.error || "部署失败");
+  if (!final.url || !final.agentName) {
     throw new Error("部署失败：返回缺少 AgentKit 连接信息");
   }
-
+  // Note: the runtime's data-plane apikey is intentionally NOT persisted in the
+  // browser (it's a secret; clear-text localStorage would be XSS-exposed). The
+  // "管理 Agent" view shows control-plane detail instead.
   return {
-    apikey: data.apikey,
-    url: data.url,
-    agentName: data.agentName,
+    apikey: final.apikey ?? "",
+    url: final.url,
+    agentName: final.agentName,
+    runtimeId: final.runtimeId,
+    consoleUrl: final.consoleUrl,
   };
 }
+
+/** A deployed runtime owned by the current user (for the "管理 Agent" view). */
+export interface ManagedRuntime {
+  name: string;
+  runtimeId: string;
+  status: string;
+  createdAt: string;
+  author?: string;
+  region: string;
+}
+
+/** List AgentKit runtimes this UI deployed, filtered to `author`. */
+export async function getMyRuntimes(
+  author: string,
+  region = "cn-beijing",
+): Promise<ManagedRuntime[]> {
+  const res = await apiFetch(
+    `/web/my-runtimes?author=${encodeURIComponent(author)}&region=${encodeURIComponent(region)}`,
+  );
+  if (!res.ok) throw new Error(`加载失败 (${res.status})`);
+  const d = (await res.json()) as { runtimes?: ManagedRuntime[] };
+  return d.runtimes ?? [];
+}
+
+/** Per-module feature gates the SPA reads at startup (studio mode disables
+ *  the chat-centric modules). Unknown/failed fetch falls back to all-enabled. */
+export interface UiFeatures {
+  newChat: boolean;
+  search: boolean;
+  skillCenter: boolean;
+  history: boolean;
+  addAgent: boolean;
+  manageAgents: boolean;
+  addAgentkit: boolean;
+}
+
+export interface UiConfig {
+  studio: boolean;
+  features: UiFeatures;
+  defaultView: "chat" | "addAgent";
+}
+
+const DEFAULT_UI_CONFIG: UiConfig = {
+  studio: false,
+  features: {
+    newChat: true,
+    search: true,
+    skillCenter: true,
+    history: true,
+    addAgent: true,
+    manageAgents: true,
+    addAgentkit: true,
+  },
+  defaultView: "chat",
+};
+
+/** Fetch the UI feature gates; falls back to all-enabled on any error. */
+export async function getUiConfig(): Promise<UiConfig> {
+  try {
+    const res = await apiFetch("/web/ui-config");
+    if (!res.ok) return DEFAULT_UI_CONFIG;
+    const d = (await res.json()) as Partial<UiConfig>;
+    return {
+      studio: d.studio ?? false,
+      features: { ...DEFAULT_UI_CONFIG.features, ...(d.features ?? {}) },
+      defaultView: d.defaultView ?? "chat",
+    };
+  } catch {
+    return DEFAULT_UI_CONFIG;
+  }
+}
+
+/** Delete a deployed runtime by id. */
+export async function deleteRuntime(
+  runtimeId: string,
+  region = "cn-beijing",
+): Promise<void> {
+  const res = await apiFetch("/web/delete-runtime", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ runtimeId, region }),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(t || `删除失败 (${res.status})`);
+  }
+}
+
+/** Control-plane detail for a runtime (GetRuntime), for the 管理 Agent view. */
+export interface RuntimeDetail {
+  runtimeId: string;
+  name: string;
+  description: string;
+  status: string;
+  statusMessage: string;
+  model: string;
+  project: string;
+  region: string;
+  createdAt: string;
+  updatedAt: string;
+  currentVersion?: number | null;
+  resources: {
+    cpuMilli?: number | null;
+    memoryMb?: number | null;
+    minInstance?: number | null;
+    maxInstance?: number | null;
+    maxConcurrency?: number | null;
+  };
+  envs: { key: string; value: string }[];
+  memoryId: string;
+  toolId: string;
+  knowledgeId: string;
+  mcpToolsetId: string;
+  artifactUrl: string;
+  artifactType: string;
+}
+
+/** Fetch a runtime's control-plane detail (config/status/envs). */
+export async function getRuntimeDetail(
+  runtimeId: string,
+  region = "cn-beijing",
+): Promise<RuntimeDetail> {
+  const res = await apiFetch(
+    `/web/runtime-detail?runtimeId=${encodeURIComponent(runtimeId)}&region=${encodeURIComponent(region)}`,
+  );
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(t || `加载详情失败 (${res.status})`);
+  }
+  return res.json();
+}
+

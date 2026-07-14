@@ -34,6 +34,7 @@ hljs.registerLanguage("ini", ini);
 hljs.registerLanguage("dockerfile", dockerfile);
 hljs.registerLanguage("makefile", makefile);
 import type { AgentProject, ProjectFile } from "../create/project";
+import type { DeployStage } from "../adk/client";
 import { buildZip } from "./zip";
 import "./ProjectPreview.css";
 
@@ -123,12 +124,23 @@ export interface DeployResult {
   agentName: string;
 }
 
+/** The ordered deploy phases shown in the stepper (keys match DeployStage.phase). */
+const DEPLOY_STEPS: { phase: string; label: string }[] = [
+  { phase: "build", label: "构建镜像" },
+  { phase: "deploy", label: "部署" },
+  { phase: "publish", label: "发布" },
+];
+
 export interface ProjectPreviewProps {
   project: AgentProject;
   /** When provided, files are editable and changes call onChange with the new project. Omit for read-only. */
   onChange?: (project: AgentProject) => void;
-  /** One-click deploy handler. Should return deploy result (URL + API Key). Omit to hide the deploy button. */
-  onDeploy?: (project: AgentProject) => Promise<DeployResult>;
+  /** One-click deploy handler. Should return deploy result (URL + API Key). Omit to hide the deploy button.
+   *  `onStage` receives each live build/deploy/publish progress frame. */
+  onDeploy?: (
+    project: AgentProject,
+    onStage?: (s: DeployStage) => void,
+  ) => Promise<DeployResult>;
   /** Called after successfully adding the agent to the connection list. */
   onAgentAdded?: (agentId: string, agentName: string) => void;
 }
@@ -184,6 +196,10 @@ export function ProjectPreview({ project, onChange, onDeploy, onAgentAdded }: Pr
   const [deploying, setDeploying] = useState(false);
   const [deployError, setDeployError] = useState<string | null>(null);
   const [deployResult, setDeployResult] = useState<DeployResult | null>(null);
+  // Latest progress frame per deploy phase + the phase currently in flight,
+  // driving the build/deploy/publish stepper.
+  const [stageMap, setStageMap] = useState<Record<string, DeployStage>>({});
+  const [activePhase, setActivePhase] = useState<string | null>(null);
   const [addingAgent, setAddingAgent] = useState(false);
   const underlayRef = useRef<HTMLPreElement>(null);
 
@@ -262,10 +278,16 @@ export function ProjectPreview({ project, onChange, onDeploy, onAgentAdded }: Pr
     if (!onDeploy || deploying) return;
     setDeployError(null);
     setDeployResult(null);
+    setStageMap({});
+    setActivePhase(null);
     setDeploying(true);
     try {
-      const result = await onDeploy(project);
+      const result = await onDeploy(project, (s) => {
+        setStageMap((prev) => ({ ...prev, [s.phase]: s }));
+        setActivePhase(s.phase);
+      });
       setDeployResult(result);
+      setActivePhase(null);
     } catch (err) {
       setDeployError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -480,7 +502,61 @@ export function ProjectPreview({ project, onChange, onDeploy, onAgentAdded }: Pr
           </div>
         </div>
 
-        {deployError && <div className="pp-error">{deployError}</div>}
+        {(deploying || deployResult || Object.keys(stageMap).length > 0) && (
+          <ol className="pp-steps">
+            {DEPLOY_STEPS.map((step, i) => {
+              const activeIdx = activePhase
+                ? DEPLOY_STEPS.findIndex((s) => s.phase === activePhase)
+                : -1;
+              const failed =
+                !!deployError && (activeIdx === -1 ? i === 0 : i === activeIdx);
+              let status: "pending" | "active" | "done" | "failed";
+              if (deployResult) status = "done";
+              else if (failed) status = "failed";
+              else if (activeIdx === -1) status = deploying ? "active" : "pending";
+              else if (i < activeIdx) status = "done";
+              else if (i === activeIdx) status = deployError ? "failed" : "active";
+              else status = "pending";
+              const frame = stageMap[step.phase];
+              return (
+                <li key={step.phase} className={`pp-step is-${status}`}>
+                  <span className="pp-step-dot">
+                    {status === "active" ? (
+                      <Loader2 className="pp-ic spin" />
+                    ) : status === "done" ? (
+                      "✓"
+                    ) : status === "failed" ? (
+                      "✕"
+                    ) : (
+                      i + 1
+                    )}
+                  </span>
+                  <span className="pp-step-body">
+                    <span className="pp-step-label">{step.label}</span>
+                    {status === "active" && frame?.message && (
+                      <span className="pp-step-msg">
+                        {frame.message}
+                        {typeof frame.pct === "number" ? ` (${frame.pct}%)` : ""}
+                      </span>
+                    )}
+                  </span>
+                </li>
+              );
+            })}
+          </ol>
+        )}
+
+        {deployError && (
+          <div className="pp-error">
+            {activePhase
+              ? `部署失败（${
+                  DEPLOY_STEPS.find((s) => s.phase === activePhase)?.label ??
+                  activePhase
+                }阶段）：`
+              : ""}
+            {deployError}
+          </div>
+        )}
 
         {deployResult && (
           <div className="pp-deploy-result">

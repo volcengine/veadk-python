@@ -3,20 +3,25 @@ import { AnimatePresence, motion } from "motion/react";
 import {
   ArrowLeft,
   Bot,
+  Globe,
   Boxes,
   Check,
   Cpu,
   Database,
   Eye,
   FileDown,
+  GitBranch,
   Info,
   LayoutGrid,
   Layers,
   Loader2,
   Plus,
+  Repeat,
   Rocket,
   Search,
+  Shapes,
   Sparkles,
+  Split,
   Trash2,
   Wrench,
   X,
@@ -43,6 +48,7 @@ import { searchSkills, downloadSkillFiles, type SkillHit } from "./skills";
 import type { AgentProject } from "./project";
 import { ProjectPreview } from "../ui/ProjectPreview";
 import { deployAgentkitProject } from "../adk/client";
+import type { DeployStage } from "../adk/client";
 import "./CustomCreate.css";
 
 /** Trigger a browser download of a text file. */
@@ -62,6 +68,7 @@ function downloadText(filename: string, text: string, mime = "text/plain") {
  * the left rail shows progress + per-step completion checkmarks.
  * ---------------------------------------------------------------- */
 type StepId =
+  | "type"
   | "basic"
   | "model"
   | "tools"
@@ -81,6 +88,7 @@ interface StepMeta {
 }
 
 const STEPS: StepMeta[] = [
+  { id: "type", label: "类型", hint: "选择 Agent 类型", icon: Shapes, required: true },
   { id: "basic", label: "基本信息", hint: "名称、描述与系统提示词", icon: Info, required: true },
   { id: "model", label: "模型配置", hint: "模型与服务（可选）", icon: Cpu },
   { id: "tools", label: "工具", hint: "可调用的能力", icon: Wrench },
@@ -92,121 +100,76 @@ const STEPS: StepMeta[] = [
   { id: "review", label: "完成", hint: "预览并创建", icon: Rocket },
 ];
 
-const TOOL_PRESETS = [
-  "web_search",
-  "image_generate",
-  "code_runner",
-  "calculator",
-  "file_reader",
-];
+type AgentTypeId = NonNullable<AgentDraft["agentType"]>;
 
-/* ---------------------------------------------------------------- *
- * A small reusable "add many strings" editor (used by skills + the
- * sub-agent tool lists). Free-text input + preset chips + a list of
- * removable pills.
- * ---------------------------------------------------------------- */
-function TagEditor({
-  values,
-  onChange,
-  placeholder,
-  presets,
-}: {
-  values: string[];
-  onChange: (next: string[]) => void;
-  placeholder: string;
-  presets?: string[];
-}) {
-  const [text, setText] = useState("");
+interface AgentTypeMeta {
+  id: AgentTypeId;
+  label: string;
+  desc: string;
+  icon: typeof Bot;
+}
 
-  const add = (raw: string) => {
-    const v = raw.trim();
-    if (!v || values.includes(v)) {
-      setText("");
-      return;
-    }
-    onChange([...values, v]);
-    setText("");
-  };
-
-  const remove = (v: string) => onChange(values.filter((x) => x !== v));
-
+/** Custom mark for the LLM agent type: a chat bubble with a generative
+ *  "spark", drawn in the lucide stroke style so it sits with the other icons. */
+function LlmIcon({ className }: { className?: string }) {
   return (
-    <div className="cw-tag-editor">
-      <div className="cw-tag-inputrow">
-        <input
-          className="cw-input"
-          value={text}
-          placeholder={placeholder}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              add(text);
-            }
-          }}
-        />
-        <button
-          type="button"
-          className="cw-btn cw-btn-soft"
-          onClick={() => add(text)}
-          disabled={!text.trim()}
-        >
-          <Plus className="cw-i" />
-          添加
-        </button>
-      </div>
-
-      {presets && presets.length > 0 && (
-        <div className="cw-presets">
-          <span className="cw-presets-label">推荐</span>
-          {presets
-            .filter((p) => !values.includes(p))
-            .map((p) => (
-              <button
-                key={p}
-                type="button"
-                className="cw-chip cw-chip-ghost"
-                onClick={() => add(p)}
-              >
-                <Plus className="cw-i cw-i-sm" />
-                {p}
-              </button>
-            ))}
-        </div>
-      )}
-
-      {values.length > 0 ? (
-        <div className="cw-pills">
-          <AnimatePresence initial={false}>
-            {values.map((v) => (
-              <motion.span
-                key={v}
-                className="cw-pill"
-                layout
-                initial={{ opacity: 0, scale: 0.85 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.85 }}
-                transition={{ duration: 0.16 }}
-              >
-                {v}
-                <button
-                  type="button"
-                  className="cw-pill-x"
-                  onClick={() => remove(v)}
-                  aria-label={`移除 ${v}`}
-                >
-                  <X className="cw-i cw-i-sm" />
-                </button>
-              </motion.span>
-            ))}
-          </AnimatePresence>
-        </div>
-      ) : (
-        <p className="cw-empty-line">暂未添加，回车或点击「添加」即可加入。</p>
-      )}
-    </div>
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+      <path d="M12 6.5c.4 2.4 1 3 3.4 3.4-2.4.4-3 1-3.4 3.4-.4-2.4-1-3-3.4-3.4 2.4-.4 3-1 3.4-3.4Z" />
+    </svg>
   );
 }
+
+/** The selectable Agent kinds shown on the "type" step. */
+const AGENT_TYPES: AgentTypeMeta[] = [
+  {
+    id: "llm",
+    label: "LLM 智能体",
+    desc: "大模型驱动，自主完成任务",
+    icon: LlmIcon as unknown as typeof Bot,
+  },
+  {
+    id: "sequential",
+    label: "顺序编排",
+    desc: "子 Agent 按顺序依次执行",
+    icon: GitBranch,
+  },
+  {
+    id: "parallel",
+    label: "并行编排",
+    desc: "子 Agent 并行执行后汇总",
+    icon: Split,
+  },
+  {
+    id: "loop",
+    label: "循环编排",
+    desc: "子 Agent 循环执行到满足条件",
+    icon: Repeat,
+  },
+  {
+    id: "a2a",
+    label: "A2A 远程 Agent",
+    desc: "挂载 URL 指向的远程 Agent",
+    icon: Globe,
+  },
+];
+
+/** Orchestrators (sequential/parallel/loop) own sub-agents but no model.
+ *  A2A is a leaf, not an orchestrator — see {@link isA2aType}. */
+const isOrchestratorType = (t: AgentDraft["agentType"]): boolean =>
+  t === "sequential" || t === "parallel" || t === "loop";
+
+const isA2aType = (t: AgentDraft["agentType"]): boolean => t === "a2a";
+
 
 /* ---------------------------------------------------------------- *
  * Multi-select checklist. Each row = label + desc, toggling the id in
@@ -747,124 +710,268 @@ function Toggle({
   );
 }
 
-/* ---------------------------------------------------------------- *
- * A compact inline editor for one sub-agent. Recursive-friendly: it
- * edits the same core AgentDraft fields, so it could nest deeper.
- * ---------------------------------------------------------------- */
-function SubAgentEditor({
-  draft,
-  index,
-  onChange,
-  onRemove,
-}: {
-  draft: AgentDraft;
-  index: number;
-  onChange: (next: AgentDraft) => void;
-  onRemove: () => void;
-}) {
-  const patch = (p: Partial<AgentDraft>) => onChange({ ...draft, ...p });
 
-  return (
-    <motion.div
-      className="cw-sub"
-      layout
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -8 }}
-      transition={{ duration: 0.18 }}
-    >
-      <div className="cw-sub-head">
-        <span className="cw-sub-badge">
-          <Bot className="cw-i cw-i-sm" />
-          子 Agent {index + 1}
-        </span>
-        <button
-          type="button"
-          className="cw-icon-btn cw-icon-danger"
-          onClick={onRemove}
-          aria-label="删除子 Agent"
-        >
-          <Trash2 className="cw-i cw-i-sm" />
-        </button>
-      </div>
+/* ================================================================ *
+ * Tree addressing — the draft is a recursive AgentDraft. A node is
+ * addressed by an array of child indices; [] is the root.
+ * ================================================================ */
+type NodePath = number[];
 
-      <div className="cw-field">
-        <label className="cw-label">
-          名称<span className="cw-req">*</span>
-        </label>
-        <input
-          className="cw-input"
-          value={draft.name}
-          placeholder="例如：检索助手"
-          onChange={(e) => patch({ name: e.target.value })}
-        />
-      </div>
+const samePath = (a: NodePath, b: NodePath) =>
+  a.length === b.length && a.every((v, i) => v === b[i]);
 
-      <div className="cw-field">
-        <label className="cw-label">描述</label>
-        <input
-          className="cw-input"
-          value={draft.description}
-          placeholder="一句话说明它负责什么"
-          onChange={(e) => patch({ description: e.target.value })}
-        />
-      </div>
+function pathExists(root: AgentDraft, path: NodePath): boolean {
+  let node: AgentDraft | undefined = root;
+  for (const i of path) {
+    node = node.subAgents?.[i];
+    if (!node) return false;
+  }
+  return true;
+}
 
-      <div className="cw-field">
-        <label className="cw-label">
-          系统提示词<span className="cw-req">*</span>
-        </label>
-        <textarea
-          className="cw-textarea cw-textarea-sm"
-          value={draft.instruction}
-          placeholder="定义这个子 Agent 的角色与行为…"
-          onChange={(e) => patch({ instruction: e.target.value })}
-        />
-      </div>
+function getNode(root: AgentDraft, path: NodePath): AgentDraft {
+  let node = root;
+  for (const i of path) node = node.subAgents[i];
+  return node;
+}
 
-      <div className="cw-field">
-        <label className="cw-label">工具</label>
-        <TagEditor
-          values={draft.tools}
-          onChange={(tools) => patch({ tools })}
-          placeholder="为子 Agent 添加工具…"
-          presets={TOOL_PRESETS}
-        />
-      </div>
-    </motion.div>
-  );
+/** Immutably replace the node at `path` by applying `fn` (copies each level). */
+function updateNode(
+  root: AgentDraft,
+  path: NodePath,
+  fn: (n: AgentDraft) => AgentDraft,
+): AgentDraft {
+  if (path.length === 0) return fn(root);
+  const [i, ...rest] = path;
+  const subAgents = root.subAgents.slice();
+  subAgents[i] = updateNode(subAgents[i], rest, fn);
+  return { ...root, subAgents };
+}
+
+function addChild(root: AgentDraft, path: NodePath): AgentDraft {
+  return updateNode(root, path, (n) => ({
+    ...n,
+    subAgents: [...n.subAgents, emptyDraft()],
+  }));
+}
+
+function removeNode(root: AgentDraft, path: NodePath): AgentDraft {
+  if (path.length === 0) return root; // the root is never removable
+  const parentPath = path.slice(0, -1);
+  const idx = path[path.length - 1];
+  return updateNode(root, parentPath, (n) => ({
+    ...n,
+    subAgents: n.subAgents.filter((_, i) => i !== idx),
+  }));
+}
+
+/** Move a child within its parent's list from index `from` to `to`. The moved
+ *  node carries its whole subtree with it. */
+function reorderSiblings(
+  root: AgentDraft,
+  parentPath: NodePath,
+  from: number,
+  to: number,
+): AgentDraft {
+  return updateNode(root, parentPath, (n) => {
+    const subAgents = n.subAgents.slice();
+    const [moved] = subAgents.splice(from, 1);
+    subAgents.splice(to, 0, moved);
+    return { ...n, subAgents };
+  });
+}
+
+/** Reordering only matters where child order drives execution: Sequential and
+ *  Loop orchestrators. Parallel / LLM sub-agents are order-independent. */
+const orderedChildrenType = (t: AgentDraft["agentType"]) =>
+  t === "sequential" || t === "loop";
+
+/** A node holds children only when it's an LLM or an orchestrator (not A2A). */
+const nodeAcceptsChildren = (n: AgentDraft) => !isA2aType(n.agentType);
+
+/** Max nesting depth below the root (root = depth 0). Keeps the tree readable
+ *  within the fixed-width panel instead of needing horizontal scroll. */
+const MAX_TREE_DEPTH = 3;
+
+const typeMeta = (type: AgentDraft["agentType"]) =>
+  AGENT_TYPES.find((t) => t.id === (type ?? "llm")) ?? AGENT_TYPES[0];
+
+/** Per-node required-field problem, or null when the node is valid. */
+function nodeProblem(n: AgentDraft): string | null {
+  if (n.name.trim().length === 0) return "缺少名称";
+  if (isA2aType(n.agentType))
+    return (n.a2aUrl ?? "").trim().length === 0 ? "缺少 Agent URL" : null;
+  if (isOrchestratorType(n.agentType))
+    return n.subAgents.length === 0 ? "缺少子 Agent" : null;
+  return n.instruction.trim().length === 0 ? "缺少系统提示词" : null;
+}
+
+interface TreeProblem {
+  path: NodePath;
+  name: string;
+  problem: string;
+}
+
+/** Collect required-field problems across the whole tree, in render order. */
+function treeProblems(root: AgentDraft, path: NodePath = []): TreeProblem[] {
+  const out: TreeProblem[] = [];
+  const p = nodeProblem(root);
+  if (p) out.push({ path, name: root.name.trim() || "未命名", problem: p });
+  if (nodeAcceptsChildren(root)) {
+    root.subAgents.forEach((c, i) => out.push(...treeProblems(c, [...path, i])));
+  }
+  return out;
 }
 
 /* ---------------------------------------------------------------- *
- * Review row helpers.
+ * Left structure tree: one selectable, editable node (recursive).
  * ---------------------------------------------------------------- */
-function ReviewRow({
-  label,
-  children,
+function TreeNode({
+  root,
+  path,
+  selectedPath,
+  onSelect,
+  onChange,
 }: {
-  label: string;
-  children: React.ReactNode;
+  root: AgentDraft;
+  path: NodePath;
+  selectedPath: NodePath;
+  onSelect: (p: NodePath) => void;
+  /** Replace the whole tree; optionally move the selection. */
+  onChange: (nextRoot: AgentDraft, select?: NodePath) => void;
 }) {
+  const node = getNode(root, path);
+  const meta = typeMeta(node.agentType);
+  const Icon = meta.icon;
+  const isRoot = path.length === 0;
+  const selected = samePath(path, selectedPath);
+  const acceptsChildren = nodeAcceptsChildren(node);
+  const canAddChild = acceptsChildren && path.length < MAX_TREE_DEPTH;
+
+  const add = () => {
+    const next = addChild(root, path);
+    const childIndex = getNode(next, path).subAgents.length - 1;
+    onChange(next, [...path, childIndex]);
+  };
+  const del = () => onChange(removeNode(root, path), path.slice(0, -1));
+
+  // Drag-to-reorder is enabled only when this node's PARENT is a Sequential or
+  // Loop orchestrator (order = execution order). Dragging carries the subtree.
+  const parentPath = path.slice(0, -1);
+  const draggable =
+    !isRoot && orderedChildrenType(getNode(root, parentPath).agentType);
+  const [dragOver, setDragOver] = useState(false);
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+    const raw = e.dataTransfer.getData("application/x-agent-path");
+    if (!raw) return;
+    let src: NodePath;
+    try {
+      src = JSON.parse(raw) as NodePath;
+    } catch {
+      return;
+    }
+    // Reorder among siblings only (same parent).
+    if (!samePath(src.slice(0, -1), parentPath)) return;
+    const from = src[src.length - 1];
+    const to = path[path.length - 1];
+    if (from === to) return;
+    onChange(reorderSiblings(root, parentPath, from, to), [...parentPath, to]);
+  };
+
   return (
-    <div className="cw-review-row">
-      <span className="cw-review-key">{label}</span>
-      <div className="cw-review-val">{children}</div>
+    <div className="cw-tree-branch">
+      <div
+        className={`cw-tree-node cw-tree-type-${node.agentType ?? "llm"} ${
+          selected ? "is-selected" : ""
+        } ${draggable ? "is-draggable" : ""} ${dragOver ? "is-dragover" : ""}`}
+        role="button"
+        tabIndex={0}
+        draggable={draggable}
+        onDragStart={
+          draggable
+            ? (e) => {
+                e.dataTransfer.setData(
+                  "application/x-agent-path",
+                  JSON.stringify(path),
+                );
+                e.dataTransfer.effectAllowed = "move";
+                e.stopPropagation();
+              }
+            : undefined
+        }
+        onDragOver={
+          draggable
+            ? (e) => {
+                e.preventDefault();
+                setDragOver(true);
+              }
+            : undefined
+        }
+        onDragLeave={draggable ? () => setDragOver(false) : undefined}
+        onDrop={draggable ? handleDrop : undefined}
+        onClick={() => onSelect(path)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onSelect(path);
+          }
+        }}
+      >
+        <Icon className="cw-tree-icon" />
+        <span className="cw-tree-main">
+          <span className="cw-tree-name">{node.name.trim() || "未命名"}</span>
+          <span className="cw-tree-type">{meta.label}</span>
+        </span>
+        <span className="cw-tree-actions">
+          {canAddChild && (
+            <button
+              type="button"
+              className="cw-icon-btn"
+              title="添加子 Agent"
+              onClick={(e) => {
+                e.stopPropagation();
+                add();
+              }}
+            >
+              <Plus className="cw-i cw-i-sm" />
+            </button>
+          )}
+          {!isRoot && (
+            <button
+              type="button"
+              className="cw-icon-btn cw-icon-danger"
+              title="删除"
+              onClick={(e) => {
+                e.stopPropagation();
+                del();
+              }}
+            >
+              <Trash2 className="cw-i cw-i-sm" />
+            </button>
+          )}
+        </span>
+      </div>
+      {acceptsChildren && node.subAgents.length > 0 && (
+        <div className="cw-tree-children">
+          {node.subAgents.map((_, i) => (
+            <TreeNode
+              key={i}
+              root={root}
+              path={[...path, i]}
+              selectedPath={selectedPath}
+              onSelect={onSelect}
+              onChange={onChange}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
-
-function boolTag(on: boolean) {
-  return (
-    <span className={`cw-tag ${on ? "cw-tag-on" : "cw-tag-off"}`}>
-      {on ? "已开启" : "未开启"}
-    </span>
-  );
-}
-
-const labelOf = (
-  options: { id: string; label: string }[],
-  id: string | undefined,
-) => options.find((o) => o.id === id)?.label ?? id ?? "—";
 
 /* ================================================================ *
  * Main component
@@ -872,9 +979,11 @@ const labelOf = (
 interface CustomCreateProps extends CreateModeProps {
   /** Pre-fill the wizard (used when importing an agent-structure YAML). */
   initialDraft?: AgentDraft;
+  /** Current user identity, tagged onto deployed runtimes for the 管理 Agent view. */
+  author?: string;
 }
 
-export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft }: CustomCreateProps) {
+export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, author = "" }: CustomCreateProps) {
   void onCreate; // outcome is the in-pane project preview, not a navigation
   void onBack; // no footer nav in the single-scroll layout; back lives in app chrome
   const [draft, setDraft] = useState<AgentDraft>(() => initialDraft ?? emptyDraft());
@@ -882,8 +991,9 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft }: C
   const [project, setProject] = useState<AgentProject | null>(null);
   const [building, setBuilding] = useState(false);
 
-  // Scroll-spy: which section is currently in view.
-  const [activeId, setActiveId] = useState<StepId>(STEPS[0].id);
+  // Which tree node is being edited ([] = root). The detail pane and per-node
+  // inline errors are driven by this selection.
+  const [selectedPath, setSelectedPath] = useState<NodePath>([]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const sectionRefs = useRef<Partial<Record<StepId, HTMLElement | null>>>({});
 
@@ -918,12 +1028,27 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft }: C
     );
   }
 
-  const patch = (p: Partial<AgentDraft>) => setDraft((d) => ({ ...d, ...p }));
+  // The selection is clamped to a path that still exists (a deletion may have
+  // removed the previously-selected node). `patch` always edits this node.
+  const safePath = pathExists(draft, selectedPath) ? selectedPath : [];
+  const node = getNode(draft, safePath);
 
-  const builtinTools = draft.builtinTools ?? [];
-  const customTools = draft.customTools ?? [];
-  const mcpTools = draft.mcpTools ?? [];
-  const tracingExporters = draft.tracingExporters ?? [];
+  const patch = (p: Partial<AgentDraft>) =>
+    setDraft((d) => updateNode(d, safePath, (n) => ({ ...n, ...p })));
+
+  // Replace the whole tree (structural edits from the left tree), optionally
+  // moving the selection to a new node.
+  const applyTree = (nextRoot: AgentDraft, select?: NodePath) => {
+    setDraft(nextRoot);
+    if (select) setSelectedPath(select);
+  };
+
+  // Root-only rich sections read these off the root draft directly.
+  const builtinTools = node.builtinTools ?? [];
+  const customTools = node.customTools ?? [];
+  const mcpTools = node.mcpTools ?? [];
+  const tracingExporters = node.tracingExporters ?? [];
+  const selectedSkills = node.selectedSkills ?? [];
 
   const toggleBuiltin = (id: string) =>
     patch({
@@ -937,78 +1062,27 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft }: C
       ? tracingExporters.filter((x) => x !== id)
       : [...tracingExporters, id];
     // Auto-enable tracing when at least one exporter is chosen.
-    patch({ tracingExporters: next, tracing: next.length > 0 ? true : draft.tracing });
+    patch({ tracingExporters: next, tracing: next.length > 0 ? true : node.tracing });
   };
 
-  // Required-field validation: name + instruction.
-  const nameMissing = draft.name.trim().length === 0;
-  const instructionMissing = draft.instruction.trim().length === 0;
-  const canFinish = !nameMissing && !instructionMissing;
+  // Detail-pane branching is driven by the SELECTED node's type.
+  const orchestrator = isOrchestratorType(node.agentType);
+  const a2a = isA2aType(node.agentType);
 
-  // Per-step completion for the left-rail checkmarks.
-  const selectedSkills = draft.selectedSkills ?? [];
+  // Inline error flags for the selected node.
+  const nameMissing = node.name.trim().length === 0;
+  const instructionMissing = node.instruction.trim().length === 0;
+  const urlMissing = (node.a2aUrl ?? "").trim().length === 0;
 
-  const completion: Record<StepId, boolean> = useMemo(
-    () => ({
-      basic: !nameMissing && !instructionMissing,
-      model: Boolean(
-        draft.modelName?.trim() ||
-          draft.modelProvider?.trim() ||
-          draft.modelApiBase?.trim(),
-      ),
-      tools: builtinTools.length > 0 || customTools.length > 0 || mcpTools.length > 0,
-      skills: selectedSkills.length > 0,
-      memory: draft.memory.shortTerm || draft.memory.longTerm,
-      knowledge: draft.knowledgebase,
-      tracing: draft.tracing || draft.enableA2ui,
-      subagents: draft.subAgents.length > 0,
-      review: canFinish,
-    }),
-    [draft, nameMissing, instructionMissing, canFinish, builtinTools, customTools, mcpTools, selectedSkills],
-  );
-
-  const activeIndex = STEPS.findIndex((s) => s.id === activeId);
-
-  // Smooth-scroll a section into view (rail click is a convenience).
-  const scrollToSection = (id: StepId) => {
-    sectionRefs.current[id]?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
-  };
-
-  // Scroll-spy: mark the section nearest the top of the scroll container as
-  // active. rootMargin pushes the activation line into the upper area so a
-  // section becomes active once it reaches the top ~35% of the viewport.
-  useEffect(() => {
-    if (project) return; // observer targets only exist in the form view
-    const root = scrollRef.current;
-    if (!root) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visible = entries
-          .filter((e) => e.isIntersecting)
-          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
-        if (visible.length > 0) {
-          const id = (visible[0].target as HTMLElement).dataset.stepId as
-            | StepId
-            | undefined;
-          if (id) setActiveId(id);
-        }
-      },
-      { root, rootMargin: "0px 0px -65% 0px", threshold: 0 },
-    );
-    for (const el of Object.values(sectionRefs.current)) {
-      if (el) observer.observe(el);
-    }
-    return () => observer.disconnect();
-  }, [project]);
+  // Whole-tree validation: every node must satisfy its type's requirements.
+  const problems = useMemo(() => treeProblems(draft), [draft]);
+  const canFinish = problems.length === 0;
 
   const finish = async () => {
     if (!canFinish) {
       setShowErrors(true);
-      // Required name + instruction both live in the basic section.
-      scrollToSection("basic");
+      // Select the first node that still has a missing required field.
+      if (problems[0]) setSelectedPath(problems[0].path);
       return;
     }
     // NOTE: do NOT call onCreate() here — it navigates away from the create
@@ -1016,13 +1090,29 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft }: C
 
     const proj = generateProject(draft);
 
-    // Pull in any Skill Hub selections, downloading their files in parallel.
-    // Per-skill failures are skipped so one bad skill can't abort the build.
-    if (selectedSkills.length > 0) {
+    // Collect Skill Hub selections across EVERY agent in the tree (dedup by
+    // namespace/slug) — skills can now be chosen on any LLM node, not just root.
+    const allSkills: SelectedSkill[] = [];
+    const seenSkill = new Set<string>();
+    const collectSkills = (n: AgentDraft) => {
+      for (const s of n.selectedSkills ?? []) {
+        const key = `${s.namespace}/${s.slug}`;
+        if (!seenSkill.has(key)) {
+          seenSkill.add(key);
+          allSkills.push(s);
+        }
+      }
+      (n.subAgents ?? []).forEach(collectSkills);
+    };
+    collectSkills(draft);
+
+    // Download their files in parallel. Per-skill failures are skipped so one
+    // bad skill can't abort the build.
+    if (allSkills.length > 0) {
       setBuilding(true);
       try {
         const results = await Promise.all(
-          selectedSkills.map((s) =>
+          allSkills.map((s) =>
             downloadSkillFiles(s.slug, s.namespace).catch((err) => {
               console.warn(`下载技能失败：${s.name}`, err);
               return [];
@@ -1047,25 +1137,20 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft }: C
     setProject(proj);
   };
 
-  // Sub-agent mutators.
-  const addSubAgent = () =>
-    patch({ subAgents: [...draft.subAgents, emptyDraft()] });
-  const updateSubAgent = (i: number, next: AgentDraft) =>
-    patch({
-      subAgents: draft.subAgents.map((s, idx) => (idx === i ? next : s)),
-    });
-  const removeSubAgent = (i: number) =>
-    patch({ subAgents: draft.subAgents.filter((_, idx) => idx !== i) });
-
   // ----------------------------------------------------------------
   // Preview mode: takes over the whole pane, hiding the wizard chrome.
   // ----------------------------------------------------------------
   if (project) {
-    const handleDeploy = async (proj: AgentProject) => {
-      return deployAgentkitProject(proj.name, proj.files, {
-        region: "cn-beijing",
-        projectName: "default",
-      });
+    const handleDeploy = async (
+      proj: AgentProject,
+      onStage?: (s: DeployStage) => void,
+    ) => {
+      return deployAgentkitProject(
+        proj.name,
+        proj.files,
+        { region: "cn-beijing", projectName: "default" },
+        { author, onStage },
+      );
     };
 
     return (
@@ -1108,12 +1193,57 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft }: C
 
   return (
     <div className="cw-root">
-      {/* Scroll container (IntersectionObserver root). Centers the
-          [form column + rail] group as one unit. */}
-      <div className="cw-body" ref={scrollRef}>
-        <div className="cw-center">
-          {/* Form column: all sections stacked */}
-          <div className="cw-form-col">
+      <div className="cw-editor">
+        {/* Left: the Agent structure tree (select / add / remove / reorder). */}
+        <aside className="cw-tree" aria-label="Agent 结构">
+          <div className="cw-tree-head">Agent 结构</div>
+          <TreeNode
+            root={draft}
+            path={[]}
+            selectedPath={safePath}
+            onSelect={setSelectedPath}
+            onChange={applyTree}
+          />
+        </aside>
+        {/* Right: the form for the currently-selected node. */}
+        <div className="cw-detail" ref={scrollRef}>
+          <div className="cw-detail-grid">
+            {/* Left column: pick the agent type (radio). Right column: fill in
+                its details — so the form isn't pushed below the type cards. */}
+            <div className="cw-detail-type">
+              <Section meta={metaOf("type")}>
+                <div className="cw-typeradio">
+                  {AGENT_TYPES.map((t) => {
+                    const on = (node.agentType ?? "llm") === t.id;
+                    const Icon = t.icon;
+                    return (
+                      <label
+                        key={t.id}
+                        className={`cw-typeradio-item ${on ? "is-on" : ""}`}
+                      >
+                        <input
+                          type="radio"
+                          name="agentType"
+                          className="cw-typeradio-input"
+                          checked={on}
+                          onChange={() => patch({ agentType: t.id })}
+                        />
+                        <span className="cw-typeradio-dot" aria-hidden />
+                        <span className="cw-typeradio-main">
+                          <span className="cw-typeradio-head">
+                            <Icon className="cw-typeradio-icon" />
+                            <span className="cw-typeradio-title">{t.label}</span>
+                          </span>
+                          <span className="cw-typeradio-desc">{t.desc}</span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </Section>
+            </div>
+            <div className="cw-form-col">
+
             <Section meta={metaOf("basic")}>
                 <div className="cw-form">
                     <div className="cw-field">
@@ -1124,10 +1254,9 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft }: C
                         className={`cw-input ${
                           showErrors && nameMissing ? "is-error" : ""
                         }`}
-                        value={draft.name}
+                        value={node.name}
                         placeholder="例如：客服智能体"
                         onChange={(e) => patch({ name: e.target.value })}
-                        autoFocus
                       />
                       {showErrors && nameMissing && (
                         <span className="cw-error-text">名称为必填项</span>
@@ -1137,7 +1266,7 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft }: C
                       <label className="cw-label">描述</label>
                       <textarea
                         className="cw-textarea cw-textarea-sm"
-                        value={draft.description}
+                        value={node.description}
                         placeholder="简要描述这个 Agent 的用途，便于团队识别…"
                         onChange={(e) =>
                           patch({ description: e.target.value })
@@ -1147,42 +1276,100 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft }: C
                         描述会显示在 Agent 列表与选择器中。
                       </span>
                     </div>
-                    <div className="cw-field">
-                      <label className="cw-label">
-                        系统提示词<span className="cw-req">*</span>
-                      </label>
-                      <textarea
-                        className={`cw-textarea cw-textarea-lg ${
-                          showErrors && instructionMissing ? "is-error" : ""
-                        }`}
-                        value={draft.instruction}
-                        placeholder={
-                          "你是一个……\n\n你的目标是……\n\n约束：\n- ……"
-                        }
-                        onChange={(e) =>
-                          patch({ instruction: e.target.value })
-                        }
-                      />
-                      {showErrors && instructionMissing ? (
-                        <span className="cw-error-text">
-                          系统提示词为必填项
-                        </span>
-                      ) : (
-                        <span className="cw-help">
-                          定义 Agent 的角色、目标与行为边界，这是最关键的一步。
-                        </span>
-                      )}
-                    </div>
+                    {orchestrator ? (
+                      <>
+                        <p className="cw-section-desc">
+                          编排型 Agent 只负责调度子 Agent，不需要模型或系统提示词。请在左侧
+                          「Agent 结构」中为它添加、排序子 Agent。
+                        </p>
+                        {node.agentType === "loop" && (
+                          <div className="cw-field">
+                            <label className="cw-label">最大轮次</label>
+                            <input
+                              className="cw-input"
+                              type="number"
+                              min={1}
+                              value={node.maxIterations ?? 3}
+                              onChange={(e) =>
+                                patch({
+                                  maxIterations: Math.max(
+                                    1,
+                                    Number(e.target.value) || 1,
+                                  ),
+                                })
+                              }
+                            />
+                            <span className="cw-help">
+                              循环编排反复执行子 Agent，直到满足条件或达到该轮次上限。
+                            </span>
+                          </div>
+                        )}
+                      </>
+                    ) : a2a ? (
+                      <div className="cw-field">
+                        <label className="cw-label">
+                          Agent URL<span className="cw-req">*</span>
+                        </label>
+                        <input
+                          className={`cw-input ${
+                            showErrors && urlMissing ? "is-error" : ""
+                          }`}
+                          value={node.a2aUrl ?? ""}
+                          placeholder="https://example.com/my-agent"
+                          onChange={(e) => patch({ a2aUrl: e.target.value })}
+                        />
+                        {showErrors && urlMissing ? (
+                          <span className="cw-error-text">Agent URL 为必填项</span>
+                        ) : (
+                          <span className="cw-help">
+                            远程 Agent 的访问地址（A2A 协议）；VeADK 会拉取其 Agent Card
+                            并按需处理鉴权。
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="cw-field">
+                        <label className="cw-label">
+                          系统提示词<span className="cw-req">*</span>
+                        </label>
+                        <textarea
+                          className={`cw-textarea cw-textarea-lg ${
+                            showErrors && instructionMissing ? "is-error" : ""
+                          }`}
+                          value={node.instruction}
+                          placeholder={
+                            "你是一个……\n\n你的目标是……\n\n约束：\n- ……"
+                          }
+                          onChange={(e) =>
+                            patch({ instruction: e.target.value })
+                          }
+                        />
+                        {showErrors && instructionMissing ? (
+                          <span className="cw-error-text">
+                            系统提示词为必填项
+                          </span>
+                        ) : (
+                          <span className="cw-help">
+                            定义 Agent 的角色、目标与行为边界，这是最关键的一步。
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
             </Section>
 
+            {/* Every LLM agent (root or sub) gets the full config —
+                model/tools/skills/memory/knowledge/tracing. Orchestrators and
+                A2A leaves own none of these. */}
+            {!orchestrator && !a2a && (
+              <>
             <Section meta={metaOf("model")}>
                   <div className="cw-form">
                     <div className="cw-field">
                       <label className="cw-label">模型名称</label>
                       <input
                         className="cw-input"
-                        value={draft.modelName ?? ""}
+                        value={node.modelName ?? ""}
                         placeholder="doubao-seed-1-6-250615"
                         onChange={(e) => patch({ modelName: e.target.value })}
                       />
@@ -1191,7 +1378,7 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft }: C
                       <label className="cw-label">服务商 Provider</label>
                       <input
                         className="cw-input"
-                        value={draft.modelProvider ?? ""}
+                        value={node.modelProvider ?? ""}
                         placeholder="openai"
                         onChange={(e) =>
                           patch({ modelProvider: e.target.value })
@@ -1202,7 +1389,7 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft }: C
                       <label className="cw-label">API Base</label>
                       <input
                         className="cw-input"
-                        value={draft.modelApiBase ?? ""}
+                        value={node.modelApiBase ?? ""}
                         placeholder="https://ark.cn-beijing.volces.com/api/v3/"
                         onChange={(e) =>
                           patch({ modelApiBase: e.target.value })
@@ -1268,47 +1455,47 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft }: C
             <Section meta={metaOf("memory")}>
                   <div className="cw-form cw-toggle-stack">
                     <Toggle
-                      checked={draft.memory.shortTerm}
+                      checked={node.memory.shortTerm}
                       onChange={(v) =>
                         patch({
-                          memory: { ...draft.memory, shortTerm: v },
+                          memory: { ...node.memory, shortTerm: v },
                         })
                       }
                       title="短期记忆"
                       desc="在单次会话内保留上下文，跨轮次记住对话内容。"
                       icon={Layers}
                     />
-                    {draft.memory.shortTerm && (
+                    {node.memory.shortTerm && (
                       <div className="cw-field cw-subfield">
                         <label className="cw-label">短期记忆后端</label>
                         <BackendSelect
                           options={STM_BACKENDS}
-                          value={draft.shortTermBackend}
+                          value={node.shortTermBackend}
                           onChange={(id) => patch({ shortTermBackend: id })}
                         />
                       </div>
                     )}
                     <Toggle
-                      checked={draft.memory.longTerm}
+                      checked={node.memory.longTerm}
                       onChange={(v) =>
                         patch({
-                          memory: { ...draft.memory, longTerm: v },
+                          memory: { ...node.memory, longTerm: v },
                         })
                       }
                       title="长期记忆"
                       desc="跨会话持久化关键信息，让 Agent 记住历史偏好。"
                       icon={Database}
                     />
-                    {draft.memory.longTerm && (
+                    {node.memory.longTerm && (
                       <div className="cw-field cw-subfield">
                         <label className="cw-label">长期记忆后端</label>
                         <BackendSelect
                           options={LTM_BACKENDS}
-                          value={draft.longTermBackend}
+                          value={node.longTermBackend}
                           onChange={(id) => patch({ longTermBackend: id })}
                         />
                         <Toggle
-                          checked={!!draft.autoSaveSession}
+                          checked={!!node.autoSaveSession}
                           onChange={(v) => patch({ autoSaveSession: v })}
                           title="自动保存会话到长期记忆"
                           desc="会话结束时自动把内容写入长期记忆，无需手动调用。"
@@ -1322,18 +1509,18 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft }: C
             <Section meta={metaOf("knowledge")}>
                   <div className="cw-form cw-toggle-stack">
                     <Toggle
-                      checked={draft.knowledgebase}
+                      checked={node.knowledgebase}
                       onChange={(v) => patch({ knowledgebase: v })}
                       title="知识库"
                       desc="启用外部知识检索（RAG），让 Agent 基于你的资料作答。"
                       icon={Database}
                     />
-                    {draft.knowledgebase && (
+                    {node.knowledgebase && (
                       <div className="cw-field cw-subfield">
                         <label className="cw-label">知识库后端</label>
                         <BackendSelect
                           options={KB_BACKENDS}
-                          value={draft.knowledgebaseBackend}
+                          value={node.knowledgebaseBackend}
                           onChange={(id) =>
                             patch({ knowledgebaseBackend: id })
                           }
@@ -1346,13 +1533,13 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft }: C
             <Section meta={metaOf("tracing")}>
                   <div className="cw-form cw-toggle-stack">
                     <Toggle
-                      checked={draft.tracing}
+                      checked={node.tracing}
                       onChange={(v) => patch({ tracing: v })}
                       title="观测 / Tracing"
                       desc="记录每一步的调用链路与耗时，便于调试与性能分析。"
                       icon={Eye}
                     />
-                    {draft.tracing && (
+                    {node.tracing && (
                       <div className="cw-field cw-subfield">
                         <label className="cw-label">Tracing 导出器</label>
                         <span className="cw-help">
@@ -1366,7 +1553,7 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft }: C
                       </div>
                     )}
                     <Toggle
-                      checked={draft.enableA2ui}
+                      checked={node.enableA2ui}
                       onChange={(v) => patch({ enableA2ui: v })}
                       title="A2UI"
                       desc="允许 Agent 渲染交互式 UI 卡片，而不仅仅是纯文本。"
@@ -1374,297 +1561,65 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft }: C
                     />
                   </div>
             </Section>
-
-            <Section meta={metaOf("subagents")}>
-                  <div className="cw-form">
-                    <p className="cw-section-desc">
-                      添加协作的子 Agent，每个子 Agent 拥有独立的提示词与工具，可被主 Agent 调度。
-                    </p>
-                    <div className="cw-sub-list">
-                      <AnimatePresence initial={false}>
-                        {draft.subAgents.map((sa, i) => (
-                          <SubAgentEditor
-                            key={i}
-                            draft={sa}
-                            index={i}
-                            onChange={(next) => updateSubAgent(i, next)}
-                            onRemove={() => removeSubAgent(i)}
-                          />
-                        ))}
-                      </AnimatePresence>
-                    </div>
-                    <button
-                      type="button"
-                      className="cw-add-sub"
-                      onClick={addSubAgent}
-                    >
-                      <Plus className="cw-i" />
-                      添加子 Agent
-                    </button>
-                    {draft.subAgents.length === 0 && (
-                      <p className="cw-empty-line">
-                        子 Agent 是可选的，留空即可创建一个独立 Agent。
-                      </p>
-                    )}
-                  </div>
-            </Section>
-
-            <Section meta={metaOf("review")}>
-                  <div className="cw-form">
-                    {!canFinish && (
-                      <div className="cw-banner">
-                        <Info className="cw-i" />
-                        <span>
-                          请先补全必填项：
-                          {nameMissing && "「名称」"}
-                          {nameMissing && instructionMissing && "、"}
-                          {instructionMissing && "「系统提示词」"}。
-                        </span>
-                      </div>
-                    )}
-                    <div className="cw-review">
-                      <ReviewRow label="名称">
-                        {draft.name.trim() ? (
-                          <span className="cw-review-strong">
-                            {draft.name}
-                          </span>
-                        ) : (
-                          <span className="cw-review-muted">未填写</span>
-                        )}
-                      </ReviewRow>
-                      <ReviewRow label="描述">
-                        {draft.description.trim() || (
-                          <span className="cw-review-muted">无</span>
-                        )}
-                      </ReviewRow>
-                      <ReviewRow label="系统提示词">
-                        {draft.instruction.trim() ? (
-                          <pre className="cw-review-pre">
-                            {draft.instruction}
-                          </pre>
-                        ) : (
-                          <span className="cw-review-muted">未填写</span>
-                        )}
-                      </ReviewRow>
-                      <ReviewRow label="内置工具">
-                        {builtinTools.length ? (
-                          <div className="cw-review-chips">
-                            {builtinTools.map((id) => (
-                              <span key={id} className="cw-chip">
-                                {labelOf(BUILTIN_TOOLS, id)}
-                              </span>
-                            ))}
-                          </div>
-                        ) : (
-                          <span className="cw-review-muted">无</span>
-                        )}
-                      </ReviewRow>
-                      <ReviewRow label="自定义工具">
-                        {customTools.length ? (
-                          <div className="cw-review-chips">
-                            {customTools.map((t, i) => (
-                              <span key={`${t.name}-${i}`} className="cw-chip">
-                                {t.name}
-                              </span>
-                            ))}
-                          </div>
-                        ) : (
-                          <span className="cw-review-muted">无</span>
-                        )}
-                      </ReviewRow>
-                      <ReviewRow label="模型">
-                        {draft.modelName?.trim() ||
-                        draft.modelProvider?.trim() ||
-                        draft.modelApiBase?.trim() ? (
-                          <span className="cw-review-muted">
-                            {[
-                              draft.modelName?.trim(),
-                              draft.modelProvider?.trim(),
-                              draft.modelApiBase?.trim(),
-                            ]
-                              .filter(Boolean)
-                              .join(" · ")}
-                          </span>
-                        ) : (
-                          <span className="cw-review-muted">默认配置</span>
-                        )}
-                      </ReviewRow>
-                      <ReviewRow label="MCP 工具">
-                        {mcpTools.length ? (
-                          <div className="cw-review-chips">
-                            {mcpTools.map((t, i) => (
-                              <span key={i} className="cw-chip">
-                                {t.name.trim() ||
-                                  (t.transport === "http"
-                                    ? t.url || "http"
-                                    : t.command || "stdio")}
-                              </span>
-                            ))}
-                          </div>
-                        ) : (
-                          <span className="cw-review-muted">无</span>
-                        )}
-                      </ReviewRow>
-                      <ReviewRow label="技能">
-                        {selectedSkills.length ? (
-                          <div className="cw-review-chips">
-                            {selectedSkills.map((s) => (
-                              <span key={s.slug} className="cw-chip">
-                                {s.name}
-                              </span>
-                            ))}
-                          </div>
-                        ) : (
-                          <span className="cw-review-muted">无</span>
-                        )}
-                      </ReviewRow>
-                      <ReviewRow label="短期记忆">
-                        {draft.memory.shortTerm ? (
-                          <span>
-                            {boolTag(true)}{" "}
-                            <span className="cw-review-muted">
-                              · {labelOf(STM_BACKENDS, draft.shortTermBackend)}
-                            </span>
-                          </span>
-                        ) : (
-                          boolTag(false)
-                        )}
-                      </ReviewRow>
-                      <ReviewRow label="长期记忆">
-                        {draft.memory.longTerm ? (
-                          <span>
-                            {boolTag(true)}{" "}
-                            <span className="cw-review-muted">
-                              · {labelOf(LTM_BACKENDS, draft.longTermBackend)}
-                              {draft.autoSaveSession ? " · 自动保存会话" : ""}
-                            </span>
-                          </span>
-                        ) : (
-                          boolTag(false)
-                        )}
-                      </ReviewRow>
-                      <ReviewRow label="知识库">
-                        {draft.knowledgebase ? (
-                          <span>
-                            {boolTag(true)}{" "}
-                            <span className="cw-review-muted">
-                              · {labelOf(KB_BACKENDS, draft.knowledgebaseBackend)}
-                            </span>
-                          </span>
-                        ) : (
-                          boolTag(false)
-                        )}
-                      </ReviewRow>
-                      <ReviewRow label="观测 / Tracing">
-                        {draft.tracing ? (
-                          <span>
-                            {boolTag(true)}
-                            {tracingExporters.length > 0 && (
-                              <span className="cw-review-muted">
-                                {" "}
-                                ·{" "}
-                                {tracingExporters
-                                  .map((id) => labelOf(TRACING_EXPORTERS, id))
-                                  .join("、")}
-                              </span>
-                            )}
-                          </span>
-                        ) : (
-                          boolTag(false)
-                        )}
-                      </ReviewRow>
-                      <ReviewRow label="A2UI">
-                        {boolTag(draft.enableA2ui)}
-                      </ReviewRow>
-                      <ReviewRow label="子 Agent">
-                        {draft.subAgents.length ? (
-                          <div className="cw-review-subs">
-                            {draft.subAgents.map((sa, i) => (
-                              <span key={i} className="cw-chip cw-chip-sub">
-                                <Bot className="cw-i cw-i-sm" />
-                                {sa.name.trim() || `子 Agent ${i + 1}`}
-                              </span>
-                            ))}
-                          </div>
-                        ) : (
-                          <span className="cw-review-muted">无</span>
-                        )}
-                      </ReviewRow>
-                    </div>
-                    <div className="cw-finish-actions">
-                      <button
-                        type="button"
-                        className="cw-btn cw-btn-primary cw-btn-finish"
-                        onClick={finish}
-                        disabled={!canFinish || building}
-                      >
-                        {building ? (
-                          <>
-                            <Loader2 className="cw-i cw-spin" />
-                            正在下载技能…
-                          </>
-                        ) : (
-                          <>
-                            <Rocket className="cw-i" />
-                            生成项目
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </div>
-            </Section>
+              </>
+            )}
           </div>
-
-          {/* Right rail: scroll-spy step indicator */}
-          <nav className="cw-rail" aria-label="步骤导航">
-            <ol className="cw-steps">
-              {/* Connector line + progress fill, anchored to the steps list so
-                  it runs exactly through the dot column from first to last dot.
-                  Fill reflects progress to the active (in-view) section. */}
-              <div className="cw-rail-track" aria-hidden>
-                <motion.div
-                  className="cw-rail-fill"
-                  animate={{
-                    height: `${
-                      (Math.max(activeIndex, 0) / (STEPS.length - 1)) * 100
-                    }%`,
-                  }}
-                  transition={{ type: "spring", stiffness: 260, damping: 32 }}
-                />
-              </div>
-              {STEPS.map((s) => {
-                const active = s.id === activeId;
-                const done = completion[s.id];
-                return (
-                  <li key={s.id}>
-                    <button
-                      type="button"
-                      className={`cw-step ${active ? "is-active" : ""} ${
-                        done ? "is-done" : ""
-                      }`}
-                      onClick={() => scrollToSection(s.id)}
-                      aria-current={active ? "step" : undefined}
-                    >
-                      <span className="cw-step-marker" aria-hidden>
-                        <span className="cw-dot" />
-                      </span>
-                      <span className="cw-step-text">
-                        <span className="cw-step-labelrow">
-                          <span className="cw-step-label">{s.label}</span>
-                          {s.required && (
-                            <span className="cw-step-required">必填</span>
-                          )}
-                        </span>
-                        <span className="cw-step-hint">{s.hint}</span>
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ol>
-          </nav>
+          </div>
         </div>
       </div>
+      <footer className="cw-footer-bar">
+        <div className="cw-footer-status">
+          {canFinish ? (
+            <span className="cw-footer-ok">✓ 配置完整，可生成项目</span>
+          ) : (
+            <button
+              type="button"
+              className="cw-footer-problem"
+              onClick={() => {
+                setShowErrors(true);
+                if (problems[0]) setSelectedPath(problems[0].path);
+              }}
+            >
+              待补全（{problems.length}）：{problems[0].name} · {problems[0].problem}
+            </button>
+          )}
+        </div>
+        <div className="cw-footer-actions">
+          <button
+            type="button"
+            className="cw-btn cw-btn-soft"
+            onClick={() =>
+              downloadText(
+                `${draft.name || "agent"}.yaml`,
+                draftToYaml(draft),
+                "text/yaml",
+              )
+            }
+            title="导出表示 Agent 结构的 YAML"
+          >
+            <FileDown className="cw-i" />
+            导出 YAML
+          </button>
+          <button
+            type="button"
+            className="cw-btn cw-btn-primary cw-btn-finish"
+            onClick={finish}
+            disabled={!canFinish || building}
+          >
+            {building ? (
+              <>
+                <Loader2 className="cw-i cw-spin" />
+                正在下载技能…
+              </>
+            ) : (
+              <>
+                <Rocket className="cw-i" />
+                生成项目
+              </>
+            )}
+          </button>
+        </div>
+      </footer>
     </div>
   );
 }

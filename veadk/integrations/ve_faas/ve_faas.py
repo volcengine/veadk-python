@@ -436,6 +436,43 @@ class VeFaaS:
         except Exception as e:
             logger.error(f"Delete application failed. Response: {e}")
 
+    def update_function_envs_and_release(
+        self, function_id: str, extra_envs: dict
+    ) -> None:
+        """Merge ``extra_envs`` into the function's env vars and re-release it.
+
+        Used for the frontend's two-phase deploy: after the public URL is known,
+        inject ``OAUTH2_REDIRECT_URI`` and re-release so the SSO callback matches
+        the real endpoint. Waits (bounded) for the release to settle.
+        """
+        import time
+
+        import veadk.config
+        from volcenginesdkvefaas import (
+            EnvForUpdateFunctionInput,
+            GetReleaseStatusRequest,
+            ReleaseRequest,
+            UpdateFunctionRequest,
+        )
+
+        merged = {**veadk.config.veadk_environments, **extra_envs}
+        envs = [EnvForUpdateFunctionInput(key=k, value=v) for k, v in merged.items()]
+        self.client.update_function(UpdateFunctionRequest(id=function_id, envs=envs))
+        # revision_number=0 releases the latest revision.
+        self.client.release(ReleaseRequest(function_id=function_id, revision_number=0))
+
+        for _ in range(60):
+            status = self.client.get_release_status(
+                GetReleaseStatusRequest(function_id=function_id)
+            )
+            state = str(getattr(status, "status", "") or "").lower()
+            if "succ" in state or state == "done":
+                return
+            if "fail" in state or "error" in state:
+                raise RuntimeError(f"Function re-release failed: {state}")
+            time.sleep(5)
+        logger.warning("Function re-release did not settle within timeout.")
+
     def deploy(
         self,
         name: str,

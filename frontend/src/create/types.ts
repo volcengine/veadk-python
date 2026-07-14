@@ -41,6 +41,18 @@ export interface AgentDraft {
   description: string;
   /** System prompt. */
   instruction: string;
+  /**
+   * Agent kind for the custom flow. "llm" is a VeADK `Agent` (LlmAgent);
+   * "sequential"/"parallel"/"loop" are orchestrators from `google.adk.agents`
+   * that only schedule their sub_agents (no model/instruction/tools/memory of
+   * their own); "a2a" is a leaf `RemoteVeAgent` referenced by URL over the A2A
+   * protocol. Defaults to "llm" when absent.
+   */
+  agentType?: "llm" | "sequential" | "parallel" | "loop" | "a2a";
+  /** Max iterations for a "loop" orchestrator (LoopAgent.max_iterations). */
+  maxIterations?: number;
+  /** Remote agent URL for an "a2a" agent (RemoteVeAgent.url). */
+  a2aUrl?: string;
   model?: string;
   /** Model configuration (optional). Empty values fall back to veadk config/env. */
   modelName?: string;
@@ -88,6 +100,9 @@ export function emptyDraft(): AgentDraft {
     name: "",
     description: "",
     instruction: "",
+    agentType: "llm",
+    maxIterations: 3,
+    a2aUrl: "",
     tools: [],
     skills: [],
     memory: { shortTerm: false, longTerm: false },
