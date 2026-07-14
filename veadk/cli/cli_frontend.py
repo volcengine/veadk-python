@@ -22,8 +22,6 @@ API (with CORS allowing the Vite dev server) for React hot reload.
 """
 
 import os
-import subprocess
-import re
 import json
 
 from pathlib import Path
@@ -79,6 +77,36 @@ def _resolve_frontend_dir(arg: str | None) -> Path:
     if (PACKAGED_WEBUI / "index.html").is_file():
         return PACKAGED_WEBUI
     return (Path.cwd() / "frontend" / "dist").resolve()
+
+
+def _open_browser_when_ready(
+    url: str, host: str, port: int, timeout: float = 15.0
+) -> None:
+    """Open ``url`` in the default browser once the server accepts connections.
+
+    Polls the TCP port (up to ``timeout`` seconds) so the tab lands on a ready
+    server rather than a connection error. Runs on a daemon thread; any failure
+    is logged and ignored — a browser that will not open must never block the
+    server from serving.
+    """
+    import socket
+    import time
+    import webbrowser
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=0.5):
+                break
+        except OSError:
+            time.sleep(0.25)
+    else:
+        logger.warning("Server not ready in time; skipped opening the browser.")
+        return
+    try:
+        webbrowser.open(url)
+    except Exception as e:  # noqa: BLE001 - opening a browser is best-effort
+        logger.warning(f"Could not open the browser automatically: {e}")
 
 
 # Built-in provider presets so users only need to supply client id/secret.
@@ -199,94 +227,115 @@ def _build_generic_oauth2(provider_id: str, redirect_uri: str):
     )
 
 
-@click.command()
-@click.option(
-    "--agents-dir",
-    default=".",
-    show_default=True,
-    help="Directory containing agent apps (like `adk web`): run from the parent "
-    "folder of your agent directories — each subdir with an `agent.py` exposing "
-    "a `root_agent` becomes a selectable app in the UI. Defaults to the current "
-    "directory.",
-)
-@click.option(
-    "--frontend-dir",
-    default=None,
-    help="Override the built React UI directory. Defaults to the UI shipped "
-    "with the package (veadk/webui), falling back to ./frontend/dist.",
-)
-@click.option("--host", default="127.0.0.1", show_default=True)
-@click.option("--port", default=8000, show_default=True, type=int)
-@click.option(
-    "--dev",
-    is_flag=True,
-    default=False,
-    help=(
-        "Dev mode: serve API only and allow CORS from the Vite dev server "
-        f"({DEV_SERVER_ORIGIN}). Run `npm run dev` in ./frontend alongside this."
-    ),
-)
-@click.option(
-    "--oauth2-user-pool",
-    default=None,
-    help="VeIdentity User Pool NAME. When set (or its UID), enables SSO: "
-    "unauthenticated browsers see a login page and the UI uses the signed-in user.",
-)
-@click.option(
-    "--oauth2-user-pool-client",
-    default=None,
-    help="VeIdentity User Pool client NAME.",
-)
-@click.option(
-    "--oauth2-user-pool-uid",
-    default=None,
-    envvar="OAUTH2_USER_POOL_ID",
-    help="VeIdentity User Pool UID (env: OAUTH2_USER_POOL_ID). Use instead of "
-    "the pool name.",
-)
-@click.option(
-    "--oauth2-user-pool-client-uid",
-    default=None,
-    envvar="OAUTH2_USER_POOL_CLIENT_ID",
-    help="VeIdentity client UID (env: OAUTH2_USER_POOL_CLIENT_ID). Use instead "
-    "of the client name.",
-)
-@click.option(
-    "--oauth2-redirect-uri",
-    default=None,
-    envvar="OAUTH2_REDIRECT_URI",
-    help="OAuth2 callback URL (env: OAUTH2_REDIRECT_URI). Set this when deploying "
-    "behind a public host/runtime; defaults to http://{host}:{port}/oauth2/callback.",
-)
-@click.option(
-    "--oauth2-provider",
-    default=None,
-    envvar="OAUTH2_PROVIDER",
-    help="SSO provider id (env: OAUTH2_PROVIDER), e.g. veidentity, github, google, "
-    "or a custom name. For github/google, only client id/secret env vars are needed; "
-    "for any OIDC provider set OAUTH2_ISSUER; otherwise set OAUTH2_AUTHORIZE_URL/"
-    "OAUTH2_TOKEN_URL/OAUTH2_USERINFO_URL. Client creds via OAUTH2_CLIENT_ID/"
-    "OAUTH2_CLIENT_SECRET. Defaults to veidentity when a user pool is configured.",
-)
-@click.option(
-    "--oauth2-provider-label",
-    default=None,
-    envvar="OAUTH2_PROVIDER_LABEL",
-    help="Display label for the SSO login button (env: OAUTH2_PROVIDER_LABEL).",
-)
-@click.option(
-    "--auth-mode",
-    type=click.Choice(["frontend", "gateway"]),
-    default="frontend",
-    show_default=True,
-    envvar="VEADK_FRONTEND_AUTH_MODE",
-    help="How the UI obtains the signed-in user (env: VEADK_FRONTEND_AUTH_MODE). "
-    "'frontend' (default): this server runs its own OAuth2 login. 'gateway': "
-    "trust the identity an upstream API gateway already authenticated and "
-    "forwards as an Authorization: Bearer <JWT> — parse the user from it and run "
-    "no in-app login (use when deployed behind the AgentKit runtime gateway).",
-)
+def _serve_options(f):
+    """Shared CLI options for the `frontend` and `studio` serve commands."""
+    options = [
+        click.option(
+            "--agents-dir",
+            default=".",
+            show_default=True,
+            help="Directory containing agent apps (like `adk web`): run from the "
+            "parent folder of your agent directories — each subdir with an "
+            "`agent.py` exposing a `root_agent` becomes a selectable app in the "
+            "UI. Defaults to the current directory.",
+        ),
+        click.option(
+            "--frontend-dir",
+            default=None,
+            help="Override the built React UI directory. Defaults to the UI shipped "
+            "with the package (veadk/webui), falling back to ./frontend/dist.",
+        ),
+        click.option("--host", default="127.0.0.1", show_default=True),
+        click.option("--port", default=8000, show_default=True, type=int),
+        click.option(
+            "--dev",
+            is_flag=True,
+            default=False,
+            help=(
+                "Dev mode: serve API only and allow CORS from the Vite dev server "
+                f"({DEV_SERVER_ORIGIN}). Run `npm run dev` in ./frontend alongside this."
+            ),
+        ),
+        click.option(
+            "--oauth2-user-pool",
+            default=None,
+            help="VeIdentity User Pool NAME. When set (or its UID), enables SSO: "
+            "unauthenticated browsers see a login page and the UI uses the signed-in user.",
+        ),
+        click.option(
+            "--oauth2-user-pool-client",
+            default=None,
+            help="VeIdentity User Pool client NAME.",
+        ),
+        click.option(
+            "--oauth2-user-pool-uid",
+            default=None,
+            envvar="OAUTH2_USER_POOL_ID",
+            help="VeIdentity User Pool UID (env: OAUTH2_USER_POOL_ID). Use instead of "
+            "the pool name.",
+        ),
+        click.option(
+            "--oauth2-user-pool-client-uid",
+            default=None,
+            envvar="OAUTH2_USER_POOL_CLIENT_ID",
+            help="VeIdentity client UID (env: OAUTH2_USER_POOL_CLIENT_ID). Use instead "
+            "of the client name.",
+        ),
+        click.option(
+            "--oauth2-redirect-uri",
+            default=None,
+            envvar="OAUTH2_REDIRECT_URI",
+            help="OAuth2 callback URL (env: OAUTH2_REDIRECT_URI). Set this when deploying "
+            "behind a public host/runtime; defaults to http://{host}:{port}/oauth2/callback.",
+        ),
+        click.option(
+            "--oauth2-provider",
+            default=None,
+            envvar="OAUTH2_PROVIDER",
+            help="SSO provider id (env: OAUTH2_PROVIDER), e.g. veidentity, github, google, "
+            "or a custom name. For github/google, only client id/secret env vars are needed; "
+            "for any OIDC provider set OAUTH2_ISSUER; otherwise set OAUTH2_AUTHORIZE_URL/"
+            "OAUTH2_TOKEN_URL/OAUTH2_USERINFO_URL. Client creds via OAUTH2_CLIENT_ID/"
+            "OAUTH2_CLIENT_SECRET. Defaults to veidentity when a user pool is configured.",
+        ),
+        click.option(
+            "--oauth2-provider-label",
+            default=None,
+            envvar="OAUTH2_PROVIDER_LABEL",
+            help="Display label for the SSO login button (env: OAUTH2_PROVIDER_LABEL).",
+        ),
+        click.option(
+            "--auth-mode",
+            type=click.Choice(["frontend", "gateway"]),
+            default="frontend",
+            show_default=True,
+            envvar="VEADK_FRONTEND_AUTH_MODE",
+            help="How the UI obtains the signed-in user (env: VEADK_FRONTEND_AUTH_MODE). "
+            "'frontend' (default): this server runs its own OAuth2 login. 'gateway': "
+            "trust the identity an upstream API gateway already authenticated and "
+            "forwards as an Authorization: Bearer <JWT> — parse the user from it and run "
+            "no in-app login (use when deployed behind the AgentKit runtime gateway).",
+        ),
+        click.option(
+            "--open/--no-open",
+            "open_browser",
+            default=False,
+            show_default=True,
+            help="Open the web UI in your default browser once the server is ready. "
+            "Off by default (typical server-hosted deployments have no local browser); "
+            "pass --open for local use. Ignored with --dev.",
+        ),
+    ]
+    for opt in reversed(options):
+        f = opt(f)
+    return f
+
+
+@click.group(invoke_without_command=True)
+@_serve_options
+@click.pass_context
 def frontend(
+    ctx: click.Context,
     agents_dir: str,
     frontend_dir: str | None,
     host: str,
@@ -300,8 +349,97 @@ def frontend(
     oauth2_provider: str | None,
     oauth2_provider_label: str | None,
     auth_mode: str,
+    open_browser: bool,
 ) -> None:
     """Launch the A2UI web UI backed by the ADK agent API server."""
+    if ctx.invoked_subcommand is not None:
+        return
+    _run_frontend_server(
+        agents_dir=agents_dir,
+        frontend_dir=frontend_dir,
+        host=host,
+        port=port,
+        dev=dev,
+        oauth2_user_pool=oauth2_user_pool,
+        oauth2_user_pool_client=oauth2_user_pool_client,
+        oauth2_user_pool_uid=oauth2_user_pool_uid,
+        oauth2_user_pool_client_uid=oauth2_user_pool_client_uid,
+        oauth2_redirect_uri=oauth2_redirect_uri,
+        oauth2_provider=oauth2_provider,
+        oauth2_provider_label=oauth2_provider_label,
+        auth_mode=auth_mode,
+        open_browser=open_browser,
+        studio=False,
+    )
+
+
+@click.group(invoke_without_command=True)
+@_serve_options
+@click.pass_context
+def studio(
+    ctx: click.Context,
+    agents_dir: str,
+    frontend_dir: str | None,
+    host: str,
+    port: int,
+    dev: bool,
+    oauth2_user_pool: str | None,
+    oauth2_user_pool_client: str | None,
+    oauth2_user_pool_uid: str | None,
+    oauth2_user_pool_client_uid: str | None,
+    oauth2_redirect_uri: str | None,
+    oauth2_provider: str | None,
+    oauth2_provider_label: str | None,
+    auth_mode: str,
+    open_browser: bool,
+) -> None:
+    """Launch VeADK Studio — the frontend trimmed to add & manage agents.
+
+    Same server as `veadk frontend`, but studio mode: the UI feature-gates off
+    chat/search/skill-center/history and lands on the add-agent page.
+    `veadk studio deploy` deploys this to VeFaaS.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+    _run_frontend_server(
+        agents_dir=agents_dir,
+        frontend_dir=frontend_dir,
+        host=host,
+        port=port,
+        dev=dev,
+        oauth2_user_pool=oauth2_user_pool,
+        oauth2_user_pool_client=oauth2_user_pool_client,
+        oauth2_user_pool_uid=oauth2_user_pool_uid,
+        oauth2_user_pool_client_uid=oauth2_user_pool_client_uid,
+        oauth2_redirect_uri=oauth2_redirect_uri,
+        oauth2_provider=oauth2_provider,
+        oauth2_provider_label=oauth2_provider_label,
+        auth_mode=auth_mode,
+        open_browser=open_browser,
+        studio=True,
+    )
+
+
+def _run_frontend_server(
+    *,
+    agents_dir: str,
+    frontend_dir: str | None,
+    host: str,
+    port: int,
+    dev: bool,
+    oauth2_user_pool: str | None,
+    oauth2_user_pool_client: str | None,
+    oauth2_user_pool_uid: str | None,
+    oauth2_user_pool_client_uid: str | None,
+    oauth2_redirect_uri: str | None,
+    oauth2_provider: str | None,
+    oauth2_provider_label: str | None,
+    auth_mode: str,
+    open_browser: bool,
+    studio: bool = False,
+) -> None:
+    """Launch the A2UI web UI backed by the ADK agent API server."""
+
     # Explicitly load .env file before any agent code runs
     # find_dotenv() searches upward from current directory to find .env
     from dotenv import find_dotenv, load_dotenv
@@ -333,6 +471,34 @@ def frontend(
 
     _agent_loader = AgentLoader(agents_dir)
 
+    def _resolve_ve_credentials() -> tuple[str, str, str | None]:
+        """Resolve Volcengine creds as (access_key, secret_key, session_token).
+
+        Priority: env AK/SK first; else the VeFaaS-injected STS credential file
+        (which carries a session token); else 400. This lets the same `/web/*`
+        endpoints work locally (env creds) and inside a VeFaaS function, where
+        only the function's IAM-role STS credentials are available.
+        """
+        ak = os.getenv("VOLCENGINE_ACCESS_KEY")
+        sk = os.getenv("VOLCENGINE_SECRET_KEY")
+        if ak and sk:
+            return ak, sk, None
+        try:
+            with open("/var/run/secrets/iam/credential", encoding="utf-8") as f:
+                data = json.load(f)
+            ak = data.get("access_key_id") or data.get("AccessKeyId")
+            sk = data.get("secret_access_key") or data.get("SecretAccessKey")
+            token = data.get("session_token") or data.get("SessionToken")
+            if ak and sk:
+                return ak, sk, token
+        except (OSError, ValueError):
+            pass
+        raise HTTPException(
+            status_code=400,
+            detail="Volcengine credentials not found (set VOLCENGINE_ACCESS_KEY/"
+            "SECRET_KEY, or run inside a VeFaaS function with an IAM role)",
+        )
+
     def _model_name(model: object) -> str:
         if isinstance(model, str):
             return model
@@ -345,6 +511,85 @@ def frontend(
         name = getattr(tool, "name", None) or getattr(tool, "__name__", None)
         return str(name or type(tool).__name__)
 
+    def _agent_type(agent: object) -> str:
+        # Map an ADK agent instance to the same type vocabulary the create
+        # wizard uses: llm | sequential | parallel | loop | a2a.
+        try:
+            from google.adk.agents import (
+                LoopAgent,
+                ParallelAgent,
+                SequentialAgent,
+            )
+
+            if isinstance(agent, LoopAgent):
+                return "loop"
+            if isinstance(agent, SequentialAgent):
+                return "sequential"
+            if isinstance(agent, ParallelAgent):
+                return "parallel"
+        except Exception:
+            pass
+        try:
+            from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
+
+            if isinstance(agent, RemoteA2aAgent):
+                return "a2a"
+        except Exception:
+            pass
+        return "llm"
+
+    def _agent_node(agent: object, depth: int = 0) -> dict:
+        # Recursive typed tree for the conversation topology panel. Depth is
+        # bounded so a pathological sub_agents cycle can't spin forever.
+        children = []
+        if depth < 8:
+            children = [
+                _agent_node(s, depth + 1)
+                for s in getattr(agent, "sub_agents", []) or []
+            ]
+        return {
+            "name": getattr(agent, "name", "") or "",
+            "description": getattr(agent, "description", "") or "",
+            "type": _agent_type(agent),
+            "model": _model_name(getattr(agent, "model", "")),
+            "tools": [_tool_label(t) for t in getattr(agent, "tools", []) or []],
+            "children": children,
+        }
+
+    @app.get("/web/ui-config")
+    async def _web_ui_config():
+        """Feature gates the SPA reads at startup. Studio mode disables the
+        chat-centric modules and lands on the add-agent page, leaving only the
+        add-agent and manage-agent flows (the '添加 AgentKit 智能体' remote-connect
+        option is disabled for now)."""
+        if studio:
+            return {
+                "studio": True,
+                "features": {
+                    "newChat": False,
+                    "search": False,
+                    "skillCenter": False,
+                    "history": False,
+                    "addAgent": True,
+                    "manageAgents": True,
+                    "addAgentkit": False,
+                },
+                "defaultView": "addAgent",
+            }
+        return {
+            "studio": False,
+            "features": {
+                "newChat": True,
+                "search": True,
+                "skillCenter": True,
+                "history": True,
+                "addAgent": True,
+                "manageAgents": True,
+                "addAgentkit": True,
+            },
+            "defaultView": "chat",
+        }
+
     @app.get("/web/agent-info/{app_name}")
     async def _web_agent_info(app_name: str):
         try:
@@ -354,11 +599,14 @@ def frontend(
         return {
             "name": getattr(agent, "name", app_name),
             "description": getattr(agent, "description", "") or "",
+            "type": _agent_type(agent),
             "model": _model_name(getattr(agent, "model", "")),
             "tools": [_tool_label(t) for t in getattr(agent, "tools", []) or []],
             "subAgents": [
                 getattr(s, "name", "") for s in getattr(agent, "sub_agents", []) or []
             ],
+            # Recursive typed tree used by the conversation topology panel.
+            "graph": _agent_node(agent),
         }
 
     # Tool names that count as "web search is mounted" on an agent.
@@ -539,339 +787,408 @@ def frontend(
             logger.error(f"AgentKit proxy error: {e}")
             raise HTTPException(status_code=502, detail=f"Proxy error: {str(e)}")
 
+    import threading as _threading
+
+    _deploy_lock = _threading.Lock()
+
     @app.post("/web/deploy-agentkit")
     async def _deploy_to_agentkit(request: Request):
-        """Deploy Agent to AgentKit cloud service.
+        """Deploy to AgentKit, streaming per-stage progress as Server-Sent Events.
 
-        Request body: {
-            "name": "agent_name",
-            "files": [{"path": "app.py", "content": "..."}, ...],
-            "config": {
-                "region": "cn-beijing",
-                "projectName": "default"
-            }
-        }
-        Returns: {
-            "success": true,
-            "agentName": "my-agent",
-            "apikey": "ak-xxx",
-            "url": "https://...",
-            "consoleUrl": "https://console.volcengine.com/..."
-        }
+        Body: {name, files:[{path,content}], config:{region,projectName}, author?}.
+        While building/deploying, streams `data: {level, phase, message, pct?}`
+        frames (phase = build|deploy|publish); ends with a terminal
+        `data: {done:true, success, agentName?, url?, apikey?, runtimeId?,
+        consoleUrl?, error?, phase?}` frame. Uses the AgentKit SDK in-process
+        (no CLI subprocess) and tags the runtime with the deploying user.
         """
         import tempfile
         import shutil
-        import yaml
+        import queue as _queue
+        import json as _json
+        import asyncio
+        import yaml as _yaml
         from pathlib import Path as PathlibPath
+        from contextlib import contextmanager
 
-        temp_dir = None
-        try:
-            data = await request.json()
-            agent_name = data.get("name", "").strip()
-            files = data.get("files", [])
-            config = data.get("config", {})
+        data = await request.json()
+        agent_name = (data.get("name") or "").strip()
+        files = data.get("files", [])
+        config = data.get("config", {})
+        author = (data.get("author") or "").strip()
+        if not agent_name:
+            raise HTTPException(status_code=400, detail="Agent name is required")
+        if not files:
+            raise HTTPException(status_code=400, detail="No files provided")
 
-            if not agent_name:
-                raise HTTPException(status_code=400, detail="Agent name is required")
-            if not files:
-                raise HTTPException(status_code=400, detail="No files provided")
+        region = config.get("region", "cn-beijing")
+        project_name = config.get("projectName", "default")
 
-            # 1. Create temporary working directory
-            temp_dir = tempfile.mkdtemp(prefix=f"agentkit_deploy_{agent_name}_")
-            logger.info(f"Deploying agent '{agent_name}' from {temp_dir}")
+        # Write the generated project (+ agentkit.yaml) into a temp dir. Passing
+        # config_file makes the SDK resolve THIS dir as the project dir, so the
+        # live server process is never chdir'd.
+        temp_dir = tempfile.mkdtemp(prefix=f"agentkit_deploy_{agent_name}_")
+        base = PathlibPath(temp_dir).resolve()
+        for fi in files:
+            fp = fi.get("path", "")
+            if not fp or fp == "__init__.py":
+                continue
+            full = (base / fp).resolve()
+            if not full.is_relative_to(base):
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                raise HTTPException(status_code=400, detail=f"Illegal file path: {fp}")
+            full.parent.mkdir(parents=True, exist_ok=True)
+            full.write_text(fi.get("content", ""), encoding="utf-8")
+        if not (base / "app.py").exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise HTTPException(status_code=400, detail="No app.py found in files")
 
-            # 2. Write all project files
-            for file_info in files:
-                file_path = file_info.get("path", "")
-                content = file_info.get("content", "")
-                if not file_path:
-                    continue
+        agentkit_config = {
+            "common": {
+                "agent_name": agent_name,
+                "entry_point": "app.py",
+                "python_version": "3.11",
+                "launch_type": "cloud",
+            },
+            "launch_types": {
+                "cloud": {
+                    "region": region,
+                    "project_name": project_name,
+                    "image_tag": "latest",
+                    "runtime_envs": {
+                        "MODEL_AGENT_API_KEY": os.getenv("MODEL_AGENT_API_KEY", ""),
+                        "OTEL_SDK_DISABLED": "true",
+                        "VEADK_DISABLE_EXPIRE_AT": "true",
+                    },
+                }
+            },
+        }
+        (base / "agentkit.yaml").write_text(
+            _yaml.dump(agentkit_config, allow_unicode=True), encoding="utf-8"
+        )
 
-                # Skip __init__.py to avoid package conflicts with python -m agent
-                if file_path == "__init__.py":
-                    logger.info(
-                        f"Skipping {file_path} to ensure proper module execution"
-                    )
-                    continue
+        events: "_queue.Queue" = _queue.Queue()
+        state = {"phase": "build"}
 
-                # Confine writes to temp_dir — reject absolute paths and
-                # "../" traversal so a crafted `path` can't write outside it.
-                base = PathlibPath(temp_dir).resolve()
-                full_path = (base / file_path).resolve()
-                if not full_path.is_relative_to(base):
-                    raise HTTPException(
-                        status_code=400, detail=f"Illegal file path: {file_path}"
-                    )
-                full_path.parent.mkdir(parents=True, exist_ok=True)
-                full_path.write_text(content, encoding="utf-8")
+        _PHASE_ORDER = {"build": 0, "deploy": 1, "publish": 2}
 
-            # 3. Verify entry point exists
-            entry_point = "app.py"
-            if not (PathlibPath(temp_dir) / "app.py").exists():
-                raise HTTPException(
-                    status_code=400,
-                    detail="No app.py found in files (frontend should generate it)",
+        def _classify(message: str) -> str:
+            """Map a reporter message to a deploy phase, monotonically.
+
+            The SDK prints two authoritative high-level markers — "Step 1/2:
+            Building image" and "Step 2/2: Deploying service" — so the phase
+            switches on those, and only advances to "publish" on a strong
+            readiness/endpoint signal. The phase never regresses: many
+            build/deploy sub-messages mention words like "endpoint", "ready",
+            or "create" (e.g. "Ensuring CR public endpoint access", "Waiting for
+            Runtime to be ready") that would otherwise flap the UI stepper
+            backward.
+            """
+            m = message.lower()
+            cur = state["phase"]
+            if "step 2/2" in m:
+                cand = "deploy"
+            elif "step 1/2" in m:
+                cand = "build"
+            elif (
+                "launch successful" in m
+                or "service endpoint:" in m
+                or "runtime status: ready" in m
+                or "endpoint: http" in m
+            ):
+                cand = "publish"
+            else:
+                cand = cur
+            # Phase only ever moves forward (build -> deploy -> publish).
+            return cand if _PHASE_ORDER[cand] >= _PHASE_ORDER[cur] else cur
+
+        from agentkit.toolkit.reporter import Reporter, TaskHandle
+
+        def _emit(level: str, message: str, pct=None):
+            state["phase"] = _classify(message)
+            ev = {"level": level, "phase": state["phase"], "message": message}
+            if pct is not None:
+                ev["pct"] = pct
+            events.put(ev)
+
+        class _QReporter(Reporter):
+            def info(self, message, **k):
+                _emit("info", str(message))
+
+            def success(self, message, **k):
+                _emit("success", str(message))
+
+            def warning(self, message, **k):
+                _emit("warning", str(message))
+
+            def error(self, message, **k):
+                _emit("error", str(message))
+
+            def progress(self, message, current, total=100, **k):
+                _emit(
+                    "info", str(message), int(current / total * 100) if total else None
                 )
 
-            # Verify files in temp_dir
-            files_created = list(PathlibPath(temp_dir).iterdir())
-            logger.info(f"Files in deployment dir: {[f.name for f in files_created]}")
+            def confirm(self, message, default=False, **k):
+                return default
 
-            # 5. Generate agentkit.yaml
-            region = config.get("region", "cn-beijing")
-            project_name = config.get("projectName", "default")
+            @contextmanager
+            def long_task(self, description, total=100):
+                _emit("info", str(description))
 
-            agentkit_config = {
-                "common": {
-                    "agent_name": agent_name,
-                    "entry_point": entry_point,  # Use agent.py or app.py
-                    "python_version": "3.11",
-                    "launch_type": "cloud",
-                },
-                "launch_types": {
-                    "cloud": {
-                        "region": region,
-                        "project_name": project_name,
-                        "image_tag": "latest",
-                        "runtime_envs": {
-                            "MODEL_AGENT_API_KEY": os.getenv("MODEL_AGENT_API_KEY", ""),
-                            # Disable OpenTelemetry to avoid connection errors in AgentKit Runtime
-                            "OTEL_SDK_DISABLED": "true",
-                            # Disable expire_at to avoid signature expiration during deployment
-                            "VEADK_DISABLE_EXPIRE_AT": "true",
-                        },
-                    }
-                },
-            }
+                class _H(TaskHandle):
+                    def update(self, description=None, completed=None):
+                        if description:
+                            pct = (
+                                int(completed / total * 100)
+                                if (completed is not None and total)
+                                else None
+                            )
+                            _emit("info", str(description), pct)
 
-            config_path = PathlibPath(temp_dir) / "agentkit.yaml"
-            config_path.write_text(yaml.dump(agentkit_config, allow_unicode=True))
+                yield _H()
 
-            # 5. Copy .env (use server credentials)
-            if Path(".env").exists():
-                shutil.copy(".env", PathlibPath(temp_dir) / ".env")
+            def show_logs(self, title, lines, max_lines=100):
+                _emit("info", str(title))
 
-            # 6. Call veadk agentkit launch
-            logger.info("Launching agent via CLI: veadk agentkit launch")
-            result = subprocess.run(
-                ["veadk", "agentkit", "launch"],
-                cwd=temp_dir,
-                capture_output=True,
-                text=True,
-                timeout=600,  # 10 minutes timeout
-            )
+        result_box: dict = {}
 
-            if result.returncode != 0:
-                error_msg = result.stderr or result.stdout
-                logger.error(f"AgentKit launch failed: {error_msg}")
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Deployment failed: {error_msg[:500]}",
-                )
+        def _run():
+            from agentkit.toolkit import sdk
+            from agentkit.toolkit.models import PreflightMode
 
-            # 7. Parse output (extract runtime_id, apikey name, and url from CLI)
-            output = result.stdout
-            logger.info(f"AgentKit launch output: {output}")
+            with _deploy_lock:
+                # Tag the created runtime with the deploying user so "管理 Agent"
+                # can filter by author. Restored right after.
+                rt_client = None
+                orig_create = None
+                try:
+                    from agentkit.sdk.runtime.client import (
+                        AgentkitRuntimeClient as rt_client,
+                    )
+                    from agentkit.sdk.runtime import types as _rt
 
-            runtime_id, apikey_name, url, actual_agent_name = _parse_agentkit_output(
-                output
-            )
-            logger.info(f"Parsed from CLI - RuntimeId: {runtime_id}, Endpoint: {url}")
+                    orig_create = rt_client.create_runtime
+                    extra = [
+                        _rt.TagsItemForCreateRuntime.model_validate(
+                            {"Key": "veadk:managed", "Value": "true"}
+                        )
+                    ]
+                    if author:
+                        extra.append(
+                            _rt.TagsItemForCreateRuntime.model_validate(
+                                {"Key": "veadk:author", "Value": author}
+                            )
+                        )
 
-            # 8. Try to get actual API key from AgentKit API
+                    def _tagged_create(self, req, _orig=orig_create, _extra=extra):
+                        req.tags = [*(req.tags or []), *_extra]
+                        return _orig(self, req)
+
+                    rt_client.create_runtime = _tagged_create
+                except Exception as e:
+                    logger.warning(f"Could not attach author tag to runtime: {e}")
+
+                try:
+                    result_box["result"] = sdk.launch(
+                        config_file=str(base / "agentkit.yaml"),
+                        preflight_mode=PreflightMode.WARN,
+                        reporter=_QReporter(),
+                    )
+                except Exception as e:
+                    logger.error(f"AgentKit launch error: {e}", exc_info=True)
+                    result_box["error"] = str(e)
+                finally:
+                    if rt_client is not None and orig_create is not None:
+                        rt_client.create_runtime = orig_create
+            events.put(None)  # sentinel: launch finished
+
+        _threading.Thread(target=_run, daemon=True).start()
+
+        async def _stream():
+            loop = asyncio.get_event_loop()
             try:
-                actual_apikey = _get_runtime_apikey(runtime_id, region)
-                if actual_apikey:
-                    apikey = actual_apikey
-                    logger.info("Successfully retrieved API key via AgentKit API")
-                else:
-                    apikey = apikey_name or f"API-KEY-{runtime_id}"
-                    logger.warning(
-                        f"Could not retrieve API key from AgentKit API, using placeholder: {apikey}"
+                while True:
+                    ev = await loop.run_in_executor(None, events.get)
+                    if ev is None:
+                        break
+                    yield f"data: {_json.dumps(ev, ensure_ascii=False)}\n\n"
+
+                final = {"done": True}
+                if result_box.get("error"):
+                    final.update(
+                        {
+                            "success": False,
+                            "error": result_box["error"],
+                            "phase": state["phase"],
+                        }
                     )
-            except Exception as e:
-                logger.warning(
-                    f"Failed to retrieve API key via AgentKit API: {e}, using placeholder"
-                )
-                apikey = apikey_name or f"API-KEY-{runtime_id}"
+                else:
+                    res = result_box.get("result")
+                    dr = getattr(res, "deploy_result", None) if res else None
+                    if res is not None and getattr(res, "success", False):
+                        meta = (dr.metadata if (dr and dr.metadata) else {}) or {}
+                        final.update(
+                            {
+                                "success": True,
+                                "agentName": agent_name,
+                                "url": getattr(dr, "endpoint_url", None)
+                                if dr
+                                else None,
+                                "apikey": meta.get("runtime_apikey", ""),
+                                "runtimeId": meta.get("runtime_id", ""),
+                                "consoleUrl": (
+                                    "https://console.volcengine.com/agentkit/"
+                                    f"region:agentkit+{region}/runtime?projectName={project_name}"
+                                ),
+                            }
+                        )
+                    else:
+                        err = getattr(res, "error", None) if res else None
+                        final.update(
+                            {
+                                "success": False,
+                                "error": err or "Deployment failed",
+                                "phase": state["phase"],
+                            }
+                        )
+                yield f"data: {_json.dumps(final, ensure_ascii=False)}\n\n"
+            finally:
+                shutil.rmtree(temp_dir, ignore_errors=True)
 
-            # 9. Construct console URL
-            console_url = (
-                f"https://console.volcengine.com/agentkit/"
-                f"region:agentkit+{region}/runtime"
-                f"?projectName={project_name}"
+        from fastapi.responses import StreamingResponse
+
+        return StreamingResponse(_stream(), media_type="text/event-stream")
+
+    @app.get("/web/my-runtimes")
+    async def _web_my_runtimes(author: str = "", region: str = "cn-beijing"):
+        """List AgentKit runtimes created via this UI (tagged veadk:managed),
+        optionally filtered to a single `author` (veadk:author tag)."""
+        ak, sk, token = _resolve_ve_credentials()
+        try:
+            from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+            from agentkit.sdk.runtime import types as _rt
+
+            client = AgentkitRuntimeClient(
+                access_key=ak, secret_key=sk, session_token=token, region=region
             )
+            out: list[dict] = []
+            token = None
+            for _ in range(20):  # page cap
+                kw = {"page_size": 100}
+                if token:
+                    kw["next_token"] = token
+                resp = client.list_runtimes(_rt.ListRuntimesRequest(**kw))
+                for r in resp.agent_kit_runtimes or []:
+                    tags = {tg.key: tg.value for tg in (r.tags or [])}
+                    if tags.get("veadk:managed") != "true":
+                        continue
+                    if author and tags.get("veadk:author") != author:
+                        continue
+                    out.append(
+                        {
+                            "name": r.name,
+                            "runtimeId": r.runtime_id,
+                            "status": r.status,
+                            "createdAt": r.created_at,
+                            "author": tags.get("veadk:author", ""),
+                            "region": region,
+                        }
+                    )
+                token = getattr(resp, "next_token", None)
+                if not token:
+                    break
+            out.sort(key=lambda x: x.get("createdAt") or "", reverse=True)
+            return {"runtimes": out}
+        except Exception as e:
+            logger.error(f"list my-runtimes failed: {e}", exc_info=True)
+            raise HTTPException(status_code=502, detail=str(e))
 
+    @app.post("/web/delete-runtime")
+    async def _web_delete_runtime(request: Request):
+        """Delete an AgentKit runtime by id (used by the '管理 Agent' view)."""
+        data = await request.json()
+        runtime_id = (data.get("runtimeId") or "").strip()
+        region = (data.get("region") or "cn-beijing").strip()
+        if not runtime_id:
+            raise HTTPException(status_code=400, detail="runtimeId is required")
+        ak, sk, token = _resolve_ve_credentials()
+        try:
+            from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+            from agentkit.sdk.runtime import types as _rt
+
+            client = AgentkitRuntimeClient(
+                access_key=ak, secret_key=sk, session_token=token, region=region
+            )
+            client.delete_runtime(_rt.DeleteRuntimeRequest(runtime_id=runtime_id))
+            return {"success": True}
+        except Exception as e:
+            logger.error(f"delete runtime failed: {e}", exc_info=True)
+            raise HTTPException(status_code=502, detail=str(e))
+
+    @app.get("/web/runtime-detail")
+    async def _web_runtime_detail(runtimeId: str = "", region: str = "cn-beijing"):
+        """Control-plane detail for one runtime (used by the '管理 Agent' view).
+
+        Returns config/status metadata from GetRuntime. This is NOT the in-container
+        agent graph (that lives on the runtime's data plane); env-var values that
+        look like secrets are masked before leaving the server.
+        """
+        if not runtimeId:
+            raise HTTPException(status_code=400, detail="runtimeId is required")
+        ak, sk, token = _resolve_ve_credentials()
+
+        def _mask(key: str, value: str) -> str:
+            if not value:
+                return value
+            if any(s in key.upper() for s in ("KEY", "SECRET", "TOKEN", "PASSWORD")):
+                return (value[:3] + "***") if len(value) > 3 else "***"
+            return value
+
+        try:
+            from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+            from agentkit.sdk.runtime import types as _rt
+
+            client = AgentkitRuntimeClient(
+                access_key=ak, secret_key=sk, session_token=token, region=region
+            )
+            r = client.get_runtime(_rt.GetRuntimeRequest(runtime_id=runtimeId))
+            envs = [
+                {"key": e.key, "value": _mask(e.key or "", e.value or "")}
+                for e in (getattr(r, "envs", None) or [])
+            ]
             return {
-                "success": True,
-                "agentName": actual_agent_name or agent_name,
-                "apikey": apikey,
-                "url": url,
-                "consoleUrl": console_url,
+                "runtimeId": getattr(r, "runtime_id", runtimeId),
+                "name": getattr(r, "name", "") or "",
+                "description": getattr(r, "description", "") or "",
+                "status": getattr(r, "status", "") or "",
+                "statusMessage": getattr(r, "status_message", "") or "",
+                "model": getattr(r, "model_agent_name", "") or "",
+                "project": getattr(r, "project_name", "") or "",
+                "region": region,
+                "createdAt": getattr(r, "created_at", "") or "",
+                "updatedAt": getattr(r, "updated_at", "") or "",
+                "currentVersion": getattr(r, "current_version_number", None),
+                "resources": {
+                    "cpuMilli": getattr(r, "cpu_milli", None),
+                    "memoryMb": getattr(r, "memory_mb", None),
+                    "minInstance": getattr(r, "min_instance", None),
+                    "maxInstance": getattr(r, "max_instance", None),
+                    "maxConcurrency": getattr(r, "max_concurrency", None),
+                },
+                "envs": envs,
+                "memoryId": getattr(r, "memory_id", "") or "",
+                "toolId": getattr(r, "tool_id", "") or "",
+                "knowledgeId": getattr(r, "knowledge_id", "") or "",
+                "mcpToolsetId": getattr(r, "mcp_toolset_id", "") or "",
+                "artifactUrl": getattr(r, "artifact_url", "") or "",
+                "artifactType": getattr(r, "artifact_type", "") or "",
             }
-
-        except subprocess.TimeoutExpired:
-            logger.error("AgentKit deployment timeout (>10min)")
-            raise HTTPException(status_code=504, detail="Deployment timeout (>10min)")
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"AgentKit deployment error: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
-        finally:
-            # 9. Cleanup temporary directory
-            if temp_dir and os.path.exists(temp_dir):
-                shutil.rmtree(temp_dir, ignore_errors=True)
-
-    def _parse_agentkit_output(output: str) -> tuple[str, str, str, str]:
-        """Parse CLI output to extract runtime_id, apikey name, endpoint, and actual agent name.
-
-        Actual AgentKit CLI output format:
-        - Runtime ID: "✅ Runtime created successfully: r-xxxxx"
-        - Endpoint: "Endpoint: https://..."
-        - Agent name: "Creating Runtime: a_111-8pi9eche" or "Creating new pipeline: a_111-8pi9eche"
-
-        Returns:
-            Tuple of (runtime_id, apikey_name, endpoint, actual_agent_name)
-        """
-        output = output.strip()
-
-        # Extract RuntimeId
-        runtime_match = re.search(
-            r"Runtime created successfully:\s*(r-\w+)", output, re.IGNORECASE
-        )
-        runtime_id = runtime_match.group(1) if runtime_match else ""
-
-        # Extract Endpoint (appears multiple times, use the first occurrence)
-        endpoint_match = re.search(r"Endpoint:\s*(https?://\S+)", output, re.IGNORECASE)
-        endpoint = endpoint_match.group(1) if endpoint_match else ""
-
-        # Try to extract API key name (may not always be present)
-        apikey_match = re.search(
-            r"Generated API key name:\s*(API-KEY-\S+)", output, re.IGNORECASE
-        )
-        apikey_name = apikey_match.group(1) if apikey_match else ""
-
-        # Extract actual agent name (pipeline/runtime name with suffix)
-        # Try multiple patterns: "Creating Runtime: xxx" or "Creating new pipeline: xxx"
-        agent_name = ""
-        for pattern in [
-            r"Creating Runtime:\s*([a-zA-Z0-9_-]+)",
-            r"Creating new pipeline:\s*([a-zA-Z0-9_-]+)",
-            r"Pipeline created successfully:\s*([a-zA-Z0-9_-]+)",
-        ]:
-            name_match = re.search(pattern, output, re.IGNORECASE)
-            if name_match:
-                agent_name = name_match.group(1)
-                break
-
-        if not runtime_id or not endpoint:
-            logger.error(f"Cannot parse CLI output: {output}")
-            raise ValueError(
-                f"Failed to parse deployment output. "
-                f"Expected RuntimeId and Endpoint, got: {output[:500]}"
-            )
-
-        return runtime_id, apikey_name, endpoint, agent_name
-
-    def _get_runtime_apikey(runtime_id: str, region: str) -> str:
-        """Get actual API key from AgentKit Runtime API.
-
-        Args:
-            runtime_id: Runtime ID (e.g., "r-yeo3ym4hkwo2eybtjs36")
-            region: AgentKit region (e.g., "cn-beijing")
-
-        Returns:
-            Actual API key string, or empty string if retrieval fails
-
-        This function calls the Volcengine AgentKit GetRuntime API to retrieve
-        the actual API key after deployment. The API key is in the
-        AuthorizerConfiguration.KeyAuth.ApiKey field.
-        """
-        try:
-            from volcengine.Credentials import Credentials
-            from volcengine.base.Service import Service
-            from volcengine.ServiceInfo import ServiceInfo
-            from volcengine.ApiInfo import ApiInfo
-
-            access_key = os.getenv("VOLCENGINE_ACCESS_KEY")
-            secret_key = os.getenv("VOLCENGINE_SECRET_KEY")
-
-            if not access_key or not secret_key:
-                logger.warning("VOLCENGINE_ACCESS_KEY or VOLCENGINE_SECRET_KEY not set")
-                return ""
-
-            # Configure AgentKit service
-            service_info = ServiceInfo(
-                host=f"agentkit.{region}.volcengineapi.com",
-                header={},
-                credentials=Credentials(access_key, secret_key, "agentkit", region),
-                connection_timeout=30,
-                socket_timeout=30,
-                scheme="https",  # IMPORTANT: Use HTTPS instead of default HTTP
-            )
-
-            api_info = {
-                "GetRuntime": ApiInfo(
-                    "POST",
-                    "/",
-                    {"Action": "GetRuntime", "Version": "2025-10-30"},
-                    {},
-                    {},
-                ),
-            }
-
-            service = Service(service_info, api_info)
-
-            # Call GetRuntime to get API key
-            request_body = {
-                "RuntimeId": runtime_id,
-            }
-
-            logger.debug(f"Calling GetRuntime API for RuntimeId: {runtime_id}")
-            response = service.json("GetRuntime", {}, json.dumps(request_body))
-
-            if not response:
-                logger.error("GetRuntime API returned empty response")
-                return ""
-
-            runtime_data = (
-                json.loads(response) if isinstance(response, str) else response
-            )
-            logger.debug(f"GetRuntime response keys: {list(runtime_data.keys())}")
-
-            if (
-                "ResponseMetadata" in runtime_data
-                and "Error" in runtime_data["ResponseMetadata"]
-            ):
-                error = runtime_data["ResponseMetadata"]["Error"]
-                logger.error(
-                    f"GetRuntime API error: {error.get('Code')} - {error.get('Message')}"
-                )
-                return ""
-
-            result = runtime_data.get("Result", {})
-
-            # Extract API key from AuthorizerConfiguration.KeyAuth.ApiKey
-            authorizer_config = result.get("AuthorizerConfiguration", {})
-            key_auth = authorizer_config.get("KeyAuth", {})
-            api_key = key_auth.get("ApiKey", "")
-
-            if api_key:
-                logger.info(
-                    f"Successfully retrieved API key from GetRuntime: {api_key[:10]}..."
-                )
-                return api_key
-            else:
-                logger.warning(
-                    f"No API key found in GetRuntime response. "
-                    f"AuthorizerConfiguration: {authorizer_config}"
-                )
-                return ""
-
-        except Exception as e:
-            logger.error(f"Failed to get API key from AgentKit API: {e}", exc_info=True)
-            return ""
+            logger.error(f"get runtime detail failed: {e}", exc_info=True)
+            raise HTTPException(status_code=502, detail=str(e))
 
     # ---- Auth ----------------------------------------------------------------
     # 'gateway' mode: an upstream API gateway (the AgentKit runtime gateway) has
@@ -991,7 +1308,7 @@ def frontend(
         # the SPA shows a "set AK/SK" notice when they are absent.
         has_creds = bool(
             os.getenv("VOLCENGINE_ACCESS_KEY") and os.getenv("VOLCENGINE_SECRET_KEY")
-        )
+        ) or os.path.exists("/var/run/secrets/iam/credential")
         return {"credentials": has_creds}
 
     if dev:
@@ -1058,6 +1375,285 @@ def frontend(
             f"A2UI UI + API serving on http://{host}:{port} (UI: {webui}, agents: {agents_dir})"
         )
 
+    # Open the UI in the browser once the server is up. Only in non-dev mode,
+    # where this server serves the UI; with --dev the Vite dev server owns it.
+    if open_browser and not dev:
+        import threading
+
+        browse_host = "127.0.0.1" if host in ("0.0.0.0", "", "::") else host
+        url = f"http://{browse_host}:{port}"
+        threading.Thread(
+            target=_open_browser_when_ready,
+            args=(url, browse_host, port),
+            daemon=True,
+        ).start()
+        logger.info(f"Opening {url} in your browser…")
+
     import uvicorn
 
     uvicorn.run(app, host=host, port=port)
+
+
+@studio.command("deploy")
+@click.option(
+    "--user-pool-id",
+    required=True,
+    help="VeIdentity User Pool UID that gates access (the gateway does SSO against it).",
+)
+@click.option(
+    "--allowed-client-id",
+    required=True,
+    help="VeIdentity client UID used for the SSO login at the gateway.",
+)
+@click.option(
+    "--client-secret",
+    default="",
+    help="Client secret, if it cannot be read back from the client UID.",
+)
+@click.option(
+    "--vefaas-app-name",
+    required=True,
+    help="VeFaaS application/function name (4-64 chars, letters/digits/-, no underscore).",
+)
+@click.option("--region", default="cn-beijing", show_default=True)
+@click.option(
+    "--iam-role",
+    default=None,
+    help="Pre-existing IAM role TRN to bind to the function. If omitted, a role "
+    "is auto-created with the frontend deploy policy.",
+)
+@click.option(
+    "--gateway-name",
+    default="",
+    help="Serverless APIG gateway name to use. Default: auto-discover an "
+    "existing serverless gateway and reuse it, creating one only if none exists.",
+)
+@click.option("--gateway-service-name", default="")
+@click.option("--gateway-upstream-name", default="")
+@click.option("--volcengine-access-key", default=None)
+@click.option("--volcengine-secret-key", default=None)
+@click.option(
+    "--veadk-version",
+    default="",
+    help="Pin the veadk-python version in the function's requirements.txt "
+    "(default: latest). The deployed UI is that version's veadk/webui.",
+)
+@click.option(
+    "--from-source",
+    is_flag=True,
+    default=False,
+    help="Build a wheel from THIS checkout (incl. uncommitted changes + the "
+    "current veadk/webui) and ship it, instead of installing veadk-python from "
+    "PyPI. Use to deploy unreleased frontend/backend changes.",
+)
+def frontend_deploy(
+    user_pool_id: str,
+    allowed_client_id: str,
+    client_secret: str,
+    vefaas_app_name: str,
+    region: str,
+    iam_role: str | None,
+    gateway_name: str,
+    gateway_service_name: str,
+    gateway_upstream_name: str,
+    volcengine_access_key: str | None,
+    volcengine_secret_key: str | None,
+    veadk_version: str,
+    from_source: bool,
+) -> None:
+    """Deploy the SSO web frontend to VeFaaS.
+
+    Builds a minimal function that runs `veadk frontend --auth-mode gateway`,
+    fronted by an APIG SSO gateway bound to the given VeIdentity user pool +
+    client, and prints the public URL. Inside the function the frontend uses the
+    bound IAM role's STS credentials to manage AgentKit runtimes.
+    """
+    import tempfile
+    import shutil
+
+    from veadk.config import getenv, veadk_environments
+
+    ak = volcengine_access_key or getenv("VOLCENGINE_ACCESS_KEY")
+    sk = volcengine_secret_key or getenv("VOLCENGINE_SECRET_KEY")
+    if not ak or not sk:
+        raise click.ClickException(
+            "Volcengine credentials required: set VOLCENGINE_ACCESS_KEY/SECRET_KEY "
+            "or pass --volcengine-access-key/--volcengine-secret-key."
+        )
+
+    # 1) Ensure the IAM role the function runs as (auto-create unless provided).
+    if iam_role:
+        role_trn = iam_role
+        click.echo(f"Using provided IAM role: {role_trn}")
+    else:
+        from veadk.cli._frontend_deploy_iam import ensure_frontend_role
+
+        click.echo("Ensuring IAM role + policy…")
+        role_trn = ensure_frontend_role(ak, sk)
+        click.echo(f"IAM role ready: {role_trn}")
+    # Consumed by VeFaaS._create_function as the function's Role (STS creds are
+    # then injected into the instance); read via getenv from os.environ, NOT
+    # shipped as a plain env var.
+    os.environ["IAM_ROLE"] = role_trn
+
+    # SECURITY: VeFaaS._create_function uploads *everything* in veadk_environments
+    # (i.e. the deployer's whole .env) as function env vars. The frontend must
+    # NOT receive the deployer's secrets (VOLCENGINE_ACCESS_KEY/SECRET_KEY, model
+    # API keys, DB passwords). It authenticates to Volcengine via its IAM role's
+    # STS credentials (see _resolve_ve_credentials — env AK/SK would otherwise
+    # wrongly take precedence). So reset to a minimal, explicit, non-secret env.
+    #
+    # The frontend does SSO itself (--auth-mode frontend): a serverless APIG
+    # gateway can only carry veFaaS upstreams, so the gateway-plugin OAuth path
+    # (which needs a domain upstream to the user pool) can't run on VeFaaS.
+    # `veadk frontend` resolves the client secret + registers the callback from
+    # the pool/client UID via from_veidentity, so we only ship the UIDs here.
+    veadk_environments.clear()
+    veadk_environments["OAUTH2_USER_POOL_ID"] = user_pool_id
+    veadk_environments["OAUTH2_USER_POOL_CLIENT_ID"] = allowed_client_id
+    veadk_environments["OAUTH2_PROVIDER"] = "veidentity"
+    if client_secret:
+        veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
+
+    # 2) Build the function project (zip): run.sh launches the frontend server on
+    #    the FaaS-assigned port; requirements.txt pulls veadk-python (ships the UI).
+    requirements = (
+        f"veadk-python=={veadk_version}\n" if veadk_version else "veadk-python\n"
+    )
+    run_sh = (
+        "#!/bin/bash\n"
+        "set -ex\n"
+        'cd "$(dirname "$0")"\n'
+        'if [ -d "output" ]; then cd ./output/; fi\n'
+        "HOST=0.0.0.0\n"
+        "PORT=${_FAAS_RUNTIME_PORT:-8000}\n"
+        "export PYTHONPATH=$PYTHONPATH:./site-packages\n"
+        "exec python3 -m veadk.cli.cli studio "
+        '--auth-mode frontend --host "$HOST" --port "$PORT"\n'
+    )
+    # 2b) Resolve the serverless APIG gateway: use --gateway-name if given, else
+    #     reuse an existing serverless gateway, creating one only if none exists.
+    #     (VeFaaS applications can only attach to a serverless gateway; reusing
+    #     avoids the per-account gateway quota.)
+    from veadk.integrations.ve_apig.ve_apig import APIGateway
+
+    if not gateway_name:
+        apig = APIGateway(ak, sk, region)
+        gw = apig.find_serverless_gateway()
+        if gw is not None:
+            gateway_name = getattr(gw, "name")
+            click.echo(f"Reusing serverless gateway: {gateway_name}")
+        else:
+            gateway_name = "veadk-frontend-gw"
+            click.echo(f"No serverless gateway found; creating '{gateway_name}'…")
+            apig.create_serverless_gateway(gateway_name)
+            click.echo(f"Created serverless gateway: {gateway_name}")
+
+    tmp = tempfile.mkdtemp(prefix=f"veadk_frontend_deploy_{vefaas_app_name}_")
+    try:
+        (Path(tmp) / "run.sh").write_text(run_sh, encoding="utf-8")
+
+        # When --from-source, build a wheel from this checkout (picks up
+        # uncommitted changes + the current veadk/webui) and install it instead
+        # of the PyPI release, so the deployed frontend runs this branch's code.
+        if from_source:
+            import shutil as _shutil
+            import subprocess
+            import sys
+            import veadk
+
+            repo_root = Path(veadk.__file__).resolve().parent.parent
+            if not (repo_root / "pyproject.toml").is_file():
+                raise click.ClickException(
+                    f"--from-source: no pyproject.toml at {repo_root}; run from a "
+                    "veadk source checkout."
+                )
+            click.echo(f"Building wheel from source at {repo_root}…")
+            uv = _shutil.which("uv")
+            if uv:
+                cmd = [uv, "build", "--wheel", str(repo_root), "-o", tmp]
+            else:
+                cmd = [
+                    sys.executable,
+                    "-m",
+                    "build",
+                    "--wheel",
+                    "-o",
+                    tmp,
+                    str(repo_root),
+                ]
+            subprocess.run(cmd, check=True)
+            wheels = list(Path(tmp).glob("veadk*.whl"))
+            if not wheels:
+                raise click.ClickException(
+                    "--from-source: wheel build produced no .whl"
+                )
+            wheel_name = wheels[0].name
+            click.echo(f"Shipping local wheel: {wheel_name}")
+            # Install the bundled wheel; deps still resolve from PyPI.
+            requirements = f"./{wheel_name}\n"
+
+        (Path(tmp) / "requirements.txt").write_text(requirements, encoding="utf-8")
+
+        # 3) Deploy the function + a plain public APIG trigger on the serverless
+        #    gateway (auth_method="none" — no gateway SSO plugin / domain upstream).
+        from veadk.cloud.cloud_agent_engine import CloudAgentEngine
+
+        engine = CloudAgentEngine(
+            volcengine_access_key=ak,
+            volcengine_secret_key=sk,
+            region=region,
+        )
+        click.echo(f"Deploying frontend to VeFaaS as '{vefaas_app_name}'…")
+        app = engine.deploy(
+            application_name=vefaas_app_name,
+            path=tmp,
+            gateway_name=gateway_name,
+            gateway_service_name=gateway_service_name,
+            gateway_upstream_name=gateway_upstream_name,
+            use_adk_web=False,
+            auth_method="none",
+        )
+        url = (app.vefaas_endpoint or "").rstrip("/")
+        redirect_uri = f"{url}/oauth2/callback"
+
+        # 4) Register the SSO callback on the user-pool client HERE, with the
+        #    deployer's full credentials — the function's IAM role is granted
+        #    only read access to Identity (id:GetUserPoolClient), not
+        #    id:UpdateUserPoolClient, so it can't register the callback itself.
+        if url:
+            try:
+                from veadk.integrations.ve_identity.identity_client import (
+                    IdentityClient,
+                )
+
+                IdentityClient(
+                    access_key=ak, secret_key=sk, region=region
+                ).register_callback_for_user_pool_client(
+                    user_pool_uid=user_pool_id,
+                    client_uid=allowed_client_id,
+                    callback_url=redirect_uri,
+                    web_origin=url,
+                )
+                click.echo(f"Registered SSO callback: {redirect_uri}")
+            except Exception as e:
+                click.echo(
+                    f"⚠️  Could not register the SSO callback ({e}). Add "
+                    f"{redirect_uri} to the user-pool client's allowed callback URLs manually."
+                )
+
+        # 5) Two-phase: now that the public URL is known, inject the correct
+        #    OAuth redirect and re-release so in-app SSO points at this endpoint.
+        function_id = getattr(app, "vefaas_function_id", "")
+        if url and function_id:
+            click.echo(f"Setting OAUTH2_REDIRECT_URI={redirect_uri} and re-releasing…")
+            engine._vefaas_service.update_function_envs_and_release(
+                function_id, {"OAUTH2_REDIRECT_URI": redirect_uri}
+            )
+
+        click.echo("")
+        click.echo(f"✅ Frontend deployed: {url}")
+        click.echo(f"   application id: {app.vefaas_application_id}")
+        click.echo("   (open the URL — you'll be redirected through SSO login)")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)

@@ -733,6 +733,7 @@ class IdentityClient:
         )
         return response.allowed
 
+    @refresh_credentials
     def create_user_pool(self, name: str) -> tuple[str, str]:
         from volcenginesdkid import CreateUserPoolRequest, CreateUserPoolResponse
 
@@ -745,6 +746,7 @@ class IdentityClient:
 
         return response.uid, response.domain
 
+    @refresh_credentials
     def get_user_pool(
         self,
         name: Optional[str] = None,
@@ -799,6 +801,7 @@ class IdentityClient:
 
         raise ValueError("Either name or uid must be provided")
 
+    @refresh_credentials
     def create_user_pool_client(
         self, user_pool_uid: str, name: str, client_type: str
     ) -> tuple[str, str]:
@@ -817,6 +820,7 @@ class IdentityClient:
         )
         return response.uid, response.client_secret
 
+    @refresh_credentials
     def register_callback_for_user_pool_client(
         self,
         user_pool_uid: str,
@@ -861,6 +865,7 @@ class IdentityClient:
         )
         self._api_client.update_user_pool_client(request2)
 
+    @refresh_credentials
     def get_user_pool_client(
         self,
         user_pool_uid: str,

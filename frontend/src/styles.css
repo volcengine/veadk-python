@@ -130,6 +130,9 @@ body {
 .history-item-btn {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
   text-align: left;
   padding: 9px 10px;
   border: none;
@@ -140,10 +143,29 @@ body {
   cursor: pointer;
 }
 .history-title {
-  display: block;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* Live "generating…" dot on a session that's currently streaming. */
+.history-streaming {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 0 0 rgb(34 197 94 / 0.5);
+  animation: history-pulse 1.4s ease-in-out infinite;
+}
+@keyframes history-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(34 197 94 / 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgb(34 197 94 / 0);
+  }
 }
 .history-more {
   flex-shrink: 0;
@@ -557,7 +579,8 @@ body {
 /* ---------- trace drawer + flame graph ---------- */
 .drawer-scrim {
   position: fixed; inset: 0;
-  background: hsl(var(--foreground) / 0.25);
+  background: hsl(var(--foreground) / 0.2);
+  backdrop-filter: blur(2px);
   animation: fade 0.2s ease;
   z-index: 40;
 }
@@ -567,7 +590,7 @@ body {
   width: min(560px, 92vw);
   background: hsl(var(--background));
   border-left: 1px solid hsl(var(--border));
-  box-shadow: -8px 0 30px hsl(var(--foreground) / 0.12);
+  box-shadow: -12px 0 40px hsl(var(--foreground) / 0.14);
   display: flex; flex-direction: column;
   z-index: 41;
   animation: slidein 0.24s cubic-bezier(0.22, 1, 0.36, 1);
@@ -575,11 +598,15 @@ body {
 @keyframes slidein { from { transform: translateX(100%); } to { transform: translateX(0); } }
 .drawer-head {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 16px 18px;
+  padding: 15px 18px;
   border-bottom: 1px solid hsl(var(--border));
+  background: hsl(var(--canvas));
 }
-.drawer-title { font-weight: 600; font-size: 15px; }
-.drawer-sub { font-size: 12px; color: hsl(var(--muted-foreground)); margin-top: 2px; }
+.drawer-title { font-weight: 650; font-size: 15px; letter-spacing: -0.01em; }
+.drawer-sub {
+  font-size: 12px; color: hsl(var(--muted-foreground)); margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+}
 .drawer-close {
   display: flex; padding: 6px; border: none; background: none; cursor: pointer;
   color: hsl(var(--muted-foreground)); border-radius: 6px;
@@ -615,8 +642,11 @@ body {
   text-align: left;
   transition: background 0.1s;
 }
-.trace-row:hover { background: hsl(var(--accent)); }
-.trace-row.active { background: hsl(var(--secondary)); }
+.trace-row:hover { background: hsl(var(--foreground) / 0.04); }
+.trace-row.active {
+  background: hsl(var(--primary) / 0.07);
+  box-shadow: inset 2px 0 0 hsl(var(--primary) / 0.55);
+}
 .trace-label { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
 .trace-caret {
   display: inline-flex; align-items: center; justify-content: center;
@@ -642,11 +672,18 @@ body {
 .trace-track {
   position: relative;
   flex: 0 0 34%;
-  height: 14px;
-  border-radius: 4px;
-  background: hsl(var(--muted) / 0.6);
+  height: 16px;
+  border-radius: 5px;
+  background: hsl(var(--foreground) / 0.05);
 }
-.trace-bar { position: absolute; top: 3px; height: 8px; min-width: 3px; border-radius: 3px; }
+.trace-bar {
+  position: absolute;
+  top: 4px;
+  height: 8px;
+  min-width: 3px;
+  border-radius: 4px;
+  opacity: 0.9;
+}
 
 .trace-detail { flex: 1; min-width: 0; overflow: auto; padding: 18px 20px; }
 .td-title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; word-break: break-all; }
@@ -658,12 +695,11 @@ body {
 }
 .td-dot { width: 8px; height: 8px; border-radius: 50%; }
 .td-section {
-  margin: 20px 0 8px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: hsl(var(--muted-foreground));
+  margin: 22px 0 9px;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: hsl(var(--foreground));
 }
 .td-props { display: flex; flex-direction: column; }
 .td-prop {
@@ -682,8 +718,9 @@ body {
 }
 .td-pre {
   margin: 0;
-  padding: 10px 12px;
-  background: hsl(var(--muted));
+  padding: 11px 13px;
+  background: hsl(var(--canvas));
+  border: 1px solid hsl(var(--border));
   border-radius: 8px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
@@ -1685,6 +1722,135 @@ a.search-result { text-decoration: none; color: inherit; }
   backdrop-filter: blur(1px);
 }
 .main { position: relative; }
+
+/* ---------- agent topology (conversation side rail) ----------
+ * Floats in the right-hand whitespace beside the centered transcript. Only
+ * rendered when the agent has sub-agents, and only shown when the window is
+ * wide enough that it won't overlap the 768px conversation column. */
+.topo {
+  position: absolute;
+  top: 68px;
+  right: 18px;
+  width: 220px;
+  max-height: calc(100% - 150px);
+  overflow-y: auto;
+  padding: 12px;
+  background: hsl(var(--canvas));
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  box-shadow: 0 4px 16px hsl(0 0% 0% / 0.04);
+  z-index: 2;
+}
+.topo-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.topo-head-title { font-size: 12px; font-weight: 650; letter-spacing: 0.02em; }
+.topo-head-sub { font-size: 11px; color: hsl(var(--muted-foreground)); }
+.topo-tree { display: flex; flex-direction: column; gap: 4px; }
+/* Nested children indent and grow a connector guide-line on the left. */
+.topo-children {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+  margin-left: 10px;
+  padding-left: 8px;
+  border-left: 1px solid hsl(var(--border));
+}
+.topo-node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--background));
+  font-size: 12px;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    opacity 0.15s ease;
+}
+.topo-icon { width: 14px; height: 14px; flex-shrink: 0; opacity: 0.8; }
+.topo-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 550;
+}
+.topo-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+}
+/* Currently-executing agent: highlighted ring + gentle pulse. */
+.topo-node.is-active {
+  border-color: hsl(var(--primary));
+  background: hsl(var(--primary) / 0.08);
+  animation: topo-pulse 1.4s ease-in-out infinite;
+}
+.topo-node.is-active .topo-icon { opacity: 1; }
+/* An ancestor on the current delegation chain (handed off, not the leaf). */
+.topo-node.is-onpath {
+  border-color: hsl(var(--primary) / 0.4);
+  background: hsl(var(--primary) / 0.04);
+}
+/* An agent that ran earlier this turn but isn't the current one. */
+.topo-node.is-done { opacity: 0.55; }
+/* "远程执行中…" sub-line under an active A2A node. */
+.topo-remote {
+  margin: 3px 0 2px 22px;
+  font-size: 10.5px;
+  color: hsl(var(--primary));
+  animation: topo-blink 1.2s ease-in-out infinite;
+}
+@keyframes topo-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+/* Live delegation breadcrumb (root › planner › searcher). */
+.topo-path {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1px;
+  margin-bottom: 9px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: hsl(var(--primary) / 0.05);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.topo-path-seg { display: inline-flex; align-items: center; min-width: 0; }
+.topo-path-sep {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: hsl(var(--muted-foreground));
+}
+.topo-path-name { color: hsl(var(--muted-foreground)); }
+.topo-path-name.is-current { color: hsl(var(--primary)); font-weight: 600; }
+@keyframes topo-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 hsl(var(--primary) / 0.28);
+  }
+  50% {
+    box-shadow: 0 0 0 4px hsl(var(--primary) / 0);
+  }
+}
+/* Not enough whitespace to float the rail without covering the transcript. */
+@media (max-width: 1200px) {
+  .topo { display: none; }
+}
 
 /* ---------- quick create (cards) ---------- */
 .quick-create {
