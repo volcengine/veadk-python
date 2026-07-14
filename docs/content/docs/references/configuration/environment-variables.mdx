@@ -100,11 +100,59 @@ volcengine:
 | | `DATABASE_REDIS_PORT` | 端口，默认 6379 |
 | | `DATABASE_REDIS_PASSWORD` | 密码 |
 | | `DATABASE_REDIS_DB` | 数据库编号，默认 0 |
+| Milvus | `DATABASE_MILVUS_URI` | Milvus 地址；可为本地 Milvus Lite 文件路径或远程 URI |
+| | `DATABASE_MILVUS_TOKEN` | 鉴权 token；优先级高于 user/password（可选） |
+| | `DATABASE_MILVUS_USER` | 用户名（可选） |
+| | `DATABASE_MILVUS_PASSWORD` | 密码（可选） |
+| | `DATABASE_MILVUS_DB_NAME` | 数据库名，默认 `default` |
+| | `DATABASE_MILVUS_OVERWRITE` | 是否覆盖 collection，默认 `false` |
+| | `DATABASE_MILVUS_TIMEOUT` | 连接/请求超时时间（可选） |
+| | `DATABASE_MILVUS_OUTPUT_FIELDS` | 检索输出字段，逗号分隔（可选） |
 | VikingDB | `DATABASE_VIKING_PROJECT` | 项目名称 |
 | | `DATABASE_VIKING_REGION` | 区域 |
 | TOS | `DATABASE_TOS_ENDPOINT` | 访问端点 |
 | | `DATABASE_TOS_REGION` | 区域 |
 | | `DATABASE_TOS_BUCKET` | 桶名称 |
+| OpenViking | `DATABASE_OPENVIKING_URL` | OpenViking HTTP 服务地址 |
+| | `DATABASE_OPENVIKING_API_KEY` | OpenViking service owner API Key |
+| | `DATABASE_OPENVIKING_ACCOUNT` | 多租户或 trusted gateway 场景使用（可选） |
+| | `DATABASE_OPENVIKING_USER` | 多租户或 trusted gateway 场景使用（可选） |
+| | `DATABASE_OPENVIKING_ACTOR_PEER_ID` | 调用方 agent 或 peer 标识（可选） |
+| | `DATABASE_OPENVIKING_TARGET_URI` | 知识库资源目录，默认 `viking://resources/{index}/` |
+| | `DATABASE_OPENVIKING_WAIT` | 导入资源时是否等待解析与索引，默认 `true` |
+| | `DATABASE_OPENVIKING_IMPORT_TIMEOUT` | 导入等待超时时间，单位秒，默认 `300` |
+| | `DATABASE_OPENVIKING_HYDRATE_RESULTS` | 搜索命中后是否读取正文或概览，默认 `true` |
+| | `DATABASE_OPENVIKING_READ_LIMIT` | 读取文件正文的最大行数，默认 `200` |
+| | `DATABASE_OPENVIKING_SCORE_THRESHOLD` | 检索最低分阈值（可选） |
+| | `DATABASE_OPENVIKING_USE_CONTEXT_SEARCH` | 是否使用上下文增强搜索，默认 `false` |
+
+```yaml title="config.yaml"
+database:
+  milvus:
+    uri: ./milvus.db
+    # token:
+    # user:
+    # password:
+    # db_name: default
+    # overwrite: false
+    # timeout: 5.0
+    # output_fields: text,metadata
+```
+
+```yaml title="config.yaml"
+database:
+  openviking:
+    url: http://127.0.0.1:1933
+    api_key: your-openviking-api-key
+    # Optional for KnowledgeBase(backend="openviking"):
+    # target_uri: viking://resources/my_app/
+    # wait: true
+    # import_timeout: 300
+    # hydrate_results: true
+    # read_limit: 200
+    # score_threshold: 0.3
+    # use_context_search: false
+```
 
 ## 可观测
 
