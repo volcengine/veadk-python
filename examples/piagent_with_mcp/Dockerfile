@@ -7,11 +7,13 @@ ENV UV_SYSTEM_PYTHON=1
 ENV PYTHONUNBUFFERED=1
 ENV PIAGENT_BINARY=/opt/piagent/pi/pi
 ENV PIAGENT_AGENT_DIR=/tmp/veadk-piagent-home
+ENV PIAGENT_AUTO_INSTALL=0
 ENV OTEL_SDK_DISABLED=true
 
 WORKDIR /app
 
 COPY vendor/pi-linux-x64.tar.gz /tmp/pi-linux-x64.tar.gz
+COPY vendor/veadk_python-*.whl /tmp/
 
 RUN PIAGENT_VERSION="${PIAGENT_VERSION}" PIAGENT_SHA256="${PIAGENT_SHA256}" python - <<'PY'
 import hashlib
@@ -44,6 +46,8 @@ binary.chmod(0o755)
 print(f"Installed Pi binary to {binary}")
 PY
 
+RUN uv pip install --system /tmp/veadk_python-*.whl
+
 COPY requirements.txt ./
 RUN uv pip install --system -r requirements.txt
 
@@ -52,4 +56,3 @@ COPY . .
 EXPOSE 8000
 
 CMD ["python", "-m", "app"]
-

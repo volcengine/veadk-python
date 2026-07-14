@@ -110,6 +110,8 @@ class PiAgentConfig:
     disable_builtin_tools: bool = False
     extensions: tuple[str, ...] = ()
     allowed_tools: tuple[str, ...] = ()
+    disable_skill_discovery: bool = True
+    skill_paths: tuple[str, ...] = ()
 
     @classmethod
     def from_agent(cls, agent: "Agent", binary_path: str) -> "PiAgentConfig":
@@ -129,6 +131,9 @@ class PiAgentConfig:
             timeout_seconds=timeout,
             model=PiAgentModelConfig.from_agent(agent),
             disable_tools=_env_flag_enabled("PIAGENT_DISABLE_TOOLS", default=True),
+            disable_skill_discovery=_env_flag_enabled(
+                "PIAGENT_DISABLE_SKILL_DISCOVERY", default=True
+            ),
         )
 
     def with_tools(
@@ -140,6 +145,13 @@ class PiAgentConfig:
             disable_builtin_tools=True,
             extensions=tuple(extensions),
             allowed_tools=tuple(allowed_tools),
+        )
+
+    def with_skills(self, *, skill_paths: list[str]) -> "PiAgentConfig":
+        return replace(
+            self,
+            disable_skill_discovery=True,
+            skill_paths=tuple(skill_paths),
         )
 
     @property

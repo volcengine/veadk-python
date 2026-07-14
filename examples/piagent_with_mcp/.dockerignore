@@ -5,6 +5,7 @@ __pycache__/
 
 # Runtime state
 .adk/
+pipeline_failed_*.log
 
 # Virtual environments
 .venv/
@@ -20,4 +21,3 @@ env/
 # Git
 .git/
 .gitignore
-

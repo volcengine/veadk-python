@@ -22,6 +22,7 @@ from veadk.runtime.base_runtime import BaseRuntime, build_system_append
 from veadk.runtime.piagent.client import PiAgentRpcClient
 from veadk.runtime.piagent.config import PiAgentConfig, prepare_piagent_home
 from veadk.runtime.piagent.installer import resolve_or_install_piagent_binary
+from veadk.runtime.piagent.skills import materialize_skills_for_pi
 from veadk.runtime.piagent.tool_runtime import PiToolRuntime
 from veadk.runtime.piagent.tools_bridge import (
     build_executable_tools,
@@ -50,36 +51,46 @@ class PiAgentRuntime(BaseRuntime):
         binary_path = resolve_or_install_piagent_binary()
         config = PiAgentConfig.from_agent(agent, binary_path)
         prepare_piagent_home(config)
-        tool_bundle = await build_executable_tools(agent, ctx)
-
-        prompt = build_prompt(ctx)
-        append_text = build_system_append(agent)
-        if append_text:
-            prompt = (
-                f"# System instructions\n\n{append_text}\n\n# Conversation\n\n{prompt}"
-            )
-
-        logger.info(
-            "piagent runtime: "
-            f"model={config.model.model} provider={config.model.provider_id}"
-        )
-        translator = PiEventTranslator(
-            author=agent.name,
-            invocation_id=ctx.invocation_id,
-        )
+        skill_bundle = materialize_skills_for_pi(agent)
+        tool_bundle = None
         try:
+            tool_bundle = await build_executable_tools(agent, ctx)
+
+            prompt = build_prompt(ctx)
+            append_text = build_system_append(agent)
+            if append_text:
+                prompt = (
+                    f"# System instructions\n\n{append_text}\n\n"
+                    f"# Conversation\n\n{prompt}"
+                )
+
+            logger.info(
+                "piagent runtime: "
+                f"model={config.model.model} provider={config.model.provider_id}"
+            )
+            translator = PiEventTranslator(
+                author=agent.name,
+                invocation_id=ctx.invocation_id,
+            )
             async with PiToolRuntime(tool_bundle) as tools:
                 run_config = (
-                    config.with_tools(
+                    config.with_skills(skill_paths=list(skill_bundle.paths))
+                    if skill_bundle.paths
+                    else config
+                )
+                run_config = (
+                    run_config.with_tools(
                         extensions=[tools.extension_path],
                         allowed_tools=tools.tool_names,
                     )
                     if tools.enabled
-                    else config
+                    else run_config
                 )
                 async with PiAgentRpcClient(run_config) as client:
                     async for pi_event in client.prompt(prompt):
                         for event in translator.event_to_adk_events(pi_event):
                             yield event
         finally:
-            await close_toolsets(tool_bundle.opened_toolsets)
+            if tool_bundle is not None:
+                await close_toolsets(tool_bundle.opened_toolsets)
+            skill_bundle.close()

@@ -30,10 +30,15 @@ from google.genai import types
 
 from veadk import Agent
 from veadk.runtime import get_runtime
+from veadk.runtime.piagent import installer
 from veadk.runtime.piagent.client import PiAgentRpcClient
 from veadk.runtime.piagent.config import PiAgentConfig, PiAgentModelConfig
-from veadk.runtime.piagent.installer import resolve_platform_archive
+from veadk.runtime.piagent.installer import (
+    resolve_or_install_piagent_binary,
+    resolve_platform_archive,
+)
 from veadk.runtime.piagent.runtime import PiAgentRuntime
+from veadk.runtime.piagent.skills import materialize_skills_for_pi
 from veadk.runtime.piagent.tool_runtime import PiToolRuntime, render_extension
 from veadk.runtime.piagent.tools_bridge import (
     PiToolBundle,
@@ -183,6 +188,14 @@ for raw in sys.stdin:
     return path, argv_path
 
 
+def _write_skill(path: Path, *, name: str, body: str = "Skill body.") -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: Demo skill.\n---\n{body}\n",
+        encoding="utf-8",
+    )
+
+
 async def _post_json(url: str, token: str, payload: dict):
     host_port = url.removeprefix("http://")
     host, port_text = host_port.split(":", 1)
@@ -228,6 +241,24 @@ def test_build_prompt_skips_thought_parts():
     )
 
 
+def test_build_prompt_uses_user_content_when_session_event_is_missing():
+    ctx = _fake_ctx()
+    ctx.user_content = types.Content(
+        role="user", parts=[types.Part(text="北京天气怎么样，用 PiAgent E2E skill")]
+    )
+
+    assert build_prompt(ctx) == "北京天气怎么样，用 PiAgent E2E skill"
+
+
+def test_build_prompt_does_not_duplicate_user_content():
+    ctx = _fake_ctx(_user_event("北京天气怎么样，用 PiAgent E2E skill"))
+    ctx.user_content = types.Content(
+        role="user", parts=[types.Part(text="北京天气怎么样，用 PiAgent E2E skill")]
+    )
+
+    assert build_prompt(ctx) == "北京天气怎么样，用 PiAgent E2E skill"
+
+
 def test_pi_event_translator_streaming_text_and_thinking():
     translator = PiEventTranslator(author="agent", invocation_id="inv-1")
 
@@ -249,11 +280,159 @@ def test_pi_event_translator_streaming_text_and_thinking():
             },
         }
     )
+    flushed = translator.event_to_adk_events({"type": "agent_settled"})
 
-    assert thinking[0].content.parts[0].text == "plan"
-    assert thinking[0].content.parts[0].thought is True
-    assert text[0].content.parts[0].text == "answer"
-    assert text[0].content.parts[0].thought is not True
+    assert thinking == []
+    assert text == []
+    assert len(flushed) == 1
+    assert flushed[0].is_final_response() is True
+    assert [part.text for part in flushed[0].content.parts] == ["plan", "answer"]
+    assert flushed[0].content.parts[0].thought is True
+    assert flushed[0].content.parts[1].thought is not True
+
+
+def test_pi_event_translator_coalesces_text_deltas():
+    translator = PiEventTranslator(author="agent", invocation_id="inv-1")
+
+    for delta in ["你", "好", "，", "世界"]:
+        assert (
+            translator.event_to_adk_events(
+                {
+                    "type": "message_update",
+                    "assistantMessageEvent": {
+                        "type": "text_delta",
+                        "delta": delta,
+                    },
+                }
+            )
+            == []
+        )
+
+    flushed = translator.event_to_adk_events({"type": "agent_settled"})
+
+    assert len(flushed) == 1
+    assert flushed[0].content.parts[0].text == "你好，世界"
+    assert flushed[0].content.parts[0].thought is not True
+
+
+def test_pi_event_translator_does_not_emit_thinking_only_final_event():
+    translator = PiEventTranslator(author="agent", invocation_id="inv-1")
+
+    for delta in ["我", "是", " PiAgent"]:
+        assert (
+            translator.event_to_adk_events(
+                {
+                    "type": "message_update",
+                    "assistantMessageEvent": {
+                        "type": "thinking_delta",
+                        "delta": delta,
+                    },
+                }
+            )
+            == []
+        )
+
+    flushed = translator.event_to_adk_events({"type": "agent_settled"})
+
+    assert flushed == []
+
+
+def test_pi_event_translator_prefers_message_end_text():
+    translator = PiEventTranslator(author="agent", invocation_id="inv-1")
+
+    translator.event_to_adk_events(
+        {
+            "type": "message_update",
+            "assistantMessageEvent": {
+                "type": "text_delta",
+                "delta": "partial",
+            },
+        }
+    )
+
+    flushed = translator.event_to_adk_events(
+        {
+            "type": "message_end",
+            "message": {"role": "assistant", "content": "final answer"},
+        }
+    )
+
+    assert len(flushed) == 1
+    assert flushed[0].content.parts[0].text == "final answer"
+
+
+def test_pi_event_translator_does_not_reuse_thinking_after_tool_call():
+    translator = PiEventTranslator(author="agent", invocation_id="inv-1")
+    thought = (
+        "用户现在问今天北京的天气怎么样，我需要调用get_weather工具，"
+        "参数是city为北京。"
+    )
+
+    translator.event_to_adk_events(
+        {
+            "type": "message_update",
+            "assistantMessageEvent": {
+                "type": "thinking_delta",
+                "delta": thought,
+            },
+        }
+    )
+    thinking = translator.event_to_adk_events(
+        {
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "type": "thinking",
+                "content": thought,
+            },
+        }
+    )
+    call = translator.event_to_adk_events(
+        {
+            "type": "tool_execution_start",
+            "toolCallId": "call-1",
+            "toolName": "get_weather",
+            "args": {"city": "北京"},
+        }
+    )
+    response = translator.event_to_adk_events(
+        {
+            "type": "tool_execution_end",
+            "toolCallId": "call-1",
+            "toolName": "get_weather",
+            "result": {"content": [{"type": "text", "text": "sunny, 28 C"}]},
+            "isError": False,
+        }
+    )
+    duplicate_thinking_end = translator.event_to_adk_events(
+        {
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "type": "thinking",
+                "content": thought,
+            },
+        }
+    )
+    final = translator.event_to_adk_events(
+        {
+            "type": "message_end",
+            "message": {"role": "assistant", "content": "北京今天晴，28 C。"},
+        }
+    )
+    settled = translator.event_to_adk_events({"type": "agent_settled"})
+
+    assert thinking == []
+    assert call[0].is_final_response() is False
+    assert call[0].content.parts[0].text == thought
+    assert call[0].content.parts[0].thought is True
+    assert call[0].content.parts[1].function_call.name == "get_weather"
+    assert response[0].content.parts[0].function_response.name == "get_weather"
+    assert duplicate_thinking_end == []
+    assert len(final) == 1
+    assert final[0].content.parts[0].text == "北京今天晴，28 C。"
+    assert final[0].content.parts[0].thought is not True
+    assert settled == []
 
 
 def test_pi_event_translator_tool_events():
@@ -316,6 +495,16 @@ def test_resolve_platform_archive_linux_amd64(monkeypatch):
     assert resolve_platform_archive() == ("linux/amd64", "pi-linux-x64.tar.gz")
 
 
+def test_resolve_pi_binary_uses_common_image_path(tmp_path, monkeypatch):
+    binary = _make_fake_pi(tmp_path)
+    monkeypatch.delenv("PIAGENT_BINARY", raising=False)
+    monkeypatch.delenv("PIAGENT_BINARY_URL", raising=False)
+    monkeypatch.setenv("PIAGENT_AUTO_INSTALL", "0")
+    monkeypatch.setattr(installer, "_COMMON_BINARY_PATHS", (binary,))
+
+    assert resolve_or_install_piagent_binary() == str(binary)
+
+
 @pytest.mark.asyncio
 async def test_piagent_rpc_client_streams_fake_pi(tmp_path):
     binary = _make_fake_pi(tmp_path)
@@ -355,6 +544,8 @@ async def test_piagent_rpc_client_loads_extensions_with_builtin_tools_disabled(
     binary, argv_path = _make_fake_pi_with_argv_capture(tmp_path)
     extension = tmp_path / "tools.ts"
     extension.write_text("export default function () {}\n", encoding="utf-8")
+    skill_dir = tmp_path / "demo-skill"
+    skill_dir.mkdir()
     model = PiAgentModelConfig(
         provider_id="veadk",
         model="model-a",
@@ -373,6 +564,7 @@ async def test_piagent_rpc_client_loads_extensions_with_builtin_tools_disabled(
         disable_builtin_tools=True,
         extensions=(str(extension),),
         allowed_tools=("lookup",),
+        skill_paths=(str(skill_dir),),
     )
     config.agent_dir.mkdir()
 
@@ -384,6 +576,85 @@ async def test_piagent_rpc_client_loads_extensions_with_builtin_tools_disabled(
     assert "--no-builtin-tools" in argv
     assert argv[argv.index("--extension") + 1] == str(extension)
     assert argv[argv.index("--tools") + 1] == "lookup"
+    assert "--no-skills" in argv
+    assert argv[argv.index("--skill") + 1] == str(skill_dir)
+
+
+def test_piagent_config_with_tools_and_skills_preserves_both(tmp_path):
+    model = PiAgentModelConfig(
+        provider_id="veadk",
+        model="model-a",
+        base_url="https://ark.example.com/api/v3/",
+        api_key="test-key",
+        api="openai-completions",
+        api_key_env="VEADK_PI_MODEL_API_KEY",
+    )
+    base = PiAgentConfig(
+        binary_path="/bin/pi",
+        agent_dir=tmp_path / "agent",
+        workdir=tmp_path,
+        timeout_seconds=5,
+        model=model,
+    )
+
+    config = base.with_skills(skill_paths=["/tmp/skill-a"]).with_tools(
+        extensions=["/tmp/tools.ts"],
+        allowed_tools=["lookup"],
+    )
+
+    assert config.skill_paths == ("/tmp/skill-a",)
+    assert config.disable_skill_discovery is True
+    assert config.disable_tools is False
+    assert config.extensions == ("/tmp/tools.ts",)
+    assert config.allowed_tools == ("lookup",)
+
+
+def test_materialize_skills_for_pi_writes_adk_skill(tmp_path):
+    from google.adk.skills import load_skill_from_dir
+    from google.adk.tools.skill_toolset import SkillToolset
+
+    skill_dir = tmp_path / "demo-skill"
+    _write_skill(skill_dir, name="demo-skill", body="Say DEMO_SKILL_LOADED.")
+    toolset = SkillToolset(skills=[load_skill_from_dir(skill_dir)])
+    agent = SimpleNamespace(tools=[toolset])
+
+    bundle = materialize_skills_for_pi(agent)
+    try:
+        assert bundle.count == 1
+        assert len(bundle.paths) == 1
+        materialized = Path(bundle.paths[0])
+        assert materialized.name == "demo-skill"
+        assert "DEMO_SKILL_LOADED" in (materialized / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+    finally:
+        root = bundle.root
+        bundle.close()
+
+    assert root is not None
+    assert not root.exists()
+
+
+def test_materialize_skills_for_pi_links_legacy_local_skill(tmp_path):
+    skill_dir = tmp_path / "legacy-skill"
+    _write_skill(skill_dir, name="legacy-skill", body="Legacy body.")
+    agent = SimpleNamespace(
+        tools=[],
+        skills_dict={"legacy-skill": SimpleNamespace(path=str(skill_dir))},
+    )
+
+    bundle = materialize_skills_for_pi(agent)
+    try:
+        assert bundle.count == 1
+        materialized = Path(bundle.paths[0])
+        assert materialized.name == "legacy-skill"
+        assert (
+            (materialized / "SKILL.md")
+            .read_text(encoding="utf-8")
+            .endswith("Legacy body.\n")
+        )
+    finally:
+        bundle.close()
 
 
 @pytest.mark.asyncio
@@ -622,9 +893,10 @@ async def test_piagent_runtime_text_only_end_to_end(tmp_path, monkeypatch):
 
     events = [event async for event in PiAgentRuntime().run_async(agent, ctx)]
 
-    assert [event.content.parts[0].text for event in events] == ["checking", "pong"]
+    assert len(events) == 1
+    assert [part.text for part in events[0].content.parts] == ["checking", "pong"]
     assert events[0].content.parts[0].thought is True
-    assert events[1].content.parts[0].thought is not True
+    assert events[0].content.parts[1].thought is not True
     models = json.loads((agent_dir / "models.json").read_text(encoding="utf-8"))
     assert models["providers"]["veadk"]["models"][0]["id"] == "model-a"
 
@@ -660,5 +932,46 @@ async def test_piagent_runtime_closes_opened_toolsets(tmp_path, monkeypatch):
 
     events = [event async for event in PiAgentRuntime().run_async(agent, ctx)]
 
-    assert [event.content.parts[0].text for event in events] == ["checking", "pong"]
+    assert len(events) == 1
+    assert [part.text for part in events[0].content.parts] == ["checking", "pong"]
     assert toolset.closed is True
+
+
+@pytest.mark.asyncio
+async def test_piagent_runtime_loads_and_cleans_materialized_skills(
+    tmp_path,
+    monkeypatch,
+):
+    from google.adk.skills import load_skill_from_dir
+    from google.adk.tools.skill_toolset import SkillToolset
+
+    binary, argv_path = _make_fake_pi_with_argv_capture(tmp_path)
+    agent_dir = tmp_path / "agent-home"
+    source_skill = tmp_path / "demo-skill"
+    _write_skill(source_skill, name="demo-skill", body="Say DEMO_SKILL_LOADED.")
+    skill_toolset = SkillToolset(skills=[load_skill_from_dir(source_skill)])
+
+    monkeypatch.setenv("PIAGENT_BINARY", str(binary))
+    monkeypatch.setenv("PIAGENT_AGENT_DIR", str(agent_dir))
+    monkeypatch.setenv("PIAGENT_AUTO_INSTALL", "0")
+
+    agent = Agent(
+        name="assistant",
+        instruction="Answer briefly.",
+        model_name="model-a",
+        model_api_base="https://ark.example.com/api/v3/",
+        model_api_key="test-key",
+        model_api_key_name="",
+        runtime="piagent",
+        tools=[skill_toolset],
+    )
+    ctx = _fake_ctx(_user_event("ping"))
+
+    events = [event async for event in PiAgentRuntime().run_async(agent, ctx)]
+
+    argv = json.loads(argv_path.read_text(encoding="utf-8"))
+    skill_path = Path(argv[argv.index("--skill") + 1])
+    assert events == []
+    assert "--no-skills" in argv
+    assert skill_path.name == "demo-skill"
+    assert not skill_path.exists()

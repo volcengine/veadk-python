@@ -24,8 +24,10 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from google.adk.skills import load_skill_from_dir
 from google.adk.tools.mcp_tool.mcp_session_manager import StdioServerParameters
 from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
+from google.adk.tools.skill_toolset import SkillToolset
 
 from veadk import Agent
 
@@ -33,6 +35,7 @@ _HERE = Path(__file__).resolve().parent
 _WEATHER_MCP_SERVER = _HERE / "mcp_server.py"
 _AIR_MCP_SERVER = _HERE / "mcp_air_server.py"
 _ORDER_MCP_SERVER = _HERE / "mcp_order_server.py"
+_SKILL_DIR = _HERE / "skills" / "piagent-e2e-style"
 
 
 def _stdio_mcp(script: Path) -> MCPToolset:
@@ -47,17 +50,20 @@ def _stdio_mcp(script: Path) -> MCPToolset:
 weather_mcp = _stdio_mcp(_WEATHER_MCP_SERVER)
 air_mcp = _stdio_mcp(_AIR_MCP_SERVER)
 order_mcp = _stdio_mcp(_ORDER_MCP_SERVER)
+style_skill = SkillToolset(skills=[load_skill_from_dir(_SKILL_DIR)])
 
 root_agent = Agent(
     name="piagent_mcp_agent",
-    description="A PiAgent-runtime agent with several local MCP toolsets.",
+    description="A PiAgent-runtime agent with local MCP toolsets and a skill.",
     instruction=(
         "Answer concisely. Use the available MCP tools before answering when "
         "the user asks about weather, air quality, or order status. Do not "
-        "invent those values without calling the relevant tool."
+        "invent those values without calling the relevant tool. Use the "
+        "piagent-e2e-style skill when the user asks you to use the PiAgent "
+        "E2E skill or asks for the skill marker."
     ),
     runtime="piagent",
-    tools=[weather_mcp, air_mcp, order_mcp],
+    tools=[style_skill, weather_mcp, air_mcp, order_mcp],
 )
 
 # Common alias used by direct scripts and examples.

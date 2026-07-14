@@ -26,6 +26,13 @@ if TYPE_CHECKING:
 
 _USER_PREFIX = "User"
 _ASSISTANT_PREFIX = "Assistant"
+_THINKING_MESSAGE_TYPES = {
+    "thinking",
+    "thought",
+    "reasoning",
+    "reasoning_message",
+    "assistant_thought",
+}
 
 
 def build_prompt(ctx: "InvocationContext") -> str:
@@ -43,21 +50,41 @@ def build_prompt(ctx: "InvocationContext") -> str:
         prefix = _USER_PREFIX if event.author == "user" else _ASSISTANT_PREFIX
         lines.append(f"{prefix}: {text}")
 
+    user_text = _content_text(getattr(ctx, "user_content", None))
+    if user_text and (not lines or lines[-1] != f"{_USER_PREFIX}: {user_text}"):
+        lines.append(f"{_USER_PREFIX}: {user_text}")
+
     if len(lines) == 1 and lines[0].startswith(f"{_USER_PREFIX}: "):
         return lines[0][len(_USER_PREFIX) + 2 :]
 
     return "\n".join(lines)
 
 
+def _content_text(content: Any) -> str:
+    if content is None or not getattr(content, "parts", None):
+        return ""
+    return "".join(
+        part.text for part in content.parts if part.text and not part.thought
+    ).strip()
+
+
 def make_text_event(
     text: str, author: str, invocation_id: str, *, thought: bool = False
+) -> Event:
+    return make_model_event(
+        [types.Part(text=text, thought=thought)],
+        author=author,
+        invocation_id=invocation_id,
+    )
+
+
+def make_model_event(
+    parts: list[types.Part], *, author: str, invocation_id: str
 ) -> Event:
     return Event(
         invocation_id=invocation_id,
         author=author,
-        content=types.Content(
-            role="model", parts=[types.Part(text=text, thought=thought)]
-        ),
+        content=types.Content(role="model", parts=parts),
     )
 
 
@@ -68,6 +95,8 @@ class PiEventTranslator:
         self.author = author
         self.invocation_id = invocation_id
         self.emitted_text = False
+        self._thinking_parts: list[str] = []
+        self._text_parts: list[str] = []
 
     def event_to_adk_events(self, event: dict[str, Any]) -> list[Event]:
         event_type = event.get("type")
@@ -77,16 +106,19 @@ class PiEventTranslator:
             return [self._tool_call_event(event)]
         if event_type == "tool_execution_end":
             return [self._tool_response_event(event)]
-        if event_type in {"message_end", "turn_end"} and not self.emitted_text:
-            text = _message_text(event.get("message"))
-            if text:
-                self.emitted_text = True
-                return [make_text_event(text, self.author, self.invocation_id)]
-        if event_type == "agent_end" and not self.emitted_text:
-            text = _last_assistant_text(event.get("messages"))
-            if text:
-                self.emitted_text = True
-                return [make_text_event(text, self.author, self.invocation_id)]
+        if event_type == "message_end":
+            message = event.get("message")
+            if _message_is_thinking(message):
+                return []
+            return self._flush_events(preferred_text=_message_text(message))
+        if event_type == "turn_end":
+            return self._flush_events()
+        if event_type == "agent_end":
+            return self._flush_events(
+                preferred_text=_last_assistant_text(event.get("messages")),
+            )
+        if event_type == "agent_settled":
+            return self._flush_events()
         return []
 
     def _message_update_to_events(self, event: dict[str, Any]) -> list[Event]:
@@ -96,40 +128,79 @@ class PiEventTranslator:
 
         update_type = update.get("type")
         if update_type == "text_delta" and update.get("delta"):
-            self.emitted_text = True
-            return [
-                make_text_event(str(update["delta"]), self.author, self.invocation_id)
-            ]
+            self._text_parts.append(str(update["delta"]))
+            return []
         if update_type == "thinking_delta" and update.get("delta"):
-            return [
-                make_text_event(
-                    str(update["delta"]),
-                    self.author,
-                    self.invocation_id,
-                    thought=True,
-                )
-            ]
+            self._thinking_parts.append(str(update["delta"]))
+            return []
         if update_type == "error":
             reason = update.get("reason") or "error"
             raise RuntimeError(f"Pi assistant error: {reason}")
         return []
 
+    def _flush_events(self, *, preferred_text: str = "") -> list[Event]:
+        if self.emitted_text:
+            self._thinking_parts.clear()
+            self._text_parts.clear()
+            return []
+
+        if preferred_text:
+            text = preferred_text
+            self._text_parts.clear()
+        else:
+            text = self._drain_text()
+        if not text:
+            return []
+
+        parts = self._drain_pending_parts(include_text=False)
+        parts.append(types.Part(text=text))
+        self.emitted_text = True
+        return [
+            make_model_event(
+                parts,
+                author=self.author,
+                invocation_id=self.invocation_id,
+            )
+        ]
+
+    def _drain_pending_parts(self, *, include_text: bool = True) -> list[types.Part]:
+        parts: list[types.Part] = []
+        thinking = self._drain_thinking()
+        if thinking:
+            parts.append(types.Part(text=thinking, thought=True))
+
+        if include_text:
+            text = self._drain_text()
+            if text:
+                parts.append(types.Part(text=text))
+
+        return parts
+
+    def _drain_thinking(self) -> str:
+        text = "".join(self._thinking_parts).strip()
+        self._thinking_parts.clear()
+        return text
+
+    def _drain_text(self) -> str:
+        text = "".join(self._text_parts).strip()
+        self._text_parts.clear()
+        return text
+
     def _tool_call_event(self, event: dict[str, Any]) -> Event:
+        parts = self._drain_pending_parts()
+        parts.append(
+            types.Part(
+                function_call=types.FunctionCall(
+                    id=str(event.get("toolCallId") or ""),
+                    name=str(event.get("toolName") or "tool"),
+                    args=_dict_or_empty(event.get("args")),
+                )
+            )
+        )
         return Event(
             invocation_id=self.invocation_id,
             author=self.author,
-            content=types.Content(
-                role="model",
-                parts=[
-                    types.Part(
-                        function_call=types.FunctionCall(
-                            id=str(event.get("toolCallId") or ""),
-                            name=str(event.get("toolName") or "tool"),
-                            args=_dict_or_empty(event.get("args")),
-                        )
-                    )
-                ],
-            ),
+            content=types.Content(role="model", parts=parts),
         )
 
     def _tool_response_event(self, event: dict[str, Any]) -> Event:
@@ -159,6 +230,8 @@ class PiEventTranslator:
 def _message_text(message: Any) -> str:
     if not isinstance(message, dict) or message.get("role") != "assistant":
         return ""
+    if _message_is_thinking(message):
+        return ""
     content = message.get("content")
     if isinstance(content, str):
         return content
@@ -166,7 +239,9 @@ def _message_text(message: Any) -> str:
         return ""
     parts: list[str] = []
     for item in content:
-        if isinstance(item, dict) and item.get("type") == "text" and item.get("text"):
+        if not isinstance(item, dict) or _content_item_is_thinking(item):
+            continue
+        if item.get("type") in (None, "text", "output_text") and item.get("text"):
             parts.append(str(item["text"]))
     return "".join(parts).strip()
 
@@ -179,6 +254,64 @@ def _last_assistant_text(messages: Any) -> str:
         if text:
             return text
     return ""
+
+
+def _message_is_thinking(message: Any) -> bool:
+    if not isinstance(message, dict):
+        return False
+
+    if _truthy_flag(
+        message,
+        "thought",
+        "isThought",
+        "is_thought",
+        "thinking",
+        "isThinking",
+        "is_thinking",
+    ):
+        return True
+
+    message_type = _normalized_type(
+        message.get("type") or message.get("messageType") or message.get("message_type")
+    )
+    if _is_thinking_type(message_type):
+        return True
+
+    content = message.get("content")
+    if not isinstance(content, list):
+        return False
+
+    text_items = [item for item in content if isinstance(item, dict) and item.get("text")]
+    return bool(text_items) and all(_content_item_is_thinking(item) for item in text_items)
+
+
+def _content_item_is_thinking(item: dict[str, Any]) -> bool:
+    if _truthy_flag(
+        item,
+        "thought",
+        "isThought",
+        "is_thought",
+        "thinking",
+        "isThinking",
+        "is_thinking",
+    ):
+        return True
+    item_type = _normalized_type(
+        item.get("type") or item.get("contentType") or item.get("content_type")
+    )
+    return _is_thinking_type(item_type)
+
+
+def _truthy_flag(data: dict[str, Any], *keys: str) -> bool:
+    return any(bool(data.get(key)) for key in keys)
+
+
+def _normalized_type(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _is_thinking_type(value: str) -> bool:
+    return value in _THINKING_MESSAGE_TYPES or "thinking" in value or "reasoning" in value
 
 
 def _dict_or_empty(value: Any) -> dict[str, Any]:

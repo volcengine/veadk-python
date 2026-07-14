@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 import shutil
@@ -24,6 +25,7 @@ import sys
 from pathlib import Path
 
 import uvicorn
+import veadk
 from google.adk.cli.fast_api import get_fast_api_app
 
 AGENTS_DIR = str(Path(__file__).resolve().parent / "agents")
@@ -58,8 +60,17 @@ def _log_piagent_agentkit_state() -> None:
         "piagent MCP AgentKit startup: "
         f"python={sys.version.split()[0]} cwd={Path.cwd()} agents_dir={AGENTS_DIR}"
     )
+    _log_veadk_state()
     _log_binary_state(binary, binary_source)
     _log_agent_dir_state(os.getenv("PIAGENT_AGENT_DIR"))
+
+
+def _log_veadk_state() -> None:
+    logger.info(
+        "piagent MCP AgentKit startup: "
+        f"veadk_version={getattr(veadk, '__version__', '<unknown>')} "
+        f"veadk_path={inspect.getfile(veadk)}"
+    )
 
 
 def _log_binary_state(binary: str | None, source: str) -> None:

@@ -1,13 +1,8 @@
-# The deployed image installs VeADK from a public package source. Before using
-# this example on AgentKit, ensure the selected veadk-python version includes
-# the piagent runtime and MCP toolset support added in this branch. For
-# pre-release cloud testing, replace this line with a pushed git branch or an
-# internal wheel URL.
-veadk-python
+# VeADK is installed from vendor/veadk_python-*.whl in the Dockerfile so the
+# AgentKit image uses the exact local build copied into this example.
 
 # The demo MCP server imports mcp.server.fastmcp.
 mcp
 
 fastapi
 uvicorn
-

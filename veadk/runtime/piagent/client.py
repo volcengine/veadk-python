@@ -72,6 +72,10 @@ class PiAgentRpcClient:
                 args.extend(["--extension", extension])
             if self.config.allowed_tools:
                 args.extend(["--tools", ",".join(self.config.allowed_tools)])
+        if self.config.disable_skill_discovery:
+            args.append("--no-skills")
+        for skill_path in self.config.skill_paths:
+            args.extend(["--skill", skill_path])
 
         env = os.environ.copy()
         env["PI_CODING_AGENT_DIR"] = str(self.config.agent_dir)
@@ -80,7 +84,9 @@ class PiAgentRpcClient:
 
         logger.info(
             "piagent runtime: starting pi rpc "
-            f"provider={self.config.model.provider_id} model={self.config.model.model}"
+            f"provider={self.config.model.provider_id} "
+            f"model={self.config.model.model} "
+            f"skills={len(self.config.skill_paths)}"
         )
         self._proc = await asyncio.create_subprocess_exec(
             *args,

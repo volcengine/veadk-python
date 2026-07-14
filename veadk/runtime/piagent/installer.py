@@ -32,6 +32,7 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _DEFAULT_REPO = "earendil-works/pi"
+_COMMON_BINARY_PATHS = (Path("/opt/piagent/pi/pi"),)
 
 
 class PiAgentInstallError(RuntimeError):
@@ -44,6 +45,10 @@ def resolve_or_install_piagent_binary() -> str:
     configured = os.getenv("PIAGENT_BINARY")
     if configured:
         return _validate_executable(Path(configured).expanduser(), "PIAGENT_BINARY")
+
+    for path in _COMMON_BINARY_PATHS:
+        if _is_executable(path):
+            return str(path)
 
     for name in ("pi", "piagent"):
         found = shutil.which(name)
