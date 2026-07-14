@@ -287,34 +287,6 @@ export async function* runSSE({
   }
 }
 
-/** Deploy a temporary agent for testing. */
-export async function deployTempAgent(
-  name: string,
-  files: { path: string; content: string }[],
-): Promise<string> {
-  const res = await apiFetch("/web/deploy-temp-agent", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, files }),
-  });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Deploy failed: ${err}`);
-  }
-  const data = await res.json();
-  return data.appName;
-}
-
-/** Delete a temporary agent. */
-export async function deleteTempAgent(appName: string): Promise<void> {
-  const res = await apiFetch(`/web/deploy-temp-agent/${appName}`, {
-    method: "DELETE",
-  });
-  if (!res.ok && res.status !== 404) {
-    throw new Error(`Delete failed: ${res.status}`);
-  }
-}
-
 export interface DeployAgentkitResult {
   apikey: string;
   url: string;
