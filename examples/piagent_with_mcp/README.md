@@ -46,10 +46,13 @@ piagent_with_mcp/
 
 ## Run Locally
 
-Set a Pi binary and model credentials first:
+Set model credentials first. If you already have a Pi binary, point
+`PIAGENT_BINARY` at the executable inside a fully extracted Pi release
+directory; otherwise the runtime uses `PIAGENT_INSTALL_DIR/pi/pi` (default
+`~/.cache/veadk/piagent/pi/pi`) and downloads Pi there when it is missing.
 
 ```bash
-export PIAGENT_BINARY=/path/to/pi
+# Optional: export PIAGENT_BINARY=/path/to/pi
 export PIAGENT_AGENT_DIR=/tmp/veadk-piagent-mcp-home
 export MODEL_AGENT_API_KEY=...
 export MODEL_AGENT_API_BASE=https://ark.cn-beijing.volces.com/api/v3
@@ -59,7 +62,7 @@ export MODEL_AGENT_NAME=deepseek-v4-flash-260425
 Then run from the command line:
 
 ```bash
-python examples/piagent_with_mcp/main.py
+uv run python examples/piagent_with_mcp/main.py
 ```
 
 Or run it in the VeADK frontend from the repository root:

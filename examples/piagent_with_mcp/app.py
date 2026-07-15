@@ -19,7 +19,6 @@ from __future__ import annotations
 import inspect
 import logging
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -53,8 +52,11 @@ def _log_piagent_agentkit_state() -> None:
     binary = os.getenv("PIAGENT_BINARY")
     binary_source = "PIAGENT_BINARY"
     if not binary:
-        binary = shutil.which("pi")
-        binary_source = "PATH"
+        install_dir = Path(
+            os.getenv("PIAGENT_INSTALL_DIR", "~/.cache/veadk/piagent")
+        ).expanduser()
+        binary = str(install_dir / "pi" / "pi")
+        binary_source = "PIAGENT_INSTALL_DIR"
 
     logger.info(
         "piagent MCP AgentKit startup: "

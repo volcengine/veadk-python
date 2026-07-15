@@ -181,7 +181,7 @@ class PiEventTranslator:
             return []
 
         parts = self._drain_pending_parts(include_text=False)
-        parts.append(types.Part(text=text))
+        parts.append(types.Part(text=text, thought=False))
         self.emitted_text = True
         return [
             make_model_event(
@@ -200,7 +200,7 @@ class PiEventTranslator:
         if include_text:
             text = self._drain_text()
             if text:
-                parts.append(types.Part(text=text))
+                parts.append(types.Part(text=text, thought=False))
 
         return parts
 

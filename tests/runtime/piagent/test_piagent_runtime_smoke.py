@@ -15,10 +15,12 @@
 """Manual smoke test for a real local Pi binary.
 
 This file is intentionally skipped by default because it calls a real model. Run
-it explicitly after setting PIAGENT_BINARY and model credentials:
+it explicitly after setting model credentials. Set PIAGENT_BINARY to use an
+existing Pi executable inside a fully extracted Pi release directory; otherwise
+the runtime uses PIAGENT_INSTALL_DIR/pi/pi and downloads Pi there when it is
+missing:
 
     PIAGENT_BINARY=/path/to/pi \
-    PIAGENT_AUTO_INSTALL=0 \
     PIAGENT_AGENT_DIR=/private/tmp/veadk-piagent-test-home \
     MODEL_AGENT_API_KEY=<key> \
     PIAGENT_SMOKE_MODEL=<model> \
@@ -44,10 +46,6 @@ def pytest_configure(config):
 async def test_real_piagent_runtime_smoke():
     if os.getenv("PIAGENT_RUN_SMOKE") != "1":
         pytest.skip("set PIAGENT_RUN_SMOKE=1 to call a real Pi binary and model")
-
-    binary = os.getenv("PIAGENT_BINARY")
-    if not binary:
-        pytest.skip("PIAGENT_BINARY is required")
 
     api_key = os.getenv("PIAGENT_SMOKE_API_KEY") or os.getenv("MODEL_AGENT_API_KEY")
     if not api_key:

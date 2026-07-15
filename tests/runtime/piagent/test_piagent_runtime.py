@@ -18,6 +18,7 @@ import asyncio
 import json
 import stat
 import sys
+import tarfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -289,13 +290,15 @@ def test_pi_event_translator_streaming_text_and_thinking():
     assert len(text) == 1
     assert text[0].partial is True
     assert text[0].content.parts[0].text == "answer"
-    assert text[0].content.parts[0].thought is not True
+    assert text[0].content.parts[0].thought is False
     assert len(flushed) == 1
     assert flushed[0].partial is not True
     assert flushed[0].is_final_response() is True
     assert [part.text for part in flushed[0].content.parts] == ["plan", "answer"]
     assert flushed[0].content.parts[0].thought is True
-    assert flushed[0].content.parts[1].thought is not True
+    assert flushed[0].content.parts[1].thought is False
+    dumped = flushed[0].model_dump(by_alias=True, exclude_none=True)
+    assert dumped["content"]["parts"][1]["thought"] is False
 
 
 def test_pi_event_translator_coalesces_text_deltas():
@@ -320,7 +323,7 @@ def test_pi_event_translator_coalesces_text_deltas():
     assert len(flushed) == 1
     assert flushed[0].partial is not True
     assert flushed[0].content.parts[0].text == "你好，世界"
-    assert flushed[0].content.parts[0].thought is not True
+    assert flushed[0].content.parts[0].thought is False
 
 
 def test_pi_event_translator_does_not_emit_thinking_only_final_event():
@@ -451,7 +454,7 @@ def test_pi_event_translator_does_not_reuse_thinking_after_tool_call():
     assert len(final) == 1
     assert final[0].partial is not True
     assert final[0].content.parts[0].text == "北京今天晴，28 C。"
-    assert final[0].content.parts[0].thought is not True
+    assert final[0].content.parts[0].thought is False
     assert settled == []
 
 
@@ -515,14 +518,57 @@ def test_resolve_platform_archive_linux_amd64(monkeypatch):
     assert resolve_platform_archive() == ("linux/amd64", "pi-linux-x64.tar.gz")
 
 
-def test_resolve_pi_binary_uses_common_image_path(tmp_path, monkeypatch):
+def test_resolve_pi_binary_uses_configured_binary(tmp_path, monkeypatch):
     binary = _make_fake_pi(tmp_path)
-    monkeypatch.delenv("PIAGENT_BINARY", raising=False)
-    monkeypatch.delenv("PIAGENT_BINARY_URL", raising=False)
-    monkeypatch.setenv("PIAGENT_AUTO_INSTALL", "0")
-    monkeypatch.setattr(installer, "_COMMON_BINARY_PATHS", (binary,))
+    install_dir = tmp_path / "install"
+    monkeypatch.setenv("PIAGENT_BINARY", str(binary))
+    monkeypatch.setenv("PIAGENT_INSTALL_DIR", str(install_dir))
 
     assert resolve_or_install_piagent_binary() == str(binary)
+
+
+def test_resolve_pi_binary_uses_install_dir_cache(tmp_path, monkeypatch):
+    install_dir = tmp_path / "install"
+    binary = install_dir / "pi" / "pi"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.delenv("PIAGENT_BINARY", raising=False)
+    monkeypatch.setenv("PIAGENT_INSTALL_DIR", str(install_dir))
+
+    assert resolve_or_install_piagent_binary() == str(binary)
+
+
+def test_resolve_pi_binary_installs_into_install_dir(tmp_path, monkeypatch):
+    install_dir = tmp_path / "install"
+    archive_root = tmp_path / "archive-root"
+    archive_pi = archive_root / "pi"
+    archive_pi.mkdir(parents=True)
+    archive_binary = archive_pi / "pi"
+    archive_binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    archive_binary.chmod(archive_binary.stat().st_mode | stat.S_IXUSR)
+    (archive_pi / "theme").mkdir()
+    (archive_pi / "theme" / "dark.json").write_text("{}", encoding="utf-8")
+
+    archive = tmp_path / "pi-linux-x64.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.add(archive_pi, arcname="pi")
+
+    monkeypatch.delenv("PIAGENT_BINARY", raising=False)
+    monkeypatch.setenv("PIAGENT_INSTALL_DIR", str(install_dir))
+    monkeypatch.setenv("PIAGENT_BINARY_URL", "https://example.invalid/pi.tar.gz")
+
+    def fake_download(url, archive_name):
+        assert url == "https://example.invalid/pi.tar.gz"
+        assert archive_name == "pi.tar.gz"
+        return archive
+
+    monkeypatch.setattr(installer, "_download", fake_download)
+
+    assert resolve_or_install_piagent_binary() == str(install_dir / "pi" / "pi")
+    assert (install_dir / "pi" / "theme" / "dark.json").read_text(
+        encoding="utf-8"
+    ) == "{}"
 
 
 @pytest.mark.asyncio
@@ -898,7 +944,6 @@ async def test_piagent_runtime_text_only_end_to_end(tmp_path, monkeypatch):
     agent_dir = tmp_path / "agent-home"
     monkeypatch.setenv("PIAGENT_BINARY", str(binary))
     monkeypatch.setenv("PIAGENT_AGENT_DIR", str(agent_dir))
-    monkeypatch.setenv("PIAGENT_AUTO_INSTALL", "0")
 
     agent = Agent(
         name="assistant",
@@ -919,11 +964,11 @@ async def test_piagent_runtime_text_only_end_to_end(tmp_path, monkeypatch):
     assert events[0].content.parts[0].thought is True
     assert events[1].partial is True
     assert events[1].content.parts[0].text == "pong"
-    assert events[1].content.parts[0].thought is not True
+    assert events[1].content.parts[0].thought is False
     assert events[2].partial is not True
     assert [part.text for part in events[2].content.parts] == ["checking", "pong"]
     assert events[2].content.parts[0].thought is True
-    assert events[2].content.parts[1].thought is not True
+    assert events[2].content.parts[1].thought is False
     models = json.loads((agent_dir / "models.json").read_text(encoding="utf-8"))
     assert models["providers"]["veadk"]["models"][0]["id"] == "model-a"
 
@@ -942,7 +987,6 @@ async def test_piagent_runtime_closes_opened_toolsets(tmp_path, monkeypatch):
     agent_dir = tmp_path / "agent-home"
     monkeypatch.setenv("PIAGENT_BINARY", str(binary))
     monkeypatch.setenv("PIAGENT_AGENT_DIR", str(agent_dir))
-    monkeypatch.setenv("PIAGENT_AUTO_INSTALL", "0")
 
     toolset = _FakeToolset([FunctionTool(get_weather)])
     agent = Agent(
@@ -985,7 +1029,6 @@ async def test_piagent_runtime_loads_and_cleans_materialized_skills(
 
     monkeypatch.setenv("PIAGENT_BINARY", str(binary))
     monkeypatch.setenv("PIAGENT_AGENT_DIR", str(agent_dir))
-    monkeypatch.setenv("PIAGENT_AUTO_INSTALL", "0")
 
     agent = Agent(
         name="assistant",

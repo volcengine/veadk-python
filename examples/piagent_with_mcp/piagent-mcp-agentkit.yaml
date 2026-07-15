@@ -17,7 +17,7 @@ launch_types:
     cr_namespace_name: agentkit
     cr_repo_name: piagent-with-mcp
     cr_auto_create_instance_type: Micro
-    cr_image_full_url: agentkit-platform-2107625663-cn-beijing.cr.volces.com/agentkit/piagent-with-mcp:20260714211901
+    cr_image_full_url: agentkit-platform-2107625663-cn-beijing.cr.volces.com/agentkit/piagent-with-mcp:20260714213018
     build_timeout: 3600
     cp_workspace_name: agentkit-cli-workspace
     cp_pipeline_name: piagent-with-mcp

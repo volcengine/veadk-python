@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Resolve or install the local Pi standalone binary."""
+"""Resolve or install the local Pi runtime distribution."""
 
 from __future__ import annotations
 
@@ -32,7 +32,6 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _DEFAULT_REPO = "earendil-works/pi"
-_COMMON_BINARY_PATHS = (Path("/opt/piagent/pi/pi"),)
 
 
 class PiAgentInstallError(RuntimeError):
@@ -40,67 +39,50 @@ class PiAgentInstallError(RuntimeError):
 
 
 def resolve_or_install_piagent_binary() -> str:
-    """Return an executable Pi binary path, installing it when configured."""
+    """Return an executable Pi binary path, installing it when needed.
+
+    Resolution is intentionally explicit and deterministic:
+
+    1. ``PIAGENT_BINARY`` points at a user-provided executable.
+    2. ``PIAGENT_INSTALL_DIR/pi/pi`` is used as the managed cache.
+    3. Otherwise the Pi archive is downloaded and installed into that cache.
+    """
 
     configured = os.getenv("PIAGENT_BINARY")
     if configured:
         return _validate_executable(Path(configured).expanduser(), "PIAGENT_BINARY")
 
-    for path in _COMMON_BINARY_PATHS:
-        if _is_executable(path):
-            return str(path)
-
-    for name in ("pi", "piagent"):
-        found = shutil.which(name)
-        if found:
-            return found
-
-    if not _auto_install_enabled():
-        raise PiAgentInstallError(_missing_binary_message(auto_install=False))
+    install_dir = _install_dir()
+    binary = _installed_binary_path(install_dir)
+    if _is_executable(binary):
+        return str(binary)
 
     url, archive_name = _resolve_download_url()
-    install_dir = Path(
-        os.getenv("PIAGENT_INSTALL_DIR", "~/.cache/veadk/piagent")
-    ).expanduser()
-    target = install_dir / "bin" / _binary_name()
-    if _is_executable(target):
-        return str(target)
-
     logger.info(f"piagent runtime: installing Pi binary from {url}")
     try:
         archive_path = _download(url, archive_name)
         expected_sha256 = os.getenv("PIAGENT_BINARY_SHA256")
         if expected_sha256:
             _verify_sha256(archive_path, expected_sha256)
-        _extract_binary(archive_path, target)
+        _install_archive(archive_path, install_dir)
     except Exception as e:  # noqa: BLE001
         raise PiAgentInstallError(
-            f"Failed to auto-install the Pi binary from {url}: {e}. "
+            f"Failed to install the Pi binary from {url} into {install_dir}: {e}. "
             "Set PIAGENT_BINARY to an existing executable, or set "
-            "PIAGENT_BINARY_URL/PIAGENT_BINARY_SHA256 to a reachable archive."
+            "PIAGENT_BINARY_URL/PIAGENT_BINARY_SHA256 to a reachable archive. "
+            "For AgentKit deployments, preinstall Pi in the image and set "
+            "PIAGENT_BINARY to that path."
         ) from e
 
-    return _validate_executable(target, "installed Pi binary")
+    return _validate_executable(binary, "installed Pi binary")
 
 
-def _auto_install_enabled() -> bool:
-    value = os.getenv("PIAGENT_AUTO_INSTALL")
-    if value is None:
-        return True
-    return value.strip().lower() not in {"0", "false", "no", "off"}
+def _install_dir() -> Path:
+    return Path(os.getenv("PIAGENT_INSTALL_DIR", "~/.cache/veadk/piagent")).expanduser()
 
 
-def _missing_binary_message(*, auto_install: bool) -> str:
-    if auto_install:
-        return (
-            "piagent runtime could not find a Pi binary. Set PIAGENT_BINARY to "
-            "an executable pi path, put pi on PATH, or configure "
-            "PIAGENT_BINARY_URL for auto-install."
-        )
-    return (
-        "piagent runtime could not find a Pi binary and PIAGENT_AUTO_INSTALL is "
-        "disabled. Set PIAGENT_BINARY or put pi on PATH."
-    )
+def _installed_binary_path(install_dir: Path) -> Path:
+    return install_dir / "pi" / _binary_name()
 
 
 def _validate_executable(path: Path, source: str) -> str:
@@ -205,17 +187,18 @@ def _verify_sha256(path: Path, expected: str) -> None:
         )
 
 
-def _extract_binary(archive_path: Path, target: Path) -> None:
+def _install_archive(archive_path: Path, install_dir: Path) -> None:
     extract_dir = Path(tempfile.mkdtemp(prefix="veadk-piagent-extract-"))
     if tarfile.is_tarfile(archive_path):
         with tarfile.open(archive_path) as tar:
             _safe_extract_tar(tar, extract_dir)
     elif zipfile.is_zipfile(archive_path):
         with zipfile.ZipFile(archive_path) as zf:
-            zf.extractall(extract_dir)
+            _safe_extract_zip(zf, extract_dir)
     else:
-        extract_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(archive_path, extract_dir / _binary_name())
+        bundle_dir = extract_dir / "pi"
+        bundle_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(archive_path, bundle_dir / _binary_name())
 
     candidate = _find_binary(extract_dir)
     if candidate is None:
@@ -223,8 +206,14 @@ def _extract_binary(archive_path: Path, target: Path) -> None:
             f"archive does not contain a pi executable: {archive_path}"
         )
 
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(candidate, target)
+    source_dir = candidate.parent
+    target_dir = install_dir / "pi"
+    install_dir.mkdir(parents=True, exist_ok=True)
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+    shutil.copytree(source_dir, target_dir)
+
+    target = _installed_binary_path(install_dir)
     mode = target.stat().st_mode
     target.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
@@ -253,4 +242,18 @@ def _safe_extract_tar(tar: tarfile.TarFile, extract_dir: Path) -> None:
             continue
         destination.parent.mkdir(parents=True, exist_ok=True)
         with source, destination.open("wb") as out:
+            shutil.copyfileobj(source, out)
+
+
+def _safe_extract_zip(zf: zipfile.ZipFile, extract_dir: Path) -> None:
+    root = extract_dir.resolve()
+    for member in zf.infolist():
+        destination = (extract_dir / member.filename).resolve()
+        if root != destination and root not in destination.parents:
+            raise PiAgentInstallError(f"unsafe archive member path: {member.filename}")
+        if member.is_dir():
+            destination.mkdir(parents=True, exist_ok=True)
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(member) as source, destination.open("wb") as out:
             shutil.copyfileobj(source, out)
