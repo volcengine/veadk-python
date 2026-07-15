@@ -60,7 +60,7 @@ class HarnessOverrides(BaseModel):
         default="You are a helpful assistant.",
         description="System prompt / instruction.",
     )
-    runtime: Literal["adk", "codex", "piagent"] = Field(
+    runtime: Literal["adk", "codex"] = Field(
         default="adk", description="Agent runtime backend."
     )
     registry_space_id: str = Field(
@@ -93,7 +93,7 @@ class HarnessConfig(HarnessOverrides):
     knowledgebase_type: str = Field(default="")
     longterm_memory_type: str = Field(default="")
     shortterm_memory_type: str = Field(default="local")
-    runtime: Literal["adk", "codex", "piagent"] = Field(default="adk")
+    runtime: Literal["adk", "codex"] = Field(default="adk")
     max_llm_calls: int | None = Field(
         default=None,
         description="Default max LLM calls per run; unset follows ADK RunConfig's default. Overridable per invocation.",
