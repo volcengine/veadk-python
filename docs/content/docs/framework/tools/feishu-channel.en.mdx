@@ -37,6 +37,7 @@ Environment variables:
 - `TOOL_FEISHU_CHANNEL_TRANSPORT`: defaults to `ws`
 - `TOOL_FEISHU_CHANNEL_STREAMING`: whether to enable streaming output, defaults to `false`
 - `TOOL_FEISHU_CHANNEL_REACTIONS`: whether to reply with a "received" reaction on incoming messages, defaults to `false`
+- `TOOL_FEISHU_CHANNEL_CONCURRENT`: whether to enable concurrent mode, defaults to `false`
 
 Or configure in `config.yaml`:
 
@@ -85,6 +86,26 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 ```
+
+## Concurrent mode
+
+By default the Feishu `Channel` serializes messages per `chat_id` (one at a time), so when several people @ the bot in a group it replies to them sequentially.
+
+With concurrent mode (`concurrent=True` or `TOOL_FEISHU_CHANNEL_CONCURRENT=true`):
+
+- the channel's per-chat serialization queue and text batching are disabled, so messages in the same chat are handled in parallel;
+- session identity defaults to per-sender isolation (`chat_id:user_id`) so parallel runs don't corrupt a shared chat session;
+- `max_concurrency` (default `8`) caps how many messages are processed at once.
+
+```python
+extension = FeishuChannelExtension(
+    runner=runner,
+    concurrent=True,
+    max_concurrency=8,
+)
+```
+
+Trade-off: in concurrent mode each sender is an isolated session, so the bot does **not** see other people's context in the group. Keep the default (per-chat serial) if you want a shared group context.
 
 ## Notes
 

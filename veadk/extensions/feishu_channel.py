@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import inspect
 import os
 from dataclasses import dataclass
@@ -89,10 +90,29 @@ class FeishuChannelExtension:
         channel_kwargs: dict[str, Any] | None = None,
         streaming: bool = False,
         reactions: bool = False,
+        concurrent: bool = False,
+        max_concurrency: int = 8,
     ) -> None:
         self.runner = runner
-        self.session_id_factory = session_id_factory or self.default_session_id_factory
+        # Concurrent mode: handle multiple @mentions in the same chat in
+        # parallel instead of one-at-a-time. This (1) disables the channel's
+        # per-chat serialization queue + text batching, (2) isolates each
+        # sender into their own session so parallel runs don't corrupt a
+        # shared chat session, and (3) caps in-flight runs with a semaphore.
+        self.concurrent = (
+            concurrent
+            or str(os.getenv("TOOL_FEISHU_CHANNEL_CONCURRENT", "")).lower() == "true"
+        )
+        if session_id_factory is not None:
+            self.session_id_factory = session_id_factory
+        elif self.concurrent:
+            self.session_id_factory = self.concurrent_session_id_factory
+        else:
+            self.session_id_factory = self.default_session_id_factory
         self.user_id_factory = user_id_factory or self.default_user_id_factory
+        self._semaphore = (
+            asyncio.Semaphore(max_concurrency) if self.concurrent else None
+        )
         self.message_handler = message_handler
         self.response_formatter = response_formatter or self.default_response_formatter
         self.reply_in_thread = reply_in_thread
@@ -142,6 +162,15 @@ class FeishuChannelExtension:
             _read_attr(message, "conversation", "chat_id"),
         )
         return thread_id or chat_id or getattr(message, "message_id", "")
+
+    @classmethod
+    def concurrent_session_id_factory(cls, message: Any) -> str:
+        """Per-sender session within a chat, so parallel replies don't share
+        (and corrupt) one chat-wide session. Note: the bot loses cross-user
+        group context in this mode."""
+        base = cls.default_session_id_factory(message)
+        user = cls.default_user_id_factory(message)
+        return f"{base}:{user}" if base else user
 
     @staticmethod
     def default_response_formatter(text: str) -> dict[str, str]:
@@ -220,6 +249,17 @@ class FeishuChannelExtension:
         if self.reply_in_thread and context.message_id:
             send_options["reply_to"] = context.message_id
 
+        # In concurrent mode, cap the number of in-flight runs; otherwise the
+        # channel already serializes per chat so no cap is needed.
+        if self._semaphore is not None:
+            async with self._semaphore:
+                await self._respond(context, send_options)
+        else:
+            await self._respond(context, send_options)
+
+    async def _respond(
+        self, context: "FeishuMessageContext", send_options: dict[str, Any]
+    ) -> None:
         if self.message_handler is not None:
             response_text = await self._maybe_await(self.message_handler(context))
             if not response_text:
@@ -376,6 +416,22 @@ class FeishuChannelExtension:
         resolved_channel_kwargs.setdefault(
             "transport", os.getenv("TOOL_FEISHU_CHANNEL_TRANSPORT", "ws")
         )
+
+        # In concurrent mode, turn off the per-chat serialization queue and
+        # text batching so same-chat messages are dispatched in parallel
+        # rather than merged and run one-at-a-time. Caller-supplied `safety`
+        # in channel_kwargs wins.
+        if self.concurrent and "safety" not in resolved_channel_kwargs:
+            from lark_oapi.channel import (
+                ChatQueueConfig,
+                SafetyConfig,
+                TextBatchConfig,
+            )
+
+            resolved_channel_kwargs["safety"] = SafetyConfig(
+                chat_queue=ChatQueueConfig(enabled=False),
+                text_batch=TextBatchConfig(delay_ms=0),
+            )
 
         return FeishuChannel(
             app_id=resolved_app_id,

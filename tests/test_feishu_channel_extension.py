@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -194,6 +195,100 @@ async def test_extension_ignores_empty_message_by_default():
 
     assert runner.calls == []
     assert channel.sent_messages == []
+
+
+@pytest.mark.anyio
+async def test_concurrent_mode_isolates_session_per_sender():
+    """In concurrent mode, two senders in the same chat get separate sessions
+    (chat_id:user_id) so parallel runs don't share one chat session."""
+    runner = FakeRunner()
+    channel = FakeChannel()
+    extension = FeishuChannelExtension(runner=runner, channel=channel, concurrent=True)
+
+    a = build_message(
+        message_id="om_a",
+        sender=SimpleNamespace(union_id="on_a", open_id="ou_a", user_id="u_a"),
+    )
+    b = build_message(
+        message_id="om_b",
+        sender=SimpleNamespace(union_id="on_b", open_id="ou_b", user_id="u_b"),
+    )
+
+    await asyncio.gather(extension._on_message(a), extension._on_message(b))
+
+    sessions = {c["user_id"]: c["session_id"] for c in runner.calls}
+    assert sessions == {
+        "on_a": "oc_chat:on_a",
+        "on_b": "oc_chat:on_b",
+    }
+
+
+@pytest.mark.anyio
+async def test_default_mode_shares_chat_session():
+    """Without concurrent mode, senders in the same chat share the chat-wide
+    session (the historical behavior)."""
+    runner = FakeRunner()
+    channel = FakeChannel()
+    extension = FeishuChannelExtension(runner=runner, channel=channel)
+
+    a = build_message(
+        message_id="om_a",
+        sender=SimpleNamespace(union_id="on_a", open_id="ou_a", user_id="u_a"),
+    )
+    b = build_message(
+        message_id="om_b",
+        sender=SimpleNamespace(union_id="on_b", open_id="ou_b", user_id="u_b"),
+    )
+
+    await asyncio.gather(extension._on_message(a), extension._on_message(b))
+
+    assert {c["session_id"] for c in runner.calls} == {"oc_chat"}
+
+
+@pytest.mark.anyio
+async def test_concurrent_mode_caps_in_flight_runs():
+    """max_concurrency bounds how many runs are in flight at once."""
+    peak = 0
+    active = 0
+    gate = asyncio.Event()
+
+    class BlockingRunner:
+        def __init__(self):
+            self.calls = []
+
+        async def run(self, messages, user_id="", session_id="", **kwargs):
+            nonlocal peak, active
+            active += 1
+            peak = max(peak, active)
+            self.calls.append(session_id)
+            await gate.wait()
+            active -= 1
+            return "ok"
+
+    runner = BlockingRunner()
+    extension = FeishuChannelExtension(
+        runner=runner, channel=FakeChannel(), concurrent=True, max_concurrency=2
+    )
+
+    messages = [
+        build_message(
+            message_id=f"om_{i}",
+            sender=SimpleNamespace(
+                union_id=f"on_{i}", open_id=f"ou_{i}", user_id=f"u_{i}"
+            ),
+        )
+        for i in range(5)
+    ]
+    tasks = [asyncio.create_task(extension._on_message(m)) for m in messages]
+    # let the semaphore admit up to the cap, then release everyone
+    await asyncio.sleep(0.05)
+    admitted = peak
+    gate.set()
+    await asyncio.gather(*tasks)
+
+    assert admitted == 2
+    assert peak == 2
+    assert len(runner.calls) == 5
 
 
 @pytest.mark.anyio

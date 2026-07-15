@@ -37,6 +37,7 @@ pip install lark-oapi
 - `TOOL_FEISHU_CHANNEL_TRANSPORT`：默认 `ws`
 - `TOOL_FEISHU_CHANNEL_STREAMING`：是否开启流式输出，默认 `false`
 - `TOOL_FEISHU_CHANNEL_REACTIONS`：是否在收到消息时回复“收到”表情，默认 `false`
+- `TOOL_FEISHU_CHANNEL_CONCURRENT`：是否开启并发模式，默认 `false`
 
 或在 `config.yaml` 中配置：
 
@@ -85,6 +86,26 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 ```
+
+## 并发模式
+
+默认情况下，飞书 `Channel` 会按 `chat_id` 串行处理同一会话内的消息（一次处理一条），因此群里多人同时 @ 机器人时会依次回复。
+
+开启并发模式（`concurrent=True` 或 `TOOL_FEISHU_CHANNEL_CONCURRENT=true`）后：
+
+- 关闭 `Channel` 的按会话串行队列与文本批处理，使同一会话内的消息并行处理；
+- 会话身份默认改为按发送者隔离（`chat_id:user_id`），避免并行运行写坏同一条会话；
+- 通过 `max_concurrency`（默认 `8`）限制同时处理的消息数量。
+
+```python
+extension = FeishuChannelExtension(
+    runner=runner,
+    concurrent=True,
+    max_concurrency=8,
+)
+```
+
+权衡：并发模式下每个发送者是独立会话，机器人**看不到群内其他人的上下文**。如果需要全群共享上下文，请保持默认（同会话串行）。
 
 ## 说明
 
