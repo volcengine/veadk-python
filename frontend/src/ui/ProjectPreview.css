@@ -455,12 +455,10 @@
   display: flex;
 }
 
-/* Shared typography for every code surface (read-only pre, overlay pre,
-   editable textarea). These MUST stay pixel-identical or the caret/selection
-   highlight drifts away from the underlying colored tokens. */
+/* Shared monospace typography for the read-only <pre> and the editable
+   <textarea>. */
 .pp-pre,
-.pp-hl,
-.pp-input {
+.pp-textarea {
   margin: 0;
   padding: 14px 16px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -470,103 +468,51 @@
   font-variant-ligatures: none;
   line-height: 1.55;
   letter-spacing: normal;
-  white-space: pre;
-  word-wrap: normal;
-  overflow-wrap: normal;
   tab-size: 2;
   -moz-tab-size: 2;
   box-sizing: border-box;
   border: none;
   overflow: auto;
-}
-
-/* Match antialiasing across layers so glyph metrics are bit-identical
-   between the (transparent) textarea and the colored <pre>. */
-.pp-pre,
-.pp-hl,
-.pp-input {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
 }
 
-/* --- read-only view ------------------------------------------------------- */
+/* --- read-only view (syntax-highlighted via highlight.js) ----------------- */
 
 .pp-pre {
   flex: 1;
   width: 100%;
   height: 100%;
+  white-space: pre;
   /* .hljs (from github.css) supplies the background + base text color. */
 }
 
-/* --- editable overlay ----------------------------------------------------- */
-
-.pp-editor-wrap {
-  position: relative;
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  width: 100%;
-  height: 100%;
-}
-
-/* Highlighted underlay: sits directly below the textarea, shows colored
-   tokens, receives no pointer events. The textarea is the only interactive
-   scroll container; its onScroll copies scrollTop/scrollLeft here. Both
-   layers keep `overflow: auto` so that when content overflows both allocate
-   an identical scrollbar gutter -> inner content widths match exactly ->
-   long lines wrap at the same column -> the selection rectangle the
-   textarea paints lines up over the colored tokens. The underlay's scrollbar
-   is painted behind the textarea's (the textarea has transparent background
-   but sits on top in paint order); pointer-events:none on the underlay
-   means you can only drag the textarea's scrollbar. */
-.pp-hl {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  /* .hljs (from github.css) supplies the background + base text color. */
-}
-
-/* Transparent textarea on top: caret + editing, colored text shows through. */
-.pp-input {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  overflow: auto;
-  resize: none;
-  outline: none;
-  background: transparent;
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-  caret-color: hsl(var(--foreground));
-}
-
-/* Kill any per-token font-weight / font-style the highlight.js theme applies.
-   Bold/italic glyphs have different advance widths than regular glyphs; the
-   textarea renders every character in a single weight/style, so we must
-   force the underlay to match or horizontal drift accumulates across a line.
-   Colors are preserved (those come from color:* rules, untouched here).
-   The highlighted HTML is injected directly into the <pre> (no wrapping
-   <code> element), so the selector targets the pre and every span the
-   highlighter emits. */
-.pp-hl,
-.pp-hl * {
-  font-weight: 400 !important;
-  font-style: normal !important;
-  font-variant: normal !important;
-  text-transform: none !important;
-  letter-spacing: normal !important;
-  text-decoration: none !important;
-}
-
-/* Read-only path: we still drop the <code> wrapper to avoid the same
-   github.css `pre code.hljs { padding: 1em }` leak, but neutralize any
-   github.css styles it might still try to apply via plain `.hljs`. */
+/* The highlighted HTML is injected directly into the <pre> (no <code>
+   wrapper), so github.css's `pre code.hljs { padding: 1em }` rule has no
+   target. Force uniform weight/style so bold/italic tokens don't shift
+   character widths in the read-only view. */
 .pp-pre,
 .pp-pre * {
   font-weight: 400 !important;
   font-style: normal !important;
+}
+
+/* --- editable view (plain textarea) --------------------------------------- */
+
+/* Editable mode is a plain <textarea> — no overlay trick. The browser
+   natively handles caret, selection rectangle, IME, and scrolling, which
+   is the only reliable way to keep the selection highlight pixel-aligned
+   with the text across browsers/font renderings. */
+.pp-textarea {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  resize: none;
+  outline: none;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  white-space: pre;
+  word-wrap: normal;
+  overflow-wrap: normal;
 }
