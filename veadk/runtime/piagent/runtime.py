@@ -79,10 +79,7 @@ class PiAgentRuntime(BaseRuntime):
                     else config
                 )
                 run_config = (
-                    run_config.with_tools(
-                        extensions=[tools.extension_path],
-                        allowed_tools=tools.tool_names,
-                    )
+                    run_config.with_tools(extensions=[tools.extension_path])
                     if tools.enabled
                     else run_config
                 )

@@ -177,7 +177,7 @@ async def _write_json_response(
 def render_extension(specs: list[PiToolSpec], bridge_url: str, token: str) -> str:
     registrations = "\n\n".join(_render_tool(spec) for spec in specs)
     return (
-        'import { Type } from "@earendil-works/pi-ai";\n\n'
+        'import { Type } from "typebox";\n\n'
         f"const BRIDGE_URL = {_js(bridge_url)};\n"
         f"const TOKEN = {_js(token)};\n\n"
         "async function callBridge(toolName, toolCallId, params, signal) {\n"

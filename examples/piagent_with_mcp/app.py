@@ -28,6 +28,8 @@ import veadk
 from google.adk.cli.fast_api import get_fast_api_app
 
 AGENTS_DIR = str(Path(__file__).resolve().parent / "agents")
+os.environ.setdefault("PIAGENT_BINARY", "/opt/piagent/pi/pi")
+os.environ.setdefault("PIAGENT_INSTALL_DIR", "/opt/piagent")
 
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))

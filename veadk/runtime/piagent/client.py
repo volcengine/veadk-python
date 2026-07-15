@@ -68,10 +68,18 @@ class PiAgentRpcClient:
         else:
             if self.config.disable_builtin_tools:
                 args.append("--no-builtin-tools")
-            for extension in self.config.extensions:
-                args.extend(["--extension", extension])
-            if self.config.allowed_tools:
-                args.extend(["--tools", ",".join(self.config.allowed_tools)])
+            if self.config.tool_allowlist:
+                args.extend(["--tools", ",".join(self.config.tool_allowlist)])
+            if self.config.exclude_tools:
+                args.extend(["--exclude-tools", ",".join(self.config.exclude_tools)])
+        if self.config.disable_extension_discovery:
+            args.append("--no-extensions")
+        for extension in self.config.extensions:
+            args.extend(["--extension", extension])
+        if self.config.project_trust == "deny":
+            args.append("--no-approve")
+        elif self.config.project_trust == "approve":
+            args.append("--approve")
         if self.config.disable_skill_discovery:
             args.append("--no-skills")
         for skill_path in self.config.skill_paths:

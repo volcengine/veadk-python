@@ -35,6 +35,7 @@ Executor = Callable[[dict[str, Any]], Awaitable[Any]]
 
 _TOOL_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 _MAX_TOOL_RESULT_CHARS = 20000
+_PI_RESERVED_TOOL_NAMES = {"read", "bash", "edit", "write", "grep", "find", "ls"}
 
 
 @dataclass(frozen=True)
@@ -206,6 +207,8 @@ def _pi_tool_name(original_name: str, seen: set[str]) -> str:
     base = _sanitize_tool_name(original_name)
     if not base:
         base = f"tool_{_short_hash(original_name)}"
+    if base in _PI_RESERVED_TOOL_NAMES:
+        base = f"veadk_{base}"
     if len(base) > 64:
         base = f"{base[:55]}_{_short_hash(original_name)}"
 

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A PiAgent-runtime agent with multiple local stdio MCP toolsets.
+"""A demo assistant backed by local deterministic data sources.
 
 The agent uses VeADK's normal model configuration from `.env`, `config.yaml`,
 or environment variables such as MODEL_AGENT_NAME and MODEL_AGENT_API_KEY. The
@@ -54,13 +54,15 @@ style_skill = SkillToolset(skills=[load_skill_from_dir(_SKILL_DIR)])
 
 root_agent = Agent(
     name="piagent_mcp_agent",
-    description="A PiAgent-runtime agent with local MCP toolsets and a skill.",
+    description=(
+        "An assistant that answers demo questions about weather, air quality, "
+        "and order status using the available data sources."
+    ),
     instruction=(
-        "Answer concisely. Use the available MCP tools before answering when "
-        "the user asks about weather, air quality, or order status. Do not "
-        "invent those values without calling the relevant tool. Use the "
-        "piagent-e2e-style skill when the user asks you to use the PiAgent "
-        "E2E skill or asks for the skill marker."
+        "Answer concisely. When the user asks about weather, air quality, or "
+        "order status, look up the relevant data before answering and do not "
+        "invent values. If the user asks for the verification marker, include "
+        "the exact marker requested by the loaded guidance."
     ),
     runtime="piagent",
     tools=[style_skill, weather_mcp, air_mcp, order_mcp],

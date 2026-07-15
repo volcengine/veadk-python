@@ -115,6 +115,8 @@ class PiEventTranslator:
             return self._message_update_to_events(event)
         if event_type == "tool_execution_start":
             return [self._tool_call_event(event)]
+        if event_type == "tool_execution_update":
+            return self._tool_update_events(event)
         if event_type == "tool_execution_end":
             return [self._tool_response_event(event)]
         if event_type == "message_end":
@@ -254,6 +256,21 @@ class PiEventTranslator:
             ),
         )
 
+    def _tool_update_events(self, event: dict[str, Any]) -> list[Event]:
+        text = _tool_update_text(event)
+        if not text:
+            return []
+        tool_name = str(event.get("toolName") or "tool")
+        return [
+            make_text_event(
+                f"[{tool_name}] {text}",
+                author=self.author,
+                invocation_id=self.invocation_id,
+                thought=True,
+                partial=True,
+            )
+        ]
+
 
 def _message_text(message: Any) -> str:
     if not isinstance(message, dict) or message.get("role") != "assistant":
@@ -347,10 +364,13 @@ def _dict_or_empty(value: Any) -> dict[str, Any]:
 
 
 def _tool_result_to_response(result: Any) -> Any:
+    if isinstance(result, str):
+        return {"content": result}
     if not isinstance(result, dict):
         return result
     content = result.get("content")
     response: dict[str, Any] = {}
+    details: dict[str, Any] = {}
     if isinstance(content, list):
         texts: list[str] = []
         for item in content:
@@ -358,10 +378,56 @@ def _tool_result_to_response(result: Any) -> Any:
                 texts.append(str(item.get("text") or ""))
         if texts:
             response["content"] = "".join(texts)
+    elif isinstance(content, str):
+        response["content"] = content
+    for key in ("text", "output", "message"):
+        if not response.get("content") and result.get(key) is not None:
+            response["content"] = str(result[key])
+    if not response.get("content"):
+        shell_parts: list[str] = []
+        if result.get("stdout"):
+            shell_parts.append(str(result["stdout"]))
+        if result.get("stderr"):
+            shell_parts.append(str(result["stderr"]))
+        if shell_parts:
+            response["content"] = "\n".join(shell_parts)
     if "structuredContent" in result:
         response["structured_content"] = result["structuredContent"]
-    if "details" in result:
-        response["details"] = result.get("details") or {}
+    if isinstance(result.get("details"), dict):
+        details.update(result["details"])
+    for key in (
+        "stdout",
+        "stderr",
+        "exitCode",
+        "exit_code",
+        "code",
+        "path",
+        "diff",
+        "oldText",
+        "newText",
+        "bytes",
+    ):
+        if key in result:
+            details[key] = result[key]
+    if details:
+        response["details"] = details
     if "isError" in result:
         response["is_error"] = bool(result.get("isError"))
     return response or result
+
+
+def _tool_update_text(event: dict[str, Any]) -> str:
+    for key in ("delta", "message", "stdout", "stderr", "text", "output"):
+        value = event.get(key)
+        if value:
+            return str(value).strip()
+
+    for key in ("partialResult", "result", "update"):
+        value = event.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, dict):
+            text = _tool_update_text(value)
+            if text:
+                return text
+    return ""

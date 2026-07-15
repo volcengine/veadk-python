@@ -165,12 +165,18 @@ for raw in sys.stdin:
 def _make_fake_pi_with_argv_capture(tmp_path):
     path = tmp_path / "pi"
     argv_path = tmp_path / "argv.json"
+    env_path = tmp_path / "env.json"
     path.write_text(
         f"""#!/usr/bin/env python3
 import json
+import os
 import sys
 
 open({str(argv_path)!r}, "w", encoding="utf-8").write(json.dumps(sys.argv[1:]))
+open({str(env_path)!r}, "w", encoding="utf-8").write(json.dumps({{
+    "PI_CODING_AGENT_DIR": os.environ.get("PI_CODING_AGENT_DIR"),
+    "VEADK_PI_MODEL_API_KEY": os.environ.get("VEADK_PI_MODEL_API_KEY"),
+}}))
 for raw in sys.stdin:
     command = json.loads(raw)
     if command.get("type") == "prompt":
@@ -195,6 +201,24 @@ def _write_skill(path: Path, *, name: str, body: str = "Skill body.") -> None:
         f"---\nname: {name}\ndescription: Demo skill.\n---\n{body}\n",
         encoding="utf-8",
     )
+
+
+def _clear_piagent_config_env(monkeypatch) -> None:
+    for name in (
+        "PIAGENT_AGENT_DIR",
+        "PI_CODING_AGENT_DIR",
+        "PIAGENT_ALLOW_PARENT_PI_CODING_AGENT_DIR",
+        "PIAGENT_DISABLE_TOOLS",
+        "PIAGENT_DISABLE_BUILTIN_TOOLS",
+        "PIAGENT_DISABLE_EXTENSION_DISCOVERY",
+        "PIAGENT_ENABLE_EXTENSION_DISCOVERY",
+        "PIAGENT_DISABLE_SKILL_DISCOVERY",
+        "PIAGENT_ENABLE_SKILL_DISCOVERY",
+        "PIAGENT_TOOL_ALLOWLIST",
+        "PIAGENT_EXCLUDE_TOOLS",
+        "PIAGENT_PROJECT_TRUST",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 async def _post_json(url: str, token: str, payload: dict):
@@ -491,6 +515,65 @@ def test_pi_event_translator_tool_events():
     assert function_response.response["result"]["structured_content"] == {"value": 1}
 
 
+def test_pi_event_translator_native_bash_result():
+    translator = PiEventTranslator(author="agent", invocation_id="inv-1")
+
+    call = translator.event_to_adk_events(
+        {
+            "type": "tool_execution_start",
+            "toolCallId": "call-bash",
+            "toolName": "bash",
+            "args": {"command": "printf ok"},
+        }
+    )[0]
+    response = translator.event_to_adk_events(
+        {
+            "type": "tool_execution_end",
+            "toolCallId": "call-bash",
+            "toolName": "bash",
+            "result": {"stdout": "ok", "stderr": "", "exitCode": 0},
+            "isError": False,
+        }
+    )[0]
+
+    assert call.content.parts[0].function_call.name == "bash"
+    function_response = response.content.parts[0].function_response
+    assert function_response.name == "bash"
+    assert function_response.response["result"]["content"] == "ok"
+    assert function_response.response["result"]["details"]["stdout"] == "ok"
+    assert function_response.response["result"]["details"]["exitCode"] == 0
+
+
+def test_pi_event_translator_native_tool_update():
+    translator = PiEventTranslator(author="agent", invocation_id="inv-1")
+
+    update = translator.event_to_adk_events(
+        {
+            "type": "tool_execution_update",
+            "toolCallId": "call-bash",
+            "toolName": "bash",
+            "partialResult": {"stdout": "line 1"},
+        }
+    )
+    response = translator.event_to_adk_events(
+        {
+            "type": "tool_execution_end",
+            "toolCallId": "call-bash",
+            "toolName": "bash",
+            "result": {"stdout": "line 1\nline 2", "exitCode": 0},
+            "isError": False,
+        }
+    )[0]
+
+    assert len(update) == 1
+    assert update[0].partial is True
+    assert update[0].content.parts[0].thought is True
+    assert update[0].content.parts[0].text == "[bash] line 1"
+    function_response = response.content.parts[0].function_response
+    assert function_response.name == "bash"
+    assert function_response.response["result"]["content"] == "line 1\nline 2"
+
+
 def test_model_config_uses_custom_provider():
     agent = Agent(
         name="assistant",
@@ -511,6 +594,62 @@ def test_model_config_uses_custom_provider():
     assert provider["api"] == "openai-completions"
     assert provider["apiKey"] == "$VEADK_PI_MODEL_API_KEY"
     assert provider["models"][0]["id"] == "doubao-primary"
+
+
+def test_piagent_config_defaults_to_temp_agent_dir(monkeypatch):
+    _clear_piagent_config_env(monkeypatch)
+    agent = SimpleNamespace(
+        model_name="model-a",
+        model_api_base="https://ark.example.com/api/v3/",
+        model_api_key="test-key",
+    )
+
+    config = PiAgentConfig.from_agent(agent, "/bin/pi")
+
+    assert config.agent_dir.name.startswith("veadk-piagent-")
+    assert config.disable_tools is False
+    assert config.disable_builtin_tools is False
+    assert config.disable_extension_discovery is True
+    assert config.disable_skill_discovery is True
+    assert config.project_trust == "deny"
+
+
+def test_piagent_config_ignores_parent_pi_coding_agent_dir_by_default(
+    tmp_path,
+    monkeypatch,
+):
+    parent_home = tmp_path / "parent-pi-home"
+    _clear_piagent_config_env(monkeypatch)
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(parent_home))
+    agent = SimpleNamespace(
+        model_name="model-a",
+        model_api_base="https://ark.example.com/api/v3/",
+        model_api_key="test-key",
+    )
+
+    config = PiAgentConfig.from_agent(agent, "/bin/pi")
+
+    assert config.agent_dir != parent_home
+    assert config.agent_dir.name.startswith("veadk-piagent-")
+
+
+def test_piagent_config_rejects_real_user_pi_agent_dir(monkeypatch):
+    real_home = Path.home() / ".pi" / "agent"
+    agent = SimpleNamespace(
+        model_name="model-a",
+        model_api_base="https://ark.example.com/api/v3/",
+        model_api_key="test-key",
+    )
+
+    monkeypatch.setenv("PIAGENT_AGENT_DIR", str(real_home))
+    with pytest.raises(ValueError, match="real Pi home"):
+        PiAgentConfig.from_agent(agent, "/bin/pi")
+
+    monkeypatch.delenv("PIAGENT_AGENT_DIR", raising=False)
+    monkeypatch.setenv("PIAGENT_ALLOW_PARENT_PI_CODING_AGENT_DIR", "1")
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(real_home))
+    with pytest.raises(ValueError, match="real Pi home"):
+        PiAgentConfig.from_agent(agent, "/bin/pi")
 
 
 def test_resolve_platform_archive_linux_amd64(monkeypatch):
@@ -604,7 +743,7 @@ async def test_piagent_rpc_client_streams_fake_pi(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_piagent_rpc_client_loads_extensions_with_builtin_tools_disabled(
+async def test_piagent_rpc_client_uses_isolated_boundary_and_explicit_resources(
     tmp_path,
 ):
     binary, argv_path = _make_fake_pi_with_argv_capture(tmp_path)
@@ -627,23 +766,63 @@ async def test_piagent_rpc_client_loads_extensions_with_builtin_tools_disabled(
         timeout_seconds=5,
         model=model,
         disable_tools=False,
-        disable_builtin_tools=True,
         extensions=(str(extension),),
-        allowed_tools=("lookup",),
         skill_paths=(str(skill_dir),),
     )
     config.agent_dir.mkdir()
+    config.models_path.write_text(json.dumps(model.to_models_json()), encoding="utf-8")
 
     async with PiAgentRpcClient(config) as client:
         _events = [event async for event in client.prompt("ping")]
 
     argv = json.loads(argv_path.read_text(encoding="utf-8"))
+    env = json.loads((tmp_path / "env.json").read_text(encoding="utf-8"))
+    assert env["PI_CODING_AGENT_DIR"] == str(config.agent_dir)
+    assert env["VEADK_PI_MODEL_API_KEY"] == "test-key"
     assert "--no-tools" not in argv
-    assert "--no-builtin-tools" in argv
+    assert "--no-builtin-tools" not in argv
+    assert "--tools" not in argv
+    assert "--no-extensions" in argv
+    assert "--no-approve" in argv
     assert argv[argv.index("--extension") + 1] == str(extension)
-    assert argv[argv.index("--tools") + 1] == "lookup"
     assert "--no-skills" in argv
     assert argv[argv.index("--skill") + 1] == str(skill_dir)
+
+
+@pytest.mark.asyncio
+async def test_piagent_rpc_client_honors_explicit_allowlist_exclude_and_trust(
+    tmp_path,
+):
+    binary, argv_path = _make_fake_pi_with_argv_capture(tmp_path)
+    model = PiAgentModelConfig(
+        provider_id="veadk",
+        model="model-a",
+        base_url="https://ark.example.com/api/v3/",
+        api_key="test-key",
+        api="openai-completions",
+        api_key_env="VEADK_PI_MODEL_API_KEY",
+    )
+    config = PiAgentConfig(
+        binary_path=str(binary),
+        agent_dir=tmp_path / "agent",
+        workdir=tmp_path,
+        timeout_seconds=5,
+        model=model,
+        tool_allowlist=("read", "bash", "lookup"),
+        exclude_tools=("write",),
+        project_trust="approve",
+    )
+    config.agent_dir.mkdir()
+    config.models_path.write_text(json.dumps(model.to_models_json()), encoding="utf-8")
+
+    async with PiAgentRpcClient(config) as client:
+        _events = [event async for event in client.prompt("ping")]
+
+    argv = json.loads(argv_path.read_text(encoding="utf-8"))
+    assert argv[argv.index("--tools") + 1] == "read,bash,lookup"
+    assert argv[argv.index("--exclude-tools") + 1] == "write"
+    assert "--approve" in argv
+    assert "--no-approve" not in argv
 
 
 def test_piagent_config_with_tools_and_skills_preserves_both(tmp_path):
@@ -665,14 +844,14 @@ def test_piagent_config_with_tools_and_skills_preserves_both(tmp_path):
 
     config = base.with_skills(skill_paths=["/tmp/skill-a"]).with_tools(
         extensions=["/tmp/tools.ts"],
-        allowed_tools=["lookup"],
     )
 
     assert config.skill_paths == ("/tmp/skill-a",)
     assert config.disable_skill_discovery is True
     assert config.disable_tools is False
+    assert config.disable_builtin_tools is False
     assert config.extensions == ("/tmp/tools.ts",)
-    assert config.allowed_tools == ("lookup",)
+    assert config.tool_allowlist == ()
 
 
 def test_materialize_skills_for_pi_writes_adk_skill(tmp_path):
@@ -845,6 +1024,18 @@ async def test_build_executable_tools_aliases_pi_incompatible_names():
     assert output["name"] == "mcp.server/get-order"
 
 
+@pytest.mark.asyncio
+async def test_build_executable_tools_prefixes_pi_reserved_names():
+    agent = SimpleNamespace(tools=[_NamedTool("read"), _NamedTool("veadk_read")])
+
+    bundle = await build_executable_tools(agent, _fake_ctx(_user_event("hi")))
+
+    assert [spec.name for spec in bundle.specs] == ["veadk_read", "veadk_read_2"]
+    assert [spec.original_name for spec in bundle.specs] == ["read", "veadk_read"]
+    output = await bundle.executors["veadk_read"]({"path": "README.md"})
+    assert output["name"] == "read"
+
+
 def test_render_extension_uses_pi_tool_shape():
     spec = PiToolSpec(
         name="get_weather",
@@ -860,7 +1051,7 @@ def test_render_extension_uses_pi_tool_shape():
 
     source = render_extension([spec], "http://127.0.0.1:1234", "token")
 
-    assert 'import { Type } from "@earendil-works/pi-ai";' in source
+    assert 'import { Type } from "typebox";' in source
     assert 'name: "get_weather"' in source
     assert "parameters: Type.Object({city: Type.String" in source
     assert "async execute(toolCallId, params, signal" in source
