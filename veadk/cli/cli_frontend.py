@@ -17,8 +17,10 @@
 This is a self-contained launcher built on Google ADK's supported
 `get_fast_api_app`. In the default mode it serves both the agent API
 (`/list-apps`, `/run_sse`, sessions, ...) and the built React UI from a single
-process, so there is no cross-origin setup. In `--dev` mode it serves only the
-API (with CORS allowing the Vite dev server) for React hot reload.
+process, so there is no cross-origin setup. In `--vite` mode it serves only the
+API (with CORS allowing the Vite dev server) for React hot reload. `--dev` is a
+separate toggle: it sources the agent picker from local agents instead of cloud
+runtimes (the UI is still served).
 """
 
 import os
@@ -252,8 +254,20 @@ def _serve_options(f):
             is_flag=True,
             default=False,
             help=(
-                "Dev mode: serve API only and allow CORS from the Vite dev server "
-                f"({DEV_SERVER_ORIGIN}). Run `npm run dev` in ./frontend alongside this."
+                "Load LOCAL agents (this server's /list-apps) in the agent picker "
+                "instead of your cloud AgentKit runtimes. The UI is still served "
+                "normally; this only changes where the picker sources agents."
+            ),
+        ),
+        click.option(
+            "--vite",
+            is_flag=True,
+            default=False,
+            help=(
+                "Frontend hot-reload mode: serve the API only (no bundled UI) and "
+                f"allow CORS from the Vite dev server ({DEV_SERVER_ORIGIN}). Run "
+                "`npm run dev` in ./frontend and open that URL. For hacking on the "
+                "React app; combine with --dev to also use local agents."
             ),
         ),
         click.option(
@@ -323,7 +337,7 @@ def _serve_options(f):
             show_default=True,
             help="Open the web UI in your default browser once the server is ready. "
             "Off by default (typical server-hosted deployments have no local browser); "
-            "pass --open for local use. Ignored with --dev.",
+            "pass --open for local use. Ignored with --vite.",
         ),
     ]
     for opt in reversed(options):
@@ -341,6 +355,7 @@ def frontend(
     host: str,
     port: int,
     dev: bool,
+    vite: bool,
     oauth2_user_pool: str | None,
     oauth2_user_pool_client: str | None,
     oauth2_user_pool_uid: str | None,
@@ -360,6 +375,7 @@ def frontend(
         host=host,
         port=port,
         dev=dev,
+        vite=vite,
         oauth2_user_pool=oauth2_user_pool,
         oauth2_user_pool_client=oauth2_user_pool_client,
         oauth2_user_pool_uid=oauth2_user_pool_uid,
@@ -383,6 +399,7 @@ def studio(
     host: str,
     port: int,
     dev: bool,
+    vite: bool,
     oauth2_user_pool: str | None,
     oauth2_user_pool_client: str | None,
     oauth2_user_pool_uid: str | None,
@@ -407,6 +424,7 @@ def studio(
         host=host,
         port=port,
         dev=dev,
+        vite=vite,
         oauth2_user_pool=oauth2_user_pool,
         oauth2_user_pool_client=oauth2_user_pool_client,
         oauth2_user_pool_uid=oauth2_user_pool_uid,
@@ -427,6 +445,7 @@ def _run_frontend_server(
     host: str,
     port: int,
     dev: bool,
+    vite: bool = False,
     oauth2_user_pool: str | None,
     oauth2_user_pool_client: str | None,
     oauth2_user_pool_uid: str | None,
@@ -454,7 +473,7 @@ def _run_frontend_server(
     from google.adk.cli.fast_api import get_fast_api_app
 
     agents_dir = os.path.abspath(agents_dir)
-    allow_origins = [DEV_SERVER_ORIGIN] if dev else []
+    allow_origins = [DEV_SERVER_ORIGIN] if vite else []
 
     app = get_fast_api_app(
         agents_dir=agents_dir,
@@ -558,26 +577,15 @@ def _run_frontend_server(
 
     @app.get("/web/ui-config")
     async def _web_ui_config():
-        """Feature gates the SPA reads at startup. Studio mode disables the
-        chat-centric modules and lands on the add-agent page, leaving only the
-        add-agent and manage-agent flows (the '添加 AgentKit 智能体' remote-connect
-        option is disabled for now)."""
-        if studio:
-            return {
-                "studio": True,
-                "features": {
-                    "newChat": False,
-                    "search": False,
-                    "skillCenter": False,
-                    "history": False,
-                    "addAgent": True,
-                    "manageAgents": True,
-                    "addAgentkit": False,
-                },
-                "defaultView": "addAgent",
-            }
+        """Feature gates the SPA reads at startup. Studio now serves the SAME UI
+        as `veadk frontend` — all modules (chat/search/skill-center/history +
+        add/manage agent) enabled, landing on the chat view. The `studio` flag
+        is informational."""
         return {
-            "studio": False,
+            "studio": studio,
+            # Agent source for the picker: --dev serves local agents (/list-apps),
+            # otherwise the deployed UI lists the user's cloud AgentKit runtimes.
+            "agentsSource": "local" if dev else "cloud",
             "features": {
                 "newChat": True,
                 "search": True,
@@ -1190,6 +1198,143 @@ def _run_frontend_server(
             logger.error(f"get runtime detail failed: {e}", exc_info=True)
             raise HTTPException(status_code=502, detail=str(e))
 
+    @app.get("/web/runtimes")
+    async def _web_runtimes(
+        author: str = "",
+        scope: str = "all",
+        page_size: int = 30,
+        next_token: str = "",
+        region: str = "cn-beijing",
+    ):
+        """One page of AgentKit runtimes for the agent selector. Lists ALL
+        runtimes (server-side paginated); each item is flagged `isMine` when its
+        veadk:author tag matches `author`. scope=mine filters to the user's own."""
+        ak, sk, token = _resolve_ve_credentials()
+        try:
+            from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+            from agentkit.sdk.runtime import types as _rt
+
+            client = AgentkitRuntimeClient(
+                access_key=ak, secret_key=sk, session_token=token, region=region
+            )
+            # Token-based pagination: MaxResults bounds the page, NextToken
+            # continues it (PageSize is ignored by this API).
+            kw = {"max_results": max(1, min(page_size, 100))}
+            if next_token:
+                kw["next_token"] = next_token
+            resp = client.list_runtimes(_rt.ListRuntimesRequest(**kw))
+            out: list[dict] = []
+            for r in resp.agent_kit_runtimes or []:
+                tags = {tg.key: tg.value for tg in (r.tags or [])}
+                is_mine = bool(author) and tags.get("veadk:author") == author
+                if scope == "mine" and not is_mine:
+                    continue
+                out.append(
+                    {
+                        "name": r.name,
+                        "runtimeId": r.runtime_id,
+                        "status": r.status,
+                        "region": region,
+                        "author": tags.get("veadk:author", ""),
+                        "isMine": is_mine,
+                    }
+                )
+            return {"runtimes": out, "nextToken": getattr(resp, "next_token", "") or ""}
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"list runtimes failed: {e}", exc_info=True)
+            raise HTTPException(status_code=502, detail=str(e))
+
+    # Cache resolved (endpoint, apikey) per runtime so the data-plane proxy does
+    # not call GetRuntime on every request. Short TTL; cleared on a 401.
+    _rt_conn_cache: dict[str, tuple] = {}
+
+    def _resolve_runtime_conn(runtime_id: str, region: str) -> tuple[str, str]:
+        import time as _time
+
+        cached = _rt_conn_cache.get(runtime_id)
+        if cached and cached[2] > _time.time():
+            return cached[0], cached[1]
+        ak, sk, token = _resolve_ve_credentials()
+        from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+        from agentkit.sdk.runtime import types as _rt
+
+        client = AgentkitRuntimeClient(
+            access_key=ak, secret_key=sk, session_token=token, region=region
+        )
+        r = client.get_runtime(_rt.GetRuntimeRequest(runtime_id=runtime_id))
+        endpoint = ""
+        for nc in getattr(r, "network_configurations", None) or []:
+            ep = getattr(nc, "endpoint", "") or ""
+            if ep:
+                endpoint = ep
+                if getattr(nc, "network_type", "") == "public":
+                    break
+        apikey = ""
+        auth = getattr(r, "authorizer_configuration", None)
+        key_auth = getattr(auth, "key_auth", None) if auth else None
+        if key_auth:
+            apikey = getattr(key_auth, "api_key", "") or ""
+        if not endpoint:
+            raise HTTPException(
+                status_code=502, detail="runtime has no public endpoint"
+            )
+        _rt_conn_cache[runtime_id] = (endpoint, apikey, _time.time() + 300)
+        return endpoint, apikey
+
+    @app.api_route(
+        "/web/runtime-proxy/{runtime_id}/{path:path}",
+        methods=["GET", "POST", "DELETE"],
+    )
+    async def _runtime_proxy(runtime_id: str, path: str, request: Request):
+        """Proxy a data-plane call to a runtime, injecting its apikey server-side
+        (the browser never sees it). Streams the response so /run_sse works."""
+        region = request.query_params.get("region", "cn-beijing")
+        try:
+            endpoint, apikey = _resolve_runtime_conn(runtime_id, region)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"resolve runtime conn failed: {e}", exc_info=True)
+            raise HTTPException(status_code=502, detail=str(e))
+
+        # Drop the SSO gateway querystring; keep any real API query params.
+        qs = {k: v for k, v in request.query_params.items() if k != "region"}
+        target = f"{endpoint.rstrip('/')}/{path}"
+        headers = {
+            k: v
+            for k, v in request.headers.items()
+            if k.lower() not in {"host", "cookie", "authorization", "content-length"}
+        }
+        if apikey:
+            headers["Authorization"] = f"Bearer {apikey}"
+        body = await request.body()
+
+        from fastapi.responses import StreamingResponse
+
+        # Open the upstream stream so we can forward status + body incrementally.
+        client = httpx.AsyncClient(timeout=None)
+        req = client.build_request(
+            request.method, target, params=qs, headers=headers, content=body
+        )
+        upstream = await client.send(req, stream=True)
+        if upstream.status_code == 401:
+            _rt_conn_cache.pop(runtime_id, None)
+
+        async def _body():
+            try:
+                async for chunk in upstream.aiter_raw():
+                    yield chunk
+            finally:
+                await upstream.aclose()
+                await client.aclose()
+
+        media = upstream.headers.get("content-type", "application/octet-stream")
+        return StreamingResponse(
+            _body(), status_code=upstream.status_code, media_type=media
+        )
+
     # ---- Auth ----------------------------------------------------------------
     # 'gateway' mode: an upstream API gateway (the AgentKit runtime gateway) has
     # already authenticated the user and forwards the identity as an
@@ -1311,9 +1456,9 @@ def _run_frontend_server(
         ) or os.path.exists("/var/run/secrets/iam/credential")
         return {"credentials": has_creds}
 
-    if dev:
+    if vite:
         logger.info(
-            f"A2UI dev mode: API on http://{host}:{port}, "
+            f"A2UI Vite mode: API on http://{host}:{port} (no bundled UI), "
             f"run `cd frontend && npm run dev` and open {DEV_SERVER_ORIGIN}"
         )
     else:
@@ -1375,9 +1520,9 @@ def _run_frontend_server(
             f"A2UI UI + API serving on http://{host}:{port} (UI: {webui}, agents: {agents_dir})"
         )
 
-    # Open the UI in the browser once the server is up. Only in non-dev mode,
-    # where this server serves the UI; with --dev the Vite dev server owns it.
-    if open_browser and not dev:
+    # Open the UI in the browser once the server is up. Only when this server
+    # serves the UI; with --vite the Vite dev server owns it.
+    if open_browser and not vite:
         import threading
 
         browse_host = "127.0.0.1" if host in ("0.0.0.0", "", "::") else host

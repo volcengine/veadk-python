@@ -10,6 +10,7 @@ import {
   Database,
   Eye,
   FileDown,
+  FileUp,
   GitBranch,
   Info,
   LayoutGrid,
@@ -29,7 +30,6 @@ import {
 import {
   type CreateModeProps,
   type AgentDraft,
-  type CustomTool,
   type McpTool,
   type SelectedSkill,
   emptyDraft,
@@ -43,7 +43,7 @@ import {
   type BackendOption,
 } from "./veadkCatalog";
 import { generateProject } from "./codegen";
-import { draftToYaml } from "./configYaml";
+import { draftToYaml, yamlToDraft } from "./configYaml";
 import { searchSkills, downloadSkillFiles, type SkillHit } from "./skills";
 import type { AgentProject } from "./project";
 import { ProjectPreview } from "../ui/ProjectPreview";
@@ -247,109 +247,6 @@ function BackendSelect({
           </button>
         );
       })}
-    </div>
-  );
-}
-
-/* ---------------------------------------------------------------- *
- * Custom function-tool editor: add {name, description} rows. Name is
- * required; description optional. Rows are removable.
- * ---------------------------------------------------------------- */
-function CustomToolEditor({
-  tools,
-  onChange,
-}: {
-  tools: CustomTool[];
-  onChange: (next: CustomTool[]) => void;
-}) {
-  const [name, setName] = useState("");
-  const [desc, setDesc] = useState("");
-
-  const add = () => {
-    const n = name.trim();
-    if (!n) return;
-    onChange([...tools, { name: n, description: desc.trim() }]);
-    setName("");
-    setDesc("");
-  };
-
-  const remove = (i: number) => onChange(tools.filter((_, idx) => idx !== i));
-
-  return (
-    <div className="cw-ctool">
-      <div className="cw-ctool-inputs">
-        <input
-          className="cw-input"
-          value={name}
-          placeholder="函数名，例如 lookup_order"
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              add();
-            }
-          }}
-        />
-        <input
-          className="cw-input"
-          value={desc}
-          placeholder="描述（可选）：这个工具做什么"
-          onChange={(e) => setDesc(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              add();
-            }
-          }}
-        />
-        <button
-          type="button"
-          className="cw-btn cw-btn-soft"
-          onClick={add}
-          disabled={!name.trim()}
-        >
-          <Plus className="cw-i" />
-          添加
-        </button>
-      </div>
-
-      {tools.length > 0 ? (
-        <div className="cw-ctool-list">
-          <AnimatePresence initial={false}>
-            {tools.map((t, i) => (
-              <motion.div
-                key={`${t.name}-${i}`}
-                className="cw-ctool-row"
-                layout
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -6 }}
-                transition={{ duration: 0.16 }}
-              >
-                <span className="cw-ctool-icon" aria-hidden>
-                  <Wrench className="cw-i cw-i-sm" />
-                </span>
-                <span className="cw-ctool-meta">
-                  <span className="cw-ctool-name">{t.name}</span>
-                  {t.description && (
-                    <span className="cw-ctool-desc">{t.description}</span>
-                  )}
-                </span>
-                <button
-                  type="button"
-                  className="cw-icon-btn cw-icon-danger"
-                  onClick={() => remove(i)}
-                  aria-label={`移除 ${t.name}`}
-                >
-                  <Trash2 className="cw-i cw-i-sm" />
-                </button>
-              </motion.div>
-            ))}
-          </AnimatePresence>
-        </div>
-      ) : (
-        <p className="cw-empty-line">暂无自定义函数工具，生成时会为每个工具创建可运行的桩函数。</p>
-      )}
     </div>
   );
 }
@@ -887,7 +784,9 @@ function TreeNode({
       <div
         className={`cw-tree-node cw-tree-type-${node.agentType ?? "llm"} ${
           selected ? "is-selected" : ""
-        } ${draggable ? "is-draggable" : ""} ${dragOver ? "is-dragover" : ""}`}
+        } ${draggable ? "is-draggable" : ""} ${dragOver ? "is-dragover" : ""} ${
+          nodeProblem(node) ? "is-invalid" : ""
+        }`}
         role="button"
         tabIndex={0}
         draggable={draggable}
@@ -990,6 +889,26 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
   const [showErrors, setShowErrors] = useState(false);
   const [project, setProject] = useState<AgentProject | null>(null);
   const [building, setBuilding] = useState(false);
+  // The section nearest the top of the scroll container (scroll-spy) — drives
+  // the right-hand step nav highlight.
+  const [activeId, setActiveId] = useState<StepId>("type");
+  // YAML import: file input + last error message.
+  const yamlInputRef = useRef<HTMLInputElement>(null);
+  const [importErr, setImportErr] = useState("");
+  const onImportYaml = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-importing the same file
+    if (!file) return;
+    setImportErr("");
+    try {
+      const text = await file.text();
+      setDraft(yamlToDraft(text));
+      setSelectedPath([]);
+      setShowErrors(false);
+    } catch (ex) {
+      setImportErr(`导入失败：${ex instanceof Error ? ex.message : String(ex)}`);
+    }
+  };
 
   // Which tree node is being edited ([] = root). The detail pane and per-node
   // inline errors are driven by this selection.
@@ -1021,7 +940,6 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
             {meta.label}
             {meta.required && <span className="cw-sec-required">必填</span>}
           </h2>
-          <p className="cw-sec-hint">{meta.hint}</p>
         </header>
         {children}
       </section>
@@ -1045,7 +963,6 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
 
   // Root-only rich sections read these off the root draft directly.
   const builtinTools = node.builtinTools ?? [];
-  const customTools = node.customTools ?? [];
   const mcpTools = node.mcpTools ?? [];
   const tracingExporters = node.tracingExporters ?? [];
   const selectedSkills = node.selectedSkills ?? [];
@@ -1077,6 +994,64 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
   // Whole-tree validation: every node must satisfy its type's requirements.
   const problems = useMemo(() => treeProblems(draft), [draft]);
   const canFinish = problems.length === 0;
+
+  // Per-step completion, for the nav's done-checkmarks + progress fill.
+  const completion = useMemo<Record<StepId, boolean>>(
+    () => ({
+      type: true,
+      basic: !nameMissing && (orchestrator || a2a || !instructionMissing),
+      model: Boolean(
+        node.modelName?.trim() ||
+          node.modelProvider?.trim() ||
+          node.modelApiBase?.trim(),
+      ),
+      tools: builtinTools.length > 0 || mcpTools.length > 0,
+      skills: selectedSkills.length > 0,
+      memory: node.memory.shortTerm || node.memory.longTerm,
+      knowledge: node.knowledgebase,
+      tracing: node.tracing || node.enableA2ui,
+      subagents: (node.subAgents?.length ?? 0) > 0,
+      review: canFinish,
+    }),
+    [node, nameMissing, instructionMissing, orchestrator, a2a, canFinish, builtinTools, mcpTools, selectedSkills],
+  );
+
+  // The nav only lists the sections actually rendered for THIS node's type —
+  // orchestrators / A2A leaves have far fewer than an LLM (type lives in the
+  // top bar; sub-agents live in the left tree; both are excluded here).
+  const navStepIds: StepId[] =
+    orchestrator || a2a
+      ? ["basic"]
+      : ["basic", "model", "tools", "skills", "memory", "knowledge", "tracing"];
+  const navSteps = STEPS.filter((s) => navStepIds.includes(s.id));
+  const activeIndex = navSteps.findIndex((s) => s.id === activeId);
+
+  // Smooth-scroll a section into view (nav click is a convenience).
+  const scrollToSection = (id: StepId) => {
+    sectionRefs.current[id]?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  // Scroll-spy: mark the section nearest the top of the scroll container active.
+  useEffect(() => {
+    if (project) return; // observer targets only exist in the form view
+    const root = scrollRef.current;
+    if (!root) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        const id = (visible[0]?.target as HTMLElement | undefined)?.dataset
+          .stepId as StepId | undefined;
+        if (id) setActiveId(id);
+      },
+      { root, rootMargin: "0px 0px -65% 0px", threshold: 0 },
+    );
+    for (const el of Object.values(sectionRefs.current)) {
+      if (el) observer.observe(el);
+    }
+    return () => observer.disconnect();
+  }, [project]);
 
   const finish = async () => {
     if (!canFinish) {
@@ -1205,43 +1180,72 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
             onChange={applyTree}
           />
         </aside>
-        {/* Right: the form for the currently-selected node. */}
-        <div className="cw-detail" ref={scrollRef}>
-          <div className="cw-detail-grid">
-            {/* Left column: pick the agent type (radio). Right column: fill in
-                its details — so the form isn't pushed below the type cards. */}
-            <div className="cw-detail-type">
-              <Section meta={metaOf("type")}>
-                <div className="cw-typeradio">
-                  {AGENT_TYPES.map((t) => {
-                    const on = (node.agentType ?? "llm") === t.id;
-                    const Icon = t.icon;
-                    return (
-                      <label
-                        key={t.id}
-                        className={`cw-typeradio-item ${on ? "is-on" : ""}`}
-                      >
-                        <input
-                          type="radio"
-                          name="agentType"
-                          className="cw-typeradio-input"
-                          checked={on}
-                          onChange={() => patch({ agentType: t.id })}
-                        />
-                        <span className="cw-typeradio-dot" aria-hidden />
-                        <span className="cw-typeradio-main">
-                          <span className="cw-typeradio-head">
-                            <Icon className="cw-typeradio-icon" />
-                            <span className="cw-typeradio-title">{t.label}</span>
-                          </span>
-                          <span className="cw-typeradio-desc">{t.desc}</span>
+        {/* Right: the form for the currently-selected node. The agent-type bar
+            is fixed on top (outside the scroll area); the form (left) + step
+            nav (right) scroll below it. */}
+        <div className="cw-detail">
+          {/* Fixed top bar: pick the agent type; missing-info shows here too. */}
+          <div className="cw-typebar">
+            <div className="cw-typebar-inner">
+              <header className="cw-sec-head">
+                <h2 className="cw-sec-title">
+                  类型<span className="cw-sec-required">必填</span>
+                </h2>
+              </header>
+              <div className="cw-typeradio cw-typeradio--row">
+                {AGENT_TYPES.map((t) => {
+                  const on = (node.agentType ?? "llm") === t.id;
+                  const Icon = t.icon;
+                  return (
+                    <label
+                      key={t.id}
+                      className={`cw-typeradio-item ${on ? "is-on" : ""}`}
+                    >
+                      <input
+                        type="radio"
+                        name="agentType"
+                        className="cw-typeradio-input"
+                        checked={on}
+                        onChange={() => patch({ agentType: t.id })}
+                      />
+                      <span className="cw-typeradio-dot" aria-hidden />
+                      <span className="cw-typeradio-main">
+                        <span className="cw-typeradio-head">
+                          <Icon className="cw-typeradio-icon" />
+                          <span className="cw-typeradio-title">{t.label}</span>
                         </span>
-                      </label>
-                    );
-                  })}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+              {problems.length > 0 && (
+                <div className="cw-missing" role="alert">
+                  <span className="cw-missing-lead">待补全（{problems.length}）</span>
+                  <div className="cw-missing-list">
+                    {problems.map((p) => (
+                      <button
+                        key={p.path.join(".") + p.problem}
+                        type="button"
+                        className="cw-missing-item"
+                        onClick={() => {
+                          setShowErrors(true);
+                          setSelectedPath(p.path);
+                        }}
+                      >
+                        {p.name} · {p.problem}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </Section>
+              )}
             </div>
+          </div>
+
+          {/* Scroll area: form on the left, step nav on the right. */}
+          <div className="cw-detail-scroll" ref={scrollRef}>
+          <div className="cw-detail-inner">
+            <div className="cw-lower">
             <div className="cw-form-col">
 
             <Section meta={metaOf("basic")}>
@@ -1417,16 +1421,6 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
                       />
                     </div>
                     <div className="cw-field">
-                      <label className="cw-label">自定义函数工具</label>
-                      <span className="cw-help">
-                        添加你自己的函数工具，生成的 agent.py 会为每个工具创建可运行的桩函数。
-                      </span>
-                      <CustomToolEditor
-                        tools={customTools}
-                        onChange={(next) => patch({ customTools: next })}
-                      />
-                    </div>
-                    <div className="cw-field">
                       <label className="cw-label">MCP 工具</label>
                       <span className="cw-help">
                         连接外部 MCP 服务，生成时会为每个条目创建对应的 MCPToolset。
@@ -1564,9 +1558,52 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
               </>
             )}
           </div>
-          </div>
-        </div>
-      </div>
+
+            {/* Right rail: scroll-spy step nav (click to jump to a section).
+                Only the sections rendered for this node's type are listed. */}
+            <nav className="cw-rail" aria-label="步骤导航">
+              <ol className="cw-steps">
+                <div className="cw-rail-track" aria-hidden>
+                  <motion.div
+                    className="cw-rail-fill"
+                    animate={{
+                      height: `${(Math.max(activeIndex, 0) / Math.max(navSteps.length - 1, 1)) * 100}%`,
+                    }}
+                    transition={{ type: "spring", stiffness: 260, damping: 32 }}
+                  />
+                </div>
+                {navSteps.map((s) => {
+                  const active = s.id === activeId;
+                  const done = completion[s.id];
+                  return (
+                    <li key={s.id}>
+                      <button
+                        type="button"
+                        className={`cw-step ${active ? "is-active" : ""} ${done ? "is-done" : ""}`}
+                        onClick={() => scrollToSection(s.id)}
+                        aria-current={active ? "step" : undefined}
+                      >
+                        <span className="cw-step-marker" aria-hidden>
+                          <span className="cw-dot" />
+                        </span>
+                        <span className="cw-step-text">
+                          <span className="cw-step-labelrow">
+                            <span className="cw-step-label">{s.label}</span>
+                            {s.required && <span className="cw-step-required">必填</span>}
+                          </span>
+                          <span className="cw-step-hint">{s.hint}</span>
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ol>
+            </nav>
+          </div>{/* cw-lower */}
+          </div>{/* cw-detail-inner */}
+          </div>{/* cw-detail-scroll */}
+        </div>{/* cw-detail */}
+      </div>{/* cw-editor */}
       <footer className="cw-footer-bar">
         <div className="cw-footer-status">
           {canFinish ? (
@@ -1585,6 +1622,23 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
           )}
         </div>
         <div className="cw-footer-actions">
+          {importErr && <span className="cw-footer-importerr">{importErr}</span>}
+          <input
+            ref={yamlInputRef}
+            type="file"
+            accept=".yaml,.yml,text/yaml"
+            style={{ display: "none" }}
+            onChange={onImportYaml}
+          />
+          <button
+            type="button"
+            className="cw-btn cw-btn-soft"
+            onClick={() => yamlInputRef.current?.click()}
+            title="从 YAML 加载 Agent 结构（覆盖当前表单）"
+          >
+            <FileUp className="cw-i" />
+            导入 YAML
+          </button>
           <button
             type="button"
             className="cw-btn cw-btn-soft"
