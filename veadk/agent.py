@@ -181,10 +181,12 @@ class Agent(LlmAgent):
     enable_skills_checklist: bool = False
     _skills_with_checklist: Dict[str, Any] = {}
 
-    runtime: Literal["adk", "codex"] = "adk"
+    runtime: Literal["adk", "codex", "piagent"] = "adk"
     """Agent runtime backend. ``"adk"`` (default) uses Google ADK's built-in LLM
     flow. ``"codex"`` delegates the inner agent loop to the OpenAI Codex SDK.
-    Non-``adk`` runtimes are implemented under :mod:`veadk.runtime`."""
+    ``"piagent"`` delegates the inner agent loop to a local Pi coding agent
+    binary through its RPC mode. Non-``adk`` runtimes are implemented under
+    :mod:`veadk.runtime`."""
 
     enable_a2ui: bool = False
     """Enable A2UI (agent-driven UI). When True, a `SendA2uiToClientToolset` is
