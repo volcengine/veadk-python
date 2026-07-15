@@ -595,13 +595,21 @@ export function ProjectPreview({ project, onChange, onDeploy, onAgentAdded }: Pr
             <div className="pp-placeholder">选择左侧文件以查看内容</div>
           ) : editable ? (
             <div className="pp-editor-wrap">
-              <pre className="pp-hl hljs" aria-hidden="true" ref={underlayRef}>
-                <code
-                  dangerouslySetInnerHTML={{
-                    __html: highlight(selectedFile.content, selectedFile.path),
-                  }}
-                />
-              </pre>
+              {/* No wrapping <code> element and no whitespace between tags:
+                  a literal "\n  " text node inside <pre> (white-space: pre)
+                  would offset the entire underlay from the textarea by one
+                  leading newline + indent. Injecting the highlighted HTML
+                  straight into the <pre> also sidesteps highlight.js's
+                  github.css `pre code.hljs { padding: 1em }` rule, which
+                  would otherwise add mismatched inner padding. */}
+              <pre
+                className="pp-hl hljs"
+                aria-hidden="true"
+                ref={underlayRef}
+                dangerouslySetInnerHTML={{
+                  __html: highlight(selectedFile.content, selectedFile.path),
+                }}
+              />
               <textarea
                 className="pp-input"
                 spellCheck={false}
@@ -616,13 +624,12 @@ export function ProjectPreview({ project, onChange, onDeploy, onAgentAdded }: Pr
               />
             </div>
           ) : (
-            <pre className="pp-pre hljs">
-              <code
-                dangerouslySetInnerHTML={{
-                  __html: highlight(selectedFile.content, selectedFile.path),
-                }}
-              />
-            </pre>
+            <pre
+              className="pp-pre hljs"
+              dangerouslySetInnerHTML={{
+                __html: highlight(selectedFile.content, selectedFile.path),
+              }}
+            />
           )}
         </div>
       </div>
