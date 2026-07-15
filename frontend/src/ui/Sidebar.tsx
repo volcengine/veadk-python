@@ -1,10 +1,11 @@
-import { useState } from "react";
-import { LogOut, MoreHorizontal, Plus, Trash2 } from "lucide-react";
-import type { AdkSession } from "../adk/client";
+import { useRef, useState } from "react";
+import { Boxes, ChevronRight, Cpu, LogOut, MoreHorizontal, Plus, Trash2 } from "lucide-react";
+import type { AdkSession, UiFeatures } from "../adk/client";
 import { sessionTitle } from "../blocks";
 import { displayName } from "../adk/identity";
 import { SkillCenterButton } from "./SkillCenter";
 import { SearchButton } from "./Search";
+import { AgentSelector, type SelectedRuntime } from "./AgentSelector";
 import volcengineLogo from "../assets/volcengine.svg";
 
 /** Hand-drawn "quick create" mark: a lightning bolt (speed) with a spark. */
@@ -29,11 +30,26 @@ function QuickCreateIcon() {
 export interface SidebarProps {
   sessions: AdkSession[];
   currentSessionId: string;
+  /** Per-module feature gates; omitted modules default to shown. */
+  features?: UiFeatures;
+  /** Session ids that are currently streaming a reply (shows a live dot). */
+  streamingSids?: Set<string>;
+  /** Agent picker: source, local app list, current selection + label. */
+  agentsSource?: "local" | "cloud";
+  localApps?: string[];
+  currentAgentId?: string;
+  currentAgentLabel?: string;
+  /** The connected runtime (drives the picker's detail panel). */
+  currentRuntime?: SelectedRuntime;
+  /** Identity used to badge the user's own runtimes in the cloud picker. */
+  author?: string;
+  onSelectAgent?: (id: string) => void;
   onNewChat: () => void;
   onSearch: () => void;
   onQuickCreate: () => void;
   onSkillCenter: () => void;
   onAddAgent: () => void;
+  onManageAgents: () => void;
   onPickSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
   userInfo?: Record<string, unknown>;
@@ -87,11 +103,21 @@ function SidebarUser({
 export function Sidebar({
   sessions,
   currentSessionId,
+  features,
+  streamingSids,
+  agentsSource = "local",
+  localApps = [],
+  currentAgentId = "",
+  currentAgentLabel = "",
+  currentRuntime,
+  author = "",
+  onSelectAgent,
   onNewChat,
   onSearch,
   onQuickCreate,
   onSkillCenter,
   onAddAgent,
+  onManageAgents,
   onPickSession,
   onDeleteSession,
   userInfo,
@@ -100,7 +126,17 @@ export function Sidebar({
   // onAddAgent is now reached through the "添加 Agent" chooser, not a direct
   // sidebar button; kept in the props contract for the App-level handler.
   void onAddAgent;
+  // Per-module feature gates; a missing flag defaults to shown.
+  const show = (k: keyof NonNullable<typeof features>) => features?.[k] !== false;
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [selectorOpen, setSelectorOpen] = useState(false);
+  const [anchorTop, setAnchorTop] = useState(0);
+  const rowRef = useRef<HTMLButtonElement>(null);
+  const toggleSelector = () => {
+    // Align the drawer's top with the picker row (its offsetParent is .sidebar).
+    if (rowRef.current) setAnchorTop(rowRef.current.offsetTop);
+    setSelectorOpen((o) => !o);
+  };
   const sorted = [...sessions].sort(
     (a, b) => (b.lastUpdateTime ?? 0) - (a.lastUpdateTime ?? 0),
   );
@@ -111,18 +147,62 @@ export function Sidebar({
           <img className="brand-logo" src={volcengineLogo} alt="" aria-hidden />
           VeADK
         </div>
-        <button className="new-chat" onClick={onNewChat}>
-          <Plus className="icon" />
-          新会话
-        </button>
-        <SearchButton onClick={onSearch} />
-        <button className="new-chat" onClick={onQuickCreate}>
-          <QuickCreateIcon />
-          添加 Agent
-        </button>
-        <SkillCenterButton onClick={onSkillCenter} />
+        {onSelectAgent &&
+          (() => {
+            // Cloud mode with nothing connected: a red prompt so the default
+            // isn't mistaken for a real agent.
+            const needsPick = agentsSource === "cloud" && !currentAgentId;
+            return (
+              <button
+                ref={rowRef}
+                className={`agent-row ${needsPick ? "agent-row--empty" : ""}`}
+                onClick={toggleSelector}
+                title="切换 Agent"
+              >
+                <Cpu className="icon agent-row-lead" />
+                <span className="agent-row-name">
+                  {needsPick ? "请选择 Agent" : currentAgentLabel || "选择 Agent"}
+                </span>
+                <ChevronRight className={`icon agent-row-chev ${selectorOpen ? "open" : ""}`} />
+              </button>
+            );
+          })()}
+        {onSelectAgent && (
+          <AgentSelector
+            open={selectorOpen}
+            onClose={() => setSelectorOpen(false)}
+            anchorTop={anchorTop}
+            agentsSource={agentsSource}
+            localApps={localApps}
+            currentId={currentAgentId}
+            currentRuntime={currentRuntime}
+            author={author}
+            onSelect={onSelectAgent}
+          />
+        )}
+        {show("newChat") && (
+          <button className="new-chat" onClick={onNewChat}>
+            <Plus className="icon" />
+            新会话
+          </button>
+        )}
+        {show("search") && <SearchButton onClick={onSearch} />}
+        {show("addAgent") && (
+          <button className="new-chat" onClick={onQuickCreate}>
+            <QuickCreateIcon />
+            添加 Agent
+          </button>
+        )}
+        {show("skillCenter") && <SkillCenterButton onClick={onSkillCenter} />}
+        {show("manageAgents") && (
+          <button className="new-chat" onClick={onManageAgents}>
+            <Boxes className="icon" />
+            管理 Agent
+          </button>
+        )}
       </div>
 
+      {show("history") && (
       <div className="sidebar-history">
         <div className="history-head">
           <span>历史会话</span>
@@ -141,6 +221,9 @@ export function Sidebar({
                 onClick={() => onPickSession(s.id)}
                 title={s.id}
               >
+                {streamingSids?.has(s.id) && (
+                  <span className="history-streaming" title="正在生成…" aria-label="正在生成" />
+                )}
                 <span className="history-title">{sessionTitle(s.events)}</span>
               </button>
               <button
@@ -170,6 +253,7 @@ export function Sidebar({
           ))}
         </div>
       </div>
+      )}
 
       <SidebarUser userInfo={userInfo} onLogout={onLogout} />
     </aside>

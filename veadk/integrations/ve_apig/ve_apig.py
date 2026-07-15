@@ -43,6 +43,31 @@ class APIGateway:
         result = thread.get()
         return result
 
+    def find_serverless_gateway(self):
+        """Return a serverless APIG gateway to reuse, or None.
+
+        VeFaaS applications can only attach to a *serverless* gateway. Lists a
+        full page (the default page size misses gateways past the first ~10) and
+        prefers a Running one; falls back to any serverless gateway so callers
+        can surface a clearer error than "not found".
+        """
+        from volcenginesdkapig import ListGatewaysRequest
+
+        request = ListGatewaysRequest(page_number=1, page_size=100)
+        result = self.apig_client.list_gateways(request, async_req=True).get()
+        items = getattr(result, "items", []) or []
+        serverless = [g for g in items if getattr(g, "type", None) == "serverless"]
+
+        def _running(g) -> bool:
+            return (
+                getattr(g, "message", None) or getattr(g, "status", None)
+            ) == "Running"
+
+        running = [g for g in serverless if _running(g)]
+        if running:
+            return running[0]
+        return serverless[0] if serverless else None
+
     def create_serverless_gateway(self, instance_name: str) -> str:  # instance
         from volcenginesdkapig import (
             CreateGatewayRequest,

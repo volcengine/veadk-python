@@ -42,6 +42,6 @@ python main.py
 ## 下一步
 
 - 把你自己的 `.md` / `.txt` / `.pdf` 文件放进 `docs/` 并就其内容提问。
-- 将 `backend="local"` 替换为持久化存储（如 `viking`、`opensearch`、`redis`，
-  在 `config.yaml` 中配置），用于生产环境。
+- 将 `backend="local"` 替换为持久化存储（如 `openviking`、`milvus`、`viking`、
+  `opensearch`、`redis`，在 `.env` 或 `config.yaml` 中配置），用于生产环境。
 - 继续阅读 [06 · 多智能体工作流](../06_multi_agent/)，组合多个智能体。

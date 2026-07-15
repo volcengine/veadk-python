@@ -20,7 +20,7 @@ from veadk.cli.cli_clean import clean
 from veadk.cli.cli_create import create
 from veadk.cli.cli_deploy import deploy
 from veadk.cli.cli_eval import eval
-from veadk.cli.cli_frontend import frontend
+from veadk.cli.cli_frontend import frontend, studio
 from veadk.cli.cli_harness import harness
 from veadk.cli.cli_init import init
 from veadk.cli.cli_kb import kb
@@ -52,6 +52,7 @@ veadk.add_command(create)
 veadk.add_command(prompt)
 veadk.add_command(web)
 veadk.add_command(frontend)
+veadk.add_command(studio)
 veadk.add_command(pipeline)
 veadk.add_command(eval)
 veadk.add_command(kb)

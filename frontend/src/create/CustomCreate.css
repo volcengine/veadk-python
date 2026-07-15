@@ -11,6 +11,216 @@
   color: hsl(var(--foreground));
 }
 
+/* ---------- master-detail editor: left tree + right form ---------- */
+.cw-editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+/* Left: the Agent structure tree. */
+.cw-tree {
+  flex-shrink: 0;
+  width: 320px;
+  overflow-y: auto;
+  padding: 16px 14px;
+  border-right: 1px solid hsl(var(--border));
+  background: hsl(var(--panel));
+}
+.cw-tree-head {
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: hsl(var(--muted-foreground));
+  padding: 0 6px;
+  margin-bottom: 10px;
+}
+.cw-tree-branch {
+  display: flex;
+  flex-direction: column;
+}
+.cw-tree-node {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  border: 1px solid transparent;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
+}
+.cw-tree-node:hover {
+  background: hsl(var(--accent));
+}
+.cw-tree-node.is-selected {
+  background: hsl(var(--primary) / 0.04);
+  border-color: hsl(var(--primary) / 0.16);
+}
+/* Node with an unfilled required field: light-red fill + red border. Kept
+   after .is-selected so the red border wins even when the node is selected. */
+.cw-tree-node.is-invalid {
+  background: hsl(var(--destructive) / 0.07);
+  border-color: hsl(var(--destructive) / 0.5);
+}
+.cw-tree-node.is-invalid.is-selected {
+  background: hsl(var(--destructive) / 0.1);
+  border-color: hsl(var(--destructive) / 0.6);
+}
+.cw-tree-node.is-draggable {
+  cursor: grab;
+}
+.cw-tree-node.is-draggable:active {
+  cursor: grabbing;
+}
+/* Drop target while dragging a sibling over it. */
+.cw-tree-node.is-dragover {
+  background: hsl(var(--primary) / 0.1);
+  border-color: hsl(var(--primary) / 0.45);
+}
+.cw-tree-icon {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+/* Two-line node: name on top, muted type label below (so the type is always
+   visible for reading the architecture, without stealing the name's width). */
+.cw-tree-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.cw-tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 550;
+}
+.cw-tree-type {
+  font-size: 11px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: hsl(var(--muted-foreground));
+}
+/* Row actions sit inline at the right; hidden (but keeping their slot, so the
+   name width doesn't jump) until the row is hovered or selected. */
+.cw-tree-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex-shrink: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+.cw-tree-node:hover .cw-tree-actions,
+.cw-tree-node.is-selected .cw-tree-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.cw-tree-children {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 2px;
+  margin-left: 8px;
+  padding-left: 8px;
+  border-left: 1px solid hsl(var(--border));
+}
+
+/* Right side: a fixed agent-type bar on top + a scrolling form/nav area. */
+.cw-detail {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* Fixed top bar (outside the scroll area) — never scrolls. */
+.cw-typebar {
+  flex-shrink: 0;
+  background: hsl(var(--panel));
+  border-bottom: 1px solid hsl(var(--border));
+  padding: 20px 44px 14px 16px;
+}
+.cw-typebar-inner {
+  max-width: 1080px;
+  margin: 0 auto;
+}
+/* The scrolling region below the type bar. */
+.cw-detail-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable both-edges;
+  /* Left padding matches the tree's gap-from-divider so the form mirrors the
+     Agent-structure items across the divider. */
+  padding: 24px 44px 48px 16px;
+}
+.cw-detail-inner {
+  max-width: 1080px;
+  margin: 0 auto;
+}
+.cw-lower {
+  display: flex;
+  gap: 36px;
+  align-items: flex-start;
+}
+.cw-detail .cw-form-col {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+/* ---------- bottom action bar (validation + generate) ---------- */
+.cw-footer-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px;
+  border-top: 1px solid hsl(var(--border));
+  background: hsl(var(--panel));
+}
+.cw-footer-status {
+  min-width: 0;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cw-footer-ok {
+  color: hsl(var(--muted-foreground));
+  font-weight: 550;
+}
+.cw-footer-problem {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 13px;
+  color: hsl(var(--destructive));
+  text-align: left;
+}
+.cw-footer-problem:hover {
+  text-decoration: underline;
+}
+.cw-footer-actions {
+  display: flex;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
 /* ---------- header ---------- */
 .cw-header {
   flex-shrink: 0;
@@ -118,6 +328,51 @@
   font-size: 13px;
   line-height: 1.5;
   color: hsl(var(--muted-foreground));
+}
+
+/* Missing-required banner, pinned under the sticky type bar. */
+.cw-missing {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: hsl(var(--destructive) / 0.07);
+  border: 1px solid hsl(var(--destructive) / 0.25);
+}
+.cw-missing-lead {
+  flex-shrink: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: hsl(var(--destructive));
+}
+.cw-missing-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.cw-missing-item {
+  border: none;
+  background: hsl(var(--destructive) / 0.1);
+  color: hsl(var(--destructive));
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.cw-missing-item:hover {
+  background: hsl(var(--destructive) / 0.18);
+}
+
+.cw-footer-importerr {
+  font-size: 12px;
+  color: hsl(var(--destructive));
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---------- finish action (end of review section) ---------- */
@@ -793,9 +1048,125 @@
   cursor: pointer;
   transition: background 0.12s, color 0.12s;
 }
-.cw-icon-danger:hover {
+.cw-icon-btn:not(:disabled):hover {
+  background: hsl(var(--foreground) / 0.06);
+  color: hsl(var(--foreground));
+}
+.cw-icon-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.cw-icon-danger:not(:disabled):hover {
   background: hsl(var(--destructive) / 0.1);
   color: hsl(var(--destructive));
+}
+.cw-sub-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.cw-sub-list-wrap {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- type picker (agent-type radio list) ----------
+ * A vertical radio group in the left detail column: radio dot + icon + title
+ * + description per row. Clear single-select semantics; compact. */
+.cw-typeradio {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* Horizontal variant for the top bar: compact chips (icon + title) in a row. */
+.cw-typeradio--row {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.cw-typeradio--row .cw-typeradio-item {
+  flex: 1 1 0;
+  min-width: 0;
+  align-items: center;
+  padding: 10px 12px;
+}
+.cw-typeradio-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 13px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 11px;
+  background: hsl(var(--background));
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
+}
+.cw-typeradio-item:hover {
+  border-color: hsl(var(--foreground) / 0.2);
+  background: hsl(var(--foreground) / 0.03);
+}
+.cw-typeradio-item.is-on {
+  border-color: hsl(var(--primary));
+  background: hsl(var(--primary) / 0.05);
+}
+/* Visually-hidden native input keeps keyboard/a11y behavior. */
+.cw-typeradio-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.cw-typeradio-dot {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  border-radius: 50%;
+  border: 2px solid hsl(var(--border));
+  transition: border-color 0.12s;
+}
+.cw-typeradio-item.is-on .cw-typeradio-dot {
+  border-color: hsl(var(--primary));
+  background: radial-gradient(
+    circle,
+    hsl(var(--primary)) 0 3.5px,
+    transparent 4.5px
+  );
+}
+/* Icon sits in the title row; the description below starts at the icon's
+   left edge (aligned to the icon, not indented under the title). */
+.cw-typeradio-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.cw-typeradio-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.cw-typeradio-icon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  color: hsl(var(--muted-foreground));
+}
+.cw-typeradio-item.is-on .cw-typeradio-icon {
+  color: hsl(var(--foreground));
+}
+.cw-typeradio-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+}
+.cw-typeradio-desc {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: hsl(var(--muted-foreground));
 }
 .cw-add-sub {
   display: inline-flex;

@@ -7,8 +7,13 @@ import { clearRemoteApps, fetchRemoteApps, registerRemoteApp } from "./client";
 export interface RemoteConnection {
   id: string;
   name: string;
-  base: string;
-  apiKey: string;
+  /** Legacy browser-direct AgentKit endpoint (apikey held in the browser). */
+  base?: string;
+  apiKey?: string;
+  /** Preferred: an AgentKit runtime routed through the server-side proxy. When
+   *  set, `base`/`apiKey` are unused and the apikey stays server-side. */
+  runtimeId?: string;
+  region?: string;
   apps: string[];
   /** Optional app ID -> friendly name mapping (e.g., "a_1" -> "a_1-4zkzsezc") */
   appLabels?: Record<string, string>;
@@ -60,9 +65,39 @@ export function registerConnections(conns: RemoteConnection[]): void {
   clearRemoteApps();
   for (const c of conns) {
     for (const app of c.apps) {
-      registerRemoteApp(remoteAppId(c.id, app), { app, base: c.base, apiKey: c.apiKey });
+      registerRemoteApp(
+        remoteAppId(c.id, app),
+        c.runtimeId
+          ? { app, runtimeId: c.runtimeId, region: c.region }
+          : { app, base: c.base, apiKey: c.apiKey },
+      );
     }
   }
+}
+
+/** Persist + register an AgentKit runtime (proxy-routed; apikey server-side)
+ *  and return the connection. Reuses any existing entry for the same runtime.
+ *  The connection id is derived from the runtime id so picker ids are stable
+ *  across reloads. */
+export function addRuntimeConnection(
+  runtimeId: string,
+  name: string,
+  region: string,
+  apps: string[],
+  appLabels?: Record<string, string>,
+): RemoteConnection {
+  const conn: RemoteConnection = {
+    id: `rt_${runtimeId}`,
+    name: name || runtimeId,
+    runtimeId,
+    region,
+    apps,
+    appLabels,
+  };
+  const list = [...loadConnections().filter((c) => c.runtimeId !== runtimeId), conn];
+  persist(list);
+  registerConnections(list);
+  return conn;
 }
 
 /** Validate a remote AgentKit endpoint and persist it. Throws on bad URL/key. */
@@ -114,7 +149,7 @@ export function buildAgentEntries(
         label,
         app,
         remote: true,
-        host: hostOf(c.base),
+        host: c.runtimeId ? c.name : hostOf(c.base ?? ""),
       };
     }),
   );

@@ -26,7 +26,6 @@ dependencies = [
     # stay compatible across google-adk >= 1.32.0 (including 2.x).
     "litellm>=1.83.7,<=1.83.14", # google-adk LiteLlm model ([extensions] on 2.x)
     "sqlalchemy>=2,<3", # google-adk sessions ([db] on 2.x)
-    "loguru==0.7.3", # For better logging
     "opentelemetry-exporter-otlp==1.37.0",
     "opentelemetry-instrumentation-logging>=0.56b0",
     "wrapt==1.17.2", # For patching built-in functions

@@ -46,6 +46,8 @@ from veadk.cloud.harness_app.types import HarnessConfig, HarnessOverrides
 from veadk.knowledgebase import KnowledgeBase
 from veadk.memory.long_term_memory import LongTermMemory
 from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.skills.materializer import materialize_remote_skill
+from veadk.skills.utils import _load_skills_from_space_id
 from veadk.tools import get_builtin_tool, list_builtin_tools
 from veadk.utils.logger import get_logger
 
@@ -63,6 +65,7 @@ _REGISTRY_OVERRIDE_FIELDS = {
     "registry_region",
     "registry_top_k",
 }
+_SKILL_CENTER_SPACE_PREFIX = "space:"
 
 __all__ = [
     "HarnessConfig",
@@ -296,6 +299,14 @@ def _normalize_skill_token(value: str) -> str:
     return value.strip().lower().replace("_", "-")
 
 
+def _is_skill_center_space_ref(skill: str) -> bool:
+    return skill.strip().startswith(_SKILL_CENTER_SPACE_PREFIX)
+
+
+def _skill_center_space_id(skill: str) -> str:
+    return skill.strip().removeprefix(_SKILL_CENTER_SPACE_PREFIX).strip()
+
+
 class SkillLoadError(RuntimeError):
     """A skill failed to download or load (e.g. a malformed ``SKILL.md``).
 
@@ -307,13 +318,18 @@ class SkillLoadError(RuntimeError):
 def build_skill_toolset(
     skills: list[str], download_dir: Path | None = None
 ) -> SkillToolset | None:
-    """Download each skill from the hub and load them as a single ADK toolset.
+    """Download each skill source and load them as a single ADK toolset.
 
-    Skills are downloaded into ``download_dir`` (a fresh temp dir when omitted)
-    and loaded via ``load_skill_from_dir``. The directory is **not** cleaned up
-    here: a skill's scripts/assets are read from disk while the agent runs, so
-    the caller owns the directory's lifetime (the base agent keeps its skills for
-    the server's lifetime; a per-invoke override cleans up after the run).
+    Plain entries are treated as SkillHub skill names/slugs. Entries prefixed
+    with ``space:`` are treated as AgentKit skills-center space ids and loaded
+    via ``_load_skills_from_space_id``.
+
+    Materialized skills are stored under ``download_dir`` (a fresh temp dir when
+    omitted) and loaded via ``load_skill_from_dir``. The directory is **not**
+    cleaned up here: a skill's scripts/assets are read from disk while the agent
+    runs, so the caller owns the directory's lifetime (the base agent keeps its
+    skills for the server's lifetime; a per-invoke override cleans up after the
+    run).
 
     Fast-fail: if *any* skill fails to download or load (e.g. a ``SKILL.md`` whose
     description exceeds ADK's limit), a :class:`SkillLoadError` is raised naming
@@ -330,9 +346,29 @@ def build_skill_toolset(
     loaded_skills = []
     for skill in skills:
         try:
-            loaded_skills.append(
-                load_skill_from_dir(_download_and_extract_skill(skill, download_dir))
-            )
+            if _is_skill_center_space_ref(skill):
+                skill_space_id = _skill_center_space_id(skill)
+                if not skill_space_id:
+                    raise RuntimeError("skills-center space id is empty")
+
+                remote_skills = _load_skills_from_space_id(skill_space_id)
+                if not remote_skills:
+                    raise RuntimeError(
+                        f"No skills found in skills-center space '{skill_space_id}'"
+                    )
+
+                for remote_skill in remote_skills:
+                    skill_dir = materialize_remote_skill(
+                        remote_skill,
+                        cache_dir=download_dir,
+                    )
+                    loaded_skills.append(load_skill_from_dir(skill_dir))
+            else:
+                loaded_skills.append(
+                    load_skill_from_dir(
+                        _download_and_extract_skill(skill, download_dir)
+                    )
+                )
         except Exception as e:
             raise SkillLoadError(f"Skill '{skill}' failed to load: {e}") from e
     return SkillToolset(skills=loaded_skills)

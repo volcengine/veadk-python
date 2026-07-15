@@ -70,9 +70,64 @@ function emitToolStub(acc: Acc, name: string, description: string): string {
   return fn;
 }
 
+/** Build an orchestrator (SequentialAgent / ParallelAgent / LoopAgent) for one
+ *  draft, returning the var name. Orchestrators own no model/instruction/tools;
+ *  they only schedule their sub_agents. Children are emitted first (recursively)
+ *  so they are defined above the parent. */
+function buildOrchestrator(acc: Acc, draft: AgentDraft, varName: string): string {
+  const type = draft.agentType as "sequential" | "parallel" | "loop";
+  const cls =
+    type === "parallel" ? "ParallelAgent" : type === "loop" ? "LoopAgent" : "SequentialAgent";
+  acc.imports.push(`from google.adk.agents import ${cls}`);
+
+  // Children (recursive — a child may itself be an orchestrator or an LLM agent).
+  const subVars: string[] = [];
+  (draft.subAgents ?? []).forEach((sa, i) => {
+    const v = `${varName}_sub_${i + 1}`;
+    buildAgent(acc, sa, v);
+    subVars.push(v);
+  });
+
+  const kwargs: string[] = [
+    `name=${pyStr(ident(draft.name, varName))}`,
+    `description=${pyStr(draft.description || draft.name || "A VeADK orchestrator agent.")}`,
+  ];
+  if (type === "loop") {
+    const iters = Number.isFinite(draft.maxIterations) ? Number(draft.maxIterations) : 3;
+    kwargs.push(`max_iterations=${iters > 0 ? iters : 3}`);
+  }
+  kwargs.push(`sub_agents=[${subVars.join(", ")}]`);
+
+  acc.preLines.push(`${varName} = ${cls}(\n    ${kwargs.join(",\n    ")},\n)`);
+  return varName;
+}
+
+/** Build a leaf RemoteVeAgent (A2A remote agent referenced by URL). Owns no
+ *  model/instruction/tools/sub_agents. RemoteVeAgent takes only name + url (+
+ *  optional auth) — its description/skills come from the fetched agent card, so
+ *  we deliberately do NOT pass `description` (the constructor rejects it). */
+function buildA2a(acc: Acc, draft: AgentDraft, varName: string): string {
+  acc.imports.push("from veadk.a2a.remote_ve_agent import RemoteVeAgent");
+  const kwargs: string[] = [
+    `name=${pyStr(ident(draft.name, varName))}`,
+    `url=${pyStr((draft.a2aUrl ?? "").trim())}`,
+  ];
+  acc.preLines.push(`${varName} = RemoteVeAgent(\n    ${kwargs.join(",\n    ")},\n)`);
+  return varName;
+}
+
 /** Build the Agent(...) wiring for one draft, returning the var name. Recurses
- *  for sub-agents (one level is what the wizard produces). */
-function buildAgent(acc: Acc, draft: AgentDraft, varName: string, isRoot: boolean): string {
+ *  for sub-agents at any depth. Orchestrator drafts (sequential / parallel /
+ *  loop) are delegated to buildOrchestrator; "a2a" to buildA2a. */
+function buildAgent(acc: Acc, draft: AgentDraft, varName: string): string {
+  const agentType = draft.agentType ?? "llm";
+  if (agentType === "a2a") {
+    return buildA2a(acc, draft, varName);
+  }
+  if (agentType !== "llm") {
+    return buildOrchestrator(acc, draft, varName);
+  }
+
   const toolExprs: string[] = [];
 
   // Built-in tools (custom mode) — root only typically, but allow on any.
@@ -119,7 +174,8 @@ function buildAgent(acc: Acc, draft: AgentDraft, varName: string, isRoot: boolea
     toolExprs.push(emitToolStub(acc, name, ""));
   }
 
-  // Components (root only — sub-agents stay lean).
+  // Every LLM agent (root or sub) gets the full component config. Preline
+  // variable names are suffixed with `varName` so nested agents don't collide.
   const kwargs: string[] = [
     `name=${pyStr(ident(draft.name, varName))}`,
     `description=${pyStr(draft.description || draft.name || "A VeADK agent.")}`,
@@ -129,78 +185,80 @@ function buildAgent(acc: Acc, draft: AgentDraft, varName: string, isRoot: boolea
 
   if (toolExprs.length) kwargs.push(`tools=[${toolExprs.join(", ")}]`);
 
-  if (isRoot) {
-    // Model configuration (optional; empty -> veadk reads from config/env).
-    if (draft.modelName?.trim()) kwargs.push(`model_name=${pyStr(draft.modelName.trim())}`);
-    if (draft.modelProvider?.trim()) kwargs.push(`model_provider=${pyStr(draft.modelProvider.trim())}`);
-    if (draft.modelApiBase?.trim()) kwargs.push(`model_api_base=${pyStr(draft.modelApiBase.trim())}`);
+  // Model configuration (optional; empty -> veadk reads from config/env).
+  if (draft.modelName?.trim()) kwargs.push(`model_name=${pyStr(draft.modelName.trim())}`);
+  if (draft.modelProvider?.trim()) kwargs.push(`model_provider=${pyStr(draft.modelProvider.trim())}`);
+  if (draft.modelApiBase?.trim()) kwargs.push(`model_api_base=${pyStr(draft.modelApiBase.trim())}`);
 
-    // Short-term memory
-    if (draft.memory?.shortTerm) {
-      const b = findStm(draft.shortTermBackend || "local");
-      if (b) {
-        acc.imports.push("from veadk.memory.short_term_memory import ShortTermMemory");
-        const args = [`backend=${pyStr(b.id)}`];
-        if (b.extraArgs) args.push(b.extraArgs);
-        acc.preLines.push(`short_term_memory = ShortTermMemory(${args.join(", ")})`);
-        kwargs.push("short_term_memory=short_term_memory");
-        addEnv(acc, b.env);
-        if (b.pipExtra) acc.extras.add(b.pipExtra);
-      }
+  // Short-term memory
+  if (draft.memory?.shortTerm) {
+    const b = findStm(draft.shortTermBackend || "local");
+    if (b) {
+      acc.imports.push("from veadk.memory.short_term_memory import ShortTermMemory");
+      const args = [`backend=${pyStr(b.id)}`];
+      if (b.extraArgs) args.push(b.extraArgs);
+      const v = `stm_${varName}`;
+      acc.preLines.push(`${v} = ShortTermMemory(${args.join(", ")})`);
+      kwargs.push(`short_term_memory=${v}`);
+      addEnv(acc, b.env);
+      if (b.pipExtra) acc.extras.add(b.pipExtra);
     }
-    // Long-term memory
-    if (draft.memory?.longTerm) {
-      const b = findLtm(draft.longTermBackend || "local");
-      if (b) {
-        acc.imports.push("from veadk.memory.long_term_memory import LongTermMemory");
-        const idx = ident(draft.name, "my_agent");
-        acc.preLines.push(
-          `long_term_memory = LongTermMemory(backend=${pyStr(b.id)}, index=${pyStr(idx)}, app_name=${pyStr(idx)})`,
-        );
-        kwargs.push("long_term_memory=long_term_memory");
-        if (draft.autoSaveSession) kwargs.push("auto_save_session=True");
-        addEnv(acc, b.env);
-        if (b.pipExtra) acc.extras.add(b.pipExtra);
-      }
-    }
-    // Knowledgebase
-    if (draft.knowledgebase) {
-      const b = findKb(draft.knowledgebaseBackend || "local");
-      if (b) {
-        acc.imports.push("from veadk.knowledgebase import KnowledgeBase");
-        const idx = ident(draft.name + "_kb", "my_kb");
-        acc.preLines.push(`knowledgebase = KnowledgeBase(backend=${pyStr(b.id)}, index=${pyStr(idx)}, app_name=${pyStr(idx)})`);
-        kwargs.push("knowledgebase=knowledgebase");
-        addEnv(acc, b.env);
-        if (b.pipExtra) acc.extras.add(b.pipExtra);
-      }
-    }
-    // Tracing
-    if (draft.tracing && (draft.tracingExporters?.length ?? 0) > 0) {
-      acc.imports.push("from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer");
-      acc.preLines.push("tracer = OpentelemetryTracer()");
-      kwargs.push("tracers=[tracer]");
-      for (const id of draft.tracingExporters ?? []) {
-        const e = findExporter(id);
-        if (!e) continue;
-        acc.env.push({ key: e.enableFlag, required: true, placeholder: "true", comment: `${e.label} 开关` });
-        addEnv(acc, e.env);
-      }
-    }
-    if (draft.enableA2ui) {
-      kwargs.push("enable_a2ui=True");
-      acc.extras.add("a2ui");
-    }
-
-    // Sub-agents
-    const subVars: string[] = [];
-    (draft.subAgents ?? []).forEach((sa, i) => {
-      const v = `sub_agent_${i + 1}`;
-      buildAgent(acc, sa, v, false);
-      subVars.push(v);
-    });
-    if (subVars.length) kwargs.push(`sub_agents=[${subVars.join(", ")}]`);
   }
+  // Long-term memory
+  if (draft.memory?.longTerm) {
+    const b = findLtm(draft.longTermBackend || "local");
+    if (b) {
+      acc.imports.push("from veadk.memory.long_term_memory import LongTermMemory");
+      const idx = ident(draft.name, varName);
+      const v = `ltm_${varName}`;
+      acc.preLines.push(
+        `${v} = LongTermMemory(backend=${pyStr(b.id)}, index=${pyStr(idx)}, app_name=${pyStr(idx)})`,
+      );
+      kwargs.push(`long_term_memory=${v}`);
+      if (draft.autoSaveSession) kwargs.push("auto_save_session=True");
+      addEnv(acc, b.env);
+      if (b.pipExtra) acc.extras.add(b.pipExtra);
+    }
+  }
+  // Knowledgebase
+  if (draft.knowledgebase) {
+    const b = findKb(draft.knowledgebaseBackend || "local");
+    if (b) {
+      acc.imports.push("from veadk.knowledgebase import KnowledgeBase");
+      const idx = ident(draft.name + "_kb", varName + "_kb");
+      const v = `kb_${varName}`;
+      acc.preLines.push(`${v} = KnowledgeBase(backend=${pyStr(b.id)}, index=${pyStr(idx)}, app_name=${pyStr(idx)})`);
+      kwargs.push(`knowledgebase=${v}`);
+      addEnv(acc, b.env);
+      if (b.pipExtra) acc.extras.add(b.pipExtra);
+    }
+  }
+  // Tracing
+  if (draft.tracing && (draft.tracingExporters?.length ?? 0) > 0) {
+    acc.imports.push("from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer");
+    const v = `tracer_${varName}`;
+    acc.preLines.push(`${v} = OpentelemetryTracer()`);
+    kwargs.push(`tracers=[${v}]`);
+    for (const id of draft.tracingExporters ?? []) {
+      const e = findExporter(id);
+      if (!e) continue;
+      acc.env.push({ key: e.enableFlag, required: true, placeholder: "true", comment: `${e.label} 开关` });
+      addEnv(acc, e.env);
+    }
+  }
+  if (draft.enableA2ui) {
+    kwargs.push("enable_a2ui=True");
+    acc.extras.add("a2ui");
+  }
+
+  // Sub-agents (recurse — a child may itself be an LLM / orchestrator / a2a).
+  const subVars: string[] = [];
+  (draft.subAgents ?? []).forEach((sa, i) => {
+    const v = `${varName}_sub_${i + 1}`;
+    buildAgent(acc, sa, v);
+    subVars.push(v);
+  });
+  if (subVars.length) kwargs.push(`sub_agents=[${subVars.join(", ")}]`);
 
   acc.preLines.push(`${varName} = Agent(\n    ${kwargs.join(",\n    ")},\n)`);
   return varName;
@@ -263,7 +321,7 @@ export function generateProject(draft: AgentDraft): AgentProject {
   const pkg = ident(draft.name, "my_agent");
   const acc: Acc = { imports: [], preLines: [], env: [...MODEL_ENV], extras: new Set(), usedNames: new Set() };
 
-  buildAgent(acc, draft, "agent", true);
+  buildAgent(acc, draft, "agent");
 
   // Assemble agent.py with FastAPI deployment support
   const importBlock = ["from veadk import Agent", ...dedupeImports(acc.imports)].join("\n");
@@ -302,6 +360,102 @@ def build_app():
     @app.get("/ping")
     def ping() -> dict[str, str]:
         return {"status": "ok"}
+
+    # Agent-structure introspection (data plane), consumed by the VeADK web
+    # UI's "管理 Agent" view to show this runtime's agent name + sub-agent tree.
+    from fastapi import HTTPException as _HTTPException
+
+    try:
+        from google.adk.cli.utils.agent_loader import AgentLoader as _AgentLoader
+
+        _agent_loader = _AgentLoader(AGENTS_DIR)
+    except Exception:
+        _agent_loader = None
+
+    def _agent_type(a: object) -> str:
+        try:
+            from google.adk.agents import LoopAgent, ParallelAgent, SequentialAgent
+
+            if isinstance(a, LoopAgent):
+                return "loop"
+            if isinstance(a, SequentialAgent):
+                return "sequential"
+            if isinstance(a, ParallelAgent):
+                return "parallel"
+        except Exception:
+            pass
+        try:
+            from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
+
+            if isinstance(a, RemoteA2aAgent):
+                return "a2a"
+        except Exception:
+            pass
+        return "llm"
+
+    def _model_name(m: object) -> str:
+        if isinstance(m, str):
+            return m
+        return str(getattr(m, "model", None) or type(m).__name__)
+
+    def _tool_label(t: object) -> str:
+        name = getattr(t, "name", None) or getattr(t, "__name__", None)
+        return str(name or type(t).__name__)
+
+    def _agent_node(a: object, depth: int = 0) -> dict:
+        children = []
+        if depth < 8:
+            children = [_agent_node(s, depth + 1) for s in getattr(a, "sub_agents", []) or []]
+        return {
+            "name": getattr(a, "name", "") or "",
+            "description": getattr(a, "description", "") or "",
+            "type": _agent_type(a),
+            "model": _model_name(getattr(a, "model", "")),
+            "tools": [_tool_label(t) for t in getattr(a, "tools", []) or []],
+            "children": children,
+        }
+
+    @app.get("/web/agent-info/{app_name}")
+    def agent_info(app_name: str) -> dict:
+        if _agent_loader is None:
+            raise _HTTPException(status_code=500, detail="agent loader unavailable")
+        try:
+            a = _agent_loader.load_agent(app_name)
+        except Exception:
+            raise _HTTPException(status_code=404, detail="unknown agent: " + app_name)
+        return {
+            "name": getattr(a, "name", app_name),
+            "description": getattr(a, "description", "") or "",
+            "type": _agent_type(a),
+            "model": _model_name(getattr(a, "model", "")),
+            "tools": [_tool_label(t) for t in getattr(a, "tools", []) or []],
+            "subAgents": [getattr(s, "name", "") for s in getattr(a, "sub_agents", []) or []],
+            "graph": _agent_node(a),
+        }
+
+    @app.get("/web/agent-graph")
+    def agent_graph() -> dict:
+        # Single introspection endpoint on the main agent: returns this runtime's
+        # root agent + recursive sub-agent tree, with no /list-apps discovery
+        # needed. Used by the VeADK "管理 Agent" view.
+        if _agent_loader is None:
+            raise _HTTPException(status_code=500, detail="agent loader unavailable")
+        names = sorted(
+            p.name
+            for p in Path(AGENTS_DIR).iterdir()
+            if p.is_dir() and (p / "agent.py").is_file()
+        )
+        if not names:
+            raise _HTTPException(status_code=404, detail="no agent found")
+        a = _agent_loader.load_agent(names[0])
+        return {
+            "name": getattr(a, "name", names[0]),
+            "description": getattr(a, "description", "") or "",
+            "type": _agent_type(a),
+            "model": _model_name(getattr(a, "model", "")),
+            "tools": [_tool_label(t) for t in getattr(a, "tools", []) or []],
+            "graph": _agent_node(a),
+        }
 
     # Mount web UI if available
     if (WEBUI_DIR / "index.html").is_file():
@@ -376,25 +530,42 @@ function asCustomTools(v: unknown): CustomTool[] {
 function pick<T>(v: unknown, allowed: Set<string>, fallback: T): string | T {
   return typeof v === "string" && allowed.has(v) ? v : fallback;
 }
+const AGENT_TYPES = new Set(["llm", "sequential", "parallel", "loop", "a2a"]);
+function asAgentType(v: unknown): NonNullable<AgentDraft["agentType"]> {
+  return typeof v === "string" && AGENT_TYPES.has(v)
+    ? (v as NonNullable<AgentDraft["agentType"]>)
+    : "llm";
+}
+function asMaxIterations(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 3;
+}
+
+/** Recursively coerce a subAgents array. Children carry the lean fields the
+ *  wizard/codegen use plus their own type + nested children. */
+function parseSubAgents(v: unknown): AgentDraft[] {
+  if (!Array.isArray(v)) return [];
+  return v.map((s) => {
+    const so = (s && typeof s === "object" ? s : {}) as Record<string, unknown>;
+    return {
+      ...emptyDraft(),
+      name: asString(so.name),
+      description: asString(so.description),
+      instruction: asString(so.instruction),
+      agentType: asAgentType(so.agentType),
+      maxIterations: asMaxIterations(so.maxIterations),
+      a2aUrl: asString(so.a2aUrl),
+      builtinTools: asStringArray(so.builtinTools).filter((t) => TOOL_IDS.has(t)),
+      customTools: asCustomTools(so.customTools),
+      subAgents: parseSubAgents(so.subAgents),
+    };
+  });
+}
 
 /** Coerce an arbitrary config object into a complete AgentDraft. */
 export function normalizeDraft(raw: unknown): AgentDraft {
   const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const mem = (o.memory && typeof o.memory === "object" ? o.memory : {}) as Record<string, unknown>;
-  const subAgents = Array.isArray(o.subAgents)
-    ? (o.subAgents as unknown[]).map((s) => {
-        // Sub-agents only carry the lean fields the wizard/codegen use.
-        const so = (s && typeof s === "object" ? s : {}) as Record<string, unknown>;
-        return {
-          ...emptyDraft(),
-          name: asString(so.name),
-          description: asString(so.description),
-          instruction: asString(so.instruction),
-          builtinTools: asStringArray(so.builtinTools).filter((t) => TOOL_IDS.has(t)),
-          customTools: asCustomTools(so.customTools),
-        };
-      })
-    : [];
+  const subAgents = parseSubAgents(o.subAgents);
 
   const mcpTools = Array.isArray(o.mcpTools)
     ? (o.mcpTools as unknown[])
@@ -418,6 +589,9 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     name: asString(o.name) || "my_agent",
     description: asString(o.description),
     instruction: asString(o.instruction) || "You are a helpful assistant.",
+    agentType: asAgentType(o.agentType),
+    maxIterations: asMaxIterations(o.maxIterations),
+    a2aUrl: asString(o.a2aUrl),
     modelName: asString(o.modelName),
     modelProvider: asString(o.modelProvider),
     modelApiBase: asString(o.modelApiBase),

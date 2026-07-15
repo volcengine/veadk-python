@@ -45,7 +45,8 @@ The answer about annual leave / remote work comes straight from
 ## What to try next
 
 - Drop your own `.md` / `.txt` / `.pdf` files into `docs/` and ask about them.
-- Swap `backend="local"` for a persistent store like `viking`, `opensearch`, or
-  `redis` (configured in `config.yaml`) for production use.
+- Swap `backend="local"` for a persistent store like `openviking`, `milvus`,
+  `viking`, `opensearch`, or `redis` (configured in `.env` or `config.yaml`) for
+  production use.
 - Move on to [06 · Multi-agent workflow](../06_multi_agent/) to compose several
   agents.
