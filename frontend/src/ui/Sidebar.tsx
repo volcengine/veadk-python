@@ -1,10 +1,11 @@
-import { useState } from "react";
-import { Boxes, LogOut, MoreHorizontal, Plus, Trash2 } from "lucide-react";
+import { useRef, useState } from "react";
+import { Boxes, ChevronRight, Cpu, LogOut, MoreHorizontal, Plus, Trash2 } from "lucide-react";
 import type { AdkSession, UiFeatures } from "../adk/client";
 import { sessionTitle } from "../blocks";
 import { displayName } from "../adk/identity";
 import { SkillCenterButton } from "./SkillCenter";
 import { SearchButton } from "./Search";
+import { AgentSelector, type SelectedRuntime } from "./AgentSelector";
 import volcengineLogo from "../assets/volcengine.svg";
 
 /** Hand-drawn "quick create" mark: a lightning bolt (speed) with a spark. */
@@ -33,6 +34,16 @@ export interface SidebarProps {
   features?: UiFeatures;
   /** Session ids that are currently streaming a reply (shows a live dot). */
   streamingSids?: Set<string>;
+  /** Agent picker: source, local app list, current selection + label. */
+  agentsSource?: "local" | "cloud";
+  localApps?: string[];
+  currentAgentId?: string;
+  currentAgentLabel?: string;
+  /** The connected runtime (drives the picker's detail panel). */
+  currentRuntime?: SelectedRuntime;
+  /** Identity used to badge the user's own runtimes in the cloud picker. */
+  author?: string;
+  onSelectAgent?: (id: string) => void;
   onNewChat: () => void;
   onSearch: () => void;
   onQuickCreate: () => void;
@@ -94,6 +105,13 @@ export function Sidebar({
   currentSessionId,
   features,
   streamingSids,
+  agentsSource = "local",
+  localApps = [],
+  currentAgentId = "",
+  currentAgentLabel = "",
+  currentRuntime,
+  author = "",
+  onSelectAgent,
   onNewChat,
   onSearch,
   onQuickCreate,
@@ -111,6 +129,14 @@ export function Sidebar({
   // Per-module feature gates; a missing flag defaults to shown.
   const show = (k: keyof NonNullable<typeof features>) => features?.[k] !== false;
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [selectorOpen, setSelectorOpen] = useState(false);
+  const [anchorTop, setAnchorTop] = useState(0);
+  const rowRef = useRef<HTMLButtonElement>(null);
+  const toggleSelector = () => {
+    // Align the drawer's top with the picker row (its offsetParent is .sidebar).
+    if (rowRef.current) setAnchorTop(rowRef.current.offsetTop);
+    setSelectorOpen((o) => !o);
+  };
   const sorted = [...sessions].sort(
     (a, b) => (b.lastUpdateTime ?? 0) - (a.lastUpdateTime ?? 0),
   );
@@ -121,6 +147,39 @@ export function Sidebar({
           <img className="brand-logo" src={volcengineLogo} alt="" aria-hidden />
           VeADK
         </div>
+        {onSelectAgent &&
+          (() => {
+            // Cloud mode with nothing connected: a red prompt so the default
+            // isn't mistaken for a real agent.
+            const needsPick = agentsSource === "cloud" && !currentAgentId;
+            return (
+              <button
+                ref={rowRef}
+                className={`agent-row ${needsPick ? "agent-row--empty" : ""}`}
+                onClick={toggleSelector}
+                title="切换 Agent"
+              >
+                <Cpu className="icon agent-row-lead" />
+                <span className="agent-row-name">
+                  {needsPick ? "请选择 Agent" : currentAgentLabel || "选择 Agent"}
+                </span>
+                <ChevronRight className={`icon agent-row-chev ${selectorOpen ? "open" : ""}`} />
+              </button>
+            );
+          })()}
+        {onSelectAgent && (
+          <AgentSelector
+            open={selectorOpen}
+            onClose={() => setSelectorOpen(false)}
+            anchorTop={anchorTop}
+            agentsSource={agentsSource}
+            localApps={localApps}
+            currentId={currentAgentId}
+            currentRuntime={currentRuntime}
+            author={author}
+            onSelect={onSelectAgent}
+          />
+        )}
         {show("newChat") && (
           <button className="new-chat" onClick={onNewChat}>
             <Plus className="icon" />

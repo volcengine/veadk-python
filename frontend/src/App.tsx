@@ -351,6 +351,7 @@ export default function App() {
     manageAgents: true,
     addAgentkit: true,
   });
+  const [agentsSource, setAgentsSource] = useState<"local" | "cloud">("local");
   const [localMode, setLocalMode] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
   // The executing sub-agent (ADK event.author) and everyone who emitted this
@@ -470,6 +471,7 @@ export default function App() {
   useEffect(() => {
     getUiConfig().then((cfg) => {
       setFeatures(cfg.features);
+      setAgentsSource(cfg.agentsSource);
       if (cfg.defaultView === "addAgent") {
         setCreateView(null);
         setSkillCenter(false);
@@ -518,6 +520,15 @@ export default function App() {
         // Restore the last-used agent; otherwise land on a known-good default
         // (prefer a servable, conversational agent — numbered examples like
         // 01_quickstart are standalone scripts with no root_agent and can't load).
+        // Cloud mode: nothing is selected by default — the user picks a runtime
+        // each session (the sidebar shows the red "请选择 Agent" prompt until then).
+        if (agentsSource === "cloud") {
+          setAppName("");
+          return;
+        }
+        // Local mode: restore the last-used agent, else a known-good default
+        // (prefer a servable, conversational agent — numbered examples like
+        // 01_quickstart are standalone scripts with no root_agent and can't load).
         const saved = localStorage.getItem(LS.app);
         const remoteIds = connections.flatMap((c) => c.apps.map((a) => remoteAppId(c.id, a)));
         const valid = saved && (list.includes(saved) || remoteIds.includes(saved));
@@ -525,11 +536,10 @@ export default function App() {
           ["web_search_agent", "web_demo"].find((a) => list.includes(a)) ??
           list.find((a) => !/^\d/.test(a)) ??
           list[0];
-        const preferred = valid ? saved : fallback;
-        if (preferred) setAppName(preferred);
+        setAppName(valid ? saved : fallback || "");
       })
       .catch((e) => setError(String(e)));
-  }, [authStatus]);
+  }, [authStatus, agentsSource]);
 
   // Persist the current view/agent/session so a refresh restores them.
   useEffect(() => {
@@ -873,9 +883,40 @@ export default function App() {
     return <LoginPage onUsername={onUsername} />;
   }
 
+  const agentEntries = buildAgentEntries(apps, connections);
+  const labelOf = (id: string) => agentEntries.find((e) => e.id === id)?.label ?? id;
+  // The runtime backing the current selection (if it's a cloud runtime app) —
+  // drives the picker's side detail panel.
+  const currentConn = connections.find(
+    (c) => c.runtimeId && c.apps.some((a) => remoteAppId(c.id, a) === appName),
+  );
+  const currentRuntime =
+    currentConn && currentConn.runtimeId
+      ? {
+          runtimeId: currentConn.runtimeId,
+          name: currentConn.name,
+          region: currentConn.region ?? "cn-beijing",
+        }
+      : undefined;
+  // Selecting an agent (from the sidebar picker) starts a fresh chat; any
+  // background stream keeps persisting to its own (old) session.
+  const selectAgent = (id: string) => {
+    setConnections(loadConnections());
+    viewSidRef.current = "";
+    setSessionId("");
+    setAppName(id);
+  };
+
   return (
     <div className="layout">
       <Sidebar
+        agentsSource={agentsSource}
+        localApps={apps}
+        currentAgentId={appName}
+        currentAgentLabel={appName ? labelOf(appName) : ""}
+        currentRuntime={currentRuntime}
+        author={String(userInfo?.email ?? userId ?? "")}
+        onSelectAgent={selectAgent}
         features={features}
         sessions={sessions}
         currentSessionId={sessionId}
@@ -978,20 +1019,12 @@ export default function App() {
             }
           />
         );
-        const agentEntries = buildAgentEntries(apps, connections);
-        const labelOf = (id: string) => agentEntries.find((e) => e.id === id)?.label ?? id;
         return (
           <main className="main">
             <Navbar
               apps={agentEntries.map((e) => e.id)}
               appName={appName}
-              onAppChange={(id) => {
-                // Switching agent starts a fresh chat; any background stream
-                // keeps persisting to its own (old) session.
-                viewSidRef.current = "";
-                setSessionId("");
-                setAppName(id);
-              }}
+              onAppChange={selectAgent}
               agentLabel={labelOf}
               title={
                 addMenu
@@ -1000,7 +1033,15 @@ export default function App() {
                     ? "添加 AgentKit 智能体"
                     : skillCenter
                       ? "技能中心"
-                      : undefined
+                      : searchView
+                        ? "搜索"
+                        : manageAgents
+                          ? "管理 Agent"
+                          : createView
+                            ? undefined
+                            : appName
+                              ? labelOf(appName)
+                              : "选择 Agent"
               }
               crumbs={
                 searchView || addAgent || skillCenter || addMenu || !createView

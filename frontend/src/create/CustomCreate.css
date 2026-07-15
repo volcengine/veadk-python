@@ -61,6 +61,16 @@
   background: hsl(var(--primary) / 0.04);
   border-color: hsl(var(--primary) / 0.16);
 }
+/* Node with an unfilled required field: light-red fill + red border. Kept
+   after .is-selected so the red border wins even when the node is selected. */
+.cw-tree-node.is-invalid {
+  background: hsl(var(--destructive) / 0.07);
+  border-color: hsl(var(--destructive) / 0.5);
+}
+.cw-tree-node.is-invalid.is-selected {
+  background: hsl(var(--destructive) / 0.1);
+  border-color: hsl(var(--destructive) / 0.6);
+}
 .cw-tree-node.is-draggable {
   cursor: grab;
 }
@@ -127,32 +137,44 @@
   border-left: 1px solid hsl(var(--border));
 }
 
-/* Right: the form for the selected node (scrolls independently). */
+/* Right side: a fixed agent-type bar on top + a scrolling form/nav area. */
 .cw-detail {
   flex: 1;
   min-width: 0;
-  overflow-y: auto;
-  /* Reserve the scrollbar on both edges so the centered grid stays symmetric. */
-  scrollbar-gutter: stable both-edges;
-  padding: 28px 44px 48px;
-}
-/* Two columns: type picker (left, sticky) + the form (right). Centered as a
-   group so the fill-in fields start at the top instead of below the types. */
-.cw-detail-grid {
+  min-height: 0;
   display: flex;
-  gap: 36px;
+  flex-direction: column;
+}
+/* Fixed top bar (outside the scroll area) — never scrolls. */
+.cw-typebar {
+  flex-shrink: 0;
+  background: hsl(var(--panel));
+  border-bottom: 1px solid hsl(var(--border));
+  padding: 20px 44px 14px 16px;
+}
+.cw-typebar-inner {
   max-width: 1080px;
   margin: 0 auto;
+}
+/* The scrolling region below the type bar. */
+.cw-detail-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable both-edges;
+  /* Left padding matches the tree's gap-from-divider so the form mirrors the
+     Agent-structure items across the divider. */
+  padding: 24px 44px 48px 16px;
+}
+.cw-detail-inner {
+  max-width: 1080px;
+  margin: 0 auto;
+}
+.cw-lower {
+  display: flex;
+  gap: 36px;
   align-items: flex-start;
 }
-.cw-detail-type {
-  flex-shrink: 0;
-  width: 250px;
-  position: sticky;
-  top: 0;
-}
-/* Fill the grid's remaining width (no leftover free space that would shift the
-   content off-center). */
 .cw-detail .cw-form-col {
   flex: 1;
   min-width: 0;
@@ -306,6 +328,51 @@
   font-size: 13px;
   line-height: 1.5;
   color: hsl(var(--muted-foreground));
+}
+
+/* Missing-required banner, pinned under the sticky type bar. */
+.cw-missing {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: hsl(var(--destructive) / 0.07);
+  border: 1px solid hsl(var(--destructive) / 0.25);
+}
+.cw-missing-lead {
+  flex-shrink: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: hsl(var(--destructive));
+}
+.cw-missing-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.cw-missing-item {
+  border: none;
+  background: hsl(var(--destructive) / 0.1);
+  color: hsl(var(--destructive));
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.cw-missing-item:hover {
+  background: hsl(var(--destructive) / 0.18);
+}
+
+.cw-footer-importerr {
+  font-size: 12px;
+  color: hsl(var(--destructive));
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---------- finish action (end of review section) ---------- */
@@ -1010,6 +1077,18 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+/* Horizontal variant for the top bar: compact chips (icon + title) in a row. */
+.cw-typeradio--row {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.cw-typeradio--row .cw-typeradio-item {
+  flex: 1 1 0;
+  min-width: 0;
+  align-items: center;
+  padding: 10px 12px;
 }
 .cw-typeradio-item {
   display: flex;

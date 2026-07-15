@@ -90,19 +90,32 @@ export interface Attachment {
 
 const API_BASE = ""; // same origin (prod) / proxied (dev)
 
-/** A resolved ADK endpoint. Empty `base` = the local same-origin server. */
+/** A resolved ADK endpoint. Empty = the local same-origin server. `runtimeId`
+ *  routes through the server-side runtime proxy; `base`+`apiKey` is the legacy
+ *  browser-direct AgentKit path. */
 export interface AdkEndpoint {
   base?: string;
   apiKey?: string;
+  runtimeId?: string;
+  region?: string;
 }
 
 // Routing table for remote AgentKit apps: maps a dropdown id (see
 // adk/connections.ts) to its real ADK app name + endpoint. Local apps are not
 // registered and fall through to the same-origin server.
+//
+// Two remote flavours:
+//  - `runtimeId` (preferred): route through the same-origin `/web/runtime-proxy`,
+//    which resolves the runtime's endpoint + apikey server-side. The browser
+//    never sees the apikey.
+//  - `base` + `apiKey` (legacy): the browser holds the key and talks to the
+//    backend `/agentkit-proxy` forwarding it in headers.
 interface RemoteApp {
   app: string;
-  base: string;
-  apiKey: string;
+  base?: string;
+  apiKey?: string;
+  runtimeId?: string;
+  region?: string;
 }
 const remoteApps = new Map<string, RemoteApp>();
 
@@ -116,12 +129,23 @@ export function clearRemoteApps(): void {
 /** Resolve a dropdown id to its real ADK app name + endpoint. */
 function resolve(appName: string): { app: string; ep: AdkEndpoint } {
   const r = remoteApps.get(appName);
-  return r ? { app: r.app, ep: { base: r.base, apiKey: r.apiKey } } : { app: appName, ep: {} };
+  if (!r) return { app: appName, ep: {} };
+  return {
+    app: r.app,
+    ep: { base: r.base, apiKey: r.apiKey, runtimeId: r.runtimeId, region: r.region },
+  };
 }
 
-/** fetch wrapper: same-origin (forwarding the gateway auth querystring) for the
- *  local server, or a remote AgentKit base URL with a Bearer API key. */
+/** fetch wrapper. Routing, in priority order:
+ *  1. `runtimeId` → same-origin `/web/runtime-proxy/{id}{path}` (server injects
+ *     the apikey; apikey never reaches the browser).
+ *  2. `base` + `apiKey` → backend `/agentkit-proxy` (legacy, key in header).
+ *  3. neither → the local same-origin server. */
 function apiFetch(path: string, init: RequestInit = {}, ep: AdkEndpoint = {}): Promise<Response> {
+  if (ep.runtimeId) {
+    const rq = ep.region ? `${path.includes("?") ? "&" : "?"}region=${encodeURIComponent(ep.region)}` : "";
+    return fetch(withAuth(`${API_BASE}/web/runtime-proxy/${ep.runtimeId}${path}${rq}`), init);
+  }
   if (ep.base) {
     // Use backend proxy to avoid CORS issues with remote AgentKit
     const headers: Record<string, string> = { ...(init.headers as Record<string, string>) };
@@ -138,9 +162,14 @@ export async function listApps(): Promise<string[]> {
   return res.json();
 }
 
-/** List the apps a remote AgentKit server exposes (also validates URL + key). */
-export async function fetchRemoteApps(base: string, apiKey: string): Promise<string[]> {
-  const res = await apiFetch(`/list-apps`, {}, { base, apiKey });
+/** List the apps a remote AgentKit server exposes (also validates URL + key).
+ *  Pass `ep` to probe via the runtime proxy instead of a raw base+key. */
+export async function fetchRemoteApps(
+  base: string,
+  apiKey: string,
+  ep?: AdkEndpoint,
+): Promise<string[]> {
+  const res = await apiFetch(`/list-apps`, {}, ep ?? { base, apiKey });
   if (!res.ok) throw new Error(`list-apps failed: ${res.status}`);
   return res.json();
 }
@@ -424,6 +453,9 @@ export interface UiConfig {
   studio: boolean;
   features: UiFeatures;
   defaultView: "chat" | "addAgent";
+  /** Where the agent picker sources agents: local apps (`--dev`) or the user's
+   *  cloud AgentKit runtimes (default). */
+  agentsSource: "local" | "cloud";
 }
 
 const DEFAULT_UI_CONFIG: UiConfig = {
@@ -438,6 +470,7 @@ const DEFAULT_UI_CONFIG: UiConfig = {
     addAgentkit: true,
   },
   defaultView: "chat",
+  agentsSource: "local",
 };
 
 /** Fetch the UI feature gates; falls back to all-enabled on any error. */
@@ -450,9 +483,66 @@ export async function getUiConfig(): Promise<UiConfig> {
       studio: d.studio ?? false,
       features: { ...DEFAULT_UI_CONFIG.features, ...(d.features ?? {}) },
       defaultView: d.defaultView ?? "chat",
+      agentsSource: d.agentsSource === "cloud" ? "cloud" : "local",
     };
   } catch {
     return DEFAULT_UI_CONFIG;
+  }
+}
+
+/** One AgentKit runtime as listed by `/web/runtimes` (control-plane). */
+export interface CloudRuntime {
+  name: string;
+  runtimeId: string;
+  status: string;
+  region: string;
+  author: string;
+  /** True when this runtime was deployed by the current user (veadk:author). */
+  isMine: boolean;
+}
+
+/** One page of cloud runtimes plus the token to fetch the next page. */
+export interface RuntimePage {
+  runtimes: CloudRuntime[];
+  nextToken: string;
+}
+
+/** List AgentKit runtimes (all of them, one page), flagging the user's own.
+ *  `nextToken` from a prior page continues pagination. */
+export async function getRuntimes(
+  author: string,
+  opts: {
+    nextToken?: string;
+    pageSize?: number;
+    region?: string;
+    scope?: "all" | "mine";
+  } = {},
+): Promise<RuntimePage> {
+  const p = new URLSearchParams({
+    author,
+    scope: opts.scope ?? "all",
+    page_size: String(opts.pageSize ?? 30),
+    region: opts.region ?? "cn-beijing",
+  });
+  if (opts.nextToken) p.set("next_token", opts.nextToken);
+  const res = await apiFetch(`/web/runtimes?${p.toString()}`);
+  if (!res.ok) throw new Error(`加载 Runtime 失败 (${res.status})`);
+  const d = (await res.json()) as Partial<RuntimePage>;
+  return { runtimes: d.runtimes ?? [], nextToken: d.nextToken ?? "" };
+}
+
+/** Probe whether a runtime speaks the ADK api-server protocol by calling its
+ *  `/list-apps` through the proxy. Returns the app list on success, or null when
+ *  the runtime does not support it (non-200 / not an ADK server). */
+export async function probeRuntimeApps(
+  runtimeId: string,
+  region = "cn-beijing",
+): Promise<string[] | null> {
+  try {
+    const res = await fetchRemoteApps("", "", { runtimeId, region });
+    return res;
+  } catch {
+    return null;
   }
 }
 
