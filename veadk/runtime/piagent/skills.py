@@ -40,9 +40,7 @@ class PiSkillBundle:
     root: Path | None = None
     paths: tuple[str, ...] = ()
     count: int = 0
-    _tmpdir: tempfile.TemporaryDirectory[str] | None = field(
-        default=None, repr=False
-    )
+    _tmpdir: tempfile.TemporaryDirectory[str] | None = field(default=None, repr=False)
 
     def close(self) -> None:
         if self._tmpdir is not None:

@@ -108,9 +108,7 @@ async def build_executable_tools(
         original_name = str(declaration.name)
         name = _pi_tool_name(original_name, seen)
         if name != original_name:
-            logger.info(
-                f"piagent: exposing tool {original_name!r} to Pi as {name!r}"
-            )
+            logger.info(f"piagent: exposing tool {original_name!r} to Pi as {name!r}")
 
         chat_param = _function_declaration_to_tool_param(declaration)
         function = chat_param.get("function") or {}

@@ -405,8 +405,7 @@ def test_pi_event_translator_prefers_message_end_text():
 def test_pi_event_translator_does_not_reuse_thinking_after_tool_call():
     translator = PiEventTranslator(author="agent", invocation_id="inv-1")
     thought = (
-        "用户现在问今天北京的天气怎么样，我需要调用get_weather工具，"
-        "参数是city为北京。"
+        "用户现在问今天北京的天气怎么样，我需要调用get_weather工具，参数是city为北京。"
     )
 
     streamed_thinking = translator.event_to_adk_events(

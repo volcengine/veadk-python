@@ -326,8 +326,12 @@ def _message_is_thinking(message: Any) -> bool:
     if not isinstance(content, list):
         return False
 
-    text_items = [item for item in content if isinstance(item, dict) and item.get("text")]
-    return bool(text_items) and all(_content_item_is_thinking(item) for item in text_items)
+    text_items = [
+        item for item in content if isinstance(item, dict) and item.get("text")
+    ]
+    return bool(text_items) and all(
+        _content_item_is_thinking(item) for item in text_items
+    )
 
 
 def _content_item_is_thinking(item: dict[str, Any]) -> bool:
@@ -356,7 +360,9 @@ def _normalized_type(value: Any) -> str:
 
 
 def _is_thinking_type(value: str) -> bool:
-    return value in _THINKING_MESSAGE_TYPES or "thinking" in value or "reasoning" in value
+    return (
+        value in _THINKING_MESSAGE_TYPES or "thinking" in value or "reasoning" in value
+    )
 
 
 def _dict_or_empty(value: Any) -> dict[str, Any]:
