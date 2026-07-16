@@ -584,8 +584,8 @@ ${n.comment}`:n.comment}this.doc.range[2]=n.offset;break}default:this.errors.pus
 )`),n}function oK(e){const t=new Map;for(const n of e){const r=t.get(n.key);r?n.required&&!r.required&&(r.required=!0):t.set(n.key,{...n})}return[...t.values()]}function aK(e){const t=["# 复制为 .env 并填入真实值（或改用 config.yaml）。","# 标记 [必填] 的变量缺失时 Agent 无法启动。",""];for(const n of e)(n.comment||n.required)&&t.push(`# ${n.required?"[必填] ":""}${n.comment??""}`.trimEnd()),t.push(`${n.key}=${n.placeholder??""}`);return t.join(`
 `)+`
 `}function lK(e){const t=[...e].sort();return`${t.length?`veadk-python[${t.join(",")}]`:"veadk-python"}
-agentkit-sdk-python==0.4.4
-google-adk==1.23.0
+agentkit-sdk-python
+google-adk
 `}function cK(e,t){return[`# ${e}`,"",t.description||"由 VeADK Web UI「自定义模式」生成的 Agent 项目。","","## 运行","","```bash","pip install -r requirements.txt","cp .env.example .env   # 填入你的密钥","python app.py","```","","`app.py` 使用 AgentKit AgentServerApp 包裹 `root_agent`，监听 `0.0.0.0:8000`。",""].join(`
 `)}function KC(e){const t=Bi(e.name,"my_agent"),n={imports:[],preLines:[],env:[...ZH],extras:new Set,usedNames:new Set};B0(n,e,"agent");const r=["from veadk import Agent",...uK(n.imports)].join(`
 `),i=["import os","from pathlib import Path","from agentkit.apps import AgentkitAgentServerApp","from fastapi.staticfiles import StaticFiles","from veadk.memory.short_term_memory import ShortTermMemory",`from agents.${t}.agent import root_agent`].join(`

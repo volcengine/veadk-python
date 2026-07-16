@@ -293,7 +293,7 @@ function renderEnvExample(env: EnvVar[]): string {
 function renderRequirements(extras: Set<string>): string {
   const list = [...extras].sort();
   const pkg = list.length ? `veadk-python[${list.join(",")}]` : "veadk-python";
-  return `${pkg}\nagentkit-sdk-python==0.4.4\ngoogle-adk==1.23.0\n`;
+  return `${pkg}\nagentkit-sdk-python\ngoogle-adk\n`;
 }
 
 function renderReadme(name: string, draft: AgentDraft): string {
