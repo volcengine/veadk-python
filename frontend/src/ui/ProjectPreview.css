@@ -455,81 +455,64 @@
   display: flex;
 }
 
-/* Shared typography for every code surface (read-only pre, overlay pre,
-   editable textarea). These MUST stay identical or the caret drifts. */
+/* Shared monospace typography for the read-only <pre> and the editable
+   <textarea>. */
 .pp-pre,
-.pp-hl,
-.pp-input {
+.pp-textarea {
   margin: 0;
   padding: 14px 16px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 13px;
+  font-weight: 400;
+  font-style: normal;
+  font-variant-ligatures: none;
   line-height: 1.55;
-  white-space: pre;
+  letter-spacing: normal;
   tab-size: 2;
+  -moz-tab-size: 2;
   box-sizing: border-box;
   border: none;
+  overflow: auto;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
-.pp-pre code,
-.pp-hl code,
-.pp-input {
-  font: inherit;
-  tab-size: inherit;
-}
-
-/* --- read-only view ------------------------------------------------------- */
+/* --- read-only view (syntax-highlighted via highlight.js) ----------------- */
 
 .pp-pre {
   flex: 1;
   width: 100%;
   height: 100%;
-  overflow: auto;
+  white-space: pre;
   /* .hljs (from github.css) supplies the background + base text color. */
 }
 
-.pp-pre code {
-  background: none;
-  padding: 0;
+/* The highlighted HTML is injected directly into the <pre> (no <code>
+   wrapper), so github.css's `pre code.hljs { padding: 1em }` rule has no
+   target. Force uniform weight/style so bold/italic tokens don't shift
+   character widths in the read-only view. */
+.pp-pre,
+.pp-pre * {
+  font-weight: 400 !important;
+  font-style: normal !important;
 }
 
-/* --- editable overlay ----------------------------------------------------- */
+/* --- editable view (plain textarea) --------------------------------------- */
 
-.pp-editor-wrap {
-  position: relative;
+/* Editable mode is a plain <textarea> — no overlay trick. The browser
+   natively handles caret, selection rectangle, IME, and scrolling, which
+   is the only reliable way to keep the selection highlight pixel-aligned
+   with the text across browsers/font renderings. */
+.pp-textarea {
   flex: 1;
-  min-width: 0;
-  min-height: 0;
   width: 100%;
   height: 100%;
-}
-
-/* Highlighted underlay: fills the wrap, shows colored tokens, ignores input. */
-.pp-hl {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  overflow: auto;
-  pointer-events: none;
-  /* .hljs (from github.css) supplies the background + base text color. */
-}
-
-.pp-hl code {
-  background: none;
-  padding: 0;
-}
-
-/* Transparent textarea on top: caret + editing, colored text shows through. */
-.pp-input {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  overflow: auto;
   resize: none;
   outline: none;
-  background: transparent;
-  color: transparent;
-  caret-color: hsl(var(--foreground));
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  white-space: pre;
+  word-wrap: normal;
+  overflow-wrap: normal;
 }

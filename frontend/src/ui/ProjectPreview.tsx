@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ChevronRight,
   Download,
@@ -201,7 +201,6 @@ export function ProjectPreview({ project, onChange, onDeploy, onAgentAdded }: Pr
   const [stageMap, setStageMap] = useState<Record<string, DeployStage>>({});
   const [activePhase, setActivePhase] = useState<string | null>(null);
   const [addingAgent, setAddingAgent] = useState(false);
-  const underlayRef = useRef<HTMLPreElement>(null);
 
   const tree = useMemo(() => {
     if (!project?.files || !Array.isArray(project.files)) {
@@ -594,35 +593,27 @@ export function ProjectPreview({ project, onChange, onDeploy, onAgentAdded }: Pr
           {selectedFile == null ? (
             <div className="pp-placeholder">选择左侧文件以查看内容</div>
           ) : editable ? (
-            <div className="pp-editor-wrap">
-              <pre className="pp-hl hljs" aria-hidden="true" ref={underlayRef}>
-                <code
-                  dangerouslySetInnerHTML={{
-                    __html: highlight(selectedFile.content, selectedFile.path),
-                  }}
-                />
-              </pre>
-              <textarea
-                className="pp-input"
-                spellCheck={false}
-                value={selectedFile.content}
-                onChange={(e) => handleEdit(e.target.value)}
-                onScroll={(e) => {
-                  const el = underlayRef.current;
-                  if (!el) return;
-                  el.scrollTop = e.currentTarget.scrollTop;
-                  el.scrollLeft = e.currentTarget.scrollLeft;
-                }}
-              />
-            </div>
+            /* Editable mode: plain <textarea> with no overlay trick. The
+               browser handles selection, caret, scrolling, and IME natively
+               — so the selection rectangle can never drift away from the
+               text (the bug that kept occurring with the previous
+               transparent-textarea-over-highlighted-<pre> hack). Syntax
+               coloring is sacrificed while editing; users still see colored
+               code in read-only/compare views, and get pixel-perfect text
+               editing here. */
+            <textarea
+              className="pp-textarea"
+              spellCheck={false}
+              value={selectedFile.content}
+              onChange={(e) => handleEdit(e.target.value)}
+            />
           ) : (
-            <pre className="pp-pre hljs">
-              <code
-                dangerouslySetInnerHTML={{
-                  __html: highlight(selectedFile.content, selectedFile.path),
-                }}
-              />
-            </pre>
+            <pre
+              className="pp-pre hljs"
+              dangerouslySetInnerHTML={{
+                __html: highlight(selectedFile.content, selectedFile.path),
+              }}
+            />
           )}
         </div>
       </div>
