@@ -3,7 +3,7 @@
 //
 // Output files: agent.py, __init__.py, .env.example, requirements.txt, README.md.
 
-import { emptyDraft, type AgentDraft, type CustomTool } from "./types";
+import { emptyDraft, type AgentDraft, type CustomTool, type SelectedSkill } from "./types";
 import type { AgentProject, ProjectFile } from "./project";
 import {
   MODEL_ENV,
@@ -172,6 +172,31 @@ function buildAgent(acc: Acc, draft: AgentDraft, varName: string): string {
   for (const name of draft.tools ?? []) {
     if (!name?.trim()) continue;
     toolExprs.push(emitToolStub(acc, name, ""));
+  }
+
+  // Skills (from Skill Hub / local upload / AgentKit SkillSpace). Each
+  // selected skill is materialized to skills/<folder>/SKILL.md (+ optional
+  // scripts/references) by the browser at finish() time. At runtime we load
+  // every skill directory via ADK's load_skill_from_dir and wrap them in a
+  // SkillToolset so the model can invoke them. This is added to tools=[...]
+  // on the Agent, same as a built-in tool.
+  const skillFolders = (draft.selectedSkills ?? [])
+    .map((s) => s.folder)
+    .filter((f): f is string => !!f && f.trim().length > 0);
+  if (skillFolders.length > 0) {
+    acc.imports.push("from pathlib import Path as _Path");
+    acc.imports.push("from google.adk.skills import load_skill_from_dir");
+    acc.imports.push("from google.adk.tools.skill_toolset import SkillToolset");
+    const v = uniqueIdent(acc, `skills_${varName}`, "skill_toolset");
+    // One skill per line for readability (especially with many skills).
+    const loaders = skillFolders.map(
+      (f) =>
+        `        load_skill_from_dir(_Path(__file__).parent.parent.parent / "skills" / ${pyStr(f)})`,
+    );
+    acc.preLines.push(
+      `${v} = SkillToolset(skills=[\n${loaders.join(",\n")},\n    ])`,
+    );
+    toolExprs.push(v);
   }
 
   // Every LLM agent (root or sub) gets the full component config. Preline
@@ -628,13 +653,68 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     tracingExporters: asStringArray(o.tracingExporters).filter((e) => EXPORTER_IDS.has(e)),
     enableA2ui: asBool(o.enableA2ui),
     subAgents,
-    selectedSkills: Array.isArray(o.selectedSkills)
-      ? (o.selectedSkills as unknown[])
-          .map((s) => {
-            const so = (s && typeof s === "object" ? s : {}) as Record<string, unknown>;
-            return { slug: asString(so.slug), name: asString(so.name) || asString(so.slug), namespace: asString(so.namespace) || "public" };
-          })
-          .filter((s) => !!s.slug)
-      : [],
+    selectedSkills: ((): SelectedSkill[] => {
+        if (!Array.isArray(o.selectedSkills)) return [];
+        const out: SelectedSkill[] = [];
+        for (const raw of o.selectedSkills as unknown[]) {
+          const so = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+          const src = asString(so.source);
+          const source: SelectedSkill["source"] =
+            src === "local" || src === "skillspace" || src === "skillhub"
+              ? src
+              : "skillhub"; // backward compat: pre-multi-source YAMLs default to hub
+          const name =
+            asString(so.name) ||
+            asString(so.slug) ||
+            asString(so.skillName) ||
+            asString(so.skillId) ||
+            "skill";
+          const folder = asString(so.folder) || name;
+          const description = asString(so.description);
+          if (source === "skillhub") {
+            const slug = asString(so.slug);
+            if (!slug) continue;
+            out.push({
+              source,
+              folder,
+              name,
+              description,
+              slug,
+              namespace: asString(so.namespace) || "public",
+            });
+            continue;
+          }
+          if (source === "local") {
+            const files = Array.isArray(so.localFiles) ? so.localFiles : [];
+            const localFiles = files
+              .map((f) => {
+                const fo = (f && typeof f === "object" ? f : {}) as Record<string, unknown>;
+                const path = asString(fo.path);
+                const content = asString(fo.content);
+                if (!path) return null;
+                return { path, content };
+              })
+              .filter((x): x is { path: string; content: string } => x !== null);
+            if (localFiles.length === 0) continue;
+            out.push({ source, folder, name, description, localFiles });
+            continue;
+          }
+          // skillspace
+          const skillSpaceId = asString(so.skillSpaceId);
+          const skillId = asString(so.skillId);
+          if (!skillSpaceId || !skillId) continue;
+          out.push({
+            source,
+            folder,
+            name,
+            description,
+            skillSpaceId,
+            skillSpaceName: asString(so.skillSpaceName),
+            skillId,
+            version: asString(so.version),
+          });
+        }
+        return out;
+      })(),
   };
 }

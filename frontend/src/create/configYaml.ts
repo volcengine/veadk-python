@@ -47,7 +47,22 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
   }
   if (draft.enableA2ui) o.enableA2ui = true;
   if (draft.selectedSkills?.length)
-    o.selectedSkills = draft.selectedSkills.map((s) => ({ slug: s.slug, name: s.name, namespace: s.namespace }));
+    o.selectedSkills = draft.selectedSkills.map((s) => {
+      const base: Record<string, unknown> = { source: s.source, name: s.name, folder: s.folder };
+      if (s.description) base.description = s.description;
+      if (s.source === "skillhub") {
+        base.slug = s.slug;
+        base.namespace = s.namespace ?? "public";
+      } else if (s.source === "local") {
+        base.localFiles = s.localFiles ?? [];
+      } else {
+        base.skillSpaceId = s.skillSpaceId;
+        base.skillSpaceName = s.skillSpaceName;
+        base.skillId = s.skillId;
+        if (s.version) base.version = s.version;
+      }
+      return base;
+    });
   if (draft.subAgents?.length)
     o.subAgents = draft.subAgents.map((sa) => {
       const s: Record<string, unknown> = { name: sa.name, description: sa.description, instruction: sa.instruction };

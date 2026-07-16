@@ -27,13 +27,13 @@ export interface McpTool {
   args?: string[];
 }
 
-/** A skill selected from the Skill Hub (findskill.com); its files get bundled
- *  into the generated project under skills/<name>/. */
-export interface SelectedSkill {
-  slug: string;
-  name: string;
-  namespace: string;
-}
+// Import and re-export the multi-source SelectedSkill (and related types) from
+// the skills module. Importing locally brings the names into scope so the
+// AgentDraft interface below can reference SelectedSkill, while `export type`
+// makes them available to external importers of "./types" unchanged.
+import type { SelectedSkill, SkillHit, SkillSource } from "./skills/types";
+export type { SelectedSkill, SkillHit, SkillSource };
+
 
 /** A draft VeADK agent configuration produced by a creation flow. */
 export interface AgentDraft {

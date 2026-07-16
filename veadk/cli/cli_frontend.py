@@ -501,7 +501,11 @@ def _run_frontend_server(
         ak = os.getenv("VOLCENGINE_ACCESS_KEY")
         sk = os.getenv("VOLCENGINE_SECRET_KEY")
         if ak and sk:
-            return ak, sk, None
+            # STS / temporary credentials carry a session token; don't drop it.
+            token = os.getenv("VOLCENGINE_SESSION_TOKEN") or os.getenv(
+                "VOLC_SESSIONTOKEN"
+            )
+            return ak, sk, token or None
         try:
             with open("/var/run/secrets/iam/credential", encoding="utf-8") as f:
                 data = json.load(f)
@@ -1455,6 +1459,142 @@ def _run_frontend_server(
             os.getenv("VOLCENGINE_ACCESS_KEY") and os.getenv("VOLCENGINE_SECRET_KEY")
         ) or os.path.exists("/var/run/secrets/iam/credential")
         return {"credentials": has_creds}
+
+    # ---- SkillSpace proxy (AgentKit account-scoped skills) ----------------
+    # These routes sign requests with the SERVER's Volcengine credentials (same
+    # chain /web/deploy-agentkit uses) and sit under /web/* so the OAuth2
+    # middleware gates them by SSO session when SSO is enabled. The browser
+    # never sees AK/SK. v1 only returns SKILL.md (SkillMd) content, not the
+    # full TOS zip; that keeps the surface small and mirrors how the public
+    # Skill Hub picker only needs markdown for basic skills.
+
+    def _skills_client(region: str):
+        """Build an AgentkitSkillsClient using server-side creds, or raise
+        HTTPException(409) if creds aren't configured."""
+        from agentkit.sdk.skills.client import AgentkitSkillsClient
+
+        try:
+            ak, sk, token = _resolve_ve_credentials()
+        except HTTPException:
+            raise HTTPException(
+                status_code=409,
+                detail="Server Volcengine credentials not configured "
+                "(set VOLCENGINE_ACCESS_KEY/SECRET_KEY).",
+            )
+        return AgentkitSkillsClient(
+            access_key=ak,
+            secret_key=sk,
+            region=region,
+            session_token=token or "",
+        )
+
+    @app.get("/web/skill-spaces")
+    async def _web_list_skill_spaces(region: str = "cn-beijing"):
+        """List SkillSpaces visible to the server's credentials. v1: single
+        page of up to 50 spaces (covers virtually all accounts)."""
+        from agentkit.sdk.skills.types import ListSkillSpacesRequest
+
+        try:
+            client = _skills_client(region)
+            resp = client.list_skill_spaces(
+                ListSkillSpacesRequest(page_number=1, page_size=50)
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"ListSkillSpaces error: {e}", exc_info=True)
+            raise HTTPException(status_code=502, detail=f"SkillSpaces API error: {e}")
+
+        items = list(resp.items or [])
+        return {
+            "items": [
+                {
+                    "id": s.id or "",
+                    "name": s.name or "",
+                    "description": s.description or "",
+                    "status": s.status or "",
+                }
+                for s in items
+            ],
+            "totalCount": resp.total_count or len(items),
+        }
+
+    @app.get("/web/skill-spaces/{space_id}/skills")
+    async def _web_list_skills_in_space(space_id: str, region: str = "cn-beijing"):
+        """List skills in one SkillSpace (relation view: id/name/description/
+        version/status per skill)."""
+        from agentkit.sdk.skills.types import ListSkillsBySkillSpaceRequest
+
+        try:
+            client = _skills_client(region)
+            resp = client.list_skills_by_skill_space(
+                ListSkillsBySkillSpaceRequest(
+                    skill_space_id=space_id, page_number=1, page_size=100
+                )
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(
+                f"ListSkillsBySkillSpace({space_id}) error: {e}", exc_info=True
+            )
+            raise HTTPException(status_code=502, detail=f"SkillSpaces API error: {e}")
+
+        items = list(resp.items or [])
+        return {
+            "items": [
+                {
+                    "skillId": r.skill_id or "",
+                    "skillName": r.skill_name or "",
+                    "skillDescription": r.skill_description or "",
+                    "version": r.version or "",
+                    "skillStatus": r.skill_status or "",
+                }
+                for r in items
+            ],
+            "totalCount": resp.total_count or len(items),
+        }
+
+    @app.get("/web/skill-spaces/{space_id}/skills/{skill_id}")
+    async def _web_get_skill_detail(
+        space_id: str,
+        skill_id: str,
+        version: str | None = None,
+        region: str = "cn-beijing",
+    ):
+        """Fetch a specific skill version's SKILL.md content (SkillMd) plus
+        metadata. v1 returns SkillMd only; the TOS zip (scripts/assets) is a
+        follow-up."""
+        from agentkit.sdk.skills.types import GetSkillVersionRequest
+
+        try:
+            client = _skills_client(region)
+            resp = client.get_skill_version(
+                GetSkillVersionRequest(id=skill_id, skill_version=version)
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(
+                f"GetSkillVersion({skill_id}@{version}) error: {e}", exc_info=True
+            )
+            raise HTTPException(status_code=502, detail=f"SkillSpaces API error: {e}")
+
+        if not resp.skill_md:
+            raise HTTPException(
+                status_code=404, detail="Skill version has no SKILL.md content"
+            )
+
+        return {
+            "skillId": skill_id,
+            "skillSpaceId": space_id,
+            "name": resp.name or "",
+            "description": resp.description or "",
+            "version": resp.version or version or "",
+            "skillMd": resp.skill_md,
+            "bucketName": resp.bucket_name or "",
+            "tosPath": resp.tos_path or "",
+        }
 
     if vite:
         logger.info(

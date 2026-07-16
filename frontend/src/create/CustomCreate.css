@@ -1482,6 +1482,85 @@
   }
 }
 
+/* ---------- multi-source skill tabs ---------- */
+.cw-skillspane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.cw-skill-sourcetabs {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.cw-skill-pickertab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 9px;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.cw-skill-pickertab:hover {
+  border-color: hsl(var(--foreground) / 0.3);
+  color: hsl(var(--foreground));
+}
+.cw-skill-pickertab.is-on {
+  background: hsl(var(--foreground));
+  color: hsl(var(--background));
+  border-color: hsl(var(--foreground));
+}
+.cw-skill-tabbody {
+  margin-top: 2px;
+}
+.cw-pill-source {
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: hsl(var(--foreground) / 0.12);
+  margin-left: 4px;
+  line-height: 1.4;
+}
+.cw-pill .cw-i {
+  opacity: 0.85;
+}
+
+/* local picker */
+.cw-local-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.cw-local-hint {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+  line-height: 1.5;
+}
+
+/* skillspace picker */
+.cw-skillspace-select {
+  width: 100%;
+  margin-bottom: 10px;
+}
+.cw-skill-result-version {
+  color: hsl(var(--muted-foreground));
+  font-weight: 400;
+  font-size: 11px;
+  margin-left: 4px;
+}
+.cw-skill-result-repo .cw-i {
+  vertical-align: -2px;
+  margin-right: 2px;
+}
+
 /* ---------- responsive ---------- */
 @media (max-width: 860px) {
   /* Drop the rail; the form is the single source of navigation by scrolling. */
