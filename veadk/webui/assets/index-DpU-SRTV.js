@@ -584,9 +584,11 @@ ${n.comment}`:n.comment}this.doc.range[2]=n.offset;break}default:this.errors.pus
 )`),n}function oK(e){const t=new Map;for(const n of e){const r=t.get(n.key);r?n.required&&!r.required&&(r.required=!0):t.set(n.key,{...n})}return[...t.values()]}function aK(e){const t=["# 复制为 .env 并填入真实值（或改用 config.yaml）。","# 标记 [必填] 的变量缺失时 Agent 无法启动。",""];for(const n of e)(n.comment||n.required)&&t.push(`# ${n.required?"[必填] ":""}${n.comment??""}`.trimEnd()),t.push(`${n.key}=${n.placeholder??""}`);return t.join(`
 `)+`
 `}function lK(e){const t=[...e].sort();return`${t.length?`veadk-python[${t.join(",")}]`:"veadk-python"}
-`}function cK(e,t){return[`# ${e}`,"",t.description||"由 VeADK Web UI「自定义模式」生成的 Agent 项目。","","## 运行","","```bash","pip install -r requirements.txt","cp .env.example .env   # 填入你的密钥","# 在本项目的上级目录启动 ADK API 服务：","adk api_server --agents_dir .","```","","`agent.py` 在模块级别暴露 `root_agent`，可被 ADK / VeADK 直接加载。",""].join(`
+agentkit-sdk-python
+google-adk
+`}function cK(e,t){return[`# ${e}`,"",t.description||"由 VeADK Web UI「自定义模式」生成的 Agent 项目。","","## 运行","","```bash","pip install -r requirements.txt","cp .env.example .env   # 填入你的密钥","python app.py","```","","`app.py` 使用 AgentKit AgentServerApp 包裹 `root_agent`，监听 `0.0.0.0:8000`。",""].join(`
 `)}function KC(e){const t=Bi(e.name,"my_agent"),n={imports:[],preLines:[],env:[...ZH],extras:new Set,usedNames:new Set};B0(n,e,"agent");const r=["from veadk import Agent",...uK(n.imports)].join(`
-`),i=["import os","from pathlib import Path","import uvicorn","from fastapi.staticfiles import StaticFiles","from google.adk.cli.fast_api import get_fast_api_app"].join(`
+`),i=["import os","from pathlib import Path","from agentkit.apps import AgentkitAgentServerApp","from fastapi.staticfiles import StaticFiles","from veadk.memory.short_term_memory import ShortTermMemory",`from agents.${t}.agent import root_agent`].join(`
 `),s=n.preLines.join(`
 
 `)+`
@@ -600,15 +602,22 @@ root_agent = agent
 # Deployment configuration
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
-AGENTS_DIR = str(Path(__file__).resolve().parent / "agents")
 
 def build_app():
-    """Build FastAPI app for deployment."""
+    """Build AgentKit AgentServerApp for deployment."""
     import veadk
     WEBUI_DIR = Path(veadk.__file__).resolve().parent / "webui"
 
-    # Create FastAPI app with agents_dir (ADK multi-agent structure)
-    app = get_fast_api_app(agents_dir=AGENTS_DIR, web=False)
+    # AgentKit's AgentServerApp exposes the ADK-compatible API surface
+    # (/list-apps, /run, /run_sse, sessions) expected by AgentKit runtime tests.
+    short_term_memory = getattr(root_agent, "short_term_memory", None) or ShortTermMemory(
+        backend="local"
+    )
+    agent_server_app = AgentkitAgentServerApp(
+        agent=root_agent,
+        short_term_memory=short_term_memory,
+    )
+    app = agent_server_app.app
 
     # Add health check endpoint
     @app.get("/ping")
@@ -618,13 +627,6 @@ def build_app():
     # Agent-structure introspection (data plane), consumed by the VeADK web
     # UI's "管理 Agent" view to show this runtime's agent name + sub-agent tree.
     from fastapi import HTTPException as _HTTPException
-
-    try:
-        from google.adk.cli.utils.agent_loader import AgentLoader as _AgentLoader
-
-        _agent_loader = _AgentLoader(AGENTS_DIR)
-    except Exception:
-        _agent_loader = None
 
     def _agent_type(a: object) -> str:
         try:
@@ -671,20 +673,17 @@ def build_app():
 
     @app.get("/web/agent-info/{app_name}")
     def agent_info(app_name: str) -> dict:
-        if _agent_loader is None:
-            raise _HTTPException(status_code=500, detail="agent loader unavailable")
-        try:
-            a = _agent_loader.load_agent(app_name)
-        except Exception:
+        expected_name = getattr(root_agent, "name", "") or ""
+        if app_name != expected_name:
             raise _HTTPException(status_code=404, detail="unknown agent: " + app_name)
         return {
-            "name": getattr(a, "name", app_name),
-            "description": getattr(a, "description", "") or "",
-            "type": _agent_type(a),
-            "model": _model_name(getattr(a, "model", "")),
-            "tools": [_tool_label(t) for t in getattr(a, "tools", []) or []],
-            "subAgents": [getattr(s, "name", "") for s in getattr(a, "sub_agents", []) or []],
-            "graph": _agent_node(a),
+            "name": expected_name or app_name,
+            "description": getattr(root_agent, "description", "") or "",
+            "type": _agent_type(root_agent),
+            "model": _model_name(getattr(root_agent, "model", "")),
+            "tools": [_tool_label(t) for t in getattr(root_agent, "tools", []) or []],
+            "subAgents": [getattr(s, "name", "") for s in getattr(root_agent, "sub_agents", []) or []],
+            "graph": _agent_node(root_agent),
         }
 
     @app.get("/web/agent-graph")
@@ -692,35 +691,58 @@ def build_app():
         # Single introspection endpoint on the main agent: returns this runtime's
         # root agent + recursive sub-agent tree, with no /list-apps discovery
         # needed. Used by the VeADK "管理 Agent" view.
-        if _agent_loader is None:
-            raise _HTTPException(status_code=500, detail="agent loader unavailable")
-        names = sorted(
-            p.name
-            for p in Path(AGENTS_DIR).iterdir()
-            if p.is_dir() and (p / "agent.py").is_file()
-        )
-        if not names:
-            raise _HTTPException(status_code=404, detail="no agent found")
-        a = _agent_loader.load_agent(names[0])
         return {
-            "name": getattr(a, "name", names[0]),
-            "description": getattr(a, "description", "") or "",
-            "type": _agent_type(a),
-            "model": _model_name(getattr(a, "model", "")),
-            "tools": [_tool_label(t) for t in getattr(a, "tools", []) or []],
-            "graph": _agent_node(a),
+            "name": getattr(root_agent, "name", "") or "",
+            "description": getattr(root_agent, "description", "") or "",
+            "type": _agent_type(root_agent),
+            "model": _model_name(getattr(root_agent, "model", "")),
+            "tools": [_tool_label(t) for t in getattr(root_agent, "tools", []) or []],
+            "graph": _agent_node(root_agent),
         }
 
-    # Mount web UI if available
+    # Serve the bundled VeADK web UI without taking over "/", which is reserved
+    # by AgentServerApp for the A2A protocol surface.
     if (WEBUI_DIR / "index.html").is_file():
-        app.mount("/", StaticFiles(directory=str(WEBUI_DIR), html=True), name="webui")
+        if (WEBUI_DIR / "assets").is_dir():
+            app.mount(
+                "/assets",
+                StaticFiles(directory=str(WEBUI_DIR / "assets")),
+                name="webui-assets",
+            )
 
-    return app
+        from fastapi.responses import FileResponse as _FileResponse
 
-app = build_app()
+        @app.get("/")
+        @app.get("/webui")
+        @app.get("/webui/{path:path}")
+        def webui(path: str = ""):
+            return _FileResponse(WEBUI_DIR / "index.html")
+
+    # AgentServerApp mounts A2A at "/", so routes added after construction must
+    # be moved before that root mount or they will be shadowed.
+    _priority_paths = {
+        "/",
+        "/ping",
+        "/web/agent-info/{app_name}",
+        "/web/agent-graph",
+        "/assets",
+        "/webui",
+        "/webui/{path:path}",
+    }
+    _priority_routes = [
+        r for r in app.router.routes if getattr(r, "path", None) in _priority_paths
+    ]
+    if _priority_routes:
+        app.router.routes[:] = _priority_routes + [
+            r for r in app.router.routes if r not in _priority_routes
+        ]
+
+    return agent_server_app, app
+
+agent_server_app, app = build_app()
 
 if __name__ == "__main__":
-    uvicorn.run(app, host=HOST, port=PORT)
+    agent_server_app.run(host=HOST, port=PORT)
 `},{path:`agents/${t}/agent.py`,content:o},{path:`agents/${t}/__init__.py`,content:`from .agent import root_agent
 
 __all__ = ["root_agent"]
