@@ -469,6 +469,7 @@ export interface UiFeatures {
   addAgent: boolean;
   manageAgents: boolean;
   addAgentkit: boolean;
+  generatedAgentTestRun?: boolean;
 }
 
 export interface UiConfig {
@@ -490,6 +491,7 @@ const DEFAULT_UI_CONFIG: UiConfig = {
     addAgent: true,
     manageAgents: true,
     addAgentkit: true,
+    generatedAgentTestRun: true,
   },
   defaultView: "chat",
   agentsSource: "local",
@@ -626,4 +628,83 @@ export async function getRuntimeDetail(
     throw new Error(t || `加载详情失败 (${res.status})`);
   }
   return res.json();
+}
+
+export interface GeneratedAgentTestRun {
+  runId: string;
+  appName: string;
+  expiresAt: number;
+}
+
+export async function createGeneratedAgentTestRun(
+  name: string,
+  files: { path: string; content: string }[],
+): Promise<GeneratedAgentTestRun> {
+  const res = await apiFetch("/web/generated-agent-test-runs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, files }),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(t || `创建调试运行失败 (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function createGeneratedAgentTestSession(
+  runId: string,
+  userId: string,
+): Promise<string> {
+  const res = await apiFetch(`/web/generated-agent-test-runs/${runId}/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId }),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(t || `创建调试会话失败 (${res.status})`);
+  }
+  const session = await res.json();
+  return session.id;
+}
+
+export async function* runGeneratedAgentTestSSE({
+  runId,
+  userId,
+  sessionId,
+  text,
+  signal,
+}: {
+  runId: string;
+  userId: string;
+  sessionId: string;
+  text: string;
+  signal?: AbortSignal;
+}): AsyncGenerator<AdkEvent, void, unknown> {
+  const parts: Record<string, unknown>[] = text.trim() ? [{ text }] : [];
+  const res = await apiFetch(`/web/generated-agent-test-runs/${runId}/run_sse`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      user_id: userId,
+      session_id: sessionId,
+      new_message: { role: "user", parts },
+      streaming: true,
+    }),
+    signal,
+  });
+  if (!res.ok) throw new Error(`调试运行失败: ${res.status}`);
+  for await (const evt of parseSSE(res)) {
+    yield evt as AdkEvent;
+  }
+}
+
+export async function deleteGeneratedAgentTestRun(runId: string): Promise<void> {
+  const res = await apiFetch(`/web/generated-agent-test-runs/${runId}`, {
+    method: "DELETE",
+  });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`清理调试运行失败 (${res.status})`);
+  }
 }

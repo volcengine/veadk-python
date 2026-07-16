@@ -23,8 +23,9 @@ separate toggle: it sources the agent picker from local agents instead of cloud
 runtimes (the UI is still served).
 """
 
-import os
 import json
+import os
+import sys
 
 from pathlib import Path
 
@@ -331,6 +332,21 @@ def _serve_options(f):
             "no in-app login (use when deployed behind the AgentKit runtime gateway).",
         ),
         click.option(
+            "--allow-remote-generated-agent-test-run",
+            is_flag=True,
+            default=False,
+            help="Allow generated-agent test runs when the frontend is bound to "
+            "a non-local host. Generated-agent debug runs are available by "
+            "default on localhost; use this only behind authentication and isolation.",
+        ),
+        click.option(
+            "--generated-agent-test-run-ttl",
+            default=600,
+            show_default=True,
+            type=int,
+            help="Seconds before a generated-agent debug runner is cleaned up.",
+        ),
+        click.option(
             "--open/--no-open",
             "open_browser",
             default=False,
@@ -364,6 +380,8 @@ def frontend(
     oauth2_provider: str | None,
     oauth2_provider_label: str | None,
     auth_mode: str,
+    allow_remote_generated_agent_test_run: bool,
+    generated_agent_test_run_ttl: int,
     open_browser: bool,
 ) -> None:
     """Launch the A2UI web UI backed by the ADK agent API server."""
@@ -384,6 +402,8 @@ def frontend(
         oauth2_provider=oauth2_provider,
         oauth2_provider_label=oauth2_provider_label,
         auth_mode=auth_mode,
+        allow_remote_generated_agent_test_run=allow_remote_generated_agent_test_run,
+        generated_agent_test_run_ttl=generated_agent_test_run_ttl,
         open_browser=open_browser,
         studio=False,
     )
@@ -408,6 +428,8 @@ def studio(
     oauth2_provider: str | None,
     oauth2_provider_label: str | None,
     auth_mode: str,
+    allow_remote_generated_agent_test_run: bool,
+    generated_agent_test_run_ttl: int,
     open_browser: bool,
 ) -> None:
     """Launch VeADK Studio — the frontend trimmed to add & manage agents.
@@ -433,6 +455,8 @@ def studio(
         oauth2_provider=oauth2_provider,
         oauth2_provider_label=oauth2_provider_label,
         auth_mode=auth_mode,
+        allow_remote_generated_agent_test_run=allow_remote_generated_agent_test_run,
+        generated_agent_test_run_ttl=generated_agent_test_run_ttl,
         open_browser=open_browser,
         studio=True,
     )
@@ -454,6 +478,8 @@ def _run_frontend_server(
     oauth2_provider: str | None,
     oauth2_provider_label: str | None,
     auth_mode: str,
+    allow_remote_generated_agent_test_run: bool,
+    generated_agent_test_run_ttl: int,
     open_browser: bool,
     studio: bool = False,
 ) -> None:
@@ -489,6 +515,20 @@ def _run_frontend_server(
     import httpx
 
     _agent_loader = AgentLoader(agents_dir)
+
+    _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+    if (
+        host not in _LOCAL_HOSTS
+        and not allow_remote_generated_agent_test_run
+    ):
+        raise click.ClickException(
+            "Generated-agent test runs execute generated Python code in an "
+            "isolated subprocess and are available on localhost by default. "
+            "Bind to 127.0.0.1 or pass --allow-remote-generated-agent-test-run "
+            "behind authentication and stronger isolation."
+        )
+
+    generated_agent_test_run_ttl = max(60, generated_agent_test_run_ttl)
 
     def _resolve_ve_credentials() -> tuple[str, str, str | None]:
         """Resolve Volcengine creds as (access_key, secret_key, session_token).
@@ -598,6 +638,7 @@ def _run_frontend_server(
                 "addAgent": True,
                 "manageAgents": True,
                 "addAgentkit": True,
+                "generatedAgentTestRun": True,
             },
             "defaultView": "chat",
         }
@@ -798,6 +839,341 @@ def _run_frontend_server(
         except Exception as e:
             logger.error(f"AgentKit proxy error: {e}")
             raise HTTPException(status_code=502, detail=f"Proxy error: {str(e)}")
+
+    # ---- Generated-agent debug runs -----------------------------------------
+    # This replaces the old in-process temp-agent loader. Generated Python code
+    # is only loaded by a short-lived subprocess runner.
+    import atexit
+    import secrets
+    import shutil
+    import socket
+    import subprocess
+    import tempfile
+    import threading as _test_threading
+    import time
+    from dataclasses import dataclass
+    from pathlib import Path as PathlibPath
+    from urllib.parse import quote
+
+    _TEST_RUN_MAX_FILES = 100
+    _TEST_RUN_MAX_FILE_BYTES = 256 * 1024
+    _TEST_RUN_MAX_TOTAL_BYTES = 2 * 1024 * 1024
+    _TEST_RUN_MAX_ACTIVE = 3
+    _TEST_RUN_READY_TIMEOUT = 30.0
+
+    @dataclass
+    class _GeneratedAgentTestRun:
+        run_id: str
+        app_name: str
+        temp_dir: str
+        base_url: str
+        process: subprocess.Popen
+        expires_at: float
+
+    _test_runs: dict[str, _GeneratedAgentTestRun] = {}
+    _test_runs_creating = {"count": 0}
+    _test_runs_lock = _test_threading.Lock()
+
+    def _terminate_test_run(run: _GeneratedAgentTestRun) -> None:
+        if run.process.poll() is None:
+            run.process.terminate()
+            try:
+                run.process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                run.process.kill()
+                run.process.wait(timeout=3)
+        shutil.rmtree(run.temp_dir, ignore_errors=True)
+
+    def _cleanup_expired_test_runs() -> None:
+        now = time.time()
+        expired: list[_GeneratedAgentTestRun] = []
+        with _test_runs_lock:
+            for run_id, run in list(_test_runs.items()):
+                if run.expires_at <= now or run.process.poll() is not None:
+                    expired.append(_test_runs.pop(run_id))
+        for run in expired:
+            _terminate_test_run(run)
+
+    def _cleanup_all_test_runs() -> None:
+        with _test_runs_lock:
+            runs = list(_test_runs.values())
+            _test_runs.clear()
+        for run in runs:
+            _terminate_test_run(run)
+
+    atexit.register(_cleanup_all_test_runs)
+
+    _cleanup_interval = min(30, max(5, generated_agent_test_run_ttl // 2))
+
+    def _test_run_cleanup_loop() -> None:
+        while True:
+            time.sleep(_cleanup_interval)
+            try:
+                _cleanup_expired_test_runs()
+            except Exception as e:
+                logger.warning(f"Generated-agent test-run cleanup failed: {e}")
+
+    _test_threading.Thread(
+        target=_test_run_cleanup_loop,
+        name="generated-agent-test-run-cleanup",
+        daemon=True,
+    ).start()
+
+    def _get_test_run(run_id: str) -> _GeneratedAgentTestRun:
+        _cleanup_expired_test_runs()
+        with _test_runs_lock:
+            run = _test_runs.get(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="test run not found")
+        return run
+
+    def _safe_runner_env() -> dict[str, str]:
+        """Whitelisted environment for the child runner.
+
+        Do not inherit full os.environ. The debug runner gets model credentials
+        plus Volcengine/tool credentials so generated agents can exercise real
+        tool calls during local debugging.
+        """
+        env: dict[str, str] = {"OTEL_SDK_DISABLED": "true"}
+        for key in (
+            "MODEL_AGENT_API_KEY",
+            "MODEL_AGENT_BASE_URL",
+            "MODEL_AGENT_NAME",
+            "MODEL_AGENT_PROVIDER",
+            "MODEL_AGENT_API_KEY_NAME",
+            "VOLCENGINE_ACCESS_KEY",
+            "VOLCENGINE_SECRET_KEY",
+            "VOLCENGINE_SESSION_TOKEN",
+            "VOLCENGINE_REGION",
+            "TOOL_WEB_SEARCH_ACCESS_KEY",
+            "TOOL_WEB_SEARCH_SECRET_KEY",
+            "CLOUD_PROVIDER",
+            "BYTEPLUS_WEB_SEARCH_API_KEY",
+        ):
+            if os.getenv(key):
+                env[key] = os.environ[key]
+        for key in ("PATH", "VIRTUAL_ENV", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"):
+            if os.getenv(key):
+                env[key] = os.environ[key]
+        repo_root = str(Path(__file__).resolve().parents[2])
+        pythonpath = os.getenv("PYTHONPATH")
+        env["PYTHONPATH"] = (
+            f"{repo_root}{os.pathsep}{pythonpath}" if pythonpath else repo_root
+        )
+        return env
+
+    def _validate_and_write_generated_project(
+        name: str, files: list[dict], temp_dir: str
+    ) -> str:
+        if not name:
+            raise HTTPException(status_code=400, detail="Agent name is required")
+        if not files:
+            raise HTTPException(status_code=400, detail="No files provided")
+        if len(files) > _TEST_RUN_MAX_FILES:
+            raise HTTPException(status_code=400, detail="Too many files")
+
+        base = PathlibPath(temp_dir).resolve()
+        total = 0
+        for item in files:
+            file_path = item.get("path")
+            content = item.get("content", "")
+            if not isinstance(file_path, str) or not file_path.strip():
+                raise HTTPException(status_code=400, detail="Invalid file path")
+            if not isinstance(content, str):
+                raise HTTPException(status_code=400, detail=f"Invalid content: {file_path}")
+            encoded = content.encode("utf-8")
+            if len(encoded) > _TEST_RUN_MAX_FILE_BYTES:
+                raise HTTPException(status_code=400, detail=f"File too large: {file_path}")
+            total += len(encoded)
+            if total > _TEST_RUN_MAX_TOTAL_BYTES:
+                raise HTTPException(status_code=400, detail="Project is too large")
+
+            path_obj = PathlibPath(file_path)
+            if path_obj.is_absolute() or "\x00" in file_path:
+                raise HTTPException(status_code=400, detail=f"Illegal file path: {file_path}")
+            if any(part in ("", ".", "..") for part in path_obj.parts):
+                raise HTTPException(status_code=400, detail=f"Illegal file path: {file_path}")
+
+            full = (base / file_path).resolve()
+            if not full.is_relative_to(base):
+                raise HTTPException(status_code=400, detail=f"Illegal file path: {file_path}")
+            full.parent.mkdir(parents=True, exist_ok=True)
+            full.write_text(content, encoding="utf-8")
+
+        agents_dir = base / "agents"
+        apps = sorted(
+            p.name
+            for p in agents_dir.iterdir()
+            if p.is_dir() and (p / "agent.py").is_file()
+        ) if agents_dir.is_dir() else []
+        if name in apps:
+            return name
+        if len(apps) == 1:
+            return apps[0]
+        raise HTTPException(
+            status_code=400,
+            detail="Generated project must contain exactly one agents/<name>/agent.py",
+        )
+
+    def _free_local_port() -> int:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            return int(s.getsockname()[1])
+
+    async def _wait_for_runner_ready(base_url: str, app_name: str, proc: subprocess.Popen) -> None:
+        import asyncio
+
+        deadline = time.time() + _TEST_RUN_READY_TIMEOUT
+        last_error = ""
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            while time.time() < deadline:
+                if proc.poll() is not None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Debug runner exited before becoming ready",
+                    )
+                try:
+                    res = await client.get(f"{base_url}/list-apps")
+                    if res.status_code == 200 and app_name in (res.json() or []):
+                        return
+                    last_error = f"list-apps returned {res.status_code}"
+                except Exception as e:
+                    last_error = str(e)
+                await asyncio.sleep(0.25)
+        raise HTTPException(
+            status_code=504,
+            detail=f"Debug runner did not become ready: {last_error}",
+        )
+
+    @app.post("/web/generated-agent-test-runs")
+    async def _create_generated_agent_test_run(request: Request):
+        _cleanup_expired_test_runs()
+        data = await request.json()
+        name = (data.get("name") or "").strip()
+        files = data.get("files", [])
+        if not isinstance(files, list):
+            raise HTTPException(status_code=400, detail="files must be a list")
+
+        reserved = False
+        with _test_runs_lock:
+            active_count = len(_test_runs) + _test_runs_creating["count"]
+            if active_count >= _TEST_RUN_MAX_ACTIVE:
+                raise HTTPException(
+                    status_code=429,
+                    detail="Too many active generated-agent test runs",
+                )
+            _test_runs_creating["count"] += 1
+            reserved = True
+
+        temp_dir = tempfile.mkdtemp(prefix="veadk_generated_agent_test_")
+        proc = None
+        try:
+            app_name = _validate_and_write_generated_project(name, files, temp_dir)
+            port = _free_local_port()
+            base_url = f"http://127.0.0.1:{port}"
+            cmd = [
+                sys.executable,
+                "-m",
+                "veadk.cli.generated_agent_test_runner",
+                "--agents-dir",
+                str(PathlibPath(temp_dir) / "agents"),
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+            ]
+            proc = subprocess.Popen(
+                cmd,
+                cwd=temp_dir,
+                env=_safe_runner_env(),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            await _wait_for_runner_ready(base_url, app_name, proc)
+
+            run_id = "tr_" + secrets.token_urlsafe(18)
+            expires_at = time.time() + generated_agent_test_run_ttl
+            run = _GeneratedAgentTestRun(
+                run_id=run_id,
+                app_name=app_name,
+                temp_dir=temp_dir,
+                base_url=base_url,
+                process=proc,
+                expires_at=expires_at,
+            )
+            with _test_runs_lock:
+                _test_runs[run_id] = run
+            return {
+                "runId": run_id,
+                "appName": app_name,
+                "expiresAt": int(expires_at),
+            }
+        except Exception:
+            if proc is not None:
+                _terminate_test_run(
+                    _GeneratedAgentTestRun("", "", temp_dir, "", proc, 0)
+                )
+            else:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
+        finally:
+            if reserved:
+                with _test_runs_lock:
+                    _test_runs_creating["count"] = max(
+                        0,
+                        _test_runs_creating["count"] - 1,
+                    )
+
+    @app.post("/web/generated-agent-test-runs/{run_id}/sessions")
+    async def _create_generated_agent_test_session(run_id: str, request: Request):
+        run = _get_test_run(run_id)
+        data = await request.json()
+        user_id = (data.get("userId") or "test_user").strip() or "test_user"
+        url = (
+            f"{run.base_url}/apps/{run.app_name}/users/"
+            f"{quote(user_id, safe='')}/sessions"
+        )
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(url, json={})
+        if res.status_code >= 400:
+            raise HTTPException(status_code=res.status_code, detail=res.text)
+        return res.json()
+
+    @app.post("/web/generated-agent-test-runs/{run_id}/run_sse")
+    async def _run_generated_agent_test_sse(run_id: str, request: Request):
+        from fastapi.responses import StreamingResponse
+
+        run = _get_test_run(run_id)
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="Invalid run_sse payload")
+        payload["app_name"] = run.app_name
+
+        async def _stream():
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream(
+                    "POST",
+                    f"{run.base_url}/run_sse",
+                    json=payload,
+                    timeout=None,
+                ) as res:
+                    if res.status_code >= 400:
+                        text = (await res.aread()).decode("utf-8", "replace")
+                        err = json.dumps({"error": text}, ensure_ascii=False)
+                        yield f"data: {err}\n\n"
+                        return
+                    async for chunk in res.aiter_bytes():
+                        yield chunk
+
+        return StreamingResponse(_stream(), media_type="text/event-stream")
+
+    @app.delete("/web/generated-agent-test-runs/{run_id}")
+    async def _delete_generated_agent_test_run(run_id: str):
+        with _test_runs_lock:
+            run = _test_runs.pop(run_id, None)
+        if run is not None:
+            _terminate_test_run(run)
+        return {"success": True}
 
     import threading as _threading
 
