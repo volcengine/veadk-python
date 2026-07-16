@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Send, Sparkles, Bot, FolderTree, AlertCircle, Loader2 } from "lucide-react";
 import { createSession, runSSE, getAgentInfo, deployAgentkitProject } from "../adk/client";
+import type { DeployStage } from "../adk/client";
 import { applyEvent, emptyAcc, type Acc } from "../blocks";
 import { Markdown } from "../ui/Markdown";
 import { ProjectPreview } from "../ui/ProjectPreview";
@@ -204,11 +205,20 @@ export function IntelligentCreate({ userId, onBack, onCreate, onAgentAdded }: In
     return { project: parseProject(finalText), finalText };
   }
 
-  const handleDeploy = async (proj: AgentProject) => {
-    return deployAgentkitProject(proj.name, proj.files, {
-      region: "cn-beijing",
-      projectName: "default",
-    });
+  const handleDeploy = async (
+    proj: AgentProject,
+    onStage?: (s: DeployStage) => void,
+    options?: Parameters<typeof deployAgentkitProject>[3],
+  ) => {
+    return deployAgentkitProject(
+      proj.name,
+      proj.files,
+      {
+        region: "cn-beijing",
+        projectName: "default",
+      },
+      { ...options, onStage },
+    );
   };
 
   const send = async () => {

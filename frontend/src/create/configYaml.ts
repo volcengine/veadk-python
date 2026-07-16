@@ -46,6 +46,9 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
     o.tracingExporters = [...draft.tracingExporters];
   }
   if (draft.enableA2ui) o.enableA2ui = true;
+  if (draft.deployment?.feishuEnabled) {
+    o.deployment = { feishuEnabled: true };
+  }
   if (draft.selectedSkills?.length)
     o.selectedSkills = draft.selectedSkills.map((s) => {
       const base: Record<string, unknown> = { source: s.source, name: s.name, folder: s.folder };

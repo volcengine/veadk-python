@@ -351,6 +351,11 @@ export interface DeployAgentkitResult {
   agentName: string;
   runtimeId?: string;
   consoleUrl?: string;
+  feishuChannel?: {
+    enabled: boolean;
+    transport: string;
+    runtimeId?: string;
+  };
 }
 
 /** One live progress frame streamed during a deployment. */
@@ -375,12 +380,28 @@ export async function deployAgentkitProject(
   name: string,
   files: { path: string; content: string }[],
   config: { region: string; projectName: string },
-  opts?: { author?: string; onStage?: (s: DeployStage) => void },
+  opts?: {
+    author?: string;
+    onStage?: (s: DeployStage) => void;
+    im?: {
+      feishu?: {
+        enabled: boolean;
+      };
+    };
+    envs?: { key: string; value: string }[];
+  },
 ): Promise<DeployAgentkitResult> {
   const res = await apiFetch("/web/deploy-agentkit", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, files, config, author: opts?.author ?? "" }),
+    body: JSON.stringify({
+      name,
+      files,
+      config,
+      author: opts?.author ?? "",
+      im: opts?.im,
+      envs: opts?.envs,
+    }),
   });
   if (!res.ok) {
     const t = await res.text().catch(() => "");
@@ -411,6 +432,7 @@ export async function deployAgentkitProject(
     agentName: final.agentName,
     runtimeId: final.runtimeId,
     consoleUrl: final.consoleUrl,
+    feishuChannel: final.feishuChannel,
   };
 }
 
@@ -605,4 +627,3 @@ export async function getRuntimeDetail(
   }
   return res.json();
 }
-
