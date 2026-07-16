@@ -32,6 +32,7 @@ Region = ""
 Host = ""
 ContentType = ""
 Scheme = "https"
+SessionToken = ""
 
 
 def norm_query(params):
@@ -268,23 +269,23 @@ def request(
         "Content-Type": request_param["content_type"],
     }
     # 第五步：计算 Signature 签名。
-    signed_headers_str = ";".join(
-        ["content-type", "host", "x-content-sha256", "x-date"]
-    )
-    # signed_headers_str = signed_headers_str + ";x-security-token"
+    canonical_header_rows = [
+        "content-type:" + request_param["content_type"],
+        "host:" + request_param["host"],
+        "x-content-sha256:" + x_content_sha256,
+        "x-date:" + x_date,
+    ]
+    signed_headers_list = ["content-type", "host", "x-content-sha256", "x-date"]
+    if SessionToken:
+        canonical_header_rows.append("x-security-token:" + SessionToken)
+        signed_headers_list.append("x-security-token")
+    signed_headers_str = ";".join(signed_headers_list)
     canonical_request_str = "\n".join(
         [
             request_param["method"].upper(),
             request_param["path"],
             norm_query(request_param["query"]),
-            "\n".join(
-                [
-                    "content-type:" + request_param["content_type"],
-                    "host:" + request_param["host"],
-                    "x-content-sha256:" + x_content_sha256,
-                    "x-date:" + x_date,
-                ]
-            ),
+            "\n".join(canonical_header_rows),
             "",
             signed_headers_str,
             x_content_sha256,
@@ -320,9 +321,10 @@ def request(
         )
     )
     header = {**header, **sign_result}
+    if SessionToken:
+        header["X-Security-Token"] = SessionToken
     if "X-Security-Token" in header and header["X-Security-Token"] == "":
         del header["X-Security-Token"]
-    # header = {**header, **{"X-Security-Token": SessionToken}}
     # 第六步：将 Signature 签名写入 HTTP Header 中，并发送 HTTP 请求。
     r = requests.request(
         method=method,
@@ -352,6 +354,7 @@ def ve_request(
     query: dict = {},
     method: Literal["GET", "POST", "PUT", "DELETE"] = "POST",
     scheme: Literal["http", "https"] = "https",
+    session_token: str = "",
 ):
     global Service
     Service = service
@@ -365,6 +368,8 @@ def ve_request(
     ContentType = content_type
     global Scheme
     Scheme = scheme
+    global SessionToken
+    SessionToken = session_token
     AK = ak
     SK = sk
     now = datetime.datetime.utcnow()

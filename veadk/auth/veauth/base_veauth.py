@@ -25,23 +25,44 @@ class BaseVeAuth(ABC, BaseAuth):
     volcengine_secret_key: str
     """Volcengine Secret Key"""
 
+    session_token: str
+    """Volcengine STS Session Token (optional, for temporary credentials)"""
+
     def __init__(
         self,
         access_key: str | None = None,
         secret_key: str | None = None,
+        session_token: str | None = None,
     ) -> None:
         super().__init__()
 
         final_ak = access_key or os.getenv("VOLCENGINE_ACCESS_KEY")
         final_sk = secret_key or os.getenv("VOLCENGINE_SECRET_KEY")
+        final_token = (
+            session_token
+            or os.getenv("VOLCENGINE_SESSION_TOKEN")
+            or os.getenv("VOLC_SESSIONTOKEN")
+            or ""
+        )
+
+        if not (final_ak and final_sk):
+            # Fall back to VeFaaS IAM credential file when env/args are missing.
+            from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
+
+            cred = get_credential_from_vefaas_iam()
+            final_ak = cred.access_key_id
+            final_sk = cred.secret_access_key
+            final_token = cred.session_token or final_token
 
         assert final_ak, "Volcengine access key cannot be empty."
         assert final_sk, "Volcengine secret key cannot be empty."
 
         self.access_key = final_ak
         self.secret_key = final_sk
+        self.session_token = final_token
 
-        self._token: str = ""
+        # Cached API bearer token (distinct from STS session_token above).
+        self._api_token: str = ""
 
     @abstractmethod
     def _fetch_token(self) -> None: ...

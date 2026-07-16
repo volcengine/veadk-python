@@ -44,15 +44,24 @@ logger = get_logger(__name__)
 
 
 class VeFaaS:
-    def __init__(self, access_key: str, secret_key: str, region: str = "cn-beijing"):
+    def __init__(
+        self,
+        access_key: str,
+        secret_key: str,
+        region: str = "cn-beijing",
+        session_token: str = "",
+    ):
         self.ak = access_key
         self.sk = secret_key
         self.region = region
+        self.session_token = session_token
 
         configuration = volcenginesdkcore.Configuration()
         configuration.ak = self.ak
         configuration.sk = self.sk
         configuration.region = region
+        if session_token:
+            configuration.session_token = session_token
 
         configuration.client_side_validation = True
         volcenginesdkcore.Configuration.set_default(configuration)
@@ -61,7 +70,7 @@ class VeFaaS:
             volcenginesdkcore.ApiClient(configuration)
         )
 
-        self.apig_client = APIGateway(self.ak, self.sk, self.region)
+        self.apig_client = APIGateway(self.ak, self.sk, self.region, session_token=session_token)
 
         self.template_id = "6874f3360bdbc40008ecf8c7"
 
@@ -99,6 +108,7 @@ class VeFaaS:
             sk=self.sk,
             target="CodeUploadCallback",
             body={"FunctionId": function_id},
+            session_token=self.session_token,
         )
 
         return res
@@ -171,6 +181,7 @@ class VeFaaS:
             version="2021-03-03",
             region="cn-beijing",
             host="open.volcengineapi.com",
+            session_token=self.session_token,
         )
 
         try:
@@ -191,6 +202,7 @@ class VeFaaS:
             version="2021-03-03",
             region="cn-beijing",
             host="open.volcengineapi.com",
+            session_token=self.session_token,
         )
 
         status, full_response = self._get_application_status(app_id)
@@ -232,6 +244,7 @@ class VeFaaS:
             version="2021-03-03",
             region="cn-beijing",
             host="open.volcengineapi.com",
+            session_token=self.session_token,
         )
         return response["Result"]["Status"], response
 
@@ -265,6 +278,7 @@ class VeFaaS:
                     version="2021-03-03",
                     region="cn-beijing",
                     host="open.volcengineapi.com",
+                    session_token=self.session_token,
                 )
                 result = response.get("Result", {})
                 items = result.get("Items", [])
@@ -432,6 +446,7 @@ class VeFaaS:
                 version="2021-03-03",
                 region="cn-beijing",
                 host="open.volcengineapi.com",
+                session_token=self.session_token,
             )
         except Exception as e:
             logger.error(f"Delete application failed. Response: {e}")
@@ -606,6 +621,7 @@ class VeFaaS:
                     version="2021-03-03",
                     region="cn-beijing",
                     host="open.volcengineapi.com",
+                    session_token=self.session_token,
                 )
 
                 current_status = query_resp.get("Result", {}).get("Ready", False)
@@ -622,6 +638,7 @@ class VeFaaS:
                     version="2021-03-03",
                     region="cn-beijing",
                     host="open.volcengineapi.com",
+                    session_token=self.session_token,
                 )
 
                 # Handle EnableUserCrVpcTunnel response correctly
@@ -647,6 +664,7 @@ class VeFaaS:
                     version="2021-03-03",
                     region="cn-beijing",
                     host="open.volcengineapi.com",
+                    session_token=self.session_token,
                 )
 
                 final_status = verify_resp.get("Result", {}).get("Ready", False)
@@ -816,6 +834,7 @@ class VeFaaS:
             version="2021-03-03",
             region="cn-beijing",
             host="open.volcengineapi.com",
+            session_token=self.session_token,
         )
 
         try:

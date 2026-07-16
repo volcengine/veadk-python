@@ -422,6 +422,8 @@ def _signed_openapi_post(
         "Host": parsed.netloc,
         "Content-Type": "application/json",
     }
+    if credentials.session_token:
+        headers_to_sign["X-Security-Token"] = credentials.session_token
     auth_headers = _volc_sign_v4(
         access_key=credentials.access_key,
         secret_key=credentials.secret_key,
@@ -438,8 +440,6 @@ def _signed_openapi_post(
         "Host": parsed.netloc,
         **auth_headers,
     }
-    if credentials.session_token:
-        request_headers["X-Security-Token"] = credentials.session_token
 
     response = None
     try:

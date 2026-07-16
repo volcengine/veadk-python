@@ -13,10 +13,12 @@
 # limitations under the License.
 
 import json
+import os
 from string import Template
 
 import requests
 
+from veadk.auth.veauth.utils import refresh_ak_sk
 from veadk.utils.logger import get_logger
 from veadk.utils.misc import formatted_timestamp
 from veadk.utils.volcengine_sign import ve_request
@@ -109,12 +111,19 @@ def get_dockerfile(tag: str = "latest") -> str:
 class VeCodePipeline:
     def __init__(
         self,
-        volcengine_access_key: str,
-        volcengine_secret_key: str,
+        volcengine_access_key: str = "",
+        volcengine_secret_key: str = "",
+        session_token: str = "",
         region: str = "cn-beijing",
     ) -> None:
-        self.volcengine_access_key = volcengine_access_key
-        self.volcengine_secret_key = volcengine_secret_key
+        cred = refresh_ak_sk(
+            volcengine_access_key or os.getenv("VOLCENGINE_ACCESS_KEY", ""),
+            volcengine_secret_key or os.getenv("VOLCENGINE_SECRET_KEY", ""),
+            session_token,
+        )
+        self.volcengine_access_key = cred.access_key_id
+        self.volcengine_secret_key = cred.secret_access_key
+        self.session_token = cred.session_token
         self.region = region
 
         self.service = "CP"
@@ -146,6 +155,7 @@ class VeCodePipeline:
             region=self.region,
             host=self.host,
             content_type=self.content_type,
+            session_token=self.session_token,
         )
 
         try:
@@ -169,6 +179,7 @@ class VeCodePipeline:
             region=self.region,
             host=self.host,
             content_type=self.content_type,
+            session_token=self.session_token,
         )
 
         try:
@@ -227,6 +238,7 @@ class VeCodePipeline:
             region="cn-beijing",
             host="open.volcengineapi.com",
             content_type="application/json",
+            session_token=self.session_token,
         )
 
         try:
@@ -254,6 +266,7 @@ class VeCodePipeline:
             region=self.region,
             host=self.host,
             content_type=self.content_type,
+            session_token=self.session_token,
         )
 
         webhook_url = ""
@@ -369,6 +382,7 @@ class VeCodePipeline:
             region=self.region,
             host=self.host,
             content_type=self.content_type,
+            session_token=self.session_token,
         )
 
         try:

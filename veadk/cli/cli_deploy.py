@@ -32,6 +32,11 @@ TEMP_PATH = "/tmp"
     help="Volcengine secret key",
 )
 @click.option(
+    "--volcengine-session-token",
+    default=None,
+    help="Volcengine session token (STS, for temporary credentials)",
+)
+@click.option(
     "--vefaas-app-name", required=True, help="Expected Volcengine FaaS application name"
 )
 @click.option(
@@ -71,6 +76,7 @@ TEMP_PATH = "/tmp"
 def deploy(
     volcengine_access_key: str,
     volcengine_secret_key: str,
+    volcengine_session_token: str,
     vefaas_app_name: str,
     veapig_instance_name: str,
     veapig_service_name: str,
@@ -142,6 +148,13 @@ def deploy(
         volcengine_access_key = getenv("VOLCENGINE_ACCESS_KEY")
     if not volcengine_secret_key:
         volcengine_secret_key = getenv("VOLCENGINE_SECRET_KEY")
+    if not volcengine_session_token:
+        volcengine_session_token = getenv("VOLCENGINE_SESSION_TOKEN", "") or getenv(
+            "VOLC_SESSIONTOKEN", ""
+        )
+    if volcengine_session_token:
+        os.environ["VOLCENGINE_SESSION_TOKEN"] = volcengine_session_token
+        veadk_environments["VOLCENGINE_SESSION_TOKEN"] = volcengine_session_token
     if not iam_role:
         iam_role = getenv("IAM_ROLE", None, allow_false_values=True)
     else:

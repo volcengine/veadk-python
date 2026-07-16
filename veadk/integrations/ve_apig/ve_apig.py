@@ -22,14 +22,23 @@ from veadk.utils.volcengine_sign import ve_request
 
 
 class APIGateway:
-    def __init__(self, access_key: str, secret_key: str, region: str = "cn-beijing"):
+    def __init__(
+        self,
+        access_key: str,
+        secret_key: str,
+        region: str = "cn-beijing",
+        session_token: str = "",
+    ):
         self.ak = access_key
         self.sk = secret_key
         self.region = region
+        self.session_token = session_token
         configuration = volcenginesdkcore.Configuration()
         configuration.ak = self.ak
         configuration.sk = self.sk
         configuration.region = region
+        if session_token:
+            configuration.session_token = session_token
 
         self.api_client = volcenginesdkcore.ApiClient(configuration=configuration)
         self.apig_20221112_client = APIG20221112Api(api_client=self.api_client)
@@ -197,6 +206,7 @@ class APIGateway:
             version="2021-03-03",
             region=self.region,
             host="open.volcengineapi.com",
+            session_token=self.session_token,
         )
 
         try:
@@ -233,6 +243,7 @@ class APIGateway:
             version="2021-03-03",
             region=self.region,
             host="open.volcengineapi.com",
+            session_token=self.session_token,
         )
 
         try:

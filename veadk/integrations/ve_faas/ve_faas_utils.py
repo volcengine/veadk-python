@@ -253,23 +253,23 @@ def request(method, date, query, header, ak, sk, token, action, body):
         "Content-Type": request_param["content_type"],
     }
 
-    signed_headers_str = ";".join(
-        ["content-type", "host", "x-content-sha256", "x-date"]
-    )
-    # signed_headers_str = signed_headers_str + ";x-security-token"
+    canonical_header_rows = [
+        "content-type:" + request_param["content_type"],
+        "host:" + request_param["host"],
+        "x-content-sha256:" + x_content_sha256,
+        "x-date:" + x_date,
+    ]
+    signed_headers_list = ["content-type", "host", "x-content-sha256", "x-date"]
+    if token:
+        canonical_header_rows.append("x-security-token:" + token)
+        signed_headers_list.append("x-security-token")
+    signed_headers_str = ";".join(signed_headers_list)
     canonical_request_str = "\n".join(
         [
             request_param["method"].upper(),
             request_param["path"],
             norm_query(request_param["query"]),
-            "\n".join(
-                [
-                    "content-type:" + request_param["content_type"],
-                    "host:" + request_param["host"],
-                    "x-content-sha256:" + x_content_sha256,
-                    "x-date:" + x_date,
-                ]
-            ),
+            "\n".join(canonical_header_rows),
             "",
             signed_headers_str,
             x_content_sha256,
@@ -299,7 +299,8 @@ def request(method, date, query, header, ak, sk, token, action, body):
         )
     )
     header = {**header, **sign_result}
-    header = {**header, **{"X-Security-Token": token}}
+    if token:
+        header["X-Security-Token"] = token
     r = requests.request(
         method=method,
         url="https://{}{}".format(request_param["host"], request_param["path"]),
@@ -310,8 +311,14 @@ def request(method, date, query, header, ak, sk, token, action, body):
     return r.json()
 
 
-def signed_request(ak: str, sk: str, target: str, body: dict):
+def signed_request(
+    ak: str, sk: str, target: str, body: dict, session_token: str = ""
+):
     now = datetime.datetime.utcnow()
+
+    token = session_token or os.getenv(
+        "VOLCENGINE_SESSION_TOKEN", ""
+    ) or os.getenv("VOLC_SESSIONTOKEN", "")
 
     try:
         response_body = request(
@@ -321,7 +328,7 @@ def signed_request(ak: str, sk: str, target: str, body: dict):
             {},
             ak,
             sk,
-            "",
+            token,
             target,
             json.dumps(body),
         )
@@ -334,9 +341,17 @@ def signed_request(ak: str, sk: str, target: str, body: dict):
 
 
 def create_api_gateway_trigger(
-    ak, sk, function_id: str, api_gateway_id: str, service_id: str, region: str = None
+    ak,
+    sk,
+    function_id: str,
+    api_gateway_id: str,
+    service_id: str,
+    region: str = None,
+    session_token: str = "",
 ):
-    token = ""
+    token = session_token or os.getenv(
+        "VOLCENGINE_SESSION_TOKEN", ""
+    ) or os.getenv("VOLC_SESSIONTOKEN", "")
 
     now = datetime.datetime.utcnow()
 
@@ -396,9 +411,11 @@ def create_api_gateway_trigger(
     return response_body
 
 
-def list_routes(ak, sk, upstream_id: str):
+def list_routes(ak, sk, upstream_id: str, session_token: str = ""):
     now = datetime.datetime.utcnow()
-    token = ""
+    token = session_token or os.getenv(
+        "VOLCENGINE_SESSION_TOKEN", ""
+    ) or os.getenv("VOLC_SESSIONTOKEN", "")
 
     body = {"UpstreamId": upstream_id}
 

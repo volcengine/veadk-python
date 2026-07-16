@@ -25,9 +25,11 @@ class VeTLS:
         self,
         access_key: str | None = None,
         secret_key: str | None = None,
+        session_token: str | None = None,
         region: str = "cn-beijing",
     ):
         try:
+            from veadk.auth.veauth.utils import refresh_ak_sk
             from veadk.integrations.ve_tls.utils import ve_tls_request
             from volcengine.tls.TLSService import TLSService
         except ImportError:
@@ -37,20 +39,23 @@ class VeTLS:
 
         self._ve_tls_request = ve_tls_request
 
-        self.access_key = (
-            access_key if access_key else os.getenv("VOLCENGINE_ACCESS_KEY", "")
-        )
-        self.secret_key = (
-            secret_key if secret_key else os.getenv("VOLCENGINE_SECRET_KEY", "")
-        )
+        ak = access_key or os.getenv("VOLCENGINE_ACCESS_KEY", "")
+        sk = secret_key or os.getenv("VOLCENGINE_SECRET_KEY", "")
+        cred = refresh_ak_sk(ak, sk, session_token or "")
+        self.access_key = cred.access_key_id
+        self.secret_key = cred.secret_access_key
+        self.session_token = cred.session_token
         self.region = region
 
-        self._client = TLSService(
+        tls_kwargs = dict(
             endpoint=f"https://tls-{self.region}.volces.com",
             access_key_id=self.access_key,
             access_key_secret=self.secret_key,
             region=self.region,
         )
+        if self.session_token:
+            tls_kwargs["security_token"] = self.session_token
+        self._client = TLSService(**tls_kwargs)
 
     def get_project_id_by_name(self, project_name: str) -> str:
         """Get the ID of a log project by its name.

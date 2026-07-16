@@ -12,8 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import time
 
+from veadk.auth.veauth.utils import refresh_ak_sk
 from veadk.consts import (
     DEFAULT_CR_INSTANCE_NAME,
     DEFAULT_CR_NAMESPACE_NAME,
@@ -26,9 +28,21 @@ logger = get_logger(__name__)
 
 
 class VeCR:
-    def __init__(self, access_key: str, secret_key: str, region: str = "cn-beijing"):
-        self.ak = access_key
-        self.sk = secret_key
+    def __init__(
+        self,
+        access_key: str = "",
+        secret_key: str = "",
+        session_token: str = "",
+        region: str = "cn-beijing",
+    ):
+        cred = refresh_ak_sk(
+            access_key or os.getenv("VOLCENGINE_ACCESS_KEY", ""),
+            secret_key or os.getenv("VOLCENGINE_SECRET_KEY", ""),
+            session_token,
+        )
+        self.ak = cred.access_key_id
+        self.sk = cred.secret_access_key
+        self.session_token = cred.session_token
         self.region = region
         assert region in ["cn-beijing", "cn-guangzhou", "cn-shanghai"]
         self.version = "2022-05-12"
@@ -61,6 +75,7 @@ class VeCR:
             version=self.version,
             region=self.region,
             host=f"cr.{self.region}.volcengineapi.com",
+            session_token=self.session_token,
         )
         logger.debug(f"create cr instance {instance_name}: {response}")
 
@@ -113,6 +128,7 @@ class VeCR:
             version=self.version,
             region=self.region,
             host=f"cr.{self.region}.volcengineapi.com",
+            session_token=self.session_token,
         )
         logger.debug(f"check cr instance {instance_name}: {response}")
 
@@ -150,6 +166,7 @@ class VeCR:
             version=self.version,
             region=self.region,
             host=f"cr.{self.region}.volcengineapi.com",
+            session_token=self.session_token,
         )
         logger.debug(f"create cr namespace {namespace_name}: {response}")
 
@@ -200,6 +217,7 @@ class VeCR:
             version=self.version,
             region=self.region,
             host=f"cr.{self.region}.volcengineapi.com",
+            session_token=self.session_token,
         )
         logger.debug(f"create cr repo {repo_name}: {response}")
 

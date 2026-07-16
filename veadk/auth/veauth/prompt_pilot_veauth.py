@@ -28,10 +28,12 @@ class PromptPilotVeAuth(BaseVeAuth):
         self,
         access_key: str = os.getenv("VOLCENGINE_ACCESS_KEY", ""),
         secret_key: str = os.getenv("VOLCENGINE_SECRET_KEY", ""),
+        session_token: str = os.getenv("VOLCENGINE_SESSION_TOKEN", "")
+        or os.getenv("VOLC_SESSIONTOKEN", ""),
     ) -> None:
-        super().__init__(access_key, secret_key)
+        super().__init__(access_key, secret_key, session_token=session_token)
 
-        self._token: str = ""
+        self._api_token: str = ""
 
     @override
     def _fetch_token(self) -> None:
@@ -46,15 +48,16 @@ class PromptPilotVeAuth(BaseVeAuth):
             version="2024-01-01",
             region="cn-beijing",
             host="open.volcengineapi.com",
+            session_token=self.session_token,
         )
         try:
-            self._token = res["Result"]["APIKeys"][0]["APIKey"]
+            self._api_token = res["Result"]["APIKeys"][0]["APIKey"]
         except KeyError:
             raise ValueError(f"Failed to get Prompt Pilot token: {res}")
 
     @property
     def token(self) -> str:
-        if self._token:
-            return self._token
+        if self._api_token:
+            return self._api_token
         self._fetch_token()
-        return self._token
+        return self._api_token

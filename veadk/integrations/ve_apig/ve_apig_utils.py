@@ -101,23 +101,23 @@ def request(method, date, query, header, region, ak, sk, token, action, body):
         "Content-Type": request_param["content_type"],
     }
     # 第五步：计算 Signature 签名。
-    signed_headers_str = ";".join(
-        ["content-type", "host", "x-content-sha256", "x-date"]
-    )
-    # signed_headers_str = signed_headers_str + ";x-security-token"
+    canonical_header_rows = [
+        "content-type:" + request_param["content_type"],
+        "host:" + request_param["host"],
+        "x-content-sha256:" + x_content_sha256,
+        "x-date:" + x_date,
+    ]
+    signed_headers_list = ["content-type", "host", "x-content-sha256", "x-date"]
+    if token:
+        canonical_header_rows.append("x-security-token:" + token)
+        signed_headers_list.append("x-security-token")
+    signed_headers_str = ";".join(signed_headers_list)
     canonical_request_str = "\n".join(
         [
             request_param["method"].upper(),
             request_param["path"],
             norm_query(request_param["query"]),
-            "\n".join(
-                [
-                    "content-type:" + request_param["content_type"],
-                    "host:" + request_param["host"],
-                    "x-content-sha256:" + x_content_sha256,
-                    "x-date:" + x_date,
-                ]
-            ),
+            "\n".join(canonical_header_rows),
             "",
             signed_headers_str,
             x_content_sha256,
@@ -150,7 +150,8 @@ def request(method, date, query, header, region, ak, sk, token, action, body):
         )
     )
     header = {"Region": region, **header, **sign_result}
-    header = {**header, **{"X-Security-Token": token}}
+    if token:
+        header["X-Security-Token"] = token
     # 第六步：将 Signature 签名写入 HTTP Header 中，并发送 HTTP 请求。
     r = requests.request(
         method=method,
@@ -187,7 +188,7 @@ def validate_and_set_region(region: str = "cn-beijing") -> str:
 
 
 # Uniformly process requests and send requests
-def handle_request(ak, sk, region, action, body) -> str:
+def handle_request(ak, sk, region, action, body, session_token: str = "") -> str:
     """
     Uniformly process and send requests.
 
@@ -195,13 +196,20 @@ def handle_request(ak, sk, region, action, body) -> str:
         region(str): The region of the request.
         action (str): The name of the operation to be performed by the request.
         body (dict): The main content of the request, stored in a dictionary.
+        session_token (str): STS session token for temporary credentials.
 
     Returns:
         str: The response body of the request.
     """
+    import os
+
     date = datetime.datetime.utcnow()
 
-    token = ""
+    token = (
+        session_token
+        or os.getenv("VOLCENGINE_SESSION_TOKEN", "")
+        or os.getenv("VOLC_SESSIONTOKEN", "")
+    )
 
     response_body = request(
         "POST", date, {}, {}, region, ak, sk, token, action, json.dumps(body)

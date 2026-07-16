@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import json
+import os
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -60,10 +61,19 @@ def get_credential_from_vefaas_iam() -> VeIAMCredential:
         )
 
 
-def refresh_ak_sk(access_key: str, secret_key: str) -> VeIAMCredential:
+def refresh_ak_sk(
+    access_key: str, secret_key: str, session_token: str = ""
+) -> VeIAMCredential:
     if access_key and secret_key:
+        final_token = (
+            session_token
+            or os.getenv("VOLCENGINE_SESSION_TOKEN", "")
+            or os.getenv("VOLC_SESSIONTOKEN", "")
+        )
         return VeIAMCredential(
-            access_key_id=access_key, secret_access_key=secret_key, session_token=""
+            access_key_id=access_key,
+            secret_access_key=secret_key,
+            session_token=final_token,
         )
 
     return get_credential_from_vefaas_iam()

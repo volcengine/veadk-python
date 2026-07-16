@@ -89,11 +89,13 @@ class CloudAgentEngine(BaseModel):
             access_key=self.volcengine_access_key,
             secret_key=self.volcengine_secret_key,
             region=self.region,
+            session_token=self.volcengine_session_token,
         )
         self._veapig_service = APIGateway(
             access_key=self.volcengine_access_key,
             secret_key=self.volcengine_secret_key,
             region=self.region,
+            session_token=self.volcengine_session_token,
         )
         self._veidentity_service = IdentityClient(
             access_key=self.volcengine_access_key,
