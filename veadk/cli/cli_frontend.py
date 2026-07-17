@@ -843,7 +843,7 @@ def _run_frontend_server(
         )
         feishu_enabled = bool(feishu_config.get("enabled"))
         requested_envs = data.get("envs") if isinstance(data.get("envs"), list) else []
-        extra_runtime_envs: dict[str, str] = {}
+        requested_runtime_envs: dict[str, str] = {}
         for item in requested_envs:
             if not isinstance(item, dict):
                 continue
@@ -855,15 +855,20 @@ def _run_frontend_server(
                     status_code=400,
                     detail=f"Invalid environment variable name: {key}",
                 )
-            extra_runtime_envs[key] = str(item.get("value") or "")
+            requested_runtime_envs[key] = str(item.get("value") or "")
+        extra_runtime_envs = {
+            key: value
+            for key, value in requested_runtime_envs.items()
+            if not key.startswith("TOOL_FEISHU_CHANNEL_")
+        }
         feishu_app_id = (
-            extra_runtime_envs.get("TOOL_FEISHU_CHANNEL_APP_ID", "").strip()
-            or extra_runtime_envs.get("FEISHU_APP_ID", "").strip()
+            requested_runtime_envs.get("FEISHU_APP_ID", "").strip()
+            or requested_runtime_envs.get("TOOL_FEISHU_CHANNEL_APP_ID", "").strip()
             or os.getenv("FEISHU_APP_ID", "").strip()
         )
         feishu_app_secret = (
-            extra_runtime_envs.get("TOOL_FEISHU_CHANNEL_APP_SECRET", "").strip()
-            or extra_runtime_envs.get("FEISHU_APP_SECRET", "").strip()
+            requested_runtime_envs.get("FEISHU_APP_SECRET", "").strip()
+            or requested_runtime_envs.get("TOOL_FEISHU_CHANNEL_APP_SECRET", "").strip()
             or os.getenv("FEISHU_APP_SECRET", "").strip()
         )
         if feishu_enabled and (not feishu_app_id or not feishu_app_secret):
@@ -903,23 +908,19 @@ def _run_frontend_server(
         if feishu_enabled:
             runtime_envs.update(
                 {
-                    "TOOL_FEISHU_CHANNEL_ENABLED": "true",
-                    "TOOL_FEISHU_CHANNEL_APP_ID": feishu_app_id,
-                    "TOOL_FEISHU_CHANNEL_APP_SECRET": feishu_app_secret,
-                    "TOOL_FEISHU_CHANNEL_TRANSPORT": str(
-                        extra_runtime_envs.get("TOOL_FEISHU_CHANNEL_TRANSPORT")
-                        or feishu_config.get("transport")
-                        or "ws"
-                    ).strip()
-                    or "ws",
-                    "TOOL_FEISHU_CHANNEL_STREAMING": str(
-                        feishu_config.get("streaming") or "false"
-                    ).lower(),
-                    "TOOL_FEISHU_CHANNEL_REACTIONS": str(
-                        feishu_config.get("reactions") or "false"
-                    ).lower(),
+                    "FEISHU_APP_ID": feishu_app_id,
+                    "FEISHU_APP_SECRET": feishu_app_secret,
                 }
             )
+
+        cloud_config = {
+            "region": region,
+            "project_name": project_name,
+            "image_tag": "latest",
+            "runtime_envs": runtime_envs,
+        }
+        if feishu_enabled:
+            cloud_config["min_instance"] = 1
 
         agentkit_config = {
             "common": {
@@ -928,14 +929,7 @@ def _run_frontend_server(
                 "python_version": "3.11",
                 "launch_type": "cloud",
             },
-            "launch_types": {
-                "cloud": {
-                    "region": region,
-                    "project_name": project_name,
-                    "image_tag": "latest",
-                    "runtime_envs": runtime_envs,
-                }
-            },
+            "launch_types": {"cloud": cloud_config},
         }
         (base / "agentkit.yaml").write_text(
             _yaml.dump(agentkit_config, allow_unicode=True), encoding="utf-8"
@@ -1165,9 +1159,7 @@ def _run_frontend_server(
                                 "runtimeId": meta.get("runtime_id", ""),
                                 "feishuChannel": {
                                     "enabled": True,
-                                    "transport": runtime_envs.get(
-                                        "TOOL_FEISHU_CHANNEL_TRANSPORT", "ws"
-                                    ),
+                                    "transport": "ws",
                                     "runtimeId": meta.get("runtime_id", ""),
                                 }
                                 if feishu_enabled

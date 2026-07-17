@@ -321,18 +321,18 @@ function renderRequirements(extras: Set<string>, includeFeishuChannel: boolean):
     list.push("extensions");
   }
   const uniqueExtras = [...new Set(list)].sort();
-  const versionSpec = includeFeishuChannel ? ">=0.5.33" : "";
   const pkg = uniqueExtras.length
-    ? `veadk-python[${uniqueExtras.join(",")}]${versionSpec}`
-    : `veadk-python${versionSpec}`;
-  const packages = includeFeishuChannel
-    ? [pkg, "lark-channel-sdk", "agentkit-sdk-python", "google-adk>=1.32.0,<2.0.0", "starlette<1.0.0"]
-    : [pkg, "agentkit-sdk-python", "google-adk>=1.32.0,<2.0.0", "starlette<1.0.0"];
+    ? `veadk-python[${uniqueExtras.join(",")}]${includeFeishuChannel ? ">=0.5.34" : ""}`
+    : "veadk-python";
+  const packages = [pkg, "agentkit-sdk-python", "google-adk"];
+  if (includeFeishuChannel) {
+    packages.push("starlette<1.0.0");
+  }
   return `${packages.join("\n")}\n`;
 }
 
 function renderReadme(name: string, draft: AgentDraft): string {
-  return [
+  const lines = [
     `# ${name}`,
     "",
     draft.description || "由 VeADK Web UI「自定义模式」生成的 Agent 项目。",
@@ -347,11 +347,16 @@ function renderReadme(name: string, draft: AgentDraft): string {
     "",
     "`app.py` 使用 AgentKit AgentServerApp 包裹 `root_agent`，监听 `0.0.0.0:8000`。",
     "",
-    "## 飞书机器人",
-    "",
-    "在 VeADK 前端部署时勾选「飞书」并填写 App ID / App Secret，runtime 会在同一进程内启动 FeishuChannelExtension。",
-    "",
-  ].join("\n");
+  ];
+  if (draft.deployment?.feishuEnabled) {
+    lines.push(
+      "## 飞书机器人",
+      "",
+      "在 VeADK 前端部署时勾选「飞书」并填写 App ID / App Secret，runtime 会在同一进程内启动 FeishuChannelExtension。",
+      "",
+    );
+  }
+  return lines.join("\n");
 }
 
 /** Main entry: AgentDraft -> AgentProject. */
@@ -373,12 +378,17 @@ export function generateProject(draft: AgentDraft): AgentProject {
 
   // Add deployment-specific imports
   const deploymentImports = [
-    "import asyncio",
-    "import inspect",
     "import os",
-    "import threading",
-    "import traceback",
-    "from contextlib import asynccontextmanager",
+    ...(feishuChannelEnabled
+      ? [
+          "import asyncio",
+          "import inspect",
+          "import threading",
+          "import traceback",
+          "from contextlib import asynccontextmanager",
+          "from veadk.extensions import FeishuChannelExtension",
+        ]
+      : []),
     "from pathlib import Path",
     "from agentkit.apps import AgentkitAgentServerApp",
     "from fastapi.staticfiles import StaticFiles",
@@ -397,164 +407,56 @@ export function generateProject(draft: AgentDraft): AgentProject {
 # Deployment configuration
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
-FEISHU_CHANNEL_ENABLED = ${feishuChannelEnabled ? "True" : "False"}
+${feishuChannelEnabled ? `FEISHU_CHANNEL_ENABLED = True
 
-def _env_bool(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+def _get_feishu_channel_method(channel, names):
+    raw_channel = getattr(channel, "channel", None)
+    for target in (raw_channel, channel):
+        if target is None:
+            continue
+        for name in names:
+            method = getattr(target, name, None)
+            if method is not None:
+                return method
+    return None
 
-def _coalesce(*values):
-    for value in values:
-        if value:
-            return value
-    return ""
-
-def _read_attr(obj, *path):
-    cur = obj
-    for part in path:
-        if cur is None:
-            return None
-        cur = getattr(cur, part, None)
-    return cur
-
-async def _maybe_await(value):
-    if inspect.isawaitable(value):
-        return await value
-    return value
-
-def _call_in_event_loop(loop, method):
+def _call_feishu_channel_method(loop, method):
     result = method()
     if inspect.isawaitable(result):
         return loop.run_until_complete(result)
     return result
 
-class _FallbackFeishuChannelExtension:
-    """Minimal Feishu bridge used when the installed veadk package lacks extensions."""
-
-    def __init__(self, runner, *, app_id, app_secret, channel_kwargs=None, **_kwargs):
-        try:
-            from lark_channel import FeishuChannel
-        except ImportError:
-            from lark_oapi.channel import FeishuChannel
-
-        self.runner = runner
-        self.channel = FeishuChannel(
-            app_id=app_id,
-            app_secret=app_secret,
-            **dict(channel_kwargs or {}),
-        )
-        self.channel.on("message", self._on_message)
-
-    async def connect(self):
-        connect = getattr(self.channel, "start", None) or self.channel.connect
-        return await _maybe_await(connect())
-
-    async def disconnect(self):
-        disconnect = getattr(self.channel, "stop", None) or getattr(self.channel, "disconnect", None)
-        if disconnect is None:
-            return None
-        return await _maybe_await(disconnect())
-
-    async def _on_message(self, message) -> None:
-        text = str(getattr(message, "content_text", "") or "").strip()
-        if not text:
-            return
-        sender = getattr(message, "sender", None)
-        user_id = _coalesce(
-            getattr(sender, "union_id", None),
-            getattr(sender, "open_id", None),
-            getattr(sender, "user_id", None),
-            getattr(message, "sender_id", None),
-            "feishu_user",
-        )
-        session_id = _coalesce(
-            _read_attr(message, "conversation", "thread_id"),
-            getattr(message, "thread_id", None),
-            getattr(message, "reply_to_message_id", None),
-            getattr(message, "chat_id", None),
-            _read_attr(message, "conversation", "chat_id"),
-            getattr(message, "message_id", None),
-            "feishu_session",
-        )
-        chat_id = _coalesce(
-            getattr(message, "chat_id", None),
-            _read_attr(message, "conversation", "chat_id"),
-        )
-        if not chat_id:
-            print("feishu channel fallback ignored message without chat_id", flush=True)
-            return
-        response_text = await self.runner.run(
-            messages=text,
-            user_id=user_id,
-            session_id=session_id,
-        )
-        if response_text:
-            options = {}
-            message_id = _coalesce(getattr(message, "message_id", None), getattr(message, "id", None))
-            if message_id:
-                options["reply_to"] = message_id
-            await _maybe_await(self.channel.send(chat_id, {"text": str(response_text)}, options))
-
-def _get_feishu_channel_method(channel, names):
-    raw_channel = getattr(channel, "channel", None)
-    for name in names:
-        method = getattr(channel, name, None)
-        if method is not None:
-            return method
-        method = getattr(raw_channel, name, None)
-        if method is not None:
-            return method
-    return None
-
 def _connect_feishu_channel(loop, channel) -> None:
     connect = _get_feishu_channel_method(channel, ("start", "connect"))
     if connect is None:
         raise AttributeError("Feishu channel has no start/connect method")
-    return _call_in_event_loop(loop, connect)
+    return _call_feishu_channel_method(loop, connect)
 
 def _disconnect_feishu_channel(loop, channel) -> None:
     disconnect = _get_feishu_channel_method(channel, ("stop", "disconnect"))
     if disconnect is None:
         return None
-    return _call_in_event_loop(loop, disconnect)
+    return _call_feishu_channel_method(loop, disconnect)
 
 def _stop_feishu_channel_from_lifespan(channel) -> None:
-    stop = _get_feishu_channel_method(channel, ("stop", "disconnect"))
-    if stop is None:
-        return None
-    return stop()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return _disconnect_feishu_channel(loop, channel)
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
 
 def _build_feishu_channel(runner, app_id, app_secret):
-    FeishuChannelExtension = _FallbackFeishuChannelExtension
-    try:
-        from veadk.extensions import FeishuChannelExtension as _VeadkFeishuChannelExtension
-    except ImportError as exc:
-        print(
-            "veadk.extensions is not installed; using generated Feishu Channel fallback: "
-            f"{type(exc).__name__}: {exc}",
-            flush=True,
-        )
-    else:
-        if getattr(_VeadkFeishuChannelExtension, "CHANNEL_SDK_COMPAT", False):
-            FeishuChannelExtension = _VeadkFeishuChannelExtension
-        else:
-            print(
-                "installed veadk FeishuChannelExtension lacks channel-sdk compatibility; "
-                "using generated Feishu Channel fallback",
-                flush=True,
-            )
-
     return FeishuChannelExtension(
         runner=runner,
         app_id=app_id,
         app_secret=app_secret,
         channel_kwargs={
-            "transport": os.getenv("TOOL_FEISHU_CHANNEL_TRANSPORT", "ws"),
+            "transport": "ws",
         },
-        streaming=_env_bool("TOOL_FEISHU_CHANNEL_STREAMING"),
-        reactions=_env_bool("TOOL_FEISHU_CHANNEL_REACTIONS"),
+        streaming=False,
+        reactions=False,
     )
 
 def _run_feishu_channel(runner, app_id, app_secret, stop_event, state) -> None:
@@ -601,11 +503,11 @@ def _run_feishu_channel(runner, app_id, app_secret, stop_event, state) -> None:
         loop.close()
 
 async def _start_feishu_channel(app, runner) -> None:
-    if not _env_bool("TOOL_FEISHU_CHANNEL_ENABLED", FEISHU_CHANNEL_ENABLED):
+    if not FEISHU_CHANNEL_ENABLED:
         return
 
-    app_id = os.getenv("TOOL_FEISHU_CHANNEL_APP_ID") or os.getenv("FEISHU_APP_ID")
-    app_secret = os.getenv("TOOL_FEISHU_CHANNEL_APP_SECRET") or os.getenv("FEISHU_APP_SECRET")
+    app_id = os.getenv("FEISHU_APP_ID")
+    app_secret = os.getenv("FEISHU_APP_SECRET")
     if not app_id or not app_secret:
         print(
             "feishu channel disabled: FEISHU_APP_ID or FEISHU_APP_SECRET is missing",
@@ -646,31 +548,29 @@ async def _stop_feishu_channel(app) -> None:
                 "feishu channel background thread did not stop within 2s",
                 flush=True,
             )
-
+` : ""}
 def build_app():
     """Build AgentKit AgentServerApp for deployment."""
     import veadk
-    from veadk import Runner
-
-    WEBUI_DIR = Path(veadk.__file__).resolve().parent / "webui"
+${feishuChannelEnabled ? "    from veadk import Runner\n" : ""}    WEBUI_DIR = Path(veadk.__file__).resolve().parent / "webui"
 
     # AgentKit's AgentServerApp exposes the ADK-compatible API surface
     # (/list-apps, /run, /run_sse, sessions) expected by AgentKit runtime tests.
     short_term_memory = getattr(root_agent, "short_term_memory", None) or ShortTermMemory(
         backend="local"
     )
-    runner = Runner(
+${feishuChannelEnabled ? `    runner = Runner(
         agent=root_agent,
         app_name=getattr(root_agent, "name", "") or "agent",
         short_term_memory=short_term_memory,
     )
-    agent_server_app = AgentkitAgentServerApp(
+` : ""}    agent_server_app = AgentkitAgentServerApp(
         agent=root_agent,
         short_term_memory=short_term_memory,
     )
     app = agent_server_app.app
 
-    original_lifespan = app.router.lifespan_context
+${feishuChannelEnabled ? `    original_lifespan = app.router.lifespan_context
 
     @asynccontextmanager
     async def lifespan(fastapi_app):
@@ -682,8 +582,7 @@ def build_app():
                 await _stop_feishu_channel(fastapi_app)
 
     app.router.lifespan_context = lifespan
-
-    # Add health check endpoint
+` : ""}    # Add health check endpoint
     @app.get("/ping")
     def ping() -> dict[str, str]:
         return {"status": "ok"}

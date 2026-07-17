@@ -1543,16 +1543,9 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
                     checked={!!draft.deployment?.feishuEnabled}
                     onChange={(v) => patchDeployment({ feishuEnabled: v })}
                     title="连接飞书"
-                    desc="部署后在同一个 AgentKit runtime 内启动飞书 Channel，用飞书消息触发当前 Agent。"
+                    desc="部署后可通过飞书消息触发当前 Agent。"
                     icon={Globe}
                   />
-                  {draft.deployment?.feishuEnabled && (
-                    <div className="cw-field cw-subfield">
-                      <span className="cw-help">
-                        App ID、App Secret 等运行时变量请在生成项目后的预览页右侧“环境变量”面板中填写。
-                      </span>
-                    </div>
-                  )}
                 </div>
               </Section>
             )}

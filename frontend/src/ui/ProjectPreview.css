@@ -310,41 +310,41 @@
   overflow: auto;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px;
+  gap: 0;
+  padding: 10px 16px 12px;
 }
 
 .pp-env-row {
   display: grid;
   grid-template-columns: minmax(142px, 1.08fr) minmax(120px, 1fr) 30px;
   align-items: center;
-  gap: 8px;
-  padding: 8px;
-  border: 1px solid hsl(var(--border));
-  border-radius: calc(var(--radius) - 1px);
-  background: hsl(var(--card));
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid hsl(var(--border) / 0.72);
 }
 
 .pp-env-row-head {
   position: sticky;
   top: 0;
   z-index: 1;
-  padding: 0 8px 2px;
+  padding: 0 0 6px;
   border: none;
-  background: hsl(var(--secondary) / 0.95);
+  background: hsl(var(--secondary) / 0.28);
   color: hsl(var(--muted-foreground));
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
 }
 
 .pp-env-row input {
   width: 100%;
   min-width: 0;
-  height: 34px;
-  padding: 0 10px;
+  height: 36px;
+  padding: 0 11px;
   border: 1px solid hsl(var(--border));
-  border-radius: calc(var(--radius) - 2px);
-  background: hsl(var(--background));
+  border-radius: 6px;
+  background: hsl(var(--card));
   color: hsl(var(--foreground));
   font: inherit;
   font-size: 12px;
@@ -356,8 +356,8 @@
 }
 
 .pp-env-key-fixed {
-  border-color: hsl(var(--primary) / 0.22) !important;
-  background: hsl(var(--primary) / 0.06) !important;
+  border-color: hsl(var(--border)) !important;
+  background: hsl(var(--card)) !important;
   color: hsl(var(--foreground)) !important;
   cursor: default;
 }
@@ -381,7 +381,7 @@
   font-size: 12px;
   text-align: center;
   border: 1px dashed hsl(var(--border));
-  border-radius: calc(var(--radius) - 1px);
+  border-radius: 6px;
   background: hsl(var(--card));
 }
 
@@ -390,10 +390,10 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  margin: 0 12px 12px;
+  margin: 0 16px 14px;
   height: 38px;
   border: 1px dashed hsl(var(--border));
-  border-radius: calc(var(--radius) - 1px);
+  border-radius: 6px;
   background: hsl(var(--card));
   color: hsl(var(--foreground));
   font: inherit;
