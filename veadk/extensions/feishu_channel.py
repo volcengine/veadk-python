@@ -57,6 +57,8 @@ def _call_in_fresh_event_loop(method: Callable[[], Any]) -> Any:
     finally:
         asyncio.set_event_loop(None)
         loop.close()
+
+
 def _stringify_card_elements(elements: Any) -> str:
     if elements is None:
         return ""
