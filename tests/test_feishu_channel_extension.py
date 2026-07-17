@@ -337,7 +337,10 @@ async def test_extension_can_be_constructed_and_connected_in_worker_thread(monke
         )
         return extension.channel.connect()
 
-    assert await asyncio.to_thread(_call_in_fresh_event_loop, build_and_connect) == "connected"
+    assert (
+        await asyncio.to_thread(_call_in_fresh_event_loop, build_and_connect)
+        == "connected"
+    )
 
     channel = FakeLoopBoundChannel.created[0]
     assert channel.kwargs == {

@@ -837,9 +837,7 @@ def _run_frontend_server(
         project_name = config.get("projectName", "default")
         im_config = data.get("im") if isinstance(data.get("im"), dict) else {}
         feishu_config = (
-            im_config.get("feishu")
-            if isinstance(im_config.get("feishu"), dict)
-            else {}
+            im_config.get("feishu") if isinstance(im_config.get("feishu"), dict) else {}
         )
         feishu_enabled = bool(feishu_config.get("enabled"))
         requested_envs = data.get("envs") if isinstance(data.get("envs"), list) else []
@@ -957,9 +955,8 @@ def _run_frontend_server(
 
         def _is_tos_request_expired(error_text: str) -> bool:
             lower = (error_text or "").lower()
-            return (
-                "request has expired" in lower
-                and ("accessdenied" in lower or "access denied" in lower)
+            return "request has expired" in lower and (
+                "accessdenied" in lower or "access denied" in lower
             )
 
         def _friendly_error(error_text: str) -> str:
