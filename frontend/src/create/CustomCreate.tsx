@@ -3,15 +3,17 @@ import { AnimatePresence, motion } from "motion/react";
 import {
   ArrowLeft,
   Bot,
-  Globe,
   Boxes,
   Check,
+  Cloud,
   Cpu,
   Database,
   Eye,
   FileDown,
   FileUp,
+  FolderUp,
   GitBranch,
+  Globe,
   Info,
   LayoutGrid,
   Layers,
@@ -19,7 +21,6 @@ import {
   Plus,
   Repeat,
   Rocket,
-  Search,
   Shapes,
   Sparkles,
   Split,
@@ -44,8 +45,13 @@ import {
 } from "./veadkCatalog";
 import { generateProject } from "./codegen";
 import { draftToYaml, yamlToDraft } from "./configYaml";
-import { searchSkills, downloadSkillFiles, type SkillHit } from "./skills";
 import type { AgentProject } from "./project";
+import type { SkillSource } from "./skills/types";
+import { downloadSkillHubSkill } from "./skills/skillhub";
+import { downloadSkillSpaceSkill } from "./skills/skillspace";
+import { SkillHubPicker } from "./SkillHubPicker";
+import { LocalPicker } from "./LocalPicker";
+import { SkillSpacePicker } from "./SkillSpacePicker";
 import { ProjectPreview } from "../ui/ProjectPreview";
 import { deployAgentkitProject } from "../adk/client";
 import type { DeployStage } from "../adk/client";
@@ -382,188 +388,123 @@ function McpToolEditor({
 }
 
 /* ---------------------------------------------------------------- *
- * Skill Hub search + select. Searches the skill hub (skills.ts) and
- * lets the user toggle results into draft.selectedSkills (de-duped by
- * slug). Selected skills show as removable rows above the results.
+ * Multi-source skill picker: tab bar switching between Skill Hub
+ * (public marketplace), local folder/.zip upload, and account-scoped
+ * AgentKit SkillSpaces. Selected skills from all sources share one
+ * pill list rendered above the tabs.
  * ---------------------------------------------------------------- */
-function SkillHubPicker({
+function SkillPill({
+  s,
+  onRemove,
+}: {
+  s: SelectedSkill;
+  onRemove: () => void;
+}) {
+  let Icon = Sparkles;
+  let label = "Skill Hub";
+  if (s.source === "local") {
+    Icon = FolderUp;
+    label = "本地";
+  } else if (s.source === "skillspace") {
+    Icon = Cloud;
+    label = "SkillSpace";
+  }
+  return (
+    <motion.span
+      key={`${s.source}:${s.folder}:${s.skillId || s.slug || ""}:${s.version || ""}`}
+      className="cw-pill"
+      layout
+      initial={{ opacity: 0, scale: 0.85 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.85 }}
+      transition={{ duration: 0.16 }}
+    >
+      <Icon className="cw-i cw-i-sm" />
+      {s.name}
+      <span className="cw-pill-source">{label}</span>
+      <button
+        type="button"
+        className="cw-pill-x"
+        onClick={onRemove}
+        aria-label={`移除 ${s.name}`}
+      >
+        <X className="cw-i cw-i-sm" />
+      </button>
+    </motion.span>
+  );
+}
+
+const SKILL_SOURCES: {
+  id: SkillSource;
+  label: string;
+  icon: typeof Globe;
+}[] = [
+  { id: "skillhub", label: "Skill Hub", icon: Globe },
+  { id: "local", label: "本地文件", icon: FolderUp },
+  { id: "skillspace", label: "SkillSpace", icon: Cloud },
+];
+
+function SkillsSourceTabs({
   selected,
   onChange,
 }: {
   selected: SelectedSkill[];
   onChange: (next: SelectedSkill[]) => void;
 }) {
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<SkillHit[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [searched, setSearched] = useState(false);
-
-  const isSelected = (slug: string) => selected.some((s) => s.slug === slug);
-
-  const toggle = (hit: SkillHit) => {
-    if (isSelected(hit.slug)) {
-      onChange(selected.filter((s) => s.slug !== hit.slug));
-    } else {
-      onChange([
-        ...selected,
-        { slug: hit.slug, name: hit.name, namespace: hit.namespace },
-      ]);
-    }
-  };
-
-  const removeSelected = (slug: string) =>
-    onChange(selected.filter((s) => s.slug !== slug));
-
-  const runSearch = async (q: string) => {
-    setLoading(true);
-    setError(null);
-    setSearched(true);
-    try {
-      const hits = await searchSkills(q);
-      setResults(hits);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "搜索失败，请稍后重试。");
-      setResults([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Debounce typing ~300ms; also searches on Enter / button via runSearch.
-  useEffect(() => {
-    const q = query.trim();
-    if (!q) {
-      setResults([]);
-      setSearched(false);
-      setError(null);
-      return;
-    }
-    const t = setTimeout(() => runSearch(q), 300);
-    return () => clearTimeout(t);
-  }, [query]);
+  const [active, setActive] = useState<SkillSource>("skillhub");
+  const remove = (key: string) =>
+    onChange(selected.filter((s) => skillKey(s) !== key));
 
   return (
-    <div className="cw-skillhub">
-      <div className="cw-skill-searchrow">
-        <div className="cw-skill-searchbox">
-          <Search className="cw-i cw-skill-searchicon" aria-hidden />
-          <input
-            className="cw-input cw-skill-input"
-            value={query}
-            placeholder="搜索 Skill Hub，例如 数据分析、PDF…"
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                if (query.trim()) runSearch(query);
-              }
-            }}
-          />
-        </div>
-        <button
-          type="button"
-          className="cw-btn cw-btn-soft"
-          onClick={() => query.trim() && runSearch(query)}
-          disabled={!query.trim() || loading}
-        >
-          {loading ? (
-            <Loader2 className="cw-i cw-spin" />
-          ) : (
-            <Search className="cw-i" />
-          )}
-          搜索
-        </button>
-      </div>
-
+    <div className="cw-skillspane">
       {selected.length > 0 && (
         <div className="cw-skill-selected">
           <span className="cw-skill-selected-label">已选技能</span>
           <div className="cw-pills">
             <AnimatePresence initial={false}>
               {selected.map((s) => (
-                <motion.span
-                  key={s.slug}
-                  className="cw-pill"
-                  layout
-                  initial={{ opacity: 0, scale: 0.85 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.85 }}
-                  transition={{ duration: 0.16 }}
-                >
-                  <Sparkles className="cw-i cw-i-sm" />
-                  {s.name}
-                  <button
-                    type="button"
-                    className="cw-pill-x"
-                    onClick={() => removeSelected(s.slug)}
-                    aria-label={`移除 ${s.name}`}
-                  >
-                    <X className="cw-i cw-i-sm" />
-                  </button>
-                </motion.span>
+                <SkillPill key={skillKey(s)} s={s} onRemove={() => remove(skillKey(s))} />
               ))}
             </AnimatePresence>
           </div>
         </div>
       )}
 
-      {error && (
-        <div className="cw-banner">
-          <Info className="cw-i" />
-          <span>{error}</span>
-        </div>
-      )}
+      <div className="cw-skill-sourcetabs" role="tablist">
+        {SKILL_SOURCES.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={active === id}
+            className={`cw-skill-pickertab ${active === id ? "is-on" : ""}`}
+            onClick={() => setActive(id)}
+          >
+            <Icon className="cw-i cw-i-sm" />
+            {label}
+          </button>
+        ))}
+      </div>
 
-      {loading && results.length === 0 ? (
-        <p className="cw-empty-line">正在搜索…</p>
-      ) : results.length > 0 ? (
-        <div className="cw-skill-results">
-          {results.map((hit) => {
-            const on = isSelected(hit.slug);
-            return (
-              <button
-                key={hit.id || hit.slug}
-                type="button"
-                className={`cw-skill-result ${on ? "is-on" : ""}`}
-                onClick={() => toggle(hit)}
-                aria-pressed={on}
-              >
-                <span className="cw-skill-result-icon" aria-hidden>
-                  {on ? (
-                    <Check className="cw-i cw-i-sm" />
-                  ) : (
-                    <Plus className="cw-i cw-i-sm" />
-                  )}
-                </span>
-                <span className="cw-skill-result-meta">
-                  <span className="cw-skill-result-name">{hit.name}</span>
-                  {hit.description && (
-                    <span className="cw-skill-result-desc">
-                      {hit.description}
-                    </span>
-                  )}
-                  {hit.sourceRepo && (
-                    <span className="cw-skill-result-repo">
-                      {hit.sourceRepo}
-                    </span>
-                  )}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      ) : searched && !error ? (
-        <p className="cw-empty-line">没有找到匹配的技能，换个关键词试试。</p>
-      ) : (
-        !searched && (
-          <p className="cw-empty-line">
-            输入关键词以搜索 Skill Hub，所选技能会在生成项目时下载到 skills/ 目录。
-          </p>
-        )
-      )}
+      <div className="cw-skill-tabbody">
+        {active === "skillhub" && (
+          <SkillHubPicker selected={selected} onChange={onChange} />
+        )}
+        {active === "local" && (
+          <LocalPicker selected={selected} onChange={onChange} />
+        )}
+        {active === "skillspace" && (
+          <SkillSpacePicker selected={selected} onChange={onChange} />
+        )}
+      </div>
     </div>
   );
+}
+
+function skillKey(s: SelectedSkill): string {
+  if (s.source === "skillhub") return `hub:${s.namespace}/${s.slug}`;
+  if (s.source === "local") return `local:${s.folder}`;
+  return `ss:${s.skillSpaceId}/${s.skillId}/${s.version || ""}`;
 }
 
 /* ---------------------------------------------------------------- *
@@ -1065,13 +1006,18 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
 
     const proj = generateProject(draft);
 
-    // Collect Skill Hub selections across EVERY agent in the tree (dedup by
-    // namespace/slug) — skills can now be chosen on any LLM node, not just root.
+    // Collect skill selections across EVERY agent in the tree (dedup by a
+    // source-aware key) — skills can be chosen on any LLM node, not just root.
     const allSkills: SelectedSkill[] = [];
     const seenSkill = new Set<string>();
     const collectSkills = (n: AgentDraft) => {
       for (const s of n.selectedSkills ?? []) {
-        const key = `${s.namespace}/${s.slug}`;
+        const key =
+          s.source === "skillhub"
+            ? `hub:${s.namespace}/${s.slug}`
+            : s.source === "local"
+              ? `local:${s.folder}`
+              : `ss:${s.skillSpaceId}/${s.skillId}/${s.version || ""}`;
         if (!seenSkill.has(key)) {
           seenSkill.add(key);
           allSkills.push(s);
@@ -1081,18 +1027,30 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
     };
     collectSkills(draft);
 
-    // Download their files in parallel. Per-skill failures are skipped so one
-    // bad skill can't abort the build.
+    // Materialize files per source in parallel. Per-skill failures are skipped
+    // (logged) so one bad skill can't abort the build. Local skills already
+    // carry their files; hub + skillspace skills are fetched here.
     if (allSkills.length > 0) {
       setBuilding(true);
       try {
         const results = await Promise.all(
-          allSkills.map((s) =>
-            downloadSkillFiles(s.slug, s.namespace).catch((err) => {
+          allSkills.map((s) => {
+            const p =
+              s.source === "local"
+                ? Promise.resolve(s.localFiles ?? [])
+                : s.source === "skillspace"
+                  ? downloadSkillSpaceSkill(
+                      s.skillSpaceId!,
+                      s.skillId!,
+                      s.version,
+                      s.folder,
+                    )
+                  : downloadSkillHubSkill(s);
+            return p.catch((err: unknown) => {
               console.warn(`下载技能失败：${s.name}`, err);
               return [];
-            }),
-          ),
+            });
+          }),
         );
         const existing = new Set(proj.files.map((f) => f.path));
         for (const files of results) {
@@ -1436,10 +1394,9 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
             <Section meta={metaOf("skills")}>
                   <div className="cw-form">
                     <p className="cw-section-desc">
-                      从 Skill Hub 搜索并选择技能，生成项目时会自动下载到
-                      skills/ 目录。
+                      从 Skill Hub、本地文件或 AgentKit SkillSpace 添加技能，生成项目时会写入 skills/ 目录。
                     </p>
-                    <SkillHubPicker
+                    <SkillsSourceTabs
                       selected={selectedSkills}
                       onChange={(next) => patch({ selectedSkills: next })}
                     />
