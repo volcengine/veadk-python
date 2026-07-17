@@ -15,6 +15,7 @@
 # adapted from Google ADK models adk-python/blob/main/src/google/adk/models/lite_llm.py at f1f44675e4a86b75e72cfd838efd8a0399f23e24 · google/adk-python
 
 import base64
+import copy
 import json
 import time
 from typing import Any, Dict, Union, AsyncGenerator, Tuple, List, Optional, Literal
@@ -101,6 +102,7 @@ ark_supported_fields = [
     "tools",
     "top_p",
     "max_tool_calls",
+    "context_management",
     "expire_at",
     "extra_headers",
     "extra_query",
@@ -700,6 +702,7 @@ class ArkLlmClient:
 
 class ArkLlm(Gemini):
     model: str
+    fallbacks: Optional[List[str]] = None
     llm_client: ArkLlmClient = Field(default_factory=ArkLlmClient)
     _additional_args: Dict[str, Any] = None
     use_interactions_api: bool = True
@@ -721,6 +724,7 @@ class ArkLlm(Gemini):
         self._additional_args.pop("messages", None)
         self._additional_args.pop("tools", None)
         self._additional_args.pop("stream", None)
+        self._additional_args.pop("fallbacks", None)
         self._additional_args.pop("enable_responses_cache", None)
         if drop_params is not None:
             self._additional_args["drop_params"] = drop_params
@@ -765,46 +769,90 @@ class ArkLlm(Gemini):
 
         if generation_params:
             responses_args.update(generation_params)
-        try:
-            async for llm_response in self.generate_content_via_responses(
-                responses_args.copy(), stream=stream
-            ):
-                yield llm_response
-        except ArkBadRequestError as e:
-            # Check if it is PreviousResponseNotFound
-            is_expired = False
-            if hasattr(e, "body") and isinstance(e.body, dict):
-                if e.body.get("code") == "InvalidParameter.PreviousResponseNotFound":
-                    is_expired = True
+        async for llm_response in self._generate_content_with_fallbacks(
+            responses_args, stream=stream
+        ):
+            yield llm_response
 
-            if is_expired:
-                logger.warning(
-                    f"Interaction expired (PreviousResponseNotFound). Retrying without previous_response_id. Error: {e}"
-                )
-                # Remove previous_response_id
-                if "previous_response_id" in responses_args:
-                    del responses_args["previous_response_id"]
-                # Retry
-                try:
-                    async for llm_response in self.generate_content_via_responses(
-                        responses_args.copy(), stream=stream
-                    ):
-                        yield llm_response
-                except Exception:
+    async def _generate_content_with_fallbacks(
+        self, responses_args: dict, stream: bool = False
+    ) -> AsyncGenerator[LlmResponse, None]:
+        """Try the primary Ark model and configured fallbacks in order.
+
+        A fallback is safe only before an attempt has yielded output. Once a
+        streaming response has reached the caller, switching models would mix
+        chunks from two responses, so the original error is propagated.
+        """
+        models = [self.model, *(self.fallbacks or [])]
+
+        for index, model in enumerate(models):
+            attempt_args = copy.deepcopy(responses_args)
+            attempt_args["model"] = model
+            yielded_response = False
+
+            try:
+                async for llm_response in self.generate_content_via_responses(
+                    attempt_args, stream=stream
+                ):
+                    yielded_response = True
+                    yield llm_response
+                return
+            except Exception as error:
+                if yielded_response:
                     logger.exception(
-                        "Retry without previous_response_id failed in Ark Responses API"
+                        f"Ark Responses API streaming request failed after model `{model}` emitted output; fallback is unsafe"
                     )
                     raise
-            else:
-                logger.exception("Ark Responses API request failed")
-                raise
-        except Exception:
-            logger.exception("Unexpected error in Ark Responses API generation")
-            raise
+
+                failure = error
+                if self._is_previous_response_not_found(error):
+                    logger.warning(
+                        f"Interaction expired for model `{model}` (PreviousResponseNotFound). Retrying without previous_response_id. Error: {error}"
+                    )
+                    responses_args = copy.deepcopy(responses_args)
+                    responses_args.pop("previous_response_id", None)
+                    retry_args = copy.deepcopy(responses_args)
+                    retry_args["model"] = model
+                    retry_yielded_response = False
+                    try:
+                        async for llm_response in self.generate_content_via_responses(
+                            retry_args, stream=stream
+                        ):
+                            retry_yielded_response = True
+                            yield llm_response
+                        return
+                    except Exception as retry_error:
+                        if retry_yielded_response:
+                            logger.exception(
+                                f"Ark Responses API streaming retry failed after model `{model}` emitted output; fallback is unsafe"
+                            )
+                            raise
+                        failure = retry_error
+
+                if index + 1 < len(models):
+                    next_model = models[index + 1]
+                    logger.warning(
+                        f"Ark Responses API request with model `{model}` failed. Falling back to `{next_model}`. Error: {failure}"
+                    )
+                    continue
+
+                logger.error(
+                    f"Ark Responses API request failed for all configured models. Last model: `{model}`. Error: {failure}"
+                )
+                raise failure.with_traceback(failure.__traceback__)
+
+    @staticmethod
+    def _is_previous_response_not_found(error: Exception) -> bool:
+        return (
+            isinstance(error, ArkBadRequestError)
+            and isinstance(getattr(error, "body", None), dict)
+            and error.body.get("code") == "InvalidParameter.PreviousResponseNotFound"
+        )
 
     async def generate_content_via_responses(
         self, responses_args: dict, stream: bool = False
     ):
+        model = responses_args["model"]
         responses_args = request_reorganization_by_ark(
             responses_args, enable_responses_cache=self.enable_responses_cache
         )
@@ -812,7 +860,7 @@ class ArkLlm(Gemini):
             responses_args["stream"] = True
             async for part in await self.llm_client.aresponses(**responses_args):
                 llm_response = event_to_generate_content_response(
-                    event=part, is_partial=True, model_version=self.model
+                    event=part, is_partial=True, model_version=model
                 )
                 if llm_response:
                     yield llm_response

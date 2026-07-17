@@ -250,35 +250,36 @@ class Agent(LlmAgent):
         logger.info(f"Model extra config: {self.model_extra_config}")
 
         if not self.model:
+            fallbacks = None
+            if isinstance(self.model_name, list):
+                if self.model_name:
+                    model_name = self.model_name[0]
+                    fallbacks = [
+                        f"{self.model_provider}/{m}" for m in self.model_name[1:]
+                    ]
+                    logger.info(
+                        f"Using primary model: {model_name}, with fallbacks: {self.model_name[1:]}"
+                    )
+                else:
+                    model_name = settings.model.name
+                    logger.warning(
+                        f"Empty model_name list provided, using default model from settings: {model_name}"
+                    )
+            else:
+                model_name = self.model_name
+
             if self.enable_responses:
                 from veadk.models.ark_llm import ArkLlm
 
                 self.model = ArkLlm(
-                    model=f"{self.model_provider}/{self.model_name}",
+                    model=f"{self.model_provider}/{model_name}",
                     api_key=self.model_api_key,
                     api_base=self.model_api_base,
+                    fallbacks=fallbacks,
                     enable_responses_cache=self.enable_responses_cache,
                     **self.model_extra_config,
                 )
             else:
-                fallbacks = None
-                if isinstance(self.model_name, list):
-                    if self.model_name:
-                        model_name = self.model_name[0]
-                        fallbacks = [
-                            f"{self.model_provider}/{m}" for m in self.model_name[1:]
-                        ]
-                        logger.info(
-                            f"Using primary model: {model_name}, with fallbacks: {self.model_name[1:]}"
-                        )
-                    else:
-                        model_name = settings.model.name
-                        logger.warning(
-                            f"Empty model_name list provided, using default model from settings: {model_name}"
-                        )
-                else:
-                    model_name = self.model_name
-
                 self.model = LiteLlm(
                     model=f"{self.model_provider}/{model_name}",
                     api_key=self.model_api_key,

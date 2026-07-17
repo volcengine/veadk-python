@@ -136,6 +136,46 @@ def test_agent_model_creation(mock_lite_llm):
     assert agent.model == mock_model
 
 
+@patch("veadk.models.ark_llm.ArkLlm")
+def test_agent_passes_context_management_to_responses_model(mock_ark_llm):
+    context_management = {
+        "edits": [
+            {
+                "type": "clear_thinking",
+                "keep": {"type": "thinking_turns", "value": 1},
+            }
+        ]
+    }
+
+    Agent(
+        model_name="test_model",
+        model_provider="ark",
+        model_api_key="test_key",
+        model_api_base="test_base",
+        enable_responses=True,
+        model_extra_config={"context_management": context_management},
+    )
+
+    assert mock_ark_llm.call_args.kwargs["context_management"] == context_management
+
+
+@patch("veadk.models.ark_llm.ArkLlm")
+def test_agent_configures_responses_model_fallbacks(mock_ark_llm):
+    Agent(
+        model_name=["primary-model", "fallback-model-1", "fallback-model-2"],
+        model_provider="openai",
+        model_api_key="test_key",
+        model_api_base="test_base",
+        enable_responses=True,
+    )
+
+    assert mock_ark_llm.call_args.kwargs["model"] == "openai/primary-model"
+    assert mock_ark_llm.call_args.kwargs["fallbacks"] == [
+        "openai/fallback-model-1",
+        "openai/fallback-model-2",
+    ]
+
+
 @patch.dict("os.environ", {"MODEL_AGENT_API_KEY": "mock_api_key"})
 def test_agent_with_existing_model():
     existing_model = LiteLlm(model="test_model")

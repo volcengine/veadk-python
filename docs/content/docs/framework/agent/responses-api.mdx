@@ -41,6 +41,17 @@ root_agent = Agent(
 )
 ```
 
+**多模型容错**
+
+Responses API 同样支持通过 `model_name` 列表配置容错模型。请求失败时会按顺序尝试后续模型，直到成功或所有模型均失败。
+
+```python
+root_agent = Agent(
+    enable_responses=True,
+    model_name=["doubao-seed-1-8-251228", "deepseek-r1-250528"],
+)
+```
+
 **效果展示**
 
 ![responses-api](/assets/images/agents/responses_api.png)
