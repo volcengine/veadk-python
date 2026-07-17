@@ -1,13 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Send, Sparkles, Bot, FolderTree, AlertCircle, Loader2 } from "lucide-react";
-import { createSession, runSSE, getAgentInfo, deployAgentkitProject } from "../adk/client";
+import {
+  createSession,
+  runSSE,
+  getAgentInfo,
+  deployAgentkitProject,
+  generateAgentProject,
+} from "../adk/client";
 import type { DeployStage } from "../adk/client";
 import { applyEvent, emptyAcc, type Acc } from "../blocks";
 import { Markdown } from "../ui/Markdown";
 import { ProjectPreview } from "../ui/ProjectPreview";
 import type { AgentProject } from "./project";
-import { generateProject, normalizeDraft } from "./codegen";
+import { normalizeDraft } from "./normalizeDraft";
 import type { AgentDraft } from "./types";
 import "./IntelligentCreate.css";
 
@@ -68,11 +74,11 @@ function stripFence(raw: string): string {
   return (fenced ? fenced[1] : t).trim();
 }
 
-/** Try to interpret the assistant's text as an agent-CONFIG JSON, then run it
- *  through the shared codegen to produce the project. Tolerant of surrounding
+/** Try to interpret the assistant's text as an agent-CONFIG JSON, then ask the
+ *  backend to produce the project. Tolerant of surrounding
  *  prose: falls back to the first `{ … }` slice. Returns null when the text
  *  isn't a config (e.g. a clarifying question). */
-function parseProject(raw: string): AgentProject | null {
+async function parseProject(raw: string): Promise<AgentProject | null> {
   const candidates: string[] = [];
   const stripped = stripFence(raw);
   candidates.push(stripped);
@@ -91,8 +97,8 @@ function parseProject(raw: string): AgentProject | null {
         (typeof (obj as Record<string, unknown>).name === "string" ||
           typeof (obj as Record<string, unknown>).instruction === "string")
       ) {
-        // Shared path: config -> normalized draft -> generated project files.
-        return generateProject(normalizeDraft(obj));
+        // Shared path: config -> normalized draft -> backend generated files.
+        return await generateAgentProject(normalizeDraft(obj));
       }
     } catch {
       /* try next candidate */
@@ -202,7 +208,7 @@ export function IntelligentCreate({ userId, onBack, onCreate, onAgentAdded }: In
       acc = applyEvent(acc, evt);
     }
     const finalText = accText(acc).trim();
-    return { project: parseProject(finalText), finalText };
+    return { project: await parseProject(finalText), finalText };
   }
 
   const handleDeploy = async (
@@ -291,7 +297,7 @@ export function IntelligentCreate({ userId, onBack, onCreate, onAgentAdded }: In
       }
 
       const finalText = accText(acc).trim();
-      const parsed = parseProject(finalText);
+      const parsed = await parseProject(finalText);
       if (parsed) {
         setProject(parsed);
         pushAssistant(

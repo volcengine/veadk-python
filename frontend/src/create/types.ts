@@ -6,7 +6,7 @@ export interface MemoryConfig {
   longTerm: boolean;
 }
 
-/** A custom function tool the user wants — codegen emits a stub for it. */
+/** A custom function tool the user wants — the backend generator emits a stub for it. */
 export interface CustomTool {
   name: string;
   description: string;
@@ -73,12 +73,12 @@ export interface AgentDraft {
   /** Nested sub-agents (the custom flow supports recursive creation). */
   subAgents: AgentDraft[];
 
-  /* ---- custom-mode codegen selections (all optional / additive) ---- */
+  /* ---- custom-mode generation selections (all optional / additive) ---- */
   /** Ids of selected built-in tools (see veadkCatalog BUILTIN_TOOLS). */
   builtinTools?: string[];
-  /** User-defined function tools — codegen emits runnable stubs. */
+  /** User-defined function tools — the backend generator emits runnable stubs. */
   customTools?: CustomTool[];
-  /** MCP tool servers — codegen emits an MCPToolset per entry. */
+  /** MCP tool servers — the backend generator emits an MCPToolset per entry. */
   mcpTools?: McpTool[];
   /** Chosen backends when memory is enabled. */
   shortTermBackend?: string;

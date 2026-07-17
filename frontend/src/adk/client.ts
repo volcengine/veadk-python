@@ -4,6 +4,8 @@
 
 import { withAuth } from "./auth";
 import { parseSSE } from "./sse";
+import type { AgentProject } from "../create/project";
+import type { AgentDraft } from "../create/types";
 
 /** An ADK event as serialised over `/run_sse` (camelCase, by_alias=True). */
 export interface AdkUsage {
@@ -154,6 +156,39 @@ function apiFetch(path: string, init: RequestInit = {}, ep: AdkEndpoint = {}): P
     return fetch(withAuth(`${API_BASE}/agentkit-proxy${path}`), { ...init, headers });
   }
   return fetch(withAuth(`${API_BASE}${path}`), init);
+}
+
+function formatErrorDetail(detail: unknown): string {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        if (item && typeof item === "object" && "msg" in item) {
+          const loc = Array.isArray((item as { loc?: unknown }).loc)
+            ? (item as { loc?: unknown[] }).loc?.join(".")
+            : "";
+          const msg = String((item as { msg?: unknown }).msg ?? "");
+          return loc ? `${loc}: ${msg}` : msg;
+        }
+        return String(item);
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  if (detail && typeof detail === "object") return JSON.stringify(detail);
+  return "";
+}
+
+async function httpErrorMessage(res: Response, fallback: string): Promise<string> {
+  const text = await res.text().catch(() => "");
+  if (!text) return `${fallback} (${res.status})`;
+  try {
+    const data = JSON.parse(text) as { detail?: unknown; error?: unknown };
+    const detail = formatErrorDetail(data.detail ?? data.error);
+    return detail || text || `${fallback} (${res.status})`;
+  } catch {
+    return text || `${fallback} (${res.status})`;
+  }
 }
 
 export async function listApps(): Promise<string[]> {
@@ -469,6 +504,8 @@ export interface UiFeatures {
   addAgent: boolean;
   manageAgents: boolean;
   addAgentkit: boolean;
+  generatedAgentTestRun?: boolean;
+  generatedAgentTestRunDisabledReason?: string;
 }
 
 export interface UiConfig {
@@ -490,6 +527,7 @@ const DEFAULT_UI_CONFIG: UiConfig = {
     addAgent: true,
     manageAgents: true,
     addAgentkit: true,
+    generatedAgentTestRun: true,
   },
   defaultView: "chat",
   agentsSource: "local",
@@ -626,4 +664,94 @@ export async function getRuntimeDetail(
     throw new Error(t || `加载详情失败 (${res.status})`);
   }
   return res.json();
+}
+
+export interface GeneratedAgentTestRun {
+  runId: string;
+  appName: string;
+  expiresAt: number;
+}
+
+export async function generateAgentProject(
+  draft: AgentDraft,
+): Promise<AgentProject> {
+  const res = await apiFetch("/web/generated-agent-projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ draft }),
+  });
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "生成项目失败"));
+  }
+  return res.json();
+}
+
+export async function createGeneratedAgentTestRun(
+  draft: AgentDraft,
+): Promise<GeneratedAgentTestRun> {
+  const res = await apiFetch("/web/generated-agent-test-runs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ draft }),
+  });
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "创建调试运行失败"));
+  }
+  return res.json();
+}
+
+export async function createGeneratedAgentTestSession(
+  runId: string,
+  userId: string,
+): Promise<string> {
+  const res = await apiFetch(`/web/generated-agent-test-runs/${runId}/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId }),
+  });
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "创建调试会话失败"));
+  }
+  const session = await res.json();
+  return session.id;
+}
+
+export async function* runGeneratedAgentTestSSE({
+  runId,
+  userId,
+  sessionId,
+  text,
+  signal,
+}: {
+  runId: string;
+  userId: string;
+  sessionId: string;
+  text: string;
+  signal?: AbortSignal;
+}): AsyncGenerator<AdkEvent, void, unknown> {
+  const parts: Record<string, unknown>[] = text.trim() ? [{ text }] : [];
+  const res = await apiFetch(`/web/generated-agent-test-runs/${runId}/run_sse`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      user_id: userId,
+      session_id: sessionId,
+      new_message: { role: "user", parts },
+      streaming: true,
+    }),
+    signal,
+  });
+  if (!res.ok) throw new Error(await httpErrorMessage(res, "调试运行失败"));
+  for await (const evt of parseSSE(res)) {
+    yield evt as AdkEvent;
+  }
+}
+
+export async function deleteGeneratedAgentTestRun(runId: string): Promise<void> {
+  const res = await apiFetch(`/web/generated-agent-test-runs/${runId}`, {
+    method: "DELETE",
+  });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(await httpErrorMessage(res, "清理调试运行失败"));
+  }
 }

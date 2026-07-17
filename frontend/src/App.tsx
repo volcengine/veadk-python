@@ -1167,6 +1167,7 @@ export default function App() {
                 onCreate={onCreate}
                 onAgentAdded={onAgentAdded}
                 author={String(userInfo?.email ?? userId ?? "")}
+                features={features}
               />
             ) : createView === "template" ? (
               <TemplateCreate onBack={() => setCreateView("menu")} onCreate={onCreate} />

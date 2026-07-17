@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import {
   ArrowLeft,
   Bot,
+  Bug,
   Boxes,
   Check,
   Cloud,
@@ -21,6 +22,8 @@ import {
   Plus,
   Repeat,
   Rocket,
+  Search,
+  Send,
   Shapes,
   Sparkles,
   Split,
@@ -43,18 +46,24 @@ import {
   TRACING_EXPORTERS,
   type BackendOption,
 } from "./veadkCatalog";
-import { generateProject } from "./codegen";
 import { draftToYaml, yamlToDraft } from "./configYaml";
 import type { AgentProject } from "./project";
 import type { SkillSource } from "./skills/types";
-import { downloadSkillHubSkill } from "./skills/skillhub";
-import { downloadSkillSpaceSkill } from "./skills/skillspace";
 import { SkillHubPicker } from "./SkillHubPicker";
 import { LocalPicker } from "./LocalPicker";
 import { SkillSpacePicker } from "./SkillSpacePicker";
 import { ProjectPreview } from "../ui/ProjectPreview";
-import { deployAgentkitProject } from "../adk/client";
-import type { DeployStage } from "../adk/client";
+import { Blocks } from "../ui/Blocks";
+import {
+  createGeneratedAgentTestRun,
+  createGeneratedAgentTestSession,
+  deleteGeneratedAgentTestRun,
+  deployAgentkitProject,
+  generateAgentProject,
+  runGeneratedAgentTestSSE,
+} from "../adk/client";
+import type { DeployStage, GeneratedAgentTestRun, UiFeatures } from "../adk/client";
+import { applyEvent, emptyAcc, type Block } from "../blocks";
 import "./CustomCreate.css";
 
 /** Trigger a browser download of a text file. */
@@ -367,6 +376,9 @@ function McpToolEditor({
                         })
                       }
                     />
+                    <p className="cw-mcp-note">
+                      stdio MCP 暂不参与调试运行；点击“生成项目”时会完整保留这项配置并生成对应代码。
+                    </p>
                   </>
                 )}
               </motion.div>
@@ -815,6 +827,231 @@ function TreeNode({
   );
 }
 
+type DebugPhase = "idle" | "building" | "starting" | "ready" | "sending" | "error";
+
+interface DebugMessage {
+  role: "user" | "assistant";
+  content: string;
+  blocks?: Block[];
+  error?: string;
+}
+
+function fmtDebugExpiry(expiresAt?: number): string {
+  if (!expiresAt) return "";
+  const ms = expiresAt * 1000 - Date.now();
+  if (ms <= 0) return "即将清理";
+  const minutes = Math.floor(ms / 60000);
+  const seconds = Math.floor((ms % 60000) / 1000);
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")} 后自动清理`;
+}
+
+function debugSnapshotKey(draft: AgentDraft): string {
+  return JSON.stringify(draft);
+}
+
+function DebugPanel({
+  enabled,
+  disabledReason,
+  phase,
+  stale,
+  run,
+  projectName,
+  logs,
+  messages,
+  input,
+  error,
+  onInput,
+  onSend,
+  onRestart,
+}: {
+  enabled: boolean;
+  disabledReason: string;
+  phase: DebugPhase;
+  stale: boolean;
+  run: GeneratedAgentTestRun | null;
+  projectName: string;
+  logs: string[];
+  messages: DebugMessage[];
+  input: string;
+  error: string | null;
+  onInput: (v: string) => void;
+  onSend: () => void;
+  onRestart: () => void;
+}) {
+  const [, refreshExpiry] = useState(0);
+  const ready = phase === "ready" || phase === "sending";
+  const busy = phase === "building" || phase === "starting" || phase === "sending";
+  const badgeState = stale ? "stale" : phase;
+  const statusText = stale
+    ? "配置已变更"
+    : !enabled
+    ? "未开启"
+    : phase === "idle"
+      ? "等待调试"
+      : phase === "building"
+        ? "生成代码中"
+        : phase === "starting"
+          ? "启动环境中"
+          : phase === "sending"
+            ? "运行中"
+            : phase === "error"
+              ? "调试失败"
+              : "可对话";
+
+  useEffect(() => {
+    if (!run) return;
+    const timer = window.setInterval(() => refreshExpiry((v) => v + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [run]);
+
+  return (
+    <aside className="cw-debug" aria-label="调试窗口">
+      <div className="cw-debug-head">
+        <div className="cw-debug-title">
+          <Bug className="cw-i" />
+          调试
+        </div>
+        <div className={`cw-debug-badge cw-debug-badge-${badgeState}`}>
+          {statusText}
+        </div>
+      </div>
+
+      <div className="cw-debug-sub">
+        {run ? (
+          <>
+            <span>{projectName || run.appName}</span>
+            <span>{fmtDebugExpiry(run.expiresAt)}</span>
+          </>
+        ) : enabled ? (
+          <span>点击底部“调试”后生成代码并启动临时运行环境。</span>
+        ) : (
+          <span>{disabledReason}</span>
+        )}
+      </div>
+
+      {run && stale && (
+        <div className="cw-debug-stale" role="status">
+          <div className="cw-debug-stale-text">
+            <strong>配置已变更</strong>
+            <span>当前对话仍使用上一次生成的 Agent。重新调试后，新配置才会生效。</span>
+          </div>
+          <button
+            type="button"
+            className="cw-debug-stale-btn"
+            disabled={busy}
+            onClick={onRestart}
+          >
+            {phase === "building" || phase === "starting" ? (
+              <Loader2 className="cw-i cw-spin" />
+            ) : (
+              <Bug className="cw-i" />
+            )}
+            重新调试
+          </button>
+        </div>
+      )}
+
+      <div className="cw-debug-body">
+        {!enabled ? (
+          <div className="cw-debug-empty">
+            {disabledReason}
+          </div>
+        ) : phase === "idle" ? (
+          <div className="cw-debug-empty">
+            当前窗口会显示生成、启动和对话结果。配置完成后点击底部“调试”。
+          </div>
+        ) : phase === "building" || phase === "starting" ? (
+          <div className="cw-debug-progress">
+            {logs.map((line, i) => (
+              <div key={`${line}-${i}`} className="cw-debug-logline">
+                {i === logs.length - 1 ? (
+                  <Loader2 className="cw-i cw-spin" />
+                ) : (
+                  <Check className="cw-i" />
+                )}
+                <span>{line}</span>
+              </div>
+            ))}
+          </div>
+        ) : phase === "error" ? (
+          <div className="cw-debug-error">
+            <span>{error || "调试失败"}</span>
+            {logs.length > 0 && (
+              <div className="cw-debug-progress">
+                {logs.map((line, i) => (
+                  <div key={`${line}-${i}`} className="cw-debug-logline">
+                    <span>{line}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="cw-debug-chat">
+            {messages.length === 0 ? (
+              <div className="cw-debug-empty">输入消息开始验证当前 Agent。</div>
+            ) : (
+              messages.map((msg, i) => (
+                <div
+                  key={i}
+                  className={`cw-debug-msg cw-debug-msg-${msg.role}`}
+                >
+                  <div className="cw-debug-role">
+                    {msg.role === "user" ? "你" : projectName || "Agent"}
+                  </div>
+                  <div className="cw-debug-content">
+                    {msg.role === "user" ? (
+                      msg.content
+                    ) : msg.error ? (
+                      <span className="cw-debug-msg-error">{msg.error}</span>
+                    ) : msg.blocks && msg.blocks.length > 0 ? (
+                      <Blocks blocks={msg.blocks} onAction={() => {}} />
+                    ) : (
+                      msg.content || "..."
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="cw-debug-composer">
+        <div className="cw-debug-composerbox">
+          <textarea
+            className="cw-debug-input"
+            rows={1}
+            value={input}
+            placeholder={ready ? "输入测试消息..." : "调试环境启动后可输入"}
+            disabled={!ready || busy}
+            onChange={(e) => onInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                onSend();
+              }
+            }}
+          />
+          <button
+            type="button"
+            className="cw-debug-send"
+            title="发送"
+            disabled={!ready || busy || !input.trim()}
+            onClick={onSend}
+          >
+            {phase === "sending" ? (
+              <Loader2 className="cw-i cw-spin" />
+            ) : (
+              <Send className="cw-i" />
+            )}
+          </button>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
 /* ================================================================ *
  * Main component
  * ================================================================ */
@@ -823,21 +1060,38 @@ interface CustomCreateProps extends CreateModeProps {
   initialDraft?: AgentDraft;
   /** Current user identity, tagged onto deployed runtimes for the 管理 Agent view. */
   author?: string;
+  /** Global UI feature gates loaded from the backend. */
+  features?: UiFeatures;
 }
 
-export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, author = "" }: CustomCreateProps) {
+export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, author = "", features }: CustomCreateProps) {
   void onCreate; // outcome is the in-pane project preview, not a navigation
   void onBack; // no footer nav in the single-scroll layout; back lives in app chrome
   const [draft, setDraft] = useState<AgentDraft>(() => initialDraft ?? emptyDraft());
   const [showErrors, setShowErrors] = useState(false);
   const [project, setProject] = useState<AgentProject | null>(null);
   const [building, setBuilding] = useState(false);
+  const debugEnabled = features?.generatedAgentTestRun === true;
+  const debugDisabledReason =
+    features?.generatedAgentTestRunDisabledReason ||
+    "当前后端暂不支持生成 Agent 调试运行。";
+  const [debugPhase, setDebugPhase] = useState<DebugPhase>("idle");
+  const [debugRun, setDebugRun] = useState<GeneratedAgentTestRun | null>(null);
+  const debugRunRef = useRef<GeneratedAgentTestRun | null>(null);
+  const [debugSessionId, setDebugSessionId] = useState<string | null>(null);
+  const [debugProjectName, setDebugProjectName] = useState("");
+  const [debugLogs, setDebugLogs] = useState<string[]>([]);
+  const [debugMessages, setDebugMessages] = useState<DebugMessage[]>([]);
+  const [debugInput, setDebugInput] = useState("");
+  const [debugError, setDebugError] = useState<string | null>(null);
+  const [debugSnapshot, setDebugSnapshot] = useState("");
   // The section nearest the top of the scroll container (scroll-spy) — drives
   // the right-hand step nav highlight.
   const [activeId, setActiveId] = useState<StepId>("type");
   // YAML import: file input + last error message.
   const yamlInputRef = useRef<HTMLInputElement>(null);
   const [importErr, setImportErr] = useState("");
+  const [buildErr, setBuildErr] = useState("");
   const onImportYaml = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = ""; // allow re-importing the same file
@@ -858,6 +1112,17 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
   const [selectedPath, setSelectedPath] = useState<NodePath>([]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const sectionRefs = useRef<Partial<Record<StepId, HTMLElement | null>>>({});
+
+  useEffect(() => {
+    return () => {
+      const run = debugRunRef.current;
+      if (run) {
+        deleteGeneratedAgentTestRun(run.runId).catch((err) =>
+          console.warn("清理调试运行失败", err),
+        );
+      }
+    };
+  }, []);
 
   // Section wrapper: registers a ref for scroll-spy + renders the heading.
   // IMPORTANT: keep a STABLE identity (stored in a ref). If this were declared
@@ -942,6 +1207,8 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
   // Whole-tree validation: every node must satisfy its type's requirements.
   const problems = useMemo(() => treeProblems(draft), [draft]);
   const canFinish = problems.length === 0;
+  const currentDebugSnapshot = useMemo(() => debugSnapshotKey(draft), [draft]);
+  const debugStale = Boolean(debugRun && debugSnapshot && debugSnapshot !== currentDebugSnapshot);
 
   // Per-step completion, for the nav's done-checkmarks + progress fill.
   const completion = useMemo<Record<StepId, boolean>>(
@@ -1011,80 +1278,142 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
     return () => observer.disconnect();
   }, [project]);
 
-  const finish = async () => {
-    if (!canFinish) {
-      setShowErrors(true);
-      // Select the first node that still has a missing required field.
-      if (problems[0]) setSelectedPath(problems[0].path);
-      return;
+  const requireCompleteDraft = () => {
+    if (canFinish) return true;
+    setShowErrors(true);
+    if (problems[0]) setSelectedPath(problems[0].path);
+    return false;
+  };
+
+  const cleanupDebugRun = async () => {
+    const run = debugRunRef.current;
+    debugRunRef.current = null;
+    setDebugRun(null);
+    setDebugSessionId(null);
+    setDebugSnapshot("");
+    if (run) {
+      try {
+        await deleteGeneratedAgentTestRun(run.runId);
+      } catch (err) {
+        console.warn("清理调试运行失败", err);
+      }
     }
+  };
+
+  const finish = async () => {
+    if (!requireCompleteDraft()) return;
     // NOTE: do NOT call onCreate() here — it navigates away from the create
     // view. The generated project preview below IS the outcome of this step.
 
-    const proj = generateProject(draft);
-
-    // Collect skill selections across EVERY agent in the tree (dedup by a
-    // source-aware key) — skills can be chosen on any LLM node, not just root.
-    const allSkills: SelectedSkill[] = [];
-    const seenSkill = new Set<string>();
-    const collectSkills = (n: AgentDraft) => {
-      for (const s of n.selectedSkills ?? []) {
-        const key =
-          s.source === "skillhub"
-            ? `hub:${s.namespace}/${s.slug}`
-            : s.source === "local"
-              ? `local:${s.folder}`
-              : `ss:${s.skillSpaceId}/${s.skillId}/${s.version || ""}`;
-        if (!seenSkill.has(key)) {
-          seenSkill.add(key);
-          allSkills.push(s);
-        }
-      }
-      (n.subAgents ?? []).forEach(collectSkills);
-    };
-    collectSkills(draft);
-
-    // Materialize files per source in parallel. Per-skill failures are skipped
-    // (logged) so one bad skill can't abort the build. Local skills already
-    // carry their files; hub + skillspace skills are fetched here.
-    if (allSkills.length > 0) {
-      setBuilding(true);
-      try {
-        const results = await Promise.all(
-          allSkills.map((s) => {
-            const p =
-              s.source === "local"
-                ? Promise.resolve(s.localFiles ?? [])
-                : s.source === "skillspace"
-                  ? downloadSkillSpaceSkill(
-                      s.skillSpaceId!,
-                      s.skillId!,
-                      s.version,
-                      s.folder,
-                    )
-                  : downloadSkillHubSkill(s);
-            return p.catch((err: unknown) => {
-              console.warn(`下载技能失败：${s.name}`, err);
-              return [];
-            });
-          }),
-        );
-        const existing = new Set(proj.files.map((f) => f.path));
-        for (const files of results) {
-          for (const f of files) {
-            // Generated files win on collision (unlikely — skills live under skills/).
-            if (!existing.has(f.path)) {
-              proj.files.push(f);
-              existing.add(f.path);
-            }
-          }
-        }
-      } finally {
-        setBuilding(false);
-      }
+    setBuilding(true);
+    setBuildErr("");
+    try {
+      const proj = await generateAgentProject(draft);
+      setProject(proj);
+    } catch (err) {
+      setBuildErr(`生成项目失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBuilding(false);
     }
+  };
 
-    setProject(proj);
+  const startDebug = async () => {
+    if (!debugEnabled || building) return;
+    if (!requireCompleteDraft()) return;
+
+    const snapshot = debugSnapshotKey(draft);
+    setDebugError(null);
+    setDebugMessages([]);
+    setDebugInput("");
+    setDebugLogs([]);
+    setDebugPhase("building");
+
+    try {
+      await cleanupDebugRun();
+      const logs: string[] = [];
+      const pushLog = (line: string) => {
+        logs.push(line);
+        setDebugLogs([...logs]);
+      };
+      pushLog("提交 Agent 配置");
+      setDebugPhase("starting");
+      pushLog("后端校验并生成调试项目");
+      const run = await createGeneratedAgentTestRun(draft);
+      debugRunRef.current = run;
+      setDebugRun(run);
+      setDebugProjectName(run.appName);
+      pushLog("创建调试会话");
+      const sid = await createGeneratedAgentTestSession(run.runId, "test_user");
+      setDebugSessionId(sid);
+      setDebugSnapshot(snapshot);
+      pushLog("调试环境就绪");
+      setDebugPhase("ready");
+    } catch (err) {
+      setDebugError(err instanceof Error ? err.message : String(err));
+      setDebugPhase("error");
+    }
+  };
+
+  const sendDebugMessage = async () => {
+    const run = debugRunRef.current;
+    const sessionId = debugSessionId;
+    const text = debugInput.trim();
+    if (!run || !sessionId || !text || debugPhase === "sending") return;
+
+    setDebugInput("");
+    setDebugPhase("sending");
+    setDebugMessages((prev) => [
+      ...prev,
+      { role: "user", content: text },
+      { role: "assistant", content: "", blocks: [] },
+    ]);
+
+    try {
+      let acc = emptyAcc();
+      let fullText = "";
+      for await (const event of runGeneratedAgentTestSSE({
+        runId: run.runId,
+        userId: "test_user",
+        sessionId,
+        text,
+      })) {
+        const error = event.error || event.errorMessage || event.error_message;
+        if (error) {
+          setDebugMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last?.role === "assistant") last.error = String(error);
+            return next;
+          });
+          break;
+        }
+        acc = applyEvent(acc, event);
+        fullText = acc.blocks
+          .filter((b) => b.kind === "text")
+          .map((b) => (b as { text: string }).text)
+          .join("");
+        setDebugMessages((prev) => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (last?.role === "assistant") {
+            last.content = fullText;
+            last.blocks = acc.blocks;
+          }
+          return next;
+        });
+      }
+      setDebugPhase("ready");
+    } catch (err) {
+      setDebugMessages((prev) => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+        if (last?.role === "assistant") {
+          last.error = err instanceof Error ? err.message : String(err);
+        }
+        return next;
+      });
+      setDebugPhase("ready");
+    }
   };
 
   // ----------------------------------------------------------------
@@ -1194,7 +1523,9 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
                       <span className="cw-typeradio-main">
                         <span className="cw-typeradio-head">
                           <Icon className="cw-typeradio-icon" />
-                          <span className="cw-typeradio-title">{t.label}</span>
+                          <span className="cw-typeradio-title">
+                            {t.id === "a2a" ? "A2A 远程" : t.label}
+                          </span>
                         </span>
                       </span>
                     </label>
@@ -1597,6 +1928,21 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
           </div>{/* cw-detail-inner */}
           </div>{/* cw-detail-scroll */}
         </div>{/* cw-detail */}
+        <DebugPanel
+          enabled={debugEnabled}
+          disabledReason={debugDisabledReason}
+          phase={debugPhase}
+          stale={debugStale}
+          run={debugRun}
+          projectName={debugProjectName || draft.name}
+          logs={debugLogs}
+          messages={debugMessages}
+          input={debugInput}
+          error={debugError}
+          onInput={setDebugInput}
+          onSend={sendDebugMessage}
+          onRestart={startDebug}
+        />
       </div>{/* cw-editor */}
       <footer className="cw-footer-bar">
         <div className="cw-footer-status">
@@ -1617,6 +1963,7 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
         </div>
         <div className="cw-footer-actions">
           {importErr && <span className="cw-footer-importerr">{importErr}</span>}
+          {buildErr && <span className="cw-footer-importerr">{buildErr}</span>}
           <input
             ref={yamlInputRef}
             type="file"
@@ -1647,6 +1994,24 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
           >
             <FileDown className="cw-i" />
             导出 YAML
+          </button>
+          <button
+            type="button"
+            className="cw-btn cw-btn-soft"
+            onClick={startDebug}
+            disabled={!debugEnabled || !canFinish || building || debugPhase === "building" || debugPhase === "starting" || debugPhase === "sending"}
+            title={
+              debugEnabled
+                ? "生成当前 Agent 代码并启动临时调试环境"
+                : debugDisabledReason
+            }
+          >
+            {debugPhase === "building" || debugPhase === "starting" ? (
+              <Loader2 className="cw-i cw-spin" />
+            ) : (
+              <Bug className="cw-i" />
+            )}
+            调试
           </button>
           <button
             type="button"

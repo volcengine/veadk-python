@@ -1,10 +1,9 @@
 // Serialize an AgentDraft to / from a human-readable "agent structure" YAML.
-// The YAML mirrors the codegen config shape (the same fields normalizeDraft
-// reads + selectedSkills), so it round-trips cleanly and can be imported back
-// into the custom-mode wizard.
+// The YAML mirrors the AgentDraft config shape, so it round-trips cleanly and
+// can be imported back into the custom-mode wizard.
 
 import { parse, stringify } from "yaml";
-import { normalizeDraft } from "./codegen";
+import { normalizeDraft } from "./normalizeDraft";
 import type { AgentDraft } from "./types";
 
 /** Build a clean, minimal config object (omit empty/false fields). */
