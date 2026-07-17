@@ -98,15 +98,17 @@ class FakeStreamingRunner:
             }
         )
         yield SimpleNamespace(
+            partial=True,
             content=SimpleNamespace(
                 parts=[
                     SimpleNamespace(text="hel", thought=False),
                     SimpleNamespace(text="thinking", thought=True),
                 ]
-            )
+            ),
         )
         yield SimpleNamespace(
-            content=SimpleNamespace(parts=[SimpleNamespace(text="lo", thought=False)])
+            partial=True,
+            content=SimpleNamespace(parts=[SimpleNamespace(text="lo", thought=False)]),
         )
 
 
