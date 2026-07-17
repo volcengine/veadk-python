@@ -45,6 +45,139 @@ def _read_attr(obj: Any, *path: str) -> Any:
     return current
 
 
+def _stringify_card_elements(elements: Any) -> str:
+    if elements is None:
+        return ""
+    if isinstance(elements, str):
+        return elements
+    if isinstance(elements, (list, tuple)):
+        parts: list[str] = []
+        for element in elements:
+            piece = _stringify_card_elements(element)
+            if piece:
+                parts.append(piece)
+        return "\n".join(parts)
+    if isinstance(elements, dict):
+        for key in ("content", "text", "plain_text", "value"):
+            value = elements.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+            if isinstance(value, dict):
+                nested = _stringify_card_elements(value)
+                if nested:
+                    return nested
+        nested_parts: list[str] = []
+        for key in ("elements", "columns", "actions", "fields"):
+            nested = _stringify_card_elements(elements.get(key))
+            if nested:
+                nested_parts.append(nested)
+        if nested_parts:
+            return "\n".join(nested_parts)
+        return ""
+    text = getattr(elements, "text", None) or getattr(elements, "content", None)
+    if isinstance(text, str):
+        return text
+    return ""
+
+
+try:
+    from lark_oapi.channel.types import (
+        InteractiveContent,
+        MergeForwardContent,
+        TextContent,
+    )
+
+    _LARK_TYPES_AVAILABLE = True
+except ImportError:
+    InteractiveContent = None  # type: ignore[assignment,misc]
+    MergeForwardContent = None  # type: ignore[assignment,misc]
+    TextContent = None  # type: ignore[assignment,misc]
+    _LARK_TYPES_AVAILABLE = False
+
+
+def _extract_interactive_text(content: Any) -> str:
+    """Extract title + body text from an ``InteractiveContent``-like value.
+
+    Prefers ``content.raw['title'] / ['elements']`` (matching lark_oapi's
+    ``InteractiveContent.raw``, a dict), then falls back to attribute access
+    for duck-typed test doubles.
+    """
+    raw = getattr(content, "raw", None)
+    title = ""
+    elements: Any = None
+    if isinstance(raw, dict):
+        title = str(raw.get("title", "") or "")
+        elements = raw.get("elements")
+    elif raw is not None:
+        title = str(getattr(raw, "title", "") or "")
+        elements = getattr(raw, "elements", None)
+    body = _stringify_card_elements(elements)
+    if title and body:
+        return f"{title}\n{body}"
+    return title or body
+
+
+def _extract_text_content(content: Any) -> str:
+    text = getattr(content, "text", None)
+    if isinstance(text, str) and text:
+        return text
+    raw = getattr(content, "raw", None)
+    if isinstance(raw, dict):
+        candidate = raw.get("text")
+        if isinstance(candidate, str):
+            return candidate
+    return ""
+
+
+def _extract_merge_forward_text(content: Any) -> str:
+    items = getattr(content, "items", None) or []
+    parts: list[str] = []
+    for item in items:
+        sub_content = getattr(item, "content", None)
+        piece = _dispatch_content(sub_content)
+        if piece:
+            parts.append(piece)
+    return "\n\n".join(parts)
+
+
+def _dispatch_content(content: Any) -> str:
+    """Route ``MessageContent`` to a kind-specific extractor.
+
+    Uses ``isinstance`` against the concrete ``lark_oapi.channel.types`` classes
+    when available, and falls back to the string ``kind`` discriminator so
+    hand-crafted objects (tests, mocks) still work.
+    """
+    if content is None:
+        return ""
+
+    if _LARK_TYPES_AVAILABLE:
+        if isinstance(content, InteractiveContent):
+            return _extract_interactive_text(content)
+        if isinstance(content, MergeForwardContent):
+            return _extract_merge_forward_text(content)
+        if isinstance(content, TextContent):
+            return _extract_text_content(content)
+
+    kind = getattr(content, "kind", None)
+    if kind == "interactive":
+        return _extract_interactive_text(content)
+    if kind == "merge_forward":
+        return _extract_merge_forward_text(content)
+    if kind == "text":
+        return _extract_text_content(content)
+
+    return _extract_text_content(content)
+
+
+def _extract_message_text(message: Any) -> str:
+    content = getattr(message, "content", None)
+    text = _dispatch_content(content)
+    if text:
+        return text
+    fallback = getattr(message, "content_text", "")
+    return str(fallback or "")
+
+
 @dataclass(slots=True)
 class FeishuMessageContext:
     message_id: str
@@ -171,13 +304,13 @@ class FeishuChannelExtension:
         return result
 
     async def _on_message(self, message: Any) -> None:
-        text = str(getattr(message, "content_text", "") or "").strip()
+        text = _extract_message_text(message).strip()
         if self.ignore_empty_messages and not text:
             logger.debug(
                 f"Ignore empty Feishu message: {getattr(message, 'message_id', '')}"
             )
             return
-
+        logger.debug(f"Received Feishu message: {getattr(message, 'message_id', '')}")
         context = self.build_message_context(message=message, text=text)
 
         if self.reactions and context.message_id:
@@ -262,10 +395,15 @@ class FeishuChannelExtension:
                         new_message=converted_message,
                         run_config=run_config,
                     ):
-                        if event.content and event.content.parts:
-                            for part in event.content.parts:
-                                if not getattr(part, "thought", False) and part.text:
-                                    await stream.append(part.text)
+                        if not getattr(event, "partial", False):
+                            continue
+                        if not (event.content and event.content.parts):
+                            continue
+                        for part in event.content.parts:
+                            if getattr(part, "thought", False):
+                                continue
+                            if part.text:
+                                await stream.append(part.text)
 
             await self._maybe_await(
                 self.channel.stream(
@@ -334,9 +472,7 @@ class FeishuChannelExtension:
             union_id=union_id,
             open_id=open_id,
             raw_message=message,
-            text=text
-            if text is not None
-            else str(getattr(message, "content_text", "") or ""),
+            text=text if text is not None else _extract_message_text(message),
         )
 
     def _build_channel(
