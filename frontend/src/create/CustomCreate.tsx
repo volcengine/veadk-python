@@ -46,12 +46,9 @@ import {
   TRACING_EXPORTERS,
   type BackendOption,
 } from "./veadkCatalog";
-import { generateProject } from "./codegen";
 import { draftToYaml, yamlToDraft } from "./configYaml";
 import type { AgentProject } from "./project";
 import type { SkillSource } from "./skills/types";
-import { downloadSkillHubSkill } from "./skills/skillhub";
-import { downloadSkillSpaceSkill } from "./skills/skillspace";
 import { SkillHubPicker } from "./SkillHubPicker";
 import { LocalPicker } from "./LocalPicker";
 import { SkillSpacePicker } from "./SkillSpacePicker";
@@ -62,6 +59,7 @@ import {
   createGeneratedAgentTestSession,
   deleteGeneratedAgentTestRun,
   deployAgentkitProject,
+  generateAgentProject,
   runGeneratedAgentTestSSE,
 } from "../adk/client";
 import type { DeployStage, GeneratedAgentTestRun, UiFeatures } from "../adk/client";
@@ -1271,77 +1269,6 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
     return () => observer.disconnect();
   }, [project]);
 
-  const buildProjectFromDraft = async (
-    onLog?: (line: string) => void,
-  ): Promise<AgentProject> => {
-    onLog?.("生成 Agent 项目代码");
-    const proj = generateProject(draft);
-
-    // Collect skill selections across EVERY agent in the tree (dedup by a
-    // source-aware key) — skills can be chosen on any LLM node, not just root.
-    const allSkills: SelectedSkill[] = [];
-    const seenSkill = new Set<string>();
-    const collectSkills = (n: AgentDraft) => {
-      for (const s of n.selectedSkills ?? []) {
-        const key =
-          s.source === "skillhub"
-            ? `hub:${s.namespace}/${s.slug}`
-            : s.source === "local"
-              ? `local:${s.folder}`
-              : `ss:${s.skillSpaceId}/${s.skillId}/${s.version || ""}`;
-        if (!seenSkill.has(key)) {
-          seenSkill.add(key);
-          allSkills.push(s);
-        }
-      }
-      (n.subAgents ?? []).forEach(collectSkills);
-    };
-    collectSkills(draft);
-
-    // Materialize files per source in parallel. Per-skill failures are skipped
-    // (logged) so one bad skill can't abort the build. Local skills already
-    // carry their files; hub + skillspace skills are fetched here.
-    if (allSkills.length > 0) {
-      onLog?.(`下载 ${allSkills.length} 个技能文件`);
-      setBuilding(true);
-      try {
-        const results = await Promise.all(
-          allSkills.map((s) => {
-            const p =
-              s.source === "local"
-                ? Promise.resolve(s.localFiles ?? [])
-                : s.source === "skillspace"
-                  ? downloadSkillSpaceSkill(
-                      s.skillSpaceId!,
-                      s.skillId!,
-                      s.version,
-                      s.folder,
-                    )
-                  : downloadSkillHubSkill(s);
-            return p.catch((err: unknown) => {
-              console.warn(`下载技能失败：${s.name}`, err);
-              return [];
-            });
-          }),
-        );
-        const existing = new Set(proj.files.map((f) => f.path));
-        for (const files of results) {
-          for (const f of files) {
-            // Generated files win on collision (unlikely — skills live under skills/).
-            if (!existing.has(f.path)) {
-              proj.files.push(f);
-              existing.add(f.path);
-            }
-          }
-        }
-      } finally {
-        setBuilding(false);
-      }
-    }
-
-    return proj;
-  };
-
   const requireCompleteDraft = () => {
     if (canFinish) return true;
     setShowErrors(true);
@@ -1369,8 +1296,13 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
     // NOTE: do NOT call onCreate() here — it navigates away from the create
     // view. The generated project preview below IS the outcome of this step.
 
-    const proj = await buildProjectFromDraft();
-    setProject(proj);
+    setBuilding(true);
+    try {
+      const proj = await generateAgentProject(draft);
+      setProject(proj);
+    } finally {
+      setBuilding(false);
+    }
   };
 
   const startDebug = async () => {
@@ -1391,13 +1323,13 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
         logs.push(line);
         setDebugLogs([...logs]);
       };
-      const proj = await buildProjectFromDraft(pushLog);
-      setDebugProjectName(proj.name);
-      pushLog("校验并启动临时运行环境");
+      pushLog("提交 Agent 配置");
       setDebugPhase("starting");
-      const run = await createGeneratedAgentTestRun(proj.name, proj.files);
+      pushLog("后端校验并生成调试项目");
+      const run = await createGeneratedAgentTestRun(draft);
       debugRunRef.current = run;
       setDebugRun(run);
+      setDebugProjectName(run.appName);
       pushLog("创建调试会话");
       const sid = await createGeneratedAgentTestSession(run.runId, "test_user");
       setDebugSessionId(sid);

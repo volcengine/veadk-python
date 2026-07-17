@@ -4,6 +4,8 @@
 
 import { withAuth } from "./auth";
 import { parseSSE } from "./sse";
+import type { AgentProject } from "../create/project";
+import type { AgentDraft } from "../create/types";
 
 /** An ADK event as serialised over `/run_sse` (camelCase, by_alias=True). */
 export interface AdkUsage {
@@ -636,14 +638,28 @@ export interface GeneratedAgentTestRun {
   expiresAt: number;
 }
 
+export async function generateAgentProject(
+  draft: AgentDraft,
+): Promise<AgentProject> {
+  const res = await apiFetch("/web/generated-agent-projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ draft }),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(t || `生成项目失败 (${res.status})`);
+  }
+  return res.json();
+}
+
 export async function createGeneratedAgentTestRun(
-  name: string,
-  files: { path: string; content: string }[],
+  draft: AgentDraft,
 ): Promise<GeneratedAgentTestRun> {
   const res = await apiFetch("/web/generated-agent-test-runs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, files }),
+    body: JSON.stringify({ draft }),
   });
   if (!res.ok) {
     const t = await res.text().catch(() => "");

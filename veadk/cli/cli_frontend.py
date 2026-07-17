@@ -854,6 +854,21 @@ def _run_frontend_server(
     from dataclasses import dataclass
     from pathlib import Path as PathlibPath
     from urllib.parse import quote
+    from pydantic import ValidationError
+
+    from veadk.cli.generated_agent_codegen import (
+        GeneratedAgentProjectRequest,
+        GeneratedAgentTestRunRequest,
+        GeneratedProject,
+        generate_project_from_draft,
+        normalize_and_validate_draft,
+    )
+    from veadk.cli.generated_agent_security import (
+        DebugPolicyError,
+        validate_debug_policy,
+        validate_project_policy,
+    )
+    from veadk.cli.generated_agent_skills import materialize_selected_skills
 
     _TEST_RUN_MAX_FILES = 100
     _TEST_RUN_MAX_FILE_BYTES = 256 * 1024
@@ -962,11 +977,62 @@ def _run_frontend_server(
         )
         return env
 
-    def _validate_and_write_generated_project(
-        name: str, files: list[dict], temp_dir: str
+    def _http_policy_error(exc: Exception) -> HTTPException:
+        return HTTPException(status_code=400, detail=str(exc))
+
+    async def _resolve_skillspace_skill_md(
+        space_id: str,
+        skill_id: str,
+        version: str | None,
     ) -> str:
-        if not name:
+        from agentkit.sdk.skills.types import GetSkillVersionRequest
+
+        try:
+            client = _skills_client("cn-beijing")
+            resp = client.get_skill_version(
+                GetSkillVersionRequest(id=skill_id, skill_version=version)
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(
+                f"GetSkillVersion({skill_id}@{version}) error: {e}",
+                exc_info=True,
+            )
+            raise HTTPException(status_code=502, detail=f"SkillSpaces API error: {e}")
+        if not resp.skill_md:
+            raise HTTPException(
+                status_code=404, detail="Skill version has no SKILL.md content"
+            )
+        return str(resp.skill_md)
+
+    async def _generate_project_from_request(data: dict, *, debug: bool) -> GeneratedProject:
+        try:
+            if debug:
+                req = GeneratedAgentTestRunRequest.model_validate(data)
+            else:
+                req = GeneratedAgentProjectRequest.model_validate(data)
+            draft = normalize_and_validate_draft(req.draft)
+            if debug:
+                validate_debug_policy(draft)
+            else:
+                validate_project_policy(draft)
+            project = generate_project_from_draft(draft)
+            await materialize_selected_skills(
+                draft,
+                project,
+                resolve_skillspace_detail=_resolve_skillspace_skill_md,
+            )
+            return project
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=e.errors()) from e
+        except DebugPolicyError as e:
+            raise _http_policy_error(e) from e
+
+    def _write_generated_project(project: GeneratedProject, temp_dir: str) -> str:
+        if not project.name:
             raise HTTPException(status_code=400, detail="Agent name is required")
+        files = project.files
         if not files:
             raise HTTPException(status_code=400, detail="No files provided")
         if len(files) > _TEST_RUN_MAX_FILES:
@@ -975,8 +1041,8 @@ def _run_frontend_server(
         base = PathlibPath(temp_dir).resolve()
         total = 0
         for item in files:
-            file_path = item.get("path")
-            content = item.get("content", "")
+            file_path = item.path
+            content = item.content
             if not isinstance(file_path, str) or not file_path.strip():
                 raise HTTPException(status_code=400, detail="Invalid file path")
             if not isinstance(content, str):
@@ -1006,8 +1072,8 @@ def _run_frontend_server(
             for p in agents_dir.iterdir()
             if p.is_dir() and (p / "agent.py").is_file()
         ) if agents_dir.is_dir() else []
-        if name in apps:
-            return name
+        if project.name in apps:
+            return project.name
         if len(apps) == 1:
             return apps[0]
         raise HTTPException(
@@ -1045,14 +1111,16 @@ def _run_frontend_server(
             detail=f"Debug runner did not become ready: {last_error}",
         )
 
+    @app.post("/web/generated-agent-projects")
+    async def _generate_agent_project(request: Request):
+        data = await request.json()
+        project = await _generate_project_from_request(data, debug=False)
+        return project.model_dump()
+
     @app.post("/web/generated-agent-test-runs")
     async def _create_generated_agent_test_run(request: Request):
         _cleanup_expired_test_runs()
         data = await request.json()
-        name = (data.get("name") or "").strip()
-        files = data.get("files", [])
-        if not isinstance(files, list):
-            raise HTTPException(status_code=400, detail="files must be a list")
 
         reserved = False
         with _test_runs_lock:
@@ -1065,10 +1133,12 @@ def _run_frontend_server(
             _test_runs_creating["count"] += 1
             reserved = True
 
-        temp_dir = tempfile.mkdtemp(prefix="veadk_generated_agent_test_")
+        temp_dir = ""
         proc = None
         try:
-            app_name = _validate_and_write_generated_project(name, files, temp_dir)
+            project = await _generate_project_from_request(data, debug=True)
+            temp_dir = tempfile.mkdtemp(prefix="veadk_generated_agent_test_")
+            app_name = _write_generated_project(project, temp_dir)
             port = _free_local_port()
             base_url = f"http://127.0.0.1:{port}"
             cmd = [
@@ -1114,7 +1184,8 @@ def _run_frontend_server(
                     _GeneratedAgentTestRun("", "", temp_dir, "", proc, 0)
                 )
             else:
-                shutil.rmtree(temp_dir, ignore_errors=True)
+                if temp_dir:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
             raise
         finally:
             if reserved:
