@@ -12,11 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from types import SimpleNamespace
+import asyncio
+import sys
+import threading
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from veadk.extensions.feishu_channel import FeishuChannelExtension
+from veadk.extensions.feishu_channel import (
+    FeishuChannelExtension,
+    _call_in_fresh_event_loop,
+)
 
 
 @pytest.fixture
@@ -53,6 +59,80 @@ class FakeStreamChannel(FakeChannel):
         controller = FakeStreamController()
         await spec["markdown"](controller)
         self.stream_calls.append((chat_id, controller.chunks, options))
+
+
+class FakeBlockingChannel(FakeChannel):
+    def __init__(self):
+        super().__init__()
+        self.connect_thread_id = None
+        self.disconnect_thread_id = None
+        self.connect_loop_running = None
+        self.disconnect_loop_running = None
+
+    def connect(self):
+        self.connect_thread_id = threading.get_ident()
+        self.connect_loop_running = asyncio.get_event_loop().is_running()
+        return "connected"
+
+    def disconnect(self):
+        self.disconnect_thread_id = threading.get_ident()
+        self.disconnect_loop_running = asyncio.get_event_loop().is_running()
+        return "disconnected"
+
+
+class FakeLoopBoundChannel(FakeChannel):
+    created = []
+
+    def __init__(self, **kwargs):
+        super().__init__()
+        self.kwargs = kwargs
+        self.init_thread_id = threading.get_ident()
+        try:
+            self.init_loop_running = asyncio.get_event_loop().is_running()
+        except RuntimeError:
+            self.init_loop_running = False
+        self.connect_thread_id = None
+        self.connect_loop_running = None
+        FakeLoopBoundChannel.created.append(self)
+
+    def connect(self):
+        self.connect_thread_id = threading.get_ident()
+        try:
+            self.connect_loop_running = asyncio.get_event_loop().is_running()
+        except RuntimeError:
+            self.connect_loop_running = False
+        return "connected"
+
+
+class FakeLegacyChannel(FakeChannel):
+    created = []
+
+    def __init__(self, **kwargs):
+        super().__init__()
+        self.kwargs = kwargs
+        FakeLegacyChannel.created.append(self)
+
+
+class FakeStartStopChannel(FakeChannel):
+    def __init__(self):
+        super().__init__()
+        self.start_called = False
+        self.stop_called = False
+        self.start_loop_running = None
+        self.stop_loop_running = None
+
+    async def connect(self):
+        raise RuntimeError("async connect should not be used")
+
+    def start(self):
+        self.start_called = True
+        self.start_loop_running = asyncio.get_event_loop().is_running()
+        return "started"
+
+    def stop(self):
+        self.stop_called = True
+        self.stop_loop_running = asyncio.get_event_loop().is_running()
+        return "stopped"
 
 
 class FakeRunner:
@@ -219,3 +299,96 @@ async def test_extension_streaming_uses_markdown_producer_controller():
     ]
     assert len(runner.run_async_calls) == 1
     assert channel.stream_calls == [("oc_chat", ["hel", "lo"], {"reply_to": "om_001"})]
+
+
+@pytest.mark.anyio
+async def test_extension_runs_sync_channel_connect_in_worker_thread():
+    runner = FakeRunner()
+    channel = FakeBlockingChannel()
+    extension = FeishuChannelExtension(runner=runner, channel=channel)
+    main_thread_id = threading.get_ident()
+
+    assert await extension.connect() == "connected"
+    assert await extension.disconnect() == "disconnected"
+
+    assert channel.connect_thread_id is not None
+    assert channel.disconnect_thread_id is not None
+    assert channel.connect_thread_id != main_thread_id
+    assert channel.disconnect_thread_id != main_thread_id
+    assert channel.connect_loop_running is False
+    assert channel.disconnect_loop_running is False
+
+
+@pytest.mark.anyio
+async def test_extension_can_be_constructed_and_connected_in_worker_thread(monkeypatch):
+    fake_lark = ModuleType("lark_oapi")
+    fake_channel_module = ModuleType("lark_oapi.channel")
+    fake_channel_module.FeishuChannel = FakeLoopBoundChannel
+    monkeypatch.setitem(sys.modules, "lark_channel", None)
+    monkeypatch.setitem(sys.modules, "lark_oapi", fake_lark)
+    monkeypatch.setitem(sys.modules, "lark_oapi.channel", fake_channel_module)
+    FakeLoopBoundChannel.created = []
+    main_thread_id = threading.get_ident()
+
+    def build_and_connect():
+        extension = FeishuChannelExtension(
+            runner=FakeRunner(),
+            app_id="cli_test",
+            app_secret="secret",
+            channel_kwargs={"transport": "ws"},
+        )
+        return extension.channel.connect()
+
+    assert (
+        await asyncio.to_thread(_call_in_fresh_event_loop, build_and_connect)
+        == "connected"
+    )
+
+    channel = FakeLoopBoundChannel.created[0]
+    assert channel.kwargs == {
+        "app_id": "cli_test",
+        "app_secret": "secret",
+        "transport": "ws",
+    }
+    assert channel.init_thread_id != main_thread_id
+    assert channel.connect_thread_id == channel.init_thread_id
+    assert channel.init_loop_running is False
+    assert channel.connect_loop_running is False
+
+
+def test_extension_prefers_lark_channel_sdk(monkeypatch):
+    fake_lark_channel = ModuleType("lark_channel")
+    fake_lark_channel.FeishuChannel = FakeLoopBoundChannel
+    fake_lark_oapi = ModuleType("lark_oapi")
+    fake_legacy_channel_module = ModuleType("lark_oapi.channel")
+    fake_legacy_channel_module.FeishuChannel = FakeLegacyChannel
+    monkeypatch.setitem(sys.modules, "lark_channel", fake_lark_channel)
+    monkeypatch.setitem(sys.modules, "lark_oapi", fake_lark_oapi)
+    monkeypatch.setitem(sys.modules, "lark_oapi.channel", fake_legacy_channel_module)
+    FakeLoopBoundChannel.created = []
+    FakeLegacyChannel.created = []
+
+    extension = FeishuChannelExtension(
+        runner=FakeRunner(),
+        app_id="cli_test",
+        app_secret="secret",
+        channel_kwargs={"transport": "ws"},
+    )
+
+    assert extension.channel is FakeLoopBoundChannel.created[0]
+    assert FakeLegacyChannel.created == []
+
+
+@pytest.mark.anyio
+async def test_extension_prefers_sync_start_stop_over_async_connect():
+    runner = FakeRunner()
+    channel = FakeStartStopChannel()
+    extension = FeishuChannelExtension(runner=runner, channel=channel)
+
+    assert await extension.connect() == "started"
+    assert await extension.disconnect() == "stopped"
+
+    assert channel.start_called is True
+    assert channel.stop_called is True
+    assert channel.start_loop_running is False
+    assert channel.stop_loop_running is False

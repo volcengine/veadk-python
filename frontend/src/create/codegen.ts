@@ -315,14 +315,24 @@ function renderEnvExample(env: EnvVar[]): string {
   return lines.join("\n") + "\n";
 }
 
-function renderRequirements(extras: Set<string>): string {
-  const list = [...extras].sort();
-  const pkg = list.length ? `veadk-python[${list.join(",")}]` : "veadk-python";
-  return `${pkg}\nagentkit-sdk-python\ngoogle-adk\n`;
+function renderRequirements(extras: Set<string>, includeFeishuChannel: boolean): string {
+  const list = [...extras];
+  if (includeFeishuChannel) {
+    list.push("extensions");
+  }
+  const uniqueExtras = [...new Set(list)].sort();
+  const pkg = uniqueExtras.length
+    ? `veadk-python[${uniqueExtras.join(",")}]${includeFeishuChannel ? ">=0.5.34" : ""}`
+    : "veadk-python";
+  const packages = [pkg, "agentkit-sdk-python", "google-adk"];
+  if (includeFeishuChannel) {
+    packages.push("starlette<1.0.0");
+  }
+  return `${packages.join("\n")}\n`;
 }
 
 function renderReadme(name: string, draft: AgentDraft): string {
-  return [
+  const lines = [
     `# ${name}`,
     "",
     draft.description || "由 VeADK Web UI「自定义模式」生成的 Agent 项目。",
@@ -337,13 +347,29 @@ function renderReadme(name: string, draft: AgentDraft): string {
     "",
     "`app.py` 使用 AgentKit AgentServerApp 包裹 `root_agent`，监听 `0.0.0.0:8000`。",
     "",
-  ].join("\n");
+  ];
+  if (draft.deployment?.feishuEnabled) {
+    lines.push(
+      "## 飞书机器人",
+      "",
+      "在 VeADK 前端部署时勾选「飞书」并填写 App ID / App Secret，runtime 会在同一进程内启动 FeishuChannelExtension。",
+      "",
+    );
+  }
+  return lines.join("\n");
 }
 
 /** Main entry: AgentDraft -> AgentProject. */
 export function generateProject(draft: AgentDraft): AgentProject {
   const pkg = ident(draft.name, "my_agent");
   const acc: Acc = { imports: [], preLines: [], env: [...MODEL_ENV], extras: new Set(), usedNames: new Set() };
+  const feishuChannelEnabled = Boolean(draft.deployment?.feishuEnabled);
+  if (feishuChannelEnabled) {
+    acc.env.push(
+      { key: "FEISHU_APP_ID", required: false, placeholder: "cli_xxx", comment: "飞书机器人 App ID（前端部署时填写）" },
+      { key: "FEISHU_APP_SECRET", required: false, placeholder: "your-feishu-app-secret", comment: "飞书机器人 App Secret（前端部署时填写）" },
+    );
+  }
 
   buildAgent(acc, draft, "agent");
 
@@ -353,6 +379,16 @@ export function generateProject(draft: AgentDraft): AgentProject {
   // Add deployment-specific imports
   const deploymentImports = [
     "import os",
+    ...(feishuChannelEnabled
+      ? [
+          "import asyncio",
+          "import inspect",
+          "import threading",
+          "import traceback",
+          "from contextlib import asynccontextmanager",
+          "from veadk.extensions import FeishuChannelExtension",
+        ]
+      : []),
     "from pathlib import Path",
     "from agentkit.apps import AgentkitAgentServerApp",
     "from fastapi.staticfiles import StaticFiles",
@@ -371,24 +407,182 @@ export function generateProject(draft: AgentDraft): AgentProject {
 # Deployment configuration
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
+${feishuChannelEnabled ? `FEISHU_CHANNEL_ENABLED = True
 
+def _get_feishu_channel_method(channel, names):
+    raw_channel = getattr(channel, "channel", None)
+    for target in (raw_channel, channel):
+        if target is None:
+            continue
+        for name in names:
+            method = getattr(target, name, None)
+            if method is not None:
+                return method
+    return None
+
+def _call_feishu_channel_method(loop, method):
+    result = method()
+    if inspect.isawaitable(result):
+        return loop.run_until_complete(result)
+    return result
+
+def _connect_feishu_channel(loop, channel) -> None:
+    connect = _get_feishu_channel_method(channel, ("start", "connect"))
+    if connect is None:
+        raise AttributeError("Feishu channel has no start/connect method")
+    return _call_feishu_channel_method(loop, connect)
+
+def _disconnect_feishu_channel(loop, channel) -> None:
+    disconnect = _get_feishu_channel_method(channel, ("stop", "disconnect"))
+    if disconnect is None:
+        return None
+    return _call_feishu_channel_method(loop, disconnect)
+
+def _stop_feishu_channel_from_lifespan(channel) -> None:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return _disconnect_feishu_channel(loop, channel)
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
+
+def _build_feishu_channel(runner, app_id, app_secret):
+    return FeishuChannelExtension(
+        runner=runner,
+        app_id=app_id,
+        app_secret=app_secret,
+        channel_kwargs={
+            "transport": "ws",
+        },
+        streaming=False,
+        reactions=False,
+    )
+
+def _run_feishu_channel(runner, app_id, app_secret, stop_event, state) -> None:
+    loop = asyncio.new_event_loop()
+    state["loop"] = loop
+    asyncio.set_event_loop(loop)
+    try:
+        while not stop_event.is_set():
+            channel = None
+            try:
+                channel = _build_feishu_channel(runner, app_id, app_secret)
+                state["channel"] = channel
+                print("feishu channel connecting in dedicated thread", flush=True)
+                _connect_feishu_channel(loop, channel)
+                print("feishu channel disconnected; reconnecting in 5s", flush=True)
+            except Exception as exc:
+                if channel is None:
+                    print(
+                        f"feishu channel initialization failed: {type(exc).__name__}: {exc}; reconnecting in 5s",
+                        flush=True,
+                    )
+                    print(traceback.format_exc(), flush=True)
+                else:
+                    print(
+                        f"feishu channel connect failed: {type(exc).__name__}: {exc}; reconnecting in 5s",
+                        flush=True,
+                    )
+            finally:
+                if channel is not None:
+                    try:
+                        _disconnect_feishu_channel(loop, channel)
+                    except Exception as exc:
+                        print(
+                            f"feishu channel disconnect failed: {type(exc).__name__}: {exc}",
+                            flush=True,
+                        )
+                    finally:
+                        if state.get("channel") is channel:
+                            state["channel"] = None
+            stop_event.wait(5)
+    finally:
+        asyncio.set_event_loop(None)
+        state["loop"] = None
+        loop.close()
+
+async def _start_feishu_channel(app, runner) -> None:
+    if not FEISHU_CHANNEL_ENABLED:
+        return
+
+    app_id = os.getenv("FEISHU_APP_ID")
+    app_secret = os.getenv("FEISHU_APP_SECRET")
+    if not app_id or not app_secret:
+        print(
+            "feishu channel disabled: FEISHU_APP_ID or FEISHU_APP_SECRET is missing",
+            flush=True,
+        )
+        return
+
+    app.state.feishu_channel_state = {"channel": None, "loop": None}
+    app.state.feishu_channel_stop_event = threading.Event()
+    app.state.feishu_channel_thread = threading.Thread(
+        target=_run_feishu_channel,
+        args=(
+            runner,
+            app_id,
+            app_secret,
+            app.state.feishu_channel_stop_event,
+            app.state.feishu_channel_state,
+        ),
+        name="feishu-channel",
+        daemon=True,
+    )
+    app.state.feishu_channel_thread.start()
+    print("feishu channel background thread started", flush=True)
+
+async def _stop_feishu_channel(app) -> None:
+    stop_event = getattr(app.state, "feishu_channel_stop_event", None)
+    if stop_event is not None:
+        stop_event.set()
+    state = getattr(app.state, "feishu_channel_state", None) or {}
+    channel = state.get("channel")
+    if channel is not None:
+        await asyncio.to_thread(_stop_feishu_channel_from_lifespan, channel)
+    thread = getattr(app.state, "feishu_channel_thread", None)
+    if thread is not None:
+        await asyncio.to_thread(thread.join, 2)
+        if thread.is_alive():
+            print(
+                "feishu channel background thread did not stop within 2s",
+                flush=True,
+            )
+` : ""}
 def build_app():
     """Build AgentKit AgentServerApp for deployment."""
     import veadk
-    WEBUI_DIR = Path(veadk.__file__).resolve().parent / "webui"
+${feishuChannelEnabled ? "    from veadk import Runner\n" : ""}    WEBUI_DIR = Path(veadk.__file__).resolve().parent / "webui"
 
     # AgentKit's AgentServerApp exposes the ADK-compatible API surface
     # (/list-apps, /run, /run_sse, sessions) expected by AgentKit runtime tests.
     short_term_memory = getattr(root_agent, "short_term_memory", None) or ShortTermMemory(
         backend="local"
     )
-    agent_server_app = AgentkitAgentServerApp(
+${feishuChannelEnabled ? `    runner = Runner(
+        agent=root_agent,
+        app_name=getattr(root_agent, "name", "") or "agent",
+        short_term_memory=short_term_memory,
+    )
+` : ""}    agent_server_app = AgentkitAgentServerApp(
         agent=root_agent,
         short_term_memory=short_term_memory,
     )
     app = agent_server_app.app
 
-    # Add health check endpoint
+${feishuChannelEnabled ? `    original_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(fastapi_app):
+        async with original_lifespan(fastapi_app):
+            await _start_feishu_channel(fastapi_app, runner)
+            try:
+                yield
+            finally:
+                await _stop_feishu_channel(fastapi_app)
+
+    app.router.lifespan_context = lifespan
+` : ""}    # Add health check endpoint
     @app.get("/ping")
     def ping() -> dict[str, str]:
         return {"status": "ok"}
@@ -519,7 +713,7 @@ if __name__ == "__main__":
     { path: `agents/${pkg}/agent.py`, content: agentPy },
     { path: `agents/${pkg}/__init__.py`, content: `from .agent import root_agent\n\n__all__ = ["root_agent"]\n` },
     { path: ".env.example", content: renderEnvExample(dedupeEnv(acc.env)) },
-    { path: "requirements.txt", content: renderRequirements(acc.extras) },
+    { path: "requirements.txt", content: renderRequirements(acc.extras, feishuChannelEnabled) },
     { path: "README.md", content: renderReadme(pkg, draft) },
   ];
 
@@ -610,6 +804,9 @@ function parseSubAgents(v: unknown): AgentDraft[] {
 export function normalizeDraft(raw: unknown): AgentDraft {
   const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const mem = (o.memory && typeof o.memory === "object" ? o.memory : {}) as Record<string, unknown>;
+  const deployment = (
+    o.deployment && typeof o.deployment === "object" ? o.deployment : {}
+  ) as Record<string, unknown>;
   const subAgents = parseSubAgents(o.subAgents);
 
   const mcpTools = Array.isArray(o.mcpTools)
@@ -652,6 +849,7 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     tracing: asBool(o.tracing),
     tracingExporters: asStringArray(o.tracingExporters).filter((e) => EXPORTER_IDS.has(e)),
     enableA2ui: asBool(o.enableA2ui),
+    deployment: { feishuEnabled: asBool(deployment.feishuEnabled) },
     subAgents,
     selectedSkills: ((): SelectedSkill[] => {
         if (!Array.isArray(o.selectedSkills)) return [];

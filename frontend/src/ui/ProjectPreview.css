@@ -268,6 +268,156 @@
   border-bottom: 1px solid hsl(var(--border));
 }
 
+/* --- environment variables ---------------------------------------------- */
+
+.pp-env-panel {
+  flex: 0 0 400px;
+  width: 400px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid hsl(var(--border));
+  background: hsl(var(--secondary) / 0.28);
+}
+
+.pp-env-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 16px 14px;
+  border-bottom: 1px solid hsl(var(--border));
+  background: hsl(var(--card));
+}
+
+.pp-env-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: hsl(var(--foreground));
+}
+
+.pp-env-sub {
+  margin-top: 5px;
+  max-width: 292px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: hsl(var(--muted-foreground));
+}
+
+.pp-env-table {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 10px 16px 12px;
+}
+
+.pp-env-row {
+  display: grid;
+  grid-template-columns: minmax(142px, 1.08fr) minmax(120px, 1fr) 30px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid hsl(var(--border) / 0.72);
+}
+
+.pp-env-row-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0 0 6px;
+  border: none;
+  background: hsl(var(--secondary) / 0.28);
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.pp-env-row input {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  padding: 0 11px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 12px;
+}
+
+.pp-env-row input:first-child {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 11.5px;
+}
+
+.pp-env-key-fixed {
+  border-color: hsl(var(--border)) !important;
+  background: hsl(var(--card)) !important;
+  color: hsl(var(--foreground)) !important;
+  cursor: default;
+}
+
+.pp-env-row input:focus {
+  outline: none;
+  border-color: hsl(var(--ring) / 0.45);
+  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.1);
+}
+
+.pp-env-row input:disabled,
+.pp-env-row button:disabled,
+.pp-env-add:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.pp-env-empty {
+  padding: 26px 12px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  text-align: center;
+  border: 1px dashed hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--card));
+}
+
+.pp-env-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 0 16px 14px;
+  height: 38px;
+  border: 1px dashed hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pp-env-add:hover:not(:disabled) {
+  background: hsl(var(--foreground) / 0.04);
+  border-color: hsl(var(--foreground) / 0.22);
+}
+
+.pp-env-remove {
+  width: 30px;
+  height: 30px;
+}
+
+.pp-env-remove-placeholder {
+  display: block;
+  width: 30px;
+  height: 30px;
+}
+
 /* --- deploy stepper ------------------------------------------------------- */
 
 .pp-steps {

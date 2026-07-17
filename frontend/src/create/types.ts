@@ -35,6 +35,10 @@ import type { SelectedSkill, SkillHit, SkillSource } from "./skills/types";
 export type { SelectedSkill, SkillHit, SkillSource };
 
 
+export interface DeploymentConfig {
+  feishuEnabled: boolean;
+}
+
 /** A draft VeADK agent configuration produced by a creation flow. */
 export interface AgentDraft {
   name: string;
@@ -93,6 +97,8 @@ export interface AgentDraft {
     nodes: { id: string; agent: AgentDraft }[];
     edges: { from: string; to: string }[];
   };
+  /** Deployment-time options that do not change generated agent code. */
+  deployment?: DeploymentConfig;
 }
 
 export function emptyDraft(): AgentDraft {
@@ -122,6 +128,7 @@ export function emptyDraft(): AgentDraft {
     knowledgebaseBackend: "local",
     tracingExporters: [],
     selectedSkills: [],
+    deployment: { feishuEnabled: false },
   };
 }
 

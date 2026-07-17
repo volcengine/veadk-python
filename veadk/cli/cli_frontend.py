@@ -835,6 +835,48 @@ def _run_frontend_server(
 
         region = config.get("region", "cn-beijing")
         project_name = config.get("projectName", "default")
+        im_config = data.get("im") if isinstance(data.get("im"), dict) else {}
+        feishu_config = (
+            im_config.get("feishu") if isinstance(im_config.get("feishu"), dict) else {}
+        )
+        feishu_enabled = bool(feishu_config.get("enabled"))
+        requested_envs = data.get("envs") if isinstance(data.get("envs"), list) else []
+        requested_runtime_envs: dict[str, str] = {}
+        for item in requested_envs:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("key") or "").strip()
+            if not key:
+                continue
+            if not key.replace("_", "").isalnum() or key[0].isdigit():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid environment variable name: {key}",
+                )
+            requested_runtime_envs[key] = str(item.get("value") or "")
+        extra_runtime_envs = {
+            key: value
+            for key, value in requested_runtime_envs.items()
+            if not key.startswith("TOOL_FEISHU_CHANNEL_")
+        }
+        feishu_app_id = (
+            requested_runtime_envs.get("FEISHU_APP_ID", "").strip()
+            or requested_runtime_envs.get("TOOL_FEISHU_CHANNEL_APP_ID", "").strip()
+            or os.getenv("FEISHU_APP_ID", "").strip()
+        )
+        feishu_app_secret = (
+            requested_runtime_envs.get("FEISHU_APP_SECRET", "").strip()
+            or requested_runtime_envs.get("TOOL_FEISHU_CHANNEL_APP_SECRET", "").strip()
+            or os.getenv("FEISHU_APP_SECRET", "").strip()
+        )
+        if feishu_enabled and (not feishu_app_id or not feishu_app_secret):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Feishu Channel is enabled but FEISHU_APP_ID "
+                    "/ FEISHU_APP_SECRET are missing."
+                ),
+            )
 
         # Write the generated project (+ agentkit.yaml) into a temp dir. Passing
         # config_file makes the SDK resolve THIS dir as the project dir, so the
@@ -855,6 +897,29 @@ def _run_frontend_server(
             shutil.rmtree(temp_dir, ignore_errors=True)
             raise HTTPException(status_code=400, detail="No app.py found in files")
 
+        runtime_envs = {
+            "MODEL_AGENT_API_KEY": os.getenv("MODEL_AGENT_API_KEY", ""),
+            "OTEL_SDK_DISABLED": "true",
+            "VEADK_DISABLE_EXPIRE_AT": "true",
+        }
+        runtime_envs.update(extra_runtime_envs)
+        if feishu_enabled:
+            runtime_envs.update(
+                {
+                    "FEISHU_APP_ID": feishu_app_id,
+                    "FEISHU_APP_SECRET": feishu_app_secret,
+                }
+            )
+
+        cloud_config = {
+            "region": region,
+            "project_name": project_name,
+            "image_tag": "latest",
+            "runtime_envs": runtime_envs,
+        }
+        if feishu_enabled:
+            cloud_config["min_instance"] = 1
+
         agentkit_config = {
             "common": {
                 "agent_name": agent_name,
@@ -862,18 +927,7 @@ def _run_frontend_server(
                 "python_version": "3.11",
                 "launch_type": "cloud",
             },
-            "launch_types": {
-                "cloud": {
-                    "region": region,
-                    "project_name": project_name,
-                    "image_tag": "latest",
-                    "runtime_envs": {
-                        "MODEL_AGENT_API_KEY": os.getenv("MODEL_AGENT_API_KEY", ""),
-                        "OTEL_SDK_DISABLED": "true",
-                        "VEADK_DISABLE_EXPIRE_AT": "true",
-                    },
-                }
-            },
+            "launch_types": {"cloud": cloud_config},
         }
         (base / "agentkit.yaml").write_text(
             _yaml.dump(agentkit_config, allow_unicode=True), encoding="utf-8"
@@ -883,6 +937,35 @@ def _run_frontend_server(
         state = {"phase": "build"}
 
         _PHASE_ORDER = {"build": 0, "deploy": 1, "publish": 2}
+
+        def _result_error_text(result) -> str:
+            parts = []
+            for obj in (
+                result,
+                getattr(result, "build_result", None),
+                getattr(result, "deploy_result", None),
+            ):
+                if obj is None:
+                    continue
+                for attr in ("error", "error_code"):
+                    value = getattr(obj, attr, None)
+                    if value:
+                        parts.append(str(value))
+            return "\n".join(parts)
+
+        def _is_tos_request_expired(error_text: str) -> bool:
+            lower = (error_text or "").lower()
+            return "request has expired" in lower and (
+                "accessdenied" in lower or "access denied" in lower
+            )
+
+        def _friendly_error(error_text: str) -> str:
+            if _is_tos_request_expired(error_text):
+                return (
+                    "云构建拉取源码包时 TOS 临时下载签名已过期。"
+                    "已自动重试一次仍失败，请稍后重新点击部署。"
+                )
+            return error_text
 
         def _classify(message: str) -> str:
             """Map a reporter message to a deploy phase, monotonically.
@@ -1002,11 +1085,32 @@ def _run_frontend_server(
                     logger.warning(f"Could not attach author tag to runtime: {e}")
 
                 try:
-                    result_box["result"] = sdk.launch(
-                        config_file=str(base / "agentkit.yaml"),
-                        preflight_mode=PreflightMode.WARN,
-                        reporter=_QReporter(),
-                    )
+                    result = None
+                    for attempt in range(1, 3):
+                        if attempt > 1:
+                            state["phase"] = "build"
+                            _emit(
+                                "warning",
+                                (
+                                    "TOS 临时下载签名已过期，正在重新打包上传并重试部署 "
+                                    f"({attempt}/2)..."
+                                ),
+                            )
+                        result = sdk.launch(
+                            config_file=str(base / "agentkit.yaml"),
+                            preflight_mode=PreflightMode.WARN,
+                            reporter=_QReporter(),
+                        )
+                        if getattr(result, "success", False):
+                            break
+                        error_text = _result_error_text(result)
+                        if attempt >= 2 or not _is_tos_request_expired(error_text):
+                            break
+                        _emit(
+                            "warning",
+                            "云构建使用的 TOS 源码包签名超过 900 秒有效期，自动重试一次。",
+                        )
+                    result_box["result"] = result
                 except Exception as e:
                     logger.error(f"AgentKit launch error: {e}", exc_info=True)
                     result_box["error"] = str(e)
@@ -1028,10 +1132,11 @@ def _run_frontend_server(
 
                 final = {"done": True}
                 if result_box.get("error"):
+                    error_text = str(result_box["error"])
                     final.update(
                         {
                             "success": False,
-                            "error": result_box["error"],
+                            "error": _friendly_error(error_text),
                             "phase": state["phase"],
                         }
                     )
@@ -1049,6 +1154,13 @@ def _run_frontend_server(
                                 else None,
                                 "apikey": meta.get("runtime_apikey", ""),
                                 "runtimeId": meta.get("runtime_id", ""),
+                                "feishuChannel": {
+                                    "enabled": True,
+                                    "transport": "ws",
+                                    "runtimeId": meta.get("runtime_id", ""),
+                                }
+                                if feishu_enabled
+                                else None,
                                 "consoleUrl": (
                                     "https://console.volcengine.com/agentkit/"
                                     f"region:agentkit+{region}/runtime?projectName={project_name}"
@@ -1057,10 +1169,17 @@ def _run_frontend_server(
                         )
                     else:
                         err = getattr(res, "error", None) if res else None
+                        err_text = (
+                            _result_error_text(res)
+                            if res is not None
+                            else str(err or "Deployment failed")
+                        )
                         final.update(
                             {
                                 "success": False,
-                                "error": err or "Deployment failed",
+                                "error": _friendly_error(err_text)
+                                or err
+                                or "Deployment failed",
                                 "phase": state["phase"],
                             }
                         )

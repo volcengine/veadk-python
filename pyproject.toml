@@ -64,6 +64,7 @@ extensions = [
     "llama-index-vector-stores-milvus>=0.4",                # For Milvus database
     "pymilvus>=2.4",                                        # For Milvus database
     "opensearch-py>=2.8.0",
+    "lark-channel-sdk",
     "lark-oapi",
 ]
 database = [

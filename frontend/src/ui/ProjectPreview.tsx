@@ -1,14 +1,18 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ChevronRight,
   Download,
+  Eye,
+  EyeOff,
   File,
   FilePlus,
   Folder,
   Loader2,
   Pencil,
+  Plus,
   Rocket,
   Trash2,
+  X,
 } from "lucide-react";
 // Use the core build + register only the languages we map, so we don't ship
 // all ~190 highlight.js grammars (keeps the bundle small).
@@ -122,6 +126,11 @@ export interface DeployResult {
   apikey: string;
   url: string;
   agentName: string;
+  feishuChannel?: {
+    enabled: boolean;
+    transport: string;
+    runtimeId?: string;
+  };
 }
 
 /** The ordered deploy phases shown in the stepper (keys match DeployStage.phase). */
@@ -130,6 +139,20 @@ const DEPLOY_STEPS: { phase: string; label: string }[] = [
   { phase: "deploy", label: "部署" },
   { phase: "publish", label: "发布" },
 ];
+
+export interface DeployOptions {
+  im?: {
+    feishu?: {
+      enabled: boolean;
+    };
+  };
+  envs?: DeployEnvVar[];
+}
+
+export interface DeployEnvVar {
+  key: string;
+  value: string;
+}
 
 export interface ProjectPreviewProps {
   project: AgentProject;
@@ -140,9 +163,12 @@ export interface ProjectPreviewProps {
   onDeploy?: (
     project: AgentProject,
     onStage?: (s: DeployStage) => void,
+    options?: DeployOptions,
   ) => Promise<DeployResult>;
   /** Called after successfully adding the agent to the connection list. */
   onAgentAdded?: (agentId: string, agentName: string) => void;
+  /** Whether Feishu Channel was enabled in the configuration step. */
+  feishuEnabled?: boolean;
 }
 
 // --- tree model -------------------------------------------------------------
@@ -183,7 +209,37 @@ function sortedChildren(node: TreeNode): TreeNode[] {
 
 // --- component --------------------------------------------------------------
 
-export function ProjectPreview({ project, onChange, onDeploy, onAgentAdded }: ProjectPreviewProps) {
+interface EnvRow {
+  id: string;
+  key: string;
+  value: string;
+}
+
+function newEnvRow(key = "", value = ""): EnvRow {
+  return {
+    id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    key,
+    value,
+  };
+}
+
+const FEISHU_ENV_KEYS = new Set(["FEISHU_APP_ID", "FEISHU_APP_SECRET"]);
+
+function defaultEnvRows(feishuEnabled: boolean): EnvRow[] {
+  if (!feishuEnabled) return [];
+  return [
+    newEnvRow("FEISHU_APP_ID", ""),
+    newEnvRow("FEISHU_APP_SECRET", ""),
+  ];
+}
+
+export function ProjectPreview({
+  project,
+  onChange,
+  onDeploy,
+  onAgentAdded,
+  feishuEnabled = false,
+}: ProjectPreviewProps) {
   const editable = typeof onChange === "function";
 
   // Initialize all hooks BEFORE any conditional returns (React hooks rule)
@@ -201,6 +257,35 @@ export function ProjectPreview({ project, onChange, onDeploy, onAgentAdded }: Pr
   const [stageMap, setStageMap] = useState<Record<string, DeployStage>>({});
   const [activePhase, setActivePhase] = useState<string | null>(null);
   const [addingAgent, setAddingAgent] = useState(false);
+  const [envRows, setEnvRows] = useState<EnvRow[]>(() =>
+    defaultEnvRows(feishuEnabled),
+  );
+  const [showEnvValues, setShowEnvValues] = useState(false);
+
+  useEffect(() => {
+    if (!feishuEnabled) {
+      setEnvRows((rows) =>
+        rows.filter(
+          (row) =>
+            !row.key.startsWith("TOOL_FEISHU_CHANNEL_") &&
+            !FEISHU_ENV_KEYS.has(row.key),
+        ),
+      );
+      return;
+    }
+    setEnvRows((rows) => {
+      const keptRows = rows.filter(
+        (row) => !row.key.startsWith("TOOL_FEISHU_CHANNEL_"),
+      );
+      const byKey = new Map(keptRows.map((row) => [row.key, row]));
+      const required = defaultEnvRows(true);
+      const next = [...keptRows];
+      for (const row of required) {
+        if (!byKey.has(row.key)) next.push(row);
+      }
+      return next;
+    });
+  }, [feishuEnabled]);
 
   const tree = useMemo(() => {
     if (!project?.files || !Array.isArray(project.files)) {
@@ -273,18 +358,63 @@ export function ProjectPreview({ project, onChange, onDeploy, onAgentAdded }: Pr
     commitFiles(remaining, remaining[0]?.path ?? null);
   }
 
+  function updateEnvRow(id: string, patch: Partial<EnvRow>) {
+    setEnvRows((rows) =>
+      rows.map((row) => (row.id === id ? { ...row, ...patch } : row)),
+    );
+  }
+
+  function removeEnvRow(id: string) {
+    setEnvRows((rows) => rows.filter((row) => row.id !== id));
+  }
+
+  function addEnvRow() {
+    setEnvRows((rows) => [...rows, newEnvRow()]);
+  }
+
+  function deployEnvVars(): DeployEnvVar[] {
+    return envRows
+      .map((row) => ({ key: row.key.trim(), value: row.value }))
+      .filter((row) => row.key.length > 0);
+  }
+
   async function handleDeploy() {
     if (!onDeploy || deploying) return;
+    const envs = deployEnvVars();
+    if (feishuEnabled) {
+      const envMap = new Map(envs.map((row) => [row.key, row.value.trim()]));
+      if (!envMap.get("FEISHU_APP_ID")) {
+        setDeployError("启用飞书后，请在右侧环境变量中填写 FEISHU_APP_ID。");
+        return;
+      }
+      if (!envMap.get("FEISHU_APP_SECRET")) {
+        setDeployError("启用飞书后，请在右侧环境变量中填写 FEISHU_APP_SECRET。");
+        return;
+      }
+    }
     setDeployError(null);
     setDeployResult(null);
     setStageMap({});
     setActivePhase(null);
     setDeploying(true);
     try {
-      const result = await onDeploy(project, (s) => {
-        setStageMap((prev) => ({ ...prev, [s.phase]: s }));
-        setActivePhase(s.phase);
-      });
+      const result = await onDeploy(
+        project,
+        (s) => {
+          setStageMap((prev) => ({ ...prev, [s.phase]: s }));
+          setActivePhase(s.phase);
+        },
+        feishuEnabled
+          ? {
+              im: {
+                feishu: {
+                  enabled: true,
+                },
+              },
+              envs,
+            }
+          : { envs },
+      );
       setDeployResult(result);
       setActivePhase(null);
     } catch (err) {
@@ -576,6 +706,14 @@ export function ProjectPreview({ project, onChange, onDeploy, onAgentAdded }: Pr
                 <label>API Key 名称</label>
                 <code>{deployResult.apikey}</code>
               </div>
+              {deployResult.feishuChannel?.enabled && (
+                <div className="pp-deploy-result-field">
+                  <label>飞书 Channel</label>
+                  <code>
+                    runtime 内启用 ({deployResult.feishuChannel.transport})
+                  </code>
+                </div>
+              )}
             </div>
             <button
               type="button"
@@ -617,6 +755,90 @@ export function ProjectPreview({ project, onChange, onDeploy, onAgentAdded }: Pr
           )}
         </div>
       </div>
+      {onDeploy && (
+        <aside className="pp-env-panel" aria-label="环境变量">
+          <div className="pp-env-head">
+            <div>
+              <div className="pp-env-title">环境变量</div>
+              {feishuEnabled && (
+                <div className="pp-env-sub">飞书 Channel 已开启，请填写 FEISHU_APP_ID 和 FEISHU_APP_SECRET。</div>
+              )}
+            </div>
+            <button
+              type="button"
+              className="pp-icon-btn"
+              title={showEnvValues ? "隐藏值" : "显示值"}
+              onClick={() => setShowEnvValues((v) => !v)}
+            >
+              {showEnvValues ? <EyeOff className="pp-ic" /> : <Eye className="pp-ic" />}
+            </button>
+          </div>
+          <div className="pp-env-table">
+            <div className="pp-env-row pp-env-row-head">
+              <span>Key</span>
+              <span>Value</span>
+              <span />
+            </div>
+            {envRows.length === 0 ? (
+              <div className="pp-env-empty">暂无环境变量</div>
+            ) : (
+              envRows.map((row) => {
+                const isFeishuPreset = feishuEnabled && FEISHU_ENV_KEYS.has(row.key);
+                const valuePlaceholder =
+                  row.key === "FEISHU_APP_ID"
+                    ? "cli_xxx"
+                    : row.key === "FEISHU_APP_SECRET"
+                      ? "输入 App Secret"
+                      : "VALUE";
+                return (
+                  <div className="pp-env-row" key={row.id}>
+                    <input
+                      className={isFeishuPreset ? "pp-env-key-fixed" : undefined}
+                      value={row.key}
+                      placeholder="KEY"
+                      readOnly={isFeishuPreset}
+                      disabled={deploying}
+                      autoComplete="off"
+                      title={isFeishuPreset ? "飞书必填变量" : undefined}
+                      onChange={(e) => updateEnvRow(row.id, { key: e.currentTarget.value })}
+                    />
+                    <input
+                      type={showEnvValues ? "text" : "password"}
+                      value={row.value}
+                      placeholder={valuePlaceholder}
+                      disabled={deploying}
+                      autoComplete="off"
+                      onChange={(e) => updateEnvRow(row.id, { value: e.currentTarget.value })}
+                    />
+                    {isFeishuPreset ? (
+                      <span className="pp-env-remove-placeholder" />
+                    ) : (
+                      <button
+                        type="button"
+                        className="pp-icon-btn pp-env-remove"
+                        title="删除变量"
+                        disabled={deploying}
+                        onClick={() => removeEnvRow(row.id)}
+                      >
+                        <X className="pp-ic" />
+                      </button>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+          <button
+            type="button"
+            className="pp-env-add"
+            onClick={addEnvRow}
+            disabled={deploying}
+          >
+            <Plus className="pp-ic" />
+            添加变量
+          </button>
+        </aside>
+      )}
     </div>
   );
 }

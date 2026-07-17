@@ -82,6 +82,7 @@ type StepId =
   | "memory"
   | "knowledge"
   | "tracing"
+  | "deploy"
   | "subagents"
   | "review";
 
@@ -102,6 +103,7 @@ const STEPS: StepMeta[] = [
   { id: "memory", label: "记忆", hint: "短期 / 长期", icon: Layers },
   { id: "knowledge", label: "知识库", hint: "外部知识检索", icon: Database },
   { id: "tracing", label: "观测", hint: "Tracing 与 A2UI", icon: Eye },
+  { id: "deploy", label: "部署配置", hint: "飞书等运行入口", icon: Rocket },
   { id: "subagents", label: "子 Agent", hint: "嵌套协作", icon: Boxes },
   { id: "review", label: "完成", hint: "预览并创建", icon: Rocket },
 ];
@@ -922,6 +924,11 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
     // Auto-enable tracing when at least one exporter is chosen.
     patch({ tracingExporters: next, tracing: next.length > 0 ? true : node.tracing });
   };
+  const patchDeployment = (p: Partial<NonNullable<AgentDraft["deployment"]>>) =>
+    setDraft((d) => ({
+      ...d,
+      deployment: { ...(d.deployment ?? { feishuEnabled: false }), ...p },
+    }));
 
   // Detail-pane branching is driven by the SELECTED node's type.
   const orchestrator = isOrchestratorType(node.agentType);
@@ -951,6 +958,7 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
       memory: node.memory.shortTerm || node.memory.longTerm,
       knowledge: node.knowledgebase,
       tracing: node.tracing || node.enableA2ui,
+      deploy: true,
       subagents: (node.subAgents?.length ?? 0) > 0,
       review: canFinish,
     }),
@@ -963,7 +971,16 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
   const navStepIds: StepId[] =
     orchestrator || a2a
       ? ["basic"]
-      : ["basic", "model", "tools", "skills", "memory", "knowledge", "tracing"];
+      : [
+          "basic",
+          "model",
+          "tools",
+          "skills",
+          "memory",
+          "knowledge",
+          "tracing",
+          ...(safePath.length === 0 ? (["deploy"] as StepId[]) : []),
+        ];
   const navSteps = STEPS.filter((s) => navStepIds.includes(s.id));
   const activeIndex = navSteps.findIndex((s) => s.id === activeId);
 
@@ -1077,12 +1094,13 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
     const handleDeploy = async (
       proj: AgentProject,
       onStage?: (s: DeployStage) => void,
+      options?: Parameters<typeof deployAgentkitProject>[3],
     ) => {
       return deployAgentkitProject(
         proj.name,
         proj.files,
         { region: "cn-beijing", projectName: "default" },
-        { author, onStage },
+        { ...options, author, onStage },
       );
     };
 
@@ -1114,7 +1132,13 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
           </button>
         </div>
         <div className="cw-preview-body">
-          <ProjectPreview project={project} onChange={setProject} onDeploy={handleDeploy} onAgentAdded={onAgentAdded} />
+          <ProjectPreview
+            project={project}
+            onChange={setProject}
+            onDeploy={handleDeploy}
+            onAgentAdded={onAgentAdded}
+            feishuEnabled={!!draft.deployment?.feishuEnabled}
+          />
         </div>
       </div>
     );
@@ -1512,6 +1536,19 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
                     />
                   </div>
             </Section>
+            {safePath.length === 0 && (
+              <Section meta={metaOf("deploy")}>
+                <div className="cw-form cw-toggle-stack">
+                  <Toggle
+                    checked={!!draft.deployment?.feishuEnabled}
+                    onChange={(v) => patchDeployment({ feishuEnabled: v })}
+                    title="连接飞书"
+                    desc="部署后可通过飞书消息触发当前 Agent。"
+                    icon={Globe}
+                  />
+                </div>
+              </Section>
+            )}
               </>
             )}
           </div>

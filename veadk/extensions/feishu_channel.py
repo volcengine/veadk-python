@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import inspect
 import os
 from dataclasses import dataclass
@@ -43,6 +44,19 @@ def _read_attr(obj: Any, *path: str) -> Any:
             return None
         current = getattr(current, key, None)
     return current
+
+
+def _call_in_fresh_event_loop(method: Callable[[], Any]) -> Any:
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        result = method()
+        if inspect.isawaitable(result):
+            return loop.run_until_complete(result)
+        return result
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
 
 
 def _stringify_card_elements(elements: Any) -> str:
@@ -206,6 +220,8 @@ class FeishuChannelExtension:
     memory, long-term memory and tracing continue to work without changes.
     """
 
+    CHANNEL_SDK_COMPAT = True
+
     def __init__(
         self,
         runner: "Runner",
@@ -281,16 +297,20 @@ class FeishuChannelExtension:
         return {"text": text}
 
     async def connect(self) -> Any:
-        return await self._maybe_await(self.channel.connect())
+        connect = getattr(self.channel, "start", None) or self.channel.connect
+        if inspect.iscoroutinefunction(connect):
+            return await connect()
+        return await asyncio.to_thread(_call_in_fresh_event_loop, connect)
 
     async def disconnect(self) -> Any:
-        disconnect = getattr(self.channel, "disconnect", None)
+        disconnect = getattr(self.channel, "stop", None) or getattr(
+            self.channel, "disconnect", None
+        )
         if disconnect is None:
             return None
-        result = disconnect()
-        if inspect.isawaitable(result):
-            return await result
-        return result
+        if inspect.iscoroutinefunction(disconnect):
+            return await disconnect()
+        return await asyncio.to_thread(_call_in_fresh_event_loop, disconnect)
 
     async def handle_webhook_request(
         self, headers: dict[str, str], body: bytes | str
@@ -483,12 +503,15 @@ class FeishuChannelExtension:
         channel_kwargs: dict[str, Any] | None,
     ) -> Any:
         try:
-            from lark_oapi.channel import FeishuChannel
-        except ImportError as exc:
-            raise ImportError(
-                "Feishu channel extension requires `lark-oapi`. "
-                "Install `veadk-python[extensions]` or `pip install lark-oapi`."
-            ) from exc
+            from lark_channel import FeishuChannel
+        except ImportError:
+            try:
+                from lark_oapi.channel import FeishuChannel
+            except ImportError as legacy_exc:
+                raise ImportError(
+                    "Feishu channel extension requires `lark-channel-sdk` "
+                    "(or legacy `lark-oapi`). Install `veadk-python[extensions]`."
+                ) from legacy_exc
 
         resolved_app_id = (
             app_id
