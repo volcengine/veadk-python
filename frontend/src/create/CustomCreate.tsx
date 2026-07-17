@@ -376,6 +376,9 @@ function McpToolEditor({
                         })
                       }
                     />
+                    <p className="cw-mcp-note">
+                      stdio MCP 暂不参与调试运行；点击“生成项目”时会完整保留这项配置并生成对应代码。
+                    </p>
                   </>
                 )}
               </motion.div>
@@ -848,6 +851,7 @@ function debugSnapshotKey(draft: AgentDraft): string {
 
 function DebugPanel({
   enabled,
+  disabledReason,
   phase,
   stale,
   run,
@@ -861,6 +865,7 @@ function DebugPanel({
   onRestart,
 }: {
   enabled: boolean;
+  disabledReason: string;
   phase: DebugPhase;
   stale: boolean;
   run: GeneratedAgentTestRun | null;
@@ -920,7 +925,7 @@ function DebugPanel({
         ) : enabled ? (
           <span>点击底部“调试”后生成代码并启动临时运行环境。</span>
         ) : (
-          <span>当前后端暂不支持生成 Agent 调试运行。</span>
+          <span>{disabledReason}</span>
         )}
       </div>
 
@@ -949,7 +954,7 @@ function DebugPanel({
       <div className="cw-debug-body">
         {!enabled ? (
           <div className="cw-debug-empty">
-            当前后端暂不支持生成 Agent 调试运行。
+            {disabledReason}
           </div>
         ) : phase === "idle" ? (
           <div className="cw-debug-empty">
@@ -1067,6 +1072,9 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
   const [project, setProject] = useState<AgentProject | null>(null);
   const [building, setBuilding] = useState(false);
   const debugEnabled = features?.generatedAgentTestRun === true;
+  const debugDisabledReason =
+    features?.generatedAgentTestRunDisabledReason ||
+    "当前后端暂不支持生成 Agent 调试运行。";
   const [debugPhase, setDebugPhase] = useState<DebugPhase>("idle");
   const [debugRun, setDebugRun] = useState<GeneratedAgentTestRun | null>(null);
   const debugRunRef = useRef<GeneratedAgentTestRun | null>(null);
@@ -1083,6 +1091,7 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
   // YAML import: file input + last error message.
   const yamlInputRef = useRef<HTMLInputElement>(null);
   const [importErr, setImportErr] = useState("");
+  const [buildErr, setBuildErr] = useState("");
   const onImportYaml = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = ""; // allow re-importing the same file
@@ -1297,9 +1306,12 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
     // view. The generated project preview below IS the outcome of this step.
 
     setBuilding(true);
+    setBuildErr("");
     try {
       const proj = await generateAgentProject(draft);
       setProject(proj);
+    } catch (err) {
+      setBuildErr(`生成项目失败：${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setBuilding(false);
     }
@@ -1918,6 +1930,7 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
         </div>{/* cw-detail */}
         <DebugPanel
           enabled={debugEnabled}
+          disabledReason={debugDisabledReason}
           phase={debugPhase}
           stale={debugStale}
           run={debugRun}
@@ -1950,6 +1963,7 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
         </div>
         <div className="cw-footer-actions">
           {importErr && <span className="cw-footer-importerr">{importErr}</span>}
+          {buildErr && <span className="cw-footer-importerr">{buildErr}</span>}
           <input
             ref={yamlInputRef}
             type="file"
@@ -1989,7 +2003,7 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
             title={
               debugEnabled
                 ? "生成当前 Agent 代码并启动临时调试环境"
-                : "当前后端暂不支持生成 Agent 调试运行"
+                : debugDisabledReason
             }
           >
             {debugPhase === "building" || debugPhase === "starting" ? (

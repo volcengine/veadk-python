@@ -2,6 +2,15 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Materialize selected skills into backend-generated projects."""
 
@@ -48,7 +57,9 @@ async def materialize_selected_skills(
         elif skill.source == "skillspace":
             if resolve_skillspace_detail is None:
                 raise DebugPolicyError("SkillSpace resolver is not configured")
-            files = await _materialize_skillspace_skill(skill, resolve_skillspace_detail)
+            files = await _materialize_skillspace_skill(
+                skill, resolve_skillspace_detail
+            )
         else:
             files = _materialize_local_skill(skill)
         _append_skill_files(project, existing, files)
@@ -91,7 +102,9 @@ async def _download_skillhub_skill(skill: SelectedSkill) -> list[GeneratedFile]:
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
         res = await client.get(url)
     if res.status_code >= 400:
-        raise DebugPolicyError(f"Failed to download Skill Hub skill ({res.status_code})")
+        raise DebugPolicyError(
+            f"Failed to download Skill Hub skill ({res.status_code})"
+        )
     content = res.content
     if len(content) > MAX_SKILL_TOTAL_BYTES:
         raise DebugPolicyError("Skill Hub zip is too large")
@@ -156,7 +169,7 @@ def _files_from_zip(content: bytes, folder: str, label: str) -> list[GeneratedFi
             rel = _normalize_relative_path(info.filename)
             target = f"skills/{folder}/{rel}"
             with archive.open(info) as fh:
-                text = fh.read().decode("utf-8")
+                text = _decode_skill_file(fh.read(), f"{label} file {info.filename}")
             if _SKILL_MD_RE.search(rel):
                 skill_md_content = text
             files.append(GeneratedFile(path=target, content=text))
@@ -164,6 +177,15 @@ def _files_from_zip(content: bytes, folder: str, label: str) -> list[GeneratedFi
         raise DebugPolicyError(f"{label} is missing SKILL.md")
     _validate_skill_md(skill_md_content, label)
     return files
+
+
+def _decode_skill_file(content: bytes, label: str) -> str:
+    for encoding in ("utf-8-sig", "gb18030"):
+        try:
+            return content.decode(encoding)
+        except UnicodeDecodeError:
+            pass
+    raise DebugPolicyError(f"{label} must be UTF-8 or GB18030 text")
 
 
 def _append_skill_files(
@@ -175,7 +197,9 @@ def _append_skill_files(
     for file in files:
         path = _normalize_project_path(file.path)
         if path in existing:
-            raise DebugPolicyError(f"Skill file conflicts with generated project: {path}")
+            raise DebugPolicyError(
+                f"Skill file conflicts with generated project: {path}"
+            )
         existing.add(path)
         project.files.append(GeneratedFile(path=path, content=file.content))
 
@@ -254,4 +278,3 @@ def _validate_skill_md(text: str, where: str) -> str:
     if len(description) > 1024 or re.search(r"<[^>]+>", description):
         raise DebugPolicyError(f"{where} SKILL.md description is invalid")
     return name
-

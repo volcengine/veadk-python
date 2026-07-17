@@ -1,5 +1,5 @@
 // Curated catalog of VeADK building blocks used by the custom-mode wizard and
-// the code generator (codegen.ts). Everything here is grounded in the real
+// backend project generator. Everything here is grounded in the real
 // veadk API (see examples/dogfooding/VEADK_COMPONENTS.md and veadk source).
 //
 // Each option carries enough metadata to (a) render a picker and (b) emit

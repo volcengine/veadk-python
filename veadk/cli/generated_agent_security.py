@@ -2,6 +2,15 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Security policy for backend-generated AgentDraft projects."""
 
@@ -50,16 +59,38 @@ _METADATA_IPS = {
 
 
 def validate_project_policy(draft: AgentDraft) -> None:
-    validate_debug_policy(draft)
-
-
-def validate_debug_policy(draft: AgentDraft) -> None:
-    total = _validate_node(draft, depth=0)
+    total = _validate_node(
+        draft,
+        depth=0,
+        allow_local_runtime_resources=True,
+        allow_stdio_mcp=True,
+    )
     if total > MAX_SUBAGENTS + 1:
         raise DebugPolicyError(f"Too many agents: {total}")
 
 
-def _validate_node(draft: AgentDraft, *, depth: int) -> int:
+def validate_debug_policy(
+    draft: AgentDraft,
+    *,
+    allow_local_runtime_resources: bool = False,
+) -> None:
+    total = _validate_node(
+        draft,
+        depth=0,
+        allow_local_runtime_resources=allow_local_runtime_resources,
+        allow_stdio_mcp=False,
+    )
+    if total > MAX_SUBAGENTS + 1:
+        raise DebugPolicyError(f"Too many agents: {total}")
+
+
+def _validate_node(
+    draft: AgentDraft,
+    *,
+    depth: int,
+    allow_local_runtime_resources: bool,
+    allow_stdio_mcp: bool,
+) -> int:
     if depth > MAX_DEPTH:
         raise DebugPolicyError(f"Agent tree is too deep (>{MAX_DEPTH})")
     if not draft.name.strip():
@@ -73,11 +104,14 @@ def _validate_node(draft: AgentDraft, *, depth: int) -> int:
     if draft.agentType == "a2a":
         if not draft.a2aUrl.strip():
             raise DebugPolicyError("A2A URL is required")
-        validate_url_not_private(draft.a2aUrl, field_name="a2aUrl")
+        if not allow_local_runtime_resources:
+            validate_url_not_private(draft.a2aUrl, field_name="a2aUrl")
 
     _validate_catalog_ids("builtinTools", draft.builtinTools, TOOL_BY_ID)
     if draft.shortTermBackend not in STM_BY_ID:
-        raise DebugPolicyError(f"Unsupported shortTermBackend: {draft.shortTermBackend}")
+        raise DebugPolicyError(
+            f"Unsupported shortTermBackend: {draft.shortTermBackend}"
+        )
     if draft.longTermBackend not in LTM_BY_ID:
         raise DebugPolicyError(f"Unsupported longTermBackend: {draft.longTermBackend}")
     if draft.knowledgebaseBackend not in KB_BY_ID:
@@ -99,9 +133,9 @@ def _validate_node(draft: AgentDraft, *, depth: int) -> int:
     if len(draft.mcpTools) > MAX_MCP_TOOLS:
         raise DebugPolicyError("Too many MCP tools")
     for tool in draft.mcpTools:
-        if tool.transport == "stdio":
+        if tool.transport == "stdio" and not allow_stdio_mcp:
             raise DebugPolicyError("MCP stdio transport is disabled for debug runs")
-        if tool.transport == "http":
+        if tool.transport == "http" and not allow_local_runtime_resources:
             validate_url_not_private(tool.url, field_name="mcpTools.url")
         for arg in tool.args:
             _check_len("MCP arg", arg, MAX_MCP_ARG_LEN)
@@ -111,7 +145,12 @@ def _validate_node(draft: AgentDraft, *, depth: int) -> int:
 
     total = 1
     for sub in draft.subAgents:
-        total += _validate_node(sub, depth=depth + 1)
+        total += _validate_node(
+            sub,
+            depth=depth + 1,
+            allow_local_runtime_resources=allow_local_runtime_resources,
+            allow_stdio_mcp=allow_stdio_mcp,
+        )
     return total
 
 
@@ -178,7 +217,9 @@ def _reject_private_ip(ip: ipaddress._BaseAddress, *, field_name: str) -> None:
         raise DebugPolicyError(f"{field_name} points to a private or reserved address")
 
 
-def _validate_catalog_ids(name: str, values: list[str], catalog: dict[str, object]) -> None:
+def _validate_catalog_ids(
+    name: str, values: list[str], catalog: dict[str, object]
+) -> None:
     for value in values:
         if value not in catalog:
             raise DebugPolicyError(f"Unsupported {name}: {value}")
@@ -187,4 +228,3 @@ def _validate_catalog_ids(name: str, values: list[str], catalog: dict[str, objec
 def _check_len(name: str, value: str, limit: int) -> None:
     if len(value or "") > limit:
         raise DebugPolicyError(f"{name} is too long (>{limit})")
-

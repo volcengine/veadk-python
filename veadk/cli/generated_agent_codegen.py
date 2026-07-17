@@ -2,6 +2,15 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Generate VeADK projects from frontend AgentDraft JSON on the backend."""
 
@@ -80,7 +89,9 @@ class SelectedSkill(BaseModel):
     @model_validator(mode="after")
     def _default_folder(self) -> "SelectedSkill":
         if not self.folder:
-            self.folder = self.name or self.slug.rsplit("/", 1)[-1] or self.skillId or "skill"
+            self.folder = (
+                self.name or self.slug.rsplit("/", 1)[-1] or self.skillId or "skill"
+            )
         if not self.name:
             self.name = self.folder
         if self.source == "skillhub" and not self.namespace:
@@ -194,7 +205,15 @@ def ident(raw: str, fallback: str) -> str:
 
 
 def _py_str(value: str) -> str:
-    return repr(value or "")
+    escaped = (
+        (value or "").replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    )
+    return f'"{escaped}"'
+
+
+def _py_triple(value: str) -> str:
+    escaped = (value or "").replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
+    return f'"""{escaped}"""'
 
 
 def _unique_ident(acc: _Acc, raw: str, fallback: str) -> str:
@@ -220,10 +239,12 @@ def _add_env(acc: _Acc, env: tuple[EnvVar, ...]) -> None:
 def _emit_tool_stub(acc: _Acc, name: str, description: str) -> str:
     fn = _unique_ident(acc, name, "custom_tool")
     doc = (description or "").strip() or f"TODO: 描述 {name} 的用途与参数。"
+    comment_name = name.replace("\r", " ").replace("\n", " ")
     acc.pre_lines.append(
         f"def {fn}(query: str) -> dict:\n"
-        f"    {_py_str(doc)}\n"
-        f"    return {{\"result\": f\"{fn} 尚未实现: {{query}}\"}}"
+        f"    {_py_triple(doc)}\n"
+        f"    # TODO: 实现「{comment_name}」的逻辑。\n"
+        f'    return {{"result": f"{fn} 尚未实现: {{query}}"}}'
     )
     return fn
 
@@ -247,7 +268,9 @@ def _build_orchestrator(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
         f"description={_py_str(draft.description or draft.name or 'A VeADK orchestrator agent.')}",
     ]
     if draft.agentType == "loop":
-        kwargs.append(f"max_iterations={draft.maxIterations if draft.maxIterations > 0 else 3}")
+        kwargs.append(
+            f"max_iterations={draft.maxIterations if draft.maxIterations > 0 else 3}"
+        )
     kwargs.append(f"sub_agents=[{', '.join(sub_vars)}]")
     joined_kwargs = ",\n    ".join(kwargs)
     acc.pre_lines.append(f"{var_name} = {cls}(\n    {joined_kwargs},\n)")
@@ -261,9 +284,7 @@ def _build_a2a(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
         f"url={_py_str((draft.a2aUrl or '').strip())}",
     ]
     joined_kwargs = ",\n    ".join(kwargs)
-    acc.pre_lines.append(
-        f"{var_name} = RemoteVeAgent(\n    {joined_kwargs},\n)"
-    )
+    acc.pre_lines.append(f"{var_name} = RemoteVeAgent(\n    {joined_kwargs},\n)")
     return var_name
 
 
@@ -293,7 +314,9 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
 
     for mcp_tool in draft.mcpTools:
         if mcp_tool.transport == "http" and mcp_tool.url.strip():
-            _add_import(acc, "from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset")
+            _add_import(
+                acc, "from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset"
+            )
             _add_import(
                 acc,
                 "from google.adk.tools.mcp_tool.mcp_session_manager import "
@@ -303,7 +326,7 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
             headers = ""
             if mcp_tool.authToken.strip():
                 headers = (
-                    ", headers={\"Authorization\": "
+                    ', headers={"Authorization": '
                     f"{_py_str('Bearer ' + mcp_tool.authToken.strip())}}}"
                 )
             acc.pre_lines.append(
@@ -312,7 +335,9 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
             )
             tool_exprs.append(v)
         elif mcp_tool.transport == "stdio" and mcp_tool.command.strip():
-            _add_import(acc, "from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset")
+            _add_import(
+                acc, "from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset"
+            )
             _add_import(
                 acc,
                 "from google.adk.tools.mcp_tool.mcp_toolset import "
@@ -342,7 +367,7 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
         v = _unique_ident(acc, f"skills_{var_name}", "skill_toolset")
         loaders = [
             "        load_skill_from_dir("
-            f"_Path(__file__).parent.parent.parent / \"skills\" / {_py_str(folder)})"
+            f'_Path(__file__).parent.parent.parent / "skills" / {_py_str(folder)})'
             for folder in skill_folders
         ]
         joined_loaders = ",\n".join(loaders)
@@ -356,7 +381,7 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
     ]
     acc.pre_lines.append(
         f"INSTRUCTION_{var_name.upper()} = "
-        f"{_py_str(draft.instruction or 'You are a helpful assistant.')}"
+        f"{_py_triple(draft.instruction or 'You are a helpful assistant.')}"
     )
 
     if tool_exprs:
@@ -371,7 +396,9 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
     if draft.memory.shortTerm:
         backend = STM_BY_ID.get(draft.shortTermBackend or "local")
         if backend:
-            _add_import(acc, "from veadk.memory.short_term_memory import ShortTermMemory")
+            _add_import(
+                acc, "from veadk.memory.short_term_memory import ShortTermMemory"
+            )
             args = [f"backend={_py_str(backend.id)}"]
             if backend.extra_args:
                 args.append(backend.extra_args)
@@ -427,7 +454,7 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
             exporter = EXPORTER_BY_ID.get(exporter_id)
             if exporter:
                 acc.env.append(
-                    EnvVar(exporter.enable_flag, True, "true", f"{exporter.id} 开关")
+                    EnvVar(exporter.enable_flag, True, "true", f"{exporter.label} 开关")
                 )
                 _add_env(acc, exporter.env)
 
@@ -476,7 +503,9 @@ def render_env_example(env: list[EnvVar]) -> str:
     ]
     for item in env:
         if item.comment or item.required:
-            lines.append(f"# {'[必填] ' if item.required else ''}{item.comment}".rstrip())
+            lines.append(
+                f"# {'[必填] ' if item.required else ''}{item.comment}".rstrip()
+            )
         lines.append(f"{item.key}={item.placeholder}")
     return "\n".join(lines) + "\n"
 
@@ -531,16 +560,18 @@ def _render_app_py(pkg: str, feishu_channel_enabled: bool) -> str:
     feishu_imports = (
         "\nimport asyncio\nimport inspect\nimport threading\nimport traceback\n"
         "from contextlib import asynccontextmanager\n"
-        "from veadk.extensions import FeishuChannelExtension\n"
+        "from veadk.extensions import FeishuChannelExtension"
         if feishu_channel_enabled
         else ""
     )
     feishu_helpers = _FEISHU_HELPERS if feishu_channel_enabled else ""
-    feishu_runner_import = "    from veadk import Runner\n" if feishu_channel_enabled else ""
+    feishu_runner_import = (
+        "    from veadk import Runner\n" if feishu_channel_enabled else ""
+    )
     feishu_runner = (
         "    runner = Runner(\n"
         "        agent=root_agent,\n"
-        "        app_name=getattr(root_agent, \"name\", \"\") or \"agent\",\n"
+        '        app_name=getattr(root_agent, "name", "") or "agent",\n'
         "        short_term_memory=short_term_memory,\n"
         "    )\n"
         if feishu_channel_enabled
@@ -579,10 +610,13 @@ def build_app():
     )
     app = agent_server_app.app
 
-{feishu_lifespan}    @app.get("/ping")
+{feishu_lifespan}    # Add health check endpoint
+    @app.get("/ping")
     def ping() -> dict[str, str]:
         return {{"status": "ok"}}
 
+    # Agent-structure introspection (data plane), consumed by the VeADK web
+    # UI's "管理 Agent" view to show this runtime's agent name + sub-agent tree.
     from fastapi import HTTPException as _HTTPException
 
     def _agent_type(a: object) -> str:
@@ -645,6 +679,9 @@ def build_app():
 
     @app.get("/web/agent-graph")
     def agent_graph() -> dict:
+        # Single introspection endpoint on the main agent: returns this runtime's
+        # root agent + recursive sub-agent tree, with no /list-apps discovery
+        # needed. Used by the VeADK "管理 Agent" view.
         return {{
             "name": getattr(root_agent, "name", "") or "",
             "description": getattr(root_agent, "description", "") or "",
@@ -654,6 +691,8 @@ def build_app():
             "graph": _agent_node(root_agent),
         }}
 
+    # Serve the bundled VeADK web UI without taking over "/", which is reserved
+    # by AgentServerApp for the A2A protocol surface.
     if (WEBUI_DIR / "index.html").is_file():
         if (WEBUI_DIR / "assets").is_dir():
             app.mount(
@@ -670,6 +709,8 @@ def build_app():
         def webui(path: str = ""):
             return _FileResponse(WEBUI_DIR / "index.html")
 
+    # AgentServerApp mounts A2A at "/", so routes added after construction must
+    # be moved before that root mount or they will be shadowed.
     _priority_paths = {{
         "/",
         "/ping",
@@ -696,7 +737,7 @@ if __name__ == "__main__":
 """
 
 
-_FEISHU_HELPERS = '''def _get_feishu_channel_method(channel, names):
+_FEISHU_HELPERS = """def _get_feishu_channel_method(channel, names):
     raw_channel = getattr(channel, "channel", None)
     for target in (raw_channel, channel):
         if target is None:
@@ -835,10 +876,10 @@ async def _stop_feishu_channel(app) -> None:
                 "feishu channel background thread did not stop within 2s",
                 flush=True,
             )
-'''
+"""
 
 
-_FEISHU_LIFESPAN = '''    original_lifespan = app.router.lifespan_context
+_FEISHU_LIFESPAN = """    original_lifespan = app.router.lifespan_context
 
     @asynccontextmanager
     async def lifespan(fastapi_app):
@@ -850,7 +891,7 @@ _FEISHU_LIFESPAN = '''    original_lifespan = app.router.lifespan_context
                 await _stop_feishu_channel(fastapi_app)
 
     app.router.lifespan_context = lifespan
-'''
+"""
 
 
 def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
@@ -892,7 +933,9 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
             path=f"agents/{pkg}/__init__.py",
             content='from .agent import root_agent\n\n__all__ = ["root_agent"]\n',
         ),
-        GeneratedFile(path=".env.example", content=render_env_example(_dedupe_env(acc.env))),
+        GeneratedFile(
+            path=".env.example", content=render_env_example(_dedupe_env(acc.env))
+        ),
         GeneratedFile(
             path="requirements.txt",
             content=render_requirements(acc.extras, feishu_channel_enabled),

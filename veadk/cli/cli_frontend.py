@@ -332,16 +332,8 @@ def _serve_options(f):
             "no in-app login (use when deployed behind the AgentKit runtime gateway).",
         ),
         click.option(
-            "--allow-remote-generated-agent-test-run",
-            is_flag=True,
-            default=False,
-            help="Allow generated-agent test runs when the frontend is bound to "
-            "a non-local host. Generated-agent debug runs are available by "
-            "default on localhost; use this only behind authentication and isolation.",
-        ),
-        click.option(
             "--generated-agent-test-run-ttl",
-            default=600,
+            default=1800,
             show_default=True,
             type=int,
             help="Seconds before a generated-agent debug runner is cleaned up.",
@@ -380,7 +372,6 @@ def frontend(
     oauth2_provider: str | None,
     oauth2_provider_label: str | None,
     auth_mode: str,
-    allow_remote_generated_agent_test_run: bool,
     generated_agent_test_run_ttl: int,
     open_browser: bool,
 ) -> None:
@@ -402,7 +393,6 @@ def frontend(
         oauth2_provider=oauth2_provider,
         oauth2_provider_label=oauth2_provider_label,
         auth_mode=auth_mode,
-        allow_remote_generated_agent_test_run=allow_remote_generated_agent_test_run,
         generated_agent_test_run_ttl=generated_agent_test_run_ttl,
         open_browser=open_browser,
         studio=False,
@@ -428,7 +418,6 @@ def studio(
     oauth2_provider: str | None,
     oauth2_provider_label: str | None,
     auth_mode: str,
-    allow_remote_generated_agent_test_run: bool,
     generated_agent_test_run_ttl: int,
     open_browser: bool,
 ) -> None:
@@ -455,7 +444,6 @@ def studio(
         oauth2_provider=oauth2_provider,
         oauth2_provider_label=oauth2_provider_label,
         auth_mode=auth_mode,
-        allow_remote_generated_agent_test_run=allow_remote_generated_agent_test_run,
         generated_agent_test_run_ttl=generated_agent_test_run_ttl,
         open_browser=open_browser,
         studio=True,
@@ -478,7 +466,6 @@ def _run_frontend_server(
     oauth2_provider: str | None,
     oauth2_provider_label: str | None,
     auth_mode: str,
-    allow_remote_generated_agent_test_run: bool,
     generated_agent_test_run_ttl: int,
     open_browser: bool,
     studio: bool = False,
@@ -516,17 +503,11 @@ def _run_frontend_server(
 
     _agent_loader = AgentLoader(agents_dir)
 
-    _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
-    if (
-        host not in _LOCAL_HOSTS
-        and not allow_remote_generated_agent_test_run
-    ):
-        raise click.ClickException(
-            "Generated-agent test runs execute generated Python code in an "
-            "isolated subprocess and are available on localhost by default. "
-            "Bind to 127.0.0.1 or pass --allow-remote-generated-agent-test-run "
-            "behind authentication and stronger isolation."
-        )
+    # Generated-agent debug is intentionally feature-complete in both local and
+    # remote Studio deployments: the backend receives AgentDraft JSON, generates
+    # the same project content as "Generate project", writes it to a temp dir,
+    # and starts a runner for the debug session.
+    generated_agent_test_run_allows_local_resources = True
 
     generated_agent_test_run_ttl = max(60, generated_agent_test_run_ttl)
 
@@ -639,6 +620,7 @@ def _run_frontend_server(
                 "manageAgents": True,
                 "addAgentkit": True,
                 "generatedAgentTestRun": True,
+                "generatedAgentTestRunDisabledReason": "",
             },
             "defaultView": "chat",
         }
@@ -857,6 +839,7 @@ def _run_frontend_server(
     from pydantic import ValidationError
 
     from veadk.cli.generated_agent_codegen import (
+        AgentDraft,
         GeneratedAgentProjectRequest,
         GeneratedAgentTestRunRequest,
         GeneratedProject,
@@ -952,6 +935,7 @@ def _run_frontend_server(
         env: dict[str, str] = {"OTEL_SDK_DISABLED": "true"}
         for key in (
             "MODEL_AGENT_API_KEY",
+            "MODEL_AGENT_API_BASE",
             "MODEL_AGENT_BASE_URL",
             "MODEL_AGENT_NAME",
             "MODEL_AGENT_PROVIDER",
@@ -967,7 +951,20 @@ def _run_frontend_server(
         ):
             if os.getenv(key):
                 env[key] = os.environ[key]
-        for key in ("PATH", "VIRTUAL_ENV", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"):
+        for key in (
+            "PATH",
+            "HOME",
+            "USER",
+            "LOGNAME",
+            "SHELL",
+            "TMPDIR",
+            "TEMP",
+            "TMP",
+            "VIRTUAL_ENV",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "NO_PROXY",
+        ):
             if os.getenv(key):
                 env[key] = os.environ[key]
         repo_root = str(Path(__file__).resolve().parents[2])
@@ -976,6 +973,45 @@ def _run_frontend_server(
             f"{repo_root}{os.pathsep}{pythonpath}" if pythonpath else repo_root
         )
         return env
+
+    def _redact_runner_log(text: str) -> str:
+        redacted = text
+        for key, value in os.environ.items():
+            upper = key.upper()
+            if (
+                value
+                and len(value) >= 8
+                and any(s in upper for s in ("KEY", "SECRET", "TOKEN", "PASSWORD"))
+            ):
+                redacted = redacted.replace(value, "***")
+        return redacted
+
+    def _read_runner_log_tail(path: PathlibPath, max_chars: int = 6000) -> str:
+        try:
+            with path.open("rb") as f:
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                f.seek(max(0, size - max_chars * 4))
+                text = f.read().decode("utf-8", "replace")
+        except OSError:
+            return ""
+        return _redact_runner_log(text[-max_chars:].strip())
+
+    def _runner_log_detail(
+        prefix: str,
+        stdout_path: PathlibPath,
+        stderr_path: PathlibPath,
+    ) -> str:
+        parts = [prefix]
+        stderr_tail = _read_runner_log_tail(stderr_path)
+        stdout_tail = _read_runner_log_tail(stdout_path)
+        if stderr_tail:
+            parts.append(f"stderr:\n{stderr_tail}")
+        if stdout_tail:
+            parts.append(f"stdout:\n{stdout_tail}")
+        if len(parts) == 1:
+            parts.append("No runner logs were captured.")
+        return "\n\n".join(parts)
 
     def _http_policy_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=400, detail=str(exc))
@@ -1006,7 +1042,25 @@ def _run_frontend_server(
             )
         return str(resp.skill_md)
 
-    async def _generate_project_from_request(data: dict, *, debug: bool) -> GeneratedProject:
+    def _draft_for_debug_run(draft: AgentDraft) -> AgentDraft:
+        """Return a debug-safe draft by omitting stdio MCP tools recursively."""
+        return draft.model_copy(
+            deep=True,
+            update={
+                "mcpTools": [
+                    tool for tool in draft.mcpTools if tool.transport != "stdio"
+                ],
+                "subAgents": [
+                    _draft_for_debug_run(sub_agent) for sub_agent in draft.subAgents
+                ],
+            },
+        )
+
+    async def _generate_project_from_request(
+        data: dict,
+        *,
+        debug: bool,
+    ) -> GeneratedProject:
         try:
             if debug:
                 req = GeneratedAgentTestRunRequest.model_validate(data)
@@ -1014,7 +1068,13 @@ def _run_frontend_server(
                 req = GeneratedAgentProjectRequest.model_validate(data)
             draft = normalize_and_validate_draft(req.draft)
             if debug:
-                validate_debug_policy(draft)
+                draft = _draft_for_debug_run(draft)
+                validate_debug_policy(
+                    draft,
+                    allow_local_runtime_resources=(
+                        generated_agent_test_run_allows_local_resources
+                    ),
+                )
             else:
                 validate_project_policy(draft)
             project = generate_project_from_draft(draft)
@@ -1046,32 +1106,46 @@ def _run_frontend_server(
             if not isinstance(file_path, str) or not file_path.strip():
                 raise HTTPException(status_code=400, detail="Invalid file path")
             if not isinstance(content, str):
-                raise HTTPException(status_code=400, detail=f"Invalid content: {file_path}")
+                raise HTTPException(
+                    status_code=400, detail=f"Invalid content: {file_path}"
+                )
             encoded = content.encode("utf-8")
             if len(encoded) > _TEST_RUN_MAX_FILE_BYTES:
-                raise HTTPException(status_code=400, detail=f"File too large: {file_path}")
+                raise HTTPException(
+                    status_code=400, detail=f"File too large: {file_path}"
+                )
             total += len(encoded)
             if total > _TEST_RUN_MAX_TOTAL_BYTES:
                 raise HTTPException(status_code=400, detail="Project is too large")
 
             path_obj = PathlibPath(file_path)
             if path_obj.is_absolute() or "\x00" in file_path:
-                raise HTTPException(status_code=400, detail=f"Illegal file path: {file_path}")
+                raise HTTPException(
+                    status_code=400, detail=f"Illegal file path: {file_path}"
+                )
             if any(part in ("", ".", "..") for part in path_obj.parts):
-                raise HTTPException(status_code=400, detail=f"Illegal file path: {file_path}")
+                raise HTTPException(
+                    status_code=400, detail=f"Illegal file path: {file_path}"
+                )
 
             full = (base / file_path).resolve()
             if not full.is_relative_to(base):
-                raise HTTPException(status_code=400, detail=f"Illegal file path: {file_path}")
+                raise HTTPException(
+                    status_code=400, detail=f"Illegal file path: {file_path}"
+                )
             full.parent.mkdir(parents=True, exist_ok=True)
             full.write_text(content, encoding="utf-8")
 
         agents_dir = base / "agents"
-        apps = sorted(
-            p.name
-            for p in agents_dir.iterdir()
-            if p.is_dir() and (p / "agent.py").is_file()
-        ) if agents_dir.is_dir() else []
+        apps = (
+            sorted(
+                p.name
+                for p in agents_dir.iterdir()
+                if p.is_dir() and (p / "agent.py").is_file()
+            )
+            if agents_dir.is_dir()
+            else []
+        )
         if project.name in apps:
             return project.name
         if len(apps) == 1:
@@ -1086,7 +1160,13 @@ def _run_frontend_server(
             s.bind(("127.0.0.1", 0))
             return int(s.getsockname()[1])
 
-    async def _wait_for_runner_ready(base_url: str, app_name: str, proc: subprocess.Popen) -> None:
+    async def _wait_for_runner_ready(
+        base_url: str,
+        app_name: str,
+        proc: subprocess.Popen,
+        stdout_path: PathlibPath,
+        stderr_path: PathlibPath,
+    ) -> None:
         import asyncio
 
         deadline = time.time() + _TEST_RUN_READY_TIMEOUT
@@ -1096,7 +1176,12 @@ def _run_frontend_server(
                 if proc.poll() is not None:
                     raise HTTPException(
                         status_code=400,
-                        detail="Debug runner exited before becoming ready",
+                        detail=_runner_log_detail(
+                            "Debug runner exited before becoming ready "
+                            f"(exit code {proc.returncode}).",
+                            stdout_path,
+                            stderr_path,
+                        ),
                     )
                 try:
                     res = await client.get(f"{base_url}/list-apps")
@@ -1108,7 +1193,11 @@ def _run_frontend_server(
                 await asyncio.sleep(0.25)
         raise HTTPException(
             status_code=504,
-            detail=f"Debug runner did not become ready: {last_error}",
+            detail=_runner_log_detail(
+                f"Debug runner did not become ready: {last_error}",
+                stdout_path,
+                stderr_path,
+            ),
         )
 
     @app.post("/web/generated-agent-projects")
@@ -1141,6 +1230,8 @@ def _run_frontend_server(
             app_name = _write_generated_project(project, temp_dir)
             port = _free_local_port()
             base_url = f"http://127.0.0.1:{port}"
+            stdout_path = PathlibPath(temp_dir) / "runner.stdout.log"
+            stderr_path = PathlibPath(temp_dir) / "runner.stderr.log"
             cmd = [
                 sys.executable,
                 "-m",
@@ -1152,14 +1243,22 @@ def _run_frontend_server(
                 "--port",
                 str(port),
             ]
-            proc = subprocess.Popen(
-                cmd,
-                cwd=temp_dir,
-                env=_safe_runner_env(),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+            with stdout_path.open("w", encoding="utf-8") as stdout_file:
+                with stderr_path.open("w", encoding="utf-8") as stderr_file:
+                    proc = subprocess.Popen(
+                        cmd,
+                        cwd=temp_dir,
+                        env=_safe_runner_env(),
+                        stdout=stdout_file,
+                        stderr=stderr_file,
+                    )
+            await _wait_for_runner_ready(
+                base_url,
+                app_name,
+                proc,
+                stdout_path,
+                stderr_path,
             )
-            await _wait_for_runner_ready(base_url, app_name, proc)
 
             run_id = "tr_" + secrets.token_urlsafe(18)
             expires_at = time.time() + generated_agent_test_run_ttl
@@ -2245,6 +2344,21 @@ def _run_frontend_server(
     uvicorn.run(app, host=host, port=port)
 
 
+def _studio_deploy_run_script() -> str:
+    """Return the authenticated VeFaaS entrypoint used by ``studio deploy``."""
+    return (
+        "#!/bin/bash\n"
+        "set -ex\n"
+        'cd "$(dirname "$0")"\n'
+        'if [ -d "output" ]; then cd ./output/; fi\n'
+        "HOST=0.0.0.0\n"
+        "PORT=${_FAAS_RUNTIME_PORT:-8000}\n"
+        "export PYTHONPATH=$PYTHONPATH:./site-packages\n"
+        "exec python3 -m veadk.cli.cli studio "
+        '--auth-mode frontend --host "$HOST" --port "$PORT"\n'
+    )
+
+
 @studio.command("deploy")
 @click.option(
     "--user-pool-id",
@@ -2314,10 +2428,10 @@ def frontend_deploy(
 ) -> None:
     """Deploy the SSO web frontend to VeFaaS.
 
-    Builds a minimal function that runs `veadk frontend --auth-mode gateway`,
-    fronted by an APIG SSO gateway bound to the given VeIdentity user pool +
-    client, and prints the public URL. Inside the function the frontend uses the
-    bound IAM role's STS credentials to manage AgentKit runtimes.
+    Builds a minimal function that runs `veadk studio --auth-mode frontend`,
+    with in-app SSO bound to the given VeIdentity user pool + client, and prints
+    the public URL. Inside the function the frontend uses the bound IAM role's
+    STS credentials to manage AgentKit runtimes.
     """
     import tempfile
     import shutil
@@ -2371,17 +2485,7 @@ def frontend_deploy(
     requirements = (
         f"veadk-python=={veadk_version}\n" if veadk_version else "veadk-python\n"
     )
-    run_sh = (
-        "#!/bin/bash\n"
-        "set -ex\n"
-        'cd "$(dirname "$0")"\n'
-        'if [ -d "output" ]; then cd ./output/; fi\n'
-        "HOST=0.0.0.0\n"
-        "PORT=${_FAAS_RUNTIME_PORT:-8000}\n"
-        "export PYTHONPATH=$PYTHONPATH:./site-packages\n"
-        "exec python3 -m veadk.cli.cli studio "
-        '--auth-mode frontend --host "$HOST" --port "$PORT"\n'
-    )
+    run_sh = _studio_deploy_run_script()
     # 2b) Resolve the serverless APIG gateway: use --gateway-name if given, else
     #     reuse an existing serverless gateway, creating one only if none exists.
     #     (VeFaaS applications can only attach to a serverless gateway; reusing

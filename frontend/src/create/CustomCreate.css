@@ -1163,6 +1163,12 @@
 .cw-seg-sm .cw-seg-title {
   font-size: 12.5px;
 }
+.cw-mcp-note {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: hsl(var(--muted-foreground));
+}
 .cw-mcp .cw-add-sub {
   margin-top: 0;
 }

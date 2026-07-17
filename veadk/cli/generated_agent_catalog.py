@@ -2,6 +2,15 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Backend catalog for generated-agent project codegen.
 
@@ -42,6 +51,7 @@ class BackendOption:
 @dataclass(frozen=True)
 class ExporterOption:
     id: str
+    label: str
     enable_flag: str
     env: tuple[EnvVar, ...] = ()
 
@@ -261,6 +271,7 @@ KB_BACKENDS = (
 TRACING_EXPORTERS = (
     ExporterOption(
         "apmplus",
+        "APMPlus",
         "ENABLE_APMPLUS",
         (
             EnvVar(
@@ -274,6 +285,7 @@ TRACING_EXPORTERS = (
     ),
     ExporterOption(
         "cozeloop",
+        "CozeLoop",
         "ENABLE_COZELOOP",
         (
             EnvVar("OBSERVABILITY_OPENTELEMETRY_COZELOOP_API_KEY", True),
@@ -287,6 +299,7 @@ TRACING_EXPORTERS = (
     ),
     ExporterOption(
         "tls",
+        "TLS (日志服务)",
         "ENABLE_TLS",
         (
             *VOLC_ENV,
@@ -306,4 +319,3 @@ STM_BY_ID = {backend.id: backend for backend in STM_BACKENDS}
 LTM_BY_ID = {backend.id: backend for backend in LTM_BACKENDS}
 KB_BY_ID = {backend.id: backend for backend in KB_BACKENDS}
 EXPORTER_BY_ID = {exporter.id: exporter for exporter in TRACING_EXPORTERS}
-

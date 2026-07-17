@@ -13,7 +13,7 @@ import { applyEvent, emptyAcc, type Acc } from "../blocks";
 import { Markdown } from "../ui/Markdown";
 import { ProjectPreview } from "../ui/ProjectPreview";
 import type { AgentProject } from "./project";
-import { normalizeDraft } from "./codegen";
+import { normalizeDraft } from "./normalizeDraft";
 import type { AgentDraft } from "./types";
 import "./IntelligentCreate.css";
 
@@ -74,8 +74,8 @@ function stripFence(raw: string): string {
   return (fenced ? fenced[1] : t).trim();
 }
 
-/** Try to interpret the assistant's text as an agent-CONFIG JSON, then run it
- *  through the shared codegen to produce the project. Tolerant of surrounding
+/** Try to interpret the assistant's text as an agent-CONFIG JSON, then ask the
+ *  backend to produce the project. Tolerant of surrounding
  *  prose: falls back to the first `{ … }` slice. Returns null when the text
  *  isn't a config (e.g. a clarifying question). */
 async function parseProject(raw: string): Promise<AgentProject | null> {
