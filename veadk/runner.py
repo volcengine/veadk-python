@@ -306,11 +306,18 @@ async def _upload_image_to_tos(
             filename = os.path.basename(part.inline_data.display_name)
             object_key = f"{app_name}/{user_id}-{session_id}-{filename}"
             ve_tos = VeTOS()
-            tos_url = ve_tos.build_tos_signed_url(object_key=object_key)
-            await ve_tos.async_upload_bytes(
+            uploaded = await ve_tos.async_upload_bytes(
                 object_key=object_key,
                 data=part.inline_data.data,
             )
+            if not uploaded:
+                logger.error(
+                    "TOS upload did not succeed; continuing without a traced "
+                    f"attachment URL | bucket={ve_tos.bucket_name}, "
+                    f"object_key={object_key}"
+                )
+                return
+            tos_url = ve_tos.build_tos_signed_url(object_key=object_key)
             part.inline_data.display_name = tos_url
     except Exception as e:
         logger.exception(

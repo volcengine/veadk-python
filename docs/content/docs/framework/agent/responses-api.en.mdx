@@ -41,6 +41,17 @@ root_agent = Agent(
 )
 ```
 
+**Model fallbacks**
+
+The Responses API also accepts a `model_name` list for resilience. If a request fails, VeADK tries each subsequent model in order until one succeeds or all models fail.
+
+```python
+root_agent = Agent(
+    enable_responses=True,
+    model_name=["doubao-seed-1-8-251228", "deepseek-r1-250528"],
+)
+```
+
 **Result**
 
 ![responses-api](/assets/images/agents/responses_api.png)

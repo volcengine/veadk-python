@@ -29,7 +29,7 @@ dependencies = [
     "opentelemetry-exporter-otlp==1.37.0",
     "opentelemetry-instrumentation-logging>=0.56b0",
     "wrapt==1.17.2", # For patching built-in functions
-    "volcengine-python-sdk>=5.0.1", # For Volcengine API
+    "volcengine-python-sdk>=5.0.36", # For Volcengine API and Ark Responses context management
     "volcengine>=1.0.193", # For Volcengine sign and AgentKit Runtime API access
     "agent-pilot-sdk==0.1.2", # Prompt optimization by Volcengine AgentPilot/PromptPilot toolkits
     "fastmcp>=2.12.3", # For running MCP
