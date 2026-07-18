@@ -1419,7 +1419,9 @@ def _run_frontend_server(
                         text = (await res.aread()).decode("utf-8", "replace")
                         logger.warning(
                             "test-run run_sse %s (%s): %s",
-                            res.status_code, run.base_url, text[:500],
+                            res.status_code,
+                            run.base_url,
+                            text[:500],
                         )
                         err = json.dumps({"error": text}, ensure_ascii=False)
                         yield f"data: {err}\n\n"
@@ -1476,7 +1478,9 @@ def _run_frontend_server(
         # Network config (advanced): optional VPC/private networking.
         # Shape: { mode: "public"|"private"|"both", vpc_id?, subnet_ids?, enable_shared_internet_access? }
         # When absent or mode=public, use the default public endpoint.
-        net_cfg = config.get("network") if isinstance(config.get("network"), dict) else {}
+        net_cfg = (
+            config.get("network") if isinstance(config.get("network"), dict) else {}
+        )
         runtime_network: dict | None = None
         if net_cfg:
             mode = str(net_cfg.get("mode") or "").strip().lower()
@@ -2075,7 +2079,8 @@ def _run_frontend_server(
                 except Exception as e:
                     logger.warning(f"list runtimes [{reg}] failed: {e}")
             all_runtimes.sort(
-                key=lambda x: x.get("createdAt") or "", reverse=True,
+                key=lambda x: x.get("createdAt") or "",
+                reverse=True,
             )
             page = all_runtimes[:page_size]
             return {"runtimes": page, "nextToken": ""}
@@ -2165,10 +2170,14 @@ def _run_frontend_server(
             body_bytes = b"".join(body_chunks)
             logger.warning(
                 "runtime-proxy %s %s -> %s (%s): %s",
-                request.method, path, upstream.status_code, target,
+                request.method,
+                path,
+                upstream.status_code,
+                target,
                 body_bytes.decode("utf-8", errors="replace")[:500],
             )
             from fastapi.responses import Response as _Resp
+
             media = upstream.headers.get("content-type", "application/octet-stream")
             await upstream.aclose()
             await client.aclose()
