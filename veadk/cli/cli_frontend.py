@@ -23,6 +23,7 @@ separate toggle: it sources the agent picker from local agents instead of cloud
 runtimes (the UI is still served).
 """
 
+import asyncio
 import json
 import os
 import sys
@@ -543,6 +544,75 @@ def _run_frontend_server(
             "SECRET_KEY, or run inside a VeFaaS function with an IAM role)",
         )
 
+    # Prefixes (and a few exact keys) we copy from the server's environment
+    # into a created AgentKit runtime. Anything NOT in this list is left out
+    # so we never ship unrelated host env (PATH, HOME, IAM_ROLE, _FAAS_*, etc.).
+    _ENV_PREFIXES: tuple[str, ...] = (
+        "MODEL_AGENT_",
+        "MODEL_EMBEDDING_",
+        "MODEL_IMAGE_",
+        "MODEL_EDIT_",
+        "MODEL_VIDEO_",
+        "MODEL_REALTIME_",
+        "TOOL_",
+        "VOLCENGINE_",
+        "BYTEPLUS_",
+        "DATABASE_MEM0_",
+        "DATABASE_VIKING",
+        "DATABASE_TOS_",
+        "DATABASE_CONTEXT_SEARCH_",
+        "OBSERVABILITY_",
+        "AGENTKIT_",
+        "ARK_",
+        "OPENAI_",
+        "GOOGLE_",
+    )
+    _ENV_EXACT: frozenset[str] = frozenset({"CLOUD_PROVIDER"})
+
+    def _collect_runtime_envs() -> dict[str, str]:
+        """Return env vars that should be injected into a deployed runtime."""
+        try:
+            from veadk.config import veadk_environments as _src
+        except Exception:  # pragma: no cover
+            _src = os.environ
+        out: dict[str, str] = {}
+        for k, v in _src.items():
+            if not v:
+                continue
+            if k in _ENV_EXACT or any(k.startswith(p) for p in _ENV_PREFIXES):
+                out[str(k)] = str(v)
+        if not out.get("MODEL_AGENT_API_KEY"):
+            try:
+                from veadk.auth.veauth.ark_veauth import get_ark_token
+
+                logger.info(
+                    "MODEL_AGENT_API_KEY not set; resolving an Ark API key "
+                    "via ListApiKeys for the runtime..."
+                )
+                ark_key = get_ark_token()
+                if ark_key:
+                    out["MODEL_AGENT_API_KEY"] = str(ark_key)
+                    logger.info("Injected MODEL_AGENT_API_KEY into runtime env.")
+            except Exception as e:
+                logger.warning(
+                    "Could not auto-resolve MODEL_AGENT_API_KEY for the runtime: "
+                    "%s. The deployed agent may fail to start without this key; "
+                    "set MODEL_AGENT_API_KEY in .env/config.yaml before deploying.",
+                    e,
+                )
+        out["OTEL_SDK_DISABLED"] = "true"
+        out["VEADK_DISABLE_EXPIRE_AT"] = "true"
+        # Force telemetry exporters off. The AgentKit runner sets
+        # apmplus_enable=True on every created runtime, which makes the
+        # platform inject ENABLE_APMPLUS=true into the container; pre-seeding
+        # the APMPlus api-key env with a harmless sentinel short-circuits the
+        # cached_property before it calls get_apmplus_token().
+        out["ENABLE_APMPLUS"] = "false"
+        out["ENABLE_COZELOOP"] = "false"
+        out["ENABLE_TLS"] = "false"
+        out["OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY"] = "tracing-disabled"
+        return out
+
     def _model_name(model: object) -> str:
         if isinstance(model, str):
             return model
@@ -932,7 +1002,13 @@ def _run_frontend_server(
         plus Volcengine/tool credentials so generated agents can exercise real
         tool calls during local debugging.
         """
-        env: dict[str, str] = {"OTEL_SDK_DISABLED": "true"}
+        env: dict[str, str] = {
+            "OTEL_SDK_DISABLED": "true",
+            "VEADK_DISABLE_EXPIRE_AT": "true",
+            "ENABLE_APMPLUS": "false",
+            "ENABLE_COZELOOP": "false",
+            "ENABLE_TLS": "false",
+        }
         for key in (
             "MODEL_AGENT_API_KEY",
             "MODEL_AGENT_API_BASE",
@@ -940,14 +1016,26 @@ def _run_frontend_server(
             "MODEL_AGENT_NAME",
             "MODEL_AGENT_PROVIDER",
             "MODEL_AGENT_API_KEY_NAME",
+            "MODEL_EMBEDDING_API_KEY",
+            "MODEL_IMAGE_API_KEY",
+            "MODEL_EDIT_API_KEY",
+            "MODEL_VIDEO_API_KEY",
+            "MODEL_REALTIME_API_KEY",
+            "ARK_API_KEY",
             "VOLCENGINE_ACCESS_KEY",
             "VOLCENGINE_SECRET_KEY",
             "VOLCENGINE_SESSION_TOKEN",
             "VOLCENGINE_REGION",
             "TOOL_WEB_SEARCH_ACCESS_KEY",
             "TOOL_WEB_SEARCH_SECRET_KEY",
+            "TOOL_VESPEECH_APP_ID",
+            "TOOL_VESPEECH_ACCESS_TOKEN",
+            "TOOL_VESEARCH_ENDPOINT",
+            "TOOL_WEB_SCRAPER_ENDPOINT",
+            "DATABASE_MEM0_API_KEY",
             "CLOUD_PROVIDER",
             "BYTEPLUS_WEB_SEARCH_API_KEY",
+            "OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY",
         ):
             if os.getenv(key):
                 env[key] = os.environ[key]
@@ -1329,6 +1417,12 @@ def _run_frontend_server(
                 ) as res:
                     if res.status_code >= 400:
                         text = (await res.aread()).decode("utf-8", "replace")
+                        logger.warning(
+                            "test-run run_sse %s (%s): %s",
+                            res.status_code,
+                            run.base_url,
+                            text[:500],
+                        )
                         err = json.dumps({"error": text}, ensure_ascii=False)
                         yield f"data: {err}\n\n"
                         return
@@ -1381,6 +1475,17 @@ def _run_frontend_server(
 
         region = config.get("region", "cn-beijing")
         project_name = config.get("projectName", "default")
+        # Network config (advanced): optional VPC/private networking.
+        # Shape: { mode: "public"|"private"|"both", vpc_id?, subnet_ids?, enable_shared_internet_access? }
+        # When absent or mode=public, use the default public endpoint.
+        net_cfg = (
+            config.get("network") if isinstance(config.get("network"), dict) else {}
+        )
+        runtime_network: dict | None = None
+        if net_cfg:
+            mode = str(net_cfg.get("mode") or "").strip().lower()
+            if mode and mode != "public":
+                runtime_network = dict(net_cfg)
         im_config = data.get("im") if isinstance(data.get("im"), dict) else {}
         feishu_config = (
             im_config.get("feishu") if isinstance(im_config.get("feishu"), dict) else {}
@@ -1443,12 +1548,14 @@ def _run_frontend_server(
             shutil.rmtree(temp_dir, ignore_errors=True)
             raise HTTPException(status_code=400, detail="No app.py found in files")
 
-        runtime_envs = {
-            "MODEL_AGENT_API_KEY": os.getenv("MODEL_AGENT_API_KEY", ""),
-            "OTEL_SDK_DISABLED": "true",
-            "VEADK_DISABLE_EXPIRE_AT": "true",
-        }
-        runtime_envs.update(extra_runtime_envs)
+        # Collect env vars from the deployer's environment to forward into the
+        # created runtime. The AgentKit platform only injects what we pass here,
+        # so we explicitly forward the VeADK/Volcengine/tool-related vars the
+        # agent needs at boot. User-provided envs (from the UI) take priority
+        # over our defaults.
+        runtime_envs = _collect_runtime_envs()
+        for k, v in extra_runtime_envs.items():
+            runtime_envs[k] = v
         if feishu_enabled:
             runtime_envs.update(
                 {
@@ -1457,20 +1564,44 @@ def _run_frontend_server(
                 }
             )
 
-        cloud_config = {
+        # TOS build-artifact buckets are region-scoped. The SDK default template
+        # ("agentkit-platform-<account_id>") produces a single global name, which
+        # collides once a bucket exists in cn-beijing and the user targets
+        # cn-shanghai (TOS refuses cross-region reuse). For non-Beijing regions,
+        # set a region-suffixed bucket name so each region gets its own
+        # auto-created bucket.
+        cloud_config: dict = {
             "region": region,
             "project_name": project_name,
             "image_tag": "latest",
             "runtime_envs": runtime_envs,
+            "python_version": "3.12",
         }
+        if runtime_network:
+            cloud_config["runtime_network"] = runtime_network
         if feishu_enabled:
             cloud_config["min_instance"] = 1
+        if region and region != "cn-beijing":
+            region_suffix = region.split("-")[-1]  # "shanghai" from "cn-shanghai"
+            try:
+                from agentkit.utils.template_utils import render_template
+
+                bucket_base = render_template("agentkit-platform-{{account_id}}")
+            except Exception as e:
+                logger.warning(
+                    "Could not resolve account_id for TOS bucket naming: %s; "
+                    "falling back to 'agentkit-platform-%s'",
+                    e,
+                    region_suffix,
+                )
+                bucket_base = "agentkit-platform"
+            cloud_config["tos_bucket"] = f"{bucket_base}-{region_suffix}"
 
         agentkit_config = {
             "common": {
                 "agent_name": agent_name,
                 "entry_point": "app.py",
-                "python_version": "3.11",
+                "python_version": "3.12",
                 "launch_type": "cloud",
             },
             "launch_types": {"cloud": cloud_config},
@@ -1624,6 +1755,11 @@ def _run_frontend_server(
 
                     def _tagged_create(self, req, _orig=orig_create, _extra=extra):
                         req.tags = [*(req.tags or []), *_extra]
+                        # The AgentKit runner hard-codes apmplus_enable=True on
+                        # every runtime; force it off so the container doesn't
+                        # try to fetch an APMPlus app-key with the deployer's
+                        # AK/SK at boot (breaks for STS temp credentials).
+                        req.apmplus_enable = False
                         return _orig(self, req)
 
                     rt_client.create_runtime = _tagged_create
@@ -1711,6 +1847,7 @@ def _run_frontend_server(
                                     "https://console.volcengine.com/agentkit/"
                                     f"region:agentkit+{region}/runtime?projectName={project_name}"
                                 ),
+                                "region": region,
                             }
                         )
                     else:
@@ -1738,23 +1875,28 @@ def _run_frontend_server(
         return StreamingResponse(_stream(), media_type="text/event-stream")
 
     @app.get("/web/my-runtimes")
-    async def _web_my_runtimes(author: str = "", region: str = "cn-beijing"):
+    async def _web_my_runtimes(author: str = "", region: str = "all"):
         """List AgentKit runtimes created via this UI (tagged veadk:managed),
-        optionally filtered to a single `author` (veadk:author tag)."""
+        optionally filtered to a single `author` (veadk:author tag).
+        `region=all` queries every supported region and merges results."""
         ak, sk, token = _resolve_ve_credentials()
-        try:
+        regions = (
+            ["cn-beijing", "cn-shanghai"] if region in {"all", "", "*"} else [region]
+        )
+
+        async def _list_one(reg: str) -> list[dict]:
             from agentkit.sdk.runtime.client import AgentkitRuntimeClient
             from agentkit.sdk.runtime import types as _rt
 
             client = AgentkitRuntimeClient(
-                access_key=ak, secret_key=sk, session_token=token, region=region
+                access_key=ak, secret_key=sk, session_token=token, region=reg
             )
             out: list[dict] = []
-            token = None
+            next_token = None
             for _ in range(20):  # page cap
-                kw = {"page_size": 100}
-                if token:
-                    kw["next_token"] = token
+                kw: dict = {"page_size": 100}
+                if next_token:
+                    kw["next_token"] = next_token
                 resp = client.list_runtimes(_rt.ListRuntimesRequest(**kw))
                 for r in resp.agent_kit_runtimes or []:
                     tags = {tg.key: tg.value for tg in (r.tags or [])}
@@ -1769,12 +1911,17 @@ def _run_frontend_server(
                             "status": r.status,
                             "createdAt": r.created_at,
                             "author": tags.get("veadk:author", ""),
-                            "region": region,
+                            "region": reg,
                         }
                     )
-                token = getattr(resp, "next_token", None)
-                if not token:
+                next_token = getattr(resp, "next_token", None)
+                if not next_token:
                     break
+            return out
+
+        try:
+            results = await asyncio.gather(*[_list_one(r) for r in regions])
+            out: list[dict] = [item for sub in results for item in sub]
             out.sort(key=lambda x: x.get("createdAt") or "", reverse=True)
             return {"runtimes": out}
         except Exception as e:
@@ -1873,24 +2020,29 @@ def _run_frontend_server(
         scope: str = "all",
         page_size: int = 30,
         next_token: str = "",
-        region: str = "cn-beijing",
+        region: str = "all",
     ):
         """One page of AgentKit runtimes for the agent selector. Lists ALL
         runtimes (server-side paginated); each item is flagged `isMine` when its
-        veadk:author tag matches `author`. scope=mine filters to the user's own."""
-        ak, sk, token = _resolve_ve_credentials()
-        try:
+        veadk:author tag matches `author`. scope=mine filters to the user's own.
+        region=all merges runtimes across all supported regions."""
+        ak, sk, svc_token = _resolve_ve_credentials()
+        regions = (
+            ["cn-beijing", "cn-shanghai"] if region in {"all", "", "*"} else [region]
+        )
+        page_size = max(1, min(page_size, 100))
+
+        # next_token format for "all" mode: "<region>:<token>" (empty token = "")
+        async def _list_region(reg: str, tok: str) -> tuple[list[dict], str]:
             from agentkit.sdk.runtime.client import AgentkitRuntimeClient
             from agentkit.sdk.runtime import types as _rt
 
             client = AgentkitRuntimeClient(
-                access_key=ak, secret_key=sk, session_token=token, region=region
+                access_key=ak, secret_key=sk, session_token=svc_token, region=reg
             )
-            # Token-based pagination: MaxResults bounds the page, NextToken
-            # continues it (PageSize is ignored by this API).
-            kw = {"max_results": max(1, min(page_size, 100))}
-            if next_token:
-                kw["next_token"] = next_token
+            kw: dict = {"max_results": page_size}
+            if tok:
+                kw["next_token"] = tok
             resp = client.list_runtimes(_rt.ListRuntimesRequest(**kw))
             out: list[dict] = []
             for r in resp.agent_kit_runtimes or []:
@@ -1903,12 +2055,35 @@ def _run_frontend_server(
                         "name": r.name,
                         "runtimeId": r.runtime_id,
                         "status": r.status,
-                        "region": region,
+                        "createdAt": r.created_at,
+                        "region": reg,
                         "author": tags.get("veadk:author", ""),
                         "isMine": is_mine,
                     }
                 )
-            return {"runtimes": out, "nextToken": getattr(resp, "next_token", "") or ""}
+            return out, getattr(resp, "next_token", "") or ""
+
+        try:
+            if len(regions) == 1:
+                out, nxt = await _list_region(regions[0], next_token)
+                return {"runtimes": out, "nextToken": nxt}
+
+            # All regions: fetch a full page from each (ignoring client-side
+            # pagination tokens — the selector uses small page sizes and most
+            # accounts have few runtimes), merge, sort and trim.
+            all_runtimes: list[dict] = []
+            for reg in regions:
+                try:
+                    items, _ = await _list_region(reg, "")
+                    all_runtimes.extend(items)
+                except Exception as e:
+                    logger.warning(f"list runtimes [{reg}] failed: {e}")
+            all_runtimes.sort(
+                key=lambda x: x.get("createdAt") or "",
+                reverse=True,
+            )
+            page = all_runtimes[:page_size]
+            return {"runtimes": page, "nextToken": ""}
         except HTTPException:
             raise
         except Exception as e:
@@ -1971,13 +2146,10 @@ def _run_frontend_server(
         # Drop the SSO gateway querystring; keep any real API query params.
         qs = {k: v for k, v in request.query_params.items() if k != "region"}
         target = f"{endpoint.rstrip('/')}/{path}"
-        headers = {
-            k: v
-            for k, v in request.headers.items()
-            if k.lower() not in {"host", "cookie", "authorization", "content-length"}
-        }
-        if apikey:
-            headers["Authorization"] = f"Bearer {apikey}"
+        # Use the shared proxy header builder so Origin/Referer and other
+        # browser-only headers are stripped (the ADK server rejects them with
+        # "origin not allowed" / 403 otherwise).
+        headers = _build_agentkit_proxy_headers(dict(request.headers), apikey)
         body = await request.body()
 
         from fastapi.responses import StreamingResponse
@@ -1990,6 +2162,30 @@ def _run_frontend_server(
         upstream = await client.send(req, stream=True)
         if upstream.status_code == 401:
             _rt_conn_cache.pop(runtime_id, None)
+        if upstream.status_code >= 400:
+            # Buffer error responses so we can log the body and still forward it.
+            body_chunks = []
+            async for chunk in upstream.aiter_raw():
+                body_chunks.append(chunk)
+            body_bytes = b"".join(body_chunks)
+            logger.warning(
+                "runtime-proxy %s %s -> %s (%s): %s",
+                request.method,
+                path,
+                upstream.status_code,
+                target,
+                body_bytes.decode("utf-8", errors="replace")[:500],
+            )
+            from fastapi.responses import Response as _Resp
+
+            media = upstream.headers.get("content-type", "application/octet-stream")
+            await upstream.aclose()
+            await client.aclose()
+            return _Resp(
+                content=body_bytes,
+                status_code=upstream.status_code,
+                media_type=media,
+            )
 
         async def _body():
             try:

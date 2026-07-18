@@ -2,12 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ChevronRight,
   Download,
+  ExternalLink,
   Eye,
   EyeOff,
   File,
   FilePlus,
   Folder,
   Loader2,
+  MessageSquare,
   Pencil,
   Plus,
   Rocket,
@@ -126,6 +128,9 @@ export interface DeployResult {
   apikey: string;
   url: string;
   agentName: string;
+  runtimeId?: string;
+  consoleUrl?: string;
+  region?: string;
   feishuChannel?: {
     enabled: boolean;
     transport: string;
@@ -169,6 +174,10 @@ export interface ProjectPreviewProps {
   onAgentAdded?: (agentId: string, agentName: string) => void;
   /** Whether Feishu Channel was enabled in the configuration step. */
   feishuEnabled?: boolean;
+  /** Selected deploy region (cn-beijing / cn-shanghai). */
+  deployRegion?: string;
+  /** Called when the user changes the deploy region. */
+  onDeployRegionChange?: (region: string) => void;
 }
 
 // --- tree model -------------------------------------------------------------
@@ -239,6 +248,8 @@ export function ProjectPreview({
   onDeploy,
   onAgentAdded,
   feishuEnabled = false,
+  deployRegion = "cn-beijing",
+  onDeployRegionChange,
 }: ProjectPreviewProps) {
   const editable = typeof onChange === "function";
 
@@ -429,35 +440,61 @@ export function ProjectPreview({
     setAddingAgent(true);
     setDeployError(null);
     try {
-      const { addConnection, remoteAppId, loadConnections } = await import("../adk/connections");
+      const {
+        addConnection,
+        addRuntimeConnection,
+        remoteAppId,
+        loadConnections,
+      } = await import("../adk/connections");
+      const { probeRuntimeApps } = await import("../adk/client");
 
-      // 先调用 addConnection 获取实际的 apps 列表
-      const conn = await addConnection(
-        deployResult.agentName,
-        deployResult.url,
-        deployResult.apikey,
-        "" // 先不传 appLabel，等拿到真实的 app 名称后再更新
-      );
+      let conn;
+      if (deployResult.runtimeId) {
+        // Preferred: server-side proxy — data-plane apikey never reaches
+        // the browser; /web/runtime-proxy injects it.
+        const region = deployResult.region ?? "cn-beijing";
+        const apps =
+          (await probeRuntimeApps(deployResult.runtimeId, region)) ?? [];
+        conn = addRuntimeConnection(
+          deployResult.runtimeId,
+          deployResult.agentName,
+          region,
+          apps,
+          apps.length > 0
+            ? { [apps[0]]: deployResult.agentName }
+            : undefined,
+        );
+      } else {
+        // Legacy: direct URL + apikey (older backends / manual deploys).
+        conn = await addConnection(
+          deployResult.agentName,
+          deployResult.url,
+          deployResult.apikey,
+          "",
+        );
+      }
 
       if (conn.apps.length === 0) {
         setDeployError("连接成功，但该地址未发现任何 Agent（/list-apps 为空）。");
       } else {
-        // 更新 connection，将第一个 app 的 label 设置为部署返回的真实名称
+        const label = { [conn.apps[0]]: deployResult.agentName };
         const updatedConn = {
           ...conn,
-          appLabels: { [conn.apps[0]]: deployResult.agentName }
+          appLabels: { ...(conn.appLabels ?? {}), ...label },
         };
 
-        // 重新保存到 localStorage
         const allConns = loadConnections();
-        const updatedList = allConns.map(c => c.id === conn.id ? updatedConn : c);
-        localStorage.setItem("veadk_agentkit_connections", JSON.stringify(updatedList));
+        const updatedList = allConns.map((c) =>
+          c.id === conn.id ? updatedConn : c,
+        );
+        localStorage.setItem(
+          "veadk_agentkit_connections",
+          JSON.stringify(updatedList),
+        );
 
-        // 重新注册连接以更新路由表
         const { registerConnections } = await import("../adk/connections");
         registerConnections(updatedList);
 
-        // 如果提供了 onAgentAdded 回调，调用它进行导航；否则显示 alert
         if (onAgentAdded) {
           const agentId = remoteAppId(conn.id, conn.apps[0]);
           onAgentAdded(agentId, deployResult.agentName);
@@ -467,7 +504,7 @@ export function ProjectPreview({
       }
     } catch (err) {
       setDeployError(
-        `添加 Agent 失败：${err instanceof Error ? err.message : String(err)}`
+        `添加 Agent 失败：${err instanceof Error ? err.message : String(err)}`,
       );
     } finally {
       setAddingAgent(false);
@@ -613,6 +650,19 @@ export function ProjectPreview({
                 下载 ZIP
               </button>
             )}
+            {onDeploy && onDeployRegionChange && (
+              <select
+                className="pp-region"
+                value={deployRegion}
+                onChange={(e) => onDeployRegionChange(e.target.value)}
+                title="部署目标区域"
+                aria-label="部署区域"
+                disabled={deploying}
+              >
+                <option value="cn-beijing">北京</option>
+                <option value="cn-shanghai">上海</option>
+              </select>
+            )}
             {onDeploy && (
               <button
                 type="button"
@@ -694,6 +744,16 @@ export function ProjectPreview({
               <span>部署成功！</span>
             </div>
             <div className="pp-deploy-result-body">
+              {deployResult.region && (
+                <div className="pp-deploy-result-field">
+                  <label>区域</label>
+                  <code>
+                    {deployResult.region === "cn-shanghai"
+                      ? "上海 (cn-shanghai)"
+                      : "北京 (cn-beijing)"}
+                  </code>
+                </div>
+              )}
               <div className="pp-deploy-result-field">
                 <label>Agent 名称</label>
                 <code>{deployResult.agentName}</code>
@@ -701,10 +761,6 @@ export function ProjectPreview({
               <div className="pp-deploy-result-field">
                 <label>API 端点</label>
                 <code className="pp-deploy-result-url">{deployResult.url}</code>
-              </div>
-              <div className="pp-deploy-result-field">
-                <label>API Key 名称</label>
-                <code>{deployResult.apikey}</code>
               </div>
               {deployResult.feishuChannel?.enabled && (
                 <div className="pp-deploy-result-field">
@@ -715,15 +771,32 @@ export function ProjectPreview({
                 </div>
               )}
             </div>
-            <button
-              type="button"
-              className="pp-deploy-result-btn"
-              onClick={handleAddAgent}
-              disabled={addingAgent}
-            >
-              {addingAgent ? <Loader2 className="pp-ic spin" /> : null}
-              {addingAgent ? "连接中…" : "添加此 Agent"}
-            </button>
+            <div className="pp-deploy-result-actions">
+              <button
+                type="button"
+                className="pp-deploy-result-btn"
+                onClick={handleAddAgent}
+                disabled={addingAgent}
+              >
+                {addingAgent ? (
+                  <Loader2 className="pp-ic spin" />
+                ) : (
+                  <MessageSquare className="pp-ic" />
+                )}
+                {addingAgent ? "连接中…" : "立即对话"}
+              </button>
+              {deployResult.consoleUrl && (
+                <a
+                  href={deployResult.consoleUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="pp-console-link pp-console-link-btn"
+                >
+                  <ExternalLink className="pp-ic" />
+                  控制台
+                </a>
+              )}
+            </div>
           </div>
         )}
 

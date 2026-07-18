@@ -386,6 +386,7 @@ export interface DeployAgentkitResult {
   agentName: string;
   runtimeId?: string;
   consoleUrl?: string;
+  region?: string;
   feishuChannel?: {
     enabled: boolean;
     transport: string;
@@ -414,7 +415,16 @@ interface DeployFrame extends Partial<DeployAgentkitResult> {
 export async function deployAgentkitProject(
   name: string,
   files: { path: string; content: string }[],
-  config: { region: string; projectName: string },
+  config: {
+    region: string;
+    projectName: string;
+    network?: {
+      mode: string;
+      vpc_id?: string;
+      subnet_ids?: string;
+      enable_shared_internet_access?: boolean;
+    };
+  },
   opts?: {
     author?: string;
     onStage?: (s: DeployStage) => void;
@@ -467,6 +477,7 @@ export async function deployAgentkitProject(
     agentName: final.agentName,
     runtimeId: final.runtimeId,
     consoleUrl: final.consoleUrl,
+    region: final.region,
     feishuChannel: final.feishuChannel,
   };
 }
@@ -481,10 +492,11 @@ export interface ManagedRuntime {
   region: string;
 }
 
-/** List AgentKit runtimes this UI deployed, filtered to `author`. */
+/** List AgentKit runtimes this UI deployed, filtered to `author`.
+ *  `region="all"` merges results from all supported regions. */
 export async function getMyRuntimes(
   author: string,
-  region = "cn-beijing",
+  region = "all",
 ): Promise<ManagedRuntime[]> {
   const res = await apiFetch(
     `/web/my-runtimes?author=${encodeURIComponent(author)}&region=${encodeURIComponent(region)}`,
@@ -582,7 +594,7 @@ export async function getRuntimes(
     author,
     scope: opts.scope ?? "all",
     page_size: String(opts.pageSize ?? 30),
-    region: opts.region ?? "cn-beijing",
+    region: opts.region ?? "all",
   });
   if (opts.nextToken) p.set("next_token", opts.nextToken);
   const res = await apiFetch(`/web/runtimes?${p.toString()}`);

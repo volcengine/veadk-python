@@ -243,6 +243,22 @@
   background: hsl(var(--foreground) / 0.05);
 }
 
+.pp-region {
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: hsl(var(--foreground));
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
+  border-radius: calc(var(--radius) - 2px);
+  cursor: pointer;
+}
+
+.pp-region:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .pp-deploy {
   color: hsl(var(--primary-foreground));
   background: hsl(var(--primary));
@@ -572,6 +588,14 @@
   margin-top: 2px;
 }
 
+.pp-deploy-result-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+
 .pp-deploy-result-btn {
   display: inline-flex;
   align-items: center;
@@ -586,8 +610,6 @@
   border-radius: calc(var(--radius) - 2px);
   cursor: pointer;
   transition: background 0.15s ease;
-  align-self: flex-end;
-  margin-left: auto;
 }
 
 .pp-deploy-result-btn:hover {
@@ -597,6 +619,30 @@
 .pp-deploy-result-btn:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+.pp-console-link {
+  color: hsl(var(--foreground));
+  text-decoration: none;
+}
+
+.pp-console-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: hsl(var(--foreground));
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
+  border-radius: calc(var(--radius) - 2px);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.pp-console-link-btn:hover {
+  background: hsl(var(--foreground) / 0.05);
 }
 
 .pp-content {

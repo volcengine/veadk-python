@@ -19,10 +19,10 @@ import {
   LayoutGrid,
   Layers,
   Loader2,
+  Network,
   Plus,
   Repeat,
   Rocket,
-  Search,
   Send,
   Shapes,
   Sparkles,
@@ -35,6 +35,7 @@ import {
   type CreateModeProps,
   type AgentDraft,
   type McpTool,
+  type NetworkConfig as NetworkConfigType,
   type SelectedSkill,
   emptyDraft,
 } from "./types";
@@ -562,6 +563,103 @@ function Toggle({
   );
 }
 
+/** Advanced network config: public (default), private VPC, or both. */
+function NetworkConfigForm({
+  value,
+  onChange,
+}: {
+  value?: NetworkConfigType;
+  onChange: (v: NetworkConfigType | undefined) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const mode = value?.mode ?? "public";
+
+  function setMode(m: NetworkConfigType["mode"]) {
+    if (m === "public") {
+      onChange(undefined);
+    } else {
+      onChange({ ...(value ?? { mode: m }), mode: m });
+    }
+  }
+
+  function patch(p: Partial<NetworkConfigType>) {
+    onChange({ ...(value ?? { mode: "private" }), ...p });
+  }
+
+  return (
+    <div className="cw-network">
+      <button
+        type="button"
+        className={`cw-toggle ${expanded ? "is-on" : ""}`}
+        onClick={() => setExpanded((x) => !x)}
+        aria-expanded={expanded}
+      >
+        <span className="cw-toggle-icon">
+          <Network className="cw-i" />
+        </span>
+        <span className="cw-toggle-text">
+          <span className="cw-toggle-title">高级：网络配置</span>
+          <span className="cw-toggle-desc">
+            选择公网部署（默认）或接入 VPC 私有网络。
+          </span>
+        </span>
+        <span className="cw-network-badge">{
+          mode === "public" ? "公网" : mode === "private" ? "VPC" : "公网+VPC"
+        }</span>
+      </button>
+      {expanded && (
+        <div className="cw-network-body">
+          <div className="cw-segmented cw-network-modes">
+            {(["public", "private", "both"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                className={`cw-seg ${mode === m ? "is-on" : ""}`}
+                onClick={() => setMode(m)}
+                aria-pressed={mode === m}
+              >
+                <span className="cw-seg-title">
+                  {m === "public" ? "公网" : m === "private" ? "VPC 私有" : "公网 + VPC"}
+                </span>
+              </button>
+            ))}
+          </div>
+          {mode !== "public" && (
+            <div className="cw-form cw-network-vpc">
+              <label className="cw-label">VPC ID</label>
+              <input
+                type="text"
+                className="cw-input"
+                placeholder="vpc-xxxxxxxx"
+                value={value?.vpcId ?? ""}
+                onChange={(e) => patch({ vpcId: e.target.value })}
+              />
+              <label className="cw-label">子网 ID（逗号分隔，可选）</label>
+              <input
+                type="text"
+                className="cw-input"
+                placeholder="subnet-xxx, subnet-yyy"
+                value={value?.subnetIds ?? ""}
+                onChange={(e) => patch({ subnetIds: e.target.value })}
+              />
+              <label className="cw-check">
+                <input
+                  type="checkbox"
+                  checked={!!value?.enableSharedInternetAccess}
+                  onChange={(e) =>
+                    patch({ enableSharedInternetAccess: e.target.checked })
+                  }
+                />
+                VPC 内共享公网出口
+              </label>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 /* ================================================================ *
  * Tree addressing — the draft is a recursive AgentDraft. A node is
@@ -1071,6 +1169,7 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
   const [showErrors, setShowErrors] = useState(false);
   const [project, setProject] = useState<AgentProject | null>(null);
   const [building, setBuilding] = useState(false);
+  const [deployRegion, setDeployRegion] = useState<string>("cn-beijing");
   const debugEnabled = features?.generatedAgentTestRun === true;
   const debugDisabledReason =
     features?.generatedAgentTestRunDisabledReason ||
@@ -1425,10 +1524,20 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
       onStage?: (s: DeployStage) => void,
       options?: Parameters<typeof deployAgentkitProject>[3],
     ) => {
+      const net = draft.deployment?.network;
+      const network =
+        net && net.mode && net.mode !== "public"
+          ? {
+              mode: net.mode,
+              vpc_id: net.vpcId,
+              subnet_ids: net.subnetIds,
+              enable_shared_internet_access: net.enableSharedInternetAccess,
+            }
+          : undefined;
       return deployAgentkitProject(
         proj.name,
         proj.files,
-        { region: "cn-beijing", projectName: "default" },
+        { region: deployRegion, projectName: "default", network },
         { ...options, author, onStage },
       );
     };
@@ -1467,6 +1576,8 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
             onDeploy={handleDeploy}
             onAgentAdded={onAgentAdded}
             feishuEnabled={!!draft.deployment?.feishuEnabled}
+            deployRegion={deployRegion}
+            onDeployRegionChange={setDeployRegion}
           />
         </div>
       </div>
@@ -1876,6 +1987,12 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
                     title="连接飞书"
                     desc="部署后可通过飞书消息触发当前 Agent。"
                     icon={Globe}
+                  />
+                  <NetworkConfigForm
+                    value={draft.deployment?.network}
+                    onChange={(v: NetworkConfigType | undefined) =>
+                      patchDeployment({ network: v })
+                    }
                   />
                 </div>
               </Section>

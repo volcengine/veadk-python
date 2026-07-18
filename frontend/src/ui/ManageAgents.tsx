@@ -34,18 +34,19 @@ export function ManageAgentsView({ author }: ManageAgentsViewProps) {
   const [deleting, setDeleting] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [details, setDetails] = useState<Record<string, DetailState>>({});
+  const [regionFilter, setRegionFilter] = useState<string>("all");
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      setRuntimes(await getMyRuntimes(author));
+      setRuntimes(await getMyRuntimes(author, regionFilter));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, [author]);
+  }, [author, regionFilter]);
 
   useEffect(() => {
     void load();
@@ -112,16 +113,29 @@ export function ManageAgentsView({ author }: ManageAgentsViewProps) {
               : "列出通过本工作台部署到 AgentKit 的 Runtime。"}
           </p>
         </div>
-        <button
-          type="button"
-          className="manage-refresh"
-          onClick={() => void load()}
-          disabled={loading}
-          title="刷新"
-        >
-          <RefreshCw className={`icon ${loading ? "spin" : ""}`} />
-          刷新
-        </button>
+        <div className="manage-head-actions">
+          <select
+            className="manage-region"
+            value={regionFilter}
+            onChange={(e) => setRegionFilter(e.target.value)}
+            title="按区域筛选"
+            aria-label="区域筛选"
+          >
+            <option value="all">全部区域</option>
+            <option value="cn-beijing">北京</option>
+            <option value="cn-shanghai">上海</option>
+          </select>
+          <button
+            type="button"
+            className="manage-refresh"
+            onClick={() => void load()}
+            disabled={loading}
+            title="刷新"
+          >
+            <RefreshCw className={`icon ${loading ? "spin" : ""}`} />
+            刷新
+          </button>
+        </div>
       </div>
 
       {error && <div className="manage-error">{error}</div>}

@@ -52,35 +52,21 @@ from veadk.cli.generated_agent_skills import (
 # generated file contents, not just Python syntax or selected snippets.
 _MINIMAL_FRONTEND_GOLDEN = {
     "app.py": "511034ddfc2a9583fa61f57b489cbe082485659b75361e26fa01511c7b7b852e",
-    "agents/demo_agent/agent.py": (
-        "775b0ed7d2fe999d5c9500edab215a5e039655ccbb0a7903b685eae83abcb5c0"
-    ),
-    "agents/demo_agent/__init__.py": (
-        "cf719fbb91c38fadd2681edc257a06694f435fa4fabe4679a3f7097fc344f8a3"
-    ),
-    ".env.example": (
-        "1cdb6e1bfe38616d5d46095ba88ba76a0c189f3d2999bf0dd23b7145ce103ab2"
-    ),
-    "requirements.txt": (
-        "11efcf6b799d9b7b59c32df21c6374bb492324867aef4d65579e145b38178226"
-    ),
+    "agents/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "agents/demo_agent/agent.py": "775b0ed7d2fe999d5c9500edab215a5e039655ccbb0a7903b685eae83abcb5c0",
+    "agents/demo_agent/__init__.py": "cf719fbb91c38fadd2681edc257a06694f435fa4fabe4679a3f7097fc344f8a3",
+    ".env.example": "1cdb6e1bfe38616d5d46095ba88ba76a0c189f3d2999bf0dd23b7145ce103ab2",
+    "requirements.txt": "a7bb29cb47b916a81b626907fcdf84eed525ca22b4214ddc82f96a5ba87c8cc8",
     "README.md": "16cbec845b595949c071f3bcf4c056d862b9e2277c00e5d23649b5540dfde83e",
 }
 
 _FULL_FRONTEND_GOLDEN = {
     "app.py": "9fd1837bc29b57a5dac61da9f951e3abf37b23756d4392ab0409e609aba7a919",
-    "agents/full_agent/agent.py": (
-        "f14d0bfdf0e604ea5a6ca47aa7e9b21d8c15e62c29602cc206b7530af66b0fd9"
-    ),
-    "agents/full_agent/__init__.py": (
-        "cf719fbb91c38fadd2681edc257a06694f435fa4fabe4679a3f7097fc344f8a3"
-    ),
-    ".env.example": (
-        "cb35eed98b4155c755df934f61ca6760293d59508de0a6090632e44501f82748"
-    ),
-    "requirements.txt": (
-        "f787c7c4f94ceea8a5b0b3cde6e10eda9f2a7ce3af0ab4aa5bb529974ca1ac48"
-    ),
+    "agents/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "agents/full_agent/agent.py": "f14d0bfdf0e604ea5a6ca47aa7e9b21d8c15e62c29602cc206b7530af66b0fd9",
+    "agents/full_agent/__init__.py": "cf719fbb91c38fadd2681edc257a06694f435fa4fabe4679a3f7097fc344f8a3",
+    ".env.example": "cb35eed98b4155c755df934f61ca6760293d59508de0a6090632e44501f82748",
+    "requirements.txt": "5230e5c9a20b97dc95cc753247b4240d7401d9f9b46aa62da851c91552061ba7",
     "README.md": "ce6e5ada2031657b5de320465a34cb8c066c6c4181ab111dfb40299d3ec0bcd0",
 }
 
