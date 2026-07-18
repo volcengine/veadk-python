@@ -1678,6 +1678,17 @@
   font-weight: 600;
   color: hsl(var(--foreground));
 }
+.cw-preview-region {
+  margin-left: auto;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: hsl(var(--foreground));
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
+  border-radius: calc(var(--radius) - 2px);
+  cursor: pointer;
+}
 .cw-preview-body {
   flex: 1;
   min-height: 0;
@@ -1927,4 +1938,42 @@
   .cw-form-col {
     max-width: 100%;
   }
+}
+
+/* Advanced network config */
+.cw-network-badge {
+  margin-left: auto;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  background: hsl(var(--secondary));
+  color: hsl(var(--secondary-foreground));
+}
+.cw-toggle.is-on .cw-network-badge {
+  background: hsl(var(--primary) / 0.15);
+  color: hsl(var(--primary));
+}
+.cw-network-body {
+  margin-top: 8px;
+  padding: 12px 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+  background: hsl(var(--background));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.cw-network-modes {
+  margin-bottom: 4px;
+}
+.cw-network-vpc {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cw-network-vpc .cw-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: hsl(var(--muted-foreground));
 }

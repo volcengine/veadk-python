@@ -35,8 +35,20 @@ import type { SelectedSkill, SkillHit, SkillSource } from "./skills/types";
 export type { SelectedSkill, SkillHit, SkillSource };
 
 
+export interface NetworkConfig {
+  /** "public" (default, public endpoint), "private" (VPC only), or "both". */
+  mode: "public" | "private" | "both";
+  /** Required when mode is private/both. */
+  vpcId?: string;
+  /** Comma-separated subnet IDs for private/both mode. */
+  subnetIds?: string;
+  /** Whether the private network has shared internet access. */
+  enableSharedInternetAccess?: boolean;
+}
+
 export interface DeploymentConfig {
   feishuEnabled: boolean;
+  network?: NetworkConfig;
 }
 
 /** A draft VeADK agent configuration produced by a creation flow. */

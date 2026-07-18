@@ -351,7 +351,7 @@ export default function App() {
     manageAgents: true,
     addAgentkit: true,
   });
-  const [agentsSource, setAgentsSource] = useState<"local" | "cloud">("local");
+  const [agentsSource, setAgentsSource] = useState<"local" | "cloud">("cloud");
   const [localMode, setLocalMode] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
   // The executing sub-agent (ADK event.author) and everyone who emitted this

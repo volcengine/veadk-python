@@ -511,19 +511,16 @@ def render_env_example(env: list[EnvVar]) -> str:
 
 
 def render_requirements(extras: set[str], include_feishu_channel: bool) -> str:
+    # Pin minimum versions so the Docker image upgrades past pre-installed
+    # older veadk releases that lack the newer tools and use Starlette 1.x
+    # which removed Router.on_startup (breaks AgentkitAgentServer.lifespan).
     all_extras = set(extras)
     if include_feishu_channel:
         all_extras.add("extensions")
     unique_extras = sorted(all_extras)
-    if unique_extras:
-        pkg = f"veadk-python[{','.join(unique_extras)}]"
-        if include_feishu_channel:
-            pkg += ">=0.5.34"
-    else:
-        pkg = "veadk-python"
-    packages = [pkg, "agentkit-sdk-python", "google-adk"]
-    if include_feishu_channel:
-        packages.append("starlette<1.0.0")
+    extras_str = f"[{','.join(unique_extras)}]" if unique_extras else ""
+    pkg = f"veadk-python{extras_str}>=1.0.4"
+    packages = [pkg, "agentkit-sdk-python", "google-adk", "starlette<1.0.0"]
     return "\n".join(packages) + "\n"
 
 
@@ -928,6 +925,9 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
     app_py = _render_app_py(pkg, feishu_channel_enabled)
     files = [
         GeneratedFile(path="app.py", content=app_py),
+        # Top-level agents package marker so `from agents.<pkg>.agent import
+        # root_agent` resolves when the container runs `python -m app`.
+        GeneratedFile(path="agents/__init__.py", content=""),
         GeneratedFile(path=f"agents/{pkg}/agent.py", content=agent_py),
         GeneratedFile(
             path=f"agents/{pkg}/__init__.py",

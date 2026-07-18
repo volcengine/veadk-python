@@ -27,6 +27,23 @@
   color: hsl(var(--muted-foreground));
 }
 
+.manage-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.manage-region {
+  padding: 7px 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: hsl(var(--foreground));
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
 .manage-refresh {
   display: inline-flex;
   align-items: center;
