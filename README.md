@@ -143,6 +143,9 @@ VeADK provides several useful command line tools for faster deployment and optim
 - `veadk deploy`: deploy your project to [Volcengine VeFaaS platform](https://www.volcengine.com/product/vefaas) (you can use `veadk init` to init a demo project first)
 - `veadk prompt`: otpimize the system prompt of your agent by [PromptPilot](https://promptpilot.volcengine.com)
 - `veadk frontend`: serve the A2UI web UI together with the ADK agent API server
+- `veadk studio deploy`: deploy Studio and ensure its default IAM role has the
+  required model, observability, search, security, memory, and identity system
+  policies
 
 ## Contribution
 

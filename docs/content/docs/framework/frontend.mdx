@@ -63,6 +63,22 @@ cd frontend && npm run dev                    # http://localhost:5173（代理 A
   非开发模式下，若未找到已构建的前端目录，命令会报错提示先执行 `npm run build`（或改用 `--dev` 配合 Vite 开发服务器）。
 </Callout>
 
+### `veadk studio deploy` 的 IAM 权限
+
+未传入 `--iam-role` 时，部署命令会创建或复用 `VeADKFrontendServiceRole`，并确保该 Role 绑定以下火山引擎系统策略：
+
+- `ArkReadOnlyAccess`
+- `TLSReadOnlyAccess`
+- `APMPlusServerReadOnlyAccess`
+- `VikingdbReadOnlyAccess`
+- `ESCloudReadOnlyAccess`
+- `LLMShieldProtectSdkAccess`
+- `TorchlightApiFullAccess`
+- `Mem0ReadOnlyAccess`
+- `IDReadOnlyAccess`
+
+Role 同时保留 `VeADKFrontendPolicy` 自定义策略中的 AgentKit 权限。传入 `--iam-role` 时，命令直接使用指定 Role，不修改其策略。
+
 ### 认证（SSO 与本地用户名）
 
 会话与记忆按 ADK 的 `user_id` 隔离，该 `user_id` 来自登录用户。
@@ -167,4 +183,3 @@ export function RevenueChart({ node, ctx }: ComponentRendererProps) {
 <Callout type="info">
   未注册渲染器的未知组件会回退到可折叠的 JSON 视图，因此目录与渲染器不匹配也不会导致界面崩溃。
 </Callout>
-

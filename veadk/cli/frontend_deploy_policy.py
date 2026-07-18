@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""IAM policy for the VeFaaS-hosted frontend (`veadk frontend deploy`).
+"""IAM policies for the VeFaaS-hosted frontend (`veadk studio deploy`).
 
 The deployed function assumes this role (trust principal ``vefaas``) and reads
 its STS credentials from the injected credential file, so the frontend's
@@ -20,6 +20,18 @@ its STS credentials from the injected credential file, so the frontend's
 document grants the union of permissions the frontend + AgentKit deploy/runtime
 flows exercise (agentkit, vefaas, cr, cp, tos, iam, ark, identity, vikingdb, …).
 """
+
+FRONTEND_DEPLOY_SYSTEM_POLICIES: tuple[str, ...] = (
+    "ArkReadOnlyAccess",
+    "TLSReadOnlyAccess",
+    "APMPlusServerReadOnlyAccess",
+    "VikingdbReadOnlyAccess",
+    "ESCloudReadOnlyAccess",
+    "LLMShieldProtectSdkAccess",
+    "TorchlightApiFullAccess",
+    "Mem0ReadOnlyAccess",
+    "IDReadOnlyAccess",
+)
 
 # The trust relationship that lets a VeFaaS function assume the role.
 FRONTEND_DEPLOY_TRUST_POLICY: dict = {

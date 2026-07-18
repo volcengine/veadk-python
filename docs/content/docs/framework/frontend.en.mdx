@@ -63,6 +63,22 @@ cd frontend && npm run dev                    # http://localhost:5173 (proxies A
   Outside dev mode, if the built frontend directory is not found, the command fails and asks you to run `npm run build` first (or use `--dev` with the Vite dev server).
 </Callout>
 
+### IAM permissions for `veadk studio deploy`
+
+When `--iam-role` is omitted, the deploy command creates or reuses `VeADKFrontendServiceRole` and ensures that the role has these Volcengine system policies:
+
+- `ArkReadOnlyAccess`
+- `TLSReadOnlyAccess`
+- `APMPlusServerReadOnlyAccess`
+- `VikingdbReadOnlyAccess`
+- `ESCloudReadOnlyAccess`
+- `LLMShieldProtectSdkAccess`
+- `TorchlightApiFullAccess`
+- `Mem0ReadOnlyAccess`
+- `IDReadOnlyAccess`
+
+The role also retains the AgentKit permissions from the custom `VeADKFrontendPolicy`. When `--iam-role` is provided, the command uses that role without modifying its policies.
+
 ### Authentication (SSO / local username)
 
 Sessions and memory are scoped by the ADK `user_id`, which comes from the
@@ -186,4 +202,3 @@ export function RevenueChart({ node, ctx }: ComponentRendererProps) {
 <Callout type="info">
   Unknown components with no registered renderer fall back to a collapsible JSON view, so a catalog/renderer mismatch never crashes the UI.
 </Callout>
-

@@ -20,9 +20,11 @@ idempotent — a fixed role/policy name is reused across re-deploys.
 """
 
 import json
+from typing import Any
 
-from veadk.cli._frontend_deploy_policy import (
+from veadk.cli.frontend_deploy_policy import (
     FRONTEND_DEPLOY_POLICY,
+    FRONTEND_DEPLOY_SYSTEM_POLICIES,
     FRONTEND_DEPLOY_TRUST_POLICY,
 )
 from veadk.utils.logger import get_logger
@@ -47,6 +49,29 @@ def _role_trn(result: dict) -> str | None:
     return role.get("Trn") or role.get("trn")
 
 
+def _ensure_system_policies(svc: Any, role_name: str) -> None:
+    """Attach any missing system policies required by the frontend runtime."""
+    result = _result(svc.list_attached_role_policies({"RoleName": role_name}))
+    attached = {
+        policy["PolicyName"]
+        for policy in result.get("AttachedPolicyMetadata", [])
+        if policy.get("PolicyName")
+    }
+    for policy_name in FRONTEND_DEPLOY_SYSTEM_POLICIES:
+        if policy_name in attached:
+            continue
+        _result(
+            svc.attach_role_policy(
+                {
+                    "RoleName": role_name,
+                    "PolicyName": policy_name,
+                    "PolicyType": "System",
+                }
+            )
+        )
+        logger.info(f"Attached system policy {policy_name} to role {role_name}")
+
+
 def ensure_frontend_role(
     access_key: str,
     secret_key: str,
@@ -68,12 +93,14 @@ def ensure_frontend_role(
     # Reuse an existing role if present.
     try:
         existing = _result(svc.get_role({"RoleName": role_name}))
+    except Exception as e:
+        logger.info(f"Role {role_name} not found, creating it: {e}")
+    else:
         trn = _role_trn(existing)
         if trn:
             logger.info(f"Reusing existing IAM role {role_name} ({trn})")
+            _ensure_system_policies(svc, role_name)
             return trn
-    except Exception as e:
-        logger.info(f"Role {role_name} not found, creating it: {e}")
 
     # Create the custom policy (tolerate "already exists").
     try:
@@ -118,5 +145,6 @@ def ensure_frontend_role(
         trn = _role_trn(_result(svc.get_role({"RoleName": role_name})))
     if not trn:
         raise RuntimeError(f"Could not resolve TRN for role {role_name}")
+    _ensure_system_policies(svc, role_name)
     logger.info(f"Ensured IAM role {role_name} ({trn})")
     return trn
