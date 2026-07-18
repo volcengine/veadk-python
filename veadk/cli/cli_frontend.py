@@ -2647,7 +2647,7 @@ def frontend_deploy(
         role_trn = iam_role
         click.echo(f"Using provided IAM role: {role_trn}")
     else:
-        from veadk.cli._frontend_deploy_iam import ensure_frontend_role
+        from veadk.cli.frontend_deploy_iam import ensure_frontend_role
 
         click.echo("Ensuring IAM role + policy…")
         role_trn = ensure_frontend_role(ak, sk)

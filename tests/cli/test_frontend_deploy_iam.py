@@ -17,8 +17,8 @@ from unittest.mock import MagicMock, call
 
 import pytest
 
-from veadk.cli._frontend_deploy_iam import ensure_frontend_role
-from veadk.cli._frontend_deploy_policy import FRONTEND_DEPLOY_SYSTEM_POLICIES
+from veadk.cli.frontend_deploy_iam import ensure_frontend_role
+from veadk.cli.frontend_deploy_policy import FRONTEND_DEPLOY_SYSTEM_POLICIES
 
 
 def _install_iam_service(monkeypatch: pytest.MonkeyPatch, service: MagicMock) -> None:

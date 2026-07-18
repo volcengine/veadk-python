@@ -22,7 +22,7 @@ idempotent — a fixed role/policy name is reused across re-deploys.
 import json
 from typing import Any
 
-from veadk.cli._frontend_deploy_policy import (
+from veadk.cli.frontend_deploy_policy import (
     FRONTEND_DEPLOY_POLICY,
     FRONTEND_DEPLOY_SYSTEM_POLICIES,
     FRONTEND_DEPLOY_TRUST_POLICY,

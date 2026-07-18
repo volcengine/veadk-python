@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""IAM policy for the VeFaaS-hosted frontend (`veadk studio deploy`).
+"""IAM policies for the VeFaaS-hosted frontend (`veadk studio deploy`).
 
 The deployed function assumes this role (trust principal ``vefaas``) and reads
 its STS credentials from the injected credential file, so the frontend's
