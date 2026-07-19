@@ -26,8 +26,10 @@ runtimes (the UI is still served).
 import asyncio
 import json
 import os
+import re
 import sys
 
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +38,66 @@ import click
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_BUILD_ERROR_MARKERS = (
+    "no solution found",
+    "unsatisfiable",
+    "failed to solve",
+    "did not complete successfully",
+    "no matching distribution",
+    "modulenotfounderror",
+    "command not found",
+    "permission denied",
+    "traceback (most recent call last)",
+)
+_SENSITIVE_LOG_PATTERNS = (
+    re.compile(r"authorization\s*[:=]", re.IGNORECASE),
+    re.compile(r"\bbearer\s+\S+", re.IGNORECASE),
+    re.compile(
+        r"(?:access[_ -]?key(?:[_ -]?id)?|secret[_ -]?key|api[_ -]?key|"
+        r"client[_ -]?secret|private[_ -]?key|(?:access|session|security|refresh|"
+        r"id|jwt|cr)[_ -]?token|password|credential|signature)"
+        r"\s*(?:=|:|\s)\s*\S+",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\."
+        r"[A-Za-z0-9_-]{10,}\b"
+    ),
+)
+
+
+def _extract_build_error_excerpt(
+    lines: Iterable[object] | str, max_lines: int = 30
+) -> str:
+    """Return a credential-safe excerpt around high-signal build errors."""
+    if max_lines <= 0:
+        return ""
+    raw_lines = lines.splitlines() if isinstance(lines, str) else lines
+    clean_lines = []
+    for raw_line in raw_lines:
+        line = _ANSI_ESCAPE_RE.sub("", str(raw_line)).strip()
+        if not line or any(pattern.search(line) for pattern in _SENSITIVE_LOG_PATTERNS):
+            continue
+        clean_lines.append(line[:1000])
+
+    error_indexes = [
+        index
+        for index, line in enumerate(clean_lines)
+        if any(marker in line.lower() for marker in _BUILD_ERROR_MARKERS)
+    ]
+    if not error_indexes:
+        return ""
+
+    selected_indexes = set()
+    for index in error_indexes:
+        selected_indexes.update(
+            range(max(0, index - 3), min(len(clean_lines), index + 4))
+        )
+    return "\n".join(
+        clean_lines[index] for index in sorted(selected_indexes)[:max_lines]
+    )
 
 
 def _claims_from_forwarded_jwt(authorization: str | None) -> dict | None:
@@ -1747,7 +1809,7 @@ def _run_frontend_server(
             "destroying": False,
         }
         events: "_queue.Queue" = _queue.Queue()
-        state = {"phase": "build"}
+        state = {"phase": "build", "build_error_excerpt": ""}
 
         _PHASE_ORDER = {"build": 0, "deploy": 1, "publish": 2}
 
@@ -1779,6 +1841,13 @@ def _run_frontend_server(
                     "已自动重试一次仍失败，请稍后重新点击部署。"
                 )
             return error_text
+
+        def _error_with_build_excerpt(error_text: str) -> str:
+            error_text = _friendly_error(error_text)
+            excerpt = state["build_error_excerpt"]
+            if not excerpt or excerpt in error_text:
+                return error_text
+            return f"{error_text}\n\n构建日志关键错误：\n{excerpt}"
 
         def _classify(message: str) -> str:
             """Map a reporter message to a deploy phase, monotonically.
@@ -1866,6 +1935,10 @@ def _run_frontend_server(
 
             def show_logs(self, title, lines, max_lines=100):
                 _emit("info", str(title))
+                excerpt = _extract_build_error_excerpt(lines, min(max_lines, 30))
+                if excerpt:
+                    state["build_error_excerpt"] = excerpt
+                    _emit("error", excerpt)
 
         result_box: dict = {}
 
@@ -1930,6 +2003,7 @@ def _run_frontend_server(
                 try:
                     result = None
                     for attempt in range(1, 3):
+                        state["build_error_excerpt"] = ""
                         if attempt > 1:
                             state["phase"] = "build"
                             _emit(
@@ -1998,7 +2072,7 @@ def _run_frontend_server(
                     final.update(
                         {
                             "success": False,
-                            "error": _friendly_error(error_text),
+                            "error": _error_with_build_excerpt(error_text),
                             "phase": state["phase"],
                         }
                     )
@@ -2045,7 +2119,7 @@ def _run_frontend_server(
                         final.update(
                             {
                                 "success": False,
-                                "error": _friendly_error(err_text)
+                                "error": _error_with_build_excerpt(err_text)
                                 or err
                                 or "Deployment failed",
                                 "phase": state["phase"],
