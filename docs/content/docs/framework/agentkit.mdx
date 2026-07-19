@@ -72,4 +72,7 @@ YAML。部署页的“组件自动生成”环境变量分组会同步显示这�
 多实例部署应使用 MySQL、PostgreSQL 等数据库持久化短期记忆；如果 `run_sse` 返回
 404，界面也会提示检查是否因 in-memory 或 SQLite 会话落在不同实例。
 
+通过内置 Web UI 部署时，如果云端镜像构建失败，部署错误会显示经过凭据脱敏的
+构建日志关键片段，便于直接定位依赖解析或 Dockerfile 执行错误。
+
 `veadk agentkit` 透传了 AgentKit 的全部子命令（如 `build`、`deploy`、`status`、`destroy` 等）。完整命令列表与说明见 [AgentKit 命令兼容](/cn/docs/cli/agentkit-cli)，更详细的平台部署步骤见 [AgentKit 官方文档](https://volcengine.github.io/agentkit-sdk-python/content/2.agentkit-cli/1.overview.html)。
