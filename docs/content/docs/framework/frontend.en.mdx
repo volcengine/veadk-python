@@ -15,7 +15,12 @@ VeADK ships a React frontend that renders [A2UI](/en/docs/framework/a2ui) (agent
 ### What it can do
 
 - **Chat**: multi-turn conversations that render streamed A2UI cards, plus thinking, tool calls, token usage and timing.
-- **Agent picker**: switch agents from the top-left; hover an agent to see its model and mounted tools.
+- **Multimodal messages**: upload images, TXT/Markdown, PDF, and video; preview
+  and replay both user and model media from history. Chat images use compact
+  thumbnails and open in a zoomable full-screen viewer.
+- **Skill and sub-agent invocation**: type `/` to select a mounted skill or `@` to route the turn to an eligible sub-agent.
+- **Agent picker**: switch agents from the top-left; long lists scroll within
+  the viewport, and hovering an agent shows its model and mounted tools.
 - **Session history**: auto-saved, time-sorted, reopen or delete.
 - **Smart search**: the *Session* source full-text-searches the current agent's history; the *Web* source calls the agent's mounted web-search tool live (using credentials from the server's environment variables).
 - **Add an AgentKit agent**: paste a URL + API key to connect a remote agent over the ADK protocol; it then appears in the picker.
@@ -63,6 +68,62 @@ cd frontend && npm run dev                    # http://localhost:5173 (proxies A
 <Callout type="info">
   Outside dev mode, if the built frontend directory is not found, the command fails and asks you to run `npm run build` first (or use `--dev` with the Vite dev server).
 </Callout>
+
+### Multimodal attachments and storage
+
+The composer accepts PNG, JPEG, WebP, GIF, TXT, Markdown, PDF, MP4, WebM, and QuickTime files. The default per-file limit is 20 MB. The browser uploads binary form data and never writes attachment base64 into the session.
+
+Media bytes are stored separately from the ADK Session:
+
+- Local mode writes to `/tmp/veadk-media/apps/.../sessions/.../media/<media-id>/` by default. `content` contains the bytes and `metadata.json` contains the name, MIME type, size, and hash.
+- TOS mode writes the same two objects below `veadk-media/users/<encoded-username>/apps/<app>/sessions/<session>/media/<media-id>/` by default. The username is the outer tenant prefix, isolating each user's objects; username, app, and session segments are URL-encoded.
+- Session Events contain only a stable Google GenAI `FileData` reference such as `veadk-media://apps/.../media/<media-id>`; reopening history fetches the original object through the media API.
+
+Before a model call, TXT/Markdown is decoded into `Part.text`; images and video
+are read from the configured backend and converted to `Part.inline_data`, while
+PDFs are automatically rendered to page PNGs. The PDF rendering runtime is
+included in VeADK's default dependencies, with no extra installation or Agent
+callback required. Model-returned `inline_data` is persisted first, then
+replaced with a stable reference before the Event is saved or emitted over SSE.
+A 15-minute TOS signed URL is used only for browser download and preview, never
+as the model's `FileData` URI.
+
+When a cloud Agent Runtime is selected, upload, preview, and deletion still use
+Studio's own `/web/media` API instead of being forwarded to the Runtime. Studio
+resolves stable references into model-ready Parts only while proxying
+`/run_sse`. It preserves the original `veadkMedia` metadata so history reloads
+the original file type and name. This works with both `/tmp` and TOS and does
+not require the remote Runtime to mount media HTTP routes.
+
+| Environment variable | Default | Description |
+| :-- | :-- | :-- |
+| `VEADK_MEDIA_STORAGE` | `local` | Select `local` or `tos`. |
+| `VEADK_MEDIA_LOCAL_DIR` | `/tmp/veadk-media` | Local media root. |
+| `VEADK_MEDIA_MAX_FILE_BYTES` | `20971520` | Byte limit for one upload or model output. |
+| `VEADK_MEDIA_TOS_PREFIX` | `veadk-media` | TOS object-key prefix. |
+| `DATABASE_TOS_BUCKET` | — | TOS bucket. |
+| `DATABASE_TOS_REGION` / `DATABASE_TOS_ENDPOINT` | cloud-aware defaults | TOS region and endpoint. |
+| `VOLCENGINE_ACCESS_KEY` / `VOLCENGINE_SECRET_KEY` | — | TOS credentials. |
+| `VOLCENGINE_SESSION_TOKEN` | — | Optional temporary credential token. |
+
+Removing an unsent attachment deletes its object; deleting a Session cleans up all media scoped to that Session. Local mode needs no additional configuration, but `/tmp` may be cleared when the process or host is replaced. Use TOS when attachments must remain durable. Minimal TOS configuration:
+
+```bash
+export VEADK_MEDIA_STORAGE=tos
+export DATABASE_TOS_BUCKET=<bucket>
+export DATABASE_TOS_REGION=cn-beijing
+export VOLCENGINE_ACCESS_KEY=<access-key>
+export VOLCENGINE_SECRET_KEY=<secret-key>
+veadk frontend --agents-dir examples
+```
+
+### Using skills and sub-agents
+
+Type `/` in the composer to search skills mounted on the current agent. Type `@` to search eligible descendants in its agent tree. Use the arrow keys to move, Enter or Tab to select, and Escape to close the menu. A selection becomes a removable chip instead of remaining ordinary message text.
+
+After selecting a sub-agent, the `/` menu shows skills mounted on that target. Changing or removing the target clears its selected skills, preventing a skill from being sent to an agent that does not own it. `task` and `single_turn` workflow nodes remain visible in the topology but cannot be selected with `@`.
+
+The frontend sends structured `veadkInvocation` metadata instead of inferring invocation intent from the message string. The backend plugin directs ADK to call the skill tool or invoke `transfer_to_agent` one tree edge at a time until it reaches the target. The same metadata is written to the first Google GenAI `Part`, so reopening session history restores the `/skill` and `@agent` chips.
 
 ### IAM permissions for `veadk studio deploy`
 
@@ -148,9 +209,9 @@ username (letters + digits, ≤16), stored locally and used as the `user_id`.
 
 <Callout type="info">
   Login state is cached: SSO via the `veadk_session` cookie, local mode via
-  `localStorage`. The session itself is created lazily on the first message (not
-  on page load). Logout is a local logout (clears the session and returns to the
-  login page).
+  `localStorage`. The session itself is created lazily on the first message or
+  attachment upload (not on page load). Logout is a local logout (clears the
+  session and returns to the login page).
 </Callout>
 
 ### How it works
@@ -159,6 +220,14 @@ username (letters + digits, ≤16), stored locally and used as the `user_id`.
 
 <Step>
 `adk/client.ts` calls `/list-apps`, creates a session, and streams `/run_sse`.
+</Step>
+
+<Step>
+`veadk.multimodal` validates uploads, manages local/TOS storage, resolves media references before model calls, and persists model-returned media before history is saved.
+</Step>
+
+<Step>
+`veadk.cli.frontend_invocation` exposes mounted skills and translates structured `/skill` and `@agent` selections into ADK skill-tool and agent-transfer directives.
 </Step>
 
 <Step>

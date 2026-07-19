@@ -71,6 +71,26 @@ DEV_SERVER_ORIGIN = "http://localhost:5173"
 PACKAGED_WEBUI = Path(__file__).resolve().parent.parent / "webui"
 
 
+def _mount_session_trace_route(app: Any, memory_exporter: Any) -> None:
+    """Expose the session trace endpoint used by the VeADK frontend."""
+
+    @app.get("/dev/apps/{app_name}/debug/trace/session/{session_id}")
+    async def _get_session_trace(app_name: str, session_id: str) -> list[dict]:
+        del app_name
+        return [
+            {
+                "name": span.name,
+                "span_id": span.context.span_id,
+                "trace_id": span.context.trace_id,
+                "start_time": span.start_time,
+                "end_time": span.end_time,
+                "attributes": dict(span.attributes),
+                "parent_span_id": span.parent.span_id if span.parent else None,
+            }
+            for span in memory_exporter.get_finished_spans(session_id)
+        ]
+
+
 def _resolve_frontend_dir(arg: str | None) -> Path:
     """Resolve the built-UI directory.
 
@@ -503,8 +523,27 @@ def _run_frontend_server(
     app = get_fast_api_app(
         agents_dir=agents_dir,
         allow_origins=allow_origins,
+        extra_plugins=[
+            "veadk.multimodal.plugin.MultimodalMediaPlugin",
+            "veadk.cli.frontend_invocation.FrontendInvocationPlugin",
+        ],
         web=False,  # we serve our own UI, not the bundled ADK dev UI
     )
+
+    # ``web=False`` deliberately keeps ADK's full development API disabled,
+    # but the VeADK trace drawer needs this one read-only endpoint. Register a
+    # dedicated in-memory exporter instead of enabling eval/builder endpoints.
+    from google.adk.cli.api_server import InMemoryExporter
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+    tracer_provider = trace.get_tracer_provider()
+    if not isinstance(tracer_provider, TracerProvider):
+        raise RuntimeError("ADK did not initialize an SDK tracer provider")
+    trace_exporter = InMemoryExporter({})
+    tracer_provider.add_span_processor(SimpleSpanProcessor(trace_exporter))
+    _mount_session_trace_route(app, trace_exporter)
 
     # Agent introspection for the UI's agent picker (name, model, tools). Reuses
     # ADK's AgentLoader, which caches each loaded `root_agent`.
@@ -513,7 +552,15 @@ def _run_frontend_server(
     from google.adk.cli.utils.agent_loader import AgentLoader
     import httpx
 
+    from veadk.cli.frontend_invocation import agent_skill_summaries
+    from veadk.multimodal.api import mount_media_routes
+    from veadk.multimodal.service import MediaService
+    from veadk.multimodal.storage import create_media_storage
+    from veadk.multimodal.transport import resolve_runtime_media
+
     _agent_loader = AgentLoader(agents_dir)
+    media_service = MediaService(create_media_storage())
+    mount_media_routes(app, media_service)
 
     # Generated-agent debug is intentionally feature-complete in both local and
     # remote Studio deployments: the backend receives AgentDraft JSON, generates
@@ -663,23 +710,30 @@ def _run_frontend_server(
             pass
         return "llm"
 
-    def _agent_node(agent: object, depth: int = 0) -> dict:
+    def _agent_node(
+        agent: object, depth: int = 0, parent_path: tuple[str, ...] = ()
+    ) -> dict:
         # Recursive typed tree for the conversation topology panel. Depth is
         # bounded so a pathological sub_agents cycle can't spin forever.
+        name = getattr(agent, "name", "") or ""
+        path = (*parent_path, name) if name else parent_path
         children = []
         if depth < 8:
             children = [
-                _agent_node(s, depth + 1)
+                _agent_node(s, depth + 1, path)
                 for s in getattr(agent, "sub_agents", []) or []
             ]
-        agent_name = getattr(agent, "name", "") or ""
+        mode = getattr(agent, "mode", None)
         return {
-            "id": agent_name,
-            "name": agent_name,
+            "id": name,
+            "name": name,
             "description": getattr(agent, "description", "") or "",
             "type": _agent_type(agent),
             "model": _model_name(getattr(agent, "model", "")),
             "tools": [_tool_label(t) for t in getattr(agent, "tools", []) or []],
+            "skills": agent_skill_summaries(agent),
+            "path": list(path),
+            "mentionable": mode not in ("task", "single_turn"),
             "children": children,
         }
 
@@ -720,6 +774,7 @@ def _run_frontend_server(
             "type": _agent_type(agent),
             "model": _model_name(getattr(agent, "model", "")),
             "tools": [_tool_label(t) for t in getattr(agent, "tools", []) or []],
+            "skills": agent_skill_summaries(agent),
             "subAgents": [
                 getattr(s, "name", "") for s in getattr(agent, "sub_agents", []) or []
             ],
@@ -2305,6 +2360,27 @@ def _run_frontend_server(
             dict(request.headers), apikey, validated_authorization
         )
         body = await request.body()
+        if request.method == "POST" and path == "run_sse":
+            try:
+                payload = json.loads(body)
+            except json.JSONDecodeError as error:
+                raise HTTPException(
+                    status_code=400, detail="run_sse request body must be JSON"
+                ) from error
+            if not isinstance(payload, dict):
+                raise HTTPException(
+                    status_code=400, detail="run_sse request body must be an object"
+                )
+            try:
+                body = json.dumps(
+                    await resolve_runtime_media(payload, media_service)
+                ).encode("utf-8")
+            except FileNotFoundError as error:
+                raise HTTPException(
+                    status_code=404, detail="Media not found."
+                ) from error
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
 
         from fastapi.responses import StreamingResponse
 

@@ -8,7 +8,14 @@
 // arrives we discard that preview and append the authoritative content. Stored
 // history is all consolidated (partial falsey), which this same logic handles.
 
-import type { AdkEvent, AdkPart } from "./adk/client";
+import type {
+  AdkEvent,
+  AdkPart,
+  AgentNodeType,
+  AgentSkill,
+  AgentTarget,
+  FrontendInvocation,
+} from "./adk/client";
 import type { A2uiMessage } from "./a2ui/types";
 
 const A2UI_TOOL = "send_a2ui_json_to_client";
@@ -29,9 +36,12 @@ export function authUriOf(authConfig: unknown): string | undefined {
 }
 
 export interface AttachmentView {
+  id: string;
   mimeType?: string;
   data?: string; // base64 (no data: prefix)
+  uri?: string;
   name?: string;
+  sizeBytes?: number;
 }
 
 export type Block =
@@ -40,6 +50,7 @@ export type Block =
   | { kind: "tool"; name: string; args?: unknown; response?: unknown; done: boolean }
   | { kind: "a2ui"; messages: A2uiMessage[] }
   | { kind: "attachment"; files: AttachmentView[] }
+  | { kind: "invocation"; value: FrontendInvocation }
   | {
       kind: "auth";
       callId: string;
@@ -85,17 +96,111 @@ function toStdBase64(b64: string): string {
 /** Pull file attachments (inline_data) out of a message's parts. */
 export function attachmentsFromParts(parts: AdkPart[]): AttachmentView[] {
   const files: AttachmentView[] = [];
-  for (const p of parts) {
+  for (const [index, p] of parts.entries()) {
+    const metadata = (p.partMetadata ?? p.part_metadata) as
+      | Record<string, unknown>
+      | undefined;
+    const transport = metadata?.veadkTransport as Record<string, unknown> | undefined;
+    if (transport?.hidden === true) continue;
+    const stored = metadata?.veadkMedia as Record<string, unknown> | undefined;
+    if (typeof stored?.uri === "string") {
+      files.push({
+        id: String(stored.id ?? stored.uri),
+        mimeType: typeof stored.mimeType === "string" ? stored.mimeType : undefined,
+        uri: stored.uri,
+        name: typeof stored.name === "string" ? stored.name : undefined,
+        sizeBytes: typeof stored.sizeBytes === "number" ? stored.sizeBytes : undefined,
+      });
+      continue;
+    }
     const d = p.inlineData ?? p.inline_data;
     if (d && d.data) {
       files.push({
+        id: `inline-${index}-${d.displayName ?? d.display_name ?? "media"}`,
         mimeType: d.mimeType ?? d.mime_type,
         data: toStdBase64(d.data),
         name: d.displayName ?? d.display_name,
       });
+      continue;
+    }
+    const f = p.fileData ?? p.file_data;
+    const uri = f?.fileUri ?? f?.file_uri;
+    if (f && uri) {
+      files.push({
+        id: uri,
+        mimeType: f.mimeType ?? f.mime_type,
+        uri,
+        name: f.displayName ?? f.display_name,
+      });
     }
   }
   return files;
+}
+
+function visiblePartText(part: AdkPart): string | undefined {
+  const metadata = (part.partMetadata ?? part.part_metadata) as
+    | Record<string, unknown>
+    | undefined;
+  const transport = metadata?.veadkTransport as Record<string, unknown> | undefined;
+  return transport?.hideText === true ? undefined : part.text;
+}
+
+const AGENT_NODE_TYPES = new Set<AgentNodeType>([
+  "llm",
+  "sequential",
+  "parallel",
+  "loop",
+  "a2a",
+]);
+
+/** Restore slash-skill and @agent selections persisted in part metadata. */
+export function invocationFromParts(parts: AdkPart[]): FrontendInvocation | undefined {
+  for (const part of parts) {
+    const raw = (part.partMetadata ?? part.part_metadata)?.veadkInvocation;
+    if (!raw || typeof raw !== "object") continue;
+    const metadata = raw as Record<string, unknown>;
+    const skills = Array.isArray(metadata.skills)
+      ? metadata.skills.flatMap<AgentSkill>((item) => {
+          if (!item || typeof item !== "object") return [];
+          const skill = item as Record<string, unknown>;
+          return typeof skill.name === "string"
+            ? [{
+                name: skill.name,
+                description: typeof skill.description === "string" ? skill.description : "",
+              }]
+            : [];
+        })
+      : [];
+
+    let targetAgent: AgentTarget | undefined;
+    const rawTarget = metadata.targetAgent;
+    if (rawTarget && typeof rawTarget === "object") {
+      const target = rawTarget as Record<string, unknown>;
+      const type = target.type;
+      if (
+        typeof target.name === "string" &&
+        typeof type === "string" &&
+        AGENT_NODE_TYPES.has(type as AgentNodeType) &&
+        Array.isArray(target.path)
+      ) {
+        targetAgent = {
+          name: target.name,
+          description: typeof target.description === "string" ? target.description : "",
+          type: type as AgentNodeType,
+          path: target.path.filter((item): item is string => typeof item === "string"),
+        };
+      }
+    }
+    if (skills.length > 0 || targetAgent) return { skills, targetAgent };
+  }
+  return undefined;
+}
+
+function appendAttachments(blocks: Block[], files: AttachmentView[]) {
+  if (!files.length) return;
+  const last = blocks[blocks.length - 1];
+  if (last?.kind === "attachment") last.files.push(...files);
+  else blocks.push({ kind: "attachment", files });
 }
 
 function appendText(blocks: Block[], kind: "thinking" | "text", text: string) {
@@ -118,8 +223,9 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
   if (ev.partial && !hasFn) {
     // Streaming delta: append into the live-preview region.
     for (const p of parts) {
-      if (typeof p.text === "string" && p.text)
-        appendText(blocks, p.thought ? "thinking" : "text", p.text);
+      const text = visiblePartText(p);
+      if (typeof text === "string" && text)
+        appendText(blocks, p.thought ? "thinking" : "text", text);
     }
     return { blocks, liveStart };
   }
@@ -130,8 +236,13 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
   for (const p of parts) {
     const fc = fnCall(p);
     const fr = fnResp(p);
-    if (typeof p.text === "string" && p.text) {
-      appendText(blocks, p.thought ? "thinking" : "text", p.text);
+    const files = attachmentsFromParts([p]);
+    const text = visiblePartText(p);
+    if (typeof text === "string" && text) {
+      appendText(blocks, p.thought ? "thinking" : "text", text);
+    } else if (files.length) {
+      closeThinking(blocks);
+      appendAttachments(blocks, files);
     } else if (fc) {
       closeThinking(blocks);
       if (fc.name === REQUEST_EUC) {
@@ -212,16 +323,18 @@ export function eventsToTurns(events: AdkEvent[]): Turn[] {
         }
       }
       const text = parts
-        .map((p) => p.text)
+        .map(visiblePartText)
         .filter((t): t is string => !!t)
         .join("");
       const files = attachmentsFromParts(parts);
+      const invocation = invocationFromParts(parts);
       // Skip pure function-response turns (no text/files) — they're internal.
-      if (!text && !files.length) {
+      if (!text && !files.length && !invocation) {
         acc = emptyAcc();
         continue;
       }
       const blocks: Block[] = [];
+      if (invocation) blocks.push({ kind: "invocation", value: invocation });
       if (files.length) blocks.push({ kind: "attachment", files });
       if (text) blocks.push({ kind: "text", text });
       turns.push({ role: "user", blocks, meta: { ts: ev.timestamp } });

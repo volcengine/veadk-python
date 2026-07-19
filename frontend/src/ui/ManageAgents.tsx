@@ -71,6 +71,9 @@ export function ManageAgentsView({ author }: ManageAgentsViewProps) {
           type: "llm",
           model: next.detail.model,
           tools: [],
+          skills: [],
+          path: [next.detail.name],
+          mentionable: false,
           children: [],
         },
       ];

@@ -15,7 +15,10 @@ VeADK 自带一个 React 前端，用于渲染智能体经由 Google ADK API Ser
 ### 功能一览
 
 - **对话**：与智能体多轮对话，渲染流式返回的 A2UI 卡片，并展示思考过程、工具调用、Token 与用时。
-- **Agent 选择器**：左上角切换 agent；悬停可查看该 agent 的模型与挂载的工具。
+- **多模态消息**：上传图片、TXT/Markdown、PDF 与视频；用户附件和模型返回的媒体均支持预览与历史回放。
+  对话中的图片默认以紧凑尺寸展示，点击后可全屏缩放预览。
+- **技能与子 Agent 调用**：在输入框输入 `/` 选择挂载技能，输入 `@` 将本轮交给可选的子 Agent。
+- **Agent 选择器**：左上角切换 agent；长列表在视口内独立滚动，悬停可查看该 agent 的模型与挂载的工具。
 - **历史会话**：自动保存、按时间排序，可重新打开或删除。
 - **智能搜索**：「会话」源在当前 agent 的历史消息中做全文检索；「网页」源调用该 agent 挂载的联网搜索工具实时检索（使用服务端环境变量里的凭据）。
 - **添加 AgentKit 智能体**：填入访问地址 + API Key，按 ADK 协议接入远程 agent，接入后出现在选择器中。
@@ -63,6 +66,57 @@ cd frontend && npm run dev                    # http://localhost:5173（代理 A
 <Callout type="info">
   非开发模式下，若未找到已构建的前端目录，命令会报错提示先执行 `npm run build`（或改用 `--dev` 配合 Vite 开发服务器）。
 </Callout>
+
+### 多模态附件与存储
+
+输入框支持 PNG、JPEG、WebP、GIF、TXT、Markdown、PDF、MP4、WebM 和 QuickTime。默认单文件上限为 20 MB。浏览器使用二进制表单上传，不会把附件转成 base64 写入会话。
+
+媒体本体与 ADK Session 分开保存：
+
+- 本地模式默认写入 `/tmp/veadk-media/apps/.../sessions/.../media/<media-id>/`，其中 `content` 是文件本体，`metadata.json` 是文件名、MIME、大小和哈希等元数据。
+- TOS 模式默认写入 `veadk-media/users/<encoded-username>/apps/<app>/sessions/<session>/media/<media-id>/` 下的同名两个对象。用户名位于最外层租户 prefix，不同用户的数据相互隔离；username、app 和 session 路径段都会进行 URL 编码。
+- Session Event 只保存 Google GenAI `FileData` 稳定引用，例如 `veadk-media://apps/.../media/<media-id>`；重新打开历史会话时再通过媒体 API 读取本体。
+
+调用模型前，TXT/Markdown 会解码为 `Part.text`，图片和视频会从当前存储读取并转换为
+`Part.inline_data`，PDF 则自动渲染为逐页 PNG 图片。PDF 渲染运行时包含在 VeADK
+默认依赖中，不需要额外安装或配置 Agent callback。模型返回的 `inline_data` 会先落到
+媒体存储，再在 Event 持久化和 SSE 输出前改写为稳定引用。TOS 的 15 分钟签名 URL
+只用于浏览器下载/预览，不作为模型的 `FileData` URI。
+
+选择云端 Agent Runtime 时，上传、预览和删除仍由 Studio 自身的 `/web/media`
+接口处理，不会转发到 Runtime。Studio 仅在代理 `/run_sse` 时读取稳定引用，将内容转换为
+远端模型可直接消费的 Part；原始 `veadkMedia` 元数据会保留，因此历史消息仍按原文件类型
+和名称加载。这个流程同时支持默认 `/tmp` 与 TOS，无需远端 Runtime 挂载媒体 HTTP 路由。
+
+| 环境变量 | 默认值 | 说明 |
+| :-- | :-- | :-- |
+| `VEADK_MEDIA_STORAGE` | `local` | 选择 `local` 或 `tos`。 |
+| `VEADK_MEDIA_LOCAL_DIR` | `/tmp/veadk-media` | 本地媒体根目录。 |
+| `VEADK_MEDIA_MAX_FILE_BYTES` | `20971520` | 单个上传文件或模型输出的字节上限。 |
+| `VEADK_MEDIA_TOS_PREFIX` | `veadk-media` | TOS 对象 Key 前缀。 |
+| `DATABASE_TOS_BUCKET` | — | TOS Bucket。 |
+| `DATABASE_TOS_REGION` / `DATABASE_TOS_ENDPOINT` | 按云环境推导 | TOS Region 与 Endpoint。 |
+| `VOLCENGINE_ACCESS_KEY` / `VOLCENGINE_SECRET_KEY` | — | TOS 访问凭据。 |
+| `VOLCENGINE_SESSION_TOKEN` | — | 可选的临时凭据 Token。 |
+
+移除尚未发送的附件会立即删除对应对象；删除 Session 会清理该 Session 下的全部媒体。本地模式无需额外配置，但 `/tmp` 可能随进程或宿主机回收而被清理；需要持久保存附件时应使用 TOS。启用 TOS 的最小配置如下：
+
+```bash
+export VEADK_MEDIA_STORAGE=tos
+export DATABASE_TOS_BUCKET=<bucket>
+export DATABASE_TOS_REGION=cn-beijing
+export VOLCENGINE_ACCESS_KEY=<access-key>
+export VOLCENGINE_SECRET_KEY=<secret-key>
+veadk frontend --agents-dir examples
+```
+
+### 使用技能与子 Agent
+
+在输入框中输入 `/` 可搜索当前 Agent 挂载的技能，输入 `@` 可搜索其 Agent 树中允许转移的后代节点。使用上下方向键移动，按 Enter 或 Tab 选择，按 Escape 关闭菜单。选中项会变成可移除的 chip，不会作为普通文本留在消息中。
+
+选中子 Agent 后，`/` 菜单会改为展示目标 Agent 自己挂载的技能。切换或移除目标时会清空原有技能，避免把技能发送给没有挂载它的 Agent。`task` 和 `single_turn` 工作流节点仍会显示在拓扑中，但不能通过 `@` 选择。
+
+前端不会从消息字符串中猜测调用意图，而是发送结构化的 `veadkInvocation` metadata。后端插件据此要求 ADK 调用技能工具，或沿 Agent 树逐级调用 `transfer_to_agent`，直到到达目标节点。同一份 metadata 也会写入首个 Google GenAI `Part`，因此重新加载历史会话后仍能恢复 `/skill` 与 `@agent` chip。
 
 ### `veadk studio deploy` 的 IAM 权限
 
@@ -128,7 +182,7 @@ Google 同理，把 `OAUTH2_PROVIDER` 换成 `google`；Keycloak / Auth0 / Okta 
 **无 SSO（本地用户名）** —— 不传上述参数时，登录页会让用户输入一个用户名（字母 + 数字，≤16 位），保存在本地并作为 `user_id`。
 
 <Callout type="info">
-  登录态会被缓存：SSO 走 `veadk_session` Cookie，本地模式走 `localStorage`。会话本身**在发送第一条消息时才创建**（而非打开页面时）。退出登录为本地登出（清除会话并回到登录页）。
+  登录态会被缓存：SSO 走 `veadk_session` Cookie，本地模式走 `localStorage`。会话本身**在发送第一条消息或上传第一个附件时才创建**（而非打开页面时）。退出登录为本地登出（清除会话并回到登录页）。
 </Callout>
 
 ### 工作原理
@@ -137,6 +191,14 @@ Google 同理，把 `OAUTH2_PROVIDER` 换成 `google`；Keycloak / Auth0 / Okta 
 
 <Step>
 `adk/client.ts` 调用 `/list-apps`，创建会话，并通过 `/run_sse` 进行流式接收。
+</Step>
+
+<Step>
+`veadk.multimodal` 校验上传，统一管理本地/TOS 存储，在模型调用前解析媒体引用，并在历史持久化前保存模型返回的媒体。
+</Step>
+
+<Step>
+`veadk.cli.frontend_invocation` 暴露 Agent 挂载的技能，并把结构化的 `/skill`、`@agent` 选择转换为 ADK 技能工具与 Agent 转移指令。
 </Step>
 
 <Step>

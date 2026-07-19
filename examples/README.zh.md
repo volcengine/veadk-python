@@ -21,8 +21,11 @@
 | 10 | [智能体路由](./10_agent_routing/) | 复杂 | 协调者动态委派给专家智能体 |
 | 11 | [链路追踪](./11_tracing/) | 复杂 | 观测大模型/工具调用；导出 span |
 
-另外还有 [`a2ui_agent/`](./a2ui_agent/) —— 一个由智能体驱动 UI 的示例，
-可通过 `veadk frontend --agents-dir examples` 运行。
+另外还有可通过 `veadk frontend --agents-dir examples` 运行的 frontend 示例：
+
+- [`a2ui_agent/`](./a2ui_agent/) 展示由智能体驱动的 UI。
+- [`multimodal_agent/`](./multimodal_agent/) 分析从聊天输入框上传的图片、
+  TXT/Markdown、PDF 和视频。
 
 如需一个可部署的**完整应用**（Web 前端 + Agent API 同处一个容器，通过
 `veadk agentkit` 部署到火山引擎 AgentKit），参见 [`basic-app/`](./basic-app/)。
