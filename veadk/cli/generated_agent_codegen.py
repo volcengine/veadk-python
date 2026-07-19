@@ -31,6 +31,21 @@ from veadk.cli.generated_agent_catalog import (
     EnvVar,
 )
 
+_PYTHON_LICENSE_HEADER = """# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""
+
 
 class GeneratedFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -527,7 +542,7 @@ def render_requirements(extras: set[str], include_feishu_channel: bool) -> str:
         all_extras.add("extensions")
     unique_extras = sorted(all_extras)
     extras_str = f"[{','.join(unique_extras)}]" if unique_extras else ""
-    pkg = f"veadk-python{extras_str}>=1.0.4"
+    pkg = f"veadk-python{extras_str}>=1.0.5"
     packages = [pkg, "agentkit-sdk-python", "google-adk", "starlette<1.0.0"]
     return "\n".join(packages) + "\n"
 
@@ -546,7 +561,7 @@ def render_readme(name: str, draft: AgentDraft) -> str:
         "python app.py",
         "```",
         "",
-        "`app.py` 使用 AgentKit AgentServerApp 包裹 `root_agent`，监听 `0.0.0.0:8000`。",
+        "`app.py` 通过 VeADK 的 AgentKit 公共组件发布 `root_agent`，监听 `0.0.0.0:8000`。",
         "",
     ]
     if draft.deployment.feishuEnabled:
@@ -562,350 +577,18 @@ def render_readme(name: str, draft: AgentDraft) -> str:
 
 
 def _render_app_py(pkg: str, feishu_channel_enabled: bool) -> str:
-    feishu_imports = (
-        "\nimport asyncio\nimport inspect\nimport threading\nimport traceback\n"
-        "from contextlib import asynccontextmanager\n"
-        "from veadk.extensions import FeishuChannelExtension"
-        if feishu_channel_enabled
-        else ""
-    )
-    feishu_helpers = _FEISHU_HELPERS if feishu_channel_enabled else ""
-    feishu_runner_import = (
-        "    from veadk import Runner\n" if feishu_channel_enabled else ""
-    )
-    feishu_runner = (
-        "    runner = Runner(\n"
-        "        agent=root_agent,\n"
-        '        app_name=getattr(root_agent, "name", "") or "agent",\n'
-        "        short_term_memory=short_term_memory,\n"
-        "    )\n"
-        if feishu_channel_enabled
-        else ""
-    )
-    feishu_lifespan = _FEISHU_LIFESPAN if feishu_channel_enabled else ""
-    feishu_config = (
-        f"FEISHU_CHANNEL_ENABLED = True\n\n{feishu_helpers}"
-        if feishu_channel_enabled
-        else ""
-    )
-    return f"""import os{feishu_imports}
-from pathlib import Path
-from agentkit.apps import AgentkitAgentServerApp
-from fastapi.staticfiles import StaticFiles
-from veadk.memory.short_term_memory import ShortTermMemory
+    return f"""{_PYTHON_LICENSE_HEADER}
 from agents.{pkg}.agent import AGENT_DISPLAY_NAMES, root_agent
+from veadk.integrations.agentkit import create_agentkit_app, run_agentkit_app
 
-# Deployment configuration
-HOST = os.getenv("HOST", "0.0.0.0")
-PORT = int(os.getenv("PORT", "8000"))
-{feishu_config}
-def build_app():
-    \"\"\"Build AgentKit AgentServerApp for deployment.\"\"\"
-    import veadk
-{feishu_runner_import}    WEBUI_DIR = Path(veadk.__file__).resolve().parent / "webui"
-
-    # AgentKit's AgentServerApp exposes the ADK-compatible API surface
-    # (/list-apps, /run, /run_sse, sessions) expected by AgentKit runtime tests.
-    short_term_memory = getattr(root_agent, "short_term_memory", None) or ShortTermMemory(
-        backend="local"
-    )
-{feishu_runner}    agent_server_app = AgentkitAgentServerApp(
-        agent=root_agent,
-        short_term_memory=short_term_memory,
-    )
-    app = agent_server_app.app
-
-{feishu_lifespan}    # Add health check endpoint
-    @app.get("/ping")
-    def ping() -> dict[str, str]:
-        return {{"status": "ok"}}
-
-    # Agent-structure introspection (data plane), consumed by the VeADK web
-    # UI's "管理 Agent" view to show this runtime's agent name + sub-agent tree.
-    from fastapi import HTTPException as _HTTPException
-
-    def _agent_type(a: object) -> str:
-        try:
-            from google.adk.agents import LoopAgent, ParallelAgent, SequentialAgent
-
-            if isinstance(a, LoopAgent):
-                return "loop"
-            if isinstance(a, SequentialAgent):
-                return "sequential"
-            if isinstance(a, ParallelAgent):
-                return "parallel"
-        except Exception:
-            pass
-        try:
-            from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
-
-            if isinstance(a, RemoteA2aAgent):
-                return "a2a"
-        except Exception:
-            pass
-        return "llm"
-
-    def _model_name(m: object) -> str:
-        if isinstance(m, str):
-            return m
-        return str(getattr(m, "model", None) or type(m).__name__)
-
-    def _tool_label(t: object) -> str:
-        name = getattr(t, "name", None) or getattr(t, "__name__", None)
-        return str(name or type(t).__name__)
-
-    def _agent_node(a: object, depth: int = 0) -> dict:
-        children = []
-        if depth < 8:
-            children = [_agent_node(s, depth + 1) for s in getattr(a, "sub_agents", []) or []]
-        agent_id = getattr(a, "name", "") or ""
-        return {{
-            "id": agent_id,
-            "name": AGENT_DISPLAY_NAMES.get(agent_id, agent_id),
-            "description": getattr(a, "description", "") or "",
-            "type": _agent_type(a),
-            "model": _model_name(getattr(a, "model", "")),
-            "tools": [_tool_label(t) for t in getattr(a, "tools", []) or []],
-            "children": children,
-        }}
-
-    @app.get("/web/agent-info/{{app_name}}")
-    def agent_info(app_name: str) -> dict:
-        expected_name = getattr(root_agent, "name", "") or ""
-        if app_name != expected_name:
-            raise _HTTPException(status_code=404, detail="unknown agent: " + app_name)
-        return {{
-            "id": expected_name,
-            "name": AGENT_DISPLAY_NAMES.get(expected_name, expected_name or app_name),
-            "description": getattr(root_agent, "description", "") or "",
-            "type": _agent_type(root_agent),
-            "model": _model_name(getattr(root_agent, "model", "")),
-            "tools": [_tool_label(t) for t in getattr(root_agent, "tools", []) or []],
-            "subAgents": [
-                AGENT_DISPLAY_NAMES.get(getattr(s, "name", ""), getattr(s, "name", ""))
-                for s in getattr(root_agent, "sub_agents", []) or []
-            ],
-            "graph": _agent_node(root_agent),
-        }}
-
-    @app.get("/web/agent-graph")
-    def agent_graph() -> dict:
-        # Single introspection endpoint on the main agent: returns this runtime's
-        # root agent + recursive sub-agent tree, with no /list-apps discovery
-        # needed. Used by the VeADK "管理 Agent" view.
-        return {{
-            "id": getattr(root_agent, "name", "") or "",
-            "name": AGENT_DISPLAY_NAMES.get(
-                getattr(root_agent, "name", "") or "",
-                getattr(root_agent, "name", "") or "",
-            ),
-            "description": getattr(root_agent, "description", "") or "",
-            "type": _agent_type(root_agent),
-            "model": _model_name(getattr(root_agent, "model", "")),
-            "tools": [_tool_label(t) for t in getattr(root_agent, "tools", []) or []],
-            "graph": _agent_node(root_agent),
-        }}
-
-    # Serve the bundled VeADK web UI without taking over "/", which is reserved
-    # by AgentServerApp for the A2A protocol surface.
-    if (WEBUI_DIR / "index.html").is_file():
-        if (WEBUI_DIR / "assets").is_dir():
-            app.mount(
-                "/assets",
-                StaticFiles(directory=str(WEBUI_DIR / "assets")),
-                name="webui-assets",
-            )
-
-        from fastapi.responses import FileResponse as _FileResponse
-
-        @app.get("/")
-        @app.get("/webui")
-        @app.get("/webui/{{path:path}}")
-        def webui(path: str = ""):
-            return _FileResponse(WEBUI_DIR / "index.html")
-
-    # AgentServerApp mounts A2A at "/", so routes added after construction must
-    # be moved before that root mount or they will be shadowed.
-    _priority_paths = {{
-        "/",
-        "/ping",
-        "/web/agent-info/{{app_name}}",
-        "/web/agent-graph",
-        "/assets",
-        "/webui",
-        "/webui/{{path:path}}",
-    }}
-    _priority_routes = [
-        r for r in app.router.routes if getattr(r, "path", None) in _priority_paths
-    ]
-    if _priority_routes:
-        app.router.routes[:] = _priority_routes + [
-            r for r in app.router.routes if r not in _priority_routes
-        ]
-
-    return agent_server_app, app
-
-agent_server_app, app = build_app()
+app = create_agentkit_app(
+    root_agent,
+    AGENT_DISPLAY_NAMES,
+    enable_feishu={feishu_channel_enabled!r},
+)
 
 if __name__ == "__main__":
-    agent_server_app.run(host=HOST, port=PORT)
-"""
-
-
-_FEISHU_HELPERS = """def _get_feishu_channel_method(channel, names):
-    raw_channel = getattr(channel, "channel", None)
-    for target in (raw_channel, channel):
-        if target is None:
-            continue
-        for name in names:
-            method = getattr(target, name, None)
-            if method is not None:
-                return method
-    return None
-
-def _call_feishu_channel_method(loop, method):
-    result = method()
-    if inspect.isawaitable(result):
-        return loop.run_until_complete(result)
-    return result
-
-def _connect_feishu_channel(loop, channel) -> None:
-    connect = _get_feishu_channel_method(channel, ("start", "connect"))
-    if connect is None:
-        raise AttributeError("Feishu channel has no start/connect method")
-    return _call_feishu_channel_method(loop, connect)
-
-def _disconnect_feishu_channel(loop, channel) -> None:
-    disconnect = _get_feishu_channel_method(channel, ("stop", "disconnect"))
-    if disconnect is None:
-        return None
-    return _call_feishu_channel_method(loop, disconnect)
-
-def _stop_feishu_channel_from_lifespan(channel) -> None:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return _disconnect_feishu_channel(loop, channel)
-    finally:
-        asyncio.set_event_loop(None)
-        loop.close()
-
-def _build_feishu_channel(runner, app_id, app_secret):
-    return FeishuChannelExtension(
-        runner=runner,
-        app_id=app_id,
-        app_secret=app_secret,
-        channel_kwargs={
-            "transport": "ws",
-        },
-        streaming=False,
-        reactions=False,
-    )
-
-def _run_feishu_channel(runner, app_id, app_secret, stop_event, state) -> None:
-    loop = asyncio.new_event_loop()
-    state["loop"] = loop
-    asyncio.set_event_loop(loop)
-    try:
-        while not stop_event.is_set():
-            channel = None
-            try:
-                channel = _build_feishu_channel(runner, app_id, app_secret)
-                state["channel"] = channel
-                print("feishu channel connecting in dedicated thread", flush=True)
-                _connect_feishu_channel(loop, channel)
-                print("feishu channel disconnected; reconnecting in 5s", flush=True)
-            except Exception as exc:
-                if channel is None:
-                    print(
-                        f"feishu channel initialization failed: {type(exc).__name__}: {exc}; reconnecting in 5s",
-                        flush=True,
-                    )
-                    print(traceback.format_exc(), flush=True)
-                else:
-                    print(
-                        f"feishu channel connect failed: {type(exc).__name__}: {exc}; reconnecting in 5s",
-                        flush=True,
-                    )
-            finally:
-                if channel is not None:
-                    try:
-                        _disconnect_feishu_channel(loop, channel)
-                    except Exception as exc:
-                        print(
-                            f"feishu channel disconnect failed: {type(exc).__name__}: {exc}",
-                            flush=True,
-                        )
-                    finally:
-                        if state.get("channel") is channel:
-                            state["channel"] = None
-            stop_event.wait(5)
-    finally:
-        asyncio.set_event_loop(None)
-        state["loop"] = None
-        loop.close()
-
-async def _start_feishu_channel(app, runner) -> None:
-    if not FEISHU_CHANNEL_ENABLED:
-        return
-
-    app_id = os.getenv("FEISHU_APP_ID")
-    app_secret = os.getenv("FEISHU_APP_SECRET")
-    if not app_id or not app_secret:
-        print(
-            "feishu channel disabled: FEISHU_APP_ID or FEISHU_APP_SECRET is missing",
-            flush=True,
-        )
-        return
-
-    app.state.feishu_channel_state = {"channel": None, "loop": None}
-    app.state.feishu_channel_stop_event = threading.Event()
-    app.state.feishu_channel_thread = threading.Thread(
-        target=_run_feishu_channel,
-        args=(
-            runner,
-            app_id,
-            app_secret,
-            app.state.feishu_channel_stop_event,
-            app.state.feishu_channel_state,
-        ),
-        name="feishu-channel",
-        daemon=True,
-    )
-    app.state.feishu_channel_thread.start()
-    print("feishu channel background thread started", flush=True)
-
-async def _stop_feishu_channel(app) -> None:
-    stop_event = getattr(app.state, "feishu_channel_stop_event", None)
-    if stop_event is not None:
-        stop_event.set()
-    state = getattr(app.state, "feishu_channel_state", None) or {}
-    channel = state.get("channel")
-    if channel is not None:
-        await asyncio.to_thread(_stop_feishu_channel_from_lifespan, channel)
-    thread = getattr(app.state, "feishu_channel_thread", None)
-    if thread is not None:
-        await asyncio.to_thread(thread.join, 2)
-        if thread.is_alive():
-            print(
-                "feishu channel background thread did not stop within 2s",
-                flush=True,
-            )
-"""
-
-
-_FEISHU_LIFESPAN = """    original_lifespan = app.router.lifespan_context
-
-    @asynccontextmanager
-    async def lifespan(fastapi_app):
-        async with original_lifespan(fastapi_app):
-            await _start_feishu_channel(fastapi_app, runner)
-            try:
-                yield
-            finally:
-                await _stop_feishu_channel(fastapi_app)
-
-    app.router.lifespan_context = lifespan
+    run_agentkit_app(app)
 """
 
 
@@ -939,18 +622,19 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
         + f"\n\nAGENT_DISPLAY_NAMES = {acc.agent_display_names!r}\n"
         + "\n# ADK 加载器要求：顶层 agent 必须命名为 root_agent\nroot_agent = agent\n"
     )
-    agent_py = f"{import_block}\n\n{agent_definition}"
+    agent_py = f"{_PYTHON_LICENSE_HEADER}\n{import_block}\n\n{agent_definition}"
 
     app_py = _render_app_py(pkg, feishu_channel_enabled)
     files = [
         GeneratedFile(path="app.py", content=app_py),
         # Top-level agents package marker so `from agents.<pkg>.agent import
         # root_agent` resolves when the container runs `python -m app`.
-        GeneratedFile(path="agents/__init__.py", content=""),
+        GeneratedFile(path="agents/__init__.py", content=_PYTHON_LICENSE_HEADER),
         GeneratedFile(path=f"agents/{pkg}/agent.py", content=agent_py),
         GeneratedFile(
             path=f"agents/{pkg}/__init__.py",
             content=(
+                f"{_PYTHON_LICENSE_HEADER}\n"
                 "from .agent import AGENT_DISPLAY_NAMES, root_agent\n\n"
                 '__all__ = ["AGENT_DISPLAY_NAMES", "root_agent"]\n'
             ),
