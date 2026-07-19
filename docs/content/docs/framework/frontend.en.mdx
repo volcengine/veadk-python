@@ -100,6 +100,11 @@ protects the API while exempting the SPA shell and `GET /web/auth-config`, so th
 app loads and shows its own login page instead of being bounced to the IdP. The
 login button's label/icon is config-driven (`--oauth2-provider` / `-label`).
 
+When connecting to an AgentKit Runtime protected by `custom_jwt`, the
+server-side proxy forwards the OAuth access token already validated for the
+current session. The token issuer must match the Runtime discovery URL, and its
+client ID must be included in the Runtime `allowed_clients` list.
+
 **Third-party / custom OAuth2 (env vars)** — without a VeIdentity user pool, set
 `OAUTH2_CLIENT_ID` (and secret) to enable GitHub, Google, or any OAuth2/OIDC
 login. Endpoints are resolved in this order: a built-in preset

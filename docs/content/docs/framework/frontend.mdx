@@ -94,6 +94,8 @@ veadk frontend --agents-dir examples \
 
 需要进程能拿到火山引擎凭证（AK/SK）。中间件保护 API、放行 SPA 外壳与 `GET /web/auth-config`，因此应用能加载并展示自己的登录页（而不是被直接重定向到 IdP）。登录按钮的文案/图标由配置驱动（`--oauth2-provider` / `--oauth2-provider-label`）。
 
+连接使用 `custom_jwt` 鉴权的 AgentKit Runtime 时，服务端代理会转发当前会话中已经验证的 OAuth access token。前端所用 token 的 issuer 必须匹配 Runtime 的 discovery URL，并且 client ID 必须包含在 Runtime 的 `allowed_clients` 中。
+
 **第三方 / 自定义 OAuth2（环境变量）** —— 不依赖 VeIdentity 用户池时，只要设置 `OAUTH2_CLIENT_ID`（及密钥），即可接入 GitHub、Google 或任意 OAuth2/OIDC 登录。端点来源按以下顺序确定：内置预设（`OAUTH2_PROVIDER=github` / `google`）→ OIDC 自动发现（设置 `OAUTH2_ISSUER`）→ 显式端点（`OAUTH2_AUTHORIZE_URL` 等）。
 
 | 环境变量 | 说明 |
