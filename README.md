@@ -80,6 +80,23 @@ res = asyncio.run(agent.run("hello!"))
 print(res)
 ```
 
+## AgentKit application
+
+Use the shared AgentKit application factory when your project needs AgentKit
+APIs, VeADK's bundled Web UI, health checks, and agent-topology endpoints. This
+keeps platform routes and lifecycle code out of your agent module:
+
+```python
+from veadk import Agent
+from veadk.integrations.agentkit import create_agentkit_app
+
+root_agent = Agent(name="customer_support")
+app = create_agentkit_app(root_agent)
+```
+
+See [`examples/generated_agentkit_project`](examples/generated_agentkit_project)
+for a complete generated project.
+
 ## Feishu bot channel
 
 VeADK now provides `veadk.extensions.FeishuChannelExtension` for bridging a Feishu bot with a `Runner`. It maps `union_id` to `user_id`, and `thread_id` / `chat_id` to `session_id`, so VeADK memory and tracing can work directly in Feishu conversations.

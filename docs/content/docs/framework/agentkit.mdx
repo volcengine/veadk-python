@@ -9,6 +9,26 @@ title: "部署到 AgentKit"
 - 已安装 VeADK（包含 `agentkit` 依赖）。
 - 已在项目根目录的 `.env` 文件中配置火山引擎访问凭据（Access Key / Secret Key）。
 
+## 公共应用组件
+
+通过 Studio 新生成的项目只保留 Agent 业务代码和一个精简的 `app.py`。AgentKit
+接口、健康检查、Agent 拓扑、内置 Web UI、短期记忆默认配置和可选的飞书生命周期
+由 `veadk.integrations.agentkit` 统一提供：
+
+```python
+from agents.my_agent.agent import AGENT_DISPLAY_NAMES, root_agent
+from veadk.integrations.agentkit import create_agentkit_app
+
+app = create_agentkit_app(
+    root_agent,
+    AGENT_DISPLAY_NAMES,
+)
+```
+
+服务会提供 AgentKit 对话接口，以及 `/ping`、`/web/agent-info/{app_name}`、
+`/web/agent-graph` 和内置 Web UI。完整生成结果可参考
+[`examples/generated_agentkit_project`](https://github.com/volcengine/veadk-python/tree/main/examples/generated_agentkit_project)。
+
 ## 步骤
 
 <Steps>

@@ -47,27 +47,26 @@ from veadk.cli.generated_agent_skills import (
 )
 
 
-# These hashes were produced from the legacy frontend generator before backend
-# codegen became the trusted implementation. They intentionally lock the full
-# generated file contents, not just Python syntax or selected snippets.
+# These hashes lock the complete generated project contents, not just Python
+# syntax or selected snippets.
 _MINIMAL_FRONTEND_GOLDEN = {
-    "app.py": "76fb40c6016bf2b70e35012d050b6a0e5be36233b6044e83e1002a3f71150bfb",
+    "app.py": "82aa7a210954d08707ee01829df26a535ecdd82211d82134a7416f7f2bf4d121",
     "agents/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "agents/demo_agent/agent.py": "6e5bbd448439c7f50f5400227680130e897dd71e8251cb4eb4594c98f4889589",
     "agents/demo_agent/__init__.py": "acb6368da255ff70d6760c00085c893aa0b2d973768d293a22bb7181fb1e3448",
     ".env.example": "1cdb6e1bfe38616d5d46095ba88ba76a0c189f3d2999bf0dd23b7145ce103ab2",
-    "requirements.txt": "a7bb29cb47b916a81b626907fcdf84eed525ca22b4214ddc82f96a5ba87c8cc8",
-    "README.md": "16cbec845b595949c071f3bcf4c056d862b9e2277c00e5d23649b5540dfde83e",
+    "requirements.txt": "9a04e5f16e94d5e751681082776f1c99f13da7a577c8753c3835e0ea507245e4",
+    "README.md": "a34208314cf9061c02662028d7a9dd97448e6b73c1d732cb4aeaa8f70dbbc684",
 }
 
 _FULL_FRONTEND_GOLDEN = {
-    "app.py": "bce061ef2a9db0ba8fa2c82c94ae682f166d96bca4d580e99fcaacca71b9a682",
+    "app.py": "25b7d5bdb179f1ef57d1a66f15b15a7f041004c2a02b3eeaa0bcac82414d88c2",
     "agents/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "agents/full_agent/agent.py": "d77ee467c4895b1a160927fb551a65d424b68319fc2941014dc5d499edbace68",
     "agents/full_agent/__init__.py": "acb6368da255ff70d6760c00085c893aa0b2d973768d293a22bb7181fb1e3448",
     ".env.example": "cb35eed98b4155c755df934f61ca6760293d59508de0a6090632e44501f82748",
-    "requirements.txt": "5230e5c9a20b97dc95cc753247b4240d7401d9f9b46aa62da851c91552061ba7",
-    "README.md": "ce6e5ada2031657b5de320465a34cb8c066c6c4181ab111dfb40299d3ec0bcd0",
+    "requirements.txt": "65b301155863e56165c5777301c3476d0c0b68e569fff4450f454e36fd66225d",
+    "README.md": "1bf4dc889c7d1076f50784d253b53412ba7c49bcb69a5d948f9092dbbecb18ac",
 }
 
 
@@ -184,8 +183,21 @@ def test_codegen_preserves_agent_display_names_for_topology() -> None:
 
     assert "'agent': '客服智能体'" in agent_py
     assert "'agent_sub_1': '订单助手'" in agent_py
-    assert '"id": agent_id' in app_py
-    assert '"name": AGENT_DISPLAY_NAMES.get(agent_id, agent_id)' in app_py
+    assert "create_agentkit_app(" in app_py
+    assert "AGENT_DISPLAY_NAMES" in app_py
+    assert 'app.get("/web/agent-info' not in app_py
+    assert len(app_py.splitlines()) == 11
+
+
+def test_codegen_enables_feishu_without_exposing_lifecycle_code() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(name="demo", deployment={"feishuEnabled": True})
+    )
+    app_py = _file_map(project)["app.py"]
+
+    assert "enable_feishu=True" in app_py
+    assert "FeishuChannelExtension" not in app_py
+    assert "asynccontextmanager" not in app_py
 
 
 def test_frontend_complete_shape_is_accepted_and_unknown_field_is_rejected() -> None:
