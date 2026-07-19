@@ -1,5 +1,7 @@
 import { memo } from "react";
+import { Maximize2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { PhotoView } from "react-photo-view";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import "highlight.js/styles/github.css";
@@ -20,6 +22,26 @@ function MarkdownImpl({ text, className }: { text: string; className?: string })
           a: ({ node, ...props }) => (
             <a {...props} target="_blank" rel="noopener noreferrer" />
           ),
+          img: ({ node, src, alt, ...props }) => {
+            const image = (
+              <img {...props} src={src} alt={alt ?? ""} loading="lazy" />
+            );
+            if (!src) return image;
+            return (
+              <PhotoView src={src}>
+                <button
+                  type="button"
+                  className="image-preview-trigger"
+                  aria-label={`放大预览：${alt || "图片"}`}
+                >
+                  {image}
+                  <span className="image-preview-hint" aria-hidden="true">
+                    <Maximize2 />
+                  </span>
+                </button>
+              </PhotoView>
+            );
+          },
         }}
       >
         {text}

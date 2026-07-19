@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import base64
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -179,3 +181,110 @@ def test_runtime_proxy_uses_authorizer_credential(
         "https://runtime.example/dev/apps/demo_agent/debug/trace/session/session-1"
     )
     assert upstream_headers["Authorization"] == expected_authorization
+
+
+def test_runtime_proxy_resolves_studio_media_before_forwarding(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("VEADK_MEDIA_LOCAL_DIR", str(tmp_path / "media"))
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                network_configurations=[
+                    SimpleNamespace(
+                        endpoint="https://runtime.example", network_type="public"
+                    )
+                ],
+                authorizer_configuration=SimpleNamespace(
+                    key_auth=SimpleNamespace(api_key="runtime-api-key"),
+                    custom_jwt_authorizer=None,
+                ),
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient", _FakeRuntimeClient
+    )
+    upstream_body = b""
+
+    class _FakeUpstreamResponse:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+
+        async def aiter_raw(self):
+            yield b"{}"
+
+        async def aclose(self) -> None:
+            pass
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def build_request(
+            self,
+            method: str,
+            url: str,
+            *,
+            params: dict[str, str],
+            headers: dict[str, str],
+            content: bytes,
+        ) -> object:
+            nonlocal upstream_body
+            upstream_body = content
+            return object()
+
+        async def send(self, request: object, *, stream: bool) -> _FakeUpstreamResponse:
+            return _FakeUpstreamResponse()
+
+        async def aclose(self) -> None:
+            pass
+
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUB"
+        "AScY42YAAAAASUVORK5CYII="
+    )
+
+    with TestClient(app) as client:
+        upload = client.post(
+            "/web/media",
+            data={
+                "app_name": "demo",
+                "user_id": "user",
+                "session_id": "session",
+            },
+            files={"file": ("cat.png", png, "image/png")},
+        )
+        assert upload.status_code == 200
+        media = upload.json()
+        response = client.post(
+            "/web/runtime-proxy/runtime-1/run_sse?region=cn-beijing",
+            json={
+                "app_name": "demo",
+                "user_id": "user",
+                "session_id": "session",
+                "new_message": {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "fileData": {
+                                "fileUri": media["uri"],
+                                "mimeType": "image/png",
+                            },
+                            "partMetadata": {"veadkMedia": media},
+                        }
+                    ],
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    forwarded_part = json.loads(upstream_body)["new_message"]["parts"][0]
+    assert "fileData" not in forwarded_part
+    assert base64.b64decode(forwarded_part["inlineData"]["data"]) == png
+    assert forwarded_part["partMetadata"]["veadkMedia"]["uri"] == media["uri"]

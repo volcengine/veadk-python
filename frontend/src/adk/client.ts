@@ -40,6 +40,8 @@ export interface AdkEvent {
     endOfAgent?: boolean;
     end_of_agent?: boolean;
     escalate?: boolean;
+    artifactDelta?: Record<string, number>;
+    artifact_delta?: Record<string, number>;
   };
   [k: string]: unknown;
 }
@@ -71,11 +73,24 @@ export interface AdkInlineData {
   display_name?: string;
 }
 
+export interface AdkFileData {
+  fileUri?: string;
+  mimeType?: string;
+  displayName?: string;
+  file_uri?: string;
+  mime_type?: string;
+  display_name?: string;
+}
+
 export interface AdkPart {
   text?: string;
   thought?: boolean;
   inlineData?: AdkInlineData;
   inline_data?: AdkInlineData; // snake_case fallback (defensive)
+  fileData?: AdkFileData;
+  file_data?: AdkFileData;
+  partMetadata?: Record<string, unknown>;
+  part_metadata?: Record<string, unknown>;
   functionCall?: { id?: string; name?: string; args?: Record<string, unknown> };
   functionResponse?: { id?: string; name?: string; response?: Record<string, unknown> };
   // snake_case fallbacks (defensive)
@@ -83,11 +98,17 @@ export interface AdkPart {
   function_response?: { id?: string; name?: string; response?: Record<string, unknown> };
 }
 
-/** A file the user attached in the composer, encoded for `/run_sse`. */
+/** A file attached in the composer or reconstructed from message history. */
 export interface Attachment {
+  id: string;
   mimeType: string;
-  data: string; // base64 (no data: prefix)
+  uri?: string;
+  data?: string; // legacy inline base64 (no data: prefix)
   name?: string;
+  sizeBytes?: number;
+  status?: "uploading" | "ready" | "error";
+  error?: string;
+  previewUrl?: string;
 }
 
 const API_BASE = ""; // same origin (prod) / proxied (dev)
@@ -263,6 +284,94 @@ export async function deleteSession(
   if (!res.ok && res.status !== 404) throw new Error(`delete session failed: ${res.status}`);
 }
 
+export interface MediaCapabilities {
+  maxFileBytes: number;
+  mimeTypes: string[];
+  storage: "local" | "tos" | string;
+}
+
+export async function getMediaCapabilities(appName: string): Promise<MediaCapabilities> {
+  void appName;
+  const res = await apiFetch("/web/media/capabilities");
+  if (!res.ok) throw new Error(await httpErrorMessage(res, "media capabilities failed"));
+  return res.json();
+}
+
+export async function uploadMedia(
+  appName: string,
+  userId: string,
+  sessionId: string,
+  file: File,
+): Promise<Attachment> {
+  const { app } = resolve(appName);
+  const body = new FormData();
+  body.set("app_name", app);
+  body.set("user_id", userId);
+  body.set("session_id", sessionId);
+  body.set("file", file);
+  const res = await apiFetch("/web/media", { method: "POST", body });
+  if (!res.ok) throw new Error(await httpErrorMessage(res, "文件上传失败"));
+  const media = (await res.json()) as {
+    id: string;
+    uri: string;
+    name: string;
+    mimeType: string;
+    sizeBytes: number;
+  };
+  return { ...media, status: "ready" };
+}
+
+export async function deleteSessionMedia(
+  appName: string,
+  userId: string,
+  sessionId: string,
+): Promise<void> {
+  const { app } = resolve(appName);
+  const path = `/web/media/${encodeURIComponent(app)}/${encodeURIComponent(userId)}/${encodeURIComponent(sessionId)}`;
+  const res = await apiFetch(path, { method: "DELETE" });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(await httpErrorMessage(res, "media cleanup failed"));
+  }
+}
+
+function mediaApiPath(uri: string): string | undefined {
+  try {
+    const parsed = new URL(uri);
+    if (parsed.protocol !== "veadk-media:" || parsed.hostname !== "apps") return undefined;
+    const segments = parsed.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+    if (
+      segments.length !== 7 ||
+      segments[1] !== "users" ||
+      segments[3] !== "sessions" ||
+      segments[5] !== "media"
+    ) return undefined;
+    return `/web/media/${segments.map(encodeURIComponent).filter((_, i) => ![1, 3, 5].includes(i)).join("/")}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Delete one uploaded media object that has not been sent in a message. */
+export async function deleteMedia(appName: string, uri: string): Promise<void> {
+  const path = mediaApiPath(uri);
+  if (!path) throw new Error("Invalid VeADK media URI");
+  void appName;
+  const res = await apiFetch(path, { method: "DELETE" });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(await httpErrorMessage(res, "media cleanup failed"));
+  }
+}
+
+/** Resolve a stable media URI to an authenticated same-origin delivery URL. */
+export function mediaContentUrl(appName: string, uri: string): string {
+  if (uri.startsWith("data:") || uri.startsWith("blob:") || /^https?:/.test(uri)) return uri;
+  const basePath = mediaApiPath(uri);
+  if (!basePath) return uri;
+  const path = `${basePath}/content`;
+  void appName;
+  return withAuth(`${API_BASE}${path}`);
+}
+
 export async function getSessionTrace(
   appName: string,
   sessionId: string,
@@ -295,7 +404,27 @@ export interface AgentNode {
   type: AgentNodeType;
   model: string;
   tools: string[];
+  skills: AgentSkill[];
+  path: string[];
+  mentionable: boolean;
   children: AgentNode[];
+}
+
+export interface AgentSkill {
+  name: string;
+  description: string;
+}
+
+export interface AgentTarget {
+  name: string;
+  description: string;
+  type: AgentNodeType;
+  path: string[];
+}
+
+export interface FrontendInvocation {
+  skills: AgentSkill[];
+  targetAgent?: AgentTarget;
 }
 
 /** Introspected metadata for an agent app (model, tools), for the picker.
@@ -306,6 +435,7 @@ export interface AgentInfo {
   description: string;
   model: string;
   tools: string[];
+  skills: AgentSkill[];
   subAgents: string[];
   /** Recursive typed tree; only the local server provides it. */
   graph?: AgentNode;
@@ -347,6 +477,7 @@ export interface RunArgs {
   sessionId: string;
   text: string;
   attachments?: Attachment[];
+  invocation?: FrontendInvocation;
   /** Function responses to send instead of/alongside text — used to resume a
    *  long-running call (e.g. answering ADK's `adk_request_credential`). */
   functionResponses?: { id: string; name: string; response: unknown }[];
@@ -361,19 +492,53 @@ export async function* runSSE({
   sessionId,
   text,
   attachments = [],
+  invocation,
   functionResponses = [],
   signal,
 }: RunArgs): AsyncGenerator<AdkEvent, void, unknown> {
   const { app, ep } = resolve(appName);
+  const attachmentParts = attachments.flatMap<Record<string, unknown>>((a) => {
+      if (a.status && a.status !== "ready") return [];
+      if (a.uri) {
+        return [{
+          fileData: { mimeType: a.mimeType, fileUri: a.uri, displayName: a.name },
+          partMetadata: {
+            veadkMedia: {
+              id: a.id,
+              uri: a.uri,
+              name: a.name,
+              mimeType: a.mimeType,
+              sizeBytes: a.sizeBytes,
+            },
+          },
+        }];
+      }
+      return a.data ? [{
+        inlineData: { mimeType: a.mimeType, data: a.data, displayName: a.name },
+      }] : [];
+    });
+  const invocationMetadata = invocation &&
+    (invocation.skills.length > 0 || invocation.targetAgent)
+    ? invocation
+    : undefined;
   const parts: Record<string, unknown>[] = [
-    ...attachments.map((a) => ({
-      inlineData: { mimeType: a.mimeType, data: a.data, displayName: a.name },
-    })),
+    ...attachmentParts,
     ...functionResponses.map((fr) => ({
       functionResponse: { id: fr.id, name: fr.name, response: fr.response },
     })),
     ...(text.trim() ? [{ text }] : []),
   ];
+  if (invocationMetadata && parts.length > 0) {
+    const firstPart = parts[0];
+    const partMetadata = firstPart.partMetadata as Record<string, unknown> | undefined;
+    parts[0] = {
+      ...firstPart,
+      partMetadata: {
+        ...partMetadata,
+        veadkInvocation: invocationMetadata,
+      },
+    };
+  }
   const res = await apiFetch(
     `/run_sse`,
     {
@@ -385,6 +550,9 @@ export async function* runSSE({
         session_id: sessionId,
         new_message: { role: "user", parts },
         streaming: true,
+        custom_metadata: invocationMetadata
+          ? { veadkInvocation: invocationMetadata }
+          : undefined,
       }),
       signal,
     },

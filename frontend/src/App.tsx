@@ -6,7 +6,6 @@ import {
   CircleCheck,
   CircleX,
   Copy,
-  FileText,
   ListTodo,
   Loader2,
 } from "lucide-react";
@@ -14,15 +13,23 @@ import { motion } from "motion/react";
 import {
   cancelAgentkitDeployment,
   createSession,
+  deleteMedia,
+  deleteSessionMedia,
   deleteSession,
+  getAgentInfo,
   getSession,
   listApps,
   listSessions,
   runSSE,
+  uploadMedia,
   getUiConfig,
   type AdkEvent,
+  type AgentInfo,
+  type AgentNode,
+  type AgentTarget,
   type AdkSession,
   type Attachment,
+  type FrontendInvocation,
   type UiFeatures,
 } from "./adk/client";
 import { applyEvent, emptyAcc, eventsToTurns, type Block, type Turn } from "./blocks";
@@ -42,6 +49,8 @@ import {
 } from "./adk/connections";
 import { Blocks, ThinkingPlaceholder } from "./ui/Blocks";
 import { Composer } from "./ui/Composer";
+import { InvocationChips } from "./ui/InvocationChips";
+import { MediaGroup } from "./ui/Media";
 import { QuickCreate, type QuickCreateKind } from "./ui/QuickCreate";
 import { StackCards } from "./ui/AddAgentMenu";
 import { IntelligentCreate } from "./create/IntelligentCreate";
@@ -67,6 +76,35 @@ type CreateView = "menu" | QuickCreateKind | null;
 const LS = { app: "veadk.appName", view: "veadk.view", session: "veadk.sessionId" } as const;
 const EMPTY_STRING_SET: Set<string> = new Set<string>();
 const EMPTY_STRING_ARR: string[] = [];
+
+function emptyInvocation(): FrontendInvocation {
+  return { skills: [] };
+}
+
+function findAgentNode(node: AgentNode, name: string): AgentNode | undefined {
+  if (node.name === name) return node;
+  for (const child of node.children) {
+    const found = findAgentNode(child, name);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function mentionableDescendants(node: AgentNode): AgentTarget[] {
+  const targets: AgentTarget[] = [];
+  for (const child of node.children) {
+    if (!child.mentionable) continue;
+    targets.push({
+      name: child.name,
+      description: child.description,
+      type: child.type,
+      path: child.path,
+    });
+    targets.push(...mentionableDescendants(child));
+  }
+  return targets;
+}
+
 function loadView(): CreateView {
   const v = typeof localStorage !== "undefined" ? localStorage.getItem(LS.view) : null;
   return v === "menu" || v === "intelligent" || v === "custom" || v === "template" || v === "workflow"
@@ -141,12 +179,13 @@ function turnText(turn: Turn): string {
 const A2UI_TOOL_NAME = "send_a2ui_json_to_client";
 
 /** Whether a finalized assistant turn has anything visible to render — non-empty
- *  text, a renderable A2UI surface, or a non-A2UI tool. Thinking, the hidden
+ *  text, media, a renderable A2UI surface, or a non-A2UI tool. Thinking, the hidden
  *  (done) A2UI tool, and empty A2UI surfaces don't count, so a reply that was
  *  ONLY thinking + an empty surface returns false (→ we show a fallback). */
 function turnHasVisibleContent(turn: Turn): boolean {
   return turn.blocks.some((b) => {
     if (b.kind === "text") return b.text.trim().length > 0;
+    if (b.kind === "attachment") return b.files.length > 0;
     if (b.kind === "tool") return !(b.name === A2UI_TOOL_NAME && b.done);
     if (b.kind === "a2ui") return buildSurfaces(b.messages).some((s) => s.components[s.rootId]);
     if (b.kind === "auth") return true; // the OAuth card counts as content
@@ -427,20 +466,22 @@ const GREETINGS = [
 ];
 const pickGreeting = () => GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
 
-const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20 MB/file (base64 inflates ~33%)
+function releaseAttachmentPreviews(items: Attachment[]) {
+  for (const item of items) {
+    if (item.previewUrl?.startsWith("blob:")) URL.revokeObjectURL(item.previewUrl);
+  }
+}
 
-/** Read a File as base64 (without the `data:...;base64,` prefix). */
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const res = String(reader.result);
-      const comma = res.indexOf(",");
-      resolve(comma >= 0 ? res.slice(comma + 1) : res);
-    };
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
+function attachmentDraftId() {
+  return `draft-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function browserMimeType(file: File) {
+  if (file.type) return file.type;
+  const extension = file.name.split(".").pop()?.toLowerCase();
+  if (extension === "md" || extension === "markdown") return "text/markdown";
+  if (extension === "txt") return "text/plain";
+  return "application/octet-stream";
 }
 
 export default function App() {
@@ -448,6 +489,7 @@ export default function App() {
   const [appName, setAppName] = useState("");
   const [sessions, setSessions] = useState<AdkSession[]>([]);
   const [sessionId, setSessionId] = useState("");
+  const creatingSessionRef = useRef<Promise<string> | null>(null);
   // Turns are stored PER SESSION, so a background stream can keep updating its
   // own session's transcript while you view another one — no cross-session
   // leak, no data loss, and no re-fetch when you switch back (its entry is
@@ -466,6 +508,10 @@ export default function App() {
     }));
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [invocation, setInvocation] = useState<FrontendInvocation>(emptyInvocation);
+  const [agentInfo, setAgentInfo] = useState<AgentInfo | null>(null);
+  const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
+  const removedAttachmentIdsRef = useRef<Set<string>>(new Set());
   // Streaming state is PER SESSION so multiple sessions can stream at once
   // (each /run_sse is an independent request). `streamingSids` = which sessions
   // are currently streaming; the AbortControllers let unmount / delete cancel
@@ -525,6 +571,61 @@ export default function App() {
   const activeAgent = activeAgentBySession[sessionId] ?? "";
   const seenAgents = seenAgentsBySession[sessionId] ?? EMPTY_STRING_SET;
   const execPath = execPathBySession[sessionId] ?? EMPTY_STRING_ARR;
+  const rootCapabilityNode = agentInfo?.graph;
+  const skillCapabilityNode = invocation.targetAgent && rootCapabilityNode
+    ? findAgentNode(rootCapabilityNode, invocation.targetAgent.name)
+    : rootCapabilityNode;
+  const availableSkills = skillCapabilityNode?.skills ??
+    (invocation.targetAgent ? [] : agentInfo?.skills ?? []);
+  const availableAgents = rootCapabilityNode
+    ? mentionableDescendants(rootCapabilityNode)
+    : [];
+
+  function discardDraftAttachments(items: Attachment[]) {
+    releaseAttachmentPreviews(items);
+    for (const item of items) {
+      if (item.status === "uploading") {
+        removedAttachmentIdsRef.current.add(item.id);
+      } else if (item.uri) {
+        void deleteMedia(appName, item.uri).catch((e) => setError(String(e)));
+      }
+    }
+  }
+
+  async function abandonDraftSession(sid: string) {
+    try {
+      await deleteSessionMedia(appName, userId, sid);
+      await deleteSession(appName, userId, sid);
+      setSessions((current) => current.filter((session) => session.id !== sid));
+      setTurnsBySession((current) => {
+        const { [sid]: _drop, ...rest } = current;
+        return rest;
+      });
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  function removeDraftAttachment(id: string) {
+    const removed = attachments.find((item) => item.id === id);
+    if (!removed) return;
+    const remaining = attachments.filter((item) => item.id !== id);
+    releaseAttachmentPreviews([removed]);
+    if (removed.status === "uploading") {
+      removedAttachmentIdsRef.current.add(id);
+    }
+    setAttachments(remaining);
+
+    const shouldAbandonSession =
+      remaining.length === 0 && !input.trim() && !!sessionId && turns.length === 0;
+    if (shouldAbandonSession) {
+      viewSidRef.current = "";
+      setSessionId("");
+      void abandonDraftSession(sessionId);
+    } else if (removed.uri) {
+      void deleteMedia(appName, removed.uri).catch((e) => setError(String(e)));
+    }
+  }
 
   // Apply a stream event's control-flow signals to a session's live state:
   // author = who's executing now; transfer_to_agent pushes the delegation
@@ -738,6 +839,29 @@ export default function App() {
     if (appName) localStorage.setItem(LS.app, appName);
   }, [appName]);
   useEffect(() => {
+    let cancelled = false;
+    setAgentInfo(null);
+    setInvocation(emptyInvocation());
+    if (!appName) {
+      setCapabilitiesLoading(false);
+      return;
+    }
+    setCapabilitiesLoading(true);
+    getAgentInfo(appName)
+      .then((info) => {
+        if (!cancelled) setAgentInfo(info);
+      })
+      .catch(() => {
+        if (!cancelled) setAgentInfo(null);
+      })
+      .finally(() => {
+        if (!cancelled) setCapabilitiesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [appName]);
+  useEffect(() => {
     localStorage.setItem(LS.view, createView ?? "chat");
   }, [createView]);
   useEffect(() => {
@@ -817,14 +941,22 @@ export default function App() {
   function startNewChat() {
     setError("");
     setGreeting(pickGreeting());
+    const abandonedSession = sessionId && turns.length === 0 && attachments.length > 0
+      ? sessionId
+      : "";
     viewSidRef.current = "";
     setSessionId("");
+    setInvocation(emptyInvocation());
+    discardDraftAttachments(attachments);
+    setAttachments([]);
+    if (abandonedSession) void abandonDraftSession(abandonedSession);
   }
 
   async function removeSession(id: string) {
     try {
       // Deleting a session with a running stream — abort just that one.
       streamAbortsRef.current.get(id)?.abort();
+      await deleteSessionMedia(appName, userId, id);
       await deleteSession(appName, userId, id);
       setTurnsBySession((m) => {
         const { [id]: _drop, ...rest } = m;
@@ -841,6 +973,7 @@ export default function App() {
     if (id === sessionId) return;
     viewSidRef.current = id;
     setError("");
+    setInvocation(emptyInvocation());
     setSessionId(id);
     // Already have this session's turns (it's cached, or streaming in the
     // background)? Show them instantly and let any live stream keep updating —
@@ -857,49 +990,85 @@ export default function App() {
     }
   }
 
-  async function addFiles(files: FileList | File[]) {
-    const picked: Attachment[] = [];
-    for (const f of Array.from(files)) {
-      if (f.size > MAX_FILE_BYTES) {
-        setError(`文件过大（>20MB）：${f.name}`);
-        continue;
-      }
-      const data = await fileToBase64(f);
-      picked.push({
-        mimeType: f.type || "application/octet-stream",
-        data,
-        name: f.name,
-      });
+  async function ensureSession(): Promise<string> {
+    if (sessionId) return sessionId;
+    if (!creatingSessionRef.current) {
+      creatingSessionRef.current = createSession(appName, userId);
     }
-    if (picked.length) setAttachments((a) => [...a, ...picked]);
+    const pending = creatingSessionRef.current;
+    try {
+      const sid = await pending;
+      setSessionId(sid);
+      const now = Date.now() / 1000;
+      const optimistic: AdkSession = { id: sid, lastUpdateTime: now, events: [] };
+      setSessions((prev) => [optimistic, ...prev.filter((s) => s.id !== sid)]);
+      return sid;
+    } finally {
+      if (creatingSessionRef.current === pending) creatingSessionRef.current = null;
+    }
   }
 
-  async function send(text: string, atts: Attachment[] = []) {
+  async function addFiles(files: FileList | File[]) {
+    setError("");
+    let sid: string;
+    try {
+      sid = await ensureSession();
+    } catch (e) {
+      setError(String(e));
+      return;
+    }
+    const drafts = Array.from(files).map((file) => ({
+      file,
+      attachment: {
+        id: attachmentDraftId(),
+        mimeType: browserMimeType(file),
+        name: file.name,
+        sizeBytes: file.size,
+        status: "uploading" as const,
+      },
+    }));
+    setAttachments((current) => [...current, ...drafts.map((draft) => draft.attachment)]);
+    await Promise.all(
+      drafts.map(async ({ file, attachment }) => {
+        try {
+          const uploaded = await uploadMedia(appName, userId, sid, file);
+          if (removedAttachmentIdsRef.current.delete(attachment.id)) {
+            if (uploaded.uri) await deleteMedia(appName, uploaded.uri);
+            return;
+          }
+          setAttachments((current) => current.map((item) =>
+            item.id === attachment.id
+              ? uploaded
+              : item,
+          ));
+        } catch (e) {
+          if (removedAttachmentIdsRef.current.delete(attachment.id)) return;
+          const message = e instanceof Error ? e.message : String(e);
+          setAttachments((current) => current.map((item) =>
+            item.id === attachment.id ? { ...item, status: "error", error: message } : item,
+          ));
+          setError(message);
+        }
+      }),
+    );
+  }
+
+  async function send(
+    text: string,
+    atts: Attachment[] = [],
+    selectedInvocation: FrontendInvocation = emptyInvocation(),
+  ) {
     // `busy` here = the CURRENT session is already streaming (can't double-send
     // to it). Other sessions can stream concurrently.
     if ((!text.trim() && atts.length === 0) || busy || !appName || !userId) return;
     setError("");
 
-    // Lazily create the backend session on the first message.
-    let sid = sessionId;
-    if (!sid) {
-      try {
-        sid = await createSession(appName, userId);
-        setSessionId(sid);
-        // Show the session in the sidebar immediately (titled with this first
-        // message) instead of waiting for the reply to finish; the post-stream
-        // refreshSessions() below reconciles it with the server.
-        const now = Date.now() / 1000;
-        const optimistic: AdkSession = {
-          id: sid,
-          lastUpdateTime: now,
-          events: [{ author: "user", timestamp: now, content: { role: "user", parts: [{ text }] } }],
-        };
-        setSessions((prev) => [optimistic, ...prev.filter((s) => s.id !== sid)]);
-      } catch (e) {
-        setError(String(e));
-        return;
-      }
+    let sid: string;
+    try {
+      sid = await ensureSession();
+    } catch (e) {
+      setError(String(e));
+      return;
     }
 
     // Register this session's own stream (concurrent with other sessions').
@@ -909,10 +1078,20 @@ export default function App() {
     viewSidRef.current = sid;
 
     const userBlocks: Turn["blocks"] = [];
+    if (selectedInvocation.skills.length > 0 || selectedInvocation.targetAgent) {
+      userBlocks.push({ kind: "invocation", value: selectedInvocation });
+    }
     if (atts.length)
       userBlocks.push({
         kind: "attachment",
-        files: atts.map((a) => ({ mimeType: a.mimeType, data: a.data, name: a.name })),
+        files: atts.map((a) => ({
+          id: a.id,
+          mimeType: a.mimeType,
+          data: a.data,
+          uri: a.uri,
+          name: a.name,
+          sizeBytes: a.sizeBytes,
+        })),
       });
     if (text.trim()) userBlocks.push({ kind: "text", text });
     setTurnsFor(sid, (t) => [
@@ -934,6 +1113,7 @@ export default function App() {
         sessionId: sid,
         text,
         attachments: atts,
+        invocation: selectedInvocation,
         signal: ctrl.signal,
       })) {
         if (ctrl.signal.aborted) break;
@@ -1194,22 +1374,29 @@ export default function App() {
         const composer = (
           <Composer
             sessionId={sessionId}
+            appName={appName}
             value={input}
             onChange={setInput}
             onSubmit={() => {
               const text = input;
               const atts = attachments;
+              const selectedInvocation = invocation;
               setInput("");
               setAttachments([]);
-              send(text, atts);
+              setInvocation(emptyInvocation());
+              send(text, atts, selectedInvocation);
+              releaseAttachmentPreviews(atts);
             }}
             disabled={!appName || !userId}
             busy={busy}
             attachments={attachments}
+            skills={availableSkills}
+            agents={availableAgents}
+            invocation={invocation}
+            capabilitiesLoading={capabilitiesLoading}
+            onInvocationChange={setInvocation}
             onAddFiles={addFiles}
-            onRemoveAttachment={(i) =>
-              setAttachments((a) => a.filter((_, j) => j !== i))
-            }
+            onRemoveAttachment={removeDraftAttachment}
           />
         );
         return (
@@ -1391,6 +1578,7 @@ export default function App() {
               const atts = turn.blocks.flatMap((b) =>
                 b.kind === "attachment" ? b.files : [],
               );
+              const turnInvocation = turn.blocks.find((b) => b.kind === "invocation");
               return (
                 <motion.div
                   key={i}
@@ -1399,24 +1587,11 @@ export default function App() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.2, ease: "easeOut" }}
                 >
+                  {turnInvocation?.kind === "invocation" && (
+                    <InvocationChips value={turnInvocation.value} />
+                  )}
                   {atts.length > 0 && (
-                    <div className="msg-attachments">
-                      {atts.map((f, j) =>
-                        f.mimeType?.startsWith("image/") && f.data ? (
-                          <img
-                            key={j}
-                            className="attachment-thumb"
-                            src={`data:${f.mimeType};base64,${f.data}`}
-                            alt={f.name ?? "image"}
-                          />
-                        ) : (
-                          <div key={j} className="attachment-file">
-                            <FileText className="icon" />
-                            <span className="attachment-file-name">{f.name ?? "文件"}</span>
-                          </div>
-                        ),
-                      )}
-                    </div>
+                    <MediaGroup appName={appName} items={atts} />
                   )}
                   {text && (
                     <div className="bubble">
@@ -1443,7 +1618,7 @@ export default function App() {
                   isLast && busy ? <ThinkingPlaceholder /> : null
                 ) : (
                   <>
-                    <Blocks blocks={turn.blocks} onAction={onAction} onAuth={onAuth} />
+                    <Blocks appName={appName} blocks={turn.blocks} onAction={onAction} onAuth={onAuth} />
                     {/* Finalized turn that produced no visible answer (e.g. only
                         thinking + an empty A2UI surface) — show a fallback note. */}
                     {!(isLast && busy) && !turnHasVisibleContent(turn) && (

@@ -1,35 +1,78 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import { ArrowUp, FileText, ImageIcon, Loader2, Plus, X } from "lucide-react";
+import {
+  ArrowUp,
+  AtSign,
+  Bot,
+  FileText,
+  FileVideo2,
+  ImageIcon,
+  Loader2,
+  Plus,
+  Sparkles,
+} from "lucide-react";
 import { motion } from "motion/react";
-import type { Attachment } from "../adk/client";
+import type {
+  AgentSkill,
+  AgentTarget,
+  Attachment,
+  FrontendInvocation,
+} from "../adk/client";
+import { InvocationChips } from "./InvocationChips";
+import { MediaGroup } from "./Media";
+
+interface CompletionTrigger {
+  kind: "skill" | "agent";
+  query: string;
+  start: number;
+  end: number;
+}
+
+type CompletionItem =
+  | { kind: "skill"; value: AgentSkill }
+  | { kind: "agent"; value: AgentTarget };
 
 export interface ComposerProps {
   sessionId: string;
+  appName: string;
   value: string;
   onChange: (v: string) => void;
   onSubmit: () => void;
   disabled: boolean; // not connected yet
   busy: boolean; // a turn is streaming
   attachments: Attachment[];
+  skills: AgentSkill[];
+  agents: AgentTarget[];
+  invocation: FrontendInvocation;
+  capabilitiesLoading?: boolean;
+  onInvocationChange: (value: FrontendInvocation) => void;
   onAddFiles: (files: FileList | File[]) => void;
-  onRemoveAttachment: (index: number) => void;
+  onRemoveAttachment: (id: string) => void;
 }
 
 export function Composer({
   sessionId,
+  appName,
   value,
   onChange,
   onSubmit,
   disabled,
   busy,
   attachments,
+  skills,
+  agents,
+  invocation,
+  capabilitiesLoading = false,
+  onInvocationChange,
   onAddFiles,
   onRemoveAttachment,
 }: ComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
-  const fileInput = useRef<HTMLInputElement>(null);
+  const documentInput = useRef<HTMLInputElement>(null);
+  const videoInput = useRef<HTMLInputElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [trigger, setTrigger] = useState<CompletionTrigger | null>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
 
   // Auto-grow the textarea up to a max height, then scroll.
   useLayoutEffect(() => {
@@ -39,36 +82,150 @@ export function Composer({
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [value]);
 
-  const canSend =
-    !disabled && !busy && (value.trim().length > 0 || attachments.length > 0);
+  const uploadPending = attachments.some((attachment) => attachment.status !== "ready");
+  const canSend = !disabled && !busy && !uploadPending &&
+    (value.trim().length > 0 || attachments.length > 0);
 
-  function pick(input: React.RefObject<HTMLInputElement>) {
+  const query = trigger?.query.toLocaleLowerCase() ?? "";
+  const suggestions: CompletionItem[] = trigger?.kind === "skill"
+    ? skills
+        .filter((skill) => !invocation.skills.some((selected) => selected.name === skill.name))
+        .filter((skill) => `${skill.name} ${skill.description}`.toLocaleLowerCase().includes(query))
+        .map((value) => ({ kind: "skill" as const, value }))
+    : trigger?.kind === "agent"
+      ? agents
+          .filter((agent) => `${agent.name} ${agent.description}`.toLocaleLowerCase().includes(query))
+          .map((value) => ({ kind: "agent" as const, value }))
+      : [];
+
+  function pick(input: React.RefObject<HTMLInputElement | null>) {
     setMenuOpen(false);
+    setTrigger(null);
     input.current?.click();
   }
 
+  function updateCompletion(nextValue: string, cursor: number) {
+    const prefix = nextValue.slice(0, cursor);
+    const match = /(^|\s)([/@])([^\s/@]*)$/.exec(prefix);
+    if (!match) {
+      setTrigger(null);
+      return;
+    }
+    const tokenLength = match[2].length + match[3].length;
+    const nextTrigger: CompletionTrigger = {
+      kind: match[2] === "/" ? "skill" : "agent",
+      query: match[3],
+      start: cursor - tokenLength,
+      end: cursor,
+    };
+    const completionChanged = !trigger ||
+      trigger.kind !== nextTrigger.kind ||
+      trigger.query !== nextTrigger.query ||
+      trigger.start !== nextTrigger.start ||
+      trigger.end !== nextTrigger.end;
+    setTrigger(nextTrigger);
+    if (completionChanged) setActiveIndex(0);
+    setMenuOpen(false);
+  }
+
+  function choose(item: CompletionItem) {
+    if (!trigger) return;
+    const nextValue = value.slice(0, trigger.start) + value.slice(trigger.end);
+    onChange(nextValue);
+    if (item.kind === "skill") {
+      onInvocationChange({
+        ...invocation,
+        skills: [...invocation.skills, item.value],
+      });
+    } else {
+      onInvocationChange({ skills: [], targetAgent: item.value });
+    }
+    const cursor = trigger.start;
+    setTrigger(null);
+    requestAnimationFrame(() => {
+      ref.current?.focus();
+      ref.current?.setSelectionRange(cursor, cursor);
+    });
+  }
+
+  function removeLastInvocation() {
+    if (invocation.targetAgent) {
+      onInvocationChange({ skills: [] });
+      return;
+    }
+    if (invocation.skills.length > 0) {
+      onInvocationChange({ ...invocation, skills: invocation.skills.slice(0, -1) });
+    }
+  }
+
   function onInputChange(e: React.ChangeEvent<HTMLInputElement>) {
-    if (e.target.files && e.target.files.length) onAddFiles(e.target.files);
+    const selected = e.target.files ? Array.from(e.target.files) : [];
+    if (selected.length) onAddFiles(selected);
     e.target.value = ""; // allow re-picking the same file
   }
 
   return (
     <div className="composer">
+      <InvocationChips
+        value={invocation}
+        onRemoveSkill={(name) => onInvocationChange({
+          ...invocation,
+          skills: invocation.skills.filter((skill) => skill.name !== name),
+        })}
+        onRemoveAgent={() => onInvocationChange({ skills: [] })}
+      />
       {attachments.length > 0 && (
-        <div className="attachment-row">
-          {attachments.map((a, i) => (
-            <AttachmentChip
-              key={i}
-              mimeType={a.mimeType}
-              data={a.data}
-              name={a.name}
-              onRemove={() => onRemoveAttachment(i)}
-            />
-          ))}
-        </div>
+        <MediaGroup
+          appName={appName}
+          compact
+          items={attachments}
+          onRemove={onRemoveAttachment}
+        />
       )}
 
       <div className="composer-box">
+        {trigger ? (
+          <div className="composer-command-menu" role="listbox" aria-label={trigger.kind === "skill" ? "可用技能" : "可用子 Agent"}>
+            <div className="composer-command-head">
+              {trigger.kind === "skill" ? <Sparkles /> : <AtSign />}
+              <span>{trigger.kind === "skill" ? "调用技能" : "使用子 Agent"}</span>
+              <kbd>{trigger.kind === "skill" ? "/" : "@"}</kbd>
+            </div>
+            {capabilitiesLoading ? (
+              <div className="composer-command-empty"><Loader2 className="spin" /> 正在读取 Agent 能力…</div>
+            ) : suggestions.length === 0 ? (
+              <div className="composer-command-empty">
+                {trigger.kind === "skill" ? "当前 Agent 没有匹配技能" : "当前 Agent 没有匹配子 Agent"}
+              </div>
+            ) : (
+              <div className="composer-command-list">
+                {suggestions.map((item, index) => (
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={index === activeIndex}
+                    className={`composer-command-item${index === activeIndex ? " is-active" : ""}`}
+                    key={`${item.kind}-${item.value.name}`}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      choose(item);
+                    }}
+                    onMouseEnter={() => setActiveIndex(index)}
+                  >
+                    <span className={`composer-command-icon composer-command-icon--${item.kind}`}>
+                      {item.kind === "skill" ? <Sparkles /> : <Bot />}
+                    </span>
+                    <span className="composer-command-copy">
+                      <strong>{item.kind === "skill" ? "/" : "@"}{item.value.name}</strong>
+                      <span>{item.value.description || (item.kind === "skill" ? "加载并执行该技能" : "将本轮交给该 Agent")}</span>
+                    </span>
+                    <kbd>{index === activeIndex ? "↵" : item.kind === "skill" ? "技能" : "Agent"}</kbd>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : null}
         <div className="composer-menu-wrap">
           <button
             type="button"
@@ -76,7 +233,10 @@ export function Composer({
             title="添加"
             aria-label="添加"
             disabled={disabled}
-            onClick={() => setMenuOpen((o) => !o)}
+            onClick={() => {
+              setTrigger(null);
+              setMenuOpen((o) => !o);
+            }}
           >
             <Plus className="icon" />
           </button>
@@ -95,10 +255,18 @@ export function Composer({
                 <button
                   type="button"
                   className="menu-item"
-                  onClick={() => pick(fileInput)}
+                  onClick={() => pick(documentInput)}
                 >
                   <FileText className="icon" />
-                  上传文件 (PDF)
+                  上传文档或 PDF
+                </button>
+                <button
+                  type="button"
+                  className="menu-item"
+                  onClick={() => pick(videoInput)}
+                >
+                  <FileVideo2 className="icon" />
+                  上传视频
                 </button>
               </div>
             </>
@@ -112,8 +280,45 @@ export function Composer({
           value={value}
           disabled={disabled}
           placeholder={disabled ? "请选择 Agent" : "给智能体发消息…"}
-          onChange={(e) => onChange(e.target.value)}
+          aria-expanded={Boolean(trigger)}
+          onChange={(e) => {
+            onChange(e.target.value);
+            updateCompletion(e.target.value, e.target.selectionStart);
+          }}
+          onSelect={(e) => updateCompletion(e.currentTarget.value, e.currentTarget.selectionStart)}
+          onBlur={() => setTimeout(() => setTrigger(null), 0)}
           onKeyDown={(e) => {
+            if (trigger) {
+              if (e.key === "ArrowDown" && suggestions.length > 0) {
+                e.preventDefault();
+                setActiveIndex((index) => (index + 1) % suggestions.length);
+                return;
+              }
+              if (e.key === "ArrowUp" && suggestions.length > 0) {
+                e.preventDefault();
+                setActiveIndex((index) => (index - 1 + suggestions.length) % suggestions.length);
+                return;
+              }
+              if ((e.key === "Enter" || e.key === "Tab") && suggestions[activeIndex]) {
+                e.preventDefault();
+                choose(suggestions[activeIndex]);
+                return;
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setTrigger(null);
+                return;
+              }
+            }
+            if (
+              e.key === "Backspace" &&
+              !value &&
+              e.currentTarget.selectionStart === 0 &&
+              e.currentTarget.selectionEnd === 0
+            ) {
+              removeLastInvocation();
+              return;
+            }
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               if (canSend) onSubmit();
@@ -156,51 +361,21 @@ export function Composer({
         onChange={onInputChange}
       />
       <input
-        ref={fileInput}
+        ref={documentInput}
         type="file"
-        accept="application/pdf"
+        accept=".txt,.md,.markdown,.pdf,text/plain,text/markdown,application/pdf"
         multiple
         hidden
         onChange={onInputChange}
       />
-    </div>
-  );
-}
-
-function AttachmentChip({
-  mimeType,
-  data,
-  name,
-  onRemove,
-}: {
-  mimeType: string;
-  data: string;
-  name?: string;
-  onRemove: () => void;
-}) {
-  const isImage = mimeType.startsWith("image/");
-  return (
-    <div className={isImage ? "attachment-thumb-wrap" : "attachment-file"}>
-      {isImage ? (
-        <img
-          className="attachment-thumb"
-          src={`data:${mimeType};base64,${data}`}
-          alt={name ?? "image"}
-        />
-      ) : (
-        <>
-          <FileText className="icon" />
-          <span className="attachment-file-name">{name ?? "file.pdf"}</span>
-        </>
-      )}
-      <button
-        type="button"
-        className="attachment-remove"
-        aria-label="移除"
-        onClick={onRemove}
-      >
-        <X className="icon" />
-      </button>
+      <input
+        ref={videoInput}
+        type="file"
+        accept="video/mp4,video/webm,video/quicktime"
+        multiple
+        hidden
+        onChange={onInputChange}
+      />
     </div>
   );
 }

@@ -29,7 +29,7 @@ Usage::
         before_model_callback=pdf_to_images_before_model_callback,
     )
 
-Requires the ``pdf`` extra: ``pip install veadk-python[pdf]``.
+PDF rendering dependencies are included in the default VeADK installation.
 """
 
 import io
@@ -47,17 +47,11 @@ logger = get_logger(__name__)
 _PDF_MIME = "application/pdf"
 
 
-def _render_pdf_to_png_parts(
+def render_pdf_to_png_parts(
     pdf_bytes: bytes, max_pages: int, scale: float
 ) -> list[types.Part]:
     """Render up to ``max_pages`` pages of a PDF into ``image/png`` parts."""
-    try:
-        import pypdfium2 as pdfium
-    except ImportError as e:
-        raise ImportError(
-            "PDF attachments require the 'pdf' extra. "
-            "Install it with: pip install veadk-python[pdf]"
-        ) from e
+    import pypdfium2 as pdfium
 
     pdf = pdfium.PdfDocument(pdf_bytes)
     page_count = len(pdf)
@@ -108,9 +102,7 @@ def make_pdf_to_images_callback(max_pages: int = 10, scale: float = 2.0):
                     and part.inline_data.data
                 ):
                     new_parts.extend(
-                        _render_pdf_to_png_parts(
-                            part.inline_data.data, max_pages, scale
-                        )
+                        render_pdf_to_png_parts(part.inline_data.data, max_pages, scale)
                     )
                 else:
                     new_parts.append(part)

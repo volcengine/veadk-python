@@ -22,8 +22,12 @@ and a bilingual README (English + 中文).
 | 10 | [Agent routing](./10_agent_routing/) | Complex | A coordinator that delegates to specialists dynamically |
 | 11 | [Tracing](./11_tracing/) | Complex | Observe LLM/tool calls; dump or export spans |
 
-There is also [`a2ui_agent/`](./a2ui_agent/) — a demo of agent-driven UI, run with
-`veadk frontend --agents-dir examples`.
+There are also frontend-focused demos that run with
+`veadk frontend --agents-dir examples`:
+
+- [`a2ui_agent/`](./a2ui_agent/) demonstrates agent-driven UI.
+- [`multimodal_agent/`](./multimodal_agent/) analyzes images, TXT/Markdown,
+  PDFs, and videos uploaded from the chat composer.
 
 For a deployable **full app** (web UI + agent API in one container, shipped to
 Volcengine AgentKit via `veadk agentkit`), see [`basic-app/`](./basic-app/).

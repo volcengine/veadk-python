@@ -5,6 +5,8 @@ import type { Block } from "../blocks";
 import { buildSurfaces, SurfaceView } from "../a2ui/Surface";
 import { useStickToBottom } from "./useStickToBottom";
 import { Markdown } from "./Markdown";
+import { InvocationChips } from "./InvocationChips";
+import { MediaGroup } from "./Media";
 import type { A2uiAction, A2uiComponent } from "../a2ui/types";
 
 const A2UI_TOOL = "send_a2ui_json_to_client";
@@ -218,12 +220,13 @@ function AuthCard({
 
 export interface BlocksProps {
   blocks: Block[];
+  appName?: string;
   onAction: (action: A2uiAction | undefined, node: A2uiComponent) => void;
   /** Handle an MCP/tool OAuth request (opens auth URL, resumes the run). */
   onAuth?: (block: AuthBlock) => Promise<void>;
 }
 
-export function Blocks({ blocks, onAction, onAuth }: BlocksProps) {
+export function Blocks({ blocks, appName = "", onAction, onAuth }: BlocksProps) {
   return (
     <>
       {blocks.map((b, i) => {
@@ -238,6 +241,10 @@ export function Blocks({ blocks, onAction, onAuth }: BlocksProps) {
               </div>
             ) : null;
           }
+          case "attachment":
+            return <MediaGroup key={i} appName={appName} items={b.files} />;
+          case "invocation":
+            return <InvocationChips key={i} value={b.value} />;
           case "tool":
             if (b.name === A2UI_TOOL && b.done) return null;
             return (

@@ -1,7 +1,9 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { MotionConfig } from "motion/react";
+import { PhotoProvider } from "react-photo-view";
 import App from "./App";
+import "react-photo-view/dist/react-photo-view.css";
 import "./styles.css";
 
 // OAuth popup callback landing. When an OAuth authorize flow (see runOAuthPopup
@@ -31,7 +33,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     {/* reducedMotion="user" makes all motion components honor the OS
         prefers-reduced-motion setting (transforms/opacity are stilled). */}
     <MotionConfig reducedMotion="user">
-      <App />
+      <PhotoProvider maskOpacity={0.9}>
+        <App />
+      </PhotoProvider>
     </MotionConfig>
   </React.StrictMode>,
 );

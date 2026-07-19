@@ -266,7 +266,10 @@ export function AgentSelector({
         className="agentsel"
         role="dialog"
         aria-label="选择 Agent"
-        style={{ top: anchorTop }}
+        style={{
+          top: anchorTop,
+          height: `min(640px, calc(100dvh - ${anchorTop}px - 10px))`,
+        }}
       >
         <div className="agentsel-main">
           <div className="agentsel-head">
