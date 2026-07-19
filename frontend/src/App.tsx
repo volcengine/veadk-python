@@ -1,7 +1,18 @@
-import { useEffect, useRef, useState } from "react";
-import { Check, Copy, FileText, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Check,
+  ChevronDown,
+  CircleAlert,
+  CircleCheck,
+  CircleX,
+  Copy,
+  FileText,
+  ListTodo,
+  Loader2,
+} from "lucide-react";
 import { motion } from "motion/react";
 import {
+  cancelAgentkitDeployment,
   createSession,
   deleteSession,
   getSession,
@@ -38,6 +49,8 @@ import { CustomCreate } from "./create/CustomCreate";
 import { TemplateCreate } from "./create/TemplateCreate";
 import { WorkflowCreate } from "./create/WorkflowCreate";
 import type { AgentDraft } from "./create/types";
+import type { DeploymentTaskUpdate } from "./ui/ProjectPreview";
+import { DeploymentErrorMessage } from "./ui/DeploymentErrorMessage";
 
 // Breadcrumb root label for the create flow and the per-mode leaf labels.
 const CREATE_ROOT = "创建 Agent";
@@ -73,21 +86,6 @@ import {
 } from "./adk/identity";
 import type { A2uiAction, A2uiComponent } from "./a2ui/types";
 import { buildSurfaces } from "./a2ui/Surface";
-
-/** Hand-drawn "AgentKit" mark: a little agent/robot module with side ports —
- *  a packaged remote agent you plug into. */
-function AgentKitIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <rect x="5" y="7.5" width="14" height="10.5" rx="3.2" />
-      <circle cx="9.6" cy="12.6" r="1.25" fill="currentColor" stroke="none" />
-      <circle cx="14.4" cy="12.6" r="1.25" fill="currentColor" stroke="none" />
-      <path d="M12 7.5V4.4" />
-      <circle cx="12" cy="3.4" r="1.15" fill="currentColor" stroke="none" />
-      <path d="M5 13.2H2.8M19 13.2h2.2" />
-    </svg>
-  );
-}
 
 /** Hand-drawn "from zero" mark: a "0" ring with a creativity spark inside. */
 function ScratchIcon({ className }: { className?: string }) {
@@ -262,6 +260,159 @@ function CopyButton({ text }: { text: string }) {
     </button>
   );
 }
+
+function deployRegionLabel(region: string): string {
+  if (region === "cn-beijing") return "华北 2（北京）";
+  if (region === "cn-shanghai") return "华东 2（上海）";
+  return region || "未指定";
+}
+
+function DeploymentTaskStatus({
+  tasks,
+  onCancel,
+}: {
+  tasks: DeploymentTaskUpdate[];
+  onCancel: (task: DeploymentTaskUpdate) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const runningCount = tasks.filter((task) => task.status === "running").length;
+  const latest = tasks[0];
+  const summaryStatus = runningCount > 0 ? "running" : latest?.status ?? "idle";
+  const summary =
+    runningCount > 0
+      ? `${runningCount} 个部署任务进行中`
+      : latest?.status === "success"
+        ? "最近部署已完成"
+        : latest?.status === "error"
+          ? "最近部署失败"
+          : latest?.status === "cancelled"
+            ? "最近部署已取消"
+            : "部署任务";
+
+  const cancelTask = (task: DeploymentTaskUpdate) => {
+    setCancellingId(task.id);
+    void onCancel(task).finally(() => setCancellingId(null));
+  };
+
+  return (
+    <div className="global-deploy-center">
+      <button
+        type="button"
+        className={`global-deploy-task is-${summaryStatus}`}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        onClick={() => setOpen((current) => !current)}
+      >
+        {summaryStatus === "running" ? (
+          <Loader2 className="global-deploy-task-icon spin" />
+        ) : summaryStatus === "success" ? (
+          <CircleCheck className="global-deploy-task-icon" />
+        ) : summaryStatus === "error" ? (
+          <CircleAlert className="global-deploy-task-icon" />
+        ) : summaryStatus === "cancelled" ? (
+          <CircleX className="global-deploy-task-icon" />
+        ) : (
+          <ListTodo className="global-deploy-task-icon" />
+        )}
+        <span className="global-deploy-task-detail">{summary}</span>
+        <ChevronDown
+          className={`global-deploy-task-chevron${open ? " is-open" : ""}`}
+        />
+      </button>
+
+      {open && (
+        <>
+          <button
+            type="button"
+            className="global-deploy-task-scrim"
+            aria-label="关闭部署任务"
+            onClick={() => setOpen(false)}
+          />
+          <section
+            className="global-deploy-popover"
+            role="dialog"
+            aria-label="部署任务"
+          >
+            <header className="global-deploy-popover-head">
+              <span>部署任务</span>
+              <span>{tasks.length}</span>
+            </header>
+            <div className="global-deploy-list">
+              {tasks.length === 0 ? (
+                <div className="global-deploy-empty">暂无部署任务</div>
+              ) : tasks.map((task) => {
+                const detail = `${task.label}${
+                  task.status === "running" && typeof task.pct === "number"
+                    ? ` ${Math.round(task.pct)}%`
+                    : ""
+                }`;
+                return (
+                  <article
+                    key={task.id}
+                    className={`global-deploy-item is-${task.status}`}
+                  >
+                    <div className="global-deploy-item-head">
+                      <span className="global-deploy-runtime-name">
+                        {task.runtimeName}
+                      </span>
+                      <span className="global-deploy-status">{detail}</span>
+                    </div>
+                    <dl className="global-deploy-meta">
+                      <div>
+                        <dt>Runtime 名称</dt>
+                        <dd>{task.runtimeName}</dd>
+                      </div>
+                      <div>
+                        <dt>部署地域</dt>
+                        <dd>{deployRegionLabel(task.region)}</dd>
+                      </div>
+                      {task.runtimeId && (
+                        <div>
+                          <dt>Runtime ID</dt>
+                          <dd>{task.runtimeId}</dd>
+                        </div>
+                      )}
+                    </dl>
+                    {task.message && task.status === "error" ? (
+                      <DeploymentErrorMessage
+                        className="global-deploy-error"
+                        message={task.message}
+                        onRetry={task.retry}
+                      />
+                    ) : task.message ? (
+                      <p className="global-deploy-message">{task.message}</p>
+                    ) : null}
+                    {task.status === "running" && (
+                      <>
+                        <div className="global-deploy-progress" aria-hidden>
+                          <span
+                            style={{
+                              width: `${Math.max(6, Math.min(100, task.pct ?? 6))}%`,
+                            }}
+                          />
+                        </div>
+                        <div className="global-deploy-item-actions">
+                          <button
+                            type="button"
+                            disabled={cancellingId === task.id}
+                            onClick={() => cancelTask(task)}
+                          >
+                            {cancellingId === task.id ? "取消中…" : "取消部署"}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        </>
+      )}
+    </div>
+  );
+}
 // Side-effect import: registers all A2UI components under a2ui/components/*.
 import "./a2ui/components";
 
@@ -411,6 +562,47 @@ export default function App() {
     }
   };
   const [createView, setCreateView] = useState<CreateView>(loadView);
+  const [deploymentTasks, setDeploymentTasks] = useState<
+    DeploymentTaskUpdate[]
+  >([]);
+  const updateDeploymentTask = useCallback((task: DeploymentTaskUpdate) => {
+    setDeploymentTasks((current) => {
+      const existingIndex = current.findIndex((item) => item.id === task.id);
+      if (existingIndex === -1) return [task, ...current];
+      const next = [...current];
+      next[existingIndex] = { ...next[existingIndex], ...task };
+      return next;
+    });
+  }, []);
+  const cancelDeploymentTask = useCallback(
+    async (task: DeploymentTaskUpdate) => {
+      try {
+        await cancelAgentkitDeployment(task.id);
+        setDeploymentTasks((current) =>
+          current.map((item) =>
+            item.id === task.id
+              ? {
+                  ...item,
+                  status: "cancelled",
+                  label: "已取消",
+                  message: "部署已取消，相关 Runtime 资源已请求销毁。",
+                }
+              : item,
+          ),
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setDeploymentTasks((current) =>
+          current.map((item) =>
+            item.id === task.id
+              ? { ...item, message: `取消失败：${message}` }
+              : item,
+          ),
+        );
+      }
+    },
+    [],
+  );
   // Whether the server has Volcengine AK/SK. The agent-creation workbench needs
   // them; assume present until the runtime-config check says otherwise (avoids
   // flashing the notice in the common, configured case).
@@ -1001,6 +1193,7 @@ export default function App() {
       {(() => {
         const composer = (
           <Composer
+            sessionId={sessionId}
             value={input}
             onChange={setInput}
             onSubmit={() => {
@@ -1020,7 +1213,7 @@ export default function App() {
           />
         );
         return (
-          <main className="main">
+          <section className="main-shell">
             <Navbar
               apps={agentEntries.map((e) => e.id)}
               appName={appName}
@@ -1063,7 +1256,14 @@ export default function App() {
                         { label: MODE_LABEL[createView] },
                       ]
               }
+              rightContent={
+                <DeploymentTaskStatus
+                  tasks={deploymentTasks}
+                  onCancel={cancelDeploymentTask}
+                />
+              }
             />
+            <main className="main">
             {error && <div className="error">{error}</div>}
             {loadingSession && (
               <div className="session-loading">
@@ -1078,20 +1278,6 @@ export default function App() {
                 title="您想以哪种方式添加 Agent 来运行？"
                 sub="选择最适合你的方式，下一步即可开始"
                 cards={[
-                  ...(features.addAgentkit
-                    ? [
-                        {
-                          key: "agentkit",
-                          icon: AgentKitIcon,
-                          title: "添加 AgentKit 智能体",
-                          desc: "连接已部署在火山引擎 AgentKit 上的远程智能体。",
-                          onClick: () => {
-                            setAddMenu(false);
-                            setAddAgent(true);
-                          },
-                        },
-                      ]
-                    : []),
                   {
                     key: "scratch",
                     icon: ScratchIcon,
@@ -1159,7 +1345,13 @@ export default function App() {
                 }}
               />
             ) : createView === "intelligent" ? (
-              <IntelligentCreate userId={userId} onBack={() => setCreateView("menu")} onCreate={onCreate} onAgentAdded={onAgentAdded} />
+              <IntelligentCreate
+                userId={userId}
+                onBack={() => setCreateView("menu")}
+                onCreate={onCreate}
+                onAgentAdded={onAgentAdded}
+                onDeploymentTaskChange={updateDeploymentTask}
+              />
             ) : createView === "custom" ? (
               <CustomCreate
                 initialDraft={importedDraft ?? undefined}
@@ -1168,6 +1360,7 @@ export default function App() {
                 onAgentAdded={onAgentAdded}
                 author={String(userInfo?.email ?? userId ?? "")}
                 features={features}
+                onDeploymentTaskChange={updateDeploymentTask}
               />
             ) : createView === "template" ? (
               <TemplateCreate onBack={() => setCreateView("menu")} onCreate={onCreate} />
@@ -1289,12 +1482,17 @@ export default function App() {
                 {composer}
               </>
             )}
-          </main>
+            </main>
+          </section>
         );
       })()}
 
       {traceOpen && sessionId && (
-        <TraceDrawer sessionId={sessionId} onClose={() => setTraceOpen(false)} />
+        <TraceDrawer
+          appName={appName}
+          sessionId={sessionId}
+          onClose={() => setTraceOpen(false)}
+        />
       )}
 
       {confirmLeave && (

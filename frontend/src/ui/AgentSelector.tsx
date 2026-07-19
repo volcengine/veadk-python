@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Boxes,
   ChevronLeft,
   ChevronRight,
   Cpu,
@@ -17,6 +16,7 @@ import {
   type RuntimeDetail,
 } from "../adk/client";
 import { addRuntimeConnection, remoteAppId } from "../adk/connections";
+import { AgentIdentityIcon } from "./AgentIdentityIcon";
 
 /** A currently-connected cloud runtime (drives the detail panel). */
 export interface SelectedRuntime {
@@ -46,6 +46,19 @@ export interface AgentSelectorProps {
 
 const PAGE_SIZE = 15;
 const LOAD_TIMEOUT_MS = 10_000;
+type RegionFilter = "all" | "cn-beijing" | "cn-shanghai";
+
+const REGION_OPTIONS: { value: RegionFilter; label: string }[] = [
+  { value: "all", label: "全部" },
+  { value: "cn-beijing", label: "北京" },
+  { value: "cn-shanghai", label: "上海" },
+];
+
+function regionLabel(region: string): string {
+  if (region === "cn-beijing") return "北京";
+  if (region === "cn-shanghai") return "上海";
+  return region;
+}
 
 /** Reject if `p` doesn't settle within `ms` (so a stuck request surfaces). */
 function withTimeout<T>(p: Promise<T>, ms = LOAD_TIMEOUT_MS): Promise<T> {
@@ -87,6 +100,7 @@ export function AgentSelector({
   // "只看我创建的" — the owner's set is small, so fetch it all at once (no pager).
   const [mineOnly, setMineOnly] = useState(false);
   const [mineList, setMineList] = useState<CloudRuntime[] | null>(null);
+  const [regionFilter, setRegionFilter] = useState<RegionFilter>("all");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
@@ -108,7 +122,11 @@ export function AgentSelector({
       setError("");
       try {
         const pg = await withTimeout(
-          getRuntimes(author, { nextToken: token, pageSize: PAGE_SIZE }),
+          getRuntimes(author, {
+            nextToken: token,
+            pageSize: PAGE_SIZE,
+            region: regionFilter,
+          }),
         );
         setPageCache((pc) => {
           const n = [...pc];
@@ -127,7 +145,7 @@ export function AgentSelector({
         setLoading(false);
       }
     },
-    [author, tokens, pageCache],
+    [author, tokens, pageCache, regionFilter],
   );
 
   const loadMine = useCallback(async () => {
@@ -138,7 +156,12 @@ export function AgentSelector({
       let token = "";
       do {
         const pg = await withTimeout(
-          getRuntimes(author, { scope: "mine", nextToken: token, pageSize: 100 }),
+          getRuntimes(author, {
+            scope: "mine",
+            nextToken: token,
+            pageSize: 100,
+            region: regionFilter,
+          }),
         );
         acc.push(...pg.runtimes);
         token = pg.nextToken;
@@ -149,14 +172,14 @@ export function AgentSelector({
     } finally {
       setLoading(false);
     }
-  }, [author]);
+  }, [author, regionFilter]);
 
   useEffect(() => {
-    if (open && agentsSource === "cloud" && !loadedOnce.current) {
+    if (open && agentsSource === "cloud" && !mineOnly && !loadedOnce.current) {
       loadedOnce.current = true;
       void fetchPage(0);
     }
-  }, [open, agentsSource, fetchPage]);
+  }, [open, agentsSource, mineOnly, fetchPage]);
 
   // Toggling "只看我创建的" loads the owner's set the first time.
   useEffect(() => {
@@ -180,7 +203,13 @@ export function AgentSelector({
       loadedOnce.current = true;
       setLoading(true);
       setError("");
-      void withTimeout(getRuntimes(author, { nextToken: "", pageSize: PAGE_SIZE }))
+      void withTimeout(
+        getRuntimes(author, {
+          nextToken: "",
+          pageSize: PAGE_SIZE,
+          region: regionFilter,
+        }),
+      )
         .then((pg) => {
           setPageCache([pg.runtimes]);
           setTokens(pg.nextToken ? ["", pg.nextToken] : [""]);
@@ -188,6 +217,17 @@ export function AgentSelector({
         .catch((e) => setError(e instanceof Error ? e.message : String(e)))
         .finally(() => setLoading(false));
     }
+  }
+
+  function changeRegion(nextRegion: RegionFilter) {
+    if (nextRegion === regionFilter) return;
+    setRegionFilter(nextRegion);
+    setPageCache([]);
+    setTokens([""]);
+    setPage(0);
+    setMineList(null);
+    setUnsupported(new Set());
+    loadedOnce.current = false;
   }
 
   const hasNext = !mineOnly && (pageCache[page + 1] !== undefined || tokens[page + 1] !== undefined);
@@ -204,6 +244,7 @@ export function AgentSelector({
         const conn = addRuntimeConnection(rt.runtimeId, rt.name, rt.region, apps, labels);
         onSelect(remoteAppId(conn.id, apps[0]));
         setFocused({ runtimeId: rt.runtimeId, name: rt.name, region: rt.region });
+        onClose();
       })
       .catch(() => setUnsupported((s) => new Set(s).add(rt.runtimeId)))
       .finally(() => setConnecting(null));
@@ -230,7 +271,7 @@ export function AgentSelector({
         <div className="agentsel-main">
           <div className="agentsel-head">
             <span className="agentsel-title">
-              <Boxes className="icon" /> 选择 Agent
+              <AgentIdentityIcon /> 选择 Agent
             </span>
             <div className="agentsel-head-actions">
               {agentsSource === "cloud" && (
@@ -278,6 +319,19 @@ export function AgentSelector({
                     placeholder="搜索 Runtime 名称"
                   />
                 </div>
+                <div className="agentsel-regions" aria-label="按部署地域筛选">
+                  {REGION_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={regionFilter === option.value ? "active" : ""}
+                      aria-pressed={regionFilter === option.value}
+                      onClick={() => changeRegion(option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
                 <label className="agentsel-mine">
                   <input
                     type="checkbox"
@@ -315,6 +369,7 @@ export function AgentSelector({
                               <Cpu className="icon" />
                             )}
                             <span className="agentsel-item-name">{rt.name}</span>
+                            <span className="agentsel-region">{regionLabel(rt.region)}</span>
                             {rt.isMine && <span className="agentsel-badge">我创建的</span>}
                             {bad ? (
                               <span className="agentsel-status is-bad">不支持</span>

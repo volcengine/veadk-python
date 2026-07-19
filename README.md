@@ -110,7 +110,9 @@ agent = Agent(enable_a2ui=True)  # uses the bundled "basic" component catalog
 
 A bundled React web UI renders A2UI over the standard ADK API server. The built
 UI ships inside the package (`veadk/webui`, produced by `npm run build`), so
-installed users can launch it directly:
+installed users can launch it directly. Its custom-agent workbench supports
+in-page debugging followed by source review and AgentKit deployment
+configuration:
 
 ```bash
 veadk frontend --agents-dir examples           # serve UI + API on http://127.0.0.1:8000

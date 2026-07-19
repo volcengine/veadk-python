@@ -7,8 +7,8 @@ import type { AgentDraft } from "../create/types";
 export type QuickCreateKind = "intelligent" | "custom" | "template" | "workflow";
 
 const MODES: { kind: QuickCreateKind; icon: StackCardDef["icon"]; title: string; desc: string; disabled?: boolean }[] = [
-  { kind: "intelligent", icon: MessagesSquare, title: "智能模式", desc: "敬请期待", disabled: true },
   { kind: "custom", icon: Wand2, title: "自定义", desc: "分步配置模型、工具、记忆、知识库等组件。" },
+  { kind: "intelligent", icon: MessagesSquare, title: "智能模式", desc: "敬请期待", disabled: true },
   { kind: "template", icon: LayoutTemplate, title: "从模板新建", desc: "敬请期待", disabled: true },
   { kind: "workflow", icon: Workflow, title: "工作流", desc: "敬请期待", disabled: true },
 ];

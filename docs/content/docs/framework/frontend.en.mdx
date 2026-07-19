@@ -19,6 +19,7 @@ VeADK ships a React frontend that renders [A2UI](/en/docs/framework/a2ui) (agent
 - **Session history**: auto-saved, time-sorted, reopen or delete.
 - **Smart search**: the *Session* source full-text-searches the current agent's history; the *Web* source calls the agent's mounted web-search tool live (using credentials from the server's environment variables).
 - **Add an AgentKit agent**: paste a URL + API key to connect a remote agent over the ADK protocol; it then appears in the picker.
+- **Custom-agent workbench**: debug an agent beside its configuration, then review generated source with line numbers and syntax highlighting and set the region, message channel, network, and environment variables before deploying to AgentKit. The global task list shows the actual AgentKit-generated Runtime name, region, and progress across pages; in-flight tasks can be cancelled and cleaned up, and failed tasks can be retried. Remote topology and traces are fetched through the selected Runtime data plane.
 - **Tracing**: view the call flame graph for the current session.
 - **Login**: SSO (VeIdentity / GitHub / Google / any OIDC) or a local username.
 

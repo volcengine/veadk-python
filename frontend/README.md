@@ -8,8 +8,16 @@ server that `veadk frontend` launches — no separate backend.
 - **Streaming chat** over the ADK `/run_sse` event stream.
 - **Markdown** rendering for user and assistant messages (GFM + code highlight).
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
-- **Sessions**: pick an agent, browse history, new chat, delete — per signed-in user.
+- **Sessions**: pick an agent, browse history, new chat, delete — per signed-in
+  user.
 - **Tracing viewer**: a span tree + detail panel from the ADK debug trace.
+- **Custom-agent workbench**: configure and debug an agent, then review
+  generated source with line numbers and syntax highlighting before setting
+  its region, message channel, network, environment variables, and deploying
+  to AgentKit. A global task list keeps Runtime, region, and progress visible
+  across page switches, follows the actual generated Runtime name, and supports
+  cancellation or retry. Remote topology and trace requests use the selected
+  Runtime endpoint.
 - **Auth**: optional VeIdentity SSO, or a local username for dev.
 - **Agent-driven UI (A2UI)**: when an agent emits A2UI, it renders as native
   components (one feature among the above — not required).
@@ -53,6 +61,7 @@ veadk frontend \
   # or by id (env: OAUTH2_USER_POOL_ID / OAUTH2_USER_POOL_CLIENT_ID):
   # --oauth2-user-pool-uid <id>  --oauth2-user-pool-client-uid <id>
 ```
+
 Requires Volcengine credentials (AK/SK) in the environment. The login button's
 label/icon is config-driven (`--oauth2-provider` / `--oauth2-provider-label`),
 exposed at `GET /web/auth-config`.

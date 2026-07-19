@@ -1,11 +1,12 @@
 import { useRef, useState } from "react";
-import { Boxes, ChevronRight, Cpu, LogOut, MoreHorizontal, Plus, Trash2 } from "lucide-react";
+import { ChevronRight, LogOut, MoreHorizontal, Plus, Trash2 } from "lucide-react";
 import type { AdkSession, UiFeatures } from "../adk/client";
 import { sessionTitle } from "../blocks";
 import { displayName } from "../adk/identity";
 import { SkillCenterButton } from "./SkillCenter";
 import { SearchButton } from "./Search";
 import { AgentSelector, type SelectedRuntime } from "./AgentSelector";
+import { AgentIdentityIcon } from "./AgentIdentityIcon";
 import volcengineLogo from "../assets/volcengine.svg";
 
 /** Hand-drawn "quick create" mark: a lightning bolt (speed) with a spark. */
@@ -23,6 +24,28 @@ function QuickCreateIcon() {
     >
       <path d="M12.5 3 5.5 13h5l-1 8 8-11h-5l.5-7z" fill="currentColor" stroke="none" />
       <path d="M19 4.5v3M17.5 6h3" opacity="0.85" />
+    </svg>
+  );
+}
+
+/** Agent roster with two compact tuning rails — management without a generic cube. */
+function ManageAgentsIcon() {
+  return (
+    <svg
+      className="icon"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <circle cx="8.25" cy="7.75" r="3.15" />
+      <path d="M2.9 19.2c.45-3.45 2.48-5.35 5.35-5.35 2.4 0 4.2 1.28 4.98 3.66" />
+      <path d="M17.4 4.5v15M14.8 9h5.2M14.8 15.3h5.2" />
+      <circle cx="17.4" cy="9" r="1.15" fill="currentColor" stroke="none" />
+      <circle cx="17.4" cy="15.3" r="1.15" fill="currentColor" stroke="none" />
     </svg>
   );
 }
@@ -145,13 +168,21 @@ export function Sidebar({
       <div className="sidebar-top">
         <div className="brand">
           <img className="brand-logo" src={volcengineLogo} alt="" aria-hidden />
-          VeADK
+          VeADK Studio
         </div>
         {onSelectAgent &&
           (() => {
             // Cloud mode with nothing connected: a red prompt so the default
             // isn't mistaken for a real agent.
             const needsPick = agentsSource === "cloud" && !currentAgentId;
+            const selectedRegion =
+              agentsSource === "cloud" && !needsPick && currentRuntime?.region
+                ? currentRuntime.region === "cn-beijing"
+                  ? "北京"
+                  : currentRuntime.region === "cn-shanghai"
+                    ? "上海"
+                    : currentRuntime.region
+                : "";
             return (
               <button
                 ref={rowRef}
@@ -159,10 +190,13 @@ export function Sidebar({
                 onClick={toggleSelector}
                 title="切换 Agent"
               >
-                <Cpu className="icon agent-row-lead" />
+                <AgentIdentityIcon className="icon agent-row-lead" />
                 <span className="agent-row-name">
                   {needsPick ? "请选择 Agent" : currentAgentLabel || "选择 Agent"}
                 </span>
+                {selectedRegion && (
+                  <span className="agent-row-region">{selectedRegion}</span>
+                )}
                 <ChevronRight className={`icon agent-row-chev ${selectorOpen ? "open" : ""}`} />
               </button>
             );
@@ -187,16 +221,16 @@ export function Sidebar({
           </button>
         )}
         {show("search") && <SearchButton onClick={onSearch} />}
+        {show("skillCenter") && <SkillCenterButton onClick={onSkillCenter} />}
         {show("addAgent") && (
           <button className="new-chat" onClick={onQuickCreate}>
             <QuickCreateIcon />
             添加 Agent
           </button>
         )}
-        {show("skillCenter") && <SkillCenterButton onClick={onSkillCenter} />}
         {show("manageAgents") && (
           <button className="new-chat" onClick={onManageAgents}>
-            <Boxes className="icon" />
+            <ManageAgentsIcon />
             管理 Agent
           </button>
         )}

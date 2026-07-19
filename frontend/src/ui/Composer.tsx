@@ -4,6 +4,7 @@ import { motion } from "motion/react";
 import type { Attachment } from "../adk/client";
 
 export interface ComposerProps {
+  sessionId: string;
   value: string;
   onChange: (v: string) => void;
   onSubmit: () => void;
@@ -15,6 +16,7 @@ export interface ComposerProps {
 }
 
 export function Composer({
+  sessionId,
   value,
   onChange,
   onSubmit,
@@ -109,7 +111,7 @@ export function Composer({
           rows={1}
           value={value}
           disabled={disabled}
-          placeholder={disabled ? "连接中…" : "给智能体发消息…"}
+          placeholder={disabled ? "请选择 Agent" : "给智能体发消息…"}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -129,6 +131,19 @@ export function Composer({
         >
           {busy ? <Loader2 className="icon spin" /> : <ArrowUp className="icon" />}
         </motion.button>
+      </div>
+
+      <div className="composer-meta">
+        <span className="composer-session-line">
+          会话 ID：
+          <span className="composer-session-id" title={sessionId || undefined}>
+            {sessionId || "—"}
+          </span>
+        </span>
+        <span className="composer-meta-separator" aria-hidden>
+          |
+        </span>
+        <span>回答仅供参考</span>
       </div>
 
       {/* hidden pickers */}

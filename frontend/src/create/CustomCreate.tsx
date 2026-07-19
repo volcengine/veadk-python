@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
-  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
   Bot,
   Bug,
   Boxes,
@@ -10,8 +11,6 @@ import {
   Cpu,
   Database,
   Eye,
-  FileDown,
-  FileUp,
   FolderUp,
   GitBranch,
   Globe,
@@ -19,11 +18,10 @@ import {
   LayoutGrid,
   Layers,
   Loader2,
-  Network,
   Plus,
+  RefreshCw,
   Repeat,
   Rocket,
-  Send,
   Shapes,
   Sparkles,
   Split,
@@ -35,7 +33,6 @@ import {
   type CreateModeProps,
   type AgentDraft,
   type McpTool,
-  type NetworkConfig as NetworkConfigType,
   type SelectedSkill,
   emptyDraft,
 } from "./types";
@@ -47,14 +44,17 @@ import {
   TRACING_EXPORTERS,
   type BackendOption,
 } from "./veadkCatalog";
-import { draftToYaml, yamlToDraft } from "./configYaml";
+import { draftToYaml } from "./configYaml";
 import type { AgentProject } from "./project";
 import type { SkillSource } from "./skills/types";
 import { SkillHubPicker } from "./SkillHubPicker";
 import { LocalPicker } from "./LocalPicker";
 import { SkillSpacePicker } from "./SkillSpacePicker";
-import { ProjectPreview } from "../ui/ProjectPreview";
-import { Blocks } from "../ui/Blocks";
+import {
+  ProjectPreview,
+  type DeploymentTaskUpdate,
+} from "../ui/ProjectPreview";
+import { Blocks, ThinkingPlaceholder } from "../ui/Blocks";
 import {
   createGeneratedAgentTestRun,
   createGeneratedAgentTestSession,
@@ -92,7 +92,6 @@ type StepId =
   | "memory"
   | "knowledge"
   | "tracing"
-  | "deploy"
   | "subagents"
   | "review";
 
@@ -113,7 +112,6 @@ const STEPS: StepMeta[] = [
   { id: "memory", label: "记忆", hint: "短期 / 长期", icon: Layers },
   { id: "knowledge", label: "知识库", hint: "外部知识检索", icon: Database },
   { id: "tracing", label: "观测", hint: "Tracing 与 A2UI", icon: Eye },
-  { id: "deploy", label: "部署配置", hint: "飞书等运行入口", icon: Rocket },
   { id: "subagents", label: "子 Agent", hint: "嵌套协作", icon: Boxes },
   { id: "review", label: "完成", hint: "预览并创建", icon: Rocket },
 ];
@@ -147,6 +145,35 @@ function LlmIcon({ className }: { className?: string }) {
   );
 }
 
+/** Custom debug-console mark: a compact runtime panel with a live trace. */
+function DebugConsoleIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.65"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3.25" y="4.25" width="17.5" height="15.5" rx="2.75" />
+      <path d="M3.75 8.75h16.5" />
+      <circle cx="6.35" cy="6.5" r="0.72" fill="currentColor" stroke="none" />
+      <circle
+        cx="8.85"
+        cy="6.5"
+        r="0.72"
+        fill="currentColor"
+        stroke="none"
+        opacity="0.45"
+      />
+      <path d="M6 14h2.2l1.35-2.8 2.1 5.5 1.7-3.1H18" />
+    </svg>
+  );
+}
+
 /** The selectable Agent kinds shown on the "type" step. */
 const AGENT_TYPES: AgentTypeMeta[] = [
   {
@@ -173,13 +200,9 @@ const AGENT_TYPES: AgentTypeMeta[] = [
     desc: "子 Agent 循环执行到满足条件",
     icon: Repeat,
   },
-  {
-    id: "a2a",
-    label: "A2A 远程 Agent",
-    desc: "挂载 URL 指向的远程 Agent",
-    icon: Globe,
-  },
 ];
+
+const AGENT_TYPE_GAP_PX = 4;
 
 /** Orchestrators (sequential/parallel/loop) own sub-agents but no model.
  *  A2A is a leaf, not an orchestrator — see {@link isA2aType}. */
@@ -378,7 +401,7 @@ function McpToolEditor({
                       }
                     />
                     <p className="cw-mcp-note">
-                      stdio MCP 暂不参与调试运行；点击“生成项目”时会完整保留这项配置并生成对应代码。
+                      stdio MCP 暂不参与调试运行；点击“去部署”时会完整保留这项配置并生成对应代码。
                     </p>
                   </>
                 )}
@@ -563,104 +586,6 @@ function Toggle({
   );
 }
 
-/** Advanced network config: public (default), private VPC, or both. */
-function NetworkConfigForm({
-  value,
-  onChange,
-}: {
-  value?: NetworkConfigType;
-  onChange: (v: NetworkConfigType | undefined) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const mode = value?.mode ?? "public";
-
-  function setMode(m: NetworkConfigType["mode"]) {
-    if (m === "public") {
-      onChange(undefined);
-    } else {
-      onChange({ ...(value ?? { mode: m }), mode: m });
-    }
-  }
-
-  function patch(p: Partial<NetworkConfigType>) {
-    onChange({ ...(value ?? { mode: "private" }), ...p });
-  }
-
-  return (
-    <div className="cw-network">
-      <button
-        type="button"
-        className={`cw-toggle ${expanded ? "is-on" : ""}`}
-        onClick={() => setExpanded((x) => !x)}
-        aria-expanded={expanded}
-      >
-        <span className="cw-toggle-icon">
-          <Network className="cw-i" />
-        </span>
-        <span className="cw-toggle-text">
-          <span className="cw-toggle-title">高级：网络配置</span>
-          <span className="cw-toggle-desc">
-            选择公网部署（默认）或接入 VPC 私有网络。
-          </span>
-        </span>
-        <span className="cw-network-badge">{
-          mode === "public" ? "公网" : mode === "private" ? "VPC" : "公网+VPC"
-        }</span>
-      </button>
-      {expanded && (
-        <div className="cw-network-body">
-          <div className="cw-segmented cw-network-modes">
-            {(["public", "private", "both"] as const).map((m) => (
-              <button
-                key={m}
-                type="button"
-                className={`cw-seg ${mode === m ? "is-on" : ""}`}
-                onClick={() => setMode(m)}
-                aria-pressed={mode === m}
-              >
-                <span className="cw-seg-title">
-                  {m === "public" ? "公网" : m === "private" ? "VPC 私有" : "公网 + VPC"}
-                </span>
-              </button>
-            ))}
-          </div>
-          {mode !== "public" && (
-            <div className="cw-form cw-network-vpc">
-              <label className="cw-label">VPC ID</label>
-              <input
-                type="text"
-                className="cw-input"
-                placeholder="vpc-xxxxxxxx"
-                value={value?.vpcId ?? ""}
-                onChange={(e) => patch({ vpcId: e.target.value })}
-              />
-              <label className="cw-label">子网 ID（逗号分隔，可选）</label>
-              <input
-                type="text"
-                className="cw-input"
-                placeholder="subnet-xxx, subnet-yyy"
-                value={value?.subnetIds ?? ""}
-                onChange={(e) => patch({ subnetIds: e.target.value })}
-              />
-              <label className="cw-check">
-                <input
-                  type="checkbox"
-                  checked={!!value?.enableSharedInternetAccess}
-                  onChange={(e) =>
-                    patch({ enableSharedInternetAccess: e.target.checked })
-                  }
-                />
-                VPC 内共享公网出口
-              </label>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-
 /* ================================================================ *
  * Tree addressing — the draft is a recursive AgentDraft. A node is
  * addressed by an array of child indices; [] is the root.
@@ -749,6 +674,7 @@ const typeMeta = (type: AgentDraft["agentType"]) =>
 /** Per-node required-field problem, or null when the node is valid. */
 function nodeProblem(n: AgentDraft): string | null {
   if (n.name.trim().length === 0) return "缺少名称";
+  if (n.description.trim().length === 0) return "缺少描述";
   if (isA2aType(n.agentType))
     return (n.a2aUrl ?? "").trim().length === 0 ? "缺少 Agent URL" : null;
   if (isOrchestratorType(n.agentType))
@@ -773,6 +699,11 @@ function treeProblems(root: AgentDraft, path: NodePath = []): TreeProblem[] {
   return out;
 }
 
+/** Count the root Agent and every nested sub-Agent in the draft. */
+function countDraftAgents(root: AgentDraft): number {
+  return 1 + root.subAgents.reduce((total, child) => total + countDraftAgents(child), 0);
+}
+
 /* ---------------------------------------------------------------- *
  * Left structure tree: one selectable, editable node (recursive).
  * ---------------------------------------------------------------- */
@@ -780,12 +711,16 @@ function TreeNode({
   root,
   path,
   selectedPath,
+  showErrors,
+  validationPulse,
   onSelect,
   onChange,
 }: {
   root: AgentDraft;
   path: NodePath;
   selectedPath: NodePath;
+  showErrors: boolean;
+  validationPulse: number;
   onSelect: (p: NodePath) => void;
   /** Replace the whole tree; optionally move the selection. */
   onChange: (nextRoot: AgentDraft, select?: NodePath) => void;
@@ -838,7 +773,9 @@ function TreeNode({
         className={`cw-tree-node cw-tree-type-${node.agentType ?? "llm"} ${
           selected ? "is-selected" : ""
         } ${draggable ? "is-draggable" : ""} ${dragOver ? "is-dragover" : ""} ${
-          nodeProblem(node) ? "is-invalid" : ""
+          showErrors && nodeProblem(node)
+            ? `is-invalid cw-error-shake-${validationPulse % 2}`
+            : ""
         }`}
         role="button"
         tabIndex={0}
@@ -915,6 +852,8 @@ function TreeNode({
               root={root}
               path={[...path, i]}
               selectedPath={selectedPath}
+              showErrors={showErrors}
+              validationPulse={validationPulse}
               onSelect={onSelect}
               onChange={onChange}
             />
@@ -934,15 +873,6 @@ interface DebugMessage {
   error?: string;
 }
 
-function fmtDebugExpiry(expiresAt?: number): string {
-  if (!expiresAt) return "";
-  const ms = expiresAt * 1000 - Date.now();
-  if (ms <= 0) return "即将清理";
-  const minutes = Math.floor(ms / 60000);
-  const seconds = Math.floor((ms % 60000) / 1000);
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")} 后自动清理`;
-}
-
 function debugSnapshotKey(draft: AgentDraft): string {
   return JSON.stringify(draft);
 }
@@ -958,9 +888,13 @@ function DebugPanel({
   messages,
   input,
   error,
+  deploying,
+  deployError,
   onInput,
   onSend,
   onRestart,
+  onIgnoreChanges,
+  onDeploy,
 }: {
   enabled: boolean;
   disabledReason: string;
@@ -972,104 +906,61 @@ function DebugPanel({
   messages: DebugMessage[];
   input: string;
   error: string | null;
+  deploying: boolean;
+  deployError: string;
   onInput: (v: string) => void;
   onSend: () => void;
   onRestart: () => void;
+  onIgnoreChanges: () => void;
+  onDeploy: () => void;
 }) {
-  const [, refreshExpiry] = useState(0);
   const ready = phase === "ready" || phase === "sending";
   const busy = phase === "building" || phase === "starting" || phase === "sending";
-  const badgeState = stale ? "stale" : phase;
-  const statusText = stale
-    ? "配置已变更"
-    : !enabled
-    ? "未开启"
-    : phase === "idle"
-      ? "等待调试"
-      : phase === "building"
-        ? "生成代码中"
-        : phase === "starting"
-          ? "启动环境中"
-          : phase === "sending"
-            ? "运行中"
-            : phase === "error"
-              ? "调试失败"
-              : "可对话";
-
-  useEffect(() => {
-    if (!run) return;
-    const timer = window.setInterval(() => refreshExpiry((v) => v + 1), 1000);
-    return () => window.clearInterval(timer);
-  }, [run]);
+  const showInitialOverlay = enabled && !run && phase === "idle";
+  const showProgressOverlay =
+    enabled && (phase === "building" || phase === "starting");
+  const showStaleOverlay = Boolean(run && stale && !showProgressOverlay);
 
   return (
     <aside className="cw-debug" aria-label="调试窗口">
       <div className="cw-debug-head">
         <div className="cw-debug-title">
-          <Bug className="cw-i" />
+          <DebugConsoleIcon className="cw-i" />
           调试
         </div>
-        <div className={`cw-debug-badge cw-debug-badge-${badgeState}`}>
-          {statusText}
-        </div>
+        <button
+          type="button"
+          className="cw-debug-deploy"
+          disabled={deploying}
+          onClick={onDeploy}
+          title="查看源码、填写环境变量并部署"
+        >
+          去部署
+          {deploying ? (
+            <Loader2 className="cw-i cw-spin" />
+          ) : (
+            <ArrowRight className="cw-i" />
+          )}
+        </button>
       </div>
 
-      <div className="cw-debug-sub">
-        {run ? (
-          <>
-            <span>{projectName || run.appName}</span>
-            <span>{fmtDebugExpiry(run.expiresAt)}</span>
-          </>
-        ) : enabled ? (
-          <span>点击底部“调试”后生成代码并启动临时运行环境。</span>
-        ) : (
+      {!run && phase === "idle" && !enabled && (
+        <div className="cw-debug-sub">
           <span>{disabledReason}</span>
-        )}
-      </div>
-
-      {run && stale && (
-        <div className="cw-debug-stale" role="status">
-          <div className="cw-debug-stale-text">
-            <strong>配置已变更</strong>
-            <span>当前对话仍使用上一次生成的 Agent。重新调试后，新配置才会生效。</span>
-          </div>
-          <button
-            type="button"
-            className="cw-debug-stale-btn"
-            disabled={busy}
-            onClick={onRestart}
-          >
-            {phase === "building" || phase === "starting" ? (
-              <Loader2 className="cw-i cw-spin" />
-            ) : (
-              <Bug className="cw-i" />
-            )}
-            重新调试
-          </button>
         </div>
       )}
 
-      <div className="cw-debug-body">
+      {deployError && (
+        <div className="cw-debug-deploy-error" role="alert">
+          {deployError}
+        </div>
+      )}
+
+      <div className="cw-debug-stage">
+        <div className="cw-debug-body">
         {!enabled ? (
           <div className="cw-debug-empty">
             {disabledReason}
-          </div>
-        ) : phase === "idle" ? (
-          <div className="cw-debug-empty">
-            当前窗口会显示生成、启动和对话结果。配置完成后点击底部“调试”。
-          </div>
-        ) : phase === "building" || phase === "starting" ? (
-          <div className="cw-debug-progress">
-            {logs.map((line, i) => (
-              <div key={`${line}-${i}`} className="cw-debug-logline">
-                {i === logs.length - 1 ? (
-                  <Loader2 className="cw-i cw-spin" />
-                ) : (
-                  <Check className="cw-i" />
-                )}
-                <span>{line}</span>
-              </div>
-            ))}
           </div>
         ) : phase === "error" ? (
           <div className="cw-debug-error">
@@ -1083,11 +974,21 @@ function DebugPanel({
                 ))}
               </div>
             )}
+            <button
+              type="button"
+              className="cw-debug-start"
+              onClick={onRestart}
+            >
+              <Bug className="cw-i" />
+              重试
+            </button>
           </div>
         ) : (
           <div className="cw-debug-chat">
             {messages.length === 0 ? (
-              <div className="cw-debug-empty">输入消息开始验证当前 Agent。</div>
+              <div className="cw-debug-chat-empty">
+                输入消息开始验证当前 Agent。
+              </div>
             ) : (
               messages.map((msg, i) => (
                 <div
@@ -1104,9 +1005,11 @@ function DebugPanel({
                       <span className="cw-debug-msg-error">{msg.error}</span>
                     ) : msg.blocks && msg.blocks.length > 0 ? (
                       <Blocks blocks={msg.blocks} onAction={() => {}} />
-                    ) : (
-                      msg.content || "..."
-                    )}
+                    ) : msg.content ? (
+                      msg.content
+                    ) : i === messages.length - 1 && phase === "sending" ? (
+                      <ThinkingPlaceholder />
+                    ) : null}
                   </div>
                 </div>
               ))
@@ -1121,8 +1024,14 @@ function DebugPanel({
             className="cw-debug-input"
             rows={1}
             value={input}
-            placeholder={ready ? "输入测试消息..." : "调试环境启动后可输入"}
-            disabled={!ready || busy}
+            placeholder={
+              stale
+                ? "更新 Agent 后可继续调试"
+                : ready
+                  ? "输入测试消息..."
+                  : "调试环境启动后可输入"
+            }
+            disabled={!ready || busy || stale}
             onChange={(e) => onInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
@@ -1135,16 +1044,84 @@ function DebugPanel({
             type="button"
             className="cw-debug-send"
             title="发送"
-            disabled={!ready || busy || !input.trim()}
+            disabled={!ready || busy || stale || !input.trim()}
             onClick={onSend}
           >
             {phase === "sending" ? (
               <Loader2 className="cw-i cw-spin" />
             ) : (
-              <Send className="cw-i" />
+              <ArrowUp className="cw-i" />
             )}
           </button>
         </div>
+      </div>
+
+        {(showInitialOverlay || showProgressOverlay || showStaleOverlay) && (
+          <div className="cw-debug-overlay" role="status" aria-live="polite">
+            <div className="cw-debug-overlay-content">
+              <strong className="cw-debug-overlay-title">
+                {showProgressOverlay
+                  ? "正在初始化调试环境"
+                  : showStaleOverlay
+                    ? "Agent 配置已变更"
+                    : "启动调试环境"}
+              </strong>
+              {showProgressOverlay ? (
+                <div className="cw-debug-overlay-progress">
+                  {logs.map((line, i) => (
+                    <div key={`${line}-${i}`} className="cw-debug-logline">
+                      {i === logs.length - 1 ? (
+                        <Loader2 className="cw-i cw-spin" />
+                      ) : (
+                        <Check className="cw-i" />
+                      )}
+                      <span>{line}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : showStaleOverlay ? (
+                <>
+                  <span className="cw-debug-overlay-copy">
+                    当前对话仍在使用上一次配置。更新后，新配置才会生效。
+                  </span>
+                <div className="cw-debug-overlay-actions">
+                  <button
+                    type="button"
+                    className="cw-debug-ignore"
+                    disabled={busy}
+                    onClick={onIgnoreChanges}
+                  >
+                    忽略
+                  </button>
+                  <button
+                    type="button"
+                    className="cw-debug-start"
+                    disabled={busy}
+                    onClick={onRestart}
+                  >
+                    <RefreshCw className="cw-i" />
+                    更新 Agent
+                  </button>
+                </div>
+                </>
+              ) : (
+                <>
+                  <span className="cw-debug-overlay-copy">
+                    启动后会生成代码并创建临时运行环境。
+                  </span>
+                  <button
+                    type="button"
+                    className="cw-debug-start"
+                    onClick={onRestart}
+                  >
+                    <Bug className="cw-i" />
+                    启动调试环境
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </aside>
   );
@@ -1160,13 +1137,24 @@ interface CustomCreateProps extends CreateModeProps {
   author?: string;
   /** Global UI feature gates loaded from the backend. */
   features?: UiFeatures;
+  /** Publish deploy progress into the persistent app header. */
+  onDeploymentTaskChange?: (task: DeploymentTaskUpdate) => void;
 }
 
-export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, author = "", features }: CustomCreateProps) {
+export function CustomCreate({
+  onBack,
+  onCreate,
+  onAgentAdded,
+  initialDraft,
+  author = "",
+  features,
+  onDeploymentTaskChange,
+}: CustomCreateProps) {
   void onCreate; // outcome is the in-pane project preview, not a navigation
   void onBack; // no footer nav in the single-scroll layout; back lives in app chrome
   const [draft, setDraft] = useState<AgentDraft>(() => initialDraft ?? emptyDraft());
   const [showErrors, setShowErrors] = useState(false);
+  const [validationPulse, setValidationPulse] = useState(0);
   const [project, setProject] = useState<AgentProject | null>(null);
   const [building, setBuilding] = useState(false);
   const [deployRegion, setDeployRegion] = useState<string>("cn-beijing");
@@ -1184,27 +1172,11 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
   const [debugInput, setDebugInput] = useState("");
   const [debugError, setDebugError] = useState<string | null>(null);
   const [debugSnapshot, setDebugSnapshot] = useState("");
+  const [ignoredDebugSnapshot, setIgnoredDebugSnapshot] = useState("");
   // The section nearest the top of the scroll container (scroll-spy) — drives
   // the right-hand step nav highlight.
-  const [activeId, setActiveId] = useState<StepId>("type");
-  // YAML import: file input + last error message.
-  const yamlInputRef = useRef<HTMLInputElement>(null);
-  const [importErr, setImportErr] = useState("");
+  const [activeId, setActiveId] = useState<StepId>("basic");
   const [buildErr, setBuildErr] = useState("");
-  const onImportYaml = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = ""; // allow re-importing the same file
-    if (!file) return;
-    setImportErr("");
-    try {
-      const text = await file.text();
-      setDraft(yamlToDraft(text));
-      setSelectedPath([]);
-      setShowErrors(false);
-    } catch (ex) {
-      setImportErr(`导入失败：${ex instanceof Error ? ex.message : String(ex)}`);
-    }
-  };
 
   // Which tree node is being edited ([] = root). The detail pane and per-node
   // inline errors are driven by this selection.
@@ -1226,8 +1198,8 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
   // Section wrapper: registers a ref for scroll-spy + renders the heading.
   // IMPORTANT: keep a STABLE identity (stored in a ref). If this were declared
   // as a fresh function each render, React would remount every section on every
-  // keystroke — detaching the nodes the IntersectionObserver watches (breaking
-  // the scroll-spy) and dropping input focus.
+  // keystroke — replacing the nodes the scroll-spy reads and dropping input
+  // focus.
   // NOTE: Must be declared before any conditional returns to satisfy React hooks rules.
   const sectionImpl = useRef<
     ((p: { meta: StepMeta; children: React.ReactNode }) => React.ReactElement) | null
@@ -1257,6 +1229,10 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
   // removed the previously-selected node). `patch` always edits this node.
   const safePath = pathExists(draft, selectedPath) ? selectedPath : [];
   const node = getNode(draft, safePath);
+  const activeTypeIndex = Math.max(
+    0,
+    AGENT_TYPES.findIndex((type) => type.id === (node.agentType ?? "llm")),
+  );
 
   const patch = (p: Partial<AgentDraft>) =>
     setDraft((d) => updateNode(d, safePath, (n) => ({ ...n, ...p })));
@@ -1288,26 +1264,36 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
     // Auto-enable tracing when at least one exporter is chosen.
     patch({ tracingExporters: next, tracing: next.length > 0 ? true : node.tracing });
   };
-  const patchDeployment = (p: Partial<NonNullable<AgentDraft["deployment"]>>) =>
-    setDraft((d) => ({
-      ...d,
-      deployment: { ...(d.deployment ?? { feishuEnabled: false }), ...p },
-    }));
-
   // Detail-pane branching is driven by the SELECTED node's type.
   const orchestrator = isOrchestratorType(node.agentType);
   const a2a = isA2aType(node.agentType);
 
   // Inline error flags for the selected node.
   const nameMissing = node.name.trim().length === 0;
+  const descriptionMissing = node.description.trim().length === 0;
   const instructionMissing = node.instruction.trim().length === 0;
   const urlMissing = (node.a2aUrl ?? "").trim().length === 0;
+  const invalidClass = (missing: boolean) =>
+    showErrors && missing
+      ? `is-error cw-error-shake-${validationPulse % 2}`
+      : "";
 
   // Whole-tree validation: every node must satisfy its type's requirements.
   const problems = useMemo(() => treeProblems(draft), [draft]);
   const canFinish = problems.length === 0;
   const currentDebugSnapshot = useMemo(() => debugSnapshotKey(draft), [draft]);
-  const debugStale = Boolean(debugRun && debugSnapshot && debugSnapshot !== currentDebugSnapshot);
+  const debugStale = Boolean(
+    debugRun &&
+      debugSnapshot &&
+      debugSnapshot !== currentDebugSnapshot &&
+      ignoredDebugSnapshot !== currentDebugSnapshot,
+  );
+
+  useEffect(() => {
+    if (ignoredDebugSnapshot && ignoredDebugSnapshot !== currentDebugSnapshot) {
+      setIgnoredDebugSnapshot("");
+    }
+  }, [currentDebugSnapshot, ignoredDebugSnapshot]);
 
   // Per-step completion, for the nav's done-checkmarks + progress fill.
   const completion = useMemo<Record<StepId, boolean>>(
@@ -1324,7 +1310,6 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
       memory: node.memory.shortTerm || node.memory.longTerm,
       knowledge: node.knowledgebase,
       tracing: node.tracing || node.enableA2ui,
-      deploy: true,
       subagents: (node.subAgents?.length ?? 0) > 0,
       review: canFinish,
     }),
@@ -1345,9 +1330,10 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
           "memory",
           "knowledge",
           "tracing",
-          ...(safePath.length === 0 ? (["deploy"] as StepId[]) : []),
         ];
   const navSteps = STEPS.filter((s) => navStepIds.includes(s.id));
+  const navStepKey = navStepIds.join("|");
+  const selectedNodeKey = safePath.join(".");
   const activeIndex = navSteps.findIndex((s) => s.id === activeId);
 
   // Smooth-scroll a section into view (nav click is a convenience).
@@ -1355,32 +1341,58 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
     sectionRefs.current[id]?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
-  // Scroll-spy: mark the section nearest the top of the scroll container active.
+  // Scroll-spy: follow the section that has crossed the scroll area's top edge.
+  // A passive scroll listener is more reliable here than IntersectionObserver:
+  // tall sections may stay intersecting for a long time, so no observer callback
+  // fires while the user moves through them.
   useEffect(() => {
-    if (project) return; // observer targets only exist in the form view
+    if (project) return;
     const root = scrollRef.current;
     if (!root) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visible = entries
-          .filter((e) => e.isIntersecting)
-          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
-        const id = (visible[0]?.target as HTMLElement | undefined)?.dataset
-          .stepId as StepId | undefined;
-        if (id) setActiveId(id);
-      },
-      { root, rootMargin: "0px 0px -65% 0px", threshold: 0 },
-    );
-    for (const el of Object.values(sectionRefs.current)) {
-      if (el) observer.observe(el);
-    }
-    return () => observer.disconnect();
-  }, [project]);
+    const ids = navStepKey.split("|") as StepId[];
+    let frame = 0;
+
+    const syncActiveSection = () => {
+      frame = 0;
+      const lastId = ids[ids.length - 1];
+      let nextId = ids[0];
+
+      if (root.scrollTop + root.clientHeight >= root.scrollHeight - 2) {
+        nextId = lastId;
+      } else {
+        const anchor = root.getBoundingClientRect().top + 24;
+        for (const id of ids) {
+          const section = sectionRefs.current[id];
+          if (!section || section.getBoundingClientRect().top > anchor) break;
+          nextId = id;
+        }
+      }
+
+      if (nextId) setActiveId((current) => (current === nextId ? current : nextId));
+    };
+
+    const scheduleSync = () => {
+      if (!frame) frame = window.requestAnimationFrame(syncActiveSection);
+    };
+
+    syncActiveSection();
+    root.addEventListener("scroll", scheduleSync, { passive: true });
+    window.addEventListener("resize", scheduleSync);
+    return () => {
+      root.removeEventListener("scroll", scheduleSync);
+      window.removeEventListener("resize", scheduleSync);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, [project, navStepKey, selectedNodeKey]);
 
   const requireCompleteDraft = () => {
     if (canFinish) return true;
     setShowErrors(true);
-    if (problems[0]) setSelectedPath(problems[0].path);
+    setValidationPulse((pulse) => pulse + 1);
+    if (problems[0]) {
+      setSelectedPath(problems[0].path);
+      window.requestAnimationFrame(() => scrollToSection("basic"));
+    }
     return false;
   };
 
@@ -1390,6 +1402,7 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
     setDebugRun(null);
     setDebugSessionId(null);
     setDebugSnapshot("");
+    setIgnoredDebugSnapshot("");
     if (run) {
       try {
         await deleteGeneratedAgentTestRun(run.runId);
@@ -1400,17 +1413,33 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
   };
 
   const finish = async () => {
+    setBuildErr("");
     if (!requireCompleteDraft()) return;
     // NOTE: do NOT call onCreate() here — it navigates away from the create
     // view. The generated project preview below IS the outcome of this step.
 
     setBuilding(true);
-    setBuildErr("");
     try {
-      const proj = await generateAgentProject(draft);
+      // Network settings are deployment-only and are not part of the codegen
+      // API schema. Keep them in the local draft while sending only the
+      // channel flag needed to generate the project.
+      const projectDraft: AgentDraft = {
+        ...draft,
+        deployment: {
+          feishuEnabled: !!draft.deployment?.feishuEnabled,
+        },
+      };
+      const proj = await generateAgentProject(projectDraft);
+      await cleanupDebugRun();
+      setDebugPhase("idle");
+      setDebugProjectName("");
+      setDebugLogs([]);
+      setDebugMessages([]);
+      setDebugInput("");
+      setDebugError(null);
       setProject(proj);
     } catch (err) {
-      setBuildErr(`生成项目失败：${err instanceof Error ? err.message : String(err)}`);
+      setBuildErr(`打开部署页失败：${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setBuilding(false);
     }
@@ -1421,6 +1450,7 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
     if (!requireCompleteDraft()) return;
 
     const snapshot = debugSnapshotKey(draft);
+    setIgnoredDebugSnapshot("");
     setDebugError(null);
     setDebugMessages([]);
     setDebugInput("");
@@ -1436,7 +1466,7 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
       };
       pushLog("提交 Agent 配置");
       setDebugPhase("starting");
-      pushLog("后端校验并生成调试项目");
+      pushLog("初始化调试环境");
       const run = await createGeneratedAgentTestRun(draft);
       debugRunRef.current = run;
       setDebugRun(run);
@@ -1544,40 +1574,45 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
 
     return (
       <div className="cw-root cw-root-preview">
-        <div className="cw-preview-bar">
-          <button
-            type="button"
-            className="cw-btn cw-btn-ghost"
-            onClick={() => setProject(null)}
-          >
-            <ArrowLeft className="cw-i" />
-            返回配置
-          </button>
-          <span className="cw-preview-title">
-            <Rocket className="cw-i" />
-            项目预览 · {project.name}
-          </span>
-          <button
-            type="button"
-            className="cw-btn cw-btn-soft cw-preview-yaml"
-            onClick={() =>
-              downloadText(`${draft.name || "agent"}.yaml`, draftToYaml(draft), "text/yaml")
-            }
-            title="导出表示 Agent 结构的 YAML"
-          >
-            <FileDown className="cw-i" />
-            导出 YAML
-          </button>
-        </div>
         <div className="cw-preview-body">
           <ProjectPreview
             project={project}
+            agentName={draft.name || "未命名 Agent"}
+            agentCount={countDraftAgents(draft)}
             onChange={setProject}
             onDeploy={handleDeploy}
             onAgentAdded={onAgentAdded}
+            onDeploymentTaskChange={onDeploymentTaskChange}
             feishuEnabled={!!draft.deployment?.feishuEnabled}
+            onFeishuEnabledChange={(feishuEnabled) =>
+              setDraft((current) => ({
+                ...current,
+                deployment: {
+                  ...(current.deployment ?? { feishuEnabled: false }),
+                  feishuEnabled,
+                },
+              }))
+            }
+            network={draft.deployment?.network}
+            onNetworkChange={(network) =>
+              setDraft((current) => ({
+                ...current,
+                deployment: {
+                  ...(current.deployment ?? { feishuEnabled: false }),
+                  network,
+                },
+              }))
+            }
             deployRegion={deployRegion}
             onDeployRegionChange={setDeployRegion}
+            onBack={() => setProject(null)}
+            onExportYaml={() =>
+              downloadText(
+                `${draft.name || "agent"}.yaml`,
+                draftToYaml(draft),
+                "text/yaml",
+              )
+            }
           />
         </div>
       </div>
@@ -1598,6 +1633,8 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
             root={draft}
             path={[]}
             selectedPath={safePath}
+            showErrors={showErrors}
+            validationPulse={validationPulse}
             onSelect={setSelectedPath}
             onChange={applyTree}
           />
@@ -1606,18 +1643,28 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
             is fixed on top (outside the scroll area); the form (left) + step
             nav (right) scroll below it. */}
         <div className="cw-detail">
-          {/* Fixed top bar: pick the agent type; missing-info shows here too. */}
+          {/* Fixed top bar: pick the agent type. */}
           <div className="cw-typebar">
             <div className="cw-typebar-inner">
-              <header className="cw-sec-head">
-                <h2 className="cw-sec-title">
-                  类型<span className="cw-sec-required">必填</span>
-                </h2>
-              </header>
-              <div className="cw-typeradio cw-typeradio--row">
+              <div
+                className="cw-typeradio cw-typeradio--row"
+                role="radiogroup"
+                aria-label="Agent 类型"
+                style={
+                  {
+                    "--cw-agent-type-gap": `${AGENT_TYPE_GAP_PX}px`,
+                    "--cw-agent-type-slider-width": `calc((100% - ${
+                      8 + AGENT_TYPE_GAP_PX * (AGENT_TYPES.length - 1)
+                    }px) / ${AGENT_TYPES.length})`,
+                    "--cw-active-type-offset": `calc(${activeTypeIndex * 100}% + ${
+                      activeTypeIndex * AGENT_TYPE_GAP_PX
+                    }px)`,
+                  } as CSSProperties
+                }
+              >
+                <span className="cw-typeradio-slider" aria-hidden />
                 {AGENT_TYPES.map((t) => {
                   const on = (node.agentType ?? "llm") === t.id;
-                  const Icon = t.icon;
                   return (
                     <label
                       key={t.id}
@@ -1630,39 +1677,13 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
                         checked={on}
                         onChange={() => patch({ agentType: t.id })}
                       />
-                      <span className="cw-typeradio-dot" aria-hidden />
-                      <span className="cw-typeradio-main">
-                        <span className="cw-typeradio-head">
-                          <Icon className="cw-typeradio-icon" />
-                          <span className="cw-typeradio-title">
-                            {t.id === "a2a" ? "A2A 远程" : t.label}
-                          </span>
-                        </span>
+                      <span className="cw-typeradio-title">
+                        {t.id === "a2a" ? "A2A 远程" : t.label}
                       </span>
                     </label>
                   );
                 })}
               </div>
-              {problems.length > 0 && (
-                <div className="cw-missing" role="alert">
-                  <span className="cw-missing-lead">待补全（{problems.length}）</span>
-                  <div className="cw-missing-list">
-                    {problems.map((p) => (
-                      <button
-                        key={p.path.join(".") + p.problem}
-                        type="button"
-                        className="cw-missing-item"
-                        onClick={() => {
-                          setShowErrors(true);
-                          setSelectedPath(p.path);
-                        }}
-                      >
-                        {p.name} · {p.problem}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
           </div>
 
@@ -1679,9 +1700,7 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
                         Agent 名称<span className="cw-req">*</span>
                       </label>
                       <input
-                        className={`cw-input ${
-                          showErrors && nameMissing ? "is-error" : ""
-                        }`}
+                        className={`cw-input ${invalidClass(nameMissing)}`}
                         value={node.name}
                         placeholder="例如：客服智能体"
                         onChange={(e) => patch({ name: e.target.value })}
@@ -1691,18 +1710,26 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
                       )}
                     </div>
                     <div className="cw-field">
-                      <label className="cw-label">描述</label>
+                      <label className="cw-label">
+                        描述<span className="cw-req">*</span>
+                      </label>
                       <textarea
-                        className="cw-textarea cw-textarea-sm"
+                        className={`cw-textarea cw-textarea-sm ${invalidClass(
+                          descriptionMissing,
+                        )}`}
                         value={node.description}
                         placeholder="简要描述这个 Agent 的用途，便于团队识别…"
                         onChange={(e) =>
                           patch({ description: e.target.value })
                         }
                       />
-                      <span className="cw-help">
-                        描述会显示在 Agent 列表与选择器中。
-                      </span>
+                      {showErrors && descriptionMissing ? (
+                        <span className="cw-error-text">描述为必填项</span>
+                      ) : (
+                        <span className="cw-help">
+                          描述会显示在 Agent 列表与选择器中。
+                        </span>
+                      )}
                     </div>
                     {orchestrator ? (
                       <>
@@ -1739,9 +1766,7 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
                           Agent URL<span className="cw-req">*</span>
                         </label>
                         <input
-                          className={`cw-input ${
-                            showErrors && urlMissing ? "is-error" : ""
-                          }`}
+                          className={`cw-input ${invalidClass(urlMissing)}`}
                           value={node.a2aUrl ?? ""}
                           placeholder="https://example.com/my-agent"
                           onChange={(e) => patch({ a2aUrl: e.target.value })}
@@ -1761,9 +1786,9 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
                           系统提示词<span className="cw-req">*</span>
                         </label>
                         <textarea
-                          className={`cw-textarea cw-textarea-lg ${
-                            showErrors && instructionMissing ? "is-error" : ""
-                          }`}
+                          className={`cw-textarea cw-textarea-lg ${invalidClass(
+                            instructionMissing,
+                          )}`}
                           value={node.instruction}
                           placeholder={
                             "你是一个……\n\n你的目标是……\n\n约束：\n- ……"
@@ -1798,7 +1823,7 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
                       <input
                         className="cw-input"
                         value={node.modelName ?? ""}
-                        placeholder="doubao-seed-1-6-250615"
+                        placeholder="doubao-seed-2-1-pro-260628"
                         onChange={(e) => patch({ modelName: e.target.value })}
                       />
                     </div>
@@ -1824,8 +1849,8 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
                         }
                       />
                       <span className="cw-help">
-                        留空则使用 VeADK 默认模型配置；API Key 请在生成项目的
-                        .env.example 中填写（不会写入代码）。
+                        留空则使用 VeADK 默认模型配置；API Key 请在部署页的环境变量中填写
+                        （不会写入代码）。
                       </span>
                     </div>
                   </div>
@@ -1860,7 +1885,7 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
             <Section meta={metaOf("skills")}>
                   <div className="cw-form">
                     <p className="cw-section-desc">
-                      从 Skill Hub、本地文件或 AgentKit SkillSpace 添加技能，生成项目时会写入 skills/ 目录。
+                      从 Skill Hub、本地文件或 AgentKit SkillSpace 添加技能，进入部署页时会写入 skills/ 目录。
                     </p>
                     <SkillsSourceTabs
                       selected={selectedSkills}
@@ -1978,25 +2003,6 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
                     />
                   </div>
             </Section>
-            {safePath.length === 0 && (
-              <Section meta={metaOf("deploy")}>
-                <div className="cw-form cw-toggle-stack">
-                  <Toggle
-                    checked={!!draft.deployment?.feishuEnabled}
-                    onChange={(v) => patchDeployment({ feishuEnabled: v })}
-                    title="连接飞书"
-                    desc="部署后可通过飞书消息触发当前 Agent。"
-                    icon={Globe}
-                  />
-                  <NetworkConfigForm
-                    value={draft.deployment?.network}
-                    onChange={(v: NetworkConfigType | undefined) =>
-                      patchDeployment({ network: v })
-                    }
-                  />
-                </div>
-              </Section>
-            )}
               </>
             )}
           </div>
@@ -2024,16 +2030,19 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
                         className={`cw-step ${active ? "is-active" : ""} ${done ? "is-done" : ""}`}
                         onClick={() => scrollToSection(s.id)}
                         aria-current={active ? "step" : undefined}
+                        aria-label={s.label}
                       >
                         <span className="cw-step-marker" aria-hidden>
-                          <span className="cw-dot" />
+                          {active ? (
+                            <span className="cw-dot" />
+                          ) : done ? (
+                            <Check className="cw-step-check" />
+                          ) : (
+                            <span className="cw-dot" />
+                          )}
                         </span>
-                        <span className="cw-step-text">
-                          <span className="cw-step-labelrow">
-                            <span className="cw-step-label">{s.label}</span>
-                            {s.required && <span className="cw-step-required">必填</span>}
-                          </span>
-                          <span className="cw-step-hint">{s.hint}</span>
+                        <span className="cw-step-tooltip" aria-hidden>
+                          {s.label}
                         </span>
                       </button>
                     </li>
@@ -2056,100 +2065,15 @@ export function CustomCreate({ onBack, onCreate, onAgentAdded, initialDraft, aut
           messages={debugMessages}
           input={debugInput}
           error={debugError}
+          deploying={building}
+          deployError={buildErr}
           onInput={setDebugInput}
           onSend={sendDebugMessage}
           onRestart={startDebug}
+          onIgnoreChanges={() => setIgnoredDebugSnapshot(currentDebugSnapshot)}
+          onDeploy={finish}
         />
       </div>{/* cw-editor */}
-      <footer className="cw-footer-bar">
-        <div className="cw-footer-status">
-          {canFinish ? (
-            <span className="cw-footer-ok">✓ 配置完整，可生成项目</span>
-          ) : (
-            <button
-              type="button"
-              className="cw-footer-problem"
-              onClick={() => {
-                setShowErrors(true);
-                if (problems[0]) setSelectedPath(problems[0].path);
-              }}
-            >
-              待补全（{problems.length}）：{problems[0].name} · {problems[0].problem}
-            </button>
-          )}
-        </div>
-        <div className="cw-footer-actions">
-          {importErr && <span className="cw-footer-importerr">{importErr}</span>}
-          {buildErr && <span className="cw-footer-importerr">{buildErr}</span>}
-          <input
-            ref={yamlInputRef}
-            type="file"
-            accept=".yaml,.yml,text/yaml"
-            style={{ display: "none" }}
-            onChange={onImportYaml}
-          />
-          <button
-            type="button"
-            className="cw-btn cw-btn-soft"
-            onClick={() => yamlInputRef.current?.click()}
-            title="从 YAML 加载 Agent 结构（覆盖当前表单）"
-          >
-            <FileUp className="cw-i" />
-            导入 YAML
-          </button>
-          <button
-            type="button"
-            className="cw-btn cw-btn-soft"
-            onClick={() =>
-              downloadText(
-                `${draft.name || "agent"}.yaml`,
-                draftToYaml(draft),
-                "text/yaml",
-              )
-            }
-            title="导出表示 Agent 结构的 YAML"
-          >
-            <FileDown className="cw-i" />
-            导出 YAML
-          </button>
-          <button
-            type="button"
-            className="cw-btn cw-btn-soft"
-            onClick={startDebug}
-            disabled={!debugEnabled || !canFinish || building || debugPhase === "building" || debugPhase === "starting" || debugPhase === "sending"}
-            title={
-              debugEnabled
-                ? "生成当前 Agent 代码并启动临时调试环境"
-                : debugDisabledReason
-            }
-          >
-            {debugPhase === "building" || debugPhase === "starting" ? (
-              <Loader2 className="cw-i cw-spin" />
-            ) : (
-              <Bug className="cw-i" />
-            )}
-            调试
-          </button>
-          <button
-            type="button"
-            className="cw-btn cw-btn-primary cw-btn-finish"
-            onClick={finish}
-            disabled={!canFinish || building}
-          >
-            {building ? (
-              <>
-                <Loader2 className="cw-i cw-spin" />
-                正在下载技能…
-              </>
-            ) : (
-              <>
-                <Rocket className="cw-i" />
-                生成项目
-              </>
-            )}
-          </button>
-        </div>
-      </footer>
     </div>
   );
 }

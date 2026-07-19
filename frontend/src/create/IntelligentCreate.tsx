@@ -11,7 +11,10 @@ import {
 import type { DeployStage } from "../adk/client";
 import { applyEvent, emptyAcc, type Acc } from "../blocks";
 import { Markdown } from "../ui/Markdown";
-import { ProjectPreview } from "../ui/ProjectPreview";
+import {
+  ProjectPreview,
+  type DeploymentTaskUpdate,
+} from "../ui/ProjectPreview";
 import type { AgentProject } from "./project";
 import { normalizeDraft } from "./normalizeDraft";
 import type { AgentDraft } from "./types";
@@ -44,6 +47,8 @@ export interface IntelligentCreateProps {
   onCreate: (draft: AgentDraft) => void;
   /** Called after successfully adding an agent to navigate to it. */
   onAgentAdded?: (agentId: string, agentName: string) => void;
+  /** Publish deploy progress into the persistent app header. */
+  onDeploymentTaskChange?: (task: DeploymentTaskUpdate) => void;
 }
 
 type Role = "assistant" | "user";
@@ -107,7 +112,13 @@ async function parseProject(raw: string): Promise<AgentProject | null> {
   return null;
 }
 
-export function IntelligentCreate({ userId, onBack, onCreate, onAgentAdded }: IntelligentCreateProps) {
+export function IntelligentCreate({
+  userId,
+  onBack,
+  onCreate,
+  onAgentAdded,
+  onDeploymentTaskChange,
+}: IntelligentCreateProps) {
   // onBack/onCreate are part of the contract but the deploy/preview is the
   // outcome here, so we don't drive navigation from this component.
   void onBack;
@@ -454,7 +465,13 @@ export function IntelligentCreate({ userId, onBack, onCreate, onAgentAdded }: In
               />
             </div>
           ) : project ? (
-            <ProjectPreview project={project} onChange={setProject} onDeploy={handleDeploy} onAgentAdded={onAgentAdded} />
+            <ProjectPreview
+              project={project}
+              onChange={setProject}
+              onDeploy={handleDeploy}
+              onAgentAdded={onAgentAdded}
+              onDeploymentTaskChange={onDeploymentTaskChange}
+            />
           ) : (
             <div className="ic-preview-empty">
               <div className="ic-preview-empty-icon">
