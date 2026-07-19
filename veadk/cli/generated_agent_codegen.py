@@ -31,6 +31,21 @@ from veadk.cli.generated_agent_catalog import (
     EnvVar,
 )
 
+_PYTHON_LICENSE_HEADER = """# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""
+
 
 class GeneratedFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -562,7 +577,8 @@ def render_readme(name: str, draft: AgentDraft) -> str:
 
 
 def _render_app_py(pkg: str, feishu_channel_enabled: bool) -> str:
-    return f"""from agents.{pkg}.agent import AGENT_DISPLAY_NAMES, root_agent
+    return f"""{_PYTHON_LICENSE_HEADER}
+from agents.{pkg}.agent import AGENT_DISPLAY_NAMES, root_agent
 from veadk.integrations.agentkit import create_agentkit_app, run_agentkit_app
 
 app = create_agentkit_app(
@@ -606,18 +622,19 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
         + f"\n\nAGENT_DISPLAY_NAMES = {acc.agent_display_names!r}\n"
         + "\n# ADK 加载器要求：顶层 agent 必须命名为 root_agent\nroot_agent = agent\n"
     )
-    agent_py = f"{import_block}\n\n{agent_definition}"
+    agent_py = f"{_PYTHON_LICENSE_HEADER}\n{import_block}\n\n{agent_definition}"
 
     app_py = _render_app_py(pkg, feishu_channel_enabled)
     files = [
         GeneratedFile(path="app.py", content=app_py),
         # Top-level agents package marker so `from agents.<pkg>.agent import
         # root_agent` resolves when the container runs `python -m app`.
-        GeneratedFile(path="agents/__init__.py", content=""),
+        GeneratedFile(path="agents/__init__.py", content=_PYTHON_LICENSE_HEADER),
         GeneratedFile(path=f"agents/{pkg}/agent.py", content=agent_py),
         GeneratedFile(
             path=f"agents/{pkg}/__init__.py",
             content=(
+                f"{_PYTHON_LICENSE_HEADER}\n"
                 "from .agent import AGENT_DISPLAY_NAMES, root_agent\n\n"
                 '__all__ = ["AGENT_DISPLAY_NAMES", "root_agent"]\n'
             ),

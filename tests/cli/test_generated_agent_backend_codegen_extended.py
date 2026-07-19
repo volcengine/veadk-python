@@ -50,20 +50,20 @@ from veadk.cli.generated_agent_skills import (
 # These hashes lock the complete generated project contents, not just Python
 # syntax or selected snippets.
 _MINIMAL_FRONTEND_GOLDEN = {
-    "app.py": "82aa7a210954d08707ee01829df26a535ecdd82211d82134a7416f7f2bf4d121",
-    "agents/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "agents/demo_agent/agent.py": "6e5bbd448439c7f50f5400227680130e897dd71e8251cb4eb4594c98f4889589",
-    "agents/demo_agent/__init__.py": "acb6368da255ff70d6760c00085c893aa0b2d973768d293a22bb7181fb1e3448",
+    "app.py": "c7807c570167793fc8c5a8a72e9f3c32aac0820db3098cb52edb1488c34a8e5f",
+    "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
+    "agents/demo_agent/agent.py": "b2d22094a8ea61e8ab6e2b633d7695c5fa5e883f03516cb8771e7ec00be0fe1f",
+    "agents/demo_agent/__init__.py": "62d651c229ddd771cf0cc0a8b0e05e96b739a737fe71e41fe8bf1df484150c36",
     ".env.example": "1cdb6e1bfe38616d5d46095ba88ba76a0c189f3d2999bf0dd23b7145ce103ab2",
     "requirements.txt": "9a04e5f16e94d5e751681082776f1c99f13da7a577c8753c3835e0ea507245e4",
     "README.md": "a34208314cf9061c02662028d7a9dd97448e6b73c1d732cb4aeaa8f70dbbc684",
 }
 
 _FULL_FRONTEND_GOLDEN = {
-    "app.py": "25b7d5bdb179f1ef57d1a66f15b15a7f041004c2a02b3eeaa0bcac82414d88c2",
-    "agents/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "agents/full_agent/agent.py": "d77ee467c4895b1a160927fb551a65d424b68319fc2941014dc5d499edbace68",
-    "agents/full_agent/__init__.py": "acb6368da255ff70d6760c00085c893aa0b2d973768d293a22bb7181fb1e3448",
+    "app.py": "a9903cf7e095733e9b8658182a0954a81d8a98b431f8ab995ce3818950127006",
+    "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
+    "agents/full_agent/agent.py": "77c6cc42f8f9a99aba060fc93a7a615655b897e6136d6f5325f035e87edce141",
+    "agents/full_agent/__init__.py": "62d651c229ddd771cf0cc0a8b0e05e96b739a737fe71e41fe8bf1df484150c36",
     ".env.example": "cb35eed98b4155c755df934f61ca6760293d59508de0a6090632e44501f82748",
     "requirements.txt": "65b301155863e56165c5777301c3476d0c0b68e569fff4450f454e36fd66225d",
     "README.md": "1bf4dc889c7d1076f50784d253b53412ba7c49bcb69a5d948f9092dbbecb18ac",
@@ -186,7 +186,7 @@ def test_codegen_preserves_agent_display_names_for_topology() -> None:
     assert "create_agentkit_app(" in app_py
     assert "AGENT_DISPLAY_NAMES" in app_py
     assert 'app.get("/web/agent-info' not in app_py
-    assert len(app_py.splitlines()) == 11
+    assert len(app_py.splitlines()) == 25
 
 
 def test_codegen_enables_feishu_without_exposing_lifecycle_code() -> None:
