@@ -151,9 +151,15 @@ def _agentkit_authorization_header(api_key: str) -> str:
 
 
 def _build_agentkit_proxy_headers(
-    incoming_headers: dict[str, str], api_key: str | None
+    incoming_headers: dict[str, str],
+    api_key: str | None,
+    validated_authorization: str | None = None,
 ) -> dict[str, str]:
-    """Return headers safe to forward from the local proxy to AgentKit."""
+    """Return headers safe to forward from the local proxy to AgentKit.
+
+    ``validated_authorization`` must only contain a credential already validated
+    by the frontend OAuth middleware or its trusted upstream gateway.
+    """
     excluded_headers = {
         # Host/proxy control.
         "host",
@@ -179,6 +185,10 @@ def _build_agentkit_proxy_headers(
     }
     if api_key and api_key.strip():
         headers["Authorization"] = _agentkit_authorization_header(api_key)
+    elif validated_authorization and validated_authorization.strip():
+        headers["Authorization"] = _agentkit_authorization_header(
+            validated_authorization
+        )
     return headers
 
 
@@ -2090,16 +2100,16 @@ def _run_frontend_server(
             logger.error(f"list runtimes failed: {e}", exc_info=True)
             raise HTTPException(status_code=502, detail=str(e))
 
-    # Cache resolved (endpoint, apikey) per runtime so the data-plane proxy does
-    # not call GetRuntime on every request. Short TTL; cleared on a 401.
-    _rt_conn_cache: dict[str, tuple] = {}
+    # Cache resolved (endpoint, apikey, auth type) per runtime so the data-plane
+    # proxy does not call GetRuntime on every request. Short TTL; cleared on a 401.
+    _rt_conn_cache: dict[str, tuple[str, str, str, float]] = {}
 
-    def _resolve_runtime_conn(runtime_id: str, region: str) -> tuple[str, str]:
+    def _resolve_runtime_conn(runtime_id: str, region: str) -> tuple[str, str, str]:
         import time as _time
 
         cached = _rt_conn_cache.get(runtime_id)
-        if cached and cached[2] > _time.time():
-            return cached[0], cached[1]
+        if cached and cached[3] > _time.time():
+            return cached[0], cached[1], cached[2]
         ak, sk, token = _resolve_ve_credentials()
         from agentkit.sdk.runtime.client import AgentkitRuntimeClient
         from agentkit.sdk.runtime import types as _rt
@@ -2118,25 +2128,37 @@ def _run_frontend_server(
         apikey = ""
         auth = getattr(r, "authorizer_configuration", None)
         key_auth = getattr(auth, "key_auth", None) if auth else None
+        custom_jwt_auth = getattr(auth, "custom_jwt_authorizer", None) if auth else None
+        auth_type = "none"
         if key_auth:
             apikey = getattr(key_auth, "api_key", "") or ""
+            auth_type = "key_auth"
+        elif custom_jwt_auth:
+            auth_type = "custom_jwt"
         if not endpoint:
             raise HTTPException(
                 status_code=502, detail="runtime has no public endpoint"
             )
-        _rt_conn_cache[runtime_id] = (endpoint, apikey, _time.time() + 300)
-        return endpoint, apikey
+        _rt_conn_cache[runtime_id] = (
+            endpoint,
+            apikey,
+            auth_type,
+            _time.time() + 300,
+        )
+        return endpoint, apikey, auth_type
 
     @app.api_route(
         "/web/runtime-proxy/{runtime_id}/{path:path}",
         methods=["GET", "POST", "DELETE"],
     )
     async def _runtime_proxy(runtime_id: str, path: str, request: Request):
-        """Proxy a data-plane call to a runtime, injecting its apikey server-side
-        (the browser never sees it). Streams the response so /run_sse works."""
+        """Proxy a data-plane call with its runtime credential injected server-side.
+
+        The browser never sees an API key. Streams the response so /run_sse works.
+        """
         region = request.query_params.get("region", "cn-beijing")
         try:
-            endpoint, apikey = _resolve_runtime_conn(runtime_id, region)
+            endpoint, apikey, auth_type = _resolve_runtime_conn(runtime_id, region)
         except HTTPException:
             raise
         except Exception as e:
@@ -2149,7 +2171,26 @@ def _run_frontend_server(
         # Use the shared proxy header builder so Origin/Referer and other
         # browser-only headers are stripped (the ADK server rejects them with
         # "origin not allowed" / 403 otherwise).
-        headers = _build_agentkit_proxy_headers(dict(request.headers), apikey)
+        validated_authorization = None
+        if auth_type == "custom_jwt":
+            access_token = getattr(request.state, "oauth2_access_token", None)
+            if (
+                getattr(request.state, "oauth2_access_token_validated", False)
+                and access_token
+            ):
+                validated_authorization = access_token
+            elif auth_mode == "gateway":
+                incoming_authorization = request.headers.get("authorization")
+                if _claims_from_forwarded_jwt(incoming_authorization):
+                    validated_authorization = incoming_authorization
+            if not validated_authorization:
+                raise HTTPException(
+                    status_code=401,
+                    detail="OAuth runtime requires an authenticated frontend session",
+                )
+        headers = _build_agentkit_proxy_headers(
+            dict(request.headers), apikey, validated_authorization
+        )
         body = await request.body()
 
         from fastapi.responses import StreamingResponse
