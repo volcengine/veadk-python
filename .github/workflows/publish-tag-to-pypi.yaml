@@ -23,6 +23,14 @@ jobs:
         run: python3 -m pip install build --user --upgrade
       - name: Build wheel and source distribution
         run: python3 -m build
+      - name: Reject distributions over the PyPI file-size limit
+        run: |
+          oversized_file="$(find dist -type f -size +100M -print -quit)"
+          if [ -n "${oversized_file}" ]; then
+            bytes="$(stat -c%s "${oversized_file}")"
+            echo "Distribution exceeds PyPI's 100 MiB limit: ${oversized_file} (${bytes} bytes)"
+            exit 1
+          fi
       - name: Upload distributables as artifact
         uses: actions/upload-artifact@v4
         with:

@@ -36,7 +36,6 @@ piagent_with_mcp/
 ├── requirements.txt
 ├── piagent-mcp-agentkit.yaml        # veadk agentkit launch config
 ├── vendor/
-│   ├── pi-linux-x64.tar.gz          # Pi Linux binary archive for cloud image
 │   └── veadk_python-*.whl           # local VeADK build installed by Dockerfile
 └── agents/
     └── piagent_mcp_agent/
@@ -74,7 +73,9 @@ veadk frontend --agents-dir examples
 Select `piagent_with_mcp` in the app dropdown and ask:
 
 ```text
-Please check Beijing weather, Beijing air quality, and order A10086 status. You must call the relevant tools before answering. Also use the PiAgent E2E skill and include the skill marker.
+Please check Beijing weather, Beijing air quality, and order A10086
+status. You must call the relevant tools before answering. Also use the
+PiAgent E2E skill and include the skill marker.
 ```
 
 You can also test each MCP independently:
@@ -92,13 +93,10 @@ parent directory that contains agent app folders.
 ## Deploy To AgentKit
 
 This example is structured like `examples/piagent_runtime_basic`: AgentKit runs
-`app.py`, which serves the ADK API from the `agents/` directory.
-
-The Dockerfile expects a Linux Pi binary archive at:
-
-```text
-vendor/pi-linux-x64.tar.gz
-```
+`app.py`, which serves the ADK API from the `agents/` directory. During the
+image build, the Dockerfile uses VeADK's PiAgent installer to download Pi
+`v0.80.6` from its GitHub release, verify its SHA256 checksum, and install it
+under `/opt/piagent`.
 
 It also expects exactly one local VeADK wheel at:
 
@@ -118,16 +116,9 @@ cp dist/veadk_python-*.whl examples/piagent_with_mcp/vendor/
 
 The AgentKit image installs this vendored wheel directly, so the cloud runtime
 uses the same local VeADK code that produced the wheel. Re-run `uv build` and
-copy the wheel again whenever the PiAgent runtime code changes.
-
-For local pre-release testing, this can be copied from the basic PiAgent
-example if both examples use the same Pi version:
-
-```bash
-mkdir -p examples/piagent_with_mcp/vendor
-cp examples/piagent_runtime_basic/vendor/pi-linux-x64.tar.gz \
-  examples/piagent_with_mcp/vendor/pi-linux-x64.tar.gz
-```
+copy the wheel again whenever the PiAgent runtime code changes. Override the
+Docker build arguments `PIAGENT_VERSION` and `PIAGENT_SHA256` together when
+testing another Pi release.
 
 Then launch from this example directory:
 
@@ -141,7 +132,9 @@ Invoke after the runtime is ready:
 
 ```bash
 veadk agentkit invoke --config-file piagent-mcp-agentkit.yaml \
-  -m "Please check Beijing weather, Beijing air quality, and order A10086 status. You must call the relevant tools before answering. Also use the PiAgent E2E skill and include the skill marker."
+  -m "Please check Beijing weather, Beijing air quality, and order A10086 \
+status. You must call the relevant tools before answering. Also use the \
+PiAgent E2E skill and include the skill marker."
 ```
 
 Expected runtime logs should include lines similar to:
