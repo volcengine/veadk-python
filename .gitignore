@@ -208,3 +208,6 @@ cython_debug/
 agentkit.yaml
 agentkit*.yaml
 .agentkit/
+
+# PiAgent release archives are downloaded and verified during image builds.
+examples/piagent_with_mcp/vendor/pi-*.tar.gz
