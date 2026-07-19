@@ -263,10 +263,24 @@ export async function deleteSession(
   if (!res.ok && res.status !== 404) throw new Error(`delete session failed: ${res.status}`);
 }
 
-export async function getSessionTrace(sessionId: string): Promise<TraceSpan[]> {
-  const res = await apiFetch(`/debug/trace/session/${sessionId}`);
+export async function getSessionTrace(
+  appName: string,
+  sessionId: string,
+): Promise<TraceSpan[]> {
+  const { app, ep } = resolve(appName);
+  const res = await apiFetch(
+    `/dev/apps/${encodeURIComponent(app)}/debug/trace/session/${encodeURIComponent(sessionId)}`,
+    {},
+    ep,
+  );
   if (!res.ok) throw new Error(`trace failed: ${res.status}`);
-  return res.json();
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    throw new Error("trace failed: 服务端返回了非 JSON 响应");
+  }
+  const spans = (await res.json()) as unknown;
+  if (!Array.isArray(spans)) throw new Error("trace failed: 返回格式无效");
+  return spans as TraceSpan[];
 }
 
 /** The agent-type vocabulary shared with the create wizard. */
@@ -274,6 +288,8 @@ export type AgentNodeType = "llm" | "sequential" | "parallel" | "loop" | "a2a";
 
 /** One node of the recursive agent topology returned by `/web/agent-info`. */
 export interface AgentNode {
+  /** Stable ADK agent identifier used by event.author and transfer actions. */
+  id?: string;
   name: string;
   description: string;
   type: AgentNodeType;
@@ -400,6 +416,7 @@ export interface DeployStage {
   phase: "build" | "deploy" | "publish" | string;
   message: string;
   pct?: number;
+  runtimeName?: string;
 }
 
 interface DeployFrame extends Partial<DeployAgentkitResult> {
@@ -408,6 +425,8 @@ interface DeployFrame extends Partial<DeployAgentkitResult> {
   error?: string;
   phase?: string;
 }
+
+const deploymentControllers = new Map<string, AbortController>();
 
 /** Deploy to AgentKit, consuming the server's SSE progress stream. `onStage`
  *  is called for each build/deploy/publish step; resolves with the connection
@@ -427,6 +446,7 @@ export async function deployAgentkitProject(
   },
   opts?: {
     author?: string;
+    taskId?: string;
     onStage?: (s: DeployStage) => void;
     im?: {
       feishu?: {
@@ -436,32 +456,56 @@ export async function deployAgentkitProject(
     envs?: { key: string; value: string }[];
   },
 ): Promise<DeployAgentkitResult> {
-  const res = await apiFetch("/web/deploy-agentkit", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      name,
-      files,
-      config,
-      author: opts?.author ?? "",
-      im: opts?.im,
-      envs: opts?.envs,
-    }),
-  });
+  const taskId = opts?.taskId;
+  const controller = taskId ? new AbortController() : undefined;
+  if (taskId && controller) deploymentControllers.set(taskId, controller);
+  const clearController = () => {
+    if (taskId && deploymentControllers.get(taskId) === controller) {
+      deploymentControllers.delete(taskId);
+    }
+  };
+
+  let res: Response;
+  try {
+    res = await apiFetch("/web/deploy-agentkit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller?.signal,
+      body: JSON.stringify({
+        name,
+        files,
+        config,
+        taskId,
+        author: opts?.author ?? "",
+        im: opts?.im,
+        envs: opts?.envs,
+      }),
+    });
+  } catch (error) {
+    clearController();
+    throw error;
+  }
   if (!res.ok) {
     const t = await res.text().catch(() => "");
+    clearController();
     throw new Error(t || `部署失败 (${res.status})`);
   }
 
   let final: DeployFrame | null = null;
-  for await (const raw of parseSSE(res)) {
-    const ev = raw as DeployFrame & DeployStage;
-    if (ev && ev.done) {
-      final = ev;
-      break;
+  try {
+    for await (const raw of parseSSE(res)) {
+      const ev = raw as DeployFrame & DeployStage;
+      if (ev && ev.done) {
+        final = ev;
+        break;
+      }
+      if (ev && ev.message) opts?.onStage?.(ev);
     }
-    if (ev && ev.message) opts?.onStage?.(ev);
+  } catch (error) {
+    clearController();
+    throw error;
   }
+  clearController();
 
   if (!final) throw new Error("部署失败：连接中断");
   if (!final.success) throw new Error(final.error || "部署失败");
@@ -480,6 +524,21 @@ export async function deployAgentkitProject(
     region: final.region,
     feishuChannel: final.feishuChannel,
   };
+}
+
+/** Cancel an in-flight deployment and ask the backend to destroy its Runtime. */
+export async function cancelAgentkitDeployment(taskId: string): Promise<void> {
+  const res = await apiFetch("/web/cancel-deploy-agentkit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ taskId }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || `取消部署失败 (${res.status})`);
+  }
+  deploymentControllers.get(taskId)?.abort();
+  deploymentControllers.delete(taskId);
 }
 
 /** A deployed runtime owned by the current user (for the "管理 Agent" view). */

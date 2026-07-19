@@ -21,6 +21,34 @@ function totalNodes(node: AgentNode): number {
   return 1 + node.children.reduce((n, c) => n + totalNodes(c), 0);
 }
 
+function nodeId(node: AgentNode): string {
+  return node.id || node.name;
+}
+
+/** Older generated runtimes exposed only Python variable names. Keep those
+ *  identifiers for event matching, but do not leak them into the UI. */
+function legacyDisplayName(node: AgentNode, isRoot: boolean): string {
+  const id = nodeId(node);
+  if (node.id && node.name && node.name !== id) return node.name;
+  if (isRoot && id === "agent") return "主 Agent";
+  const subAgent = /^agent_sub_(\d+)$/.exec(id);
+  return subAgent ? `子 Agent ${subAgent[1]}` : node.name || id;
+}
+
+function normalizeLegacyNames(node: AgentNode, isRoot = true): AgentNode {
+  return {
+    ...node,
+    id: nodeId(node),
+    name: legacyDisplayName(node, isRoot),
+    children: node.children.map((child) => normalizeLegacyNames(child, false)),
+  };
+}
+
+function collectDisplayNames(node: AgentNode, names: Map<string, string>): void {
+  names.set(nodeId(node), node.name || nodeId(node));
+  node.children.forEach((child) => collectDisplayNames(child, names));
+}
+
 function TopoNode({
   node,
   activeAgent,
@@ -35,12 +63,13 @@ function TopoNode({
 }) {
   const meta = TYPE_META[node.type] ?? TYPE_META.llm;
   const Icon = meta.icon;
-  const named = Boolean(node.name);
-  const active = named && node.name === activeAgent;
+  const id = nodeId(node);
+  const named = Boolean(id);
+  const active = named && id === activeAgent;
   // On the delegation chain but not the leaf being executed → an ancestor that
   // handed off. Highlighted more softly than the active node.
-  const onPath = named && !active && path.has(node.name);
-  const done = named && !active && !onPath && seen.has(node.name);
+  const onPath = named && !active && path.has(id);
+  const done = named && !active && !onPath && seen.has(id);
   return (
     <div className="topo-branch">
       <div
@@ -62,7 +91,7 @@ function TopoNode({
         <div className="topo-children">
           {node.children.map((c, i) => (
             <TopoNode
-              key={`${c.name}-${i}`}
+              key={`${nodeId(c)}-${i}`}
               node={c}
               activeAgent={activeAgent}
               seen={seen}
@@ -99,7 +128,9 @@ export function AgentTopology({
     if (!appName) return;
     getAgentInfo(appName)
       .then((info) => {
-        if (!cancelled) setGraph(info.graph ?? null);
+        if (!cancelled) {
+          setGraph(info.graph ? normalizeLegacyNames(info.graph) : null);
+        }
       })
       .catch(() => {
         if (!cancelled) setGraph(null);
@@ -114,6 +145,8 @@ export function AgentTopology({
   if (!graph || graph.children.length === 0) return null;
 
   const pathSet = new Set(execPath);
+  const displayNames = new Map<string, string>();
+  collectDisplayNames(graph, displayNames);
 
   return (
     <aside className="topo" aria-label="Agent 拓扑">
@@ -134,7 +167,7 @@ export function AgentTopology({
                     : "topo-path-name"
                 }
               >
-                {name}
+                {displayNames.get(name) ?? name}
               </span>
             </span>
           ))}

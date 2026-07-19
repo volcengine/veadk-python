@@ -1,4 +1,4 @@
-import { Fragment, useRef, useState } from "react";
+import { Fragment, type ReactNode, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Cpu, Loader2, Wrench } from "lucide-react";
 import { getAgentInfo, type AgentInfo } from "../adk/client";
 
@@ -18,33 +18,57 @@ export interface NavbarProps {
   title?: string;
   /** When set, the left side shows a breadcrumb trail (takes priority over title). */
   crumbs?: Crumb[];
+  /** Persistent app-level status rendered on the far right. */
+  rightContent?: ReactNode;
 }
 
 /** Top bar inside the main panel: agent picker / title / breadcrumb on the left.
  *  (The account block lives at the bottom of the sidebar.) */
-export function Navbar({ apps, appName, onAppChange, agentLabel, title, crumbs }: NavbarProps) {
+export function Navbar({
+  apps,
+  appName,
+  onAppChange,
+  agentLabel,
+  title,
+  crumbs,
+  rightContent,
+}: NavbarProps) {
   return (
     <div className="navbar">
-      {crumbs && crumbs.length > 0 ? (
-        <nav className="navbar-crumbs" aria-label="面包屑">
-          {crumbs.map((c, i) => (
-            <Fragment key={i}>
-              {i > 0 && <ChevronRight className="crumb-sep" />}
-              {c.onClick ? (
-                <button className="crumb crumb-link" onClick={c.onClick}>
-                  {c.label}
-                </button>
-              ) : (
-                <span className="crumb crumb-current">{c.label}</span>
-              )}
-            </Fragment>
-          ))}
-        </nav>
-      ) : title ? (
-        <div className="navbar-title">{title}</div>
-      ) : (
-        <AgentSelect apps={apps} appName={appName} onAppChange={onAppChange} agentLabel={agentLabel} />
-      )}
+      <div className="navbar-left">
+        <div className="navbar-default">
+          {crumbs && crumbs.length > 0 ? (
+            <nav className="navbar-crumbs" aria-label="面包屑">
+              {crumbs.map((c, i) => (
+                <Fragment key={i}>
+                  {i > 0 && <ChevronRight className="crumb-sep" />}
+                  {c.onClick ? (
+                    <button className="crumb crumb-link" onClick={c.onClick}>
+                      {c.label}
+                    </button>
+                  ) : (
+                    <span className="crumb crumb-current">{c.label}</span>
+                  )}
+                </Fragment>
+              ))}
+            </nav>
+          ) : title ? (
+            <div className="navbar-title">{title}</div>
+          ) : (
+            <AgentSelect
+              apps={apps}
+              appName={appName}
+              onAppChange={onAppChange}
+              agentLabel={agentLabel}
+            />
+          )}
+        </div>
+        <div id="veadk-page-header-left" className="navbar-portal-slot" />
+      </div>
+      <div className="navbar-right">
+        <div id="veadk-page-header-actions" className="navbar-portal-actions" />
+        {rightContent}
+      </div>
     </div>
   );
 }
@@ -170,4 +194,3 @@ function AgentFlyout({ state, top }: { state: InfoState; top: number }) {
     </div>
   );
 }
-

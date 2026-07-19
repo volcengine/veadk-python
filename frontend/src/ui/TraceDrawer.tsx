@@ -84,11 +84,12 @@ function attrs(span: TraceSpan): Attr[] {
 }
 
 export interface TraceDrawerProps {
+  appName: string;
   sessionId: string;
   onClose: () => void;
 }
 
-export function TraceDrawer({ sessionId, onClose }: TraceDrawerProps) {
+export function TraceDrawer({ appName, sessionId, onClose }: TraceDrawerProps) {
   const [spans, setSpans] = useState<TraceSpan[] | null>(null);
   const [err, setErr] = useState("");
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
@@ -97,13 +98,13 @@ export function TraceDrawer({ sessionId, onClose }: TraceDrawerProps) {
   useEffect(() => {
     setSpans(null);
     setErr("");
-    getSessionTrace(sessionId)
+    getSessionTrace(appName, sessionId)
       .then((s) => {
         setSpans(s);
         setSelectedId(s.length ? s.reduce((a, b) => (a.start_time <= b.start_time ? a : b)).span_id : null);
       })
       .catch((e) => setErr(String(e)));
-  }, [sessionId]);
+  }, [appName, sessionId]);
 
   const { rootNodes, min, total } = useMemo(() => buildTree(spans ?? []), [spans]);
   const rows = useMemo(() => flatten(rootNodes, collapsed), [rootNodes, collapsed]);

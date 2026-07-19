@@ -187,6 +187,7 @@ class _Acc:
         self.env: list[EnvVar] = list(MODEL_ENV)
         self.extras: set[str] = set()
         self.used_names: set[str] = set()
+        self.agent_display_names: dict[str, str] = {}
 
 
 def normalize_and_validate_draft(raw: Any) -> AgentDraft:
@@ -202,6 +203,13 @@ def ident(raw: str, fallback: str) -> str:
     if not s or s[0].isdigit():
         return f"a_{s}" if s else fallback
     return s
+
+
+def _agent_name(acc: _Acc, draft: AgentDraft, fallback: str) -> str:
+    """Return the ADK-safe id while retaining the user-facing Agent name."""
+    agent_name = ident(draft.name, fallback)
+    acc.agent_display_names[agent_name] = draft.name.strip() or agent_name
+    return agent_name
 
 
 def _py_str(value: str) -> str:
@@ -264,7 +272,7 @@ def _build_orchestrator(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
         sub_vars.append(child_var)
 
     kwargs = [
-        f"name={_py_str(ident(draft.name, var_name))}",
+        f"name={_py_str(_agent_name(acc, draft, var_name))}",
         f"description={_py_str(draft.description or draft.name or 'A VeADK orchestrator agent.')}",
     ]
     if draft.agentType == "loop":
@@ -280,7 +288,7 @@ def _build_orchestrator(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
 def _build_a2a(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
     _add_import(acc, "from veadk.a2a.remote_ve_agent import RemoteVeAgent")
     kwargs = [
-        f"name={_py_str(ident(draft.name, var_name))}",
+        f"name={_py_str(_agent_name(acc, draft, var_name))}",
         f"url={_py_str((draft.a2aUrl or '').strip())}",
     ]
     joined_kwargs = ",\n    ".join(kwargs)
@@ -375,7 +383,7 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
         tool_exprs.append(v)
 
     kwargs = [
-        f"name={_py_str(ident(draft.name, var_name))}",
+        f"name={_py_str(_agent_name(acc, draft, var_name))}",
         f"description={_py_str(draft.description or draft.name or 'A VeADK agent.')}",
         f"instruction=INSTRUCTION_{var_name.upper()}",
     ]
@@ -585,7 +593,7 @@ from pathlib import Path
 from agentkit.apps import AgentkitAgentServerApp
 from fastapi.staticfiles import StaticFiles
 from veadk.memory.short_term_memory import ShortTermMemory
-from agents.{pkg}.agent import root_agent
+from agents.{pkg}.agent import AGENT_DISPLAY_NAMES, root_agent
 
 # Deployment configuration
 HOST = os.getenv("HOST", "0.0.0.0")
@@ -650,8 +658,10 @@ def build_app():
         children = []
         if depth < 8:
             children = [_agent_node(s, depth + 1) for s in getattr(a, "sub_agents", []) or []]
+        agent_id = getattr(a, "name", "") or ""
         return {{
-            "name": getattr(a, "name", "") or "",
+            "id": agent_id,
+            "name": AGENT_DISPLAY_NAMES.get(agent_id, agent_id),
             "description": getattr(a, "description", "") or "",
             "type": _agent_type(a),
             "model": _model_name(getattr(a, "model", "")),
@@ -665,12 +675,16 @@ def build_app():
         if app_name != expected_name:
             raise _HTTPException(status_code=404, detail="unknown agent: " + app_name)
         return {{
-            "name": expected_name or app_name,
+            "id": expected_name,
+            "name": AGENT_DISPLAY_NAMES.get(expected_name, expected_name or app_name),
             "description": getattr(root_agent, "description", "") or "",
             "type": _agent_type(root_agent),
             "model": _model_name(getattr(root_agent, "model", "")),
             "tools": [_tool_label(t) for t in getattr(root_agent, "tools", []) or []],
-            "subAgents": [getattr(s, "name", "") for s in getattr(root_agent, "sub_agents", []) or []],
+            "subAgents": [
+                AGENT_DISPLAY_NAMES.get(getattr(s, "name", ""), getattr(s, "name", ""))
+                for s in getattr(root_agent, "sub_agents", []) or []
+            ],
             "graph": _agent_node(root_agent),
         }}
 
@@ -680,7 +694,11 @@ def build_app():
         # root agent + recursive sub-agent tree, with no /list-apps discovery
         # needed. Used by the VeADK "管理 Agent" view.
         return {{
-            "name": getattr(root_agent, "name", "") or "",
+            "id": getattr(root_agent, "name", "") or "",
+            "name": AGENT_DISPLAY_NAMES.get(
+                getattr(root_agent, "name", "") or "",
+                getattr(root_agent, "name", "") or "",
+            ),
             "description": getattr(root_agent, "description", "") or "",
             "type": _agent_type(root_agent),
             "model": _model_name(getattr(root_agent, "model", "")),
@@ -918,7 +936,8 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
     import_block = "\n".join(["from veadk import Agent", *_dedupe_imports(acc.imports)])
     agent_definition = (
         "\n\n".join(acc.pre_lines)
-        + "\n\n# ADK 加载器要求：顶层 agent 必须命名为 root_agent\nroot_agent = agent\n"
+        + f"\n\nAGENT_DISPLAY_NAMES = {acc.agent_display_names!r}\n"
+        + "\n# ADK 加载器要求：顶层 agent 必须命名为 root_agent\nroot_agent = agent\n"
     )
     agent_py = f"{import_block}\n\n{agent_definition}"
 
@@ -931,7 +950,10 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
         GeneratedFile(path=f"agents/{pkg}/agent.py", content=agent_py),
         GeneratedFile(
             path=f"agents/{pkg}/__init__.py",
-            content='from .agent import root_agent\n\n__all__ = ["root_agent"]\n',
+            content=(
+                "from .agent import AGENT_DISPLAY_NAMES, root_agent\n\n"
+                '__all__ = ["AGENT_DISPLAY_NAMES", "root_agent"]\n'
+            ),
         ),
         GeneratedFile(
             path=".env.example", content=render_env_example(_dedupe_env(acc.env))

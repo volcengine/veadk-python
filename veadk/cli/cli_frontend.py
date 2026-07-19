@@ -29,6 +29,7 @@ import os
 import sys
 
 from pathlib import Path
+from typing import Any
 
 import click
 
@@ -671,8 +672,10 @@ def _run_frontend_server(
                 _agent_node(s, depth + 1)
                 for s in getattr(agent, "sub_agents", []) or []
             ]
+        agent_name = getattr(agent, "name", "") or ""
         return {
-            "name": getattr(agent, "name", "") or "",
+            "id": agent_name,
+            "name": agent_name,
             "description": getattr(agent, "description", "") or "",
             "type": _agent_type(agent),
             "model": _model_name(getattr(agent, "model", "")),
@@ -1452,6 +1455,67 @@ def _run_frontend_server(
     import threading as _threading
 
     _deploy_lock = _threading.Lock()
+    _deploy_tasks_lock = _threading.Lock()
+    _deploy_tasks: dict[str, dict[str, Any]] = {}
+
+    def _delete_agentkit_runtime(runtime_id: str, region: str) -> None:
+        """Delete one AgentKit Runtime through the control plane."""
+        from agentkit.sdk.runtime import types as _rt
+        from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+        ak, sk, token = _resolve_ve_credentials()
+        client = AgentkitRuntimeClient(
+            access_key=ak,
+            secret_key=sk,
+            session_token=token or "",
+            region=region,
+        )
+        client.delete_runtime(_rt.DeleteRuntimeRequest(RuntimeId=runtime_id))
+
+    def _destroy_deploy_task_runtime(task: dict[str, Any]) -> bool:
+        """Destroy a task's Runtime once, if creation has reached that stage."""
+        with _deploy_tasks_lock:
+            runtime_id = str(task.get("runtime_id") or "")
+            if not runtime_id or task.get("destroyed") or task.get("destroying"):
+                return False
+            task["destroying"] = True
+            region = str(task.get("region") or "cn-beijing")
+
+        try:
+            _delete_agentkit_runtime(runtime_id, region)
+        except Exception:
+            with _deploy_tasks_lock:
+                task["destroying"] = False
+            raise
+
+        with _deploy_tasks_lock:
+            task["destroying"] = False
+            task["destroyed"] = True
+        return True
+
+    @app.post("/web/cancel-deploy-agentkit")
+    async def _cancel_deploy_to_agentkit(request: Request):
+        """Cancel a deployment and destroy any Runtime it already created."""
+        data = await request.json()
+        task_id = str(data.get("taskId") or "").strip()
+        if not task_id:
+            raise HTTPException(status_code=400, detail="taskId is required")
+        with _deploy_tasks_lock:
+            task = _deploy_tasks.get(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Deployment task not found")
+
+        task["cancel_event"].set()
+        try:
+            destroyed = _destroy_deploy_task_runtime(task)
+        except Exception as e:
+            logger.error("cancel deployment cleanup failed: %s", e, exc_info=True)
+            raise HTTPException(status_code=502, detail=str(e)) from e
+        return {
+            "success": True,
+            "runtimeId": str(task.get("runtime_id") or ""),
+            "destroyed": destroyed or bool(task.get("destroyed")),
+        }
 
     @app.post("/web/deploy-agentkit")
     async def _deploy_to_agentkit(request: Request):
@@ -1477,6 +1541,7 @@ def _run_frontend_server(
         agent_name = (data.get("name") or "").strip()
         files = data.get("files", [])
         config = data.get("config", {})
+        task_id = str(data.get("taskId") or f"deploy-{id(request)}").strip()
         author = (data.get("author") or "").strip()
         if not agent_name:
             raise HTTPException(status_code=400, detail="Agent name is required")
@@ -1589,8 +1654,6 @@ def _run_frontend_server(
         }
         if runtime_network:
             cloud_config["runtime_network"] = runtime_network
-        if feishu_enabled:
-            cloud_config["min_instance"] = 1
         if region and region != "cn-beijing":
             region_suffix = region.split("-")[-1]  # "shanghai" from "cn-shanghai"
             try:
@@ -1620,6 +1683,14 @@ def _run_frontend_server(
             _yaml.dump(agentkit_config, allow_unicode=True), encoding="utf-8"
         )
 
+        task_state: dict[str, Any] = {
+            "cancel_event": _threading.Event(),
+            "runtime_id": "",
+            "runtime_name": "",
+            "region": region,
+            "destroyed": False,
+            "destroying": False,
+        }
         events: "_queue.Queue" = _queue.Queue()
         state = {"phase": "build"}
 
@@ -1689,6 +1760,14 @@ def _run_frontend_server(
         def _emit(level: str, message: str, pct=None):
             state["phase"] = _classify(message)
             ev = {"level": level, "phase": state["phase"], "message": message}
+            for marker in ("Generated Runtime name:", "Creating Runtime:"):
+                if marker in message:
+                    runtime_name = message.split(marker, 1)[1].strip()
+                    if runtime_name:
+                        task_state["runtime_name"] = runtime_name
+                    break
+            if task_state["runtime_name"]:
+                ev["runtimeName"] = task_state["runtime_name"]
             if pct is not None:
                 ev["pct"] = pct
             events.put(ev)
@@ -1764,13 +1843,30 @@ def _run_frontend_server(
                         )
 
                     def _tagged_create(self, req, _orig=orig_create, _extra=extra):
+                        if task_state["cancel_event"].is_set():
+                            raise RuntimeError("Deployment cancelled")
                         req.tags = [*(req.tags or []), *_extra]
                         # The AgentKit runner hard-codes apmplus_enable=True on
                         # every runtime; force it off so the container doesn't
                         # try to fetch an APMPlus app-key with the deployer's
                         # AK/SK at boot (breaks for STS temp credentials).
                         req.apmplus_enable = False
-                        return _orig(self, req)
+                        created = _orig(self, req)
+                        runtime_id = str(
+                            getattr(created, "runtime_id", "")
+                            or getattr(
+                                getattr(created, "agent_kit_runtime", None),
+                                "runtime_id",
+                                "",
+                            )
+                        )
+                        if runtime_id:
+                            with _deploy_tasks_lock:
+                                task_state["runtime_id"] = runtime_id
+                        if task_state["cancel_event"].is_set():
+                            _destroy_deploy_task_runtime(task_state)
+                            raise RuntimeError("Deployment cancelled")
+                        return created
 
                     rt_client.create_runtime = _tagged_create
                 except Exception as e:
@@ -1809,7 +1905,26 @@ def _run_frontend_server(
                 finally:
                     if rt_client is not None and orig_create is not None:
                         rt_client.create_runtime = orig_create
-            events.put(None)  # sentinel: launch finished
+                    if task_state["cancel_event"].is_set():
+                        try:
+                            _destroy_deploy_task_runtime(task_state)
+                        except Exception as e:
+                            logger.error(
+                                "cancelled deployment cleanup failed: %s",
+                                e,
+                                exc_info=True,
+                            )
+                    with _deploy_tasks_lock:
+                        _deploy_tasks.pop(task_id, None)
+                    events.put(None)  # sentinel: launch finished
+
+        with _deploy_tasks_lock:
+            if task_id in _deploy_tasks:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                raise HTTPException(
+                    status_code=409, detail="Deployment task already exists"
+                )
+            _deploy_tasks[task_id] = task_state
 
         _threading.Thread(target=_run, daemon=True).start()
 
@@ -1837,10 +1952,15 @@ def _run_frontend_server(
                     dr = getattr(res, "deploy_result", None) if res else None
                     if res is not None and getattr(res, "success", False):
                         meta = (dr.metadata if (dr and dr.metadata) else {}) or {}
+                        runtime_name = str(
+                            meta.get("runtime_name")
+                            or task_state.get("runtime_name")
+                            or agent_name
+                        )
                         final.update(
                             {
                                 "success": True,
-                                "agentName": agent_name,
+                                "agentName": runtime_name,
                                 "url": getattr(dr, "endpoint_url", None)
                                 if dr
                                 else None,
@@ -1946,15 +2066,8 @@ def _run_frontend_server(
         region = (data.get("region") or "cn-beijing").strip()
         if not runtime_id:
             raise HTTPException(status_code=400, detail="runtimeId is required")
-        ak, sk, token = _resolve_ve_credentials()
         try:
-            from agentkit.sdk.runtime.client import AgentkitRuntimeClient
-            from agentkit.sdk.runtime import types as _rt
-
-            client = AgentkitRuntimeClient(
-                access_key=ak, secret_key=sk, session_token=token, region=region
-            )
-            client.delete_runtime(_rt.DeleteRuntimeRequest(runtime_id=runtime_id))
+            _delete_agentkit_runtime(runtime_id, region)
             return {"success": True}
         except Exception as e:
             logger.error(f"delete runtime failed: {e}", exc_info=True)

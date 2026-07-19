@@ -51,20 +51,20 @@ from veadk.cli.generated_agent_skills import (
 # codegen became the trusted implementation. They intentionally lock the full
 # generated file contents, not just Python syntax or selected snippets.
 _MINIMAL_FRONTEND_GOLDEN = {
-    "app.py": "511034ddfc2a9583fa61f57b489cbe082485659b75361e26fa01511c7b7b852e",
+    "app.py": "76fb40c6016bf2b70e35012d050b6a0e5be36233b6044e83e1002a3f71150bfb",
     "agents/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "agents/demo_agent/agent.py": "775b0ed7d2fe999d5c9500edab215a5e039655ccbb0a7903b685eae83abcb5c0",
-    "agents/demo_agent/__init__.py": "cf719fbb91c38fadd2681edc257a06694f435fa4fabe4679a3f7097fc344f8a3",
+    "agents/demo_agent/agent.py": "6e5bbd448439c7f50f5400227680130e897dd71e8251cb4eb4594c98f4889589",
+    "agents/demo_agent/__init__.py": "acb6368da255ff70d6760c00085c893aa0b2d973768d293a22bb7181fb1e3448",
     ".env.example": "1cdb6e1bfe38616d5d46095ba88ba76a0c189f3d2999bf0dd23b7145ce103ab2",
     "requirements.txt": "a7bb29cb47b916a81b626907fcdf84eed525ca22b4214ddc82f96a5ba87c8cc8",
     "README.md": "16cbec845b595949c071f3bcf4c056d862b9e2277c00e5d23649b5540dfde83e",
 }
 
 _FULL_FRONTEND_GOLDEN = {
-    "app.py": "9fd1837bc29b57a5dac61da9f951e3abf37b23756d4392ab0409e609aba7a919",
+    "app.py": "bce061ef2a9db0ba8fa2c82c94ae682f166d96bca4d580e99fcaacca71b9a682",
     "agents/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "agents/full_agent/agent.py": "f14d0bfdf0e604ea5a6ca47aa7e9b21d8c15e62c29602cc206b7530af66b0fd9",
-    "agents/full_agent/__init__.py": "cf719fbb91c38fadd2681edc257a06694f435fa4fabe4679a3f7097fc344f8a3",
+    "agents/full_agent/agent.py": "d77ee467c4895b1a160927fb551a65d424b68319fc2941014dc5d499edbace68",
+    "agents/full_agent/__init__.py": "acb6368da255ff70d6760c00085c893aa0b2d973768d293a22bb7181fb1e3448",
     ".env.example": "cb35eed98b4155c755df934f61ca6760293d59508de0a6090632e44501f82748",
     "requirements.txt": "5230e5c9a20b97dc95cc753247b4240d7401d9f9b46aa62da851c91552061ba7",
     "README.md": "ce6e5ada2031657b5de320465a34cb8c066c6c4181ab111dfb40299d3ec0bcd0",
@@ -169,6 +169,23 @@ def test_full_project_matches_frontend_codegen_golden() -> None:
 
     assert project.name == "full_agent"
     assert _content_hashes(project) == _FULL_FRONTEND_GOLDEN
+
+
+def test_codegen_preserves_agent_display_names_for_topology() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="客服智能体",
+            subAgents=[AgentDraft(name="订单助手", instruction="处理订单")],
+        )
+    )
+    files = _file_map(project)
+    agent_py = files["agents/my_agent/agent.py"]
+    app_py = files["app.py"]
+
+    assert "'agent': '客服智能体'" in agent_py
+    assert "'agent_sub_1': '订单助手'" in agent_py
+    assert '"id": agent_id' in app_py
+    assert '"name": AGENT_DISPLAY_NAMES.get(agent_id, agent_id)' in app_py
 
 
 def test_frontend_complete_shape_is_accepted_and_unknown_field_is_rejected() -> None:

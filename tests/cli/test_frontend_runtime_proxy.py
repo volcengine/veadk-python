@@ -128,6 +128,7 @@ def test_runtime_proxy_uses_authorizer_credential(
     )
 
     upstream_headers: dict[str, str] = {}
+    upstream_url = ""
 
     class _FakeUpstreamResponse:
         status_code = 200
@@ -152,6 +153,8 @@ def test_runtime_proxy_uses_authorizer_credential(
             headers: dict[str, str],
             content: bytes,
         ) -> object:
+            nonlocal upstream_url
+            upstream_url = url
             upstream_headers.update(headers)
             return object()
 
@@ -165,9 +168,14 @@ def test_runtime_proxy_uses_authorizer_credential(
 
     with TestClient(app) as client:
         response = client.get(
-            "/web/runtime-proxy/runtime-1/list-apps?region=cn-beijing"
+            "/web/runtime-proxy/runtime-1/dev/apps/demo_agent/debug/trace/"
+            "session/session-1"
+            "?region=cn-beijing"
         )
 
     assert response.status_code == 200
     assert response.json() == ["demo_agent"]
+    assert upstream_url == (
+        "https://runtime.example/dev/apps/demo_agent/debug/trace/session/session-1"
+    )
     assert upstream_headers["Authorization"] == expected_authorization
