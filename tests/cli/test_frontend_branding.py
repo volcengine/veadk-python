@@ -138,6 +138,10 @@ def test_studio_deploy_bundles_logo_and_optional_title(
     monkeypatch.setattr(
         "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
     )
+    monkeypatch.setattr(
+        "veadk.cli.studio_deploy_serverless_iam.ensure_serverless_application_role",
+        lambda *_: False,
+    )
 
     args = [
         "deploy",
