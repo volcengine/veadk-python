@@ -3,6 +3,7 @@
 // (the browser never sees credentials) and are gated by SSO when enabled.
 
 import type { ProjectFile } from "../project";
+import { DEFAULT_REQUEST_TIMEOUT_MS, requestSignal } from "../../adk/timeout";
 import type { SkillHit } from "./types";
 
 export interface SkillSpaceRef {
@@ -30,7 +31,10 @@ export interface SkillDetail {
 }
 
 async function jfetch<T>(url: string): Promise<T> {
-  const res = await fetch(url, { headers: { accept: "application/json" } });
+  const res = await fetch(url, {
+    headers: { accept: "application/json" },
+    signal: requestSignal(undefined, DEFAULT_REQUEST_TIMEOUT_MS),
+  });
   if (res.status === 409) {
     throw new Error("服务端未配置 Volcengine AK/SK，无法访问 SkillSpace");
   }

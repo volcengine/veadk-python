@@ -1769,6 +1769,29 @@ body {
 
 /* ---------- boot (resolving identity) ---------- */
 .boot { height: 100vh; background: hsl(var(--background)); }
+.boot-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: hsl(var(--foreground));
+  font-size: 14px;
+}
+.boot-error p { margin: 0; }
+.boot-error button,
+.login-provider-error button {
+  padding: 7px 18px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.boot-error button:hover,
+.login-provider-error button:hover { background: hsl(var(--accent)); }
 
 /* ---------- main navbar (agent picker + account) ---------- */
 .navbar {
@@ -2714,6 +2737,15 @@ a.search-result { text-decoration: none; color: inherit; }
 }
 
 .login-providers { display: flex; flex-direction: column; gap: 10px; }
+.login-provider-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  color: hsl(var(--destructive));
+  font-size: 13px;
+}
+.login-provider-error p { margin: 0; }
 
 /* login: no-SSO username input */
 .login-name { display: flex; align-items: center; gap: 8px; }

@@ -280,6 +280,27 @@ export function ManageAgentsView({
   );
 }
 
+/** Env keys whose values are commonly credentials. */
+const SENSITIVE_ENV_RE = /KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL/i;
+
+function EnvValue({ envKey, value }: { envKey: string; value: string }) {
+  const [revealed, setRevealed] = useState(false);
+  if (!SENSITIVE_ENV_RE.test(envKey) || revealed) {
+    return <code className="manage-env-v">{value}</code>;
+  }
+  return (
+    <button
+      type="button"
+      className="manage-env-v manage-env-masked"
+      title="敏感值已隐藏，点击显示"
+      aria-label={`显示 ${envKey} 的值`}
+      onClick={() => setRevealed(true)}
+    >
+      ••••••••
+    </button>
+  );
+}
+
 /** Renders the control-plane detail fields (model, resources, envs, ids). */
 function RuntimeDetailCard({ detail }: { detail: RuntimeDetail }) {
   const r = detail.resources;
@@ -322,7 +343,7 @@ function RuntimeDetailCard({ detail }: { detail: RuntimeDetail }) {
           {detail.envs.map((e) => (
             <div key={e.key} className="manage-env">
               <code className="manage-env-k">{e.key}</code>
-              <code className="manage-env-v">{e.value}</code>
+              <EnvValue envKey={e.key} value={e.value} />
             </div>
           ))}
         </div>

@@ -5,7 +5,9 @@
 // loads and shows its own login page. `/oauth2/userinfo` tells us the state:
 //   200 -> authenticated (use the returned identity)
 //   401 -> SSO enabled but not signed in (show the login page)
-//   404/err -> SSO not configured (local dev; use a default id)
+//   404 -> SSO not configured on legacy servers (local username mode)
+
+import { BOOT_REQUEST_TIMEOUT_MS, requestSignal } from "./timeout";
 
 const LOCAL_USER_KEY = "veadk_local_user";
 
@@ -54,13 +56,28 @@ export interface Provider {
 
 /** Fetch the SSO providers the server has configured (unauthenticated). */
 export async function fetchProviders(): Promise<Provider[]> {
+  let res: Response;
   try {
-    const res = await fetch("/web/auth-config", { headers: { Accept: "application/json" } });
-    if (!res.ok) return [];
-    const data = (await res.json()) as { providers?: Provider[] };
-    return Array.isArray(data.providers) ? data.providers : [];
-  } catch {
-    return [];
+    res = await fetch("/web/auth-config", {
+      headers: { Accept: "application/json" },
+      signal: requestSignal(undefined, BOOT_REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    console.warn("[identity] /web/auth-config is unreachable:", error);
+    throw new Error("无法加载登录配置，请检查网络后重试。");
+  }
+  if (!res.ok) {
+    throw new Error(`登录配置服务异常（HTTP ${res.status}），请稍后重试。`);
+  }
+  try {
+    const data = (await res.json()) as { providers?: unknown };
+    if (!Array.isArray(data.providers)) {
+      throw new TypeError("providers is not an array");
+    }
+    return data.providers as Provider[];
+  } catch (error) {
+    console.warn("[identity] /web/auth-config returned an invalid response:", error);
+    throw new Error("登录配置服务返回了无法解析的响应，请稍后重试。");
   }
 }
 
@@ -81,27 +98,44 @@ export function logout(): void {
 }
 
 /** Resolve identity. With SSO: via /oauth2/userinfo. Without SSO (endpoint 404):
- *  use a locally chosen username, or prompt for one on the login page. */
+ *  use a locally chosen username, or prompt for one on the login page.
+ *
+ *  Network and server failures reject instead of silently changing identity
+ *  mode. The caller can then show a retryable error. */
 export async function resolveIdentity(): Promise<Identity> {
-  let res: Response | null = null;
+  let res: Response;
   try {
-    res = await fetch("/oauth2/userinfo", { headers: { Accept: "application/json" } });
-  } catch {
-    res = null;
+    res = await fetch("/oauth2/userinfo", {
+      headers: { Accept: "application/json" },
+      signal: requestSignal(undefined, BOOT_REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    console.warn("[identity] /oauth2/userinfo is unreachable:", error);
+    throw new Error("无法连接身份服务，请检查网络后重试。");
   }
 
   // SSO enabled, signed in.
-  if (res && res.ok) {
-    const info = (await res.json()) as Record<string, unknown>;
+  if (res.ok) {
+    let info: Record<string, unknown>;
+    try {
+      info = (await res.json()) as Record<string, unknown>;
+    } catch (error) {
+      console.warn("[identity] /oauth2/userinfo returned a non-JSON response:", error);
+      throw new Error("身份服务返回了无法解析的响应，请稍后重试。");
+    }
     const userId = String(info.sub ?? info.user_id ?? info.email ?? "");
     return { status: "authenticated", userId, info };
   }
   // SSO enabled, not signed in -> provider login page.
-  if (res && res.status === 401) {
+  if (res.status === 401) {
     return { status: "unauthenticated", userId: "", local: false };
   }
 
-  // No SSO (404 / unreachable): local username mode.
+  if (res.status !== 404) {
+    throw new Error(`身份服务异常（HTTP ${res.status}），请稍后重试。`);
+  }
+
+  // Legacy server without the identity endpoint: local username mode.
   const saved = getLocalUser();
   if (saved) {
     return { status: "authenticated", userId: saved, info: { name: saved }, local: true };
