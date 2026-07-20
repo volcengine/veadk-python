@@ -27,7 +27,11 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from veadk.cli.cli_frontend import _run_frontend_server, _studio_deploy_run_script
+from veadk.cli.cli_frontend import (
+    _redact_debug_text,
+    _run_frontend_server,
+    _studio_deploy_run_script,
+)
 from veadk.cli.generated_agent_codegen import (
     AgentDraft,
     GeneratedAgentProjectRequest,
@@ -518,6 +522,27 @@ class _FakeSocket:
         return ("127.0.0.1", 54321)
 
 
+def test_debug_text_redacts_environment_and_inline_markers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    environment_marker = "public-environment-marker-123"
+    inline_marker = "public-inline-marker-456"
+    bearer_marker = "public-bearer-marker-789"
+    monkeypatch.setenv("SMOKEY_REDACTION_PROBE", environment_marker)
+
+    redacted = _redact_debug_text(
+        f"env={environment_marker}\n"
+        f"authToken={inline_marker}\n"
+        f"Authorization: Bearer {bearer_marker}"
+    )
+
+    assert environment_marker not in redacted
+    assert inline_marker not in redacted
+    assert bearer_marker not in redacted
+    assert "authToken=***" in redacted
+    assert "Bearer ***" in redacted
+
+
 def test_generated_project_and_debug_run_api_lifecycle(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -671,6 +696,7 @@ def test_generated_project_and_debug_run_api_lifecycle(
         assert create_error_response.status_code == 500
         create_error_detail = create_error_response.json()["detail"]
         assert "创建调试环境失败" in create_error_detail
+        assert "异常类型：OSError" in create_error_detail
         assert "错误 ID" in create_error_detail
         assert "tenant debug process quota exhausted" not in create_error_detail
 
