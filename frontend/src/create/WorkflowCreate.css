@@ -86,6 +86,22 @@
   border-color: hsl(var(--ring) / 0.5);
   box-shadow: 0 0 0 3px hsl(var(--ring) / 0.08);
 }
+.wfb-input--error,
+.wfb-input--error:focus {
+  border-color: hsl(var(--destructive));
+  box-shadow: 0 0 0 3px hsl(var(--destructive) / 0.08);
+}
+.wfb-field-error,
+.wfb-field-help {
+  font-size: 11px;
+  line-height: 1.4;
+}
+.wfb-field-error {
+  color: hsl(var(--destructive));
+}
+.wfb-field-help {
+  color: hsl(var(--muted-foreground));
+}
 .wfb-textarea {
   resize: vertical;
   min-height: 52px;

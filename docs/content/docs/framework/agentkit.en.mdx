@@ -68,6 +68,17 @@ veadk agentkit launch
 
 </Steps>
 
+When deploying through Studio, the required Feishu, knowledge-base,
+short-/long-term memory, and observability settings appear in their respective
+feature sections. Their values are converted to VeADK runtime environment
+variables only during deployment, and selecting an observability exporter also
+enables its corresponding `ENABLE_*` flag. These values are not written to
+generated source or exported YAML. The deployment page mirrors them in a
+component-generated environment-variable group for review. Use a database-backed
+short-term memory store for multi-instance runtimes; when `run_sse` returns 404,
+the UI also suggests checking whether an in-memory or SQLite session landed on a
+different instance.
+
 When deploying from the bundled Web UI, cloud image build failures include a
 credential-safe build-log excerpt so dependency resolution and Dockerfile
 errors can be diagnosed directly.

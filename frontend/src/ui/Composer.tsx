@@ -19,6 +19,7 @@ import type {
 } from "../adk/client";
 import { InvocationChips } from "./InvocationChips";
 import { MediaGroup } from "./Media";
+import { isImeCompositionEvent } from "./composerKeyboard";
 
 interface CompletionTrigger {
   kind: "skill" | "agent";
@@ -39,6 +40,7 @@ export interface ComposerProps {
   onSubmit: () => void;
   disabled: boolean; // not connected yet
   busy: boolean; // a turn is streaming
+  showMeta: boolean;
   attachments: Attachment[];
   skills: AgentSkill[];
   agents: AgentTarget[];
@@ -57,6 +59,7 @@ export function Composer({
   onSubmit,
   disabled,
   busy,
+  showMeta,
   attachments,
   skills,
   agents,
@@ -288,6 +291,7 @@ export function Composer({
           onSelect={(e) => updateCompletion(e.currentTarget.value, e.currentTarget.selectionStart)}
           onBlur={() => setTimeout(() => setTrigger(null), 0)}
           onKeyDown={(e) => {
+            if (isImeCompositionEvent(e.nativeEvent)) return;
             if (trigger) {
               if (e.key === "ArrowDown" && suggestions.length > 0) {
                 e.preventDefault();
@@ -338,18 +342,20 @@ export function Composer({
         </motion.button>
       </div>
 
-      <div className="composer-meta">
-        <span className="composer-session-line">
-          会话 ID：
-          <span className="composer-session-id" title={sessionId || undefined}>
-            {sessionId || "—"}
+      {showMeta && (
+        <div className="composer-meta">
+          <span className="composer-session-line">
+            会话 ID：
+            <span className="composer-session-id" title={sessionId || undefined}>
+              {sessionId || "—"}
+            </span>
           </span>
-        </span>
-        <span className="composer-meta-separator" aria-hidden>
-          |
-        </span>
-        <span>回答仅供参考</span>
-      </div>
+          <span className="composer-meta-separator" aria-hidden>
+            |
+          </span>
+          <span>回答仅供参考</span>
+        </div>
+      )}
 
       {/* hidden pickers */}
       <input

@@ -69,6 +69,22 @@ const VOLC_ENV: EnvVar[] = [
   { key: "VOLCENGINE_SECRET_KEY", required: true, placeholder: "xxxx", comment: "火山引擎 Secret Key" },
 ];
 
+/** Feishu Channel runtime credentials. */
+export const FEISHU_ENV: EnvVar[] = [
+  {
+    key: "FEISHU_APP_ID",
+    required: true,
+    placeholder: "cli_xxx",
+    comment: "飞书应用 App ID",
+  },
+  {
+    key: "FEISHU_APP_SECRET",
+    required: true,
+    placeholder: "输入 App Secret",
+    comment: "飞书应用 App Secret",
+  },
+];
+
 /* ------------------------------------------------------------------ *
  * Built-in tools (curated to ones that load without npx/uvx/AgentKit).
  * ------------------------------------------------------------------ */

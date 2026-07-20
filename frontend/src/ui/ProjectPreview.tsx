@@ -54,6 +54,12 @@ hljs.registerLanguage("dockerfile", dockerfile);
 hljs.registerLanguage("makefile", makefile);
 import type { AgentProject, ProjectFile } from "../create/project";
 import type { NetworkConfig } from "../create/types";
+import { FEISHU_ENV, type EnvVar } from "../create/veadkCatalog";
+import {
+  firstMissingRuntimeEnv,
+  runtimeEnvDisplayRows,
+  runtimeEnvVars,
+} from "../create/deploymentEnv";
 import type { DeployStage } from "../adk/client";
 import { buildZip } from "./zip";
 import { DeploymentErrorMessage } from "./DeploymentErrorMessage";
@@ -213,7 +219,12 @@ export interface ProjectPreviewProps {
   /** Whether Feishu Channel was enabled in the configuration step. */
   feishuEnabled?: boolean;
   /** Update the Feishu channel selection from the deploy page. */
-  onFeishuEnabledChange?: (enabled: boolean) => void;
+  onFeishuEnabledChange?: (enabled: boolean) => void | Promise<void>;
+  /** Environment variables required by the selected memory/knowledge backends. */
+  deploymentEnv?: EnvVar[];
+  /** Deployment-only values entered in each feature's configuration area. */
+  deploymentEnvValues?: Record<string, string>;
+  onDeploymentEnvChange?: (key: string, value: string) => void;
   /** Runtime network settings edited on the deploy page. */
   network?: NetworkConfig;
   onNetworkChange?: (network: NetworkConfig | undefined) => void;
@@ -278,16 +289,6 @@ function newEnvRow(key = "", value = ""): EnvRow {
   };
 }
 
-const FEISHU_ENV_KEYS = new Set(["FEISHU_APP_ID", "FEISHU_APP_SECRET"]);
-
-function defaultEnvRows(feishuEnabled: boolean): EnvRow[] {
-  if (!feishuEnabled) return [];
-  return [
-    newEnvRow("FEISHU_APP_ID", ""),
-    newEnvRow("FEISHU_APP_SECRET", ""),
-  ];
-}
-
 function ProjectHeaderPortal({
   left,
   right,
@@ -335,6 +336,9 @@ export function ProjectPreview({
   onDeploymentTaskChange,
   feishuEnabled = false,
   onFeishuEnabledChange,
+  deploymentEnv = [],
+  deploymentEnvValues = {},
+  onDeploymentEnvChange,
   network,
   onNetworkChange,
   deployRegion = "cn-beijing",
@@ -352,6 +356,7 @@ export function ProjectPreview({
   const [adding, setAdding] = useState(false);
   const [newPath, setNewPath] = useState("");
   const [deploying, setDeploying] = useState(false);
+  const [feishuUpdating, setFeishuUpdating] = useState(false);
   const [deployError, setDeployError] = useState<string | null>(null);
   const [deployResult, setDeployResult] = useState<DeployResult | null>(null);
   // Latest progress frame per deploy phase + the phase currently in flight,
@@ -359,9 +364,7 @@ export function ProjectPreview({
   const [stageMap, setStageMap] = useState<Record<string, DeployStage>>({});
   const [activePhase, setActivePhase] = useState<string | null>(null);
   const [addingAgent, setAddingAgent] = useState(false);
-  const [envRows, setEnvRows] = useState<EnvRow[]>(() =>
-    defaultEnvRows(feishuEnabled),
-  );
+  const [envRows, setEnvRows] = useState<EnvRow[]>([]);
   const [showEnvValues, setShowEnvValues] = useState(false);
   const mountedRef = useRef(true);
 
@@ -371,31 +374,6 @@ export function ProjectPreview({
       mountedRef.current = false;
     };
   }, []);
-
-  useEffect(() => {
-    if (!feishuEnabled) {
-      setEnvRows((rows) =>
-        rows.filter(
-          (row) =>
-            !row.key.startsWith("TOOL_FEISHU_CHANNEL_") &&
-            !FEISHU_ENV_KEYS.has(row.key),
-        ),
-      );
-      return;
-    }
-    setEnvRows((rows) => {
-      const keptRows = rows.filter(
-        (row) => !row.key.startsWith("TOOL_FEISHU_CHANNEL_"),
-      );
-      const byKey = new Map(keptRows.map((row) => [row.key, row]));
-      const required = defaultEnvRows(true);
-      const next = [...keptRows];
-      for (const row of required) {
-        if (!byKey.has(row.key)) next.push(row);
-      }
-      return next;
-    });
-  }, [feishuEnabled]);
 
   const tree = useMemo(() => {
     if (!project?.files || !Array.isArray(project.files)) {
@@ -412,6 +390,10 @@ export function ProjectPreview({
   const selectedFile =
     project.files.find((f) => f.path === selected) ?? null;
   const networkMode = network?.mode ?? "public";
+  const automaticEnvRows = runtimeEnvDisplayRows(
+    feishuEnabled ? [...deploymentEnv, ...FEISHU_ENV] : deploymentEnv,
+    deploymentEnvValues,
+  );
 
   function toggleFolder(key: string) {
     setCollapsed((prev) => {
@@ -495,9 +477,36 @@ export function ProjectPreview({
   }
 
   function deployEnvVars(): DeployEnvVar[] {
-    return envRows
-      .map((row) => ({ key: row.key.trim(), value: row.value }))
-      .filter((row) => row.key.length > 0);
+    const byKey = new Map(
+      envRows
+        .map((row) => ({ key: row.key.trim(), value: row.value }))
+        .filter((row) => row.key.length > 0)
+        .map((row) => [row.key, row.value]),
+    );
+    const featureEnv = feishuEnabled
+      ? [...deploymentEnv, ...FEISHU_ENV]
+      : deploymentEnv;
+    for (const env of runtimeEnvVars(featureEnv, deploymentEnvValues)) {
+      byKey.set(env.key, env.value);
+    }
+    return [...byKey].map(([key, value]) => ({ key, value }));
+  }
+
+  async function handleFeishuToggle() {
+    if (!onFeishuEnabledChange || deploying || feishuUpdating) return;
+    setDeployError(null);
+    setFeishuUpdating(true);
+    try {
+      await onFeishuEnabledChange(!feishuEnabled);
+    } catch (error) {
+      if (mountedRef.current) {
+        setDeployError(
+          `更新飞书配置失败：${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    } finally {
+      if (mountedRef.current) setFeishuUpdating(false);
+    }
   }
 
   async function handleDeploy() {
@@ -506,15 +515,24 @@ export function ProjectPreview({
       setDeployError("使用 VPC 网络时，请填写 VPC ID。");
       return;
     }
+    const missingFeatureEnv = firstMissingRuntimeEnv(
+      deploymentEnv,
+      deploymentEnvValues,
+    );
+    if (missingFeatureEnv) {
+      const env = deploymentEnv.find((item) => item.key === missingFeatureEnv.key);
+      setDeployError(`请返回配置页填写 ${env?.comment || env?.key}（${env?.key}）。`);
+      return;
+    }
     const envs = deployEnvVars();
     if (feishuEnabled) {
-      const envMap = new Map(envs.map((row) => [row.key, row.value.trim()]));
-      if (!envMap.get("FEISHU_APP_ID")) {
-        setDeployError("启用飞书后，请在右侧环境变量中填写 FEISHU_APP_ID。");
-        return;
-      }
-      if (!envMap.get("FEISHU_APP_SECRET")) {
-        setDeployError("启用飞书后，请在右侧环境变量中填写 FEISHU_APP_SECRET。");
+      const missingFeishuEnv = firstMissingRuntimeEnv(
+        FEISHU_ENV,
+        deploymentEnvValues,
+      );
+      if (missingFeishuEnv) {
+        const env = FEISHU_ENV.find((item) => item.key === missingFeishuEnv.key);
+        setDeployError(`启用飞书后，请填写${env?.comment || env?.key}。`);
         return;
       }
     }
@@ -896,14 +914,39 @@ export function ProjectPreview({
                   role="switch"
                   aria-checked={feishuEnabled}
                   className={`pp-channel${feishuEnabled ? " is-on" : ""}`}
-                  onClick={() => onFeishuEnabledChange?.(!feishuEnabled)}
-                  disabled={deploying || !onFeishuEnabledChange}
+                  onClick={() => void handleFeishuToggle()}
+                  disabled={deploying || feishuUpdating || !onFeishuEnabledChange}
                 >
-                  <span className="pp-channel-title">飞书</span>
+                  <span className="pp-channel-title">
+                    {feishuUpdating ? "飞书（正在更新代码…）" : "飞书"}
+                  </span>
                   <span className="pp-switch" aria-hidden>
                     <span />
                   </span>
                 </button>
+                {feishuEnabled && (
+                  <div className="pp-channel-fields">
+                    {FEISHU_ENV.map((env) => (
+                      <label key={env.key}>
+                        <span>
+                          {env.comment || env.key}
+                          {env.required && <small>必填</small>}
+                        </span>
+                        <code>{env.key}</code>
+                        <input
+                          type={env.key.includes("SECRET") ? "password" : "text"}
+                          value={deploymentEnvValues[env.key] ?? ""}
+                          placeholder={env.placeholder}
+                          disabled={deploying || !onDeploymentEnvChange}
+                          autoComplete="off"
+                          onChange={(event) =>
+                            onDeploymentEnvChange?.(env.key, event.currentTarget.value)
+                          }
+                        />
+                      </label>
+                    ))}
+                  </div>
+                )}
               </section>
 
               <section className="pp-config-section">
@@ -962,9 +1005,9 @@ export function ProjectPreview({
                 <div className="pp-env-head">
                   <div>
                     <div className="pp-config-label">环境变量</div>
-                    {feishuEnabled && (
-                      <div className="pp-env-sub">请填写飞书应用的 App ID 与 App Secret。</div>
-                    )}
+                    <div className="pp-env-sub">
+                      组件配置会自动同步到这里，部署前可核对最终值。
+                    </div>
                   </div>
                   <button
                     type="button"
@@ -976,50 +1019,87 @@ export function ProjectPreview({
                   </button>
                 </div>
                 <div className="pp-env-table">
-                  {envRows.length === 0 ? (
+                  {automaticEnvRows.length > 0 && (
+                    <div className="pp-env-group">
+                      <div className="pp-env-group-head">
+                        <span>组件自动生成</span>
+                        <small>{automaticEnvRows.length} 项</small>
+                      </div>
+                      {automaticEnvRows.map((row) => {
+                        const fixed = row.key.startsWith("ENABLE_");
+                        return (
+                          <div
+                            className="pp-env-row pp-env-row-derived"
+                            key={row.key}
+                          >
+                            <input
+                              className="pp-env-key-fixed"
+                              value={row.key}
+                              readOnly
+                              disabled={deploying}
+                              aria-label={`${row.key} 环境变量名`}
+                            />
+                            <input
+                              type={fixed || showEnvValues ? "text" : "password"}
+                              value={row.value}
+                              placeholder={row.required ? "必填，尚未填写" : "可选，尚未填写"}
+                              readOnly={fixed}
+                              disabled={
+                                deploying || (!fixed && !onDeploymentEnvChange)
+                              }
+                              autoComplete="off"
+                              aria-label={`${row.key} 环境变量值`}
+                              onChange={(event) =>
+                                onDeploymentEnvChange?.(
+                                  row.key,
+                                  event.currentTarget.value,
+                                )
+                              }
+                            />
+                            <span className="pp-env-source">
+                              {fixed ? "自动" : "同步"}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {envRows.length > 0 && (
+                    <div className="pp-env-group-head pp-env-group-head-custom">
+                      <span>自定义变量</span>
+                      <small>{envRows.length} 项</small>
+                    </div>
+                  )}
+                  {automaticEnvRows.length === 0 && envRows.length === 0 ? (
                     <div className="pp-env-empty">暂无环境变量</div>
                   ) : (
                     envRows.map((row) => {
-                      const isFeishuPreset = feishuEnabled && FEISHU_ENV_KEYS.has(row.key);
-                      const valuePlaceholder =
-                        row.key === "FEISHU_APP_ID"
-                          ? "cli_xxx"
-                          : row.key === "FEISHU_APP_SECRET"
-                            ? "输入 App Secret"
-                            : "VALUE";
                       return (
                         <div className="pp-env-row" key={row.id}>
                           <input
-                            className={isFeishuPreset ? "pp-env-key-fixed" : undefined}
                             value={row.key}
                             placeholder="KEY"
-                            readOnly={isFeishuPreset}
                             disabled={deploying}
                             autoComplete="off"
-                            title={isFeishuPreset ? "飞书必填变量" : undefined}
                             onChange={(e) => updateEnvRow(row.id, { key: e.currentTarget.value })}
                           />
                           <input
                             type={showEnvValues ? "text" : "password"}
                             value={row.value}
-                            placeholder={valuePlaceholder}
+                            placeholder="VALUE"
                             disabled={deploying}
                             autoComplete="off"
                             onChange={(e) => updateEnvRow(row.id, { value: e.currentTarget.value })}
                           />
-                          {isFeishuPreset ? (
-                            <span className="pp-env-remove-placeholder" />
-                          ) : (
-                            <button
-                              type="button"
-                              className="pp-icon-btn pp-env-remove"
-                              title="删除变量"
-                              disabled={deploying}
-                              onClick={() => removeEnvRow(row.id)}
-                            >
-                              <X className="pp-ic" />
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            className="pp-icon-btn pp-env-remove"
+                            title="删除变量"
+                            disabled={deploying}
+                            onClick={() => removeEnvRow(row.id)}
+                          >
+                            <X className="pp-ic" />
+                          </button>
                         </div>
                       );
                     })
@@ -1166,7 +1246,7 @@ export function ProjectPreview({
                 type="button"
                 className="pp-deploy"
                 onClick={handleDeploy}
-                disabled={deploying}
+                disabled={deploying || feishuUpdating}
               >
                 {deploying ? (
                   <Loader2 className="pp-ic spin" />

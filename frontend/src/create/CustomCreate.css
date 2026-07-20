@@ -344,6 +344,18 @@
   font-size: 13px;
   line-height: 1.5;
 }
+.cw-debug-error-detail,
+.cw-debug-msg-error {
+  width: 100%;
+  min-width: 0;
+  color: hsl(var(--destructive));
+  text-align: left;
+}
+.cw-debug-error-detail .deploy-error-message-text,
+.cw-debug-msg-error .deploy-error-message-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
 .cw-debug-chat {
   min-height: 100%;
   display: flex;
@@ -391,9 +403,6 @@
 }
 .cw-debug-msg-assistant .cw-debug-content {
   width: 100%;
-}
-.cw-debug-msg-error {
-  color: hsl(var(--destructive));
 }
 .cw-debug-composer {
   flex-shrink: 0;
@@ -785,6 +794,52 @@
 .cw-error-text {
   font-size: 12px;
   color: hsl(var(--destructive));
+}
+
+.cw-env-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 5px;
+}
+
+.cw-env-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cw-env-field-head {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  color: hsl(var(--foreground));
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.cw-env-field-head code {
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: 9.5px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cw-env-empty {
+  margin: 4px 0 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+@media (max-width: 1100px) {
+  .cw-env-fields {
+    grid-template-columns: 1fr;
+  }
 }
 
 .cw-input {

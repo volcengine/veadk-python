@@ -14,11 +14,15 @@
 """Tests for the frontend session trace endpoint."""
 
 from types import SimpleNamespace
+from typing import cast
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk.trace.export import SpanExportResult
 
 from veadk.cli.cli_frontend import _mount_session_trace_route
+from veadk.cli.frontend_trace import SessionTraceExporter
 
 
 class _MemoryExporter:
@@ -68,3 +72,28 @@ def test_session_trace_route_returns_empty_json_array() -> None:
 
     assert response.status_code == 200
     assert response.json() == []
+
+
+def test_session_trace_exporter_groups_spans_without_google_adk_internals() -> None:
+    exporter = SessionTraceExporter()
+    matching = SimpleNamespace(
+        name="call_llm",
+        context=SimpleNamespace(trace_id=22),
+        attributes={"gcp.vertex.agent.session_id": "session-1"},
+    )
+    child = SimpleNamespace(
+        name="execute_tool",
+        context=SimpleNamespace(trace_id=22),
+        attributes={},
+    )
+    unrelated = SimpleNamespace(
+        name="call_llm",
+        context=SimpleNamespace(trace_id=33),
+        attributes={"gcp.vertex.agent.session_id": "session-2"},
+    )
+
+    result = exporter.export(cast(list[ReadableSpan], [matching, child, unrelated]))
+
+    assert result == SpanExportResult.SUCCESS
+    assert exporter.get_finished_spans("session-1") == [matching, child]
+    assert exporter.get_finished_spans("unknown") == []

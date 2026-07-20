@@ -3,6 +3,7 @@
 // the Vite dev proxy in development.
 
 import { withAuth } from "./auth";
+import { formatRunSseError } from "./runSseError";
 import { parseSSE } from "./sse";
 import type { AgentProject } from "../create/project";
 import type { AgentDraft } from "../create/types";
@@ -385,7 +386,10 @@ export async function getSessionTrace(
   if (!res.ok) throw new Error(`trace failed: ${res.status}`);
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
-    throw new Error("trace failed: 服务端返回了非 JSON 响应");
+    const responseType = contentType.split(";", 1)[0] || "Content-Type 缺失";
+    throw new Error(
+      `trace failed: 服务端返回了非 JSON 响应（${responseType}），请检查 Studio API 代理配置`,
+    );
   }
   const spans = (await res.json()) as unknown;
   if (!Array.isArray(spans)) throw new Error("trace failed: 返回格式无效");
@@ -558,9 +562,17 @@ export async function* runSSE({
     },
     ep,
   );
-  if (!res.ok) throw new Error(`run_sse failed: ${res.status}`);
+  if (!res.ok) throw new Error(formatRunSseError(`run_sse failed: ${res.status}`));
   for await (const evt of parseSSE(res)) {
-    yield evt as AdkEvent;
+    const event = evt as AdkEvent;
+    if (typeof event.error === "string") event.error = formatRunSseError(event.error);
+    if (typeof event.errorMessage === "string") {
+      event.errorMessage = formatRunSseError(event.errorMessage);
+    }
+    if (typeof event.error_message === "string") {
+      event.error_message = formatRunSseError(event.error_message);
+    }
+    yield event;
   }
 }
 
@@ -747,8 +759,14 @@ export interface UiFeatures {
   generatedAgentTestRunDisabledReason?: string;
 }
 
+export interface SiteBranding {
+  title: string;
+  logoUrl: string;
+}
+
 export interface UiConfig {
   studio: boolean;
+  branding: SiteBranding;
   features: UiFeatures;
   defaultView: "chat" | "addAgent";
   /** Where the agent picker sources agents: local apps (`--dev`) or the user's
@@ -756,8 +774,14 @@ export interface UiConfig {
   agentsSource: "local" | "cloud";
 }
 
+export const DEFAULT_SITE_BRANDING: SiteBranding = {
+  title: "VeADK Studio",
+  logoUrl: "",
+};
+
 const DEFAULT_UI_CONFIG: UiConfig = {
   studio: false,
+  branding: DEFAULT_SITE_BRANDING,
   features: {
     newChat: true,
     search: true,
@@ -777,9 +801,20 @@ export async function getUiConfig(): Promise<UiConfig> {
   try {
     const res = await apiFetch("/web/ui-config");
     if (!res.ok) return DEFAULT_UI_CONFIG;
-    const d = (await res.json()) as Partial<UiConfig>;
+    const d = (await res.json()) as Partial<Omit<UiConfig, "branding">> & {
+      branding?: Partial<SiteBranding>;
+    };
+    const logoUrl = typeof d.branding?.logoUrl === "string"
+      ? d.branding.logoUrl
+      : DEFAULT_SITE_BRANDING.logoUrl;
     return {
       studio: d.studio ?? false,
+      branding: {
+        title: typeof d.branding?.title === "string"
+          ? d.branding.title
+          : DEFAULT_SITE_BRANDING.title,
+        logoUrl: logoUrl ? withAuth(logoUrl) : "",
+      },
       features: { ...DEFAULT_UI_CONFIG.features, ...(d.features ?? {}) },
       defaultView: d.defaultView ?? "chat",
       agentsSource: d.agentsSource === "cloud" ? "cloud" : "local",

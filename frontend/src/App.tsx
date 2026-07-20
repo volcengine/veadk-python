@@ -13,6 +13,7 @@ import { motion } from "motion/react";
 import {
   cancelAgentkitDeployment,
   createSession,
+  DEFAULT_SITE_BRANDING,
   deleteMedia,
   deleteSessionMedia,
   deleteSession,
@@ -30,6 +31,7 @@ import {
   type AdkSession,
   type Attachment,
   type FrontendInvocation,
+  type SiteBranding,
   type UiFeatures,
 } from "./adk/client";
 import { applyEvent, emptyAcc, eventsToTurns, type Block, type Turn } from "./blocks";
@@ -60,6 +62,7 @@ import { WorkflowCreate } from "./create/WorkflowCreate";
 import type { AgentDraft } from "./create/types";
 import type { DeploymentTaskUpdate } from "./ui/ProjectPreview";
 import { DeploymentErrorMessage } from "./ui/DeploymentErrorMessage";
+import defaultSiteLogo from "./assets/volcengine.svg";
 
 // Breadcrumb root label for the create flow and the per-mode leaf labels.
 const CREATE_ROOT = "创建 Agent";
@@ -549,6 +552,7 @@ export default function App() {
     addAgentkit: true,
   });
   const [agentsSource, setAgentsSource] = useState<"local" | "cloud">("cloud");
+  const [siteBranding, setSiteBranding] = useState<SiteBranding>(DEFAULT_SITE_BRANDING);
   const [localMode, setLocalMode] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
   // The executing sub-agent (ADK event.author) and everyone who emitted this
@@ -765,6 +769,7 @@ export default function App() {
     getUiConfig().then((cfg) => {
       setFeatures(cfg.features);
       setAgentsSource(cfg.agentsSource);
+      setSiteBranding(cfg.branding);
       if (cfg.defaultView === "addAgent") {
         setCreateView(null);
         setSkillCenter(false);
@@ -775,6 +780,18 @@ export default function App() {
       }
     });
   }, []);
+
+  useEffect(() => {
+    document.title = siteBranding.title;
+    let favicon = document.querySelector<HTMLLinkElement>('link[rel~="icon"]');
+    if (!favicon) {
+      favicon = document.createElement("link");
+      favicon.rel = "icon";
+      document.head.appendChild(favicon);
+    }
+    favicon.removeAttribute("type");
+    favicon.href = siteBranding.logoUrl || defaultSiteLogo;
+  }, [siteBranding]);
 
   // Check whether the server has Volcengine AK/SK (needed by the workbench).
   useEffect(() => {
@@ -788,6 +805,17 @@ export default function App() {
 
   function onUsername(name: string) {
     setLocalUser(name);
+    // A completed login is a fresh entry into the app. Do not reveal a create
+    // or management view that was persisted before the login page appeared.
+    restoredRef.current = true;
+    setCreateView(null);
+    setImportedDraft(null);
+    setSkillCenter(false);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSearchView(false);
+    setManageAgents(false);
+    startNewChat();
     setUserId(name);
     setUserInfo({ name });
     setLocalMode(true);
@@ -1252,7 +1280,7 @@ export default function App() {
     return <div className="boot" />; // resolving identity
   }
   if (authStatus === "unauthenticated") {
-    return <LoginPage onUsername={onUsername} />;
+    return <LoginPage branding={siteBranding} onUsername={onUsername} />;
   }
 
   const agentEntries = buildAgentEntries(apps, connections);
@@ -1282,6 +1310,7 @@ export default function App() {
   return (
     <div className="layout">
       <Sidebar
+        branding={siteBranding}
         agentsSource={agentsSource}
         localApps={apps}
         currentAgentId={appName}
@@ -1389,6 +1418,7 @@ export default function App() {
             }}
             disabled={!appName || !userId}
             busy={busy}
+            showMeta={turns.length > 0}
             attachments={attachments}
             skills={availableSkills}
             agents={availableAgents}

@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { ChevronRight, LogOut, MoreHorizontal, Plus, Trash2 } from "lucide-react";
-import type { AdkSession, UiFeatures } from "../adk/client";
+import type { AdkSession, SiteBranding, UiFeatures } from "../adk/client";
 import { sessionTitle } from "../blocks";
 import { displayName } from "../adk/identity";
 import { SkillCenterButton } from "./SkillCenter";
@@ -51,6 +51,7 @@ function ManageAgentsIcon() {
 }
 
 export interface SidebarProps {
+  branding: SiteBranding;
   sessions: AdkSession[];
   currentSessionId: string;
   /** Per-module feature gates; omitted modules default to shown. */
@@ -124,6 +125,7 @@ function SidebarUser({
 }
 
 export function Sidebar({
+  branding,
   sessions,
   currentSessionId,
   features,
@@ -167,8 +169,15 @@ export function Sidebar({
     <aside className="sidebar">
       <div className="sidebar-top">
         <div className="brand">
-          <img className="brand-logo" src={volcengineLogo} alt="" aria-hidden />
-          VeADK Studio
+          <img
+            className="brand-logo"
+            src={branding.logoUrl || volcengineLogo}
+            width={20}
+            height={20}
+            alt=""
+            aria-hidden
+          />
+          {branding.title}
         </div>
         {onSelectAgent &&
           (() => {

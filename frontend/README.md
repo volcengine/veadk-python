@@ -14,9 +14,12 @@ server that `veadk frontend` launches — no separate backend.
   the turn to a mentionable sub-agent.
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
 - **Sessions**: pick an agent, browse history, new chat, delete — per signed-in
-  user. Long Agent lists stay within the viewport and scroll independently.
+  user. The new-session composer stays minimal until a conversation begins,
+  when its session metadata appears. Long Agent lists stay within the viewport
+  and scroll independently.
 - **Tracing viewer**: a span tree + detail panel from the ADK debug trace.
-- **Custom-agent workbench**: configure and debug an agent, then review
+- **Custom-agent workbench**: configure and debug an agent with expandable,
+  copyable runner error details, then review
   generated source with line numbers and syntax highlighting before setting
   its region, message channel, network, environment variables, and deploying
   to AgentKit. A global task list keeps Runtime, region, and progress visible
@@ -26,6 +29,10 @@ server that `veadk frontend` launches — no separate backend.
 - **Auth**: optional VeIdentity SSO, or a local username for dev.
 - **Agent-driven UI (A2UI)**: when an agent emits A2UI, it renders as native
   components (one feature among the above — not required).
+
+Changing the Feishu channel on the deployment page regenerates the project so
+`app.py`, the `extensions` dependency, and the runtime environment variables
+stay aligned before deployment.
 
 ## Run
 
@@ -52,6 +59,25 @@ Dev loop with hot reload (Vite proxies the API):
 veadk frontend --dev        # API only, CORS for the vite dev server
 cd frontend && npm run dev  # http://localhost:5173
 ```
+
+The Vite development server proxies the ADK API routes, including the
+`/dev/apps/.../debug/trace` session-trace endpoint, to the backend on port 8000.
+
+## Branding
+
+Set a custom title (up to six characters) and a local or remote image logo when
+starting Studio. The same logo is used in the sidebar, login page, and browser
+favicon; the title is also used as the browser page title.
+
+```bash
+veadk studio --site-title 火山助手 --site-logo ./logo.png
+veadk studio --site-title 火山助手 --site-logo https://example.com/logo.webp
+```
+
+Supported logo formats are PNG, JPEG, GIF, WebP, AVIF, and ICO, up to 5 MB.
+`VEADK_SITE_TITLE` and `VEADK_SITE_LOGO` provide equivalent environment-variable
+configuration. `veadk studio deploy` accepts the same flags and copies either a
+local image or a downloaded network image into the VeFaaS deployment package.
 
 ## Authentication
 
@@ -144,6 +170,13 @@ the message string. The invocation plugin directs ADK to call the mounted skill
 tool or transfer one tree edge at a time until it reaches the selected agent.
 The same metadata is attached to the first Google GenAI `Part`, so session
 history restores the `/skill` and `@agent` chips after a reload.
+
+## Agent naming
+
+Studio validates every root and nested Agent name against Google ADK rules.
+Names must start with an ASCII letter or underscore, may then contain ASCII
+letters, digits, and underscores, cannot be `user`, and must be unique in the
+Agent tree.
 
 ## How it works
 

@@ -24,9 +24,13 @@ VeADK ships a React frontend that renders [A2UI](/en/docs/framework/a2ui) (agent
 - **Session history**: auto-saved, time-sorted, reopen or delete.
 - **Smart search**: the *Session* source full-text-searches the current agent's history; the *Web* source calls the agent's mounted web-search tool live (using credentials from the server's environment variables).
 - **Add an AgentKit agent**: paste a URL + API key to connect a remote agent over the ADK protocol; it then appears in the picker.
-- **Custom-agent workbench**: debug an agent beside its configuration, then review generated source with line numbers and syntax highlighting and set the region, message channel, network, and environment variables before deploying to AgentKit. The global task list shows the actual AgentKit-generated Runtime name, region, and progress across pages; in-flight tasks can be cancelled and cleaned up, and failed tasks can be retried. Remote topology and traces are fetched through the selected Runtime data plane.
+- **Custom-agent workbench**: debug an agent beside its configuration. Initialization, session, and conversation failures show credential-redacted error details and Runner logs that can be expanded and copied. Then review generated source with line numbers and syntax highlighting and set the region, message channel, network, and environment variables before deploying to AgentKit. The global task list shows the actual AgentKit-generated Runtime name, region, and progress across pages; in-flight tasks can be cancelled and cleaned up, and failed tasks can be retried. Remote topology and traces are fetched through the selected Runtime data plane.
 - **Tracing**: view the call flame graph for the current session.
 - **Login**: SSO (VeIdentity / GitHub / Google / any OIDC) or a local username.
+
+When the Feishu channel is enabled or disabled on the deployment page, Studio
+regenerates the project so `app.py`, the `extensions` dependency, and runtime
+environment variables stay aligned before deployment.
 
 ### Run
 
@@ -125,6 +129,32 @@ After selecting a sub-agent, the `/` menu shows skills mounted on that target. C
 
 The frontend sends structured `veadkInvocation` metadata instead of inferring invocation intent from the message string. The backend plugin directs ADK to call the skill tool or invoke `transfer_to_agent` one tree edge at a time until it reaches the target. The same metadata is written to the first Google GenAI `Part`, so reopening session history restores the `/skill` and `@agent` chips.
 
+### Custom Studio branding
+
+Use `--site-title` for a system name of up to six characters and `--site-logo`
+for a local image or HTTP(S) image URL. The logo is used in the sidebar, login
+page, and browser favicon; the system name also becomes the browser page title.
+
+```bash
+veadk studio --site-title 火山助手 --site-logo ./logo.png
+veadk studio --site-title 火山助手 --site-logo https://example.com/logo.webp
+```
+
+PNG, JPEG, GIF, WebP, AVIF, and ICO images up to 5 MB are supported. The
+equivalent environment variables are `VEADK_SITE_TITLE` and `VEADK_SITE_LOGO`.
+Cloud deployment accepts the same options. A remote image is downloaded during
+deployment and bundled into VeFaaS just like a local image, so the deployed site
+does not depend on the original URL:
+
+```bash
+veadk studio deploy \
+  --user-pool-id <pool-id> \
+  --allowed-client-id <client-id> \
+  --vefaas-app-name <app-name> \
+  --site-title 火山助手 \
+  --site-logo ./logo.png
+```
+
 ### IAM permissions for `veadk studio deploy`
 
 When `--iam-role` is omitted, the deploy command creates or reuses `VeADKFrontendServiceRole` and ensures that the role has these Volcengine system policies:
@@ -213,6 +243,13 @@ username (letters + digits, ≤16), stored locally and used as the `user_id`.
   attachment upload (not on page load). Logout is a local logout (clears the
   session and returns to the login page).
 </Callout>
+
+### Agent naming rules
+
+Studio validates root and nested Agent names against Google ADK rules. A name
+must start with an ASCII letter or underscore, may then contain ASCII letters,
+digits, and underscores, cannot be the reserved name `user`, and must be unique
+within the Agent tree.
 
 ### How it works
 

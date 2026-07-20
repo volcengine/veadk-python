@@ -43,7 +43,14 @@ import {
   KB_BACKENDS,
   TRACING_EXPORTERS,
   type BackendOption,
+  type EnvVar,
 } from "./veadkCatalog";
+import {
+  runtimeEnvConfiguration,
+  type RuntimeEnvConfiguration,
+  type RuntimeEnvSelection,
+} from "./deploymentEnv";
+import { agentNameProblem, duplicateAgentNames } from "./agentNameValidation";
 import { draftToYaml } from "./configYaml";
 import type { AgentProject } from "./project";
 import type { SkillSource } from "./skills/types";
@@ -55,6 +62,7 @@ import {
   type DeploymentTaskUpdate,
 } from "../ui/ProjectPreview";
 import { Blocks, ThinkingPlaceholder } from "../ui/Blocks";
+import { DeploymentErrorMessage } from "../ui/DeploymentErrorMessage";
 import {
   createGeneratedAgentTestRun,
   createGeneratedAgentTestSession,
@@ -288,6 +296,49 @@ function BackendSelect({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+function isSensitiveEnv(key: string): boolean {
+  return /(SECRET|PASSWORD|KEY|TOKEN)$/.test(key);
+}
+
+/** Feature-specific settings stay readable in their own configuration area,
+ * while their VeADK environment-variable names remain visible and exact. */
+function RuntimeEnvFields({
+  env,
+  values,
+  onChange,
+}: {
+  env: EnvVar[];
+  values: Record<string, string>;
+  onChange: (key: string, value: string) => void;
+}) {
+  if (env.length === 0) {
+    return <p className="cw-env-empty">此后端无需额外运行参数。</p>;
+  }
+  return (
+    <div className="cw-env-fields">
+      {env.map((item) => (
+        <label className="cw-env-field" key={item.key}>
+          <span className="cw-env-field-head">
+            <span>
+              {item.comment || item.key}
+              {item.required && <span className="cw-req">*</span>}
+            </span>
+            <code>{item.key}</code>
+          </span>
+          <input
+            className="cw-input"
+            type={isSensitiveEnv(item.key) ? "password" : "text"}
+            value={values[item.key] ?? ""}
+            placeholder={item.placeholder || "请输入参数值"}
+            autoComplete="off"
+            onChange={(event) => onChange(item.key, event.currentTarget.value)}
+          />
+        </label>
+      ))}
     </div>
   );
 }
@@ -672,8 +723,13 @@ const typeMeta = (type: AgentDraft["agentType"]) =>
   AGENT_TYPES.find((t) => t.id === (type ?? "llm")) ?? AGENT_TYPES[0];
 
 /** Per-node required-field problem, or null when the node is valid. */
-function nodeProblem(n: AgentDraft): string | null {
-  if (n.name.trim().length === 0) return "缺少名称";
+function nodeProblem(
+  n: AgentDraft,
+  duplicateNames: ReadonlySet<string>,
+): string | null {
+  const nameProblem = agentNameProblem(n.name);
+  if (nameProblem) return nameProblem;
+  if (duplicateNames.has(n.name)) return "Agent 名称在当前结构中必须唯一";
   if (n.description.trim().length === 0) return "缺少描述";
   if (isA2aType(n.agentType))
     return (n.a2aUrl ?? "").trim().length === 0 ? "缺少 Agent URL" : null;
@@ -689,12 +745,18 @@ interface TreeProblem {
 }
 
 /** Collect required-field problems across the whole tree, in render order. */
-function treeProblems(root: AgentDraft, path: NodePath = []): TreeProblem[] {
+function treeProblems(
+  root: AgentDraft,
+  duplicateNames: ReadonlySet<string>,
+  path: NodePath = [],
+): TreeProblem[] {
   const out: TreeProblem[] = [];
-  const p = nodeProblem(root);
+  const p = nodeProblem(root, duplicateNames);
   if (p) out.push({ path, name: root.name.trim() || "未命名", problem: p });
   if (nodeAcceptsChildren(root)) {
-    root.subAgents.forEach((c, i) => out.push(...treeProblems(c, [...path, i])));
+    root.subAgents.forEach((c, i) =>
+      out.push(...treeProblems(c, duplicateNames, [...path, i])),
+    );
   }
   return out;
 }
@@ -704,6 +766,51 @@ function countDraftAgents(root: AgentDraft): number {
   return 1 + root.subAgents.reduce((total, child) => total + countDraftAgents(child), 0);
 }
 
+/** Collect only settings used by active components across the Agent tree. */
+function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
+  const selections: RuntimeEnvSelection[] = [];
+  const visit = (node: AgentDraft) => {
+    if (node.memory.shortTerm) {
+      selections.push({
+        env:
+          STM_BACKENDS.find(
+            (item) => item.id === (node.shortTermBackend ?? "local"),
+          )?.env ?? [],
+      });
+    }
+    if (node.memory.longTerm) {
+      selections.push({
+        env:
+          LTM_BACKENDS.find(
+            (item) => item.id === (node.longTermBackend ?? "local"),
+          )?.env ?? [],
+      });
+    }
+    if (node.knowledgebase) {
+      selections.push({
+        env:
+          KB_BACKENDS.find(
+            (item) => item.id === (node.knowledgebaseBackend ?? "local"),
+          )?.env ?? [],
+      });
+    }
+    if (node.tracing) {
+      for (const exporterId of node.tracingExporters ?? []) {
+        const exporter = TRACING_EXPORTERS.find((item) => item.id === exporterId);
+        if (exporter) {
+          selections.push({
+            env: exporter.env,
+            enableFlag: exporter.enableFlag,
+          });
+        }
+      }
+    }
+    node.subAgents.forEach(visit);
+  };
+  visit(root);
+  return runtimeEnvConfiguration(selections);
+}
+
 /* ---------------------------------------------------------------- *
  * Left structure tree: one selectable, editable node (recursive).
  * ---------------------------------------------------------------- */
@@ -711,6 +818,7 @@ function TreeNode({
   root,
   path,
   selectedPath,
+  duplicateNames,
   showErrors,
   validationPulse,
   onSelect,
@@ -719,6 +827,7 @@ function TreeNode({
   root: AgentDraft;
   path: NodePath;
   selectedPath: NodePath;
+  duplicateNames: ReadonlySet<string>;
   showErrors: boolean;
   validationPulse: number;
   onSelect: (p: NodePath) => void;
@@ -773,7 +882,7 @@ function TreeNode({
         className={`cw-tree-node cw-tree-type-${node.agentType ?? "llm"} ${
           selected ? "is-selected" : ""
         } ${draggable ? "is-draggable" : ""} ${dragOver ? "is-dragover" : ""} ${
-          showErrors && nodeProblem(node)
+          showErrors && nodeProblem(node, duplicateNames)
             ? `is-invalid cw-error-shake-${validationPulse % 2}`
             : ""
         }`}
@@ -852,6 +961,7 @@ function TreeNode({
               root={root}
               path={[...path, i]}
               selectedPath={selectedPath}
+              duplicateNames={duplicateNames}
               showErrors={showErrors}
               validationPulse={validationPulse}
               onSelect={onSelect}
@@ -873,8 +983,17 @@ interface DebugMessage {
   error?: string;
 }
 
+function codegenDraft(draft: AgentDraft): AgentDraft {
+  return {
+    ...draft,
+    deployment: {
+      feishuEnabled: !!draft.deployment?.feishuEnabled,
+    },
+  };
+}
+
 function debugSnapshotKey(draft: AgentDraft): string {
-  return JSON.stringify(draft);
+  return JSON.stringify(codegenDraft(draft));
 }
 
 function DebugPanel({
@@ -964,7 +1083,13 @@ function DebugPanel({
           </div>
         ) : phase === "error" ? (
           <div className="cw-debug-error">
-            <span>{error || "调试失败"}</span>
+            <DeploymentErrorMessage
+              message={error || "调试失败"}
+              className="cw-debug-error-detail"
+              onRetry={async () => {
+                await onRestart();
+              }}
+            />
             {logs.length > 0 && (
               <div className="cw-debug-progress">
                 {logs.map((line, i) => (
@@ -974,14 +1099,6 @@ function DebugPanel({
                 ))}
               </div>
             )}
-            <button
-              type="button"
-              className="cw-debug-start"
-              onClick={onRestart}
-            >
-              <Bug className="cw-i" />
-              重试
-            </button>
           </div>
         ) : (
           <div className="cw-debug-chat">
@@ -1002,7 +1119,10 @@ function DebugPanel({
                     {msg.role === "user" ? (
                       msg.content
                     ) : msg.error ? (
-                      <span className="cw-debug-msg-error">{msg.error}</span>
+                      <DeploymentErrorMessage
+                        message={msg.error}
+                        className="cw-debug-msg-error"
+                      />
                     ) : msg.blocks && msg.blocks.length > 0 ? (
                       <Blocks blocks={msg.blocks} onAction={() => {}} />
                     ) : msg.content ? (
@@ -1237,6 +1357,18 @@ export function CustomCreate({
   const patch = (p: Partial<AgentDraft>) =>
     setDraft((d) => updateNode(d, safePath, (n) => ({ ...n, ...p })));
 
+  const patchDeploymentEnv = (key: string, value: string) =>
+    setDraft((current) => ({
+      ...current,
+      deployment: {
+        ...(current.deployment ?? { feishuEnabled: false }),
+        envValues: {
+          ...(current.deployment?.envValues ?? {}),
+          [key]: value,
+        },
+      },
+    }));
+
   // Replace the whole tree (structural edits from the left tree), optionally
   // moving the selection to a new node.
   const applyTree = (nextRoot: AgentDraft, select?: NodePath) => {
@@ -1269,7 +1401,11 @@ export function CustomCreate({
   const a2a = isA2aType(node.agentType);
 
   // Inline error flags for the selected node.
-  const nameMissing = node.name.trim().length === 0;
+  const duplicateNames = useMemo(() => duplicateAgentNames(draft), [draft]);
+  const nameProblem =
+    agentNameProblem(node.name) ??
+    (duplicateNames.has(node.name) ? "Agent 名称在当前结构中必须唯一" : null);
+  const nameInvalid = nameProblem !== null;
   const descriptionMissing = node.description.trim().length === 0;
   const instructionMissing = node.instruction.trim().length === 0;
   const urlMissing = (node.a2aUrl ?? "").trim().length === 0;
@@ -1279,9 +1415,13 @@ export function CustomCreate({
       : "";
 
   // Whole-tree validation: every node must satisfy its type's requirements.
-  const problems = useMemo(() => treeProblems(draft), [draft]);
+  const problems = useMemo(
+    () => treeProblems(draft, duplicateNames),
+    [draft, duplicateNames],
+  );
   const canFinish = problems.length === 0;
   const currentDebugSnapshot = useMemo(() => debugSnapshotKey(draft), [draft]);
+  const deploymentEnv = useMemo(() => collectDeploymentEnv(draft), [draft]);
   const debugStale = Boolean(
     debugRun &&
       debugSnapshot &&
@@ -1299,7 +1439,7 @@ export function CustomCreate({
   const completion = useMemo<Record<StepId, boolean>>(
     () => ({
       type: true,
-      basic: !nameMissing && (orchestrator || a2a || !instructionMissing),
+      basic: !nameInvalid && (orchestrator || a2a || !instructionMissing),
       model: Boolean(
         node.modelName?.trim() ||
           node.modelProvider?.trim() ||
@@ -1313,7 +1453,7 @@ export function CustomCreate({
       subagents: (node.subAgents?.length ?? 0) > 0,
       review: canFinish,
     }),
-    [node, nameMissing, instructionMissing, orchestrator, a2a, canFinish, builtinTools, mcpTools, selectedSkills],
+    [node, nameInvalid, instructionMissing, orchestrator, a2a, canFinish, builtinTools, mcpTools, selectedSkills],
   );
 
   // The nav only lists the sections actually rendered for THIS node's type —
@@ -1423,13 +1563,7 @@ export function CustomCreate({
       // Network settings are deployment-only and are not part of the codegen
       // API schema. Keep them in the local draft while sending only the
       // channel flag needed to generate the project.
-      const projectDraft: AgentDraft = {
-        ...draft,
-        deployment: {
-          feishuEnabled: !!draft.deployment?.feishuEnabled,
-        },
-      };
-      const proj = await generateAgentProject(projectDraft);
+      const proj = await generateAgentProject(codegenDraft(draft));
       await cleanupDebugRun();
       setDebugPhase("idle");
       setDebugProjectName("");
@@ -1467,7 +1601,7 @@ export function CustomCreate({
       pushLog("提交 Agent 配置");
       setDebugPhase("starting");
       pushLog("初始化调试环境");
-      const run = await createGeneratedAgentTestRun(draft);
+      const run = await createGeneratedAgentTestRun(codegenDraft(draft));
       debugRunRef.current = run;
       setDebugRun(run);
       setDebugProjectName(run.appName);
@@ -1584,15 +1718,24 @@ export function CustomCreate({
             onAgentAdded={onAgentAdded}
             onDeploymentTaskChange={onDeploymentTaskChange}
             feishuEnabled={!!draft.deployment?.feishuEnabled}
-            onFeishuEnabledChange={(feishuEnabled) =>
-              setDraft((current) => ({
-                ...current,
+            onFeishuEnabledChange={async (feishuEnabled) => {
+              const nextDraft: AgentDraft = {
+                ...draft,
                 deployment: {
-                  ...(current.deployment ?? { feishuEnabled: false }),
+                  ...(draft.deployment ?? { feishuEnabled: false }),
                   feishuEnabled,
                 },
-              }))
-            }
+              };
+              const nextProject = await generateAgentProject(codegenDraft(nextDraft));
+              setDraft(nextDraft);
+              setProject(nextProject);
+            }}
+            deploymentEnv={deploymentEnv.specs}
+            deploymentEnvValues={{
+              ...draft.deployment?.envValues,
+              ...deploymentEnv.fixedValues,
+            }}
+            onDeploymentEnvChange={patchDeploymentEnv}
             network={draft.deployment?.network}
             onNetworkChange={(network) =>
               setDraft((current) => ({
@@ -1633,6 +1776,7 @@ export function CustomCreate({
             root={draft}
             path={[]}
             selectedPath={safePath}
+            duplicateNames={duplicateNames}
             showErrors={showErrors}
             validationPulse={validationPulse}
             onSelect={setSelectedPath}
@@ -1700,13 +1844,17 @@ export function CustomCreate({
                         Agent 名称<span className="cw-req">*</span>
                       </label>
                       <input
-                        className={`cw-input ${invalidClass(nameMissing)}`}
+                        className={`cw-input ${invalidClass(nameInvalid)}`}
                         value={node.name}
-                        placeholder="例如：客服智能体"
+                        placeholder="例如：customer_service"
                         onChange={(e) => patch({ name: e.target.value })}
                       />
-                      {showErrors && nameMissing && (
-                        <span className="cw-error-text">名称为必填项</span>
+                      {showErrors && nameProblem ? (
+                        <span className="cw-error-text">{nameProblem}</span>
+                      ) : (
+                        <span className="cw-help">
+                          遵循 Google ADK 命名规则，且在 Agent 结构中保持唯一。
+                        </span>
                       )}
                     </div>
                     <div className="cw-field">
@@ -1915,6 +2063,15 @@ export function CustomCreate({
                           value={node.shortTermBackend}
                           onChange={(id) => patch({ shortTermBackend: id })}
                         />
+                        <RuntimeEnvFields
+                          env={
+                            STM_BACKENDS.find(
+                              (item) => item.id === (node.shortTermBackend ?? "local"),
+                            )?.env ?? []
+                          }
+                          values={draft.deployment?.envValues ?? {}}
+                          onChange={patchDeploymentEnv}
+                        />
                       </div>
                     )}
                     <Toggle
@@ -1935,6 +2092,15 @@ export function CustomCreate({
                           options={LTM_BACKENDS}
                           value={node.longTermBackend}
                           onChange={(id) => patch({ longTermBackend: id })}
+                        />
+                        <RuntimeEnvFields
+                          env={
+                            LTM_BACKENDS.find(
+                              (item) => item.id === (node.longTermBackend ?? "local"),
+                            )?.env ?? []
+                          }
+                          values={draft.deployment?.envValues ?? {}}
+                          onChange={patchDeploymentEnv}
                         />
                         <Toggle
                           checked={!!node.autoSaveSession}
@@ -1967,6 +2133,15 @@ export function CustomCreate({
                             patch({ knowledgebaseBackend: id })
                           }
                         />
+                        <RuntimeEnvFields
+                          env={
+                            KB_BACKENDS.find(
+                              (item) => item.id === (node.knowledgebaseBackend ?? "local"),
+                            )?.env ?? []
+                          }
+                          values={draft.deployment?.envValues ?? {}}
+                          onChange={patchDeploymentEnv}
+                        />
                       </div>
                     )}
                   </div>
@@ -1991,6 +2166,13 @@ export function CustomCreate({
                           items={TRACING_EXPORTERS}
                           selected={tracingExporters}
                           onToggle={toggleExporter}
+                        />
+                        <RuntimeEnvFields
+                          env={TRACING_EXPORTERS.filter((item) =>
+                            tracingExporters.includes(item.id),
+                          ).flatMap((item) => item.env)}
+                          values={draft.deployment?.envValues ?? {}}
+                          onChange={patchDeploymentEnv}
                         />
                       </div>
                     )}

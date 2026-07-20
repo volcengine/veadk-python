@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import secrets
 import socket
 import zipfile
 from pathlib import Path
@@ -193,11 +194,15 @@ def test_codegen_enables_feishu_without_exposing_lifecycle_code() -> None:
     project = generate_project_from_draft(
         AgentDraft(name="demo", deployment={"feishuEnabled": True})
     )
-    app_py = _file_map(project)["app.py"]
+    files = _file_map(project)
+    app_py = files["app.py"]
 
     assert "enable_feishu=True" in app_py
     assert "FeishuChannelExtension" not in app_py
     assert "asynccontextmanager" not in app_py
+    assert "veadk-python[extensions]" in files["requirements.txt"]
+    assert "FEISHU_APP_ID=" in files[".env.example"]
+    assert "FEISHU_APP_SECRET=" in files[".env.example"]
 
 
 def test_frontend_complete_shape_is_accepted_and_unknown_field_is_rejected() -> None:
@@ -461,6 +466,17 @@ class _FakeAsyncClient:
         return _FakeResponse(body=b'data: {"content":{"parts":[{"text":"hello"}]}}\n\n')
 
 
+class _FakeRunnerErrorAsyncClient(_FakeAsyncClient):
+    async def post(self, url: str, json: Any) -> _FakeResponse:
+        assert "/sessions" in url
+        return _FakeResponse(status_code=500, body=b"Internal Server Error")
+
+    def stream(self, method: str, url: str, json: dict[str, Any], **kwargs: Any):
+        assert method == "POST"
+        assert url.endswith("/run_sse")
+        return _FakeResponse(status_code=500, body=b"Internal Server Error")
+
+
 class _FakeProcess:
     created: list["_FakeProcess"] = []
 
@@ -519,6 +535,8 @@ def test_generated_project_and_debug_run_api_lifecycle(
     _run_frontend_server(
         agents_dir=str(tmp_path),
         frontend_dir=None,
+        site_logo=None,
+        site_title=None,
         host="127.0.0.1",
         port=8765,
         dev=True,
@@ -605,6 +623,57 @@ def test_generated_project_and_debug_run_api_lifecycle(
         assert '"text":"hello"' in sse_response.text
         assert _FakeAsyncClient.streamed_payloads[-1]["app_name"] == "demo_agent"
 
+        runner_error = "RuntimeError: tenant model credential is unavailable"
+        runner_marker = secrets.token_urlsafe(24)
+        inline_marker = secrets.token_urlsafe(24)
+        monkeypatch.setenv("MODEL_AGENT_API_KEY", runner_marker)
+        (Path(process.cwd) / "runner.stderr.log").write_text(
+            # lgtm[py/clear-text-storage-sensitive-data]
+            f"{runner_error}\napi_key={runner_marker}\nauthToken={inline_marker}",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr("httpx.AsyncClient", _FakeRunnerErrorAsyncClient)
+
+        session_error_response = client.post(
+            f"/web/generated-agent-test-runs/{run['runId']}/sessions",
+            json={"userId": "test_user"},
+        )
+        assert session_error_response.status_code == 500
+        assert runner_error in session_error_response.json()["detail"]
+        assert runner_marker not in session_error_response.json()["detail"]
+        assert inline_marker not in session_error_response.json()["detail"]
+        assert "api_key=***" in session_error_response.json()["detail"]
+        assert "authToken=***" in session_error_response.json()["detail"]
+        assert session_error_response.json()["detail"] != "Internal Server Error"
+
+        sse_error_response = client.post(
+            f"/web/generated-agent-test-runs/{run['runId']}/run_sse",
+            json={
+                "user_id": "test_user",
+                "session_id": "session-1",
+                "new_message": {"role": "user", "parts": [{"text": "hi"}]},
+                "streaming": True,
+            },
+        )
+        assert sse_error_response.status_code == 200
+        assert runner_error in sse_error_response.text
+        assert runner_marker not in sse_error_response.text
+        assert '"status_code": 500' in sse_error_response.text
+
+        def _raise_process_error(*args: Any, **kwargs: Any) -> None:
+            raise OSError("tenant debug process quota exhausted")
+
+        monkeypatch.setattr("subprocess.Popen", _raise_process_error)
+        create_error_response = client.post(
+            "/web/generated-agent-test-runs",
+            json={"draft": draft},
+        )
+        assert create_error_response.status_code == 500
+        create_error_detail = create_error_response.json()["detail"]
+        assert "创建调试环境失败" in create_error_detail
+        assert "错误 ID" in create_error_detail
+        assert "tenant debug process quota exhausted" not in create_error_detail
+
         delete_response = client.delete(
             f"/web/generated-agent-test-runs/{run['runId']}"
         )
@@ -634,6 +703,8 @@ def test_generated_agent_debug_omits_stdio_mcp_on_remote_bind(
     _run_frontend_server(
         agents_dir=str(tmp_path),
         frontend_dir=None,
+        site_logo=None,
+        site_title=None,
         host="0.0.0.0",
         port=8765,
         dev=True,
@@ -710,8 +781,9 @@ def test_generated_agent_debug_omits_stdio_mcp_on_remote_bind(
 
 
 def test_studio_deploy_run_script_allows_generated_agent_debug() -> None:
-    run_script = _studio_deploy_run_script()
+    run_script = _studio_deploy_run_script("site-logo.png")
 
     assert "HOST=0.0.0.0" in run_script
     assert "studio --auth-mode frontend" in run_script
+    assert '--site-logo "$ROOT_DIR/site-logo.png"' in run_script
     assert "--allow-remote-generated-agent-test-run" not in run_script

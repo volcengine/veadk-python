@@ -19,6 +19,7 @@ export default defineConfig({
       "/run_sse": API_TARGET,
       "/run": API_TARGET,
       "/debug": API_TARGET,
+      "/dev": API_TARGET,
       "/oauth2": API_TARGET,
       "/web": API_TARGET,
       "/skillhub": {

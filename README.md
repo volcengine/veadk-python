@@ -97,6 +97,14 @@ app = create_agentkit_app(root_agent)
 See [`examples/generated_agentkit_project`](examples/generated_agentkit_project)
 for a complete generated project.
 
+The Studio deployment flow lists Feishu, knowledge-base, short-/long-term
+memory, and observability settings in their feature sections. Values entered
+there are mirrored in the deployment environment-variable summary and converted
+to VeADK runtime environment variables only when deploying; secrets are not
+written to generated source or exported YAML. For multi-instance runtimes, use
+a database-backed short-term memory store so sessions remain available across
+instances.
+
 When a cloud image build fails from the bundled Web UI, the deployment error
 includes a credential-safe excerpt from the build log so dependency and
 Dockerfile failures can be diagnosed directly.
@@ -167,10 +175,11 @@ VeADK provides several useful command line tools for faster deployment and optim
 - `veadk prompt`: otpimize the system prompt of your agent by [PromptPilot](https://promptpilot.volcengine.com)
 - `veadk frontend`: serve the A2UI web UI together with the ADK agent API server
   and forward its validated OAuth access token when connecting to an AgentKit
-  runtime protected by `custom_jwt`
+  runtime protected by `custom_jwt`; customize its browser/sidebar branding with
+  `--site-title` and `--site-logo`
 - `veadk studio deploy`: deploy Studio and ensure its default IAM role has the
   required model, observability, search, security, memory, and identity system
-  policies
+  policies; custom local or remote logo images are bundled into the deployment
 
 ## Contribution
 
