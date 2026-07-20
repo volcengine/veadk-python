@@ -50,6 +50,7 @@ import {
   type RuntimeEnvConfiguration,
   type RuntimeEnvSelection,
 } from "./deploymentEnv";
+import { agentNameProblem, duplicateAgentNames } from "./agentNameValidation";
 import { draftToYaml } from "./configYaml";
 import type { AgentProject } from "./project";
 import type { SkillSource } from "./skills/types";
@@ -721,8 +722,13 @@ const typeMeta = (type: AgentDraft["agentType"]) =>
   AGENT_TYPES.find((t) => t.id === (type ?? "llm")) ?? AGENT_TYPES[0];
 
 /** Per-node required-field problem, or null when the node is valid. */
-function nodeProblem(n: AgentDraft): string | null {
-  if (n.name.trim().length === 0) return "缺少名称";
+function nodeProblem(
+  n: AgentDraft,
+  duplicateNames: ReadonlySet<string>,
+): string | null {
+  const nameProblem = agentNameProblem(n.name);
+  if (nameProblem) return nameProblem;
+  if (duplicateNames.has(n.name)) return "Agent 名称在当前结构中必须唯一";
   if (n.description.trim().length === 0) return "缺少描述";
   if (isA2aType(n.agentType))
     return (n.a2aUrl ?? "").trim().length === 0 ? "缺少 Agent URL" : null;
@@ -738,12 +744,18 @@ interface TreeProblem {
 }
 
 /** Collect required-field problems across the whole tree, in render order. */
-function treeProblems(root: AgentDraft, path: NodePath = []): TreeProblem[] {
+function treeProblems(
+  root: AgentDraft,
+  duplicateNames: ReadonlySet<string>,
+  path: NodePath = [],
+): TreeProblem[] {
   const out: TreeProblem[] = [];
-  const p = nodeProblem(root);
+  const p = nodeProblem(root, duplicateNames);
   if (p) out.push({ path, name: root.name.trim() || "未命名", problem: p });
   if (nodeAcceptsChildren(root)) {
-    root.subAgents.forEach((c, i) => out.push(...treeProblems(c, [...path, i])));
+    root.subAgents.forEach((c, i) =>
+      out.push(...treeProblems(c, duplicateNames, [...path, i])),
+    );
   }
   return out;
 }
@@ -805,6 +817,7 @@ function TreeNode({
   root,
   path,
   selectedPath,
+  duplicateNames,
   showErrors,
   validationPulse,
   onSelect,
@@ -813,6 +826,7 @@ function TreeNode({
   root: AgentDraft;
   path: NodePath;
   selectedPath: NodePath;
+  duplicateNames: ReadonlySet<string>;
   showErrors: boolean;
   validationPulse: number;
   onSelect: (p: NodePath) => void;
@@ -867,7 +881,7 @@ function TreeNode({
         className={`cw-tree-node cw-tree-type-${node.agentType ?? "llm"} ${
           selected ? "is-selected" : ""
         } ${draggable ? "is-draggable" : ""} ${dragOver ? "is-dragover" : ""} ${
-          showErrors && nodeProblem(node)
+          showErrors && nodeProblem(node, duplicateNames)
             ? `is-invalid cw-error-shake-${validationPulse % 2}`
             : ""
         }`}
@@ -946,6 +960,7 @@ function TreeNode({
               root={root}
               path={[...path, i]}
               selectedPath={selectedPath}
+              duplicateNames={duplicateNames}
               showErrors={showErrors}
               validationPulse={validationPulse}
               onSelect={onSelect}
@@ -1384,7 +1399,11 @@ export function CustomCreate({
   const a2a = isA2aType(node.agentType);
 
   // Inline error flags for the selected node.
-  const nameMissing = node.name.trim().length === 0;
+  const duplicateNames = useMemo(() => duplicateAgentNames(draft), [draft]);
+  const nameProblem =
+    agentNameProblem(node.name) ??
+    (duplicateNames.has(node.name) ? "Agent 名称在当前结构中必须唯一" : null);
+  const nameInvalid = nameProblem !== null;
   const descriptionMissing = node.description.trim().length === 0;
   const instructionMissing = node.instruction.trim().length === 0;
   const urlMissing = (node.a2aUrl ?? "").trim().length === 0;
@@ -1394,7 +1413,10 @@ export function CustomCreate({
       : "";
 
   // Whole-tree validation: every node must satisfy its type's requirements.
-  const problems = useMemo(() => treeProblems(draft), [draft]);
+  const problems = useMemo(
+    () => treeProblems(draft, duplicateNames),
+    [draft, duplicateNames],
+  );
   const canFinish = problems.length === 0;
   const currentDebugSnapshot = useMemo(() => debugSnapshotKey(draft), [draft]);
   const deploymentEnv = useMemo(() => collectDeploymentEnv(draft), [draft]);
@@ -1415,7 +1437,7 @@ export function CustomCreate({
   const completion = useMemo<Record<StepId, boolean>>(
     () => ({
       type: true,
-      basic: !nameMissing && (orchestrator || a2a || !instructionMissing),
+      basic: !nameInvalid && (orchestrator || a2a || !instructionMissing),
       model: Boolean(
         node.modelName?.trim() ||
           node.modelProvider?.trim() ||
@@ -1429,7 +1451,7 @@ export function CustomCreate({
       subagents: (node.subAgents?.length ?? 0) > 0,
       review: canFinish,
     }),
-    [node, nameMissing, instructionMissing, orchestrator, a2a, canFinish, builtinTools, mcpTools, selectedSkills],
+    [node, nameInvalid, instructionMissing, orchestrator, a2a, canFinish, builtinTools, mcpTools, selectedSkills],
   );
 
   // The nav only lists the sections actually rendered for THIS node's type —
@@ -1749,6 +1771,7 @@ export function CustomCreate({
             root={draft}
             path={[]}
             selectedPath={safePath}
+            duplicateNames={duplicateNames}
             showErrors={showErrors}
             validationPulse={validationPulse}
             onSelect={setSelectedPath}
@@ -1816,13 +1839,17 @@ export function CustomCreate({
                         Agent 名称<span className="cw-req">*</span>
                       </label>
                       <input
-                        className={`cw-input ${invalidClass(nameMissing)}`}
+                        className={`cw-input ${invalidClass(nameInvalid)}`}
                         value={node.name}
-                        placeholder="例如：客服智能体"
+                        placeholder="例如：customer_service"
                         onChange={(e) => patch({ name: e.target.value })}
                       />
-                      {showErrors && nameMissing && (
-                        <span className="cw-error-text">名称为必填项</span>
+                      {showErrors && nameProblem ? (
+                        <span className="cw-error-text">{nameProblem}</span>
+                      ) : (
+                        <span className="cw-help">
+                          遵循 Google ADK 命名规则，且在 Agent 结构中保持唯一。
+                        </span>
                       )}
                     </div>
                     <div className="cw-field">

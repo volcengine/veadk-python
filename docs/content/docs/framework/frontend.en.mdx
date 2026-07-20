@@ -240,6 +240,13 @@ username (letters + digits, ≤16), stored locally and used as the `user_id`.
   session and returns to the login page).
 </Callout>
 
+### Agent naming rules
+
+Studio validates root and nested Agent names against Google ADK rules. A name
+must start with an ASCII letter or underscore, may then contain ASCII letters,
+digits, and underscores, cannot be the reserved name `user`, and must be unique
+within the Agent tree.
+
 ### How it works
 
 <Steps>

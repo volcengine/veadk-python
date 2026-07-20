@@ -35,6 +35,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { type CreateModeProps, type AgentDraft, emptyDraft } from "./types";
+import { agentNameProblem, duplicateAgentNames } from "./agentNameValidation";
 import "./WorkflowCreate.css";
 
 /* ------------------------------------------------------------------ *
@@ -134,6 +135,34 @@ function WorkflowCreateInner({ onBack, onCreate }: CreateModeProps) {
   const [selectedId, setSelectedId] = useState<string | null>(starter.id);
 
   const selectedNode = nodes.find((n) => n.id === selectedId) ?? null;
+  const effectiveWorkflowName = wfName.trim() || "workflow_agent";
+  const duplicateNames = useMemo(
+    () =>
+      duplicateAgentNames({
+        name: effectiveWorkflowName,
+        subAgents: nodes.map((n) => n.data.agent),
+      }),
+    [effectiveWorkflowName, nodes],
+  );
+  const workflowNameProblem =
+    agentNameProblem(effectiveWorkflowName) ??
+    (duplicateNames.has(effectiveWorkflowName)
+      ? "名称须与 Agent 节点名称保持唯一"
+      : null);
+  const selectedNameProblem = selectedNode
+    ? agentNameProblem(selectedNode.data.agent.name) ??
+      (duplicateNames.has(selectedNode.data.agent.name)
+        ? "Agent 名称在当前工作流中必须唯一"
+        : null)
+    : null;
+  const canCreate =
+    nodes.length > 0 &&
+    workflowNameProblem === null &&
+    nodes.every(
+      (n) =>
+        agentNameProblem(n.data.agent.name) === null &&
+        !duplicateNames.has(n.data.agent.name),
+    );
 
   const onConnect = useCallback(
     (conn: Connection) =>
@@ -208,10 +237,11 @@ function WorkflowCreateInner({ onBack, onCreate }: CreateModeProps) {
 
   /* ---- assemble the AgentDraft & finalize ---- */
   const handleCreate = useCallback(() => {
+    if (!canCreate) return;
     const nodeAgents = nodes.map((n) => n.data.agent);
     const draft: AgentDraft = {
       ...emptyDraft(),
-      name: wfName.trim() || "workflow_agent",
+      name: effectiveWorkflowName,
       description: wfDesc.trim(),
       instruction: wfDesc.trim(),
       subAgents: nodeAgents,
@@ -222,9 +252,7 @@ function WorkflowCreateInner({ onBack, onCreate }: CreateModeProps) {
       },
     };
     onCreate(draft);
-  }, [nodes, edges, wfName, wfDesc, wfType, onCreate]);
-
-  const canCreate = nodes.length > 0;
+  }, [canCreate, nodes, edges, effectiveWorkflowName, wfDesc, wfType, onCreate]);
 
   // The app breadcrumb handles leaving this view, so onBack is no longer
   // rendered here.
@@ -239,11 +267,14 @@ function WorkflowCreateInner({ onBack, onCreate }: CreateModeProps) {
           <label className="wfb-field">
             <span className="wfb-field-label">名称</span>
             <input
-              className="wfb-input"
+              className={`wfb-input ${workflowNameProblem ? "wfb-input--error" : ""}`}
               value={wfName}
               onChange={(e) => setWfName(e.target.value)}
               placeholder="my_workflow"
             />
+            {workflowNameProblem && (
+              <span className="wfb-field-error">{workflowNameProblem}</span>
+            )}
           </label>
           <label className="wfb-field">
             <span className="wfb-field-label">描述</span>
@@ -350,11 +381,18 @@ function WorkflowCreateInner({ onBack, onCreate }: CreateModeProps) {
               <label className="wfb-field">
                 <span className="wfb-field-label">名称</span>
                 <input
-                  className="wfb-input"
+                  className={`wfb-input ${selectedNameProblem ? "wfb-input--error" : ""}`}
                   value={selectedNode.data.agent.name}
                   onChange={(e) => patchSelected({ name: e.target.value })}
                   placeholder="agent_name"
                 />
+                {selectedNameProblem ? (
+                  <span className="wfb-field-error">{selectedNameProblem}</span>
+                ) : (
+                  <span className="wfb-field-help">
+                    仅使用英文字母、数字和下划线，且名称保持唯一。
+                  </span>
+                )}
               </label>
 
               <label className="wfb-field">

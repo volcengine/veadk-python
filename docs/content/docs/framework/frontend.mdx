@@ -210,6 +210,12 @@ Google 同理，把 `OAUTH2_PROVIDER` 换成 `google`；Keycloak / Auth0 / Okta 
   登录态会被缓存：SSO 走 `veadk_session` Cookie，本地模式走 `localStorage`。会话本身**在发送第一条消息或上传第一个附件时才创建**（而非打开页面时）。退出登录为本地登出（清除会话并回到登录页）。
 </Callout>
 
+### Agent 命名规则
+
+Studio 会按照 Google ADK 的规则校验根 Agent 与所有嵌套 Agent 的名称：名称须以
+英文字母或下划线开头，后续只能包含英文字母、数字和下划线；不能使用保留名
+`user`，并且在整个 Agent 结构中必须唯一。
+
 ### 工作原理
 
 <Steps>

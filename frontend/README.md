@@ -166,6 +166,13 @@ tool or transfer one tree edge at a time until it reaches the selected agent.
 The same metadata is attached to the first Google GenAI `Part`, so session
 history restores the `/skill` and `@agent` chips after a reload.
 
+## Agent naming
+
+Studio validates every root and nested Agent name against Google ADK rules.
+Names must start with an ASCII letter or underscore, may then contain ASCII
+letters, digits, and underscores, cannot be `user`, and must be unique in the
+Agent tree.
+
 ## How it works
 
 - `adk/client.ts` calls `/list-apps`, creates a session, and streams `/run_sse`;
