@@ -14,7 +14,9 @@ server that `veadk frontend` launches — no separate backend.
   the turn to a mentionable sub-agent.
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
 - **Sessions**: pick an agent, browse history, new chat, delete — per signed-in
-  user. Long Agent lists stay within the viewport and scroll independently.
+  user. The new-session composer stays minimal until a conversation begins,
+  when its session metadata appears. Long Agent lists stay within the viewport
+  and scroll independently.
 - **Tracing viewer**: a span tree + detail panel from the ADK debug trace.
 - **Custom-agent workbench**: configure and debug an agent, then review
   generated source with line numbers and syntax highlighting before setting

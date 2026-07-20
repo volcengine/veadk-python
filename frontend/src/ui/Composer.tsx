@@ -40,6 +40,7 @@ export interface ComposerProps {
   onSubmit: () => void;
   disabled: boolean; // not connected yet
   busy: boolean; // a turn is streaming
+  showMeta: boolean;
   attachments: Attachment[];
   skills: AgentSkill[];
   agents: AgentTarget[];
@@ -58,6 +59,7 @@ export function Composer({
   onSubmit,
   disabled,
   busy,
+  showMeta,
   attachments,
   skills,
   agents,
@@ -340,18 +342,20 @@ export function Composer({
         </motion.button>
       </div>
 
-      <div className="composer-meta">
-        <span className="composer-session-line">
-          会话 ID：
-          <span className="composer-session-id" title={sessionId || undefined}>
-            {sessionId || "—"}
+      {showMeta && (
+        <div className="composer-meta">
+          <span className="composer-session-line">
+            会话 ID：
+            <span className="composer-session-id" title={sessionId || undefined}>
+              {sessionId || "—"}
+            </span>
           </span>
-        </span>
-        <span className="composer-meta-separator" aria-hidden>
-          |
-        </span>
-        <span>回答仅供参考</span>
-      </div>
+          <span className="composer-meta-separator" aria-hidden>
+            |
+          </span>
+          <span>回答仅供参考</span>
+        </div>
+      )}
 
       {/* hidden pickers */}
       <input

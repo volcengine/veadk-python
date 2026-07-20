@@ -1400,6 +1400,7 @@ export default function App() {
             }}
             disabled={!appName || !userId}
             busy={busy}
+            showMeta={turns.length > 0}
             attachments={attachments}
             skills={availableSkills}
             agents={availableAgents}
