@@ -2673,6 +2673,7 @@ a.search-result { text-decoration: none; color: inherit; }
 .login-btn:active { transform: scale(0.99); }
 .login-btn .icon { width: 18px; height: 18px; }
 .login-legal { margin: 18px 0 0; font-size: 12px; color: hsl(var(--muted-foreground)); }
+.login-powered { margin: 6px 0 0; font-size: 12px; color: hsl(var(--muted-foreground)); }
 .login-footer { padding: 18px 24px; text-align: center; font-size: 12px; color: hsl(var(--muted-foreground)); }
 
 /* ---------- reduced motion ---------- */

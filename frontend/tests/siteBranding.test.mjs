@@ -30,6 +30,8 @@ test("applies configured branding to the UI, document title, and favicon", () =>
   assert.match(sidebarSource, /branding\.logoUrl \|\| volcengineLogo/);
   assert.match(sidebarSource, /width=\{20\}\s*height=\{20\}/);
   assert.match(loginSource, /width=\{20\}\s*height=\{20\}/);
+  assert.match(loginSource, /<h1 className="login-title">\{branding\.title\}<\/h1>/);
+  assert.match(loginSource, /火山引擎 VeADK 提供企业级 Agent 解决方案/);
   assert.match(stylesSource, /flex: 0 0 20px/);
   assert.match(stylesSource, /object-fit: contain/);
   assert.match(htmlSource, /<link rel="icon"/);

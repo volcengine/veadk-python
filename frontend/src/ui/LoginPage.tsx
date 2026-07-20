@@ -46,11 +46,7 @@ export function LoginPage({ branding, onUsername }: LoginPageProps) {
 
       <main className="login-main">
         <div className="login-card">
-          <h1 className="login-title">
-            VeADK 提供
-            <br />
-            企业级 Agent 解决方案
-          </h1>
+          <h1 className="login-title">{branding.title}</h1>
 
           {providers === null ? null : providers.length > 0 ? (
             <>
@@ -100,6 +96,7 @@ export function LoginPage({ branding, onUsername }: LoginPageProps) {
           )}
 
           <p className="login-legal">继续即表示你已阅读并同意服务条款与隐私政策</p>
+          <p className="login-powered">火山引擎 VeADK 提供企业级 Agent 解决方案</p>
         </div>
       </main>
 
