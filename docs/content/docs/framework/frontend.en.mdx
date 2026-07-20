@@ -153,9 +153,17 @@ veadk studio deploy \
   --user-pool-id <pool-id> \
   --allowed-client-id <client-id> \
   --vefaas-app-name <app-name> \
+  --region cn-beijing \
+  --project default \
   --site-title 火山助手 \
   --site-logo ./logo.png
 ```
+
+`--region` selects the Studio deployment region, defaults to `cn-beijing`, and
+also supports `cn-shanghai`. Deployment checks the deployment region first and
+then searches the Beijing and Shanghai Identity regions. A cross-region match
+emits a warning and continues. `--project` selects the VeFaaS function project
+and defaults to `default`.
 
 ### IAM permissions for `veadk studio deploy`
 

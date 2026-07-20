@@ -44,10 +44,17 @@ logger = get_logger(__name__)
 
 
 class VeFaaS:
-    def __init__(self, access_key: str, secret_key: str, region: str = "cn-beijing"):
+    def __init__(
+        self,
+        access_key: str,
+        secret_key: str,
+        region: str = "cn-beijing",
+        project_name: str = "default",
+    ):
         self.ak = access_key
         self.sk = secret_key
         self.region = region
+        self.project_name = project_name
 
         configuration = volcenginesdkcore.Configuration()
         configuration.ak = self.ak
@@ -99,6 +106,7 @@ class VeFaaS:
             sk=self.sk,
             target="CodeUploadCallback",
             body={"FunctionId": function_id},
+            region=self.region,
         )
 
         return res
@@ -124,6 +132,7 @@ class VeFaaS:
                 envs=envs,
                 memory_mb=2048,
                 role=getenv("IAM_ROLE", None, allow_false_values=True),
+                project_name=self.project_name,
             )
         )
 

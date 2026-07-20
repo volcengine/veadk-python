@@ -45,6 +45,8 @@ class CloudAgentEngine(BaseModel):
         volcengine_secret_key (str): Secret key for Volcengine authentication.
             Defaults to VOLCENGINE_SECRET_KEY environment variable.
         region (str): Region for Volcengine services. Defaults to "cn-beijing".
+        project (str): Volcengine project for the VeFaaS function. Defaults to
+            "default".
         _vefaas_service (VeFaaS): Internal VeFaaS client instance, initialized post-creation.
         _veapig_service (APIGateway): Internal VeAPIG client instance, initialized post-creation.
         _veidentity_service (IdentityClient): Internal Identity client instance, initialized post-creation.
@@ -69,6 +71,7 @@ class CloudAgentEngine(BaseModel):
         "VOLCENGINE_SECRET_KEY", "", allow_false_values=True
     )
     region: str = "cn-beijing"
+    project: str = "default"
 
     def model_post_init(self, context: Any, /) -> None:
         """Initializes the internal VeFaaS service after Pydantic model validation.
@@ -89,6 +92,7 @@ class CloudAgentEngine(BaseModel):
             access_key=self.volcengine_access_key,
             secret_key=self.volcengine_secret_key,
             region=self.region,
+            project_name=self.project,
         )
         self._veapig_service = APIGateway(
             access_key=self.volcengine_access_key,

@@ -143,9 +143,16 @@ veadk studio deploy \
   --user-pool-id <pool-id> \
   --allowed-client-id <client-id> \
   --vefaas-app-name <app-name> \
+  --region cn-beijing \
+  --project default \
   --site-title 火山助手 \
   --site-logo ./logo.png
 ```
+
+`--region` 指定 Studio 部署地域，默认为 `cn-beijing`，也支持
+`cn-shanghai`。部署时会先查询部署地域，再跨地域查询北京、上海的 Identity
+用户池；跨地域命中时会显示 warning 并继续。`--project` 指定 VeFaaS 函数
+所属项目，默认为 `default`。
 
 ### `veadk studio deploy` 的 IAM 权限
 
