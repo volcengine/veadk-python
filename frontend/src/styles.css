@@ -91,7 +91,7 @@ body {
   letter-spacing: -0.01em;
   padding: 4px 10px 12px;
 }
-.brand-logo { width: 20px; height: 20px; flex-shrink: 0; }
+.brand-logo { width: 20px; height: 20px; flex-shrink: 0; object-fit: contain; }
 /* ChatGPT-style row: transparent, hover gray */
 .new-chat {
   display: flex;
@@ -2623,7 +2623,15 @@ a.search-result { text-decoration: none; color: inherit; }
   color: hsl(var(--foreground));
 }
 .login-top { padding: 18px 24px; }
-.login-brand { font-weight: 600; font-size: 15px; letter-spacing: -0.01em; }
+.login-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+}
+.login-brand-logo { width: 20px; height: 20px; object-fit: contain; }
 .login-main { flex: 1; display: flex; align-items: center; justify-content: center; padding: 0 24px; }
 .login-card { width: 100%; max-width: 420px; }
 .login-title {

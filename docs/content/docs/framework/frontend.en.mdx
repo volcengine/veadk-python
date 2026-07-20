@@ -125,6 +125,32 @@ After selecting a sub-agent, the `/` menu shows skills mounted on that target. C
 
 The frontend sends structured `veadkInvocation` metadata instead of inferring invocation intent from the message string. The backend plugin directs ADK to call the skill tool or invoke `transfer_to_agent` one tree edge at a time until it reaches the target. The same metadata is written to the first Google GenAI `Part`, so reopening session history restores the `/skill` and `@agent` chips.
 
+### Custom Studio branding
+
+Use `--site-title` for a system name of up to six characters and `--site-logo`
+for a local image or HTTP(S) image URL. The logo is used in the sidebar, login
+page, and browser favicon; the system name also becomes the browser page title.
+
+```bash
+veadk studio --site-title 火山助手 --site-logo ./logo.png
+veadk studio --site-title 火山助手 --site-logo https://example.com/logo.webp
+```
+
+PNG, JPEG, GIF, WebP, AVIF, and ICO images up to 5 MB are supported. The
+equivalent environment variables are `VEADK_SITE_TITLE` and `VEADK_SITE_LOGO`.
+Cloud deployment accepts the same options. A remote image is downloaded during
+deployment and bundled into VeFaaS just like a local image, so the deployed site
+does not depend on the original URL:
+
+```bash
+veadk studio deploy \
+  --user-pool-id <pool-id> \
+  --allowed-client-id <client-id> \
+  --vefaas-app-name <app-name> \
+  --site-title 火山助手 \
+  --site-logo ./logo.png
+```
+
 ### IAM permissions for `veadk studio deploy`
 
 When `--iam-role` is omitted, the deploy command creates or reuses `VeADKFrontendServiceRole` and ensures that the role has these Volcengine system policies:

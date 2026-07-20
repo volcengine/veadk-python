@@ -759,8 +759,14 @@ export interface UiFeatures {
   generatedAgentTestRunDisabledReason?: string;
 }
 
+export interface SiteBranding {
+  title: string;
+  logoUrl: string;
+}
+
 export interface UiConfig {
   studio: boolean;
+  branding: SiteBranding;
   features: UiFeatures;
   defaultView: "chat" | "addAgent";
   /** Where the agent picker sources agents: local apps (`--dev`) or the user's
@@ -768,8 +774,14 @@ export interface UiConfig {
   agentsSource: "local" | "cloud";
 }
 
+export const DEFAULT_SITE_BRANDING: SiteBranding = {
+  title: "VeADK Studio",
+  logoUrl: "",
+};
+
 const DEFAULT_UI_CONFIG: UiConfig = {
   studio: false,
+  branding: DEFAULT_SITE_BRANDING,
   features: {
     newChat: true,
     search: true,
@@ -789,9 +801,20 @@ export async function getUiConfig(): Promise<UiConfig> {
   try {
     const res = await apiFetch("/web/ui-config");
     if (!res.ok) return DEFAULT_UI_CONFIG;
-    const d = (await res.json()) as Partial<UiConfig>;
+    const d = (await res.json()) as Partial<Omit<UiConfig, "branding">> & {
+      branding?: Partial<SiteBranding>;
+    };
+    const logoUrl = typeof d.branding?.logoUrl === "string"
+      ? d.branding.logoUrl
+      : DEFAULT_SITE_BRANDING.logoUrl;
     return {
       studio: d.studio ?? false,
+      branding: {
+        title: typeof d.branding?.title === "string"
+          ? d.branding.title
+          : DEFAULT_SITE_BRANDING.title,
+        logoUrl: logoUrl ? withAuth(logoUrl) : "",
+      },
       features: { ...DEFAULT_UI_CONFIG.features, ...(d.features ?? {}) },
       defaultView: d.defaultView ?? "chat",
       agentsSource: d.agentsSource === "cloud" ? "cloud" : "local",

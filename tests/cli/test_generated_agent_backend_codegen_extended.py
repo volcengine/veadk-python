@@ -519,6 +519,8 @@ def test_generated_project_and_debug_run_api_lifecycle(
     _run_frontend_server(
         agents_dir=str(tmp_path),
         frontend_dir=None,
+        site_logo=None,
+        site_title=None,
         host="127.0.0.1",
         port=8765,
         dev=True,
@@ -634,6 +636,8 @@ def test_generated_agent_debug_omits_stdio_mcp_on_remote_bind(
     _run_frontend_server(
         agents_dir=str(tmp_path),
         frontend_dir=None,
+        site_logo=None,
+        site_title=None,
         host="0.0.0.0",
         port=8765,
         dev=True,
@@ -710,8 +714,9 @@ def test_generated_agent_debug_omits_stdio_mcp_on_remote_bind(
 
 
 def test_studio_deploy_run_script_allows_generated_agent_debug() -> None:
-    run_script = _studio_deploy_run_script()
+    run_script = _studio_deploy_run_script("site-logo.png")
 
     assert "HOST=0.0.0.0" in run_script
     assert "studio --auth-mode frontend" in run_script
+    assert '--site-logo "$ROOT_DIR/site-logo.png"' in run_script
     assert "--allow-remote-generated-agent-test-run" not in run_script

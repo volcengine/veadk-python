@@ -31,7 +31,13 @@ from veadk.cli.cli_frontend import (
 )
 
 
-def _create_frontend_app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> FastAPI:
+def _create_frontend_app(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    site_logo: str | None = None,
+    site_title: str | None = None,
+) -> FastAPI:
     captured: dict[str, Any] = {}
     monkeypatch.setattr("dotenv.find_dotenv", lambda: "")
     monkeypatch.setattr(
@@ -44,6 +50,8 @@ def _create_frontend_app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Fas
     _run_frontend_server(
         agents_dir=str(tmp_path),
         frontend_dir=None,
+        site_logo=site_logo,
+        site_title=site_title,
         host="127.0.0.1",
         port=8765,
         dev=True,
@@ -81,6 +89,36 @@ def test_vite_allows_both_loopback_browser_origins() -> None:
         "http://127.0.0.1:5173",
     ]
     assert _frontend_allow_origins(vite=False) == []
+
+
+def test_ui_config_serves_custom_branding(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    logo = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8A"
+        "AQUBAScY42YAAAAASUVORK5CYII="
+    )
+    logo_path = tmp_path / "logo.png"
+    logo_path.write_bytes(logo)
+    app = _create_frontend_app(
+        monkeypatch,
+        tmp_path,
+        site_logo=str(logo_path),
+        site_title="火山助手",
+    )
+
+    with TestClient(app) as client:
+        config_response = client.get("/web/ui-config")
+        logo_response = client.get("/web/site-logo")
+
+    assert config_response.status_code == 200
+    assert config_response.json()["branding"] == {
+        "title": "火山助手",
+        "logoUrl": "/web/site-logo",
+    }
+    assert logo_response.status_code == 200
+    assert logo_response.headers["content-type"].startswith("image/png")
+    assert logo_response.content == logo
 
 
 @pytest.mark.parametrize(

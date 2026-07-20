@@ -118,6 +118,31 @@ veadk frontend --agents-dir examples
 
 前端不会从消息字符串中猜测调用意图，而是发送结构化的 `veadkInvocation` metadata。后端插件据此要求 ADK 调用技能工具，或沿 Agent 树逐级调用 `transfer_to_agent`，直到到达目标节点。同一份 metadata 也会写入首个 Google GenAI `Part`，因此重新加载历史会话后仍能恢复 `/skill` 与 `@agent` chip。
 
+### 自定义 Studio 品牌
+
+使用 `--site-title` 设置不超过 6 个字符的系统名称，使用
+`--site-logo` 指定本地图片或 HTTP(S) 图片地址。Logo 会同时用于
+侧边栏、登录页和浏览器 favicon，系统名称也会作为浏览器页面标题。
+
+```bash
+veadk studio --site-title 火山助手 --site-logo ./logo.png
+veadk studio --site-title 火山助手 --site-logo https://example.com/logo.webp
+```
+
+支持 PNG、JPEG、GIF、WebP、AVIF 和 ICO，图片最大 5 MB；也可以通过
+`VEADK_SITE_TITLE` 与 `VEADK_SITE_LOGO` 环境变量配置。云上部署使用相同
+参数，网络图片会在部署时下载，并与本地图片一样打包进 VeFaaS，
+不依赖原始图片地址：
+
+```bash
+veadk studio deploy \
+  --user-pool-id <pool-id> \
+  --allowed-client-id <client-id> \
+  --vefaas-app-name <app-name> \
+  --site-title 火山助手 \
+  --site-logo ./logo.png
+```
+
 ### `veadk studio deploy` 的 IAM 权限
 
 未传入 `--iam-role` 时，部署命令会创建或复用 `VeADKFrontendServiceRole`，并确保该 Role 绑定以下火山引擎系统策略：

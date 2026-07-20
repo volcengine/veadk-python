@@ -58,6 +58,22 @@ cd frontend && npm run dev  # http://localhost:5173
 The Vite development server proxies the ADK API routes, including the
 `/dev/apps/.../debug/trace` session-trace endpoint, to the backend on port 8000.
 
+## Branding
+
+Set a custom title (up to six characters) and a local or remote image logo when
+starting Studio. The same logo is used in the sidebar, login page, and browser
+favicon; the title is also used as the browser page title.
+
+```bash
+veadk studio --site-title 火山助手 --site-logo ./logo.png
+veadk studio --site-title 火山助手 --site-logo https://example.com/logo.webp
+```
+
+Supported logo formats are PNG, JPEG, GIF, WebP, AVIF, and ICO, up to 5 MB.
+`VEADK_SITE_TITLE` and `VEADK_SITE_LOGO` provide equivalent environment-variable
+configuration. `veadk studio deploy` accepts the same flags and copies either a
+local image or a downloaded network image into the VeFaaS deployment package.
+
 ## Authentication
 
 The ADK `user_id` (which scopes sessions/memory) comes from the signed-in user.

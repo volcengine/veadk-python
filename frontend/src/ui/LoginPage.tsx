@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { ArrowRight, Github, LogIn } from "lucide-react";
+import type { SiteBranding } from "../adk/client";
 import { fetchProviders, loginTo, USERNAME_RE, type Provider } from "../adk/identity";
+import defaultSiteLogo from "../assets/volcengine.svg";
 
 function providerIcon(id: string) {
   if (id.toLowerCase() === "github") return <Github className="icon" />;
@@ -8,11 +10,12 @@ function providerIcon(id: string) {
 }
 
 export interface LoginPageProps {
+  branding: SiteBranding;
   /** Chosen username for the no-SSO local mode. */
   onUsername: (name: string) => void;
 }
 
-export function LoginPage({ onUsername }: LoginPageProps) {
+export function LoginPage({ branding, onUsername }: LoginPageProps) {
   const [providers, setProviders] = useState<Provider[] | null>(null);
   const [name, setName] = useState("");
 
@@ -28,7 +31,15 @@ export function LoginPage({ onUsername }: LoginPageProps) {
   return (
     <div className="login">
       <header className="login-top">
-        <span className="login-brand">VeADK Web</span>
+        <span className="login-brand">
+          <img
+            className="login-brand-logo"
+            src={branding.logoUrl || defaultSiteLogo}
+            alt=""
+            aria-hidden
+          />
+          {branding.title}
+        </span>
       </header>
 
       <main className="login-main">
@@ -41,7 +52,7 @@ export function LoginPage({ onUsername }: LoginPageProps) {
 
           {providers === null ? null : providers.length > 0 ? (
             <>
-              <p className="login-sub">登录以继续使用 VeADK Web</p>
+              <p className="login-sub">登录以继续使用 {branding.title}</p>
               <div className="login-providers">
                 {providers.map((p) => (
                   <button key={p.id} className="login-btn" onClick={() => loginTo(p.loginUrl)}>

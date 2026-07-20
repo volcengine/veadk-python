@@ -33,6 +33,7 @@ from typing import Any
 
 import click
 
+from veadk.cli.frontend_branding import normalize_site_title, resolve_site_logo
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -289,6 +290,19 @@ def _serve_options(f):
             help="Override the built React UI directory. Defaults to the UI shipped "
             "with the package (veadk/webui), falling back to ./frontend/dist.",
         ),
+        click.option(
+            "--site-logo",
+            default=None,
+            envvar="VEADK_SITE_LOGO",
+            help="Studio logo as a local image path or HTTP(S) URL "
+            "(env: VEADK_SITE_LOGO).",
+        ),
+        click.option(
+            "--site-title",
+            default=None,
+            envvar="VEADK_SITE_TITLE",
+            help="Studio title, at most 6 characters (env: VEADK_SITE_TITLE).",
+        ),
         click.option("--host", default="127.0.0.1", show_default=True),
         click.option("--port", default=8000, show_default=True, type=int),
         click.option(
@@ -401,6 +415,8 @@ def frontend(
     ctx: click.Context,
     agents_dir: str,
     frontend_dir: str | None,
+    site_logo: str | None,
+    site_title: str | None,
     host: str,
     port: int,
     dev: bool,
@@ -422,6 +438,8 @@ def frontend(
     _run_frontend_server(
         agents_dir=agents_dir,
         frontend_dir=frontend_dir,
+        site_logo=site_logo,
+        site_title=site_title,
         host=host,
         port=port,
         dev=dev,
@@ -447,6 +465,8 @@ def studio(
     ctx: click.Context,
     agents_dir: str,
     frontend_dir: str | None,
+    site_logo: str | None,
+    site_title: str | None,
     host: str,
     port: int,
     dev: bool,
@@ -473,6 +493,8 @@ def studio(
     _run_frontend_server(
         agents_dir=agents_dir,
         frontend_dir=frontend_dir,
+        site_logo=site_logo,
+        site_title=site_title,
         host=host,
         port=port,
         dev=dev,
@@ -495,6 +517,8 @@ def _run_frontend_server(
     *,
     agents_dir: str,
     frontend_dir: str | None,
+    site_logo: str | None,
+    site_title: str | None,
     host: str,
     port: int,
     dev: bool,
@@ -512,6 +536,12 @@ def _run_frontend_server(
     studio: bool = False,
 ) -> None:
     """Launch the A2UI web UI backed by the ADK agent API server."""
+
+    try:
+        branding_title = normalize_site_title(site_title)
+        branding_logo = resolve_site_logo(site_logo)
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
 
     # Explicitly load .env file before any agent code runs
     # find_dotenv() searches upward from current directory to find .env
@@ -746,6 +776,16 @@ def _run_frontend_server(
             "children": children,
         }
 
+    if branding_logo is not None:
+
+        @app.get("/web/site-logo")
+        async def _web_site_logo():
+            return Response(
+                content=branding_logo.content,
+                media_type=branding_logo.media_type,
+                headers={"Cache-Control": "no-cache"},
+            )
+
     @app.get("/web/ui-config")
     async def _web_ui_config():
         """Feature gates the SPA reads at startup. Studio now serves the SAME UI
@@ -754,6 +794,10 @@ def _run_frontend_server(
         is informational."""
         return {
             "studio": studio,
+            "branding": {
+                "title": branding_title,
+                "logoUrl": "/web/site-logo" if branding_logo is not None else "",
+            },
             # Agent source for the picker: --dev serves local agents (/list-apps),
             # otherwise the deployed UI lists the user's cloud AgentKit runtimes.
             "agentsSource": "local" if dev else "cloud",
@@ -2530,7 +2574,14 @@ def _run_frontend_server(
             setup_oauth2(
                 app,
                 oauth2_config,
-                exempt_paths={"/", "/index.html", "/favicon.ico", "/web/auth-config"},
+                exempt_paths={
+                    "/",
+                    "/index.html",
+                    "/favicon.ico",
+                    "/web/auth-config",
+                    "/web/site-logo",
+                    "/web/ui-config",
+                },
                 exempt_prefixes={"/assets", "/skillhub"},
             )
             logger.info(
@@ -2779,18 +2830,22 @@ def _run_frontend_server(
     uvicorn.run(app, host=host, port=port)
 
 
-def _studio_deploy_run_script() -> str:
+def _studio_deploy_run_script(site_logo_filename: str | None = None) -> str:
     """Return the authenticated VeFaaS entrypoint used by ``studio deploy``."""
+    command = "exec python3 -m veadk.cli.cli studio --auth-mode frontend"
+    if site_logo_filename:
+        command += f' --site-logo "$ROOT_DIR/{site_logo_filename}"'
+    command += ' --host "$HOST" --port "$PORT"\n'
     return (
         "#!/bin/bash\n"
         "set -ex\n"
-        'cd "$(dirname "$0")"\n'
+        'ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"\n'
+        'cd "$ROOT_DIR"\n'
         'if [ -d "output" ]; then cd ./output/; fi\n'
         "HOST=0.0.0.0\n"
         "PORT=${_FAAS_RUNTIME_PORT:-8000}\n"
         "export PYTHONPATH=$PYTHONPATH:./site-packages\n"
-        "exec python3 -m veadk.cli.cli studio "
-        '--auth-mode frontend --host "$HOST" --port "$PORT"\n'
+        f"{command}"
     )
 
 
@@ -2846,6 +2901,17 @@ def _studio_deploy_run_script() -> str:
     "current veadk/webui) and ship it, instead of installing veadk-python from "
     "PyPI. Use to deploy unreleased frontend/backend changes.",
 )
+@click.option(
+    "--site-logo",
+    default=None,
+    help="Studio logo as a local image path or HTTP(S) URL; the image is "
+    "bundled into the deployed function.",
+)
+@click.option(
+    "--site-title",
+    default=None,
+    help="Studio title, at most 6 characters.",
+)
 def frontend_deploy(
     user_pool_id: str,
     allowed_client_id: str,
@@ -2860,6 +2926,8 @@ def frontend_deploy(
     volcengine_secret_key: str | None,
     veadk_version: str,
     from_source: bool,
+    site_logo: str | None,
+    site_title: str | None,
 ) -> None:
     """Deploy the SSO web frontend to VeFaaS.
 
@@ -2872,6 +2940,12 @@ def frontend_deploy(
     import shutil
 
     from veadk.config import getenv, veadk_environments
+
+    try:
+        branding_title = normalize_site_title(site_title)
+        branding_logo = resolve_site_logo(site_logo)
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
 
     ak = volcengine_access_key or getenv("VOLCENGINE_ACCESS_KEY")
     sk = volcengine_secret_key or getenv("VOLCENGINE_SECRET_KEY")
@@ -2912,6 +2986,7 @@ def frontend_deploy(
     veadk_environments["OAUTH2_USER_POOL_ID"] = user_pool_id
     veadk_environments["OAUTH2_USER_POOL_CLIENT_ID"] = allowed_client_id
     veadk_environments["OAUTH2_PROVIDER"] = "veidentity"
+    veadk_environments["VEADK_SITE_TITLE"] = branding_title
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
 
@@ -2920,7 +2995,10 @@ def frontend_deploy(
     requirements = (
         f"veadk-python=={veadk_version}\n" if veadk_version else "veadk-python\n"
     )
-    run_sh = _studio_deploy_run_script()
+    logo_filename = (
+        f"site-logo.{branding_logo.extension}" if branding_logo is not None else None
+    )
+    run_sh = _studio_deploy_run_script(logo_filename)
     # 2b) Resolve the serverless APIG gateway: use --gateway-name if given, else
     #     reuse an existing serverless gateway, creating one only if none exists.
     #     (VeFaaS applications can only attach to a serverless gateway; reusing
@@ -2942,6 +3020,8 @@ def frontend_deploy(
     tmp = tempfile.mkdtemp(prefix=f"veadk_frontend_deploy_{vefaas_app_name}_")
     try:
         (Path(tmp) / "run.sh").write_text(run_sh, encoding="utf-8")
+        if branding_logo is not None and logo_filename is not None:
+            (Path(tmp) / logo_filename).write_bytes(branding_logo.content)
 
         # When --from-source, build a wheel from this checkout (picks up
         # uncommitted changes + the current veadk/webui) and install it instead

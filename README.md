@@ -171,10 +171,11 @@ VeADK provides several useful command line tools for faster deployment and optim
 - `veadk prompt`: otpimize the system prompt of your agent by [PromptPilot](https://promptpilot.volcengine.com)
 - `veadk frontend`: serve the A2UI web UI together with the ADK agent API server
   and forward its validated OAuth access token when connecting to an AgentKit
-  runtime protected by `custom_jwt`
+  runtime protected by `custom_jwt`; customize its browser/sidebar branding with
+  `--site-title` and `--site-logo`
 - `veadk studio deploy`: deploy Studio and ensure its default IAM role has the
   required model, observability, search, security, memory, and identity system
-  policies
+  policies; custom local or remote logo images are bundled into the deployment
 
 ## Contribution
 
