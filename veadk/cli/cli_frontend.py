@@ -3169,7 +3169,8 @@ def frontend_deploy(
     veadk_environments["OAUTH2_USER_POOL_ID"] = user_pool_id
     veadk_environments["OAUTH2_USER_POOL_CLIENT_ID"] = allowed_client_id
     veadk_environments["OAUTH2_PROVIDER"] = "veidentity"
-    veadk_environments["VEADK_SITE_TITLE"] = branding_title
+    if site_title is not None:
+        veadk_environments["VEADK_SITE_TITLE"] = branding_title
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
 

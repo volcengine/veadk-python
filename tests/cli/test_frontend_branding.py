@@ -102,8 +102,15 @@ def test_resolve_site_logo_downloads_network_image(
     assert logo.media_type == "image/png"
 
 
-def test_studio_deploy_bundles_logo_and_title(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize(
+    ("title_args", "expected_site_title"),
+    [([], None), (["--site-title", "火山助手"], "火山助手")],
+)
+def test_studio_deploy_bundles_logo_and_optional_title(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    title_args: list[str],
+    expected_site_title: str | None,
 ) -> None:
     logo_path = tmp_path / "logo.png"
     logo_path.write_bytes(_PNG)
@@ -132,32 +139,31 @@ def test_studio_deploy_bundles_logo_and_title(
         "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
     )
 
-    result = CliRunner().invoke(
-        studio,
-        [
-            "deploy",
-            "--user-pool-id",
-            "pool-id",
-            "--allowed-client-id",
-            "client-id",
-            "--vefaas-app-name",
-            "branded-studio",
-            "--iam-role",
-            "trn:iam::role/test",
-            "--gateway-name",
-            "gateway",
-            "--volcengine-access-key",
-            "ak",
-            "--volcengine-secret-key",
-            "sk",
-            "--site-title",
-            "火山助手",
-            "--site-logo",
-            str(logo_path),
-        ],
-    )
+    args = [
+        "deploy",
+        "--user-pool-id",
+        "pool-id",
+        "--allowed-client-id",
+        "client-id",
+        "--vefaas-app-name",
+        "branded-studio",
+        "--iam-role",
+        "trn:iam::role/test",
+        "--gateway-name",
+        "gateway",
+        "--volcengine-access-key",
+        "ak",
+        "--volcengine-secret-key",
+        "sk",
+        "--site-logo",
+        str(logo_path),
+    ]
+    result = CliRunner().invoke(studio, args + title_args)
 
     assert result.exit_code == 0, result.output
     assert captured["logo"] == _PNG
     assert '--site-logo "$ROOT_DIR/site-logo.png"' in str(captured["run_script"])
-    assert environments["VEADK_SITE_TITLE"] == "火山助手"
+    if expected_site_title is None:
+        assert "VEADK_SITE_TITLE" not in environments
+    else:
+        assert environments["VEADK_SITE_TITLE"] == expected_site_title
