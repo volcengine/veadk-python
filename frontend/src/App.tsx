@@ -31,6 +31,7 @@ import {
   type AdkSession,
   type Attachment,
   type FrontendInvocation,
+  type ManagedRuntime,
   type SiteBranding,
   type UiFeatures,
 } from "./adk/client";
@@ -44,6 +45,7 @@ import { ManageAgentsView } from "./ui/ManageAgents";
 import { SearchView } from "./ui/Search";
 import {
   buildAgentEntries,
+  connectRuntime,
   loadConnections,
   registerConnections,
   remoteAppId,
@@ -1306,6 +1308,14 @@ export default function App() {
     setSessionId("");
     setAppName(id);
   };
+  const connectManagedRuntime = async (runtime: ManagedRuntime) => {
+    const agentId = await connectRuntime(
+      runtime.runtimeId,
+      runtime.name,
+      runtime.region,
+    );
+    selectAgent(agentId);
+  };
 
   return (
     <div className="layout">
@@ -1489,7 +1499,11 @@ export default function App() {
             )}
 
             {manageAgents ? (
-              <ManageAgentsView author={String(userInfo?.email ?? userId ?? "")} />
+              <ManageAgentsView
+                author={String(userInfo?.email ?? userId ?? "")}
+                currentRuntimeId={currentRuntime?.runtimeId}
+                onConnect={connectManagedRuntime}
+              />
             ) : addMenu ? (
               <StackCards
                 title="您想以哪种方式添加 Agent 来运行？"

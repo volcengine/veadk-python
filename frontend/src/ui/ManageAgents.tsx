@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Link2,
+  Loader2,
+  RefreshCw,
+  Trash2,
+} from "lucide-react";
 import {
   deleteRuntime,
   getMyRuntimes,
@@ -13,6 +20,10 @@ import "./ManageAgents.css";
 export interface ManageAgentsViewProps {
   /** The current user identity used to filter runtimes (email / user id). */
   author: string;
+  /** Runtime currently connected through the global Agent selector. */
+  currentRuntimeId?: string;
+  /** Connect a managed Runtime and switch the global Agent selector to it. */
+  onConnect: (runtime: ManagedRuntime) => Promise<void>;
 }
 
 /** Per-runtime detail state: control-plane detail + (if creds are stored) the
@@ -27,11 +38,16 @@ interface DetailState {
 
 /** Lists the AgentKit runtimes this UI deployed on behalf of `author`, letting
  *  the user inspect their detail + agent structure and delete unwanted ones. */
-export function ManageAgentsView({ author }: ManageAgentsViewProps) {
+export function ManageAgentsView({
+  author,
+  currentRuntimeId,
+  onConnect,
+}: ManageAgentsViewProps) {
   const [runtimes, setRuntimes] = useState<ManagedRuntime[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [details, setDetails] = useState<Record<string, DetailState>>({});
   const [regionFilter, setRegionFilter] = useState<string>("all");
@@ -105,6 +121,19 @@ export function ManageAgentsView({ author }: ManageAgentsViewProps) {
     }
   }
 
+  async function handleConnect(rt: ManagedRuntime) {
+    if (connecting || currentRuntimeId === rt.runtimeId) return;
+    setConnecting(rt.runtimeId);
+    setError("");
+    try {
+      await onConnect(rt);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setConnecting(null);
+    }
+  }
+
   return (
     <div className="manage">
       <div className="manage-head">
@@ -175,19 +204,38 @@ export function ManageAgentsView({ author }: ManageAgentsViewProps) {
                       </span>
                     </span>
                   </button>
-                  <button
-                    type="button"
-                    className="manage-del"
-                    onClick={() => void handleDelete(rt)}
-                    disabled={deleting === rt.runtimeId}
-                    title="删除该 Runtime"
-                  >
-                    {deleting === rt.runtimeId ? (
-                      <Loader2 className="icon spin" />
-                    ) : (
-                      <Trash2 className="icon" />
-                    )}
-                  </button>
+                  <div className="manage-item-actions">
+                    <button
+                      type="button"
+                      className="manage-connect"
+                      onClick={() => void handleConnect(rt)}
+                      disabled={
+                        connecting !== null || currentRuntimeId === rt.runtimeId
+                      }
+                    >
+                      {connecting === rt.runtimeId ? (
+                        <Loader2 className="icon spin" />
+                      ) : (
+                        <Link2 className="icon" />
+                      )}
+                      {currentRuntimeId === rt.runtimeId
+                        ? "已连接"
+                        : "连接到此 Agent"}
+                    </button>
+                    <button
+                      type="button"
+                      className="manage-del"
+                      onClick={() => void handleDelete(rt)}
+                      disabled={deleting === rt.runtimeId}
+                      title="删除该 Runtime"
+                    >
+                      {deleting === rt.runtimeId ? (
+                        <Loader2 className="icon spin" />
+                      ) : (
+                        <Trash2 className="icon" />
+                      )}
+                    </button>
+                  </div>
                 </div>
                 <div className="manage-item-meta">
                   <span className="manage-item-id" title={rt.runtimeId}>

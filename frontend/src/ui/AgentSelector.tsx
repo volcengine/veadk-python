@@ -11,11 +11,10 @@ import {
 import {
   getRuntimeDetail,
   getRuntimes,
-  probeRuntimeApps,
   type CloudRuntime,
   type RuntimeDetail,
 } from "../adk/client";
-import { addRuntimeConnection, remoteAppId } from "../adk/connections";
+import { connectRuntime } from "../adk/connections";
 import { AgentIdentityIcon } from "./AgentIdentityIcon";
 
 /** A currently-connected cloud runtime (drives the detail panel). */
@@ -234,15 +233,9 @@ export function AgentSelector({
 
   function connect(rt: CloudRuntime) {
     setConnecting(rt.runtimeId);
-    probeRuntimeApps(rt.runtimeId, rt.region)
-      .then((apps) => {
-        if (!apps || apps.length === 0) {
-          setUnsupported((s) => new Set(s).add(rt.runtimeId));
-          return;
-        }
-        const labels = Object.fromEntries(apps.map((a) => [a, rt.name]));
-        const conn = addRuntimeConnection(rt.runtimeId, rt.name, rt.region, apps, labels);
-        onSelect(remoteAppId(conn.id, apps[0]));
+    connectRuntime(rt.runtimeId, rt.name, rt.region)
+      .then((agentId) => {
+        onSelect(agentId);
         setFocused({ runtimeId: rt.runtimeId, name: rt.name, region: rt.region });
         onClose();
       })
