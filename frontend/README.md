@@ -53,6 +53,9 @@ veadk frontend --dev        # API only, CORS for the vite dev server
 cd frontend && npm run dev  # http://localhost:5173
 ```
 
+The Vite development server proxies the ADK API routes, including the
+`/dev/apps/.../debug/trace` session-trace endpoint, to the backend on port 8000.
+
 ## Authentication
 
 The ADK `user_id` (which scopes sessions/memory) comes from the signed-in user.

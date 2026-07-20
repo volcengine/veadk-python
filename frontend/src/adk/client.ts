@@ -386,7 +386,10 @@ export async function getSessionTrace(
   if (!res.ok) throw new Error(`trace failed: ${res.status}`);
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
-    throw new Error("trace failed: 服务端返回了非 JSON 响应");
+    const responseType = contentType.split(";", 1)[0] || "Content-Type 缺失";
+    throw new Error(
+      `trace failed: 服务端返回了非 JSON 响应（${responseType}），请检查 Studio API 代理配置`,
+    );
   }
   const spans = (await res.json()) as unknown;
   if (!Array.isArray(spans)) throw new Error("trace failed: 返回格式无效");
