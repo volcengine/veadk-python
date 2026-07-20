@@ -97,6 +97,10 @@ app = create_agentkit_app(root_agent)
 See [`examples/generated_agentkit_project`](examples/generated_agentkit_project)
 for a complete generated project.
 
+When a cloud image build fails from the bundled Web UI, the deployment error
+includes a credential-safe excerpt from the build log so dependency and
+Dockerfile failures can be diagnosed directly.
+
 ## Feishu bot channel
 
 VeADK now provides `veadk.extensions.FeishuChannelExtension` for bridging a Feishu bot with a `Runner`. It maps `union_id` to `user_id`, and `thread_id` / `chat_id` to `session_id`, so VeADK memory and tracing can work directly in Feishu conversations.
