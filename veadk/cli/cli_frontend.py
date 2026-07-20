@@ -3032,6 +3032,37 @@ def _studio_deploy_run_script(site_logo_filename: str | None = None) -> str:
     )
 
 
+def _resolve_studio_identity_region(
+    *,
+    access_key: str,
+    secret_key: str,
+    user_pool_id: str,
+    client_id: str,
+    deployment_region: str,
+) -> str:
+    """Locate a Studio user-pool client across supported Identity regions."""
+    from veadk.integrations.ve_identity.identity_client import IdentityClient
+
+    supported_regions = ("cn-beijing", "cn-shanghai")
+    candidate_regions = (deployment_region,) + tuple(
+        region for region in supported_regions if region != deployment_region
+    )
+    for candidate_region in candidate_regions:
+        identity_client = IdentityClient(
+            access_key=access_key,
+            secret_key=secret_key,
+            region=candidate_region,
+        )
+        if identity_client.user_pool_client_exists(
+            user_pool_uid=user_pool_id,
+            client_uid=client_id,
+        ):
+            return candidate_region
+    raise click.ClickException(
+        "VeIdentity user pool/client not found in cn-beijing or cn-shanghai."
+    )
+
+
 @studio.command("deploy")
 @click.option(
     "--user-pool-id",
@@ -3053,7 +3084,19 @@ def _studio_deploy_run_script(site_logo_filename: str | None = None) -> str:
     required=True,
     help="VeFaaS application/function name (4-64 chars, letters/digits/-, no underscore).",
 )
-@click.option("--region", default="cn-beijing", show_default=True)
+@click.option(
+    "--region",
+    default="cn-beijing",
+    show_default=True,
+    type=click.Choice(["cn-beijing", "cn-shanghai"]),
+    help="Volcengine region for Studio deployment.",
+)
+@click.option(
+    "--project",
+    default="default",
+    show_default=True,
+    help="Volcengine project for the VeFaaS function.",
+)
 @click.option(
     "--iam-role",
     default=None,
@@ -3101,6 +3144,7 @@ def frontend_deploy(
     client_secret: str,
     vefaas_app_name: str,
     region: str,
+    project: str,
     iam_role: str | None,
     gateway_name: str,
     gateway_service_name: str,
@@ -3136,6 +3180,21 @@ def frontend_deploy(
         raise click.ClickException(
             "Volcengine credentials required: set VOLCENGINE_ACCESS_KEY/SECRET_KEY "
             "or pass --volcengine-access-key/--volcengine-secret-key."
+        )
+
+    identity_region = _resolve_studio_identity_region(
+        access_key=ak,
+        secret_key=sk,
+        user_pool_id=user_pool_id,
+        client_id=allowed_client_id,
+        deployment_region=region,
+    )
+    if identity_region != region:
+        click.secho(
+            f"Warning: Studio deploys to {region}, but the VeIdentity user "
+            f"pool/client was found in {identity_region}. Continuing with "
+            f"Identity region {identity_region}.",
+            fg="yellow",
         )
 
     # 1) Ensure VeFaaS has its service role before provisioning cloud resources.
@@ -3176,6 +3235,7 @@ def frontend_deploy(
     veadk_environments["OAUTH2_USER_POOL_ID"] = user_pool_id
     veadk_environments["OAUTH2_USER_POOL_CLIENT_ID"] = allowed_client_id
     veadk_environments["OAUTH2_PROVIDER"] = "veidentity"
+    veadk_environments["VEIDENTITY_REGION"] = identity_region
     if site_title is not None:
         veadk_environments["VEADK_SITE_TITLE"] = branding_title
     if client_secret:
@@ -3218,9 +3278,12 @@ def frontend_deploy(
         # uncommitted changes + the current veadk/webui) and install it instead
         # of the PyPI release, so the deployed frontend runs this branch's code.
         if from_source:
+            import hashlib
             import shutil as _shutil
             import subprocess
             import sys
+            from urllib.request import urlopen
+
             import veadk
 
             repo_root = Path(veadk.__file__).resolve().parent.parent
@@ -3251,8 +3314,55 @@ def frontend_deploy(
                 )
             wheel_name = wheels[0].name
             click.echo(f"Shipping local wheel: {wheel_name}")
-            # Install the bundled wheel; deps still resolve from PyPI.
-            requirements = f"./{wheel_name}\n"
+            # VeFaaS's package mirror can lag public PyPI, while its build
+            # environment cannot reliably reach public PyPI. Bundle the pinned
+            # dependencies currently missing or stale in that mirror.
+            bundled_wheels = [
+                (
+                    "trustedmcp-0.0.5-py3-none-any.whl",
+                    "https://files.pythonhosted.org/packages/e0/5b/"
+                    "9d60a8633f4ab94c9ec0621b51a74d866086b4cb6579882fa4fb9186023b/"
+                    "trustedmcp-0.0.5-py3-none-any.whl",
+                    "3e89f6c9f5fb17cb70aaaa37df21a6e01722ccb1eec6cb8fc2e61417016986d4",
+                ),
+                (
+                    "volcengine_python_sdk-5.0.36-py2.py3-none-any.whl",
+                    "https://files.pythonhosted.org/packages/00/a1/"
+                    "9e246023bb847329bda43e516c64aa10d77b2d98c662f0e1179689020c23/"
+                    "volcengine_python_sdk-5.0.36-py2.py3-none-any.whl",
+                    "3a74fa7a7baa5d5f604b175f967660cd0aa4c7057ce44d98c4041fbaf7944b5b",
+                ),
+                (
+                    "tokenizers-0.22.2-cp39-abi3-manylinux_2_17_x86_64."
+                    "manylinux2014_x86_64.whl",
+                    "https://files.pythonhosted.org/packages/2e/76/"
+                    "932be4b50ef6ccedf9d3c6639b056a967a86258c6d9200643f01269211ca/"
+                    "tokenizers-0.22.2-cp39-abi3-manylinux_2_17_x86_64."
+                    "manylinux2014_x86_64.whl",
+                    "369cc9fc8cc10cb24143873a0d95438bb8ee257bb80c71989e3ee290e8d72c67",
+                ),
+                (
+                    "openviking_sdk-0.1.4-py3-none-any.whl",
+                    "https://files.pythonhosted.org/packages/fe/af/"
+                    "4ca139b05f39c8ed04339d7c8aa56550df80f97d39768d2df9bd72fdbbb9/"
+                    "openviking_sdk-0.1.4-py3-none-any.whl",
+                    "1e9f23332b1b687dd7f272e660953992de60ad3e9d07d62f7460fd4aedb99616",
+                ),
+            ]
+            for dependency_name, dependency_url, dependency_sha256 in bundled_wheels:
+                with urlopen(dependency_url, timeout=60) as response:
+                    dependency_wheel = response.read()
+                if hashlib.sha256(dependency_wheel).hexdigest() != dependency_sha256:
+                    raise click.ClickException(
+                        f"--from-source: {dependency_name} checksum verification failed"
+                    )
+                (Path(tmp) / dependency_name).write_bytes(dependency_wheel)
+            requirements = (
+                "".join(
+                    f"./{dependency_name}\n" for dependency_name, _, _ in bundled_wheels
+                )
+                + f"./{wheel_name}\n"
+            )
 
         (Path(tmp) / "requirements.txt").write_text(requirements, encoding="utf-8")
 
@@ -3264,8 +3374,12 @@ def frontend_deploy(
             volcengine_access_key=ak,
             volcengine_secret_key=sk,
             region=region,
+            project=project,
         )
-        click.echo(f"Deploying frontend to VeFaaS as '{vefaas_app_name}'…")
+        click.echo(
+            f"Deploying frontend to VeFaaS as '{vefaas_app_name}' "
+            f"in {region}/{project}…"
+        )
         app = engine.deploy(
             application_name=vefaas_app_name,
             path=tmp,
@@ -3289,7 +3403,7 @@ def frontend_deploy(
                 )
 
                 IdentityClient(
-                    access_key=ak, secret_key=sk, region=region
+                    access_key=ak, secret_key=sk, region=identity_region
                 ).register_callback_for_user_pool_client(
                     user_pool_uid=user_pool_id,
                     client_uid=allowed_client_id,

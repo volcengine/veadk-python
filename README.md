@@ -182,7 +182,10 @@ VeADK provides several useful command line tools for faster deployment and optim
   `--site-title` and `--site-logo` (omitting the title keeps `VeADK Studio`)
 - `veadk studio deploy`: deploy Studio and ensure its default IAM role has the
   required model, observability, search, security, memory, and identity system
-  policies; custom local or remote logo images are bundled into the deployment
+  policies; target `cn-beijing` (default) or `cn-shanghai` with
+  `--region`, automatically locate the Identity user pool across Beijing and
+  Shanghai, and select the VeFaaS project with `--project` (default `default`);
+  custom local or remote logo images are bundled into the deployment
 
 ## Contribution
 

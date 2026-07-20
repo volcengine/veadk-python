@@ -866,6 +866,33 @@ class IdentityClient:
         self._api_client.update_user_pool_client(request2)
 
     @refresh_credentials
+    def user_pool_client_exists(
+        self,
+        user_pool_uid: str,
+        client_uid: str,
+    ) -> bool:
+        """Return whether a user-pool client exists in this client's region.
+
+        Only a not-found response becomes ``False``. Permission, credential,
+        and transport failures are raised so callers do not silently search a
+        different region and hide the real problem.
+        """
+        from volcenginesdkcore.rest import ApiException
+        from volcenginesdkid import GetUserPoolClientRequest
+
+        request = GetUserPoolClientRequest(
+            user_pool_uid=user_pool_uid,
+            client_uid=client_uid,
+        )
+        try:
+            self._api_client.get_user_pool_client(request)
+        except ApiException as error:
+            if error.status == 404:
+                return False
+            raise
+        return True
+
+    @refresh_credentials
     def get_user_pool_client(
         self,
         user_pool_uid: str,

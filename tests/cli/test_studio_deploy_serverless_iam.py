@@ -153,6 +153,10 @@ def test_studio_deploy_checks_serverless_role_with_custom_function_role(
     monkeypatch.setattr(
         "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
     )
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._resolve_studio_identity_region",
+        lambda **kwargs: kwargs["deployment_region"],
+    )
 
     result = CliRunner().invoke(
         studio,
