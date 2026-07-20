@@ -25,7 +25,16 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #root { height: 100%; margin: 0; overscroll-behavior: none; }
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+#root {
+  position: fixed;
+  inset: 0;
+}
 body {
   background: hsl(var(--canvas));
   color: hsl(var(--foreground));
@@ -57,7 +66,13 @@ body {
  * One big rounded "window": the whole app (sidebar + main) is a single rounded
  * panel floating on the gray canvas, with the gray showing as a margin all
  * around (LobeChat-style). */
-.layout { display: flex; height: 100vh; }
+.layout {
+  display: flex;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
 
 .main-shell {
   flex: 1;
@@ -70,11 +85,18 @@ body {
 /* ---------- sidebar ---------- */
 .sidebar {
   width: 264px;
+  height: 100%;
+  min-height: 0;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   background: transparent; /* sits directly on the canvas; main floats beside it */
   position: relative; /* anchors the slide-out agent selector to the right edge */
+}
+@media (max-width: 860px) {
+  .sidebar {
+    width: 220px;
+  }
 }
 .sidebar-top {
   display: flex;

@@ -18,9 +18,14 @@ server that `veadk frontend` launches — no separate backend.
   when its session metadata appears. Long Agent lists stay within the viewport
   and scroll independently.
 - **Tracing viewer**: a span tree + detail panel from the ADK debug trace.
+- **Runtime management**: inspect or delete deployed runtimes, or connect one
+  directly so the global Agent selector switches to that Runtime.
 - **Custom-agent workbench**: configure an agent with a rich Markdown
   system-prompt editor (including heading and list shortcuts), then debug with
-  expandable, copyable runner error details and review
+  expandable, copyable runner error details and review. Long descriptions and
+  prompts scroll within bounded editors, while the sidebar stays pinned to the
+  viewport. On narrow desktop windows, the structure, configuration, and debug
+  panels stack vertically instead of squeezing the form. Review
   generated source with line numbers and syntax highlighting before setting
   its region, message channel, network, environment variables, and deploying
   to AgentKit. A global task list keeps Runtime, region, and progress visible

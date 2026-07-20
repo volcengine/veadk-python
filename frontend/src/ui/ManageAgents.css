@@ -112,6 +112,13 @@
   gap: 8px;
 }
 
+.manage-item-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .manage-item-toggle {
   display: flex;
   align-items: center;
@@ -213,6 +220,52 @@
   background: hsl(var(--card));
   color: hsl(var(--muted-foreground));
   cursor: pointer;
+}
+
+.manage-connect {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.manage-connect:hover:not(:disabled) {
+  border-color: hsl(var(--foreground) / 0.28);
+  background: hsl(var(--foreground) / 0.05);
+}
+
+.manage-connect:disabled {
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--foreground) / 0.035);
+  cursor: default;
+}
+
+@media (max-width: 700px) {
+  .manage-item-row {
+    flex-wrap: wrap;
+  }
+
+  .manage-item-toggle {
+    flex-basis: 100%;
+  }
+
+  .manage-item-actions {
+    width: 100%;
+    justify-content: flex-end;
+    padding-left: 24px;
+  }
 }
 
 .manage-del:hover:not(:disabled) {

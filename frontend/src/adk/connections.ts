@@ -2,7 +2,12 @@
 // the ADK protocol (browser-direct, with `Authorization: Bearer <key>`). Stored
 // in localStorage and registered into the client's routing table on load.
 
-import { clearRemoteApps, fetchRemoteApps, registerRemoteApp } from "./client";
+import {
+  clearRemoteApps,
+  fetchRemoteApps,
+  probeRuntimeApps,
+  registerRemoteApp,
+} from "./client";
 
 export interface RemoteConnection {
   id: string;
@@ -98,6 +103,21 @@ export function addRuntimeConnection(
   persist(list);
   registerConnections(list);
   return conn;
+}
+
+/** Probe, persist, and register one AgentKit runtime, returning its first app id. */
+export async function connectRuntime(
+  runtimeId: string,
+  name: string,
+  region: string,
+): Promise<string> {
+  const apps = await probeRuntimeApps(runtimeId, region);
+  if (!apps || apps.length === 0) {
+    throw new Error("该 Runtime 暂不支持连接，请确认服务已正常运行。");
+  }
+  const labels = Object.fromEntries(apps.map((app) => [app, name]));
+  const connection = addRuntimeConnection(runtimeId, name, region, apps, labels);
+  return remoteAppId(connection.id, apps[0]);
 }
 
 /** Validate a remote AgentKit endpoint and persist it. Throws on bad URL/key. */
