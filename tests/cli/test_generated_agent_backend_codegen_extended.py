@@ -669,7 +669,6 @@ def test_generated_project_and_debug_run_api_lifecycle(
         assert "创建调试环境失败" in create_error_detail
         assert "错误 ID" in create_error_detail
         assert "tenant debug process quota exhausted" not in create_error_detail
-        assert "错误 ID" in create_error_detail
 
         delete_response = client.delete(
             f"/web/generated-agent-test-runs/{run['runId']}"
