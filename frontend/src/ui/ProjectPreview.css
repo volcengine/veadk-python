@@ -457,6 +457,7 @@
 }
 
 .pp-config-select,
+.pp-channel-fields input,
 .pp-network-fields input,
 .pp-env-row input {
   width: 100%;
@@ -477,6 +478,7 @@
 }
 
 .pp-config-select:focus,
+.pp-channel-fields input:focus,
 .pp-network-fields input:focus,
 .pp-env-row input:focus {
   border-color: hsl(var(--ring) / 0.55);
@@ -484,6 +486,7 @@
 }
 
 .pp-config-select:disabled,
+.pp-channel-fields input:disabled,
 .pp-network-fields input:disabled,
 .pp-env-row input:disabled {
   opacity: 0.55;
@@ -542,6 +545,42 @@
 
 .pp-channel.is-on .pp-switch span {
   transform: translateX(15px);
+}
+
+.pp-channel-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.pp-channel-fields label {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px 8px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+}
+
+.pp-channel-fields label > span {
+  color: hsl(var(--foreground));
+  font-weight: 560;
+}
+
+.pp-channel-fields small {
+  margin-left: 5px;
+  color: hsl(var(--destructive));
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.pp-channel-fields code {
+  color: hsl(var(--muted-foreground));
+  font-size: 9.5px;
+}
+
+.pp-channel-fields input {
+  grid-column: 1 / -1;
 }
 
 .pp-network-modes {
@@ -647,13 +686,7 @@
   font-size: 11px;
 }
 
-.pp-env-key-fixed {
-  background: hsl(var(--secondary) / 0.28) !important;
-  cursor: default;
-}
-
-.pp-env-remove,
-.pp-env-remove-placeholder {
+.pp-env-remove {
   width: 28px;
   height: 28px;
 }

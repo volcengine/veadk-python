@@ -97,6 +97,13 @@ app = create_agentkit_app(root_agent)
 See [`examples/generated_agentkit_project`](examples/generated_agentkit_project)
 for a complete generated project.
 
+The Studio deployment flow lists Feishu, knowledge-base, and short-/long-term
+memory settings in their feature sections. Values entered there are converted
+to VeADK runtime environment variables only when deploying; secrets are not
+written to generated source or exported YAML. For multi-instance runtimes, use
+a database-backed short-term memory store so sessions remain available across
+instances.
+
 ## Feishu bot channel
 
 VeADK now provides `veadk.extensions.FeishuChannelExtension` for bridging a Feishu bot with a `Runner`. It maps `union_id` to `user_id`, and `thread_id` / `chat_id` to `session_id`, so VeADK memory and tracing can work directly in Feishu conversations.

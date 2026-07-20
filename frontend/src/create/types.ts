@@ -49,6 +49,9 @@ export interface NetworkConfig {
 export interface DeploymentConfig {
   feishuEnabled: boolean;
   network?: NetworkConfig;
+  /** Values entered for feature-specific runtime configuration.
+   *  These are deployment-only and must not be exported to source/YAML. */
+  envValues?: Record<string, string>;
 }
 
 /** A draft VeADK agent configuration produced by a creation flow. */

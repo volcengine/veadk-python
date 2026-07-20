@@ -19,6 +19,7 @@ import type {
 } from "../adk/client";
 import { InvocationChips } from "./InvocationChips";
 import { MediaGroup } from "./Media";
+import { isImeCompositionEvent } from "./composerKeyboard";
 
 interface CompletionTrigger {
   kind: "skill" | "agent";
@@ -288,6 +289,7 @@ export function Composer({
           onSelect={(e) => updateCompletion(e.currentTarget.value, e.currentTarget.selectionStart)}
           onBlur={() => setTimeout(() => setTrigger(null), 0)}
           onKeyDown={(e) => {
+            if (isImeCompositionEvent(e.nativeEvent)) return;
             if (trigger) {
               if (e.key === "ArrowDown" && suggestions.length > 0) {
                 e.preventDefault();

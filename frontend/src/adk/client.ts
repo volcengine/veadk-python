@@ -3,6 +3,7 @@
 // the Vite dev proxy in development.
 
 import { withAuth } from "./auth";
+import { formatRunSseError } from "./runSseError";
 import { parseSSE } from "./sse";
 import type { AgentProject } from "../create/project";
 import type { AgentDraft } from "../create/types";
@@ -558,9 +559,17 @@ export async function* runSSE({
     },
     ep,
   );
-  if (!res.ok) throw new Error(`run_sse failed: ${res.status}`);
+  if (!res.ok) throw new Error(formatRunSseError(`run_sse failed: ${res.status}`));
   for await (const evt of parseSSE(res)) {
-    yield evt as AdkEvent;
+    const event = evt as AdkEvent;
+    if (typeof event.error === "string") event.error = formatRunSseError(event.error);
+    if (typeof event.errorMessage === "string") {
+      event.errorMessage = formatRunSseError(event.errorMessage);
+    }
+    if (typeof event.error_message === "string") {
+      event.error_message = formatRunSseError(event.error_message);
+    }
+    yield event;
   }
 }
 

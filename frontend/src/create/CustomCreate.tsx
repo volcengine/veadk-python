@@ -43,6 +43,7 @@ import {
   KB_BACKENDS,
   TRACING_EXPORTERS,
   type BackendOption,
+  type EnvVar,
 } from "./veadkCatalog";
 import { draftToYaml } from "./configYaml";
 import type { AgentProject } from "./project";
@@ -288,6 +289,49 @@ function BackendSelect({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+function isSensitiveEnv(key: string): boolean {
+  return /(SECRET|PASSWORD|KEY|TOKEN)$/.test(key);
+}
+
+/** Feature-specific settings stay readable in their own configuration area,
+ * while their VeADK environment-variable names remain visible and exact. */
+function BackendEnvFields({
+  option,
+  values,
+  onChange,
+}: {
+  option: BackendOption | undefined;
+  values: Record<string, string>;
+  onChange: (key: string, value: string) => void;
+}) {
+  if (!option || option.env.length === 0) {
+    return <p className="cw-env-empty">此后端无需额外运行参数。</p>;
+  }
+  return (
+    <div className="cw-env-fields">
+      {option.env.map((env) => (
+        <label className="cw-env-field" key={env.key}>
+          <span className="cw-env-field-head">
+            <span>
+              {env.comment || env.key}
+              {env.required && <span className="cw-req">*</span>}
+            </span>
+            <code>{env.key}</code>
+          </span>
+          <input
+            className="cw-input"
+            type={isSensitiveEnv(env.key) ? "password" : "text"}
+            value={values[env.key] ?? ""}
+            placeholder={env.placeholder || "请输入参数值"}
+            autoComplete="off"
+            onChange={(event) => onChange(env.key, event.currentTarget.value)}
+          />
+        </label>
+      ))}
     </div>
   );
 }
@@ -704,6 +748,44 @@ function countDraftAgents(root: AgentDraft): number {
   return 1 + root.subAgents.reduce((total, child) => total + countDraftAgents(child), 0);
 }
 
+/** Collect only the runtime variables used by the currently selected feature
+ * backends. Values for a backend that was later deselected are not deployed. */
+function collectDeploymentEnv(root: AgentDraft): EnvVar[] {
+  const byKey = new Map<string, EnvVar>();
+  const add = (env: EnvVar[]) => {
+    for (const item of env) {
+      const previous = byKey.get(item.key);
+      if (!previous || (item.required && !previous.required)) {
+        byKey.set(item.key, item);
+      }
+    }
+  };
+  const visit = (node: AgentDraft) => {
+    if (node.memory.shortTerm) {
+      add(
+        STM_BACKENDS.find((item) => item.id === (node.shortTermBackend ?? "local"))
+          ?.env ?? [],
+      );
+    }
+    if (node.memory.longTerm) {
+      add(
+        LTM_BACKENDS.find((item) => item.id === (node.longTermBackend ?? "local"))
+          ?.env ?? [],
+      );
+    }
+    if (node.knowledgebase) {
+      add(
+        KB_BACKENDS.find(
+          (item) => item.id === (node.knowledgebaseBackend ?? "local"),
+        )?.env ?? [],
+      );
+    }
+    node.subAgents.forEach(visit);
+  };
+  visit(root);
+  return [...byKey.values()];
+}
+
 /* ---------------------------------------------------------------- *
  * Left structure tree: one selectable, editable node (recursive).
  * ---------------------------------------------------------------- */
@@ -873,8 +955,17 @@ interface DebugMessage {
   error?: string;
 }
 
+function codegenDraft(draft: AgentDraft): AgentDraft {
+  return {
+    ...draft,
+    deployment: {
+      feishuEnabled: !!draft.deployment?.feishuEnabled,
+    },
+  };
+}
+
 function debugSnapshotKey(draft: AgentDraft): string {
-  return JSON.stringify(draft);
+  return JSON.stringify(codegenDraft(draft));
 }
 
 function DebugPanel({
@@ -1237,6 +1328,18 @@ export function CustomCreate({
   const patch = (p: Partial<AgentDraft>) =>
     setDraft((d) => updateNode(d, safePath, (n) => ({ ...n, ...p })));
 
+  const patchDeploymentEnv = (key: string, value: string) =>
+    setDraft((current) => ({
+      ...current,
+      deployment: {
+        ...(current.deployment ?? { feishuEnabled: false }),
+        envValues: {
+          ...(current.deployment?.envValues ?? {}),
+          [key]: value,
+        },
+      },
+    }));
+
   // Replace the whole tree (structural edits from the left tree), optionally
   // moving the selection to a new node.
   const applyTree = (nextRoot: AgentDraft, select?: NodePath) => {
@@ -1282,6 +1385,7 @@ export function CustomCreate({
   const problems = useMemo(() => treeProblems(draft), [draft]);
   const canFinish = problems.length === 0;
   const currentDebugSnapshot = useMemo(() => debugSnapshotKey(draft), [draft]);
+  const deploymentEnv = useMemo(() => collectDeploymentEnv(draft), [draft]);
   const debugStale = Boolean(
     debugRun &&
       debugSnapshot &&
@@ -1423,13 +1527,7 @@ export function CustomCreate({
       // Network settings are deployment-only and are not part of the codegen
       // API schema. Keep them in the local draft while sending only the
       // channel flag needed to generate the project.
-      const projectDraft: AgentDraft = {
-        ...draft,
-        deployment: {
-          feishuEnabled: !!draft.deployment?.feishuEnabled,
-        },
-      };
-      const proj = await generateAgentProject(projectDraft);
+      const proj = await generateAgentProject(codegenDraft(draft));
       await cleanupDebugRun();
       setDebugPhase("idle");
       setDebugProjectName("");
@@ -1467,7 +1565,7 @@ export function CustomCreate({
       pushLog("提交 Agent 配置");
       setDebugPhase("starting");
       pushLog("初始化调试环境");
-      const run = await createGeneratedAgentTestRun(draft);
+      const run = await createGeneratedAgentTestRun(codegenDraft(draft));
       debugRunRef.current = run;
       setDebugRun(run);
       setDebugProjectName(run.appName);
@@ -1593,6 +1691,9 @@ export function CustomCreate({
                 },
               }))
             }
+            deploymentEnv={deploymentEnv}
+            deploymentEnvValues={draft.deployment?.envValues}
+            onDeploymentEnvChange={patchDeploymentEnv}
             network={draft.deployment?.network}
             onNetworkChange={(network) =>
               setDraft((current) => ({
@@ -1915,6 +2016,13 @@ export function CustomCreate({
                           value={node.shortTermBackend}
                           onChange={(id) => patch({ shortTermBackend: id })}
                         />
+                        <BackendEnvFields
+                          option={STM_BACKENDS.find(
+                            (item) => item.id === (node.shortTermBackend ?? "local"),
+                          )}
+                          values={draft.deployment?.envValues ?? {}}
+                          onChange={patchDeploymentEnv}
+                        />
                       </div>
                     )}
                     <Toggle
@@ -1935,6 +2043,13 @@ export function CustomCreate({
                           options={LTM_BACKENDS}
                           value={node.longTermBackend}
                           onChange={(id) => patch({ longTermBackend: id })}
+                        />
+                        <BackendEnvFields
+                          option={LTM_BACKENDS.find(
+                            (item) => item.id === (node.longTermBackend ?? "local"),
+                          )}
+                          values={draft.deployment?.envValues ?? {}}
+                          onChange={patchDeploymentEnv}
                         />
                         <Toggle
                           checked={!!node.autoSaveSession}
@@ -1966,6 +2081,13 @@ export function CustomCreate({
                           onChange={(id) =>
                             patch({ knowledgebaseBackend: id })
                           }
+                        />
+                        <BackendEnvFields
+                          option={KB_BACKENDS.find(
+                            (item) => item.id === (node.knowledgebaseBackend ?? "local"),
+                          )}
+                          values={draft.deployment?.envValues ?? {}}
+                          onChange={patchDeploymentEnv}
                         />
                       </div>
                     )}
