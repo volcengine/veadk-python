@@ -24,6 +24,14 @@ const {
   STM_BACKENDS,
   TRACING_EXPORTERS,
 } = await loadTypeScriptModule("../src/create/veadkCatalog.ts");
+const customCreateSource = readFileSync(
+  new URL("../src/create/CustomCreate.tsx", import.meta.url),
+  "utf8",
+);
+const projectPreviewSource = readFileSync(
+  new URL("../src/ui/ProjectPreview.tsx", import.meta.url),
+  "utf8",
+);
 
 test("maps active feature settings to VeADK runtime env rows", () => {
   const specs = [
@@ -120,4 +128,14 @@ test("shows configured database and Feishu values in the runtime env summary", (
     { key: "FEISHU_APP_ID", value: "cli_example", required: true },
     { key: "FEISHU_APP_SECRET", value: "feishu-secret", required: true },
   ]);
+});
+
+test("regenerates project code when Feishu changes on the deployment page", () => {
+  assert.match(
+    customCreateSource,
+    /const nextProject = await generateAgentProject\(codegenDraft\(nextDraft\)\)/,
+  );
+  assert.match(customCreateSource, /setProject\(nextProject\)/);
+  assert.match(projectPreviewSource, /await onFeishuEnabledChange\(!feishuEnabled\)/);
+  assert.match(projectPreviewSource, /deploying \|\| feishuUpdating/);
 });

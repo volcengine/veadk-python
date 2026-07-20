@@ -30,6 +30,10 @@ server that `veadk frontend` launches — no separate backend.
 - **Agent-driven UI (A2UI)**: when an agent emits A2UI, it renders as native
   components (one feature among the above — not required).
 
+Changing the Feishu channel on the deployment page regenerates the project so
+`app.py`, the `extensions` dependency, and the runtime environment variables
+stay aligned before deployment.
+
 ## Run
 
 The build output ships inside the package at `veadk/webui` (committed), so

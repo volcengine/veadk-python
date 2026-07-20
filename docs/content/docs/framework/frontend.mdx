@@ -26,6 +26,9 @@ VeADK 自带一个 React 前端，用于渲染智能体经由 Google ADK API Ser
 - **Tracing 观测**：查看本次会话的调用火焰图。
 - **登录**：支持 SSO（VeIdentity / GitHub / Google / 任意 OIDC）或本地用户名。
 
+在部署页打开或关闭飞书渠道时，Studio 会重新生成项目，确保 `app.py`、
+`extensions` 依赖和运行时环境变量在部署前保持一致。
+
 ### 运行
 
 先构建前端，再用一条命令同时提供 UI 与智能体 API：

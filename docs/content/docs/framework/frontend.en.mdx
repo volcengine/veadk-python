@@ -28,6 +28,10 @@ VeADK ships a React frontend that renders [A2UI](/en/docs/framework/a2ui) (agent
 - **Tracing**: view the call flame graph for the current session.
 - **Login**: SSO (VeIdentity / GitHub / Google / any OIDC) or a local username.
 
+When the Feishu channel is enabled or disabled on the deployment page, Studio
+regenerates the project so `app.py`, the `extensions` dependency, and runtime
+environment variables stay aligned before deployment.
+
 ### Run
 
 Build the UI once, then serve the UI and the agent API together with a single command:

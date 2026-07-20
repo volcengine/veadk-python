@@ -1718,15 +1718,18 @@ export function CustomCreate({
             onAgentAdded={onAgentAdded}
             onDeploymentTaskChange={onDeploymentTaskChange}
             feishuEnabled={!!draft.deployment?.feishuEnabled}
-            onFeishuEnabledChange={(feishuEnabled) =>
-              setDraft((current) => ({
-                ...current,
+            onFeishuEnabledChange={async (feishuEnabled) => {
+              const nextDraft: AgentDraft = {
+                ...draft,
                 deployment: {
-                  ...(current.deployment ?? { feishuEnabled: false }),
+                  ...(draft.deployment ?? { feishuEnabled: false }),
                   feishuEnabled,
                 },
-              }))
-            }
+              };
+              const nextProject = await generateAgentProject(codegenDraft(nextDraft));
+              setDraft(nextDraft);
+              setProject(nextProject);
+            }}
             deploymentEnv={deploymentEnv.specs}
             deploymentEnvValues={{
               ...draft.deployment?.envValues,

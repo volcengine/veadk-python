@@ -219,7 +219,7 @@ export interface ProjectPreviewProps {
   /** Whether Feishu Channel was enabled in the configuration step. */
   feishuEnabled?: boolean;
   /** Update the Feishu channel selection from the deploy page. */
-  onFeishuEnabledChange?: (enabled: boolean) => void;
+  onFeishuEnabledChange?: (enabled: boolean) => void | Promise<void>;
   /** Environment variables required by the selected memory/knowledge backends. */
   deploymentEnv?: EnvVar[];
   /** Deployment-only values entered in each feature's configuration area. */
@@ -356,6 +356,7 @@ export function ProjectPreview({
   const [adding, setAdding] = useState(false);
   const [newPath, setNewPath] = useState("");
   const [deploying, setDeploying] = useState(false);
+  const [feishuUpdating, setFeishuUpdating] = useState(false);
   const [deployError, setDeployError] = useState<string | null>(null);
   const [deployResult, setDeployResult] = useState<DeployResult | null>(null);
   // Latest progress frame per deploy phase + the phase currently in flight,
@@ -489,6 +490,23 @@ export function ProjectPreview({
       byKey.set(env.key, env.value);
     }
     return [...byKey].map(([key, value]) => ({ key, value }));
+  }
+
+  async function handleFeishuToggle() {
+    if (!onFeishuEnabledChange || deploying || feishuUpdating) return;
+    setDeployError(null);
+    setFeishuUpdating(true);
+    try {
+      await onFeishuEnabledChange(!feishuEnabled);
+    } catch (error) {
+      if (mountedRef.current) {
+        setDeployError(
+          `更新飞书配置失败：${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    } finally {
+      if (mountedRef.current) setFeishuUpdating(false);
+    }
   }
 
   async function handleDeploy() {
@@ -896,10 +914,12 @@ export function ProjectPreview({
                   role="switch"
                   aria-checked={feishuEnabled}
                   className={`pp-channel${feishuEnabled ? " is-on" : ""}`}
-                  onClick={() => onFeishuEnabledChange?.(!feishuEnabled)}
-                  disabled={deploying || !onFeishuEnabledChange}
+                  onClick={() => void handleFeishuToggle()}
+                  disabled={deploying || feishuUpdating || !onFeishuEnabledChange}
                 >
-                  <span className="pp-channel-title">飞书</span>
+                  <span className="pp-channel-title">
+                    {feishuUpdating ? "飞书（正在更新代码…）" : "飞书"}
+                  </span>
                   <span className="pp-switch" aria-hidden>
                     <span />
                   </span>
@@ -1226,7 +1246,7 @@ export function ProjectPreview({
                 type="button"
                 className="pp-deploy"
                 onClick={handleDeploy}
-                disabled={deploying}
+                disabled={deploying || feishuUpdating}
               >
                 {deploying ? (
                   <Loader2 className="pp-ic spin" />

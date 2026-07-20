@@ -194,11 +194,15 @@ def test_codegen_enables_feishu_without_exposing_lifecycle_code() -> None:
     project = generate_project_from_draft(
         AgentDraft(name="demo", deployment={"feishuEnabled": True})
     )
-    app_py = _file_map(project)["app.py"]
+    files = _file_map(project)
+    app_py = files["app.py"]
 
     assert "enable_feishu=True" in app_py
     assert "FeishuChannelExtension" not in app_py
     assert "asynccontextmanager" not in app_py
+    assert "veadk-python[extensions]" in files["requirements.txt"]
+    assert "FEISHU_APP_ID=" in files[".env.example"]
+    assert "FEISHU_APP_SECRET=" in files[".env.example"]
 
 
 def test_frontend_complete_shape_is_accepted_and_unknown_field_is_rejected() -> None:
