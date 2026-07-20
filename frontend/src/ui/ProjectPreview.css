@@ -672,6 +672,34 @@
   flex-direction: column;
 }
 
+.pp-env-group {
+  padding: 4px 7px 0;
+  border: 1px solid hsl(var(--border) / 0.75);
+  border-radius: 6px;
+  background: hsl(var(--secondary) / 0.16);
+}
+
+.pp-env-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 1px 3px;
+  color: hsl(var(--foreground));
+  font-size: 10.5px;
+  font-weight: 620;
+  letter-spacing: 0.02em;
+}
+
+.pp-env-group-head small {
+  color: hsl(var(--muted-foreground));
+  font-size: 9.5px;
+  font-weight: 450;
+}
+
+.pp-env-group-head-custom {
+  margin-top: 12px;
+}
+
 .pp-env-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 28px;
@@ -684,6 +712,21 @@
 .pp-env-row input:first-child {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 11px;
+}
+
+.pp-env-row-derived:last-child {
+  border-bottom: 0;
+}
+
+.pp-env-key-fixed {
+  background: hsl(var(--secondary) / 0.32) !important;
+  cursor: default;
+}
+
+.pp-env-source {
+  color: hsl(var(--muted-foreground));
+  font-size: 9px;
+  text-align: center;
 }
 
 .pp-env-remove {

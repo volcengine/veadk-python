@@ -13,6 +13,10 @@ export interface RuntimeEnvConfiguration {
   fixedValues: Record<string, string>;
 }
 
+export interface RuntimeEnvDisplayRow extends RuntimeEnvSpec {
+  value: string;
+}
+
 /** Merge active component settings and derive selected exporter enable flags. */
 export function runtimeEnvConfiguration(
   selections: RuntimeEnvSelection[],
@@ -35,6 +39,18 @@ export function runtimeEnvConfiguration(
     }
   }
   return { specs: [...specs.values()], fixedValues };
+}
+
+/** Build the complete, including empty values, summary shown before deploy. */
+export function runtimeEnvDisplayRows(
+  specs: RuntimeEnvSpec[],
+  values: Record<string, string>,
+): RuntimeEnvDisplayRow[] {
+  const deduped = runtimeEnvConfiguration([{ env: specs }]).specs;
+  return deduped.map((spec) => ({
+    ...spec,
+    value: values[spec.key] ?? "",
+  }));
 }
 
 /** Convert only the currently active feature settings into runtime env rows. */

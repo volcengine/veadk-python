@@ -57,6 +57,7 @@ import type { NetworkConfig } from "../create/types";
 import { FEISHU_ENV, type EnvVar } from "../create/veadkCatalog";
 import {
   firstMissingRuntimeEnv,
+  runtimeEnvDisplayRows,
   runtimeEnvVars,
 } from "../create/deploymentEnv";
 import type { DeployStage } from "../adk/client";
@@ -388,6 +389,10 @@ export function ProjectPreview({
   const selectedFile =
     project.files.find((f) => f.path === selected) ?? null;
   const networkMode = network?.mode ?? "public";
+  const automaticEnvRows = runtimeEnvDisplayRows(
+    feishuEnabled ? [...deploymentEnv, ...FEISHU_ENV] : deploymentEnv,
+    deploymentEnvValues,
+  );
 
   function toggleFolder(key: string) {
     setCollapsed((prev) => {
@@ -980,7 +985,9 @@ export function ProjectPreview({
                 <div className="pp-env-head">
                   <div>
                     <div className="pp-config-label">环境变量</div>
-                    <div className="pp-env-sub">仅用于添加其他自定义运行变量。</div>
+                    <div className="pp-env-sub">
+                      组件配置会自动同步到这里，部署前可核对最终值。
+                    </div>
                   </div>
                   <button
                     type="button"
@@ -992,7 +999,58 @@ export function ProjectPreview({
                   </button>
                 </div>
                 <div className="pp-env-table">
-                  {envRows.length === 0 ? (
+                  {automaticEnvRows.length > 0 && (
+                    <div className="pp-env-group">
+                      <div className="pp-env-group-head">
+                        <span>组件自动生成</span>
+                        <small>{automaticEnvRows.length} 项</small>
+                      </div>
+                      {automaticEnvRows.map((row) => {
+                        const fixed = row.key.startsWith("ENABLE_");
+                        return (
+                          <div
+                            className="pp-env-row pp-env-row-derived"
+                            key={row.key}
+                          >
+                            <input
+                              className="pp-env-key-fixed"
+                              value={row.key}
+                              readOnly
+                              disabled={deploying}
+                              aria-label={`${row.key} 环境变量名`}
+                            />
+                            <input
+                              type={fixed || showEnvValues ? "text" : "password"}
+                              value={row.value}
+                              placeholder={row.required ? "必填，尚未填写" : "可选，尚未填写"}
+                              readOnly={fixed}
+                              disabled={
+                                deploying || (!fixed && !onDeploymentEnvChange)
+                              }
+                              autoComplete="off"
+                              aria-label={`${row.key} 环境变量值`}
+                              onChange={(event) =>
+                                onDeploymentEnvChange?.(
+                                  row.key,
+                                  event.currentTarget.value,
+                                )
+                              }
+                            />
+                            <span className="pp-env-source">
+                              {fixed ? "自动" : "同步"}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {envRows.length > 0 && (
+                    <div className="pp-env-group-head pp-env-group-head-custom">
+                      <span>自定义变量</span>
+                      <small>{envRows.length} 项</small>
+                    </div>
+                  )}
+                  {automaticEnvRows.length === 0 && envRows.length === 0 ? (
                     <div className="pp-env-empty">暂无环境变量</div>
                   ) : (
                     envRows.map((row) => {

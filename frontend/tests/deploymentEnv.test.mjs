@@ -15,6 +15,7 @@ async function loadTypeScriptModule(relativePath) {
 const {
   firstMissingRuntimeEnv,
   runtimeEnvConfiguration,
+  runtimeEnvDisplayRows,
   runtimeEnvVars,
 } = await loadTypeScriptModule("../src/create/deploymentEnv.ts");
 const {
@@ -87,4 +88,36 @@ test("collects every component parameter and enables selected tracing exporters"
   for (const exporter of TRACING_EXPORTERS) {
     assert.equal(config.fixedValues[exporter.enableFlag], "true");
   }
+});
+
+test("shows configured database and Feishu values in the runtime env summary", () => {
+  const rows = runtimeEnvDisplayRows(
+    [
+      { key: "DATABASE_POSTGRESQL_HOST", required: true },
+      { key: "DATABASE_POSTGRESQL_PASSWORD", required: true },
+      { key: "FEISHU_APP_ID", required: true },
+      { key: "FEISHU_APP_SECRET", required: true },
+    ],
+    {
+      DATABASE_POSTGRESQL_HOST: "postgres.internal",
+      DATABASE_POSTGRESQL_PASSWORD: "database-secret",
+      FEISHU_APP_ID: "cli_example",
+      FEISHU_APP_SECRET: "feishu-secret",
+    },
+  );
+
+  assert.deepEqual(rows, [
+    {
+      key: "DATABASE_POSTGRESQL_HOST",
+      value: "postgres.internal",
+      required: true,
+    },
+    {
+      key: "DATABASE_POSTGRESQL_PASSWORD",
+      value: "database-secret",
+      required: true,
+    },
+    { key: "FEISHU_APP_ID", value: "cli_example", required: true },
+    { key: "FEISHU_APP_SECRET", value: "feishu-secret", required: true },
+  ]);
 });
