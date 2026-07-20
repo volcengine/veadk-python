@@ -172,6 +172,8 @@ export function Sidebar({
           <img
             className="brand-logo"
             src={branding.logoUrl || volcengineLogo}
+            width={20}
+            height={20}
             alt=""
             aria-hidden
           />

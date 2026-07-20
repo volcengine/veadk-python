@@ -91,7 +91,18 @@ body {
   letter-spacing: -0.01em;
   padding: 4px 10px 12px;
 }
-.brand-logo { width: 20px; height: 20px; flex-shrink: 0; object-fit: contain; }
+.brand-logo,
+.login-brand-logo {
+  display: block;
+  width: 20px;
+  min-width: 20px;
+  max-width: 20px;
+  height: 20px;
+  min-height: 20px;
+  max-height: 20px;
+  flex: 0 0 20px;
+  object-fit: contain;
+}
 /* ChatGPT-style row: transparent, hover gray */
 .new-chat {
   display: flex;
@@ -2631,7 +2642,6 @@ a.search-result { text-decoration: none; color: inherit; }
   font-size: 15px;
   letter-spacing: -0.01em;
 }
-.login-brand-logo { width: 20px; height: 20px; object-fit: contain; }
 .login-main { flex: 1; display: flex; align-items: center; justify-content: center; padding: 0 24px; }
 .login-card { width: 100%; max-width: 420px; }
 .login-title {

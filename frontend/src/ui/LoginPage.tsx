@@ -35,6 +35,8 @@ export function LoginPage({ branding, onUsername }: LoginPageProps) {
           <img
             className="login-brand-logo"
             src={branding.logoUrl || defaultSiteLogo}
+            width={20}
+            height={20}
             alt=""
             aria-hidden
           />
