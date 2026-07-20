@@ -943,6 +943,98 @@
   font-size: 13px;
 }
 
+.cw-markdown-loading,
+.cw-markdown-editor {
+  min-height: 340px;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--background));
+}
+.cw-markdown-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+}
+.cw-markdown-editor {
+  overflow: hidden;
+  color: hsl(var(--foreground));
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.cw-markdown-editor:focus-within {
+  border-color: hsl(var(--ring) / 0.45);
+  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.12);
+}
+.cw-markdown-editor.is-error {
+  border-color: hsl(var(--destructive) / 0.6);
+  box-shadow: 0 0 0 3px hsl(var(--destructive) / 0.1);
+}
+.cw-markdown-toolbar {
+  min-height: 40px;
+  padding: 5px 8px;
+  border: 0;
+  border-bottom: 1px solid hsl(var(--border));
+  border-radius: 0;
+  background: hsl(var(--muted) / 0.38);
+}
+.cw-markdown-toolbar button,
+.cw-markdown-toolbar [role="combobox"] {
+  color: hsl(var(--foreground));
+}
+.cw-markdown-content {
+  min-height: 298px;
+  padding: 18px 20px 28px;
+  color: hsl(var(--foreground));
+  font-size: 14px;
+  line-height: 1.7;
+}
+.cw-markdown-content:focus {
+  outline: none;
+}
+.cw-markdown-content h1,
+.cw-markdown-content h2,
+.cw-markdown-content h3 {
+  margin: 1.1em 0 0.45em;
+  color: hsl(var(--foreground));
+  font-weight: 650;
+  line-height: 1.3;
+}
+.cw-markdown-content h1:first-child,
+.cw-markdown-content h2:first-child,
+.cw-markdown-content h3:first-child {
+  margin-top: 0;
+}
+.cw-markdown-content h1 {
+  font-size: 20px;
+}
+.cw-markdown-content h2 {
+  font-size: 17px;
+}
+.cw-markdown-content h3 {
+  font-size: 15px;
+}
+.cw-markdown-content p {
+  margin: 0 0 0.8em;
+}
+.cw-markdown-content ul,
+.cw-markdown-content ol {
+  margin: 0.5em 0 0.9em;
+  padding-left: 1.5em;
+}
+.cw-markdown-content blockquote {
+  margin: 0.8em 0;
+  padding-left: 12px;
+  border-left: 3px solid hsl(var(--border));
+  color: hsl(var(--muted-foreground));
+}
+.cw-markdown-error {
+  display: block;
+  margin-top: 6px;
+  color: hsl(var(--destructive));
+  font-size: 12px;
+}
+
 /* ---------- tag editor ---------- */
 .cw-tag-editor {
   display: flex;
