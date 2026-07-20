@@ -542,15 +542,15 @@ def _run_frontend_server(
     # ``web=False`` deliberately keeps ADK's full development API disabled,
     # but the VeADK trace drawer needs this one read-only endpoint. Register a
     # dedicated in-memory exporter instead of enabling eval/builder endpoints.
-    from google.adk.cli.adk_web_server import InMemoryExporter
     from opentelemetry import trace
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from veadk.cli.frontend_trace import SessionTraceExporter
 
     tracer_provider = trace.get_tracer_provider()
     if not isinstance(tracer_provider, TracerProvider):
         raise RuntimeError("ADK did not initialize an SDK tracer provider")
-    trace_exporter = InMemoryExporter({})
+    trace_exporter = SessionTraceExporter()
     tracer_provider.add_span_processor(SimpleSpanProcessor(trace_exporter))
     _mount_session_trace_route(app, trace_exporter)
 
