@@ -25,6 +25,14 @@ from veadk.config import veadk_environments
 from veadk.integrations.ve_identity.identity_client import IdentityClient
 
 
+@pytest.fixture(autouse=True)
+def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "veadk.cli.studio_deploy_serverless_iam.ensure_serverless_application_role",
+        lambda *_: None,
+    )
+
+
 @pytest.mark.parametrize(
     ("target_args", "expected_region", "expected_identity_region", "expected_project"),
     [

@@ -142,6 +142,10 @@ def test_studio_deploy_bundles_logo_and_optional_title(
         "veadk.cli.cli_frontend._resolve_studio_identity_region",
         lambda **kwargs: kwargs["deployment_region"],
     )
+    monkeypatch.setattr(
+        "veadk.cli.studio_deploy_serverless_iam.ensure_serverless_application_role",
+        lambda *_: False,
+    )
 
     args = [
         "deploy",
