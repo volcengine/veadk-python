@@ -66,6 +66,15 @@ def _claims_from_forwarded_jwt(authorization: str | None) -> dict | None:
 
 
 DEV_SERVER_ORIGIN = "http://localhost:5173"
+DEV_SERVER_LOOPBACK_ORIGIN = "http://127.0.0.1:5173"
+
+
+def _frontend_allow_origins(vite: bool) -> list[str]:
+    """Return browser origins accepted by the local Vite development server."""
+    if not vite:
+        return []
+    return [DEV_SERVER_ORIGIN, DEV_SERVER_LOOPBACK_ORIGIN]
+
 
 # Built UI shipped inside the package (output of `npm run build`).
 PACKAGED_WEBUI = Path(__file__).resolve().parent.parent / "webui"
@@ -518,7 +527,7 @@ def _run_frontend_server(
     from google.adk.cli.fast_api import get_fast_api_app
 
     agents_dir = os.path.abspath(agents_dir)
-    allow_origins = [DEV_SERVER_ORIGIN] if vite else []
+    allow_origins = _frontend_allow_origins(vite)
 
     app = get_fast_api_app(
         agents_dir=agents_dir,
@@ -533,7 +542,7 @@ def _run_frontend_server(
     # ``web=False`` deliberately keeps ADK's full development API disabled,
     # but the VeADK trace drawer needs this one read-only endpoint. Register a
     # dedicated in-memory exporter instead of enabling eval/builder endpoints.
-    from google.adk.cli.api_server import InMemoryExporter
+    from google.adk.cli.adk_web_server import InMemoryExporter
     from opentelemetry import trace
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor

@@ -45,6 +45,11 @@ import {
   type BackendOption,
   type EnvVar,
 } from "./veadkCatalog";
+import {
+  runtimeEnvConfiguration,
+  type RuntimeEnvConfiguration,
+  type RuntimeEnvSelection,
+} from "./deploymentEnv";
 import { draftToYaml } from "./configYaml";
 import type { AgentProject } from "./project";
 import type { SkillSource } from "./skills/types";
@@ -299,36 +304,36 @@ function isSensitiveEnv(key: string): boolean {
 
 /** Feature-specific settings stay readable in their own configuration area,
  * while their VeADK environment-variable names remain visible and exact. */
-function BackendEnvFields({
-  option,
+function RuntimeEnvFields({
+  env,
   values,
   onChange,
 }: {
-  option: BackendOption | undefined;
+  env: EnvVar[];
   values: Record<string, string>;
   onChange: (key: string, value: string) => void;
 }) {
-  if (!option || option.env.length === 0) {
+  if (env.length === 0) {
     return <p className="cw-env-empty">此后端无需额外运行参数。</p>;
   }
   return (
     <div className="cw-env-fields">
-      {option.env.map((env) => (
-        <label className="cw-env-field" key={env.key}>
+      {env.map((item) => (
+        <label className="cw-env-field" key={item.key}>
           <span className="cw-env-field-head">
             <span>
-              {env.comment || env.key}
-              {env.required && <span className="cw-req">*</span>}
+              {item.comment || item.key}
+              {item.required && <span className="cw-req">*</span>}
             </span>
-            <code>{env.key}</code>
+            <code>{item.key}</code>
           </span>
           <input
             className="cw-input"
-            type={isSensitiveEnv(env.key) ? "password" : "text"}
-            value={values[env.key] ?? ""}
-            placeholder={env.placeholder || "请输入参数值"}
+            type={isSensitiveEnv(item.key) ? "password" : "text"}
+            value={values[item.key] ?? ""}
+            placeholder={item.placeholder || "请输入参数值"}
             autoComplete="off"
-            onChange={(event) => onChange(env.key, event.currentTarget.value)}
+            onChange={(event) => onChange(item.key, event.currentTarget.value)}
           />
         </label>
       ))}
@@ -748,42 +753,49 @@ function countDraftAgents(root: AgentDraft): number {
   return 1 + root.subAgents.reduce((total, child) => total + countDraftAgents(child), 0);
 }
 
-/** Collect only the runtime variables used by the currently selected feature
- * backends. Values for a backend that was later deselected are not deployed. */
-function collectDeploymentEnv(root: AgentDraft): EnvVar[] {
-  const byKey = new Map<string, EnvVar>();
-  const add = (env: EnvVar[]) => {
-    for (const item of env) {
-      const previous = byKey.get(item.key);
-      if (!previous || (item.required && !previous.required)) {
-        byKey.set(item.key, item);
-      }
-    }
-  };
+/** Collect only settings used by active components across the Agent tree. */
+function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
+  const selections: RuntimeEnvSelection[] = [];
   const visit = (node: AgentDraft) => {
     if (node.memory.shortTerm) {
-      add(
-        STM_BACKENDS.find((item) => item.id === (node.shortTermBackend ?? "local"))
-          ?.env ?? [],
-      );
+      selections.push({
+        env:
+          STM_BACKENDS.find(
+            (item) => item.id === (node.shortTermBackend ?? "local"),
+          )?.env ?? [],
+      });
     }
     if (node.memory.longTerm) {
-      add(
-        LTM_BACKENDS.find((item) => item.id === (node.longTermBackend ?? "local"))
-          ?.env ?? [],
-      );
+      selections.push({
+        env:
+          LTM_BACKENDS.find(
+            (item) => item.id === (node.longTermBackend ?? "local"),
+          )?.env ?? [],
+      });
     }
     if (node.knowledgebase) {
-      add(
-        KB_BACKENDS.find(
-          (item) => item.id === (node.knowledgebaseBackend ?? "local"),
-        )?.env ?? [],
-      );
+      selections.push({
+        env:
+          KB_BACKENDS.find(
+            (item) => item.id === (node.knowledgebaseBackend ?? "local"),
+          )?.env ?? [],
+      });
+    }
+    if (node.tracing) {
+      for (const exporterId of node.tracingExporters ?? []) {
+        const exporter = TRACING_EXPORTERS.find((item) => item.id === exporterId);
+        if (exporter) {
+          selections.push({
+            env: exporter.env,
+            enableFlag: exporter.enableFlag,
+          });
+        }
+      }
     }
     node.subAgents.forEach(visit);
   };
   visit(root);
-  return [...byKey.values()];
+  return runtimeEnvConfiguration(selections);
 }
 
 /* ---------------------------------------------------------------- *
@@ -1691,8 +1703,11 @@ export function CustomCreate({
                 },
               }))
             }
-            deploymentEnv={deploymentEnv}
-            deploymentEnvValues={draft.deployment?.envValues}
+            deploymentEnv={deploymentEnv.specs}
+            deploymentEnvValues={{
+              ...draft.deployment?.envValues,
+              ...deploymentEnv.fixedValues,
+            }}
             onDeploymentEnvChange={patchDeploymentEnv}
             network={draft.deployment?.network}
             onNetworkChange={(network) =>
@@ -2016,10 +2031,12 @@ export function CustomCreate({
                           value={node.shortTermBackend}
                           onChange={(id) => patch({ shortTermBackend: id })}
                         />
-                        <BackendEnvFields
-                          option={STM_BACKENDS.find(
-                            (item) => item.id === (node.shortTermBackend ?? "local"),
-                          )}
+                        <RuntimeEnvFields
+                          env={
+                            STM_BACKENDS.find(
+                              (item) => item.id === (node.shortTermBackend ?? "local"),
+                            )?.env ?? []
+                          }
                           values={draft.deployment?.envValues ?? {}}
                           onChange={patchDeploymentEnv}
                         />
@@ -2044,10 +2061,12 @@ export function CustomCreate({
                           value={node.longTermBackend}
                           onChange={(id) => patch({ longTermBackend: id })}
                         />
-                        <BackendEnvFields
-                          option={LTM_BACKENDS.find(
-                            (item) => item.id === (node.longTermBackend ?? "local"),
-                          )}
+                        <RuntimeEnvFields
+                          env={
+                            LTM_BACKENDS.find(
+                              (item) => item.id === (node.longTermBackend ?? "local"),
+                            )?.env ?? []
+                          }
                           values={draft.deployment?.envValues ?? {}}
                           onChange={patchDeploymentEnv}
                         />
@@ -2082,10 +2101,12 @@ export function CustomCreate({
                             patch({ knowledgebaseBackend: id })
                           }
                         />
-                        <BackendEnvFields
-                          option={KB_BACKENDS.find(
-                            (item) => item.id === (node.knowledgebaseBackend ?? "local"),
-                          )}
+                        <RuntimeEnvFields
+                          env={
+                            KB_BACKENDS.find(
+                              (item) => item.id === (node.knowledgebaseBackend ?? "local"),
+                            )?.env ?? []
+                          }
                           values={draft.deployment?.envValues ?? {}}
                           onChange={patchDeploymentEnv}
                         />
@@ -2113,6 +2134,13 @@ export function CustomCreate({
                           items={TRACING_EXPORTERS}
                           selected={tracingExporters}
                           onToggle={toggleExporter}
+                        />
+                        <RuntimeEnvFields
+                          env={TRACING_EXPORTERS.filter((item) =>
+                            tracingExporters.includes(item.id),
+                          ).flatMap((item) => item.env)}
+                          values={draft.deployment?.envValues ?? {}}
+                          onChange={patchDeploymentEnv}
                         />
                       </div>
                     )}

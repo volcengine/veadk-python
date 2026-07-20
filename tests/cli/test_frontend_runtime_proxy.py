@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 
 from veadk.cli.cli_frontend import (
     _build_agentkit_proxy_headers,
+    _frontend_allow_origins,
     _run_frontend_server,
 )
 
@@ -72,6 +73,14 @@ def test_proxy_headers_do_not_forward_unvalidated_authorization() -> None:
     )
 
     assert headers == {"Accept": "application/json"}
+
+
+def test_vite_allows_both_loopback_browser_origins() -> None:
+    assert _frontend_allow_origins(vite=True) == [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
+    assert _frontend_allow_origins(vite=False) == []
 
 
 @pytest.mark.parametrize(

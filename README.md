@@ -97,12 +97,12 @@ app = create_agentkit_app(root_agent)
 See [`examples/generated_agentkit_project`](examples/generated_agentkit_project)
 for a complete generated project.
 
-The Studio deployment flow lists Feishu, knowledge-base, and short-/long-term
-memory settings in their feature sections. Values entered there are converted
-to VeADK runtime environment variables only when deploying; secrets are not
-written to generated source or exported YAML. For multi-instance runtimes, use
-a database-backed short-term memory store so sessions remain available across
-instances.
+The Studio deployment flow lists Feishu, knowledge-base, short-/long-term
+memory, and observability settings in their feature sections. Values entered
+there are converted to VeADK runtime environment variables only when deploying;
+secrets are not written to generated source or exported YAML. For multi-instance
+runtimes, use a database-backed short-term memory store so sessions remain
+available across instances.
 
 ## Feishu bot channel
 

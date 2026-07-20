@@ -68,12 +68,13 @@ veadk agentkit launch
 
 </Steps>
 
-When deploying through Studio, the required Feishu, knowledge-base, and
-short-/long-term memory settings appear in their respective feature sections.
-Their values are converted to VeADK runtime environment variables only during
-deployment and are not written to generated source or exported YAML. Use a
-database-backed short-term memory store for multi-instance runtimes; when
-`run_sse` returns 404, the UI also suggests checking whether an in-memory or
-SQLite session landed on a different instance.
+When deploying through Studio, the required Feishu, knowledge-base,
+short-/long-term memory, and observability settings appear in their respective
+feature sections. Their values are converted to VeADK runtime environment
+variables only during deployment, and selecting an observability exporter also
+enables its corresponding `ENABLE_*` flag. These values are not written to
+generated source or exported YAML. Use a database-backed short-term memory store
+for multi-instance runtimes; when `run_sse` returns 404, the UI also suggests
+checking whether an in-memory or SQLite session landed on a different instance.
 
 `veadk agentkit` passes through all of AgentKit's subcommands (such as `build`, `deploy`, `status`, and `destroy`). For the full command list and descriptions, see [AgentKit-Compatible Commands](/en/docs/cli/agentkit-cli); for more detailed platform deployment steps, see the [AgentKit documentation](https://volcengine.github.io/agentkit-sdk-python/content/2.agentkit-cli/1.overview.html).

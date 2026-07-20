@@ -3,15 +3,26 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import ts from "typescript";
 
-const source = readFileSync(
-  new URL("../src/create/deploymentEnv.ts", import.meta.url),
-  "utf8",
-);
-const { outputText } = ts.transpileModule(source, {
-  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
-});
-const moduleUrl = `data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`;
-const { firstMissingRuntimeEnv, runtimeEnvVars } = await import(moduleUrl);
+async function loadTypeScriptModule(relativePath) {
+  const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
+  const { outputText } = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
+  });
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`;
+  return import(moduleUrl);
+}
+
+const {
+  firstMissingRuntimeEnv,
+  runtimeEnvConfiguration,
+  runtimeEnvVars,
+} = await loadTypeScriptModule("../src/create/deploymentEnv.ts");
+const {
+  KB_BACKENDS,
+  LTM_BACKENDS,
+  STM_BACKENDS,
+  TRACING_EXPORTERS,
+} = await loadTypeScriptModule("../src/create/veadkCatalog.ts");
 
 test("maps active feature settings to VeADK runtime env rows", () => {
   const specs = [
@@ -48,4 +59,32 @@ test("reports the first missing required runtime setting", () => {
     }),
     undefined,
   );
+});
+
+test("collects every component parameter and enables selected tracing exporters", () => {
+  const backendSelections = [
+    ...STM_BACKENDS,
+    ...LTM_BACKENDS,
+    ...KB_BACKENDS,
+  ].map((option) => ({ env: option.env }));
+  const exporterSelections = TRACING_EXPORTERS.map((option) => ({
+    env: option.env,
+    enableFlag: option.enableFlag,
+  }));
+
+  const config = runtimeEnvConfiguration([
+    ...backendSelections,
+    ...exporterSelections,
+  ]);
+  const expectedKeys = new Set(
+    [...backendSelections, ...exporterSelections].flatMap((selection) => [
+      ...selection.env.map((env) => env.key),
+      ...(selection.enableFlag ? [selection.enableFlag] : []),
+    ]),
+  );
+
+  assert.deepEqual(new Set(config.specs.map((spec) => spec.key)), expectedKeys);
+  for (const exporter of TRACING_EXPORTERS) {
+    assert.equal(config.fixedValues[exporter.enableFlag], "true");
+  }
 });
