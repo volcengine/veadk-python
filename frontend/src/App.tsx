@@ -788,6 +788,17 @@ export default function App() {
 
   function onUsername(name: string) {
     setLocalUser(name);
+    // A completed login is a fresh entry into the app. Do not reveal a create
+    // or management view that was persisted before the login page appeared.
+    restoredRef.current = true;
+    setCreateView(null);
+    setImportedDraft(null);
+    setSkillCenter(false);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSearchView(false);
+    setManageAgents(false);
+    startNewChat();
     setUserId(name);
     setUserInfo({ name });
     setLocalMode(true);
