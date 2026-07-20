@@ -1296,7 +1296,7 @@ def _run_frontend_server(
         return "\n\n".join(parts)
 
     def _unexpected_debug_error_detail(prefix: str, exc: Exception) -> str:
-        """Return a traceable, credential-redacted debug error for the UI."""
+        """Log the exception and return only a traceable public error."""
         error_id = secrets.token_hex(4)
         message = _redact_runner_log(str(exc).strip()) or "No error message"
         logger.exception(
@@ -1305,7 +1305,7 @@ def _run_frontend_server(
             type(exc).__name__,
             message,
         )
-        return f"{prefix}（错误 ID：{error_id}）\n{type(exc).__name__}: {message}"
+        return f"{prefix}（错误 ID：{error_id}）"
 
     def _test_run_log_detail(run: _GeneratedAgentTestRun, prefix: str) -> str:
         temp_dir = PathlibPath(run.temp_dir)

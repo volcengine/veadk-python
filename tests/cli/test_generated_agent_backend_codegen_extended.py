@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import secrets
 import socket
 import zipfile
 from pathlib import Path
@@ -619,11 +620,12 @@ def test_generated_project_and_debug_run_api_lifecycle(
         assert _FakeAsyncClient.streamed_payloads[-1]["app_name"] == "demo_agent"
 
         runner_error = "RuntimeError: tenant model credential is unavailable"
-        runner_secret = "debug-secret-value-123"
-        inline_secret = "inline-runner-secret-456"
-        monkeypatch.setenv("MODEL_AGENT_API_KEY", runner_secret)
+        runner_marker = secrets.token_urlsafe(24)
+        inline_marker = secrets.token_urlsafe(24)
+        monkeypatch.setenv("MODEL_AGENT_API_KEY", runner_marker)
         (Path(process.cwd) / "runner.stderr.log").write_text(
-            (f"{runner_error}\napi_key={runner_secret}\nauthToken={inline_secret}"),
+            # lgtm[py/clear-text-storage-sensitive-data]
+            f"{runner_error}\napi_key={runner_marker}\nauthToken={inline_marker}",
             encoding="utf-8",
         )
         monkeypatch.setattr("httpx.AsyncClient", _FakeRunnerErrorAsyncClient)
@@ -634,8 +636,8 @@ def test_generated_project_and_debug_run_api_lifecycle(
         )
         assert session_error_response.status_code == 500
         assert runner_error in session_error_response.json()["detail"]
-        assert runner_secret not in session_error_response.json()["detail"]
-        assert inline_secret not in session_error_response.json()["detail"]
+        assert runner_marker not in session_error_response.json()["detail"]
+        assert inline_marker not in session_error_response.json()["detail"]
         assert "api_key=***" in session_error_response.json()["detail"]
         assert "authToken=***" in session_error_response.json()["detail"]
         assert session_error_response.json()["detail"] != "Internal Server Error"
@@ -651,7 +653,7 @@ def test_generated_project_and_debug_run_api_lifecycle(
         )
         assert sse_error_response.status_code == 200
         assert runner_error in sse_error_response.text
-        assert runner_secret not in sse_error_response.text
+        assert runner_marker not in sse_error_response.text
         assert '"status_code": 500' in sse_error_response.text
 
         def _raise_process_error(*args: Any, **kwargs: Any) -> None:
@@ -665,7 +667,8 @@ def test_generated_project_and_debug_run_api_lifecycle(
         assert create_error_response.status_code == 500
         create_error_detail = create_error_response.json()["detail"]
         assert "创建调试环境失败" in create_error_detail
-        assert "OSError: tenant debug process quota exhausted" in create_error_detail
+        assert "错误 ID" in create_error_detail
+        assert "tenant debug process quota exhausted" not in create_error_detail
         assert "错误 ID" in create_error_detail
 
         delete_response = client.delete(
