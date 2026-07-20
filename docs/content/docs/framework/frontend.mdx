@@ -149,6 +149,22 @@ veadk studio deploy \
 
 ### `veadk studio deploy` 的 IAM 权限
 
+部署命令会先检查 `ServerlessApplicationRole`。如果该 Role 不存在，终端会显示
+黄色提示并自动创建 Role，同时创建或复用自定义策略 `vefaas_full_access`，然后
+绑定以下策略（作用域均为 Global）：
+
+- `CloudMonitorReadOnlyAccess`
+- `vefaas_full_access`
+- `VPCFullAccess`
+- `TLSFullAccess`
+- `APIGFullAccess`
+- `ECSFullAccess`
+- `VeFaaSFullAccess`
+- `STSAssumeRoleAccess`
+
+该检查不受 `--iam-role` 影响；部署使用的 AK/SK 需要具备查询、创建 IAM
+Role/策略以及绑定策略的权限。
+
 未传入 `--iam-role` 时，部署命令会创建或复用 `VeADKFrontendServiceRole`，并确保该 Role 绑定以下火山引擎系统策略：
 
 - `ArkReadOnlyAccess`

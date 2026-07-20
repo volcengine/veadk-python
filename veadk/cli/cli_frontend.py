@@ -3138,7 +3138,14 @@ def frontend_deploy(
             "or pass --volcengine-access-key/--volcengine-secret-key."
         )
 
-    # 1) Ensure the IAM role the function runs as (auto-create unless provided).
+    # 1) Ensure VeFaaS has its service role before provisioning cloud resources.
+    from veadk.cli.studio_deploy_serverless_iam import (
+        ensure_serverless_application_role,
+    )
+
+    ensure_serverless_application_role(ak, sk)
+
+    # 2) Ensure the IAM role the function runs as (auto-create unless provided).
     if iam_role:
         role_trn = iam_role
         click.echo(f"Using provided IAM role: {role_trn}")
@@ -3174,7 +3181,7 @@ def frontend_deploy(
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
 
-    # 2) Build the function project (zip): run.sh launches the frontend server on
+    # 3) Build the function project (zip): run.sh launches the frontend server on
     #    the FaaS-assigned port; requirements.txt pulls veadk-python (ships the UI).
     requirements = (
         f"veadk-python=={veadk_version}\n" if veadk_version else "veadk-python\n"
@@ -3183,7 +3190,7 @@ def frontend_deploy(
         f"site-logo.{branding_logo.extension}" if branding_logo is not None else None
     )
     run_sh = _studio_deploy_run_script(logo_filename)
-    # 2b) Resolve the serverless APIG gateway: use --gateway-name if given, else
+    # 3b) Resolve the serverless APIG gateway: use --gateway-name if given, else
     #     reuse an existing serverless gateway, creating one only if none exists.
     #     (VeFaaS applications can only attach to a serverless gateway; reusing
     #     avoids the per-account gateway quota.)

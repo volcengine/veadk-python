@@ -169,6 +169,9 @@ renderer directory (`frontend/src/a2ui/components/<Name>/`). See
 
 ## Command line tools
 
+`veadk studio deploy` automatically provisions `ServerlessApplicationRole`
+when the required VeFaaS role is missing.
+
 VeADK provides several useful command line tools for faster deployment and optimization, such as:
 
 - `veadk deploy`: deploy your project to [Volcengine VeFaaS platform](https://www.volcengine.com/product/vefaas) (you can use `veadk init` to init a demo project first)

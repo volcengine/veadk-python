@@ -159,6 +159,23 @@ veadk studio deploy \
 
 ### IAM permissions for `veadk studio deploy`
 
+The deploy command first checks `ServerlessApplicationRole`. If the role is
+missing, the terminal shows a yellow warning and creates it automatically. It
+also creates or reuses the custom `vefaas_full_access` policy and attaches these
+policies, all with Global scope:
+
+- `CloudMonitorReadOnlyAccess`
+- `vefaas_full_access`
+- `VPCFullAccess`
+- `TLSFullAccess`
+- `APIGFullAccess`
+- `ECSFullAccess`
+- `VeFaaSFullAccess`
+- `STSAssumeRoleAccess`
+
+This check runs even when `--iam-role` is provided. The deployment AK/SK must
+be allowed to inspect and create IAM roles and policies and to attach policies.
+
 When `--iam-role` is omitted, the deploy command creates or reuses `VeADKFrontendServiceRole` and ensures that the role has these Volcengine system policies:
 
 - `ArkReadOnlyAccess`
