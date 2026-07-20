@@ -1,4 +1,12 @@
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  lazy,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   ArrowRight,
@@ -74,6 +82,8 @@ import {
 import type { DeployStage, GeneratedAgentTestRun, UiFeatures } from "../adk/client";
 import { applyEvent, emptyAcc, type Block } from "../blocks";
 import "./CustomCreate.css";
+
+const MarkdownPromptEditor = lazy(() => import("./MarkdownPromptEditor"));
 
 /** Trigger a browser download of a text file. */
 function downloadText(filename: string, text: string, mime = "text/plain") {
@@ -1933,25 +1943,26 @@ export function CustomCreate({
                         <label className="cw-label">
                           系统提示词<span className="cw-req">*</span>
                         </label>
-                        <textarea
-                          className={`cw-textarea cw-textarea-lg ${invalidClass(
-                            instructionMissing,
-                          )}`}
-                          value={node.instruction}
-                          placeholder={
-                            "你是一个……\n\n你的目标是……\n\n约束：\n- ……"
+                        <Suspense
+                          fallback={
+                            <div className="cw-markdown-loading" role="status">
+                              正在加载 Markdown 编辑器…
+                            </div>
                           }
-                          onChange={(e) =>
-                            patch({ instruction: e.target.value })
-                          }
-                        />
+                        >
+                          <MarkdownPromptEditor
+                            value={node.instruction}
+                            invalid={instructionMissing}
+                            onChange={(instruction) => patch({ instruction })}
+                          />
+                        </Suspense>
                         {showErrors && instructionMissing ? (
                           <span className="cw-error-text">
                             系统提示词为必填项
                           </span>
                         ) : (
                           <span className="cw-help">
-                            定义 Agent 的角色、目标与行为边界，这是最关键的一步。
+                            支持 Markdown 快捷输入，例如键入 ## 加空格创建二级标题。
                           </span>
                         )}
                       </div>
