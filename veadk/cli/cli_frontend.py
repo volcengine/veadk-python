@@ -101,6 +101,30 @@ def _extract_build_error_excerpt(
     )
 
 
+def _redact_debug_text(text: str) -> str:
+    """Redact credentials before debug details leave the server process."""
+    redacted = text
+    for key, value in os.environ.items():
+        upper = key.upper()
+        if (
+            value
+            and len(value) >= 8
+            and any(s in upper for s in ("KEY", "SECRET", "TOKEN", "PASSWORD"))
+        ):
+            redacted = redacted.replace(value, "***")
+    redacted = re.sub(
+        r"(?i)(\bbearer\s+)[a-z0-9._~+/=-]+",
+        r"\1***",
+        redacted,
+    )
+    return re.sub(
+        r"(?i)((?:api[_-]?key|auth[_-]?token|access[_-]?token|secret|"
+        r"password|token)\s*[:=]\s*)(?:[\"'][^\"']*[\"']|[^\s,;]+)",
+        r"\1***",
+        redacted,
+    )
+
+
 def _claims_from_forwarded_jwt(authorization: str | None) -> dict | None:
     """Decode the JWT an upstream API gateway forwarded in the Authorization
     header, WITHOUT re-verifying its signature.
@@ -1245,29 +1269,6 @@ def _run_frontend_server(
         )
         return env
 
-    def _redact_runner_log(text: str) -> str:
-        redacted = text
-        for key, value in os.environ.items():
-            upper = key.upper()
-            if (
-                value
-                and len(value) >= 8
-                and any(s in upper for s in ("KEY", "SECRET", "TOKEN", "PASSWORD"))
-            ):
-                redacted = redacted.replace(value, "***")
-        redacted = re.sub(
-            r"(?i)(\bbearer\s+)[a-z0-9._~+/=-]+",
-            r"\1***",
-            redacted,
-        )
-        redacted = re.sub(
-            r"(?i)((?:api[_-]?key|auth[_-]?token|access[_-]?token|secret|"
-            r"password|token)\s*[:=]\s*)(?:[\"'][^\"']*[\"']|[^\s,;]+)",
-            r"\1***",
-            redacted,
-        )
-        return redacted
-
     def _read_runner_log_tail(path: PathlibPath, max_chars: int = 6000) -> str:
         try:
             with path.open("rb") as f:
@@ -1277,7 +1278,7 @@ def _run_frontend_server(
                 text = f.read().decode("utf-8", "replace")
         except OSError:
             return ""
-        return _redact_runner_log(text[-max_chars:].strip())
+        return _redact_debug_text(text[-max_chars:].strip())
 
     def _runner_log_detail(
         prefix: str,
@@ -1296,16 +1297,20 @@ def _run_frontend_server(
         return "\n\n".join(parts)
 
     def _unexpected_debug_error_detail(prefix: str, exc: Exception) -> str:
-        """Log the exception and return only a traceable public error."""
+        """Log an unexpected error and return a safe, traceable UI summary."""
         error_id = secrets.token_hex(4)
-        message = _redact_runner_log(str(exc).strip()) or "No error message"
+        message = _redact_debug_text(str(exc).strip()) or "No error message"
         logger.exception(
             "Generated-agent debug error %s (%s): %s",
             error_id,
             type(exc).__name__,
             message,
         )
-        return f"{prefix}（错误 ID：{error_id}）"
+        return (
+            f"{prefix}（错误 ID：{error_id}）\n"
+            f"异常类型：{type(exc).__name__}\n"
+            "详细信息已记录在 Studio 服务端日志中。"
+        )
 
     def _test_run_log_detail(run: _GeneratedAgentTestRun, prefix: str) -> str:
         temp_dir = PathlibPath(run.temp_dir)
@@ -1321,7 +1326,7 @@ def _run_frontend_server(
         status_code: int,
         response_text: str,
     ) -> str:
-        response_detail = _redact_runner_log(response_text.strip())
+        response_detail = _redact_debug_text(response_text.strip())
         prefix = f"{operation}失败（临时运行环境返回 HTTP {status_code}）"
         if response_detail and response_detail.lower() != "internal server error":
             prefix += f"\n响应：{response_detail[:2000]}"
