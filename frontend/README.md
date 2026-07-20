@@ -18,7 +18,8 @@ server that `veadk frontend` launches — no separate backend.
   when its session metadata appears. Long Agent lists stay within the viewport
   and scroll independently.
 - **Tracing viewer**: a span tree + detail panel from the ADK debug trace.
-- **Custom-agent workbench**: configure and debug an agent, then review
+- **Custom-agent workbench**: configure and debug an agent with expandable,
+  copyable runner error details, then review
   generated source with line numbers and syntax highlighting before setting
   its region, message channel, network, environment variables, and deploying
   to AgentKit. A global task list keeps Runtime, region, and progress visible

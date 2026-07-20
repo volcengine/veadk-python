@@ -344,6 +344,18 @@
   font-size: 13px;
   line-height: 1.5;
 }
+.cw-debug-error-detail,
+.cw-debug-msg-error {
+  width: 100%;
+  min-width: 0;
+  color: hsl(var(--destructive));
+  text-align: left;
+}
+.cw-debug-error-detail .deploy-error-message-text,
+.cw-debug-msg-error .deploy-error-message-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
 .cw-debug-chat {
   min-height: 100%;
   display: flex;
@@ -391,9 +403,6 @@
 }
 .cw-debug-msg-assistant .cw-debug-content {
   width: 100%;
-}
-.cw-debug-msg-error {
-  color: hsl(var(--destructive));
 }
 .cw-debug-composer {
   flex-shrink: 0;

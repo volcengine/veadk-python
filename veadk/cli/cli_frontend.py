@@ -1255,6 +1255,17 @@ def _run_frontend_server(
                 and any(s in upper for s in ("KEY", "SECRET", "TOKEN", "PASSWORD"))
             ):
                 redacted = redacted.replace(value, "***")
+        redacted = re.sub(
+            r"(?i)(\bbearer\s+)[a-z0-9._~+/=-]+",
+            r"\1***",
+            redacted,
+        )
+        redacted = re.sub(
+            r"(?i)((?:api[_-]?key|auth[_-]?token|access[_-]?token|secret|"
+            r"password|token)\s*[:=]\s*)(?:[\"'][^\"']*[\"']|[^\s,;]+)",
+            r"\1***",
+            redacted,
+        )
         return redacted
 
     def _read_runner_log_tail(path: PathlibPath, max_chars: int = 6000) -> str:
@@ -1283,6 +1294,38 @@ def _run_frontend_server(
         if len(parts) == 1:
             parts.append("No runner logs were captured.")
         return "\n\n".join(parts)
+
+    def _unexpected_debug_error_detail(prefix: str, exc: Exception) -> str:
+        """Return a traceable, credential-redacted debug error for the UI."""
+        error_id = secrets.token_hex(4)
+        message = _redact_runner_log(str(exc).strip()) or "No error message"
+        logger.exception(
+            "Generated-agent debug error %s (%s): %s",
+            error_id,
+            type(exc).__name__,
+            message,
+        )
+        return f"{prefix}（错误 ID：{error_id}）\n{type(exc).__name__}: {message}"
+
+    def _test_run_log_detail(run: _GeneratedAgentTestRun, prefix: str) -> str:
+        temp_dir = PathlibPath(run.temp_dir)
+        return _runner_log_detail(
+            prefix,
+            temp_dir / "runner.stdout.log",
+            temp_dir / "runner.stderr.log",
+        )
+
+    def _runner_response_error_detail(
+        run: _GeneratedAgentTestRun,
+        operation: str,
+        status_code: int,
+        response_text: str,
+    ) -> str:
+        response_detail = _redact_runner_log(response_text.strip())
+        prefix = f"{operation}失败（临时运行环境返回 HTTP {status_code}）"
+        if response_detail and response_detail.lower() != "internal server error":
+            prefix += f"\n响应：{response_detail[:2000]}"
+        return _test_run_log_detail(run, prefix)
 
     def _http_policy_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=400, detail=str(exc))
@@ -1488,7 +1531,11 @@ def _run_frontend_server(
             if active_count >= _TEST_RUN_MAX_ACTIVE:
                 raise HTTPException(
                     status_code=429,
-                    detail="Too many active generated-agent test runs",
+                    detail=(
+                        "调试环境并发数已达上限 "
+                        f"({active_count}/{_TEST_RUN_MAX_ACTIVE})，"
+                        "请稍后重试或关闭不再使用的调试页面。"
+                    ),
                 )
             _test_runs_creating["count"] += 1
             reserved = True
@@ -1548,7 +1595,7 @@ def _run_frontend_server(
                 "appName": app_name,
                 "expiresAt": int(expires_at),
             }
-        except Exception:
+        except Exception as exc:
             if proc is not None:
                 _terminate_test_run(
                     _GeneratedAgentTestRun("", "", temp_dir, "", proc, 0)
@@ -1556,7 +1603,15 @@ def _run_frontend_server(
             else:
                 if temp_dir:
                     shutil.rmtree(temp_dir, ignore_errors=True)
-            raise
+            if isinstance(exc, HTTPException):
+                raise
+            raise HTTPException(
+                status_code=500,
+                detail=_unexpected_debug_error_detail(
+                    "创建调试环境失败",
+                    exc,
+                ),
+            ) from exc
         finally:
             if reserved:
                 with _test_runs_lock:
@@ -1574,11 +1629,39 @@ def _run_frontend_server(
             f"{run.base_url}/apps/{run.app_name}/users/"
             f"{quote(user_id, safe='')}/sessions"
         )
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            res = await client.post(url, json={})
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                res = await client.post(url, json={})
+        except httpx.HTTPError as exc:
+            detail = _unexpected_debug_error_detail(
+                "连接临时运行环境以创建会话时失败",
+                exc,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=_test_run_log_detail(run, detail),
+            ) from exc
         if res.status_code >= 400:
-            raise HTTPException(status_code=res.status_code, detail=res.text)
-        return res.json()
+            raise HTTPException(
+                status_code=res.status_code,
+                detail=_runner_response_error_detail(
+                    run,
+                    "创建调试会话",
+                    res.status_code,
+                    res.text,
+                ),
+            )
+        try:
+            return res.json()
+        except ValueError as exc:
+            detail = _unexpected_debug_error_detail(
+                "解析临时运行环境的会话响应时失败",
+                exc,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=_test_run_log_detail(run, detail),
+            ) from exc
 
     @app.post("/web/generated-agent-test-runs/{run_id}/run_sse")
     async def _run_generated_agent_test_sse(run_id: str, request: Request):
@@ -1591,26 +1674,47 @@ def _run_frontend_server(
         payload["app_name"] = run.app_name
 
         async def _stream():
-            async with httpx.AsyncClient(timeout=None) as client:
-                async with client.stream(
-                    "POST",
-                    f"{run.base_url}/run_sse",
-                    json=payload,
-                    timeout=None,
-                ) as res:
-                    if res.status_code >= 400:
-                        text = (await res.aread()).decode("utf-8", "replace")
-                        logger.warning(
-                            "test-run run_sse %s (%s): %s",
-                            res.status_code,
-                            run.base_url,
-                            text[:500],
-                        )
-                        err = json.dumps({"error": text}, ensure_ascii=False)
-                        yield f"data: {err}\n\n"
-                        return
-                    async for chunk in res.aiter_bytes():
-                        yield chunk
+            try:
+                async with httpx.AsyncClient(timeout=None) as client:
+                    async with client.stream(
+                        "POST",
+                        f"{run.base_url}/run_sse",
+                        json=payload,
+                        timeout=None,
+                    ) as res:
+                        if res.status_code >= 400:
+                            text = (await res.aread()).decode("utf-8", "replace")
+                            detail = _runner_response_error_detail(
+                                run,
+                                "调试对话",
+                                res.status_code,
+                                text,
+                            )
+                            logger.warning(
+                                "test-run run_sse %s (%s): %s",
+                                res.status_code,
+                                run.base_url,
+                                detail[:500],
+                            )
+                            err = json.dumps(
+                                {
+                                    "error": detail,
+                                    "status_code": res.status_code,
+                                },
+                                ensure_ascii=False,
+                            )
+                            yield f"data: {err}\n\n"
+                            return
+                        async for chunk in res.aiter_bytes():
+                            yield chunk
+            except httpx.HTTPError as exc:
+                detail = _unexpected_debug_error_detail(
+                    "连接临时运行环境进行调试对话时失败",
+                    exc,
+                )
+                detail = _test_run_log_detail(run, detail)
+                err = json.dumps({"error": detail}, ensure_ascii=False)
+                yield f"data: {err}\n\n"
 
         return StreamingResponse(_stream(), media_type="text/event-stream")
 

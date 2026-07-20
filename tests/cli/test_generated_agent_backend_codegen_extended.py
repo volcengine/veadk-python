@@ -461,6 +461,17 @@ class _FakeAsyncClient:
         return _FakeResponse(body=b'data: {"content":{"parts":[{"text":"hello"}]}}\n\n')
 
 
+class _FakeRunnerErrorAsyncClient(_FakeAsyncClient):
+    async def post(self, url: str, json: Any) -> _FakeResponse:
+        assert "/sessions" in url
+        return _FakeResponse(status_code=500, body=b"Internal Server Error")
+
+    def stream(self, method: str, url: str, json: dict[str, Any], **kwargs: Any):
+        assert method == "POST"
+        assert url.endswith("/run_sse")
+        return _FakeResponse(status_code=500, body=b"Internal Server Error")
+
+
 class _FakeProcess:
     created: list["_FakeProcess"] = []
 
@@ -606,6 +617,56 @@ def test_generated_project_and_debug_run_api_lifecycle(
         assert sse_response.status_code == 200
         assert '"text":"hello"' in sse_response.text
         assert _FakeAsyncClient.streamed_payloads[-1]["app_name"] == "demo_agent"
+
+        runner_error = "RuntimeError: tenant model credential is unavailable"
+        runner_secret = "debug-secret-value-123"
+        inline_secret = "inline-runner-secret-456"
+        monkeypatch.setenv("MODEL_AGENT_API_KEY", runner_secret)
+        (Path(process.cwd) / "runner.stderr.log").write_text(
+            (f"{runner_error}\napi_key={runner_secret}\nauthToken={inline_secret}"),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr("httpx.AsyncClient", _FakeRunnerErrorAsyncClient)
+
+        session_error_response = client.post(
+            f"/web/generated-agent-test-runs/{run['runId']}/sessions",
+            json={"userId": "test_user"},
+        )
+        assert session_error_response.status_code == 500
+        assert runner_error in session_error_response.json()["detail"]
+        assert runner_secret not in session_error_response.json()["detail"]
+        assert inline_secret not in session_error_response.json()["detail"]
+        assert "api_key=***" in session_error_response.json()["detail"]
+        assert "authToken=***" in session_error_response.json()["detail"]
+        assert session_error_response.json()["detail"] != "Internal Server Error"
+
+        sse_error_response = client.post(
+            f"/web/generated-agent-test-runs/{run['runId']}/run_sse",
+            json={
+                "user_id": "test_user",
+                "session_id": "session-1",
+                "new_message": {"role": "user", "parts": [{"text": "hi"}]},
+                "streaming": True,
+            },
+        )
+        assert sse_error_response.status_code == 200
+        assert runner_error in sse_error_response.text
+        assert runner_secret not in sse_error_response.text
+        assert '"status_code": 500' in sse_error_response.text
+
+        def _raise_process_error(*args: Any, **kwargs: Any) -> None:
+            raise OSError("tenant debug process quota exhausted")
+
+        monkeypatch.setattr("subprocess.Popen", _raise_process_error)
+        create_error_response = client.post(
+            "/web/generated-agent-test-runs",
+            json={"draft": draft},
+        )
+        assert create_error_response.status_code == 500
+        create_error_detail = create_error_response.json()["detail"]
+        assert "创建调试环境失败" in create_error_detail
+        assert "OSError: tenant debug process quota exhausted" in create_error_detail
+        assert "错误 ID" in create_error_detail
 
         delete_response = client.delete(
             f"/web/generated-agent-test-runs/{run['runId']}"

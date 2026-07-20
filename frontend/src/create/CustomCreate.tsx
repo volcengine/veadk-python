@@ -62,6 +62,7 @@ import {
   type DeploymentTaskUpdate,
 } from "../ui/ProjectPreview";
 import { Blocks, ThinkingPlaceholder } from "../ui/Blocks";
+import { DeploymentErrorMessage } from "../ui/DeploymentErrorMessage";
 import {
   createGeneratedAgentTestRun,
   createGeneratedAgentTestSession,
@@ -1082,7 +1083,13 @@ function DebugPanel({
           </div>
         ) : phase === "error" ? (
           <div className="cw-debug-error">
-            <span>{error || "调试失败"}</span>
+            <DeploymentErrorMessage
+              message={error || "调试失败"}
+              className="cw-debug-error-detail"
+              onRetry={async () => {
+                await onRestart();
+              }}
+            />
             {logs.length > 0 && (
               <div className="cw-debug-progress">
                 {logs.map((line, i) => (
@@ -1092,14 +1099,6 @@ function DebugPanel({
                 ))}
               </div>
             )}
-            <button
-              type="button"
-              className="cw-debug-start"
-              onClick={onRestart}
-            >
-              <Bug className="cw-i" />
-              重试
-            </button>
           </div>
         ) : (
           <div className="cw-debug-chat">
@@ -1120,7 +1119,10 @@ function DebugPanel({
                     {msg.role === "user" ? (
                       msg.content
                     ) : msg.error ? (
-                      <span className="cw-debug-msg-error">{msg.error}</span>
+                      <DeploymentErrorMessage
+                        message={msg.error}
+                        className="cw-debug-msg-error"
+                      />
                     ) : msg.blocks && msg.blocks.length > 0 ? (
                       <Blocks blocks={msg.blocks} onAction={() => {}} />
                     ) : msg.content ? (
