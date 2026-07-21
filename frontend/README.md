@@ -47,6 +47,22 @@ Changing the Feishu channel on the deployment page regenerates the project so
 `app.py`, the `extensions` dependency, and the runtime environment variables
 stay aligned before deployment.
 
+## Development specification
+
+All frontend changes must follow [`SPEC.md`](SPEC.md). It defines the required
+code, visual, interaction, security, code-generation, and testing conventions
+for VeADK Studio, including these non-negotiable rules:
+
+- New or updated product icons must be repository-owned, hand-drawn SVG React
+  components. Do not add generic icon-library, emoji, or remote-icon usage.
+- Reuse the existing semantic color tokens, restrained enterprise-workbench
+  visual language, bounded scrolling regions, and accessible interaction states.
+- Feature configuration must remain explicit in its domain section and runtime
+  environment summary; secrets must never enter generated source, browser
+  persistence, logs, documentation, or committed files.
+- Run the tests, production build, documentation checks, and secret scan required
+  by the specification before submitting a pull request.
+
 ## Run
 
 The build output ships inside the package at `veadk/webui` (committed), so
