@@ -5,9 +5,10 @@ import {
   FileType2,
   FileVideo2,
   ImageIcon,
-  LoaderCircle,
+  Loader2,
   Maximize2,
   X,
+  Play,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { PhotoView } from "react-photo-view";
@@ -80,16 +81,31 @@ export function MediaGroup({ appName, items, compact = false, onRemove }: MediaG
           const kind = mediaKind(item.mimeType);
           const source = sourceFor(item, appName);
           const disabled = item.status === "uploading" || item.status === "error" || !source;
+
           const previewButton = (
             <button
               type="button"
               className="media-card-main"
               disabled={disabled}
-              onClick={kind === "image" ? undefined : () => setOpen(item)}
+              onClick={() => setOpen(item)}
               aria-label={`预览 ${item.name ?? "附件"}`}
             >
               {kind === "image" && source ? (
                 <img className="media-card-image" src={source} alt={item.name ?? "图片"} loading="lazy" />
+              ) : kind === "video" && source ? (
+                <div className="media-card-video-container">
+                  <video
+                    className="media-card-video"
+                    src={source}
+                    muted
+                    playsInline
+                    preload="metadata"
+                    aria-hidden="true"
+                  />
+                  <span className="media-card-video-play">
+                    <Play />
+                  </span>
+                </div>
               ) : (
                 <span className="media-card-icon"><KindIcon kind={kind} /></span>
               )}
@@ -98,7 +114,7 @@ export function MediaGroup({ appName, items, compact = false, onRemove }: MediaG
                 <span className="media-card-meta">
                   <span className="media-card-type">{labelFor(item)}</span>
                   {item.status === "uploading" ? (
-                    <><LoaderCircle className="media-card-spinner" /> 上传中</>
+                    <><Loader2 className="media-card-spinner" /> 上传中</>
                   ) : item.status === "error" ? (
                     item.error ?? "上传失败"
                   ) : (
@@ -116,13 +132,14 @@ export function MediaGroup({ appName, items, compact = false, onRemove }: MediaG
               className={`media-card media-card--${kind}${item.status === "error" ? " media-card--error" : ""}`}
               key={item.id}
               layout
-              initial={{ opacity: 0, scale: 0.97, y: 4 }}
+              initial={{ opacity: 0, scale: 0.985, y: 4 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.97 }}
             >
               {kind === "image" && !disabled ? (
                 <PhotoView src={source}>{previewButton}</PhotoView>
-              ) : previewButton}
+              ) : (
+                previewButton
+              )}
               {onRemove ? (
                 <button
                   type="button"
@@ -201,7 +218,7 @@ function MediaViewer({ appName, item, onClose }: { appName: string; item: MediaI
         initial={{ opacity: 0, y: 18, scale: 0.985 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         exit={{ opacity: 0, y: 10, scale: 0.99 }}
-        transition={{ type: "spring", stiffness: 420, damping: 34 }}
+        transition={{ type: "spring", stiffness: 420, damping: 30 }}
       >
         <header className="media-viewer-header">
           <div>
@@ -215,9 +232,20 @@ function MediaViewer({ appName, item, onClose }: { appName: string; item: MediaI
         </header>
         <div className={`media-viewer-body media-viewer-body--${kind}`}>
           {kind === "image" ? <img src={source} alt={item.name ?? "图片"} /> : null}
-          {kind === "video" ? <video src={source} controls autoPlay preload="metadata" /> : null}
+          {kind === "video" ? (
+            <div className="media-viewer-video-wrapper">
+              <video
+                src={source}
+                controls
+                autoPlay
+                playsInline
+                preload="auto"
+                className="media-viewer-video"
+              />
+            </div>
+          ) : null}
           {kind === "pdf" ? <iframe src={source} title={item.name ?? "PDF"} /> : null}
-          {loading ? <div className="media-viewer-loading"><LoaderCircle /> 正在读取文档…</div> : null}
+          {loading ? <div className="media-viewer-loading"><Loader2 /> 正在读取文档…</div> : null}
           {!loading && loadError ? <div className="media-viewer-loading">文档加载失败：{loadError}</div> : null}
           {!loading && kind === "markdown" ? <div className="media-document"><Markdown text={text} /></div> : null}
           {!loading && kind === "text" ? <pre className="media-document media-document--plain">{text}</pre> : null}
