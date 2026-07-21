@@ -27,6 +27,7 @@
     "react-markdown": "^9.1.0",
     "react-photo-view": "^1.2.7",
     "rehype-highlight": "^7.0.2",
+    "rehype-raw": "^7.0.0",
     "remark-gfm": "^4.0.1",
     "yaml": "^2.9.0"
   },
