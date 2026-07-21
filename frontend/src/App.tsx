@@ -13,12 +13,14 @@ import { motion } from "motion/react";
 import {
   cancelAgentkitDeployment,
   createSession,
+  DEFAULT_STUDIO_ACCESS,
   DEFAULT_SITE_BRANDING,
   deleteMedia,
   deleteSessionMedia,
   deleteSession,
   getAgentInfo,
   getSession,
+  getStudioAccess,
   listApps,
   listSessions,
   runSSE,
@@ -33,6 +35,7 @@ import {
   type FrontendInvocation,
   type ManagedRuntime,
   type SiteBranding,
+  type StudioAccess,
   type UiFeatures,
 } from "./adk/client";
 import { applyEvent, emptyAcc, eventsToTurns, type Block, type Turn } from "./blocks";
@@ -553,6 +556,9 @@ export default function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [userId, setUserId] = useState("");
   const [userInfo, setUserInfo] = useState<Record<string, unknown> | undefined>();
+  // Null while the server-derived role is unresolved. Privileged UI remains
+  // hidden until this has loaded; failures fall back to the ordinary user.
+  const [access, setAccess] = useState<StudioAccess | null>(null);
   // Per-module feature gates (studio mode disables chat-centric modules).
   // Defaults to all-enabled until /web/ui-config resolves.
   const [features, setFeatures] = useState<UiFeatures>({
@@ -566,6 +572,8 @@ export default function App() {
   });
   const [agentsSource, setAgentsSource] = useState<"local" | "cloud">("cloud");
   const [siteBranding, setSiteBranding] = useState<SiteBranding>(DEFAULT_SITE_BRANDING);
+  const [defaultView, setDefaultView] = useState<"chat" | "addAgent">("chat");
+  const [uiConfigLoaded, setUiConfigLoaded] = useState(false);
   const [localMode, setLocalMode] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
   // The executing sub-agent (ADK event.author) and everyone who emitted this
@@ -749,6 +757,7 @@ export default function App() {
   const [confirmLeave, setConfirmLeave] = useState(false);
   // Restore the previously-open session only once, after apps/user resolve.
   const restoredRef = useRef(false);
+  const defaultViewAppliedRef = useRef(false);
 
   // Placeholder: persisting/registering the created agent is a follow-up.
   function onCreate(draft: AgentDraft) {
@@ -785,22 +794,62 @@ export default function App() {
     resolveAuth();
   }, [resolveAuth]);
 
-  // Load per-module feature gates; studio mode lands on the add-agent page.
+  useEffect(() => {
+    if (authStatus !== "authenticated" || !userId) {
+      setAccess(null);
+      return;
+    }
+    let cancelled = false;
+    setAccess(null);
+    getStudioAccess()
+      .then((next) => {
+        if (!cancelled) setAccess(next);
+      })
+      .catch((error) => {
+        console.warn("[app] /web/access failed; using ordinary-user access:", error);
+        if (!cancelled) setAccess(DEFAULT_STUDIO_ACCESS);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authStatus, userId]);
+
+  // Load per-module feature gates. The configured landing page is applied only
+  // after role resolution so an ordinary user never sees a privileged view.
   useEffect(() => {
     getUiConfig().then((cfg) => {
       setFeatures(cfg.features);
       setAgentsSource(cfg.agentsSource);
       setSiteBranding(cfg.branding);
-      if (cfg.defaultView === "addAgent") {
-        setCreateView(null);
-        setSkillCenter(false);
-        setSearchView(false);
-        setManageAgents(false);
-        setAddAgent(false);
-        setAddMenu(true);
-      }
+      setDefaultView(cfg.defaultView);
+      setUiConfigLoaded(true);
     });
   }, []);
+
+  useEffect(() => {
+    if (!access || !uiConfigLoaded || defaultViewAppliedRef.current) return;
+    defaultViewAppliedRef.current = true;
+    if (defaultView === "addAgent" && access.capabilities.createAgents) {
+      setCreateView(null);
+      setSkillCenter(false);
+      setSearchView(false);
+      setManageAgents(false);
+      setAddAgent(false);
+      setAddMenu(true);
+    }
+  }, [access, defaultView, uiConfigLoaded]);
+
+  useEffect(() => {
+    if (!access) return;
+    if (!access.capabilities.createAgents) {
+      setCreateView(null);
+      setImportedDraft(null);
+      setAddAgent(false);
+      setAddMenu(false);
+      setDeploymentTasks([]);
+    }
+    if (!access.capabilities.manageAgents) setManageAgents(false);
+  }, [access]);
 
   useEffect(() => {
     document.title = siteBranding.title;
@@ -831,6 +880,8 @@ export default function App() {
     // A completed login is a fresh entry into the app. Do not reveal a create
     // or management view that was persisted before the login page appeared.
     restoredRef.current = true;
+    defaultViewAppliedRef.current = false;
+    setAccess(null);
     setCreateView(null);
     setImportedDraft(null);
     setSkillCenter(false);
@@ -846,6 +897,8 @@ export default function App() {
   }
 
   function onLogout() {
+    defaultViewAppliedRef.current = false;
+    setAccess(null);
     if (localMode) {
       clearLocalUser();
       setUserId("");
@@ -913,8 +966,12 @@ export default function App() {
     };
   }, [appName]);
   useEffect(() => {
-    localStorage.setItem(LS.view, createView ?? "chat");
-  }, [createView]);
+    if (!access) return;
+    localStorage.setItem(
+      LS.view,
+      access.capabilities.createAgents ? createView ?? "chat" : "chat",
+    );
+  }, [access, createView]);
   useEffect(() => {
     localStorage.setItem(LS.session, sessionId);
     // Keep the stream-write guard in sync with the displayed session (backup for
@@ -1315,7 +1372,16 @@ export default function App() {
   if (authStatus === "unauthenticated") {
     return <LoginPage branding={siteBranding} onUsername={onUsername} />;
   }
+  if (!access) {
+    return <div className="boot" />;
+  }
 
+  const canCreateAgents = access.capabilities.createAgents;
+  const canManageAgents = access.capabilities.manageAgents;
+  const visibleCreateView = canCreateAgents ? createView : null;
+  const showAddMenu = canCreateAgents && addMenu;
+  const showAddAgent = canCreateAgents && addAgent;
+  const showManageAgents = canManageAgents && manageAgents;
   const agentEntries = buildAgentEntries(apps, connections);
   const labelOf = (id: string) => agentEntries.find((e) => e.id === id)?.label ?? id;
   // The runtime backing the current selection (if it's a cloud runtime app) —
@@ -1352,12 +1418,12 @@ export default function App() {
     <div className="layout">
       <Sidebar
         branding={siteBranding}
+        access={access}
         agentsSource={agentsSource}
         localApps={apps}
         currentAgentId={appName}
         currentAgentLabel={appName ? labelOf(appName) : ""}
         currentRuntime={currentRuntime}
-        author={String(userInfo?.email ?? userId ?? "")}
         onSelectAgent={selectAgent}
         features={features}
         sessions={sessions}
@@ -1382,6 +1448,10 @@ export default function App() {
           setError("");
         }}
         onQuickCreate={() => {
+          if (!canCreateAgents) {
+            setError("当前账号没有添加 Agent 的权限。");
+            return;
+          }
           // "添加 Agent" — open the two-card chooser. Drop any selected session.
           viewSidRef.current = "";
           setSessionId("");
@@ -1404,6 +1474,10 @@ export default function App() {
           setError("");
         }}
         onAddAgent={() => {
+          if (!canCreateAgents) {
+            setError("当前账号没有添加 Agent 的权限。");
+            return;
+          }
           viewSidRef.current = "";
           setCreateView(null);
           setSkillCenter(false);
@@ -1415,6 +1489,10 @@ export default function App() {
           setError("");
         }}
         onManageAgents={() => {
+          if (!canManageAgents) {
+            setError("当前账号没有管理 Agent 的权限。");
+            return;
+          }
           viewSidRef.current = "";
           setSessionId("");
           setCreateView(null);
@@ -1478,26 +1556,26 @@ export default function App() {
               onAppChange={selectAgent}
               agentLabel={labelOf}
               title={
-                addMenu
+                showAddMenu
                   ? "添加 Agent"
-                  : addAgent
+                  : showAddAgent
                     ? "添加 AgentKit 智能体"
                     : skillCenter
                       ? "技能中心"
                       : searchView
                         ? "搜索"
-                        : manageAgents
+                        : showManageAgents
                           ? "管理 Agent"
-                          : createView
+                          : visibleCreateView
                             ? undefined
                             : appName
                               ? labelOf(appName)
                               : "选择 Agent"
               }
               crumbs={
-                searchView || addAgent || skillCenter || addMenu || !createView
+                searchView || showAddAgent || skillCenter || showAddMenu || !visibleCreateView
                   ? undefined
-                  : createView === "menu"
+                  : visibleCreateView === "menu"
                     ? [
                         {
                           label: CREATE_ROOT,
@@ -1511,12 +1589,12 @@ export default function App() {
                       ]
                     : [
                         { label: "从 0 快速创建", onClick: () => setConfirmLeave(true) },
-                        { label: MODE_LABEL[createView] },
+                        { label: MODE_LABEL[visibleCreateView] },
                       ]
               }
               rightContent={
                 <DeploymentTaskStatus
-                  tasks={deploymentTasks}
+                  tasks={canCreateAgents ? deploymentTasks : []}
                   onCancel={cancelDeploymentTask}
                 />
               }
@@ -1529,13 +1607,12 @@ export default function App() {
               </div>
             )}
 
-            {manageAgents ? (
+            {showManageAgents ? (
               <ManageAgentsView
-                author={String(userInfo?.email ?? userId ?? "")}
                 currentRuntimeId={currentRuntime?.runtimeId}
                 onConnect={connectManagedRuntime}
               />
-            ) : addMenu ? (
+            ) : showAddMenu ? (
               <StackCards
                 title="您想以哪种方式添加 Agent 来运行？"
                 sub="选择最适合你的方式，下一步即可开始"
@@ -1560,7 +1637,7 @@ export default function App() {
                 agentLabel={labelOf}
                 onOpenSession={openFromSearch}
               />
-            ) : addAgent ? (
+            ) : showAddAgent ? (
               <AddAgentKitView
                 onAdded={(id) => {
                   setConnections(loadConnections());
@@ -1571,7 +1648,7 @@ export default function App() {
               />
             ) : skillCenter ? (
               <SkillCenterView />
-            ) : createView !== null && !hasCreds ? (
+            ) : visibleCreateView !== null && !hasCreds ? (
               <div
                 style={{
                   display: "flex",
@@ -1595,7 +1672,7 @@ export default function App() {
                   <code>VOLCENGINE_SECRET_KEY</code> 后重试。
                 </div>
               </div>
-            ) : createView === "menu" ? (
+            ) : visibleCreateView === "menu" ? (
               <QuickCreate
                 onSelect={(k) => {
                   setImportedDraft(null);
@@ -1606,7 +1683,7 @@ export default function App() {
                   setCreateView("custom");
                 }}
               />
-            ) : createView === "intelligent" ? (
+            ) : visibleCreateView === "intelligent" ? (
               <IntelligentCreate
                 userId={userId}
                 onBack={() => setCreateView("menu")}
@@ -1614,19 +1691,18 @@ export default function App() {
                 onAgentAdded={onAgentAdded}
                 onDeploymentTaskChange={updateDeploymentTask}
               />
-            ) : createView === "custom" ? (
+            ) : visibleCreateView === "custom" ? (
               <CustomCreate
                 initialDraft={importedDraft ?? undefined}
                 onBack={() => setCreateView("menu")}
                 onCreate={onCreate}
                 onAgentAdded={onAgentAdded}
-                author={String(userInfo?.email ?? userId ?? "")}
                 features={features}
                 onDeploymentTaskChange={updateDeploymentTask}
               />
-            ) : createView === "template" ? (
+            ) : visibleCreateView === "template" ? (
               <TemplateCreate onBack={() => setCreateView("menu")} onCreate={onCreate} />
-            ) : createView === "workflow" ? (
+            ) : visibleCreateView === "workflow" ? (
               <WorkflowCreate onBack={() => setCreateView("menu")} onCreate={onCreate} />
             ) : turns.length === 0 ? (
               <>

@@ -8,7 +8,12 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import type { AdkSession, SiteBranding, UiFeatures } from "../adk/client";
+import type {
+  AdkSession,
+  SiteBranding,
+  StudioAccess,
+  UiFeatures,
+} from "../adk/client";
 import { sessionTitle } from "../blocks";
 import { displayName, profilePictureUrl } from "../adk/identity";
 import { SkillCenterButton } from "./SkillCenter";
@@ -66,6 +71,8 @@ export interface SidebarProps {
   currentSessionId: string;
   /** Per-module feature gates; omitted modules default to shown. */
   features?: UiFeatures;
+  /** Server-derived role and capabilities. */
+  access: StudioAccess;
   /** Session ids that are currently streaming a reply (shows a live dot). */
   streamingSids?: Set<string>;
   /** Agent picker: source, local app list, current selection + label. */
@@ -75,8 +82,6 @@ export interface SidebarProps {
   currentAgentLabel?: string;
   /** The connected runtime (drives the picker's detail panel). */
   currentRuntime?: SelectedRuntime;
-  /** Identity used to badge the user's own runtimes in the cloud picker. */
-  author?: string;
   onSelectAgent?: (id: string) => void;
   onNewChat: () => void;
   onSearch: () => void;
@@ -107,17 +112,33 @@ function smokeAvatarStyle(seed: string): CSSProperties {
   } as CSSProperties;
 }
 
+const STUDIO_ROLE_LABELS: Record<StudioAccess["role"], string> = {
+  admin: "管理员",
+  developer: "开发者",
+  user: "普通用户",
+};
+
+function StudioRoleBadge({ role }: { role: StudioAccess["role"] }) {
+  const label = STUDIO_ROLE_LABELS[role];
+  return (
+    <span className={`studio-role-badge studio-role-badge--${role}`} title={label}>
+      {label}
+    </span>
+  );
+}
+
 /** Account block pinned at the bottom of the sidebar: avatar + name, with a
  *  popover (opening upward) holding the full identity + logout. */
 function SidebarUser({
+  access,
   userInfo,
   onLogout,
-}: Pick<SidebarProps, "userInfo" | "onLogout">) {
+}: Pick<SidebarProps, "access" | "userInfo" | "onLogout">) {
   const [open, setOpen] = useState(false);
   const [failedAvatarUrl, setFailedAvatarUrl] = useState("");
   if (!userInfo) return null;
   const name = displayName(userInfo);
-  const email = String(userInfo.email ?? userInfo.sub ?? "");
+  const email = typeof userInfo.email === "string" ? userInfo.email : "";
   const initial = (name || "U").slice(0, 1).toUpperCase();
   const avatarStyle = smokeAvatarStyle(name || email || initial);
   const pictureUrl = profilePictureUrl(userInfo);
@@ -127,7 +148,7 @@ function SidebarUser({
       <button
         className="sidebar-user-btn"
         onClick={() => setOpen((o) => !o)}
-        title={name}
+        title={email ? `${name}\n${email}` : name}
       >
         <span
           className={`account-avatar${visiblePictureUrl ? " has-image" : ""}`}
@@ -145,7 +166,15 @@ function SidebarUser({
             />
           ) : null}
         </span>
-        <span className="sidebar-user-name">{name}</span>
+        <span className="sidebar-user-identity">
+          <span className="sidebar-user-primary">
+            <span className="sidebar-user-name">{name}</span>
+            <StudioRoleBadge role={access.role} />
+          </span>
+          {email && email !== name && (
+            <span className="sidebar-user-email">{email}</span>
+          )}
+        </span>
       </button>
       {open && (
         <>
@@ -171,7 +200,10 @@ function SidebarUser({
                 ) : null}
               </span>
               <div className="account-id">
-                <div className="account-name">{name}</div>
+                <div className="account-name-row">
+                  <div className="account-name">{name}</div>
+                  <StudioRoleBadge role={access.role} />
+                </div>
                 {email && email !== name && <div className="account-sub">{email}</div>}
               </div>
             </div>
@@ -196,13 +228,13 @@ export function Sidebar({
   sessions,
   currentSessionId,
   features,
+  access,
   streamingSids,
   agentsSource = "local",
   localApps = [],
   currentAgentId = "",
   currentAgentLabel = "",
   currentRuntime,
-  author = "",
   onSelectAgent,
   onNewChat,
   onSearch,
@@ -331,7 +363,7 @@ export function Sidebar({
             localApps={localApps}
             currentId={currentAgentId}
             currentRuntime={currentRuntime}
-            author={author}
+            runtimeScope={access.capabilities.runtimeScope}
             onSelect={onSelectAgent}
           />
         )}
@@ -348,7 +380,7 @@ export function Sidebar({
         )}
         {show("search") && <SearchButton onClick={onSearch} />}
         {show("skillCenter") && <SkillCenterButton onClick={onSkillCenter} />}
-        {show("addAgent") && (
+        {access.capabilities.createAgents && show("addAgent") && (
           <button
             className="new-chat"
             onClick={onQuickCreate}
@@ -359,7 +391,7 @@ export function Sidebar({
             <span className="sidebar-nav-label">添加 Agent</span>
           </button>
         )}
-        {show("manageAgents") && (
+        {access.capabilities.manageAgents && show("manageAgents") && (
           <button
             className="new-chat"
             onClick={onManageAgents}
@@ -436,7 +468,7 @@ export function Sidebar({
       </div>
       )}
 
-      <SidebarUser userInfo={userInfo} onLogout={onLogout} />
+      <SidebarUser access={access} userInfo={userInfo} onLogout={onLogout} />
     </aside>
   );
 }

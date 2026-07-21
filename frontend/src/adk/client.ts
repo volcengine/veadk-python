@@ -12,6 +12,7 @@ import {
 } from "./timeout";
 import type { AgentProject } from "../create/project";
 import type { AgentDraft } from "../create/types";
+import { withLocalUser } from "./identity";
 
 /** An ADK event as serialised over `/run_sse` (camelCase, by_alias=True). */
 export interface AdkUsage {
@@ -176,16 +177,20 @@ function apiFetch(
   ep: AdkEndpoint = {},
   timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
 ): Promise<Response> {
-  const opts = { ...init, signal: requestSignal(init.signal, timeoutMs) };
+  const opts = {
+    ...init,
+    headers: withLocalUser(init.headers),
+    signal: requestSignal(init.signal, timeoutMs),
+  };
   if (ep.runtimeId) {
     const rq = ep.region ? `${path.includes("?") ? "&" : "?"}region=${encodeURIComponent(ep.region)}` : "";
     return fetch(withAuth(`${API_BASE}/web/runtime-proxy/${ep.runtimeId}${path}${rq}`), opts);
   }
   if (ep.base) {
     // Use backend proxy to avoid CORS issues with remote AgentKit
-    const headers: Record<string, string> = { ...(init.headers as Record<string, string>) };
-    headers["X-AgentKit-Base"] = ep.base;
-    if (ep.apiKey) headers["X-AgentKit-Key"] = ep.apiKey;
+    const headers = new Headers(opts.headers);
+    headers.set("X-AgentKit-Base", ep.base);
+    if (ep.apiKey) headers.set("X-AgentKit-Key", ep.apiKey);
     return fetch(withAuth(`${API_BASE}/agentkit-proxy${path}`), { ...opts, headers });
   }
   return fetch(withAuth(`${API_BASE}${path}`), opts);
@@ -230,6 +235,14 @@ export async function listApps(): Promise<string[]> {
   return res.json();
 }
 
+/** A runtime exists but the current identity is not allowed to use it. */
+export class RuntimeAccessDeniedError extends Error {
+  constructor() {
+    super("你没有权限访问该 Runtime，请刷新列表后重试。");
+    this.name = "RuntimeAccessDeniedError";
+  }
+}
+
 /** List the apps a remote AgentKit server exposes (also validates URL + key).
  *  Pass `ep` to probe via the runtime proxy instead of a raw base+key. */
 export async function fetchRemoteApps(
@@ -238,6 +251,9 @@ export async function fetchRemoteApps(
   ep?: AdkEndpoint,
 ): Promise<string[]> {
   const res = await apiFetch(`/list-apps`, {}, ep ?? { base, apiKey });
+  if ((res.status === 403 || res.status === 404) && ep?.runtimeId) {
+    throw new RuntimeAccessDeniedError();
+  }
   if (!res.ok) throw new Error(`list-apps failed: ${res.status}`);
   return res.json();
 }
@@ -642,7 +658,6 @@ export async function deployAgentkitProject(
     };
   },
   opts?: {
-    author?: string;
     taskId?: string;
     onStage?: (s: DeployStage) => void;
     im?: {
@@ -675,7 +690,6 @@ export async function deployAgentkitProject(
           files,
           config,
           taskId,
-          author: opts?.author ?? "",
           im: opts?.im,
           envs: opts?.envs,
         }),
@@ -753,15 +767,10 @@ export interface ManagedRuntime {
   region: string;
 }
 
-/** List AgentKit runtimes this UI deployed, filtered to `author`.
+/** List AgentKit runtimes the server authorizes this user to manage.
  *  `region="all"` merges results from all supported regions. */
-export async function getMyRuntimes(
-  author: string,
-  region = "all",
-): Promise<ManagedRuntime[]> {
-  const res = await apiFetch(
-    `/web/my-runtimes?author=${encodeURIComponent(author)}&region=${encodeURIComponent(region)}`,
-  );
+export async function getMyRuntimes(region = "all"): Promise<ManagedRuntime[]> {
+  const res = await apiFetch(`/web/my-runtimes?region=${encodeURIComponent(region)}`);
   if (!res.ok) throw new Error(`加载失败 (${res.status})`);
   const d = (await res.json()) as { runtimes?: ManagedRuntime[] };
   return d.runtimes ?? [];
@@ -846,6 +855,44 @@ export async function getUiConfig(): Promise<UiConfig> {
   }
 }
 
+export type StudioRole = "admin" | "developer" | "user";
+export type RuntimeScope = "all" | "mine";
+
+export interface StudioAccess {
+  role: StudioRole;
+  capabilities: {
+    createAgents: boolean;
+    manageAgents: boolean;
+    runtimeScope: RuntimeScope;
+  };
+}
+
+/** Least-privileged fallback while access is loading or unavailable. */
+export const DEFAULT_STUDIO_ACCESS: StudioAccess = {
+  role: "user",
+  capabilities: {
+    createAgents: false,
+    manageAgents: false,
+    runtimeScope: "mine",
+  },
+};
+
+/** Resolve the signed-in user's Studio role and capabilities. */
+export async function getStudioAccess(): Promise<StudioAccess> {
+  const res = await apiFetch("/web/access");
+  if (!res.ok) throw new Error(`加载权限失败 (${res.status})`);
+  const access = (await res.json()) as StudioAccess;
+  if (
+    !["admin", "developer", "user"].includes(access.role) ||
+    typeof access.capabilities?.createAgents !== "boolean" ||
+    typeof access.capabilities?.manageAgents !== "boolean" ||
+    !["all", "mine"].includes(access.capabilities?.runtimeScope)
+  ) {
+    throw new Error("权限服务返回了无法解析的响应");
+  }
+  return access;
+}
+
 /** One AgentKit runtime as listed by `/web/runtimes` (control-plane). */
 export interface CloudRuntime {
   name: string;
@@ -863,10 +910,9 @@ export interface RuntimePage {
   nextToken: string;
 }
 
-/** List AgentKit runtimes (all of them, one page), flagging the user's own.
- *  `nextToken` from a prior page continues pagination. */
+/** List one authorized page of AgentKit runtimes. `nextToken` from a prior
+ *  page continues pagination; the server derives ownership from identity. */
 export async function getRuntimes(
-  author: string,
   opts: {
     nextToken?: string;
     pageSize?: number;
@@ -875,7 +921,6 @@ export async function getRuntimes(
   } = {},
 ): Promise<RuntimePage> {
   const p = new URLSearchParams({
-    author,
     scope: opts.scope ?? "all",
     page_size: String(opts.pageSize ?? 30),
     region: opts.region ?? "all",
@@ -897,7 +942,8 @@ export async function probeRuntimeApps(
   try {
     const res = await fetchRemoteApps("", "", { runtimeId, region });
     return res;
-  } catch {
+  } catch (error) {
+    if (error instanceof RuntimeAccessDeniedError) throw error;
     return null;
   }
 }

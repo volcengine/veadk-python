@@ -198,6 +198,34 @@ VeADK provides several useful command line tools for faster deployment and optim
   environment variables, title, and logo are preserved; pass `--site-title` or
   `--site-logo` only when those branding values should be replaced
 
+Studio can assign comma-separated local usernames or OAuth emails to the
+`admin` and `developer` roles:
+
+```bash
+veadk studio \
+  --admin "admin,admin@example.com" \
+  --developer "alice,alice@example.com"
+
+veadk studio deploy \
+  --user-pool-id <pool-id> \
+  --allowed-client-id <client-id> \
+  --vefaas-app-name <app-name> \
+  --admin "admin@example.com" \
+  --developer "alice@example.com,bob@example.com"
+```
+
+Supplying either role list enables role-based access control; users not in a
+list are regular users, and `admin` wins when an identity appears in both
+lists. Admins have all Studio capabilities and can see every Runtime.
+Developers can add and manage agents but can see and manage only their own
+Runtimes. Regular users can see only their own Runtimes; the add/manage-agent
+sidebar items are hidden. The sidebar account footer shows the OAuth email
+beneath the display name and identifies the current role with a color-coded
+badge. Existing Runtimes without owner metadata are visible
+only to admins unless they carry the legacy-compatible `veadk:author`
+ownership tag. Local usernames are browser-provided and can be impersonated, so
+use OAuth or gateway authentication for production authorization.
+
 ## Contribution
 
 Before making your contribution to our repository, please install and config the `pre-commit` linter first.

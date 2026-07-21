@@ -18,8 +18,6 @@ import {
 import "./ManageAgents.css";
 
 export interface ManageAgentsViewProps {
-  /** The current user identity used to filter runtimes (email / user id). */
-  author: string;
   /** Runtime currently connected through the global Agent selector. */
   currentRuntimeId?: string;
   /** Connect a managed Runtime and switch the global Agent selector to it. */
@@ -36,10 +34,8 @@ interface DetailState {
   graphNote?: string; // why the agent tree isn't shown, if applicable
 }
 
-/** Lists the AgentKit runtimes this UI deployed on behalf of `author`, letting
- *  the user inspect their detail + agent structure and delete unwanted ones. */
+/** Lists the AgentKit runtimes the server authorizes this user to manage. */
 export function ManageAgentsView({
-  author,
   currentRuntimeId,
   onConnect,
 }: ManageAgentsViewProps) {
@@ -56,13 +52,13 @@ export function ManageAgentsView({
     setLoading(true);
     setError("");
     try {
-      setRuntimes(await getMyRuntimes(author, regionFilter));
+      setRuntimes(await getMyRuntimes(regionFilter));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, [author, regionFilter]);
+  }, [regionFilter]);
 
   useEffect(() => {
     void load();
@@ -140,9 +136,7 @@ export function ManageAgentsView({
         <div>
           <h2 className="manage-title">管理 Agent</h2>
           <p className="manage-sub">
-            {author
-              ? `列出你（${author}）通过本工作台部署到 AgentKit 的 Runtime。`
-              : "列出通过本工作台部署到 AgentKit 的 Runtime。"}
+            列出你有权管理的 AgentKit Runtime。
           </p>
         </div>
         <div className="manage-head-actions">

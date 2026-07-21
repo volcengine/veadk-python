@@ -204,6 +204,59 @@ When deployment registers the callback URL, it keeps the VeIdentity login page
 enabled and enables skip-consent for that client. This avoids showing a second
 authorization confirmation after login.
 
+### Studio roles and Runtime access
+
+`--admin` and `--developer` each accept a comma-separated list of local
+usernames or OAuth email addresses. Whitespace is ignored and matching is
+case-insensitive. If the same identity appears in both lists, `admin` takes
+precedence. For a local Studio:
+
+```bash
+veadk studio \
+  --admin "admin,admin@example.com" \
+  --developer "alice,alice@example.com,bob"
+```
+
+The equivalent environment variables are `VEADK_STUDIO_ADMINS` and
+`VEADK_STUDIO_DEVELOPERS`.
+
+Use the same options for a deployed Studio:
+
+```bash
+veadk studio deploy \
+  --user-pool-id <pool-id> \
+  --allowed-client-id <client-id> \
+  --vefaas-app-name <app-name> \
+  --admin "admin@example.com" \
+  --developer "alice@example.com,bob@example.com"
+```
+
+Supplying either list enables role-based access control. An identity that does
+not match either list is a regular user. Omitting both options preserves the
+existing unrestricted Studio behavior.
+
+| Capability | admin | developer | Regular user |
+| :-- | :-- | :-- | :-- |
+| Add, debug, and deploy agents | Allowed | Allowed | Denied; add/manage items are hidden from the sidebar |
+| View and connect to Runtimes | All Runtimes | Own Runtimes only | Own Runtimes only |
+| Manage or delete Runtimes | All Studio-managed Runtimes | Own Runtimes only | Denied |
+
+The account footer shows the OAuth email below the display name. Purple,
+yellow, and green badges identify admins, developers, and regular users.
+
+The server records Runtime ownership when it creates a Runtime; authorization
+does not trust an author field submitted by the browser. Existing Runtimes may
+still be claimed by the legacy-compatible `veadk:author` ownership tag. A
+historical Runtime with neither `veadk:owner` nor `veadk:author` is visible only
+to admins.
+
+<Callout type="warning">
+  A local username is stored in the browser and can be changed or impersonated.
+  Use it only for local development and feature testing. Production deployments
+  must use OAuth or gateway authentication so roles and Runtime ownership come
+  from a server-verified identity.
+</Callout>
+
 ### IAM permissions for `veadk studio deploy`
 
 The deploy command first checks `ServerlessApplicationRole`. If the role is

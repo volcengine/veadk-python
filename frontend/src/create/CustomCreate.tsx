@@ -1411,8 +1411,6 @@ function DebugPanel({
 interface CustomCreateProps extends CreateModeProps {
   /** Pre-fill the wizard (used when importing an agent-structure YAML). */
   initialDraft?: AgentDraft;
-  /** Current user identity, tagged onto deployed runtimes for the 管理 Agent view. */
-  author?: string;
   /** Global UI feature gates loaded from the backend. */
   features?: UiFeatures;
   /** Publish deploy progress into the persistent app header. */
@@ -1424,7 +1422,6 @@ export function CustomCreate({
   onCreate,
   onAgentAdded,
   initialDraft,
-  author = "",
   features,
   onDeploymentTaskChange,
 }: CustomCreateProps) {
@@ -1884,7 +1881,7 @@ export function CustomCreate({
         proj.name,
         proj.files,
         { region: deployRegion, projectName: "default", network },
-        { ...options, author, onStage },
+        { ...options, onStage },
       );
     };
 

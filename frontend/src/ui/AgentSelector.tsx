@@ -11,7 +11,9 @@ import {
 import {
   getRuntimeDetail,
   getRuntimes,
+  RuntimeAccessDeniedError,
   type CloudRuntime,
+  type RuntimeScope,
   type RuntimeDetail,
 } from "../adk/client";
 import { connectRuntime } from "../adk/connections";
@@ -37,8 +39,8 @@ export interface AgentSelectorProps {
   currentId: string;
   /** The connected runtime, if any — shown in the side detail panel. */
   currentRuntime?: SelectedRuntime;
-  /** Identity used to badge "我创建的" runtimes. */
-  author: string;
+  /** Maximum runtime scope granted by the server. */
+  runtimeScope: RuntimeScope;
   /** Called with the picker id once an agent is chosen. */
   onSelect: (id: string) => void;
 }
@@ -88,7 +90,7 @@ export function AgentSelector({
   localApps,
   currentId,
   currentRuntime,
-  author,
+  runtimeScope,
   onSelect,
 }: AgentSelectorProps) {
   // Lazily-loaded pages of the full list: pageCache[i] holds page i's runtimes,
@@ -97,7 +99,7 @@ export function AgentSelector({
   const [tokens, setTokens] = useState<string[]>([""]);
   const [page, setPage] = useState(0);
   // "只看我创建的" — the owner's set is small, so fetch it all at once (no pager).
-  const [mineOnly, setMineOnly] = useState(false);
+  const [mineOnly, setMineOnly] = useState(runtimeScope === "mine");
   const [mineList, setMineList] = useState<CloudRuntime[] | null>(null);
   const [regionFilter, setRegionFilter] = useState<RegionFilter>("all");
   const [loading, setLoading] = useState(false);
@@ -121,10 +123,11 @@ export function AgentSelector({
       setError("");
       try {
         const pg = await withTimeout(
-          getRuntimes(author, {
+          getRuntimes({
             nextToken: token,
             pageSize: PAGE_SIZE,
             region: regionFilter,
+            scope: "all",
           }),
         );
         setPageCache((pc) => {
@@ -144,7 +147,7 @@ export function AgentSelector({
         setLoading(false);
       }
     },
-    [author, tokens, pageCache, regionFilter],
+    [tokens, pageCache, regionFilter],
   );
 
   const loadMine = useCallback(async () => {
@@ -155,7 +158,7 @@ export function AgentSelector({
       let token = "";
       do {
         const pg = await withTimeout(
-          getRuntimes(author, {
+          getRuntimes({
             scope: "mine",
             nextToken: token,
             pageSize: 100,
@@ -171,7 +174,16 @@ export function AgentSelector({
     } finally {
       setLoading(false);
     }
-  }, [author, regionFilter]);
+  }, [regionFilter]);
+
+  useEffect(() => {
+    setMineOnly(runtimeScope === "mine");
+    setPageCache([]);
+    setTokens([""]);
+    setPage(0);
+    setMineList(null);
+    loadedOnce.current = false;
+  }, [runtimeScope]);
 
   useEffect(() => {
     if (open && agentsSource === "cloud" && !mineOnly && !loadedOnce.current) {
@@ -203,10 +215,11 @@ export function AgentSelector({
       setLoading(true);
       setError("");
       void withTimeout(
-        getRuntimes(author, {
+        getRuntimes({
           nextToken: "",
           pageSize: PAGE_SIZE,
           region: regionFilter,
+          scope: "all",
         }),
       )
         .then((pg) => {
@@ -239,7 +252,13 @@ export function AgentSelector({
         setFocused({ runtimeId: rt.runtimeId, name: rt.name, region: rt.region });
         onClose();
       })
-      .catch(() => setUnsupported((s) => new Set(s).add(rt.runtimeId)))
+      .catch((error) => {
+        if (error instanceof RuntimeAccessDeniedError) {
+          setError(error.message);
+          return;
+        }
+        setUnsupported((s) => new Set(s).add(rt.runtimeId));
+      })
       .finally(() => setConnecting(null));
   }
 
@@ -328,14 +347,16 @@ export function AgentSelector({
                     </button>
                   ))}
                 </div>
-                <label className="agentsel-mine">
-                  <input
-                    type="checkbox"
-                    checked={mineOnly}
-                    onChange={(e) => setMineOnly(e.target.checked)}
-                  />
-                  只看我创建的
-                </label>
+                {runtimeScope === "all" && (
+                  <label className="agentsel-mine">
+                    <input
+                      type="checkbox"
+                      checked={mineOnly}
+                      onChange={(e) => setMineOnly(e.target.checked)}
+                    />
+                    只看我创建的
+                  </label>
+                )}
               </div>
 
               {error && <div className="agentsel-error">{error}</div>}

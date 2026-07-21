@@ -48,6 +48,16 @@ export function clearLocalUser(): void {
   }
 }
 
+/** Add the no-SSO username to same-origin API requests. OAuth deployments may
+ *  receive this header too, but the server derives identity from OAuth there
+ *  and deliberately ignores the browser-provided value. */
+export function withLocalUser(headers?: HeadersInit): Headers {
+  const next = new Headers(headers);
+  const username = getLocalUser();
+  if (username) next.set("X-VeADK-Local-User", username);
+  return next;
+}
+
 export interface Provider {
   id: string;
   label: string;

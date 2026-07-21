@@ -16,7 +16,12 @@ const identitySource = readFileSync(
   new URL("../src/adk/identity.ts", import.meta.url),
   "utf8",
 ).replace('from "./timeout"', `from "${timeoutUrl}"`);
-const { fetchProviders, profilePictureUrl, resolveIdentity } = await import(
+const {
+  fetchProviders,
+  profilePictureUrl,
+  resolveIdentity,
+  withLocalUser,
+} = await import(
   transpileUrl(identitySource)
 );
 
@@ -66,6 +71,13 @@ test("identity 404 restores a saved local username", async () => {
   assert.equal(identity.status, "authenticated");
   assert.equal(identity.userId, "alice");
   assert.equal(identity.local, true);
+});
+
+test("local username is forwarded through the dedicated API header", () => {
+  globalThis.localStorage = { getItem: () => "alice" };
+  const headers = withLocalUser({ Accept: "application/json" });
+  assert.equal(headers.get("Accept"), "application/json");
+  assert.equal(headers.get("X-VeADK-Local-User"), "alice");
 });
 
 test("identity network and server failures do not enter local mode", async (t) => {
