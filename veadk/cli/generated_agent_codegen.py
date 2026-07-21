@@ -22,6 +22,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from veadk.cli.generated_agent_catalog import (
+    A2A_REGISTRY_ENV,
     EXPORTER_BY_ID,
     KB_BY_ID,
     LTM_BY_ID,
@@ -86,6 +87,29 @@ class McpTool(BaseModel):
     args: list[str] = Field(default_factory=list)
 
 
+class A2ARegistryConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    registrySpaceId: str = ""
+    registryTopK: str = ""
+    registryRegion: str = ""
+    registryEndpoint: str = ""
+
+    @field_validator(
+        "registrySpaceId",
+        "registryTopK",
+        "registryRegion",
+        "registryEndpoint",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_string(cls, value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value)
+
+
 class SelectedSkill(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -141,6 +165,7 @@ class DeploymentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     feishuEnabled: bool = False
+    envValues: dict[str, str] = Field(default_factory=dict)
 
 
 class AgentDraft(BaseModel):
@@ -165,6 +190,7 @@ class AgentDraft(BaseModel):
     builtinTools: list[str] = Field(default_factory=list)
     customTools: list[CustomTool] = Field(default_factory=list)
     mcpTools: list[McpTool] = Field(default_factory=list)
+    a2aRegistry: A2ARegistryConfig = Field(default_factory=A2ARegistryConfig)
     shortTermBackend: str = "local"
     longTermBackend: str = "local"
     autoSaveSession: bool = False
@@ -385,6 +411,15 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
                 "timeout=30))"
             )
             tool_exprs.append(v)
+
+    if draft.a2aRegistry.enabled:
+        _add_import(
+            acc,
+            "from veadk.tools.builtin_tools.a2a_registry import "
+            "build_a2a_registry_tools",
+        )
+        tool_exprs.append("*build_a2a_registry_tools()")
+        _add_env(acc, A2A_REGISTRY_ENV)
 
     for name in draft.tools:
         if name.strip():

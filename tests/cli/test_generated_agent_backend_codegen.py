@@ -105,6 +105,16 @@ def test_project_policy_allows_mcp_stdio_but_debug_rejects_it() -> None:
         validate_debug_policy(draft, allow_local_runtime_resources=True)
 
 
+def test_security_rejects_enabled_a2a_registry_without_space_id() -> None:
+    draft = AgentDraft(
+        name="demo",
+        instruction="You are helpful.",
+        a2aRegistry={"enabled": True},
+    )
+    with pytest.raises(DebugPolicyError, match="A2A registry space id is required"):
+        validate_project_policy(draft)
+
+
 def test_url_policy_rejects_private_literal_ip() -> None:
     with pytest.raises(DebugPolicyError):
         validate_url_not_private("http://127.0.0.1:8000", field_name="url")

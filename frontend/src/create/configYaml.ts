@@ -28,6 +28,18 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
       if (m.args?.length) e.args = m.args;
       return e;
     });
+  if (draft.a2aRegistry?.enabled) {
+    const registry: Record<string, unknown> = { enabled: true };
+    if (draft.a2aRegistry.registrySpaceId?.trim())
+      registry.registrySpaceId = draft.a2aRegistry.registrySpaceId.trim();
+    if (draft.a2aRegistry.registryTopK?.trim())
+      registry.registryTopK = draft.a2aRegistry.registryTopK.trim();
+    if (draft.a2aRegistry.registryRegion?.trim())
+      registry.registryRegion = draft.a2aRegistry.registryRegion.trim();
+    if (draft.a2aRegistry.registryEndpoint?.trim())
+      registry.registryEndpoint = draft.a2aRegistry.registryEndpoint.trim();
+    o.a2aRegistry = registry;
+  }
   if (draft.memory?.shortTerm || draft.memory?.longTerm) {
     o.memory = { shortTerm: !!draft.memory.shortTerm, longTerm: !!draft.memory.longTerm };
     if (draft.memory.shortTerm) o.shortTermBackend = draft.shortTermBackend || "local";
@@ -69,6 +81,7 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
       const s: Record<string, unknown> = { name: sa.name, description: sa.description, instruction: sa.instruction };
       if (sa.builtinTools?.length) s.builtinTools = [...sa.builtinTools];
       if (sa.customTools?.length) s.customTools = sa.customTools.map((t) => ({ name: t.name, description: t.description }));
+      if (sa.a2aRegistry?.enabled) s.a2aRegistry = toConfig(sa).a2aRegistry;
       return s;
     });
   return o;

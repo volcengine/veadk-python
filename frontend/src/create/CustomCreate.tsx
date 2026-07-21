@@ -41,6 +41,8 @@ import {
   emptyDraft,
 } from "./types";
 import {
+  A2A_REGISTRY_DEFAULTS,
+  A2A_REGISTRY_ENV,
   BUILTIN_TOOLS,
   STM_BACKENDS,
   LTM_BACKENDS,
@@ -112,6 +114,7 @@ type StepId =
   | "skills"
   | "knowledge"
   | "advanced"
+  | "a2aCenter"
   | "subagents"
   | "review";
 
@@ -131,6 +134,7 @@ const STEPS: StepMeta[] = [
   { id: "skills", label: "技能", hint: "声明式技能", icon: Sparkles },
   { id: "knowledge", label: "知识库", hint: "外部知识检索", icon: Database },
   { id: "advanced", label: "进阶配置", hint: "记忆与观测", icon: Layers },
+  { id: "a2aCenter", label: "A2A 中心", hint: "远程 Agent 发现", icon: Globe },
   { id: "subagents", label: "子 Agent", hint: "嵌套协作", icon: Boxes },
   { id: "review", label: "完成", hint: "预览并创建", icon: Rocket },
 ];
@@ -207,6 +211,38 @@ function DebugRunIcon({ className }: { className?: string }) {
 }
 
 const AGENT_TYPE_GAP_PX = 4;
+
+const A2A_REGISTRY_ENV_TO_FIELD = {
+  REGISTRY_SPACE_ID: "registrySpaceId",
+  REGISTRY_TOP_K: "registryTopK",
+  REGISTRY_REGION: "registryRegion",
+  REGISTRY_ENDPOINT: "registryEndpoint",
+} as const;
+
+type A2aRegistryEnvKey = keyof typeof A2A_REGISTRY_ENV_TO_FIELD;
+
+function a2aRegistryEnvValues(
+  registry: AgentDraft["a2aRegistry"] | undefined,
+  options: { includeDefaults: boolean },
+): Record<string, string> {
+  if (!registry?.enabled) return {};
+  const values: Record<string, string> = {
+    REGISTRY_SPACE_ID: registry.registrySpaceId ?? "",
+  };
+  if (options.includeDefaults) {
+    values.REGISTRY_TOP_K =
+      registry.registryTopK?.trim() || A2A_REGISTRY_DEFAULTS.topK;
+    values.REGISTRY_REGION =
+      registry.registryRegion?.trim() || A2A_REGISTRY_DEFAULTS.region;
+    values.REGISTRY_ENDPOINT =
+      registry.registryEndpoint?.trim() || A2A_REGISTRY_DEFAULTS.endpoint;
+  } else {
+    values.REGISTRY_TOP_K = registry.registryTopK ?? "";
+    values.REGISTRY_REGION = registry.registryRegion ?? "";
+    values.REGISTRY_ENDPOINT = registry.registryEndpoint ?? "";
+  }
+  return values;
+}
 /* ---------------------------------------------------------------- *
  * Multi-select checklist. Each row = label + desc, toggling the id in
  * `selected`. Used for built-in tools and tracing exporters.
@@ -845,6 +881,9 @@ function nodeProblem(
     return (n.a2aUrl ?? "").trim().length === 0 ? "缺少 Agent URL" : null;
   if (isOrchestratorType(n.agentType))
     return n.subAgents.length === 0 ? "缺少子 Agent" : null;
+  if (n.a2aRegistry?.enabled && !n.a2aRegistry.registrySpaceId.trim()) {
+    return "A2A 中心缺少空间 ID";
+  }
   return n.instruction.trim().length === 0 ? "缺少系统提示词" : null;
 }
 
@@ -879,10 +918,18 @@ function countDraftAgents(root: AgentDraft): number {
 /** Collect only settings used by active components across the Agent tree. */
 function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
   const selections: RuntimeEnvSelection[] = [];
+  const fixedValues: Record<string, string> = {};
   const visit = (node: AgentDraft) => {
     for (const toolId of node.builtinTools ?? []) {
       const tool = BUILTIN_TOOLS.find((item) => item.id === toolId);
       if (tool) selections.push({ env: tool.env });
+    }
+    if (node.a2aRegistry?.enabled) {
+      selections.push({ env: A2A_REGISTRY_ENV });
+      Object.assign(
+        fixedValues,
+        a2aRegistryEnvValues(node.a2aRegistry, { includeDefaults: true }),
+      );
     }
     if (node.memory.shortTerm) {
       selections.push({
@@ -922,7 +969,11 @@ function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
     node.subAgents.forEach(visit);
   };
   visit(root);
-  return runtimeEnvConfiguration(selections);
+  const config = runtimeEnvConfiguration(selections);
+  return {
+    specs: config.specs,
+    fixedValues: { ...config.fixedValues, ...fixedValues },
+  };
 }
 
 /* ---------------------------------------------------------------- *
@@ -1531,6 +1582,29 @@ export function CustomCreate({
       },
     }));
 
+  const patchA2aRegistry = (
+    updates: Partial<NonNullable<AgentDraft["a2aRegistry"]>>,
+  ) =>
+    patch({
+      a2aRegistry: {
+        ...(node.a2aRegistry ?? {
+          enabled: false,
+          registrySpaceId: "",
+          registryTopK: "",
+          registryRegion: "",
+          registryEndpoint: "",
+        }),
+        ...updates,
+      },
+    });
+
+  const patchA2aRegistryEnv = (key: string, value: string) => {
+    if (!(key in A2A_REGISTRY_ENV_TO_FIELD)) return;
+    const field = A2A_REGISTRY_ENV_TO_FIELD[key as A2aRegistryEnvKey];
+    patchA2aRegistry({ [field]: value });
+    patchDeploymentEnv(key, value);
+  };
+
   // Replace the whole tree (structural edits from the left tree), optionally
   // moving the selection to a new node.
   const applyTree = (nextRoot: AgentDraft, select?: NodePath) => {
@@ -1586,6 +1660,8 @@ export function CustomCreate({
   const descriptionMissing = node.description.trim().length === 0;
   const instructionMissing = node.instruction.trim().length === 0;
   const urlMissing = (node.a2aUrl ?? "").trim().length === 0;
+  const a2aRegistrySpaceMissing =
+    !!node.a2aRegistry?.enabled && !node.a2aRegistry.registrySpaceId.trim();
   const invalidClass = (missing: boolean) =>
     showErrors && missing
       ? `is-error cw-error-shake-${validationPulse % 2}`
@@ -1629,6 +1705,7 @@ export function CustomCreate({
         node.memory.shortTerm ||
         node.memory.longTerm ||
         node.tracing,
+      a2aCenter: !!node.a2aRegistry?.enabled,
       subagents: (node.subAgents?.length ?? 0) > 0,
       review: canFinish,
     }),
@@ -1638,7 +1715,7 @@ export function CustomCreate({
   // The nav only lists the sections actually rendered for THIS node's type —
   // orchestrators / A2A leaves have far fewer than an LLM (type lives in the
   // top bar; sub-agents live in the left tree; both are excluded here).
-  const rootOnlyStepIds: StepId[] = isRootAgent ? ["advanced"] : [];
+  const rootOnlyStepIds: StepId[] = isRootAgent ? ["advanced", "a2aCenter"] : [];
   const navStepIds: StepId[] =
     orchestrator || a2a
       ? ["basic"]
@@ -2466,6 +2543,37 @@ export function CustomCreate({
                   )}
                 </AnimatePresence>
               </section>
+            )}
+            {isRootAgent && (
+              <Section meta={metaOf("a2aCenter")}>
+                    <div className="cw-form cw-toggle-stack">
+                      <Toggle
+                        checked={!!node.a2aRegistry?.enabled}
+                        onChange={(enabled) =>
+                          patchA2aRegistry({ enabled })
+                        }
+                        title="A2A 中心"
+                        desc="通过 AgentKit A2A 注册中心发现并调用远程 Agent。"
+                        icon={Globe}
+                      />
+                      {node.a2aRegistry?.enabled && (
+                        <div className="cw-field cw-subfield">
+                          <RuntimeEnvFields
+                            env={A2A_REGISTRY_ENV}
+                            values={a2aRegistryEnvValues(node.a2aRegistry, {
+                              includeDefaults: false,
+                            })}
+                            onChange={patchA2aRegistryEnv}
+                          />
+                          {showErrors && a2aRegistrySpaceMissing && (
+                            <span className="cw-error-text">
+                              A2A 注册中心空间 ID 为必填项
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+              </Section>
             )}
               </>
             )}

@@ -19,6 +19,7 @@ import ast
 import pytest
 
 from veadk.cli.generated_agent_catalog import (
+    A2A_REGISTRY_ENV,
     BUILTIN_TOOLS,
     KB_BACKENDS,
     LTM_BACKENDS,
@@ -206,6 +207,32 @@ def test_every_tracing_exporter_generates_code_and_env(
     assert _env_keys(files[".env.example"]) == (
         _catalog_env_keys(MODEL_ENV, exporter.env) | {exporter.enable_flag}
     )
+    _assert_python_files_compile(project)
+
+
+def test_a2a_registry_center_generates_tools_and_env() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="a2a-center",
+            a2aRegistry={
+                "enabled": True,
+                "registrySpaceId": "space-test",
+            },
+        )
+    )
+    files = _files(project)
+    agent_py = files["agents/a2a_center/agent.py"]
+
+    assert "from veadk.tools.builtin_tools.a2a_registry import" in agent_py
+    assert "build_a2a_registry_tools" in agent_py
+    assert "tools=[*build_a2a_registry_tools()]" in agent_py
+    assert _env_keys(files[".env.example"]) == _catalog_env_keys(
+        MODEL_ENV,
+        A2A_REGISTRY_ENV,
+    )
+    assert "REGISTRY_TOP_K=3" in files[".env.example"]
+    assert "REGISTRY_REGION=cn-beijing" in files[".env.example"]
+    assert "REGISTRY_ENDPOINT=https://open.volcengineapi.com/" in files[".env.example"]
     _assert_python_files_compile(project)
 
 

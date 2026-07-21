@@ -1,4 +1,10 @@
-import { emptyDraft, type AgentDraft, type CustomTool, type SelectedSkill } from "./types";
+import {
+  emptyDraft,
+  type A2aRegistryConfig,
+  type AgentDraft,
+  type CustomTool,
+  type SelectedSkill,
+} from "./types";
 
 const STM_IDS = new Set(["local", "sqlite", "mysql", "postgresql"]);
 const LTM_IDS = new Set(["local", "opensearch", "redis", "viking", "mem0"]);
@@ -57,6 +63,17 @@ function asMaxIterations(v: unknown): number {
   return typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 3;
 }
 
+function asA2aRegistry(v: unknown): A2aRegistryConfig {
+  const o = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
+  return {
+    enabled: asBool(o.enabled),
+    registrySpaceId: asString(o.registrySpaceId),
+    registryTopK: asString(o.registryTopK),
+    registryRegion: asString(o.registryRegion),
+    registryEndpoint: asString(o.registryEndpoint),
+  };
+}
+
 function parseSubAgents(v: unknown): AgentDraft[] {
   if (!Array.isArray(v)) return [];
   return v.map((s) => {
@@ -71,6 +88,7 @@ function parseSubAgents(v: unknown): AgentDraft[] {
       a2aUrl: asString(so.a2aUrl),
       builtinTools: asStringArray(so.builtinTools).filter((t) => TOOL_IDS.has(t)),
       customTools: asCustomTools(so.customTools),
+      a2aRegistry: asA2aRegistry(so.a2aRegistry),
       subAgents: parseSubAgents(so.subAgents),
     };
   });
@@ -178,6 +196,7 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     builtinTools: asStringArray(o.builtinTools).filter((t) => TOOL_IDS.has(t)),
     customTools: asCustomTools(o.customTools),
     mcpTools,
+    a2aRegistry: asA2aRegistry(o.a2aRegistry),
     memory: { shortTerm: asBool(mem.shortTerm), longTerm: asBool(mem.longTerm) },
     shortTermBackend: pick(o.shortTermBackend, STM_IDS, "local"),
     longTermBackend: pick(o.longTermBackend, LTM_IDS, "local"),

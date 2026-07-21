@@ -1435,6 +1435,28 @@ def _run_frontend_server(
         )
         return env
 
+    def _a2a_registry_env_from_draft(draft: AgentDraft) -> dict[str, str]:
+        env: dict[str, str] = {}
+
+        def visit(node: AgentDraft) -> None:
+            registry = node.a2aRegistry
+            if registry.enabled:
+                env.update(
+                    {
+                        "REGISTRY_SPACE_ID": registry.registrySpaceId.strip(),
+                        "REGISTRY_TOP_K": registry.registryTopK.strip() or "3",
+                        "REGISTRY_REGION": registry.registryRegion.strip()
+                        or "cn-beijing",
+                        "REGISTRY_ENDPOINT": registry.registryEndpoint.strip()
+                        or "https://open.volcengineapi.com/",
+                    }
+                )
+            for sub_agent in node.subAgents:
+                visit(sub_agent)
+
+        visit(draft)
+        return env
+
     def _read_runner_log_tail(path: PathlibPath, max_chars: int = 6000) -> str:
         try:
             with path.open("rb") as f:
@@ -1542,11 +1564,11 @@ def _run_frontend_server(
             },
         )
 
-    async def _generate_project_from_request(
+    async def _generate_project_and_draft_from_request(
         data: dict,
         *,
         debug: bool,
-    ) -> GeneratedProject:
+    ) -> tuple[GeneratedProject, AgentDraft]:
         try:
             if debug:
                 req = GeneratedAgentTestRunRequest.model_validate(data)
@@ -1569,11 +1591,22 @@ def _run_frontend_server(
                 project,
                 resolve_skillspace_detail=_resolve_skillspace_skill_md,
             )
-            return project
+            return project, draft
         except ValidationError as e:
             raise HTTPException(status_code=422, detail=e.errors()) from e
         except DebugPolicyError as e:
             raise _http_policy_error(e) from e
+
+    async def _generate_project_from_request(
+        data: dict,
+        *,
+        debug: bool,
+    ) -> GeneratedProject:
+        project, _ = await _generate_project_and_draft_from_request(
+            data,
+            debug=debug,
+        )
+        return project
 
     def _write_generated_project(project: GeneratedProject, temp_dir: str) -> str:
         if not project.name:
@@ -1717,7 +1750,10 @@ def _run_frontend_server(
         temp_dir = ""
         proc = None
         try:
-            project = await _generate_project_from_request(data, debug=True)
+            project, draft = await _generate_project_and_draft_from_request(
+                data,
+                debug=True,
+            )
             temp_dir = tempfile.mkdtemp(prefix="veadk_generated_agent_test_")
             app_name = _write_generated_project(project, temp_dir)
             port = _free_local_port()
@@ -1735,12 +1771,14 @@ def _run_frontend_server(
                 "--port",
                 str(port),
             ]
+            runner_env = _safe_runner_env()
+            runner_env.update(_a2a_registry_env_from_draft(draft))
             with stdout_path.open("w", encoding="utf-8") as stdout_file:
                 with stderr_path.open("w", encoding="utf-8") as stderr_file:
                     proc = subprocess.Popen(
                         cmd,
                         cwd=temp_dir,
-                        env=_safe_runner_env(),
+                        env=runner_env,
                         stdout=stdout_file,
                         stderr=stderr_file,
                     )

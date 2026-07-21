@@ -46,6 +46,18 @@ export interface NetworkConfig {
   enableSharedInternetAccess?: boolean;
 }
 
+export interface A2aRegistryConfig {
+  enabled: boolean;
+  /** REGISTRY_SPACE_ID. */
+  registrySpaceId: string;
+  /** REGISTRY_TOP_K. Empty means the UI supplies the explicit default. */
+  registryTopK?: string;
+  /** REGISTRY_REGION. Empty means the UI supplies the explicit default. */
+  registryRegion?: string;
+  /** REGISTRY_ENDPOINT. Empty means the UI supplies the explicit default. */
+  registryEndpoint?: string;
+}
+
 export interface DeploymentConfig {
   feishuEnabled: boolean;
   network?: NetworkConfig;
@@ -94,6 +106,8 @@ export interface AgentDraft {
   customTools?: CustomTool[];
   /** MCP tool servers — the backend generator emits an MCPToolset per entry. */
   mcpTools?: McpTool[];
+  /** AgentKit A2A registry center tools. */
+  a2aRegistry?: A2aRegistryConfig;
   /** Chosen backends when memory is enabled. */
   shortTermBackend?: string;
   longTermBackend?: string;
@@ -146,6 +160,13 @@ export function emptyDraft(): AgentDraft {
     builtinTools: [],
     customTools: [],
     mcpTools: [],
+    a2aRegistry: {
+      enabled: false,
+      registrySpaceId: "",
+      registryTopK: "",
+      registryRegion: "",
+      registryEndpoint: "",
+    },
     modelName: DEFAULT_MODEL_NAME,
     modelProvider: "",
     modelApiBase: "",
