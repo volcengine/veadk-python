@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import type { AdkSession, SiteBranding, UiFeatures } from "../adk/client";
 import { sessionTitle } from "../blocks";
-import { displayName } from "../adk/identity";
+import { displayName, profilePictureUrl } from "../adk/identity";
 import { SkillCenterButton } from "./SkillCenter";
 import { SearchButton } from "./Search";
 import { AgentSelector, type SelectedRuntime } from "./AgentSelector";
@@ -114,11 +114,14 @@ function SidebarUser({
   onLogout,
 }: Pick<SidebarProps, "userInfo" | "onLogout">) {
   const [open, setOpen] = useState(false);
+  const [failedAvatarUrl, setFailedAvatarUrl] = useState("");
   if (!userInfo) return null;
   const name = displayName(userInfo);
   const email = String(userInfo.email ?? userInfo.sub ?? "");
   const initial = (name || "U").slice(0, 1).toUpperCase();
   const avatarStyle = smokeAvatarStyle(name || email || initial);
+  const pictureUrl = profilePictureUrl(userInfo);
+  const visiblePictureUrl = pictureUrl === failedAvatarUrl ? "" : pictureUrl;
   return (
     <div className="sidebar-user">
       <button
@@ -126,7 +129,22 @@ function SidebarUser({
         onClick={() => setOpen((o) => !o)}
         title={name}
       >
-        <span className="account-avatar" style={avatarStyle}>{initial}</span>
+        <span
+          className={`account-avatar${visiblePictureUrl ? " has-image" : ""}`}
+          style={avatarStyle}
+        >
+          {initial}
+          {visiblePictureUrl ? (
+            <img
+              className="account-avatar-image"
+              src={visiblePictureUrl}
+              alt=""
+              aria-hidden="true"
+              referrerPolicy="no-referrer"
+              onError={() => setFailedAvatarUrl(visiblePictureUrl)}
+            />
+          ) : null}
+        </span>
         <span className="sidebar-user-name">{name}</span>
       </button>
       {open && (
@@ -134,9 +152,24 @@ function SidebarUser({
           <div className="menu-scrim" onClick={() => setOpen(false)} />
           <div className="account-pop sidebar-user-pop">
             <div className="account-head">
-              <div className="account-avatar account-avatar--lg" style={avatarStyle}>
+              <span
+                className={`account-avatar account-avatar--lg${
+                  visiblePictureUrl ? " has-image" : ""
+                }`}
+                style={avatarStyle}
+              >
                 {initial}
-              </div>
+                {visiblePictureUrl ? (
+                  <img
+                    className="account-avatar-image"
+                    src={visiblePictureUrl}
+                    alt=""
+                    aria-hidden="true"
+                    referrerPolicy="no-referrer"
+                    onError={() => setFailedAvatarUrl(visiblePictureUrl)}
+                  />
+                ) : null}
+              </span>
               <div className="account-id">
                 <div className="account-name">{name}</div>
                 {email && email !== name && <div className="account-sub">{email}</div>}

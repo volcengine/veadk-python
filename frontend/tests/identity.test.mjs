@@ -16,7 +16,9 @@ const identitySource = readFileSync(
   new URL("../src/adk/identity.ts", import.meta.url),
   "utf8",
 ).replace('from "./timeout"', `from "${timeoutUrl}"`);
-const { fetchProviders, resolveIdentity } = await import(transpileUrl(identitySource));
+const { fetchProviders, profilePictureUrl, resolveIdentity } = await import(
+  transpileUrl(identitySource)
+);
 
 const originalFetch = globalThis.fetch;
 const originalWarn = console.warn;
@@ -32,10 +34,16 @@ test.after(() => {
 });
 
 test("identity 200 resolves as authenticated", async () => {
-  globalThis.fetch = async () => Response.json({ sub: "u-1", name: "Li" });
+  globalThis.fetch = async () =>
+    Response.json({
+      sub: "u-1",
+      name: "Li",
+      picture: "https://example.com/avatar.png",
+    });
   const identity = await resolveIdentity();
   assert.equal(identity.status, "authenticated");
   assert.equal(identity.userId, "u-1");
+  assert.equal(identity.info?.picture, "https://example.com/avatar.png");
   assert.equal(identity.local, undefined);
 });
 
@@ -77,6 +85,16 @@ test("identity network and server failures do not enter local mode", async (t) =
 test("identity rejects a non-JSON success response", async () => {
   globalThis.fetch = async () => new Response("<!doctype html>", { status: 200 });
   await assert.rejects(resolveIdentity(), /无法解析/);
+});
+
+test("reads a trimmed standard OIDC profile picture", () => {
+  assert.equal(
+    profilePictureUrl({ picture: " https://example.com/avatar.png " }),
+    "https://example.com/avatar.png",
+  );
+  assert.equal(profilePictureUrl({ picture: "" }), "");
+  assert.equal(profilePictureUrl({ picture: { url: "invalid" } }), "");
+  assert.equal(profilePictureUrl(), "");
 });
 
 test("provider lookup enables local mode only after a successful empty response", async () => {
