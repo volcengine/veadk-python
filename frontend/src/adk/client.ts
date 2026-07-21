@@ -254,7 +254,9 @@ export async function fetchRemoteApps(
   if ((res.status === 403 || res.status === 404) && ep?.runtimeId) {
     throw new RuntimeAccessDeniedError();
   }
-  if (!res.ok) throw new Error(`list-apps failed: ${res.status}`);
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "读取 Agent 列表失败"));
+  }
   return res.json();
 }
 
@@ -451,6 +453,14 @@ export interface AgentSkill {
   description: string;
 }
 
+/** One runtime component mounted on an Agent. Unknown kinds are intentionally
+ *  preserved so newer Agent Server versions remain visible to older clients. */
+export interface AgentComponent {
+  kind: string;
+  name: string;
+  description?: string;
+}
+
 export interface AgentTarget {
   name: string;
   description: string;
@@ -463,25 +473,53 @@ export interface FrontendInvocation {
   targetAgent?: AgentTarget;
 }
 
-/** Introspected metadata for an agent app (model, tools), for the picker.
- *  Only the local server implements `/web/agent-info`; remote AgentKit apps
- *  will reject this and the caller falls back to a basic flyout. */
+/** Introspected metadata for an agent app, served locally or by Agent Server. */
 export interface AgentInfo {
   name: string;
   description: string;
+  type?: AgentNodeType;
   model: string;
   tools: string[];
   skills: AgentSkill[];
   subAgents: string[];
+  /** Optional for compatibility with Agent Servers released before this field. */
+  components?: AgentComponent[];
   /** Recursive typed tree; only the local server provides it. */
   graph?: AgentNode;
 }
 
-export async function getAgentInfo(appName: string): Promise<AgentInfo> {
-  const { app, ep } = resolve(appName);
+async function fetchAgentInfo(app: string, ep: AdkEndpoint): Promise<AgentInfo> {
   const res = await apiFetch(`/web/agent-info/${app}`, {}, ep);
   if (!res.ok) throw new Error(`agent-info failed: ${res.status}`);
-  return res.json();
+  const info = (await res.json()) as Partial<AgentInfo>;
+  return {
+    name: info.name ?? app,
+    description: info.description ?? "",
+    type: info.type,
+    model: info.model ?? "",
+    tools: info.tools ?? [],
+    skills: info.skills ?? [],
+    subAgents: info.subAgents ?? [],
+    components: info.components ?? [],
+    graph: info.graph,
+  };
+}
+
+export async function getAgentInfo(appName: string): Promise<AgentInfo> {
+  const { app, ep } = resolve(appName);
+  return fetchAgentInfo(app, ep);
+}
+
+/** Read Agent metadata for a Runtime without connecting or persisting it. */
+export async function getRuntimeAgentInfo(
+  runtimeId: string,
+  region: string,
+): Promise<AgentInfo> {
+  const ep = { runtimeId, region };
+  const apps = await fetchRemoteApps("", "", ep);
+  const app = apps[0];
+  if (!app) throw new Error("该 Runtime 未提供可预览的 Agent。");
+  return fetchAgentInfo(app, ep);
 }
 
 /** One web-search hit (Volcengine WebSearch WebItem, trimmed for the UI). */
@@ -1002,8 +1040,7 @@ export async function getRuntimeDetail(
     `/web/runtime-detail?runtimeId=${encodeURIComponent(runtimeId)}&region=${encodeURIComponent(region)}`,
   );
   if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(t || `加载详情失败 (${res.status})`);
+    throw new Error(await httpErrorMessage(res, "加载 Runtime 详情失败"));
   }
   return res.json();
 }

@@ -21,43 +21,13 @@ from typing import Any
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models.llm_request import LlmRequest
 from google.adk.plugins import BasePlugin
-from google.adk.tools.skill_toolset import SkillToolset
+from veadk.agent_metadata import agent_skill_summaries as agent_skill_summaries
 
 INVOCATION_METADATA_KEY = "veadkInvocation"
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _SKILL_TOOL_NAMES = ("load_skill", "skills_tool", "execute_skills")
 _TRANSFER_TOOL_NAME = "transfer_to_agent"
-
-
-def agent_skill_summaries(agent: object) -> list[dict[str, str]]:
-    """Return deduplicated local skill metadata mounted on one agent."""
-    summaries: dict[str, str] = {}
-
-    legacy_skills = getattr(agent, "skills_dict", None)
-    if isinstance(legacy_skills, dict):
-        for skill in legacy_skills.values():
-            _add_skill_summary(summaries, skill)
-
-    for tool in getattr(agent, "tools", []) or []:
-        if not isinstance(tool, SkillToolset):
-            continue
-        skills = getattr(tool, "_skills", None)
-        if not isinstance(skills, dict):
-            continue
-        for skill in skills.values():
-            _add_skill_summary(summaries, skill)
-
-    return [
-        {"name": name, "description": summaries[name]} for name in sorted(summaries)
-    ]
-
-
-def _add_skill_summary(summaries: dict[str, str], skill: object) -> None:
-    name = getattr(skill, "name", None)
-    description = getattr(skill, "description", None)
-    if isinstance(name, str) and _SAFE_NAME.fullmatch(name):
-        summaries.setdefault(name, str(description or ""))
 
 
 class FrontendInvocationPlugin(BasePlugin):

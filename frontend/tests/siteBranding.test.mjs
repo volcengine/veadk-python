@@ -53,6 +53,14 @@ test("global sidebar can collapse to a compact icon rail", () => {
   );
 });
 
+test("connected cloud Agent uses a calm green selector icon", () => {
+  assert.match(sidebarSource, /agent-row--connected/);
+  assert.match(
+    stylesSource,
+    /\.agent-row--connected \.agent-row-lead\s*\{[^}]*color:\s*hsl\(142 48% 38%\);/,
+  );
+});
+
 test("history header offers a borderless new-session action", () => {
   assert.match(
     sidebarSource,
@@ -78,6 +86,8 @@ test("sidebar brand row aligns with the main header", () => {
     stylesSource,
     /\.navbar\s*\{[\s\S]*?flex:\s*0 0 54px;[\s\S]*?padding:\s*0 10px;/,
   );
+  assert.match(sidebarSource, /const MAIN_PANEL_TOP_PX = 54;/);
+  assert.match(sidebarSource, /anchorTop=\{MAIN_PANEL_TOP_PX\}/);
 });
 
 test("welcome headings use a restrained neutral shimmer and stable smoke avatars", () => {

@@ -23,6 +23,7 @@ import { AgentIdentityIcon } from "./AgentIdentityIcon";
 import volcengineLogo from "../assets/volcengine.svg";
 
 const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
+const MAIN_PANEL_TOP_PX = 54;
 
 /** Hand-drawn "quick create" mark: a lightning bolt (speed) with a spark. */
 function QuickCreateIcon() {
@@ -259,11 +260,7 @@ export function Sidebar({
       window.matchMedia(SIDEBAR_AUTO_COLLAPSE_QUERY).matches,
   );
   const [collapsed, setCollapsed] = useState(autoCollapsedRef.current);
-  const [anchorTop, setAnchorTop] = useState(0);
-  const rowRef = useRef<HTMLButtonElement>(null);
   const toggleSelector = () => {
-    // Align the drawer's top with the picker row (its offsetParent is .sidebar).
-    if (rowRef.current) setAnchorTop(rowRef.current.offsetTop);
     setSelectorOpen((o) => !o);
   };
   const sorted = [...sessions].sort(
@@ -327,6 +324,8 @@ export function Sidebar({
             // Cloud mode with nothing connected: a red prompt so the default
             // isn't mistaken for a real agent.
             const needsPick = agentsSource === "cloud" && !currentAgentId;
+            const isConnected =
+              agentsSource === "cloud" && !needsPick && Boolean(currentRuntime);
             const selectedRegion =
               agentsSource === "cloud" && !needsPick && currentRuntime?.region
                 ? currentRuntime.region === "cn-beijing"
@@ -337,8 +336,7 @@ export function Sidebar({
                 : "";
             return (
               <button
-                ref={rowRef}
-                className={`agent-row ${needsPick ? "agent-row--empty" : ""}`}
+                className={`agent-row ${needsPick ? "agent-row--empty" : ""} ${isConnected ? "agent-row--connected" : ""}`}
                 onClick={toggleSelector}
                 aria-label={needsPick ? "请选择 Agent" : currentAgentLabel || "选择 Agent"}
                 title="切换 Agent"
@@ -358,7 +356,7 @@ export function Sidebar({
           <AgentSelector
             open={selectorOpen}
             onClose={() => setSelectorOpen(false)}
-            anchorTop={anchorTop}
+            anchorTop={MAIN_PANEL_TOP_PX}
             agentsSource={agentsSource}
             localApps={localApps}
             currentId={currentAgentId}

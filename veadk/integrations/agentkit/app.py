@@ -34,6 +34,10 @@ from google.adk.agents import LoopAgent, ParallelAgent, SequentialAgent
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
 
+from veadk.agent_metadata import (
+    agent_component_summaries,
+    agent_skill_summaries,
+)
 from veadk.memory.short_term_memory import ShortTermMemory
 
 if TYPE_CHECKING:
@@ -77,14 +81,17 @@ def _agent_node(
     agent: object,
     display_names: Mapping[str, str],
     depth: int = 0,
+    parent_path: tuple[str, ...] = (),
 ) -> dict[str, Any]:
+    agent_id = str(getattr(agent, "name", "") or "")
+    path = (*parent_path, agent_id) if agent_id else parent_path
     children: list[dict[str, Any]] = []
     if depth < _MAX_AGENT_GRAPH_DEPTH:
         children = [
-            _agent_node(child, display_names, depth + 1)
+            _agent_node(child, display_names, depth + 1, path)
             for child in getattr(agent, "sub_agents", []) or []
         ]
-    agent_id = str(getattr(agent, "name", "") or "")
+    mode = getattr(agent, "mode", None)
     return {
         "id": agent_id,
         "name": _display_name(agent_id, display_names),
@@ -92,6 +99,10 @@ def _agent_node(
         "type": _agent_type(agent),
         "model": _model_name(getattr(agent, "model", "")),
         "tools": [_tool_label(tool) for tool in getattr(agent, "tools", []) or []],
+        "skills": agent_skill_summaries(agent),
+        "components": agent_component_summaries(agent),
+        "path": list(path),
+        "mentionable": mode not in ("task", "single_turn"),
         "children": children,
     }
 
@@ -303,6 +314,8 @@ def _add_introspection_routes(
             **{key: node[key] for key in ("id", "name", "description", "type")},
             "model": node["model"],
             "tools": node["tools"],
+            "skills": node["skills"],
+            "components": node["components"],
             "subAgents": [
                 _display_name(
                     str(getattr(child, "name", "") or ""),
@@ -320,6 +333,8 @@ def _add_introspection_routes(
             **{key: node[key] for key in ("id", "name", "description", "type")},
             "model": node["model"],
             "tools": node["tools"],
+            "skills": node["skills"],
+            "components": node["components"],
             "graph": node,
         }
 

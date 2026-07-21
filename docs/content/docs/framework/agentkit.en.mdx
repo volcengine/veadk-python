@@ -32,6 +32,15 @@ UI. See
 [`examples/generated_agentkit_project`](https://github.com/volcengine/veadk-python/tree/main/examples/generated_agentkit_project)
 for a complete generated project.
 
+`/web/agent-info/{app_name}` returns the root Agent's name, description, model,
+sub-Agents, tools, skills, and mounted component summaries. Each
+`/web/agent-graph` node also includes its skills, components, path, and whether
+it can be selected in a conversation. Each Runtime row in Studio has explicit
+connect and info actions. The info action opens one panel whose tabs switch
+between the live Agent metadata and Runtime control-plane detail. These endpoints
+do not expose system prompts, credentials, environment-variable values, or
+arbitrary serialized objects.
+
 ## Steps
 
 <Steps>

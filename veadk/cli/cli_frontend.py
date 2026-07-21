@@ -703,12 +703,15 @@ def _run_frontend_server(
     from google.adk.cli.utils.agent_loader import AgentLoader
     import httpx
 
-    from veadk.cli.frontend_invocation import agent_skill_summaries
     from veadk.cli.studio_rbac import (
         StudioAccessPolicy,
         StudioPrincipal,
         StudioRole,
         runtime_belongs_to,
+    )
+    from veadk.agent_metadata import (
+        agent_component_summaries,
+        agent_skill_summaries,
     )
     from veadk.multimodal.api import mount_media_routes
     from veadk.multimodal.service import MediaService
@@ -944,6 +947,7 @@ def _run_frontend_server(
             "model": _model_name(getattr(agent, "model", "")),
             "tools": [_tool_label(t) for t in getattr(agent, "tools", []) or []],
             "skills": agent_skill_summaries(agent),
+            "components": agent_component_summaries(agent),
             "path": list(path),
             "mentionable": mode not in ("task", "single_turn"),
             "children": children,
@@ -1001,6 +1005,7 @@ def _run_frontend_server(
             "model": _model_name(getattr(agent, "model", "")),
             "tools": [_tool_label(t) for t in getattr(agent, "tools", []) or []],
             "skills": agent_skill_summaries(agent),
+            "components": agent_component_summaries(agent),
             "subAgents": [
                 getattr(s, "name", "") for s in getattr(agent, "sub_agents", []) or []
             ],
@@ -2616,8 +2621,10 @@ def _run_frontend_server(
         )
         page_size = max(1, min(page_size, 100))
 
-        # next_token format for "all" mode: "<region>:<token>" (empty token = "")
-        async def _list_region(reg: str, tok: str) -> tuple[list[dict], str]:
+        # next_token format for cross-region mode: "all:<offset>".
+        async def _list_region(
+            reg: str, tok: str, max_results: int = page_size
+        ) -> tuple[list[dict], str]:
             from agentkit.sdk.runtime.client import AgentkitRuntimeClient
             from agentkit.sdk.runtime import types as _rt
 
@@ -2630,11 +2637,13 @@ def _run_frontend_server(
             out: list[dict] = []
             current_token = tok
             next_page_token = ""
+            target_size = max(1, min(max_results, 100))
             for _ in range(20):
-                kw: dict = {"max_results": max(1, page_size - len(out))}
+                kw: dict = {"max_results": max(1, target_size - len(out))}
                 if current_token:
                     kw["next_token"] = current_token
-                resp = client.list_runtimes(_rt.ListRuntimesRequest(**kw))
+                request = _rt.ListRuntimesRequest(**kw)
+                resp = await asyncio.to_thread(client.list_runtimes, request)
                 for runtime in resp.agent_kit_runtimes or []:
                     tags = _runtime_tags(runtime)
                     is_mine = runtime_belongs_to(tags, principal)
@@ -2651,35 +2660,78 @@ def _run_frontend_server(
                             "isMine": is_mine,
                         }
                     )
-                    if len(out) >= page_size:
+                    if len(out) >= target_size:
                         break
                 next_page_token = getattr(resp, "next_token", "") or ""
-                if len(out) >= page_size or not next_page_token:
+                if len(out) >= target_size or not next_page_token:
                     break
                 current_token = next_page_token
-            return out[:page_size], next_page_token
+            return out[:target_size], next_page_token
 
         try:
             if len(regions) == 1:
                 out, nxt = await _list_region(regions[0], next_token)
                 return {"runtimes": out, "nextToken": nxt}
 
-            # All regions: fetch a full page from each (ignoring client-side
-            # pagination tokens — the selector uses small page sizes and most
-            # accounts have few runtimes), merge, sort and trim.
+            if next_token:
+                match = re.fullmatch(r"all:(\d+)", next_token)
+                if match is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="invalid cross-region runtime page token",
+                    )
+                offset = int(match.group(1))
+            else:
+                offset = 0
+
+            # Pull only the regional prefixes needed to produce this merged
+            # page. Fetching ``offset + page_size`` items per region is enough
+            # to preserve the global created-at ordering without exhausting
+            # every regional cursor on the first request.
+            window_end = offset + page_size
+
+            async def _list_region_window(reg: str) -> tuple[list[dict], bool]:
+                items: list[dict] = []
+                regional_token = ""
+                seen_tokens: set[str] = set()
+                following_token = ""
+                while len(items) < window_end:
+                    page, following_token = await _list_region(
+                        reg,
+                        regional_token,
+                        window_end - len(items),
+                    )
+                    items.extend(page)
+                    if not following_token:
+                        break
+                    if following_token in seen_tokens:
+                        raise RuntimeError(f"repeated runtime page token for {reg}")
+                    seen_tokens.add(following_token)
+                    regional_token = following_token
+                return items, bool(following_token)
+
             all_runtimes: list[dict] = []
-            for reg in regions:
-                try:
-                    items, _ = await _list_region(reg, "")
-                    all_runtimes.extend(items)
-                except Exception as e:
-                    logger.warning(f"list runtimes [{reg}] failed: {e}")
+            region_results = await asyncio.gather(
+                *(_list_region_window(reg) for reg in regions),
+                return_exceptions=True,
+            )
+            regional_has_more = False
+            for reg, result in zip(regions, region_results, strict=True):
+                if isinstance(result, BaseException):
+                    logger.warning(f"list runtimes [{reg}] failed: {result}")
+                    continue
+                items, has_more = result
+                all_runtimes.extend(items)
+                regional_has_more = regional_has_more or has_more
             all_runtimes.sort(
                 key=lambda x: x.get("createdAt") or "",
                 reverse=True,
             )
-            page = all_runtimes[:page_size]
-            return {"runtimes": page, "nextToken": ""}
+            page_end = min(offset + page_size, len(all_runtimes))
+            page = all_runtimes[offset:page_end]
+            has_more = page_end < len(all_runtimes) or regional_has_more
+            following_token = f"all:{page_end}" if has_more else ""
+            return {"runtimes": page, "nextToken": following_token}
         except HTTPException:
             raise
         except Exception as e:
