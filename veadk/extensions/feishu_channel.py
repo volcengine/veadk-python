@@ -14,6 +14,7 @@
 
 import asyncio
 import inspect
+import json
 import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
@@ -192,6 +193,61 @@ def _extract_message_text(message: Any) -> str:
     return str(fallback or "")
 
 
+def _extract_text_from_body(msg_type: str, content_json: str) -> str:
+    """Extract readable text from an ``im/v1`` ``Message.body.content`` payload.
+
+    ``body.content`` is a JSON string whose shape depends on ``msg_type``
+    (text / post / interactive / merge_forward / ...). This is used to inline
+    parent/thread history that we fetch via the OpenAPI, which returns raw JSON
+    rather than the parsed ``MessageContent`` objects delivered over WebSocket.
+    """
+    if not content_json:
+        return ""
+    try:
+        payload = json.loads(content_json)
+    except Exception:
+        return content_json.strip()
+
+    if not isinstance(payload, dict):
+        return str(payload)
+
+    if msg_type == "text":
+        return str(payload.get("text", "") or "").strip()
+    if msg_type == "post":
+        title = str(payload.get("title", "") or "")
+        pieces: list[str] = []
+        for paragraph in payload.get("content", []) or []:
+            if not isinstance(paragraph, list):
+                continue
+            line_parts: list[str] = []
+            for node in paragraph:
+                if isinstance(node, dict):
+                    text = (
+                        node.get("text") or node.get("content") or node.get("user_name")
+                    )
+                    if isinstance(text, str) and text:
+                        line_parts.append(text)
+            if line_parts:
+                pieces.append("".join(line_parts))
+        body = "\n".join(pieces)
+        return f"{title}\n{body}".strip() if title else body
+    if msg_type == "interactive":
+        title_data = (
+            payload.get("header", {}).get("title", {})
+            if isinstance(payload.get("header"), dict)
+            else {}
+        )
+        title = ""
+        if isinstance(title_data, dict):
+            title = str(title_data.get("content", "") or "")
+        body = _stringify_card_elements(payload.get("elements") or payload.get("card"))
+        return f"{title}\n{body}".strip() if title else body
+    if msg_type == "merge_forward":
+        return str(payload.get("content", "") or payload.get("text", "") or "").strip()
+
+    return _stringify_card_elements(payload)
+
+
 @dataclass(slots=True)
 class FeishuMessageContext:
     message_id: str
@@ -238,6 +294,9 @@ class FeishuChannelExtension:
         channel_kwargs: dict[str, Any] | None = None,
         streaming: bool = False,
         reactions: bool = False,
+        include_parent_message: bool = True,
+        include_thread_history: bool = True,
+        thread_history_limit: int = 20,
     ) -> None:
         self.runner = runner
         self.session_id_factory = session_id_factory or self.default_session_id_factory
@@ -254,6 +313,20 @@ class FeishuChannelExtension:
             streaming
             or str(os.getenv("TOOL_FEISHU_CHANNEL_STREAMING", "")).lower() == "true"
         )
+        self.include_parent_message = include_parent_message
+        self.include_thread_history = include_thread_history
+        self.thread_history_limit = max(1, int(thread_history_limit))
+        self._app_id = (
+            app_id
+            or os.getenv("TOOL_FEISHU_CHANNEL_APP_ID")
+            or os.getenv("TOOL_LARK_ENDPOINT")
+        )
+        self._app_secret = (
+            app_secret
+            or os.getenv("TOOL_FEISHU_CHANNEL_APP_SECRET")
+            or os.getenv("TOOL_LARK_API_KEY")
+        )
+        self._openapi_client: Any = None
 
         if channel is not None:
             self.channel = channel
@@ -331,7 +404,11 @@ class FeishuChannelExtension:
             )
             return
         logger.debug(f"Received Feishu message: {getattr(message, 'message_id', '')}")
-        context = self.build_message_context(message=message, text=text)
+
+        prefix = await self._collect_reference_context(message)
+        composed_text = f"{prefix}\n\n{text}".strip() if prefix else text
+
+        context = self.build_message_context(message=message, text=composed_text)
 
         if self.reactions and context.message_id:
             try:
@@ -352,8 +429,9 @@ class FeishuChannelExtension:
                 )
 
                 if hasattr(self.channel, "client"):
-                    response = await self._maybe_await(
-                        self.channel.client.im.v1.message_reaction.create(request)
+                    openapi_client = self._get_openapi_client() or self.channel.client
+                    response = await asyncio.to_thread(
+                        openapi_client.im.v1.message_reaction.create, request
                     )
 
                     if not response.success():
@@ -547,3 +625,156 @@ class FeishuChannelExtension:
         if inspect.isawaitable(value):
             return await value
         return value
+
+    def _get_openapi_client(self) -> Any:
+        """Return a lark ``Client`` that can call OpenAPI (im/v1 message.get etc.).
+
+        ``FeishuChannel.client`` on the WebSocket path is a CallbackClient that
+        does NOT carry a tenant_access_token when calling HTTP OpenAPI, so
+        requests come back with code=99991661 "Missing access token". We build
+        (and cache) a dedicated ``lark.Client`` from app_id/app_secret for HTTP
+        calls instead.
+        """
+        if self._openapi_client is not None:
+            return self._openapi_client
+        if not self._app_id or not self._app_secret:
+            logger.debug(
+                "Cannot build OpenAPI client: app_id/app_secret not configured."
+            )
+            return None
+        try:
+            import lark_oapi as lark
+        except ImportError:
+            return None
+        try:
+            self._openapi_client = (
+                lark.Client.builder()
+                .app_id(self._app_id)
+                .app_secret(self._app_secret)
+                .build()
+            )
+        except Exception as exc:
+            logger.warning("Failed to build lark OpenAPI client: %s", exc)
+            return None
+        return self._openapi_client
+
+    async def _collect_reference_context(self, message: Any) -> str:
+        if not (self.include_parent_message or self.include_thread_history):
+            return ""
+        client = self._get_openapi_client()
+        if client is None:
+            return ""
+
+        thread_id = _coalesce(
+            _read_attr(message, "conversation", "thread_id"),
+            getattr(message, "thread_id", None),
+        )
+        parent_id = _coalesce(
+            getattr(message, "parent_id", None),
+            getattr(message, "reply_to_message_id", None),
+            _read_attr(message, "reply", "message_id"),
+        )
+        root_id = getattr(message, "root_id", None) or thread_id
+        message_id = getattr(message, "message_id", "")
+
+        blocks: list[str] = []
+
+        if self.include_thread_history and thread_id:
+            history = await self._fetch_thread_messages(client, thread_id)
+            rendered = self._render_history_block(history, exclude_ids={message_id})
+            if rendered:
+                blocks.append(f"[飞书话题历史 thread_id={thread_id}]\n{rendered}")
+        elif self.include_parent_message and parent_id:
+            parent = await self._fetch_message(client, parent_id)
+            rendered = self._render_message_line(parent) if parent else ""
+            if rendered:
+                blocks.append(f"[引用消息 message_id={parent_id}]\n{rendered}")
+            elif root_id and root_id != parent_id:
+                root_msg = await self._fetch_message(client, root_id)
+                rendered = self._render_message_line(root_msg) if root_msg else ""
+                if rendered:
+                    blocks.append(f"[根消息 message_id={root_id}]\n{rendered}")
+
+        return "\n\n".join(blocks)
+
+    async def _fetch_message(self, client: Any, message_id: str) -> Any:
+        try:
+            from lark_oapi.api.im.v1 import GetMessageRequest
+        except ImportError:
+            return None
+        req = GetMessageRequest.builder().message_id(message_id).build()
+        try:
+            resp = await asyncio.to_thread(client.im.v1.message.get, req)
+        except Exception as exc:
+            logger.warning("Feishu get message %s failed: %s", message_id, exc)
+            return None
+        if not getattr(resp, "success", lambda: False)():
+            logger.error(
+                "Feishu get message %s non-success: code=%s msg=%s",
+                message_id,
+                getattr(resp, "code", None),
+                getattr(resp, "msg", None),
+            )
+            return None
+        items = getattr(getattr(resp, "data", None), "items", None) or []
+        return items[0] if items else None
+
+    async def _fetch_thread_messages(self, client: Any, thread_id: str) -> list[Any]:
+        try:
+            from lark_oapi.api.im.v1 import ListMessageRequest
+        except ImportError:
+            return []
+        req = (
+            ListMessageRequest.builder()
+            .container_id_type("thread")
+            .container_id(thread_id)
+            .sort_type("ByCreateTimeAsc")
+            .page_size(self.thread_history_limit)
+            .build()
+        )
+        try:
+            resp = await asyncio.to_thread(client.im.v1.message.list, req)
+        except Exception as exc:
+            logger.warning("Feishu list thread %s failed: %s", thread_id, exc)
+            return []
+        if not getattr(resp, "success", lambda: False)():
+            logger.debug(
+                "Feishu list thread %s non-success: code=%s msg=%s",
+                thread_id,
+                getattr(resp, "code", None),
+                getattr(resp, "msg", None),
+            )
+            return []
+        return list(getattr(getattr(resp, "data", None), "items", None) or [])
+
+    def _render_history_block(
+        self, messages: list[Any], exclude_ids: set[str] | None = None
+    ) -> str:
+        exclude_ids = exclude_ids or set()
+        lines: list[str] = []
+        for msg in messages:
+            if getattr(msg, "message_id", None) in exclude_ids:
+                continue
+            line = self._render_message_line(msg)
+            if line:
+                lines.append(line)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _render_message_line(msg: Any) -> str:
+        if msg is None:
+            return ""
+        msg_type = getattr(msg, "msg_type", "") or ""
+        body = getattr(msg, "body", None)
+        content = getattr(body, "content", "") if body is not None else ""
+        text = _extract_text_from_body(msg_type, content).strip()
+        if not text:
+            return ""
+        sender = getattr(msg, "sender", None)
+        sender_id = _coalesce(
+            getattr(sender, "id", None),
+            getattr(sender, "sender_id", None),
+            getattr(msg, "sender_id", None),
+        )
+        prefix = f"@{sender_id}" if sender_id else "user"
+        return f"{prefix} ({msg_type}): {text}"
