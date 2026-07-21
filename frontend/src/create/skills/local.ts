@@ -218,13 +218,18 @@ export async function readZipSkills(file: File): Promise<LocalReadResult> {
   return collectHits(normalizeEntries(raw), file.name);
 }
 
-/** Read a FileList produced by <input webkitdirectory>. */
-export async function readFolderSkills(fileList: FileList): Promise<LocalReadResult> {
+/** Read files produced by <input webkitdirectory> or a dropped directory. */
+export async function readFolderSkills(
+  fileList: ArrayLike<File>,
+  relativePaths: ReadonlyMap<File, string> = new Map(),
+): Promise<LocalReadResult> {
   const raw: RawEntry[] = [];
   for (let i = 0; i < fileList.length; i++) {
     const f = fileList[i];
     const rel =
-      (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
+      relativePaths.get(f) ||
+      (f as File & { webkitRelativePath?: string }).webkitRelativePath ||
+      f.name;
     // Decode bytes as UTF-8. Binary assets are out of v1 scope.
     const text = await f.text();
     raw.push({ path: rel, text });

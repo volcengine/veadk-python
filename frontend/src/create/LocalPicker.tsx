@@ -8,6 +8,69 @@ import { useEffect, useRef, useState } from "react";
 import { Check, FolderUp, Info, Plus } from "lucide-react";
 import { readFolderSkills, readZipSkills, type LocalReadResult } from "./skills/local";
 import type { SelectedSkill, SkillHit } from "./skills/types";
+import { displayDescription } from "./displayText";
+
+interface DroppedEntry {
+  isFile: boolean;
+  isDirectory: boolean;
+  name: string;
+}
+
+interface DroppedFileEntry extends DroppedEntry {
+  file: (
+    success: (file: File) => void,
+    failure?: (error: DOMException) => void,
+  ) => void;
+}
+
+interface DroppedDirectoryReader {
+  readEntries: (
+    success: (entries: DroppedEntry[]) => void,
+    failure?: (error: DOMException) => void,
+  ) => void;
+}
+
+interface DroppedDirectoryEntry extends DroppedEntry {
+  createReader: () => DroppedDirectoryReader;
+}
+
+interface DroppedFile {
+  file: File;
+  path: string;
+}
+
+function fileFromEntry(entry: DroppedFileEntry): Promise<File> {
+  return new Promise((resolve, reject) => entry.file(resolve, reject));
+}
+
+async function directoryEntries(
+  entry: DroppedDirectoryEntry,
+): Promise<DroppedEntry[]> {
+  const reader = entry.createReader();
+  const entries: DroppedEntry[] = [];
+  while (true) {
+    const chunk = await new Promise<DroppedEntry[]>((resolve, reject) =>
+      reader.readEntries(resolve, reject),
+    );
+    if (chunk.length === 0) return entries;
+    entries.push(...chunk);
+  }
+}
+
+async function collectDroppedFiles(
+  entry: DroppedEntry,
+  parentPath = "",
+): Promise<DroppedFile[]> {
+  const path = parentPath ? `${parentPath}/${entry.name}` : entry.name;
+  if (entry.isFile) {
+    return [{ file: await fileFromEntry(entry as DroppedFileEntry), path }];
+  }
+  if (!entry.isDirectory) return [];
+  const children = await directoryEntries(entry as DroppedDirectoryEntry);
+  return (await Promise.all(
+    children.map((child) => collectDroppedFiles(child, path)),
+  )).flat();
+}
 
 export function LocalPicker({
   selected,
@@ -16,11 +79,11 @@ export function LocalPicker({
   selected: SelectedSkill[];
   onChange: (next: SelectedSkill[]) => void;
 }) {
-  const folderRef = useRef<HTMLInputElement>(null);
-  const zipRef = useRef<HTMLInputElement>(null);
   const [errors, setErrors] = useState<string[]>([]);
   const [foundHits, setFoundHits] = useState<SkillHit[]>([]);
   const [busy, setBusy] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const dragDepthRef = useRef(0);
 
   // Match by folder name (frontmatter `name`), the de-dup key for local uploads.
   const isSelectedByFolder = (folder: string) =>
@@ -108,73 +171,80 @@ export function LocalPicker({
     }
   };
 
-  const onFolderChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    setBusy(true);
-    try {
-      showResult(await readFolderSkills(files));
-    } finally {
-      setBusy(false);
-      // reset so selecting the same folder again fires change
-      if (folderRef.current) folderRef.current.value = "";
-    }
+  const onDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    dragDepthRef.current += 1;
+    setDragging(true);
   };
 
-  const onZipChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const onDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setDragging(false);
+  };
+
+  const onDrop = async (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    dragDepthRef.current = 0;
+    setDragging(false);
+    if (busy) return;
+
+    const entries = Array.from(event.dataTransfer.items)
+      .map((item) => item.webkitGetAsEntry?.() as DroppedEntry | null)
+      .filter((entry): entry is DroppedEntry => entry !== null);
+    if (entries.length === 0) {
+      setErrors(["请拖入包含 SKILL.md 的文件夹或一个 .zip 文件"]);
+      return;
+    }
+
     setBusy(true);
     try {
-      showResult(await readZipSkills(file));
+      const dropped = (await Promise.all(
+        entries.map((entry) => collectDroppedFiles(entry)),
+      )).flat();
+      const includesDirectory = entries.some((entry) => entry.isDirectory);
+      if (
+        !includesDirectory &&
+        dropped.length === 1 &&
+        dropped[0].file.name.toLowerCase().endsWith(".zip")
+      ) {
+        showResult(await readZipSkills(dropped[0].file));
+        return;
+      }
+      if (!includesDirectory) {
+        setErrors(["请拖入包含 SKILL.md 的文件夹或一个 .zip 文件"]);
+        return;
+      }
+      const paths = new Map(dropped.map(({ file, path }) => [file, path]));
+      showResult(await readFolderSkills(dropped.map(({ file }) => file), paths));
+    } catch (error) {
+      setErrors([
+        `读取失败：${error instanceof Error ? error.message : String(error)}`,
+      ]);
     } finally {
       setBusy(false);
-      if (zipRef.current) zipRef.current.value = "";
     }
   };
 
   return (
     <div className="cw-local">
-      <div className="cw-local-actions">
-        <button
-          type="button"
-          className="cw-btn cw-btn-soft"
-          onClick={() => folderRef.current?.click()}
-          disabled={busy}
-        >
-          <FolderUp className="cw-i" />
-          上传文件夹
-        </button>
-        <button
-          type="button"
-          className="cw-btn cw-btn-soft"
-          onClick={() => zipRef.current?.click()}
-          disabled={busy}
-        >
-          <FolderUp className="cw-i" />
-          上传 .zip
-        </button>
-        <input
-          ref={folderRef}
-          type="file"
-          // @ts-expect-error - webkitdirectory is non-standard but widely supported
-          webkitdirectory=""
-          directory=""
-          multiple
-          hidden
-          onChange={onFolderChange}
-        />
-        <input
-          ref={zipRef}
-          type="file"
-          accept=".zip,application/zip"
-          hidden
-          onChange={onZipChange}
-        />
+      <div
+        className={`cw-local-dropzone ${dragging ? "is-dragging" : ""}`}
+        role="group"
+        aria-label="拖入文件夹或 ZIP，自动识别 Skill"
+        onDragEnter={onDragEnter}
+        onDragOver={(event) => event.preventDefault()}
+        onDragLeave={onDragLeave}
+        onDrop={(event) => void onDrop(event)}
+      >
+        <FolderUp className="cw-local-drop-icon" aria-hidden />
+        <p className="cw-local-drop-hint">
+          拖入文件夹或 ZIP，自动识别 Skill
+        </p>
       </div>
 
       <p className="cw-local-hint">
-        每个技能需包含 SKILL.md（含 name / description frontmatter）。支持选择包含多个技能文件夹的目录。
+        每个技能需包含 SKILL.md（含 name / description frontmatter）。支持包含多个技能的目录。
       </p>
 
       {busy && <p className="cw-empty-line">正在读取文件…</p>}
@@ -208,7 +278,9 @@ export function LocalPicker({
                 <span className="cw-skill-result-meta">
                   <span className="cw-skill-result-name">{hit.name}</span>
                   {hit.description && (
-                    <span className="cw-skill-result-desc">{hit.description}</span>
+                    <span className="cw-skill-result-desc">
+                      {displayDescription(hit.description)}
+                    </span>
                   )}
                   <span className="cw-skill-result-repo">
                     本地 · {hit.localFiles?.length ?? 0} 个文件

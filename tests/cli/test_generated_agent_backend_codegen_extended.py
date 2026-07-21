@@ -59,7 +59,7 @@ _MINIMAL_FRONTEND_GOLDEN = {
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
     "agents/demo_agent/agent.py": "b2d22094a8ea61e8ab6e2b633d7695c5fa5e883f03516cb8771e7ec00be0fe1f",
     "agents/demo_agent/__init__.py": "62d651c229ddd771cf0cc0a8b0e05e96b739a737fe71e41fe8bf1df484150c36",
-    ".env.example": "1cdb6e1bfe38616d5d46095ba88ba76a0c189f3d2999bf0dd23b7145ce103ab2",
+    ".env.example": "ec3258da9bef4e74333376d8554c265ccb12a4a1e5d4e1e1b0acdf5c9ae93ab6",
     "requirements.txt": "9a04e5f16e94d5e751681082776f1c99f13da7a577c8753c3835e0ea507245e4",
     "README.md": "a34208314cf9061c02662028d7a9dd97448e6b73c1d732cb4aeaa8f70dbbc684",
 }
@@ -67,10 +67,10 @@ _MINIMAL_FRONTEND_GOLDEN = {
 _FULL_FRONTEND_GOLDEN = {
     "app.py": "a9903cf7e095733e9b8658182a0954a81d8a98b431f8ab995ce3818950127006",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
-    "agents/full_agent/agent.py": "77c6cc42f8f9a99aba060fc93a7a615655b897e6136d6f5325f035e87edce141",
+    "agents/full_agent/agent.py": "1bc030b7aaafa29bbb673e4a67bd51a1a209dd1f0377206b0ca35252c82c5822",
     "agents/full_agent/__init__.py": "62d651c229ddd771cf0cc0a8b0e05e96b739a737fe71e41fe8bf1df484150c36",
-    ".env.example": "cb35eed98b4155c755df934f61ca6760293d59508de0a6090632e44501f82748",
-    "requirements.txt": "65b301155863e56165c5777301c3476d0c0b68e569fff4450f454e36fd66225d",
+    ".env.example": "054a10f8bc0e046158349ebccdc67a1182c22c4c63ee5b51bf7c2c1674abe052",
+    "requirements.txt": "4a941e1bf7efb43d57f608649ac238f2e5ea833f9e0aae92f8bc3fef67b8874e",
     "README.md": "1bf4dc889c7d1076f50784d253b53412ba7c49bcb69a5d948f9092dbbecb18ac",
 }
 
@@ -116,7 +116,6 @@ def _full_draft() -> AgentDraft:
         knowledgebaseBackend="context_search",
         tracing=True,
         tracingExporters=["apmplus", "cozeloop", "tls"],
-        enableA2ui=True,
         selectedSkills=[
             {
                 "source": "local",
@@ -169,10 +168,24 @@ def test_minimal_project_matches_frontend_codegen_golden() -> None:
 
 
 def test_full_project_matches_frontend_codegen_golden() -> None:
-    project = generate_project_from_draft(_full_draft())
+    draft = _full_draft()
+    project = generate_project_from_draft(draft)
+    files = _file_map(project)
 
     assert project.name == "full_agent"
+    assert "enableA2ui" not in draft.model_dump()
+    assert "enable_a2ui" not in files["agents/full_agent/agent.py"]
+    assert "[a2ui]" not in files["requirements.txt"]
     assert _content_hashes(project) == _FULL_FRONTEND_GOLDEN
+
+
+def test_retired_a2ui_option_is_accepted_but_not_generated() -> None:
+    draft = AgentDraft.model_validate({"name": "legacy", "enableA2ui": True})
+    files = _file_map(generate_project_from_draft(draft))
+
+    assert "enableA2ui" not in draft.model_dump()
+    assert "enable_a2ui" not in files["agents/legacy/agent.py"]
+    assert "[a2ui]" not in files["requirements.txt"]
 
 
 def test_codegen_preserves_agent_display_names_for_topology() -> None:
@@ -487,6 +500,7 @@ class _FakeProcess:
     def __init__(self, cmd: list[str], *, cwd: str, **kwargs: Any) -> None:
         self.cmd = cmd
         self.cwd = cwd
+        self.env = kwargs.get("env", {})
         self.returncode: int | None = None
         self.terminated = False
         self.created.append(self)
@@ -550,6 +564,8 @@ def test_generated_project_and_debug_run_api_lifecycle(
     captured: dict[str, Any] = {}
     _FakeProcess.created.clear()
     _FakeAsyncClient.streamed_payloads.clear()
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-sk")
 
     monkeypatch.setattr("dotenv.find_dotenv", lambda: "")
     monkeypatch.setattr(
@@ -619,6 +635,8 @@ def test_generated_project_and_debug_run_api_lifecycle(
         assert run["runId"].startswith("tr_")
 
         process = _FakeProcess.created[-1]
+        assert process.env["VOLCENGINE_ACCESS_KEY"] == "test-ak"
+        assert process.env["VOLCENGINE_SECRET_KEY"] == "test-sk"
         generated_files = {
             str(path.relative_to(process.cwd)): path.read_text(encoding="utf-8")
             for path in Path(process.cwd).rglob("*")

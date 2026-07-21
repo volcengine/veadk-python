@@ -19,8 +19,10 @@ const {
   runtimeEnvVars,
 } = await loadTypeScriptModule("../src/create/deploymentEnv.ts");
 const {
+  BUILTIN_TOOLS,
   KB_BACKENDS,
   LTM_BACKENDS,
+  MODEL_ENV,
   STM_BACKENDS,
   TRACING_EXPORTERS,
 } = await loadTypeScriptModule("../src/create/veadkCatalog.ts");
@@ -30,6 +32,18 @@ const customCreateSource = readFileSync(
 );
 const projectPreviewSource = readFileSync(
   new URL("../src/ui/ProjectPreview.tsx", import.meta.url),
+  "utf8",
+);
+const projectPreviewStyles = readFileSync(
+  new URL("../src/ui/ProjectPreview.css", import.meta.url),
+  "utf8",
+);
+const codeBrowserSource = readFileSync(
+  new URL("../src/ui/CodeBrowserDialog.tsx", import.meta.url),
+  "utf8",
+);
+const codeBrowserStyles = readFileSync(
+  new URL("../src/ui/CodeBrowserDialog.css", import.meta.url),
   "utf8",
 );
 
@@ -98,6 +112,34 @@ test("collects every component parameter and enables selected tracing exporters"
   }
 });
 
+test("does not request auto-resolved credentials per component", () => {
+  const envKeys = [
+    ...BUILTIN_TOOLS,
+    ...STM_BACKENDS,
+    ...LTM_BACKENDS,
+    ...KB_BACKENDS,
+    ...TRACING_EXPORTERS,
+  ].flatMap((option) => option.env.map((env) => env.key));
+
+  const autoResolvedCredentials = [
+    "MODEL_AGENT_API_KEY",
+    "MODEL_EMBEDDING_API_KEY",
+    "MODEL_IMAGE_API_KEY",
+    "MODEL_EDIT_API_KEY",
+    "MODEL_VIDEO_API_KEY",
+    "TOOL_VESPEECH_API_KEY",
+    "TOOL_VESEARCH_API_KEY",
+    "VOLCENGINE_ACCESS_KEY",
+    "VOLCENGINE_SECRET_KEY",
+    "OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY",
+  ];
+
+  for (const key of autoResolvedCredentials) {
+    assert.equal(envKeys.includes(key), false, key);
+  }
+  assert.equal(MODEL_ENV.some((env) => env.key === "MODEL_AGENT_API_KEY"), false);
+});
+
 test("shows configured database and Feishu values in the runtime env summary", () => {
   const rows = runtimeEnvDisplayRows(
     [
@@ -138,4 +180,81 @@ test("regenerates project code when Feishu changes on the deployment page", () =
   assert.match(customCreateSource, /setProject\(nextProject\)/);
   assert.match(projectPreviewSource, /await onFeishuEnabledChange\(!feishuEnabled\)/);
   assert.match(projectPreviewSource, /deploying \|\| feishuUpdating/);
+});
+
+test("uses concise placeholders for agent names and custom environment variables", () => {
+  assert.match(customCreateSource, /placeholder="customer_service"/);
+  assert.doesNotMatch(customCreateSource, /placeholder="例如：customer_service"/);
+  assert.match(projectPreviewSource, /placeholder="名称"/);
+  assert.match(projectPreviewSource, /placeholder="值"/);
+  assert.doesNotMatch(projectPreviewSource, /placeholder="(?:KEY|VALUE)"/);
+});
+
+test("collects non-automatic built-in tool settings for deployment", () => {
+  assert.match(
+    customCreateSource,
+    /for \(const toolId of node\.builtinTools \?\? \[\]\)/,
+  );
+  assert.match(
+    customCreateSource,
+    /BUILTIN_TOOLS\.find\(\(item\) => item\.id === toolId\)/,
+  );
+  assert.match(customCreateSource, /selections\.push\(\{ env: tool\.env \}\)/);
+});
+
+test("keeps deployment configuration primary beside an inspectable Agent topology", () => {
+  assert.match(customCreateSource, /agentDraft=\{draft\}/);
+  assert.match(projectPreviewSource, /className="pp-topology-pane"/);
+  assert.match(projectPreviewSource, /onMouseEnter=\{\(\) => onHover\(agent\.id\)\}/);
+  assert.match(projectPreviewSource, /onMouseLeave=\{\(\) => onHover\(null\)\}/);
+  assert.match(projectPreviewSource, /onBlur=\{\(\) => onFocus\(null\)\}/);
+  assert.match(projectPreviewSource, /<ProjectCodeBrowser project=\{project\}/);
+  assert.match(projectPreviewSource, />\s*导出配置\s*</);
+  assert.match(projectPreviewSource, />\s*下载源码\s*</);
+  assert.match(
+    projectPreviewStyles,
+    /grid-template-columns:\s*minmax\(260px, 3fr\) minmax\(520px, 7fr\)/,
+  );
+});
+
+test("shows concrete Agent configuration only while a topology node is inspected", () => {
+  assert.match(
+    projectPreviewSource,
+    /\{inspectedAgent && inspectedAgentMeta && InspectedAgentIcon && \(/,
+  );
+  for (const label of [
+    "模型",
+    "工具",
+    "技能",
+    "知识库",
+    "短期记忆",
+    "长期记忆",
+    "观测",
+  ]) {
+    assert.match(projectPreviewSource, new RegExp(`<dt>${label}</dt>`));
+  }
+  assert.doesNotMatch(projectPreviewSource, /<dt>组件<\/dt>/);
+  assert.match(projectPreviewSource, /findTool\(toolId\)\?\.label/);
+  assert.match(projectPreviewSource, /findKb\(node\.knowledgebaseBackend/);
+  assert.match(projectPreviewSource, /findExporter\(exporterId\)\?\.label/);
+});
+
+test("uses an unboxed 查看源码 trigger", () => {
+  assert.match(codeBrowserSource, /<span>查看源码<\/span>/);
+  assert.match(
+    codeBrowserStyles,
+    /\.code-browser-trigger\s*\{[\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;/,
+  );
+  assert.match(codeBrowserStyles, /\.code-browser-trigger:focus-visible/);
+});
+
+test("opens generated source in an editable code browser dialog", () => {
+  assert.match(codeBrowserSource, /role="dialog"[\s\S]*?aria-modal="true"/);
+  assert.match(codeBrowserSource, /<CodeEditor[\s\S]*?onChange=\{handleEdit\}/);
+  assert.match(codeBrowserSource, /event\.key === "Escape"/);
+  assert.match(codeBrowserSource, /document\.body\.style\.overflow = "hidden"/);
+  assert.match(
+    codeBrowserStyles,
+    /\.code-browser-dialog\s*\{[\s\S]*?height:\s*min\(720px, 84vh\);/,
+  );
 });

@@ -84,7 +84,6 @@ export interface AgentDraft {
   knowledgebase: boolean;
   /** Observability / tracing. */
   tracing: boolean;
-  enableA2ui: boolean;
   /** Nested sub-agents (the custom flow supports recursive creation). */
   subAgents: AgentDraft[];
 
@@ -143,7 +142,6 @@ export function emptyDraft(): AgentDraft {
     memory: { shortTerm: false, longTerm: false },
     knowledgebase: false,
     tracing: false,
-    enableA2ui: false,
     subAgents: [],
     builtinTools: [],
     customTools: [],

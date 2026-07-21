@@ -19,6 +19,7 @@ import ast
 import pytest
 
 from veadk.cli.generated_agent_catalog import (
+    BUILTIN_TOOLS,
     KB_BACKENDS,
     LTM_BACKENDS,
     MODEL_ENV,
@@ -56,6 +57,73 @@ def _assert_python_files_compile(project: GeneratedProject) -> None:
     for path, content in _files(project).items():
         if path.endswith(".py"):
             ast.parse(content, filename=path)
+
+
+def test_component_catalog_does_not_request_auto_resolved_credentials() -> None:
+    component_env_keys = _catalog_env_keys(
+        *(item.env for item in BUILTIN_TOOLS),
+        *(item.env for item in STM_BACKENDS),
+        *(item.env for item in LTM_BACKENDS),
+        *(item.env for item in KB_BACKENDS),
+        *(item.env for item in TRACING_EXPORTERS),
+    )
+
+    auto_resolved_credentials = {
+        "MODEL_AGENT_API_KEY",
+        "MODEL_EMBEDDING_API_KEY",
+        "MODEL_IMAGE_API_KEY",
+        "MODEL_EDIT_API_KEY",
+        "MODEL_VIDEO_API_KEY",
+        "TOOL_VESPEECH_API_KEY",
+        "TOOL_VESEARCH_API_KEY",
+        "VOLCENGINE_ACCESS_KEY",
+        "VOLCENGINE_SECRET_KEY",
+        "OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY",
+    }
+
+    assert component_env_keys.isdisjoint(auto_resolved_credentials)
+    assert "MODEL_AGENT_API_KEY" not in _catalog_env_keys(MODEL_ENV)
+
+
+def test_managed_components_keep_only_component_specific_env() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="managed-components",
+            builtinTools=[
+                "web_search",
+                "link_reader",
+                "image_generate",
+                "image_edit",
+                "video_generate",
+                "text_to_speech",
+                "vesearch",
+            ],
+            memory=MemoryConfig(shortTerm=True, longTerm=True),
+            longTermBackend="viking",
+            knowledgebase=True,
+            knowledgebaseBackend="context_search",
+            tracing=True,
+            tracingExporters=["apmplus", "tls"],
+        )
+    )
+    env_keys = _env_keys(_files(project)[".env.example"])
+
+    assert "VOLCENGINE_ACCESS_KEY" not in env_keys
+    assert "VOLCENGINE_SECRET_KEY" not in env_keys
+    assert "MODEL_AGENT_API_KEY" not in env_keys
+    assert "DATABASE_CONTEXT_SEARCH_ENGINE_ID" in env_keys
+    assert "DATABASE_CONTEXT_SEARCH_ENGINE_ENDPOINT" in env_keys
+    assert "DATABASE_CONTEXT_SEARCH_ENGINE_APIKEY" in env_keys
+    assert "TOOL_VESPEECH_APP_ID" in env_keys
+    assert "TOOL_VESEARCH_ENDPOINT" in env_keys
+    assert "OBSERVABILITY_OPENTELEMETRY_APMPLUS_SERVICE_NAME" in env_keys
+    assert "MODEL_EMBEDDING_API_KEY" not in env_keys
+    assert "MODEL_IMAGE_API_KEY" not in env_keys
+    assert "MODEL_EDIT_API_KEY" not in env_keys
+    assert "MODEL_VIDEO_API_KEY" not in env_keys
+    assert "TOOL_VESPEECH_API_KEY" not in env_keys
+    assert "TOOL_VESEARCH_API_KEY" not in env_keys
+    assert "OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY" not in env_keys
 
 
 @pytest.mark.parametrize("backend", STM_BACKENDS, ids=lambda item: item.id)

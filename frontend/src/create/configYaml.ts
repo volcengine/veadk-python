@@ -44,7 +44,6 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
     o.tracing = true;
     o.tracingExporters = [...draft.tracingExporters];
   }
-  if (draft.enableA2ui) o.enableA2ui = true;
   if (draft.deployment?.feishuEnabled) {
     o.deployment = { feishuEnabled: true };
   }

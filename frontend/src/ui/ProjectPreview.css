@@ -394,19 +394,260 @@
   white-space: pre;
 }
 
-.pp-config {
-  flex: 0 0 390px;
-  width: 390px;
+.pp-root.is-deploy .pp-body {
+  display: grid;
+  grid-template-columns: minmax(260px, 3fr) minmax(520px, 7fr);
+}
+
+.pp-root.is-deploy .pp-files-area {
+  display: none;
+}
+
+.pp-topology-pane {
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid hsl(var(--border));
+  border-right: 1px solid hsl(var(--border));
+  background: hsl(var(--panel));
+}
+
+.pp-topology-head {
+  flex: 0 0 58px;
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 16px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.pp-topology-title {
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.pp-topology-count {
+  margin-top: 2px;
+  color: hsl(var(--muted-foreground));
+  font-size: 10.5px;
+}
+
+.pp-topology-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 12px 16px;
+}
+
+.pp-topology-tree {
+  padding-bottom: 12px;
+}
+
+.pp-topology-branch {
+  position: relative;
+}
+
+.pp-topology-children {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 2px;
+}
+
+.pp-topology-children::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 6px;
+  left: 8px;
+  width: 1px;
+  background: hsl(var(--border));
+}
+
+.pp-agent-node {
+  position: relative;
+  width: 100%;
+  min-height: 49px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: hsl(var(--foreground));
+  font: inherit;
+  text-align: left;
+  cursor: default;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+
+.pp-agent-node:hover,
+.pp-agent-node:focus-visible,
+.pp-agent-node.is-inspected {
+  border-color: hsl(var(--primary) / 0.16);
+  outline: none;
+  background: hsl(var(--primary) / 0.04);
+}
+
+.pp-agent-node-icon,
+.pp-agent-inspector-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: hsl(var(--muted-foreground));
+}
+
+.pp-agent-node-icon {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+}
+
+.pp-agent-node-icon svg,
+.pp-agent-inspector-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.pp-agent-node-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pp-agent-node-name {
+  overflow: hidden;
+  color: hsl(var(--foreground));
+  font-size: 12.5px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pp-agent-node-type {
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pp-agent-child-count {
+  flex: 0 0 auto;
+  min-width: 18px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: hsl(var(--secondary));
+  color: hsl(var(--muted-foreground));
+  font-size: 9.5px;
+  text-align: center;
+}
+
+.pp-agent-inspector {
+  padding: 13px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 9px;
+  background: hsl(var(--secondary) / 0.22);
+}
+
+.pp-agent-inspector-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.pp-agent-inspector-icon {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border-radius: 7px;
+  background: hsl(var(--background));
+}
+
+.pp-agent-inspector-head > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.pp-agent-inspector-head strong {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pp-agent-inspector-head span,
+.pp-agent-inspector p {
+  color: hsl(var(--muted-foreground));
+  font-size: 10.5px;
+}
+
+.pp-agent-inspector p {
+  margin: 10px 0 0;
+  line-height: 1.5;
+}
+
+.pp-agent-config-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 7px 12px;
+  margin: 12px 0 0;
+  padding-top: 11px;
+  border-top: 1px solid hsl(var(--border) / 0.72);
+  font-size: 10.5px;
+}
+
+.pp-agent-config-grid dt {
+  color: hsl(var(--muted-foreground));
+}
+
+.pp-agent-config-grid dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: hsl(var(--foreground));
+  text-align: right;
+}
+
+.pp-topology-actions {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  padding: 10px 12px;
+  border-top: 1px solid hsl(var(--border));
+}
+
+.pp-topology-actions .pp-secondary {
+  width: 100%;
+  padding-inline: 8px;
+}
+
+.pp-config {
+  min-width: 0;
+  width: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   background: hsl(var(--panel));
 }
 
 .pp-config-head {
-  flex: 0 0 42px;
-  height: 42px;
+  flex: 0 0 58px;
+  height: 58px;
   box-sizing: border-box;
   display: flex;
   align-items: center;
@@ -416,15 +657,16 @@
 
 .pp-config-title {
   color: hsl(var(--foreground));
-  font-size: 13px;
-  font-weight: 680;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
 .pp-env-sub {
   margin-top: 4px;
   color: hsl(var(--muted-foreground));
-  font-size: 11.5px;
-  line-height: 1.45;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .pp-config-scroll {
@@ -444,16 +686,20 @@
   background: hsl(var(--panel));
 }
 
+.pp-config-actions .pp-deploy {
+  min-width: 108px;
+}
+
 .pp-config-section {
   padding: 16px 18px 18px;
-  border-bottom: 1px solid hsl(var(--border));
 }
 
 .pp-config-label {
   margin-bottom: 10px;
   color: hsl(var(--foreground));
-  font-size: 13.5px;
+  font-size: 15px;
   font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
 .pp-config-select,
@@ -493,11 +739,11 @@
 }
 
 .pp-channel {
-  width: 100%;
-  display: flex;
+  width: auto;
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 18px;
+  justify-content: flex-start;
+  gap: 10px;
   padding: 2px 0;
   border: 0;
   background: transparent;
@@ -559,7 +805,7 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 5px 8px;
   color: hsl(var(--muted-foreground));
-  font-size: 11.5px;
+  font-size: 12.5px;
 }
 
 .pp-channel-fields label > span {
@@ -576,7 +822,7 @@
 
 .pp-channel-fields code {
   color: hsl(var(--muted-foreground));
-  font-size: 9.5px;
+  font-size: 10.5px;
 }
 
 .pp-channel-fields input {
@@ -601,7 +847,7 @@
   background: transparent;
   color: hsl(var(--muted-foreground));
   font: inherit;
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 560;
   cursor: pointer;
 }
@@ -628,7 +874,7 @@
   flex-direction: column;
   gap: 6px;
   color: hsl(var(--muted-foreground));
-  font-size: 11.5px;
+  font-size: 12.5px;
 }
 
 .pp-network-fields small {
@@ -641,7 +887,7 @@
   align-items: center;
   gap: 8px;
   color: hsl(var(--foreground));
-  font-size: 11.5px;
+  font-size: 12.5px;
   cursor: pointer;
 }
 
@@ -664,12 +910,21 @@
 }
 
 .pp-env-head .pp-config-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   margin-bottom: 0;
+}
+
+.pp-env-count {
+  display: inline-flex;
+  align-items: center;
 }
 
 .pp-env-table {
   display: flex;
   flex-direction: column;
+  margin-top: 10px;
 }
 
 .pp-env-group {
@@ -685,14 +940,13 @@
   justify-content: space-between;
   padding: 5px 1px 3px;
   color: hsl(var(--foreground));
-  font-size: 10.5px;
-  font-weight: 620;
-  letter-spacing: 0.02em;
+  font-size: 12.5px;
+  font-weight: 600;
 }
 
 .pp-env-group-head small {
   color: hsl(var(--muted-foreground));
-  font-size: 9.5px;
+  font-size: 11.5px;
   font-weight: 450;
 }
 
@@ -710,8 +964,8 @@
 }
 
 .pp-env-row input:first-child {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 11px;
+  font-family: inherit;
+  font-size: 13px;
 }
 
 .pp-env-row-derived:last-child {
@@ -725,7 +979,7 @@
 
 .pp-env-source {
   color: hsl(var(--muted-foreground));
-  font-size: 9px;
+  font-size: 11px;
   text-align: center;
 }
 
@@ -734,29 +988,20 @@
   height: 28px;
 }
 
-.pp-env-empty {
-  padding: 17px 12px;
-  border: 1px dashed hsl(var(--border));
-  border-radius: 5px;
-  color: hsl(var(--muted-foreground));
-  font-size: 11.5px;
-  text-align: center;
-}
-
 .pp-env-add {
   width: 100%;
-  height: 32px;
+  min-height: 52px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  margin-top: 10px;
   border: 1px dashed hsl(var(--border));
-  border-radius: 5px;
+  border-radius: 10px;
   background: transparent;
   color: hsl(var(--muted-foreground));
   font: inherit;
-  font-size: 11.5px;
+  font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -821,7 +1066,7 @@
 
 .pp-step-label {
   color: hsl(var(--muted-foreground));
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 560;
 }
 
@@ -829,7 +1074,7 @@
   max-width: 300px;
   overflow: hidden;
   color: hsl(var(--muted-foreground));
-  font-size: 10.5px;
+  font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -858,7 +1103,7 @@
   border-radius: 5px;
   background: hsl(var(--destructive) / 0.06);
   color: hsl(var(--destructive));
-  font-size: 11.5px;
+  font-size: 12.5px;
   line-height: 1.5;
 }
 
@@ -873,8 +1118,8 @@
 .pp-deploy-result-header {
   margin-bottom: 12px;
   color: hsl(var(--foreground));
-  font-size: 12.5px;
-  font-weight: 680;
+  font-size: 13px;
+  font-weight: 650;
 }
 
 .pp-deploy-result-body {
@@ -891,14 +1136,14 @@
 
 .pp-deploy-result-field label {
   color: hsl(var(--muted-foreground));
-  font-size: 10.5px;
+  font-size: 12.5px;
 }
 
 .pp-deploy-result-field code {
   overflow-wrap: anywhere;
   color: hsl(var(--foreground));
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 11px;
+  font-size: 12.5px;
 }
 
 .pp-deploy-result-actions {
@@ -906,6 +1151,73 @@
   justify-content: flex-end;
   gap: 8px;
   margin-top: 14px;
+}
+
+.pp-confirm-dialog {
+  width: min(420px, calc(100vw - 40px));
+  height: auto;
+  min-height: 0;
+}
+
+.pp-confirm-head {
+  flex-basis: 60px;
+}
+
+.pp-confirm-icon {
+  background: hsl(38 92% 50% / 0.12);
+  color: hsl(32 92% 38%);
+}
+
+.pp-confirm-body {
+  padding: 24px 20px;
+}
+
+.pp-confirm-body p {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.pp-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid hsl(var(--border));
+}
+
+.pp-confirm-actions button {
+  min-width: 76px;
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pp-confirm-actions button:hover {
+  background: hsl(var(--secondary));
+}
+
+.pp-confirm-actions button:focus-visible {
+  outline: 2px solid hsl(var(--primary) / 0.34);
+  outline-offset: 2px;
+}
+
+.pp-confirm-actions .is-primary {
+  border-color: hsl(var(--primary));
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+
+.pp-confirm-actions .is-primary:hover {
+  background: hsl(var(--primary) / 0.9);
 }
 
 .pp-deploy-result-btn,
@@ -917,7 +1229,7 @@
   gap: 6px;
   padding: 0 11px;
   border-radius: 5px;
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 600;
   text-decoration: none;
   cursor: pointer;
@@ -946,9 +1258,8 @@
 }
 
 @media (max-width: 1120px) {
-  .pp-config {
-    flex-basis: 350px;
-    width: 350px;
+  .pp-root.is-deploy .pp-body {
+    grid-template-columns: minmax(235px, 3fr) minmax(470px, 7fr);
   }
 
   .pp-sidebar {
@@ -971,6 +1282,17 @@
   .pp-body {
     overflow-y: auto;
     flex-direction: column;
+  }
+
+  .pp-root.is-deploy .pp-body {
+    display: flex;
+  }
+
+  .pp-topology-pane {
+    flex: 0 0 auto;
+    min-height: 420px;
+    border-right: 0;
+    border-bottom: 1px solid hsl(var(--border));
   }
 
   .pp-files-area {

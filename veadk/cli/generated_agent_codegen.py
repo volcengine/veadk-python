@@ -161,7 +161,6 @@ class AgentDraft(BaseModel):
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     knowledgebase: bool = False
     tracing: bool = False
-    enableA2ui: bool = False
     subAgents: list["AgentDraft"] = Field(default_factory=list)
     builtinTools: list[str] = Field(default_factory=list)
     customTools: list[CustomTool] = Field(default_factory=list)
@@ -174,6 +173,16 @@ class AgentDraft(BaseModel):
     selectedSkills: list[SelectedSkill] = Field(default_factory=list)
     workflow: WorkflowConfig | None = None
     deployment: DeploymentConfig = Field(default_factory=DeploymentConfig)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _ignore_retired_a2ui_option(cls, value: Any) -> Any:
+        """Accept old Studio drafts without carrying A2UI into generation."""
+        if not isinstance(value, dict) or "enableA2ui" not in value:
+            return value
+        normalized = value.copy()
+        normalized.pop("enableA2ui")
+        return normalized
 
     @field_validator("maxIterations", mode="before")
     @classmethod
@@ -481,10 +490,6 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
                     EnvVar(exporter.enable_flag, True, "true", f"{exporter.label} 开关")
                 )
                 _add_env(acc, exporter.env)
-
-    if draft.enableA2ui:
-        kwargs.append("enable_a2ui=True")
-        acc.extras.add("a2ui")
 
     sub_vars: list[str] = []
     for idx, sub in enumerate(draft.subAgents):

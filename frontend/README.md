@@ -25,12 +25,16 @@ server that `veadk frontend` launches — no separate backend.
   expandable, copyable runner error details and review. Long descriptions and
   prompts scroll within bounded editors, while the sidebar stays pinned to the
   viewport. On narrow desktop windows, the structure, configuration, and debug
-  panels stack vertically instead of squeezing the form. Review
-  generated source with line numbers and syntax highlighting before setting
-  its region, message channel, network, environment variables, and deploying
-  to AgentKit. A global task list keeps Runtime, region, and progress visible
-  across page switches, follows the actual generated Runtime name, and supports
-  cancellation or retry. Remote topology and trace requests use the selected
+  panels stack vertically instead of squeezing the form. The deployment page
+  pairs an inspectable Agent topology with configuration export, source download,
+  and a code browser/editor dialog, while keeping region, message channel,
+  network, and environment settings primary. Local skills accept a dropped
+  folder or ZIP and detect the format automatically. Component forms omit credentials
+  VeADK can resolve automatically,
+  while the Studio server forwards its Volcengine credentials to debug runs and
+  deployed runtimes. A global task list keeps Runtime, region, and progress
+  visible across page switches, follows the actual generated Runtime name, and
+  supports cancellation or retry. Remote topology and trace requests use the selected
   Runtime endpoint.
 - **Auth**: optional VeIdentity SSO, or a local username for dev.
 - **Agent-driven UI (A2UI)**: when an agent emits A2UI, it renders as native

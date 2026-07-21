@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { Check, Info, Loader2, Plus, Search } from "lucide-react";
 import { searchSkills } from "./skills/skillhub";
 import type { SelectedSkill, SkillHit } from "./skills/types";
+import { displayDescription } from "./displayText";
 
 export function SkillHubPicker({
   selected,
@@ -79,7 +80,7 @@ export function SkillHubPicker({
           <input
             className="cw-input cw-skill-input"
             value={query}
-            placeholder="搜索 Skill Hub，例如 数据分析、PDF…"
+            placeholder="搜索火山 Find Skill 技能广场，例如 数据分析、PDF…"
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
@@ -135,7 +136,9 @@ export function SkillHubPicker({
                 <span className="cw-skill-result-meta">
                   <span className="cw-skill-result-name">{hit.name}</span>
                   {hit.description && (
-                    <span className="cw-skill-result-desc">{hit.description}</span>
+                    <span className="cw-skill-result-desc">
+                      {displayDescription(hit.description)}
+                    </span>
                   )}
                   {hit.sourceRepo && (
                     <span className="cw-skill-result-repo">{hit.sourceRepo}</span>
@@ -150,7 +153,7 @@ export function SkillHubPicker({
       ) : (
         !searched && (
           <p className="cw-empty-line">
-            输入关键词以搜索 Skill Hub，所选技能会在生成项目时下载到 skills/ 目录。
+            输入关键词搜索火山 Find Skill 技能广场，所选技能会在生成项目时下载到 skills/ 目录。
           </p>
         )
       )}

@@ -188,7 +188,6 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     tracingExporters: asStringArray(o.tracingExporters).filter((e) =>
       EXPORTER_IDS.has(e),
     ),
-    enableA2ui: asBool(o.enableA2ui),
     deployment: { feishuEnabled: asBool(deployment.feishuEnabled) },
     subAgents: parseSubAgents(o.subAgents),
     selectedSkills: parseSelectedSkills(o),

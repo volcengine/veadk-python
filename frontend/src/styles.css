@@ -84,7 +84,7 @@ body {
 
 /* ---------- sidebar ---------- */
 .sidebar {
-  width: 264px;
+  width: 236px;
   height: 100%;
   min-height: 0;
   flex-shrink: 0;
@@ -92,26 +92,74 @@ body {
   flex-direction: column;
   background: transparent; /* sits directly on the canvas; main floats beside it */
   position: relative; /* anchors the slide-out agent selector to the right edge */
+  transition: width 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.sidebar.is-collapsed {
+  width: 56px;
 }
 @media (max-width: 860px) {
   .sidebar {
-    width: 220px;
+    width: 204px;
   }
 }
 .sidebar-top {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 14px 10px 8px;
+  padding: 0 10px 8px;
+}
+.sidebar-brand-row {
+  height: 54px;
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 0 0 10px;
 }
 .brand {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 9px;
   font-weight: 600;
   font-size: 15px;
   letter-spacing: -0.01em;
-  padding: 4px 10px 12px;
+}
+.brand-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-collapse-toggle {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.sidebar-collapse-toggle:hover {
+  background: hsl(var(--foreground) / 0.06);
+  color: hsl(var(--foreground));
+}
+.sidebar-collapse-toggle .icon {
+  width: 17px;
+  height: 17px;
+}
+.sidebar.is-collapsed .sidebar-brand-row {
+  justify-content: center;
+  padding-inline: 0;
+}
+.sidebar.is-collapsed .brand {
+  display: none;
 }
 .brand-logo,
 .login-brand-logo {
@@ -142,6 +190,27 @@ body {
 }
 .new-chat .icon { width: 18px; height: 18px; }
 .new-chat:hover { background: hsl(var(--foreground) / 0.05); }
+
+.sidebar.is-collapsed .new-chat,
+.sidebar.is-collapsed .agent-row {
+  align-self: center;
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
+  gap: 0;
+  padding: 9px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.sidebar.is-collapsed .agent-row-name,
+.sidebar.is-collapsed .agent-row-region,
+.sidebar.is-collapsed .agent-row-chev,
+.sidebar.is-collapsed .sidebar-nav-label {
+  display: none;
+}
+.sidebar.is-collapsed .sidebar-history {
+  display: none;
+}
 
 /* ---------- agent picker (sidebar row + right-edge slide-out) ---------- */
 .agent-row {
@@ -395,7 +464,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 20px 6px;
+  padding: 8px 10px 6px 20px;
   font-size: 12px;
   font-weight: 500;
   color: hsl(var(--muted-foreground));
@@ -405,6 +474,26 @@ body {
   color: hsl(var(--muted-foreground)); display: flex;
 }
 .history-refresh:hover { color: hsl(var(--foreground)); }
+.history-new-chat {
+  width: 24px;
+  height: 24px;
+  margin: -4px 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition: color 0.12s;
+}
+.history-new-chat .icon { width: 15px; height: 15px; }
+.history-new-chat:hover {
+  background: transparent;
+  color: hsl(var(--foreground));
+}
 .history-list { flex: 1; overflow-y: auto; padding: 4px 10px 12px; display: flex; flex-direction: column; gap: 2px; }
 .history-empty { padding: 16px 8px; font-size: 13px; color: hsl(var(--muted-foreground)); text-align: center; }
 .history-item {
@@ -548,7 +637,26 @@ body {
   font-size: 26px;
   font-weight: 600;
   letter-spacing: -0.02em;
-  color: hsl(var(--foreground));
+  color: transparent;
+  background:
+    linear-gradient(
+      108deg,
+      hsl(220 16% 18%) 8%,
+      hsl(218 11% 32%) 36%,
+      hsl(42 8% 68%) 48%,
+      hsl(218 11% 32%) 59%,
+      hsl(220 16% 18%) 82%
+    );
+  background-size: 240% 100%;
+  background-position: 100% 50%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: welcome-smoke-shimmer 9s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+@keyframes welcome-smoke-shimmer {
+  0%, 12% { background-position: 100% 50%; }
+  52%, 72% { background-position: 0% 50%; }
+  100% { background-position: -100% 50%; }
 }
 .welcome .composer { padding: 0; }
 
@@ -1801,7 +1909,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 13px 10px 3px;
+  padding: 0 10px;
   background: transparent;
 }
 
@@ -2321,18 +2429,52 @@ body {
 .account-avatar {
   width: 32px; height: 32px;
   flex-shrink: 0;
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
   border: none;
-  border-radius: 50%;
-  background: hsl(var(--primary));
-  color: hsl(var(--primary-foreground));
+  border-radius: 9px;
+  background:
+    radial-gradient(
+      circle at var(--avatar-x, 32%) var(--avatar-y, 30%),
+      hsl(var(--avatar-hue-a, 202) 100% 92%) 0 12%,
+      hsl(var(--avatar-hue-a, 202) 95% 75% / 0.76) 34%,
+      transparent 62%
+    ),
+    radial-gradient(
+      ellipse at 82% 78%,
+      hsl(var(--avatar-hue-c, 185) 86% 49% / 0.88) 0 18%,
+      transparent 58%
+    ),
+    linear-gradient(
+      142deg,
+      hsl(var(--avatar-hue-b, 222) 94% 83%),
+      hsl(var(--avatar-hue-b, 222) 95% 54%) 52%,
+      hsl(var(--avatar-hue-c, 185) 74% 62%)
+    );
+  background-size: 180% 180%, 160% 160%, 100% 100%;
+  background-position: 20% 12%, 80% 80%, center;
+  color: hsl(218 54% 18% / 0.88);
   display: flex; align-items: center; justify-content: center;
   font-size: 13px; font-weight: 600;
   cursor: pointer;
-  transition: opacity 0.12s;
+  text-shadow: 0 1px 2px hsl(0 0% 100% / 0.62);
+  box-shadow: none;
+  animation: avatar-smoke-drift 9s ease-in-out infinite alternate;
+  transition: filter 0.16s, transform 0.16s;
 }
-.account-avatar:hover { opacity: 0.88; }
+.account-avatar:hover {
+  filter: saturate(1.12) brightness(1.03);
+  transform: scale(1.035);
+}
+@keyframes avatar-smoke-drift {
+  0% { background-position: 18% 12%, 82% 84%, center; }
+  50% { background-position: 58% 42%, 54% 62%, center; }
+  100% { background-position: 82% 70%, 26% 24%, center; }
+}
 .account-avatar--lg {
   width: 40px; height: 40px;
+  border-radius: 11px;
   font-size: 16px;
   cursor: default;
 }
@@ -2405,6 +2547,27 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.sidebar.is-collapsed .sidebar-user-btn {
+  width: 36px;
+  height: 36px;
+  justify-content: center;
+  gap: 0;
+  padding: 2px;
+  overflow: hidden;
+}
+.sidebar.is-collapsed .sidebar-user-name {
+  display: none;
+}
+.sidebar.is-collapsed .sidebar-user-pop {
+  left: 8px;
+  right: auto;
+  width: 220px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar {
+    transition: none;
+  }
 }
 /* popover opens UPWARD (the footer is at the very bottom) */
 .sidebar-user-pop {
@@ -2695,6 +2858,33 @@ a.search-result { text-decoration: none; color: inherit; }
   font-weight: 700;
   line-height: 1.2;
   letter-spacing: -0.02em;
+  color: transparent;
+  background:
+    linear-gradient(
+      108deg,
+      hsl(220 16% 16%) 8%,
+      hsl(218 11% 30%) 36%,
+      hsl(42 8% 66%) 48%,
+      hsl(218 11% 30%) 59%,
+      hsl(220 16% 16%) 82%
+    );
+  background-size: 240% 100%;
+  background-position: 100% 50%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: welcome-smoke-shimmer 9s 0.6s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .welcome-title,
+  .login-title,
+  .account-avatar {
+    animation: none;
+  }
+  .welcome-title,
+  .login-title {
+    background-position: 45% 50%;
+  }
 }
 .login-sub { margin: 0 0 28px; color: hsl(var(--muted-foreground)); font-size: 15px; }
 .login-btn {

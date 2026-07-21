@@ -16,6 +16,7 @@ import {
   type SkillSpaceSkill,
 } from "./skills/skillspace";
 import type { SelectedSkill, SkillHit } from "./skills/types";
+import { displayDescription } from "./displayText";
 
 export function SkillSpacePicker({
   selected,
@@ -121,7 +122,7 @@ export function SkillSpacePicker({
     <div className="cw-skillspace">
       {loading ? (
         <p className="cw-empty-line">
-          <Loader2 className="cw-i cw-spin" /> 正在加载 SkillSpace 列表…
+          <Loader2 className="cw-i cw-spin" /> 正在加载 AgentKit Skills 中心…
         </p>
       ) : error ? (
         <div className="cw-banner">
@@ -129,7 +130,7 @@ export function SkillSpacePicker({
           <span>{error}</span>
         </div>
       ) : spaces.length === 0 ? (
-        <p className="cw-empty-line">此账号下没有 SkillSpace。</p>
+        <p className="cw-empty-line">此账号下没有 AgentKit Skills 中心。</p>
       ) : (
         <>
           <div className="cw-skillspace-header">
@@ -137,13 +138,13 @@ export function SkillSpacePicker({
               className="cw-input cw-skillspace-select"
               value={spaceId}
               onChange={(e) => setSpaceId(e.target.value)}
-              aria-label="选择 SkillSpace"
+              aria-label="选择 AgentKit Skills 中心"
             >
               {spaces.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name || s.id}
                   {s.region ? ` [${s.region}]` : ""}
-                  {s.description ? ` — ${s.description}` : ""}
+                  {s.description ? ` — ${displayDescription(s.description)}` : ""}
                 </option>
               ))}
             </select>
@@ -166,7 +167,7 @@ export function SkillSpacePicker({
               <Loader2 className="cw-i cw-spin" /> 正在加载技能列表…
             </p>
           ) : skills.length === 0 ? (
-            <p className="cw-empty-line">此 SkillSpace 暂无技能。</p>
+            <p className="cw-empty-line">此 AgentKit Skills 中心暂无技能。</p>
           ) : (
             <div className="cw-skill-results">
               {skills.map((sk) => {
@@ -198,7 +199,7 @@ export function SkillSpacePicker({
                       </span>
                       {sk.skillDescription && (
                         <span className="cw-skill-result-desc">
-                          {sk.skillDescription}
+                          {displayDescription(sk.skillDescription)}
                         </span>
                       )}
                       <span className="cw-skill-result-repo">
