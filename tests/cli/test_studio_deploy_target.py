@@ -19,6 +19,9 @@ from unittest.mock import Mock
 import pytest
 from click.testing import CliRunner
 from volcenginesdkcore.rest import ApiException
+from volcenginesdkcore.interceptor.interceptors.build_request_interceptor import (
+    sanitize_for_serialization,
+)
 
 from veadk.cli.cli_frontend import _resolve_studio_identity_region, studio
 from veadk.config import veadk_environments
@@ -65,10 +68,17 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
 
         def deploy(self, **kwargs: object) -> SimpleNamespace:
             return SimpleNamespace(
-                vefaas_endpoint="",
+                vefaas_endpoint="https://studio.example.com",
                 vefaas_application_id="app-id",
                 vefaas_function_id="",
             )
+
+    class _FakeIdentityClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def register_callback_for_user_pool_client(self, **kwargs: object) -> None:
+            captured["callback"] = kwargs
 
     monkeypatch.setattr(
         "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
@@ -76,6 +86,10 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     monkeypatch.setattr(
         "veadk.cli.cli_frontend._resolve_studio_identity_region",
         lambda **_: expected_identity_region,
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient",
+        _FakeIdentityClient,
     )
 
     result = CliRunner().invoke(
@@ -108,6 +122,10 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert ("Warning:" in result.output) == (
         expected_identity_region != expected_region
     )
+    callback = captured["callback"]
+    assert isinstance(callback, dict)
+    assert callback["dismiss_login_page_enabled"] is False
+    assert callback["skip_consent_enabled"] is True
 
 
 def test_studio_identity_region_searches_deployment_region_first(
@@ -159,6 +177,71 @@ def test_identity_region_probe_only_swallows_not_found() -> None:
     )
     with pytest.raises(ApiException):
         identity_client.user_pool_client_exists("pool-id", "client-id")
+
+
+@pytest.mark.parametrize(
+    ("switches", "expected_switches"),
+    [
+        ({}, {}),
+        (
+            {
+                "dismiss_login_page_enabled": False,
+                "skip_consent_enabled": True,
+            },
+            {
+                "DismissLoginPageEnabled": False,
+                "SkipConsentEnabled": True,
+            },
+        ),
+    ],
+)
+def test_register_callback_only_sends_requested_login_switches(
+    switches: dict[str, bool],
+    expected_switches: dict[str, bool],
+) -> None:
+    identity_client = IdentityClient(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+    )
+    identity_client._api_client = Mock()
+    identity_client._api_client.get_user_pool_client.return_value = SimpleNamespace(
+        allowed_callback_urls=["https://existing.example.com/oauth2/callback"],
+        allowed_web_origins=["https://existing.example.com"],
+        name="studio-client",
+        description=None,
+        allowed_logout_urls=None,
+        allowed_cors=None,
+        id_token=None,
+        refresh_token=None,
+    )
+
+    identity_client.register_callback_for_user_pool_client(
+        user_pool_uid="pool-id",
+        client_uid="client-id",
+        callback_url="https://studio.example.com/oauth2/callback",
+        web_origin="https://studio.example.com",
+        **switches,
+    )
+
+    update_request = identity_client._api_client.update_user_pool_client.call_args.args[
+        0
+    ]
+    assert update_request.user_pool_uid == "pool-id"
+    assert update_request.client_uid == "client-id"
+    assert update_request.allowed_callback_urls == [
+        "https://existing.example.com/oauth2/callback",
+        "https://studio.example.com/oauth2/callback",
+    ]
+    assert update_request.allowed_web_origins == [
+        "https://existing.example.com",
+        "https://studio.example.com",
+    ]
+    serialized_request = sanitize_for_serialization(update_request)
+    for key in ("DismissLoginPageEnabled", "SkipConsentEnabled"):
+        assert (key in serialized_request) == (key in expected_switches)
+    assert {
+        key: serialized_request[key] for key in expected_switches
+    } == expected_switches
 
 
 def test_studio_deploy_rejects_unsupported_region() -> None:

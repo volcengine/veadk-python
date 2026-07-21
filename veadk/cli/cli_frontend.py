@@ -3420,6 +3420,8 @@ def frontend_deploy(
                     client_uid=allowed_client_id,
                     callback_url=redirect_uri,
                     web_origin=url,
+                    dismiss_login_page_enabled=False,
+                    skip_consent_enabled=True,
                 )
                 click.echo(f"Registered SSO callback: {redirect_uri}")
             except Exception as e:

@@ -827,6 +827,9 @@ class IdentityClient:
         client_uid: str,
         callback_url: str,
         web_origin: str,
+        *,
+        dismiss_login_page_enabled: bool | None = None,
+        skip_consent_enabled: bool | None = None,
     ):
         from volcenginesdkid import (
             GetUserPoolClientRequest,
@@ -862,6 +865,8 @@ class IdentityClient:
             allowed_cors=response.allowed_cors,
             id_token=response.id_token,
             refresh_token=response.refresh_token,
+            dismiss_login_page_enabled=dismiss_login_page_enabled,
+            skip_consent_enabled=skip_consent_enabled,
         )
         self._api_client.update_user_pool_client(request2)
 

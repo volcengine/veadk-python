@@ -123,6 +123,10 @@ Non-streaming frontend API requests use a 30-second deadline, while file
 transfers use 120 seconds. Chat, debug, and deployment progress streams remain
 open until the server finishes or the caller explicitly cancels them.
 
+`veadk studio deploy` keeps the VeIdentity login page enabled and enables the
+client's skip-consent setting when it registers the deployed callback URL. This
+avoids presenting a second authorization confirmation after login.
+
 ## Multimodal media
 
 The composer accepts PNG, JPEG, WebP, GIF, TXT, Markdown, PDF, MP4, WebM, and
