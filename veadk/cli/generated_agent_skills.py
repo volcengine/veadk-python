@@ -119,7 +119,12 @@ async def _materialize_skillspace_skill(
     if not skill.skillSpaceId or not skill.skillId:
         raise DebugPolicyError("SkillSpace skill is missing ids")
     folder = _safe_folder(skill.folder or skill.name or skill.skillId)
-    skill_md = await resolver(skill.skillSpaceId, skill.skillId, skill.version or None, skill.skillSpaceRegion or None)
+    skill_md = await resolver(
+        skill.skillSpaceId,
+        skill.skillId,
+        skill.version or None,
+        skill.skillSpaceRegion or None,
+    )
     _validate_skill_md(skill_md, f"SkillSpace skill {skill.skillId}")
     return [GeneratedFile(path=f"skills/{folder}/SKILL.md", content=skill_md)]
 

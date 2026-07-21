@@ -2839,18 +2839,22 @@ def _run_frontend_server(
                     ListSkillSpacesRequest(page_number=1, page_size=50)
                 )
                 for s in resp.items or []:
-                    all_items.append({
-                        "id": s.id or "",
-                        "name": s.name or "",
-                        "description": s.description or "",
-                        "status": s.status or "",
-                        "region": reg,
-                    })
+                    all_items.append(
+                        {
+                            "id": s.id or "",
+                            "name": s.name or "",
+                            "description": s.description or "",
+                            "status": s.status or "",
+                            "region": reg,
+                        }
+                    )
             except HTTPException:
                 raise
             except Exception as e:
                 logger.error(f"ListSkillSpaces error for {reg}: {e}", exc_info=True)
-                raise HTTPException(status_code=502, detail=f"SkillSpaces API error for {reg}: {e}")
+                raise HTTPException(
+                    status_code=502, detail=f"SkillSpaces API error for {reg}: {e}"
+                )
 
         return {
             "items": all_items,
@@ -2874,9 +2878,12 @@ def _run_frontend_server(
             raise
         except Exception as e:
             logger.error(
-                f"ListSkillsBySkillSpace({space_id}) error for {region}: {e}", exc_info=True
+                f"ListSkillsBySkillSpace({space_id}) error for {region}: {e}",
+                exc_info=True,
             )
-            raise HTTPException(status_code=502, detail=f"SkillSpaces API error for {region}: {e}")
+            raise HTTPException(
+                status_code=502, detail=f"SkillSpaces API error for {region}: {e}"
+            )
 
         items = list(resp.items or [])
         return {
