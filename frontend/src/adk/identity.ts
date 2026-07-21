@@ -148,3 +148,9 @@ export function displayName(info?: Record<string, unknown>): string {
   if (!info) return "";
   return String(info.name ?? info.preferred_username ?? info.email ?? info.sub ?? "");
 }
+
+/** Standard OIDC profile picture URL, when provided by the identity service. */
+export function profilePictureUrl(info?: Record<string, unknown>): string {
+  const picture = info?.picture;
+  return typeof picture === "string" ? picture.trim() : "";
+}
