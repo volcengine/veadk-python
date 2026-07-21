@@ -73,7 +73,7 @@ export function LoginPage({ branding, onUsername }: LoginPageProps) {
             </div>
           ) : providers === null ? null : providers.length > 0 ? (
             <>
-              <p className="login-sub">登录以继续使用 {branding.title}</p>
+              <p className="login-sub">登录以继续使用</p>
               <div className="login-providers">
                 {providers.map((p) => (
                   <button key={p.id} className="login-btn" onClick={() => loginTo(p.loginUrl)}>
@@ -119,7 +119,7 @@ export function LoginPage({ branding, onUsername }: LoginPageProps) {
           )}
 
           <p className="login-legal">继续即表示你已阅读并同意服务条款与隐私政策</p>
-          <p className="login-powered">火山引擎 VeADK 提供企业级 Agent 解决方案</p>
+          <p className="login-powered">火山引擎 AgentKit 提供企业级 Agent 解决方案</p>
         </div>
       </main>
 

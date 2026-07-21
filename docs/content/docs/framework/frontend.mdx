@@ -244,6 +244,9 @@ Google 同理，把 `OAUTH2_PROVIDER` 换成 `google`；Keycloak / Auth0 / Okta 
   部署到 runtime / 公网时，OAuth 回调必须指向外部可访问的地址：把 `OAUTH2_REDIRECT_URI` 设为公网回调 URL，并在 OAuth 应用里登记同一地址。Cookie 的 `Secure` 标志会根据该地址是否为 HTTPS 自动开启。
 </Callout>
 
+SSO 引导语固定为“登录以继续使用”，不追加系统名称；登录页底部使用
+“火山引擎 AgentKit 提供企业级 Agent 解决方案”品牌文案。
+
 **无 SSO（本地用户名）** —— 不传上述参数时，登录页会让用户输入一个用户名（字母 + 数字，≤16 位），保存在本地并作为 `user_id`。
 
 <Callout type="info">
