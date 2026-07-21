@@ -1,0 +1,54 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Docs Autogen
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  trigger-docs-autogen:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger docs autogen
+        env:
+          DOCS_AUTOGEN_URL: ${{ vars.DOCS_AUTOGEN_URL }}
+          DOCS_AUTOGEN_TOKEN: ${{ secrets.DOCS_AUTOGEN_TOKEN }}
+          BASE_REF: ${{ github.event.before }}
+          HEAD_REF: ${{ github.event.after }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$DOCS_AUTOGEN_URL" ]; then
+            echo "DOCS_AUTOGEN_URL repository variable is not configured." >&2
+            exit 1
+          fi
+
+          if [ -z "$DOCS_AUTOGEN_TOKEN" ]; then
+            echo "DOCS_AUTOGEN_TOKEN repository secret is not configured." >&2
+            exit 1
+          fi
+
+          command="DOCS_REPO_URL=git@github.com:yaozheng-fang/docs.git CODE_REPO_PATH=git@github.com:volcengine/veadk-python.git DOCS_PROJECT=veadk BASE_REF=${BASE_REF} HEAD_REF=${HEAD_REF} OUTPUT_MODE=commit_and_mr bash scripts/run-docs-autogen.sh"
+          payload="$(jq -n --arg command "$command" --arg cwd "." '{command: $command, cwd: $cwd, async: false}')"
+
+          curl --fail --show-error --silent -X POST "$DOCS_AUTOGEN_URL" \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${DOCS_AUTOGEN_TOKEN}" \
+            -d "$payload"
