@@ -191,6 +191,12 @@ VeADK provides several useful command line tools for faster deployment and optim
   Shanghai, and select the VeFaaS project with `--project` (default `default`);
   custom local or remote logo images are bundled into the deployment; the
   deployed client skips the second OAuth consent confirmation after login
+- `veadk studio update --vefaas-app-name <app-name>`: build the frontend from a
+  local VeADK source checkout and release it through the existing VeFaaS
+  Application and Function. Omit `--region` and `--project` to search Beijing,
+  Shanghai, and all visible projects. Existing URL, SSO, IAM, gateway,
+  environment variables, title, and logo are preserved; pass `--site-title` or
+  `--site-logo` only when those branding values should be replaced
 
 ## Contribution
 

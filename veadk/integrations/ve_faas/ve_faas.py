@@ -17,6 +17,7 @@ import time
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Any, cast
 from cookiecutter.main import cookiecutter
 import veadk.integrations.ve_faas as vefaas
 from veadk.version import VERSION
@@ -198,7 +199,7 @@ class VeFaaS:
             sk=self.sk,
             service="vefaas",
             version="2021-03-03",
-            region="cn-beijing",
+            region=self.region,
             host="open.volcengineapi.com",
         )
 
@@ -239,7 +240,7 @@ class VeFaaS:
             sk=self.sk,
             service="vefaas",
             version="2021-03-03",
-            region="cn-beijing",
+            region=self.region,
             host="open.volcengineapi.com",
         )
         return response["Result"]["Status"], response
@@ -272,7 +273,7 @@ class VeFaaS:
                     sk=self.sk,
                     service="vefaas",
                     version="2021-03-03",
-                    region="cn-beijing",
+                    region=self.region,
                     host="open.volcengineapi.com",
                 )
                 result = response.get("Result", {})
@@ -291,6 +292,52 @@ class VeFaaS:
                     f"List application failed. Error: {str(e)}. Response: {response}."
                 )
         return all_items
+
+    def update_application_code_bundle(
+        self,
+        *,
+        application_id: str,
+        function_id: str,
+        path: str,
+        environment_overrides: dict[str, str] | None = None,
+    ) -> str:
+        """Replace an application's function bundle and release it.
+
+        Existing function settings are left untouched. When environment overrides
+        are provided, they are merged with the complete current environment before
+        updating the function.
+
+        Args:
+            application_id: Existing VeFaaS Application ID.
+            function_id: Function ID referenced by the Application.
+            path: Prepared function bundle directory.
+            environment_overrides: Environment values to explicitly replace.
+
+        Returns:
+            The existing Application URL after the new revision is released.
+        """
+        request_options: dict[str, Any] = {"id": function_id}
+        if environment_overrides:
+            function = cast(
+                Any,
+                self.client.get_function(
+                    volcenginesdkvefaas.GetFunctionRequest(id=function_id)
+                ),
+            )
+            environment = {
+                item.key: item.value for item in (getattr(function, "envs", None) or [])
+            }
+            environment.update(environment_overrides)
+            request_options["envs"] = [
+                volcenginesdkvefaas.EnvForUpdateFunctionInput(key=key, value=value)
+                for key, value in environment.items()
+            ]
+
+        self._upload_and_mount_code(function_id, path)
+        self.client.update_function(
+            volcenginesdkvefaas.UpdateFunctionRequest(**request_options)
+        )
+        return self._release_application(application_id)
 
     def _update_function_code(
         self,
