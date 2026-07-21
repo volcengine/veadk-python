@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Optional
+
 from google.adk.tools import ToolContext
 
 from veadk.tools.builtin_tools._agentkit import (
@@ -27,6 +29,7 @@ logger = get_logger(__name__)
 def execute_skills(
     workflow_prompt: str,
     tool_context: ToolContext = None,
+    env_vars: Optional[dict[str, str]] = None,
 ) -> str:
     """Execute skills in a sandbox and return the output.
 
@@ -34,6 +37,8 @@ def execute_skills(
 
     Args:
         workflow_prompt (str): instruction of workflow
+        env_vars (Optional[dict[str, str]]): Environment variables passed to the
+            skill agent process for this execution only.
 
     Returns:
         str: The output of the code execution.
@@ -47,6 +52,8 @@ def execute_skills(
         extra_env_vars["TOS_SKILLS_DIR"] = (
             f"tos://agentkit-platform-{account_id}/skills/"
         )
+    if env_vars:
+        extra_env_vars.update(env_vars)
 
     return run_sandbox_agent(
         workflow_prompt=workflow_prompt,

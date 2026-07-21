@@ -21,9 +21,10 @@ from veadk.tools.builtin_tools._agentkit import (
     resolve_agentkit_tool_id,
 )
 from veadk.tools.builtin_tools.run_sandbox_agent import (
-    _format_execution_result,
     _build_agent_command,
     _build_agent_runner_code,
+    _format_execution_result,
+    _merge_execution_env_vars,
 )
 from veadk.utils.logger import get_logger
 from veadk.tools.builtin_tools._agentkit import (
@@ -40,6 +41,7 @@ def execute_skills(
     runtime: ToolRuntime,
     skills: Optional[List[str]] = None,
     timeout: int = 900,
+    env_vars: Optional[dict[str, str]] = None,
 ) -> str:
     """execute skills in a code sandbox and return the output.
     For C++ code, don't execute it directly, compile and execute via Python; write sources and object files to /tmp.
@@ -48,6 +50,8 @@ def execute_skills(
         workflow_prompt (str): instruction of workflow
         skills (Optional[List[str]]): The skills will be invoked
         timeout (int, optional): The timeout in seconds for the code execution, less than or equal to 900. Defaults to 900.
+        env_vars (Optional[dict[str, str]]): Environment variables passed to the
+            skill agent process for this execution only.
 
     Returns:
         str: The output of the code execution.
@@ -74,14 +78,17 @@ def execute_skills(
         logger.error(f"Error occurred while getting account id: {e}")
         return {"error": str(e)}
 
-    env_vars = {"TOOL_USER_SESSION_ID": tool_user_session_id}
+    base_env_vars = {"TOOL_USER_SESSION_ID": tool_user_session_id}
     if account_id:
-        env_vars["TOS_SKILLS_DIR"] = f"tos://agentkit-platform-{account_id}/skills/"
+        base_env_vars["TOS_SKILLS_DIR"] = (
+            f"tos://agentkit-platform-{account_id}/skills/"
+        )
+    execution_env_vars = _merge_execution_env_vars(base_env_vars, env_vars)
 
     code = _build_agent_runner_code(
         cmd=cmd,
         timeout=timeout,
-        env_vars=env_vars,
+        env_vars=execution_env_vars,
     )
 
     res = invoke_agentkit_run_code(
@@ -91,7 +98,8 @@ def execute_skills(
         timeout=timeout,
         kernel_name="python3",
     )
-    logger.debug(f"Invoke run code response: {res}")
+    # The response can echo the submitted runner code, including custom env values.
+    logger.debug("Invoke run code completed")
 
     try:
         return _format_execution_result(res["Result"]["Result"])
