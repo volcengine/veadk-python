@@ -167,6 +167,9 @@ veadk studio deploy \
 用户池；跨地域命中时会显示 warning 并继续。`--project` 指定 VeFaaS 函数
 所属项目，默认为 `default`。
 
+部署注册回调地址时会保留 VeIdentity 登录页，并为该客户端开启跳过授权确认，
+避免用户登录后再次确认授权。
+
 ### `veadk studio deploy` 的 IAM 权限
 
 部署命令会先检查 `ServerlessApplicationRole`。如果该 Role 不存在，终端会显示

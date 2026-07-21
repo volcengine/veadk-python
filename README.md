@@ -189,7 +189,8 @@ VeADK provides several useful command line tools for faster deployment and optim
   policies; target `cn-beijing` (default) or `cn-shanghai` with
   `--region`, automatically locate the Identity user pool across Beijing and
   Shanghai, and select the VeFaaS project with `--project` (default `default`);
-  custom local or remote logo images are bundled into the deployment
+  custom local or remote logo images are bundled into the deployment; the
+  deployed client skips the second OAuth consent confirmation after login
 
 ## Contribution
 

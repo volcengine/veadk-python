@@ -182,6 +182,10 @@ then searches the Beijing and Shanghai Identity regions. A cross-region match
 emits a warning and continues. `--project` selects the VeFaaS function project
 and defaults to `default`.
 
+When deployment registers the callback URL, it keeps the VeIdentity login page
+enabled and enables skip-consent for that client. This avoids showing a second
+authorization confirmation after login.
+
 ### IAM permissions for `veadk studio deploy`
 
 The deploy command first checks `ServerlessApplicationRole`. If the role is
