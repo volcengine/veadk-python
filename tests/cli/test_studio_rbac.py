@@ -111,6 +111,12 @@ def test_parse_role_members_normalizes_csv() -> None:
     }
 
 
+def test_studio_role_behaves_as_a_python_310_string_enum() -> None:
+    assert isinstance(StudioRole.ADMIN, str)
+    assert str(StudioRole.ADMIN) == "admin"
+    assert json.dumps({"role": StudioRole.ADMIN}) == '{"role": "admin"}'
+
+
 def test_role_matching_uses_all_trusted_identifiers_and_admin_wins() -> None:
     principal = StudioPrincipal.from_claims(
         {

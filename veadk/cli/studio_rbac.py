@@ -17,16 +17,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
 from typing import Any, Mapping
 
 
-class StudioRole(StrEnum):
+class StudioRole(str, Enum):
     """Roles exposed by Studio's access endpoint."""
 
     ADMIN = "admin"
     DEVELOPER = "developer"
     USER = "user"
+
+    def __str__(self) -> str:
+        """Return the wire-format role name."""
+        return self.value
 
 
 def parse_role_members(value: str | None) -> frozenset[str]:
