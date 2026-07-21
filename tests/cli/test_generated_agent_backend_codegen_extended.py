@@ -831,3 +831,65 @@ def test_studio_deploy_run_script_allows_generated_agent_debug() -> None:
     assert "studio --auth-mode frontend" in run_script
     assert '--site-logo "$ROOT_DIR/site-logo.png"' in run_script
     assert "--allow-remote-generated-agent-test-run" not in run_script
+
+
+def test_agentkit_app_adds_dynamic_a2a_tools_per_run() -> None:
+    source = Path("veadk/integrations/agentkit/app.py").read_text()
+
+    assert "build_remote_a2a_agent_tools(prompt, registry_config)" in source
+    assert "def _spawn_dynamic_a2a_agent(" in source
+    assert "def _configure_dynamic_a2a_routes(" in source
+    assert '@app.post("/run_sse")' in source
+    assert '@app.post("/run", response_model=None)' in source
+
+
+def test_generated_agent_test_runner_enables_dynamic_a2a_helper() -> None:
+    source = Path("veadk/cli/generated_agent_test_runner.py").read_text()
+
+    assert "get_fast_api_app" in source
+    assert "_bind_adk_server_services(app)" in source
+    assert "_veadk_adk_server" in source
+    assert "dynamic_a2a" in source
+    assert "helper.enable_dynamic_a2a_tools(app, root_agent)" in source
+
+
+def test_agentkit_dynamic_a2a_tools_use_user_prompt_once(monkeypatch) -> None:
+    from veadk import Agent
+    from veadk.a2a.registry_client import AgentKitA2ARegistryConfig
+    from veadk.integrations.agentkit import app as agentkit_app
+    from veadk.tools.builtin_tools import a2a_registry
+
+    calls: list[str] = []
+
+    def fake_build_remote_a2a_agent_tools(prompt, config):
+        calls.append(prompt)
+        assert config.space_id == "space-test"
+
+        def remote_a2a_reliability_review(input: str):
+            return {"input": input}
+
+        return [remote_a2a_reliability_review]
+
+    monkeypatch.setattr(
+        a2a_registry,
+        "build_remote_a2a_agent_tools",
+        fake_build_remote_a2a_agent_tools,
+    )
+    agent = Agent(name="demo", instruction="x", model_api_key="fake")
+    setattr(
+        agent,
+        "_veadk_a2a_registry_config",
+        AgentKitA2ARegistryConfig(space_id="space-test"),
+    )
+
+    cloned = agentkit_app._spawn_dynamic_a2a_agent(
+        agent,
+        "你是否拥有 remote_a2a 开头的工具？",
+    )
+
+    assert calls == [
+        "你是否拥有 remote_a2a 开头的工具？",
+    ]
+    assert "remote_a2a_reliability_review" in {
+        getattr(tool, "__name__", "") for tool in cloned.tools
+    }

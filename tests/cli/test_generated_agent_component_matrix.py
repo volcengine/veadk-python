@@ -221,11 +221,24 @@ def test_a2a_registry_center_generates_tools_and_env() -> None:
         )
     )
     files = _files(project)
+    app_py = files["app.py"]
     agent_py = files["agents/a2a_center/agent.py"]
+    dynamic_py = files["agents/a2a_center/dynamic_a2a.py"]
 
+    assert "enable_dynamic_a2a_tools(app, root_agent)" in app_py
+    assert "from veadk.a2a.registry_client import registry_config_from_env" in agent_py
     assert "from veadk.tools.builtin_tools.a2a_registry import" in agent_py
+    assert "a2a_registry_config_agent = registry_config_from_env()" in agent_py
     assert "build_a2a_registry_tools" in agent_py
-    assert "tools=[*build_a2a_registry_tools()]" in agent_py
+    assert "tools=[*a2a_registry_tools_agent]" in agent_py
+    assert (
+        'setattr(agent, "_veadk_a2a_registry_config", a2a_registry_config_agent)'
+        in agent_py
+    )
+    assert "build_remote_a2a_agent_tools(prompt, registry_config)" in dynamic_py
+    assert "_ADK_SERVER_STATE_KEY" in dynamic_py
+    assert "_DYNAMIC_A2A_ROUTES_ENABLED_STATE_KEY" in dynamic_py
+    assert '@app.post("/run_sse")' in dynamic_py
     assert _env_keys(files[".env.example"]) == _catalog_env_keys(
         MODEL_ENV,
         A2A_REGISTRY_ENV,
@@ -233,6 +246,33 @@ def test_a2a_registry_center_generates_tools_and_env() -> None:
     assert "REGISTRY_TOP_K=3" in files[".env.example"]
     assert "REGISTRY_REGION=cn-beijing" in files[".env.example"]
     assert "REGISTRY_ENDPOINT=https://open.volcengineapi.com/" in files[".env.example"]
+    _assert_python_files_compile(project)
+
+
+def test_nested_a2a_registry_agent_generates_dynamic_helper() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="root-sequential",
+            agentType="sequential",
+            subAgents=[
+                AgentDraft(
+                    name="registry-worker",
+                    a2aRegistry={
+                        "enabled": True,
+                        "registrySpaceId": "space-test",
+                    },
+                )
+            ],
+        )
+    )
+    files = _files(project)
+
+    assert "agents/root_sequential/dynamic_a2a.py" in files
+    assert "enable_dynamic_a2a_tools(app, root_agent)" in files["app.py"]
+    assert (
+        "_has_a2a_registry_config(child)"
+        in files["agents/root_sequential/dynamic_a2a.py"]
+    )
     _assert_python_files_compile(project)
 
 
