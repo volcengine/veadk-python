@@ -121,6 +121,90 @@ def test_ui_config_serves_custom_branding(
     assert logo_response.content == logo
 
 
+def test_runtime_list_paginates_across_regions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    calls: list[tuple[str, str, int]] = []
+    runtimes = {
+        "cn-beijing": [
+            ("beijing-new", "2026-07-21T05:00:00Z"),
+            ("beijing-mid", "2026-07-21T03:00:00Z"),
+            ("beijing-old", "2026-07-21T01:00:00Z"),
+        ],
+        "cn-shanghai": [
+            ("shanghai-new", "2026-07-21T06:00:00Z"),
+            ("shanghai-old", "2026-07-21T02:00:00Z"),
+        ],
+    }
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.region = kwargs["region"]
+
+        def list_runtimes(self, request: Any) -> SimpleNamespace:
+            offset = int(getattr(request, "next_token", "") or 0)
+            page_size = request.max_results
+            calls.append((self.region, str(offset), page_size))
+            source = runtimes[self.region]
+            page = source[offset : offset + page_size]
+            page_end = offset + len(page)
+            return SimpleNamespace(
+                agent_kit_runtimes=[
+                    SimpleNamespace(
+                        name=name,
+                        runtime_id=f"runtime-{name}",
+                        status="Ready",
+                        created_at=created_at,
+                        tags=[],
+                    )
+                    for name, created_at in page
+                ],
+                next_token=str(page_end) if page_end < len(source) else "",
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient", _FakeRuntimeClient
+    )
+
+    with TestClient(app) as client:
+        first = client.get("/web/runtimes", params={"region": "all", "page_size": 2})
+        first_calls = list(calls)
+        second = client.get(
+            "/web/runtimes",
+            params={
+                "region": "all",
+                "page_size": 2,
+                "next_token": first.json()["nextToken"],
+            },
+        )
+        third = client.get(
+            "/web/runtimes",
+            params={
+                "region": "all",
+                "page_size": 2,
+                "next_token": second.json()["nextToken"],
+            },
+        )
+
+    assert [item["name"] for item in first.json()["runtimes"]] == [
+        "shanghai-new",
+        "beijing-new",
+    ]
+    assert sorted(first_calls) == [
+        ("cn-beijing", "0", 2),
+        ("cn-shanghai", "0", 2),
+    ]
+    assert first.json()["nextToken"] == "all:2"
+    assert [item["name"] for item in second.json()["runtimes"]] == [
+        "beijing-mid",
+        "shanghai-old",
+    ]
+    assert second.json()["nextToken"] == "all:4"
+    assert [item["name"] for item in third.json()["runtimes"]] == ["beijing-old"]
+    assert third.json()["nextToken"] == ""
+
+
 @pytest.mark.parametrize(
     ("authorizer", "expected_authorization"),
     [

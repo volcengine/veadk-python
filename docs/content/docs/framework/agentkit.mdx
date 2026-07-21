@@ -29,6 +29,12 @@ app = create_agentkit_app(
 `/web/agent-graph` 和内置 Web UI。完整生成结果可参考
 [`examples/generated_agentkit_project`](https://github.com/volcengine/veadk-python/tree/main/examples/generated_agentkit_project)。
 
+`/web/agent-info/{app_name}` 会返回根 Agent 的名称、描述、模型、子 Agent、
+Tools、Skills 和已挂载组件摘要；`/web/agent-graph` 的每个节点也包含对应的
+Skills、组件、路径与是否可在对话中选择。Studio 的每个 Runtime 条目都提供独立的
+连接和信息操作；点击信息图标会展开详情面板，可通过 Tab 切换 Agent 实时信息和
+Runtime 控制面信息。接口不会返回系统提示词、凭据、环境变量值或任意对象序列化内容。
+
 ## 步骤
 
 <Steps>

@@ -91,6 +91,8 @@ def test_create_agentkit_app_preserves_platform_route_contract() -> None:
         "type": "llm",
         "model": "doubao-model",
         "tools": ["search_orders"],
+        "skills": [],
+        "components": [],
         "subAgents": ["订单助手"],
         "graph": {
             "id": "agent",
@@ -99,6 +101,10 @@ def test_create_agentkit_app_preserves_platform_route_contract() -> None:
             "type": "llm",
             "model": "doubao-model",
             "tools": ["search_orders"],
+            "skills": [],
+            "components": [],
+            "path": ["agent"],
+            "mentionable": True,
             "children": [
                 {
                     "id": "agent_sub_1",
@@ -107,6 +113,10 @@ def test_create_agentkit_app_preserves_platform_route_contract() -> None:
                     "type": "llm",
                     "model": "child-model",
                     "tools": [],
+                    "skills": [],
+                    "components": [],
+                    "path": ["agent", "agent_sub_1"],
+                    "mentionable": True,
                     "children": [],
                 }
             ],
@@ -114,6 +124,56 @@ def test_create_agentkit_app_preserves_platform_route_contract() -> None:
     }
     assert client.get("/web/agent-info/unknown").status_code == 404
     assert client.get("/web/agent-graph").json()["graph"] == info.json()["graph"]
+
+
+def test_agent_info_exposes_mounted_skills_and_components() -> None:
+    root_agent = _root_agent()
+    setattr(
+        root_agent,
+        "skills_dict",
+        {
+            "refund-orders": SimpleNamespace(
+                name="refund-orders",
+                description="Handle refund requests.",
+            )
+        },
+    )
+    setattr(
+        root_agent,
+        "knowledgebase",
+        SimpleNamespace(
+            index="support-docs",
+            description="Customer support documentation.",
+        ),
+    )
+    setattr(root_agent, "long_term_memory", SimpleNamespace(backend="viking"))
+    setattr(root_agent, "tracers", [SimpleNamespace(name="apm-tracer")])
+    setattr(root_agent, "plugins", [SimpleNamespace(name="audit-plugin")])
+
+    info = TestClient(agentkit_app.create_agentkit_app(root_agent)).get(
+        "/web/agent-info/agent"
+    )
+
+    assert info.status_code == 200
+    assert info.json()["skills"] == [
+        {"name": "refund-orders", "description": "Handle refund requests."}
+    ]
+    assert info.json()["components"] == [
+        {
+            "kind": "knowledgebase",
+            "name": "support-docs",
+            "description": "Customer support documentation.",
+        },
+        {
+            "kind": "memory",
+            "name": "SimpleNamespace",
+            "description": "backend: viking",
+        },
+        {"kind": "tracer", "name": "apm-tracer"},
+        {"kind": "plugin", "name": "audit-plugin"},
+    ]
+    assert info.json()["graph"]["skills"] == info.json()["skills"]
+    assert info.json()["graph"]["components"] == info.json()["components"]
 
 
 def test_create_agentkit_app_reuses_agent_memory_and_configures_feishu(

@@ -97,6 +97,12 @@ app = create_agentkit_app(root_agent)
 See [`examples/generated_agentkit_project`](examples/generated_agentkit_project)
 for a complete generated project.
 
+The Agent Server metadata endpoint reports the root Agent's name, description,
+model, sub-Agents, tools, skills, and mounted component summaries. Each Runtime
+row in Studio has explicit connect and info actions; the info panel's tabs switch
+between this live metadata and control-plane information without exposing prompts
+or credentials.
+
 The Studio deployment flow lists Feishu, knowledge-base, short-/long-term
 memory, and observability settings in their feature sections. Values entered
 there are mirrored in the deployment environment-variable summary and converted
