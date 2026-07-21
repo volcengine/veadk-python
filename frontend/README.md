@@ -110,6 +110,15 @@ Login state is cached: SSO via the `veadk_session` cookie, local mode via
 `localStorage`. The session itself is created lazily on the first message or
 attachment upload.
 
+Identity and provider discovery failures are shown as retryable errors. The UI
+only offers local username login after `/web/auth-config` successfully returns
+an empty provider list; network and gateway failures never silently change the
+authentication mode.
+
+Non-streaming frontend API requests use a 30-second deadline, while file
+transfers use 120 seconds. Chat, debug, and deployment progress streams remain
+open until the server finishes or the caller explicitly cancels them.
+
 ## Multimodal media
 
 The composer accepts PNG, JPEG, WebP, GIF, TXT, Markdown, PDF, MP4, WebM, and

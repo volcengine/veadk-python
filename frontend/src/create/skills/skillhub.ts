@@ -7,6 +7,11 @@
 // Skills are downloaded as a zip and unpacked client-side into project files.
 
 import type { ProjectFile } from "../project";
+import {
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  requestSignal,
+  TRANSFER_REQUEST_TIMEOUT_MS,
+} from "../../adk/timeout";
 import type { SkillHit, SelectedSkill } from "./types";
 import { unzip } from "./zip";
 
@@ -30,7 +35,10 @@ export async function searchSkills(
 ): Promise<SkillHit[]> {
   const q = query.trim();
   const url = `${BASE}?query=${encodeURIComponent(q)}&namespace=${encodeURIComponent(namespace)}`;
-  const res = await fetch(url, { headers: { accept: "application/json" } });
+  const res = await fetch(url, {
+    headers: { accept: "application/json" },
+    signal: requestSignal(undefined, DEFAULT_REQUEST_TIMEOUT_MS),
+  });
   if (!res.ok) throw new Error(`搜索失败 (${res.status})`);
   const data = (await res.json()) as { Skills?: RawSkill[] };
   return (data.Skills ?? []).map((s) => ({
@@ -53,7 +61,9 @@ export async function downloadSkillHubSkill(
   const slug = s.slug || "";
   const namespace = s.namespace || "public";
   const url = `${BASE}/download/${slug}?namespace=${encodeURIComponent(namespace)}`;
-  const res = await fetch(url);
+  const res = await fetch(url, {
+    signal: requestSignal(undefined, TRANSFER_REQUEST_TIMEOUT_MS),
+  });
   if (!res.ok) throw new Error(`下载技能失败 (${res.status})`);
   const buf = new Uint8Array(await res.arrayBuffer());
   const entries = await unzip(buf);

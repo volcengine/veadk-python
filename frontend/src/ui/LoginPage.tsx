@@ -17,11 +17,27 @@ export interface LoginPageProps {
 
 export function LoginPage({ branding, onUsername }: LoginPageProps) {
   const [providers, setProviders] = useState<Provider[] | null>(null);
+  const [providerError, setProviderError] = useState("");
+  const [providerAttempt, setProviderAttempt] = useState(0);
   const [name, setName] = useState("");
 
   useEffect(() => {
-    fetchProviders().then(setProviders);
-  }, []);
+    let active = true;
+    setProviders(null);
+    setProviderError("");
+    fetchProviders()
+      .then((nextProviders) => {
+        if (active) setProviders(nextProviders);
+      })
+      .catch((error) => {
+        if (active) {
+          setProviderError(error instanceof Error ? error.message : String(error));
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [providerAttempt]);
 
   const valid = USERNAME_RE.test(name);
   const submit = () => {
@@ -48,7 +64,14 @@ export function LoginPage({ branding, onUsername }: LoginPageProps) {
         <div className="login-card">
           <h1 className="login-title">{branding.title}</h1>
 
-          {providers === null ? null : providers.length > 0 ? (
+          {providerError ? (
+            <div className="login-provider-error" role="alert">
+              <p>{providerError}</p>
+              <button type="button" onClick={() => setProviderAttempt((attempt) => attempt + 1)}>
+                重试
+              </button>
+            </div>
+          ) : providers === null ? null : providers.length > 0 ? (
             <>
               <p className="login-sub">登录以继续使用 {branding.title}</p>
               <div className="login-providers">

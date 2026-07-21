@@ -210,6 +210,16 @@ function turnAwaitingAuth(turn: Turn): boolean {
  *  falls back to asking the user to paste the callback URL. */
 function runOAuthPopup(authUri: string): Promise<string> {
   return new Promise((resolve, reject) => {
+    let protocol = "";
+    try {
+      protocol = new URL(authUri, window.location.href).protocol;
+    } catch {
+      // Invalid URLs are rejected with unsupported schemes below.
+    }
+    if (protocol !== "http:" && protocol !== "https:") {
+      reject(new Error("授权链接不是 http/https 地址，已阻止打开。"));
+      return;
+    }
     const popup = window.open(authUri, "veadk_oauth", "width=520,height=720");
     if (!popup) {
       reject(new Error("弹窗被拦截，请允许弹窗后重试。"));
@@ -540,6 +550,7 @@ export default function App() {
   const [traceOpen, setTraceOpen] = useState(false);
   const [greeting, setGreeting] = useState(pickGreeting);
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [userId, setUserId] = useState("");
   const [userInfo, setUserInfo] = useState<Record<string, unknown> | undefined>();
   // Per-module feature gates (studio mode disables chat-centric modules).
@@ -757,14 +768,22 @@ export default function App() {
   const { ref: scrollRef, onScroll } = useStickToBottom<HTMLDivElement>(turns);
 
   // Resolve SSO identity first; it provides the ADK user_id.
-  useEffect(() => {
-    resolveIdentity().then((id) => {
-      setUserId(id.userId);
-      setUserInfo(id.info);
-      setLocalMode(!!id.local);
-      setAuthStatus(id.status);
-    });
+  const resolveAuth = useCallback(() => {
+    setAuthError(null);
+    resolveIdentity()
+      .then((id) => {
+        setUserId(id.userId);
+        setUserInfo(id.info);
+        setLocalMode(!!id.local);
+        setAuthStatus(id.status);
+      })
+      .catch((error) => {
+        setAuthError(error instanceof Error ? error.message : String(error));
+      });
   }, []);
+  useEffect(() => {
+    resolveAuth();
+  }, [resolveAuth]);
 
   // Load per-module feature gates; studio mode lands on the add-agent page.
   useEffect(() => {
@@ -797,12 +816,14 @@ export default function App() {
 
   // Check whether the server has Volcengine AK/SK (needed by the workbench).
   useEffect(() => {
-    fetch("/web/runtime-config")
+    fetch("/web/runtime-config", { signal: AbortSignal.timeout(10_000) })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (d) setHasCreds(!!d.credentials);
       })
-      .catch(() => {});
+      .catch((error) => {
+        console.warn("[app] /web/runtime-config probe failed; workbench stays hidden:", error);
+      });
   }, []);
 
   function onUsername(name: string) {
@@ -1278,6 +1299,16 @@ export default function App() {
     }
   }
 
+  if (authError) {
+    return (
+      <div className="boot boot-error">
+        <p>{authError}</p>
+        <button type="button" onClick={resolveAuth}>
+          重试
+        </button>
+      </div>
+    );
+  }
   if (authStatus === null) {
     return <div className="boot" />; // resolving identity
   }

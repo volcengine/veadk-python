@@ -357,6 +357,17 @@
   word-break: break-all;
 }
 
+.manage-env-masked {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: hsl(var(--muted-foreground));
+  font: inherit;
+  letter-spacing: 2px;
+  cursor: pointer;
+  user-select: none;
+}
+
 .manage-tree-note {
   font-size: 12px;
   color: hsl(var(--muted-foreground));

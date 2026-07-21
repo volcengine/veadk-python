@@ -5,6 +5,11 @@
 import { withAuth } from "./auth";
 import { formatRunSseError } from "./runSseError";
 import { parseSSE } from "./sse";
+import {
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  requestSignal,
+  TRANSFER_REQUEST_TIMEOUT_MS,
+} from "./timeout";
 import type { AgentProject } from "../create/project";
 import type { AgentDraft } from "../create/types";
 
@@ -165,19 +170,25 @@ function resolve(appName: string): { app: string; ep: AdkEndpoint } {
  *     the apikey; apikey never reaches the browser).
  *  2. `base` + `apiKey` → backend `/agentkit-proxy` (legacy, key in header).
  *  3. neither → the local same-origin server. */
-function apiFetch(path: string, init: RequestInit = {}, ep: AdkEndpoint = {}): Promise<Response> {
+function apiFetch(
+  path: string,
+  init: RequestInit = {},
+  ep: AdkEndpoint = {},
+  timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
+): Promise<Response> {
+  const opts = { ...init, signal: requestSignal(init.signal, timeoutMs) };
   if (ep.runtimeId) {
     const rq = ep.region ? `${path.includes("?") ? "&" : "?"}region=${encodeURIComponent(ep.region)}` : "";
-    return fetch(withAuth(`${API_BASE}/web/runtime-proxy/${ep.runtimeId}${path}${rq}`), init);
+    return fetch(withAuth(`${API_BASE}/web/runtime-proxy/${ep.runtimeId}${path}${rq}`), opts);
   }
   if (ep.base) {
     // Use backend proxy to avoid CORS issues with remote AgentKit
     const headers: Record<string, string> = { ...(init.headers as Record<string, string>) };
     headers["X-AgentKit-Base"] = ep.base;
     if (ep.apiKey) headers["X-AgentKit-Key"] = ep.apiKey;
-    return fetch(withAuth(`${API_BASE}/agentkit-proxy${path}`), { ...init, headers });
+    return fetch(withAuth(`${API_BASE}/agentkit-proxy${path}`), { ...opts, headers });
   }
-  return fetch(withAuth(`${API_BASE}${path}`), init);
+  return fetch(withAuth(`${API_BASE}${path}`), opts);
 }
 
 function formatErrorDetail(detail: unknown): string {
@@ -310,7 +321,12 @@ export async function uploadMedia(
   body.set("user_id", userId);
   body.set("session_id", sessionId);
   body.set("file", file);
-  const res = await apiFetch("/web/media", { method: "POST", body });
+  const res = await apiFetch(
+    "/web/media",
+    { method: "POST", body },
+    {},
+    TRANSFER_REQUEST_TIMEOUT_MS,
+  );
   if (!res.ok) throw new Error(await httpErrorMessage(res, "文件上传失败"));
   const media = (await res.json()) as {
     id: string;
@@ -561,6 +577,7 @@ export async function* runSSE({
       signal,
     },
     ep,
+    0,
   );
   if (!res.ok) throw new Error(formatRunSseError(`run_sse failed: ${res.status}`));
   for await (const evt of parseSSE(res)) {
@@ -647,20 +664,25 @@ export async function deployAgentkitProject(
 
   let res: Response;
   try {
-    res = await apiFetch("/web/deploy-agentkit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller?.signal,
-      body: JSON.stringify({
-        name,
-        files,
-        config,
-        taskId,
-        author: opts?.author ?? "",
-        im: opts?.im,
-        envs: opts?.envs,
-      }),
-    });
+    res = await apiFetch(
+      "/web/deploy-agentkit",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller?.signal,
+        body: JSON.stringify({
+          name,
+          files,
+          config,
+          taskId,
+          author: opts?.author ?? "",
+          im: opts?.im,
+          envs: opts?.envs,
+        }),
+      },
+      {},
+      0,
+    );
   } catch (error) {
     clearController();
     throw error;
@@ -1004,17 +1026,22 @@ export async function* runGeneratedAgentTestSSE({
   signal?: AbortSignal;
 }): AsyncGenerator<AdkEvent, void, unknown> {
   const parts: Record<string, unknown>[] = text.trim() ? [{ text }] : [];
-  const res = await apiFetch(`/web/generated-agent-test-runs/${runId}/run_sse`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      user_id: userId,
-      session_id: sessionId,
-      new_message: { role: "user", parts },
-      streaming: true,
-    }),
-    signal,
-  });
+  const res = await apiFetch(
+    `/web/generated-agent-test-runs/${runId}/run_sse`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        user_id: userId,
+        session_id: sessionId,
+        new_message: { role: "user", parts },
+        streaming: true,
+      }),
+      signal,
+    },
+    {},
+    0,
+  );
   if (!res.ok) throw new Error(await httpErrorMessage(res, "调试运行失败"));
   for await (const evt of parseSSE(res)) {
     yield evt as AdkEvent;

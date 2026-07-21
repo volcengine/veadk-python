@@ -11,28 +11,44 @@ export async function* parseSSE(
   const decoder = new TextDecoder();
   let buffer = "";
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
 
-    // SSE frames are separated by a blank line.
-    let sep: number;
-    while ((sep = buffer.indexOf("\n\n")) !== -1) {
-      const frame = buffer.slice(0, sep);
-      buffer = buffer.slice(sep + 2);
-      const data = frame
-        .split("\n")
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trimStart())
-        .join("\n");
-      if (data) {
-        try {
-          yield JSON.parse(data);
-        } catch {
-          // Ignore non-JSON keep-alive frames.
+      // SSE frames use a blank line separator. Accept both LF and CRLF.
+      let separator = buffer.match(/\r?\n\r?\n/);
+      while (separator?.index !== undefined) {
+        const frame = buffer.slice(0, separator.index);
+        buffer = buffer.slice(separator.index + separator[0].length);
+        const data = frame
+          .split(/\r?\n/)
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trimStart())
+          .join("\n");
+        if (data) {
+          try {
+            yield JSON.parse(data);
+          } catch {
+            if (data !== "[DONE]" && data !== "ping") {
+              console.debug(
+                `parseSSE: dropping unparseable frame (${data.length} chars):`,
+                data.slice(0, 200),
+              );
+            }
+          }
         }
+        separator = buffer.match(/\r?\n\r?\n/);
       }
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      // The response may already be closed; cleanup must not mask its result.
+    } finally {
+      reader.releaseLock();
     }
   }
 }
