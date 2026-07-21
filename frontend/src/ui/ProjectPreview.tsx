@@ -10,9 +10,9 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+  AlertTriangle,
   ArrowLeft,
   ChevronRight,
-  CloudUpload,
   Download,
   ExternalLink,
   Eye,
@@ -53,8 +53,17 @@ hljs.registerLanguage("ini", ini);
 hljs.registerLanguage("dockerfile", dockerfile);
 hljs.registerLanguage("makefile", makefile);
 import type { AgentProject, ProjectFile } from "../create/project";
-import type { NetworkConfig } from "../create/types";
-import { FEISHU_ENV, type EnvVar } from "../create/veadkCatalog";
+import type { AgentDraft, NetworkConfig } from "../create/types";
+import { agentTypeMeta } from "../create/agentTypeMeta";
+import {
+  FEISHU_ENV,
+  findExporter,
+  findKb,
+  findLtm,
+  findStm,
+  findTool,
+  type EnvVar,
+} from "../create/veadkCatalog";
 import {
   firstMissingRuntimeEnv,
   runtimeEnvDisplayRows,
@@ -62,10 +71,91 @@ import {
 } from "../create/deploymentEnv";
 import type { DeployStage } from "../adk/client";
 import { buildZip } from "./zip";
+import { ProjectCodeBrowser } from "./CodeBrowserDialog";
+import { DeployIcon } from "./DeployIcon";
 import { DeploymentErrorMessage } from "./DeploymentErrorMessage";
 import "./ProjectPreview.css";
 
 const CodeEditor = lazy(() => import("./CodeEditor"));
+
+interface DeploymentConfirmDialogProps {
+  open: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}
+
+function DeploymentConfirmDialog({
+  open,
+  onCancel,
+  onConfirm,
+}: DeploymentConfirmDialogProps) {
+  const cancelButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    cancelButtonRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onCancel, open]);
+
+  if (!open) return null;
+
+  return createPortal(
+    <div
+      className="code-browser-backdrop pp-confirm-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onCancel();
+      }}
+    >
+      <section
+        className="code-browser-dialog pp-confirm-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="pp-confirm-title"
+        aria-describedby="pp-confirm-description"
+      >
+        <header className="code-browser-head pp-confirm-head">
+          <div className="code-browser-title-wrap">
+            <span className="code-browser-title-icon pp-confirm-icon" aria-hidden="true">
+              <AlertTriangle />
+            </span>
+            <h2 id="pp-confirm-title">确认部署</h2>
+          </div>
+          <button
+            type="button"
+            className="code-browser-close"
+            onClick={onCancel}
+            aria-label="关闭部署确认"
+          >
+            <X aria-hidden="true" />
+          </button>
+        </header>
+        <div className="pp-confirm-body">
+          <p id="pp-confirm-description">
+            部署后暂不支持修改 Agent 配置，确定部署吗？
+          </p>
+        </div>
+        <footer className="pp-confirm-actions">
+          <button ref={cancelButtonRef} type="button" onClick={onCancel}>
+            取消
+          </button>
+          <button type="button" className="is-primary" onClick={onConfirm}>
+            确定部署
+          </button>
+        </footer>
+      </section>
+    </div>,
+    document.body,
+  );
+}
 
 // --- syntax highlighting ----------------------------------------------------
 
@@ -168,6 +258,157 @@ const DEPLOY_STEPS: { phase: string; label: string }[] = [
   { phase: "publish", label: "发布" },
 ];
 
+type TopologyAgentType = NonNullable<AgentDraft["agentType"]>;
+
+interface TopologyAgent {
+  id: string;
+  name: string;
+  type: TopologyAgentType;
+  description: string;
+  model: string;
+  tools: string;
+  skills: string;
+  knowledgebase: string;
+  shortTerm: string;
+  longTerm: string;
+  tracing: string;
+  children: TopologyAgent[];
+}
+
+function trimDescription(value: string): string {
+  return value.trim().replace(/[。.!！]+$/u, "");
+}
+
+function displayConfig(
+  values: (string | undefined)[],
+  emptyValue = "未配置",
+): string {
+  const configured = [...new Set(values.map((value) => value?.trim()).filter(Boolean))];
+  return configured.join("、") || emptyValue;
+}
+
+function buildTopologyAgent(node: AgentDraft, id = "root"): TopologyAgent {
+  const type = node.agentType ?? "llm";
+  const tools = [
+    ...(node.builtinTools ?? []).map((toolId) => findTool(toolId)?.label ?? toolId),
+    ...(node.customTools ?? []).map((tool) => tool.name),
+    ...(node.mcpTools ?? []).map((tool) => tool.name),
+    ...(node.tools ?? []),
+  ];
+  const skills = [
+    ...(node.selectedSkills ?? []).map((skill) => skill.name),
+    ...(node.skills ?? []),
+  ];
+  const longTermBackend = node.memory.longTerm
+    ? findLtm(node.longTermBackend ?? "local")?.label ?? node.longTermBackend
+    : undefined;
+
+  return {
+    id,
+    name: node.name.trim() || "未命名 Agent",
+    type,
+    description: trimDescription(node.description),
+    model: type === "llm" ? node.modelName || node.model || "默认模型" : "不适用",
+    tools: displayConfig(tools),
+    skills: displayConfig(skills),
+    knowledgebase: node.knowledgebase
+      ? findKb(node.knowledgebaseBackend ?? "local")?.label ??
+        node.knowledgebaseBackend ??
+        "默认知识库"
+      : "未配置",
+    shortTerm: node.memory.shortTerm
+      ? findStm(node.shortTermBackend ?? "local")?.label ??
+        node.shortTermBackend ??
+        "默认后端"
+      : "未配置",
+    longTerm: longTermBackend
+      ? `${longTermBackend}${node.autoSaveSession ? " · 自动保存会话" : ""}`
+      : "未配置",
+    tracing: node.tracing
+      ? displayConfig(
+          (node.tracingExporters ?? []).map(
+            (exporterId) => findExporter(exporterId)?.label ?? exporterId,
+          ),
+          "默认观测",
+        )
+      : "未配置",
+    children: node.subAgents.map((child, index) =>
+      buildTopologyAgent(child, `${id}.${index}`),
+    ),
+  };
+}
+
+function findTopologyAgent(
+  root: TopologyAgent,
+  id: string,
+): TopologyAgent | undefined {
+  if (root.id === id) return root;
+  for (const child of root.children) {
+    const match = findTopologyAgent(child, id);
+    if (match) return match;
+  }
+  return undefined;
+}
+
+function TopologyNode({
+  agent,
+  depth,
+  inspectedId,
+  onHover,
+  onFocus,
+}: {
+  agent: TopologyAgent;
+  depth: number;
+  inspectedId: string | null;
+  onHover: (id: string | null) => void;
+  onFocus: (id: string | null) => void;
+}) {
+  const meta = agentTypeMeta(agent.type);
+  const Icon = meta.icon;
+  return (
+    <div className="pp-topology-branch">
+      <button
+        type="button"
+        className={`pp-agent-node${agent.id === inspectedId ? " is-inspected" : ""}`}
+        style={{
+          marginLeft: depth * 16,
+          width: `calc(100% - ${depth * 16}px)`,
+        }}
+        onMouseEnter={() => onHover(agent.id)}
+        onMouseLeave={() => onHover(null)}
+        onFocus={() => onFocus(agent.id)}
+        onBlur={() => onFocus(null)}
+        aria-label={`查看 ${agent.name} 配置`}
+      >
+        <span className="pp-agent-node-icon">
+          <Icon aria-hidden="true" />
+        </span>
+        <span className="pp-agent-node-main">
+          <span className="pp-agent-node-name">{agent.name}</span>
+          <span className="pp-agent-node-type">{meta.label}</span>
+        </span>
+        {agent.children.length > 0 && (
+          <span className="pp-agent-child-count">{agent.children.length}</span>
+        )}
+      </button>
+      {agent.children.length > 0 && (
+        <div className="pp-topology-children">
+          {agent.children.map((child) => (
+            <TopologyNode
+              key={child.id}
+              agent={child}
+              depth={depth + 1}
+              inspectedId={inspectedId}
+              onHover={onHover}
+              onFocus={onFocus}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export interface DeployOptions {
   taskId?: string;
   im?: {
@@ -199,6 +440,8 @@ export interface DeploymentTaskUpdate {
 
 export interface ProjectPreviewProps {
   project: AgentProject;
+  /** Draft tree displayed as the Agent topology on the deployment page. */
+  agentDraft?: AgentDraft;
   /** Main Agent display name. Generated project names may be normalized. */
   agentName?: string;
   /** Root Agent plus all recursively nested sub-Agents. */
@@ -328,6 +571,7 @@ function ProjectHeaderPortal({
 
 export function ProjectPreview({
   project,
+  agentDraft,
   agentName,
   agentCount,
   onChange,
@@ -356,6 +600,7 @@ export function ProjectPreview({
   const [adding, setAdding] = useState(false);
   const [newPath, setNewPath] = useState("");
   const [deploying, setDeploying] = useState(false);
+  const [deployConfirmOpen, setDeployConfirmOpen] = useState(false);
   const [feishuUpdating, setFeishuUpdating] = useState(false);
   const [deployError, setDeployError] = useState<string | null>(null);
   const [deployResult, setDeployResult] = useState<DeployResult | null>(null);
@@ -366,7 +611,35 @@ export function ProjectPreview({
   const [addingAgent, setAddingAgent] = useState(false);
   const [envRows, setEnvRows] = useState<EnvRow[]>([]);
   const [showEnvValues, setShowEnvValues] = useState(false);
+  const [hoveredAgentId, setHoveredAgentId] = useState<string | null>(null);
+  const [focusedAgentId, setFocusedAgentId] = useState<string | null>(null);
   const mountedRef = useRef(true);
+
+  const topology = useMemo<TopologyAgent>(() => {
+    if (agentDraft) return buildTopologyAgent(agentDraft);
+    return {
+      id: "root",
+      name: agentName || project?.name || "未命名 Agent",
+      type: "llm",
+      description: "",
+      model: "默认模型",
+      tools: "未配置",
+      skills: "未配置",
+      knowledgebase: "未配置",
+      shortTerm: "未配置",
+      longTerm: "未配置",
+      tracing: "未配置",
+      children: [],
+    };
+  }, [agentDraft, agentName, project?.name]);
+  const inspectedAgentId = focusedAgentId ?? hoveredAgentId;
+  const inspectedAgent = inspectedAgentId
+    ? findTopologyAgent(topology, inspectedAgentId)
+    : undefined;
+  const inspectedAgentMeta = inspectedAgent
+    ? agentTypeMeta(inspectedAgent.type)
+    : undefined;
+  const InspectedAgentIcon = inspectedAgentMeta?.icon;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -394,6 +667,7 @@ export function ProjectPreview({
     feishuEnabled ? [...deploymentEnv, ...FEISHU_ENV] : deploymentEnv,
     deploymentEnvValues,
   );
+  const environmentVariableCount = automaticEnvRows.length + envRows.length;
 
   function toggleFolder(key: string) {
     setCollapsed((prev) => {
@@ -509,7 +783,7 @@ export function ProjectPreview({
     }
   }
 
-  async function handleDeploy() {
+  async function requestDeploymentConfirmation() {
     if (!onDeploy || deploying) return;
     if (networkMode !== "public" && !network?.vpcId?.trim()) {
       setDeployError("使用 VPC 网络时，请填写 VPC ID。");
@@ -524,7 +798,6 @@ export function ProjectPreview({
       setDeployError(`请返回配置页填写 ${env?.comment || env?.key}（${env?.key}）。`);
       return;
     }
-    const envs = deployEnvVars();
     if (feishuEnabled) {
       const missingFeishuEnv = firstMissingRuntimeEnv(
         FEISHU_ENV,
@@ -536,6 +809,13 @@ export function ProjectPreview({
         return;
       }
     }
+    setDeployConfirmOpen(true);
+  }
+
+  async function performDeployment() {
+    if (!onDeploy || deploying) return;
+    setDeployConfirmOpen(false);
+    const envs = deployEnvVars();
     if (mountedRef.current) {
       setDeployError(null);
       setDeployResult(null);
@@ -628,11 +908,15 @@ export function ProjectPreview({
         status: "error",
         label: "部署失败",
         message,
-        retry: handleDeploy,
+        retry: requestDeploymentConfirmation,
       });
     } finally {
       if (mountedRef.current) setDeploying(false);
     }
+  }
+
+  function cancelDeploymentConfirmation() {
+    setDeployConfirmOpen(false);
   }
 
   async function handleAddAgent() {
@@ -788,6 +1072,78 @@ export function ProjectPreview({
       )}
 
       <div className="pp-body">
+        {onDeploy && (
+          <section className="pp-topology-pane" aria-label="Agent 拓扑">
+            <div className="pp-topology-head">
+              <div>
+                <div className="pp-topology-title">Agent 拓扑</div>
+                <div className="pp-topology-count">
+                  {agentCount ?? 1} 个智能体
+                </div>
+              </div>
+              {editable && onChange && (
+                <ProjectCodeBrowser project={project} onChange={onChange} />
+              )}
+            </div>
+            <div className="pp-topology-scroll">
+              <div className="pp-topology-tree">
+                <TopologyNode
+                  agent={topology}
+                  depth={0}
+                  inspectedId={inspectedAgentId}
+                  onHover={setHoveredAgentId}
+                  onFocus={setFocusedAgentId}
+                />
+              </div>
+              {inspectedAgent && inspectedAgentMeta && InspectedAgentIcon && (
+                <div className="pp-agent-inspector" aria-live="polite">
+                  <div className="pp-agent-inspector-head">
+                    <span className="pp-agent-inspector-icon">
+                      <InspectedAgentIcon aria-hidden="true" />
+                    </span>
+                    <div>
+                      <strong>{inspectedAgent.name}</strong>
+                      <span>{inspectedAgentMeta.label}</span>
+                    </div>
+                  </div>
+                  {inspectedAgent.description && (
+                    <p>{inspectedAgent.description}</p>
+                  )}
+                  <dl className="pp-agent-config-grid">
+                    <dt>模型</dt>
+                    <dd>{inspectedAgent.model}</dd>
+                    <dt>工具</dt>
+                    <dd>{inspectedAgent.tools}</dd>
+                    <dt>技能</dt>
+                    <dd>{inspectedAgent.skills}</dd>
+                    <dt>知识库</dt>
+                    <dd>{inspectedAgent.knowledgebase}</dd>
+                    <dt>短期记忆</dt>
+                    <dd>{inspectedAgent.shortTerm}</dd>
+                    <dt>长期记忆</dt>
+                    <dd>{inspectedAgent.longTerm}</dd>
+                    <dt>观测</dt>
+                    <dd>{inspectedAgent.tracing}</dd>
+                  </dl>
+                </div>
+              )}
+            </div>
+            <div className="pp-topology-actions">
+              {onExportYaml && (
+                <button type="button" className="pp-secondary" onClick={onExportYaml}>
+                  <FileDown className="pp-ic" />
+                  导出配置
+                </button>
+              )}
+              {project.files.length > 0 && (
+                <button type="button" className="pp-secondary" onClick={handleDownloadZip}>
+                  <Download className="pp-ic" />
+                  下载源码
+                </button>
+              )}
+            </div>
+          </section>
+        )}
         <div className="pp-files-area">
           <div className="pp-sidebar">
             <div className="pp-sidebar-head">
@@ -1004,7 +1360,12 @@ export function ProjectPreview({
               <section className="pp-config-section pp-env-section">
                 <div className="pp-env-head">
                   <div>
-                    <div className="pp-config-label">环境变量</div>
+                    <div className="pp-config-label">
+                      环境变量
+                      <span className="pp-agent-child-count pp-env-count">
+                        {environmentVariableCount} 项
+                      </span>
+                    </div>
                     <div className="pp-env-sub">
                       组件配置会自动同步到这里，部署前可核对最终值。
                     </div>
@@ -1018,93 +1379,6 @@ export function ProjectPreview({
                     {showEnvValues ? <EyeOff className="pp-ic" /> : <Eye className="pp-ic" />}
                   </button>
                 </div>
-                <div className="pp-env-table">
-                  {automaticEnvRows.length > 0 && (
-                    <div className="pp-env-group">
-                      <div className="pp-env-group-head">
-                        <span>组件自动生成</span>
-                        <small>{automaticEnvRows.length} 项</small>
-                      </div>
-                      {automaticEnvRows.map((row) => {
-                        const fixed = row.key.startsWith("ENABLE_");
-                        return (
-                          <div
-                            className="pp-env-row pp-env-row-derived"
-                            key={row.key}
-                          >
-                            <input
-                              className="pp-env-key-fixed"
-                              value={row.key}
-                              readOnly
-                              disabled={deploying}
-                              aria-label={`${row.key} 环境变量名`}
-                            />
-                            <input
-                              type={fixed || showEnvValues ? "text" : "password"}
-                              value={row.value}
-                              placeholder={row.required ? "必填，尚未填写" : "可选，尚未填写"}
-                              readOnly={fixed}
-                              disabled={
-                                deploying || (!fixed && !onDeploymentEnvChange)
-                              }
-                              autoComplete="off"
-                              aria-label={`${row.key} 环境变量值`}
-                              onChange={(event) =>
-                                onDeploymentEnvChange?.(
-                                  row.key,
-                                  event.currentTarget.value,
-                                )
-                              }
-                            />
-                            <span className="pp-env-source">
-                              {fixed ? "自动" : "同步"}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                  {envRows.length > 0 && (
-                    <div className="pp-env-group-head pp-env-group-head-custom">
-                      <span>自定义变量</span>
-                      <small>{envRows.length} 项</small>
-                    </div>
-                  )}
-                  {automaticEnvRows.length === 0 && envRows.length === 0 ? (
-                    <div className="pp-env-empty">暂无环境变量</div>
-                  ) : (
-                    envRows.map((row) => {
-                      return (
-                        <div className="pp-env-row" key={row.id}>
-                          <input
-                            value={row.key}
-                            placeholder="KEY"
-                            disabled={deploying}
-                            autoComplete="off"
-                            onChange={(e) => updateEnvRow(row.id, { key: e.currentTarget.value })}
-                          />
-                          <input
-                            type={showEnvValues ? "text" : "password"}
-                            value={row.value}
-                            placeholder="VALUE"
-                            disabled={deploying}
-                            autoComplete="off"
-                            onChange={(e) => updateEnvRow(row.id, { value: e.currentTarget.value })}
-                          />
-                          <button
-                            type="button"
-                            className="pp-icon-btn pp-env-remove"
-                            title="删除变量"
-                            disabled={deploying}
-                            onClick={() => removeEnvRow(row.id)}
-                          >
-                            <X className="pp-ic" />
-                          </button>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
                 <button
                   type="button"
                   className="pp-env-add"
@@ -1114,6 +1388,89 @@ export function ProjectPreview({
                   <Plus className="pp-ic" />
                   添加变量
                 </button>
+                {(automaticEnvRows.length > 0 || envRows.length > 0) && (
+                  <div className="pp-env-table">
+                    {automaticEnvRows.length > 0 && (
+                      <div className="pp-env-group">
+                        <div className="pp-env-group-head">
+                          <span>组件自动生成</span>
+                          <small>{automaticEnvRows.length} 项</small>
+                        </div>
+                        {automaticEnvRows.map((row) => {
+                          const fixed = row.key.startsWith("ENABLE_");
+                          return (
+                            <div
+                              className="pp-env-row pp-env-row-derived"
+                              key={row.key}
+                            >
+                              <input
+                                className="pp-env-key-fixed"
+                                value={row.key}
+                                readOnly
+                                disabled={deploying}
+                                aria-label={`${row.key} 环境变量名`}
+                              />
+                              <input
+                                type={fixed || showEnvValues ? "text" : "password"}
+                                value={row.value}
+                                placeholder={row.required ? "必填，尚未填写" : "可选，尚未填写"}
+                                readOnly={fixed}
+                                disabled={
+                                  deploying || (!fixed && !onDeploymentEnvChange)
+                                }
+                                autoComplete="off"
+                                aria-label={`${row.key} 环境变量值`}
+                                onChange={(event) =>
+                                  onDeploymentEnvChange?.(
+                                    row.key,
+                                    event.currentTarget.value,
+                                  )
+                                }
+                              />
+                              <span className="pp-env-source">
+                                {fixed ? "自动" : "同步"}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {envRows.length > 0 && (
+                      <div className="pp-env-group-head pp-env-group-head-custom">
+                        <span>自定义变量</span>
+                        <small>{envRows.length} 项</small>
+                      </div>
+                    )}
+                    {envRows.map((row) => (
+                      <div className="pp-env-row" key={row.id}>
+                        <input
+                          value={row.key}
+                          placeholder="名称"
+                          disabled={deploying}
+                          autoComplete="off"
+                          onChange={(e) => updateEnvRow(row.id, { key: e.currentTarget.value })}
+                        />
+                        <input
+                          type={showEnvValues ? "text" : "password"}
+                          value={row.value}
+                          placeholder="值"
+                          disabled={deploying}
+                          autoComplete="off"
+                          onChange={(e) => updateEnvRow(row.id, { value: e.currentTarget.value })}
+                        />
+                        <button
+                          type="button"
+                          className="pp-icon-btn pp-env-remove"
+                          title="删除变量"
+                          disabled={deploying}
+                          onClick={() => removeEnvRow(row.id)}
+                        >
+                          <X className="pp-ic" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </section>
 
               {(deploying || deployResult || Object.keys(stageMap).length > 0) && (
@@ -1173,7 +1530,7 @@ export function ProjectPreview({
                         activePhase
                       }阶段）：`
                     : ""}${deployError}`}
-                  onRetry={handleDeploy}
+                  onRetry={requestDeploymentConfirmation}
                 />
               )}
 
@@ -1230,22 +1587,10 @@ export function ProjectPreview({
               )}
             </div>
             <div className="pp-config-actions">
-              {onExportYaml && (
-                <button type="button" className="pp-secondary" onClick={onExportYaml}>
-                  <FileDown className="pp-ic" />
-                  导出 YAML
-                </button>
-              )}
-              {project.files.length > 0 && (
-                <button type="button" className="pp-secondary" onClick={handleDownloadZip}>
-                  <Download className="pp-ic" />
-                  下载 ZIP
-                </button>
-              )}
               <button
                 type="button"
                 className="pp-deploy"
-                onClick={handleDeploy}
+                onClick={requestDeploymentConfirmation}
                 disabled={deploying || feishuUpdating}
               >
                 {deploying ? (
@@ -1253,7 +1598,7 @@ export function ProjectPreview({
                 ) : deployError ? (
                   <RotateCcw className="pp-ic" />
                 ) : (
-                  <CloudUpload className="pp-ic" />
+                  <DeployIcon className="pp-ic" />
                 )}
                 {deploying ? "部署中…" : deployError ? "重试部署" : "部署"}
               </button>
@@ -1261,6 +1606,11 @@ export function ProjectPreview({
           </aside>
         )}
       </div>
+      <DeploymentConfirmDialog
+        open={deployConfirmOpen}
+        onCancel={cancelDeploymentConfirmation}
+        onConfirm={() => void performDeployment()}
+      />
     </div>
   );
 }

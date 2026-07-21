@@ -59,12 +59,6 @@ class ExporterOption:
 ARK = "https://ark.cn-beijing.volces.com/api/v3/"
 
 MODEL_ENV = (
-    EnvVar(
-        "MODEL_AGENT_API_KEY",
-        True,
-        "your-ark-api-key",
-        "火山方舟 (Ark) API Key",
-    ),
     EnvVar("MODEL_AGENT_NAME", False, "doubao-seed-1-6-250615", "模型名称"),
     EnvVar("MODEL_AGENT_PROVIDER", False, "openai"),
     EnvVar("MODEL_AGENT_API_BASE", False, ARK),
@@ -79,13 +73,11 @@ EMBEDDING_ENV = (
     ),
     EnvVar("MODEL_EMBEDDING_DIM", False, "2048"),
     EnvVar("MODEL_EMBEDDING_API_BASE", False, ARK),
-    EnvVar("MODEL_EMBEDDING_API_KEY", False, "", "留空则回退到 MODEL_AGENT_API_KEY"),
 )
 
-VOLC_ENV = (
-    EnvVar("VOLCENGINE_ACCESS_KEY", True, "AKxxxx", "火山引擎 Access Key"),
-    EnvVar("VOLCENGINE_SECRET_KEY", True, "xxxx", "火山引擎 Secret Key"),
-)
+# Studio owns the Volcengine credential chain and forwards it to debug runs and
+# AgentKit runtimes. Components must not ask users to duplicate AK/SK settings.
+VOLC_ENV: tuple[EnvVar, ...] = ()
 
 BUILTIN_TOOLS = (
     ToolOption(
@@ -107,7 +99,6 @@ BUILTIN_TOOLS = (
         id="link_reader",
         import_line="from veadk.tools.builtin_tools.link_reader import link_reader",
         tool_names=("link_reader",),
-        env=(EnvVar("MODEL_AGENT_API_KEY", True, "your-ark-api-key"),),
     ),
     ToolOption(
         id="web_scraper",
@@ -124,29 +115,13 @@ BUILTIN_TOOLS = (
             "from veadk.tools.builtin_tools.image_generate import image_generate"
         ),
         tool_names=("image_generate",),
-        env=(
-            EnvVar(
-                "MODEL_IMAGE_API_KEY",
-                False,
-                "",
-                "留空则回退到 MODEL_AGENT_API_KEY",
-            ),
-            EnvVar("MODEL_IMAGE_NAME", False, "doubao-seedream-5-0-260128"),
-        ),
+        env=(EnvVar("MODEL_IMAGE_NAME", False, "doubao-seedream-5-0-260128"),),
     ),
     ToolOption(
         id="image_edit",
         import_line="from veadk.tools.builtin_tools.image_edit import image_edit",
         tool_names=("image_edit",),
-        env=(
-            EnvVar(
-                "MODEL_EDIT_API_KEY",
-                False,
-                "",
-                "留空则回退到 MODEL_AGENT_API_KEY",
-            ),
-            EnvVar("MODEL_EDIT_NAME", False, "doubao-seededit-3-0-i2i-250628"),
-        ),
+        env=(EnvVar("MODEL_EDIT_NAME", False, "doubao-seededit-3-0-i2i-250628"),),
     ),
     ToolOption(
         id="video_generate",
@@ -155,15 +130,7 @@ BUILTIN_TOOLS = (
             "video_generate, video_task_query"
         ),
         tool_names=("video_generate", "video_task_query"),
-        env=(
-            EnvVar(
-                "MODEL_VIDEO_API_KEY",
-                False,
-                "",
-                "留空则回退到 MODEL_AGENT_API_KEY",
-            ),
-            EnvVar("MODEL_VIDEO_NAME", False, "doubao-seedance-2-0-260128"),
-        ),
+        env=(EnvVar("MODEL_VIDEO_NAME", False, "doubao-seedance-2-0-260128"),),
     ),
     ToolOption(
         id="text_to_speech",
@@ -171,7 +138,6 @@ BUILTIN_TOOLS = (
         tool_names=("text_to_speech",),
         env=(
             EnvVar("TOOL_VESPEECH_APP_ID", True),
-            EnvVar("TOOL_VESPEECH_API_KEY", True),
             EnvVar("TOOL_VESPEECH_SPEAKER", False, "zh_female_vv_uranus_bigtts"),
         ),
     ),
@@ -179,10 +145,7 @@ BUILTIN_TOOLS = (
         id="vesearch",
         import_line="from veadk.tools.builtin_tools.vesearch import vesearch",
         tool_names=("vesearch",),
-        env=(
-            EnvVar("TOOL_VESEARCH_API_KEY", False),
-            EnvVar("TOOL_VESEARCH_ENDPOINT", True, "", "VeSearch bot_id"),
-        ),
+        env=(EnvVar("TOOL_VESEARCH_ENDPOINT", True, "", "VeSearch bot_id"),),
     ),
 )
 
@@ -273,15 +236,7 @@ TRACING_EXPORTERS = (
         "apmplus",
         "APMPlus",
         "ENABLE_APMPLUS",
-        (
-            EnvVar(
-                "OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY",
-                False,
-                "",
-                "留空则用 AK/SK 自动获取",
-            ),
-            EnvVar("OBSERVABILITY_OPENTELEMETRY_APMPLUS_SERVICE_NAME", False),
-        ),
+        (EnvVar("OBSERVABILITY_OPENTELEMETRY_APMPLUS_SERVICE_NAME", False),),
     ),
     ExporterOption(
         "cozeloop",

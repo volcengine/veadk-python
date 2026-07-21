@@ -37,10 +37,10 @@ async function jfetch<T>(url: string): Promise<T> {
     signal: requestSignal(undefined, DEFAULT_REQUEST_TIMEOUT_MS),
   });
   if (res.status === 409) {
-    throw new Error("服务端未配置 Volcengine AK/SK，无法访问 SkillSpace");
+    throw new Error("服务端未配置 Volcengine AK/SK，无法访问 AgentKit Skills 中心");
   }
   if (res.status === 401) {
-    throw new Error("请先登录以访问 SkillSpace");
+    throw new Error("请先登录以访问 AgentKit Skills 中心");
   }
   if (res.status === 404) {
     throw new Error("技能不存在或无 SKILL.md 内容");

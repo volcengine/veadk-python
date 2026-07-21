@@ -51,7 +51,6 @@ const ARK = "https://ark.cn-beijing.volces.com/api/v3/";
 
 /** Base model env — always needed for the agent to run. */
 export const MODEL_ENV: EnvVar[] = [
-  { key: "MODEL_AGENT_API_KEY", required: true, placeholder: "your-ark-api-key", comment: "火山方舟 (Ark) API Key" },
   { key: "MODEL_AGENT_NAME", required: false, placeholder: "doubao-seed-1-6-250615", comment: "模型名称" },
   { key: "MODEL_AGENT_PROVIDER", required: false, placeholder: "openai" },
   { key: "MODEL_AGENT_API_BASE", required: false, placeholder: ARK },
@@ -61,13 +60,11 @@ const EMBEDDING_ENV: EnvVar[] = [
   { key: "MODEL_EMBEDDING_NAME", required: false, placeholder: "doubao-embedding-vision-250615", comment: "向量化模型（记忆/知识库需要）" },
   { key: "MODEL_EMBEDDING_DIM", required: false, placeholder: "2048" },
   { key: "MODEL_EMBEDDING_API_BASE", required: false, placeholder: ARK },
-  { key: "MODEL_EMBEDDING_API_KEY", required: false, comment: "留空则回退到 MODEL_AGENT_API_KEY" },
 ];
 
-const VOLC_ENV: EnvVar[] = [
-  { key: "VOLCENGINE_ACCESS_KEY", required: true, placeholder: "AKxxxx", comment: "火山引擎 Access Key" },
-  { key: "VOLCENGINE_SECRET_KEY", required: true, placeholder: "xxxx", comment: "火山引擎 Secret Key" },
-];
+// Studio owns the Volcengine credential chain and forwards it to debug runs and
+// AgentKit runtimes. Components must not ask users to duplicate AK/SK settings.
+const VOLC_ENV: EnvVar[] = [];
 
 /** Feishu Channel runtime credentials. */
 export const FEISHU_ENV: EnvVar[] = [
@@ -111,7 +108,7 @@ export const BUILTIN_TOOLS: ToolOption[] = [
     desc: "抓取并阅读给定链接的正文内容。",
     importLine: "from veadk.tools.builtin_tools.link_reader import link_reader",
     toolNames: ["link_reader"],
-    env: [{ key: "MODEL_AGENT_API_KEY", required: true, placeholder: "your-ark-api-key" }],
+    env: [],
   },
   {
     id: "web_scraper",
@@ -130,10 +127,7 @@ export const BUILTIN_TOOLS: ToolOption[] = [
     desc: "文生图（Doubao Seedream）。",
     importLine: "from veadk.tools.builtin_tools.image_generate import image_generate",
     toolNames: ["image_generate"],
-    env: [
-      { key: "MODEL_IMAGE_API_KEY", required: false, comment: "留空则回退到 MODEL_AGENT_API_KEY" },
-      { key: "MODEL_IMAGE_NAME", required: false, placeholder: "doubao-seedream-5-0-260128" },
-    ],
+    env: [{ key: "MODEL_IMAGE_NAME", required: false, placeholder: "doubao-seedream-5-0-260128" }],
   },
   {
     id: "image_edit",
@@ -141,10 +135,7 @@ export const BUILTIN_TOOLS: ToolOption[] = [
     desc: "图生图 / 编辑（Doubao SeedEdit）。",
     importLine: "from veadk.tools.builtin_tools.image_edit import image_edit",
     toolNames: ["image_edit"],
-    env: [
-      { key: "MODEL_EDIT_API_KEY", required: false, comment: "留空则回退到 MODEL_AGENT_API_KEY" },
-      { key: "MODEL_EDIT_NAME", required: false, placeholder: "doubao-seededit-3-0-i2i-250628" },
-    ],
+    env: [{ key: "MODEL_EDIT_NAME", required: false, placeholder: "doubao-seededit-3-0-i2i-250628" }],
   },
   {
     id: "video_generate",
@@ -152,10 +143,7 @@ export const BUILTIN_TOOLS: ToolOption[] = [
     desc: "文/图生视频（Doubao Seedance），含任务查询。",
     importLine: "from veadk.tools.builtin_tools.video_generate import video_generate, video_task_query",
     toolNames: ["video_generate", "video_task_query"],
-    env: [
-      { key: "MODEL_VIDEO_API_KEY", required: false, comment: "留空则回退到 MODEL_AGENT_API_KEY" },
-      { key: "MODEL_VIDEO_NAME", required: false, placeholder: "doubao-seedance-2-0-260128" },
-    ],
+    env: [{ key: "MODEL_VIDEO_NAME", required: false, placeholder: "doubao-seedance-2-0-260128" }],
   },
   {
     id: "text_to_speech",
@@ -165,7 +153,6 @@ export const BUILTIN_TOOLS: ToolOption[] = [
     toolNames: ["text_to_speech"],
     env: [
       { key: "TOOL_VESPEECH_APP_ID", required: true },
-      { key: "TOOL_VESPEECH_API_KEY", required: true },
       { key: "TOOL_VESPEECH_SPEAKER", required: false, placeholder: "zh_female_vv_uranus_bigtts" },
     ],
   },
@@ -175,10 +162,7 @@ export const BUILTIN_TOOLS: ToolOption[] = [
     desc: "火山 VeSearch（需要 bot 端点）。",
     importLine: "from veadk.tools.builtin_tools.vesearch import vesearch",
     toolNames: ["vesearch"],
-    env: [
-      { key: "TOOL_VESEARCH_API_KEY", required: false },
-      { key: "TOOL_VESEARCH_ENDPOINT", required: true, comment: "VeSearch bot_id" },
-    ],
+    env: [{ key: "TOOL_VESEARCH_ENDPOINT", required: true, comment: "VeSearch bot_id" }],
   },
 ];
 
@@ -315,10 +299,7 @@ export const TRACING_EXPORTERS: ExporterOption[] = [
     label: "APMPlus",
     desc: "火山 APMPlus 应用性能监控。",
     enableFlag: "ENABLE_APMPLUS",
-    env: [
-      { key: "OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY", required: false, comment: "留空则用 AK/SK 自动获取" },
-      { key: "OBSERVABILITY_OPENTELEMETRY_APMPLUS_SERVICE_NAME", required: false },
-    ],
+    env: [{ key: "OBSERVABILITY_OPENTELEMETRY_APMPLUS_SERVICE_NAME", required: false }],
   },
   {
     id: "cozeloop",

@@ -26,9 +26,9 @@ function SkillCenterIcon() {
 /** Sidebar entry that opens the skill center view in the main panel. */
 export function SkillCenterButton({ onClick }: { onClick: () => void }) {
   return (
-    <button className="new-chat" onClick={onClick}>
+    <button className="new-chat" onClick={onClick} aria-label="技能中心" title="技能中心">
       <SkillCenterIcon />
-      技能中心
+      <span className="sidebar-nav-label">技能中心</span>
     </button>
   );
 }

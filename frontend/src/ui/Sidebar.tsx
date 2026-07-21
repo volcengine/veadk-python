@@ -1,5 +1,13 @@
-import { useRef, useState } from "react";
-import { ChevronRight, LogOut, MoreHorizontal, Plus, Trash2 } from "lucide-react";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
+import {
+  ChevronRight,
+  LogOut,
+  MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
+  Trash2,
+} from "lucide-react";
 import type { AdkSession, SiteBranding, UiFeatures } from "../adk/client";
 import { sessionTitle } from "../blocks";
 import { displayName } from "../adk/identity";
@@ -8,6 +16,8 @@ import { SearchButton } from "./Search";
 import { AgentSelector, type SelectedRuntime } from "./AgentSelector";
 import { AgentIdentityIcon } from "./AgentIdentityIcon";
 import volcengineLogo from "../assets/volcengine.svg";
+
+const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
 
 /** Hand-drawn "quick create" mark: a lightning bolt (speed) with a spark. */
 function QuickCreateIcon() {
@@ -80,6 +90,23 @@ export interface SidebarProps {
   onLogout: () => void;
 }
 
+/** Stable per-user blue/cyan smoke palette so avatars feel individual without flicker. */
+function smokeAvatarStyle(seed: string): CSSProperties {
+  let hash = 2166136261;
+  for (const char of seed) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  const value = hash >>> 0;
+  return {
+    "--avatar-hue-a": 194 + (value % 22),
+    "--avatar-hue-b": 214 + ((value >>> 6) % 25),
+    "--avatar-hue-c": 176 + ((value >>> 12) % 25),
+    "--avatar-x": `${22 + ((value >>> 18) % 55)}%`,
+    "--avatar-y": `${18 + ((value >>> 24) % 58)}%`,
+  } as CSSProperties;
+}
+
 /** Account block pinned at the bottom of the sidebar: avatar + name, with a
  *  popover (opening upward) holding the full identity + logout. */
 function SidebarUser({
@@ -91,10 +118,15 @@ function SidebarUser({
   const name = displayName(userInfo);
   const email = String(userInfo.email ?? userInfo.sub ?? "");
   const initial = (name || "U").slice(0, 1).toUpperCase();
+  const avatarStyle = smokeAvatarStyle(name || email || initial);
   return (
     <div className="sidebar-user">
-      <button className="sidebar-user-btn" onClick={() => setOpen((o) => !o)}>
-        <span className="account-avatar">{initial}</span>
+      <button
+        className="sidebar-user-btn"
+        onClick={() => setOpen((o) => !o)}
+        title={name}
+      >
+        <span className="account-avatar" style={avatarStyle}>{initial}</span>
         <span className="sidebar-user-name">{name}</span>
       </button>
       {open && (
@@ -102,7 +134,9 @@ function SidebarUser({
           <div className="menu-scrim" onClick={() => setOpen(false)} />
           <div className="account-pop sidebar-user-pop">
             <div className="account-head">
-              <div className="account-avatar account-avatar--lg">{initial}</div>
+              <div className="account-avatar account-avatar--lg" style={avatarStyle}>
+                {initial}
+              </div>
               <div className="account-id">
                 <div className="account-name">{name}</div>
                 {email && email !== name && <div className="account-sub">{email}</div>}
@@ -155,6 +189,11 @@ export function Sidebar({
   const show = (k: keyof NonNullable<typeof features>) => features?.[k] !== false;
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [selectorOpen, setSelectorOpen] = useState(false);
+  const autoCollapsedRef = useRef(
+    typeof window !== "undefined" &&
+      window.matchMedia(SIDEBAR_AUTO_COLLAPSE_QUERY).matches,
+  );
+  const [collapsed, setCollapsed] = useState(autoCollapsedRef.current);
   const [anchorTop, setAnchorTop] = useState(0);
   const rowRef = useRef<HTMLButtonElement>(null);
   const toggleSelector = () => {
@@ -165,19 +204,58 @@ export function Sidebar({
   const sorted = [...sessions].sort(
     (a, b) => (b.lastUpdateTime ?? 0) - (a.lastUpdateTime ?? 0),
   );
+  const toggleCollapsed = () => {
+    autoCollapsedRef.current = false;
+    setCollapsed((value) => !value);
+    setSelectorOpen(false);
+    setMenuFor(null);
+  };
+  useEffect(() => {
+    const query = window.matchMedia(SIDEBAR_AUTO_COLLAPSE_QUERY);
+    const handleViewportChange = (event: MediaQueryListEvent) => {
+      if (event.matches) {
+        setCollapsed((current) => {
+          if (current) return current;
+          autoCollapsedRef.current = true;
+          return true;
+        });
+      } else if (autoCollapsedRef.current) {
+        autoCollapsedRef.current = false;
+        setCollapsed(false);
+      }
+    };
+
+    query.addEventListener("change", handleViewportChange);
+    return () => query.removeEventListener("change", handleViewportChange);
+  }, []);
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${collapsed ? "is-collapsed" : ""}`}>
       <div className="sidebar-top">
-        <div className="brand">
-          <img
-            className="brand-logo"
-            src={branding.logoUrl || volcengineLogo}
-            width={20}
-            height={20}
-            alt=""
-            aria-hidden
-          />
-          {branding.title}
+        <div className="sidebar-brand-row">
+          <div className="brand">
+            <img
+              className="brand-logo"
+              src={branding.logoUrl || volcengineLogo}
+              width={20}
+              height={20}
+              alt=""
+              aria-hidden
+            />
+            <span className="brand-title">{branding.title}</span>
+          </div>
+          <button
+            type="button"
+            className="sidebar-collapse-toggle"
+            onClick={toggleCollapsed}
+            aria-label={collapsed ? "展开侧边栏" : "收起侧边栏"}
+            title={collapsed ? "展开侧边栏" : "收起侧边栏"}
+          >
+            {collapsed ? (
+              <PanelLeftOpen className="icon" />
+            ) : (
+              <PanelLeftClose className="icon" />
+            )}
+          </button>
         </div>
         {onSelectAgent &&
           (() => {
@@ -197,6 +275,7 @@ export function Sidebar({
                 ref={rowRef}
                 className={`agent-row ${needsPick ? "agent-row--empty" : ""}`}
                 onClick={toggleSelector}
+                aria-label={needsPick ? "请选择 Agent" : currentAgentLabel || "选择 Agent"}
                 title="切换 Agent"
               >
                 <AgentIdentityIcon className="icon agent-row-lead" />
@@ -224,23 +303,38 @@ export function Sidebar({
           />
         )}
         {show("newChat") && (
-          <button className="new-chat" onClick={onNewChat}>
+          <button
+            className="new-chat"
+            onClick={onNewChat}
+            aria-label="新会话"
+            title="新会话"
+          >
             <Plus className="icon" />
-            新会话
+            <span className="sidebar-nav-label">新会话</span>
           </button>
         )}
         {show("search") && <SearchButton onClick={onSearch} />}
         {show("skillCenter") && <SkillCenterButton onClick={onSkillCenter} />}
         {show("addAgent") && (
-          <button className="new-chat" onClick={onQuickCreate}>
+          <button
+            className="new-chat"
+            onClick={onQuickCreate}
+            aria-label="添加 Agent"
+            title="添加 Agent"
+          >
             <QuickCreateIcon />
-            添加 Agent
+            <span className="sidebar-nav-label">添加 Agent</span>
           </button>
         )}
         {show("manageAgents") && (
-          <button className="new-chat" onClick={onManageAgents}>
+          <button
+            className="new-chat"
+            onClick={onManageAgents}
+            aria-label="管理 Agent"
+            title="管理 Agent"
+          >
             <ManageAgentsIcon />
-            管理 Agent
+            <span className="sidebar-nav-label">管理 Agent</span>
           </button>
         )}
       </div>
@@ -249,6 +343,17 @@ export function Sidebar({
       <div className="sidebar-history">
         <div className="history-head">
           <span>历史会话</span>
+          {show("newChat") && (
+            <button
+              type="button"
+              className="history-new-chat"
+              onClick={onNewChat}
+              aria-label="新建会话"
+              title="新建会话"
+            >
+              <Plus className="icon" />
+            </button>
+          )}
         </div>
         <div className="history-list">
           {sorted.length === 0 && (

@@ -24,9 +24,9 @@ function SearchIcon() {
 
 export function SearchButton({ onClick }: { onClick: () => void }) {
   return (
-    <button className="new-chat" onClick={onClick}>
+    <button className="new-chat" onClick={onClick} aria-label="智能搜索" title="智能搜索">
       <SearchIcon />
-      智能搜索
+      <span className="sidebar-nav-label">智能搜索</span>
     </button>
   );
 }

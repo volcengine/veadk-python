@@ -1,5 +1,6 @@
 import {
   type CSSProperties,
+  type ComponentType,
   lazy,
   Suspense,
   useEffect,
@@ -12,27 +13,22 @@ import {
   ArrowRight,
   ArrowUp,
   Bot,
-  Bug,
   Boxes,
   Check,
-  Cloud,
+  ChevronRight,
   Cpu,
   Database,
   Eye,
   FolderUp,
-  GitBranch,
   Globe,
   Info,
-  LayoutGrid,
   Layers,
   Loader2,
   Plus,
   RefreshCw,
-  Repeat,
   Rocket,
   Shapes,
   Sparkles,
-  Split,
   Trash2,
   Wrench,
   X,
@@ -59,6 +55,13 @@ import {
   type RuntimeEnvSelection,
 } from "./deploymentEnv";
 import { agentNameProblem, duplicateAgentNames } from "./agentNameValidation";
+import {
+  AGENT_TYPES,
+  agentTypeMeta,
+  isA2aType,
+  isOrchestratorType,
+} from "./agentTypeMeta";
+import { displayDescription } from "./displayText";
 import { draftToYaml } from "./configYaml";
 import type { AgentProject } from "./project";
 import type { SkillSource } from "./skills/types";
@@ -107,9 +110,8 @@ type StepId =
   | "model"
   | "tools"
   | "skills"
-  | "memory"
   | "knowledge"
-  | "tracing"
+  | "advanced"
   | "subagents"
   | "review";
 
@@ -127,25 +129,14 @@ const STEPS: StepMeta[] = [
   { id: "model", label: "模型配置", hint: "模型与服务（可选）", icon: Cpu },
   { id: "tools", label: "工具", hint: "可调用的能力", icon: Wrench },
   { id: "skills", label: "技能", hint: "声明式技能", icon: Sparkles },
-  { id: "memory", label: "记忆", hint: "短期 / 长期", icon: Layers },
   { id: "knowledge", label: "知识库", hint: "外部知识检索", icon: Database },
-  { id: "tracing", label: "观测", hint: "Tracing 与 A2UI", icon: Eye },
+  { id: "advanced", label: "进阶配置", hint: "记忆与观测", icon: Layers },
   { id: "subagents", label: "子 Agent", hint: "嵌套协作", icon: Boxes },
   { id: "review", label: "完成", hint: "预览并创建", icon: Rocket },
 ];
 
-type AgentTypeId = NonNullable<AgentDraft["agentType"]>;
-
-interface AgentTypeMeta {
-  id: AgentTypeId;
-  label: string;
-  desc: string;
-  icon: typeof Bot;
-}
-
-/** Custom mark for the LLM agent type: a chat bubble with a generative
- *  "spark", drawn in the lucide stroke style so it sits with the other icons. */
-function LlmIcon({ className }: { className?: string }) {
+/** Root-only reset mark: a tilted eraser clearing the current draft. */
+function ClearAgentIcon({ className }: { className?: string }) {
   return (
     <svg
       className={className}
@@ -155,10 +146,12 @@ function LlmIcon({ className }: { className?: string }) {
       strokeWidth="1.8"
       strokeLinecap="round"
       strokeLinejoin="round"
-      aria-hidden="true"
+      aria-hidden
     >
-      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-      <path d="M12 6.5c.4 2.4 1 3 3.4 3.4-2.4.4-3 1-3.4 3.4-.4-2.4-1-3-3.4-3.4 2.4-.4 3-1 3.4-3.4Z" />
+      <path d="m7.2 15.8 7.9-7.9a2 2 0 0 1 2.8 0l1.2 1.2a2 2 0 0 1 0 2.8l-7 7H8.7l-1.5-1.5a1.15 1.15 0 0 1 0-1.6Z" />
+      <path d="m12.7 10.3 4 4" />
+      <path d="M6.3 19h12.4" />
+      <path d="m5.5 8.2.5-1.4 1.4-.5L6 5.8l-.5-1.4L5 5.8l-1.4.5 1.4.5.5 1.4Z" />
     </svg>
   );
 }
@@ -192,44 +185,28 @@ function DebugConsoleIcon({ className }: { className?: string }) {
   );
 }
 
-/** The selectable Agent kinds shown on the "type" step. */
-const AGENT_TYPES: AgentTypeMeta[] = [
-  {
-    id: "llm",
-    label: "LLM 智能体",
-    desc: "大模型驱动，自主完成任务",
-    icon: LlmIcon as unknown as typeof Bot,
-  },
-  {
-    id: "sequential",
-    label: "顺序编排",
-    desc: "子 Agent 按顺序依次执行",
-    icon: GitBranch,
-  },
-  {
-    id: "parallel",
-    label: "并行编排",
-    desc: "子 Agent 并行执行后汇总",
-    icon: Split,
-  },
-  {
-    id: "loop",
-    label: "循环编排",
-    desc: "子 Agent 循环执行到满足条件",
-    icon: Repeat,
-  },
-];
+/** Debug-run mark: a play head breaking through two lightweight motion rails. */
+function DebugRunIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M9 7.15v9.7a1.15 1.15 0 0 0 1.78.96l7.2-4.85a1.15 1.15 0 0 0 0-1.92l-7.2-4.85A1.15 1.15 0 0 0 9 7.15Z" />
+      <path d="M5.75 8.25v7.5" opacity="0.8" />
+      <path d="M3 10v4" opacity="0.45" />
+      <path d="M17.9 5.25v2.2M19 6.35h-2.2" strokeWidth="1.55" />
+    </svg>
+  );
+}
 
 const AGENT_TYPE_GAP_PX = 4;
-
-/** Orchestrators (sequential/parallel/loop) own sub-agents but no model.
- *  A2A is a leaf, not an orchestrator — see {@link isA2aType}. */
-const isOrchestratorType = (t: AgentDraft["agentType"]): boolean =>
-  t === "sequential" || t === "parallel" || t === "loop";
-
-const isA2aType = (t: AgentDraft["agentType"]): boolean => t === "a2a";
-
-
 /* ---------------------------------------------------------------- *
  * Multi-select checklist. Each row = label + desc, toggling the id in
  * `selected`. Used for built-in tools and tracing exporters.
@@ -244,13 +221,24 @@ function Checklist({
   items,
   selected,
   onToggle,
+  scrollRows,
 }: {
   items: ChecklistItem[];
   selected: string[];
   onToggle: (id: string) => void;
+  scrollRows?: number;
 }) {
   return (
-    <div className="cw-checklist">
+    <div
+      className={`cw-checklist ${scrollRows ? "cw-checklist-tools" : ""}`}
+      style={
+        scrollRows
+          ? ({
+              "--cw-checklist-max-height": `${scrollRows * 65 + (scrollRows - 1) * 8}px`,
+            } as CSSProperties)
+          : undefined
+      }
+    >
       {items.map((it) => {
         const on = selected.includes(it.id);
         return (
@@ -266,7 +254,7 @@ function Checklist({
             </span>
             <span className="cw-check-text">
               <span className="cw-check-title">{it.label}</span>
-              <span className="cw-check-desc">{it.desc}</span>
+              <span className="cw-check-desc">{displayDescription(it.desc)}</span>
             </span>
           </button>
         );
@@ -299,10 +287,10 @@ function BackendSelect({
             className={`cw-seg ${on ? "is-on" : ""}`}
             onClick={() => onChange(o.id)}
             aria-pressed={on}
-            title={o.desc}
+            title={displayDescription(o.desc)}
           >
             <span className="cw-seg-title">{o.label}</span>
-            <span className="cw-seg-desc">{o.desc}</span>
+            <span className="cw-seg-desc">{displayDescription(o.desc)}</span>
           </button>
         );
       })}
@@ -333,11 +321,11 @@ function RuntimeEnvFields({
       {env.map((item) => (
         <label className="cw-env-field" key={item.key}>
           <span className="cw-env-field-head">
-            <span>
+            <span className="cw-env-field-label">
               {item.comment || item.key}
               {item.required && <span className="cw-req">*</span>}
             </span>
-            <code>{item.key}</code>
+            {item.comment && <code title={item.key}>{item.key}</code>}
           </span>
           <input
             className="cw-input"
@@ -490,57 +478,85 @@ function McpToolEditor({
  * Multi-source skill picker: tab bar switching between Skill Hub
  * (public marketplace), local folder/.zip upload, and account-scoped
  * AgentKit SkillSpaces. Selected skills from all sources share one
- * pill list rendered above the tabs.
+ * list rendered below the tabs.
  * ---------------------------------------------------------------- */
-function SkillPill({
+function AgentKitSkillsIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M5.5 7.5h10.75a2 2 0 0 1 2 2v7.75a2 2 0 0 1-2 2H5.5a2 2 0 0 1-2-2V9.5a2 2 0 0 1 2-2Z" />
+      <path d="M7 4.75h9.5a2 2 0 0 1 2 2" opacity=".58" />
+      <path d="m11 10.25.72 1.48 1.63.24-1.18 1.15.28 1.62-1.45-.77-1.45.77.28-1.62-1.18-1.15 1.63-.24.72-1.48Z" />
+      <path d="M19.25 11.25h1.5M20 10.5V12" opacity=".72" />
+    </svg>
+  );
+}
+
+function SelectedSkillRow({
   s,
   onRemove,
 }: {
   s: SelectedSkill;
   onRemove: () => void;
 }) {
-  let Icon = Sparkles;
-  let label = "Skill Hub";
+  let Icon: ComponentType<{ className?: string }> = Sparkles;
+  let label = "火山 Find Skill 技能广场";
   if (s.source === "local") {
     Icon = FolderUp;
     label = "本地";
   } else if (s.source === "skillspace") {
-    Icon = Cloud;
-    label = "SkillSpace";
+    Icon = AgentKitSkillsIcon;
+    label = "AgentKit Skills 中心";
   }
   return (
-    <motion.span
+    <motion.div
       key={`${s.source}:${s.folder}:${s.skillId || s.slug || ""}:${s.version || ""}`}
-      className="cw-pill"
+      className="cw-selected-skill-row"
       layout
-      initial={{ opacity: 0, scale: 0.85 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.85 }}
+      initial={{ opacity: 0, y: -4 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -4 }}
       transition={{ duration: 0.16 }}
     >
-      <Icon className="cw-i cw-i-sm" />
-      {s.name}
-      <span className="cw-pill-source">{label}</span>
+      <span className="cw-selected-skill-icon" aria-hidden>
+        <Icon className="cw-i cw-i-sm" />
+      </span>
+      <span className="cw-selected-skill-meta">
+        <span className="cw-selected-skill-name">{s.name}</span>
+        <span className="cw-selected-skill-detail">
+          {label}
+          {s.description ? ` · ${displayDescription(s.description)}` : ""}
+        </span>
+      </span>
       <button
         type="button"
-        className="cw-pill-x"
+        className="cw-selected-skill-remove"
         onClick={onRemove}
         aria-label={`移除 ${s.name}`}
+        title={`移除 ${s.name}`}
       >
         <X className="cw-i cw-i-sm" />
       </button>
-    </motion.span>
+    </motion.div>
   );
 }
 
 const SKILL_SOURCES: {
   id: SkillSource;
   label: string;
-  icon: typeof Globe;
+  icon: ComponentType<{ className?: string }>;
 }[] = [
-  { id: "skillhub", label: "Skill Hub", icon: Globe },
   { id: "local", label: "本地文件", icon: FolderUp },
-  { id: "skillspace", label: "SkillSpace", icon: Cloud },
+  { id: "skillspace", label: "AgentKit Skills 中心", icon: AgentKitSkillsIcon },
+  { id: "skillhub", label: "火山 Find Skill 技能广场", icon: Globe },
 ];
 
 function SkillsSourceTabs({
@@ -550,52 +566,139 @@ function SkillsSourceTabs({
   selected: SelectedSkill[];
   onChange: (next: SelectedSkill[]) => void;
 }) {
-  const [active, setActive] = useState<SkillSource>("skillhub");
+  const [active, setActive] = useState<SkillSource>("local");
+  const [open, setOpen] = useState(false);
+  const activeIndex = SKILL_SOURCES.findIndex((source) => source.id === active);
   const remove = (key: string) =>
     onChange(selected.filter((s) => skillKey(s) !== key));
 
+  useEffect(() => {
+    if (!open) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [open]);
+
   return (
     <div className="cw-skillspane">
+      <button
+        type="button"
+        className="cw-skill-add"
+        aria-haspopup="dialog"
+        onClick={() => setOpen(true)}
+      >
+        <span className="cw-skill-add-icon" aria-hidden>
+          <Plus className="cw-i" />
+        </span>
+        <span>添加 Skill</span>
+      </button>
+
       {selected.length > 0 && (
         <div className="cw-skill-selected">
-          <span className="cw-skill-selected-label">已选技能</span>
-          <div className="cw-pills">
+          <span className="cw-skill-selected-label">
+            已加入技能 · {selected.length}
+          </span>
+          <div className="cw-selected-skill-list">
             <AnimatePresence initial={false}>
               {selected.map((s) => (
-                <SkillPill key={skillKey(s)} s={s} onRemove={() => remove(skillKey(s))} />
+                <SelectedSkillRow
+                  key={skillKey(s)}
+                  s={s}
+                  onRemove={() => remove(skillKey(s))}
+                />
               ))}
             </AnimatePresence>
           </div>
         </div>
       )}
 
-      <div className="cw-skill-sourcetabs" role="tablist">
-        {SKILL_SOURCES.map(({ id, label, icon: Icon }) => (
-          <button
-            key={id}
-            type="button"
-            role="tab"
-            aria-selected={active === id}
-            className={`cw-skill-pickertab ${active === id ? "is-on" : ""}`}
-            onClick={() => setActive(id)}
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            className="cw-skill-dialog-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.16 }}
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setOpen(false);
+            }}
           >
-            <Icon className="cw-i cw-i-sm" />
-            {label}
-          </button>
-        ))}
-      </div>
+            <motion.div
+              className="cw-skill-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="cw-skill-dialog-title"
+              initial={{ opacity: 0, y: 10, scale: 0.985 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 6, scale: 0.99 }}
+              transition={{ duration: 0.18, ease: "easeOut" }}
+            >
+              <div className="cw-skill-dialog-head">
+                <h3 id="cw-skill-dialog-title">添加 Skill</h3>
+                <button
+                  type="button"
+                  className="cw-skill-dialog-close"
+                  aria-label="关闭添加 Skill"
+                  onClick={() => setOpen(false)}
+                >
+                  <X className="cw-i" />
+                </button>
+              </div>
+              <div className="cw-skill-dialog-body">
+                <div
+                  className="cw-skill-sourcetabs"
+                  role="tablist"
+                  style={
+                    {
+                      "--cw-skill-tab-slider-width": `calc((100% - 16px) / ${SKILL_SOURCES.length})`,
+                      "--cw-active-skill-tab-offset": `calc(${activeIndex * 100}% + ${
+                        activeIndex * 4
+                      }px)`,
+                    } as CSSProperties
+                  }
+                >
+                  <span className="cw-skill-tab-slider" aria-hidden />
+                  {SKILL_SOURCES.map(({ id, label, icon: Icon }) => (
+                    <button
+                      key={id}
+                      type="button"
+                      role="tab"
+                      id={`cw-skill-tab-${id}`}
+                      aria-controls="cw-skill-tabpanel"
+                      aria-selected={active === id}
+                      className={`cw-skill-pickertab ${active === id ? "is-on" : ""}`}
+                      onClick={() => setActive(id)}
+                    >
+                      <Icon className="cw-i cw-i-sm" />
+                      {label}
+                    </button>
+                  ))}
+                </div>
 
-      <div className="cw-skill-tabbody">
-        {active === "skillhub" && (
-          <SkillHubPicker selected={selected} onChange={onChange} />
+                <div
+                  id="cw-skill-tabpanel"
+                  className="cw-skill-tabbody"
+                  role="tabpanel"
+                  aria-labelledby={`cw-skill-tab-${active}`}
+                >
+                  {active === "skillhub" && (
+                    <SkillHubPicker selected={selected} onChange={onChange} />
+                  )}
+                  {active === "local" && (
+                    <LocalPicker selected={selected} onChange={onChange} />
+                  )}
+                  {active === "skillspace" && (
+                    <SkillSpacePicker selected={selected} onChange={onChange} />
+                  )}
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
         )}
-        {active === "local" && (
-          <LocalPicker selected={selected} onChange={onChange} />
-        )}
-        {active === "skillspace" && (
-          <SkillSpacePicker selected={selected} onChange={onChange} />
-        )}
-      </div>
+      </AnimatePresence>
     </div>
   );
 }
@@ -634,7 +737,7 @@ function Toggle({
       </span>
       <span className="cw-toggle-text">
         <span className="cw-toggle-title">{title}</span>
-        <span className="cw-toggle-desc">{desc}</span>
+        <span className="cw-toggle-desc">{displayDescription(desc)}</span>
       </span>
       <span className="cw-switch" aria-hidden>
         <motion.span
@@ -729,9 +832,6 @@ const nodeAcceptsChildren = (n: AgentDraft) => !isA2aType(n.agentType);
  *  within the fixed-width panel instead of needing horizontal scroll. */
 const MAX_TREE_DEPTH = 3;
 
-const typeMeta = (type: AgentDraft["agentType"]) =>
-  AGENT_TYPES.find((t) => t.id === (type ?? "llm")) ?? AGENT_TYPES[0];
-
 /** Per-node required-field problem, or null when the node is valid. */
 function nodeProblem(
   n: AgentDraft,
@@ -780,6 +880,10 @@ function countDraftAgents(root: AgentDraft): number {
 function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
   const selections: RuntimeEnvSelection[] = [];
   const visit = (node: AgentDraft) => {
+    for (const toolId of node.builtinTools ?? []) {
+      const tool = BUILTIN_TOOLS.find((item) => item.id === toolId);
+      if (tool) selections.push({ env: tool.env });
+    }
     if (node.memory.shortTerm) {
       selections.push({
         env:
@@ -833,6 +937,7 @@ function TreeNode({
   validationPulse,
   onSelect,
   onChange,
+  onClearRoot,
 }: {
   root: AgentDraft;
   path: NodePath;
@@ -843,9 +948,10 @@ function TreeNode({
   onSelect: (p: NodePath) => void;
   /** Replace the whole tree; optionally move the selection. */
   onChange: (nextRoot: AgentDraft, select?: NodePath) => void;
+  onClearRoot: () => void;
 }) {
   const node = getNode(root, path);
-  const meta = typeMeta(node.agentType);
+  const meta = agentTypeMeta(node.agentType);
   const Icon = meta.icon;
   const isRoot = path.length === 0;
   const selected = samePath(path, selectedPath);
@@ -935,6 +1041,20 @@ function TreeNode({
           <span className="cw-tree-type">{meta.label}</span>
         </span>
         <span className="cw-tree-actions">
+          {isRoot && (
+            <button
+              type="button"
+              className="cw-icon-btn cw-tree-clear"
+              title="清空根 Agent"
+              aria-label="清空根 Agent"
+              onClick={(e) => {
+                e.stopPropagation();
+                onClearRoot();
+              }}
+            >
+              <ClearAgentIcon className="cw-i cw-i-sm" />
+            </button>
+          )}
           {canAddChild && (
             <button
               type="button"
@@ -976,6 +1096,7 @@ function TreeNode({
               validationPulse={validationPulse}
               onSelect={onSelect}
               onChange={onChange}
+              onClearRoot={onClearRoot}
             />
           ))}
         </div>
@@ -1043,6 +1164,7 @@ function DebugPanel({
   onIgnoreChanges: () => void;
   onDeploy: () => void;
 }) {
+  const [collapsed, setCollapsed] = useState(false);
   const ready = phase === "ready" || phase === "sending";
   const busy = phase === "building" || phase === "starting" || phase === "sending";
   const showInitialOverlay = enabled && !run && phase === "idle";
@@ -1050,27 +1172,53 @@ function DebugPanel({
     enabled && (phase === "building" || phase === "starting");
   const showStaleOverlay = Boolean(run && stale && !showProgressOverlay);
 
+  if (collapsed) {
+    return (
+      <aside className="cw-debug is-collapsed" aria-label="调试窗口（已收起）">
+        <button
+          type="button"
+          className="cw-debug-expand"
+          onClick={() => setCollapsed(false)}
+          aria-label="展开调试栏"
+          title="展开调试栏"
+        >
+          <DebugConsoleIcon className="cw-i" />
+        </button>
+      </aside>
+    );
+  }
+
   return (
     <aside className="cw-debug" aria-label="调试窗口">
       <div className="cw-debug-head">
         <div className="cw-debug-title">
-          <DebugConsoleIcon className="cw-i" />
-          调试
+          <button
+            type="button"
+            className="cw-debug-collapse"
+            onClick={() => setCollapsed(true)}
+            aria-label="收起调试栏"
+            title="收起调试栏"
+          >
+            <ChevronRight className="cw-i cw-i-sm" />
+          </button>
+          <span>调试</span>
         </div>
-        <button
-          type="button"
-          className="cw-debug-deploy"
-          disabled={deploying}
-          onClick={onDeploy}
-          title="查看源码、填写环境变量并部署"
-        >
-          去部署
-          {deploying ? (
-            <Loader2 className="cw-i cw-spin" />
-          ) : (
-            <ArrowRight className="cw-i" />
-          )}
-        </button>
+        <div className="cw-debug-head-actions">
+          <button
+            type="button"
+            className="cw-debug-deploy"
+            disabled={deploying}
+            onClick={onDeploy}
+            title="查看源码、填写环境变量并部署"
+          >
+            去部署
+            {deploying ? (
+              <Loader2 className="cw-i cw-spin" />
+            ) : (
+              <ArrowRight className="cw-i" />
+            )}
+          </button>
+        </div>
       </div>
 
       {!run && phase === "idle" && !enabled && (
@@ -1244,7 +1392,7 @@ function DebugPanel({
                     className="cw-debug-start"
                     onClick={onRestart}
                   >
-                    <Bug className="cw-i" />
+                    <DebugRunIcon className="cw-i cw-debug-run-icon" />
                     启动调试环境
                   </button>
                 </>
@@ -1307,6 +1455,9 @@ export function CustomCreate({
   // the right-hand step nav highlight.
   const [activeId, setActiveId] = useState<StepId>("basic");
   const [buildErr, setBuildErr] = useState("");
+  const [modelAdvancedOpen, setModelAdvancedOpen] = useState(false);
+  const [moreToolTypesOpen, setMoreToolTypesOpen] = useState(false);
+  const [advancedConfigOpen, setAdvancedConfigOpen] = useState(false);
 
   // Which tree node is being edited ([] = root). The detail pane and per-node
   // inline errors are driven by this selection.
@@ -1359,6 +1510,10 @@ export function CustomCreate({
   // removed the previously-selected node). `patch` always edits this node.
   const safePath = pathExists(draft, selectedPath) ? selectedPath : [];
   const node = getNode(draft, safePath);
+  const isRootAgent = safePath.length === 0;
+  const modelAdvancedId = `cw-model-advanced-${safePath.join("-") || "root"}`;
+  const moreToolTypesId = `cw-more-tool-types-${safePath.join("-") || "root"}`;
+  const advancedConfigId = `cw-advanced-config-${safePath.join("-") || "root"}`;
   const activeTypeIndex = Math.max(
     0,
     AGENT_TYPES.findIndex((type) => type.id === (node.agentType ?? "llm")),
@@ -1386,11 +1541,26 @@ export function CustomCreate({
     if (select) setSelectedPath(select);
   };
 
+  const clearRootAgent = () => {
+    if (!window.confirm("清空根 Agent 的全部配置和子 Agent？此操作无法撤销。")) {
+      return;
+    }
+    setDraft(emptyDraft());
+    setSelectedPath([]);
+    setShowErrors(false);
+    setAdvancedConfigOpen(false);
+  };
+
   // Root-only rich sections read these off the root draft directly.
   const builtinTools = node.builtinTools ?? [];
   const mcpTools = node.mcpTools ?? [];
   const tracingExporters = node.tracingExporters ?? [];
   const selectedSkills = node.selectedSkills ?? [];
+  const advancedEnabledCount = [
+    node.memory.shortTerm,
+    node.memory.longTerm,
+    node.tracing,
+  ].filter(Boolean).length;
 
   const toggleBuiltin = (id: string) =>
     patch({
@@ -1457,9 +1627,11 @@ export function CustomCreate({
       ),
       tools: builtinTools.length > 0 || mcpTools.length > 0,
       skills: selectedSkills.length > 0,
-      memory: node.memory.shortTerm || node.memory.longTerm,
       knowledge: node.knowledgebase,
-      tracing: node.tracing || node.enableA2ui,
+      advanced:
+        node.memory.shortTerm ||
+        node.memory.longTerm ||
+        node.tracing,
       subagents: (node.subAgents?.length ?? 0) > 0,
       review: canFinish,
     }),
@@ -1469,6 +1641,7 @@ export function CustomCreate({
   // The nav only lists the sections actually rendered for THIS node's type —
   // orchestrators / A2A leaves have far fewer than an LLM (type lives in the
   // top bar; sub-agents live in the left tree; both are excluded here).
+  const rootOnlyStepIds: StepId[] = isRootAgent ? ["advanced"] : [];
   const navStepIds: StepId[] =
     orchestrator || a2a
       ? ["basic"]
@@ -1477,9 +1650,8 @@ export function CustomCreate({
           "model",
           "tools",
           "skills",
-          "memory",
           "knowledge",
-          "tracing",
+          ...rootOnlyStepIds,
         ];
   const navSteps = STEPS.filter((s) => navStepIds.includes(s.id));
   const navStepKey = navStepIds.join("|");
@@ -1721,6 +1893,7 @@ export function CustomCreate({
         <div className="cw-preview-body">
           <ProjectPreview
             project={project}
+            agentDraft={draft}
             agentName={draft.name || "未命名 Agent"}
             agentCount={countDraftAgents(draft)}
             onChange={setProject}
@@ -1791,6 +1964,7 @@ export function CustomCreate({
             validationPulse={validationPulse}
             onSelect={setSelectedPath}
             onChange={applyTree}
+            onClearRoot={clearRootAgent}
           />
         </aside>
         {/* Right: the form for the currently-selected node. The agent-type bar
@@ -1856,7 +2030,7 @@ export function CustomCreate({
                       <input
                         className={`cw-input ${invalidClass(nameInvalid)}`}
                         value={node.name}
-                        placeholder="例如：customer_service"
+                        placeholder="customer_service"
                         onChange={(e) => patch({ name: e.target.value })}
                       />
                       {showErrors && nameProblem ? (
@@ -1970,9 +2144,8 @@ export function CustomCreate({
                   </div>
             </Section>
 
-            {/* Every LLM agent (root or sub) gets the full config —
-                model/tools/skills/memory/knowledge/tracing. Orchestrators and
-                A2A leaves own none of these. */}
+            {/* Every LLM agent gets model, tools, skills, and knowledge.
+                Root LLM agents additionally own memory and tracing. */}
             {!orchestrator && !a2a && (
               <>
             <Section meta={metaOf("model")}>
@@ -1986,32 +2159,60 @@ export function CustomCreate({
                         onChange={(e) => patch({ modelName: e.target.value })}
                       />
                     </div>
-                    <div className="cw-field">
-                      <label className="cw-label">服务商 Provider</label>
-                      <input
-                        className="cw-input"
-                        value={node.modelProvider ?? ""}
-                        placeholder="openai"
-                        onChange={(e) =>
-                          patch({ modelProvider: e.target.value })
-                        }
+                    <button
+                      type="button"
+                      className="cw-more-options"
+                      aria-expanded={modelAdvancedOpen}
+                      aria-controls={modelAdvancedId}
+                      onClick={() => setModelAdvancedOpen((open) => !open)}
+                    >
+                      <span>更多选项</span>
+                      <ChevronRight
+                        className={`cw-more-options-chevron ${
+                          modelAdvancedOpen ? "is-open" : ""
+                        }`}
+                        aria-hidden
                       />
-                    </div>
-                    <div className="cw-field">
-                      <label className="cw-label">API Base</label>
-                      <input
-                        className="cw-input"
-                        value={node.modelApiBase ?? ""}
-                        placeholder="https://ark.cn-beijing.volces.com/api/v3/"
-                        onChange={(e) =>
-                          patch({ modelApiBase: e.target.value })
-                        }
-                      />
-                      <span className="cw-help">
-                        留空则使用 VeADK 默认模型配置；API Key 请在部署页的环境变量中填写
-                        （不会写入代码）。
-                      </span>
-                    </div>
+                    </button>
+                    <AnimatePresence initial={false}>
+                      {modelAdvancedOpen && (
+                        <motion.div
+                          id={modelAdvancedId}
+                          className="cw-model-advanced"
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: "auto", opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={{ duration: 0.18, ease: "easeOut" }}
+                        >
+                          <div className="cw-field">
+                            <label className="cw-label">服务商 Provider</label>
+                            <input
+                              className="cw-input"
+                              value={node.modelProvider ?? ""}
+                              placeholder="openai"
+                              onChange={(e) =>
+                                patch({ modelProvider: e.target.value })
+                              }
+                            />
+                          </div>
+                          <div className="cw-field">
+                            <label className="cw-label">API Base</label>
+                            <input
+                              className="cw-input"
+                              value={node.modelApiBase ?? ""}
+                              placeholder="https://ark.cn-beijing.volces.com/api/v3/"
+                              onChange={(e) =>
+                                patch({ modelApiBase: e.target.value })
+                              }
+                            />
+                            <span className="cw-help">
+                              留空则使用 VeADK 默认模型配置；Ark API Key 会由 Studio
+                              服务端凭据自动获取。其他服务商的 Key 可在部署页添加。
+                            </span>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
             </Section>
 
@@ -2022,106 +2223,67 @@ export function CustomCreate({
                       <span className="cw-help">
                         勾选 VeADK 提供的内置能力，生成时会自动补全 import 与所需环境变量。
                       </span>
-                      <Checklist
-                        items={BUILTIN_TOOLS}
-                        selected={builtinTools}
-                        onToggle={toggleBuiltin}
-                      />
+                      <div className="cw-tools-list-shell">
+                        <Checklist
+                          items={BUILTIN_TOOLS}
+                          selected={builtinTools}
+                          onToggle={toggleBuiltin}
+                          scrollRows={6}
+                        />
+                      </div>
                     </div>
-                    <div className="cw-field">
-                      <label className="cw-label">MCP 工具</label>
-                      <span className="cw-help">
-                        连接外部 MCP 服务，生成时会为每个条目创建对应的 MCPToolset。
-                      </span>
-                      <McpToolEditor
-                        tools={mcpTools}
-                        onChange={(next) => patch({ mcpTools: next })}
+                    <button
+                      type="button"
+                      className="cw-more-options"
+                      aria-expanded={moreToolTypesOpen}
+                      aria-controls={moreToolTypesId}
+                      onClick={() => setMoreToolTypesOpen((open) => !open)}
+                    >
+                      <span>更多类型工具</span>
+                      {mcpTools.length > 0 && (
+                        <span className="cw-more-options-count">
+                          已配置 {mcpTools.length}
+                        </span>
+                      )}
+                      <ChevronRight
+                        className={`cw-more-options-chevron ${
+                          moreToolTypesOpen ? "is-open" : ""
+                        }`}
+                        aria-hidden
                       />
-                    </div>
+                    </button>
+                    <AnimatePresence initial={false}>
+                      {moreToolTypesOpen && (
+                        <motion.div
+                          id={moreToolTypesId}
+                          className="cw-model-advanced"
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: "auto", opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={{ duration: 0.18, ease: "easeOut" }}
+                        >
+                          <div className="cw-field">
+                            <label className="cw-label">MCP 工具</label>
+                            <span className="cw-help">
+                              连接外部 MCP 服务，生成时会为每个条目创建对应的 MCPToolset。
+                            </span>
+                            <McpToolEditor
+                              tools={mcpTools}
+                              onChange={(next) => patch({ mcpTools: next })}
+                            />
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
             </Section>
 
             <Section meta={metaOf("skills")}>
                   <div className="cw-form">
-                    <p className="cw-section-desc">
-                      从 Skill Hub、本地文件或 AgentKit SkillSpace 添加技能，进入部署页时会写入 skills/ 目录。
-                    </p>
                     <SkillsSourceTabs
                       selected={selectedSkills}
                       onChange={(next) => patch({ selectedSkills: next })}
                     />
-                  </div>
-            </Section>
-
-            <Section meta={metaOf("memory")}>
-                  <div className="cw-form cw-toggle-stack">
-                    <Toggle
-                      checked={node.memory.shortTerm}
-                      onChange={(v) =>
-                        patch({
-                          memory: { ...node.memory, shortTerm: v },
-                        })
-                      }
-                      title="短期记忆"
-                      desc="在单次会话内保留上下文，跨轮次记住对话内容。"
-                      icon={Layers}
-                    />
-                    {node.memory.shortTerm && (
-                      <div className="cw-field cw-subfield">
-                        <label className="cw-label">短期记忆后端</label>
-                        <BackendSelect
-                          options={STM_BACKENDS}
-                          value={node.shortTermBackend}
-                          onChange={(id) => patch({ shortTermBackend: id })}
-                        />
-                        <RuntimeEnvFields
-                          env={
-                            STM_BACKENDS.find(
-                              (item) => item.id === (node.shortTermBackend ?? "local"),
-                            )?.env ?? []
-                          }
-                          values={draft.deployment?.envValues ?? {}}
-                          onChange={patchDeploymentEnv}
-                        />
-                      </div>
-                    )}
-                    <Toggle
-                      checked={node.memory.longTerm}
-                      onChange={(v) =>
-                        patch({
-                          memory: { ...node.memory, longTerm: v },
-                        })
-                      }
-                      title="长期记忆"
-                      desc="跨会话持久化关键信息，让 Agent 记住历史偏好。"
-                      icon={Database}
-                    />
-                    {node.memory.longTerm && (
-                      <div className="cw-field cw-subfield">
-                        <label className="cw-label">长期记忆后端</label>
-                        <BackendSelect
-                          options={LTM_BACKENDS}
-                          value={node.longTermBackend}
-                          onChange={(id) => patch({ longTermBackend: id })}
-                        />
-                        <RuntimeEnvFields
-                          env={
-                            LTM_BACKENDS.find(
-                              (item) => item.id === (node.longTermBackend ?? "local"),
-                            )?.env ?? []
-                          }
-                          values={draft.deployment?.envValues ?? {}}
-                          onChange={patchDeploymentEnv}
-                        />
-                        <Toggle
-                          checked={!!node.autoSaveSession}
-                          onChange={(v) => patch({ autoSaveSession: v })}
-                          title="自动保存会话到长期记忆"
-                          desc="会话结束时自动把内容写入长期记忆，无需手动调用。"
-                          icon={Database}
-                        />
-                      </div>
-                    )}
                   </div>
             </Section>
 
@@ -2158,44 +2320,156 @@ export function CustomCreate({
                   </div>
             </Section>
 
-            <Section meta={metaOf("tracing")}>
-                  <div className="cw-form cw-toggle-stack">
-                    <Toggle
-                      checked={node.tracing}
-                      onChange={(v) => patch({ tracing: v })}
-                      title="观测 / Tracing"
-                      desc="记录每一步的调用链路与耗时，便于调试与性能分析。"
-                      icon={Eye}
-                    />
-                    {node.tracing && (
-                      <div className="cw-field cw-subfield">
-                        <label className="cw-label">Tracing 导出器</label>
-                        <span className="cw-help">
-                          选择一个或多个观测平台，生成时会写入对应的 ENABLE_* 开关与环境变量。
-                        </span>
-                        <Checklist
-                          items={TRACING_EXPORTERS}
-                          selected={tracingExporters}
-                          onToggle={toggleExporter}
-                        />
-                        <RuntimeEnvFields
-                          env={TRACING_EXPORTERS.filter((item) =>
-                            tracingExporters.includes(item.id),
-                          ).flatMap((item) => item.env)}
-                          values={draft.deployment?.envValues ?? {}}
-                          onChange={patchDeploymentEnv}
-                        />
+            {isRootAgent && (
+              <section
+                ref={(el) => {
+                  sectionRefs.current.advanced = el;
+                }}
+                id="cw-sec-advanced"
+                data-step-id="advanced"
+                className="cw-section cw-advanced-section"
+              >
+                <button
+                  type="button"
+                  className="cw-advanced-disclosure"
+                  aria-expanded={advancedConfigOpen}
+                  aria-controls={advancedConfigId}
+                  onClick={() => setAdvancedConfigOpen((open) => !open)}
+                >
+                  <span className="cw-advanced-disclosure-title">进阶配置</span>
+                  <ChevronRight
+                    className={`cw-advanced-disclosure-chevron ${
+                      advancedConfigOpen ? "is-open" : ""
+                    }`}
+                    aria-hidden
+                  />
+                  {advancedEnabledCount > 0 && (
+                    <span className="cw-more-options-count">
+                      已启用 {advancedEnabledCount}
+                    </span>
+                  )}
+                </button>
+                <AnimatePresence initial={false}>
+                  {advancedConfigOpen && (
+                    <motion.div
+                      id={advancedConfigId}
+                      className="cw-advanced-content"
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.2, ease: "easeOut" }}
+                    >
+                    <div className="cw-advanced-group">
+                      <div className="cw-advanced-group-head">
+                        <span>记忆</span>
                       </div>
-                    )}
-                    <Toggle
-                      checked={node.enableA2ui}
-                      onChange={(v) => patch({ enableA2ui: v })}
-                      title="A2UI"
-                      desc="允许 Agent 渲染交互式 UI 卡片，而不仅仅是纯文本。"
-                      icon={LayoutGrid}
-                    />
-                  </div>
-            </Section>
+                      <div className="cw-form cw-toggle-stack">
+                        <Toggle
+                          checked={node.memory.shortTerm}
+                          onChange={(v) =>
+                            patch({ memory: { ...node.memory, shortTerm: v } })
+                          }
+                          title="短期记忆"
+                          desc="在单次会话内保留上下文，跨轮次记住对话内容。"
+                          icon={Layers}
+                        />
+                        {node.memory.shortTerm && (
+                          <div className="cw-field cw-subfield">
+                            <label className="cw-label">短期记忆后端</label>
+                            <BackendSelect
+                              options={STM_BACKENDS}
+                              value={node.shortTermBackend}
+                              onChange={(id) => patch({ shortTermBackend: id })}
+                            />
+                            <RuntimeEnvFields
+                              env={
+                                STM_BACKENDS.find(
+                                  (item) =>
+                                    item.id === (node.shortTermBackend ?? "local"),
+                                )?.env ?? []
+                              }
+                              values={draft.deployment?.envValues ?? {}}
+                              onChange={patchDeploymentEnv}
+                            />
+                          </div>
+                        )}
+                        <Toggle
+                          checked={node.memory.longTerm}
+                          onChange={(v) =>
+                            patch({ memory: { ...node.memory, longTerm: v } })
+                          }
+                          title="长期记忆"
+                          desc="跨会话持久化关键信息，让 Agent 记住历史偏好。"
+                          icon={Database}
+                        />
+                        {node.memory.longTerm && (
+                          <div className="cw-field cw-subfield">
+                            <label className="cw-label">长期记忆后端</label>
+                            <BackendSelect
+                              options={LTM_BACKENDS}
+                              value={node.longTermBackend}
+                              onChange={(id) => patch({ longTermBackend: id })}
+                            />
+                            <RuntimeEnvFields
+                              env={
+                                LTM_BACKENDS.find(
+                                  (item) =>
+                                    item.id === (node.longTermBackend ?? "local"),
+                                )?.env ?? []
+                              }
+                              values={draft.deployment?.envValues ?? {}}
+                              onChange={patchDeploymentEnv}
+                            />
+                            <Toggle
+                              checked={!!node.autoSaveSession}
+                              onChange={(v) => patch({ autoSaveSession: v })}
+                              title="自动保存会话到长期记忆"
+                              desc="会话结束时自动把内容写入长期记忆，无需手动调用。"
+                              icon={Database}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="cw-advanced-group">
+                      <div className="cw-advanced-group-head">
+                        <span>观测</span>
+                      </div>
+                      <div className="cw-form cw-toggle-stack">
+                        <Toggle
+                          checked={node.tracing}
+                          onChange={(v) => patch({ tracing: v })}
+                          title="观测 / Tracing"
+                          desc="记录每一步的调用链路与耗时，便于调试与性能分析。"
+                          icon={Eye}
+                        />
+                        {node.tracing && (
+                          <div className="cw-field cw-subfield">
+                            <label className="cw-label">Tracing 导出器</label>
+                            <span className="cw-help">
+                              选择一个或多个观测平台，生成时会写入对应的 ENABLE_* 开关与环境变量。
+                            </span>
+                            <Checklist
+                              items={TRACING_EXPORTERS}
+                              selected={tracingExporters}
+                              onToggle={toggleExporter}
+                            />
+                            <RuntimeEnvFields
+                              env={TRACING_EXPORTERS.filter((item) =>
+                                tracingExporters.includes(item.id),
+                              ).flatMap((item) => item.env)}
+                              values={draft.deployment?.envValues ?? {}}
+                              onChange={patchDeploymentEnv}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </section>
+            )}
               </>
             )}
           </div>
