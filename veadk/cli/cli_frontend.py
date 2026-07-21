@@ -480,6 +480,22 @@ def _serve_options(f):
             help="Seconds before a generated-agent debug runner is cleaned up.",
         ),
         click.option(
+            "--admin",
+            "studio_admins",
+            default=None,
+            envvar="VEADK_STUDIO_ADMINS",
+            help="Comma-separated Studio admin usernames or OAuth emails "
+            "(env: VEADK_STUDIO_ADMINS).",
+        ),
+        click.option(
+            "--developer",
+            "studio_developers",
+            default=None,
+            envvar="VEADK_STUDIO_DEVELOPERS",
+            help="Comma-separated Studio developer usernames or OAuth emails "
+            "(env: VEADK_STUDIO_DEVELOPERS).",
+        ),
+        click.option(
             "--open/--no-open",
             "open_browser",
             default=False,
@@ -516,6 +532,8 @@ def frontend(
     oauth2_provider_label: str | None,
     auth_mode: str,
     generated_agent_test_run_ttl: int,
+    studio_admins: str | None,
+    studio_developers: str | None,
     open_browser: bool,
 ) -> None:
     """Launch the A2UI web UI backed by the ADK agent API server."""
@@ -539,6 +557,8 @@ def frontend(
         oauth2_provider_label=oauth2_provider_label,
         auth_mode=auth_mode,
         generated_agent_test_run_ttl=generated_agent_test_run_ttl,
+        studio_admins=studio_admins,
+        studio_developers=studio_developers,
         open_browser=open_browser,
         studio=False,
     )
@@ -566,6 +586,8 @@ def studio(
     oauth2_provider_label: str | None,
     auth_mode: str,
     generated_agent_test_run_ttl: int,
+    studio_admins: str | None,
+    studio_developers: str | None,
     open_browser: bool,
 ) -> None:
     """Launch VeADK Studio — the frontend trimmed to add & manage agents.
@@ -594,6 +616,8 @@ def studio(
         oauth2_provider_label=oauth2_provider_label,
         auth_mode=auth_mode,
         generated_agent_test_run_ttl=generated_agent_test_run_ttl,
+        studio_admins=studio_admins,
+        studio_developers=studio_developers,
         open_browser=open_browser,
         studio=True,
     )
@@ -618,6 +642,8 @@ def _run_frontend_server(
     oauth2_provider_label: str | None,
     auth_mode: str,
     generated_agent_test_run_ttl: int,
+    studio_admins: str | None = None,
+    studio_developers: str | None = None,
     open_browser: bool,
     studio: bool = False,
 ) -> None:
@@ -678,6 +704,12 @@ def _run_frontend_server(
     import httpx
 
     from veadk.cli.frontend_invocation import agent_skill_summaries
+    from veadk.cli.studio_rbac import (
+        StudioAccessPolicy,
+        StudioPrincipal,
+        StudioRole,
+        runtime_belongs_to,
+    )
     from veadk.multimodal.api import mount_media_routes
     from veadk.multimodal.service import MediaService
     from veadk.multimodal.storage import create_media_storage
@@ -694,6 +726,61 @@ def _run_frontend_server(
     generated_agent_test_run_allows_local_resources = True
 
     generated_agent_test_run_ttl = max(60, generated_agent_test_run_ttl)
+    access_policy = StudioAccessPolicy.from_csv(
+        studio_admins,
+        studio_developers,
+    )
+
+    def _current_principal(request: Request) -> StudioPrincipal | None:
+        """Resolve identity only from a trusted auth source.
+
+        ``X-VeADK-Local-User`` is a local-development convenience and is not a
+        production authentication boundary. It is ignored whenever OAuth or a
+        trusted gateway is active.
+        """
+        if auth_mode == "gateway":
+            claims = _claims_from_forwarded_jwt(request.headers.get("authorization"))
+            return StudioPrincipal.from_claims(claims) if claims else None
+
+        oauth2_handler = getattr(app.state, "oauth2_handler", None)
+        if oauth2_handler is not None:
+            session = oauth2_handler.get_session_from_request(request)
+            if session and session.user_info:
+                return StudioPrincipal.from_claims(session.user_info)
+            if getattr(request.state, "oauth2_access_token_validated", False):
+                claims = _claims_from_forwarded_jwt(
+                    request.headers.get("authorization")
+                )
+                if claims:
+                    return StudioPrincipal.from_claims(claims)
+            scope_user = request.scope.get("user")
+            display_name = str(getattr(scope_user, "display_name", "") or "")
+            return StudioPrincipal.local(display_name)
+
+        return StudioPrincipal.local(request.headers.get("X-VeADK-Local-User", ""))
+
+    def _request_role(request: Request) -> StudioRole:
+        principal = _current_principal(request)
+        if access_policy.enabled and principal is None:
+            raise HTTPException(status_code=401, detail="Studio identity is required")
+        return access_policy.role_for(principal)
+
+    def _require_agent_management(request: Request) -> StudioPrincipal | None:
+        principal = _current_principal(request)
+        if access_policy.enabled and principal is None:
+            raise HTTPException(status_code=401, detail="Studio identity is required")
+        if access_policy.role_for(principal) == StudioRole.USER:
+            raise HTTPException(
+                status_code=403, detail="Agent management is not allowed"
+            )
+        return principal
+
+    @app.get("/web/access")
+    async def _web_access(request: Request):
+        principal = _current_principal(request)
+        if access_policy.enabled and principal is None:
+            raise HTTPException(status_code=401, detail="Studio identity is required")
+        return access_policy.access_payload(principal)
 
     def _resolve_ve_credentials() -> tuple[str, str, str | None]:
         """Resolve Volcengine creds as (access_key, secret_key, session_token).
@@ -1053,6 +1140,7 @@ def _run_frontend_server(
         (``X-AgentKit-Key``) must be present. Without both, we refuse rather
         than let the server reach arbitrary internal/external URLs.
         """
+        _require_agent_management(request)
         from urllib.parse import urlparse
 
         target_base = request.headers.get("X-AgentKit-Base")
@@ -1144,6 +1232,7 @@ def _run_frontend_server(
         base_url: str
         process: subprocess.Popen
         expires_at: float
+        owner_id: str
 
     _test_runs: dict[str, _GeneratedAgentTestRun] = {}
     _test_runs_creating = {"count": 0}
@@ -1194,11 +1283,19 @@ def _run_frontend_server(
         daemon=True,
     ).start()
 
-    def _get_test_run(run_id: str) -> _GeneratedAgentTestRun:
+    def _get_test_run(
+        run_id: str,
+        request: Request,
+    ) -> _GeneratedAgentTestRun:
         _cleanup_expired_test_runs()
         with _test_runs_lock:
             run = _test_runs.get(run_id)
         if run is None:
+            raise HTTPException(status_code=404, detail="test run not found")
+        principal = _require_agent_management(request)
+        if _request_role(request) != StudioRole.ADMIN and (
+            principal is None or run.owner_id != principal.owner_id
+        ):
             raise HTTPException(status_code=404, detail="test run not found")
         return run
 
@@ -1522,12 +1619,14 @@ def _run_frontend_server(
 
     @app.post("/web/generated-agent-projects")
     async def _generate_agent_project(request: Request):
+        _require_agent_management(request)
         data = await request.json()
         project = await _generate_project_from_request(data, debug=False)
         return project.model_dump()
 
     @app.post("/web/generated-agent-test-runs")
     async def _create_generated_agent_test_run(request: Request):
+        principal = _require_agent_management(request)
         _cleanup_expired_test_runs()
         data = await request.json()
 
@@ -1593,6 +1692,7 @@ def _run_frontend_server(
                 base_url=base_url,
                 process=proc,
                 expires_at=expires_at,
+                owner_id=principal.owner_id if principal else "",
             )
             with _test_runs_lock:
                 _test_runs[run_id] = run
@@ -1604,7 +1704,7 @@ def _run_frontend_server(
         except Exception as exc:
             if proc is not None:
                 _terminate_test_run(
-                    _GeneratedAgentTestRun("", "", temp_dir, "", proc, 0)
+                    _GeneratedAgentTestRun("", "", temp_dir, "", proc, 0, "")
                 )
             else:
                 if temp_dir:
@@ -1628,7 +1728,7 @@ def _run_frontend_server(
 
     @app.post("/web/generated-agent-test-runs/{run_id}/sessions")
     async def _create_generated_agent_test_session(run_id: str, request: Request):
-        run = _get_test_run(run_id)
+        run = _get_test_run(run_id, request)
         data = await request.json()
         user_id = (data.get("userId") or "test_user").strip() or "test_user"
         url = (
@@ -1673,7 +1773,7 @@ def _run_frontend_server(
     async def _run_generated_agent_test_sse(run_id: str, request: Request):
         from fastapi.responses import StreamingResponse
 
-        run = _get_test_run(run_id)
+        run = _get_test_run(run_id, request)
         payload = await request.json()
         if not isinstance(payload, dict):
             raise HTTPException(status_code=400, detail="Invalid run_sse payload")
@@ -1725,7 +1825,8 @@ def _run_frontend_server(
         return StreamingResponse(_stream(), media_type="text/event-stream")
 
     @app.delete("/web/generated-agent-test-runs/{run_id}")
-    async def _delete_generated_agent_test_run(run_id: str):
+    async def _delete_generated_agent_test_run(run_id: str, request: Request):
+        _get_test_run(run_id, request)
         with _test_runs_lock:
             run = _test_runs.pop(run_id, None)
         if run is not None:
@@ -1776,6 +1877,7 @@ def _run_frontend_server(
     @app.post("/web/cancel-deploy-agentkit")
     async def _cancel_deploy_to_agentkit(request: Request):
         """Cancel a deployment and destroy any Runtime it already created."""
+        principal = _require_agent_management(request)
         data = await request.json()
         task_id = str(data.get("taskId") or "").strip()
         if not task_id:
@@ -1783,6 +1885,10 @@ def _run_frontend_server(
         with _deploy_tasks_lock:
             task = _deploy_tasks.get(task_id)
         if task is None:
+            raise HTTPException(status_code=404, detail="Deployment task not found")
+        if _request_role(request) != StudioRole.ADMIN and (
+            principal is None or task.get("owner_id") != principal.owner_id
+        ):
             raise HTTPException(status_code=404, detail="Deployment task not found")
 
         task["cancel_event"].set()
@@ -1801,7 +1907,7 @@ def _run_frontend_server(
     async def _deploy_to_agentkit(request: Request):
         """Deploy to AgentKit, streaming per-stage progress as Server-Sent Events.
 
-        Body: {name, files:[{path,content}], config:{region,projectName}, author?}.
+        Body: {name, files:[{path,content}], config:{region,projectName}}.
         While building/deploying, streams `data: {level, phase, message, pct?}`
         frames (phase = build|deploy|publish); ends with a terminal
         `data: {done:true, success, agentName?, url?, apikey?, runtimeId?,
@@ -1817,12 +1923,14 @@ def _run_frontend_server(
         from pathlib import Path as PathlibPath
         from contextlib import contextmanager
 
+        principal = _require_agent_management(request)
         data = await request.json()
         agent_name = (data.get("name") or "").strip()
         files = data.get("files", [])
         config = data.get("config", {})
         task_id = str(data.get("taskId") or f"deploy-{id(request)}").strip()
-        author = (data.get("author") or "").strip()
+        author = principal.display_name if principal else ""
+        owner_id = principal.owner_id if principal else ""
         if not agent_name:
             raise HTTPException(status_code=400, detail="Agent name is required")
         if not files:
@@ -1970,6 +2078,7 @@ def _run_frontend_server(
             "region": region,
             "destroyed": False,
             "destroying": False,
+            "owner_id": owner_id,
         }
         events: "_queue.Queue" = _queue.Queue()
         state = {"phase": "build", "build_error_excerpt": ""}
@@ -2132,6 +2241,12 @@ def _run_frontend_server(
                                 {"Key": "veadk:author", "Value": author}
                             )
                         )
+                    if owner_id:
+                        extra.append(
+                            _rt.TagsItemForCreateRuntime.model_validate(
+                                {"Key": "veadk:owner", "Value": owner_id}
+                            )
+                        )
 
                     def _tagged_create(self, req, _orig=orig_create, _extra=extra):
                         if task_state["cancel_event"].is_set():
@@ -2161,7 +2276,9 @@ def _run_frontend_server(
 
                     rt_client.create_runtime = _tagged_create
                 except Exception as e:
-                    logger.warning(f"Could not attach author tag to runtime: {e}")
+                    logger.error("Could not prepare Runtime ownership tags: %s", e)
+                    result_box["error"] = str(e)
+                    return
 
                 try:
                     result = None
@@ -2296,11 +2413,49 @@ def _run_frontend_server(
 
         return StreamingResponse(_stream(), media_type="text/event-stream")
 
+    def _runtime_tags(runtime: Any) -> dict[str, str]:
+        return {
+            str(tag.key): str(tag.value)
+            for tag in (getattr(runtime, "tags", None) or [])
+        }
+
+    def _get_runtime(runtime_id: str, region: str) -> Any:
+        from agentkit.sdk.runtime import types as _rt
+        from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+        ak, sk, token = _resolve_ve_credentials()
+        client = AgentkitRuntimeClient(
+            access_key=ak,
+            secret_key=sk,
+            session_token=token or "",
+            region=region,
+        )
+        return client.get_runtime(_rt.GetRuntimeRequest(runtime_id=runtime_id))
+
+    def _authorized_runtime(
+        request: Request,
+        runtime_id: str,
+        region: str,
+        *,
+        managed_only: bool = False,
+    ) -> Any:
+        principal = _current_principal(request)
+        role = _request_role(request)
+        runtime = _get_runtime(runtime_id, region)
+        tags = _runtime_tags(runtime)
+        if role != StudioRole.ADMIN and not runtime_belongs_to(tags, principal):
+            raise HTTPException(status_code=404, detail="Runtime not found")
+        if managed_only and tags.get("veadk:managed") != "true":
+            raise HTTPException(status_code=404, detail="Runtime not found")
+        return runtime
+
     @app.get("/web/my-runtimes")
-    async def _web_my_runtimes(author: str = "", region: str = "all"):
+    async def _web_my_runtimes(request: Request, region: str = "all"):
         """List AgentKit runtimes created via this UI (tagged veadk:managed),
-        optionally filtered to a single `author` (veadk:author tag).
+        filtered to the trusted current identity for non-admin users.
         `region=all` queries every supported region and merges results."""
+        principal = _current_principal(request)
+        role = _request_role(request)
         ak, sk, token = _resolve_ve_credentials()
         regions = (
             ["cn-beijing", "cn-shanghai"] if region in {"all", "", "*"} else [region]
@@ -2311,7 +2466,10 @@ def _run_frontend_server(
             from agentkit.sdk.runtime import types as _rt
 
             client = AgentkitRuntimeClient(
-                access_key=ak, secret_key=sk, session_token=token, region=reg
+                access_key=ak,
+                secret_key=sk,
+                session_token=token or "",
+                region=reg,
             )
             out: list[dict] = []
             next_token = None
@@ -2321,10 +2479,12 @@ def _run_frontend_server(
                     kw["next_token"] = next_token
                 resp = client.list_runtimes(_rt.ListRuntimesRequest(**kw))
                 for r in resp.agent_kit_runtimes or []:
-                    tags = {tg.key: tg.value for tg in (r.tags or [])}
+                    tags = _runtime_tags(r)
                     if tags.get("veadk:managed") != "true":
                         continue
-                    if author and tags.get("veadk:author") != author:
+                    if role != StudioRole.ADMIN and not runtime_belongs_to(
+                        tags, principal
+                    ):
                         continue
                     out.append(
                         {
@@ -2353,20 +2513,33 @@ def _run_frontend_server(
     @app.post("/web/delete-runtime")
     async def _web_delete_runtime(request: Request):
         """Delete an AgentKit runtime by id (used by the '管理 Agent' view)."""
+        _require_agent_management(request)
         data = await request.json()
         runtime_id = (data.get("runtimeId") or "").strip()
         region = (data.get("region") or "cn-beijing").strip()
         if not runtime_id:
             raise HTTPException(status_code=400, detail="runtimeId is required")
         try:
+            _authorized_runtime(
+                request,
+                runtime_id,
+                region,
+                managed_only=True,
+            )
             _delete_agentkit_runtime(runtime_id, region)
             return {"success": True}
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"delete runtime failed: {e}", exc_info=True)
             raise HTTPException(status_code=502, detail=str(e))
 
     @app.get("/web/runtime-detail")
-    async def _web_runtime_detail(runtimeId: str = "", region: str = "cn-beijing"):
+    async def _web_runtime_detail(
+        request: Request,
+        runtimeId: str = "",
+        region: str = "cn-beijing",
+    ):
         """Control-plane detail for one runtime (used by the '管理 Agent' view).
 
         Returns config/status metadata from GetRuntime. This is NOT the in-container
@@ -2375,7 +2548,6 @@ def _run_frontend_server(
         """
         if not runtimeId:
             raise HTTPException(status_code=400, detail="runtimeId is required")
-        ak, sk, token = _resolve_ve_credentials()
 
         def _mask(key: str, value: str) -> str:
             if not value:
@@ -2385,13 +2557,7 @@ def _run_frontend_server(
             return value
 
         try:
-            from agentkit.sdk.runtime.client import AgentkitRuntimeClient
-            from agentkit.sdk.runtime import types as _rt
-
-            client = AgentkitRuntimeClient(
-                access_key=ak, secret_key=sk, session_token=token, region=region
-            )
-            r = client.get_runtime(_rt.GetRuntimeRequest(runtime_id=runtimeId))
+            r = _authorized_runtime(request, runtimeId, region)
             envs = [
                 {"key": e.key, "value": _mask(e.key or "", e.value or "")}
                 for e in (getattr(r, "envs", None) or [])
@@ -2431,7 +2597,7 @@ def _run_frontend_server(
 
     @app.get("/web/runtimes")
     async def _web_runtimes(
-        author: str = "",
+        request: Request,
         scope: str = "all",
         page_size: int = 30,
         next_token: str = "",
@@ -2439,8 +2605,11 @@ def _run_frontend_server(
     ):
         """One page of AgentKit runtimes for the agent selector. Lists ALL
         runtimes (server-side paginated); each item is flagged `isMine` when its
-        veadk:author tag matches `author`. scope=mine filters to the user's own.
+        ownership tags match the trusted current identity. Non-admin users are
+        always restricted to their own runtimes.
         region=all merges runtimes across all supported regions."""
+        principal = _current_principal(request)
+        role = _request_role(request)
         ak, sk, svc_token = _resolve_ve_credentials()
         regions = (
             ["cn-beijing", "cn-shanghai"] if region in {"all", "", "*"} else [region]
@@ -2453,30 +2622,42 @@ def _run_frontend_server(
             from agentkit.sdk.runtime import types as _rt
 
             client = AgentkitRuntimeClient(
-                access_key=ak, secret_key=sk, session_token=svc_token, region=reg
+                access_key=ak,
+                secret_key=sk,
+                session_token=svc_token or "",
+                region=reg,
             )
-            kw: dict = {"max_results": page_size}
-            if tok:
-                kw["next_token"] = tok
-            resp = client.list_runtimes(_rt.ListRuntimesRequest(**kw))
             out: list[dict] = []
-            for r in resp.agent_kit_runtimes or []:
-                tags = {tg.key: tg.value for tg in (r.tags or [])}
-                is_mine = bool(author) and tags.get("veadk:author") == author
-                if scope == "mine" and not is_mine:
-                    continue
-                out.append(
-                    {
-                        "name": r.name,
-                        "runtimeId": r.runtime_id,
-                        "status": r.status,
-                        "createdAt": r.created_at,
-                        "region": reg,
-                        "author": tags.get("veadk:author", ""),
-                        "isMine": is_mine,
-                    }
-                )
-            return out, getattr(resp, "next_token", "") or ""
+            current_token = tok
+            next_page_token = ""
+            for _ in range(20):
+                kw: dict = {"max_results": max(1, page_size - len(out))}
+                if current_token:
+                    kw["next_token"] = current_token
+                resp = client.list_runtimes(_rt.ListRuntimesRequest(**kw))
+                for runtime in resp.agent_kit_runtimes or []:
+                    tags = _runtime_tags(runtime)
+                    is_mine = runtime_belongs_to(tags, principal)
+                    if (scope == "mine" or role != StudioRole.ADMIN) and not is_mine:
+                        continue
+                    out.append(
+                        {
+                            "name": runtime.name,
+                            "runtimeId": runtime.runtime_id,
+                            "status": runtime.status,
+                            "createdAt": runtime.created_at,
+                            "region": reg,
+                            "author": tags.get("veadk:author", ""),
+                            "isMine": is_mine,
+                        }
+                    )
+                    if len(out) >= page_size:
+                        break
+                next_page_token = getattr(resp, "next_token", "") or ""
+                if len(out) >= page_size or not next_page_token:
+                    break
+                current_token = next_page_token
+            return out[:page_size], next_page_token
 
         try:
             if len(regions) == 1:
@@ -2507,22 +2688,20 @@ def _run_frontend_server(
 
     # Cache resolved (endpoint, apikey, auth type) per runtime so the data-plane
     # proxy does not call GetRuntime on every request. Short TTL; cleared on a 401.
-    _rt_conn_cache: dict[str, tuple[str, str, str, float]] = {}
+    _rt_conn_cache: dict[tuple[str, str], tuple[str, str, str, float]] = {}
 
-    def _resolve_runtime_conn(runtime_id: str, region: str) -> tuple[str, str, str]:
+    def _resolve_runtime_conn(
+        runtime_id: str,
+        region: str,
+        runtime: Any | None = None,
+    ) -> tuple[str, str, str]:
         import time as _time
 
-        cached = _rt_conn_cache.get(runtime_id)
+        cache_key = (region, runtime_id)
+        cached = _rt_conn_cache.get(cache_key)
         if cached and cached[3] > _time.time():
             return cached[0], cached[1], cached[2]
-        ak, sk, token = _resolve_ve_credentials()
-        from agentkit.sdk.runtime.client import AgentkitRuntimeClient
-        from agentkit.sdk.runtime import types as _rt
-
-        client = AgentkitRuntimeClient(
-            access_key=ak, secret_key=sk, session_token=token, region=region
-        )
-        r = client.get_runtime(_rt.GetRuntimeRequest(runtime_id=runtime_id))
+        r = runtime if runtime is not None else _get_runtime(runtime_id, region)
         endpoint = ""
         for nc in getattr(r, "network_configurations", None) or []:
             ep = getattr(nc, "endpoint", "") or ""
@@ -2544,7 +2723,7 @@ def _run_frontend_server(
             raise HTTPException(
                 status_code=502, detail="runtime has no public endpoint"
             )
-        _rt_conn_cache[runtime_id] = (
+        _rt_conn_cache[cache_key] = (
             endpoint,
             apikey,
             auth_type,
@@ -2563,7 +2742,12 @@ def _run_frontend_server(
         """
         region = request.query_params.get("region", "cn-beijing")
         try:
-            endpoint, apikey, auth_type = _resolve_runtime_conn(runtime_id, region)
+            runtime = _authorized_runtime(request, runtime_id, region)
+            endpoint, apikey, auth_type = _resolve_runtime_conn(
+                runtime_id,
+                region,
+                runtime,
+            )
         except HTTPException:
             raise
         except Exception as e:
@@ -2628,7 +2812,7 @@ def _run_frontend_server(
         )
         upstream = await client.send(req, stream=True)
         if upstream.status_code == 401:
-            _rt_conn_cache.pop(runtime_id, None)
+            _rt_conn_cache.pop((region, runtime_id), None)
         if upstream.status_code >= 400:
             # Buffer error responses so we can log the body and still forward it.
             body_chunks = []
@@ -3137,6 +3321,20 @@ def _resolve_studio_identity_region(
     default=None,
     help="Studio title, at most 6 characters.",
 )
+@click.option(
+    "--admin",
+    "studio_admins",
+    default=None,
+    envvar="VEADK_STUDIO_ADMINS",
+    help="Comma-separated Studio admin usernames or OAuth emails.",
+)
+@click.option(
+    "--developer",
+    "studio_developers",
+    default=None,
+    envvar="VEADK_STUDIO_DEVELOPERS",
+    help="Comma-separated Studio developer usernames or OAuth emails.",
+)
 def frontend_deploy(
     user_pool_id: str,
     allowed_client_id: str,
@@ -3154,6 +3352,8 @@ def frontend_deploy(
     from_source: bool,
     site_logo: str | None,
     site_title: str | None,
+    studio_admins: str | None,
+    studio_developers: str | None,
 ) -> None:
     """Deploy the SSO web frontend to VeFaaS.
 
@@ -3237,6 +3437,10 @@ def frontend_deploy(
     veadk_environments["VEIDENTITY_REGION"] = identity_region
     if site_title is not None:
         veadk_environments["VEADK_SITE_TITLE"] = branding_title
+    if studio_admins:
+        veadk_environments["VEADK_STUDIO_ADMINS"] = studio_admins
+    if studio_developers:
+        veadk_environments["VEADK_STUDIO_DEVELOPERS"] = studio_developers
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
 

@@ -8,7 +8,12 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import type { AdkSession, SiteBranding, UiFeatures } from "../adk/client";
+import type {
+  AdkSession,
+  SiteBranding,
+  StudioAccess,
+  UiFeatures,
+} from "../adk/client";
 import { sessionTitle } from "../blocks";
 import { displayName, profilePictureUrl } from "../adk/identity";
 import { SkillCenterButton } from "./SkillCenter";
@@ -66,6 +71,8 @@ export interface SidebarProps {
   currentSessionId: string;
   /** Per-module feature gates; omitted modules default to shown. */
   features?: UiFeatures;
+  /** Server-derived role and capabilities. */
+  access: StudioAccess;
   /** Session ids that are currently streaming a reply (shows a live dot). */
   streamingSids?: Set<string>;
   /** Agent picker: source, local app list, current selection + label. */
@@ -75,8 +82,6 @@ export interface SidebarProps {
   currentAgentLabel?: string;
   /** The connected runtime (drives the picker's detail panel). */
   currentRuntime?: SelectedRuntime;
-  /** Identity used to badge the user's own runtimes in the cloud picker. */
-  author?: string;
   onSelectAgent?: (id: string) => void;
   onNewChat: () => void;
   onSearch: () => void;
@@ -196,13 +201,13 @@ export function Sidebar({
   sessions,
   currentSessionId,
   features,
+  access,
   streamingSids,
   agentsSource = "local",
   localApps = [],
   currentAgentId = "",
   currentAgentLabel = "",
   currentRuntime,
-  author = "",
   onSelectAgent,
   onNewChat,
   onSearch,
@@ -331,7 +336,7 @@ export function Sidebar({
             localApps={localApps}
             currentId={currentAgentId}
             currentRuntime={currentRuntime}
-            author={author}
+            runtimeScope={access.capabilities.runtimeScope}
             onSelect={onSelectAgent}
           />
         )}
@@ -348,7 +353,7 @@ export function Sidebar({
         )}
         {show("search") && <SearchButton onClick={onSearch} />}
         {show("skillCenter") && <SkillCenterButton onClick={onSkillCenter} />}
-        {show("addAgent") && (
+        {access.capabilities.createAgents && show("addAgent") && (
           <button
             className="new-chat"
             onClick={onQuickCreate}
@@ -359,7 +364,7 @@ export function Sidebar({
             <span className="sidebar-nav-label">添加 Agent</span>
           </button>
         )}
-        {show("manageAgents") && (
+        {access.capabilities.manageAgents && show("manageAgents") && (
           <button
             className="new-chat"
             onClick={onManageAgents}

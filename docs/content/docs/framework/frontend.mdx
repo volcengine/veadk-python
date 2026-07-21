@@ -183,6 +183,51 @@ Application。未指定 `--region` 和 `--project` 时，会在北京、上海�
 部署注册回调地址时会保留 VeIdentity 登录页，并为该客户端开启跳过授权确认，
 避免用户登录后再次确认授权。
 
+### Studio 角色与 Runtime 权限
+
+`--admin` 和 `--developer` 分别接收逗号分隔的用户名或 OAuth 邮箱。空格会被
+忽略，身份匹配不区分大小写；同一身份同时出现在两个名单时，`admin` 优先。
+本地启动示例：
+
+```bash
+veadk studio \
+  --admin "admin,admin@example.com" \
+  --developer "alice,alice@example.com,bob"
+```
+
+也可以分别通过 `VEADK_STUDIO_ADMINS` 和 `VEADK_STUDIO_DEVELOPERS` 环境变量
+设置这两个名单。
+
+部署 Studio 时使用相同参数：
+
+```bash
+veadk studio deploy \
+  --user-pool-id <pool-id> \
+  --allowed-client-id <client-id> \
+  --vefaas-app-name <app-name> \
+  --admin "admin@example.com" \
+  --developer "alice@example.com,bob@example.com"
+```
+
+只要传入任一名单就会启用角色权限；未命中名单的身份是普通用户。两项都不传时
+保留原有行为，不限制 Studio 功能。
+
+| 功能 | admin | developer | 普通用户 |
+| :-- | :-- | :-- | :-- |
+| 添加、调试和部署 Agent | 允许 | 允许 | 不允许；侧边栏隐藏添加/管理入口 |
+| 查看和连接 Runtime | 全部 Runtime | 仅自己创建的 Runtime | 仅自己创建的 Runtime |
+| 管理或删除 Runtime | 全部 Studio 管理的 Runtime | 仅自己创建的 Runtime | 不允许 |
+
+Runtime 归属由服务端在创建时记录，不使用浏览器提交的作者字段做授权。升级前创建
+的 Runtime 会兼容 `veadk:author` 归属标签；同时缺少 `veadk:owner` 和
+`veadk:author` 归属标签的历史 Runtime 仅 admin 可见。
+
+<Callout type="warning">
+  本地用户名保存在浏览器中，可以被用户修改或冒充，只适合本地开发和功能验证。
+  生产环境必须使用 OAuth 或 gateway 认证，让服务端从已验证的身份中判断角色和
+  Runtime 归属。
+</Callout>
+
 ### `veadk studio deploy` 的 IAM 权限
 
 部署命令会先检查 `ServerlessApplicationRole`。如果该 Role 不存在，终端会显示

@@ -7,6 +7,7 @@ import {
   fetchRemoteApps,
   probeRuntimeApps,
   registerRemoteApp,
+  RuntimeAccessDeniedError,
 } from "./client";
 
 export interface RemoteConnection {
@@ -111,8 +112,17 @@ export async function connectRuntime(
   name: string,
   region: string,
 ): Promise<string> {
-  const apps = await probeRuntimeApps(runtimeId, region);
+  let apps: string[] | null;
+  try {
+    apps = await probeRuntimeApps(runtimeId, region);
+  } catch (error) {
+    if (error instanceof RuntimeAccessDeniedError) {
+      removeRuntimeConnection(runtimeId);
+    }
+    throw error;
+  }
   if (!apps || apps.length === 0) {
+    removeRuntimeConnection(runtimeId);
     throw new Error("该 Runtime 暂不支持连接，请确认服务已正常运行。");
   }
   const labels = Object.fromEntries(apps.map((app) => [app, name]));
@@ -145,6 +155,14 @@ export async function addConnection(
 
 export function removeConnection(id: string): RemoteConnection[] {
   const list = loadConnections().filter((c) => c.id !== id);
+  persist(list);
+  registerConnections(list);
+  return list;
+}
+
+/** Forget a cached runtime connection after the server rejects its owner. */
+export function removeRuntimeConnection(runtimeId: string): RemoteConnection[] {
+  const list = loadConnections().filter((c) => c.runtimeId !== runtimeId);
   persist(list);
   registerConnections(list);
   return list;
