@@ -98,6 +98,7 @@ class SelectedSkill(BaseModel):
     localFiles: list[GeneratedFile] = Field(default_factory=list)
     skillSpaceId: str = ""
     skillSpaceName: str = ""
+    skillSpaceRegion: str = ""
     skillId: str = ""
     version: str = ""
 

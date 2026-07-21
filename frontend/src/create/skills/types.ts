@@ -27,6 +27,7 @@ export interface SkillHit {
   // SkillSpace (AgentKit account-scoped) fields
   skillSpaceId?: string;
   skillSpaceName?: string;
+  skillSpaceRegion?: string;
   skillId?: string;
   version?: string;
 }
@@ -48,6 +49,7 @@ export interface SelectedSkill {
   // fetched live rather than serialized, since it can be large).
   skillSpaceId?: string;
   skillSpaceName?: string;
+  skillSpaceRegion?: string;
   skillId?: string;
   version?: string;
 }

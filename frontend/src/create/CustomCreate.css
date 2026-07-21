@@ -1965,9 +1965,26 @@
 }
 
 /* skillspace picker */
+.cw-skillspace-header {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
 .cw-skillspace-select {
   width: 100%;
-  margin-bottom: 10px;
+  flex: 1;
+  min-width: 0;
+}
+.cw-skillspace-console-link {
+  flex-shrink: 0;
+  padding: 9px 12px;
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  border-color: hsl(var(--primary));
+}
+.cw-skillspace-console-link .cw-i {
+  display: block;
 }
 .cw-skill-result-version {
   color: hsl(var(--muted-foreground));

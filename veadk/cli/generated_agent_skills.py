@@ -34,7 +34,7 @@ from veadk.cli.generated_agent_codegen import (
 from veadk.cli.generated_agent_security import DebugPolicyError
 
 
-SkillSpaceResolver = Callable[[str, str, str | None], Awaitable[str]]
+SkillSpaceResolver = Callable[..., Awaitable[str]]
 
 SKILLHUB_BASE = "https://skills.volces.com/v1/skills"
 MAX_SKILL_FILES = 80
@@ -119,7 +119,19 @@ async def _materialize_skillspace_skill(
     if not skill.skillSpaceId or not skill.skillId:
         raise DebugPolicyError("SkillSpace skill is missing ids")
     folder = _safe_folder(skill.folder or skill.name or skill.skillId)
-    skill_md = await resolver(skill.skillSpaceId, skill.skillId, skill.version or None)
+    try:
+        skill_md = await resolver(
+            skill.skillSpaceId,
+            skill.skillId,
+            skill.version or None,
+            skill.skillSpaceRegion or None,
+        )
+    except TypeError:
+        skill_md = await resolver(
+            skill.skillSpaceId,
+            skill.skillId,
+            skill.version or None,
+        )
     _validate_skill_md(skill_md, f"SkillSpace skill {skill.skillId}")
     return [GeneratedFile(path=f"skills/{folder}/SKILL.md", content=skill_md)]
 

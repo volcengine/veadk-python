@@ -11,6 +11,7 @@ export interface SkillSpaceRef {
   name: string;
   description: string;
   status: string;
+  region?: string;
 }
 export interface SkillSpaceSkill {
   skillId: string;
@@ -58,13 +59,14 @@ async function jfetch<T>(url: string): Promise<T> {
 }
 
 export async function listSkillSpaces(): Promise<SkillSpaceRef[]> {
-  const data = await jfetch<{ items: SkillSpaceRef[] }>("/web/skill-spaces");
+  const data = await jfetch<{ items: SkillSpaceRef[] }>("/web/skill-spaces?region=all");
   return data.items || [];
 }
 
-export async function listSkillsInSpace(spaceId: string): Promise<SkillSpaceSkill[]> {
+export async function listSkillsInSpace(spaceId: string, region?: string): Promise<SkillSpaceSkill[]> {
+  const q = region ? `?region=${encodeURIComponent(region)}` : "";
   const data = await jfetch<{ items: SkillSpaceSkill[] }>(
-    `/web/skill-spaces/${encodeURIComponent(spaceId)}/skills`,
+    `/web/skill-spaces/${encodeURIComponent(spaceId)}/skills${q}`,
   );
   return data.items || [];
 }
@@ -73,8 +75,12 @@ export async function getSkillDetail(
   spaceId: string,
   skillId: string,
   version?: string,
+  region?: string,
 ): Promise<SkillDetail> {
-  const q = version ? `?version=${encodeURIComponent(version)}` : "";
+  const params: string[] = [];
+  if (version) params.push(`version=${encodeURIComponent(version)}`);
+  if (region) params.push(`region=${encodeURIComponent(region)}`);
+  const q = params.length > 0 ? `?${params.join("&")}` : "";
   return jfetch<SkillDetail>(
     `/web/skill-spaces/${encodeURIComponent(spaceId)}/skills/${encodeURIComponent(skillId)}${q}`,
   );
@@ -90,6 +96,7 @@ export function toHit(space: SkillSpaceRef, s: SkillSpaceSkill): SkillHit {
     folder: s.skillName,
     skillSpaceId: space.id,
     skillSpaceName: space.name,
+    skillSpaceRegion: space.region,
     skillId: s.skillId,
     version: s.version,
   };
@@ -102,7 +109,15 @@ export async function downloadSkillSpaceSkill(
   skillId: string,
   version: string | undefined,
   folder: string,
+  region?: string,
 ): Promise<ProjectFile[]> {
-  const d = await getSkillDetail(spaceId, skillId, version);
+  const d = await getSkillDetail(spaceId, skillId, version, region);
   return [{ path: `skills/${folder}/SKILL.md`, content: d.skillMd }];
+}
+
+/** Get the Volcengine console URL for a SkillSpace. */
+export function getSkillSpaceConsoleUrl(spaceId: string, region?: string): string {
+  const r = region || "cn-beijing";
+  const consoleRegion = r === "cn-beijing" ? "cn" : "cn-shanghai";
+  return `https://console.volcengine.com/agentkit/${consoleRegion}/skillspace/detail/${encodeURIComponent(spaceId)}`;
 }

@@ -1339,11 +1339,12 @@ def _run_frontend_server(
         space_id: str,
         skill_id: str,
         version: str | None,
+        region: str | None = None,
     ) -> str:
         from agentkit.sdk.skills.types import GetSkillVersionRequest
 
         try:
-            client = _skills_client("cn-beijing")
+            client = _skills_client(region or "cn-beijing")
             resp = client.get_skill_version(
                 GetSkillVersionRequest(id=skill_id, skill_version=version)
             )
@@ -1351,7 +1352,7 @@ def _run_frontend_server(
             raise
         except Exception as e:
             logger.error(
-                f"GetSkillVersion({skill_id}@{version}) error: {e}",
+                f"GetSkillVersion({skill_id}@{version}) error for region {region or 'cn-beijing'}: {e}",
                 exc_info=True,
             )
             raise HTTPException(status_code=502, detail=f"SkillSpaces API error: {e}")
@@ -2823,34 +2824,41 @@ def _run_frontend_server(
         )
 
     @app.get("/web/skill-spaces")
-    async def _web_list_skill_spaces(region: str = "cn-beijing"):
-        """List SkillSpaces visible to the server's credentials. v1: single
-        page of up to 50 spaces (covers virtually all accounts)."""
+    async def _web_list_skill_spaces(region: str = "all"):
+        """List SkillSpaces visible to the server's credentials. Fetches from
+        both cn-beijing and cn-shanghai when region=all."""
         from agentkit.sdk.skills.types import ListSkillSpacesRequest
 
-        try:
-            client = _skills_client(region)
-            resp = client.list_skill_spaces(
-                ListSkillSpacesRequest(page_number=1, page_size=50)
-            )
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"ListSkillSpaces error: {e}", exc_info=True)
-            raise HTTPException(status_code=502, detail=f"SkillSpaces API error: {e}")
+        regions = ["cn-beijing", "cn-shanghai"] if region == "all" else [region]
+        all_items = []
 
-        items = list(resp.items or [])
+        for reg in regions:
+            try:
+                client = _skills_client(reg)
+                resp = client.list_skill_spaces(
+                    ListSkillSpacesRequest(page_number=1, page_size=50)
+                )
+                for s in resp.items or []:
+                    all_items.append(
+                        {
+                            "id": s.id or "",
+                            "name": s.name or "",
+                            "description": s.description or "",
+                            "status": s.status or "",
+                            "region": reg,
+                        }
+                    )
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"ListSkillSpaces error for {reg}: {e}", exc_info=True)
+                raise HTTPException(
+                    status_code=502, detail=f"SkillSpaces API error for {reg}: {e}"
+                )
+
         return {
-            "items": [
-                {
-                    "id": s.id or "",
-                    "name": s.name or "",
-                    "description": s.description or "",
-                    "status": s.status or "",
-                }
-                for s in items
-            ],
-            "totalCount": resp.total_count or len(items),
+            "items": all_items,
+            "totalCount": len(all_items),
         }
 
     @app.get("/web/skill-spaces/{space_id}/skills")
@@ -2870,9 +2878,12 @@ def _run_frontend_server(
             raise
         except Exception as e:
             logger.error(
-                f"ListSkillsBySkillSpace({space_id}) error: {e}", exc_info=True
+                f"ListSkillsBySkillSpace({space_id}) error for {region}: {e}",
+                exc_info=True,
             )
-            raise HTTPException(status_code=502, detail=f"SkillSpaces API error: {e}")
+            raise HTTPException(
+                status_code=502, detail=f"SkillSpaces API error for {region}: {e}"
+            )
 
         items = list(resp.items or [])
         return {
