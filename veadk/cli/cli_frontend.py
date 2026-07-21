@@ -3026,21 +3026,9 @@ def _run_frontend_server(
 
 def _studio_deploy_run_script(site_logo_filename: str | None = None) -> str:
     """Return the authenticated VeFaaS entrypoint used by ``studio deploy``."""
-    command = "exec python3 -m veadk.cli.cli studio --auth-mode frontend"
-    if site_logo_filename:
-        command += f' --site-logo "$ROOT_DIR/{site_logo_filename}"'
-    command += ' --host "$HOST" --port "$PORT"\n'
-    return (
-        "#!/bin/bash\n"
-        "set -ex\n"
-        'ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"\n'
-        'cd "$ROOT_DIR"\n'
-        'if [ -d "output" ]; then cd ./output/; fi\n'
-        "HOST=0.0.0.0\n"
-        "PORT=${_FAAS_RUNTIME_PORT:-8000}\n"
-        "export PYTHONPATH=$PYTHONPATH:./site-packages\n"
-        f"{command}"
-    )
+    from veadk.cli.studio_package import studio_run_script
+
+    return studio_run_script(site_logo_filename)
 
 
 def _resolve_studio_identity_region(
@@ -3257,10 +3245,6 @@ def frontend_deploy(
     requirements = (
         f"veadk-python=={veadk_version}\n" if veadk_version else "veadk-python\n"
     )
-    logo_filename = (
-        f"site-logo.{branding_logo.extension}" if branding_logo is not None else None
-    )
-    run_sh = _studio_deploy_run_script(logo_filename)
     # 3b) Resolve the serverless APIG gateway: use --gateway-name if given, else
     #     reuse an existing serverless gateway, creating one only if none exists.
     #     (VeFaaS applications can only attach to a serverless gateway; reusing
@@ -3281,101 +3265,28 @@ def frontend_deploy(
 
     tmp = tempfile.mkdtemp(prefix=f"veadk_frontend_deploy_{vefaas_app_name}_")
     try:
-        (Path(tmp) / "run.sh").write_text(run_sh, encoding="utf-8")
-        if branding_logo is not None and logo_filename is not None:
-            (Path(tmp) / logo_filename).write_bytes(branding_logo.content)
-
         # When --from-source, build a wheel from this checkout (picks up
         # uncommitted changes + the current veadk/webui) and install it instead
         # of the PyPI release, so the deployed frontend runs this branch's code.
         if from_source:
-            import hashlib
-            import shutil as _shutil
-            import subprocess
-            import sys
-            from urllib.request import urlopen
-
             import veadk
 
-            repo_root = Path(veadk.__file__).resolve().parent.parent
-            if not (repo_root / "pyproject.toml").is_file():
-                raise click.ClickException(
-                    f"--from-source: no pyproject.toml at {repo_root}; run from a "
-                    "veadk source checkout."
-                )
-            click.echo(f"Building wheel from source at {repo_root}…")
-            uv = _shutil.which("uv")
-            if uv:
-                cmd = [uv, "build", "--wheel", str(repo_root), "-o", tmp]
-            else:
-                cmd = [
-                    sys.executable,
-                    "-m",
-                    "build",
-                    "--wheel",
-                    "-o",
-                    tmp,
-                    str(repo_root),
-                ]
-            subprocess.run(cmd, check=True)
-            wheels = list(Path(tmp).glob("veadk*.whl"))
-            if not wheels:
-                raise click.ClickException(
-                    "--from-source: wheel build produced no .whl"
-                )
-            wheel_name = wheels[0].name
-            click.echo(f"Shipping local wheel: {wheel_name}")
-            # VeFaaS's package mirror can lag public PyPI, while its build
-            # environment cannot reliably reach public PyPI. Bundle the pinned
-            # dependencies currently missing or stale in that mirror.
-            bundled_wheels = [
-                (
-                    "trustedmcp-0.0.5-py3-none-any.whl",
-                    "https://files.pythonhosted.org/packages/e0/5b/"
-                    "9d60a8633f4ab94c9ec0621b51a74d866086b4cb6579882fa4fb9186023b/"
-                    "trustedmcp-0.0.5-py3-none-any.whl",
-                    "3e89f6c9f5fb17cb70aaaa37df21a6e01722ccb1eec6cb8fc2e61417016986d4",
-                ),
-                (
-                    "volcengine_python_sdk-5.0.36-py2.py3-none-any.whl",
-                    "https://files.pythonhosted.org/packages/00/a1/"
-                    "9e246023bb847329bda43e516c64aa10d77b2d98c662f0e1179689020c23/"
-                    "volcengine_python_sdk-5.0.36-py2.py3-none-any.whl",
-                    "3a74fa7a7baa5d5f604b175f967660cd0aa4c7057ce44d98c4041fbaf7944b5b",
-                ),
-                (
-                    "tokenizers-0.22.2-cp39-abi3-manylinux_2_17_x86_64."
-                    "manylinux2014_x86_64.whl",
-                    "https://files.pythonhosted.org/packages/2e/76/"
-                    "932be4b50ef6ccedf9d3c6639b056a967a86258c6d9200643f01269211ca/"
-                    "tokenizers-0.22.2-cp39-abi3-manylinux_2_17_x86_64."
-                    "manylinux2014_x86_64.whl",
-                    "369cc9fc8cc10cb24143873a0d95438bb8ee257bb80c71989e3ee290e8d72c67",
-                ),
-                (
-                    "openviking_sdk-0.1.4-py3-none-any.whl",
-                    "https://files.pythonhosted.org/packages/fe/af/"
-                    "4ca139b05f39c8ed04339d7c8aa56550df80f97d39768d2df9bd72fdbbb9/"
-                    "openviking_sdk-0.1.4-py3-none-any.whl",
-                    "1e9f23332b1b687dd7f272e660953992de60ad3e9d07d62f7460fd4aedb99616",
-                ),
-            ]
-            for dependency_name, dependency_url, dependency_sha256 in bundled_wheels:
-                with urlopen(dependency_url, timeout=60) as response:
-                    dependency_wheel = response.read()
-                if hashlib.sha256(dependency_wheel).hexdigest() != dependency_sha256:
-                    raise click.ClickException(
-                        f"--from-source: {dependency_name} checksum verification failed"
-                    )
-                (Path(tmp) / dependency_name).write_bytes(dependency_wheel)
-            requirements = (
-                "".join(
-                    f"./{dependency_name}\n" for dependency_name, _, _ in bundled_wheels
-                )
-                + f"./{wheel_name}\n"
-            )
+            from veadk.cli.studio_package import build_local_studio_requirements
 
-        (Path(tmp) / "requirements.txt").write_text(requirements, encoding="utf-8")
+            repo_root = Path(veadk.__file__).resolve().parent.parent
+            click.echo(f"Building wheel from source at {repo_root}…")
+            try:
+                requirements = build_local_studio_requirements(repo_root, Path(tmp))
+            except ValueError as error:
+                raise click.ClickException(f"--from-source: {error}") from error
+
+        from veadk.cli.studio_package import write_studio_package
+
+        write_studio_package(
+            Path(tmp),
+            requirements=requirements,
+            site_logo=branding_logo,
+        )
 
         # 3) Deploy the function + a plain public APIG trigger on the serverless
         #    gateway (auth_method="none" — no gateway SSO plugin / domain upstream).
@@ -3443,5 +3354,159 @@ def frontend_deploy(
         click.echo(f"✅ Frontend deployed: {url}")
         click.echo(f"   application id: {app.vefaas_application_id}")
         click.echo("   (open the URL — you'll be redirected through SSO login)")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@studio.command("update")
+@click.option(
+    "--vefaas-app-name",
+    required=True,
+    help="Existing VeFaaS Application name to update.",
+)
+@click.option(
+    "--region",
+    default=None,
+    type=click.Choice(["cn-beijing", "cn-shanghai"]),
+    help="Limit Application lookup to one region (default: search both).",
+)
+@click.option(
+    "--project",
+    default=None,
+    help="Limit Application lookup to one project (default: search all visible projects).",
+)
+@click.option(
+    "--path",
+    default=".",
+    show_default=True,
+    type=click.Path(file_okay=False, path_type=Path),
+    help="VeADK source checkout whose frontend will be built and uploaded.",
+)
+@click.option(
+    "--site-logo",
+    default=None,
+    help="Replace the deployed Studio logo with a local image or HTTP(S) URL.",
+)
+@click.option(
+    "--site-title",
+    default=None,
+    help="Replace the deployed Studio title, at most 6 characters.",
+)
+@click.option("--volcengine-access-key", default=None)
+@click.option("--volcengine-secret-key", default=None)
+def frontend_update(
+    vefaas_app_name: str,
+    region: str | None,
+    project: str | None,
+    path: Path,
+    site_logo: str | None,
+    site_title: str | None,
+    volcengine_access_key: str | None,
+    volcengine_secret_key: str | None,
+) -> None:
+    """Build local Studio sources and update an existing VeFaaS Application."""
+    import shutil
+    import tempfile
+
+    from veadk.cli.studio_package import (
+        build_frontend_assets,
+        build_local_studio_requirements,
+        write_studio_package,
+    )
+    from veadk.cli.studio_update import (
+        find_studio_deployments,
+        load_deployed_site_logo,
+    )
+    from veadk.config import getenv
+    from veadk.integrations.ve_faas.ve_faas import VeFaaS
+
+    ak = volcengine_access_key or getenv("VOLCENGINE_ACCESS_KEY")
+    sk = volcengine_secret_key or getenv("VOLCENGINE_SECRET_KEY")
+    if not ak or not sk:
+        raise click.ClickException(
+            "Volcengine credentials required: set VOLCENGINE_ACCESS_KEY/SECRET_KEY "
+            "or pass --volcengine-access-key/--volcengine-secret-key."
+        )
+
+    targets = find_studio_deployments(
+        access_key=ak,
+        secret_key=sk,
+        application_name=vefaas_app_name,
+        region=region,
+        project=project,
+    )
+    if not targets:
+        scope = "/".join(value for value in (region, project) if value) or (
+            "cn-beijing and cn-shanghai across all visible projects"
+        )
+        raise click.ClickException(
+            f"VeFaaS Application '{vefaas_app_name}' was not found in {scope}."
+        )
+    if len(targets) > 1:
+        candidates = "\n".join(
+            f"  - {target.region}/{target.project} "
+            f"(Application ID: {target.application_id})"
+            for target in targets
+        )
+        raise click.ClickException(
+            f"Multiple VeFaaS Applications named '{vefaas_app_name}' were found. "
+            "Specify --region and/or --project:\n"
+            f"{candidates}"
+        )
+    target = targets[0]
+
+    try:
+        branding_logo = (
+            resolve_site_logo(site_logo)
+            if site_logo is not None
+            else load_deployed_site_logo(target)
+        )
+        branding_title = (
+            normalize_site_title(site_title) if site_title is not None else None
+        )
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
+
+    source_root = path.expanduser().resolve()
+    tmp = Path(tempfile.mkdtemp(prefix=f"veadk_studio_update_{vefaas_app_name}_"))
+    package_dir = tmp / "package"
+    try:
+        click.echo(f"Building Studio frontend from {source_root}…")
+        frontend_assets = tmp / "frontend"
+        try:
+            build_frontend_assets(source_root, frontend_assets)
+            requirements = build_local_studio_requirements(
+                source_root,
+                package_dir,
+                frontend_assets=frontend_assets,
+            )
+        except ValueError as error:
+            raise click.ClickException(str(error)) from error
+        write_studio_package(
+            package_dir,
+            requirements=requirements,
+            site_logo=branding_logo,
+        )
+
+        click.echo(f"Updating '{vefaas_app_name}' in {target.region}/{target.project}…")
+        service = VeFaaS(
+            access_key=ak,
+            secret_key=sk,
+            region=target.region,
+            project_name=target.project,
+        )
+        environment_overrides = (
+            {"VEADK_SITE_TITLE": branding_title} if branding_title is not None else None
+        )
+        url = service.update_application_code_bundle(
+            application_id=target.application_id,
+            function_id=target.function_id,
+            path=str(package_dir),
+            environment_overrides=environment_overrides,
+        )
+        click.echo("")
+        click.echo(f"✅ Studio updated: {url}")
+        click.echo(f"   application id: {target.application_id}")
+        click.echo(f"   function id: {target.function_id}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

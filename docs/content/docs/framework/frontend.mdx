@@ -167,6 +167,19 @@ veadk studio deploy \
 用户池；跨地域命中时会显示 warning 并继续。`--project` 指定 VeFaaS 函数
 所属项目，默认为 `default`。
 
+更新已部署的 Studio 时，在 VeADK 源码目录执行：
+
+```bash
+veadk studio update --vefaas-app-name <app-name>
+```
+
+该命令重新构建本地前端并更新已有 VeFaaS Function 的代码，然后发布原
+Application。未指定 `--region` 和 `--project` 时，会在北京、上海以及所有可见
+项目中查找；若同名 Application 不唯一，命令会列出候选项并要求缩小范围。
+更新不会改变 Application/Function ID、访问 URL、SSO、IAM、网关或已有环境
+变量。`--site-title` 和 `--site-logo` 仅在显式传入时覆盖，省略时保留云上品牌
+设置。可用 `--path` 指定源码目录，默认为当前目录；本地需安装 Node.js 与 npm。
+
 部署注册回调地址时会保留 VeIdentity 登录页，并为该客户端开启跳过授权确认，
 避免用户登录后再次确认授权。
 
