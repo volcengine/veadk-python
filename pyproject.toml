@@ -45,7 +45,7 @@ dependencies = [
     "pypdfium2>=4.30.0", # Frontend PDF attachments are rendered as page images
     "pillow>=10.0.0", # Encode rendered PDF pages as PNG
     "vikingdb-python-sdk>=0.1.3", # For Viking DB
-    "agentkit-sdk-python>=0.2.0",
+    "agentkit-sdk-python>=0.5.10",
     "openviking-sdk>=0.1.3",
     "python-frontmatter==1.1.0",
     "tos>=2.8.4",   # For TOS storage and Viking DB
