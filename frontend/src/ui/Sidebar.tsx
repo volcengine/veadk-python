@@ -112,17 +112,33 @@ function smokeAvatarStyle(seed: string): CSSProperties {
   } as CSSProperties;
 }
 
+const STUDIO_ROLE_LABELS: Record<StudioAccess["role"], string> = {
+  admin: "管理员",
+  developer: "开发者",
+  user: "普通用户",
+};
+
+function StudioRoleBadge({ role }: { role: StudioAccess["role"] }) {
+  const label = STUDIO_ROLE_LABELS[role];
+  return (
+    <span className={`studio-role-badge studio-role-badge--${role}`} title={label}>
+      {label}
+    </span>
+  );
+}
+
 /** Account block pinned at the bottom of the sidebar: avatar + name, with a
  *  popover (opening upward) holding the full identity + logout. */
 function SidebarUser({
+  access,
   userInfo,
   onLogout,
-}: Pick<SidebarProps, "userInfo" | "onLogout">) {
+}: Pick<SidebarProps, "access" | "userInfo" | "onLogout">) {
   const [open, setOpen] = useState(false);
   const [failedAvatarUrl, setFailedAvatarUrl] = useState("");
   if (!userInfo) return null;
   const name = displayName(userInfo);
-  const email = String(userInfo.email ?? userInfo.sub ?? "");
+  const email = typeof userInfo.email === "string" ? userInfo.email : "";
   const initial = (name || "U").slice(0, 1).toUpperCase();
   const avatarStyle = smokeAvatarStyle(name || email || initial);
   const pictureUrl = profilePictureUrl(userInfo);
@@ -132,7 +148,7 @@ function SidebarUser({
       <button
         className="sidebar-user-btn"
         onClick={() => setOpen((o) => !o)}
-        title={name}
+        title={email ? `${name}\n${email}` : name}
       >
         <span
           className={`account-avatar${visiblePictureUrl ? " has-image" : ""}`}
@@ -150,7 +166,15 @@ function SidebarUser({
             />
           ) : null}
         </span>
-        <span className="sidebar-user-name">{name}</span>
+        <span className="sidebar-user-identity">
+          <span className="sidebar-user-primary">
+            <span className="sidebar-user-name">{name}</span>
+            <StudioRoleBadge role={access.role} />
+          </span>
+          {email && email !== name && (
+            <span className="sidebar-user-email">{email}</span>
+          )}
+        </span>
       </button>
       {open && (
         <>
@@ -176,7 +200,10 @@ function SidebarUser({
                 ) : null}
               </span>
               <div className="account-id">
-                <div className="account-name">{name}</div>
+                <div className="account-name-row">
+                  <div className="account-name">{name}</div>
+                  <StudioRoleBadge role={access.role} />
+                </div>
                 {email && email !== name && <div className="account-sub">{email}</div>}
               </div>
             </div>
@@ -441,7 +468,7 @@ export function Sidebar({
       </div>
       )}
 
-      <SidebarUser userInfo={userInfo} onLogout={onLogout} />
+      <SidebarUser access={access} userInfo={userInfo} onLogout={onLogout} />
     </aside>
   );
 }

@@ -218,6 +218,9 @@ veadk studio deploy \
 | 查看和连接 Runtime | 全部 Runtime | 仅自己创建的 Runtime | 仅自己创建的 Runtime |
 | 管理或删除 Runtime | 全部 Studio 管理的 Runtime | 仅自己创建的 Runtime | 不允许 |
 
+侧边栏底部的账号区域会在用户名下显示 OAuth 邮箱，并在用户名右侧用紫色、黄色、
+绿色徽标分别标识管理员、开发者和普通用户。
+
 Runtime 归属由服务端在创建时记录，不使用浏览器提交的作者字段做授权。升级前创建
 的 Runtime 会兼容 `veadk:author` 归属标签；同时缺少 `veadk:owner` 和
 `veadk:author` 归属标签的历史 Runtime 仅 admin 可见。

@@ -10,6 +10,7 @@ const clientSource = read("adk/client.ts");
 const connectionsSource = read("adk/connections.ts");
 const selectorSource = read("ui/AgentSelector.tsx");
 const sidebarSource = read("ui/Sidebar.tsx");
+const stylesSource = read("styles.css");
 
 test("Studio access fails closed until the server-derived role is known", () => {
   assert.match(clientSource, /export type StudioRole = "admin" \| "developer" \| "user"/);
@@ -26,6 +27,17 @@ test("ordinary users cannot render or open Agent creation and management", () =>
   assert.match(appSource, /const showManageAgents = canManageAgents && manageAgents/);
   assert.match(appSource, /if \(!canCreateAgents\)[\s\S]*?当前账号没有添加 Agent 的权限/);
   assert.match(appSource, /if \(!canManageAgents\)[\s\S]*?当前账号没有管理 Agent 的权限/);
+});
+
+test("sidebar shows the OAuth email and translated role badge", () => {
+  assert.match(sidebarSource, /admin: "管理员"/);
+  assert.match(sidebarSource, /developer: "开发者"/);
+  assert.match(sidebarSource, /user: "普通用户"/);
+  assert.match(sidebarSource, /typeof userInfo\.email === "string"/);
+  assert.match(sidebarSource, /<SidebarUser access=\{access\}/);
+  assert.match(stylesSource, /studio-role-badge--admin[\s\S]*?hsl\(271/);
+  assert.match(stylesSource, /studio-role-badge--developer[\s\S]*?hsl\(47/);
+  assert.match(stylesSource, /studio-role-badge--user[\s\S]*?hsl\(145/);
 });
 
 test("runtime selection obeys the server-granted scope", () => {

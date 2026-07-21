@@ -2848,8 +2848,10 @@ body {
   animation: ddpop 0.12s ease;
 }
 .account-head { display: flex; align-items: center; gap: 10px; }
-.account-id { min-width: 0; }
+.account-id { min-width: 0; flex: 1; }
+.account-name-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .account-name {
+  min-width: 0; flex: 1;
   font-size: 14px; font-weight: 600;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
@@ -2894,6 +2896,19 @@ body {
   transition: background 0.12s;
 }
 .sidebar-user-btn:hover { background: hsl(var(--foreground) / 0.05); }
+.sidebar-user-identity {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sidebar-user-primary {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .sidebar-user-name {
   min-width: 0;
   flex: 1;
@@ -2904,6 +2919,41 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.sidebar-user-email {
+  min-width: 0;
+  text-align: left;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.studio-role-badge {
+  flex-shrink: 0;
+  padding: 2px 5px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.studio-role-badge--admin {
+  color: hsl(271 64% 43%);
+  background: hsl(271 74% 55% / 0.11);
+  border-color: hsl(271 64% 48% / 0.24);
+}
+.studio-role-badge--developer {
+  color: hsl(39 91% 31%);
+  background: hsl(47 96% 52% / 0.18);
+  border-color: hsl(44 88% 43% / 0.3);
+}
+.studio-role-badge--user {
+  color: hsl(144 65% 30%);
+  background: hsl(145 65% 42% / 0.12);
+  border-color: hsl(144 57% 37% / 0.24);
+}
 .sidebar.is-collapsed .sidebar-user-btn {
   width: 36px;
   height: 36px;
@@ -2912,7 +2962,7 @@ body {
   padding: 2px;
   overflow: hidden;
 }
-.sidebar.is-collapsed .sidebar-user-name {
+.sidebar.is-collapsed .sidebar-user-identity {
   display: none;
 }
 .sidebar.is-collapsed .sidebar-user-pop {
