@@ -1979,6 +1979,9 @@
 .cw-skillspace-console-link {
   flex-shrink: 0;
   padding: 9px 12px;
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  border-color: hsl(var(--primary));
 }
 .cw-skillspace-console-link .cw-i {
   display: block;
