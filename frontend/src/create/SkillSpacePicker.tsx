@@ -6,11 +6,12 @@
 // exports with markdown.
 
 import { useEffect, useState } from "react";
-import { Check, Cloud, Info, Loader2, Plus } from "lucide-react";
+import { Check, Cloud, ExternalLink, Info, Loader2, Plus } from "lucide-react";
 import {
   listSkillSpaces,
   listSkillsInSpace,
   toHit,
+  getSkillSpaceConsoleUrl,
   type SkillSpaceRef,
   type SkillSpaceSkill,
 } from "./skills/skillspace";
@@ -57,12 +58,13 @@ export function SkillSpacePicker({
       setSkills([]);
       return;
     }
+    const selectedSpace = spaces.find((s) => s.id === spaceId);
     let cancelled = false;
     (async () => {
       setLoadingSkills(true);
       setError(null);
       try {
-        const sk = await listSkillsInSpace(spaceId);
+        const sk = await listSkillsInSpace(spaceId, selectedSpace?.region);
         if (!cancelled) setSkills(sk);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "加载失败");
@@ -73,7 +75,7 @@ export function SkillSpacePicker({
     return () => {
       cancelled = true;
     };
-  }, [spaceId]);
+  }, [spaceId, spaces]);
 
   const selectedSpace = spaces.find((s) => s.id === spaceId);
 
@@ -107,6 +109,7 @@ export function SkillSpacePicker({
           description: hit.description,
           skillSpaceId: hit.skillSpaceId,
           skillSpaceName: hit.skillSpaceName,
+          skillSpaceRegion: hit.skillSpaceRegion,
           skillId: hit.skillId,
           version: hit.version,
         },
@@ -129,19 +132,34 @@ export function SkillSpacePicker({
         <p className="cw-empty-line">此账号下没有 SkillSpace。</p>
       ) : (
         <>
-          <select
-            className="cw-input cw-skillspace-select"
-            value={spaceId}
-            onChange={(e) => setSpaceId(e.target.value)}
-            aria-label="选择 SkillSpace"
-          >
-            {spaces.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name || s.id}
-                {s.description ? ` — ${s.description}` : ""}
-              </option>
-            ))}
-          </select>
+          <div className="cw-skillspace-header">
+            <select
+              className="cw-input cw-skillspace-select"
+              value={spaceId}
+              onChange={(e) => setSpaceId(e.target.value)}
+              aria-label="选择 SkillSpace"
+            >
+              {spaces.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name || s.id}
+                  {s.region ? ` [${s.region}]` : ""}
+                  {s.description ? ` — ${s.description}` : ""}
+                </option>
+              ))}
+            </select>
+
+            {selectedSpace && (
+              <a
+                href={getSkillSpaceConsoleUrl(selectedSpace.id, selectedSpace.region)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="cw-button cw-button-secondary cw-skillspace-console-link"
+                title="在火山引擎控制台打开"
+              >
+                <ExternalLink className="cw-i cw-i-sm" />
+              </a>
+            )}
+          </div>
 
           {loadingSkills ? (
             <p className="cw-empty-line">
