@@ -103,3 +103,17 @@ test("welcome headings use a restrained neutral shimmer and stable smoke avatars
     /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.account-avatar\s*\{[\s\S]*?animation:\s*none;/,
   );
 });
+
+test("OAuth profile pictures fall back to the generated account avatar", () => {
+  assert.match(sidebarSource, /profilePictureUrl\(userInfo\)/);
+  assert.match(sidebarSource, /pictureUrl === failedAvatarUrl \? "" : pictureUrl/);
+  assert.match(sidebarSource, /className="account-avatar-image"/);
+  assert.match(
+    sidebarSource,
+    /onError=\{\(\) => setFailedAvatarUrl\(visiblePictureUrl\)\}/,
+  );
+  assert.match(
+    stylesSource,
+    /\.account-avatar-image\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?object-fit:\s*cover;/,
+  );
+});
