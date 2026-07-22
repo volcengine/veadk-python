@@ -118,6 +118,8 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert captured["region"] == expected_region
     assert captured["project"] == expected_project
     assert veadk_environments["VEIDENTITY_REGION"] == expected_identity_region
+    assert "VEADK_STUDIO_ADMINS" not in veadk_environments
+    assert "VEADK_STUDIO_DEVELOPERS" not in veadk_environments
     assert f"{expected_region}/{expected_project}" in result.output
     assert ("Warning:" in result.output) == (
         expected_identity_region != expected_region
@@ -126,6 +128,78 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert isinstance(callback, dict)
     assert callback["dismiss_login_page_enabled"] is False
     assert callback["skip_consent_enabled"] is True
+
+
+@pytest.mark.parametrize(
+    ("role_args", "expected_environment"),
+    [
+        (
+            ["--admin", "admin@example.com"],
+            {"VEADK_STUDIO_ADMINS": "admin@example.com"},
+        ),
+        (
+            ["--developer", "dev@example.com"],
+            {"VEADK_STUDIO_DEVELOPERS": "dev@example.com"},
+        ),
+    ],
+)
+def test_studio_deploy_enables_rbac_when_either_role_is_configured(
+    monkeypatch: pytest.MonkeyPatch,
+    role_args: list[str],
+    expected_environment: dict[str, str],
+) -> None:
+    class _FakeCloudAgentEngine:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def deploy(self, **_: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                vefaas_endpoint="https://studio.example.com",
+                vefaas_application_id="app-id",
+                vefaas_function_id="",
+            )
+
+    monkeypatch.setattr(
+        "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
+    )
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._resolve_studio_identity_region",
+        lambda **_: "cn-beijing",
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient.register_callback_for_user_pool_client",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "deploy",
+            "--user-pool-id",
+            "pool-id",
+            "--allowed-client-id",
+            "client-id",
+            "--vefaas-app-name",
+            "studio-app",
+            "--iam-role",
+            "trn:iam::role/test",
+            "--gateway-name",
+            "gateway",
+            "--volcengine-access-key",
+            "ak",
+            "--volcengine-secret-key",
+            "sk",
+            *role_args,
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    configured_roles = {
+        key: value
+        for key, value in veadk_environments.items()
+        if key in {"VEADK_STUDIO_ADMINS", "VEADK_STUDIO_DEVELOPERS"}
+    }
+    assert configured_roles == expected_environment
 
 
 def test_studio_identity_region_searches_deployment_region_first(

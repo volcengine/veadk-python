@@ -220,9 +220,10 @@ veadk studio deploy \
   --developer "alice@example.com,bob@example.com"
 ```
 
-Supplying either role list enables role-based access control; users not in a
-list are regular users, and `admin` wins when an identity appears in both
-lists. Admins have all Studio capabilities and can see every Runtime.
+Omitting both role lists makes every signed-in user an `admin`. Supplying
+either list enables role-based access control; users not in a list are regular
+users, and `admin` wins when an identity appears in both lists. Admins have all
+Studio capabilities and can see every Runtime.
 Developers can add and manage agents but can see and manage only their own
 Runtimes. Regular users can see only their own Runtimes; the add/manage-agent
 sidebar items are hidden. The sidebar account footer shows the OAuth email

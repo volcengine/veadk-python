@@ -485,7 +485,8 @@ def _serve_options(f):
             default=None,
             envvar="VEADK_STUDIO_ADMINS",
             help="Comma-separated Studio admin usernames or OAuth emails "
-            "(env: VEADK_STUDIO_ADMINS).",
+            "(env: VEADK_STUDIO_ADMINS). Omit both role options to grant "
+            "every user admin access.",
         ),
         click.option(
             "--developer",
@@ -3378,7 +3379,8 @@ def _resolve_studio_identity_region(
     "studio_admins",
     default=None,
     envvar="VEADK_STUDIO_ADMINS",
-    help="Comma-separated Studio admin usernames or OAuth emails.",
+    help="Comma-separated Studio admin usernames or OAuth emails. Omit both "
+    "role options to grant every user admin access.",
 )
 @click.option(
     "--developer",
