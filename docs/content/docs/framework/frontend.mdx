@@ -209,8 +209,8 @@ veadk studio deploy \
   --developer "alice@example.com,bob@example.com"
 ```
 
-只要传入任一名单就会启用角色权限；未命中名单的身份是普通用户。两项都不传时
-保留原有行为，不限制 Studio 功能。
+两项都不传时，所有登录用户都按管理员（`admin`）处理。只要传入任一名单就会启用
+角色权限；未命中名单的身份是普通用户。
 
 | 功能 | admin | developer | 普通用户 |
 | :-- | :-- | :-- | :-- |

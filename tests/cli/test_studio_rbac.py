@@ -141,9 +141,40 @@ def test_role_matching_uses_all_trusted_identifiers_and_admin_wins() -> None:
 
 def test_unconfigured_policy_preserves_legacy_full_access() -> None:
     policy = StudioAccessPolicy.from_csv(None, "")
+    principal = StudioPrincipal.local("any-user")
 
     assert not policy.enabled
-    assert policy.role_for(None) == StudioRole.ADMIN
+    assert policy.role_for(principal) == StudioRole.ADMIN
+    assert policy.access_payload(principal) == {
+        "role": "admin",
+        "username": "any-user",
+        "rbacEnabled": False,
+        "capabilities": {
+            "createAgents": True,
+            "manageAgents": True,
+            "runtimeScope": "all",
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("admins", "developers", "listed_user", "listed_role"),
+    [
+        ("admin", None, "admin", StudioRole.ADMIN),
+        (None, "developer", "developer", StudioRole.DEVELOPER),
+    ],
+)
+def test_either_role_list_enables_rbac(
+    admins: str | None,
+    developers: str | None,
+    listed_user: str,
+    listed_role: StudioRole,
+) -> None:
+    policy = StudioAccessPolicy.from_csv(admins, developers)
+
+    assert policy.enabled
+    assert policy.role_for(StudioPrincipal.local(listed_user)) == listed_role
+    assert policy.role_for(StudioPrincipal.local("unlisted")) == StudioRole.USER
 
 
 def test_unlisted_identity_is_a_regular_user() -> None:
@@ -195,6 +226,9 @@ def test_studio_deploy_exposes_role_options() -> None:
     assert result.exit_code == 0
     assert "--admin" in result.output
     assert "--developer" in result.output
+    assert "Omit both role options to grant every user admin access" in " ".join(
+        result.output.split()
+    )
 
 
 def test_access_endpoint_resolves_local_roles_and_blocks_user_management(

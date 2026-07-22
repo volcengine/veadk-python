@@ -231,9 +231,9 @@ veadk studio deploy \
   --developer "alice@example.com,bob@example.com"
 ```
 
-Supplying either list enables role-based access control. An identity that does
-not match either list is a regular user. Omitting both options preserves the
-existing unrestricted Studio behavior.
+Omitting both options treats every signed-in user as an `admin`. Supplying
+either list enables role-based access control. An identity that does not match
+either list is a regular user.
 
 | Capability | admin | developer | Regular user |
 | :-- | :-- | :-- | :-- |
