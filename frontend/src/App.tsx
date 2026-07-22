@@ -1818,7 +1818,7 @@ export default function App() {
                   : showAddAgent
                     ? "添加 AgentKit 智能体"
                     : skillCenter
-                      ? "技能中心"
+                      ? undefined
                       : searchView
                         ? "搜索"
                         : showManageAgents
@@ -1828,7 +1828,9 @@ export default function App() {
                             : conversationTitle
               }
               crumbs={
-                searchView || showAddAgent || skillCenter || showAddMenu || !visibleCreateView
+                skillCenter
+                  ? [{ label: "技能中心" }, { label: "AgentKit Skill 空间" }]
+                  : searchView || showAddAgent || showAddMenu || !visibleCreateView
                   ? undefined
                   : visibleCreateView === "menu"
                     ? [

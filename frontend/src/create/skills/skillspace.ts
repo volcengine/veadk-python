@@ -12,6 +12,9 @@ export interface SkillSpaceRef {
   description: string;
   status: string;
   region?: string;
+  projectName?: string;
+  updatedAt?: string;
+  skillCount?: number;
 }
 export interface SkillSpaceSkill {
   skillId: string;
@@ -29,6 +32,20 @@ export interface SkillDetail {
   skillMd: string;
   bucketName: string;
   tosPath: string;
+}
+
+export interface SkillSpacePage<T> {
+  items: T[];
+  totalCount: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface SkillSpacePageOptions {
+  region: string;
+  page: number;
+  pageSize: number;
+  project?: string;
 }
 
 async function jfetch<T>(url: string): Promise<T> {
@@ -63,6 +80,18 @@ export async function listSkillSpaces(): Promise<SkillSpaceRef[]> {
   return data.items || [];
 }
 
+export async function listSkillSpacesPage(
+  options: SkillSpacePageOptions,
+): Promise<SkillSpacePage<SkillSpaceRef>> {
+  const params = new URLSearchParams({
+    region: options.region,
+    page: String(options.page),
+    page_size: String(options.pageSize),
+  });
+  if (options.project) params.set("project", options.project);
+  return jfetch<SkillSpacePage<SkillSpaceRef>>(`/web/skill-spaces?${params.toString()}`);
+}
+
 export async function listSkillsInSpace(spaceId: string, region?: string): Promise<SkillSpaceSkill[]> {
   const q = region ? `?region=${encodeURIComponent(region)}` : "";
   const data = await jfetch<{ items: SkillSpaceSkill[] }>(
@@ -71,15 +100,32 @@ export async function listSkillsInSpace(spaceId: string, region?: string): Promi
   return data.items || [];
 }
 
+export async function listSkillsInSpacePage(
+  spaceId: string,
+  options: SkillSpacePageOptions,
+): Promise<SkillSpacePage<SkillSpaceSkill>> {
+  const params = new URLSearchParams({
+    region: options.region,
+    page: String(options.page),
+    page_size: String(options.pageSize),
+  });
+  if (options.project) params.set("project", options.project);
+  return jfetch<SkillSpacePage<SkillSpaceSkill>>(
+    `/web/skill-spaces/${encodeURIComponent(spaceId)}/skills?${params.toString()}`,
+  );
+}
+
 export async function getSkillDetail(
   spaceId: string,
   skillId: string,
   version?: string,
   region?: string,
+  project?: string,
 ): Promise<SkillDetail> {
   const params: string[] = [];
   if (version) params.push(`version=${encodeURIComponent(version)}`);
   if (region) params.push(`region=${encodeURIComponent(region)}`);
+  if (project) params.push(`project=${encodeURIComponent(project)}`);
   const q = params.length > 0 ? `?${params.join("&")}` : "";
   return jfetch<SkillDetail>(
     `/web/skill-spaces/${encodeURIComponent(spaceId)}/skills/${encodeURIComponent(skillId)}${q}`,
