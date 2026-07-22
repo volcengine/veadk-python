@@ -28,7 +28,14 @@ _ARK_PROJECT_NAME = "default"
 _ARK_PAGE_SIZE = 10
 
 
-def get_ark_token(region: str = "cn-beijing", api_key_name: str | None = None) -> str:
+def get_ark_token(
+    region: str = "cn-beijing",
+    api_key_name: str | None = None,
+    *,
+    access_key: str | None = None,
+    secret_key: str | None = None,
+    session_token: str | None = None,
+) -> str:
     """Fetch a raw ARK API key.
 
     Args:
@@ -37,15 +44,22 @@ def get_ark_token(region: str = "cn-beijing", api_key_name: str | None = None) -
         api_key_name: When given, resolve the key whose ``Name`` matches exactly.
             Raises ``ValueError`` if no key with that name exists. When omitted,
             the first key in the account's list is used (legacy behavior).
+        access_key: Optional Volcengine access key. Defaults to the environment.
+        secret_key: Optional Volcengine secret key. Defaults to the environment.
+        session_token: Optional STS session token. Defaults to the environment.
 
     Returns:
         The raw API key string.
     """
     logger.info("Fetching ARK token...")
 
-    access_key = os.getenv("VOLCENGINE_ACCESS_KEY")
-    secret_key = os.getenv("VOLCENGINE_SECRET_KEY")
-    session_token = ""
+    access_key = access_key or os.getenv("VOLCENGINE_ACCESS_KEY")
+    secret_key = secret_key or os.getenv("VOLCENGINE_SECRET_KEY")
+    session_token = (
+        session_token
+        or os.getenv("VOLCENGINE_SESSION_TOKEN")
+        or os.getenv("VOLC_SESSIONTOKEN", "")
+    )
 
     if not (access_key and secret_key):
         # try to get from vefaas iam
@@ -80,8 +94,8 @@ def get_ark_token(region: str = "cn-beijing", api_key_name: str | None = None) -
         )
         try:
             return res["Result"]
-        except KeyError:
-            raise ValueError(f"Failed to get ARK api key list: {res}")
+        except KeyError as error:
+            raise ValueError("Failed to get ARK API key list.") from error
 
     if api_key_name:
         target_id = None
@@ -106,16 +120,14 @@ def get_ark_token(region: str = "cn-beijing", api_key_name: str | None = None) -
                 f"ARK API Key named '{api_key_name}' not found in project "
                 f"'{_ARK_PROJECT_NAME}' (scanned {scanned} keys)."
             )
-        logger.info(f"Using ARK API Key by name='{api_key_name}', id={target_id}.")
+        logger.info("Using the requested ARK API Key.")
     else:
         items = _list_api_keys(1).get("Items", [])
         if not items:
             raise ValueError(f"No ARK API keys found in project '{_ARK_PROJECT_NAME}'.")
         target_id = items[0]["Id"]
         logger.warning("By default, VeADK fetches the first API Key in the list.")
-        logger.info(
-            f"Try to fetch ARK API Key with id={target_id}, name={items[0].get('Name')}"
-        )
+        logger.info("Fetching the first ARK API Key returned by ListApiKeys.")
 
     # get raw api key
     res = ve_request(
@@ -131,7 +143,7 @@ def get_ark_token(region: str = "cn-beijing", api_key_name: str | None = None) -
     )
     try:
         api_key = res["Result"]["ApiKey"]
-        logger.info(f"Successfully fetched ARK API Key (starts with {api_key[:8]}).")
+        logger.info("Successfully fetched ARK API Key.")
         return api_key
-    except KeyError:
-        raise ValueError(f"Failed to get ARK api key: {res}")
+    except KeyError as error:
+        raise ValueError("Failed to get ARK API key.") from error

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ArrowUp,
   AtSign,
@@ -20,6 +20,8 @@ import type {
 import { InvocationChips } from "./InvocationChips";
 import { MediaGroup } from "./Media";
 import { isImeCompositionEvent } from "./composerKeyboard";
+import { NewChatModeSelector } from "./new-chat-modes/NewChatModeSelector";
+import type { NewChatMode } from "./new-chat-modes/types";
 
 interface CompletionTrigger {
   kind: "skill" | "agent";
@@ -49,6 +51,9 @@ export interface ComposerProps {
   onInvocationChange: (value: FrontendInvocation) => void;
   onAddFiles: (files: FileList | File[]) => void;
   onRemoveAttachment: (id: string) => void;
+  newChatMode?: NewChatMode;
+  showModeSelector?: boolean;
+  onModeChange?: (value: NewChatMode) => void;
 }
 
 export function Composer({
@@ -68,6 +73,9 @@ export function Composer({
   onInvocationChange,
   onAddFiles,
   onRemoveAttachment,
+  newChatMode = "agent",
+  showModeSelector = false,
+  onModeChange,
 }: ComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
@@ -85,9 +93,15 @@ export function Composer({
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [value]);
 
-  const uploadPending = attachments.some((attachment) => attachment.status !== "ready");
+  const skillMode = newChatMode === "skill-create";
+  useEffect(() => {
+    if (!skillMode) return;
+    setMenuOpen(false);
+    setTrigger(null);
+  }, [skillMode]);
+  const uploadPending = !skillMode && attachments.some((attachment) => attachment.status !== "ready");
   const canSend = !disabled && !busy && !uploadPending &&
-    (value.trim().length > 0 || attachments.length > 0);
+    (value.trim().length > 0 || (!skillMode && attachments.length > 0));
 
   const query = trigger?.query.toLocaleLowerCase() ?? "";
   const suggestions: CompletionItem[] = trigger?.kind === "skill"
@@ -169,15 +183,17 @@ export function Composer({
 
   return (
     <div className="composer">
-      <InvocationChips
-        value={invocation}
-        onRemoveSkill={(name) => onInvocationChange({
-          ...invocation,
-          skills: invocation.skills.filter((skill) => skill.name !== name),
-        })}
-        onRemoveAgent={() => onInvocationChange({ skills: [] })}
-      />
-      {attachments.length > 0 && (
+      {!skillMode ? (
+        <InvocationChips
+          value={invocation}
+          onRemoveSkill={(name) => onInvocationChange({
+            ...invocation,
+            skills: invocation.skills.filter((skill) => skill.name !== name),
+          })}
+          onRemoveAgent={() => onInvocationChange({ skills: [] })}
+        />
+      ) : null}
+      {!skillMode && attachments.length > 0 && (
         <MediaGroup
           appName={appName}
           compact
@@ -229,7 +245,7 @@ export function Composer({
             )}
           </div>
         ) : null}
-        <div className="composer-menu-wrap">
+        {!skillMode ? <div className="composer-menu-wrap">
           <button
             type="button"
             className="comp-icon"
@@ -274,23 +290,28 @@ export function Composer({
               </div>
             </>
           )}
-        </div>
+        </div> : null}
 
-        <textarea
-          ref={ref}
-          className="comp-input scroll"
-          rows={1}
-          value={value}
-          disabled={disabled}
-          placeholder={disabled ? "请选择 Agent" : "给智能体发消息…"}
-          aria-expanded={Boolean(trigger)}
-          onChange={(e) => {
-            onChange(e.target.value);
-            updateCompletion(e.target.value, e.target.selectionStart);
-          }}
-          onSelect={(e) => updateCompletion(e.currentTarget.value, e.currentTarget.selectionStart)}
-          onBlur={() => setTimeout(() => setTrigger(null), 0)}
-          onKeyDown={(e) => {
+        <div className="composer-input-stack">
+          <textarea
+            ref={ref}
+            className="comp-input scroll"
+            rows={1}
+            value={value}
+            disabled={disabled}
+            placeholder={skillMode
+              ? "描述 Skill 要解决的问题、适用场景和期望输出…"
+              : disabled ? "请选择 Agent" : "给智能体发消息…"}
+            aria-expanded={Boolean(trigger)}
+            onChange={(e) => {
+              onChange(e.target.value);
+              if (!skillMode) updateCompletion(e.target.value, e.target.selectionStart);
+            }}
+            onSelect={(e) => {
+              if (!skillMode) updateCompletion(e.currentTarget.value, e.currentTarget.selectionStart);
+            }}
+            onBlur={() => setTimeout(() => setTrigger(null), 0)}
+            onKeyDown={(e) => {
             if (isImeCompositionEvent(e.nativeEvent)) return;
             if (trigger) {
               if (e.key === "ArrowDown" && suggestions.length > 0) {
@@ -327,8 +348,16 @@ export function Composer({
               e.preventDefault();
               if (canSend) onSubmit();
             }
-          }}
-        />
+            }}
+          />
+          {showModeSelector && onModeChange ? (
+            <NewChatModeSelector
+              value={newChatMode}
+              onChange={onModeChange}
+              disabled={busy}
+            />
+          ) : null}
+        </div>
         <motion.button
           type="button"
           className="comp-send"

@@ -91,3 +91,19 @@ def test_name_found_on_first_page_no_extra_pages():
         ]
         assert get_ark_token(api_key_name="wanted") == "sk-X"
         assert m.call_count == 2  # matched on page 1, no further paging
+
+
+def test_environment_sts_token_is_used_for_signed_requests(monkeypatch):
+    monkeypatch.setenv("VOLCENGINE_SESSION_TOKEN", "temporary-session-token")
+    with patch("veadk.auth.veauth.ark_veauth.ve_request") as request:
+        request.side_effect = [
+            _list_page([_key("id-1", "first")], total=1, page=1),
+            _raw("sk-FIRST"),
+        ]
+
+        assert get_ark_token() == "sk-FIRST"
+
+    assert all(
+        call.kwargs["header"]["X-Security-Token"] == "temporary-session-token"
+        for call in request.call_args_list
+    )

@@ -1793,6 +1793,13 @@ body {
   border-radius: 26px;
   background: hsl(var(--background));
 }
+.composer-input-stack {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+}
+.composer-input-stack .comp-input { width: 100%; }
 .composer-meta {
   display: flex;
   align-items: center;

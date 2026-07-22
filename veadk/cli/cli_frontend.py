@@ -778,6 +778,14 @@ def _run_frontend_server(
             )
         return principal
 
+    def _skill_creator_owner(request: Request) -> str:
+        principal = _require_agent_management(request)
+        return principal.owner_id if principal else "local"
+
+    from veadk.cli.frontend_skill_creator import mount_skill_creator_routes
+
+    mount_skill_creator_routes(app, _skill_creator_owner)
+
     @app.get("/web/access")
     async def _web_access(request: Request):
         principal = _current_principal(request)
@@ -3387,6 +3395,12 @@ def _resolve_studio_identity_region(
     envvar="VEADK_STUDIO_DEVELOPERS",
     help="Comma-separated Studio developer usernames or OAuth emails.",
 )
+@click.option(
+    "--skill-creator-tool-id",
+    default=None,
+    envvar="VEADK_SKILL_CREATOR_TOOL_ID",
+    help="Dedicated ready AgentKit CodeEnv Tool ID used by Skill creation mode.",
+)
 def frontend_deploy(
     user_pool_id: str,
     allowed_client_id: str,
@@ -3406,6 +3420,7 @@ def frontend_deploy(
     site_title: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
+    skill_creator_tool_id: str | None,
 ) -> None:
     """Deploy the SSO web frontend to VeFaaS.
 
@@ -3470,6 +3485,29 @@ def frontend_deploy(
     # shipped as a plain env var.
     os.environ["IAM_ROLE"] = role_trn
 
+    if skill_creator_tool_id:
+        from veadk.cli.frontend_skill_creator import (
+            ensure_skill_creator_model_credential,
+        )
+
+        session_token = os.getenv("VOLCENGINE_SESSION_TOKEN") or os.getenv(
+            "VOLC_SESSIONTOKEN"
+        )
+        click.echo("Ensuring the Skill Creator model credential relay…")
+        try:
+            ensure_skill_creator_model_credential(
+                tool_id=skill_creator_tool_id,
+                region=region,
+                access_key=ak,
+                secret_key=sk,
+                session_token=session_token,
+            )
+        except Exception as error:
+            raise click.ClickException(
+                f"Failed to provision the Skill Creator model credential relay: {error}"
+            ) from error
+        click.echo("Skill Creator model credential relay is ready.")
+
     # SECURITY: VeFaaS._create_function uploads *everything* in veadk_environments
     # (i.e. the deployer's whole .env) as function env vars. The frontend must
     # NOT receive the deployer's secrets (VOLCENGINE_ACCESS_KEY/SECRET_KEY, model
@@ -3493,6 +3531,8 @@ def frontend_deploy(
         veadk_environments["VEADK_STUDIO_ADMINS"] = studio_admins
     if studio_developers:
         veadk_environments["VEADK_STUDIO_DEVELOPERS"] = studio_developers
+    if skill_creator_tool_id:
+        veadk_environments["VEADK_SKILL_CREATOR_TOOL_ID"] = skill_creator_tool_id
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
 

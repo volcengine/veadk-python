@@ -195,6 +195,7 @@ def test_studio_deploy_exposes_role_options() -> None:
     assert result.exit_code == 0
     assert "--admin" in result.output
     assert "--developer" in result.output
+    assert "--skill-creator-tool-id" in result.output
 
 
 def test_access_endpoint_resolves_local_roles_and_blocks_user_management(
@@ -219,11 +220,17 @@ def test_access_endpoint_resolves_local_roles_and_blocks_user_management(
             headers={"X-VeADK-Local-User": "reader"},
             json={},
         )
+        skill_creator_forbidden = client.post(
+            "/web/skill-creator/jobs",
+            headers={"X-VeADK-Local-User": "reader"},
+            json={"prompt": "Create a release notes Skill"},
+        )
 
     assert admin.json()["role"] == "admin"
     assert developer.json()["role"] == "developer"
     assert user.json()["role"] == "user"
     assert forbidden.status_code == 403
+    assert skill_creator_forbidden.status_code == 403
 
 
 def test_gateway_role_uses_jwt_and_ignores_local_identity_header(
