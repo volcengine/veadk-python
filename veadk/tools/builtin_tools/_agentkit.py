@@ -153,3 +153,56 @@ def invoke_agentkit_run_code(
         header=header,
         scheme=scheme,
     )
+
+
+def invoke_agentkit_exec_bash(
+    *,
+    tool_id: str,
+    tool_user_session_id: str,
+    command: str,
+    exec_dir: Optional[str] = None,
+    env: Optional[dict[str, str]] = None,
+    timeout: int = 30,
+    hard_timeout: Optional[int] = None,
+    max_output_length: Optional[int] = None,
+    tool_state: Optional[dict[str, Any]] = None,
+    ttl: Optional[int] = None,
+) -> dict[str, Any]:
+    """Invoke AgentKit's Bash execution operation through InvokeTool."""
+    service, region, host, scheme = get_agentkit_endpoint_config()
+    ak, sk, header = get_agentkit_credentials(tool_state)
+
+    operation_payload: dict[str, Any] = {
+        "command": command,
+        "timeout": timeout,
+    }
+    if exec_dir is not None:
+        operation_payload["exec_dir"] = exec_dir
+    if env is not None:
+        operation_payload["env"] = env
+    if hard_timeout is not None:
+        operation_payload["hard_timeout"] = hard_timeout
+    if max_output_length is not None:
+        operation_payload["max_output_length"] = max_output_length
+
+    request_body: dict[str, Any] = {
+        "ToolId": tool_id,
+        "OperationType": "ExecBash",
+        "UserSessionId": tool_user_session_id,
+        "OperationPayload": json.dumps(operation_payload),
+    }
+    if ttl is not None:
+        request_body["Ttl"] = ttl
+
+    return ve_request(
+        request_body=request_body,
+        action="InvokeTool",
+        ak=ak,
+        sk=sk,
+        service=service,
+        version="2025-10-30",
+        region=region,
+        host=host,
+        header=header,
+        scheme=scheme,
+    )

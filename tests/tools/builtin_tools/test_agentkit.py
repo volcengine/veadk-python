@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import importlib.util
+import json
 import os
 import sys
 import types
@@ -158,6 +159,48 @@ class TestResolveAgentkitToolId(unittest.TestCase):
     def test_resolve_raises_when_all_tool_ids_missing(self):
         with self.assertRaisesRegex(ValueError, "AGENTKIT_TOOL_ID"):
             self.agentkit_module.resolve_agentkit_tool_id("AGENTKIT_TOOL_ID_SCRIPT")
+
+
+class TestInvokeAgentkitExecBash(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.agentkit_module = _load_agentkit_module()
+
+    def test_builds_exec_bash_invoke_tool_request(self):
+        with patch.object(
+            self.agentkit_module,
+            "ve_request",
+            return_value={"Result": {"Result": "shell output"}},
+        ) as ve_request:
+            result = self.agentkit_module.invoke_agentkit_exec_bash(
+                tool_id="shell-tool",
+                tool_user_session_id="kk",
+                command="echo hello",
+                exec_dir="/tmp",
+                env={"DEMO_ENV": "from-invoke-tool"},
+                timeout=30,
+                hard_timeout=60,
+                max_output_length=30000,
+                ttl=1800,
+            )
+
+        self.assertEqual(result, {"Result": {"Result": "shell output"}})
+        request_body = ve_request.call_args.kwargs["request_body"]
+        self.assertEqual(request_body["ToolId"], "shell-tool")
+        self.assertEqual(request_body["OperationType"], "ExecBash")
+        self.assertEqual(request_body["UserSessionId"], "kk")
+        self.assertEqual(request_body["Ttl"], 1800)
+        self.assertEqual(
+            json.loads(request_body["OperationPayload"]),
+            {
+                "command": "echo hello",
+                "exec_dir": "/tmp",
+                "env": {"DEMO_ENV": "from-invoke-tool"},
+                "timeout": 30,
+                "hard_timeout": 60,
+                "max_output_length": 30000,
+            },
+        )
 
 
 if __name__ == "__main__":
