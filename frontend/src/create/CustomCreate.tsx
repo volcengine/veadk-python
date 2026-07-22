@@ -2553,7 +2553,7 @@ export function CustomCreate({
                           patchA2aRegistry({ enabled })
                         }
                         title="A2A 中心"
-                        desc="通过 AgentKit A2A 注册中心发现并调用远程 Agent。"
+                        desc="升级该 Agent 为 SupperAgent，支持发现并调用 A2A 注册中心子 Agent"
                         icon={Globe}
                       />
                       {node.a2aRegistry?.enabled && (
