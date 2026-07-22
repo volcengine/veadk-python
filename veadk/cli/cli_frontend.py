@@ -880,6 +880,8 @@ def _run_frontend_server(
         "DATABASE_CONTEXT_SEARCH_",
         "OBSERVABILITY_",
         "AGENTKIT_",
+        "REGISTRY_",
+        "A2A_REGISTRY_",
         "ARK_",
         "OPENAI_",
         "GOOGLE_",

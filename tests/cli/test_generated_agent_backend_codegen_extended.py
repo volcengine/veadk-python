@@ -843,7 +843,16 @@ def test_agentkit_app_adds_dynamic_a2a_tools_per_run() -> None:
     assert 'getattr(req, "custom_metadata", None)' in source
     assert "req.custom_metadata" not in source
     assert '@app.post("/run_sse")' in source
+    assert '@app.post("/invoke")' in source
+    assert "types.UserContent" in source
     assert '@app.post("/run", response_model=None)' in source
+
+
+def test_frontend_deploy_forwards_a2a_registry_runtime_env_prefixes() -> None:
+    source = Path("veadk/cli/cli_frontend.py").read_text()
+
+    assert '"REGISTRY_",' in source
+    assert '"A2A_REGISTRY_",' in source
 
 
 def test_generated_agent_test_runner_enables_dynamic_a2a_helper() -> None:

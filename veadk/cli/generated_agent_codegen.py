@@ -684,6 +684,7 @@ from google.adk.apps.app import App
 from google.adk.cli.api_server import RunAgentRequest
 from google.adk.runners import Runner as AdkRunner
 from google.adk.utils.context_utils import Aclosing
+from google.genai import types
 
 
 _SERVER_STATE_KEY = "_veadk_agentkit_server"
@@ -761,6 +762,21 @@ def _promote_route(app: FastAPI, endpoint) -> None:
             return
 
 
+def _has_dynamic_a2a_routes(app: FastAPI) -> bool:
+    expected = {
+        ("/run", "run_agent_dynamic"),
+        ("/run_sse", "run_agent_sse_dynamic"),
+        ("/invoke", "invoke_agent_dynamic"),
+    }
+    found: set[tuple[str, str]] = set()
+    for route in app.router.routes:
+        path = getattr(route, "path", None)
+        endpoint_name = getattr(getattr(route, "endpoint", None), "__name__", "")
+        if (path, endpoint_name) in expected:
+            found.add((path, endpoint_name))
+    return expected.issubset(found)
+
+
 class _RuntimeServices:
     def __init__(self, app: FastAPI):
         agent_server = getattr(app.state, _SERVER_STATE_KEY, None)
@@ -825,8 +841,38 @@ def _run_request_custom_metadata(req: RunAgentRequest) -> dict[str, Any] | None:
     return metadata if isinstance(metadata, dict) and metadata else None
 
 
+def _resolve_invoke_app_name(services: _RuntimeServices, root_agent: BaseAgent) -> str:
+    app_name = services.default_app_name or getattr(root_agent, "name", "") or ""
+    if not app_name:
+        raise HTTPException(
+            status_code=400,
+            detail="app_name is required when ADK_DEFAULT_APP_NAME is not set",
+        )
+    if services.current_app_name_ref is not None:
+        services.current_app_name_ref.value = app_name
+    return app_name
+
+
+async def _invoke_text(request: Request) -> str:
+    body = await request.body()
+    if not body:
+        return ""
+    try:
+        payload = json.loads(body)
+    except Exception:
+        return body.decode("utf-8", errors="replace")
+    if isinstance(payload, dict):
+        text = payload.get("prompt")
+        if text is not None:
+            return str(text)
+    try:
+        return json.dumps(payload, ensure_ascii=False)
+    except Exception:
+        return ""
+
+
 def enable_dynamic_a2a_tools(app: FastAPI, root_agent: BaseAgent) -> None:
-    if getattr(app.state, _DYNAMIC_A2A_ROUTES_ENABLED_STATE_KEY, False):
+    if _has_dynamic_a2a_routes(app):
         return
 
     services = _RuntimeServices(app)
@@ -952,8 +998,68 @@ def enable_dynamic_a2a_tools(app: FastAPI, root_agent: BaseAgent) -> None:
 
         return StreamingResponse(event_generator(), media_type="text/event-stream")
 
+    @app.post("/invoke")
+    async def invoke_agent_dynamic(request: Request) -> StreamingResponse:
+        app_name = _resolve_invoke_app_name(services, root_agent)
+        user_id = request.headers.get("user_id") or "agentkit_user"
+        session_id = request.headers.get("session_id") or ""
+        prompt = await _invoke_text(request)
+        content = types.UserContent(parts=[types.Part(text=prompt or "")])
+
+        session = await services.session_service.get_session(
+            app_name=app_name,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        if not session:
+            await services.session_service.create_session(
+                app_name=app_name,
+                user_id=user_id,
+                session_id=session_id,
+            )
+
+        runner = _dynamic_runner(
+            services,
+            app_name=app_name,
+            root_agent=root_agent,
+            prompt=prompt,
+        )
+
+        async def event_generator():
+            try:
+                async with Aclosing(
+                    runner.run_async(
+                        user_id=user_id,
+                        session_id=session_id,
+                        new_message=content,
+                        run_config=RunConfig(streaming_mode=StreamingMode.SSE),
+                    )
+                ) as agen:
+                    async for event in agen:
+                        yield (
+                            "data: "
+                            + event.model_dump_json(
+                                exclude_none=True,
+                                by_alias=True,
+                            )
+                            + "\n\n"
+                        )
+            except Exception as exc:
+                yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     _promote_route(app, run_agent_dynamic)
     _promote_route(app, run_agent_sse_dynamic)
+    _promote_route(app, invoke_agent_dynamic)
     setattr(app.state, _DYNAMIC_A2A_ROUTES_ENABLED_STATE_KEY, True)
 """
     )

@@ -241,7 +241,10 @@ def test_a2a_registry_center_generates_tools_and_env() -> None:
     assert "req.custom_metadata" not in dynamic_py
     assert "_ADK_SERVER_STATE_KEY" in dynamic_py
     assert "_DYNAMIC_A2A_ROUTES_ENABLED_STATE_KEY" in dynamic_py
+    assert "def _has_dynamic_a2a_routes(" in dynamic_py
     assert '@app.post("/run_sse")' in dynamic_py
+    assert '@app.post("/invoke")' in dynamic_py
+    assert "types.UserContent" in dynamic_py
     assert _env_keys(files[".env.example"]) == _catalog_env_keys(
         MODEL_ENV,
         A2A_REGISTRY_ENV,
