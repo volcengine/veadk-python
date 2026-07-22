@@ -215,6 +215,24 @@ async def test_gateway_accepts_a_lazy_client_factory() -> None:
 
 
 @pytest.mark.asyncio
+async def test_gateway_accepts_an_already_expired_session_as_deleted() -> None:
+    class _Client:
+        def delete_session(self, request: object) -> None:
+            del request
+            raise RuntimeError("InvalidResource.NotFound")
+
+    gateway = AgentkitSandboxGateway(_Client())
+    await gateway.delete_session(
+        SandboxCloudSession(
+            tool_id="tool-1",
+            instance_id="expired-session",
+            user_session_id="user-1",
+            endpoint="https://sandbox.example",
+        )
+    )
+
+
+@pytest.mark.asyncio
 async def test_delete_failure_keeps_session_for_cleanup_retry() -> None:
     class _FailDeleteGateway(_FakeGateway):
         async def delete_session(self, session: SandboxCloudSession) -> None:

@@ -48,6 +48,7 @@ _FAILED_TOOL_STATUSES = frozenset(
     {"Error", "Failed", "CreateFailed", "Deleting", "Deleted"}
 )
 _CREATE_SESSION_START_FAIL_CODE = "ErrCreateSessionFail"
+_SESSION_NOT_FOUND_CODE = "InvalidResource.NotFound"
 _SENSITIVE_PATTERN = re.compile(
     r"(?i)((?:api[_-]?key|access[_-]?key|secret|token|authorization|password)"
     r"\s*[:=]\s*)(?:[\"'][^\"']*[\"']|[^\s,;]+)"
@@ -478,6 +479,8 @@ class AgentkitSandboxGateway:
                 ),
             )
         except Exception as error:
+            if _SESSION_NOT_FOUND_CODE in str(error):
+                return
             raise SandboxProvisioningError(
                 f"删除 AgentKit 沙箱会话失败：{_safe_error_message(error)}"
             ) from error
