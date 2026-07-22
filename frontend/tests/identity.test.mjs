@@ -33,6 +33,7 @@ test.before(() => {
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
   delete globalThis.localStorage;
+  delete globalThis.sessionStorage;
 });
 test.after(() => {
   console.warn = originalWarn;
@@ -78,6 +79,20 @@ test("local username is forwarded through the dedicated API header", () => {
   const headers = withLocalUser({ Accept: "application/json" });
   assert.equal(headers.get("Accept"), "application/json");
   assert.equal(headers.get("X-VeADK-Local-User"), "alice");
+});
+
+test("local username stays stable within a browser tab", () => {
+  let savedUser = "alice";
+  const tabValues = new Map();
+  globalThis.localStorage = { getItem: () => savedUser };
+  globalThis.sessionStorage = {
+    getItem: (key) => tabValues.get(key) ?? null,
+    setItem: (key, value) => tabValues.set(key, value),
+  };
+
+  assert.equal(withLocalUser().get("X-VeADK-Local-User"), "alice");
+  savedUser = "bob";
+  assert.equal(withLocalUser().get("X-VeADK-Local-User"), "alice");
 });
 
 test("identity network and server failures do not enter local mode", async (t) => {

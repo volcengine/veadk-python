@@ -104,6 +104,14 @@ between this live metadata and control-plane information without exposing prompt
 or credentials. The same metadata advertises mounted smart-search sources, so
 Studio can disable unavailable sources up front and query the Agent's web-search
 tool, KnowledgeBase, or long-term memory without exposing component credentials.
+Studio also provides an isolated Insight Sandbox for temporary Codex
+conversations. It reuses a dedicated AgentKit CodeEnv tool, creates a fresh
+user-owned Sandbox session, and deletes that session on exit without adding the
+conversation to normal Studio history. Reloading may create another temporary
+session; AgentKit reclaims abandoned sessions automatically when their TTL ends.
+When configuring skills, Studio can also browse account-scoped AgentKit Skill
+Spaces and their paginated skill lists by region and project. These requests are
+signed on the server, so browser clients never receive Volcengine credentials.
 
 The Studio deployment flow lists Feishu, knowledge-base, short-/long-term
 memory, and observability settings in their feature sections. Values entered
@@ -198,13 +206,17 @@ VeADK provides several useful command line tools for faster deployment and optim
   `--region`, automatically locate the Identity user pool across Beijing and
   Shanghai, and select the VeFaaS project with `--project` (default `default`);
   custom local or remote logo images are bundled into the deployment; the
-  deployed client skips the second OAuth consent confirmation after login
+  deployed client skips the second OAuth consent confirmation after login;
+  two dedicated AgentKit CodeEnv Tools are created automatically for temporary
+  chats and Skill creation unless their IDs are supplied with
+  `--sandbox-chat-codex-tool-id` and `--sandbox-skill-creator-tool-id`
 - `veadk studio update --vefaas-app-name <app-name>`: build the frontend from a
   local VeADK source checkout and release it through the existing VeFaaS
   Application and Function. Omit `--region` and `--project` to search Beijing,
   Shanghai, and all visible projects. Existing URL, SSO, IAM, gateway,
   environment variables, title, and logo are preserved; pass `--site-title` or
-  `--site-logo` only when those branding values should be replaced
+  `--site-logo` only when those branding values should be replaced. Sandbox Tool
+  IDs are also preserved unless the corresponding deploy option is supplied
 
 Studio can assign comma-separated local usernames or OAuth emails to the
 `admin` and `developer` roles:

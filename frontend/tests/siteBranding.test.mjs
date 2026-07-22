@@ -40,8 +40,15 @@ test("applies configured branding to the UI, document title, and favicon", () =>
   );
   assert.match(loginSource, /<p className="login-sub">登录以继续使用<\/p>/);
   assert.match(loginSource, /火山引擎 AgentKit 提供企业级 Agent 解决方案/);
+  assert.match(loginSource, /继续即表示你已阅读并同意 AgentKit/);
+  assert.match(loginSource, /https:\/\/docs\.volcengine\.com\/docs\/86681\/1925174\?lang=zh/);
+  assert.match(loginSource, /target="_blank"/);
   assert.match(stylesSource, /flex: 0 0 20px/);
   assert.match(stylesSource, /object-fit: contain/);
+  assert.match(
+    stylesSource,
+    /\.brand-logo,[\s\S]*?\.brand-title,[\s\S]*?\.login-brand-logo,[\s\S]*?\.login-brand,[\s\S]*?\.login-title\s*\{[\s\S]*?cursor:\s*text;/,
+  );
   assert.match(htmlSource, /<link rel="icon"/);
   assert.match(htmlSource, /<title>VeADK Studio<\/title>/);
 });

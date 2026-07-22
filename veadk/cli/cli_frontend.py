@@ -699,7 +699,7 @@ def _run_frontend_server(
 
     # Agent introspection for the UI's agent picker (name, model, tools). Reuses
     # ADK's AgentLoader, which caches each loaded `root_agent`.
-    from fastapi import HTTPException, Request
+    from fastapi import HTTPException, Query, Request
     from fastapi.responses import Response
     from google.adk.cli.utils.agent_loader import AgentLoader
     import httpx
@@ -781,6 +781,14 @@ def _run_frontend_server(
             )
         return principal
 
+    def _skill_creator_owner(request: Request) -> str:
+        principal = _require_agent_management(request)
+        return principal.owner_id if principal else "local"
+
+    from veadk.cli.frontend_skill_creator import mount_skill_creator_routes
+
+    mount_skill_creator_routes(app, _skill_creator_owner)
+
     @app.get("/web/access")
     async def _web_access(request: Request):
         principal = _current_principal(request)
@@ -819,6 +827,39 @@ def _run_frontend_server(
             detail="Volcengine credentials not found (set VOLCENGINE_ACCESS_KEY/"
             "SECRET_KEY, or run inside a VeFaaS function with an IAM role)",
         )
+
+    from veadk.cli.frontend_sandbox import (
+        AgentkitSandboxGateway,
+        SandboxConfigurationError,
+        SandboxConversationService,
+        mount_sandbox_routes,
+    )
+
+    def _sandbox_client():
+        from agentkit.sdk.tools.client import AgentkitToolsClient
+
+        try:
+            access_key, secret_key, session_token = _resolve_ve_credentials()
+        except HTTPException as error:
+            raise SandboxConfigurationError(str(error.detail)) from error
+        return AgentkitToolsClient(
+            access_key=access_key,
+            secret_key=secret_key,
+            region=os.getenv("AGENTKIT_SANDBOX_REGION", "cn-beijing"),
+            session_token=session_token or "",
+        )
+
+    def _sandbox_owner(request: Request) -> str:
+        principal = _current_principal(request)
+        if principal is None:
+            raise HTTPException(status_code=401, detail="Studio identity is required")
+        return principal.owner_id
+
+    mount_sandbox_routes(
+        app,
+        SandboxConversationService(AgentkitSandboxGateway(_sandbox_client)),
+        _sandbox_owner,
+    )
 
     # Prefixes (and a few exact keys) we copy from the server's environment
     # into a created AgentKit runtime. Anything NOT in this list is left out
@@ -3083,19 +3124,33 @@ def _run_frontend_server(
         )
 
     @app.get("/web/skill-spaces")
-    async def _web_list_skill_spaces(region: str = "all"):
+    async def _web_list_skill_spaces(
+        region: str = "all",
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=50, ge=1, le=100),
+        project: str | None = None,
+    ):
         """List SkillSpaces visible to the server's credentials. Fetches from
         both cn-beijing and cn-shanghai when region=all."""
         from agentkit.sdk.skills.types import ListSkillSpacesRequest
 
         regions = ["cn-beijing", "cn-shanghai"] if region == "all" else [region]
         all_items = []
+        total_count = 0
+        project_name = (project or "").strip() or None
 
         for reg in regions:
             try:
                 client = _skills_client(reg)
-                resp = client.list_skill_spaces(
-                    ListSkillSpacesRequest(page_number=1, page_size=50)
+                request_page = 1 if region == "all" else page
+                request_page_size = 50 if region == "all" else page_size
+                resp = await asyncio.to_thread(
+                    client.list_skill_spaces,
+                    ListSkillSpacesRequest(
+                        PageNumber=request_page,
+                        PageSize=request_page_size,
+                        ProjectName=project_name,
+                    ),
                 )
                 for s in resp.items or []:
                     all_items.append(
@@ -3105,33 +3160,55 @@ def _run_frontend_server(
                             "description": s.description or "",
                             "status": s.status or "",
                             "region": reg,
+                            "projectName": s.project_name or "",
+                            "updatedAt": s.update_time_stamp or "",
+                            "skillCount": len(s.relations or []),
                         }
+                    )
+                if region != "all":
+                    total_count = (
+                        resp.total_count
+                        if resp.total_count is not None
+                        else len(all_items)
                     )
             except HTTPException:
                 raise
             except Exception as e:
                 logger.error(f"ListSkillSpaces error for {reg}: {e}", exc_info=True)
                 raise HTTPException(
-                    status_code=502, detail=f"SkillSpaces API error for {reg}: {e}"
+                    status_code=502,
+                    detail="暂时无法加载 AgentKit Skill Space，请稍后重试。",
                 )
 
         return {
             "items": all_items,
-            "totalCount": len(all_items),
+            "totalCount": len(all_items) if region == "all" else total_count,
+            "page": 1 if region == "all" else page,
+            "pageSize": 50 if region == "all" else page_size,
         }
 
     @app.get("/web/skill-spaces/{space_id}/skills")
-    async def _web_list_skills_in_space(space_id: str, region: str = "cn-beijing"):
+    async def _web_list_skills_in_space(
+        space_id: str,
+        region: str = "cn-beijing",
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=100, ge=1, le=100),
+        project: str | None = None,
+    ):
         """List skills in one SkillSpace (relation view: id/name/description/
         version/status per skill)."""
         from agentkit.sdk.skills.types import ListSkillsBySkillSpaceRequest
 
+        del project  # SkillSpace ID is already globally scoped by AgentKit.
         try:
             client = _skills_client(region)
-            resp = client.list_skills_by_skill_space(
+            resp = await asyncio.to_thread(
+                client.list_skills_by_skill_space,
                 ListSkillsBySkillSpaceRequest(
-                    skill_space_id=space_id, page_number=1, page_size=100
-                )
+                    SkillSpaceId=space_id,
+                    PageNumber=page,
+                    PageSize=page_size,
+                ),
             )
         except HTTPException:
             raise
@@ -3141,7 +3218,8 @@ def _run_frontend_server(
                 exc_info=True,
             )
             raise HTTPException(
-                status_code=502, detail=f"SkillSpaces API error for {region}: {e}"
+                status_code=502,
+                detail="暂时无法加载该 Skill Space 的技能，请稍后重试。",
             )
 
         items = list(resp.items or [])
@@ -3156,7 +3234,11 @@ def _run_frontend_server(
                 }
                 for r in items
             ],
-            "totalCount": resp.total_count or len(items),
+            "totalCount": (
+                resp.total_count if resp.total_count is not None else len(items)
+            ),
+            "page": page,
+            "pageSize": page_size,
         }
 
     @app.get("/web/skill-spaces/{space_id}/skills/{skill_id}")
@@ -3173,8 +3255,9 @@ def _run_frontend_server(
 
         try:
             client = _skills_client(region)
-            resp = client.get_skill_version(
-                GetSkillVersionRequest(id=skill_id, skill_version=version)
+            resp = await asyncio.to_thread(
+                client.get_skill_version,
+                GetSkillVersionRequest(Id=skill_id, SkillVersion=version),
             )
         except HTTPException:
             raise
@@ -3182,7 +3265,10 @@ def _run_frontend_server(
             logger.error(
                 f"GetSkillVersion({skill_id}@{version}) error: {e}", exc_info=True
             )
-            raise HTTPException(status_code=502, detail=f"SkillSpaces API error: {e}")
+            raise HTTPException(
+                status_code=502,
+                detail="暂时无法加载该技能详情，请稍后重试。",
+            )
 
         if not resp.skill_md:
             raise HTTPException(
@@ -3411,6 +3497,23 @@ def _resolve_studio_identity_region(
     envvar="VEADK_STUDIO_DEVELOPERS",
     help="Comma-separated Studio developer usernames or OAuth emails.",
 )
+@click.option(
+    "--sandbox-chat-codex-tool-id",
+    "sandbox_chat_codex_tool_id",
+    default=None,
+    envvar="SANDBOX_CHAT_CODEX",
+    help="Dedicated ready AgentKit CodeEnv Tool ID used by temporary chats. "
+    "Default: create one during deployment.",
+)
+@click.option(
+    "--sandbox-skill-creator-tool-id",
+    "--skill-creator-tool-id",
+    "sandbox_skill_creator_tool_id",
+    default=None,
+    envvar="SANDBOX_SKILL_CREATOR",
+    help="Dedicated ready AgentKit CodeEnv Tool ID used by Skill creation mode. "
+    "Default: create one during deployment.",
+)
 def frontend_deploy(
     user_pool_id: str,
     allowed_client_id: str,
@@ -3430,6 +3533,8 @@ def frontend_deploy(
     site_title: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
+    sandbox_chat_codex_tool_id: str | None,
+    sandbox_skill_creator_tool_id: str | None,
 ) -> None:
     """Deploy the SSO web frontend to VeFaaS.
 
@@ -3494,6 +3599,68 @@ def frontend_deploy(
     # shipped as a plain env var.
     os.environ["IAM_ROLE"] = role_trn
 
+    session_token = os.getenv("VOLCENGINE_SESSION_TOKEN") or os.getenv(
+        "VOLC_SESSIONTOKEN"
+    )
+    sandbox_tool_ids = {
+        "chat": sandbox_chat_codex_tool_id,
+        "skill": sandbox_skill_creator_tool_id,
+    }
+    from veadk.cli.studio_sandbox_tools import (
+        ensure_studio_code_env_tool,
+        studio_sandbox_tool_name,
+    )
+
+    for purpose, tool_id in sandbox_tool_ids.items():
+        if tool_id:
+            continue
+        tool_name = studio_sandbox_tool_name(vefaas_app_name, purpose)
+        click.echo(f"Ensuring AgentKit {purpose} CodeEnv Tool '{tool_name}'…")
+        try:
+            sandbox_tool_ids[purpose] = ensure_studio_code_env_tool(
+                name=tool_name,
+                region=region,
+                access_key=ak,
+                secret_key=sk,
+                session_token=session_token or "",
+            )
+        except Exception as error:
+            raise click.ClickException(
+                f"Failed to provision the AgentKit {purpose} CodeEnv Tool. "
+                "Verify account permissions and AgentKit service status."
+            ) from error
+        click.echo(f"AgentKit {purpose} CodeEnv Tool is ready.")
+
+    from veadk.cli.frontend_skill_creator import (
+        ensure_skill_creator_model_credential,
+    )
+
+    for purpose, tool_id in sandbox_tool_ids.items():
+        if not tool_id:
+            raise click.ClickException(
+                f"AgentKit {purpose} CodeEnv Tool did not return a Tool ID."
+            )
+        click.echo(f"Ensuring the AgentKit {purpose} model credential relay…")
+        try:
+            ensure_skill_creator_model_credential(
+                tool_id=tool_id,
+                region=region,
+                access_key=ak,
+                secret_key=sk,
+                session_token=session_token,
+            )
+        except Exception as error:
+            raise click.ClickException(
+                f"Failed to provision the AgentKit {purpose} model credential relay. "
+                "Verify the Tool ID, account permissions, and AgentKit service status."
+            ) from error
+        click.echo(f"AgentKit {purpose} model credential relay is ready.")
+
+    chat_codex_tool_id = sandbox_tool_ids["chat"]
+    skill_creator_tool_id = sandbox_tool_ids["skill"]
+    if not chat_codex_tool_id or not skill_creator_tool_id:
+        raise click.ClickException("AgentKit CodeEnv Tool provisioning was incomplete.")
+
     # SECURITY: VeFaaS._create_function uploads *everything* in veadk_environments
     # (i.e. the deployer's whole .env) as function env vars. The frontend must
     # NOT receive the deployer's secrets (VOLCENGINE_ACCESS_KEY/SECRET_KEY, model
@@ -3517,6 +3684,8 @@ def frontend_deploy(
         veadk_environments["VEADK_STUDIO_ADMINS"] = studio_admins
     if studio_developers:
         veadk_environments["VEADK_STUDIO_DEVELOPERS"] = studio_developers
+    veadk_environments["SANDBOX_CHAT_CODEX"] = chat_codex_tool_id
+    veadk_environments["SANDBOX_SKILL_CREATOR"] = skill_creator_tool_id
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
 
@@ -3672,6 +3841,19 @@ def frontend_deploy(
     default=None,
     help="Replace the deployed Studio title, at most 6 characters.",
 )
+@click.option(
+    "--sandbox-chat-codex-tool-id",
+    "sandbox_chat_codex_tool_id",
+    default=None,
+    help="Replace the temporary-chat AgentKit CodeEnv Tool ID.",
+)
+@click.option(
+    "--sandbox-skill-creator-tool-id",
+    "--skill-creator-tool-id",
+    "sandbox_skill_creator_tool_id",
+    default=None,
+    help="Replace the Skill Creator AgentKit CodeEnv Tool ID.",
+)
 @click.option("--volcengine-access-key", default=None)
 @click.option("--volcengine-secret-key", default=None)
 def frontend_update(
@@ -3681,6 +3863,8 @@ def frontend_update(
     path: Path,
     site_logo: str | None,
     site_title: str | None,
+    sandbox_chat_codex_tool_id: str | None,
+    sandbox_skill_creator_tool_id: str | None,
     volcengine_access_key: str | None,
     volcengine_secret_key: str | None,
 ) -> None:
@@ -3775,14 +3959,20 @@ def frontend_update(
             region=target.region,
             project_name=target.project,
         )
-        environment_overrides = (
-            {"VEADK_SITE_TITLE": branding_title} if branding_title is not None else None
-        )
+        environment_overrides = {}
+        if branding_title is not None:
+            environment_overrides["VEADK_SITE_TITLE"] = branding_title
+        if sandbox_chat_codex_tool_id is not None:
+            environment_overrides["SANDBOX_CHAT_CODEX"] = sandbox_chat_codex_tool_id
+        if sandbox_skill_creator_tool_id is not None:
+            environment_overrides["SANDBOX_SKILL_CREATOR"] = (
+                sandbox_skill_creator_tool_id
+            )
         url = service.update_application_code_bundle(
             application_id=target.application_id,
             function_id=target.function_id,
             path=str(package_dir),
-            environment_overrides=environment_overrides,
+            environment_overrides=environment_overrides or None,
         )
         click.echo("")
         click.echo(f"✅ Studio updated: {url}")

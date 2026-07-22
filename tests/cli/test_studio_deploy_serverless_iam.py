@@ -157,6 +157,14 @@ def test_studio_deploy_checks_serverless_role_with_custom_function_role(
         "veadk.cli.cli_frontend._resolve_studio_identity_region",
         lambda **kwargs: kwargs["deployment_region"],
     )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_code_env_tool",
+        lambda **kwargs: f"auto-{kwargs['name']}",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
+        lambda **_: None,
+    )
 
     result = CliRunner().invoke(
         studio,

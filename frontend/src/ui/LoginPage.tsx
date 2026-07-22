@@ -121,8 +121,17 @@ export function LoginPage({ branding, onUsername }: LoginPageProps) {
             </>
           )}
 
-          <p className="login-legal">继续即表示你已阅读并同意服务条款与隐私政策</p>
           <p className="login-powered">火山引擎 AgentKit 提供企业级 Agent 解决方案</p>
+          <p className="login-legal">
+            继续即表示你已阅读并同意 AgentKit{" "}
+            <a
+              href="https://docs.volcengine.com/docs/86681/1925174?lang=zh"
+              target="_blank"
+              rel="noreferrer"
+            >
+              产品和服务条款
+            </a>
+          </p>
         </div>
       </main>
 
