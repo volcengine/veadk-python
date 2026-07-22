@@ -11,7 +11,8 @@ server that `veadk frontend` launches — no separate backend.
   including previews and history replay for both user and model media. Chat
   images use compact thumbnails and open in a zoomable full-screen viewer.
 - **Composer invocations**: type `/` to select a mounted skill or `@` to route
-  the turn to a mentionable sub-agent.
+  the turn to a mentionable sub-agent. New conversations address the selected
+  Agent by its display name in the composer placeholder.
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
 - **Built-in tool activity** gives web search, image/video generation, memory,
   and knowledge-base retrieval their own repository-drawn icons and concise

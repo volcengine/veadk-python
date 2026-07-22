@@ -1586,6 +1586,7 @@ export default function App() {
             sessionId={sessionId}
             sessionInitializing={initializingSession}
             appName={appName}
+            agentName={appName ? labelOf(appName) : "Agent"}
             value={input}
             onChange={setInput}
             onSubmit={() => {

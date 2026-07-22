@@ -38,6 +38,7 @@ export interface ComposerProps {
   sessionId: string;
   sessionInitializing?: boolean;
   appName: string;
+  agentName: string;
   value: string;
   onChange: (v: string) => void;
   onSubmit: () => void;
@@ -58,6 +59,7 @@ export function Composer({
   sessionId,
   sessionInitializing = false,
   appName,
+  agentName,
   value,
   onChange,
   onSubmit,
@@ -298,7 +300,7 @@ export function Composer({
           rows={1}
           value={value}
           disabled={disabled}
-          placeholder={disabled ? "请选择 Agent" : "给智能体发消息…"}
+          placeholder={disabled ? "请选择 Agent" : `向 ${agentName} 发消息…`}
           aria-expanded={Boolean(trigger)}
           onChange={(e) => {
             onChange(e.target.value);

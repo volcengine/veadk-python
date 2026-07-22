@@ -70,3 +70,9 @@ test("renders a normal-font session id with an inline copy action", () => {
     /\.composer-session-id\s*\{[^}]*font-family:\s*inherit/,
   );
 });
+
+test("addresses the selected Agent by its display name in the composer", () => {
+  assert.match(appSource, /agentName=\{appName \? labelOf\(appName\) : "Agent"\}/);
+  assert.match(composerSource, /`向 \$\{agentName\} 发消息…`/);
+  assert.doesNotMatch(composerSource, /给智能体发消息/);
+});
