@@ -34,6 +34,7 @@ type CompletionItem =
 
 export interface ComposerProps {
   sessionId: string;
+  sessionInitializing?: boolean;
   appName: string;
   value: string;
   onChange: (v: string) => void;
@@ -53,6 +54,7 @@ export interface ComposerProps {
 
 export function Composer({
   sessionId,
+  sessionInitializing = false,
   appName,
   value,
   onChange,
@@ -346,8 +348,12 @@ export function Composer({
         <div className="composer-meta">
           <span className="composer-session-line">
             会话 ID：
-            <span className="composer-session-id" title={sessionId || undefined}>
-              {sessionId || "—"}
+            <span
+              className="composer-session-id"
+              title={sessionId || undefined}
+              aria-live="polite"
+            >
+              {sessionInitializing ? "初始化中" : sessionId || "—"}
             </span>
           </span>
           <span className="composer-meta-separator" aria-hidden>

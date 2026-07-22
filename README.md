@@ -228,7 +228,9 @@ Developers can add and manage agents but can see and manage only their own
 Runtimes. Regular users can see only their own Runtimes; the add/manage-agent
 sidebar items are hidden. The sidebar account footer shows the OAuth email
 beneath the display name and identifies the current role with a color-coded
-badge. Existing Runtimes without owner metadata are visible
+badge. The manage-agent view defaults to Beijing and can be switched to
+Shanghai. A new conversation renders the first message immediately while its
+server session initializes in the background. Existing Runtimes without owner metadata are visible
 only to admins unless they carry the legacy-compatible `veadk:author`
 ownership tag. Local usernames are browser-provided and can be impersonated, so
 use OAuth or gateway authentication for production authorization.

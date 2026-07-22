@@ -482,6 +482,14 @@ const GREETINGS = [
   "有问题尽管问我",
   "嗨，我们开始吧",
   "开始一段新对话吧",
+  "今天想先解决哪件事？",
+  "把你的想法告诉我吧",
+  "我们从哪里开始？",
+  "有什么任务交给我？",
+  "准备好一起推进了吗？",
+  "说说你现在最关心的问题",
+  "今天也一起把事情做好",
+  "我在，随时可以开始",
 ];
 const pickGreeting = () => GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
 
@@ -509,6 +517,8 @@ export default function App() {
   const [sessions, setSessions] = useState<AdkSession[]>([]);
   const [sessionId, setSessionId] = useState("");
   const creatingSessionRef = useRef<Promise<string> | null>(null);
+  const [initializingSession, setInitializingSession] = useState(false);
+  const [pendingTurns, setPendingTurns] = useState<Turn[]>([]);
   // Turns are stored PER SESSION, so a background stream can keep updating its
   // own session's transcript while you view another one — no cross-session
   // leak, no data loss, and no re-fetch when you switch back (its entry is
@@ -516,7 +526,7 @@ export default function App() {
   const [turnsBySession, setTurnsBySession] = useState<Record<string, Turn[]>>(
     {},
   );
-  const turns = turnsBySession[sessionId] ?? [];
+  const turns = sessionId ? turnsBySession[sessionId] ?? [] : pendingTurns;
   const setTurnsFor = (
     sid: string,
     updater: Turn[] | ((prev: Turn[]) => Turn[]),
@@ -594,6 +604,7 @@ export default function App() {
   // Everything the view needs for the ACTIVE session, derived from the
   // per-session maps above.
   const busy = streamingSids.has(sessionId);
+  const conversationBusy = busy || initializingSession;
   const activeAgent = activeAgentBySession[sessionId] ?? "";
   const seenAgents = seenAgentsBySession[sessionId] ?? EMPTY_STRING_SET;
   const execPath = execPathBySession[sessionId] ?? EMPTY_STRING_ARR;
@@ -1055,6 +1066,8 @@ export default function App() {
       : "";
     viewSidRef.current = "";
     setSessionId("");
+    setInitializingSession(false);
+    setPendingTurns([]);
     setInvocation(emptyInvocation());
     discardDraftAttachments(attachments);
     setAttachments([]);
@@ -1082,6 +1095,8 @@ export default function App() {
     if (id === sessionId) return;
     viewSidRef.current = id;
     setError("");
+    setInitializingSession(false);
+    setPendingTurns([]);
     setInvocation(emptyInvocation());
     setSessionId(id);
     // Already have this session's turns (it's cached, or streaming in the
@@ -1099,7 +1114,7 @@ export default function App() {
     }
   }
 
-  async function ensureSession(): Promise<string> {
+  async function ensureSession(activate = true): Promise<string> {
     if (sessionId) return sessionId;
     if (!creatingSessionRef.current) {
       creatingSessionRef.current = createSession(appName, userId);
@@ -1107,7 +1122,7 @@ export default function App() {
     const pending = creatingSessionRef.current;
     try {
       const sid = await pending;
-      setSessionId(sid);
+      if (activate) setSessionId(sid);
       const now = Date.now() / 1000;
       const optimistic: AdkSession = { id: sid, lastUpdateTime: now, events: [] };
       setSessions((prev) => [optimistic, ...prev.filter((s) => s.id !== sid)]);
@@ -1169,22 +1184,13 @@ export default function App() {
   ) {
     // `busy` here = the CURRENT session is already streaming (can't double-send
     // to it). Other sessions can stream concurrently.
-    if ((!text.trim() && atts.length === 0) || busy || !appName || !userId) return;
+    if (
+      (!text.trim() && atts.length === 0) ||
+      conversationBusy ||
+      !appName ||
+      !userId
+    ) return;
     setError("");
-
-    let sid: string;
-    try {
-      sid = await ensureSession();
-    } catch (e) {
-      setError(String(e));
-      return;
-    }
-
-    // Register this session's own stream (concurrent with other sessions').
-    const ctrl = new AbortController();
-    streamAbortsRef.current.set(sid, ctrl);
-    setStreaming(sid, true);
-    viewSidRef.current = sid;
 
     const userBlocks: Turn["blocks"] = [];
     if (selectedInvocation.skills.length > 0 || selectedInvocation.targetAgent) {
@@ -1203,11 +1209,44 @@ export default function App() {
         })),
       });
     if (text.trim()) userBlocks.push({ kind: "text", text });
-    setTurnsFor(sid, (t) => [
-      ...t,
+    const optimisticTurns: Turn[] = [
       { role: "user", blocks: userBlocks, meta: { ts: Date.now() / 1000 } },
       { role: "assistant", blocks: [] },
-    ]);
+    ];
+    const createsSession = !sessionId;
+    if (createsSession) {
+      setPendingTurns(optimisticTurns);
+      setInitializingSession(true);
+    }
+
+    let sid: string;
+    try {
+      sid = await ensureSession(!createsSession);
+    } catch (e) {
+      if (createsSession) {
+        setPendingTurns([]);
+        setInitializingSession(false);
+        setInput(text);
+        setInvocation(selectedInvocation);
+      }
+      setError(String(e));
+      return;
+    }
+
+    setTurnsFor(sid, optimisticTurns);
+    if (createsSession) {
+      viewSidRef.current = sid;
+      setSessionId(sid);
+      setPendingTurns([]);
+      setInitializingSession(false);
+    }
+
+    // Register this session's own stream (concurrent with other sessions').
+    const ctrl = new AbortController();
+    streamAbortsRef.current.set(sid, ctrl);
+    setStreaming(sid, true);
+    viewSidRef.current = sid;
+
     setActiveAgentBySession((m) => ({ ...m, [sid]: "" }));
     setSeenAgentsBySession((m) => ({ ...m, [sid]: new Set() }));
     setExecPathBySession((m) => ({ ...m, [sid]: [] }));
@@ -1523,6 +1562,7 @@ export default function App() {
         const composer = (
           <Composer
             sessionId={sessionId}
+            sessionInitializing={initializingSession}
             appName={appName}
             value={input}
             onChange={setInput}
@@ -1537,7 +1577,7 @@ export default function App() {
               releaseAttachmentPreviews(atts);
             }}
             disabled={!appName || !userId}
-            busy={busy}
+            busy={conversationBusy}
             showMeta={turns.length > 0}
             attachments={attachments}
             skills={availableSkills}
@@ -1769,19 +1809,19 @@ export default function App() {
                 transition={{ duration: 0.2, ease: "easeOut" }}
               >
                 {pending ? (
-                  isLast && busy ? <ThinkingPlaceholder /> : null
+                  isLast && conversationBusy ? <ThinkingPlaceholder /> : null
                 ) : (
                   <>
                     <Blocks appName={appName} blocks={turn.blocks} onAction={onAction} onAuth={onAuth} />
                     {/* Finalized turn that produced no visible answer (e.g. only
                         thinking + an empty A2UI surface) — show a fallback note. */}
-                    {!(isLast && busy) && !turnHasVisibleContent(turn) && (
+                    {!(isLast && conversationBusy) && !turnHasVisibleContent(turn) && (
                       <div className="turn-empty">本次没有返回可显示的内容。</div>
                     )}
                     {/* Hide the actions/timestamp row while this turn is still
                         thinking/streaming or waiting on an OAuth card; reveal it
                         only once the reply is done. */}
-                    {!(isLast && busy) && !turnAwaitingAuth(turn) && (
+                    {!(isLast && conversationBusy) && !turnAwaitingAuth(turn) && (
                       <div className="turn-meta">
                         <div className="turn-actions">
                           <button

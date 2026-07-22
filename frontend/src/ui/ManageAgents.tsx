@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  Check,
   ChevronDown,
   ChevronRight,
   Link2,
@@ -46,7 +47,8 @@ export function ManageAgentsView({
   const [connecting, setConnecting] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [details, setDetails] = useState<Record<string, DetailState>>({});
-  const [regionFilter, setRegionFilter] = useState<string>("all");
+  const [regionFilter, setRegionFilter] = useState<string>("cn-beijing");
+  const [regionMenuOpen, setRegionMenuOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -136,21 +138,63 @@ export function ManageAgentsView({
         <div>
           <h2 className="manage-title">管理 Agent</h2>
           <p className="manage-sub">
-            列出你有权管理的 AgentKit Runtime。
+            列出你有权管理的 AgentKit Runtime
           </p>
         </div>
         <div className="manage-head-actions">
-          <select
-            className="manage-region"
-            value={regionFilter}
-            onChange={(e) => setRegionFilter(e.target.value)}
-            title="按区域筛选"
-            aria-label="区域筛选"
+          <div
+            className="manage-region-picker"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setRegionMenuOpen(false);
+            }}
           >
-            <option value="all">全部区域</option>
-            <option value="cn-beijing">北京</option>
-            <option value="cn-shanghai">上海</option>
-          </select>
+            <button
+              type="button"
+              className="manage-region"
+              onClick={() => setRegionMenuOpen((open) => !open)}
+              title="按区域筛选"
+              aria-label="区域筛选"
+              aria-haspopup="listbox"
+              aria-expanded={regionMenuOpen}
+            >
+              <span>{regionFilter === "cn-beijing" ? "北京" : "上海"}</span>
+              <ChevronDown
+                className={`manage-region-chevron${regionMenuOpen ? " is-open" : ""}`}
+              />
+            </button>
+            {regionMenuOpen && (
+              <>
+                <div
+                  className="menu-scrim"
+                  onClick={() => setRegionMenuOpen(false)}
+                />
+                <div className="manage-region-menu" role="listbox" aria-label="区域">
+                  {[
+                    { value: "cn-beijing", label: "北京" },
+                    { value: "cn-shanghai", label: "上海" },
+                  ].map((region) => {
+                    const selected = region.value === regionFilter;
+                    return (
+                      <button
+                        key={region.value}
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        className={`manage-region-option${selected ? " is-selected" : ""}`}
+                        onClick={() => {
+                          setRegionFilter(region.value);
+                          setRegionMenuOpen(false);
+                        }}
+                      >
+                        <span>{region.label}</span>
+                        {selected && <Check aria-hidden="true" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
           <button
             type="button"
             className="manage-refresh"
