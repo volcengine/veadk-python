@@ -3,6 +3,7 @@ import { ArrowRight, Github, LogIn } from "lucide-react";
 import type { SiteBranding } from "../adk/client";
 import { fetchProviders, loginTo, USERNAME_RE, type Provider } from "../adk/identity";
 import defaultSiteLogo from "../assets/volcengine.svg";
+import { TextShimmer } from "./text-shimmer/TextShimmer";
 
 function providerIcon(id: string) {
   if (id.toLowerCase() === "github") return <Github className="icon" />;
@@ -62,7 +63,9 @@ export function LoginPage({ branding, onUsername }: LoginPageProps) {
 
       <main className="login-main">
         <div className="login-card">
-          <h1 className="login-title">{branding.title}</h1>
+          <TextShimmer as="h1" className="login-title" duration={4.8} spread={22}>
+            {branding.title}
+          </TextShimmer>
 
           {providerError ? (
             <div className="login-provider-error" role="alert">

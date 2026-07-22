@@ -1,0 +1,76 @@
+.builtin-tool-head {
+  --builtin-tool-accent: 215 18% 42%;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 3px 7px 3px 3px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font: inherit;
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+
+.builtin-tool-head[data-tool-tone="search"] {
+  --builtin-tool-accent: 211 62% 42%;
+}
+
+.builtin-tool-head[data-tool-tone="image"] {
+  --builtin-tool-accent: 28 67% 42%;
+}
+
+.builtin-tool-head[data-tool-tone="video"] {
+  --builtin-tool-accent: 260 38% 48%;
+}
+
+.builtin-tool-head[data-tool-tone="memory"] {
+  --builtin-tool-accent: 174 52% 34%;
+}
+
+.builtin-tool-head[data-tool-tone="knowledge"] {
+  --builtin-tool-accent: 225 48% 45%;
+}
+
+.builtin-tool-head:hover {
+  color: hsl(var(--foreground));
+}
+
+.builtin-tool-icon {
+  position: relative;
+  width: 20px;
+  height: 26px;
+  flex: 0 0 20px;
+  display: grid;
+  place-items: center;
+  color: hsl(var(--builtin-tool-accent));
+}
+
+.builtin-tool-icon > svg {
+  width: 18px;
+  height: 18px;
+}
+
+.builtin-tool-label {
+  font-size: 13.5px;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+.builtin-tool-head.is-done .builtin-tool-label {
+  color: hsl(var(--muted-foreground));
+}
+
+.builtin-tool-chevron {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+  opacity: 0.58;
+  transition: transform 180ms ease;
+}
+
+.builtin-tool-chevron.is-open {
+  transform: rotate(90deg);
+}

@@ -971,26 +971,6 @@ body {
   font-size: 26px;
   font-weight: 600;
   letter-spacing: -0.02em;
-  color: transparent;
-  background:
-    linear-gradient(
-      108deg,
-      hsl(220 16% 18%) 8%,
-      hsl(218 11% 32%) 36%,
-      hsl(42 8% 68%) 48%,
-      hsl(218 11% 32%) 59%,
-      hsl(220 16% 18%) 82%
-    );
-  background-size: 240% 100%;
-  background-position: 100% 50%;
-  background-clip: text;
-  -webkit-background-clip: text;
-  animation: welcome-smoke-shimmer 9s cubic-bezier(0.45, 0, 0.25, 1) infinite;
-}
-@keyframes welcome-smoke-shimmer {
-  0%, 12% { background-position: 100% 50%; }
-  52%, 72% { background-position: 0% 50%; }
-  100% { background-position: -100% 50%; }
 }
 .welcome .composer { padding: 0; }
 
@@ -1439,43 +1419,41 @@ body {
 .chev { width: 14px; height: 14px; transition: transform 0.25s ease; opacity: 0.7; }
 .chev.open { transform: rotate(90deg); } /* right (closed) -> down (open) */
 
-/* shimmer sweep across the label text */
-.think-label.shimmer {
-  background: linear-gradient(
-    90deg,
-    hsl(var(--muted-foreground)) 35%,
-    hsl(var(--foreground)) 50%,
-    hsl(var(--muted-foreground)) 65%
-  );
-  background-size: 220% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: shimmer 2.2s linear infinite;
-}
-@keyframes shimmer { from { background-position: 220% 0; } to { background-position: -220% 0; } }
 .think-label--done { color: hsl(var(--muted-foreground)); }
 
-/* tool-call row — mirrors janus-ee event-renderer.tsx tool_pair styling:
- * muted, low-key row with a small status dot, name, and chevron. */
+/* Generic tool calls share the built-in tool geometry, using a neutral icon. */
 .tool-head { color: hsl(var(--muted-foreground)); transition: color 0.12s; }
 .tool-head:hover { color: hsl(var(--foreground)); }
-.tool-name { font-weight: 400; color: inherit; }
-/* small status dot (h-1.5 w-1.5 rounded-full in janus): grey while running,
- * solid green once the tool returns. */
-.tool-dot {
-  width: 6px;
-  height: 6px;
-  flex-shrink: 0;
-  border-radius: 999px;
-  background: hsl(var(--muted-foreground));
+.tool-head--generic {
+  gap: 8px;
+  min-height: 32px;
+  padding: 3px 7px 3px 3px;
 }
-.tool-dot--running { animation: pulse 1.4s ease-in-out infinite; }
-.tool-dot--done { background: #10b981; } /* emerald-500, matching janus' bg-emerald-500 */
-.tool-detail { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 4px; padding-left: 14px; }
+.tool-name { font-weight: 400; color: inherit; }
+.tool-icon {
+  width: 20px;
+  height: 26px;
+  flex: 0 0 20px;
+  display: grid;
+  place-items: center;
+}
+.tool-icon > svg {
+  width: 18px;
+  height: 18px;
+}
+.tool-icon--generic { color: hsl(var(--muted-foreground)); }
+.tool-chevron {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+  opacity: 0.58;
+  transition: transform 180ms ease;
+}
+.tool-chevron.is-open { transform: rotate(90deg); }
+.tool-detail { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 4px; padding-left: 3px; }
 .tool-section-label {
   margin-bottom: 4px;
-  font-size: 10px;
+  font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: hsl(var(--muted-foreground));
@@ -1507,7 +1485,7 @@ body {
   background: hsl(var(--muted));
   border-radius: 6px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
   overflow-x: auto;
   white-space: pre-wrap;
@@ -3598,33 +3576,6 @@ a.search-result { text-decoration: none; color: inherit; }
   font-weight: 700;
   line-height: 1.2;
   letter-spacing: -0.02em;
-  color: transparent;
-  background:
-    linear-gradient(
-      108deg,
-      hsl(220 16% 16%) 8%,
-      hsl(218 11% 30%) 36%,
-      hsl(42 8% 66%) 48%,
-      hsl(218 11% 30%) 59%,
-      hsl(220 16% 16%) 82%
-    );
-  background-size: 240% 100%;
-  background-position: 100% 50%;
-  background-clip: text;
-  -webkit-background-clip: text;
-  animation: welcome-smoke-shimmer 9s 0.6s cubic-bezier(0.45, 0, 0.25, 1) infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .welcome-title,
-  .login-title,
-  .account-avatar {
-    animation: none;
-  }
-  .welcome-title,
-  .login-title {
-    background-position: 45% 50%;
-  }
 }
 .login-sub { margin: 0 0 28px; color: hsl(var(--muted-foreground)); font-size: 15px; }
 .login-btn {
