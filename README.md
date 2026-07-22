@@ -104,6 +104,9 @@ between this live metadata and control-plane information without exposing prompt
 or credentials. The same metadata advertises mounted smart-search sources, so
 Studio can disable unavailable sources up front and query the Agent's web-search
 tool, KnowledgeBase, or long-term memory without exposing component credentials.
+When configuring skills, Studio can also browse account-scoped AgentKit Skill
+Spaces and their paginated skill lists by region and project. These requests are
+signed on the server, so browser clients never receive Volcengine credentials.
 
 The Studio deployment flow lists Feishu, knowledge-base, short-/long-term
 memory, and observability settings in their feature sections. Values entered
