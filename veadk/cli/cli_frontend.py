@@ -820,6 +820,39 @@ def _run_frontend_server(
             "SECRET_KEY, or run inside a VeFaaS function with an IAM role)",
         )
 
+    from veadk.cli.frontend_sandbox import (
+        AgentkitSandboxGateway,
+        SandboxConfigurationError,
+        SandboxConversationService,
+        mount_sandbox_routes,
+    )
+
+    def _sandbox_client():
+        from agentkit.sdk.tools.client import AgentkitToolsClient
+
+        try:
+            access_key, secret_key, session_token = _resolve_ve_credentials()
+        except HTTPException as error:
+            raise SandboxConfigurationError(str(error.detail)) from error
+        return AgentkitToolsClient(
+            access_key=access_key,
+            secret_key=secret_key,
+            region=os.getenv("AGENTKIT_SANDBOX_REGION", "cn-beijing"),
+            session_token=session_token or "",
+        )
+
+    def _sandbox_owner(request: Request) -> str:
+        principal = _current_principal(request)
+        if principal is None:
+            raise HTTPException(status_code=401, detail="Studio identity is required")
+        return principal.owner_id
+
+    mount_sandbox_routes(
+        app,
+        SandboxConversationService(AgentkitSandboxGateway(_sandbox_client)),
+        _sandbox_owner,
+    )
+
     # Prefixes (and a few exact keys) we copy from the server's environment
     # into a created AgentKit runtime. Anything NOT in this list is left out
     # so we never ship unrelated host env (PATH, HOME, IAM_ROLE, _FAAS_*, etc.).

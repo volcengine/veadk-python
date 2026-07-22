@@ -24,6 +24,12 @@ server that `veadk frontend` launches — no separate backend.
   first user message, while long titles truncate without shifting header actions.
   Session IDs use normal text with a copy action, and sidebar title tooltips show
   the full conversation name. Long Agent lists stay within the viewport and scroll independently.
+- **Insight Sandbox**: start an isolated, temporary AgentKit CodeEnv session
+  from the new-chat composer or global header. Studio reuses its dedicated
+  Sandbox tool, creates a fresh user-owned session, streams Codex replies, and
+  deletes the cloud session on exit without adding it to normal chat history.
+  Reloading can create another session; AgentKit reclaims abandoned sessions
+  automatically when their TTL ends.
 - **Tracing viewer**: a span tree + detail panel from the ADK debug trace.
 - **Smart search**: search sessions, the network through `web_search`, and a
   selected Agent's KnowledgeBase or long-term memory when mounted. The source
@@ -57,6 +63,15 @@ server that `veadk frontend` launches — no separate backend.
 Changing the Feishu channel on the deployment page regenerates the project so
 `app.py`, the `extensions` dependency, and the runtime environment variables
 stay aligned before deployment.
+
+Insight Sandbox requires server-side `VOLCENGINE_ACCESS_KEY`,
+`VOLCENGINE_SECRET_KEY`, `MODEL_AGENT_API_KEY`, and `MODEL_AGENT_NAME` values.
+These credentials and the AgentKit session endpoint remain on the Studio server
+and are never returned to the browser.
+
+Temporary Sandbox state is process-local. Run Studio with one server worker, or
+configure session affinity so create, message, and delete requests from the same
+browser reach the same instance.
 
 ## Development specification
 

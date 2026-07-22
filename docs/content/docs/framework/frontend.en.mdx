@@ -22,6 +22,12 @@ VeADK ships a React frontend that renders [A2UI](/en/docs/framework/a2ui) (agent
 - **Agent picker**: switch agents from the top-left; long lists scroll within
   the viewport, and hovering an agent shows its model and mounted tools.
 - **Session history**: auto-saved, time-sorted, reopen or delete.
+- **Insight Sandbox**: start an isolated temporary AgentKit Sandbox from the
+  new-chat composer or global header. Studio reuses its dedicated CodeEnv tool,
+  creates a fresh user-owned Sandbox session, and runs multi-turn Codex chat.
+  Exiting deletes the cloud session without writing it to normal chat history;
+  after a reload, users can start another session and AgentKit reclaims the
+  abandoned session automatically when its TTL ends.
 - **Smart search**: the *Session* source full-text-searches the current agent's history; the *Web* source calls the agent's mounted web-search tool live (using credentials from the server's environment variables).
 - **Add an AgentKit agent**: paste a URL + API key to connect a remote agent over the ADK protocol; it then appears in the picker.
 - **Custom-agent workbench**: author system prompts in a rich Markdown editor
@@ -44,6 +50,14 @@ cannot be derived automatically. Studio forwards its server-side Volcengine
 credentials to local debug runs and deployed AgentKit runtimes, allowing VeADK
 to resolve Ark, embedding, media, speech, VeSearch, and APMPlus keys without
 asking for them again.
+
+Insight Sandbox requires server-side `VOLCENGINE_ACCESS_KEY`,
+`VOLCENGINE_SECRET_KEY`, `MODEL_AGENT_API_KEY`, and `MODEL_AGENT_NAME` values.
+Volcengine credentials, model credentials, and the authorized Sandbox endpoint
+remain on the Studio server and are never returned to the browser.
+Temporary Sandbox state is process-local. Run Studio with one server process,
+or configure session affinity so create, message, and exit requests from one
+browser reach the same instance.
 
 When the Feishu channel is enabled or disabled on the deployment page, Studio
 regenerates the project so `app.py`, the `extensions` dependency, and runtime

@@ -20,6 +20,10 @@ VeADK 自带一个 React 前端，用于渲染智能体经由 Google ADK API Ser
 - **技能与子 Agent 调用**：在输入框输入 `/` 选择挂载技能，输入 `@` 将本轮交给可选的子 Agent。
 - **Agent 选择器**：左上角切换 agent；长列表在视口内独立滚动，悬停可查看该 agent 的模型与挂载的工具。
 - **历史会话**：自动保存、按时间排序，可重新打开或删除。
+- **灵光一现**：从新会话输入框或全局标题栏启动独立的 AgentKit 沙箱临时会话。
+  Studio 会复用专属 CodeEnv Tool、为当前用户创建全新的 Sandbox Session，并通过
+  Codex 进行多轮对话。退出后云端 Session 会被删除，内容不会写入普通历史会话；
+  页面刷新后可直接新建，遗留 Session 由 AgentKit 在 TTL 到期后自动回收。
 - **智能搜索**：「会话」源在当前 agent 的历史消息中做全文检索；「网页」源调用该 agent 挂载的联网搜索工具实时检索（使用服务端环境变量里的凭据）。
 - **添加 AgentKit 智能体**：填入访问地址 + API Key，按 ADK 协议接入远程 agent，接入后出现在选择器中。
 - **自定义 Agent 工作台**：系统提示词支持所见即所得的 Markdown
@@ -38,6 +42,13 @@ VeADK 自带一个 React 前端，用于渲染智能体经由 Google ADK API Ser
 服务端已有的火山引擎凭证会自动传给本地调试进程和部署后的 AgentKit Runtime，
 VeADK 会据此获取 Ark、Embedding、图像、视频、语音、VeSearch 和 APMPlus 的
 API Key，挂载组件时无需重复填写。
+
+“灵光一现”需要 Studio 服务端配置 `VOLCENGINE_ACCESS_KEY`、
+`VOLCENGINE_SECRET_KEY`、`MODEL_AGENT_API_KEY` 和 `MODEL_AGENT_NAME`。
+火山引擎凭证、模型凭证以及带授权信息的 Sandbox Endpoint 始终保留在服务端，
+不会返回浏览器。
+临时沙箱状态保存在 Studio 进程内；部署时应使用单个服务进程，或配置会话亲和，
+确保同一浏览器的创建、对话和退出请求到达同一个实例。
 
 在部署页打开或关闭飞书渠道时，Studio 会重新生成项目，确保 `app.py`、
 `extensions` 依赖和运行时环境变量在部署前保持一致。
