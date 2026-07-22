@@ -18,6 +18,10 @@ const stylesSource = readFileSync(
   new URL("../src/styles.css", import.meta.url),
   "utf8",
 );
+const textShimmerSource = readFileSync(
+  new URL("../src/ui/text-shimmer/TextShimmer.tsx", import.meta.url),
+  "utf8",
+);
 const htmlSource = readFileSync(
   new URL("../index.html", import.meta.url),
   "utf8",
@@ -30,7 +34,10 @@ test("applies configured branding to the UI, document title, and favicon", () =>
   assert.match(sidebarSource, /branding\.logoUrl \|\| volcengineLogo/);
   assert.match(sidebarSource, /width=\{20\}\s*height=\{20\}/);
   assert.match(loginSource, /width=\{20\}\s*height=\{20\}/);
-  assert.match(loginSource, /<h1 className="login-title">\{branding\.title\}<\/h1>/);
+  assert.match(
+    loginSource,
+    /<TextShimmer as="h1" className="login-title"[\s\S]*?\{branding\.title\}[\s\S]*?<\/TextShimmer>/,
+  );
   assert.match(loginSource, /<p className="login-sub">登录以继续使用<\/p>/);
   assert.match(loginSource, /火山引擎 AgentKit 提供企业级 Agent 解决方案/);
   assert.match(stylesSource, /flex: 0 0 20px/);
@@ -90,10 +97,14 @@ test("sidebar brand row aligns with the main header", () => {
   assert.match(sidebarSource, /anchorTop=\{MAIN_PANEL_TOP_PX\}/);
 });
 
-test("welcome headings use a restrained neutral shimmer and stable smoke avatars", () => {
+test("welcome headings share the neutral TextShimmer and stable smoke avatars", () => {
   assert.match(sidebarSource, /function smokeAvatarStyle/);
   assert.match(sidebarSource, /style=\{avatarStyle\}/);
-  assert.match(stylesSource, /@keyframes welcome-smoke-shimmer/);
+  assert.match(appSource, /<TextShimmer as="h1" className="welcome-title"/);
+  assert.match(loginSource, /<TextShimmer as="h1" className="login-title"/);
+  assert.match(textShimmerSource, /hsl\(var\(--muted-foreground\)\)/);
+  assert.match(textShimmerSource, /hsl\(var\(--foreground\)\) 50%/);
+  assert.doesNotMatch(stylesSource, /welcome-smoke-shimmer/);
   assert.match(stylesSource, /@keyframes avatar-smoke-drift/);
   assert.match(
     stylesSource,
@@ -102,15 +113,7 @@ test("welcome headings use a restrained neutral shimmer and stable smoke avatars
   assert.match(stylesSource, /\.account-avatar--lg\s*\{[\s\S]*?border-radius:\s*11px;/);
   assert.match(
     stylesSource,
-    /\.welcome-title\s*\{[\s\S]*?hsl\(42 8% 68%\)[\s\S]*?animation:\s*welcome-smoke-shimmer 9s/,
-  );
-  assert.match(
-    stylesSource,
-    /\.login-title\s*\{[\s\S]*?hsl\(42 8% 66%\)[\s\S]*?animation:\s*welcome-smoke-shimmer 9s/,
-  );
-  assert.match(
-    stylesSource,
-    /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.account-avatar\s*\{[\s\S]*?animation:\s*none;/,
+    /@media \(prefers-reduced-motion: reduce\)[\s\S]*?animation-duration:\s*0\.001ms !important;/,
   );
 });
 

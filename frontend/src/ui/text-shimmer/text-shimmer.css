@@ -1,0 +1,21 @@
+.text-shimmer.text-shimmer {
+  color: transparent;
+  background-size: 200% auto;
+  background-position: 200% center;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: text-shimmer 4s linear infinite;
+}
+
+@keyframes text-shimmer {
+  to {
+    background-position: -200% center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .text-shimmer.text-shimmer {
+    animation: none;
+    background-position: 50% center;
+  }
+}

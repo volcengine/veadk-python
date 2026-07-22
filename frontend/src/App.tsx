@@ -67,6 +67,7 @@ import { WorkflowCreate } from "./create/WorkflowCreate";
 import type { AgentDraft } from "./create/types";
 import type { DeploymentTaskUpdate } from "./ui/ProjectPreview";
 import { DeploymentErrorMessage } from "./ui/DeploymentErrorMessage";
+import { TextShimmer } from "./ui/text-shimmer/TextShimmer";
 import defaultSiteLogo from "./assets/volcengine.svg";
 
 // Breadcrumb root label for the create flow and the per-mode leaf labels.
@@ -1707,7 +1708,9 @@ export default function App() {
             ) : turns.length === 0 ? (
               <>
                 <div className="welcome">
-                  <h1 className="welcome-title">{greeting}</h1>
+                  <TextShimmer as="h1" className="welcome-title" duration={4.8} spread={22}>
+                    {greeting}
+                  </TextShimmer>
                   {composer}
                 </div>
                 {/* Show the agent's structure as soon as it's selected, before

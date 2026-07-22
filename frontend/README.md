@@ -13,6 +13,10 @@ server that `veadk frontend` launches — no separate backend.
 - **Composer invocations**: type `/` to select a mounted skill or `@` to route
   the turn to a mentionable sub-agent.
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
+- **Built-in tool activity** gives web search, image/video generation, memory,
+  and knowledge-base retrieval their own repository-drawn icons and concise
+  Chinese running/completed labels. Active work uses the shared Prompt Kit-style
+  `TextShimmer`, which also powers thinking and branded heading shimmer states.
 - **Sessions**: pick an agent, browse history, new chat, delete — per signed-in
   user. The new-session composer stays minimal until a conversation begins,
   when its session metadata appears. Long Agent lists stay within the viewport

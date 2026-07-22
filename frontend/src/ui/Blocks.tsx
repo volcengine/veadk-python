@@ -8,6 +8,10 @@ import { Markdown } from "./Markdown";
 import { InvocationChips } from "./InvocationChips";
 import { MediaGroup } from "./Media";
 import type { A2uiAction, A2uiComponent } from "../a2ui/types";
+import { TextShimmer } from "./text-shimmer/TextShimmer";
+import { BuiltinToolHeader } from "./builtin-tools/BuiltinToolHeader";
+import { ToolDisclosureIcon } from "./builtin-tools/icons";
+import { getBuiltinToolDefinition } from "./builtin-tools/registry";
 
 const A2UI_TOOL = "send_a2ui_json_to_client";
 
@@ -16,6 +20,23 @@ function SparkIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden>
       <path d="M12 2.2l1.7 5.1a3 3 0 0 0 1.9 1.9L20.8 11l-5.1 1.7a3 3 0 0 0-1.9 1.9L12 19.8l-1.7-5.1a3 3 0 0 0-1.9-1.9L3.2 11l5.1-1.7a3 3 0 0 0 1.9-1.9L12 2.2z" />
+    </svg>
+  );
+}
+
+/** Repository-drawn neutral icon for tools without a dedicated treatment. */
+function GenericToolIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M14.3 5.25a4.6 4.6 0 0 0-5.55 5.55L3.6 15.95a1.8 1.8 0 0 0 0 2.55l1.9 1.9a1.8 1.8 0 0 0 2.55 0l5.15-5.15a4.6 4.6 0 0 0 5.55-5.55l-2.9 2.9-2.45-.55-.55-2.45 2.9-2.9a4.6 4.6 0 0 0-1.45-1.45Z" />
     </svg>
   );
 }
@@ -37,9 +58,13 @@ export function ThinkingBlock({ text, done }: { text: string; done: boolean }) {
     <div className="block-thinking">
       <button className="think-head" onClick={toggle} type="button">
         <SparkIcon className={`spark ${done ? "" : "pulse"}`} />
-        <span className={`think-label ${done ? "think-label--done" : "shimmer"}`}>
-          {done ? "已完成思考" : "思考中"}
-        </span>
+        {done ? (
+          <span className="think-label think-label--done">已完成思考</span>
+        ) : (
+          <TextShimmer className="think-label" duration={2.2} spread={15}>
+            思考中
+          </TextShimmer>
+        )}
         <ChevronRight className={`chev ${open ? "open" : ""}`} />
       </button>
       <div className={`think-collapse ${open && body ? "open" : ""}`}>
@@ -59,12 +84,9 @@ export function ThinkingPlaceholder() {
   return <ThinkingBlock text="" done={false} />;
 }
 
-/** Generic tool-call row. Visual treatment mirrors the janus-ee extension's
- *  `tool_pair` renderer (extension/src/components/event-renderer.tsx
- *  lines 922-980): a small status dot (running → done), the tool name with a
- *  shimmer while pending, a chevron, and a grid-rows collapse holding
- *  "参数" (args) and "返回" (result) sections in muted code blocks. The A2UI
- *  tool is shown as "渲染 UI" and hidden once done (handled by the caller). */
+/** Tool-call row. Dedicated built-ins use their registered icon and Chinese
+ *  status copy; other tools use a neutral repository-drawn tool icon. Both
+ *  treatments share the same header and detail alignment. */
 function ToolBlock({
   name,
   args,
@@ -78,6 +100,7 @@ function ToolBlock({
 }) {
   const [open, setOpen] = useState(false);
   const label = name === A2UI_TOOL ? "渲染 UI" : name;
+  const builtinTool = getBuiltinToolDefinition(name);
   const respText =
     response == null
       ? null
@@ -88,16 +111,38 @@ function ToolBlock({
     respText && respText.length > 2000 ? respText.slice(0, 2000) + "\n…（已截断）" : respText;
   return (
     <motion.div
-      className="block-tool"
+      className={`block-tool${builtinTool ? " block-tool--builtin" : ""}`}
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2, ease: "easeOut" }}
     >
-      <button className="tool-head" onClick={() => setOpen((o) => !o)} type="button">
-        <span className={`tool-dot ${done ? "tool-dot--done" : "tool-dot--running"}`} aria-hidden />
-        <span className={`tool-name ${done ? "" : "shimmer"}`}>{label}</span>
-        <ChevronRight className={`chev ${open ? "open" : ""}`} />
-      </button>
+      {builtinTool ? (
+        <BuiltinToolHeader
+          definition={builtinTool}
+          done={done}
+          open={open}
+          onToggle={() => setOpen((value) => !value)}
+        />
+      ) : (
+        <button
+          className="tool-head tool-head--generic"
+          onClick={() => setOpen((o) => !o)}
+          type="button"
+          aria-expanded={open}
+        >
+          <span className="tool-icon tool-icon--generic" aria-hidden="true">
+            <GenericToolIcon />
+          </span>
+          {done ? (
+            <span className="tool-name">{label}</span>
+          ) : (
+            <TextShimmer className="tool-name" duration={2.2} spread={15}>
+              {label}
+            </TextShimmer>
+          )}
+          <ToolDisclosureIcon className={`tool-chevron${open ? " is-open" : ""}`} />
+        </button>
+      )}
       <div className={`think-collapse ${open ? "open" : ""}`}>
         <div className="think-collapse-inner">
           <div className="tool-detail">
