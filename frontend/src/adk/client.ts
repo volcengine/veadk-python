@@ -806,7 +806,10 @@ export async function deployAgentkitProject(
 
   if (!final) throw new Error("部署失败：连接中断");
   if (!final.success) throw new Error(final.error || "部署失败");
-  if (!final.url || !final.agentName) {
+  if (!final.agentName) {
+    throw new Error("部署失败：返回缺少 Agent 名称");
+  }
+  if (!final.runtimeId && !final.url) {
     throw new Error("部署失败：返回缺少 AgentKit 连接信息");
   }
   // Note: the runtime's data-plane apikey is intentionally NOT persisted in the
@@ -814,7 +817,7 @@ export async function deployAgentkitProject(
   // "管理 Agent" view shows control-plane detail instead.
   return {
     apikey: final.apikey ?? "",
-    url: final.url,
+    url: final.url ?? "",
     agentName: final.agentName,
     runtimeId: final.runtimeId,
     consoleUrl: final.consoleUrl,
