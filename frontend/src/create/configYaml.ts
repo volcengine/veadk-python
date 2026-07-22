@@ -3,6 +3,7 @@
 // can be imported back into the custom-mode wizard.
 
 import { parse, stringify } from "yaml";
+import { A2A_REGISTRY_DEFAULTS } from "./veadkCatalog";
 import { normalizeDraft } from "./normalizeDraft";
 import type { AgentDraft } from "./types";
 
@@ -32,12 +33,13 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
     const registry: Record<string, unknown> = { enabled: true };
     if (draft.a2aRegistry.registrySpaceId?.trim())
       registry.registrySpaceId = draft.a2aRegistry.registrySpaceId.trim();
-    if (draft.a2aRegistry.registryTopK?.trim())
-      registry.registryTopK = draft.a2aRegistry.registryTopK.trim();
-    if (draft.a2aRegistry.registryRegion?.trim())
-      registry.registryRegion = draft.a2aRegistry.registryRegion.trim();
-    if (draft.a2aRegistry.registryEndpoint?.trim())
-      registry.registryEndpoint = draft.a2aRegistry.registryEndpoint.trim();
+    registry.registryTopK =
+      draft.a2aRegistry.registryTopK?.trim() || A2A_REGISTRY_DEFAULTS.topK;
+    registry.registryRegion =
+      draft.a2aRegistry.registryRegion?.trim() || A2A_REGISTRY_DEFAULTS.region;
+    registry.registryEndpoint =
+      draft.a2aRegistry.registryEndpoint?.trim() ||
+      A2A_REGISTRY_DEFAULTS.endpoint;
     o.a2aRegistry = registry;
   }
   if (draft.memory?.shortTerm || draft.memory?.longTerm) {

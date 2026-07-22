@@ -19,6 +19,8 @@ const {
   runtimeEnvVars,
 } = await loadTypeScriptModule("../src/create/deploymentEnv.ts");
 const {
+  A2A_REGISTRY_DEFAULTS,
+  A2A_REGISTRY_ENV,
   BUILTIN_TOOLS,
   KB_BACKENDS,
   LTM_BACKENDS,
@@ -200,6 +202,38 @@ test("collects non-automatic built-in tool settings for deployment", () => {
     /BUILTIN_TOOLS\.find\(\(item\) => item\.id === toolId\)/,
   );
   assert.match(customCreateSource, /selections\.push\(\{ env: tool\.env \}\)/);
+});
+
+test("materializes A2A registry defaults for deployment env", () => {
+  assert.deepEqual(
+    runtimeEnvVars(A2A_REGISTRY_ENV, {
+      REGISTRY_SPACE_ID: "space-test",
+      REGISTRY_TOP_K: A2A_REGISTRY_DEFAULTS.topK,
+      REGISTRY_REGION: A2A_REGISTRY_DEFAULTS.region,
+      REGISTRY_ENDPOINT: A2A_REGISTRY_DEFAULTS.endpoint,
+    }),
+    [
+      { key: "REGISTRY_SPACE_ID", value: "space-test" },
+      { key: "REGISTRY_TOP_K", value: "3" },
+      { key: "REGISTRY_REGION", value: "cn-beijing" },
+      {
+        key: "REGISTRY_ENDPOINT",
+        value: "https://open.volcengineapi.com/",
+      },
+    ],
+  );
+  assert.match(
+    customCreateSource,
+    /a2aRegistryEnvValues\(node\.a2aRegistry, \{ includeDefaults: true \}\)/,
+  );
+  assert.match(
+    customCreateSource,
+    /fixedValues:\s*\{ \.\.\.config\.fixedValues, \.\.\.fixedValues \}/,
+  );
+  assert.match(
+    customCreateSource,
+    /deploymentEnvValues=\{\{[\s\S]*?\.\.\.draft\.deployment\?\.envValues,[\s\S]*?\.\.\.deploymentEnv\.fixedValues,/,
+  );
 });
 
 test("keeps deployment configuration primary beside an inspectable Agent topology", () => {

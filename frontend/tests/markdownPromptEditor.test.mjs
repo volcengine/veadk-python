@@ -18,12 +18,17 @@ const localPickerSource = readFileSync(
   new URL("../src/create/LocalPicker.tsx", import.meta.url),
   "utf8",
 );
+const configYamlSource = readFileSync(
+  new URL("../src/create/configYaml.ts", import.meta.url),
+  "utf8",
+);
 const generatedAgentConfigSources = [
   "../src/create/types.ts",
   "../src/create/normalizeDraft.ts",
-  "../src/create/configYaml.ts",
   "../src/create/TemplateCreate.tsx",
-].map((path) => readFileSync(new URL(path, import.meta.url), "utf8")).join("\n");
+].map((path) => readFileSync(new URL(path, import.meta.url), "utf8"))
+  .concat(configYamlSource)
+  .join("\n");
 const displayTextSource = readFileSync(
   new URL("../src/create/displayText.ts", import.meta.url),
   "utf8",
@@ -301,7 +306,7 @@ test("nested Agent forms omit root-only advanced configuration", () => {
   assert.match(createSource, /const isRootAgent = safePath\.length === 0;/);
   assert.match(
     createSource,
-    /const rootOnlyStepIds: StepId\[\] = isRootAgent \? \["advanced"\] : \[\];/,
+    /const rootOnlyStepIds: StepId\[\] = isRootAgent \? \["advanced", "a2aCenter"\] : \[\];/,
   );
   assert.match(createSource, /\.\.\.rootOnlyStepIds/);
   assert.match(
@@ -328,4 +333,23 @@ test("memory and tracing are grouped under advanced configuration", () => {
   assert.doesNotMatch(createSource, /metaOf\("tracing"\)/);
   assert.doesNotMatch(createSource, /A2UI|enableA2ui/);
   assert.doesNotMatch(generatedAgentConfigSources, /A2UI|enableA2ui/);
+});
+
+test("A2A registry YAML export materializes default optional settings", () => {
+  assert.match(
+    configYamlSource,
+    /import \{ A2A_REGISTRY_DEFAULTS \} from "\.\/veadkCatalog";/,
+  );
+  assert.match(
+    configYamlSource,
+    /registry\.registryTopK\s*=\s*draft\.a2aRegistry\.registryTopK\?\.trim\(\) \|\| A2A_REGISTRY_DEFAULTS\.topK;/,
+  );
+  assert.match(
+    configYamlSource,
+    /registry\.registryRegion\s*=\s*draft\.a2aRegistry\.registryRegion\?\.trim\(\) \|\| A2A_REGISTRY_DEFAULTS\.region;/,
+  );
+  assert.match(
+    configYamlSource,
+    /registry\.registryEndpoint\s*=\s*draft\.a2aRegistry\.registryEndpoint\?\.trim\(\) \|\|\s*A2A_REGISTRY_DEFAULTS\.endpoint;/,
+  );
 });

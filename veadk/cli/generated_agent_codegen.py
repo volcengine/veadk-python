@@ -960,6 +960,34 @@ def _draft_has_a2a_registry(draft: AgentDraft) -> bool:
     return any(_draft_has_a2a_registry(sub_agent) for sub_agent in draft.subAgents)
 
 
+def _a2a_registry_env_values(draft: AgentDraft) -> dict[str, str]:
+    if not draft.a2aRegistry.enabled:
+        return {}
+    registry = draft.a2aRegistry
+    return {
+        "REGISTRY_SPACE_ID": registry.registrySpaceId.strip(),
+        "REGISTRY_TOP_K": registry.registryTopK.strip() or "3",
+        "REGISTRY_REGION": registry.registryRegion.strip() or "cn-beijing",
+        "REGISTRY_ENDPOINT": registry.registryEndpoint.strip()
+        or "https://open.volcengineapi.com/",
+    }
+
+
+def _materialize_a2a_registry_env(env: list[EnvVar], draft: AgentDraft) -> list[EnvVar]:
+    values = _a2a_registry_env_values(draft)
+    if not values:
+        return env
+    return [
+        EnvVar(
+            item.key,
+            item.required,
+            values.get(item.key, item.placeholder),
+            item.comment,
+        )
+        for item in env
+    ]
+
+
 def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
     pkg = ident(draft.name, "my_agent")
     acc = _Acc()
@@ -1019,7 +1047,10 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
             else []
         ),
         GeneratedFile(
-            path=".env.example", content=render_env_example(_dedupe_env(acc.env))
+            path=".env.example",
+            content=render_env_example(
+                _materialize_a2a_registry_env(_dedupe_env(acc.env), draft)
+            ),
         ),
         GeneratedFile(
             path="requirements.txt",

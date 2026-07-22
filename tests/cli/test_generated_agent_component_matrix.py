@@ -249,6 +249,27 @@ def test_a2a_registry_center_generates_tools_and_env() -> None:
     _assert_python_files_compile(project)
 
 
+def test_a2a_registry_center_env_example_uses_configured_values() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="a2a-center-custom",
+            a2aRegistry={
+                "enabled": True,
+                "registrySpaceId": "space-custom",
+                "registryTopK": "8",
+                "registryRegion": "cn-shanghai",
+                "registryEndpoint": "https://example.com/",
+            },
+        )
+    )
+    env_example = _files(project)[".env.example"]
+
+    assert "REGISTRY_SPACE_ID=space-custom" in env_example
+    assert "REGISTRY_TOP_K=8" in env_example
+    assert "REGISTRY_REGION=cn-shanghai" in env_example
+    assert "REGISTRY_ENDPOINT=https://example.com/" in env_example
+
+
 def test_nested_a2a_registry_agent_generates_dynamic_helper() -> None:
     project = generate_project_from_draft(
         AgentDraft(
