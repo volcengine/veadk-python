@@ -253,6 +253,8 @@ def test_runner_redacts_environment_and_structured_secrets(
     status = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))
     error_log = (tmp_path / "runner-error.log").read_text(encoding="utf-8")
     serialized = json.dumps(status, ensure_ascii=False) + error_log
+    assert status["status"] == "failed"
+    assert "BrokenPipeError" not in serialized
     assert "sk-raw-runner-key" not in serialized
     assert "third-party-password" not in serialized
     assert "[REDACTED]" in serialized

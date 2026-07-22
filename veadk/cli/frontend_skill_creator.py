@@ -485,8 +485,15 @@ def _runner_source() -> str:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
             )
-            process.stdin.write(prompt.encode("utf-8"))
-            process.stdin.close()
+            try:
+                process.stdin.write(prompt.encode("utf-8"))
+            except BrokenPipeError:
+                pass
+            finally:
+                try:
+                    process.stdin.close()
+                except BrokenPipeError:
+                    pass
             selector = selectors.DefaultSelector()
             selector.register(process.stdout, selectors.EVENT_READ)
             recent_output = []
