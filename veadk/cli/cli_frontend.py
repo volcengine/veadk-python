@@ -880,13 +880,30 @@ def _run_frontend_server(
         "DATABASE_CONTEXT_SEARCH_",
         "OBSERVABILITY_",
         "AGENTKIT_",
-        "REGISTRY_",
-        "A2A_REGISTRY_",
         "ARK_",
         "OPENAI_",
         "GOOGLE_",
     )
-    _ENV_EXACT: frozenset[str] = frozenset({"CLOUD_PROVIDER"})
+    _ENV_EXACT: frozenset[str] = frozenset(
+        {
+            "CLOUD_PROVIDER",
+            "REGISTRY_SPACE_ID",
+            "REGISTRY_ENDPOINT",
+            "REGISTRY_VERSION",
+            "REGISTRY_SERVICE_NAME",
+            "REGISTRY_REGION",
+            "REGISTRY_TOP_K",
+            "REGISTRY_TIMEOUT_MS",
+            "REGISTRY_POLL_INTERVAL_MS",
+            "REGISTRY_UPSTREAM_TIP_TOKEN",
+            "REGISTRY_ID_ENDPOINT",
+            "A2A_REGISTRY_SPACE_ID",
+            "A2A_REGISTRY_UPSTREAM_TIP_TOKEN",
+            "A2A_REGISTRY_ACCESS_KEY",
+            "A2A_REGISTRY_SECRET_KEY",
+            "A2A_REGISTRY_SESSION_TOKEN",
+        }
+    )
 
     def _collect_runtime_envs() -> dict[str, str]:
         """Return env vars that should be injected into a deployed runtime."""

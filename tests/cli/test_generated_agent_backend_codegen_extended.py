@@ -848,11 +848,15 @@ def test_agentkit_app_adds_dynamic_a2a_tools_per_run() -> None:
     assert '@app.post("/run", response_model=None)' in source
 
 
-def test_frontend_deploy_forwards_a2a_registry_runtime_env_prefixes() -> None:
+def test_frontend_deploy_forwards_a2a_registry_runtime_env_keys() -> None:
     source = Path("veadk/cli/cli_frontend.py").read_text()
 
-    assert '"REGISTRY_",' in source
-    assert '"A2A_REGISTRY_",' in source
+    assert '"REGISTRY_",' not in source
+    assert '"A2A_REGISTRY_",' not in source
+    assert '"REGISTRY_SPACE_ID",' in source
+    assert '"REGISTRY_ENDPOINT",' in source
+    assert '"REGISTRY_TOP_K",' in source
+    assert '"A2A_REGISTRY_ACCESS_KEY",' in source
 
 
 def test_generated_agent_test_runner_enables_dynamic_a2a_helper() -> None:
