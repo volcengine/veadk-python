@@ -3,6 +3,7 @@ import { withLocalUser } from "../../adk/identity";
 import {
   type PublishedSkill,
   type PublishSkillOptions,
+  type SkillActivity,
   type SkillCandidate,
   type SkillCandidateStage,
   type SkillCandidateStatus,
@@ -12,6 +13,16 @@ import {
 } from "./types";
 
 const API_ROOT = "/web/skill-creator";
+
+export class SkillCreatorApiError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "SkillCreatorApiError";
+    this.status = status;
+  }
+}
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -58,7 +69,9 @@ async function errorMessage(response: Response, fallback: string): Promise<strin
 }
 
 async function jsonResponse(response: Response, fallback: string): Promise<unknown> {
-  if (!response.ok) throw new Error(await errorMessage(response, fallback));
+  if (!response.ok) {
+    throw new SkillCreatorApiError(await errorMessage(response, fallback), response.status);
+  }
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
     throw new Error(`${fallback}：服务端返回了非 JSON 响应`);
@@ -113,6 +126,43 @@ function normalizeValidation(value: unknown): SkillValidation | undefined {
   return { valid, errors, warnings };
 }
 
+function normalizeActivities(value: unknown): SkillActivity[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("Skill 生成活动记录格式错误");
+  return value.map((item, index) => {
+    const activity = asRecord(item, `活动 ${index + 1}`);
+    const id = stringValue(activity, "id");
+    const kind = stringValue(activity, "kind");
+    const status = stringValue(activity, "status");
+    if (!id || !kind || !["status", "thinking", "tool", "message"].includes(kind)) {
+      throw new Error(`活动 ${index + 1} 格式错误`);
+    }
+    if (status !== "running" && status !== "done") {
+      throw new Error(`活动 ${index + 1} 状态错误`);
+    }
+    if (kind === "tool") {
+      const name = stringValue(activity, "name");
+      if (!name) throw new Error(`活动 ${index + 1} 缺少工具名称`);
+      return {
+        id,
+        kind,
+        name,
+        args: activity.input,
+        response: activity.output,
+        status,
+      };
+    }
+    const text = stringValue(activity, "text");
+    if (!text) throw new Error(`活动 ${index + 1} 缺少文本`);
+    return {
+      id,
+      kind: kind as "status" | "thinking" | "message",
+      text,
+      status,
+    };
+  });
+}
+
 function normalizeCandidate(value: unknown, index: number): SkillCandidate {
   const candidate = asRecord(value, `候选方案 ${index + 1}`);
   const id = stringValue(candidate, "id", "candidate_id", "candidateId");
@@ -128,6 +178,7 @@ function normalizeCandidate(value: unknown, index: number): SkillCandidate {
     description: stringValue(candidate, "description"),
     skillMd: stringValue(candidate, "skillMd", "skill_md"),
     files: normalizeFiles(candidate.files),
+    activities: normalizeActivities(candidate.activities),
     validation: normalizeValidation(candidate.validation),
     durationMs: numberValue(candidate, "elapsedMs", "elapsed_ms"),
     error: stringValue(candidate, "error", "error_message", "errorMessage"),
@@ -145,7 +196,7 @@ function normalizeJob(value: unknown, fallbackPrompt = ""): SkillCreationJob {
     ? job.candidates.map(normalizeCandidate)
     : [];
   const status = stringValue(job, "status") ?? "running";
-  if (status !== "running" && status !== "completed") {
+  if (status !== "provisioning" && status !== "running" && status !== "completed") {
     throw new Error(`未知的 Skill 任务状态：${status}`);
   }
   return {
@@ -156,12 +207,58 @@ function normalizeJob(value: unknown, fallbackPrompt = ""): SkillCreationJob {
   };
 }
 
-export async function createSkillJob(prompt: string): Promise<SkillCreationJob> {
+export async function createSkillJob(
+  prompt: string,
+  onProgress?: (job: SkillCreationJob) => void,
+): Promise<SkillCreationJob> {
   const response = await apiRequest("/jobs", {
     method: "POST",
     body: JSON.stringify({ prompt }),
   });
-  return normalizeJob(await jsonResponse(response, "创建 Skill 任务失败"), prompt);
+  if (!response.ok) {
+    throw new SkillCreatorApiError(
+      await errorMessage(response, "创建 Skill 任务失败"),
+      response.status,
+    );
+  }
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    const job = normalizeJob(await response.json(), prompt);
+    onProgress?.(job);
+    return job;
+  }
+  if (!contentType.includes("application/x-ndjson") || !response.body) {
+    throw new Error("创建 Skill 任务失败：服务端返回了非流式响应");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let latest: SkillCreationJob | undefined;
+  const consume = (line: string) => {
+    if (!line.trim()) return;
+    const event = asRecord(JSON.parse(line), "Skill 创建进度");
+    if (event.type === "error") {
+      throw new Error(stringValue(event, "error") ?? "创建 Skill 任务失败");
+    }
+    if (event.type !== "progress" && event.type !== "complete") {
+      throw new Error("未知的 Skill 创建进度事件");
+    }
+    latest = normalizeJob(event.job, prompt);
+    onProgress?.(latest);
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    lines.forEach(consume);
+    if (done) break;
+  }
+  consume(buffer);
+  if (!latest) throw new Error("创建 Skill 任务失败：服务端未返回任务");
+  return latest;
 }
 
 export async function getSkillJob(jobId: string): Promise<SkillCreationJob> {

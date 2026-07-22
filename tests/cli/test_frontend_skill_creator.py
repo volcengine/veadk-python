@@ -89,6 +89,7 @@ def test_archive_metadata_requires_safe_single_matching_root() -> None:
 def test_create_job_runs_fixed_models_in_independent_candidates() -> None:
     service = SkillCreatorService(tool_id="tool-id")
     calls: list[tuple[str, str]] = []
+    progress: list[dict[str, Any]] = []
 
     def create_candidate(
         tool_id: str,
@@ -112,7 +113,9 @@ def test_create_job_runs_fixed_models_in_independent_candidates() -> None:
         ),
         patch.object(service, "_create_candidate", side_effect=create_candidate),
     ):
-        result = service.create_job("Create a release notes Skill", "alice")
+        result = service.create_job(
+            "Create a release notes Skill", "alice", progress.append
+        )
 
     assert result["status"] == "running"
     assert {candidate["id"] for candidate in result["candidates"]} == {"a", "b"}
@@ -120,6 +123,35 @@ def test_create_job_runs_fixed_models_in_independent_candidates() -> None:
         ("a", "doubao-seed-2-0-pro-260215"),
         ("b", "deepseek-v4-flash-260425"),
     }
+    assert len(progress) == 3
+    assert all(snapshot["status"] == "provisioning" for snapshot in progress)
+    assert all(
+        candidate["activities"][0]["text"] == "正在拉起 Sandbox"
+        for candidate in progress[0]["candidates"]
+    )
+    assert any(
+        candidate["activities"][0]["text"] == "Sandbox 已就绪，正在启动生成"
+        for candidate in progress[1]["candidates"]
+    )
+    assert all(candidate["status"] == "running" for candidate in result["candidates"])
+
+
+def test_new_session_visibility_is_retried_before_job_becomes_running() -> None:
+    service = SkillCreatorService(tool_id="tool-id")
+    session = {"instanceId": "instance-a", "endpoint": "https://sandbox"}
+
+    with (
+        patch.object(
+            service,
+            "_find_session",
+            side_effect=[SkillCreatorError("Skill 创建任务不存在或已过期"), session],
+        ) as find_session,
+        patch("veadk.cli.frontend_skill_creator.time.sleep") as sleep,
+    ):
+        service._wait_for_session_visibility("tool-id", "job-a")
+
+    assert find_session.call_count == 2
+    sleep.assert_called_once_with(5.0)
 
 
 def test_runner_uses_prompt_file_and_ephemeral_codex() -> None:
@@ -128,11 +160,72 @@ def test_runner_uses_prompt_file_and_ephemeral_codex() -> None:
     assert 'job_dir / "prompt.txt"' in source
     assert '"--ephemeral"' in source
     assert '"workspace-write"' in source
+    assert '"--json"' in source
+    assert "subprocess.Popen" in source
+    assert "handle_event(json.loads(line))" in source
     assert '"--dangerously-bypass-approvals-and-sandbox"' not in source
     assert "secret_values" in source
     assert "redact(traceback.format_exc())" in source
     assert "sensitive_assignment.sub" in source
     assert "ck-test-ticket" not in source
+
+
+def test_runner_streams_only_public_bounded_activities(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = tmp_path / "runner.py"
+    runner.write_text(_runner_source(), encoding="utf-8")
+    (tmp_path / "prompt.txt").write_text("Create a safe Skill", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_codex = fake_bin / "codex"
+    fake_codex.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "import pathlib\n"
+        "import sys\n"
+        "work = pathlib.Path(sys.argv[sys.argv.index('-C') + 1])\n"
+        "root = work / 'weather-report'\n"
+        "root.mkdir(parents=True)\n"
+        "(root / 'SKILL.md').write_text(\n"
+        "    '---\\nname: weather-report\\ndescription: Weather report.\\n---\\n',\n"
+        "    encoding='utf-8',\n"
+        ")\n"
+        "events = [\n"
+        "  {'type': 'item.completed', 'item': {'id': 'thinking', 'type': 'reasoning', 'summary': ['检查 Skill 结构', '准备生成文件']}},\n"
+        "  {'type': 'item.started', 'item': {'id': 'cmd', 'type': 'command_execution', 'command': 'python /home/gem/.codex/build.py'}},\n"
+        "  {'type': 'item.completed', 'item': {'id': 'cmd', 'type': 'command_execution', 'command': 'python /home/gem/.codex/build.py', 'status': 'completed'}},\n"
+        "  {'type': 'item.completed', 'item': {'id': 'write', 'type': 'command_execution', 'command': 'cat > /home/gem/jobs/work/weather-report/SKILL.md'}},\n"
+        "  {'type': 'item.completed', 'item': {'id': 'file', 'type': 'file_change', 'path': 'weather-report/SKILL.md'}},\n"
+        "  {'type': 'item.completed', 'item': {'id': 'mcp', 'type': 'mcp_tool_call', 'server': 'files', 'tool': 'inspect', 'arguments': {'api_key': 'plain-secret'}, 'result': {'ok': True}}},\n"
+        "  {'type': 'item.completed', 'item': {'id': 'message', 'type': 'agent_message', 'text': 'Skill 已生成'}},\n"
+        "]\n"
+        "for event in events:\n"
+        "    print(json.dumps(event), flush=True)\n",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ['PATH']}")
+
+    subprocess.run([sys.executable, str(runner)], check=True)
+
+    status = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))
+    serialized = json.dumps(status["activities"], ensure_ascii=False)
+    assert status["status"] == "succeeded"
+    assert "检查 Skill 结构" in serialized
+    assert "准备生成文件" in serialized
+    assert "运行校验脚本" in serialized
+    assert "修改文件" in serialized
+    assert ".codex" not in serialized.lower()
+    assert "plain-secret" not in serialized
+    assert "MCP · files/inspect" in serialized
+    assert "weather-report/SKILL.md" in serialized
+    assert "Skill 已生成" in serialized
+    assert all(
+        len(json.dumps(item, ensure_ascii=False)) <= 4_500
+        for item in status["activities"]
+    )
+    assert len(status["activities"]) <= 80
 
 
 def test_runner_redacts_environment_and_structured_secrets(
@@ -189,6 +282,33 @@ def test_create_job_cleans_up_successful_candidate_when_peer_fails() -> None:
         service.create_job("Create a release notes Skill", "alice")
 
     delete_instances.assert_called_once_with([("tool-id", "instance-b")])
+
+
+def test_candidate_status_rejects_invalid_or_oversized_activities() -> None:
+    service = SkillCreatorService(tool_id="tool-id")
+    oversized = [
+        {"id": f"event-{index}", "kind": "status", "text": "ok", "status": "done"}
+        for index in range(81)
+    ]
+    remote_status = {
+        "status": "running",
+        "stage": "generating",
+        "activities": oversized,
+    }
+    with (
+        patch.object(
+            service,
+            "_find_session",
+            return_value={"instanceId": "instance-a", "endpoint": "https://sandbox"},
+        ),
+        patch("veadk.cli.frontend_skill_creator.requests.post"),
+        patch(
+            "veadk.cli.frontend_skill_creator._safe_json_response",
+            return_value={"data": {"output": json.dumps(remote_status)}},
+        ),
+        pytest.raises(SkillCreatorError, match="活动记录格式错误"),
+    ):
+        service._candidate_status("tool-id", "job-id", "a", "model", "label")
 
 
 def test_archive_metadata_rejects_symlink_entry() -> None:
@@ -268,6 +388,7 @@ def test_candidate_session_never_overrides_hosted_tool_ticket(monkeypatch) -> No
             "veadk.cli.frontend_skill_creator.AgentkitToolsClient",
             return_value=FakeClient(),
         ),
+        patch.object(service, "_wait_for_session_visibility"),
         patch("veadk.cli.frontend_skill_creator.requests.post"),
         patch("veadk.cli.frontend_skill_creator._safe_json_response", return_value={}),
     ):
@@ -310,6 +431,7 @@ def test_tool_rejects_untrusted_credential_relay_url() -> None:
 
 
 def test_routes_mount_and_report_disabled_without_sandbox(monkeypatch) -> None:
+    monkeypatch.delenv("SANDBOX_SKILL_CREATOR", raising=False)
     monkeypatch.delenv("VEADK_SKILL_CREATOR_TOOL_ID", raising=False)
     monkeypatch.delenv("AGENTKIT_SANDBOX_TOOL_ID", raising=False)
     app = FastAPI()
@@ -319,4 +441,17 @@ def test_routes_mount_and_report_disabled_without_sandbox(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["enabled"] is False
+    assert response.json()["reason"] == "管理员未配置"
     assert len(response.json()["models"]) == 2
+
+
+def test_skill_creator_reads_only_dedicated_sandbox_tool_env(monkeypatch) -> None:
+    monkeypatch.setenv("SANDBOX_SKILL_CREATOR", "skill-creator-tool")
+    monkeypatch.setenv("VEADK_SKILL_CREATOR_TOOL_ID", "legacy-tool")
+    monkeypatch.setenv("AGENTKIT_SANDBOX_TOOL_ID", "shared-tool")
+
+    assert SkillCreatorService()._tool_id() == "skill-creator-tool"
+
+    monkeypatch.delenv("SANDBOX_SKILL_CREATOR")
+    with pytest.raises(SkillCreatorError, match="管理员未配置"):
+        SkillCreatorService()._tool_id()

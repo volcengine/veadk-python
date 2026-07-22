@@ -181,7 +181,7 @@ test("the tabbed detail panel constrains long content and narrow viewports", () 
   );
   assert.match(
     stylesSource,
-    /\.agentsel-list\s*\{[\s\S]*?gap:\s*0;/,
+    /\.agentsel-list\s*\{[\s\S]*?gap:\s*4px;/,
   );
   assert.match(
     stylesSource,

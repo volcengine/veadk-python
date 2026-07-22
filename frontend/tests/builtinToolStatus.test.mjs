@@ -154,5 +154,9 @@ test("aligns thinking and special-tool headers on the same visual grid", () => {
     sharedStylesSource,
     /\.think-label\s*\{[^}]*font-size:\s*13\.5px[^}]*font-weight:\s*400[^}]*line-height:\s*1\.35/,
   );
+  assert.match(
+    sharedStylesSource,
+    /\.tool-name\s*\{[^}]*font-size:\s*13\.5px[^}]*font-weight:\s*400[^}]*line-height:\s*1\.35/,
+  );
   assert.match(blocksSource, /<TextShimmer className="think-label" duration=\{2\.4\} spread=\{18\}>/);
 });

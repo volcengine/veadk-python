@@ -3498,10 +3498,21 @@ def _resolve_studio_identity_region(
     help="Comma-separated Studio developer usernames or OAuth emails.",
 )
 @click.option(
-    "--skill-creator-tool-id",
+    "--sandbox-chat-codex-tool-id",
+    "sandbox_chat_codex_tool_id",
     default=None,
-    envvar="VEADK_SKILL_CREATOR_TOOL_ID",
-    help="Dedicated ready AgentKit CodeEnv Tool ID used by Skill creation mode.",
+    envvar="SANDBOX_CHAT_CODEX",
+    help="Dedicated ready AgentKit CodeEnv Tool ID used by temporary chats. "
+    "Default: create one during deployment.",
+)
+@click.option(
+    "--sandbox-skill-creator-tool-id",
+    "--skill-creator-tool-id",
+    "sandbox_skill_creator_tool_id",
+    default=None,
+    envvar="SANDBOX_SKILL_CREATOR",
+    help="Dedicated ready AgentKit CodeEnv Tool ID used by Skill creation mode. "
+    "Default: create one during deployment.",
 )
 def frontend_deploy(
     user_pool_id: str,
@@ -3522,7 +3533,8 @@ def frontend_deploy(
     site_title: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
-    skill_creator_tool_id: str | None,
+    sandbox_chat_codex_tool_id: str | None,
+    sandbox_skill_creator_tool_id: str | None,
 ) -> None:
     """Deploy the SSO web frontend to VeFaaS.
 
@@ -3587,18 +3599,51 @@ def frontend_deploy(
     # shipped as a plain env var.
     os.environ["IAM_ROLE"] = role_trn
 
-    if skill_creator_tool_id:
-        from veadk.cli.frontend_skill_creator import (
-            ensure_skill_creator_model_credential,
-        )
+    session_token = os.getenv("VOLCENGINE_SESSION_TOKEN") or os.getenv(
+        "VOLC_SESSIONTOKEN"
+    )
+    sandbox_tool_ids = {
+        "chat": sandbox_chat_codex_tool_id,
+        "skill": sandbox_skill_creator_tool_id,
+    }
+    from veadk.cli.studio_sandbox_tools import (
+        ensure_studio_code_env_tool,
+        studio_sandbox_tool_name,
+    )
 
-        session_token = os.getenv("VOLCENGINE_SESSION_TOKEN") or os.getenv(
-            "VOLC_SESSIONTOKEN"
-        )
-        click.echo("Ensuring the Skill Creator model credential relay…")
+    for purpose, tool_id in sandbox_tool_ids.items():
+        if tool_id:
+            continue
+        tool_name = studio_sandbox_tool_name(vefaas_app_name, purpose)
+        click.echo(f"Ensuring AgentKit {purpose} CodeEnv Tool '{tool_name}'…")
+        try:
+            sandbox_tool_ids[purpose] = ensure_studio_code_env_tool(
+                name=tool_name,
+                region=region,
+                access_key=ak,
+                secret_key=sk,
+                session_token=session_token or "",
+            )
+        except Exception as error:
+            raise click.ClickException(
+                f"Failed to provision the AgentKit {purpose} CodeEnv Tool. "
+                "Verify account permissions and AgentKit service status."
+            ) from error
+        click.echo(f"AgentKit {purpose} CodeEnv Tool is ready.")
+
+    from veadk.cli.frontend_skill_creator import (
+        ensure_skill_creator_model_credential,
+    )
+
+    for purpose, tool_id in sandbox_tool_ids.items():
+        if not tool_id:
+            raise click.ClickException(
+                f"AgentKit {purpose} CodeEnv Tool did not return a Tool ID."
+            )
+        click.echo(f"Ensuring the AgentKit {purpose} model credential relay…")
         try:
             ensure_skill_creator_model_credential(
-                tool_id=skill_creator_tool_id,
+                tool_id=tool_id,
                 region=region,
                 access_key=ak,
                 secret_key=sk,
@@ -3606,10 +3651,15 @@ def frontend_deploy(
             )
         except Exception as error:
             raise click.ClickException(
-                "Failed to provision the Skill Creator model credential relay. "
+                f"Failed to provision the AgentKit {purpose} model credential relay. "
                 "Verify the Tool ID, account permissions, and AgentKit service status."
             ) from error
-        click.echo("Skill Creator model credential relay is ready.")
+        click.echo(f"AgentKit {purpose} model credential relay is ready.")
+
+    chat_codex_tool_id = sandbox_tool_ids["chat"]
+    skill_creator_tool_id = sandbox_tool_ids["skill"]
+    if not chat_codex_tool_id or not skill_creator_tool_id:
+        raise click.ClickException("AgentKit CodeEnv Tool provisioning was incomplete.")
 
     # SECURITY: VeFaaS._create_function uploads *everything* in veadk_environments
     # (i.e. the deployer's whole .env) as function env vars. The frontend must
@@ -3634,8 +3684,8 @@ def frontend_deploy(
         veadk_environments["VEADK_STUDIO_ADMINS"] = studio_admins
     if studio_developers:
         veadk_environments["VEADK_STUDIO_DEVELOPERS"] = studio_developers
-    if skill_creator_tool_id:
-        veadk_environments["VEADK_SKILL_CREATOR_TOOL_ID"] = skill_creator_tool_id
+    veadk_environments["SANDBOX_CHAT_CODEX"] = chat_codex_tool_id
+    veadk_environments["SANDBOX_SKILL_CREATOR"] = skill_creator_tool_id
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
 
@@ -3791,6 +3841,19 @@ def frontend_deploy(
     default=None,
     help="Replace the deployed Studio title, at most 6 characters.",
 )
+@click.option(
+    "--sandbox-chat-codex-tool-id",
+    "sandbox_chat_codex_tool_id",
+    default=None,
+    help="Replace the temporary-chat AgentKit CodeEnv Tool ID.",
+)
+@click.option(
+    "--sandbox-skill-creator-tool-id",
+    "--skill-creator-tool-id",
+    "sandbox_skill_creator_tool_id",
+    default=None,
+    help="Replace the Skill Creator AgentKit CodeEnv Tool ID.",
+)
 @click.option("--volcengine-access-key", default=None)
 @click.option("--volcengine-secret-key", default=None)
 def frontend_update(
@@ -3800,6 +3863,8 @@ def frontend_update(
     path: Path,
     site_logo: str | None,
     site_title: str | None,
+    sandbox_chat_codex_tool_id: str | None,
+    sandbox_skill_creator_tool_id: str | None,
     volcengine_access_key: str | None,
     volcengine_secret_key: str | None,
 ) -> None:
@@ -3894,14 +3959,20 @@ def frontend_update(
             region=target.region,
             project_name=target.project,
         )
-        environment_overrides = (
-            {"VEADK_SITE_TITLE": branding_title} if branding_title is not None else None
-        )
+        environment_overrides = {}
+        if branding_title is not None:
+            environment_overrides["VEADK_SITE_TITLE"] = branding_title
+        if sandbox_chat_codex_tool_id is not None:
+            environment_overrides["SANDBOX_CHAT_CODEX"] = sandbox_chat_codex_tool_id
+        if sandbox_skill_creator_tool_id is not None:
+            environment_overrides["SANDBOX_SKILL_CREATOR"] = (
+                sandbox_skill_creator_tool_id
+            )
         url = service.update_application_code_bundle(
             application_id=target.application_id,
             function_id=target.function_id,
             path=str(package_dir),
-            environment_overrides=environment_overrides,
+            environment_overrides=environment_overrides or None,
         )
         click.echo("")
         click.echo(f"✅ Studio updated: {url}")

@@ -419,6 +419,60 @@ def test_studio_update_explicit_branding_overrides_cloud_values(
     assert update["environment_overrides"] == {"VEADK_SITE_TITLE": "新标题"}
 
 
+def test_studio_update_only_overrides_explicit_sandbox_tool_id(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    target = _target()
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "veadk.cli.studio_update.find_studio_deployments", lambda **_: [target]
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_update.load_deployed_site_logo", lambda _: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_frontend_assets", lambda *_: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_local_studio_requirements",
+        lambda *_a, **_k: "./veadk.whl\n",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.write_studio_package", lambda *_a, **_k: None
+    )
+
+    class _FakeVeFaaS:
+        def __init__(self, **_: str) -> None:
+            pass
+
+        def update_application_code_bundle(self, **kwargs: object) -> str:
+            captured.update(kwargs)
+            return target.url
+
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _FakeVeFaaS)
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "update",
+            "--vefaas-app-name",
+            "studio-app",
+            "--path",
+            str(tmp_path),
+            "--sandbox-chat-codex-tool-id",
+            "chat-tool-new",
+            "--volcengine-access-key",
+            "ak",
+            "--volcengine-secret-key",
+            "sk",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["environment_overrides"] == {"SANDBOX_CHAT_CODEX": "chat-tool-new"}
+
+
 def test_update_application_code_bundle_merges_only_explicit_environment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -450,6 +504,38 @@ def test_update_application_code_bundle_merges_only_explicit_environment(
     assert {item.key: item.value for item in request.envs} == {
         "EXISTING": "kept",
         "VEADK_SITE_TITLE": "新标题",
+    }
+
+
+def test_update_application_code_bundle_preserves_unspecified_sandbox_tool(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    updated_requests: list[Any] = []
+    service = object.__new__(VeFaaS)
+    cast(Any, service).client = SimpleNamespace(
+        get_function=lambda _: SimpleNamespace(
+            envs=[
+                SimpleNamespace(key="SANDBOX_CHAT_CODEX", value="chat-old"),
+                SimpleNamespace(key="SANDBOX_SKILL_CREATOR", value="skill-old"),
+            ]
+        ),
+        update_function=updated_requests.append,
+    )
+    monkeypatch.setattr(service, "_upload_and_mount_code", lambda *_: None)
+    monkeypatch.setattr(service, "_release_application", lambda _: "https://same")
+
+    service.update_application_code_bundle(
+        application_id="app-id",
+        function_id="function-id",
+        path=str(tmp_path),
+        environment_overrides={"SANDBOX_CHAT_CODEX": "chat-new"},
+    )
+
+    request = updated_requests[0]
+    assert {item.key: item.value for item in request.envs} == {
+        "SANDBOX_CHAT_CODEX": "chat-new",
+        "SANDBOX_SKILL_CREATOR": "skill-old",
     }
 
 

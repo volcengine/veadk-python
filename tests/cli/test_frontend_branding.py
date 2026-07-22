@@ -146,6 +146,14 @@ def test_studio_deploy_bundles_logo_and_optional_title(
         "veadk.cli.studio_deploy_serverless_iam.ensure_serverless_application_role",
         lambda *_: False,
     )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_code_env_tool",
+        lambda **kwargs: f"auto-{kwargs['name']}",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
+        lambda **_: None,
+    )
 
     args = [
         "deploy",

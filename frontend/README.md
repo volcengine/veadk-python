@@ -13,10 +13,12 @@ server that `veadk frontend` launches — no separate backend.
 - **Composer invocations**: type `/` to select a mounted skill or `@` to route
   the turn to a mentionable sub-agent. New conversations address the selected
   Agent by its display name in the composer placeholder.
-- **New-chat modes**: keep the existing Agent conversation path, show the
-  upcoming temporary-session mode, or create a Skill with a real two-model A/B
-  run in independent AgentKit CodeEnv sessions. Completed candidates can be
-  compared, downloaded as ZIP files, and added to AgentKit.
+- **New-chat modes**: keep the existing Agent conversation path, start a
+  temporary Codex conversation in an AgentKit Sandbox, or create a Skill with
+  a real two-model A/B run in independent AgentKit CodeEnv sessions. Skill
+  progress resumes from Sandbox state if the creation stream is interrupted;
+  completed candidates can be compared, downloaded as ZIP files, and added to
+  AgentKit.
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
 - **Built-in tool activity** gives web search, image/video generation, memory,
   and knowledge-base retrieval their own repository-drawn icons and concise
@@ -31,10 +33,13 @@ server that `veadk frontend` launches — no separate backend.
   scroll independently.
 - **Insight Sandbox**: start an isolated, temporary AgentKit CodeEnv session
   from the new-chat composer or global header. Studio reuses its dedicated
-  Sandbox tool, creates a fresh user-owned session, streams Codex replies, and
-  deletes the cloud session on exit without adding it to normal chat history.
+  Sandbox tool, creates a fresh user-owned session, streams Codex reasoning,
+  tool activity, and replies into the normal conversation renderer, and deletes
+  the cloud session on exit without adding it to normal chat history.
   Reloading can create another session; AgentKit reclaims abandoned sessions
   automatically when their TTL ends.
+- **AgentKit Skill center**: browse Skill Spaces and their skills with
+  server-side pagination by region, then inspect the selected Skill content.
 - **Tracing viewer**: a span tree + detail panel from the ADK debug trace.
 - **Smart search**: search sessions, the network through `web_search`, and a
   selected Agent's KnowledgeBase or long-term memory when mounted. The source
@@ -254,17 +259,23 @@ the browser or copied into per-job Session variables. Studio also rejects
 non-HTTPS or non-Volcengine credential relay URLs. Skill creation is limited
 to Studio developers and admins.
 
-Configure a dedicated, ready AgentKit `CodeEnv` Tool before starting the
-server. The Tool ID is intentionally server-only and cannot be supplied by the
-browser:
+After submission, Studio opens both candidate conversations immediately. Each
+conversation independently renders public reasoning summaries, tool calls, and
+assistant messages returned by the generator. Private chain-of-thought and
+credentials never enter the UI. Completed candidates still support preview,
+ZIP download, and AgentKit publish.
+
+Configure separate ready AgentKit `CodeEnv` Tools for temporary chats and Skill
+creation before starting the server. The Tool IDs are intentionally server-only
+and cannot be supplied by the browser:
 
 ```bash
-export VEADK_SKILL_CREATOR_TOOL_ID=<code-env-tool-id>
+export SANDBOX_CHAT_CODEX=<chat-code-env-tool-id>
+export SANDBOX_SKILL_CREATOR=<skill-code-env-tool-id>
 veadk frontend --agents-dir examples
 ```
 
-`AGENTKIT_SANDBOX_TOOL_ID` is accepted as a compatibility fallback. Publishing
-a generated Skill uses TOS and the AgentKit Skills API. Set
+Publishing a generated Skill uses TOS and the AgentKit Skills API. Set
 `VEADK_SKILL_CREATOR_TOS_BUCKET`, `VEADK_SKILL_CREATOR_TOS_PREFIX`, and
 `VEADK_SKILL_CREATOR_PROJECT_NAME` only when their defaults are unsuitable.
 Each candidate session expires after 30 minutes and is deleted immediately when
@@ -272,19 +283,19 @@ a job is discarded. Job state lives in Sandbox rather than frontend-process
 memory, so polling and downloads continue to work when FaaS requests reach a
 different instance.
 
-For local Studio, run the AgentKit `credential-hosting` command and choose to
-bind its result to the dedicated CodeEnv Tool. For a cloud Studio deployment,
-pass the server-only Tool ID explicitly. The deploy command obtains the Ark key
-with the deployer's Volcengine credentials, stores it through AgentKit
-credential hosting, and binds only the returned ticket and relay URL to that
-Tool:
+For local Studio, run the AgentKit `credential-hosting` command and bind its
+result to both CodeEnv Tools. A cloud deployment creates both Tools when their
+IDs are omitted. Alternatively, select existing Tools with
+`--sandbox-chat-codex-tool-id` and `--sandbox-skill-creator-tool-id`. The deploy
+command obtains the Ark key with the deployer's Volcengine credentials, stores
+it through AgentKit credential hosting, and binds only the returned ticket and
+relay URL to the Tools:
 
 ```bash
 veadk studio deploy \
   --user-pool-id <pool-id> \
   --allowed-client-id <client-id> \
-  --vefaas-app-name <app-name> \
-  --skill-creator-tool-id <code-env-tool-id>
+  --vefaas-app-name <app-name>
 ```
 
 ## Agent naming

@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
-import { getSkillJob, publishSkillCandidate } from "./api";
+import {
+  getSkillJob,
+  publishSkillCandidate,
+  SkillCreatorApiError,
+} from "./api";
 import { SkillCandidatePane } from "./SkillCandidatePane";
 import {
   SKILL_MODELS,
@@ -10,10 +14,11 @@ import {
 import "./skill-create.css";
 
 const TERMINAL = new Set(["completed"]);
+const POLL_INTERVAL_MS = 1_100;
+const NOT_FOUND_GRACE_MS = 30_000;
 
 export interface SkillCreateWorkspaceProps {
   initialJob: SkillCreationJob;
-  onStartOver: () => void;
 }
 
 function placeholderCandidate(model: string, index: number): SkillCandidate {
@@ -24,37 +29,71 @@ function placeholderCandidate(model: string, index: number): SkillCandidate {
     status: "queued",
     stage: "provisioning",
     files: [],
+    activities: [{
+      id: "provisioning",
+      kind: "status",
+      text: "正在拉起 Sandbox",
+      status: "running",
+    }],
   };
 }
 
-export function SkillCreateWorkspace({ initialJob, onStartOver }: SkillCreateWorkspaceProps) {
+export function SkillCreateWorkspace({ initialJob }: SkillCreateWorkspaceProps) {
   const [job, setJob] = useState(initialJob);
   const [pollError, setPollError] = useState("");
+  const [pollingStopped, setPollingStopped] = useState(false);
   const [selectedId, setSelectedId] = useState<string>();
   const [publishingId, setPublishingId] = useState<string>();
   const [publishedIds, setPublishedIds] = useState<Set<string>>(() => new Set());
   const [publishErrors, setPublishErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    if (TERMINAL.has(initialJob.status)) return;
+    setJob(initialJob);
+    setPollError("");
+    setPollingStopped(false);
+  }, [initialJob]);
+
+  useEffect(() => {
+    if (
+      TERMINAL.has(initialJob.status) ||
+      initialJob.id.startsWith("pending-")
+    ) return;
     let cancelled = false;
     let timer: number | undefined;
+    const notFoundDeadline = Date.now() + NOT_FOUND_GRACE_MS;
     const poll = async () => {
       try {
         const updated = await getSkillJob(initialJob.id);
         if (!cancelled) {
           setJob({ ...updated, prompt: updated.prompt || initialJob.prompt });
           setPollError("");
-          if (!TERMINAL.has(updated.status)) timer = window.setTimeout(poll, 1100);
+          if (!TERMINAL.has(updated.status)) {
+            timer = window.setTimeout(poll, POLL_INTERVAL_MS);
+          }
         }
       } catch (error) {
         if (!cancelled) {
-          setPollError(error instanceof Error ? error.message : String(error));
-          timer = window.setTimeout(poll, 1100);
+          const apiError = error instanceof SkillCreatorApiError ? error : undefined;
+          const awaitingSession =
+            apiError?.status === 404 && Date.now() < notFoundDeadline;
+          if (awaitingSession) {
+            setPollError("");
+            setPollingStopped(false);
+            timer = window.setTimeout(poll, POLL_INTERVAL_MS);
+            return;
+          }
+          const unavailable = apiError?.status === 403 || apiError?.status === 404;
+          setPollError(
+            apiError?.status === 403
+              ? "当前标签页的登录身份与此任务不一致，请重新创建 Skill"
+              : error instanceof Error ? error.message : String(error),
+          );
+          setPollingStopped(unavailable);
+          if (!unavailable) timer = window.setTimeout(poll, POLL_INTERVAL_MS);
         }
       }
     };
-    timer = window.setTimeout(poll, 1100);
+    timer = window.setTimeout(poll, POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
@@ -86,19 +125,12 @@ export function SkillCreateWorkspace({ initialJob, onStartOver }: SkillCreateWor
   return (
     <section className="skill-workspace">
       <header className="skill-workspace__intro">
-        <div>
-          <span className="skill-workspace__kicker">A/B Skill 创建</span>
-          <h1>正在把需求变成可运行的 Skill</h1>
-          <p>{job.prompt}</p>
-        </div>
-        <button type="button" className="skill-workspace__restart" onClick={onStartOver}>
-          重新创建
-        </button>
+        <h1>正在把需求变成可运行的 Skill</h1>
       </header>
 
       {pollError ? (
         <div className="skill-workspace__poll-error" role="alert">
-          状态刷新失败：{pollError}。页面会继续重试。
+          状态刷新失败：{pollError}。{pollingStopped ? "" : "页面会继续重试。"}
         </div>
       ) : null}
 

@@ -10,6 +10,7 @@
 import { BOOT_REQUEST_TIMEOUT_MS, requestSignal } from "./timeout";
 
 const LOCAL_USER_KEY = "veadk_local_user";
+const TAB_LOCAL_USER_KEY = "veadk_local_user_tab";
 
 export type AuthStatus = "authenticated" | "unauthenticated";
 
@@ -26,13 +27,26 @@ export const USERNAME_RE = /^[A-Za-z0-9]{1,16}$/;
 
 export function getLocalUser(): string | null {
   try {
-    return localStorage.getItem(LOCAL_USER_KEY);
+    const tabUser = sessionStorage.getItem(TAB_LOCAL_USER_KEY);
+    if (tabUser) return tabUser;
+    const savedUser = localStorage.getItem(LOCAL_USER_KEY);
+    if (savedUser) sessionStorage.setItem(TAB_LOCAL_USER_KEY, savedUser);
+    return savedUser;
   } catch {
-    return null;
+    try {
+      return localStorage.getItem(LOCAL_USER_KEY);
+    } catch {
+      return null;
+    }
   }
 }
 
 export function setLocalUser(name: string): void {
+  try {
+    sessionStorage.setItem(TAB_LOCAL_USER_KEY, name);
+  } catch {
+    /* ignore */
+  }
   try {
     localStorage.setItem(LOCAL_USER_KEY, name);
   } catch {
@@ -41,6 +55,11 @@ export function setLocalUser(name: string): void {
 }
 
 export function clearLocalUser(): void {
+  try {
+    sessionStorage.removeItem(TAB_LOCAL_USER_KEY);
+  } catch {
+    /* ignore */
+  }
   try {
     localStorage.removeItem(LOCAL_USER_KEY);
   } catch {

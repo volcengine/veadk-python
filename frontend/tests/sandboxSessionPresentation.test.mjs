@@ -26,6 +26,10 @@ const iconSource = readFileSync(
   new URL("../src/ui/icons/InsightIcon.tsx", import.meta.url),
   "utf8",
 );
+const modeSelectorSource = readFileSync(
+  new URL("../src/ui/new-chat-modes/NewChatModeSelector.tsx", import.meta.url),
+  "utf8",
+);
 
 test("sandbox access is isolated behind a reusable typed client", () => {
   assert.match(sandboxClientSource, /export interface AgentKitSandboxClient/);
@@ -37,20 +41,24 @@ test("sandbox access is isolated behind a reusable typed client", () => {
   assert.match(sandboxClientSource, /withAuth/);
   assert.match(sandboxClientSource, /withLocalUser/);
   assert.match(sandboxClientSource, /Accept: "text\/event-stream"/);
+  assert.match(sandboxClientSource, /onBlocks\?: \(blocks: Block\[\]\) => void/);
+  assert.match(sandboxClientSource, /event === "activity"/);
+  assert.match(sandboxClientSource, /kind === "thinking"/);
+  assert.match(sandboxClientSource, /payload\.kind !== "tool"/);
+  assert.match(appSource, /onBlocks: \(blocks\) =>/);
   assert.doesNotMatch(sandboxClientSource, /setTimeout|crypto\.randomUUID/);
 });
 
-test("new chat and global header expose the same sandbox entry", () => {
-  assert.match(appSource, /variant="composer"[\s\S]*?onClick=\{openSandboxLaunch\}/);
-  assert.match(appSource, /variant="header"[\s\S]*?onClick=\{openSandboxLaunch\}/);
-  assert.match(sandboxSessionSource, /"灵光一现"/);
-  assert.match(stylesSource, /\.sandbox-entry--composer/);
-  assert.match(stylesSource, /\.sandbox-entry--header/);
+test("new-chat temporary mode launches the AgentKit sandbox", () => {
+  assert.match(modeSelectorSource, /value: "temporary"[\s\S]*?AgentKit 沙箱/);
+  assert.match(appSource, /mode === "temporary"[\s\S]*?openSandboxLaunch\(\)/);
+  assert.doesNotMatch(appSource, /<SandboxEntryButton/);
 });
 
 test("sandbox launch dialog covers confirmation loading failure and retry", () => {
   assert.match(dialogSource, /role="dialog"/);
-  assert.match(dialogSource, /将启动 AgentKit 沙箱来开启临时会话/);
+  assert.match(dialogSource, /启用临时会话/);
+  assert.match(dialogSource, /将启动 AgentKit 沙箱与 Codex Agent 开启临时会话/);
   assert.match(dialogSource, /您的会话将不会被持久化保存/);
   assert.match(dialogSource, /正在初始化沙箱/);
   assert.match(dialogSource, /启动失败/);

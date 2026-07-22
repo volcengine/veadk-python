@@ -24,6 +24,7 @@ import { MediaGroup } from "./Media";
 import { isImeCompositionEvent } from "./composerKeyboard";
 import { NewChatModeSelector } from "./new-chat-modes/NewChatModeSelector";
 import type { NewChatMode } from "./new-chat-modes/types";
+import { SKILL_MODELS } from "./skill-create/types";
 
 interface CompletionTrigger {
   kind: "skill" | "agent";
@@ -57,8 +58,11 @@ export interface ComposerProps {
   onAddFiles: (files: FileList | File[]) => void;
   onRemoveAttachment: (id: string) => void;
   newChatMode?: NewChatMode;
+  newChatLayout?: boolean;
   showModeSelector?: boolean;
   onModeChange?: (value: NewChatMode) => void;
+  temporaryEnabled?: boolean;
+  skillCreateEnabled?: boolean;
 }
 
 export function Composer({
@@ -82,8 +86,11 @@ export function Composer({
   onAddFiles,
   onRemoveAttachment,
   newChatMode = "agent",
+  newChatLayout = false,
   showModeSelector = false,
   onModeChange,
+  temporaryEnabled,
+  skillCreateEnabled,
 }: ComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
@@ -202,7 +209,7 @@ export function Composer({
   }
 
   return (
-    <div className="composer">
+    <div className={`composer${newChatLayout ? " composer--new-chat" : ""}`}>
       {!skillMode ? (
         <InvocationChips
           value={invocation}
@@ -316,11 +323,11 @@ export function Composer({
           <textarea
             ref={ref}
             className="comp-input scroll"
-            rows={1}
+            rows={newChatLayout ? 4 : 1}
             value={value}
             disabled={disabled}
             placeholder={skillMode
-              ? "描述 Skill 要解决的问题、适用场景和期望输出…"
+              ? `描述你想创建的 Skill，将使用 ${SKILL_MODELS.join(" 和 ")} 并行创建…`
               : disabled ? "请选择 Agent" : `向 ${agentName} 发消息…`}
             aria-expanded={Boolean(trigger)}
             onChange={(e) => {
@@ -370,14 +377,17 @@ export function Composer({
             }
             }}
           />
-          {showModeSelector && onModeChange ? (
-            <NewChatModeSelector
-              value={newChatMode}
-              onChange={onModeChange}
-              disabled={busy}
-            />
-          ) : null}
         </div>
+        {showModeSelector && onModeChange ? (
+          <NewChatModeSelector
+            value={newChatMode}
+            agentName={agentName}
+            onChange={onModeChange}
+            disabled={busy}
+            temporaryEnabled={temporaryEnabled}
+            skillCreateEnabled={skillCreateEnabled}
+          />
+        ) : null}
         <motion.button
           type="button"
           className="comp-send"

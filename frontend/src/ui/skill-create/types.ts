@@ -26,6 +26,20 @@ export interface SkillValidation {
   warnings: string[];
 }
 
+export type SkillActivity = {
+  id: string;
+  kind: "status" | "thinking" | "message";
+  text: string;
+  status: "running" | "done";
+} | {
+  id: string;
+  kind: "tool";
+  name: string;
+  args?: unknown;
+  response?: unknown;
+  status: "running" | "done";
+};
+
 export interface SkillCandidate {
   id: string;
   model: string;
@@ -36,6 +50,7 @@ export interface SkillCandidate {
   description?: string;
   skillMd?: string;
   files: SkillFile[];
+  activities: SkillActivity[];
   validation?: SkillValidation;
   durationMs?: number;
   error?: string;
@@ -47,7 +62,7 @@ export interface SkillCandidate {
 export interface SkillCreationJob {
   id: string;
   prompt: string;
-  status: "running" | "completed";
+  status: "provisioning" | "running" | "completed";
   candidates: SkillCandidate[];
 }
 

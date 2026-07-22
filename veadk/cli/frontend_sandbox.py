@@ -22,7 +22,6 @@ import contextlib
 import json
 import os
 import re
-import secrets
 import shlex
 import time
 import uuid
@@ -39,14 +38,9 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 STUDIO_SANDBOX_TOOL_NAME = "veadk-studio-codex"
-STUDIO_SANDBOX_PROJECT_NAME = "default"
-STUDIO_SANDBOX_TOOL_TYPE = "CodeEnv"
 STUDIO_SANDBOX_TTL_SECONDS = 3_600
 STUDIO_SANDBOX_MAX_ACTIVE = 20
-_READY_TOOL_STATUS = "Ready"
-_FAILED_TOOL_STATUSES = frozenset(
-    {"Error", "Failed", "CreateFailed", "Deleting", "Deleted"}
-)
+_SANDBOX_CHAT_TOOL_ENV = "SANDBOX_CHAT_CODEX"
 _CREATE_SESSION_START_FAIL_CODE = "ErrCreateSessionFail"
 _SESSION_NOT_FOUND_CODE = "InvalidResource.NotFound"
 _SENSITIVE_PATTERN = re.compile(
@@ -113,6 +107,44 @@ def _safe_error_message(error: object) -> str:
     return message[:1000] or type(error).__name__
 
 
+def _safe_public_value(value: object, depth: int = 0) -> object:
+    """Return a bounded, credential-safe value for browser-visible events."""
+    if depth >= 4:
+        return "…"
+    if isinstance(value, str):
+        return _safe_error_message(value)
+    if isinstance(value, dict):
+        result: dict[str, object] = {}
+        for key, item in list(value.items())[:30]:
+            safe_key = _safe_error_message(key)[:100]
+            if any(
+                marker in str(key).upper()
+                for marker in ("KEY", "PASSWORD", "SECRET", "TOKEN", "AUTHORIZATION")
+            ):
+                result[safe_key] = "***"
+            else:
+                result[safe_key] = _safe_public_value(item, depth + 1)
+        return result
+    if isinstance(value, list):
+        return [_safe_public_value(item, depth + 1) for item in value[:30]]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return _safe_error_message(value)
+
+
+def _public_event_text(value: object) -> str:
+    """Extract readable text from a Codex event field."""
+    if isinstance(value, str):
+        return _safe_error_message(value)
+    if isinstance(value, list):
+        return "\n".join(filter(None, (_public_event_text(item) for item in value)))
+    if isinstance(value, dict):
+        return _public_event_text(
+            value.get("text") or value.get("content") or value.get("summary")
+        )
+    return ""
+
+
 @dataclass(frozen=True)
 class SandboxCloudSession:
     """Remote AgentKit Sandbox session data kept only on the server."""
@@ -141,16 +173,18 @@ class SandboxConversation:
 class SandboxStreamEvent:
     """One typed event emitted while the coding agent is running."""
 
+    kind: str = ""
+    item_id: str = ""
+    status: str = "done"
     text: str = ""
+    name: str = ""
+    arguments: object | None = None
+    response: object | None = None
     thread_id: str | None = None
 
 
 class SandboxCloudGateway(Protocol):
     """AgentKit operations needed by the Studio conversation service."""
-
-    async def ensure_studio_tool(self) -> str:
-        """Find or create the Studio-owned Sandbox tool."""
-        raise NotImplementedError
 
     async def create_session(self, tool_id: str) -> SandboxCloudSession:
         """Create a fresh remote Sandbox session."""
@@ -187,13 +221,8 @@ class AgentkitSandboxGateway:
     def __init__(
         self,
         client: Any | Callable[[], Any],
-        *,
-        tool_ready_timeout: float = 600.0,
-        poll_interval: float = 5.0,
     ) -> None:
         self._client = client
-        self._tool_ready_timeout = tool_ready_timeout
-        self._poll_interval = poll_interval
         self._background_tasks: set[asyncio.Task[None]] = set()
 
     def _track_cleanup(self, coroutine: Any) -> None:
@@ -205,152 +234,6 @@ class AgentkitSandboxGateway:
         client = self._client() if callable(self._client) else self._client
         method = getattr(client, method_name)
         return await asyncio.to_thread(method, request)
-
-    async def _list_studio_tools(self) -> list[Any]:
-        from agentkit.sdk.tools import types as tools_types
-
-        tools: list[Any] = []
-        next_token: str | None = None
-        while True:
-            response = await self._call(
-                "list_tools",
-                tools_types.ListToolsRequest(
-                    ProjectName=STUDIO_SANDBOX_PROJECT_NAME,
-                    MaxResults=100,
-                    NextToken=next_token,
-                    Filters=[
-                        tools_types.FiltersItemForListTools(
-                            Name="Name",
-                            Values=[STUDIO_SANDBOX_TOOL_NAME],
-                        )
-                    ],
-                ),
-            )
-            tools.extend(response.tools or [])
-            next_token = response.next_token or None
-            if not next_token:
-                return [
-                    tool
-                    for tool in tools
-                    if tool.name == STUDIO_SANDBOX_TOOL_NAME
-                    and tool.project_name == STUDIO_SANDBOX_PROJECT_NAME
-                    and tool.tool_type == STUDIO_SANDBOX_TOOL_TYPE
-                ]
-
-    def _model_configuration(self) -> tuple[str, str, str | None, str | None]:
-        api_key = (os.getenv("MODEL_AGENT_API_KEY") or "").strip()
-        model_name = (os.getenv("MODEL_AGENT_NAME") or "").strip()
-        base_url = (os.getenv("MODEL_AGENT_API_BASE") or "").strip() or None
-        provider = (os.getenv("AGENTKIT_SANDBOX_MODEL_PROVIDER") or "").strip() or None
-        if not api_key or not model_name:
-            raise SandboxConfigurationError(
-                "临时会话需要在 Studio 服务端配置 MODEL_AGENT_API_KEY 和 "
-                "MODEL_AGENT_NAME。"
-            )
-        return api_key, model_name, base_url, provider
-
-    def _tool_envs(self) -> list[Any]:
-        from agentkit.toolkit.cli.sandbox.env_config import build_create_tool_envs
-
-        api_key, model_name, base_url, provider = self._model_configuration()
-        return (
-            build_create_tool_envs(
-                tool_type=STUDIO_SANDBOX_TOOL_TYPE,
-                model_name=model_name,
-                model_api_key=api_key,
-                model_provider=provider,
-                model_base_url=base_url,
-                model_provider_was_provided=provider is not None,
-                model_base_url_was_provided=base_url is not None,
-            )
-            or []
-        )
-
-    def _session_envs(self) -> list[Any]:
-        from agentkit.toolkit.cli.sandbox.env_config import build_exec_session_envs
-
-        api_key, model_name, base_url, provider = self._model_configuration()
-        return (
-            build_exec_session_envs(
-                model_name=model_name,
-                model_api_key=api_key,
-                model_provider=provider,
-                model_base_url=base_url,
-                model_provider_was_provided=provider is not None,
-                model_base_url_was_provided=base_url is not None,
-                include_codex_config=True,
-            )
-            or []
-        )
-
-    async def _wait_for_tool(self, tool_id: str) -> None:
-        from agentkit.sdk.tools import types as tools_types
-
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + self._tool_ready_timeout
-        while True:
-            tool = await self._call(
-                "get_tool", tools_types.GetToolRequest(ToolId=tool_id)
-            )
-            status = (tool.status or "").strip()
-            if status == _READY_TOOL_STATUS:
-                return
-            if status in _FAILED_TOOL_STATUSES:
-                raise SandboxProvisioningError(
-                    f"AgentKit 沙箱创建失败，当前状态：{status}。"
-                )
-            if loop.time() >= deadline:
-                raise SandboxProvisioningError("等待 AgentKit 沙箱就绪超时。")
-            await asyncio.sleep(self._poll_interval)
-
-    async def ensure_studio_tool(self) -> str:
-        from agentkit.sdk.tools import types as tools_types
-
-        try:
-            tools = await self._list_studio_tools()
-            if len(tools) > 1:
-                raise SandboxProvisioningError(
-                    "检测到多个 Studio 临时会话沙箱，请删除重复资源后重试。"
-                )
-            if tools:
-                tool_id = (tools[0].tool_id or "").strip()
-                if not tool_id:
-                    raise SandboxProvisioningError("AgentKit 工具响应缺少 ToolId。")
-                await self._wait_for_tool(tool_id)
-                return tool_id
-
-            response = await self._call(
-                "create_tool",
-                tools_types.CreateToolRequest(
-                    Name=STUDIO_SANDBOX_TOOL_NAME,
-                    ToolType=STUDIO_SANDBOX_TOOL_TYPE,
-                    ProjectName=STUDIO_SANDBOX_PROJECT_NAME,
-                    CpuMilli=4000,
-                    MemoryMb=8192,
-                    AuthorizerConfiguration=tools_types.AuthorizerForCreateTool(
-                        KeyAuth=tools_types.AuthorizerKeyAuthForCreateTool(
-                            ApiKeyName=f"studio-{secrets.token_hex(8)}",
-                            ApiKeyLocation="Header",
-                        )
-                    ),
-                    NetworkConfiguration=tools_types.NetworkForCreateTool(
-                        EnablePublicNetwork=True,
-                        EnablePrivateNetwork=False,
-                    ),
-                    Envs=self._tool_envs(),
-                ),
-            )
-            tool_id = (response.tool_id or "").strip()
-            if not tool_id:
-                raise SandboxProvisioningError("AgentKit 创建工具响应缺少 ToolId。")
-            await self._wait_for_tool(tool_id)
-            return tool_id
-        except SandboxError:
-            raise
-        except Exception as error:
-            raise SandboxProvisioningError(
-                f"访问 AgentKit 工具服务失败：{_safe_error_message(error)}"
-            ) from error
 
     async def _reconcile_created_session(
         self, tool_id: str, user_session_id: str
@@ -395,7 +278,6 @@ class AgentkitSandboxGateway:
             Ttl=STUDIO_SANDBOX_TTL_SECONDS,
             TtlUnit="second",
             UserSessionId=user_session_id,
-            Envs=self._session_envs(),
         )
         create_task = asyncio.create_task(self._call("create_session", request))
         try:
@@ -538,13 +420,105 @@ class AgentkitSandboxGateway:
             if isinstance(thread_id, str) and thread_id:
                 return SandboxStreamEvent(thread_id=thread_id)
             return None
-        if event.get("type") != "item.completed":
+        event_type = event.get("type")
+        if event_type not in {"item.started", "item.completed"}:
             return None
         item = event.get("item")
-        if not isinstance(item, dict) or item.get("type") != "agent_message":
+        if not isinstance(item, dict):
             return None
-        text = item.get("text")
-        return SandboxStreamEvent(text=text) if isinstance(text, str) and text else None
+        item_type = str(item.get("type") or "")
+        item_id = str(item.get("id") or f"item-{uuid.uuid4().hex}")[:100]
+        status = "running" if event_type == "item.started" else "done"
+
+        if item_type == "reasoning":
+            text = _public_event_text(
+                item.get("text") or item.get("summary") or item.get("content")
+            )
+            return (
+                SandboxStreamEvent(
+                    kind="thinking",
+                    item_id=item_id,
+                    status=status,
+                    text=text,
+                )
+                if text
+                else None
+            )
+        if item_type == "agent_message":
+            text = _public_event_text(item.get("text"))
+            return SandboxStreamEvent(kind="text", text=text) if text else None
+        if item_type == "command_execution":
+            response = None
+            if status == "done":
+                response = {
+                    "status": _safe_public_value(item.get("status") or "completed"),
+                    "exitCode": _safe_public_value(item.get("exit_code")),
+                    "output": _safe_public_value(item.get("aggregated_output")),
+                }
+            return SandboxStreamEvent(
+                kind="tool",
+                item_id=item_id,
+                status=status,
+                name="运行命令",
+                arguments={"command": _safe_public_value(item.get("command") or "")},
+                response=response,
+            )
+        if item_type in {"file_change", "file_changes"}:
+            changes = item.get("changes")
+            arguments = (
+                {"changes": _safe_public_value(changes)}
+                if isinstance(changes, list)
+                else {"path": _safe_public_value(item.get("path") or "")}
+            )
+            return SandboxStreamEvent(
+                kind="tool",
+                item_id=item_id,
+                status=status,
+                name="修改文件",
+                arguments=arguments,
+                response={"status": _safe_public_value(item.get("status") or status)}
+                if status == "done"
+                else None,
+            )
+        if item_type == "mcp_tool_call":
+            server = _safe_error_message(item.get("server") or "MCP")[:100]
+            tool = _safe_error_message(item.get("tool") or item.get("name") or "工具")[
+                :100
+            ]
+            return SandboxStreamEvent(
+                kind="tool",
+                item_id=item_id,
+                status=status,
+                name=f"MCP · {server}/{tool}",
+                arguments=_safe_public_value(item.get("arguments")),
+                response=_safe_public_value(item.get("result") or item.get("error"))
+                if status == "done"
+                else None,
+            )
+        if item_type in {"web_search", "web_search_call"}:
+            return SandboxStreamEvent(
+                kind="tool",
+                item_id=item_id,
+                status=status,
+                name="网络搜索",
+                arguments=_safe_public_value(
+                    item.get("query") or item.get("arguments")
+                ),
+                response=_safe_public_value(item.get("result") or item.get("output"))
+                if status == "done"
+                else None,
+            )
+        text = _public_event_text(item.get("text") or item.get("summary"))
+        return (
+            SandboxStreamEvent(
+                kind="thinking",
+                item_id=item_id,
+                status=status,
+                text=text,
+            )
+            if text
+            else None
+        )
 
     async def stream_codex(
         self,
@@ -653,15 +627,32 @@ class AgentkitSandboxGateway:
 class SandboxConversationService:
     """Own temporary conversation lifecycle and per-user isolation."""
 
-    def __init__(self, gateway: SandboxCloudGateway) -> None:
+    def __init__(
+        self, gateway: SandboxCloudGateway, tool_id: str | None = None
+    ) -> None:
         self._gateway = gateway
+        self._configured_tool_id = (tool_id or "").strip()
         self._sessions: dict[str, SandboxConversation] = {}
-        self._provision_lock = asyncio.Lock()
         self._registry_lock = asyncio.Lock()
         self._sessions_starting = 0
 
+    def capabilities(self) -> dict[str, object]:
+        """Report whether the dedicated temporary-chat Tool is configured."""
+        enabled = bool(self._tool_id(required=False))
+        return {"enabled": enabled, "reason": "" if enabled else "管理员未配置"}
+
+    def _tool_id(self, *, required: bool = True) -> str:
+        tool_id = (
+            self._configured_tool_id
+            or (os.getenv(_SANDBOX_CHAT_TOOL_ENV) or "").strip()
+        )
+        if required and not tool_id:
+            raise SandboxConfigurationError("管理员未配置")
+        return tool_id
+
     async def start(self, owner_id: str) -> SandboxConversation:
         cloud: SandboxCloudSession | None = None
+        tool_id = self._tool_id()
         await self.cleanup_expired()
         async with self._registry_lock:
             if len(self._sessions) + self._sessions_starting >= (
@@ -670,8 +661,6 @@ class SandboxConversationService:
                 raise SandboxCapacityError("临时会话并发数已达上限，请稍后重试。")
             self._sessions_starting += 1
         try:
-            async with self._provision_lock:
-                tool_id = await self._gateway.ensure_studio_tool()
             cloud = await self._gateway.create_session(tool_id)
             session = SandboxConversation(
                 session_id=str(uuid.uuid4()),
@@ -700,7 +689,7 @@ class SandboxConversationService:
 
     async def stream_message(
         self, session_id: str, owner_id: str, prompt: str
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[SandboxStreamEvent]:
         session = self._owned(session_id, owner_id)
         async with session.lock:
             async for event in self._gateway.stream_codex(
@@ -708,8 +697,8 @@ class SandboxConversationService:
             ):
                 if event.thread_id:
                     session.thread_id = event.thread_id
-                if event.text:
-                    yield event.text
+                if event.kind:
+                    yield event
 
     async def close(self, session_id: str, owner_id: str) -> None:
         session = self._owned(session_id, owner_id)
@@ -781,6 +770,11 @@ def mount_sandbox_routes(
             },
         )
 
+    @app.get("/web/sandbox/capabilities")
+    async def _sandbox_capabilities(request: Request) -> dict[str, object]:
+        owner_resolver(request)
+        return service.capabilities()
+
     @app.post("/web/sandbox/sessions")
     async def _start_sandbox_session(request: Request) -> dict[str, str]:
         try:
@@ -811,10 +805,23 @@ def mount_sandbox_routes(
 
         async def _stream() -> AsyncIterator[str]:
             try:
-                async for text in service.stream_message(
+                async for event in service.stream_message(
                     session_id, owner_id, prompt.strip()
                 ):
-                    yield f"event: delta\ndata: {json.dumps({'text': text}, ensure_ascii=False)}\n\n"
+                    if event.kind == "text":
+                        payload = {"text": event.text}
+                        yield f"event: delta\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                        continue
+                    payload = {
+                        "id": event.item_id,
+                        "kind": event.kind,
+                        "status": event.status,
+                        "text": event.text or None,
+                        "name": event.name or None,
+                        "args": event.arguments,
+                        "response": event.response,
+                    }
+                    yield f"event: activity\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
                 yield "event: done\ndata: {}\n\n"
             except asyncio.CancelledError:
                 try:

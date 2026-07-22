@@ -77,18 +77,21 @@ import { DeploymentErrorMessage } from "./ui/DeploymentErrorMessage";
 import { TextShimmer } from "./ui/text-shimmer/TextShimmer";
 import { createSkillJob, deleteSkillJob } from "./ui/skill-create/api";
 import { SkillCreateWorkspace } from "./ui/skill-create/SkillCreateWorkspace";
-import type { SkillCreationJob } from "./ui/skill-create/types";
+import { SKILL_MODELS, type SkillCreationJob } from "./ui/skill-create/types";
 import type { NewChatMode } from "./ui/new-chat-modes/types";
 import {
   sandboxClient,
   type SandboxSession as SandboxSessionInfo,
 } from "./adk/sandbox";
 import {
+  getSandboxCapability,
+  getSkillCreatorCapability,
+} from "./adk/newChatCapabilities";
+import {
   SandboxLaunchDialog,
   type SandboxLaunchState,
 } from "./ui/SandboxLaunchDialog";
 import {
-  SandboxEntryButton,
   SandboxSessionWarning,
 } from "./ui/SandboxSession";
 import defaultSiteLogo from "./assets/volcengine.svg";
@@ -590,8 +593,13 @@ export default function App() {
     }));
   const [input, setInput] = useState("");
   const [newChatMode, setNewChatMode] = useState<NewChatMode>("agent");
+  const [newChatCapabilities, setNewChatCapabilities] = useState<{
+    temporaryEnabled?: boolean;
+    skillCreateEnabled?: boolean;
+  }>({});
   const [skillJob, setSkillJob] = useState<SkillCreationJob | null>(null);
   const [skillCreating, setSkillCreating] = useState(false);
+  const skillCreationRunRef = useRef(0);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [invocation, setInvocation] = useState<FrontendInvocation>(emptyInvocation);
   const [agentInfo, setAgentInfo] = useState<AgentInfo | null>(null);
@@ -689,9 +697,11 @@ export default function App() {
   }
 
   function discardSkillCreation() {
+    skillCreationRunRef.current += 1;
     const job = skillJob;
     setSkillJob(null);
-    if (job) {
+    setSkillCreating(false);
+    if (job && !job.id.startsWith("pending-")) {
       void deleteSkillJob(job.id).catch((cause) => {
         setError(cause instanceof Error ? cause.message : String(cause));
       });
@@ -874,6 +884,33 @@ export default function App() {
   useEffect(() => {
     resolveAuth();
   }, [resolveAuth]);
+
+  useEffect(() => {
+    if (localMode && userId) setLocalUser(userId);
+  }, [localMode, userId]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || !userId) {
+      setNewChatCapabilities({});
+      return;
+    }
+    let cancelled = false;
+    void Promise.allSettled([
+      getSandboxCapability(),
+      getSkillCreatorCapability(),
+    ]).then(([sandboxResult, skillResult]) => {
+      if (cancelled) return;
+      setNewChatCapabilities({
+        temporaryEnabled:
+          sandboxResult.status === "fulfilled" && sandboxResult.value.enabled,
+        skillCreateEnabled:
+          skillResult.status === "fulfilled" && skillResult.value.enabled,
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [authStatus, userId]);
 
   useEffect(() => {
     if (authStatus !== "authenticated" || !userId) {
@@ -1145,6 +1182,9 @@ export default function App() {
     setSandboxLaunchOpen(false);
     setSandboxLaunchState("confirm");
     setSandboxLaunchError("");
+    if (!sandboxSession && newChatMode === "temporary") {
+      setNewChatMode("agent");
+    }
   }
 
   async function launchSandboxSession() {
@@ -1163,7 +1203,7 @@ export default function App() {
       setPendingTurns([]);
       setInput("");
       setInvocation(emptyInvocation());
-      setNewChatMode("agent");
+      setNewChatMode("temporary");
       discardSkillCreation();
       setSkillCreating(false);
       discardDraftAttachments(attachments);
@@ -1201,6 +1241,7 @@ export default function App() {
     setSandboxTurns([]);
     setInput("");
     setError("");
+    setNewChatMode("agent");
     const closingSession = sandboxSession;
     setSandboxSession(null);
     if (closingSession) {
@@ -1230,7 +1271,20 @@ export default function App() {
     try {
       const reply = await sandboxClient.sendMessage(
         { sessionId: activeSession.id, text },
-        { signal: controller.signal },
+        {
+          signal: controller.signal,
+          onBlocks: (blocks) => {
+            if (sandboxMessageAbortRef.current !== controller) return;
+            setSandboxTurns((current) => {
+              const next = current.slice();
+              const last = next[next.length - 1];
+              if (last?.role === "assistant") {
+                next[next.length - 1] = { ...last, blocks };
+              }
+              return next;
+            });
+          },
+        },
       );
       if (sandboxMessageAbortRef.current !== controller) return;
       setSandboxTurns((current) => {
@@ -1239,7 +1293,7 @@ export default function App() {
         if (last?.role === "assistant") {
           next[next.length - 1] = {
             ...last,
-            blocks: [{ kind: "text", text: reply.text }],
+            blocks: reply.blocks,
             meta: { ts: Date.now() / 1000 },
           };
         }
@@ -1805,17 +1859,52 @@ export default function App() {
                 if (!sandboxSession && newChatMode === "skill-create") {
                   const prompt = input.trim();
                   if (!prompt || skillCreating) return;
+                  const provisionalJob: SkillCreationJob = {
+                    id: `pending-${Date.now()}`,
+                    prompt,
+                    status: "provisioning",
+                    candidates: SKILL_MODELS.map((model, index) => ({
+                      id: `pending-${index}`,
+                      model,
+                      modelLabel: model,
+                      status: "queued",
+                      stage: "provisioning",
+                      files: [],
+                      activities: [{
+                        id: "provisioning",
+                        kind: "status",
+                        text: "正在拉起 Sandbox",
+                        status: "running",
+                      }],
+                    })),
+                  };
                   setSkillCreating(true);
+                  const creationRun = ++skillCreationRunRef.current;
                   setError("");
-                  void createSkillJob(prompt)
-                    .then((job) => {
+                  setSkillJob(provisionalJob);
+                  setInput("");
+                  void createSkillJob(prompt, (job) => {
+                    if (skillCreationRunRef.current === creationRun) {
                       setSkillJob(job);
-                      setInput("");
+                    }
+                  })
+                    .then((job) => {
+                      if (skillCreationRunRef.current === creationRun) {
+                        setSkillJob(job);
+                      }
                     })
                     .catch((cause) => {
-                      setError(cause instanceof Error ? cause.message : String(cause));
+                      if (skillCreationRunRef.current === creationRun) {
+                        setSkillJob(null);
+                        setInput(prompt);
+                        setError(cause instanceof Error ? cause.message : String(cause));
+                      }
                     })
-                    .finally(() => setSkillCreating(false));
+                    .finally(() => {
+                      if (skillCreationRunRef.current === creationRun) {
+                        setSkillCreating(false);
+                      }
+                    });
                   return;
                 }
                 const text = input;
@@ -1834,7 +1923,9 @@ export default function App() {
               disabled={
                 sandboxSession
                   ? false
-                  : !userId || (newChatMode === "agent" && !appName)
+                  : !userId ||
+                    newChatMode === "temporary" ||
+                    (newChatMode === "agent" && !appName)
               }
               busy={
                 sandboxSession
@@ -1854,13 +1945,25 @@ export default function App() {
               onAddFiles={addFiles}
               onRemoveAttachment={removeDraftAttachment}
               newChatMode={sandboxSession ? "agent" : newChatMode}
+              newChatLayout={!sandboxSession && turns.length === 0 && skillJob === null}
               showModeSelector={
                 !sandboxSession &&
                 turns.length === 0 &&
                 skillJob === null &&
                 canCreateAgents
               }
+              temporaryEnabled={newChatCapabilities.temporaryEnabled}
+              skillCreateEnabled={newChatCapabilities.skillCreateEnabled}
               onModeChange={(mode) => {
+                if (
+                  (mode === "temporary" && !newChatCapabilities.temporaryEnabled) ||
+                  (mode === "skill-create" && !newChatCapabilities.skillCreateEnabled)
+                ) return;
+                if (mode === "temporary") {
+                  setNewChatMode(mode);
+                  openSandboxLaunch();
+                  return;
+                }
                 setNewChatMode(mode);
                 setError("");
                 if (mode === "skill-create") {
@@ -1926,17 +2029,10 @@ export default function App() {
                       ]
               }
               rightContent={
-                <>
-                  <SandboxEntryButton
-                    variant="header"
-                    active={Boolean(sandboxSession)}
-                    onClick={openSandboxLaunch}
-                  />
-                  <DeploymentTaskStatus
-                    tasks={canCreateAgents ? deploymentTasks : []}
-                    onCancel={cancelDeploymentTask}
-                  />
-                </>
+                <DeploymentTaskStatus
+                  tasks={canCreateAgents ? deploymentTasks : []}
+                  onCancel={cancelDeploymentTask}
+                />
               }
             />
             <main className={`main${sandboxSession ? " is-sandbox-session" : ""}`}>
@@ -2047,13 +2143,7 @@ export default function App() {
             ) : visibleCreateView === "workflow" ? (
               <WorkflowCreate onBack={() => setCreateView("menu")} onCreate={onCreate} />
             ) : turns.length === 0 && skillJob ? (
-              <SkillCreateWorkspace
-                initialJob={skillJob}
-                onStartOver={() => {
-                  discardSkillCreation();
-                  setError("");
-                }}
-              />
+              <SkillCreateWorkspace initialJob={skillJob} />
             ) : turns.length === 0 ? (
               <>
                 <div className="welcome">
@@ -2065,14 +2155,6 @@ export default function App() {
                         : greeting}
                   </TextShimmer>
                   {composer}
-                  {!sandboxSession && (
-                    <div className="sandbox-new-chat-entry">
-                      <SandboxEntryButton
-                        variant="composer"
-                        onClick={openSandboxLaunch}
-                      />
-                    </div>
-                  )}
                 </div>
                 {/* Show the agent's structure as soon as it's selected, before
                     any conversation — only renders when it has sub-agents. */}

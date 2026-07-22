@@ -34,6 +34,14 @@ def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
         "veadk.cli.studio_deploy_serverless_iam.ensure_serverless_application_role",
         lambda *_: None,
     )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_code_env_tool",
+        lambda **kwargs: f"auto-{kwargs['name']}",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
+        lambda **_: None,
+    )
 
 
 @pytest.mark.parametrize(
@@ -61,6 +69,7 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     expected_project: str,
 ) -> None:
     captured: dict[str, object] = {}
+    credential_tool_ids: list[str] = []
 
     class _FakeCloudAgentEngine:
         def __init__(self, **kwargs: object) -> None:
@@ -93,7 +102,7 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     )
     monkeypatch.setattr(
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
-        lambda **kwargs: captured.update(credential_tool_id=kwargs["tool_id"]),
+        lambda **kwargs: credential_tool_ids.append(str(kwargs["tool_id"])),
     )
 
     result = CliRunner().invoke(
@@ -106,7 +115,9 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
             "client-id",
             "--vefaas-app-name",
             "studio-app",
-            "--skill-creator-tool-id",
+            "--sandbox-chat-codex-tool-id",
+            "chat-code-env-id",
+            "--sandbox-skill-creator-tool-id",
             "skill-code-env-id",
             "--iam-role",
             "trn:iam::role/test",
@@ -126,8 +137,12 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert veadk_environments["VEIDENTITY_REGION"] == expected_identity_region
     assert "VEADK_STUDIO_ADMINS" not in veadk_environments
     assert "VEADK_STUDIO_DEVELOPERS" not in veadk_environments
-    assert veadk_environments["VEADK_SKILL_CREATOR_TOOL_ID"] == "skill-code-env-id"
-    assert captured["credential_tool_id"] == "skill-code-env-id"
+    assert veadk_environments["SANDBOX_CHAT_CODEX"] == "chat-code-env-id"
+    assert veadk_environments["SANDBOX_SKILL_CREATOR"] == "skill-code-env-id"
+    assert credential_tool_ids == [
+        "chat-code-env-id",
+        "skill-code-env-id",
+    ]
     assert f"{expected_region}/{expected_project}" in result.output
     assert ("Warning:" in result.output) == (
         expected_identity_region != expected_region
@@ -136,6 +151,74 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert isinstance(callback, dict)
     assert callback["dismiss_login_page_enabled"] is False
     assert callback["skip_consent_enabled"] is True
+
+
+def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created_names: list[str] = []
+    credential_tool_ids: list[str] = []
+
+    class _FakeCloudAgentEngine:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def deploy(self, **_: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                vefaas_endpoint="",
+                vefaas_application_id="app-id",
+                vefaas_function_id="",
+            )
+
+    def _ensure_tool(**kwargs: object) -> str:
+        name = str(kwargs["name"])
+        created_names.append(name)
+        return f"tool-{len(created_names)}"
+
+    monkeypatch.setattr(
+        "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
+    )
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._resolve_studio_identity_region",
+        lambda **_: "cn-beijing",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_code_env_tool", _ensure_tool
+    )
+    monkeypatch.setattr(
+        "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
+        lambda **kwargs: credential_tool_ids.append(str(kwargs["tool_id"])),
+    )
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "deploy",
+            "--user-pool-id",
+            "pool-id",
+            "--allowed-client-id",
+            "client-id",
+            "--vefaas-app-name",
+            "studio-app",
+            "--iam-role",
+            "trn:iam::role/test",
+            "--gateway-name",
+            "gateway",
+            "--volcengine-access-key",
+            "ak",
+            "--volcengine-secret-key",
+            "sk",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(created_names) == 2
+    assert created_names[0] != created_names[1]
+    assert "chat" in created_names[0]
+    assert "skill" in created_names[1]
+    assert veadk_environments["SANDBOX_CHAT_CODEX"] == "tool-1"
+    assert veadk_environments["SANDBOX_SKILL_CREATOR"] == "tool-2"
+    assert credential_tool_ids == ["tool-1", "tool-2"]
 
 
 @pytest.mark.parametrize(

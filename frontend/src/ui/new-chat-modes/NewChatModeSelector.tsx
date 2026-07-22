@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { AgentIdentityIcon } from "../AgentIdentityIcon";
 import type { NewChatMode } from "./types";
 import "./new-chat-modes.css";
 
@@ -6,38 +7,39 @@ interface ModeOption {
   value: NewChatMode;
   label: string;
   description: string;
-  disabled?: boolean;
 }
 
 const MODES: ModeOption[] = [
   {
     value: "agent",
-    label: "Agent 模式",
+    label: "Agent",
     description: "与当前选择的 Agent 对话",
   },
   {
     value: "temporary",
     label: "临时会话",
-    description: "快速执行一次性任务",
-    disabled: true,
+    description: "在 AgentKit 沙箱中执行一次性任务",
   },
   {
     value: "skill-create",
-    label: "Skill 创建",
+    label: "创建 Skill",
     description: "使用两个模型生成并对比 Skill",
   },
 ];
 
 export interface NewChatModeSelectorProps {
   value: NewChatMode;
+  agentName: string;
   onChange: (value: NewChatMode) => void;
   disabled?: boolean;
+  temporaryEnabled?: boolean;
+  skillCreateEnabled?: boolean;
 }
 
 function ModeIcon({ mode }: { mode: NewChatMode }) {
   if (mode === "skill-create") {
     return (
-      <svg viewBox="0 0 20 20" aria-hidden="true">
+      <svg className="new-chat-mode__skill-icon" viewBox="0 0 20 20" aria-hidden="true">
         <path d="M10 2.2l1.35 4.1 4.15 1.35-4.15 1.35L10 13.1 8.65 9 4.5 7.65 8.65 6.3 10 2.2Z" />
         <path d="M15.6 12.2l.6 1.8 1.8.6-1.8.6-.6 1.8-.6-1.8-1.8-.6 1.8-.6.6-1.8Z" />
       </svg>
@@ -45,24 +47,24 @@ function ModeIcon({ mode }: { mode: NewChatMode }) {
   }
   if (mode === "temporary") {
     return (
-      <svg viewBox="0 0 20 20" aria-hidden="true">
-        <circle cx="10" cy="10" r="6.5" />
-        <path d="M10 6.2v4.1l2.8 1.6" />
+      <svg className="new-chat-mode__temporary-icon" viewBox="0 0 20 20" aria-hidden="true">
+        <path
+          d="M4.1 4.2h11.8v8.7H9l-3.5 2.8v-2.8H4.1z"
+          strokeDasharray="2.25 1.9"
+        />
       </svg>
     );
   }
-  return (
-    <svg viewBox="0 0 20 20" aria-hidden="true">
-      <rect x="4" y="5.5" width="12" height="9.5" rx="3" />
-      <path d="M10 3.1v2.4M7.3 10h.01M12.7 10h.01M7.8 12.5h4.4" />
-    </svg>
-  );
+  return <AgentIdentityIcon className="new-chat-mode__agent-icon" />;
 }
 
 export function NewChatModeSelector({
   value,
+  agentName,
   onChange,
   disabled = false,
+  temporaryEnabled,
+  skillCreateEnabled,
 }: NewChatModeSelectorProps) {
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(() =>
@@ -71,6 +73,23 @@ export function NewChatModeSelector({
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const current = MODES.find((mode) => mode.value === value) ?? MODES[0];
+
+  function modeEnabled(mode: ModeOption): boolean | undefined {
+    if (mode.value === "temporary") return temporaryEnabled;
+    if (mode.value === "skill-create") return skillCreateEnabled;
+    return true;
+  }
+
+  function modeDisabled(mode: ModeOption): boolean {
+    return modeEnabled(mode) !== true;
+  }
+
+  function modeDescription(mode: ModeOption): string {
+    const enabled = modeEnabled(mode);
+    if (enabled === undefined) return "正在检查配置";
+    if (!enabled) return "管理员未配置";
+    return mode.description;
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -85,12 +104,12 @@ export function NewChatModeSelector({
     let next = activeIndex;
     do {
       next = (next + delta + MODES.length) % MODES.length;
-    } while (MODES[next].disabled);
+    } while (modeDisabled(MODES[next]));
     setActiveIndex(next);
   }
 
   function choose(mode: ModeOption) {
-    if (mode.disabled) return;
+    if (modeDisabled(mode)) return;
     onChange(mode.value);
     setOpen(false);
     triggerRef.current?.focus();
@@ -125,7 +144,12 @@ export function NewChatModeSelector({
         }}
       >
         <span className="new-chat-mode__icon"><ModeIcon mode={current.value} /></span>
-        <span>{current.label}</span>
+        <span
+          className="new-chat-mode__current"
+          title={current.value === "agent" ? agentName : undefined}
+        >
+          {current.value === "agent" ? agentName : current.label}
+        </span>
         <svg className="new-chat-mode__chevron" viewBox="0 0 12 12" aria-hidden="true">
           <path d="m3 4.5 3 3 3-3" />
         </svg>
@@ -157,8 +181,8 @@ export function NewChatModeSelector({
               type="button"
               role="option"
               aria-selected={value === mode.value}
-              aria-disabled={mode.disabled}
-              disabled={mode.disabled}
+              aria-disabled={modeDisabled(mode)}
+              disabled={modeDisabled(mode)}
               className={`new-chat-mode__option${index === activeIndex ? " is-active" : ""}`}
               onMouseEnter={() => setActiveIndex(index)}
               onClick={() => choose(mode)}
@@ -166,10 +190,12 @@ export function NewChatModeSelector({
               <span className="new-chat-mode__option-icon"><ModeIcon mode={mode.value} /></span>
               <span className="new-chat-mode__copy">
                 <span className="new-chat-mode__label">
-                  {mode.label}
-                  {mode.disabled ? <span className="new-chat-mode__soon">接入中</span> : null}
+                  {mode.value === "agent" ? agentName : mode.label}
+                  {mode.value === "skill-create" ? (
+                    <span className="new-chat-mode__beta">Beta</span>
+                  ) : null}
                 </span>
-                <span>{mode.description}</span>
+                <span>{modeDescription(mode)}</span>
               </span>
               {value === mode.value ? (
                 <svg className="new-chat-mode__check" viewBox="0 0 16 16" aria-hidden="true">
