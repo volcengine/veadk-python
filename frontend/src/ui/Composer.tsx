@@ -3,6 +3,8 @@ import {
   ArrowUp,
   AtSign,
   Bot,
+  Check,
+  Copy,
   FileText,
   FileVideo2,
   ImageIcon,
@@ -78,6 +80,18 @@ export function Composer({
   const [menuOpen, setMenuOpen] = useState(false);
   const [trigger, setTrigger] = useState<CompletionTrigger | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [sessionIdCopied, setSessionIdCopied] = useState(false);
+
+  async function copySessionId() {
+    if (!sessionId) return;
+    try {
+      await navigator.clipboard.writeText(sessionId);
+      setSessionIdCopied(true);
+      setTimeout(() => setSessionIdCopied(false), 1500);
+    } catch {
+      setSessionIdCopied(false);
+    }
+  }
 
   // Auto-grow the textarea up to a max height, then scroll.
   useLayoutEffect(() => {
@@ -355,6 +369,17 @@ export function Composer({
             >
               {sessionInitializing ? "初始化中" : sessionId || "—"}
             </span>
+            {sessionId && (
+              <button
+                type="button"
+                className="composer-session-copy"
+                title={sessionIdCopied ? "已复制" : "复制会话 ID"}
+                aria-label={sessionIdCopied ? "已复制会话 ID" : "复制会话 ID"}
+                onClick={() => void copySessionId()}
+              >
+                {sessionIdCopied ? <Check /> : <Copy />}
+              </button>
+            )}
           </span>
           <span className="composer-meta-separator" aria-hidden>
             |

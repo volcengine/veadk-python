@@ -19,7 +19,7 @@ from types import SimpleNamespace
 
 from google.adk.tools.base_toolset import BaseToolset
 
-from veadk.agent_metadata import agent_component_summaries
+from veadk.agent_metadata import agent_component_summaries, agent_search_sources
 
 
 class _SearchToolset(BaseToolset):
@@ -36,7 +36,10 @@ class SkillsToolset(BaseToolset):
 
 def test_agent_component_summaries_recognizes_supported_components() -> None:
     agent = SimpleNamespace(
-        knowledgebase=SimpleNamespace(index="product-docs"),
+        knowledgebase=SimpleNamespace(
+            name="user_knowledgebase",
+            index="product-docs",
+        ),
         short_term_memory=SimpleNamespace(backend="local"),
         long_term_memory=None,
         prompt_manager=SimpleNamespace(name="prompt-hub"),
@@ -52,13 +55,22 @@ def test_agent_component_summaries_recognizes_supported_components() -> None:
     )
 
     assert agent_component_summaries(agent) == [
-        {"kind": "knowledgebase", "name": "product-docs"},
+        {
+            "kind": "knowledgebase",
+            "name": "product-docs",
+            "source": "knowledgebase",
+        },
         {
             "kind": "memory",
             "name": "SimpleNamespace",
-            "description": "backend: local",
+            "source": "short_term_memory",
+            "backend": "local",
         },
-        {"kind": "prompt_manager", "name": "prompt-hub"},
+        {
+            "kind": "prompt_manager",
+            "name": "prompt-hub",
+            "source": "prompt_manager",
+        },
         {"kind": "run_processor", "name": "authz"},
         {"kind": "tracer", "name": "apm"},
         {"kind": "toolset", "name": "_SearchToolset"},
@@ -79,3 +91,23 @@ def test_agent_component_summaries_ignores_default_processor_and_deduplicates() 
     )
 
     assert agent_component_summaries(agent) == [{"kind": "plugin", "name": "audit"}]
+
+
+def test_agent_search_sources_excludes_short_term_memory() -> None:
+    def web_search() -> None:
+        pass
+
+    agent = SimpleNamespace(
+        tools=[web_search],
+        knowledgebase=SimpleNamespace(index="product-docs"),
+        short_term_memory=SimpleNamespace(backend="local"),
+        long_term_memory=SimpleNamespace(backend="viking"),
+    )
+
+    assert agent_search_sources(agent) == ["web", "knowledge", "memory"]
+    assert (
+        agent_search_sources(
+            SimpleNamespace(short_term_memory=SimpleNamespace(backend="local"))
+        )
+        == []
+    )

@@ -18,7 +18,7 @@ const A2UI_TOOL = "send_a2ui_json_to_client";
 /** Hand-drawn "spark" icon for the thinking indicator. */
 function SparkIcon({ className }: { className?: string }) {
   return (
-    <svg className={className} viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden>
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
       <path d="M12 2.2l1.7 5.1a3 3 0 0 0 1.9 1.9L20.8 11l-5.1 1.7a3 3 0 0 0-1.9 1.9L12 19.8l-1.7-5.1a3 3 0 0 0-1.9-1.9L3.2 11l5.1-1.7a3 3 0 0 0 1.9-1.9L12 2.2z" />
     </svg>
   );
@@ -57,11 +57,13 @@ export function ThinkingBlock({ text, done }: { text: string; done: boolean }) {
   return (
     <div className="block-thinking">
       <button className="think-head" onClick={toggle} type="button">
-        <SparkIcon className={`spark ${done ? "" : "pulse"}`} />
+        <span className="think-icon" aria-hidden="true">
+          <SparkIcon className={`spark ${done ? "" : "pulse"}`} />
+        </span>
         {done ? (
           <span className="think-label think-label--done">已完成思考</span>
         ) : (
-          <TextShimmer className="think-label" duration={2.2} spread={15}>
+          <TextShimmer className="think-label" duration={2.4} spread={18}>
             思考中
           </TextShimmer>
         )}

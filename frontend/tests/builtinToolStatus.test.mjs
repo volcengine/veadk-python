@@ -139,3 +139,20 @@ test("centralizes all loading text shimmer behavior in TextShimmer", () => {
   assert.match(blocksSource, /<TextShimmer className="tool-name"/);
   assert.doesNotMatch(blocksSource, /className=\{`[^`]*shimmer/);
 });
+
+test("aligns thinking and special-tool headers on the same visual grid", () => {
+  assert.match(blocksSource, /className="think-icon"/);
+  assert.match(
+    sharedStylesSource,
+    /\.think-head\s*\{[^}]*gap:\s*8px[^}]*min-height:\s*32px[^}]*padding:\s*3px 7px 3px 3px/,
+  );
+  assert.match(
+    sharedStylesSource,
+    /\.think-icon\s*\{[^}]*width:\s*20px[^}]*height:\s*26px[^}]*flex:\s*0 0 20px/,
+  );
+  assert.match(
+    sharedStylesSource,
+    /\.think-label\s*\{[^}]*font-size:\s*13\.5px[^}]*font-weight:\s*400[^}]*line-height:\s*1\.35/,
+  );
+  assert.match(blocksSource, /<TextShimmer className="think-label" duration=\{2\.4\} spread=\{18\}>/);
+});

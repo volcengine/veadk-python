@@ -93,6 +93,7 @@ def test_create_agentkit_app_preserves_platform_route_contract() -> None:
         "tools": ["search_orders"],
         "skills": [],
         "components": [],
+        "searchSources": [],
         "subAgents": ["订单助手"],
         "graph": {
             "id": "agent",
@@ -144,6 +145,7 @@ def test_agent_info_exposes_mounted_skills_and_components() -> None:
         SimpleNamespace(
             index="support-docs",
             description="Customer support documentation.",
+            backend="viking",
         ),
     )
     setattr(root_agent, "long_term_memory", SimpleNamespace(backend="viking"))
@@ -162,18 +164,104 @@ def test_agent_info_exposes_mounted_skills_and_components() -> None:
         {
             "kind": "knowledgebase",
             "name": "support-docs",
+            "source": "knowledgebase",
+            "backend": "viking",
             "description": "Customer support documentation.",
         },
         {
             "kind": "memory",
             "name": "SimpleNamespace",
-            "description": "backend: viking",
+            "source": "long_term_memory",
+            "backend": "viking",
         },
         {"kind": "tracer", "name": "apm-tracer"},
         {"kind": "plugin", "name": "audit-plugin"},
     ]
     assert info.json()["graph"]["skills"] == info.json()["skills"]
     assert info.json()["graph"]["components"] == info.json()["components"]
+    assert info.json()["searchSources"] == ["knowledge", "memory"]
+
+
+def test_agent_search_uses_mounted_knowledgebase_and_long_term_memory() -> None:
+    class Knowledgebase:
+        name = "user_knowledgebase"
+        index = "support-docs"
+        backend = "viking"
+
+        def search(self, query: str) -> list[SimpleNamespace]:
+            assert query == "退款规则"
+            return [SimpleNamespace(content="七天内可申请退款。")]
+
+    class LongTermMemory:
+        name = "customer-memory"
+        backend = "viking"
+
+        async def search_memory(
+            self,
+            *,
+            app_name: str,
+            user_id: str,
+            query: str,
+        ) -> SimpleNamespace:
+            assert (app_name, user_id, query) == ("agent", "user-1", "偏好")
+            content = SimpleNamespace(
+                parts=[SimpleNamespace(text="用户偏好中文回复。")]
+            )
+            entry = SimpleNamespace(
+                author="user",
+                content=content,
+                timestamp=1_700_000_000.0,
+            )
+            return SimpleNamespace(memories=[entry])
+
+    root_agent = _root_agent()
+    setattr(root_agent, "knowledgebase", Knowledgebase())
+    setattr(root_agent, "long_term_memory", LongTermMemory())
+    client = TestClient(agentkit_app.create_agentkit_app(root_agent))
+
+    knowledge = client.get(
+        "/web/search",
+        params={"source": "knowledge", "app_name": "agent", "q": "退款规则"},
+    )
+    memory = client.get(
+        "/web/search",
+        params={
+            "source": "memory",
+            "app_name": "agent",
+            "q": "偏好",
+            "user_id": "user-1",
+        },
+    )
+
+    assert knowledge.json() == {
+        "mounted": True,
+        "sourceName": "support-docs",
+        "sourceType": "viking",
+        "results": [{"content": "七天内可申请退款。"}],
+    }
+    assert memory.json() == {
+        "mounted": True,
+        "sourceName": "customer-memory",
+        "sourceType": "viking",
+        "results": [
+            {
+                "content": "用户偏好中文回复。",
+                "author": "user",
+                "timestamp": 1_700_000_000.0,
+            }
+        ],
+    }
+
+
+def test_agent_search_reports_unmounted_components() -> None:
+    client = TestClient(agentkit_app.create_agentkit_app(_root_agent()))
+
+    response = client.get(
+        "/web/search",
+        params={"source": "knowledge", "app_name": "agent", "q": "退款"},
+    )
+
+    assert response.json() == {"mounted": False, "results": []}
 
 
 def test_create_agentkit_app_reuses_agent_memory_and_configures_feishu(

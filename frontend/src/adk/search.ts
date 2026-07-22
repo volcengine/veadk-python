@@ -4,9 +4,17 @@
 //                reusing the ADK list/get-session endpoints).
 //   - web:       the agent's web-search tool, run server-side with the user's
 //                environment credentials (see backend /web/search).
-//   - knowledge/memory: reserved (TODO, backend-backed).
+//   - knowledge: the KnowledgeBase mounted on the current Agent.
+//   - memory:    the long-term memory mounted on the current Agent.
 
-import { getSession, listSessions, webSearch, type AdkSession } from "./client";
+import {
+  componentSearch,
+  getSession,
+  listSessions,
+  webSearch,
+  type AdkSession,
+  type AgentSearchSource,
+} from "./client";
 
 export type SearchSource = "session" | "web" | "knowledge" | "memory";
 
@@ -29,7 +37,25 @@ export interface WebResult {
   summary: string;
 }
 
-export type SearchResult = SessionResult | WebResult;
+export interface KnowledgeResult {
+  type: "knowledge";
+  index: number;
+  content: string;
+  sourceName: string;
+  sourceType?: string;
+}
+
+export interface MemoryResult {
+  type: "memory";
+  index: number;
+  content: string;
+  sourceName: string;
+  sourceType?: string;
+  author?: string;
+  ts?: number;
+}
+
+export type SearchResult = SessionResult | WebResult | KnowledgeResult | MemoryResult;
 
 /** Search outcome: results plus an optional human note (e.g. "not mounted"). */
 export interface SearchOutcome {
@@ -120,12 +146,12 @@ async function searchWeb(appId: string, query: string): Promise<SearchOutcome> {
     return {
       results: [],
       note: msg.includes("404")
-        ? "网页搜索接口未就绪（后端未启用 /web/search）。"
-        : `网页搜索失败：${msg}`,
+        ? "网络搜索接口未就绪（后端未启用 /web/search）。"
+        : `网络搜索失败：${msg}`,
     };
   }
   const { mounted, results, error } = res;
-  if (!mounted) return { results: [], note: "该 Agent 未挂载 Web Search 工具。" };
+  if (!mounted) return { results: [], note: "当前 Agent 未挂载 web_search 工具。" };
   if (error) return { results: [], note: error };
   return {
     results: results.map((hit, index) => ({
@@ -136,6 +162,46 @@ async function searchWeb(appId: string, query: string): Promise<SearchOutcome> {
       siteName: hit.siteName,
       summary: hit.summary,
     })),
+  };
+}
+
+/** Search retrieval components inside the selected Agent process. */
+async function searchComponent(
+  source: AgentSearchSource,
+  appId: string,
+  userId: string,
+  query: string,
+): Promise<SearchOutcome> {
+  if (!appId || !query.trim()) return { results: [] };
+  const response = await componentSearch(appId, source, query.trim(), userId);
+  if (!response.mounted) {
+    return {
+      results: [],
+      note: source === "knowledge" ? "该 Agent 未挂载知识库。" : "该 Agent 未挂载长期记忆。",
+    };
+  }
+  if (response.error) return { results: [], note: response.error };
+  const sourceName = response.sourceName ?? (source === "knowledge" ? "知识库" : "长期记忆");
+  return {
+    results: response.results.map((hit, index) =>
+      source === "knowledge"
+        ? {
+            type: "knowledge" as const,
+            index,
+            content: hit.content,
+            sourceName,
+            sourceType: response.sourceType,
+          }
+        : {
+            type: "memory" as const,
+            index,
+            content: hit.content,
+            sourceName,
+            sourceType: response.sourceType,
+            author: hit.author,
+            ts: hit.timestamp,
+          },
+    ),
   };
 }
 
@@ -152,5 +218,5 @@ export async function search(
 ): Promise<SearchOutcome> {
   if (source === "session") return { results: await searchSessions(ctx.userId, ctx.appId, query) };
   if (source === "web") return searchWeb(ctx.appId, query);
-  return { results: [], note: "该搜索源即将支持。" };
+  return searchComponent(source, ctx.appId, ctx.userId, query);
 }

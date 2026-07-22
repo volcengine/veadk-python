@@ -27,8 +27,8 @@ app = create_agentkit_app(
 ```
 
 The resulting service exposes AgentKit conversation APIs together with
-`/ping`, `/web/agent-info/{app_name}`, `/web/agent-graph`, and the bundled Web
-UI. See
+`/ping`, `/web/agent-info/{app_name}`, `/web/agent-graph`, `/web/search`, and
+the bundled Web UI. See
 [`examples/generated_agentkit_project`](https://github.com/volcengine/veadk-python/tree/main/examples/generated_agentkit_project)
 for a complete generated project.
 
@@ -39,7 +39,12 @@ it can be selected in a conversation. Each Runtime row in Studio has explicit
 connect and info actions. The info action opens one panel whose tabs switch
 between the live Agent metadata and Runtime control-plane detail. These endpoints
 do not expose system prompts, credentials, environment-variable values, or
-arbitrary serialized objects.
+arbitrary serialized objects. The metadata response also reports
+`searchSources`. Studio disables unavailable sources before the user searches,
+and enables network, KnowledgeBase, or long-term-memory search only when the
+corresponding `web_search` tool or component is mounted. `/web/search` reuses the
+Agent's existing retrieval implementations. KnowledgeBase results identify the
+configured index and backend type separately so users can verify the source.
 
 ## Steps
 

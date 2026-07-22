@@ -53,7 +53,7 @@ export function Navbar({
               ))}
             </nav>
           ) : title ? (
-            <div className="navbar-title">{title}</div>
+            <div className="navbar-title" title={title}>{title}</div>
           ) : (
             <AgentSelect
               apps={apps}
