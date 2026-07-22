@@ -79,6 +79,18 @@ import { createSkillJob, deleteSkillJob } from "./ui/skill-create/api";
 import { SkillCreateWorkspace } from "./ui/skill-create/SkillCreateWorkspace";
 import type { SkillCreationJob } from "./ui/skill-create/types";
 import type { NewChatMode } from "./ui/new-chat-modes/types";
+import {
+  sandboxClient,
+  type SandboxSession as SandboxSessionInfo,
+} from "./adk/sandbox";
+import {
+  SandboxLaunchDialog,
+  type SandboxLaunchState,
+} from "./ui/SandboxLaunchDialog";
+import {
+  SandboxEntryButton,
+  SandboxSessionWarning,
+} from "./ui/SandboxSession";
 import defaultSiteLogo from "./assets/volcengine.svg";
 
 // Breadcrumb root label for the create flow and the per-mode leaf labels.
@@ -541,6 +553,16 @@ export default function App() {
   const creatingSessionRef = useRef<Promise<string> | null>(null);
   const [initializingSession, setInitializingSession] = useState(false);
   const [pendingTurns, setPendingTurns] = useState<Turn[]>([]);
+  const [sandboxSession, setSandboxSession] =
+    useState<SandboxSessionInfo | null>(null);
+  const [sandboxTurns, setSandboxTurns] = useState<Turn[]>([]);
+  const [sandboxBusy, setSandboxBusy] = useState(false);
+  const [sandboxLaunchOpen, setSandboxLaunchOpen] = useState(false);
+  const [sandboxLaunchState, setSandboxLaunchState] =
+    useState<SandboxLaunchState>("confirm");
+  const [sandboxLaunchError, setSandboxLaunchError] = useState("");
+  const sandboxLaunchAbortRef = useRef<AbortController | null>(null);
+  const sandboxMessageAbortRef = useRef<AbortController | null>(null);
   // Turns are stored PER SESSION, so a background stream can keep updating its
   // own session's transcript while you view another one — no cross-session
   // leak, no data loss, and no re-fetch when you switch back (its entry is
@@ -548,11 +570,16 @@ export default function App() {
   const [turnsBySession, setTurnsBySession] = useState<Record<string, Turn[]>>(
     {},
   );
-  const turns = sessionId ? turnsBySession[sessionId] ?? [] : pendingTurns;
-  const conversationTitle = activeSessionTitle(
-    sessions.find((session) => session.id === sessionId),
-    turns,
-  );
+  const persistentTurns = sessionId
+    ? turnsBySession[sessionId] ?? []
+    : pendingTurns;
+  const turns = sandboxSession ? sandboxTurns : persistentTurns;
+  const conversationTitle = sandboxSession
+    ? "灵光一现"
+    : activeSessionTitle(
+        sessions.find((session) => session.id === sessionId),
+        turns,
+      );
   const setTurnsFor = (
     sid: string,
     updater: Turn[] | ((prev: Turn[]) => Turn[]),
@@ -634,6 +661,9 @@ export default function App() {
   // per-session maps above.
   const busy = streamingSids.has(sessionId);
   const conversationBusy = busy || initializingSession;
+  const activeConversationBusy = sandboxSession
+    ? sandboxBusy
+    : conversationBusy;
   const activeAgent = activeAgentBySession[sessionId] ?? "";
   const seenAgents = seenAgentsBySession[sessionId] ?? EMPTY_STRING_SET;
   const execPath = execPathBySession[sessionId] ?? EMPTY_STRING_ARR;
@@ -1034,6 +1064,13 @@ export default function App() {
     () => () => streamAbortsRef.current.forEach((c) => c.abort()),
     [],
   );
+  useEffect(
+    () => () => {
+      sandboxLaunchAbortRef.current?.abort();
+      sandboxMessageAbortRef.current?.abort();
+    },
+    [],
+  );
 
   // When the app (or resolved user) changes, list existing sessions. On the
   // very first resolve, restore the previously-open session (if it still
@@ -1094,16 +1131,151 @@ export default function App() {
     }
   }
 
+  function openSandboxLaunch() {
+    if (sandboxSession) return;
+    setError("");
+    setSandboxLaunchError("");
+    setSandboxLaunchState("confirm");
+    setSandboxLaunchOpen(true);
+  }
+
+  function cancelSandboxLaunch() {
+    sandboxLaunchAbortRef.current?.abort();
+    sandboxLaunchAbortRef.current = null;
+    setSandboxLaunchOpen(false);
+    setSandboxLaunchState("confirm");
+    setSandboxLaunchError("");
+  }
+
+  async function launchSandboxSession() {
+    sandboxLaunchAbortRef.current?.abort();
+    const controller = new AbortController();
+    sandboxLaunchAbortRef.current = controller;
+    setSandboxLaunchState("loading");
+    setSandboxLaunchError("");
+    try {
+      const nextSession = await sandboxClient.startSession({
+        signal: controller.signal,
+      });
+      if (sandboxLaunchAbortRef.current !== controller) return;
+      viewSidRef.current = "";
+      setSessionId("");
+      setPendingTurns([]);
+      setInput("");
+      setInvocation(emptyInvocation());
+      setNewChatMode("agent");
+      discardSkillCreation();
+      setSkillCreating(false);
+      discardDraftAttachments(attachments);
+      setAttachments([]);
+      setSandboxTurns([]);
+      setSandboxSession(nextSession);
+      setCreateView(null);
+      setSkillCenter(false);
+      setAddAgent(false);
+      setAddMenu(false);
+      setSearchView(false);
+      setManageAgents(false);
+      setSandboxLaunchOpen(false);
+      setSandboxLaunchState("confirm");
+    } catch (launchError) {
+      if ((launchError as Error)?.name === "AbortError") return;
+      if (sandboxLaunchAbortRef.current !== controller) return;
+      setSandboxLaunchError(
+        launchError instanceof Error
+          ? launchError.message
+          : String(launchError),
+      );
+      setSandboxLaunchState("error");
+    } finally {
+      if (sandboxLaunchAbortRef.current === controller) {
+        sandboxLaunchAbortRef.current = null;
+      }
+    }
+  }
+
+  function exitSandboxSession() {
+    sandboxMessageAbortRef.current?.abort();
+    sandboxMessageAbortRef.current = null;
+    setSandboxBusy(false);
+    setSandboxTurns([]);
+    setInput("");
+    setError("");
+    const closingSession = sandboxSession;
+    setSandboxSession(null);
+    if (closingSession) {
+      void sandboxClient
+        .closeSession(closingSession.id)
+        .catch((closeError) => setError(String(closeError)));
+    }
+  }
+
+  async function sendSandboxMessage(text: string) {
+    const activeSession = sandboxSession;
+    if (!activeSession || sandboxBusy || !text.trim()) return;
+    setError("");
+    const controller = new AbortController();
+    sandboxMessageAbortRef.current?.abort();
+    sandboxMessageAbortRef.current = controller;
+    const optimisticTurns: Turn[] = [
+      {
+        role: "user",
+        blocks: [{ kind: "text", text }],
+        meta: { ts: Date.now() / 1000 },
+      },
+      { role: "assistant", blocks: [] },
+    ];
+    setSandboxTurns((current) => [...current, ...optimisticTurns]);
+    setSandboxBusy(true);
+    try {
+      const reply = await sandboxClient.sendMessage(
+        { sessionId: activeSession.id, text },
+        { signal: controller.signal },
+      );
+      if (sandboxMessageAbortRef.current !== controller) return;
+      setSandboxTurns((current) => {
+        const next = current.slice();
+        const last = next[next.length - 1];
+        if (last?.role === "assistant") {
+          next[next.length - 1] = {
+            ...last,
+            blocks: [{ kind: "text", text: reply.text }],
+            meta: { ts: Date.now() / 1000 },
+          };
+        }
+        return next;
+      });
+    } catch (messageError) {
+      if ((messageError as Error)?.name === "AbortError") return;
+      if (sandboxMessageAbortRef.current !== controller) return;
+      setSandboxTurns((current) => current.slice(0, -2));
+      setInput(text);
+      setError(
+        `临时会话发送失败：${
+          messageError instanceof Error
+            ? messageError.message
+            : String(messageError)
+        }`,
+      );
+    } finally {
+      if (sandboxMessageAbortRef.current === controller) {
+        sandboxMessageAbortRef.current = null;
+        setSandboxBusy(false);
+      }
+    }
+  }
+
   // Reset to a fresh, not-yet-created chat. The backend session is created
   // lazily on the first message (see send()). A background stream (if any)
   // keeps running and persisting — its writes are suppressed here by viewSidRef.
   function startNewChat() {
+    exitSandboxSession();
     setError("");
     setGreeting(pickGreeting());
     setNewChatMode("agent");
     discardSkillCreation();
     setSkillCreating(false);
-    const abandonedSession = sessionId && turns.length === 0 && attachments.length > 0
+    const abandonedSession = sessionId && persistentTurns.length === 0 && attachments.length > 0
       ? sessionId
       : "";
     viewSidRef.current = "";
@@ -1134,6 +1306,7 @@ export default function App() {
   }
 
   async function pickSession(id: string) {
+    if (sandboxSession) exitSandboxSession();
     if (id === sessionId) return;
     viewSidRef.current = id;
     setError("");
@@ -1523,6 +1696,7 @@ export default function App() {
           startNewChat();
         }}
         onSearch={() => {
+          if (sandboxSession) exitSandboxSession();
           setCreateView(null);
           setSkillCenter(false);
           setAddAgent(false);
@@ -1536,6 +1710,7 @@ export default function App() {
             setError("当前账号没有添加 Agent 的权限。");
             return;
           }
+          if (sandboxSession) exitSandboxSession();
           // "添加 Agent" — open the two-card chooser. Drop any selected session.
           viewSidRef.current = "";
           setSessionId("");
@@ -1549,6 +1724,7 @@ export default function App() {
           setError("");
         }}
         onSkillCenter={() => {
+          if (sandboxSession) exitSandboxSession();
           setCreateView(null);
           setAddAgent(false);
           setAddMenu(false);
@@ -1562,6 +1738,7 @@ export default function App() {
             setError("当前账号没有添加 Agent 的权限。");
             return;
           }
+          if (sandboxSession) exitSandboxSession();
           viewSidRef.current = "";
           setCreateView(null);
           setSkillCenter(false);
@@ -1577,6 +1754,7 @@ export default function App() {
             setError("当前账号没有管理 Agent 的权限。");
             return;
           }
+          if (sandboxSession) exitSandboxSession();
           viewSidRef.current = "";
           setSessionId("");
           setCreateView(null);
@@ -1604,73 +1782,104 @@ export default function App() {
 
       {(() => {
         const composer = (
-          <Composer
-            sessionId={sessionId}
-            sessionInitializing={initializingSession}
-            appName={appName}
-            agentName={appName ? labelOf(appName) : "Agent"}
-            value={input}
-            onChange={setInput}
-            onSubmit={() => {
-              if (newChatMode === "skill-create") {
-                const prompt = input.trim();
-                if (!prompt || skillCreating) return;
-                setSkillCreating(true);
-                setError("");
-                void createSkillJob(prompt)
-                  .then((job) => {
-                    setSkillJob(job);
-                    setInput("");
-                  })
-                  .catch((cause) => {
-                    setError(cause instanceof Error ? cause.message : String(cause));
-                  })
-                  .finally(() => setSkillCreating(false));
-                return;
+          <div
+            className={`composer-slot${sandboxSession ? " sandbox-composer-wrap" : ""}`}
+          >
+            {sandboxSession && (
+              <SandboxSessionWarning onExit={startNewChat} />
+            )}
+            <Composer
+              sessionId={sandboxSession ? sandboxSession.id : sessionId}
+              sessionInitializing={!sandboxSession && initializingSession}
+              appName={appName}
+              agentName={
+                sandboxSession
+                  ? "AgentKit 沙箱"
+                  : appName
+                    ? labelOf(appName)
+                    : "Agent"
               }
-              const text = input;
-              const atts = attachments;
-              const selectedInvocation = invocation;
-              setInput("");
-              setAttachments([]);
-              setInvocation(emptyInvocation());
-              send(text, atts, selectedInvocation);
-              releaseAttachmentPreviews(atts);
-            }}
-            disabled={!userId || (newChatMode === "agent" && !appName)}
-            busy={newChatMode === "skill-create" ? skillCreating : conversationBusy}
-            showMeta={turns.length > 0}
-            attachments={attachments}
-            skills={availableSkills}
-            agents={availableAgents}
-            invocation={invocation}
-            capabilitiesLoading={capabilitiesLoading}
-            onInvocationChange={setInvocation}
-            onAddFiles={addFiles}
-            onRemoveAttachment={removeDraftAttachment}
-            newChatMode={newChatMode}
-            showModeSelector={
-              turns.length === 0 && skillJob === null && canCreateAgents
-            }
-            onModeChange={(mode) => {
-              setNewChatMode(mode);
-              setError("");
-              if (mode === "skill-create") {
-                setInvocation(emptyInvocation());
-                const abandonedSession =
-                  sessionId && turns.length === 0 && attachments.length > 0
-                    ? sessionId
-                    : "";
-                discardDraftAttachments(attachments);
-                setAttachments([]);
-                if (abandonedSession) {
-                  viewSidRef.current = "";
-                  setSessionId("");
-                  void abandonDraftSession(abandonedSession);
+              value={input}
+              onChange={setInput}
+              onSubmit={() => {
+                if (!sandboxSession && newChatMode === "skill-create") {
+                  const prompt = input.trim();
+                  if (!prompt || skillCreating) return;
+                  setSkillCreating(true);
+                  setError("");
+                  void createSkillJob(prompt)
+                    .then((job) => {
+                      setSkillJob(job);
+                      setInput("");
+                    })
+                    .catch((cause) => {
+                      setError(cause instanceof Error ? cause.message : String(cause));
+                    })
+                    .finally(() => setSkillCreating(false));
+                  return;
                 }
+                const text = input;
+                setInput("");
+                if (sandboxSession) {
+                  void sendSandboxMessage(text);
+                  return;
+                }
+                const atts = attachments;
+                const selectedInvocation = invocation;
+                setAttachments([]);
+                setInvocation(emptyInvocation());
+                send(text, atts, selectedInvocation);
+                releaseAttachmentPreviews(atts);
+              }}
+              disabled={
+                sandboxSession
+                  ? false
+                  : !userId || (newChatMode === "agent" && !appName)
               }
-            }}
-          />
+              busy={
+                sandboxSession
+                  ? sandboxBusy
+                  : newChatMode === "skill-create"
+                    ? skillCreating
+                    : conversationBusy
+              }
+              showMeta={turns.length > 0 && !sandboxSession}
+              attachments={sandboxSession ? [] : attachments}
+              skills={sandboxSession ? [] : availableSkills}
+              agents={sandboxSession ? [] : availableAgents}
+              invocation={sandboxSession ? emptyInvocation() : invocation}
+              capabilitiesLoading={!sandboxSession && capabilitiesLoading}
+              allowAttachments={!sandboxSession}
+              onInvocationChange={setInvocation}
+              onAddFiles={addFiles}
+              onRemoveAttachment={removeDraftAttachment}
+              newChatMode={sandboxSession ? "agent" : newChatMode}
+              showModeSelector={
+                !sandboxSession &&
+                turns.length === 0 &&
+                skillJob === null &&
+                canCreateAgents
+              }
+              onModeChange={(mode) => {
+                setNewChatMode(mode);
+                setError("");
+                if (mode === "skill-create") {
+                  setInvocation(emptyInvocation());
+                  const abandonedSession =
+                    sessionId && persistentTurns.length === 0 && attachments.length > 0
+                      ? sessionId
+                      : "";
+                  discardDraftAttachments(attachments);
+                  setAttachments([]);
+                  if (abandonedSession) {
+                    viewSidRef.current = "";
+                    setSessionId("");
+                    void abandonDraftSession(abandonedSession);
+                  }
+                }
+              }}
+            />
+          </div>
         );
         return (
           <section className="main-shell">
@@ -1685,7 +1894,7 @@ export default function App() {
                   : showAddAgent
                     ? "添加 AgentKit 智能体"
                     : skillCenter
-                      ? "技能中心"
+                      ? undefined
                       : searchView
                         ? "搜索"
                         : showManageAgents
@@ -1695,7 +1904,9 @@ export default function App() {
                             : conversationTitle
               }
               crumbs={
-                searchView || showAddAgent || skillCenter || showAddMenu || !visibleCreateView
+                skillCenter
+                  ? [{ label: "技能中心" }, { label: "AgentKit Skill 空间" }]
+                  : searchView || showAddAgent || showAddMenu || !visibleCreateView
                   ? undefined
                   : visibleCreateView === "menu"
                     ? [
@@ -1715,13 +1926,20 @@ export default function App() {
                       ]
               }
               rightContent={
-                <DeploymentTaskStatus
-                  tasks={canCreateAgents ? deploymentTasks : []}
-                  onCancel={cancelDeploymentTask}
-                />
+                <>
+                  <SandboxEntryButton
+                    variant="header"
+                    active={Boolean(sandboxSession)}
+                    onClick={openSandboxLaunch}
+                  />
+                  <DeploymentTaskStatus
+                    tasks={canCreateAgents ? deploymentTasks : []}
+                    onCancel={cancelDeploymentTask}
+                  />
+                </>
               }
             />
-            <main className="main">
+            <main className={`main${sandboxSession ? " is-sandbox-session" : ""}`}>
             {error && <div className="error">{error}</div>}
             {loadingSession && (
               <div className="session-loading">
@@ -1840,13 +2058,25 @@ export default function App() {
               <>
                 <div className="welcome">
                   <TextShimmer as="h1" className="welcome-title" duration={4.8} spread={22}>
-                    {newChatMode === "skill-create" ? "想创建一个什么 Skill？" : greeting}
+                    {sandboxSession
+                      ? "让灵感在临时空间里自由生长"
+                      : newChatMode === "skill-create"
+                        ? "想创建一个什么 Skill？"
+                        : greeting}
                   </TextShimmer>
                   {composer}
+                  {!sandboxSession && (
+                    <div className="sandbox-new-chat-entry">
+                      <SandboxEntryButton
+                        variant="composer"
+                        onClick={openSandboxLaunch}
+                      />
+                    </div>
+                  )}
                 </div>
                 {/* Show the agent's structure as soon as it's selected, before
                     any conversation — only renders when it has sub-agents. */}
-                {newChatMode === "agent" ? (
+                {!sandboxSession && newChatMode === "agent" ? (
                   <AgentTopology
                     appName={appName}
                     activeAgent={activeAgent}
@@ -1902,28 +2132,30 @@ export default function App() {
                 transition={{ duration: 0.2, ease: "easeOut" }}
               >
                 {pending ? (
-                  isLast && conversationBusy ? <ThinkingPlaceholder /> : null
+                  isLast && activeConversationBusy ? <ThinkingPlaceholder /> : null
                 ) : (
                   <>
                     <Blocks appName={appName} blocks={turn.blocks} onAction={onAction} onAuth={onAuth} />
                     {/* Finalized turn that produced no visible answer (e.g. only
                         thinking + an empty A2UI surface) — show a fallback note. */}
-                    {!(isLast && conversationBusy) && !turnHasVisibleContent(turn) && (
+                    {!(isLast && activeConversationBusy) && !turnHasVisibleContent(turn) && (
                       <div className="turn-empty">本次没有返回可显示的内容。</div>
                     )}
                     {/* Hide the actions/timestamp row while this turn is still
                         thinking/streaming or waiting on an OAuth card; reveal it
                         only once the reply is done. */}
-                    {!(isLast && conversationBusy) && !turnAwaitingAuth(turn) && (
+                    {!(isLast && activeConversationBusy) && !turnAwaitingAuth(turn) && (
                       <div className="turn-meta">
                         <div className="turn-actions">
-                          <button
-                            className="icon-btn"
-                            title="Tracing 火焰图"
-                            onClick={() => setTraceOpen(true)}
-                          >
-                            <TraceIcon />
-                          </button>
+                          {!sandboxSession && (
+                            <button
+                              className="icon-btn"
+                              title="Tracing 火焰图"
+                              onClick={() => setTraceOpen(true)}
+                            >
+                              <TraceIcon />
+                            </button>
+                          )}
                           <CopyButton text={turnText(turn)} />
                         </div>
                         {turn.meta && <span className="meta-text">{fmtMeta(turn.meta)}</span>}
@@ -1935,12 +2167,14 @@ export default function App() {
             );
           })}
                 </div>
-                <AgentTopology
-                  appName={appName}
-                  activeAgent={activeAgent}
-                  seenAgents={seenAgents}
-                  execPath={execPath}
-                />
+                {!sandboxSession && (
+                  <AgentTopology
+                    appName={appName}
+                    activeAgent={activeAgent}
+                    seenAgents={seenAgents}
+                    execPath={execPath}
+                  />
+                )}
                 {composer}
               </>
             )}
@@ -1956,6 +2190,14 @@ export default function App() {
           onClose={() => setTraceOpen(false)}
         />
       )}
+
+      <SandboxLaunchDialog
+        open={sandboxLaunchOpen}
+        state={sandboxLaunchState}
+        error={sandboxLaunchError}
+        onCancel={cancelSandboxLaunch}
+        onConfirm={() => void launchSandboxSession()}
+      />
 
       {confirmLeave && (
         <div className="confirm-scrim" onClick={() => setConfirmLeave(false)}>

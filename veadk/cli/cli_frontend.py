@@ -699,7 +699,7 @@ def _run_frontend_server(
 
     # Agent introspection for the UI's agent picker (name, model, tools). Reuses
     # ADK's AgentLoader, which caches each loaded `root_agent`.
-    from fastapi import HTTPException, Request
+    from fastapi import HTTPException, Query, Request
     from fastapi.responses import Response
     from google.adk.cli.utils.agent_loader import AgentLoader
     import httpx
@@ -827,6 +827,39 @@ def _run_frontend_server(
             detail="Volcengine credentials not found (set VOLCENGINE_ACCESS_KEY/"
             "SECRET_KEY, or run inside a VeFaaS function with an IAM role)",
         )
+
+    from veadk.cli.frontend_sandbox import (
+        AgentkitSandboxGateway,
+        SandboxConfigurationError,
+        SandboxConversationService,
+        mount_sandbox_routes,
+    )
+
+    def _sandbox_client():
+        from agentkit.sdk.tools.client import AgentkitToolsClient
+
+        try:
+            access_key, secret_key, session_token = _resolve_ve_credentials()
+        except HTTPException as error:
+            raise SandboxConfigurationError(str(error.detail)) from error
+        return AgentkitToolsClient(
+            access_key=access_key,
+            secret_key=secret_key,
+            region=os.getenv("AGENTKIT_SANDBOX_REGION", "cn-beijing"),
+            session_token=session_token or "",
+        )
+
+    def _sandbox_owner(request: Request) -> str:
+        principal = _current_principal(request)
+        if principal is None:
+            raise HTTPException(status_code=401, detail="Studio identity is required")
+        return principal.owner_id
+
+    mount_sandbox_routes(
+        app,
+        SandboxConversationService(AgentkitSandboxGateway(_sandbox_client)),
+        _sandbox_owner,
+    )
 
     # Prefixes (and a few exact keys) we copy from the server's environment
     # into a created AgentKit runtime. Anything NOT in this list is left out
@@ -3091,19 +3124,33 @@ def _run_frontend_server(
         )
 
     @app.get("/web/skill-spaces")
-    async def _web_list_skill_spaces(region: str = "all"):
+    async def _web_list_skill_spaces(
+        region: str = "all",
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=50, ge=1, le=100),
+        project: str | None = None,
+    ):
         """List SkillSpaces visible to the server's credentials. Fetches from
         both cn-beijing and cn-shanghai when region=all."""
         from agentkit.sdk.skills.types import ListSkillSpacesRequest
 
         regions = ["cn-beijing", "cn-shanghai"] if region == "all" else [region]
         all_items = []
+        total_count = 0
+        project_name = (project or "").strip() or None
 
         for reg in regions:
             try:
                 client = _skills_client(reg)
-                resp = client.list_skill_spaces(
-                    ListSkillSpacesRequest(page_number=1, page_size=50)
+                request_page = 1 if region == "all" else page
+                request_page_size = 50 if region == "all" else page_size
+                resp = await asyncio.to_thread(
+                    client.list_skill_spaces,
+                    ListSkillSpacesRequest(
+                        PageNumber=request_page,
+                        PageSize=request_page_size,
+                        ProjectName=project_name,
+                    ),
                 )
                 for s in resp.items or []:
                     all_items.append(
@@ -3113,33 +3160,55 @@ def _run_frontend_server(
                             "description": s.description or "",
                             "status": s.status or "",
                             "region": reg,
+                            "projectName": s.project_name or "",
+                            "updatedAt": s.update_time_stamp or "",
+                            "skillCount": len(s.relations or []),
                         }
+                    )
+                if region != "all":
+                    total_count = (
+                        resp.total_count
+                        if resp.total_count is not None
+                        else len(all_items)
                     )
             except HTTPException:
                 raise
             except Exception as e:
                 logger.error(f"ListSkillSpaces error for {reg}: {e}", exc_info=True)
                 raise HTTPException(
-                    status_code=502, detail=f"SkillSpaces API error for {reg}: {e}"
+                    status_code=502,
+                    detail="暂时无法加载 AgentKit Skill Space，请稍后重试。",
                 )
 
         return {
             "items": all_items,
-            "totalCount": len(all_items),
+            "totalCount": len(all_items) if region == "all" else total_count,
+            "page": 1 if region == "all" else page,
+            "pageSize": 50 if region == "all" else page_size,
         }
 
     @app.get("/web/skill-spaces/{space_id}/skills")
-    async def _web_list_skills_in_space(space_id: str, region: str = "cn-beijing"):
+    async def _web_list_skills_in_space(
+        space_id: str,
+        region: str = "cn-beijing",
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=100, ge=1, le=100),
+        project: str | None = None,
+    ):
         """List skills in one SkillSpace (relation view: id/name/description/
         version/status per skill)."""
         from agentkit.sdk.skills.types import ListSkillsBySkillSpaceRequest
 
+        del project  # SkillSpace ID is already globally scoped by AgentKit.
         try:
             client = _skills_client(region)
-            resp = client.list_skills_by_skill_space(
+            resp = await asyncio.to_thread(
+                client.list_skills_by_skill_space,
                 ListSkillsBySkillSpaceRequest(
-                    skill_space_id=space_id, page_number=1, page_size=100
-                )
+                    SkillSpaceId=space_id,
+                    PageNumber=page,
+                    PageSize=page_size,
+                ),
             )
         except HTTPException:
             raise
@@ -3149,7 +3218,8 @@ def _run_frontend_server(
                 exc_info=True,
             )
             raise HTTPException(
-                status_code=502, detail=f"SkillSpaces API error for {region}: {e}"
+                status_code=502,
+                detail="暂时无法加载该 Skill Space 的技能，请稍后重试。",
             )
 
         items = list(resp.items or [])
@@ -3164,7 +3234,11 @@ def _run_frontend_server(
                 }
                 for r in items
             ],
-            "totalCount": resp.total_count or len(items),
+            "totalCount": (
+                resp.total_count if resp.total_count is not None else len(items)
+            ),
+            "page": page,
+            "pageSize": page_size,
         }
 
     @app.get("/web/skill-spaces/{space_id}/skills/{skill_id}")
@@ -3181,8 +3255,9 @@ def _run_frontend_server(
 
         try:
             client = _skills_client(region)
-            resp = client.get_skill_version(
-                GetSkillVersionRequest(id=skill_id, skill_version=version)
+            resp = await asyncio.to_thread(
+                client.get_skill_version,
+                GetSkillVersionRequest(Id=skill_id, SkillVersion=version),
             )
         except HTTPException:
             raise
@@ -3190,7 +3265,10 @@ def _run_frontend_server(
             logger.error(
                 f"GetSkillVersion({skill_id}@{version}) error: {e}", exc_info=True
             )
-            raise HTTPException(status_code=502, detail=f"SkillSpaces API error: {e}")
+            raise HTTPException(
+                status_code=502,
+                detail="暂时无法加载该技能详情，请稍后重试。",
+            )
 
         if not resp.skill_md:
             raise HTTPException(

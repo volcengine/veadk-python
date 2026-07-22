@@ -49,7 +49,15 @@ function isVideoLink(node: any): boolean {
  *
  *  Streaming-safe: re-renders cleanly as `text` grows. Links open in a new
  *  tab. Memoized so unrelated turn re-renders don't re-parse the tree. */
-function MarkdownImpl({ text, className }: { text: string; className?: string }) {
+function MarkdownImpl({
+  text,
+  className,
+  allowRawHtml = true,
+}: {
+  text: string;
+  className?: string;
+  allowRawHtml?: boolean;
+}) {
   const [videoViewerOpen, setVideoViewerOpen] = useState<VideoData | null>(null);
 
   // Extract video src from props or source children
@@ -101,7 +109,7 @@ function MarkdownImpl({ text, className }: { text: string; className?: string })
     <div className={className ? `md ${className}` : "md"}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeRaw, rehypeHighlight]}
+        rehypePlugins={allowRawHtml ? [rehypeRaw, rehypeHighlight] : [rehypeHighlight]}
         components={{
           a: ({ node, ...props }) => {
             const href = props.href;

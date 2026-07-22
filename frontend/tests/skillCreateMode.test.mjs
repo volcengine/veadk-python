@@ -40,7 +40,7 @@ test("offers Agent, disabled temporary, and Skill creation modes in the new-chat
 test("preserves the existing Agent submit flow and resets mode on a new chat", () => {
   assert.match(
     appSource,
-    /if \(newChatMode === "skill-create"\)[\s\S]*?return;[\s\S]*?const text = input;[\s\S]*?send\(text, atts, selectedInvocation\)/,
+    /if \(!sandboxSession && newChatMode === "skill-create"\)[\s\S]*?return;[\s\S]*?const text = input;[\s\S]*?send\(text, atts, selectedInvocation\)/,
   );
   assert.match(appSource, /function startNewChat\(\)[\s\S]*?setNewChatMode\("agent"\)/);
   assert.match(

@@ -52,6 +52,7 @@ export interface ComposerProps {
   agents: AgentTarget[];
   invocation: FrontendInvocation;
   capabilitiesLoading?: boolean;
+  allowAttachments?: boolean;
   onInvocationChange: (value: FrontendInvocation) => void;
   onAddFiles: (files: FileList | File[]) => void;
   onRemoveAttachment: (id: string) => void;
@@ -76,6 +77,7 @@ export function Composer({
   agents,
   invocation,
   capabilitiesLoading = false,
+  allowAttachments = true,
   onInvocationChange,
   onAddFiles,
   onRemoveAttachment,
@@ -269,7 +271,7 @@ export function Composer({
             className="comp-icon"
             title="添加"
             aria-label="添加"
-            disabled={disabled}
+            disabled={disabled || !allowAttachments}
             onClick={() => {
               setTrigger(null);
               setMenuOpen((o) => !o);

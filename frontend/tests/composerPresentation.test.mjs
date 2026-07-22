@@ -20,7 +20,7 @@ const stylesSource = readFileSync(
 );
 
 test("shows session metadata only after the conversation starts", () => {
-  assert.match(appSource, /showMeta=\{turns\.length > 0\}/);
+  assert.match(appSource, /showMeta=\{turns\.length > 0 && !sandboxSession\}/);
   assert.match(
     composerSource,
     /\{showMeta && \(\s*<div className="composer-meta">/,
@@ -72,7 +72,20 @@ test("renders a normal-font session id with an inline copy action", () => {
 });
 
 test("addresses the selected Agent by its display name in the composer", () => {
-  assert.match(appSource, /agentName=\{appName \? labelOf\(appName\) : "Agent"\}/);
+  assert.match(
+    appSource,
+    /agentName=\{[\s\S]*?sandboxSession[\s\S]*?"AgentKit 沙箱"[\s\S]*?labelOf\(appName\)/,
+  );
   assert.match(composerSource, /`向 \$\{agentName\} 发消息…`/);
   assert.doesNotMatch(composerSource, /给智能体发消息/);
+});
+
+test("composer slot keeps the input full width in the centered welcome layout", () => {
+  const sandboxStyles = readFileSync(
+    new URL("../src/ui/SandboxSession.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(appSource, /className=\{`composer-slot\$\{sandboxSession/);
+  assert.match(sandboxStyles, /\.composer-slot\s*\{[^}]*width:\s*100%/);
+  assert.match(sandboxStyles, /\.composer-slot\s*\{[^}]*min-width:\s*0/);
 });
