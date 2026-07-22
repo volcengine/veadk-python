@@ -24,8 +24,15 @@ permissions:
 
 jobs:
   trigger-docs-archive:
+    if: github.event.deleted == false
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
       - name: Trigger docs archive
         env:
           DOCS_ARCHIVE_URL: ${{ vars.DOCS_ARCHIVE_URL }}
@@ -44,7 +51,10 @@ jobs:
           fi
 
           tag_name="${GITHUB_REF#refs/tags/}"
-          command="DOCS_REPO_URL=git@github.com:yaozheng-fang/docs.git CODE_REPO_PATH=git@github.com:volcengine/veadk-python.git DOCS_PROJECT=veadk RELEASE_TAG=${tag_name} OUTPUT_MODE=commit_and_pr bash scripts/run-docs-archive-on-tag.sh"
+          current_commit="$(git rev-list -n 1 "$tag_name")"
+          previous_tag="$(git describe --tags --abbrev=0 --exclude "$tag_name" "$current_commit" 2>/dev/null || true)"
+
+          command="DOCS_REPO_URL=git@github.com:yaozheng-fang/docs.git CODE_REPO_PATH=git@github.com:volcengine/veadk-python.git DOCS_PROJECT=veadk RELEASE_TAG=${tag_name} PREVIOUS_TAG=${previous_tag} OUTPUT_MODE=commit_and_pr bash scripts/run-docs-archive-on-tag.sh"
           payload="$(jq -n --arg command "$command" --arg cwd "." '{command: $command, cwd: $cwd, async: false}')"
 
           curl --fail --show-error --silent -X POST "$DOCS_ARCHIVE_URL" \
