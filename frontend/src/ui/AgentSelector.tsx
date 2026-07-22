@@ -539,6 +539,21 @@ function componentKindLabel(kind: string): string {
   return COMPONENT_KIND_LABELS[kind.toLowerCase()] ?? kind;
 }
 
+function componentBackendLabel(backend: string): string {
+  const labels: Record<string, string> = {
+    context_search: "Context Search",
+    local: "本地",
+    mem0: "Mem0",
+    milvus: "Milvus",
+    opensearch: "OpenSearch",
+    openviking: "OpenViking",
+    redis: "Redis",
+    tos_vector: "TOS Vector",
+    viking: "VikingDB",
+  };
+  return labels[backend.toLowerCase()] ?? backend;
+}
+
 function RuntimePreviewPanel({
   runtime,
   tab,
@@ -710,7 +725,12 @@ function AgentInfoContent({ runtime }: { runtime: SelectedRuntime }) {
                   >
                     <div className="agentsel-component-head">
                       <strong title={component.name}>{component.name}</strong>
-                      <span>{componentKindLabel(component.kind)}</span>
+                      <span>
+                        {componentKindLabel(component.kind)}
+                        {component.backend
+                          ? ` · ${componentBackendLabel(component.backend)}`
+                          : ""}
+                      </span>
                     </div>
                     {component.description && (
                       <span title={component.description}>

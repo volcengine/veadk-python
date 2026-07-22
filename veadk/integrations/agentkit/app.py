@@ -36,8 +36,10 @@ from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
 
 from veadk.agent_metadata import (
     agent_component_summaries,
+    agent_search_sources,
     agent_skill_summaries,
 )
+from veadk.agent_search import search_agent_component
 from veadk.memory.short_term_memory import ShortTermMemory
 
 if TYPE_CHECKING:
@@ -316,6 +318,7 @@ def _add_introspection_routes(
             "tools": node["tools"],
             "skills": node["skills"],
             "components": node["components"],
+            "searchSources": agent_search_sources(root_agent),
             "subAgents": [
                 _display_name(
                     str(getattr(child, "name", "") or ""),
@@ -325,6 +328,34 @@ def _add_introspection_routes(
             ],
             "graph": node,
         }
+
+    @app.get("/web/search")
+    async def agent_search(
+        source: str,
+        app_name: str,
+        q: str,
+        user_id: str = "",
+    ) -> dict[str, Any]:
+        expected_name = str(getattr(root_agent, "name", "") or "")
+        if app_name != expected_name:
+            raise HTTPException(status_code=404, detail="unknown agent: " + app_name)
+        if source not in {"knowledge", "memory"}:
+            raise HTTPException(
+                status_code=400,
+                detail="unsupported Agent search source: " + source,
+            )
+        if source == "memory" and not user_id:
+            raise HTTPException(
+                status_code=400,
+                detail="user_id is required for long-term memory search",
+            )
+        return await search_agent_component(
+            root_agent,
+            source,
+            q,
+            app_name=expected_name,
+            user_id=user_id,
+        )
 
     @app.get("/web/agent-graph")
     def agent_graph() -> dict[str, Any]:
@@ -367,6 +398,7 @@ def _prioritize_platform_routes(app: FastAPI) -> None:
         "/ping",
         "/web/agent-info/{app_name}",
         "/web/agent-graph",
+        "/web/search",
         "/assets",
         "/webui",
         "/webui/{path:path}",

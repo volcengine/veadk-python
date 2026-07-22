@@ -712,8 +712,10 @@ def _run_frontend_server(
     )
     from veadk.agent_metadata import (
         agent_component_summaries,
+        agent_search_sources,
         agent_skill_summaries,
     )
+    from veadk.agent_search import search_agent_component
     from veadk.multimodal.api import mount_media_routes
     from veadk.multimodal.service import MediaService
     from veadk.multimodal.storage import create_media_storage
@@ -1007,15 +1009,13 @@ def _run_frontend_server(
             "tools": [_tool_label(t) for t in getattr(agent, "tools", []) or []],
             "skills": agent_skill_summaries(agent),
             "components": agent_component_summaries(agent),
+            "searchSources": agent_search_sources(agent),
             "subAgents": [
                 getattr(s, "name", "") for s in getattr(agent, "sub_agents", []) or []
             ],
             # Recursive typed tree used by the conversation topology panel.
             "graph": _agent_node(agent),
         }
-
-    # Tool names that count as "web search is mounted" on an agent.
-    _WEB_SEARCH_TOOLS = {"web_search", "parallel_web_search", "vesearch"}
 
     def _web_search_aksk() -> tuple[str | None, str | None]:
         ak = os.getenv("TOOL_WEB_SEARCH_ACCESS_KEY") or os.getenv(
@@ -1027,23 +1027,45 @@ def _run_frontend_server(
         return ak, sk
 
     @app.get("/web/search")
-    async def _web_search(source: str, app_name: str, q: str):
-        """Smart-search 'web' source: run the Volcengine WebSearch API with the
-        server's env credentials. Returns mounted=False when a *known* agent has
-        no web-search tool; unknown/remote agents are searched anyway."""
-        if source != "web":
+    async def _web_search(
+        source: str,
+        app_name: str,
+        q: str,
+        user_id: str = "",
+    ):
+        """Search the web or retrieval components mounted on a local Agent."""
+        if source not in {"web", "knowledge", "memory"}:
             raise HTTPException(status_code=400, detail=f"unsupported source: {source}")
-        if not q.strip():
-            return {"mounted": True, "results": []}
 
-        # Gate on the agent's tools only when we can introspect it locally.
         try:
             agent = _agent_loader.load_agent(app_name)
         except ValueError:
             agent = None
+        if source in {"knowledge", "memory"}:
+            if agent is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"unknown agent: {app_name}",
+                )
+            if source == "memory" and not user_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="user_id is required for long-term memory search",
+                )
+            return await search_agent_component(
+                agent,
+                source,
+                q,
+                app_name=app_name,
+                user_id=user_id,
+            )
+
+        if not q.strip():
+            return {"mounted": True, "results": []}
+
+        # Gate on the agent's tools only when we can introspect it locally.
         if agent is not None:
-            tools = [_tool_label(t) for t in getattr(agent, "tools", []) or []]
-            if not any(t in _WEB_SEARCH_TOOLS for t in tools):
+            if "web" not in agent_search_sources(agent):
                 return {"mounted": False, "results": []}
 
         ak, sk = _web_search_aksk()

@@ -3,6 +3,8 @@ import {
   ArrowUp,
   AtSign,
   Bot,
+  Check,
+  Copy,
   FileText,
   FileVideo2,
   ImageIcon,
@@ -36,6 +38,7 @@ export interface ComposerProps {
   sessionId: string;
   sessionInitializing?: boolean;
   appName: string;
+  agentName: string;
   value: string;
   onChange: (v: string) => void;
   onSubmit: () => void;
@@ -56,6 +59,7 @@ export function Composer({
   sessionId,
   sessionInitializing = false,
   appName,
+  agentName,
   value,
   onChange,
   onSubmit,
@@ -78,6 +82,18 @@ export function Composer({
   const [menuOpen, setMenuOpen] = useState(false);
   const [trigger, setTrigger] = useState<CompletionTrigger | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [sessionIdCopied, setSessionIdCopied] = useState(false);
+
+  async function copySessionId() {
+    if (!sessionId) return;
+    try {
+      await navigator.clipboard.writeText(sessionId);
+      setSessionIdCopied(true);
+      setTimeout(() => setSessionIdCopied(false), 1500);
+    } catch {
+      setSessionIdCopied(false);
+    }
+  }
 
   // Auto-grow the textarea up to a max height, then scroll.
   useLayoutEffect(() => {
@@ -284,7 +300,7 @@ export function Composer({
           rows={1}
           value={value}
           disabled={disabled}
-          placeholder={disabled ? "请选择 Agent" : "给智能体发消息…"}
+          placeholder={disabled ? "请选择 Agent" : `向 ${agentName} 发消息…`}
           aria-expanded={Boolean(trigger)}
           onChange={(e) => {
             onChange(e.target.value);
@@ -355,6 +371,17 @@ export function Composer({
             >
               {sessionInitializing ? "初始化中" : sessionId || "—"}
             </span>
+            {sessionId && (
+              <button
+                type="button"
+                className="composer-session-copy"
+                title={sessionIdCopied ? "已复制" : "复制会话 ID"}
+                aria-label={sessionIdCopied ? "已复制会话 ID" : "复制会话 ID"}
+                onClick={() => void copySessionId()}
+              >
+                {sessionIdCopied ? <Check /> : <Copy />}
+              </button>
+            )}
           </span>
           <span className="composer-meta-separator" aria-hidden>
             |

@@ -11,7 +11,8 @@ server that `veadk frontend` launches — no separate backend.
   including previews and history replay for both user and model media. Chat
   images use compact thumbnails and open in a zoomable full-screen viewer.
 - **Composer invocations**: type `/` to select a mounted skill or `@` to route
-  the turn to a mentionable sub-agent.
+  the turn to a mentionable sub-agent. New conversations address the selected
+  Agent by its display name in the composer placeholder.
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
 - **Built-in tool activity** gives web search, image/video generation, memory,
   and knowledge-base retrieval their own repository-drawn icons and concise
@@ -19,9 +20,15 @@ server that `veadk frontend` launches — no separate backend.
   `TextShimmer`, which also powers thinking and branded heading shimmer states.
 - **Sessions**: pick an agent, browse history, new chat, delete — per signed-in
   user. The new-session composer stays minimal until a conversation begins,
-  when its session metadata appears. Long Agent lists stay within the viewport
-  and scroll independently.
+  when its session metadata appears. The page header follows the active session's
+  first user message, while long titles truncate without shifting header actions.
+  Session IDs use normal text with a copy action, and sidebar title tooltips show
+  the full conversation name. Long Agent lists stay within the viewport and scroll independently.
 - **Tracing viewer**: a span tree + detail panel from the ADK debug trace.
+- **Smart search**: search sessions, the network through `web_search`, and a
+  selected Agent's KnowledgeBase or long-term memory when mounted. The source
+  picker follows live Agent metadata and disables unavailable sources before a
+  search; active retrieval sources show their index/name and backend separately.
 - **Runtime management**: inspect or delete deployed runtimes, or connect one
   directly so the global Agent selector switches to that Runtime. The cloud
   selector gives each two-line Runtime row explicit connect and info actions;

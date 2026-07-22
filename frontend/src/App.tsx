@@ -38,7 +38,14 @@ import {
   type StudioAccess,
   type UiFeatures,
 } from "./adk/client";
-import { applyEvent, emptyAcc, eventsToTurns, type Block, type Turn } from "./blocks";
+import {
+  applyEvent,
+  emptyAcc,
+  eventsToTurns,
+  sessionTitle,
+  type Block,
+  type Turn,
+} from "./blocks";
 import { Sidebar } from "./ui/Sidebar";
 import { Navbar } from "./ui/Navbar";
 import { AgentTopology } from "./ui/AgentTopology";
@@ -88,6 +95,17 @@ const EMPTY_STRING_ARR: string[] = [];
 
 function emptyInvocation(): FrontendInvocation {
   return { skills: [] };
+}
+
+function activeSessionTitle(session: AdkSession | undefined, turns: Turn[]): string {
+  const persistedTitle = sessionTitle(session?.events);
+  if (persistedTitle !== "新会话") return persistedTitle;
+  for (const turn of turns) {
+    if (turn.role !== "user") continue;
+    const text = turn.blocks.find((block) => block.kind === "text")?.text.trim();
+    if (text) return text;
+  }
+  return "新会话";
 }
 
 function findAgentNode(node: AgentNode, name: string): AgentNode | undefined {
@@ -527,6 +545,10 @@ export default function App() {
     {},
   );
   const turns = sessionId ? turnsBySession[sessionId] ?? [] : pendingTurns;
+  const conversationTitle = activeSessionTitle(
+    sessions.find((session) => session.id === sessionId),
+    turns,
+  );
   const setTurnsFor = (
     sid: string,
     updater: Turn[] | ((prev: Turn[]) => Turn[]),
@@ -1564,6 +1586,7 @@ export default function App() {
             sessionId={sessionId}
             sessionInitializing={initializingSession}
             appName={appName}
+            agentName={appName ? labelOf(appName) : "Agent"}
             value={input}
             onChange={setInput}
             onSubmit={() => {
@@ -1609,9 +1632,7 @@ export default function App() {
                           ? "管理 Agent"
                           : visibleCreateView
                             ? undefined
-                            : appName
-                              ? labelOf(appName)
-                              : "选择 Agent"
+                            : conversationTitle
               }
               crumbs={
                 searchView || showAddAgent || skillCenter || showAddMenu || !visibleCreateView
@@ -1675,6 +1696,8 @@ export default function App() {
               <SearchView
                 userId={userId}
                 appId={appName}
+                agentInfo={agentInfo}
+                capabilitiesLoading={capabilitiesLoading}
                 agentLabel={labelOf}
                 onOpenSession={openFromSearch}
               />

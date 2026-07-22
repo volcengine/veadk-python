@@ -459,6 +459,8 @@ export interface AgentComponent {
   kind: string;
   name: string;
   description?: string;
+  backend?: string;
+  source?: string;
 }
 
 export interface AgentTarget {
@@ -484,6 +486,8 @@ export interface AgentInfo {
   subAgents: string[];
   /** Optional for compatibility with Agent Servers released before this field. */
   components?: AgentComponent[];
+  /** Search sources that are actually mounted on this Agent. */
+  searchSources?: AgentSearchCapability[];
   /** Recursive typed tree; only the local server provides it. */
   graph?: AgentNode;
 }
@@ -501,6 +505,7 @@ async function fetchAgentInfo(app: string, ep: AdkEndpoint): Promise<AgentInfo> 
     skills: info.skills ?? [],
     subAgents: info.subAgents ?? [],
     components: info.components ?? [],
+    searchSources: info.searchSources ?? [],
     graph: info.graph,
   };
 }
@@ -528,6 +533,44 @@ export interface WebHit {
   url: string;
   siteName: string;
   summary: string;
+}
+
+export type AgentSearchSource = "knowledge" | "memory";
+export type AgentSearchCapability = AgentSearchSource | "web";
+
+export interface AgentSearchHit {
+  content: string;
+  author?: string;
+  timestamp?: number;
+}
+
+export interface AgentSearchResponse {
+  mounted: boolean;
+  sourceName?: string;
+  sourceType?: string;
+  results: AgentSearchHit[];
+  error?: string;
+}
+
+/** Search a KnowledgeBase or long-term memory mounted inside the Agent process. */
+export async function componentSearch(
+  appName: string,
+  source: AgentSearchSource,
+  query: string,
+  userId: string,
+): Promise<AgentSearchResponse> {
+  const { app, ep } = resolve(appName);
+  const params = new URLSearchParams({
+    source,
+    app_name: app,
+    q: query,
+    user_id: userId,
+  });
+  const res = await apiFetch(`/web/search?${params.toString()}`, {}, ep);
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "Agent 检索失败"));
+  }
+  return res.json();
 }
 
 /** Run an agent's web-search tool on the local server (which holds the env

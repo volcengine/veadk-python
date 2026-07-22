@@ -422,21 +422,23 @@ export function Sidebar({
           {sorted.length === 0 && (
             <div className="history-empty">暂无会话</div>
           )}
-          {sorted.map((s) => (
-            <div
-              key={s.id}
-              className={`history-item ${s.id === currentSessionId ? "active" : ""}`}
-            >
-              <button
-                className="history-item-btn"
-                onClick={() => onPickSession(s.id)}
-                title={s.id}
+          {sorted.map((s) => {
+            const title = sessionTitle(s.events);
+            return (
+              <div
+                key={s.id}
+                className={`history-item ${s.id === currentSessionId ? "active" : ""}`}
               >
-                {streamingSids?.has(s.id) && (
-                  <span className="history-streaming" title="正在生成…" aria-label="正在生成" />
-                )}
-                <span className="history-title">{sessionTitle(s.events)}</span>
-              </button>
+                <button
+                  className="history-item-btn"
+                  onClick={() => onPickSession(s.id)}
+                  title={title}
+                >
+                  {streamingSids?.has(s.id) && (
+                    <span className="history-streaming" title="正在生成…" aria-label="正在生成" />
+                  )}
+                  <span className="history-title">{title}</span>
+                </button>
               <button
                 className="history-more"
                 title="更多"
@@ -460,8 +462,9 @@ export function Sidebar({
                   </div>
                 </>
               )}
-            </div>
-          ))}
+              </div>
+            );
+          })}
         </div>
       </div>
       )}

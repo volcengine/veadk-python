@@ -24,6 +24,28 @@ from google.adk.tools.skill_toolset import SkillToolset
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _SKILL_TOOLSET_CLASS_NAMES = {"SkillsToolset"}
+_WEB_SEARCH_TOOL_NAMES = {"parallel_web_search", "vesearch", "web_search"}
+
+
+def agent_search_sources(agent: object) -> list[str]:
+    """Return the smart-search sources mounted on an agent.
+
+    Short-term memory is deliberately excluded: it backs conversations and is
+    already covered by session search, while long-term memory is a distinct
+    semantic retrieval source.
+    """
+    sources = []
+    tool_names = {
+        str(getattr(tool, "name", None) or getattr(tool, "__name__", None) or "")
+        for tool in (getattr(agent, "tools", None) or [])
+    }
+    if tool_names & _WEB_SEARCH_TOOL_NAMES:
+        sources.append("web")
+    if getattr(agent, "knowledgebase", None) is not None:
+        sources.append("knowledge")
+    if getattr(agent, "long_term_memory", None) is not None:
+        sources.append("memory")
+    return sources
 
 
 def agent_skill_summaries(agent: object) -> list[dict[str, str]]:
@@ -101,7 +123,7 @@ def _add_attribute_component(
 ) -> None:
     component = getattr(agent, attribute, None)
     if component is not None:
-        _add_component(components, seen, kind, component)
+        _add_component(components, seen, kind, component, source=attribute)
 
 
 def _add_component(
@@ -109,22 +131,29 @@ def _add_component(
     seen: set[tuple[str, str]],
     kind: str,
     component: object,
+    source: str = "",
 ) -> None:
-    name = _component_name(component)
+    name = _component_name(component, prefer_index=kind == "knowledgebase")
     key = (kind, name)
     if key in seen:
         return
     seen.add(key)
 
     summary = {"kind": kind, "name": name}
+    if source:
+        summary["source"] = source
+    backend = _component_backend(component)
+    if backend:
+        summary["backend"] = backend
     description = _component_description(component)
     if description:
         summary["description"] = description
     components.append(summary)
 
 
-def _component_name(component: object) -> str:
-    for attribute in ("name", "index"):
+def _component_name(component: object, *, prefer_index: bool = False) -> str:
+    attributes = ("index", "name") if prefer_index else ("name", "index")
+    for attribute in attributes:
         value = getattr(component, attribute, None)
         if isinstance(value, str) and value.strip():
             return value.strip()
@@ -135,9 +164,13 @@ def _component_description(component: object) -> str:
     description = getattr(component, "description", None)
     if isinstance(description, str) and description.strip():
         return description.strip()
+    return ""
+
+
+def _component_backend(component: object) -> str:
     backend = getattr(component, "backend", None)
     if isinstance(backend, str) and backend.strip():
-        return f"backend: {backend.strip()}"
+        return backend.strip()
     return ""
 
 
