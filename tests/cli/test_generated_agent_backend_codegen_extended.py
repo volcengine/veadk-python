@@ -839,6 +839,9 @@ def test_agentkit_app_adds_dynamic_a2a_tools_per_run() -> None:
     assert "build_remote_a2a_agent_tools(prompt, registry_config)" in source
     assert "def _spawn_dynamic_a2a_agent(" in source
     assert "def _configure_dynamic_a2a_routes(" in source
+    assert "def _run_request_custom_metadata(" in source
+    assert 'getattr(req, "custom_metadata", None)' in source
+    assert "req.custom_metadata" not in source
     assert '@app.post("/run_sse")' in source
     assert '@app.post("/run", response_model=None)' in source
 

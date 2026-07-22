@@ -561,6 +561,11 @@ def _resolve_run_app_name(
     return app_name
 
 
+def _run_request_custom_metadata(req: RunAgentRequest) -> dict[str, Any] | None:
+    metadata = getattr(req, "custom_metadata", None)
+    return metadata if isinstance(metadata, dict) and metadata else None
+
+
 def _configure_dynamic_a2a_routes(
     app: FastAPI,
     root_agent: BaseAgent,
@@ -584,10 +589,9 @@ def _configure_dynamic_a2a_routes(
             root_agent=root_agent,
             prompt=_content_text(req.new_message),
         )
+        custom_metadata = _run_request_custom_metadata(req)
         run_config = (
-            RunConfig(custom_metadata=req.custom_metadata)
-            if req.custom_metadata
-            else None
+            RunConfig(custom_metadata=custom_metadata) if custom_metadata else None
         )
 
         async def worker() -> list[Any]:
@@ -635,6 +639,7 @@ def _configure_dynamic_a2a_routes(
             prompt=_content_text(req.new_message),
         )
         stream_mode = StreamingMode.SSE if req.streaming else StreamingMode.NONE
+        custom_metadata = _run_request_custom_metadata(req)
 
         if not runner.auto_create_session:
             session = await services.session_service.get_session(
@@ -658,7 +663,7 @@ def _configure_dynamic_a2a_routes(
                         state_delta=req.state_delta,
                         run_config=RunConfig(
                             streaming_mode=stream_mode,
-                            custom_metadata=req.custom_metadata,
+                            custom_metadata=custom_metadata,
                         ),
                         invocation_id=req.invocation_id,
                     )

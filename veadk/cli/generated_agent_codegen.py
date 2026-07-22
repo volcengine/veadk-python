@@ -820,6 +820,11 @@ def _resolve_run_app_name(services: _RuntimeServices, root_agent: BaseAgent, req
     return app_name
 
 
+def _run_request_custom_metadata(req: RunAgentRequest) -> dict[str, Any] | None:
+    metadata = getattr(req, "custom_metadata", None)
+    return metadata if isinstance(metadata, dict) and metadata else None
+
+
 def enable_dynamic_a2a_tools(app: FastAPI, root_agent: BaseAgent) -> None:
     if getattr(app.state, _DYNAMIC_A2A_ROUTES_ENABLED_STATE_KEY, False):
         return
@@ -840,10 +845,9 @@ def enable_dynamic_a2a_tools(app: FastAPI, root_agent: BaseAgent) -> None:
             root_agent=root_agent,
             prompt=_content_text(req.new_message),
         )
+        custom_metadata = _run_request_custom_metadata(req)
         run_config = (
-            RunConfig(custom_metadata=req.custom_metadata)
-            if req.custom_metadata
-            else None
+            RunConfig(custom_metadata=custom_metadata) if custom_metadata else None
         )
 
         async def worker() -> list[Any]:
@@ -891,6 +895,7 @@ def enable_dynamic_a2a_tools(app: FastAPI, root_agent: BaseAgent) -> None:
             prompt=_content_text(req.new_message),
         )
         stream_mode = StreamingMode.SSE if req.streaming else StreamingMode.NONE
+        custom_metadata = _run_request_custom_metadata(req)
 
         if not runner.auto_create_session:
             session = await services.session_service.get_session(
@@ -914,7 +919,7 @@ def enable_dynamic_a2a_tools(app: FastAPI, root_agent: BaseAgent) -> None:
                         state_delta=req.state_delta,
                         run_config=RunConfig(
                             streaming_mode=stream_mode,
-                            custom_metadata=req.custom_metadata,
+                            custom_metadata=custom_metadata,
                         ),
                         invocation_id=req.invocation_id,
                     )

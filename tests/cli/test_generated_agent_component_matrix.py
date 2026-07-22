@@ -236,6 +236,9 @@ def test_a2a_registry_center_generates_tools_and_env() -> None:
         in agent_py
     )
     assert "build_remote_a2a_agent_tools(prompt, registry_config)" in dynamic_py
+    assert "def _run_request_custom_metadata(" in dynamic_py
+    assert 'getattr(req, "custom_metadata", None)' in dynamic_py
+    assert "req.custom_metadata" not in dynamic_py
     assert "_ADK_SERVER_STATE_KEY" in dynamic_py
     assert "_DYNAMIC_A2A_ROUTES_ENABLED_STATE_KEY" in dynamic_py
     assert '@app.post("/run_sse")' in dynamic_py
