@@ -13,6 +13,10 @@ server that `veadk frontend` launches — no separate backend.
 - **Composer invocations**: type `/` to select a mounted skill or `@` to route
   the turn to a mentionable sub-agent. New conversations address the selected
   Agent by its display name in the composer placeholder.
+- **New-chat modes**: keep the existing Agent conversation path, show the
+  upcoming temporary-session mode, or create a Skill with a real two-model A/B
+  run in independent AgentKit CodeEnv sessions. Completed candidates can be
+  compared, downloaded as ZIP files, and added to AgentKit.
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
 - **Built-in tool activity** gives web search, image/video generation, memory,
   and knowledge-base retrieval their own repository-drawn icons and concise
@@ -23,7 +27,8 @@ server that `veadk frontend` launches — no separate backend.
   when its session metadata appears. The page header follows the active session's
   first user message, while long titles truncate without shifting header actions.
   Session IDs use normal text with a copy action, and sidebar title tooltips show
-  the full conversation name. Long Agent lists stay within the viewport and scroll independently.
+  the full conversation name. Long Agent lists stay within the viewport and
+  scroll independently.
 - **Tracing viewer**: a span tree + detail panel from the ADK debug trace.
 - **Smart search**: search sessions, the network through `web_search`, and a
   selected Agent's KnowledgeBase or long-term memory when mounted. The source
@@ -223,6 +228,49 @@ the message string. The invocation plugin directs ADK to call the mounted skill
 tool or transfer one tree edge at a time until it reaches the selected agent.
 The same metadata is attached to the first Google GenAI `Part`, so session
 history restores the `/skill` and `@agent` chips after a reload.
+
+### Skill creation mode
+
+Skill creation uses `doubao-seed-2-0-pro-260215` and
+`deepseek-v4-flash-260425` through Ark Responses. The real Ark API key is kept
+by AgentKit credential hosting; Studio and the two isolated Sandbox sessions
+receive only its revocable gateway ticket. Credentials are never returned to
+the browser or copied into per-job Session variables. Studio also rejects
+non-HTTPS or non-Volcengine credential relay URLs. Skill creation is limited
+to Studio developers and admins.
+
+Configure a dedicated, ready AgentKit `CodeEnv` Tool before starting the
+server. The Tool ID is intentionally server-only and cannot be supplied by the
+browser:
+
+```bash
+export VEADK_SKILL_CREATOR_TOOL_ID=<code-env-tool-id>
+veadk frontend --agents-dir examples
+```
+
+`AGENTKIT_SANDBOX_TOOL_ID` is accepted as a compatibility fallback. Publishing
+a generated Skill uses TOS and the AgentKit Skills API. Set
+`VEADK_SKILL_CREATOR_TOS_BUCKET`, `VEADK_SKILL_CREATOR_TOS_PREFIX`, and
+`VEADK_SKILL_CREATOR_PROJECT_NAME` only when their defaults are unsuitable.
+Each candidate session expires after 30 minutes and is deleted immediately when
+a job is discarded. Job state lives in Sandbox rather than frontend-process
+memory, so polling and downloads continue to work when FaaS requests reach a
+different instance.
+
+For local Studio, run the AgentKit `credential-hosting` command and choose to
+bind its result to the dedicated CodeEnv Tool. For a cloud Studio deployment,
+pass the server-only Tool ID explicitly. The deploy command obtains the Ark key
+with the deployer's Volcengine credentials, stores it through AgentKit
+credential hosting, and binds only the returned ticket and relay URL to that
+Tool:
+
+```bash
+veadk studio deploy \
+  --user-pool-id <pool-id> \
+  --allowed-client-id <client-id> \
+  --vefaas-app-name <app-name> \
+  --skill-creator-tool-id <code-env-tool-id>
+```
 
 ## Agent naming
 

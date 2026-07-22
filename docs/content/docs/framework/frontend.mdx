@@ -18,6 +18,7 @@ VeADK 自带一个 React 前端，用于渲染智能体经由 Google ADK API Ser
 - **多模态消息**：上传图片、TXT/Markdown、PDF 与视频；用户附件和模型返回的媒体均支持预览与历史回放。
   对话中的图片默认以紧凑尺寸展示，点击后可全屏缩放预览。
 - **技能与子 Agent 调用**：在输入框输入 `/` 选择挂载技能，输入 `@` 将本轮交给可选的子 Agent。
+- **新会话模式**：保留 Agent 对话模式；临时会话模式显示为接入中；Skill 创建模式会在两个独立的 AgentKit CodeEnv Session 中使用固定模型做真实 A/B 生成，完成后可对比、下载 ZIP 或添加到 AgentKit。
 - **Agent 选择器**：左上角切换 agent；长列表在视口内独立滚动，悬停可查看该 agent 的模型与挂载的工具。
 - **历史会话**：自动保存、按时间排序，可重新打开或删除。
 - **智能搜索**：「会话」源在当前 agent 的历史消息中做全文检索；「网页」源调用该 agent 挂载的联网搜索工具实时检索（使用服务端环境变量里的凭据）。
@@ -133,6 +134,52 @@ veadk frontend --agents-dir examples
 选中子 Agent 后，`/` 菜单会改为展示目标 Agent 自己挂载的技能。切换或移除目标时会清空原有技能，避免把技能发送给没有挂载它的 Agent。`task` 和 `single_turn` 工作流节点仍会显示在拓扑中，但不能通过 `@` 选择。
 
 前端不会从消息字符串中猜测调用意图，而是发送结构化的 `veadkInvocation` metadata。后端插件据此要求 ADK 调用技能工具，或沿 Agent 树逐级调用 `transfer_to_agent`，直到到达目标节点。同一份 metadata 也会写入首个 Google GenAI `Part`，因此重新加载历史会话后仍能恢复 `/skill` 与 `@agent` chip。
+
+### Skill 创建模式
+
+新会话输入框中的「Skill 创建」会固定使用
+`doubao-seed-2-0-pro-260215` 和 `deepseek-v4-flash-260425`，通过 Ark
+Responses API 并行生成两个候选方案。每个候选使用独立的 AgentKit CodeEnv
+Session，生成结果会校验目录名、`SKILL.md` frontmatter、文件数量、大小和路径安全，
+再打包为 ZIP。真实 Ark API Key 由 AgentKit 凭据托管保存，Studio 和 Sandbox
+只使用可撤销的网关票据；每个任务的 Session 环境变量不会覆盖托管票据，且服务端
+只接受 Volcengine HTTPS 凭据中继地址。浏览器不会收到模型凭据。Skill 创建接口仅允许
+Studio developer 和 admin 使用。
+
+启动前必须在服务端配置一个专用且状态为 `Ready` 的 CodeEnv Tool：
+
+```bash
+export VEADK_SKILL_CREATOR_TOOL_ID=<code-env-tool-id>
+veadk frontend --agents-dir examples
+```
+
+本地运行前使用 AgentKit 的 `credential-hosting` 命令，并选择将结果写入上述 CodeEnv
+Tool。
+也可使用兼容变量 `AGENTKIT_SANDBOX_TOOL_ID`。添加到 AgentKit 时，服务端会先将
+ZIP 上传到 TOS，再调用 Skills API 创建或更新 Skill；只有用户填写 SkillSpace ID
+时才发布到对应空间。以下变量均为可选覆盖项：
+
+| 环境变量 | 默认值 | 说明 |
+| :-- | :-- | :-- |
+| `VEADK_SKILL_CREATOR_TOOL_ID` | — | 专用 AgentKit CodeEnv Tool ID。 |
+| `VEADK_SKILL_CREATOR_TOS_BUCKET` | AgentKit 账户默认 Bucket | 发布产物使用的 TOS Bucket。 |
+| `VEADK_SKILL_CREATOR_TOS_PREFIX` | `agentkit/skills` | TOS 对象 Key 前缀。 |
+| `VEADK_SKILL_CREATOR_PROJECT_NAME` | — | 创建 Skill 时使用的项目名称。 |
+
+候选 Session 的 TTL 为 30 分钟，用户重新创建或离开任务时会立即清理。任务状态保存
+在 Sandbox 而非 Frontend 进程内存，因此 FaaS 请求命中不同实例时仍可继续轮询和下载。
+
+云上部署时使用 `--skill-creator-tool-id`。部署命令会用部署凭据获取 Ark API Key，
+通过 AgentKit 凭据托管将其保存到 KMS 并准备网关代理，再把代理地址和可撤销票据
+绑定到专用 CodeEnv Tool；VeFaaS Function 不接收模型凭据：
+
+```bash
+veadk studio deploy \
+  --user-pool-id <pool-id> \
+  --allowed-client-id <client-id> \
+  --vefaas-app-name <app-name> \
+  --skill-creator-tool-id <code-env-tool-id>
+```
 
 ### 自定义 Studio 品牌
 

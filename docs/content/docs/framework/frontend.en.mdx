@@ -19,6 +19,7 @@ VeADK ships a React frontend that renders [A2UI](/en/docs/framework/a2ui) (agent
   and replay both user and model media from history. Chat images use compact
   thumbnails and open in a zoomable full-screen viewer.
 - **Skill and sub-agent invocation**: type `/` to select a mounted skill or `@` to route the turn to an eligible sub-agent.
+- **New-chat modes**: retain the Agent conversation path, expose the upcoming temporary-session mode, or generate two real Skill candidates in isolated AgentKit CodeEnv sessions for comparison, ZIP download, and AgentKit publishing.
 - **Agent picker**: switch agents from the top-left; long lists scroll within
   the viewport, and hovering an agent shows its model and mounted tools.
 - **Session history**: auto-saved, time-sorted, reopen or delete.
@@ -145,6 +146,60 @@ Type `/` in the composer to search skills mounted on the current agent. Type `@`
 After selecting a sub-agent, the `/` menu shows skills mounted on that target. Changing or removing the target clears its selected skills, preventing a skill from being sent to an agent that does not own it. `task` and `single_turn` workflow nodes remain visible in the topology but cannot be selected with `@`.
 
 The frontend sends structured `veadkInvocation` metadata instead of inferring invocation intent from the message string. The backend plugin directs ADK to call the skill tool or invoke `transfer_to_agent` one tree edge at a time until it reaches the target. The same metadata is written to the first Google GenAI `Part`, so reopening session history restores the `/skill` and `@agent` chips.
+
+### Skill creation mode
+
+The new-chat **Skill creation** mode runs
+`doubao-seed-2-0-pro-260215` and `deepseek-v4-flash-260425` in parallel through
+Ark Responses. Each candidate gets an independent AgentKit CodeEnv session.
+The server validates the generated directory name, `SKILL.md` frontmatter,
+file count, size, and safe paths before packaging a ZIP. AgentKit credential
+hosting keeps the real Ark API key; Studio and Sandbox receive only its
+revocable gateway ticket. Per-job Session variables cannot override that
+hosted ticket, and Studio accepts only Volcengine HTTPS credential relay URLs.
+Model credentials are never returned to the browser, and the Skill creation
+APIs require the Studio developer or admin role.
+
+Configure a dedicated AgentKit Tool in the `Ready` `CodeEnv` state before
+starting the server:
+
+```bash
+export VEADK_SKILL_CREATOR_TOOL_ID=<code-env-tool-id>
+veadk frontend --agents-dir examples
+```
+
+For local Studio, run the AgentKit `credential-hosting` command and choose to
+write its result into the dedicated CodeEnv Tool.
+`AGENTKIT_SANDBOX_TOOL_ID` is accepted as a compatibility fallback. Adding a
+candidate to AgentKit uploads its ZIP to TOS, then creates or updates the Skill
+through the Skills API. It is published to a SkillSpace only when the user
+provides SkillSpace IDs.
+
+| Environment variable | Default | Description |
+| :-- | :-- | :-- |
+| `VEADK_SKILL_CREATOR_TOOL_ID` | — | Dedicated AgentKit CodeEnv Tool ID. |
+| `VEADK_SKILL_CREATOR_TOS_BUCKET` | AgentKit account default | TOS bucket used for published artifacts. |
+| `VEADK_SKILL_CREATOR_TOS_PREFIX` | `agentkit/skills` | TOS object-key prefix. |
+| `VEADK_SKILL_CREATOR_PROJECT_NAME` | — | Project name used when creating a Skill. |
+
+Candidate sessions have a 30-minute TTL and are deleted immediately when the
+user starts over or leaves the job. Job state is stored in Sandbox rather than
+frontend-process memory, so polling and downloads continue to work when FaaS
+requests reach different instances.
+
+For a cloud deployment, pass `--skill-creator-tool-id`. The deploy command uses
+the deployer's credentials to obtain the Ark key, stores it in KMS through
+AgentKit credential hosting, and binds only the relay URL and revocable ticket
+to the dedicated CodeEnv Tool. The VeFaaS Function receives no model
+credential:
+
+```bash
+veadk studio deploy \
+  --user-pool-id <pool-id> \
+  --allowed-client-id <client-id> \
+  --vefaas-app-name <app-name> \
+  --skill-creator-tool-id <code-env-tool-id>
+```
 
 ### Custom Studio branding
 

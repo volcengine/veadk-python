@@ -91,6 +91,10 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
         "veadk.integrations.ve_identity.identity_client.IdentityClient",
         _FakeIdentityClient,
     )
+    monkeypatch.setattr(
+        "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
+        lambda **kwargs: captured.update(credential_tool_id=kwargs["tool_id"]),
+    )
 
     result = CliRunner().invoke(
         studio,
@@ -102,6 +106,8 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
             "client-id",
             "--vefaas-app-name",
             "studio-app",
+            "--skill-creator-tool-id",
+            "skill-code-env-id",
             "--iam-role",
             "trn:iam::role/test",
             "--gateway-name",
@@ -120,6 +126,8 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert veadk_environments["VEIDENTITY_REGION"] == expected_identity_region
     assert "VEADK_STUDIO_ADMINS" not in veadk_environments
     assert "VEADK_STUDIO_DEVELOPERS" not in veadk_environments
+    assert veadk_environments["VEADK_SKILL_CREATOR_TOOL_ID"] == "skill-code-env-id"
+    assert captured["credential_tool_id"] == "skill-code-env-id"
     assert f"{expected_region}/{expected_project}" in result.output
     assert ("Warning:" in result.output) == (
         expected_identity_region != expected_region

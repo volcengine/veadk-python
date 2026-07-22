@@ -75,6 +75,10 @@ import type { AgentDraft } from "./create/types";
 import type { DeploymentTaskUpdate } from "./ui/ProjectPreview";
 import { DeploymentErrorMessage } from "./ui/DeploymentErrorMessage";
 import { TextShimmer } from "./ui/text-shimmer/TextShimmer";
+import { createSkillJob, deleteSkillJob } from "./ui/skill-create/api";
+import { SkillCreateWorkspace } from "./ui/skill-create/SkillCreateWorkspace";
+import type { SkillCreationJob } from "./ui/skill-create/types";
+import type { NewChatMode } from "./ui/new-chat-modes/types";
 import defaultSiteLogo from "./assets/volcengine.svg";
 
 // Breadcrumb root label for the create flow and the per-mode leaf labels.
@@ -558,6 +562,9 @@ export default function App() {
       [sid]: typeof updater === "function" ? updater(m[sid] ?? []) : updater,
     }));
   const [input, setInput] = useState("");
+  const [newChatMode, setNewChatMode] = useState<NewChatMode>("agent");
+  const [skillJob, setSkillJob] = useState<SkillCreationJob | null>(null);
+  const [skillCreating, setSkillCreating] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [invocation, setInvocation] = useState<FrontendInvocation>(emptyInvocation);
   const [agentInfo, setAgentInfo] = useState<AgentInfo | null>(null);
@@ -648,6 +655,16 @@ export default function App() {
       } else if (item.uri) {
         void deleteMedia(appName, item.uri).catch((e) => setError(String(e)));
       }
+    }
+  }
+
+  function discardSkillCreation() {
+    const job = skillJob;
+    setSkillJob(null);
+    if (job) {
+      void deleteSkillJob(job.id).catch((cause) => {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      });
     }
   }
 
@@ -1083,6 +1100,9 @@ export default function App() {
   function startNewChat() {
     setError("");
     setGreeting(pickGreeting());
+    setNewChatMode("agent");
+    discardSkillCreation();
+    setSkillCreating(false);
     const abandonedSession = sessionId && turns.length === 0 && attachments.length > 0
       ? sessionId
       : "";
@@ -1119,6 +1139,8 @@ export default function App() {
     setError("");
     setInitializingSession(false);
     setPendingTurns([]);
+    setNewChatMode("agent");
+    discardSkillCreation();
     setInvocation(emptyInvocation());
     setSessionId(id);
     // Already have this session's turns (it's cached, or streaming in the
@@ -1590,6 +1612,22 @@ export default function App() {
             value={input}
             onChange={setInput}
             onSubmit={() => {
+              if (newChatMode === "skill-create") {
+                const prompt = input.trim();
+                if (!prompt || skillCreating) return;
+                setSkillCreating(true);
+                setError("");
+                void createSkillJob(prompt)
+                  .then((job) => {
+                    setSkillJob(job);
+                    setInput("");
+                  })
+                  .catch((cause) => {
+                    setError(cause instanceof Error ? cause.message : String(cause));
+                  })
+                  .finally(() => setSkillCreating(false));
+                return;
+              }
               const text = input;
               const atts = attachments;
               const selectedInvocation = invocation;
@@ -1599,8 +1637,8 @@ export default function App() {
               send(text, atts, selectedInvocation);
               releaseAttachmentPreviews(atts);
             }}
-            disabled={!appName || !userId}
-            busy={conversationBusy}
+            disabled={!userId || (newChatMode === "agent" && !appName)}
+            busy={newChatMode === "skill-create" ? skillCreating : conversationBusy}
             showMeta={turns.length > 0}
             attachments={attachments}
             skills={availableSkills}
@@ -1610,6 +1648,28 @@ export default function App() {
             onInvocationChange={setInvocation}
             onAddFiles={addFiles}
             onRemoveAttachment={removeDraftAttachment}
+            newChatMode={newChatMode}
+            showModeSelector={
+              turns.length === 0 && skillJob === null && canCreateAgents
+            }
+            onModeChange={(mode) => {
+              setNewChatMode(mode);
+              setError("");
+              if (mode === "skill-create") {
+                setInvocation(emptyInvocation());
+                const abandonedSession =
+                  sessionId && turns.length === 0 && attachments.length > 0
+                    ? sessionId
+                    : "";
+                discardDraftAttachments(attachments);
+                setAttachments([]);
+                if (abandonedSession) {
+                  viewSidRef.current = "";
+                  setSessionId("");
+                  void abandonDraftSession(abandonedSession);
+                }
+              }
+            }}
           />
         );
         return (
@@ -1768,22 +1828,32 @@ export default function App() {
               <TemplateCreate onBack={() => setCreateView("menu")} onCreate={onCreate} />
             ) : visibleCreateView === "workflow" ? (
               <WorkflowCreate onBack={() => setCreateView("menu")} onCreate={onCreate} />
+            ) : turns.length === 0 && skillJob ? (
+              <SkillCreateWorkspace
+                initialJob={skillJob}
+                onStartOver={() => {
+                  discardSkillCreation();
+                  setError("");
+                }}
+              />
             ) : turns.length === 0 ? (
               <>
                 <div className="welcome">
                   <TextShimmer as="h1" className="welcome-title" duration={4.8} spread={22}>
-                    {greeting}
+                    {newChatMode === "skill-create" ? "想创建一个什么 Skill？" : greeting}
                   </TextShimmer>
                   {composer}
                 </div>
                 {/* Show the agent's structure as soon as it's selected, before
                     any conversation — only renders when it has sub-agents. */}
-                <AgentTopology
-                  appName={appName}
-                  activeAgent={activeAgent}
-                  seenAgents={seenAgents}
-                  execPath={execPath}
-                />
+                {newChatMode === "agent" ? (
+                  <AgentTopology
+                    appName={appName}
+                    activeAgent={activeAgent}
+                    seenAgents={seenAgents}
+                    execPath={execPath}
+                  />
+                ) : null}
               </>
             ) : (
               <>
