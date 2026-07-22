@@ -412,6 +412,7 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
             )
             tool_exprs.append(v)
 
+    registry_var = ""
     if draft.a2aRegistry.enabled:
         _add_import(
             acc, "from veadk.a2a.registry_client import registry_config_from_env"
@@ -681,7 +682,7 @@ from google.adk.agents import RunConfig
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.run_config import StreamingMode
 from google.adk.apps.app import App
-from google.adk.cli.api_server import RunAgentRequest
+from google.adk.cli.adk_web_server import RunAgentRequest
 from google.adk.runners import Runner as AdkRunner
 from google.adk.utils.context_utils import Aclosing
 from google.genai import types
@@ -809,6 +810,8 @@ class _RuntimeServices:
 
 
 def _dynamic_runner(services: _RuntimeServices, *, app_name: str, root_agent: BaseAgent, prompt: str):
+    if services.session_service is None:
+        raise RuntimeError("ADK session service is unavailable")
     run_agent = _spawn_dynamic_a2a_agent(root_agent, prompt)
     agent_app = App(name=app_name, root_agent=run_agent, plugins=[])
     return AdkRunner(
@@ -876,7 +879,8 @@ def enable_dynamic_a2a_tools(app: FastAPI, root_agent: BaseAgent) -> None:
         return
 
     services = _RuntimeServices(app)
-    if services.session_service is None or not _has_a2a_registry_config(root_agent):
+    session_service = services.session_service
+    if session_service is None or not _has_a2a_registry_config(root_agent):
         return
 
     @app.post("/run", response_model=None)
@@ -944,7 +948,7 @@ def enable_dynamic_a2a_tools(app: FastAPI, root_agent: BaseAgent) -> None:
         custom_metadata = _run_request_custom_metadata(req)
 
         if not runner.auto_create_session:
-            session = await services.session_service.get_session(
+            session = await session_service.get_session(
                 app_name=app_name,
                 user_id=req.user_id,
                 session_id=req.session_id,
@@ -1006,13 +1010,13 @@ def enable_dynamic_a2a_tools(app: FastAPI, root_agent: BaseAgent) -> None:
         prompt = await _invoke_text(request)
         content = types.UserContent(parts=[types.Part(text=prompt or "")])
 
-        session = await services.session_service.get_session(
+        session = await session_service.get_session(
             app_name=app_name,
             user_id=user_id,
             session_id=session_id,
         )
         if not session:
-            await services.session_service.create_session(
+            await session_service.create_session(
                 app_name=app_name,
                 user_id=user_id,
                 session_id=session_id,
