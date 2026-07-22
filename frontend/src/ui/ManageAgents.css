@@ -1,7 +1,7 @@
 .manage {
   max-width: 760px;
   margin: 0 auto;
-  padding: 28px 24px 48px;
+  padding: 28px 24px 16px;
   width: 100%;
   overflow-y: auto;
 }
@@ -33,15 +33,114 @@
   gap: 8px;
 }
 
+.manage-region-picker {
+  position: relative;
+}
+
 .manage-region {
-  padding: 7px 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 88px;
+  height: 34px;
+  padding: 0 10px;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 550;
   color: hsl(var(--foreground));
   background: hsl(var(--card));
   border: 1px solid hsl(var(--border));
   border-radius: var(--radius);
   cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.manage-region:hover,
+.manage-region[aria-expanded="true"] {
+  background: hsl(var(--foreground) / 0.04);
+  border-color: hsl(var(--foreground) / 0.2);
+}
+
+.manage-region:focus-visible {
+  outline: none;
+  border-color: hsl(var(--ring));
+  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.14);
+}
+
+.manage-region-chevron {
+  width: 15px;
+  height: 15px;
+  color: hsl(var(--muted-foreground));
+  transition: transform 160ms ease;
+}
+
+.manage-region-chevron.is-open {
+  transform: rotate(180deg);
+}
+
+.manage-region-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 31;
+  width: 128px;
+  padding: 6px;
+  background: hsl(var(--panel));
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  box-shadow:
+    0 12px 32px hsl(var(--foreground) / 0.14),
+    0 2px 8px hsl(var(--foreground) / 0.06);
+  animation: manage-region-pop 140ms ease-out;
+}
+
+.manage-region-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 36px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 100ms ease;
+}
+
+.manage-region-option:hover,
+.manage-region-option:focus-visible {
+  outline: none;
+  background: hsl(var(--foreground) / 0.06);
+}
+
+.manage-region-option.is-selected {
+  font-weight: 600;
+  background: hsl(var(--foreground) / 0.04);
+}
+
+.manage-region-option svg {
+  width: 15px;
+  height: 15px;
+  color: hsl(var(--primary));
+}
+
+@keyframes manage-region-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .manage-refresh {

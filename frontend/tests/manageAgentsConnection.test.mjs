@@ -39,3 +39,19 @@ test("runtime connection probing is shared with the Agent selector", () => {
   assert.match(connectionsSource, /addRuntimeConnection\(/);
   assert.match(connectionsSource, /return remoteAppId\(connection\.id, apps\[0\]\)/);
 });
+
+test("management defaults to Beijing without trailing list whitespace", () => {
+  assert.match(manageSource, /useState<string>\("cn-beijing"\)/);
+  assert.match(manageSource, /\{ value: "cn-beijing", label: "北京" \}/);
+  assert.match(manageSource, /\{ value: "cn-shanghai", label: "上海" \}/);
+  assert.doesNotMatch(manageSource, /value: "all"/);
+  assert.match(manageSource, /role="listbox" aria-label="区域"/);
+  assert.match(manageSource, /role="option"[\s\S]*?aria-selected=\{selected\}/);
+  assert.match(manageStyles, /\.manage-region-menu\s*\{[\s\S]*?border-radius:\s*12px;/);
+  assert.match(manageSource, /列出你有权管理的 AgentKit Runtime\s*<\/p>/);
+  assert.doesNotMatch(manageSource, /列出你有权管理的 AgentKit Runtime。/);
+  assert.match(
+    manageStyles,
+    /\.manage\s*\{[\s\S]*?padding:\s*28px 24px 16px;/,
+  );
+});

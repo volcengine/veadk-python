@@ -805,9 +805,10 @@ export interface ManagedRuntime {
   region: string;
 }
 
-/** List AgentKit runtimes the server authorizes this user to manage.
- *  `region="all"` merges results from all supported regions. */
-export async function getMyRuntimes(region = "all"): Promise<ManagedRuntime[]> {
+/** List AgentKit runtimes the server authorizes this user to manage. */
+export async function getMyRuntimes(
+  region = "cn-beijing",
+): Promise<ManagedRuntime[]> {
   const res = await apiFetch(`/web/my-runtimes?region=${encodeURIComponent(region)}`);
   if (!res.ok) throw new Error(`加载失败 (${res.status})`);
   const d = (await res.json()) as { runtimes?: ManagedRuntime[] };
