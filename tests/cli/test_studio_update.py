@@ -269,7 +269,7 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
     assert isinstance(update, dict)
     assert update["application_id"] == "app-id"
     assert update["function_id"] == "function-app-id"
-    assert update["environment_overrides"] is None
+    assert update["environment_overrides"] == {"AGENTKIT_SANDBOX_REGION": "cn-beijing"}
 
 
 def test_studio_update_rejects_ambiguous_name_before_build(
@@ -416,7 +416,10 @@ def test_studio_update_explicit_branding_overrides_cloud_values(
     assert search["project"] == "default"
     update = captured["update"]
     assert isinstance(update, dict)
-    assert update["environment_overrides"] == {"VEADK_SITE_TITLE": "新标题"}
+    assert update["environment_overrides"] == {
+        "AGENTKIT_SANDBOX_REGION": "cn-beijing",
+        "VEADK_SITE_TITLE": "新标题",
+    }
 
 
 def test_studio_update_only_overrides_explicit_sandbox_tool_id(
@@ -470,7 +473,10 @@ def test_studio_update_only_overrides_explicit_sandbox_tool_id(
     )
 
     assert result.exit_code == 0, result.output
-    assert captured["environment_overrides"] == {"SANDBOX_CHAT_CODEX": "chat-tool-new"}
+    assert captured["environment_overrides"] == {
+        "AGENTKIT_SANDBOX_REGION": "cn-beijing",
+        "SANDBOX_CHAT_CODEX": "chat-tool-new",
+    }
 
 
 def test_update_application_code_bundle_merges_only_explicit_environment(

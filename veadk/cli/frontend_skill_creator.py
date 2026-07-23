@@ -756,8 +756,11 @@ def ensure_skill_creator_model_credential(
 class SkillCreatorService:
     """Coordinate A/B Skill generation in independent AgentKit sandboxes."""
 
-    def __init__(self, tool_id: str | None = None) -> None:
+    def __init__(self, tool_id: str | None = None, region: str | None = None) -> None:
         self._configured_tool_id = (tool_id or "").strip()
+        self._region = (
+            region or os.getenv("AGENTKIT_SANDBOX_REGION") or _REGION
+        ).strip()
 
     def capabilities(self) -> dict[str, Any]:
         """Return fixed model capabilities without exposing server credentials."""
@@ -766,7 +769,7 @@ class SkillCreatorService:
         reason = "管理员未配置"
         if tool_id:
             try:
-                tool = AgentkitToolsClient(region=_REGION).get_tool(
+                tool = AgentkitToolsClient(region=self._region).get_tool(
                     tools_types.GetToolRequest(ToolId=tool_id)
                 )
                 envs = {item.key: item.value for item in tool.envs or []}
@@ -964,7 +967,7 @@ class SkillCreatorService:
         _ensure_bucket_ready(
             bucket_name=bucket,
             prefix=prefix,
-            region=_REGION,
+            region=self._region,
             auto_bucket=not bool(configured_bucket),
             assume_yes=True,
             assume_no=False,
@@ -977,10 +980,10 @@ class SkillCreatorService:
                 str(archive_path), name, temp_dir
             )
             tos_url = _tos_upload(
-                hashed_path, bucket, prefix, _REGION, verify_bucket=False
+                hashed_path, bucket, prefix, self._region, verify_bucket=False
             )
 
-        client = AgentkitSkillsClient(region=_REGION)
+        client = AgentkitSkillsClient(region=self._region)
         effective_project = (
             project_name or os.getenv("VEADK_SKILL_CREATOR_PROJECT_NAME") or None
         )
@@ -1076,7 +1079,7 @@ class SkillCreatorService:
         request: str,
     ) -> dict[str, str]:
         del label
-        client = AgentkitToolsClient(region=_REGION)
+        client = AgentkitToolsClient(region=self._region)
         session_id = self._session_id(job_id, candidate_id)
         session_envs = build_exec_session_envs(
             model_name=model,
@@ -1198,7 +1201,7 @@ class SkillCreatorService:
         return result
 
     def _find_session(self, tool_id: str, user_session_id: str) -> dict[str, str]:
-        response = AgentkitToolsClient(region=_REGION).list_sessions(
+        response = AgentkitToolsClient(region=self._region).list_sessions(
             tools_types.ListSessionsRequest(
                 ToolId=tool_id,
                 MaxResults=10,
@@ -1227,7 +1230,7 @@ class SkillCreatorService:
         failed = 0
         for tool_id, instance_id in instances:
             try:
-                AgentkitToolsClient(region=_REGION).delete_session(
+                AgentkitToolsClient(region=self._region).delete_session(
                     tools_types.DeleteSessionRequest(
                         ToolId=tool_id, SessionId=instance_id
                     )
@@ -1239,7 +1242,7 @@ class SkillCreatorService:
 
     def _validate_tool(self, tool_id: str) -> str:
         try:
-            tool = AgentkitToolsClient(region=_REGION).get_tool(
+            tool = AgentkitToolsClient(region=self._region).get_tool(
                 tools_types.GetToolRequest(ToolId=tool_id)
             )
         except Exception as error:

@@ -3788,6 +3788,7 @@ def frontend_deploy(
         veadk_environments["VEADK_STUDIO_DEVELOPERS"] = studio_developers
     veadk_environments["SANDBOX_CHAT_CODEX"] = chat_codex_tool_id
     veadk_environments["SANDBOX_SKILL_CREATOR"] = skill_creator_tool_id
+    veadk_environments["AGENTKIT_SANDBOX_REGION"] = region
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
 
@@ -4061,7 +4062,7 @@ def frontend_update(
             region=target.region,
             project_name=target.project,
         )
-        environment_overrides = {}
+        environment_overrides = {"AGENTKIT_SANDBOX_REGION": target.region}
         if branding_title is not None:
             environment_overrides["VEADK_SITE_TITLE"] = branding_title
         if sandbox_chat_codex_tool_id is not None:

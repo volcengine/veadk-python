@@ -278,7 +278,9 @@ then searches the Beijing and Shanghai Identity regions. A cross-region match
 emits a warning and continues. `--project` selects the VeFaaS function project
 and defaults to `default`. For Shanghai deployments, the Function, APIG, and
 AgentKit resources remain in Shanghai while VeFaaS Application operations use
-the service's Beijing control-plane endpoint.
+the service's Beijing control-plane endpoint. The deployed Function records the
+selected AgentKit Sandbox region so temporary chat and Skill-creation sessions
+query the same region as their CodeEnv Tools.
 
 To update an existing Studio deployment, run this command from a VeADK source
 checkout:

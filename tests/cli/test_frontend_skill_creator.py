@@ -465,3 +465,21 @@ def test_skill_creator_reads_only_dedicated_sandbox_tool_env(monkeypatch) -> Non
     monkeypatch.delenv("SANDBOX_SKILL_CREATOR")
     with pytest.raises(SkillCreatorError, match="管理员未配置"):
         SkillCreatorService()._tool_id()
+
+
+def test_skill_creator_uses_configured_sandbox_region(monkeypatch) -> None:
+    monkeypatch.setenv("AGENTKIT_SANDBOX_REGION", "cn-shanghai")
+    tool = SimpleNamespace(
+        tool_type="CodeEnv",
+        status="Ready",
+        envs=[
+            SimpleNamespace(key="CODEX_API_KEY", value=os.urandom(24).hex()),
+            SimpleNamespace(key="CODEX_BASE_URL", value=_MODEL_BASE_URL),
+        ],
+    )
+    with patch("veadk.cli.frontend_skill_creator.AgentkitToolsClient") as client_class:
+        client_class.return_value.get_tool.return_value = tool
+
+        SkillCreatorService(tool_id="tool-id")._validate_tool("tool-id")
+
+    client_class.assert_called_once_with(region="cn-shanghai")
