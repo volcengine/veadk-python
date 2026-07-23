@@ -50,8 +50,8 @@ def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
     [
         ("tool", "Failed to provision the AgentKit chat CodeEnv Tool"),
         (
-            "relay",
-            "Failed to provision the AgentKit chat model credential relay",
+            "credential",
+            "Failed to provision the AgentKit chat model credential",
         ),
     ],
 )

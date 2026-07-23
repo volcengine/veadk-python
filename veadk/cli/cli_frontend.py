@@ -3738,7 +3738,7 @@ def frontend_deploy(
             raise click.ClickException(
                 f"AgentKit {purpose} CodeEnv Tool did not return a Tool ID."
             )
-        click.echo(f"Ensuring the AgentKit {purpose} model credential relay…")
+        click.echo(f"Ensuring the AgentKit {purpose} model credential…")
         try:
             ensure_skill_creator_model_credential(
                 tool_id=tool_id,
@@ -3753,10 +3753,10 @@ def frontend_deploy(
                 secrets=(ak, sk, session_token),
             )
             raise click.ClickException(
-                f"Failed to provision the AgentKit {purpose} model credential relay. "
+                f"Failed to provision the AgentKit {purpose} model credential. "
                 f"Underlying error:\n{detail}"
             ) from error
-        click.echo(f"AgentKit {purpose} model credential relay is ready.")
+        click.echo(f"AgentKit {purpose} model credential is ready.")
 
     chat_codex_tool_id = sandbox_tool_ids["chat"]
     skill_creator_tool_id = sandbox_tool_ids["skill"]

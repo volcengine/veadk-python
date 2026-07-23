@@ -210,7 +210,7 @@ VeADK provides several useful command line tools for faster deployment and optim
   two dedicated AgentKit CodeEnv Tools are created automatically for temporary
   chats and Skill creation unless their IDs are supplied with
   `--sandbox-chat-codex-tool-id` and `--sandbox-skill-creator-tool-id`; Tool or
-  credential-relay provisioning failures print the underlying error verbatim
+  model-credential provisioning failures print the underlying error verbatim
   after credential values are redacted
 - `veadk studio update --vefaas-app-name <app-name>`: build the frontend from a
   local VeADK source checkout and release it through the existing VeFaaS
