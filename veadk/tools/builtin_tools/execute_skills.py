@@ -12,11 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
+import os
 from typing import Optional
+from urllib import error, request
+from urllib.parse import urljoin
 
 from google.adk.tools import ToolContext
 
 from veadk.tools.builtin_tools._agentkit import (
+    ensure_agentkit_session_endpoint,
     get_agentkit_account_id,
     resolve_agentkit_tool_id,
 )
@@ -26,10 +31,184 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+_SKILL_API_COMPATIBILITY_STATUS_CODES = frozenset({404, 405})
+_SKILL_API_TIMEOUT = 900
+
+
+class _SkillApiCompatibilityMiss(Exception):
+    """Raised when the sandbox does not expose the new Skill HTTP API."""
+
+
+def _tool_user_session_id(tool_context: ToolContext) -> str:
+    invocation_context = tool_context._invocation_context
+    session_id = invocation_context.session.id
+    agent_name = invocation_context.agent.name
+    user_id = invocation_context.user_id
+    return agent_name + "_" + user_id + "_" + session_id
+
+
+def _tip_token_key(tool_context: ToolContext | None) -> str | None:
+    if tool_context is None:
+        return os.getenv("TIP_TOKEN_KEY") or None
+    state = tool_context.state or {}
+    return (
+        state.get("TIP_TOKEN_KEY")
+        or state.get("tip_token_key")
+        or os.getenv("TIP_TOKEN_KEY")
+        or None
+    )
+
+
+def _skill_api_enabled(env_vars: Optional[dict[str, str]]) -> bool:
+    protocol = os.getenv("VEADK_EXECUTE_SKILLS_PROTOCOL", "auto").strip().lower()
+    if protocol in {"legacy", "runcode", "run_code"}:
+        return False
+    # Per-execution env vars are guaranteed by the legacy RunCode path. The new
+    # Skill HTTP API does not accept arbitrary per-request env overrides.
+    return not env_vars
+
+
+def _skill_api_url(endpoint: str, path: str) -> str:
+    if not endpoint:
+        raise _SkillApiCompatibilityMiss("AgentKit session endpoint is empty")
+    return urljoin(endpoint.rstrip("/") + "/", path.lstrip("/"))
+
+
+def _post_skill_api_json(
+    *,
+    endpoint: str,
+    path: str,
+    payload: dict[str, object],
+    tip_token_key: str | None,
+    timeout: int,
+) -> bytes:
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    if tip_token_key:
+        headers["X-Tip-Token-Key"] = tip_token_key
+
+    req = request.Request(
+        _skill_api_url(endpoint, path),
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=timeout) as response:
+            return response.read()
+    except error.HTTPError as exc:
+        if exc.code in _SKILL_API_COMPATIBILITY_STATUS_CODES:
+            raise _SkillApiCompatibilityMiss(
+                f"Skill HTTP API is not available: {exc.code}"
+            ) from exc
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"Skill HTTP API request failed with HTTP {exc.code}: {detail}"
+        ) from exc
+    except error.URLError as exc:
+        raise _SkillApiCompatibilityMiss(
+            f"Skill HTTP API endpoint is not reachable: {exc.reason}"
+        ) from exc
+
+
+def _parse_skill_execute_response(raw: bytes) -> str:
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except json.JSONDecodeError:
+        return raw.decode("utf-8", errors="replace")
+
+    if isinstance(payload, dict):
+        if isinstance(payload.get("content"), str):
+            return payload["content"]
+        data = payload.get("data")
+        if isinstance(data, dict) and isinstance(data.get("content"), str):
+            return data["content"]
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _parse_skill_stream_response(raw: bytes) -> str:
+    chunks: list[str] = []
+    event_name = "message"
+    data_lines: list[str] = []
+
+    def flush_event() -> None:
+        nonlocal event_name, data_lines
+        if not data_lines:
+            event_name = "message"
+            return
+        data = "\n".join(data_lines)
+        try:
+            payload = json.loads(data)
+        except json.JSONDecodeError:
+            payload = {}
+
+        if event_name == "error":
+            content = payload.get("content") if isinstance(payload, dict) else None
+            if isinstance(content, str):
+                raise RuntimeError(content)
+            raise RuntimeError(data)
+        if isinstance(payload, dict) and payload.get("type") == "text":
+            content = payload.get("content")
+            if isinstance(content, str):
+                chunks.append(content)
+
+        event_name = "message"
+        data_lines = []
+
+    for line in raw.decode("utf-8", errors="replace").splitlines():
+        if not line:
+            flush_event()
+            continue
+        if line.startswith(":"):
+            continue
+        if line.startswith("event:"):
+            event_name = line[len("event:") :].strip()
+        elif line.startswith("data:"):
+            data_lines.append(line[len("data:") :].strip())
+
+    flush_event()
+    return "".join(chunks)
+
+
+def _execute_skills_via_skill_api(
+    *,
+    workflow_prompt: str,
+    tool_id: str,
+    tool_context: ToolContext,
+    prefer_stream: bool,
+    timeout: int,
+) -> str:
+    try:
+        endpoint = ensure_agentkit_session_endpoint(
+            tool_id=tool_id,
+            tool_user_session_id=_tool_user_session_id(tool_context),
+            tool_state=tool_context.state if tool_context else None,
+            ttl=max(timeout, 1800),
+        )
+    except Exception as exc:
+        raise _SkillApiCompatibilityMiss(
+            f"AgentKit session endpoint is not available: {exc}"
+        ) from exc
+    path = "/v1/skills/stream" if prefer_stream else "/v1/skills/execute"
+    raw = _post_skill_api_json(
+        endpoint=endpoint,
+        path=path,
+        payload={"prompt": workflow_prompt},
+        tip_token_key=_tip_token_key(tool_context),
+        timeout=timeout,
+    )
+    if prefer_stream:
+        return _parse_skill_stream_response(raw)
+    return _parse_skill_execute_response(raw)
+
+
 def execute_skills(
     workflow_prompt: str,
     tool_context: ToolContext = None,
     env_vars: Optional[dict[str, str]] = None,
+    prefer_stream: bool = False,
 ) -> str:
     """Execute skills in a sandbox and return the output.
 
@@ -43,10 +222,22 @@ def execute_skills(
     Returns:
         str: The output of the code execution.
     """
-    timeout = 900
+    timeout = _SKILL_API_TIMEOUT
     tool_id = resolve_agentkit_tool_id("AGENTKIT_TOOL_ID_SKILLS")
-    account_id = get_agentkit_account_id(tool_context.state if tool_context else None)
 
+    if tool_context is not None and _skill_api_enabled(env_vars):
+        try:
+            return _execute_skills_via_skill_api(
+                workflow_prompt=workflow_prompt,
+                tool_id=tool_id,
+                tool_context=tool_context,
+                prefer_stream=prefer_stream,
+                timeout=timeout,
+            )
+        except _SkillApiCompatibilityMiss as exc:
+            logger.debug(f"Falling back to legacy SkillEnv execution: {exc}")
+
+    account_id = get_agentkit_account_id(tool_context.state if tool_context else None)
     extra_env_vars = {}
     if account_id:
         extra_env_vars["TOS_SKILLS_DIR"] = (

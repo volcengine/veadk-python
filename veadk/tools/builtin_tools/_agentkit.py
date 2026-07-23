@@ -206,3 +206,46 @@ def invoke_agentkit_exec_bash(
         header=header,
         scheme=scheme,
     )
+
+
+def ensure_agentkit_session_endpoint(
+    *,
+    tool_id: str,
+    tool_user_session_id: str,
+    tool_state: Optional[dict[str, Any]] = None,
+    ttl: int = 1800,
+    prefer_internal_endpoint: bool = False,
+) -> str:
+    """Create or reuse an AgentKit tool session and return its HTTP endpoint."""
+    from agentkit.sdk.tools import types as tools_types
+    from agentkit.sdk.tools.client import AgentkitToolsClient
+
+    _, region, _, _ = get_agentkit_endpoint_config()
+    ak, sk, header = get_agentkit_credentials(tool_state)
+    session_token = header.get("X-Security-Token", "")
+    client = AgentkitToolsClient(
+        access_key=ak,
+        secret_key=sk,
+        region=region,
+        session_token=session_token,
+    )
+    session = client.create_session(
+        tools_types.CreateSessionRequest(
+            ToolId=tool_id,
+            UserSessionId=tool_user_session_id,
+            Ttl=ttl,
+        )
+    )
+    session_id = session.session_id
+    if not session_id:
+        return session.internal_endpoint or session.endpoint or ""
+
+    current_session = client.get_session(
+        tools_types.GetSessionRequest(
+            ToolId=tool_id,
+            SessionId=session_id,
+        )
+    )
+    if prefer_internal_endpoint:
+        return current_session.internal_endpoint or current_session.endpoint or ""
+    return current_session.endpoint or current_session.internal_endpoint or ""
