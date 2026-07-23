@@ -205,6 +205,9 @@ VeADK provides several useful command line tools for faster deployment and optim
   policies; target `cn-beijing` (default) or `cn-shanghai` with
   `--region`, automatically locate the Identity user pool across Beijing and
   Shanghai, and select the VeFaaS project with `--project` (default `default`);
+  deployment credentials can come from explicit CLI options, the
+  `VOLCENGINE_ACCESS_KEY` / `VOLCENGINE_SECRET_KEY` environment variables, or
+  the `[default]` profile in `~/.volc/credentials`;
   Shanghai Functions, gateways, and AgentKit resources stay in Shanghai while
   VeFaaS Application operations use its Beijing control-plane endpoint; the
   selected region is also used for temporary-chat and Skill-creation sessions;

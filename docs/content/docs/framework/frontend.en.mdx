@@ -242,6 +242,12 @@ veadk studio deploy \
   --vefaas-app-name <app-name>
 ```
 
+Deployment credentials can be supplied explicitly with
+`--volcengine-access-key` / `--volcengine-secret-key`, through the current
+process's `VOLCENGINE_ACCESS_KEY` / `VOLCENGINE_SECRET_KEY` environment
+variables, or through the `[default]` profile in `~/.volc/credentials` when the
+other sources are absent.
+
 ### Custom Studio branding
 
 Use `--site-title` for a system name of up to six characters and `--site-logo`

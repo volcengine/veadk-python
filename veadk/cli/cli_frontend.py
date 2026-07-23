@@ -3501,6 +3501,48 @@ def _resolve_studio_identity_region(
     )
 
 
+def _resolve_studio_cloud_credentials(
+    access_key: str | None,
+    secret_key: str | None,
+    credentials_path: Path | None = None,
+) -> tuple[str, str]:
+    """Resolve Studio deploy credentials from CLI, environment, or ~/.volc."""
+    import configparser
+
+    resolved_access_key = access_key or os.getenv("VOLCENGINE_ACCESS_KEY", "")
+    resolved_secret_key = secret_key or os.getenv("VOLCENGINE_SECRET_KEY", "")
+    if resolved_access_key and resolved_secret_key:
+        return resolved_access_key, resolved_secret_key
+
+    path = credentials_path or Path.home() / ".volc" / "credentials"
+    if path.is_file():
+        parser = configparser.ConfigParser(interpolation=None)
+        try:
+            with path.open(encoding="utf-8") as credentials_file:
+                parser.read_file(credentials_file)
+        except (OSError, UnicodeError, configparser.Error) as error:
+            raise click.ClickException(
+                f"Failed to read Volcengine credentials file '{path}': {error}"
+            ) from error
+        default_profile = parser["default"] if parser.has_section("default") else {}
+        resolved_access_key = (
+            resolved_access_key or str(default_profile.get("access_key_id", "")).strip()
+        )
+        resolved_secret_key = (
+            resolved_secret_key
+            or str(default_profile.get("secret_access_key", "")).strip()
+        )
+
+    if resolved_access_key and resolved_secret_key:
+        return resolved_access_key, resolved_secret_key
+    raise click.ClickException(
+        "Volcengine credentials required: pass --volcengine-access-key/"
+        "--volcengine-secret-key, set VOLCENGINE_ACCESS_KEY/"
+        "VOLCENGINE_SECRET_KEY, or configure the [default] profile in "
+        "~/.volc/credentials."
+    )
+
+
 @studio.command("deploy")
 @click.option(
     "--user-pool-id",
@@ -3640,7 +3682,7 @@ def frontend_deploy(
     import tempfile
     import shutil
 
-    from veadk.config import getenv, veadk_environments
+    from veadk.config import veadk_environments
 
     try:
         branding_title = normalize_site_title(site_title)
@@ -3648,13 +3690,10 @@ def frontend_deploy(
     except ValueError as error:
         raise click.ClickException(str(error)) from error
 
-    ak = volcengine_access_key or getenv("VOLCENGINE_ACCESS_KEY")
-    sk = volcengine_secret_key or getenv("VOLCENGINE_SECRET_KEY")
-    if not ak or not sk:
-        raise click.ClickException(
-            "Volcengine credentials required: set VOLCENGINE_ACCESS_KEY/SECRET_KEY "
-            "or pass --volcengine-access-key/--volcengine-secret-key."
-        )
+    ak, sk = _resolve_studio_cloud_credentials(
+        volcengine_access_key,
+        volcengine_secret_key,
+    )
 
     identity_region = _resolve_studio_identity_region(
         access_key=ak,
