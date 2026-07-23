@@ -230,6 +230,11 @@ selected with `--sandbox-chat-codex-tool-id` and
 credential in KMS and binds only the relay URL and revocable ticket to both
 Tools. The VeFaaS Function receives only Tool IDs, never model credentials:
 
+If Tool or credential-relay provisioning fails, the CLI prints the underlying
+error verbatim, including its original line breaks, after redacting credential
+values. Use the service action, error code, request ID, and request details to
+identify the missing permission or account resource.
+
 ```bash
 veadk studio deploy \
   --user-pool-id <pool-id> \

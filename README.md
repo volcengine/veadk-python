@@ -209,7 +209,9 @@ VeADK provides several useful command line tools for faster deployment and optim
   deployed client skips the second OAuth consent confirmation after login;
   two dedicated AgentKit CodeEnv Tools are created automatically for temporary
   chats and Skill creation unless their IDs are supplied with
-  `--sandbox-chat-codex-tool-id` and `--sandbox-skill-creator-tool-id`
+  `--sandbox-chat-codex-tool-id` and `--sandbox-skill-creator-tool-id`; Tool or
+  credential-relay provisioning failures print the underlying error verbatim
+  after credential values are redacted
 - `veadk studio update --vefaas-app-name <app-name>`: build the frontend from a
   local VeADK source checkout and release it through the existing VeFaaS
   Application and Function. Omit `--region` and `--project` to search Beijing,

@@ -15,6 +15,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
+from uuid import uuid4
 
 import pytest
 from click.testing import CliRunner
@@ -42,6 +43,96 @@ def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
         lambda **_: None,
     )
+
+
+@pytest.mark.parametrize(
+    ("stage", "expected_prefix"),
+    [
+        ("tool", "Failed to provision the AgentKit chat CodeEnv Tool"),
+        (
+            "relay",
+            "Failed to provision the AgentKit chat model credential relay",
+        ),
+    ],
+)
+def test_studio_deploy_surfaces_redacted_provisioning_error_chain(
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+    expected_prefix: str,
+) -> None:
+    access_key = uuid4().hex
+    bearer_value = uuid4().hex
+    model_key = uuid4().hex
+    secret_key = uuid4().hex
+
+    def _fail(**_: object) -> str:
+        try:
+            raise ValueError(f"Authorization: Bearer {bearer_value}")
+        except ValueError as cause:
+            raise RuntimeError(
+                "CreateApiKeyCredentialProvider: AccessDenied\n"
+                f"Request: api_key={model_key}\n"
+                f"RequestId=req-123 {access_key}"
+            ) from cause
+
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._resolve_studio_identity_region",
+        lambda **kwargs: kwargs["deployment_region"],
+    )
+    if stage == "tool":
+        monkeypatch.setattr(
+            "veadk.cli.studio_sandbox_tools.ensure_studio_code_env_tool",
+            _fail,
+        )
+        tool_args: list[str] = []
+    else:
+        monkeypatch.setattr(
+            "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
+            _fail,
+        )
+        tool_args = [
+            "--sandbox-chat-codex-tool-id",
+            "chat-tool-id",
+            "--sandbox-skill-creator-tool-id",
+            "skill-tool-id",
+        ]
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "deploy",
+            "--user-pool-id",
+            "pool-id",
+            "--allowed-client-id",
+            "client-id",
+            "--vefaas-app-name",
+            "studio-app",
+            "--iam-role",
+            "trn:iam::role/test",
+            "--gateway-name",
+            "gateway",
+            "--volcengine-access-key",
+            access_key,
+            "--volcengine-secret-key",
+            secret_key,
+            *tool_args,
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert expected_prefix in result.output
+    assert (
+        "Underlying error:\nCreateApiKeyCredentialProvider: AccessDenied"
+        in result.output
+    )
+    assert "Request: api_key=***" in result.output
+    assert "RequestId=req-123" in result.output
+    assert "Caused by:\nAuthorization: Bearer ***" in result.output
+    assert access_key not in result.output
+    assert bearer_value not in result.output
+    assert model_key not in result.output
+    assert secret_key not in result.output
+    assert "***" in result.output
 
 
 @pytest.mark.parametrize(
