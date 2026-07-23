@@ -388,13 +388,12 @@ def test_runtime_detail_proxy_and_delete_enforce_role_and_owner(
             ).status_code
             == 404
         )
-        assert (
-            client.get(
-                "/web/runtime-proxy/runtime-other/list-apps?region=cn-beijing",
-                headers=developer_headers,
-            ).status_code
-            == 404
+        proxy_forbidden = client.get(
+            "/web/runtime-proxy/runtime-other/list-apps?region=cn-beijing",
+            headers=developer_headers,
         )
+        assert proxy_forbidden.status_code == 404
+        assert proxy_forbidden.json()["detail"] == "runtime_access_denied"
         assert (
             client.post(
                 "/web/delete-runtime",

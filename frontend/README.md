@@ -48,7 +48,9 @@ server that `veadk frontend` launches — no separate backend.
 - **Runtime management**: inspect or delete deployed runtimes, or connect one
   directly so the global Agent selector switches to that Runtime. The cloud
   selector gives each two-line Runtime row explicit connect and info actions;
-  the info action opens a tabbed Agent/Runtime panel. Long descriptions, names,
+  the info action opens a tabbed Agent/Runtime panel. Studio distinguishes its
+  own ownership checks from Agent Server compatibility and authentication
+  failures when a connection cannot be established. Long descriptions, names,
   component summaries, IDs, and environment values stay inside the scrollable panel.
 - **Custom-agent workbench**: configure an agent with a rich Markdown
   system-prompt editor (including heading and list shortcuts), then debug with

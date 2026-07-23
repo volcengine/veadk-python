@@ -238,8 +238,30 @@ export async function listApps(): Promise<string[]> {
 /** A runtime exists but the current identity is not allowed to use it. */
 export class RuntimeAccessDeniedError extends Error {
   constructor() {
-    super("你没有权限访问该 Runtime，请刷新列表后重试。");
+    super("当前账号无权访问该 Runtime，请刷新列表或重新登录后重试。");
     this.name = "RuntimeAccessDeniedError";
+  }
+}
+
+/** The Runtime is visible to Studio, but its Agent Server cannot be probed. */
+export class RuntimeProbeError extends Error {
+  constructor(
+    message: string,
+    readonly unsupported = false,
+  ) {
+    super(message);
+    this.name = "RuntimeProbeError";
+  }
+}
+
+async function runtimeProxyErrorCode(response: Response): Promise<string> {
+  try {
+    const payload = (await response.clone().json()) as {
+      detail?: unknown;
+    };
+    return typeof payload.detail === "string" ? payload.detail : "";
+  } catch {
+    return "";
   }
 }
 
@@ -251,8 +273,22 @@ export async function fetchRemoteApps(
   ep?: AdkEndpoint,
 ): Promise<string[]> {
   const res = await apiFetch(`/list-apps`, {}, ep ?? { base, apiKey });
-  if ((res.status === 403 || res.status === 404) && ep?.runtimeId) {
+  const runtimeErrorCode = ep?.runtimeId
+    ? await runtimeProxyErrorCode(res)
+    : "";
+  if (ep?.runtimeId && runtimeErrorCode === "runtime_access_denied") {
     throw new RuntimeAccessDeniedError();
+  }
+  if (ep?.runtimeId && res.status === 404) {
+    throw new RuntimeProbeError(
+      "该 Runtime 的 Agent Server 未提供连接接口，请确认 Runtime 已就绪且版本兼容。",
+      true,
+    );
+  }
+  if (ep?.runtimeId && (res.status === 401 || res.status === 403)) {
+    throw new RuntimeProbeError(
+      "Runtime 服务拒绝了连接请求，请检查 Runtime 的鉴权配置。",
+    );
   }
   if (!res.ok) {
     throw new Error(await httpErrorMessage(res, "读取 Agent 列表失败"));
@@ -1028,7 +1064,12 @@ export async function probeRuntimeApps(
     const res = await fetchRemoteApps("", "", { runtimeId, region });
     return res;
   } catch (error) {
-    if (error instanceof RuntimeAccessDeniedError) throw error;
+    if (
+      error instanceof RuntimeAccessDeniedError ||
+      error instanceof RuntimeProbeError
+    ) {
+      throw error;
+    }
     return null;
   }
 }
