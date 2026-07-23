@@ -125,6 +125,30 @@ def _redact_debug_text(text: str) -> str:
     )
 
 
+def _safe_exception_detail(
+    error: BaseException,
+    *,
+    secrets: Iterable[str | None] = (),
+) -> str:
+    """Return exception messages verbatim except for credential redaction."""
+    parts: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = _ANSI_ESCAPE_RE.sub("", str(current)).strip()
+        for secret in secrets:
+            if secret:
+                message = message.replace(secret, "***")
+        message = _redact_debug_text(message)
+        if not message:
+            message = type(current).__name__
+        if message not in parts:
+            parts.append(message)
+        current = current.__cause__ or current.__context__
+    return "\nCaused by:\n".join(parts)
+
+
 def _claims_from_forwarded_jwt(authorization: str | None) -> dict | None:
     """Decode the JWT an upstream API gateway forwarded in the Authorization
     header, WITHOUT re-verifying its signature.
@@ -3695,9 +3719,13 @@ def frontend_deploy(
                 session_token=session_token or "",
             )
         except Exception as error:
+            detail = _safe_exception_detail(
+                error,
+                secrets=(ak, sk, session_token),
+            )
             raise click.ClickException(
                 f"Failed to provision the AgentKit {purpose} CodeEnv Tool. "
-                "Verify account permissions and AgentKit service status."
+                f"Underlying error:\n{detail}"
             ) from error
         click.echo(f"AgentKit {purpose} CodeEnv Tool is ready.")
 
@@ -3720,9 +3748,13 @@ def frontend_deploy(
                 session_token=session_token,
             )
         except Exception as error:
+            detail = _safe_exception_detail(
+                error,
+                secrets=(ak, sk, session_token),
+            )
             raise click.ClickException(
                 f"Failed to provision the AgentKit {purpose} model credential relay. "
-                "Verify the Tool ID, account permissions, and AgentKit service status."
+                f"Underlying error:\n{detail}"
             ) from error
         click.echo(f"AgentKit {purpose} model credential relay is ready.")
 
