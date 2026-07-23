@@ -35,10 +35,18 @@ test("first message renders before session creation finishes", () => {
   assert.match(appSource, /sid = await ensureSession\(!createsSession\)/);
   assert.match(
     appSource,
-    /setTurnsFor\(sid, optimisticTurns\);[\s\S]*?setSessionId\(sid\);[\s\S]*?setInitializingSession\(false\);/,
+    /setTurnsFor\(sid,\s*\(current\)\s*=>\s*createsSession\s*\?\s*optimisticTurns\s*:\s*\[\.\.\.current,\s*\.\.\.optimisticTurns\],\s*\);[\s\S]*?setSessionId\(sid\);[\s\S]*?setInitializingSession\(false\);/,
   );
   assert.match(appSource, /const conversationBusy = busy \|\| initializingSession/);
   assert.match(composerSource, /sessionInitializing \? "初始化中" : sessionId \|\| "—"/);
+});
+
+test("subsequent messages append to the active session transcript", () => {
+  assert.match(
+    appSource,
+    /createsSession\s*\?\s*optimisticTurns\s*:\s*\[\.\.\.current,\s*\.\.\.optimisticTurns\]/,
+  );
+  assert.doesNotMatch(appSource, /setTurnsFor\(sid, optimisticTurns\);/);
 });
 
 test("new-session failure restores the submitted text", () => {

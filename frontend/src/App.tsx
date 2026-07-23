@@ -1504,7 +1504,9 @@ export default function App() {
       return;
     }
 
-    setTurnsFor(sid, optimisticTurns);
+    setTurnsFor(sid, (current) =>
+      createsSession ? optimisticTurns : [...current, ...optimisticTurns],
+    );
     if (createsSession) {
       viewSidRef.current = sid;
       setSessionId(sid);
