@@ -205,6 +205,8 @@ VeADK provides several useful command line tools for faster deployment and optim
   policies; target `cn-beijing` (default) or `cn-shanghai` with
   `--region`, automatically locate the Identity user pool across Beijing and
   Shanghai, and select the VeFaaS project with `--project` (default `default`);
+  Shanghai Functions, gateways, and AgentKit resources stay in Shanghai while
+  VeFaaS Application operations use its Beijing control-plane endpoint;
   custom local or remote logo images are bundled into the deployment; the
   deployed client skips the second OAuth consent confirmation after login;
   two dedicated AgentKit CodeEnv Tools are created automatically for temporary

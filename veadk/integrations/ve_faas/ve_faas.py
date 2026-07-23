@@ -43,6 +43,8 @@ from veadk.utils.volcengine_sign import ve_request
 
 logger = get_logger(__name__)
 
+_APPLICATION_CONTROL_PLANE_REGION = "cn-beijing"
+
 
 class VeFaaS:
     def __init__(
@@ -179,7 +181,7 @@ class VeFaaS:
             sk=self.sk,
             service="vefaas",
             version="2021-03-03",
-            region="cn-beijing",
+            region=_APPLICATION_CONTROL_PLANE_REGION,
             host="open.volcengineapi.com",
         )
 
@@ -199,7 +201,7 @@ class VeFaaS:
             sk=self.sk,
             service="vefaas",
             version="2021-03-03",
-            region=self.region,
+            region=_APPLICATION_CONTROL_PLANE_REGION,
             host="open.volcengineapi.com",
         )
 
@@ -240,7 +242,7 @@ class VeFaaS:
             sk=self.sk,
             service="vefaas",
             version="2021-03-03",
-            region=self.region,
+            region=_APPLICATION_CONTROL_PLANE_REGION,
             host="open.volcengineapi.com",
         )
         return response["Result"]["Status"], response
@@ -273,7 +275,7 @@ class VeFaaS:
                     sk=self.sk,
                     service="vefaas",
                     version="2021-03-03",
-                    region=self.region,
+                    region=_APPLICATION_CONTROL_PLANE_REGION,
                     host="open.volcengineapi.com",
                 )
                 result = response.get("Result", {})
@@ -486,7 +488,7 @@ class VeFaaS:
                 sk=self.sk,
                 service="vefaas",
                 version="2021-03-03",
-                region="cn-beijing",
+                region=_APPLICATION_CONTROL_PLANE_REGION,
                 host="open.volcengineapi.com",
             )
         except Exception as e:
@@ -870,7 +872,7 @@ class VeFaaS:
             sk=self.sk,
             service="vefaas",
             version="2021-03-03",
-            region="cn-beijing",
+            region=_APPLICATION_CONTROL_PLANE_REGION,
             host="open.volcengineapi.com",
         )
 

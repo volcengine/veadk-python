@@ -147,7 +147,7 @@ def test_find_studio_deployments_searches_regions_and_filters_project(
     ]
 
 
-def test_list_applications_uses_client_region(
+def test_list_applications_uses_application_control_plane_region(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     requested_regions: list[str] = []
@@ -163,7 +163,7 @@ def test_list_applications_uses_client_region(
     monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.ve_request", _request)
 
     assert service._list_application(app_name="studio-app") == []
-    assert requested_regions == ["cn-shanghai"]
+    assert requested_regions == ["cn-beijing"]
 
 
 def test_load_deployed_site_logo_uses_current_branding_url(
@@ -505,6 +505,36 @@ def test_update_application_code_bundle_merges_only_explicit_environment(
         "EXISTING": "kept",
         "VEADK_SITE_TITLE": "新标题",
     }
+
+
+def test_application_control_plane_uses_beijing_for_shanghai_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+    service = object.__new__(VeFaaS)
+    cast(Any, service).ak = "ak"
+    cast(Any, service).sk = "sk"
+    cast(Any, service).region = "cn-shanghai"
+
+    def _ve_request(**kwargs: object) -> dict[str, object]:
+        action = cast(str, kwargs["action"])
+        region = cast(str, kwargs["region"])
+        calls.append((action, region))
+        if action == "GetApplication":
+            return {"Result": {"Status": "create_success"}}
+        return {"Result": {"Items": [], "Total": 0}}
+
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.ve_request", _ve_request)
+
+    status, _ = service._get_application_status("application-id")
+    applications = service._list_application(app_name="studio-app")
+
+    assert status == "create_success"
+    assert applications == []
+    assert calls == [
+        ("GetApplication", "cn-beijing"),
+        ("ListApplications", "cn-beijing"),
+    ]
 
 
 def test_update_application_code_bundle_preserves_unspecified_sandbox_tool(
