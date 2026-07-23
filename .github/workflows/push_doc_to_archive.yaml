@@ -24,30 +24,40 @@ permissions:
 
 jobs:
   trigger-docs-archive:
+    if: github.event.deleted == false
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
       - name: Trigger docs archive
         env:
-          DOCS_ARCHIVE_URL: ${{ vars.DOCS_ARCHIVE_URL }}
-          DOCS_ARCHIVE_TOKEN: ${{ secrets.DOCS_ARCHIVE_TOKEN }}
+          DOCS_AUTOGEN_URL: ${{ vars.DOCS_AUTOGEN_URL }}
+          DOCS_AUTOGEN_TOKEN: ${{ secrets.DOCS_AUTOGEN_TOKEN }}
         run: |
           set -euo pipefail
 
-          if [ -z "$DOCS_ARCHIVE_URL" ]; then
-            echo "DOCS_ARCHIVE_URL repository variable is not configured." >&2
+          if [ -z "$DOCS_AUTOGEN_URL" ]; then
+            echo "DOCS_AUTOGEN_URL repository variable is not configured." >&2
             exit 1
           fi
 
-          if [ -z "$DOCS_ARCHIVE_TOKEN" ]; then
-            echo "DOCS_ARCHIVE_TOKEN repository secret is not configured." >&2
+          if [ -z "$DOCS_AUTOGEN_TOKEN" ]; then
+            echo "DOCS_AUTOGEN_TOKEN repository secret is not configured." >&2
             exit 1
           fi
 
           tag_name="${GITHUB_REF#refs/tags/}"
-          command="DOCS_REPO_URL=git@github.com:yaozheng-fang/docs.git CODE_REPO_PATH=git@github.com:volcengine/veadk-python.git DOCS_PROJECT=veadk RELEASE_TAG=${tag_name} OUTPUT_MODE=commit_and_pr bash scripts/run-docs-archive-on-tag.sh"
+          current_commit="$(git rev-list -n 1 "$tag_name")"
+          previous_tag="$(git describe --tags --abbrev=0 --exclude "$tag_name" "$current_commit" 2>/dev/null || true)"
+
+          command="DOCS_REPO_URL=git@github.com:yaozheng-fang/docs.git CODE_REPO_PATH=git@github.com:volcengine/veadk-python.git DOCS_PROJECT=veadk RELEASE_TAG=${tag_name} PREVIOUS_TAG=${previous_tag} OUTPUT_MODE=commit_and_pr bash scripts/run-docs-archive-on-tag.sh"
           payload="$(jq -n --arg command "$command" --arg cwd "." '{command: $command, cwd: $cwd, async: false}')"
 
-          curl --fail --show-error --silent -X POST "$DOCS_ARCHIVE_URL" \
+          curl --fail --show-error --silent -X POST "$DOCS_AUTOGEN_URL" \
             -H 'Content-Type: application/json' \
-            -H "Authorization: Bearer ${DOCS_ARCHIVE_TOKEN}" \
+            -H "Authorization: Bearer ${DOCS_AUTOGEN_TOKEN}" \
             -d "$payload"
