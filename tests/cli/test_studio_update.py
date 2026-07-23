@@ -147,7 +147,7 @@ def test_find_studio_deployments_searches_regions_and_filters_project(
     ]
 
 
-def test_list_applications_uses_client_region(
+def test_list_applications_uses_application_control_plane_region(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     requested_regions: list[str] = []
@@ -163,7 +163,7 @@ def test_list_applications_uses_client_region(
     monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.ve_request", _request)
 
     assert service._list_application(app_name="studio-app") == []
-    assert requested_regions == ["cn-shanghai"]
+    assert requested_regions == ["cn-beijing"]
 
 
 def test_load_deployed_site_logo_uses_current_branding_url(
@@ -269,7 +269,7 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
     assert isinstance(update, dict)
     assert update["application_id"] == "app-id"
     assert update["function_id"] == "function-app-id"
-    assert update["environment_overrides"] is None
+    assert update["environment_overrides"] == {"AGENTKIT_SANDBOX_REGION": "cn-beijing"}
 
 
 def test_studio_update_rejects_ambiguous_name_before_build(
@@ -416,7 +416,10 @@ def test_studio_update_explicit_branding_overrides_cloud_values(
     assert search["project"] == "default"
     update = captured["update"]
     assert isinstance(update, dict)
-    assert update["environment_overrides"] == {"VEADK_SITE_TITLE": "新标题"}
+    assert update["environment_overrides"] == {
+        "AGENTKIT_SANDBOX_REGION": "cn-beijing",
+        "VEADK_SITE_TITLE": "新标题",
+    }
 
 
 def test_studio_update_only_overrides_explicit_sandbox_tool_id(
@@ -470,7 +473,10 @@ def test_studio_update_only_overrides_explicit_sandbox_tool_id(
     )
 
     assert result.exit_code == 0, result.output
-    assert captured["environment_overrides"] == {"SANDBOX_CHAT_CODEX": "chat-tool-new"}
+    assert captured["environment_overrides"] == {
+        "AGENTKIT_SANDBOX_REGION": "cn-beijing",
+        "SANDBOX_CHAT_CODEX": "chat-tool-new",
+    }
 
 
 def test_update_application_code_bundle_merges_only_explicit_environment(
@@ -505,6 +511,36 @@ def test_update_application_code_bundle_merges_only_explicit_environment(
         "EXISTING": "kept",
         "VEADK_SITE_TITLE": "新标题",
     }
+
+
+def test_application_control_plane_uses_beijing_for_shanghai_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+    service = object.__new__(VeFaaS)
+    cast(Any, service).ak = "ak"
+    cast(Any, service).sk = "sk"
+    cast(Any, service).region = "cn-shanghai"
+
+    def _ve_request(**kwargs: object) -> dict[str, object]:
+        action = cast(str, kwargs["action"])
+        region = cast(str, kwargs["region"])
+        calls.append((action, region))
+        if action == "GetApplication":
+            return {"Result": {"Status": "create_success"}}
+        return {"Result": {"Items": [], "Total": 0}}
+
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.ve_request", _ve_request)
+
+    status, _ = service._get_application_status("application-id")
+    applications = service._list_application(app_name="studio-app")
+
+    assert status == "create_success"
+    assert applications == []
+    assert calls == [
+        ("GetApplication", "cn-beijing"),
+        ("ListApplications", "cn-beijing"),
+    ]
 
 
 def test_update_application_code_bundle_preserves_unspecified_sandbox_tool(

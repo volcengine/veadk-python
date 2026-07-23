@@ -50,8 +50,8 @@ def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
     [
         ("tool", "Failed to provision the AgentKit chat CodeEnv Tool"),
         (
-            "relay",
-            "Failed to provision the AgentKit chat model credential relay",
+            "credential",
+            "Failed to provision the AgentKit chat model credential",
         ),
     ],
 )
@@ -230,6 +230,7 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert "VEADK_STUDIO_DEVELOPERS" not in veadk_environments
     assert veadk_environments["SANDBOX_CHAT_CODEX"] == "chat-code-env-id"
     assert veadk_environments["SANDBOX_SKILL_CREATOR"] == "skill-code-env-id"
+    assert veadk_environments["AGENTKIT_SANDBOX_REGION"] == expected_region
     assert credential_tool_ids == [
         "chat-code-env-id",
         "skill-code-env-id",

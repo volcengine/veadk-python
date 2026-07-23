@@ -34,8 +34,6 @@ from collections.abc import AsyncIterator, Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path, PurePosixPath
 from typing import Any
-from urllib.parse import urlsplit
-
 import requests
 
 from agentkit.sdk.skills import types as skills_types
@@ -60,6 +58,7 @@ _MODELS = (
     ("b", "deepseek-v4-flash-260425", "DeepSeek V4 Flash"),
 )
 _MODEL_PROVIDER = "model_square"
+_MODEL_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 _REGION = "cn-beijing"
 _SESSION_TTL_SECONDS = 1800
 _SESSION_DISCOVERY_ATTEMPTS = 6
@@ -685,22 +684,12 @@ def _safe_json_response(
     return payload
 
 
-def _validate_credential_relay_url(value: str) -> str:
-    """Require an HTTPS AgentKit credential relay endpoint."""
-    parsed = urlsplit(value)
-    hostname = (parsed.hostname or "").lower()
-    if (
-        parsed.scheme != "https"
-        or not hostname.endswith(".volceapi.com")
-        or parsed.port not in (None, 443)
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.path.rstrip("/") != "/api/v3"
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise SkillCreatorError("Sandbox 模型凭证中继地址无效")
-    return value.rstrip("/")
+def _validate_model_base_url(value: str) -> str:
+    """Require the Ark model endpoint configured by Studio deployment."""
+    normalized = value.rstrip("/")
+    if normalized != _MODEL_BASE_URL:
+        raise SkillCreatorError("Sandbox 模型服务地址无效")
+    return normalized
 
 
 def ensure_skill_creator_model_credential(
@@ -711,13 +700,8 @@ def ensure_skill_creator_model_credential(
     session_token: str | None = None,
     region: str = _REGION,
 ) -> None:
-    """Bind an AgentKit-hosted Ark credential to the dedicated CodeEnv Tool."""
+    """Resolve an Ark API key and bind it directly to the CodeEnv Tool."""
     from agentkit.auth._openapi import OpenApiClient
-    from agentkit.auth.credential_hosting import (
-        host_model_key,
-        list_gateways,
-        set_tool_env,
-    )
 
     from veadk.auth.veauth.ark_veauth import get_ark_token
 
@@ -736,46 +720,17 @@ def ensure_skill_creator_model_credential(
         for item in tool.get("Envs", [])
         if item.get("Key")
     }
-    if str(envs.get("CODEX_API_KEY", "")).startswith("ck-") and envs.get(
-        "CODEX_BASE_URL"
-    ):
-        _validate_credential_relay_url(str(envs["CODEX_BASE_URL"]))
-        return
-
-    gateway = next(
-        (item for item in list_gateways(api) if item["name"] == "agentkit-credhost-gw"),
-        None,
-    )
-    provider_name = (
-        f"veadk-skill-creator-{hashlib.sha256(tool_id.encode()).hexdigest()[:12]}"
-    )
-    raw_model_key = get_ark_token(
+    model_api_key = get_ark_token(
         region=region,
         access_key=access_key,
         secret_key=secret_key,
         session_token=session_token,
     )
-    try:
-        hosted = host_model_key(
-            key=raw_model_key,
-            gateway_id=gateway["id"] if gateway else None,
-            gateway_name=None if gateway else "agentkit-credhost-gw",
-            provider_name=provider_name,
-            upstream_url="https://ark.cn-beijing.volces.com",
-            model_path="/api/v3",
-            region=region,
-            api=api,
-        )
-    finally:
-        raw_model_key = ""
-    if not hosted.ticket:
-        raise SkillCreatorError("AgentKit 凭据托管未返回 Sandbox 票据")
-
     session_envs = build_exec_session_envs(
         model_name=_MODELS[0][1],
-        model_api_key=hosted.ticket,
+        model_api_key=model_api_key,
         model_provider=_MODEL_PROVIDER,
-        model_base_url=hosted.model_base_url,
+        model_base_url=_MODEL_BASE_URL,
         model_provider_was_provided=True,
         model_base_url_was_provided=True,
         include_codex_config=True,
@@ -783,15 +738,29 @@ def ensure_skill_creator_model_credential(
     )
     if not session_envs:
         raise SkillCreatorError("无法生成 Sandbox 模型环境变量")
-    _validate_credential_relay_url(hosted.model_base_url)
-    set_tool_env(api, tool_id, {item.key: item.value for item in session_envs})
+    updates = {item.key: item.value for item in session_envs}
+    if all(envs.get(key) == value for key, value in updates.items()):
+        return
+    envs.update(updates)
+    api.call(
+        "agentkit",
+        "UpdateTool",
+        "2025-10-30",
+        {
+            "ToolId": tool_id,
+            "Envs": [{"Key": key, "Value": value} for key, value in envs.items()],
+        },
+    )
 
 
 class SkillCreatorService:
     """Coordinate A/B Skill generation in independent AgentKit sandboxes."""
 
-    def __init__(self, tool_id: str | None = None) -> None:
+    def __init__(self, tool_id: str | None = None, region: str | None = None) -> None:
         self._configured_tool_id = (tool_id or "").strip()
+        self._region = (
+            region or os.getenv("AGENTKIT_SANDBOX_REGION") or _REGION
+        ).strip()
 
     def capabilities(self) -> dict[str, Any]:
         """Return fixed model capabilities without exposing server credentials."""
@@ -800,22 +769,21 @@ class SkillCreatorService:
         reason = "管理员未配置"
         if tool_id:
             try:
-                tool = AgentkitToolsClient(region=_REGION).get_tool(
+                tool = AgentkitToolsClient(region=self._region).get_tool(
                     tools_types.GetToolRequest(ToolId=tool_id)
                 )
                 envs = {item.key: item.value for item in tool.envs or []}
                 credential_ready = bool(
-                    str(envs.get("CODEX_API_KEY") or "").startswith("ck-")
-                    and envs.get("CODEX_BASE_URL")
+                    envs.get("CODEX_API_KEY") and envs.get("CODEX_BASE_URL")
                 )
                 if credential_ready:
-                    _validate_credential_relay_url(str(envs["CODEX_BASE_URL"]))
+                    _validate_model_base_url(str(envs["CODEX_BASE_URL"]))
                 tool_ready = tool.tool_type == "CodeEnv" and tool.status == "Ready"
                 enabled = tool_ready and credential_ready
                 if not tool_ready:
                     reason = "配置的 Sandbox 必须是 Ready CodeEnv"
                 elif not credential_ready:
-                    reason = "Sandbox 尚未绑定 AgentKit 托管模型凭证"
+                    reason = "Sandbox 尚未绑定模型凭证"
                 else:
                     reason = ""
             except Exception:
@@ -999,7 +967,7 @@ class SkillCreatorService:
         _ensure_bucket_ready(
             bucket_name=bucket,
             prefix=prefix,
-            region=_REGION,
+            region=self._region,
             auto_bucket=not bool(configured_bucket),
             assume_yes=True,
             assume_no=False,
@@ -1012,10 +980,10 @@ class SkillCreatorService:
                 str(archive_path), name, temp_dir
             )
             tos_url = _tos_upload(
-                hashed_path, bucket, prefix, _REGION, verify_bucket=False
+                hashed_path, bucket, prefix, self._region, verify_bucket=False
             )
 
-        client = AgentkitSkillsClient(region=_REGION)
+        client = AgentkitSkillsClient(region=self._region)
         effective_project = (
             project_name or os.getenv("VEADK_SKILL_CREATOR_PROJECT_NAME") or None
         )
@@ -1111,7 +1079,7 @@ class SkillCreatorService:
         request: str,
     ) -> dict[str, str]:
         del label
-        client = AgentkitToolsClient(region=_REGION)
+        client = AgentkitToolsClient(region=self._region)
         session_id = self._session_id(job_id, candidate_id)
         session_envs = build_exec_session_envs(
             model_name=model,
@@ -1233,7 +1201,7 @@ class SkillCreatorService:
         return result
 
     def _find_session(self, tool_id: str, user_session_id: str) -> dict[str, str]:
-        response = AgentkitToolsClient(region=_REGION).list_sessions(
+        response = AgentkitToolsClient(region=self._region).list_sessions(
             tools_types.ListSessionsRequest(
                 ToolId=tool_id,
                 MaxResults=10,
@@ -1262,7 +1230,7 @@ class SkillCreatorService:
         failed = 0
         for tool_id, instance_id in instances:
             try:
-                AgentkitToolsClient(region=_REGION).delete_session(
+                AgentkitToolsClient(region=self._region).delete_session(
                     tools_types.DeleteSessionRequest(
                         ToolId=tool_id, SessionId=instance_id
                     )
@@ -1274,7 +1242,7 @@ class SkillCreatorService:
 
     def _validate_tool(self, tool_id: str) -> str:
         try:
-            tool = AgentkitToolsClient(region=_REGION).get_tool(
+            tool = AgentkitToolsClient(region=self._region).get_tool(
                 tools_types.GetToolRequest(ToolId=tool_id)
             )
         except Exception as error:
@@ -1282,12 +1250,9 @@ class SkillCreatorService:
         if tool.tool_type != "CodeEnv" or tool.status != "Ready":
             raise SkillCreatorError("配置的 Sandbox 必须是 Ready CodeEnv")
         envs = {item.key: item.value for item in tool.envs or []}
-        if not (
-            str(envs.get("CODEX_API_KEY") or "").startswith("ck-")
-            and envs.get("CODEX_BASE_URL")
-        ):
-            raise SkillCreatorError("Sandbox 尚未绑定 AgentKit 托管模型凭证")
-        return _validate_credential_relay_url(str(envs["CODEX_BASE_URL"]))
+        if not (envs.get("CODEX_API_KEY") and envs.get("CODEX_BASE_URL")):
+            raise SkillCreatorError("Sandbox 尚未绑定模型凭证")
+        return _validate_model_base_url(str(envs["CODEX_BASE_URL"]))
 
     def _tool_id(self, *, required: bool = True) -> str:
         if self._configured_tool_id:

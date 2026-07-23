@@ -205,12 +205,15 @@ VeADK provides several useful command line tools for faster deployment and optim
   policies; target `cn-beijing` (default) or `cn-shanghai` with
   `--region`, automatically locate the Identity user pool across Beijing and
   Shanghai, and select the VeFaaS project with `--project` (default `default`);
+  Shanghai Functions, gateways, and AgentKit resources stay in Shanghai while
+  VeFaaS Application operations use its Beijing control-plane endpoint; the
+  selected region is also used for temporary-chat and Skill-creation sessions;
   custom local or remote logo images are bundled into the deployment; the
   deployed client skips the second OAuth consent confirmation after login;
   two dedicated AgentKit CodeEnv Tools are created automatically for temporary
   chats and Skill creation unless their IDs are supplied with
   `--sandbox-chat-codex-tool-id` and `--sandbox-skill-creator-tool-id`; Tool or
-  credential-relay provisioning failures print the underlying error verbatim
+  model-credential provisioning failures print the underlying error verbatim
   after credential values are redacted
 - `veadk studio update --vefaas-app-name <app-name>`: build the frontend from a
   local VeADK source checkout and release it through the existing VeFaaS

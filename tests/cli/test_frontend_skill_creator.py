@@ -40,7 +40,7 @@ from veadk.cli.frontend_skill_creator import (
     mount_skill_creator_routes,
 )
 
-_RELAY_URL = "https://test.apigateway-cn-beijing.volceapi.com/api/v3"
+_MODEL_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 
 
 def _skill_zip(name: str = "weather-report") -> bytes:
@@ -101,7 +101,7 @@ def test_create_job_runs_fixed_models_in_independent_candidates() -> None:
         request: str,
     ) -> dict[str, str]:
         del tool_id, job_id, label, request
-        assert model_base_url == _RELAY_URL
+        assert model_base_url == _MODEL_BASE_URL
         calls.append((candidate_id, model))
         return {"instanceId": f"instance-{candidate_id}", "endpoint": "endpoint"}
 
@@ -109,7 +109,7 @@ def test_create_job_runs_fixed_models_in_independent_candidates() -> None:
         patch.object(
             service,
             "_validate_tool",
-            return_value=_RELAY_URL,
+            return_value=_MODEL_BASE_URL,
         ),
         patch.object(service, "_create_candidate", side_effect=create_candidate),
     ):
@@ -275,7 +275,7 @@ def test_create_job_cleans_up_successful_candidate_when_peer_fails() -> None:
         patch.object(
             service,
             "_validate_tool",
-            return_value=_RELAY_URL,
+            return_value=_MODEL_BASE_URL,
         ),
         patch.object(service, "_create_candidate", side_effect=create_candidate),
         patch.object(service, "_delete_instances") as delete_instances,
@@ -329,50 +329,58 @@ def test_archive_metadata_rejects_symlink_entry() -> None:
         SkillCreatorService(tool_id="tool-id")._archive_metadata(output.getvalue())
 
 
-def test_credential_hosting_is_bound_to_tool_without_raw_key() -> None:
-    class FakeApi:
-        def call(self, *_args: object, **_kwargs: object) -> dict[str, object]:
-            return {
-                "Tool": {
-                    "Envs": [
-                        {"Key": "CODEX_API_KEY", "Value": "raw-key"},
-                        {"Key": "CODEX_BASE_URL", "Value": "https://ark.example"},
-                    ]
-                }
-            }
+def test_model_credential_is_bound_directly_to_tool() -> None:
+    access_key = os.urandom(16).hex()
+    model_api_key = os.urandom(24).hex()
+    secret_key = os.urandom(24).hex()
+    calls: list[tuple[str, dict[str, object]]] = []
 
-    updates: dict[str, str] = {}
+    class FakeApi:
+        def call(
+            self,
+            _service: str,
+            action: str,
+            _version: str,
+            body: dict[str, object],
+        ) -> dict[str, object]:
+            calls.append((action, body))
+            if action == "GetTool":
+                return {
+                    "Tool": {"Envs": [{"Key": "EXISTING_ENV", "Value": "preserved"}]}
+                }
+            return {}
+
     with (
         patch("agentkit.auth._openapi.OpenApiClient", return_value=FakeApi()),
         patch(
-            "agentkit.auth.credential_hosting.list_gateways",
-            return_value=[{"id": "gateway-id", "name": "agentkit-credhost-gw"}],
-        ),
-        patch("veadk.auth.veauth.ark_veauth.get_ark_token", return_value="raw-key"),
-        patch(
-            "agentkit.auth.credential_hosting.host_model_key",
-            return_value=SimpleNamespace(
-                ticket="ck-hosted-ticket",
-                model_base_url=_RELAY_URL,
-            ),
-        ),
-        patch(
-            "agentkit.auth.credential_hosting.set_tool_env",
-            side_effect=lambda _api, _tool_id, values: updates.update(values),
-        ),
+            "veadk.auth.veauth.ark_veauth.get_ark_token",
+            return_value=model_api_key,
+        ) as get_ark_token,
     ):
         ensure_skill_creator_model_credential(
             tool_id="tool-id",
-            access_key="access-key",
-            secret_key="secret-key",
+            access_key=access_key,
+            secret_key=secret_key,
         )
 
-    assert updates["CODEX_API_KEY"] == "ck-hosted-ticket"
-    assert updates["CODEX_BASE_URL"] == _RELAY_URL
-    assert "raw-key" not in updates.values()
+    get_ark_token.assert_called_once_with(
+        region="cn-beijing",
+        access_key=access_key,
+        secret_key=secret_key,
+        session_token=None,
+    )
+    assert [action for action, _ in calls] == ["GetTool", "UpdateTool"]
+    update_body = calls[1][1]
+    envs = {
+        item["Key"]: item["Value"]
+        for item in cast(list[dict[str, str]], update_body["Envs"])
+    }
+    assert envs["EXISTING_ENV"] == "preserved"
+    assert envs["CODEX_API_KEY"] == model_api_key
+    assert envs["CODEX_BASE_URL"] == _MODEL_BASE_URL
 
 
-def test_candidate_session_never_overrides_hosted_tool_ticket(monkeypatch) -> None:
+def test_candidate_session_never_overrides_tool_model_credential(monkeypatch) -> None:
     service = SkillCreatorService(tool_id="tool-id")
     captured: dict[str, object] = {}
 
@@ -400,7 +408,7 @@ def test_candidate_session_never_overrides_hosted_tool_ticket(monkeypatch) -> No
             "a",
             "doubao-seed-2-0-pro-260215",
             "豆包 Seed 2.0 Pro",
-            _RELAY_URL,
+            _MODEL_BASE_URL,
             "Create a release notes Skill",
         )
 
@@ -412,13 +420,13 @@ def test_candidate_session_never_overrides_hosted_tool_ticket(monkeypatch) -> No
     )
 
 
-def test_tool_rejects_untrusted_credential_relay_url() -> None:
+def test_tool_rejects_untrusted_model_base_url() -> None:
     service = SkillCreatorService(tool_id="tool-id")
     tool = SimpleNamespace(
         tool_type="CodeEnv",
         status="Ready",
         envs=[
-            SimpleNamespace(key="CODEX_API_KEY", value="ck-hosted-ticket"),
+            SimpleNamespace(key="CODEX_API_KEY", value=os.urandom(24).hex()),
             SimpleNamespace(
                 key="CODEX_BASE_URL", value="http://attacker.invalid/api/v3"
             ),
@@ -426,7 +434,7 @@ def test_tool_rejects_untrusted_credential_relay_url() -> None:
     )
     with (
         patch("veadk.cli.frontend_skill_creator.AgentkitToolsClient") as client_class,
-        pytest.raises(SkillCreatorError, match="中继地址无效"),
+        pytest.raises(SkillCreatorError, match="模型服务地址无效"),
     ):
         client_class.return_value.get_tool.return_value = tool
         service._validate_tool("tool-id")
@@ -457,3 +465,21 @@ def test_skill_creator_reads_only_dedicated_sandbox_tool_env(monkeypatch) -> Non
     monkeypatch.delenv("SANDBOX_SKILL_CREATOR")
     with pytest.raises(SkillCreatorError, match="管理员未配置"):
         SkillCreatorService()._tool_id()
+
+
+def test_skill_creator_uses_configured_sandbox_region(monkeypatch) -> None:
+    monkeypatch.setenv("AGENTKIT_SANDBOX_REGION", "cn-shanghai")
+    tool = SimpleNamespace(
+        tool_type="CodeEnv",
+        status="Ready",
+        envs=[
+            SimpleNamespace(key="CODEX_API_KEY", value=os.urandom(24).hex()),
+            SimpleNamespace(key="CODEX_BASE_URL", value=_MODEL_BASE_URL),
+        ],
+    )
+    with patch("veadk.cli.frontend_skill_creator.AgentkitToolsClient") as client_class:
+        client_class.return_value.get_tool.return_value = tool
+
+        SkillCreatorService(tool_id="tool-id")._validate_tool("tool-id")
+
+    client_class.assert_called_once_with(region="cn-shanghai")

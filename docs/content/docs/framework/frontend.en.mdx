@@ -180,11 +180,11 @@ The new-chat **Skill creation** mode runs
 Ark Responses. Each candidate gets an independent AgentKit CodeEnv session.
 The server validates the generated directory name, `SKILL.md` frontmatter,
 file count, size, and safe paths before packaging a ZIP. AgentKit credential
-hosting keeps the real Ark API key; Studio and Sandbox receive only its
-revocable gateway ticket. Per-job Session variables cannot override that
-hosted ticket, and Studio accepts only Volcengine HTTPS credential relay URLs.
-Model credentials are never returned to the browser, and the Skill creation
-APIs require the Studio developer or admin role.
+configuration resolves the Ark API key with the deployer's AK/SK and writes it
+directly to each dedicated CodeEnv Tool. Per-job Session variables cannot
+override the Tool's model credential. Model credentials are never returned to
+the browser, and the Skill creation APIs require the Studio developer or admin
+role.
 
 After submission, both candidate conversations appear immediately and
 independently render public reasoning summaries, tool calls, and assistant
@@ -204,11 +204,10 @@ export SANDBOX_SKILL_CREATOR=<skill-code-env-tool-id>
 veadk frontend --agents-dir examples
 ```
 
-For local Studio, run the AgentKit `credential-hosting` command and choose to
-write its result into both dedicated CodeEnv Tools. Adding a
-candidate to AgentKit uploads its ZIP to TOS, then creates or updates the Skill
-through the Skills API. It is published to a SkillSpace only when the user
-provides SkillSpace IDs.
+For local Studio, configure the Ark model variables on both dedicated CodeEnv
+Tools. Adding a candidate to AgentKit uploads its ZIP to TOS, then creates or
+updates the Skill through the Skills API. It is published to a SkillSpace only
+when the user provides SkillSpace IDs.
 
 | Environment variable | Default | Description |
 | :-- | :-- | :-- |
@@ -226,11 +225,12 @@ requests reach different instances.
 On the first cloud deployment, the command creates two independent CodeEnv
 Tools with the deployer's AK/SK when Tool IDs are omitted. Existing Tools can be
 selected with `--sandbox-chat-codex-tool-id` and
-`--sandbox-skill-creator-tool-id`. AgentKit credential hosting stores the Ark
-credential in KMS and binds only the relay URL and revocable ticket to both
-Tools. The VeFaaS Function receives only Tool IDs, never model credentials:
+`--sandbox-skill-creator-tool-id`. The Ark credential is resolved with the
+deployer's AK/SK and written directly to both Tools as model environment
+variables. Sandbox sessions inherit those Tool variables. The browser and
+VeFaaS Function receive only Tool IDs, never model credentials.
 
-If Tool or credential-relay provisioning fails, the CLI prints the underlying
+If Tool or model-credential provisioning fails, the CLI prints the underlying
 error verbatim, including its original line breaks, after redacting credential
 values. Use the service action, error code, request ID, and request details to
 identify the missing permission or account resource.
@@ -276,7 +276,11 @@ veadk studio deploy \
 also supports `cn-shanghai`. Deployment checks the deployment region first and
 then searches the Beijing and Shanghai Identity regions. A cross-region match
 emits a warning and continues. `--project` selects the VeFaaS function project
-and defaults to `default`.
+and defaults to `default`. For Shanghai deployments, the Function, APIG, and
+AgentKit resources remain in Shanghai while VeFaaS Application operations use
+the service's Beijing control-plane endpoint. The deployed Function records the
+selected AgentKit Sandbox region so temporary chat and Skill-creation sessions
+query the same region as their CodeEnv Tools.
 
 To update an existing Studio deployment, run this command from a VeADK source
 checkout:
