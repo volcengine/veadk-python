@@ -338,8 +338,9 @@ def _build_orchestrator(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
 
 def _build_a2a(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
     _add_import(acc, "from veadk.a2a.remote_ve_agent import RemoteVeAgent")
+    internal_draft = draft.model_copy(update={"name": ""})
     kwargs = [
-        f"name={_py_str(_agent_name(acc, draft, var_name))}",
+        f"name={_py_str(_agent_name(acc, internal_draft, var_name))}",
         f"url={_py_str((draft.a2aUrl or '').strip())}",
     ]
     joined_kwargs = ",\n    ".join(kwargs)
@@ -349,6 +350,12 @@ def _build_a2a(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
 
 def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
     if draft.agentType == "a2a":
+        if draft.a2aRegistry.enabled:
+            return _build_agent(
+                acc,
+                AgentDraft(agentType="llm", a2aRegistry=draft.a2aRegistry),
+                var_name,
+            )
         return _build_a2a(acc, draft, var_name)
     if draft.agentType != "llm":
         return _build_orchestrator(acc, draft, var_name)
@@ -1076,16 +1083,20 @@ def _draft_has_a2a_registry(draft: AgentDraft) -> bool:
 
 
 def _a2a_registry_env_values(draft: AgentDraft) -> dict[str, str]:
-    if not draft.a2aRegistry.enabled:
-        return {}
-    registry = draft.a2aRegistry
-    return {
-        "REGISTRY_SPACE_ID": registry.registrySpaceId.strip(),
-        "REGISTRY_TOP_K": registry.registryTopK.strip() or "3",
-        "REGISTRY_REGION": registry.registryRegion.strip() or "cn-beijing",
-        "REGISTRY_ENDPOINT": registry.registryEndpoint.strip()
-        or "https://open.volcengineapi.com/",
-    }
+    if draft.a2aRegistry.enabled:
+        registry = draft.a2aRegistry
+        return {
+            "REGISTRY_SPACE_ID": registry.registrySpaceId.strip(),
+            "REGISTRY_TOP_K": registry.registryTopK.strip() or "3",
+            "REGISTRY_REGION": registry.registryRegion.strip() or "cn-beijing",
+            "REGISTRY_ENDPOINT": registry.registryEndpoint.strip()
+            or "https://open.volcengineapi.com/",
+        }
+    for sub_agent in draft.subAgents:
+        values = _a2a_registry_env_values(sub_agent)
+        if values:
+            return values
+    return {}
 
 
 def _materialize_a2a_registry_env(env: list[EnvVar], draft: AgentDraft) -> list[EnvVar]:
@@ -1104,6 +1115,9 @@ def _materialize_a2a_registry_env(env: list[EnvVar], draft: AgentDraft) -> list[
 
 
 def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
+    if draft.agentType == "a2a":
+        raise ValueError("Remote Agent cannot be the root Agent.")
+
     pkg = ident(draft.name, "my_agent")
     acc = _Acc()
     feishu_channel_enabled = bool(draft.deployment.feishuEnabled)

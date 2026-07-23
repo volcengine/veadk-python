@@ -78,17 +78,22 @@ function parseSubAgents(v: unknown): AgentDraft[] {
   if (!Array.isArray(v)) return [];
   return v.map((s) => {
     const so = (s && typeof s === "object" ? s : {}) as Record<string, unknown>;
+    const a2aRegistry = asA2aRegistry(so.a2aRegistry);
+    const parsedType = asAgentType(so.agentType);
+    const agentType =
+      a2aRegistry.enabled && parsedType === "llm" ? "a2a" : parsedType;
     return {
       ...emptyDraft(),
       name: asString(so.name),
       description: asString(so.description),
       instruction: asString(so.instruction),
-      agentType: asAgentType(so.agentType),
+      agentType,
       maxIterations: asMaxIterations(so.maxIterations),
       a2aUrl: asString(so.a2aUrl),
       builtinTools: asStringArray(so.builtinTools).filter((t) => TOOL_IDS.has(t)),
       customTools: asCustomTools(so.customTools),
-      a2aRegistry: asA2aRegistry(so.a2aRegistry),
+      a2aRegistry:
+        agentType === "a2a" ? { ...a2aRegistry, enabled: true } : a2aRegistry,
       subAgents: parseSubAgents(so.subAgents),
     };
   });
@@ -164,6 +169,10 @@ export function normalizeDraft(raw: unknown): AgentDraft {
   const deployment = (
     o.deployment && typeof o.deployment === "object" ? o.deployment : {}
   ) as Record<string, unknown>;
+  const a2aRegistry = asA2aRegistry(o.a2aRegistry);
+  const parsedType = asAgentType(o.agentType);
+  const agentType =
+    a2aRegistry.enabled && parsedType === "llm" ? "a2a" : parsedType;
 
   const mcpTools = Array.isArray(o.mcpTools)
     ? (o.mcpTools as unknown[])
@@ -187,7 +196,7 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     name: asString(o.name) || "my_agent",
     description: asString(o.description),
     instruction: asString(o.instruction) || "You are a helpful assistant.",
-    agentType: asAgentType(o.agentType),
+    agentType,
     maxIterations: asMaxIterations(o.maxIterations),
     a2aUrl: asString(o.a2aUrl),
     modelName: asString(o.modelName),
@@ -196,7 +205,8 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     builtinTools: asStringArray(o.builtinTools).filter((t) => TOOL_IDS.has(t)),
     customTools: asCustomTools(o.customTools),
     mcpTools,
-    a2aRegistry: asA2aRegistry(o.a2aRegistry),
+    a2aRegistry:
+      agentType === "a2a" ? { ...a2aRegistry, enabled: true } : a2aRegistry,
     memory: { shortTerm: asBool(mem.shortTerm), longTerm: asBool(mem.longTerm) },
     shortTermBackend: pick(o.shortTermBackend, STM_IDS, "local"),
     longTermBackend: pick(o.longTermBackend, LTM_IDS, "local"),

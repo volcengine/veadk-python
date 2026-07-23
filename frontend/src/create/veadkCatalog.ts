@@ -93,8 +93,8 @@ export const A2A_REGISTRY_ENV: EnvVar[] = [
   {
     key: "REGISTRY_SPACE_ID",
     required: true,
-    placeholder: "请输入 A2A 空间 ID",
-    comment: "A2A 注册中心空间 ID",
+    placeholder: "请输入智能体中心 ID，如 as-yer579143kbrkemozdn6",
+    comment: "AgentKit 智能体中心 ID",
   },
   {
     key: "REGISTRY_TOP_K",
@@ -106,13 +106,13 @@ export const A2A_REGISTRY_ENV: EnvVar[] = [
     key: "REGISTRY_REGION",
     required: false,
     placeholder: A2A_REGISTRY_DEFAULTS.region,
-    comment: "A2A 注册中心地域",
+    comment: "AgentKit 智能体中心地域",
   },
   {
     key: "REGISTRY_ENDPOINT",
     required: false,
     placeholder: A2A_REGISTRY_DEFAULTS.endpoint,
-    comment: "A2A 注册中心 OpenAPI 地址",
+    comment: "AgentKit 智能体中心 OpenAPI 地址",
   },
 ];
 

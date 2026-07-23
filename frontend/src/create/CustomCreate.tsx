@@ -84,7 +84,11 @@ import {
   generateAgentProject,
   runGeneratedAgentTestSSE,
 } from "../adk/client";
-import type { DeployStage, GeneratedAgentTestRun, UiFeatures } from "../adk/client";
+import type {
+  DeployStage,
+  GeneratedAgentTestRun,
+  UiFeatures,
+} from "../adk/client";
 import { applyEvent, emptyAcc, type Block } from "../blocks";
 import "./CustomCreate.css";
 
@@ -92,7 +96,9 @@ const MarkdownPromptEditor = lazy(() => import("./MarkdownPromptEditor"));
 
 /** Trigger a browser download of a text file. */
 function downloadText(filename: string, text: string, mime = "text/plain") {
-  const url = URL.createObjectURL(new Blob([text], { type: `${mime};charset=utf-8` }));
+  const url = URL.createObjectURL(
+    new Blob([text], { type: `${mime};charset=utf-8` }),
+  );
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
@@ -114,7 +120,6 @@ type StepId =
   | "skills"
   | "knowledge"
   | "advanced"
-  | "a2aCenter"
   | "subagents"
   | "review";
 
@@ -127,14 +132,25 @@ interface StepMeta {
 }
 
 const STEPS: StepMeta[] = [
-  { id: "type", label: "类型", hint: "选择 Agent 类型", icon: Shapes, required: true },
-  { id: "basic", label: "基本信息", hint: "名称、描述与系统提示词", icon: Info, required: true },
+  {
+    id: "type",
+    label: "类型",
+    hint: "选择 Agent 类型",
+    icon: Shapes,
+    required: true,
+  },
+  {
+    id: "basic",
+    label: "基本信息",
+    hint: "名称、描述与系统提示词",
+    icon: Info,
+    required: true,
+  },
   { id: "model", label: "模型配置", hint: "模型与服务（可选）", icon: Cpu },
   { id: "tools", label: "工具", hint: "可调用的能力", icon: Wrench },
   { id: "skills", label: "技能", hint: "声明式技能", icon: Sparkles },
   { id: "knowledge", label: "知识库", hint: "外部知识检索", icon: Database },
   { id: "advanced", label: "进阶配置", hint: "记忆与观测", icon: Layers },
-  { id: "a2aCenter", label: "A2A 中心", hint: "远程 Agent 发现", icon: Globe },
   { id: "subagents", label: "子 Agent", hint: "嵌套协作", icon: Boxes },
   { id: "review", label: "完成", hint: "预览并创建", icon: Rocket },
 ];
@@ -211,6 +227,16 @@ function DebugRunIcon({ className }: { className?: string }) {
 }
 
 const AGENT_TYPE_GAP_PX = 4;
+const AGENT_TYPE_BAR_LABELS: Record<
+  NonNullable<AgentDraft["agentType"]>,
+  string
+> = {
+  llm: "LLM 智能体",
+  sequential: "顺序型智能体",
+  parallel: "并行型智能体",
+  loop: "循环型智能体",
+  a2a: "远程智能体",
+};
 
 const A2A_REGISTRY_ENV_TO_FIELD = {
   REGISTRY_SPACE_ID: "registrySpaceId",
@@ -290,7 +316,9 @@ function Checklist({
             </span>
             <span className="cw-check-text">
               <span className="cw-check-title">{it.label}</span>
-              <span className="cw-check-desc">{displayDescription(it.desc)}</span>
+              <span className="cw-check-desc">
+                {displayDescription(it.desc)}
+              </span>
             </span>
           </button>
         );
@@ -486,7 +514,8 @@ function McpToolEditor({
                       }
                     />
                     <p className="cw-mcp-note">
-                      stdio MCP 暂不参与调试运行；点击“去部署”时会完整保留这项配置并生成对应代码。
+                      stdio MCP
+                      暂不参与调试运行；点击“去部署”时会完整保留这项配置并生成对应代码。
                     </p>
                   </>
                 )}
@@ -872,18 +901,20 @@ const MAX_TREE_DEPTH = 3;
 function nodeProblem(
   n: AgentDraft,
   duplicateNames: ReadonlySet<string>,
+  isRoot = false,
 ): string | null {
+  if (isA2aType(n.agentType)) {
+    if (isRoot) return "远程 Agent 只能作为子 Agent";
+    return n.a2aRegistry?.registrySpaceId.trim()
+      ? null
+      : "缺少 AgentKit 智能体中心 ID";
+  }
   const nameProblem = agentNameProblem(n.name);
   if (nameProblem) return nameProblem;
   if (duplicateNames.has(n.name)) return "Agent 名称在当前结构中必须唯一";
   if (n.description.trim().length === 0) return "缺少描述";
-  if (isA2aType(n.agentType))
-    return (n.a2aUrl ?? "").trim().length === 0 ? "缺少 Agent URL" : null;
   if (isOrchestratorType(n.agentType))
     return n.subAgents.length === 0 ? "缺少子 Agent" : null;
-  if (n.a2aRegistry?.enabled && !n.a2aRegistry.registrySpaceId.trim()) {
-    return "A2A 中心缺少空间 ID";
-  }
   return n.instruction.trim().length === 0 ? "缺少系统提示词" : null;
 }
 
@@ -900,8 +931,15 @@ function treeProblems(
   path: NodePath = [],
 ): TreeProblem[] {
   const out: TreeProblem[] = [];
-  const p = nodeProblem(root, duplicateNames);
-  if (p) out.push({ path, name: root.name.trim() || "未命名", problem: p });
+  const remote = isA2aType(root.agentType);
+  const p = nodeProblem(root, duplicateNames, path.length === 0);
+  if (p) {
+    out.push({
+      path,
+      name: remote ? "远程 Agent" : root.name.trim() || "未命名",
+      problem: p,
+    });
+  }
   if (nodeAcceptsChildren(root)) {
     root.subAgents.forEach((c, i) =>
       out.push(...treeProblems(c, duplicateNames, [...path, i])),
@@ -912,7 +950,10 @@ function treeProblems(
 
 /** Count the root Agent and every nested sub-Agent in the draft. */
 function countDraftAgents(root: AgentDraft): number {
-  return 1 + root.subAgents.reduce((total, child) => total + countDraftAgents(child), 0);
+  return (
+    1 +
+    root.subAgents.reduce((total, child) => total + countDraftAgents(child), 0)
+  );
 }
 
 /** Collect only settings used by active components across the Agent tree. */
@@ -957,7 +998,9 @@ function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
     }
     if (node.tracing) {
       for (const exporterId of node.tracingExporters ?? []) {
-        const exporter = TRACING_EXPORTERS.find((item) => item.id === exporterId);
+        const exporter = TRACING_EXPORTERS.find(
+          (item) => item.id === exporterId,
+        );
         if (exporter) {
           selections.push({
             env: exporter.env,
@@ -1049,7 +1092,7 @@ function TreeNode({
         className={`cw-tree-node cw-tree-type-${node.agentType ?? "llm"} ${
           selected ? "is-selected" : ""
         } ${draggable ? "is-draggable" : ""} ${dragOver ? "is-dragover" : ""} ${
-          showErrors && nodeProblem(node, duplicateNames)
+          showErrors && nodeProblem(node, duplicateNames, isRoot)
             ? `is-invalid cw-error-shake-${validationPulse % 2}`
             : ""
         }`}
@@ -1088,7 +1131,11 @@ function TreeNode({
       >
         <Icon className="cw-tree-icon" />
         <span className="cw-tree-main">
-          <span className="cw-tree-name">{node.name.trim() || "未命名"}</span>
+          <span className="cw-tree-name">
+            {isA2aType(node.agentType)
+              ? "远程 Agent"
+              : node.name.trim() || "未命名"}
+          </span>
           <span className="cw-tree-type">{meta.label}</span>
         </span>
         <span className="cw-tree-actions">
@@ -1156,7 +1203,8 @@ function TreeNode({
   );
 }
 
-type DebugPhase = "idle" | "building" | "starting" | "ready" | "sending" | "error";
+type DebugPhase =
+  "idle" | "building" | "starting" | "ready" | "sending" | "error";
 
 interface DebugMessage {
   role: "user" | "assistant";
@@ -1217,7 +1265,8 @@ function DebugPanel({
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const ready = phase === "ready" || phase === "sending";
-  const busy = phase === "building" || phase === "starting" || phase === "sending";
+  const busy =
+    phase === "building" || phase === "starting" || phase === "sending";
   const showInitialOverlay = enabled && !run && phase === "idle";
   const showProgressOverlay =
     enabled && (phase === "building" || phase === "starting");
@@ -1287,9 +1336,7 @@ function DebugPanel({
       <div className="cw-debug-stage">
         <div className="cw-debug-body">
         {!enabled ? (
-          <div className="cw-debug-empty">
-            {disabledReason}
-          </div>
+            <div className="cw-debug-empty">{disabledReason}</div>
         ) : phase === "error" ? (
           <div className="cw-debug-error">
             <DeploymentErrorMessage
@@ -1478,7 +1525,9 @@ export function CustomCreate({
 }: CustomCreateProps) {
   void onCreate; // outcome is the in-pane project preview, not a navigation
   void onBack; // no footer nav in the single-scroll layout; back lives in app chrome
-  const [draft, setDraft] = useState<AgentDraft>(() => initialDraft ?? emptyDraft());
+  const [draft, setDraft] = useState<AgentDraft>(
+    () => initialDraft ?? emptyDraft(),
+  );
   const [showErrors, setShowErrors] = useState(false);
   const [validationPulse, setValidationPulse] = useState(0);
   const [project, setProject] = useState<AgentProject | null>(null);
@@ -1531,7 +1580,8 @@ export function CustomCreate({
   // focus.
   // NOTE: Must be declared before any conditional returns to satisfy React hooks rules.
   const sectionImpl = useRef<
-    ((p: { meta: StepMeta; children: React.ReactNode }) => React.ReactElement) | null
+    | ((p: { meta: StepMeta; children: React.ReactNode }) => React.ReactElement)
+    | null
   >(null);
   if (!sectionImpl.current) {
     sectionImpl.current = ({ meta, children }) => (
@@ -1605,6 +1655,31 @@ export function CustomCreate({
     patchDeploymentEnv(key, value);
   };
 
+  const selectAgentType = (agentType: NonNullable<AgentDraft["agentType"]>) => {
+    if (isRootAgent && agentType === "a2a") return;
+    if (agentType === "a2a") {
+      patch({
+        agentType,
+        a2aRegistry: {
+          ...(node.a2aRegistry ?? {
+            registrySpaceId: "",
+            registryTopK: "",
+            registryRegion: "",
+            registryEndpoint: "",
+          }),
+          enabled: true,
+        },
+      });
+      return;
+    }
+    patch({
+      agentType,
+      a2aRegistry: node.a2aRegistry
+        ? { ...node.a2aRegistry, enabled: false }
+        : undefined,
+    });
+  };
+
   // Replace the whole tree (structural edits from the left tree), optionally
   // moving the selection to a new node.
   const applyTree = (nextRoot: AgentDraft, select?: NodePath) => {
@@ -1613,7 +1688,9 @@ export function CustomCreate({
   };
 
   const clearRootAgent = () => {
-    if (!window.confirm("清空根 Agent 的全部配置和子 Agent？此操作无法撤销。")) {
+    if (
+      !window.confirm("清空根 Agent 的全部配置和子 Agent？此操作无法撤销。")
+    ) {
       return;
     }
     setDraft(emptyDraft());
@@ -1645,7 +1722,10 @@ export function CustomCreate({
       ? tracingExporters.filter((x) => x !== id)
       : [...tracingExporters, id];
     // Auto-enable tracing when at least one exporter is chosen.
-    patch({ tracingExporters: next, tracing: next.length > 0 ? true : node.tracing });
+    patch({
+      tracingExporters: next,
+      tracing: next.length > 0 ? true : node.tracing,
+    });
   };
   // Detail-pane branching is driven by the SELECTED node's type.
   const orchestrator = isOrchestratorType(node.agentType);
@@ -1653,15 +1733,17 @@ export function CustomCreate({
 
   // Inline error flags for the selected node.
   const duplicateNames = useMemo(() => duplicateAgentNames(draft), [draft]);
-  const nameProblem =
-    agentNameProblem(node.name) ??
-    (duplicateNames.has(node.name) ? "Agent 名称在当前结构中必须唯一" : null);
+  const nameProblem = a2a
+    ? null
+    : (agentNameProblem(node.name) ??
+      (duplicateNames.has(node.name)
+        ? "Agent 名称在当前结构中必须唯一"
+        : null));
   const nameInvalid = nameProblem !== null;
-  const descriptionMissing = node.description.trim().length === 0;
+  const descriptionMissing = !a2a && node.description.trim().length === 0;
   const instructionMissing = node.instruction.trim().length === 0;
-  const urlMissing = (node.a2aUrl ?? "").trim().length === 0;
   const a2aRegistrySpaceMissing =
-    !!node.a2aRegistry?.enabled && !node.a2aRegistry.registrySpaceId.trim();
+    a2a && !node.a2aRegistry?.registrySpaceId.trim();
   const invalidClass = (missing: boolean) =>
     showErrors && missing
       ? `is-error cw-error-shake-${validationPulse % 2}`
@@ -1692,7 +1774,9 @@ export function CustomCreate({
   const completion = useMemo<Record<StepId, boolean>>(
     () => ({
       type: true,
-      basic: !nameInvalid && (orchestrator || a2a || !instructionMissing),
+      basic: a2a
+        ? !a2aRegistrySpaceMissing
+        : !nameInvalid && (orchestrator || !instructionMissing),
       model: Boolean(
         node.modelName?.trim() ||
           node.modelProvider?.trim() ||
@@ -1701,32 +1785,31 @@ export function CustomCreate({
       tools: builtinTools.length > 0 || mcpTools.length > 0,
       skills: selectedSkills.length > 0,
       knowledge: node.knowledgebase,
-      advanced:
-        node.memory.shortTerm ||
-        node.memory.longTerm ||
-        node.tracing,
-      a2aCenter: !!node.a2aRegistry?.enabled,
+      advanced: node.memory.shortTerm || node.memory.longTerm || node.tracing,
       subagents: (node.subAgents?.length ?? 0) > 0,
       review: canFinish,
     }),
-    [node, nameInvalid, instructionMissing, orchestrator, a2a, canFinish, builtinTools, mcpTools, selectedSkills],
+    [
+      node,
+      nameInvalid,
+      instructionMissing,
+      orchestrator,
+      a2a,
+      canFinish,
+      builtinTools,
+      mcpTools,
+      selectedSkills,
+    ],
   );
 
   // The nav only lists the sections actually rendered for THIS node's type —
   // orchestrators / A2A leaves have far fewer than an LLM (type lives in the
   // top bar; sub-agents live in the left tree; both are excluded here).
-  const rootOnlyStepIds: StepId[] = isRootAgent ? ["advanced", "a2aCenter"] : [];
+  const rootOnlyStepIds: StepId[] = isRootAgent ? ["advanced"] : [];
   const navStepIds: StepId[] =
     orchestrator || a2a
       ? ["basic"]
-      : [
-          "basic",
-          "model",
-          "tools",
-          "skills",
-          "knowledge",
-          ...rootOnlyStepIds,
-        ];
+      : ["basic", "model", "tools", "skills", "knowledge", ...rootOnlyStepIds];
   const navSteps = STEPS.filter((s) => navStepIds.includes(s.id));
   const navStepKey = navStepIds.join("|");
   const selectedNodeKey = safePath.join(".");
@@ -1734,7 +1817,10 @@ export function CustomCreate({
 
   // Smooth-scroll a section into view (nav click is a convenience).
   const scrollToSection = (id: StepId) => {
-    sectionRefs.current[id]?.scrollIntoView({ behavior: "smooth", block: "start" });
+    sectionRefs.current[id]?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
   };
 
   // Scroll-spy: follow the section that has crossed the scroll area's top edge.
@@ -1764,7 +1850,8 @@ export function CustomCreate({
         }
       }
 
-      if (nextId) setActiveId((current) => (current === nextId ? current : nextId));
+      if (nextId)
+        setActiveId((current) => (current === nextId ? current : nextId));
     };
 
     const scheduleSync = () => {
@@ -1829,7 +1916,9 @@ export function CustomCreate({
       setDebugError(null);
       setProject(proj);
     } catch (err) {
-      setBuildErr(`打开部署页失败：${err instanceof Error ? err.message : String(err)}`);
+      setBuildErr(
+        `打开部署页失败：${err instanceof Error ? err.message : String(err)}`,
+      );
     } finally {
       setBuilding(false);
     }
@@ -2067,21 +2156,42 @@ export function CustomCreate({
                 <span className="cw-typeradio-slider" aria-hidden />
                 {AGENT_TYPES.map((t) => {
                   const on = (node.agentType ?? "llm") === t.id;
+                  const remoteTypeDisabled = isRootAgent && t.id === "a2a";
+                  const disabledHintId = remoteTypeDisabled
+                    ? "cw-remote-agent-disabled-hint"
+                    : undefined;
                   return (
                     <label
                       key={t.id}
-                      className={`cw-typeradio-item ${on ? "is-on" : ""}`}
+                      className={`cw-typeradio-item ${on ? "is-on" : ""} ${
+                        remoteTypeDisabled ? "is-disabled" : ""
+                      }`}
+                      title={remoteTypeDisabled ? undefined : t.desc}
+                      tabIndex={remoteTypeDisabled ? 0 : undefined}
+                      aria-describedby={disabledHintId}
                     >
                       <input
                         type="radio"
                         name="agentType"
                         className="cw-typeradio-input"
                         checked={on}
-                        onChange={() => patch({ agentType: t.id })}
+                        disabled={remoteTypeDisabled}
+                        onChange={() => selectAgentType(t.id)}
                       />
                       <span className="cw-typeradio-title">
-                        {t.id === "a2a" ? "A2A 远程" : t.label}
+                        {AGENT_TYPE_BAR_LABELS[t.id].replace("智能体", "")}
+                        <wbr />
+                        智能体
                       </span>
+                      {remoteTypeDisabled && (
+                        <span
+                          id={disabledHintId}
+                          className="cw-typeradio-disabled-hint"
+                          role="tooltip"
+                        >
+                          远程 Agent 仅可作为子 Agent
+                        </span>
+                      )}
                     </label>
                   );
                 })}
@@ -2094,9 +2204,10 @@ export function CustomCreate({
           <div className="cw-detail-inner">
             <div className="cw-lower">
             <div className="cw-form-col">
-
             <Section meta={metaOf("basic")}>
                 <div className="cw-form">
+                      {!a2a && (
+                        <>
                     <div className="cw-field">
                       <label className="cw-label">
                         Agent 名称<span className="cw-req">*</span>
@@ -2108,10 +2219,13 @@ export function CustomCreate({
                         onChange={(e) => patch({ name: e.target.value })}
                       />
                       {showErrors && nameProblem ? (
-                        <span className="cw-error-text">{nameProblem}</span>
+                              <span className="cw-error-text">
+                                {nameProblem}
+                              </span>
                       ) : (
                         <span className="cw-help">
-                          遵循 Google ADK 命名规则，且在 Agent 结构中保持唯一。
+                                遵循 Google ADK 命名规则，且在 Agent
+                                结构中保持唯一。
                         </span>
                       )}
                     </div>
@@ -2130,18 +2244,23 @@ export function CustomCreate({
                         }
                       />
                       {showErrors && descriptionMissing ? (
-                        <span className="cw-error-text">描述为必填项</span>
+                              <span className="cw-error-text">
+                                描述为必填项
+                              </span>
                       ) : (
                         <span className="cw-help">
                           描述会显示在 Agent 列表与选择器中。
                         </span>
                       )}
                     </div>
+                        </>
+                      )}
                     {orchestrator ? (
                       <>
                         <p className="cw-section-desc">
-                          编排型 Agent 只负责调度子 Agent，不需要模型或系统提示词。请在左侧
-                          「Agent 结构」中为它添加、排序子 Agent。
+                            编排型 Agent 只负责调度子
+                            Agent，不需要模型或系统提示词。请在左侧 「Agent
+                            结构」中为它添加、排序子 Agent。
                         </p>
                         {node.agentType === "loop" && (
                           <div className="cw-field">
@@ -2161,28 +2280,33 @@ export function CustomCreate({
                               }
                             />
                             <span className="cw-help">
-                              循环编排反复执行子 Agent，直到满足条件或达到该轮次上限。
+                                循环编排反复执行子
+                                Agent，直到满足条件或达到该轮次上限。
                             </span>
                           </div>
                         )}
                       </>
                     ) : a2a ? (
-                      <div className="cw-field">
-                        <label className="cw-label">
-                          Agent URL<span className="cw-req">*</span>
-                        </label>
-                        <input
-                          className={`cw-input ${invalidClass(urlMissing)}`}
-                          value={node.a2aUrl ?? ""}
-                          placeholder="https://example.com/my-agent"
-                          onChange={(e) => patch({ a2aUrl: e.target.value })}
-                        />
-                        {showErrors && urlMissing ? (
-                          <span className="cw-error-text">Agent URL 为必填项</span>
-                        ) : (
-                          <span className="cw-help">
-                            远程 Agent 的访问地址（A2A 协议）；VeADK 会拉取其 Agent Card
-                            并按需处理鉴权。
+                        <div className="cw-field cw-remote-center-fields">
+                          <div className="cw-remote-center-head">
+                            <div className="cw-label">
+                              AgentKit 智能体中心
+                            </div>
+                            <p className="cw-help cw-remote-center-description">
+                              远程 Agent 的名称、描述和能力来自中心返回的 Agent Card。
+                              系统会根据每轮任务动态发现并挂载匹配的 Agent。
+                            </p>
+                          </div>
+                          <RuntimeEnvFields
+                            env={A2A_REGISTRY_ENV}
+                            values={a2aRegistryEnvValues(node.a2aRegistry, {
+                              includeDefaults: false,
+                            })}
+                            onChange={patchA2aRegistryEnv}
+                          />
+                          {showErrors && a2aRegistrySpaceMissing && (
+                            <span className="cw-error-text">
+                              AgentKit 智能体中心 ID 为必填项
                           </span>
                         )}
                       </div>
@@ -2193,7 +2317,10 @@ export function CustomCreate({
                         </label>
                         <Suspense
                           fallback={
-                            <div className="cw-markdown-loading" role="status">
+                              <div
+                                className="cw-markdown-loading"
+                                role="status"
+                              >
                               正在加载 Markdown 编辑器…
                             </div>
                           }
@@ -2210,7 +2337,8 @@ export function CustomCreate({
                           </span>
                         ) : (
                           <span className="cw-help">
-                            支持 Markdown 快捷输入，例如键入 ## 加空格创建二级标题。
+                              支持 Markdown 快捷输入，例如键入 ##
+                              加空格创建二级标题。
                           </span>
                         )}
                       </div>
@@ -2230,7 +2358,9 @@ export function CustomCreate({
                         className="cw-input"
                         value={node.modelName ?? ""}
                         placeholder="doubao-seed-2-1-pro-260628"
-                        onChange={(e) => patch({ modelName: e.target.value })}
+                              onChange={(e) =>
+                                patch({ modelName: e.target.value })
+                              }
                       />
                     </div>
                     <button
@@ -2238,7 +2368,9 @@ export function CustomCreate({
                       className="cw-more-options"
                       aria-expanded={modelAdvancedOpen}
                       aria-controls={modelAdvancedId}
-                      onClick={() => setModelAdvancedOpen((open) => !open)}
+                            onClick={() =>
+                              setModelAdvancedOpen((open) => !open)
+                            }
                     >
                       <span>更多选项</span>
                       <ChevronRight
@@ -2259,7 +2391,9 @@ export function CustomCreate({
                           transition={{ duration: 0.18, ease: "easeOut" }}
                         >
                           <div className="cw-field">
-                            <label className="cw-label">服务商 Provider</label>
+                                  <label className="cw-label">
+                                    服务商 Provider
+                                  </label>
                             <input
                               className="cw-input"
                               value={node.modelProvider ?? ""}
@@ -2280,8 +2414,9 @@ export function CustomCreate({
                               }
                             />
                             <span className="cw-help">
-                              留空则使用 VeADK 默认模型配置；Ark API Key 会由 Studio
-                              服务端凭据自动获取。其他服务商的 Key 可在部署页添加。
+                                    留空则使用 VeADK 默认模型配置；Ark API Key
+                                    会由 Studio 服务端凭据自动获取。其他服务商的
+                                    Key 可在部署页添加。
                             </span>
                           </div>
                         </motion.div>
@@ -2295,7 +2430,8 @@ export function CustomCreate({
                     <div className="cw-field">
                       <label className="cw-label">内置工具</label>
                       <span className="cw-help">
-                        勾选 VeADK 提供的内置能力，生成时会自动补全 import 与所需环境变量。
+                              勾选 VeADK 提供的内置能力，生成时会自动补全 import
+                              与所需环境变量。
                       </span>
                       <div className="cw-tools-list-shell">
                         <Checklist
@@ -2311,7 +2447,9 @@ export function CustomCreate({
                       className="cw-more-options"
                       aria-expanded={moreToolTypesOpen}
                       aria-controls={moreToolTypesId}
-                      onClick={() => setMoreToolTypesOpen((open) => !open)}
+                            onClick={() =>
+                              setMoreToolTypesOpen((open) => !open)
+                            }
                     >
                       <span>更多类型工具</span>
                       {mcpTools.length > 0 && (
@@ -2339,11 +2477,15 @@ export function CustomCreate({
                           <div className="cw-field">
                             <label className="cw-label">MCP 工具</label>
                             <span className="cw-help">
-                              连接外部 MCP 服务，生成时会为每个条目创建对应的 MCPToolset。
+                                    连接外部 MCP
+                                    服务，生成时会为每个条目创建对应的
+                                    MCPToolset。
                             </span>
                             <McpToolEditor
                               tools={mcpTools}
-                              onChange={(next) => patch({ mcpTools: next })}
+                                    onChange={(next) =>
+                                      patch({ mcpTools: next })
+                                    }
                             />
                           </div>
                         </motion.div>
@@ -2383,7 +2525,9 @@ export function CustomCreate({
                         <RuntimeEnvFields
                           env={
                             KB_BACKENDS.find(
-                              (item) => item.id === (node.knowledgebaseBackend ?? "local"),
+                                    (item) =>
+                                      item.id ===
+                                      (node.knowledgebaseBackend ?? "local"),
                             )?.env ?? []
                           }
                           values={draft.deployment?.envValues ?? {}}
@@ -2408,7 +2552,9 @@ export function CustomCreate({
                   className="cw-advanced-disclosure"
                   aria-expanded={advancedConfigOpen}
                   aria-controls={advancedConfigId}
-                  onClick={() => setAdvancedConfigOpen((open) => !open)}
+                            onClick={() =>
+                              setAdvancedConfigOpen((open) => !open)
+                            }
                 >
                   <span className="cw-advanced-disclosure-title">进阶配置</span>
                   <ChevronRight
@@ -2441,7 +2587,12 @@ export function CustomCreate({
                         <Toggle
                           checked={node.memory.shortTerm}
                           onChange={(v) =>
-                            patch({ memory: { ...node.memory, shortTerm: v } })
+                                        patch({
+                                          memory: {
+                                            ...node.memory,
+                                            shortTerm: v,
+                                          },
+                                        })
                           }
                           title="短期记忆"
                           desc="在单次会话内保留上下文，跨轮次记住对话内容。"
@@ -2449,20 +2600,28 @@ export function CustomCreate({
                         />
                         {node.memory.shortTerm && (
                           <div className="cw-field cw-subfield">
-                            <label className="cw-label">短期记忆后端</label>
+                                        <label className="cw-label">
+                                          短期记忆后端
+                                        </label>
                             <BackendSelect
                               options={STM_BACKENDS}
                               value={node.shortTermBackend}
-                              onChange={(id) => patch({ shortTermBackend: id })}
+                                          onChange={(id) =>
+                                            patch({ shortTermBackend: id })
+                                          }
                             />
                             <RuntimeEnvFields
                               env={
                                 STM_BACKENDS.find(
                                   (item) =>
-                                    item.id === (node.shortTermBackend ?? "local"),
+                                                item.id ===
+                                                (node.shortTermBackend ??
+                                                  "local"),
                                 )?.env ?? []
                               }
-                              values={draft.deployment?.envValues ?? {}}
+                                          values={
+                                            draft.deployment?.envValues ?? {}
+                                          }
                               onChange={patchDeploymentEnv}
                             />
                           </div>
@@ -2470,7 +2629,12 @@ export function CustomCreate({
                         <Toggle
                           checked={node.memory.longTerm}
                           onChange={(v) =>
-                            patch({ memory: { ...node.memory, longTerm: v } })
+                                        patch({
+                                          memory: {
+                                            ...node.memory,
+                                            longTerm: v,
+                                          },
+                                        })
                           }
                           title="长期记忆"
                           desc="跨会话持久化关键信息，让 Agent 记住历史偏好。"
@@ -2478,25 +2642,35 @@ export function CustomCreate({
                         />
                         {node.memory.longTerm && (
                           <div className="cw-field cw-subfield">
-                            <label className="cw-label">长期记忆后端</label>
+                                        <label className="cw-label">
+                                          长期记忆后端
+                                        </label>
                             <BackendSelect
                               options={LTM_BACKENDS}
                               value={node.longTermBackend}
-                              onChange={(id) => patch({ longTermBackend: id })}
+                                          onChange={(id) =>
+                                            patch({ longTermBackend: id })
+                                          }
                             />
                             <RuntimeEnvFields
                               env={
                                 LTM_BACKENDS.find(
                                   (item) =>
-                                    item.id === (node.longTermBackend ?? "local"),
+                                                item.id ===
+                                                (node.longTermBackend ??
+                                                  "local"),
                                 )?.env ?? []
                               }
-                              values={draft.deployment?.envValues ?? {}}
+                                          values={
+                                            draft.deployment?.envValues ?? {}
+                                          }
                               onChange={patchDeploymentEnv}
                             />
                             <Toggle
                               checked={!!node.autoSaveSession}
-                              onChange={(v) => patch({ autoSaveSession: v })}
+                                          onChange={(v) =>
+                                            patch({ autoSaveSession: v })
+                                          }
                               title="自动保存会话到长期记忆"
                               desc="会话结束时自动把内容写入长期记忆，无需手动调用。"
                               icon={Database}
@@ -2519,9 +2693,12 @@ export function CustomCreate({
                         />
                         {node.tracing && (
                           <div className="cw-field cw-subfield">
-                            <label className="cw-label">Tracing 导出器</label>
+                                        <label className="cw-label">
+                                          Tracing 导出器
+                                        </label>
                             <span className="cw-help">
-                              选择一个或多个观测平台，生成时会写入对应的 ENABLE_* 开关与环境变量。
+                                          选择一个或多个观测平台，生成时会写入对应的
+                                          ENABLE_* 开关与环境变量。
                             </span>
                             <Checklist
                               items={TRACING_EXPORTERS}
@@ -2529,10 +2706,15 @@ export function CustomCreate({
                               onToggle={toggleExporter}
                             />
                             <RuntimeEnvFields
-                              env={TRACING_EXPORTERS.filter((item) =>
-                                tracingExporters.includes(item.id),
+                                          env={TRACING_EXPORTERS.filter(
+                                            (item) =>
+                                              tracingExporters.includes(
+                                                item.id,
+                                              ),
                               ).flatMap((item) => item.env)}
-                              values={draft.deployment?.envValues ?? {}}
+                                          values={
+                                            draft.deployment?.envValues ?? {}
+                                          }
                               onChange={patchDeploymentEnv}
                             />
                           </div>
@@ -2543,37 +2725,6 @@ export function CustomCreate({
                   )}
                 </AnimatePresence>
               </section>
-            )}
-            {isRootAgent && (
-              <Section meta={metaOf("a2aCenter")}>
-                    <div className="cw-form cw-toggle-stack">
-                      <Toggle
-                        checked={!!node.a2aRegistry?.enabled}
-                        onChange={(enabled) =>
-                          patchA2aRegistry({ enabled })
-                        }
-                        title="A2A 中心"
-                        desc="升级该 Agent 为 SupperAgent，支持发现并调用 A2A 注册中心子 Agent"
-                        icon={Globe}
-                      />
-                      {node.a2aRegistry?.enabled && (
-                        <div className="cw-field cw-subfield">
-                          <RuntimeEnvFields
-                            env={A2A_REGISTRY_ENV}
-                            values={a2aRegistryEnvValues(node.a2aRegistry, {
-                              includeDefaults: false,
-                            })}
-                            onChange={patchA2aRegistryEnv}
-                          />
-                          {showErrors && a2aRegistrySpaceMissing && (
-                            <span className="cw-error-text">
-                              A2A 注册中心空间 ID 为必填项
-                            </span>
-                          )}
-                        </div>
-                      )}
-                    </div>
-              </Section>
             )}
               </>
             )}
@@ -2589,7 +2740,11 @@ export function CustomCreate({
                     animate={{
                       height: `${(Math.max(activeIndex, 0) / Math.max(navSteps.length - 1, 1)) * 100}%`,
                     }}
-                    transition={{ type: "spring", stiffness: 260, damping: 32 }}
+                        transition={{
+                          type: "spring",
+                          stiffness: 260,
+                          damping: 32,
+                        }}
                   />
                 </div>
                 {navSteps.map((s) => {
@@ -2622,10 +2777,14 @@ export function CustomCreate({
                 })}
               </ol>
             </nav>
-          </div>{/* cw-lower */}
-          </div>{/* cw-detail-inner */}
-          </div>{/* cw-detail-scroll */}
-        </div>{/* cw-detail */}
+              </div>
+              {/* cw-lower */}
+            </div>
+            {/* cw-detail-inner */}
+          </div>
+          {/* cw-detail-scroll */}
+        </div>
+        {/* cw-detail */}
         <DebugPanel
           enabled={debugEnabled}
           disabledReason={debugDisabledReason}
@@ -2645,7 +2804,8 @@ export function CustomCreate({
           onIgnoreChanges={() => setIgnoredDebugSnapshot(currentDebugSnapshot)}
           onDeploy={finish}
         />
-      </div>{/* cw-editor */}
+      </div>
+      {/* cw-editor */}
     </div>
   );
 }

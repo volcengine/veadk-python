@@ -205,6 +205,11 @@ test("collects non-automatic built-in tool settings for deployment", () => {
 });
 
 test("materializes A2A registry defaults for deployment env", () => {
+  assert.equal(
+    A2A_REGISTRY_ENV.find((item) => item.key === "REGISTRY_SPACE_ID")
+      ?.placeholder,
+    "请输入智能体中心 ID，如 as-yer579143kbrkemozdn6",
+  );
   assert.deepEqual(
     runtimeEnvVars(A2A_REGISTRY_ENV, {
       REGISTRY_SPACE_ID: "space-test",

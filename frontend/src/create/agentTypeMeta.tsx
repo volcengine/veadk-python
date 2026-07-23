@@ -41,25 +41,25 @@ const AGENT_TYPE_META: Record<AgentTypeId, AgentTypeMeta> = {
   },
   sequential: {
     id: "sequential",
-    label: "顺序编排",
+    label: "顺序型智能体",
     desc: "子 Agent 按顺序依次执行",
     icon: GitBranch,
   },
   parallel: {
     id: "parallel",
-    label: "并行编排",
+    label: "并行型智能体",
     desc: "子 Agent 并行执行后汇总",
     icon: Split,
   },
   loop: {
     id: "loop",
-    label: "循环编排",
+    label: "循环型智能体",
     desc: "子 Agent 循环执行到满足条件",
     icon: Repeat,
   },
   a2a: {
     id: "a2a",
-    label: "远程 Agent",
+    label: "远程智能体",
     desc: "通过 A2A 协议调用远程 Agent",
     icon: Globe,
   },
@@ -71,6 +71,7 @@ export const AGENT_TYPES: AgentTypeMeta[] = [
   AGENT_TYPE_META.sequential,
   AGENT_TYPE_META.parallel,
   AGENT_TYPE_META.loop,
+  AGENT_TYPE_META.a2a,
 ];
 
 export function agentTypeMeta(type: AgentDraft["agentType"]): AgentTypeMeta {
