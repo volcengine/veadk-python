@@ -41,6 +41,11 @@ VeADK ships a React frontend that renders [A2UI](/en/docs/framework/a2ui) (agent
   and detect the format automatically. You can also browse account-scoped
   AgentKit Skill Spaces and their skills by region and project. Then debug the
   agent beside its configuration.
+  Remote Agents can only be added as child Agents. They are configured through
+  an AgentKit center ID, recall count, region, and OpenAPI endpoint, while their
+  names, descriptions, and capabilities come from Agent Cards returned by the
+  center. The generated internal proxy discovers and mounts matching remote
+  Agents dynamically for each request.
   Initialization, session, and conversation failures show credential-redacted
   error details and Runner logs that can be expanded and copied. The deployment
   page shows the Agent topology on the left, with hover details, configuration

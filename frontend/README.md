@@ -61,13 +61,16 @@ server that `veadk frontend` launches — no separate backend.
   pairs an inspectable Agent topology with configuration export, source download,
   and a code browser/editor dialog, while keeping region, message channel,
   network, and environment settings primary. Local skills accept a dropped
-  folder or ZIP and detect the format automatically. Component forms omit credentials
-  VeADK can resolve automatically,
-  while the Studio server forwards its Volcengine credentials to debug runs and
-  deployed runtimes. A global task list keeps Runtime, region, and progress
+  folder or ZIP and detect the format automatically. Component forms omit
+  credentials that VeADK can resolve automatically, while the Studio server
+  forwards its Volcengine credentials to debug runs and deployed runtimes. A
+  global task list keeps Runtime, region, and progress
   visible across page switches, follows the actual generated Runtime name, and
   supports cancellation or retry. Remote topology and trace requests use the selected
-  Runtime endpoint.
+  Runtime endpoint. The Remote Agent type is available only for child Agents;
+  its generated internal proxy mounts AgentKit A2A center agents dynamically
+  from the center ID, recall count, region, and OpenAPI endpoint. Remote names,
+  descriptions, and capabilities come from the returned Agent Cards.
 - **Auth**: optional VeIdentity SSO, or a local username for dev.
 - **Agent-driven UI (A2UI)**: when an agent emits A2UI, it renders as native
   components (one feature among the above — not required).

@@ -18,12 +18,18 @@ const localPickerSource = readFileSync(
   new URL("../src/create/LocalPicker.tsx", import.meta.url),
   "utf8",
 );
+const configYamlSource = readFileSync(
+  new URL("../src/create/configYaml.ts", import.meta.url),
+  "utf8",
+);
 const generatedAgentConfigSources = [
   "../src/create/types.ts",
   "../src/create/normalizeDraft.ts",
-  "../src/create/configYaml.ts",
   "../src/create/TemplateCreate.tsx",
-].map((path) => readFileSync(new URL(path, import.meta.url), "utf8")).join("\n");
+]
+  .map((path) => readFileSync(new URL(path, import.meta.url), "utf8"))
+  .concat(configYamlSource)
+  .join("\n");
 const displayTextSource = readFileSync(
   new URL("../src/create/displayText.ts", import.meta.url),
   "utf8",
@@ -67,10 +73,7 @@ test("long form content scrolls inside bounded editors", () => {
     createStyles,
     /\.cw-markdown-editor:not\(\.mdxeditor-popup-container\)/,
   );
-  assert.doesNotMatch(
-    createStyles,
-    /(?:^|,)\s*\.cw-markdown-editor\s*\{/m,
-  );
+  assert.doesNotMatch(createStyles, /(?:^|,)\s*\.cw-markdown-editor\s*\{/m);
   assert.match(
     createStyles,
     /\.cw-textarea-sm\s*\{[\s\S]*?max-height:\s*160px;[\s\S]*?overflow-y:\s*auto;/,
@@ -82,10 +85,7 @@ test("long form content scrolls inside bounded editors", () => {
 });
 
 test("application shell contains scrolling within the viewport", () => {
-  assert.match(
-    appStyles,
-    /html, body, #root\s*\{[\s\S]*?overflow:\s*hidden;/,
-  );
+  assert.match(appStyles, /html, body, #root\s*\{[\s\S]*?overflow:\s*hidden;/);
   assert.match(
     appStyles,
     /#root\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?inset:\s*0;/,
@@ -149,10 +149,7 @@ test("advanced model connection settings use an accessible disclosure", () => {
 });
 
 test("built-in tools adapt columns and scroll after six rows", () => {
-  assert.match(
-    createSource,
-    /items=\{BUILTIN_TOOLS\}[\s\S]*?scrollRows=\{6\}/,
-  );
+  assert.match(createSource, /items=\{BUILTIN_TOOLS\}[\s\S]*?scrollRows=\{6\}/);
   assert.match(
     createStyles,
     /\.cw-tools-list-shell\s*\{[\s\S]*?container-type:\s*inline-size;/,
@@ -191,7 +188,10 @@ test("MCP tools live under an accessible more-tool-types disclosure", () => {
 });
 
 test("debug panel can collapse without clearing its external run state", () => {
-  assert.match(createSource, /const \[collapsed, setCollapsed\] = useState\(false\)/);
+  assert.match(
+    createSource,
+    /const \[collapsed, setCollapsed\] = useState\(false\)/,
+  );
   assert.match(createSource, /aria-label="收起调试栏"/);
   assert.match(createSource, /aria-label="展开调试栏"/);
   assert.match(
@@ -235,7 +235,10 @@ test("root Agent exposes a confirmed custom clear action", () => {
 });
 
 test("skill sources open in a fixed-height dialog above a six-row selected list", () => {
-  assert.doesNotMatch(createSource, /从 Skill Hub、本地文件或 AgentKit SkillSpace 添加技能/);
+  assert.doesNotMatch(
+    createSource,
+    /从 Skill Hub、本地文件或 AgentKit SkillSpace 添加技能/,
+  );
   assert.match(createSource, /label: "AgentKit Skills 中心"/);
   assert.doesNotMatch(createSource, /label: "SkillSpace"/);
   assert.match(createSource, /label: "火山 Find Skill 技能广场"/);
@@ -249,10 +252,16 @@ test("skill sources open in a fixed-height dialog above a six-row selected list"
     /\{ id: "local", label: "本地文件"[\s\S]*?\{ id: "skillspace", label: "AgentKit Skills 中心"[\s\S]*?\{ id: "skillhub", label: "火山 Find Skill 技能广场"/,
   );
   assert.match(createSource, /useState<SkillSource>\("local"\)/);
-  assert.match(createSource, /className="cw-skill-add"[\s\S]*?<span>添加 Skill<\/span>/);
+  assert.match(
+    createSource,
+    /className="cw-skill-add"[\s\S]*?<span>添加 Skill<\/span>/,
+  );
   assert.match(createSource, /role="dialog"[\s\S]*?aria-modal="true"/);
   assert.match(createSource, /id="cw-skill-dialog-title">添加 Skill<\/h3>/);
-  assert.match(createSource, /className="cw-skill-sourcetabs"[\s\S]*?role="tablist"/);
+  assert.match(
+    createSource,
+    /className="cw-skill-sourcetabs"[\s\S]*?role="tablist"/,
+  );
   assert.match(createSource, /className="cw-skill-tab-slider" aria-hidden/);
   assert.match(createSource, /role="tabpanel"/);
   assert.match(
@@ -288,7 +297,10 @@ test("local Skill folders and ZIP archives support drag and drop", () => {
   assert.match(localPickerSource, /item\.webkitGetAsEntry\?\.\(\)/);
   assert.match(localPickerSource, /collectDroppedFiles/);
   assert.match(localPickerSource, /onDragEnter=\{onDragEnter\}/);
-  assert.match(localPickerSource, /onDrop=\{\(event\) => void onDrop\(event\)\}/);
+  assert.match(
+    localPickerSource,
+    /onDrop=\{\(event\) => void onDrop\(event\)\}/,
+  );
   assert.match(localPickerSource, /readZipSkills\(dropped\[0\]\.file\)/);
   assert.match(localPickerSource, /readFolderSkills\(dropped\.map/);
   assert.match(
@@ -310,9 +322,55 @@ test("nested Agent forms omit root-only advanced configuration", () => {
   );
 });
 
+test("remote Agent configures only the AgentKit center", () => {
+  assert.match(createSource, /llm: "LLM 智能体"/);
+  assert.match(createSource, /sequential: "顺序型智能体"/);
+  assert.match(createSource, /parallel: "并行型智能体"/);
+  assert.match(createSource, /loop: "循环型智能体"/);
+  assert.match(createSource, /a2a: "远程智能体"/);
+  assert.match(createSource, /<wbr \/>/);
+  assert.match(createSource, /AgentKit 智能体中心 ID 为必填项/);
+  assert.match(
+    createSource,
+    /远程 Agent 的名称、描述和能力来自中心返回的 Agent Card/,
+  );
+  assert.match(
+    createSource,
+    /if \(agentType === "a2a"\)[\s\S]*?a2aRegistry:[\s\S]*?enabled: true/,
+  );
+  assert.match(
+    createSource,
+    /if \(isRootAgent && agentType === "a2a"\) return;/,
+  );
+  assert.match(createSource, /disabled=\{remoteTypeDisabled\}/);
+  assert.match(createSource, /远程 Agent 仅可作为子 Agent/);
+  assert.match(
+    createSource,
+    /className="cw-typeradio-disabled-hint"[\s\S]*?role="tooltip"/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-typeradio-item\.is-disabled:hover \.cw-typeradio-disabled-hint/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-typeradio-disabled-hint\s*\{[\s\S]*?top:\s*calc\(100% \+ 17px\)/,
+  );
+  assert.match(createSource, /\{!a2a && \(\s*<>[\s\S]*?Agent 名称/);
+  assert.match(
+    createSource,
+    /if \(isRoot\) return "远程 Agent 只能作为子 Agent";/,
+  );
+  assert.doesNotMatch(createSource, /Agent Card 地址|远程 Agent 添加方式/);
+  assert.doesNotMatch(createSource, /metaOf\("a2aCenter"\)/);
+});
+
 test("memory and tracing are grouped under advanced configuration", () => {
   assert.match(createSource, /aria-expanded=\{advancedConfigOpen\}/);
-  assert.match(createSource, /className="cw-advanced-disclosure-title">进阶配置/);
+  assert.match(
+    createSource,
+    /className="cw-advanced-disclosure-title">进阶配置/,
+  );
   assert.doesNotMatch(createSource, /cw-advanced-disclosure-desc/);
   assert.match(
     createSource,
@@ -323,9 +381,35 @@ test("memory and tracing are grouped under advanced configuration", () => {
     /\{advancedConfigOpen && \([\s\S]*?<span>记忆<\/span>[\s\S]*?<span>观测<\/span>/,
   );
   assert.doesNotMatch(createSource, /<span>观测与呈现<\/span>/);
-  assert.doesNotMatch(createStyles, /\.cw-advanced-group \+ \.cw-advanced-group\s*\{[^}]*border-top:/);
+  assert.doesNotMatch(
+    createStyles,
+    /\.cw-advanced-group \+ \.cw-advanced-group\s*\{[^}]*border-top:/,
+  );
   assert.doesNotMatch(createSource, /metaOf\("memory"\)/);
   assert.doesNotMatch(createSource, /metaOf\("tracing"\)/);
   assert.doesNotMatch(createSource, /A2UI|enableA2ui/);
   assert.doesNotMatch(generatedAgentConfigSources, /A2UI|enableA2ui/);
+});
+
+test("A2A registry YAML export materializes default optional settings", () => {
+  assert.match(
+    configYamlSource,
+    /import \{ A2A_REGISTRY_DEFAULTS \} from "\.\/veadkCatalog";/,
+  );
+  assert.match(
+    configYamlSource,
+    /registry\.registryTopK\s*=\s*draft\.a2aRegistry\.registryTopK\?\.trim\(\) \|\| A2A_REGISTRY_DEFAULTS\.topK;/,
+  );
+  assert.match(
+    configYamlSource,
+    /registry\.registryRegion\s*=\s*draft\.a2aRegistry\.registryRegion\?\.trim\(\) \|\| A2A_REGISTRY_DEFAULTS\.region;/,
+  );
+  assert.match(
+    configYamlSource,
+    /registry\.registryEndpoint\s*=\s*draft\.a2aRegistry\.registryEndpoint\?\.trim\(\) \|\|\s*A2A_REGISTRY_DEFAULTS\.endpoint;/,
+  );
+  assert.match(
+    configYamlSource,
+    /if \(draft\.agentType === "a2a"\)[\s\S]*?o\.a2aRegistry = registry;[\s\S]*?return o;/,
+  );
 });

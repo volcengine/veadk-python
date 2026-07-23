@@ -19,6 +19,7 @@ import ast
 import pytest
 
 from veadk.cli.generated_agent_catalog import (
+    A2A_REGISTRY_ENV,
     BUILTIN_TOOLS,
     KB_BACKENDS,
     LTM_BACKENDS,
@@ -30,6 +31,7 @@ from veadk.cli.generated_agent_catalog import (
     ExporterOption,
 )
 from veadk.cli.generated_agent_codegen import (
+    A2ARegistryConfig,
     AgentDraft,
     GeneratedProject,
     MemoryConfig,
@@ -205,6 +207,132 @@ def test_every_tracing_exporter_generates_code_and_env(
     assert "tracers=[tracer_agent]" in agent_py
     assert _env_keys(files[".env.example"]) == (
         _catalog_env_keys(MODEL_ENV, exporter.env) | {exporter.enable_flag}
+    )
+    _assert_python_files_compile(project)
+
+
+def test_a2a_registry_center_generates_tools_and_env() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="a2a-center",
+            agentType="sequential",
+            subAgents=[
+                AgentDraft(
+                    name="ignored-remote-name",
+                    description="ignored remote description",
+                    instruction="ignored remote instruction",
+                    agentType="a2a",
+                    a2aRegistry=A2ARegistryConfig(
+                        enabled=True,
+                        registrySpaceId="space-test",
+                    ),
+                )
+            ],
+        )
+    )
+    files = _files(project)
+    app_py = files["app.py"]
+    agent_py = files["agents/a2a_center/agent.py"]
+    dynamic_py = files["agents/a2a_center/dynamic_a2a.py"]
+
+    assert "enable_dynamic_a2a_tools(app, root_agent)" in app_py
+    assert "from veadk.a2a.registry_client import registry_config_from_env" in agent_py
+    assert "from veadk.tools.builtin_tools.a2a_registry import" in agent_py
+    assert "a2a_registry_config_agent_sub_1 = registry_config_from_env()" in agent_py
+    assert "build_a2a_registry_tools" in agent_py
+    assert "tools=[*a2a_registry_tools_agent_sub_1]" in agent_py
+    assert "RemoteVeAgent(" not in agent_py
+    assert (
+        'setattr(agent_sub_1, "_veadk_a2a_registry_config", '
+        "a2a_registry_config_agent_sub_1)" in agent_py
+    )
+    assert 'name="agent_sub_1"' in agent_py
+    assert "ignored-remote-name" not in agent_py
+    assert "ignored remote description" not in agent_py
+    assert "ignored remote instruction" not in agent_py
+    assert "build_remote_a2a_agent_tools(prompt, registry_config)" in dynamic_py
+    assert "def _run_request_custom_metadata(" in dynamic_py
+    assert 'getattr(req, "custom_metadata", None)' in dynamic_py
+    assert "req.custom_metadata" not in dynamic_py
+    assert "_ADK_SERVER_STATE_KEY" in dynamic_py
+    assert "_DYNAMIC_A2A_ROUTES_ENABLED_STATE_KEY" in dynamic_py
+    assert "def _has_dynamic_a2a_routes(" in dynamic_py
+    assert '@app.post("/run_sse")' in dynamic_py
+    assert '@app.post("/invoke")' in dynamic_py
+    assert "types.UserContent" in dynamic_py
+    assert _env_keys(files[".env.example"]) == _catalog_env_keys(
+        MODEL_ENV,
+        A2A_REGISTRY_ENV,
+    )
+    assert "REGISTRY_TOP_K=3" in files[".env.example"]
+    assert "REGISTRY_REGION=cn-beijing" in files[".env.example"]
+    assert "REGISTRY_ENDPOINT=https://open.volcengineapi.com/" in files[".env.example"]
+    _assert_python_files_compile(project)
+
+
+def test_remote_agent_cannot_be_generated_as_root() -> None:
+    with pytest.raises(ValueError, match="Remote Agent cannot be the root Agent"):
+        generate_project_from_draft(
+            AgentDraft(
+                agentType="a2a",
+                a2aRegistry=A2ARegistryConfig(
+                    enabled=True,
+                    registrySpaceId="space-test",
+                ),
+            )
+        )
+
+
+def test_a2a_registry_center_env_example_uses_configured_values() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="a2a-center-custom",
+            a2aRegistry=A2ARegistryConfig(
+                enabled=True,
+                registrySpaceId="space-custom",
+                registryTopK="8",
+                registryRegion="cn-shanghai",
+                registryEndpoint="https://example.com/",
+            ),
+        )
+    )
+    env_example = _files(project)[".env.example"]
+
+    assert "REGISTRY_SPACE_ID=space-custom" in env_example
+    assert "REGISTRY_TOP_K=8" in env_example
+    assert "REGISTRY_REGION=cn-shanghai" in env_example
+    assert "REGISTRY_ENDPOINT=https://example.com/" in env_example
+
+
+def test_nested_a2a_registry_agent_generates_dynamic_helper() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="root-sequential",
+            agentType="sequential",
+            subAgents=[
+                AgentDraft(
+                    name="registry-worker",
+                    agentType="a2a",
+                    a2aRegistry=A2ARegistryConfig(
+                        enabled=True,
+                        registrySpaceId="space-test",
+                    ),
+                )
+            ],
+        )
+    )
+    files = _files(project)
+
+    assert "agents/root_sequential/dynamic_a2a.py" in files
+    assert "enable_dynamic_a2a_tools(app, root_agent)" in files["app.py"]
+    agent_py = files["agents/root_sequential/agent.py"]
+    assert "agent_sub_1 = Agent(" in agent_py
+    assert 'name="agent_sub_1"' in agent_py
+    assert "registry-worker" not in agent_py
+    assert "REGISTRY_SPACE_ID=space-test" in files[".env.example"]
+    assert (
+        "_has_a2a_registry_config(child)"
+        in files["agents/root_sequential/dynamic_a2a.py"]
     )
     _assert_python_files_compile(project)
 

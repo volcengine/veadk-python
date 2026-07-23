@@ -22,12 +22,28 @@ const agentTypeMetaSource = readFileSync(
 test("shares the create-page agent type icons with the deployment topology", () => {
   assert.match(customCreateSource, /from "\.\/agentTypeMeta"/);
   assert.match(projectPreviewSource, /from "\.\.\/create\/agentTypeMeta"/);
-  assert.match(projectPreviewSource, /const meta = agentTypeMeta\(agent\.type\)/);
+  assert.match(
+    projectPreviewSource,
+    /const meta = agentTypeMeta\(agent\.type\)/,
+  );
   assert.doesNotMatch(projectPreviewSource, /function topologyIcon/);
 
   for (const icon of ["LlmIcon", "GitBranch", "Split", "Repeat", "Globe"]) {
     assert.match(agentTypeMetaSource, new RegExp(`icon: ${icon}`));
   }
+});
+
+test("offers the AgentKit-backed remote Agent type", () => {
+  assert.match(agentTypeMetaSource, /label: "远程智能体"/);
+  assert.match(
+    agentTypeMetaSource,
+    /export const AGENT_TYPES:[\s\S]*?AGENT_TYPE_META\.a2a/,
+  );
+  assert.match(customCreateSource, /AgentKit 智能体中心/);
+  assert.match(
+    customCreateSource,
+    /remoteTypeDisabled = isRootAgent && t\.id === "a2a"/,
+  );
 });
 
 test("places the add-variable row before any environment variable rows", () => {
@@ -76,7 +92,9 @@ test("uses the builder typography hierarchy for deployment configuration", () =>
 
 test("requires explicit confirmation before starting deployment", () => {
   const requestConfirmation = projectPreviewSource.slice(
-    projectPreviewSource.indexOf("async function requestDeploymentConfirmation"),
+    projectPreviewSource.indexOf(
+      "async function requestDeploymentConfirmation",
+    ),
     projectPreviewSource.indexOf("async function performDeployment"),
   );
   const performDeployment = projectPreviewSource.slice(

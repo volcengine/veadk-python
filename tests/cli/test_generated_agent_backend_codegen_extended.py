@@ -21,7 +21,7 @@ import secrets
 import socket
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -34,8 +34,14 @@ from veadk.cli.cli_frontend import (
 )
 from veadk.cli.generated_agent_codegen import (
     AgentDraft,
+    CustomTool,
+    DeploymentConfig,
     GeneratedAgentProjectRequest,
+    GeneratedFile,
     GeneratedProject,
+    McpTool,
+    MemoryConfig,
+    SelectedSkill,
     generate_project_from_draft,
 )
 from veadk.cli.generated_agent_security import (
@@ -67,7 +73,7 @@ _MINIMAL_FRONTEND_GOLDEN = {
 _FULL_FRONTEND_GOLDEN = {
     "app.py": "a9903cf7e095733e9b8658182a0954a81d8a98b431f8ab995ce3818950127006",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
-    "agents/full_agent/agent.py": "1bc030b7aaafa29bbb673e4a67bd51a1a209dd1f0377206b0ca35252c82c5822",
+    "agents/full_agent/agent.py": "72af9cb24761f83ddc20951706ba3c154b65423cc35962131aefb55fe7c3d8fe",
     "agents/full_agent/__init__.py": "62d651c229ddd771cf0cc0a8b0e05e96b739a737fe71e41fe8bf1df484150c36",
     ".env.example": "054a10f8bc0e046158349ebccdc67a1182c22c4c63ee5b51bf7c2c1674abe052",
     "requirements.txt": "4a941e1bf7efb43d57f608649ac238f2e5ea833f9e0aae92f8bc3fef67b8874e",
@@ -98,17 +104,20 @@ def _full_draft() -> AgentDraft:
         tools=["legacy helper"],
         builtinTools=["web_search", "video_generate"],
         customTools=[
-            {"name": "lookup-order", "description": 'Lookup "order".\nReturn details.'}
+            CustomTool(
+                name="lookup-order",
+                description='Lookup "order".\nReturn details.',
+            )
         ],
         mcpTools=[
-            {
-                "name": "orders",
-                "transport": "http",
-                "url": "https://mcp.example.com/api",
-                "authToken": "secret-token",
-            }
+            McpTool(
+                name="orders",
+                transport="http",
+                url="https://mcp.example.com/api",
+                authToken="secret-token",
+            )
         ],
-        memory={"shortTerm": True, "longTerm": True},
+        memory=MemoryConfig(shortTerm=True, longTerm=True),
         shortTermBackend="sqlite",
         longTermBackend="redis",
         autoSaveSession=True,
@@ -117,18 +126,18 @@ def _full_draft() -> AgentDraft:
         tracing=True,
         tracingExporters=["apmplus", "cozeloop", "tls"],
         selectedSkills=[
-            {
-                "source": "local",
-                "folder": "local-skill",
-                "name": "local-skill",
-                "description": "Local",
-                "localFiles": [
-                    {
-                        "path": "skills/local-skill/SKILL.md",
-                        "content": skill_md,
-                    }
+            SelectedSkill(
+                source="local",
+                folder="local-skill",
+                name="local-skill",
+                description="Local",
+                localFiles=[
+                    GeneratedFile(
+                        path="skills/local-skill/SKILL.md",
+                        content=skill_md,
+                    )
                 ],
-            }
+            )
         ],
         subAgents=[
             AgentDraft(
@@ -150,7 +159,7 @@ def _full_draft() -> AgentDraft:
                 a2aUrl="https://agent.example.com",
             ),
         ],
-        deployment={"feishuEnabled": True},
+        deployment=DeploymentConfig(feishuEnabled=True),
     )
 
 
@@ -209,7 +218,10 @@ def test_codegen_preserves_agent_display_names_for_topology() -> None:
 
 def test_codegen_enables_feishu_without_exposing_lifecycle_code() -> None:
     project = generate_project_from_draft(
-        AgentDraft(name="demo", deployment={"feishuEnabled": True})
+        AgentDraft(
+            name="demo",
+            deployment=DeploymentConfig(feishuEnabled=True),
+        )
     )
     files = _file_map(project)
     app_py = files["app.py"]
@@ -247,7 +259,11 @@ def test_frontend_complete_shape_is_accepted_and_unknown_field_is_rejected() -> 
         ("loop", "LoopAgent", "max_iterations=7"),
     ],
 )
-def test_orchestrator_codegen(agent_type: str, class_name: str, extra: str) -> None:
+def test_orchestrator_codegen(
+    agent_type: Literal["sequential", "parallel", "loop"],
+    class_name: str,
+    extra: str,
+) -> None:
     project = generate_project_from_draft(
         AgentDraft(
             name=f"{agent_type}-root",
@@ -322,8 +338,12 @@ def test_project_allows_stdio_mcp_but_debug_rejects_it() -> None:
         name="demo",
         instruction="Use local MCP.",
         mcpTools=[
-            {"transport": "stdio", "command": "npx", "args": ["-y", "mcp"]},
-            {"transport": "http", "url": "http://127.0.0.1:9000/mcp"},
+            McpTool(
+                transport="stdio",
+                command="npx",
+                args=["-y", "mcp"],
+            ),
+            McpTool(transport="http", url="http://127.0.0.1:9000/mcp"),
         ],
         subAgents=[
             AgentDraft(
@@ -341,7 +361,7 @@ def test_project_allows_stdio_mcp_but_debug_rejects_it() -> None:
     debug_draft = AgentDraft(
         name="demo",
         instruction="Use local MCP.",
-        mcpTools=[{"transport": "http", "url": "http://127.0.0.1:9000/mcp"}],
+        mcpTools=[McpTool(transport="http", url="http://127.0.0.1:9000/mcp")],
         subAgents=[
             AgentDraft(
                 name="local-a2a",
@@ -355,14 +375,14 @@ def test_project_allows_stdio_mcp_but_debug_rejects_it() -> None:
 
 @pytest.mark.asyncio
 async def test_skillspace_materialization_deduplicates_nested_selection() -> None:
-    skill = {
-        "source": "skillspace",
-        "folder": "shared-skill",
-        "name": "shared-skill",
-        "skillSpaceId": "space-1",
-        "skillId": "skill-1",
-        "version": "v1",
-    }
+    skill = SelectedSkill(
+        source="skillspace",
+        folder="shared-skill",
+        name="shared-skill",
+        skillSpaceId="space-1",
+        skillId="skill-1",
+        version="v1",
+    )
     draft = AgentDraft(
         name="root",
         selectedSkills=[skill],
@@ -831,3 +851,84 @@ def test_studio_deploy_run_script_allows_generated_agent_debug() -> None:
     assert "studio --auth-mode frontend" in run_script
     assert '--site-logo "$ROOT_DIR/site-logo.png"' in run_script
     assert "--allow-remote-generated-agent-test-run" not in run_script
+
+
+def test_agentkit_app_adds_dynamic_a2a_tools_per_run() -> None:
+    source = Path("veadk/integrations/agentkit/app.py").read_text()
+
+    assert "build_remote_a2a_agent_tools(prompt, registry_config)" in source
+    assert "def _spawn_dynamic_a2a_agent(" in source
+    assert "def _configure_dynamic_a2a_routes(" in source
+    assert "def _run_request_custom_metadata(" in source
+    assert 'getattr(req, "custom_metadata", None)' in source
+    assert "req.custom_metadata" not in source
+    assert '@app.post("/run_sse")' in source
+    assert '@app.post("/invoke")' in source
+    assert "types.UserContent" in source
+    assert '@app.post("/run", response_model=None)' in source
+
+
+def test_frontend_deploy_forwards_a2a_registry_runtime_env_keys() -> None:
+    source = Path("veadk/cli/cli_frontend.py").read_text()
+
+    assert '"REGISTRY_",' not in source
+    assert '"A2A_REGISTRY_",' not in source
+    assert '"REGISTRY_SPACE_ID",' in source
+    assert '"REGISTRY_ENDPOINT",' in source
+    assert '"REGISTRY_TOP_K",' in source
+    assert '"A2A_REGISTRY_ACCESS_KEY",' in source
+
+
+def test_generated_agent_test_runner_enables_dynamic_a2a_helper() -> None:
+    source = Path("veadk/cli/generated_agent_test_runner.py").read_text()
+
+    assert "get_fast_api_app" in source
+    assert "_bind_adk_server_services(app)" in source
+    assert "_veadk_adk_server" in source
+    assert "dynamic_a2a" in source
+    assert "helper.enable_dynamic_a2a_tools(app, root_agent)" in source
+
+
+def test_agentkit_dynamic_a2a_tools_use_user_prompt_once(monkeypatch) -> None:
+    from google.adk.agents import LlmAgent
+
+    from veadk import Agent
+    from veadk.a2a.registry_client import AgentKitA2ARegistryConfig
+    from veadk.integrations.agentkit import app as agentkit_app
+    from veadk.tools.builtin_tools import a2a_registry
+
+    calls: list[str] = []
+
+    def fake_build_remote_a2a_agent_tools(prompt, config):
+        calls.append(prompt)
+        assert config.space_id == "space-test"
+
+        def remote_a2a_reliability_review(input: str):
+            return {"input": input}
+
+        return [remote_a2a_reliability_review]
+
+    monkeypatch.setattr(
+        a2a_registry,
+        "build_remote_a2a_agent_tools",
+        fake_build_remote_a2a_agent_tools,
+    )
+    agent = Agent(name="demo", instruction="x", model_api_key="fake")
+    setattr(
+        agent,
+        "_veadk_a2a_registry_config",
+        AgentKitA2ARegistryConfig(space_id="space-test"),
+    )
+
+    cloned = agentkit_app._spawn_dynamic_a2a_agent(
+        agent,
+        "你是否拥有 remote_a2a 开头的工具？",
+    )
+
+    assert calls == [
+        "你是否拥有 remote_a2a 开头的工具？",
+    ]
+    assert isinstance(cloned, LlmAgent)
+    assert "remote_a2a_reliability_review" in {
+        getattr(tool, "__name__", "") for tool in cloned.tools
+    }

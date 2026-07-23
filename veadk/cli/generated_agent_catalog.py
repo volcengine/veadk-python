@@ -79,6 +79,23 @@ EMBEDDING_ENV = (
 # AgentKit runtimes. Components must not ask users to duplicate AK/SK settings.
 VOLC_ENV: tuple[EnvVar, ...] = ()
 
+A2A_REGISTRY_ENV = (
+    EnvVar(
+        "REGISTRY_SPACE_ID",
+        True,
+        "your-agentkit-center-id",
+        "AgentKit 智能体中心 ID",
+    ),
+    EnvVar("REGISTRY_TOP_K", False, "3", "召回 Agent 数量"),
+    EnvVar("REGISTRY_REGION", False, "cn-beijing", "AgentKit 智能体中心地域"),
+    EnvVar(
+        "REGISTRY_ENDPOINT",
+        False,
+        "https://open.volcengineapi.com/",
+        "AgentKit 智能体中心 OpenAPI 地址",
+    ),
+)
+
 BUILTIN_TOOLS = (
     ToolOption(
         id="web_search",

@@ -106,6 +106,8 @@ def _validate_node(
             raise DebugPolicyError("A2A URL is required")
         if not allow_local_runtime_resources:
             validate_url_not_private(draft.a2aUrl, field_name="a2aUrl")
+    if draft.a2aRegistry.enabled and not draft.a2aRegistry.registrySpaceId.strip():
+        raise DebugPolicyError("A2A registry space id is required")
 
     _validate_catalog_ids("builtinTools", draft.builtinTools, TOOL_BY_ID)
     if draft.shortTermBackend not in STM_BY_ID:

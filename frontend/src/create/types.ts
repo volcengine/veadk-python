@@ -46,6 +46,18 @@ export interface NetworkConfig {
   enableSharedInternetAccess?: boolean;
 }
 
+export interface A2aRegistryConfig {
+  enabled: boolean;
+  /** REGISTRY_SPACE_ID. */
+  registrySpaceId: string;
+  /** REGISTRY_TOP_K. Empty means the UI supplies the explicit default. */
+  registryTopK?: string;
+  /** REGISTRY_REGION. Empty means the UI supplies the explicit default. */
+  registryRegion?: string;
+  /** REGISTRY_ENDPOINT. Empty means the UI supplies the explicit default. */
+  registryEndpoint?: string;
+}
+
 export interface DeploymentConfig {
   feishuEnabled: boolean;
   network?: NetworkConfig;
@@ -64,8 +76,8 @@ export interface AgentDraft {
    * Agent kind for the custom flow. "llm" is a VeADK `Agent` (LlmAgent);
    * "sequential"/"parallel"/"loop" are orchestrators from `google.adk.agents`
    * that only schedule their sub_agents (no model/instruction/tools/memory of
-   * their own); "a2a" is a leaf `RemoteVeAgent` referenced by URL over the A2A
-   * protocol. Defaults to "llm" when absent.
+   * their own); "a2a" is a leaf remote Agent configured through an AgentKit
+   * A2A center. Defaults to "llm" when absent.
    */
   agentType?: "llm" | "sequential" | "parallel" | "loop" | "a2a";
   /** Max iterations for a "loop" orchestrator (LoopAgent.max_iterations). */
@@ -94,6 +106,8 @@ export interface AgentDraft {
   customTools?: CustomTool[];
   /** MCP tool servers — the backend generator emits an MCPToolset per entry. */
   mcpTools?: McpTool[];
+  /** AgentKit A2A center configuration for a remote Agent. */
+  a2aRegistry?: A2aRegistryConfig;
   /** Chosen backends when memory is enabled. */
   shortTermBackend?: string;
   longTermBackend?: string;
@@ -146,6 +160,13 @@ export function emptyDraft(): AgentDraft {
     builtinTools: [],
     customTools: [],
     mcpTools: [],
+    a2aRegistry: {
+      enabled: false,
+      registrySpaceId: "",
+      registryTopK: "",
+      registryRegion: "",
+      registryEndpoint: "",
+    },
     modelName: DEFAULT_MODEL_NAME,
     modelProvider: "",
     modelApiBase: "",

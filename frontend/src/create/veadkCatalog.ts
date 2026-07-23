@@ -82,6 +82,40 @@ export const FEISHU_ENV: EnvVar[] = [
   },
 ];
 
+export const A2A_REGISTRY_DEFAULTS = {
+  topK: "3",
+  region: "cn-beijing",
+  endpoint: "https://open.volcengineapi.com/",
+} as const;
+
+/** AgentKit A2A registry center runtime configuration. */
+export const A2A_REGISTRY_ENV: EnvVar[] = [
+  {
+    key: "REGISTRY_SPACE_ID",
+    required: true,
+    placeholder: "请输入智能体中心 ID，如 as-yer579143kbrkemozdn6",
+    comment: "AgentKit 智能体中心 ID",
+  },
+  {
+    key: "REGISTRY_TOP_K",
+    required: false,
+    placeholder: A2A_REGISTRY_DEFAULTS.topK,
+    comment: "召回 Agent 数量",
+  },
+  {
+    key: "REGISTRY_REGION",
+    required: false,
+    placeholder: A2A_REGISTRY_DEFAULTS.region,
+    comment: "AgentKit 智能体中心地域",
+  },
+  {
+    key: "REGISTRY_ENDPOINT",
+    required: false,
+    placeholder: A2A_REGISTRY_DEFAULTS.endpoint,
+    comment: "AgentKit 智能体中心 OpenAPI 地址",
+  },
+];
+
 /* ------------------------------------------------------------------ *
  * Built-in tools (curated to ones that load without npx/uvx/AgentKit).
  * ------------------------------------------------------------------ */

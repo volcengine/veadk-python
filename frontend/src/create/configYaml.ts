@@ -3,25 +3,49 @@
 // can be imported back into the custom-mode wizard.
 
 import { parse, stringify } from "yaml";
+import { A2A_REGISTRY_DEFAULTS } from "./veadkCatalog";
 import { normalizeDraft } from "./normalizeDraft";
 import type { AgentDraft } from "./types";
 
 /** Build a clean, minimal config object (omit empty/false fields). */
 function toConfig(draft: AgentDraft): Record<string, unknown> {
   const o: Record<string, unknown> = {
-    name: draft.name,
-    description: draft.description,
-    instruction: draft.instruction,
+    agentType: draft.agentType ?? "llm",
   };
+  if (draft.agentType === "a2a") {
+    if (draft.a2aRegistry?.enabled) {
+      const registry: Record<string, unknown> = { enabled: true };
+      if (draft.a2aRegistry.registrySpaceId?.trim())
+        registry.registrySpaceId = draft.a2aRegistry.registrySpaceId.trim();
+      registry.registryTopK =
+        draft.a2aRegistry.registryTopK?.trim() || A2A_REGISTRY_DEFAULTS.topK;
+      registry.registryRegion =
+        draft.a2aRegistry.registryRegion?.trim() || A2A_REGISTRY_DEFAULTS.region;
+      registry.registryEndpoint =
+        draft.a2aRegistry.registryEndpoint?.trim() || A2A_REGISTRY_DEFAULTS.endpoint;
+      o.a2aRegistry = registry;
+    }
+    return o;
+  }
+  o.name = draft.name;
+  o.description = draft.description;
+  o.instruction = draft.instruction;
+  if (draft.agentType === "loop") o.maxIterations = draft.maxIterations ?? 3;
   if (draft.modelName?.trim()) o.modelName = draft.modelName.trim();
   if (draft.modelProvider?.trim()) o.modelProvider = draft.modelProvider.trim();
   if (draft.modelApiBase?.trim()) o.modelApiBase = draft.modelApiBase.trim();
   if (draft.builtinTools?.length) o.builtinTools = [...draft.builtinTools];
   if (draft.customTools?.length)
-    o.customTools = draft.customTools.map((t) => ({ name: t.name, description: t.description }));
+    o.customTools = draft.customTools.map((t) => ({
+      name: t.name,
+      description: t.description,
+    }));
   if (draft.mcpTools?.length)
     o.mcpTools = draft.mcpTools.map((m) => {
-      const e: Record<string, unknown> = { name: m.name, transport: m.transport };
+      const e: Record<string, unknown> = {
+        name: m.name,
+        transport: m.transport,
+      };
       if (m.url?.trim()) e.url = m.url.trim();
       if (m.authToken?.trim()) e.authToken = m.authToken.trim();
       if (m.command?.trim()) e.command = m.command.trim();
@@ -29,8 +53,12 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
       return e;
     });
   if (draft.memory?.shortTerm || draft.memory?.longTerm) {
-    o.memory = { shortTerm: !!draft.memory.shortTerm, longTerm: !!draft.memory.longTerm };
-    if (draft.memory.shortTerm) o.shortTermBackend = draft.shortTermBackend || "local";
+    o.memory = {
+      shortTerm: !!draft.memory.shortTerm,
+      longTerm: !!draft.memory.longTerm,
+    };
+    if (draft.memory.shortTerm)
+      o.shortTermBackend = draft.shortTermBackend || "local";
     if (draft.memory.longTerm) {
       o.longTermBackend = draft.longTermBackend || "local";
       o.autoSaveSession = !!draft.autoSaveSession;
@@ -49,7 +77,11 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
   }
   if (draft.selectedSkills?.length)
     o.selectedSkills = draft.selectedSkills.map((s) => {
-      const base: Record<string, unknown> = { source: s.source, name: s.name, folder: s.folder };
+      const base: Record<string, unknown> = {
+        source: s.source,
+        name: s.name,
+        folder: s.folder,
+      };
       if (s.description) base.description = s.description;
       if (s.source === "skillhub") {
         base.slug = s.slug;
@@ -64,13 +96,7 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
       }
       return base;
     });
-  if (draft.subAgents?.length)
-    o.subAgents = draft.subAgents.map((sa) => {
-      const s: Record<string, unknown> = { name: sa.name, description: sa.description, instruction: sa.instruction };
-      if (sa.builtinTools?.length) s.builtinTools = [...sa.builtinTools];
-      if (sa.customTools?.length) s.customTools = sa.customTools.map((t) => ({ name: t.name, description: t.description }));
-      return s;
-    });
+  if (draft.subAgents?.length) o.subAgents = draft.subAgents.map(toConfig);
   return o;
 }
 

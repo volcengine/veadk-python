@@ -148,6 +148,8 @@
 }
 /* Fixed top bar (outside the scroll area) — never scrolls. */
 .cw-typebar {
+  position: relative;
+  z-index: 5;
   flex-shrink: 0;
   height: var(--cw-workbench-toolbar-height);
   background: hsl(var(--panel));
@@ -257,7 +259,10 @@
   background: transparent;
   color: hsl(var(--muted-foreground));
   cursor: pointer;
-  transition: color 0.12s, background 0.12s, transform 0.12s;
+  transition:
+    color 0.12s,
+    background 0.12s,
+    transform 0.12s;
 }
 .cw-debug-collapse {
   width: 24px;
@@ -308,7 +313,9 @@
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: opacity 0.12s, transform 0.1s;
+  transition:
+    opacity 0.12s,
+    transform 0.1s;
 }
 .cw-debug-deploy {
   gap: 4px;
@@ -539,7 +546,11 @@
   border: none;
   border-radius: 50%;
   cursor: pointer;
-  transition: opacity 0.15s, transform 0.1s, background 0.12s, color 0.12s;
+  transition:
+    opacity 0.15s,
+    transform 0.1s,
+    background 0.12s,
+    color 0.12s;
 }
 .cw-debug-send {
   background: hsl(var(--primary));
@@ -614,7 +625,10 @@
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.12s, border-color 0.12s, transform 0.1s;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    transform 0.1s;
 }
 .cw-debug-ignore:hover:not(:disabled) {
   border-color: hsl(var(--foreground) / 0.2);
@@ -815,7 +829,10 @@
   height: 6px;
   border-radius: 50%;
   background: hsl(var(--foreground) / 0.25);
-  transition: background 0.15s, width 0.15s, height 0.15s;
+  transition:
+    background 0.15s,
+    width 0.15s,
+    height 0.15s;
 }
 .cw-step.is-active .cw-dot {
   width: 10px;
@@ -847,7 +864,9 @@
   opacity: 0;
   pointer-events: none;
   transform: translate(4px, -50%);
-  transition: opacity 0.12s, transform 0.12s;
+  transition:
+    opacity 0.12s,
+    transform 0.12s;
 }
 .cw-step:hover .cw-step-tooltip,
 .cw-step:focus-visible .cw-step-tooltip {
@@ -940,6 +959,17 @@
   color: hsl(var(--muted-foreground));
   line-height: 1.5;
 }
+.cw-remote-center-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cw-remote-center-description {
+  display: block;
+  max-width: 560px;
+  margin: 0;
+  line-height: 1.6;
+}
 .cw-error-text {
   font-size: 12px;
   color: hsl(var(--destructive));
@@ -950,10 +980,7 @@
   /* The form can become narrow while the viewport stays wide because the
      Agent tree and debug panel flank it. Size columns from this container,
      not from a viewport media query. */
-  grid-template-columns: repeat(
-    auto-fit,
-    minmax(min(100%, 280px), 1fr)
-  );
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
   gap: 12px;
   margin-top: 5px;
 }
@@ -1007,7 +1034,9 @@
   color: hsl(var(--foreground));
   font: inherit;
   font-size: 14px;
-  transition: border-color 0.12s, box-shadow 0.12s;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
 }
 .cw-input::placeholder {
   color: hsl(var(--muted-foreground));
@@ -1033,7 +1062,9 @@
   font-size: 14px;
   line-height: 1.6;
   resize: vertical;
-  transition: border-color 0.12s, box-shadow 0.12s;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
 }
 .cw-textarea::placeholder {
   color: hsl(var(--muted-foreground));
@@ -1121,7 +1152,9 @@
   max-height: 420px;
   overflow: hidden;
   color: hsl(var(--foreground));
-  transition: border-color 0.12s, box-shadow 0.12s;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
 }
 .cw-markdown-editor:not(.mdxeditor-popup-container):focus-within {
   border-color: hsl(var(--ring) / 0.45);
@@ -1241,7 +1274,10 @@
   cursor: pointer;
   font: inherit;
   font-size: 12.5px;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s,
+    border-color 0.12s;
 }
 .cw-chip-ghost:hover {
   background: hsl(var(--accent));
@@ -1278,7 +1314,9 @@
   background: hsl(var(--foreground) / 0.06);
   color: hsl(var(--muted-foreground));
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 .cw-pill-x:hover {
   background: hsl(var(--destructive) / 0.12);
@@ -1363,7 +1401,9 @@
   text-align: left;
   cursor: pointer;
   font: inherit;
-  transition: background 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
 }
 .cw-check:hover {
   background: hsl(var(--foreground) / 0.05);
@@ -1384,7 +1424,10 @@
   border-radius: 5px;
   background: hsl(var(--background));
   color: hsl(var(--background));
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    color 0.12s;
 }
 .cw-check.is-on .cw-check-box {
   background: hsl(var(--foreground));
@@ -1427,7 +1470,9 @@
   text-align: left;
   cursor: pointer;
   font: inherit;
-  transition: background 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
 }
 .cw-seg:hover {
   background: hsl(var(--foreground) / 0.05);
@@ -1584,7 +1629,10 @@
   text-align: left;
   cursor: pointer;
   font: inherit;
-  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s,
+    background 0.15s;
 }
 .cw-toggle:hover {
   border-color: hsl(var(--ring) / 0.25);
@@ -1603,7 +1651,9 @@
   border-radius: 11px;
   background: hsl(var(--secondary));
   color: hsl(var(--muted-foreground));
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 .cw-toggle.is-on .cw-toggle-icon {
   background: hsl(var(--primary) / 0.1);
@@ -1692,7 +1742,9 @@
   background: none;
   color: hsl(var(--muted-foreground));
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 .cw-icon-btn:not(:disabled):hover {
   background: hsl(var(--foreground) / 0.06);
@@ -1730,7 +1782,7 @@
   width: 100%;
   max-width: 100%;
   padding: 4px;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid hsl(var(--border) / 0.55);
   border-radius: 10px;
   background: hsl(var(--secondary) / 0.58);
@@ -1771,6 +1823,44 @@
   background: hsl(var(--foreground) / 0.035);
   color: hsl(var(--foreground));
 }
+.cw-typeradio-item.is-disabled {
+  color: hsl(var(--muted-foreground) / 0.45);
+  cursor: not-allowed;
+}
+.cw-typeradio-item.is-disabled:hover {
+  background: transparent;
+  color: hsl(var(--muted-foreground) / 0.45);
+}
+.cw-typeradio-disabled-hint {
+  position: absolute;
+  top: calc(100% + 17px);
+  right: 0;
+  width: max-content;
+  max-width: 220px;
+  padding: 7px 10px;
+  border: 1px solid hsl(var(--border) / 0.72);
+  border-radius: 7px;
+  background: hsl(var(--popover));
+  box-shadow: 0 8px 24px hsl(var(--foreground) / 0.1);
+  color: hsl(var(--popover-foreground));
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-2px);
+  transition:
+    opacity 0.14s ease,
+    transform 0.14s ease;
+}
+.cw-typeradio-item.is-disabled:hover .cw-typeradio-disabled-hint,
+.cw-typeradio-item.is-disabled:focus .cw-typeradio-disabled-hint,
+.cw-typeradio-item.is-disabled:focus-visible .cw-typeradio-disabled-hint {
+  opacity: 1;
+  transform: translateY(0);
+}
 .cw-typeradio-item.is-on {
   background: transparent;
   color: hsl(var(--foreground));
@@ -1787,12 +1877,12 @@
 }
 .cw-typeradio-title {
   min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: 13.5px;
+  white-space: normal;
+  word-break: keep-all;
+  font-size: clamp(11px, 1.1vw, 13px);
   font-weight: 600;
-  line-height: 1.25;
+  line-height: 1.12;
+  text-align: center;
 }
 .cw-add-sub {
   display: inline-flex;
@@ -1810,7 +1900,10 @@
   font-size: 13.5px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s,
+    border-color 0.12s;
 }
 .cw-add-sub:hover {
   background: hsl(var(--accent));
@@ -1913,7 +2006,11 @@
   font-size: 13.5px;
   font-weight: 550;
   cursor: pointer;
-  transition: background 0.13s, opacity 0.13s, border-color 0.13s, transform 0.1s;
+  transition:
+    background 0.13s,
+    opacity 0.13s,
+    border-color 0.13s,
+    transform 0.1s;
 }
 .cw-btn:active {
   transform: scale(0.98);
@@ -2033,7 +2130,9 @@
   text-align: left;
   cursor: pointer;
   font: inherit;
-  transition: background 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
   min-height: 72px;
   max-height: 72px;
   overflow: hidden;
@@ -2057,7 +2156,10 @@
   border-radius: 7px;
   background: hsl(var(--background));
   color: hsl(var(--muted-foreground));
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    color 0.12s;
 }
 .cw-skill-result.is-on .cw-skill-result-icon {
   background: hsl(var(--foreground));
@@ -2125,7 +2227,10 @@
   font: inherit;
   font-size: 13px;
   font-weight: 600;
-  transition: border-color 0.15s, background 0.15s, color 0.15s;
+  transition:
+    border-color 0.15s,
+    background 0.15s,
+    color 0.15s;
 }
 .cw-skill-add:hover {
   border-color: hsl(var(--foreground) / 0.34);
@@ -2250,7 +2355,9 @@
   font: inherit;
   font-size: 12.5px;
   font-weight: 500;
-  transition: background 0.16s, color 0.16s;
+  transition:
+    background 0.16s,
+    color 0.16s;
 }
 .cw-skill-pickertab:hover {
   background: hsl(var(--foreground) / 0.035);
@@ -2401,7 +2508,9 @@
   border: 1px dashed hsl(var(--border));
   border-radius: 10px;
   background: transparent;
-  transition: border-color 0.15s, color 0.15s;
+  transition:
+    border-color 0.15s,
+    color 0.15s;
 }
 .cw-local-drop-icon {
   width: 20px;
