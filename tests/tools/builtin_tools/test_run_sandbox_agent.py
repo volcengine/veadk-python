@@ -278,7 +278,10 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
             def read(self):
                 return b"not found"
 
-        def fake_urlopen(_request, timeout=None):
+            def close(self):
+                return None
+
+        def fake_urlopen(_request, **_kwargs):
             raise module.error.HTTPError(
                 url="https://sandbox.test/v1/skills/execute",
                 code=404,
@@ -305,6 +308,40 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         self.assertEqual(1, len(fallback_calls))
         self.assertEqual("do work", fallback_calls[0]["workflow_prompt"])
 
+    def test_falls_back_to_legacy_runcode_when_skill_api_returns_405(self):
+        class MethodNotAllowedResponse:
+            def read(self):
+                return b"method not allowed"
+
+            def close(self):
+                return None
+
+        def fake_urlopen(_request, **_kwargs):
+            raise module.error.HTTPError(
+                url="https://sandbox.test/v1/skills/execute",
+                code=405,
+                msg="Method Not Allowed",
+                hdrs={},
+                fp=MethodNotAllowedResponse(),
+            )
+
+        fallback_calls = []
+
+        def fake_run_sandbox_agent(**kwargs):
+            fallback_calls.append(kwargs)
+            return "legacy result"
+
+        module = _load_execute_skills_module(
+            fake_run_sandbox_agent,
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test",
+        )
+
+        with patch.object(module.request, "urlopen", fake_urlopen):
+            result = module.execute_skills("do work", tool_context=self._tool_context())
+
+        self.assertEqual(result, "legacy result")
+        self.assertEqual(1, len(fallback_calls))
+
     def test_falls_back_to_legacy_runcode_when_session_endpoint_is_unavailable(self):
         fallback_calls = []
 
@@ -325,6 +362,108 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         self.assertEqual(result, "legacy result")
         self.assertEqual(1, len(fallback_calls))
         self.assertEqual("do work", fallback_calls[0]["workflow_prompt"])
+
+    def test_env_vars_disable_skill_api_and_preserve_legacy_per_request_env(self):
+        fallback_calls = []
+
+        def fake_run_sandbox_agent(**kwargs):
+            fallback_calls.append(kwargs)
+            return "legacy result"
+
+        module = _load_execute_skills_module(
+            fake_run_sandbox_agent,
+            ensure_agentkit_session_endpoint=lambda **_kwargs: self.fail(
+                "Skill API should be disabled when env_vars are provided"
+            ),
+        )
+
+        result = module.execute_skills(
+            "do work",
+            tool_context=self._tool_context(),
+            env_vars={"CUSTOM_VALUE": "custom"},
+        )
+
+        self.assertEqual(result, "legacy result")
+        self.assertEqual(
+            {
+                "TOS_SKILLS_DIR": "tos://agentkit-platform-test-account/skills/",
+                "CUSTOM_VALUE": "custom",
+            },
+            fallback_calls[0]["extra_env_vars"],
+        )
+
+    def test_legacy_protocol_env_disables_skill_api(self):
+        fallback_calls = []
+
+        def fake_run_sandbox_agent(**kwargs):
+            fallback_calls.append(kwargs)
+            return "legacy result"
+
+        module = _load_execute_skills_module(
+            fake_run_sandbox_agent,
+            ensure_agentkit_session_endpoint=lambda **_kwargs: self.fail(
+                "Skill API should be disabled by VEADK_EXECUTE_SKILLS_PROTOCOL"
+            ),
+        )
+
+        with patch.dict(
+            module.os.environ,
+            {"VEADK_EXECUTE_SKILLS_PROTOCOL": "legacy"},
+            clear=False,
+        ):
+            result = module.execute_skills("do work", tool_context=self._tool_context())
+
+        self.assertEqual(result, "legacy result")
+        self.assertEqual(1, len(fallback_calls))
+
+    def test_missing_tool_context_keeps_legacy_execution_path(self):
+        fallback_calls = []
+
+        def fake_run_sandbox_agent(**kwargs):
+            fallback_calls.append(kwargs)
+            return "legacy result"
+
+        module = _load_execute_skills_module(
+            fake_run_sandbox_agent,
+            ensure_agentkit_session_endpoint=lambda **_kwargs: self.fail(
+                "Skill API requires a tool_context"
+            ),
+        )
+
+        result = module.execute_skills("do work", tool_context=None)
+
+        self.assertEqual(result, "legacy result")
+        self.assertEqual(1, len(fallback_calls))
+        self.assertIsNone(fallback_calls[0]["tool_context"])
+
+    def test_non_compatibility_skill_api_http_error_is_not_swallowed(self):
+        class ServerErrorResponse:
+            def read(self):
+                return b"internal error"
+
+            def close(self):
+                return None
+
+        def fake_urlopen(_request, **_kwargs):
+            raise module.error.HTTPError(
+                url="https://sandbox.test/v1/skills/execute",
+                code=500,
+                msg="Internal Server Error",
+                hdrs={},
+                fp=ServerErrorResponse(),
+            )
+
+        fallback_calls = []
+        module = _load_execute_skills_module(
+            lambda **kwargs: fallback_calls.append(kwargs) or "legacy result",
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test",
+        )
+
+        with patch.object(module.request, "urlopen", fake_urlopen):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 500: internal error"):
+                module.execute_skills("do work", tool_context=self._tool_context())
+
+        self.assertEqual([], fallback_calls)
 
     def test_stream_mode_aggregates_text_chunks_from_skill_api_sse(self):
         sse_body = (
@@ -350,7 +489,7 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
 
         captured_urls = []
 
-        def fake_urlopen(request, timeout=None):
+        def fake_urlopen(request, **_kwargs):
             captured_urls.append(request.full_url)
             return FakeResponse()
 
@@ -368,6 +507,39 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
 
         self.assertEqual(result, "hello world")
         self.assertEqual(["https://sandbox.test/v1/skills/stream"], captured_urls)
+
+    def test_stream_mode_raises_skill_api_error_event(self):
+        sse_body = (
+            "event: error\n"
+            'data: {"request_id":"req_1","type":"text","content":"skill failed","metadata":{}}\n\n'
+        ).encode()
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self):
+                return sse_body
+
+        module = _load_execute_skills_module(
+            lambda **_kwargs: "fallback",
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test",
+        )
+
+        with patch.object(
+            module.request,
+            "urlopen",
+            lambda *_args, **_kwargs: FakeResponse(),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "skill failed"):
+                module.execute_skills(
+                    "do work",
+                    tool_context=self._tool_context(),
+                    prefer_stream=True,
+                )
 
 
 if __name__ == "__main__":
