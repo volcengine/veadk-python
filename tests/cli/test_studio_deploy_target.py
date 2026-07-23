@@ -24,7 +24,11 @@ from volcenginesdkcore.interceptor.interceptors.build_request_interceptor import
     sanitize_for_serialization,
 )
 
-from veadk.cli.cli_frontend import _resolve_studio_identity_region, studio
+from veadk.cli.cli_frontend import (
+    _resolve_studio_cloud_credentials,
+    _resolve_studio_identity_region,
+    studio,
+)
 from veadk.config import veadk_environments
 from veadk.integrations.ve_identity.identity_client import IdentityClient
 
@@ -43,6 +47,48 @@ def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
         lambda **_: None,
     )
+
+
+def test_studio_credentials_prefer_inline_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    credentials_path = tmp_path / "credentials"
+    credentials_path.write_text(
+        "[default]\naccess_key_id=file-ak\nsecret_access_key=file-sk\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "env-ak")
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "env-sk")
+
+    credentials = _resolve_studio_cloud_credentials(
+        None,
+        None,
+        credentials_path,
+    )
+
+    assert credentials == ("env-ak", "env-sk")
+
+
+def test_studio_credentials_fall_back_to_volc_default_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    credentials_path = tmp_path / "credentials"
+    credentials_path.write_text(
+        "[default]\naccess_key_id=file-ak\nsecret_access_key=file-sk\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("VOLCENGINE_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("VOLCENGINE_SECRET_KEY", raising=False)
+
+    credentials = _resolve_studio_cloud_credentials(
+        None,
+        None,
+        credentials_path,
+    )
+
+    assert credentials == ("file-ak", "file-sk")
 
 
 @pytest.mark.parametrize(

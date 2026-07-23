@@ -204,6 +204,11 @@ veadk studio deploy \
   --vefaas-app-name <app-name>
 ```
 
+部署凭据支持通过 `--volcengine-access-key` / `--volcengine-secret-key`
+显式传入，也支持当前进程的 `VOLCENGINE_ACCESS_KEY` /
+`VOLCENGINE_SECRET_KEY` 环境变量。两者均未提供时，会读取
+`~/.volc/credentials` 中的 `[default]` 配置。
+
 ### 自定义 Studio 品牌
 
 使用 `--site-title` 设置不超过 6 个字符的系统名称，使用
