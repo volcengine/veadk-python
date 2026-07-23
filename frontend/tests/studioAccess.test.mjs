@@ -49,10 +49,19 @@ test("runtime selection obeys the server-granted scope", () => {
 });
 
 test("runtime authorization failures are not reported as unsupported", () => {
-  assert.match(clientSource, /res\.status === 403 \|\| res\.status === 404/);
-  assert.match(clientSource, /if \(error instanceof RuntimeAccessDeniedError\) throw error/);
+  assert.match(clientSource, /response\.clone\(\)\.json\(\)/);
+  assert.match(clientSource, /runtime_access_denied/);
+  assert.match(clientSource, /res\.status === 404[\s\S]*?RuntimeProbeError/);
+  assert.match(clientSource, /res\.status === 401 \|\| res\.status === 403/);
+  assert.match(clientSource, /error instanceof RuntimeAccessDeniedError \|\|[\s\S]*?error instanceof RuntimeProbeError/);
   assert.match(selectorSource, /error instanceof RuntimeAccessDeniedError[\s\S]*?setError\(error\.message\)/);
+  assert.match(selectorSource, /error instanceof RuntimeProbeError[\s\S]*?setError\(error\.message\)/);
   assert.match(connectionsSource, /removeRuntimeConnection\(runtimeId\)/);
+});
+
+test("selected Agent icons are optically aligned with the label", () => {
+  assert.match(stylesSource, /\.agent-row-lead[^}]*transform: translateY\(3px\)/);
+  assert.match(stylesSource, /\.agent-row-chev\.open[^}]*translateY\(1px\) rotate\(90deg\)/);
 });
 
 test("deployment and management requests rely on server identity, not author input", () => {

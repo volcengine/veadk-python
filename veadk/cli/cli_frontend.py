@@ -2507,13 +2507,21 @@ def _run_frontend_server(
         region: str,
         *,
         managed_only: bool = False,
+        coded_access_error: bool = False,
     ) -> Any:
         principal = _current_principal(request)
         role = _request_role(request)
         runtime = _get_runtime(runtime_id, region)
         tags = _runtime_tags(runtime)
         if role != StudioRole.ADMIN and not runtime_belongs_to(tags, principal):
-            raise HTTPException(status_code=404, detail="Runtime not found")
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "runtime_access_denied"
+                    if coded_access_error
+                    else "Runtime not found"
+                ),
+            )
         if managed_only and tags.get("veadk:managed") != "true":
             raise HTTPException(status_code=404, detail="Runtime not found")
         return runtime
@@ -2858,7 +2866,12 @@ def _run_frontend_server(
         """
         region = request.query_params.get("region", "cn-beijing")
         try:
-            runtime = _authorized_runtime(request, runtime_id, region)
+            runtime = _authorized_runtime(
+                request,
+                runtime_id,
+                region,
+                coded_access_error=True,
+            )
             endpoint, apikey, auth_type = _resolve_runtime_conn(
                 runtime_id,
                 region,

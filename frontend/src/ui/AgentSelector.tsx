@@ -21,6 +21,7 @@ import {
   getRuntimeDetail,
   getRuntimes,
   RuntimeAccessDeniedError,
+  RuntimeProbeError,
   type AgentInfo,
   type CloudRuntime,
   type RuntimeScope,
@@ -305,6 +306,13 @@ export function AgentSelector({
       })
       .catch((error) => {
         if (error instanceof RuntimeAccessDeniedError) {
+          setError(error.message);
+          return;
+        }
+        if (error instanceof RuntimeProbeError) {
+          if (error.unsupported) {
+            setUnsupported((current) => new Set(current).add(rt.runtimeId));
+          }
           setError(error.message);
           return;
         }
