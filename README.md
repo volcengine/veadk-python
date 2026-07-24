@@ -225,6 +225,11 @@ VeADK provides several useful command line tools for faster deployment and optim
   environment variables, title, and logo are preserved; pass `--site-title` or
   `--site-logo` only when those branding values should be replaced. Sandbox Tool
   IDs are also preserved unless the corresponding deploy option is supplied
+- Studio releases use the API-key-protected VeFaaS service in
+  `services/studio_release_server`: GitHub uploads a prepared archive of the
+  exact target SHA through a short-lived TOS URL, while the service verifies
+  the inputs, builds the immutable Bundle, and publishes it with its VeFaaS IAM
+  role
 
 Studio can assign comma-separated local usernames or OAuth emails to the
 `admin` and `developer` roles:

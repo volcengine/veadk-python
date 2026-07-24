@@ -51,17 +51,20 @@ class VeFaaS:
         self,
         access_key: str,
         secret_key: str,
+        session_token: str = "",
         region: str = "cn-beijing",
         project_name: str = "default",
     ):
         self.ak = access_key
         self.sk = secret_key
+        self.session_token = session_token
         self.region = region
         self.project_name = project_name
 
         configuration = volcenginesdkcore.Configuration()
         configuration.ak = self.ak
         configuration.sk = self.sk
+        configuration.session_token = self.session_token
         configuration.region = region
 
         configuration.client_side_validation = True
@@ -110,6 +113,7 @@ class VeFaaS:
             target="CodeUploadCallback",
             body={"FunctionId": function_id},
             region=self.region,
+            session_token=self.session_token,
         )
 
         return res
@@ -183,6 +187,7 @@ class VeFaaS:
             version="2021-03-03",
             region=_APPLICATION_CONTROL_PLANE_REGION,
             host="open.volcengineapi.com",
+            session_token=self.session_token,
         )
 
         try:
@@ -193,8 +198,9 @@ class VeFaaS:
         except Exception as _:
             raise ValueError(f"Create application failed: {response}")
 
-    def _release_application(self, app_id: str):
-        _ = ve_request(
+    def _start_application_release(self, app_id: str) -> None:
+        """Submit an Application release without waiting for completion."""
+        ve_request(
             request_body={"Id": app_id},
             action="ReleaseApplication",
             ak=self.ak,
@@ -203,7 +209,11 @@ class VeFaaS:
             version="2021-03-03",
             region=_APPLICATION_CONTROL_PLANE_REGION,
             host="open.volcengineapi.com",
+            session_token=self.session_token,
         )
+
+    def _release_application(self, app_id: str):
+        self._start_application_release(app_id)
 
         status, full_response = self._get_application_status(app_id)
         while status not in ["deploy_success", "deploy_fail"]:
@@ -244,6 +254,7 @@ class VeFaaS:
             version="2021-03-03",
             region=_APPLICATION_CONTROL_PLANE_REGION,
             host="open.volcengineapi.com",
+            session_token=self.session_token,
         )
         return response["Result"]["Status"], response
 
@@ -277,6 +288,7 @@ class VeFaaS:
                     version="2021-03-03",
                     region=_APPLICATION_CONTROL_PLANE_REGION,
                     host="open.volcengineapi.com",
+                    session_token=self.session_token,
                 )
                 result = response.get("Result", {})
                 items = result.get("Items", [])
@@ -318,6 +330,43 @@ class VeFaaS:
         Returns:
             The existing Application URL after the new revision is released.
         """
+        self._replace_application_code_bundle(
+            function_id=function_id,
+            path=path,
+            environment_overrides=environment_overrides,
+        )
+        return self._release_application(application_id)
+
+    def submit_application_code_bundle_update(
+        self,
+        *,
+        application_id: str,
+        function_id: str,
+        path: str,
+        environment_overrides: dict[str, str] | None = None,
+    ) -> None:
+        """Replace a function bundle and submit its Application release.
+
+        Unlike :meth:`update_application_code_bundle`, this method does not wait for
+        the new revision. It is intended for a function updating itself, because
+        the current process may stop as soon as the control plane activates the
+        replacement revision.
+        """
+        self._replace_application_code_bundle(
+            function_id=function_id,
+            path=path,
+            environment_overrides=environment_overrides,
+        )
+        self._start_application_release(application_id)
+
+    def _replace_application_code_bundle(
+        self,
+        *,
+        function_id: str,
+        path: str,
+        environment_overrides: dict[str, str] | None,
+    ) -> None:
+        """Upload a bundle and update the Function without releasing it."""
         request_options: dict[str, Any] = {"id": function_id}
         if environment_overrides:
             function = cast(
@@ -339,7 +388,6 @@ class VeFaaS:
         self.client.update_function(
             volcenginesdkvefaas.UpdateFunctionRequest(**request_options)
         )
-        return self._release_application(application_id)
 
     def _update_function_code(
         self,
@@ -490,6 +538,7 @@ class VeFaaS:
                 version="2021-03-03",
                 region=_APPLICATION_CONTROL_PLANE_REGION,
                 host="open.volcengineapi.com",
+                session_token=self.session_token,
             )
         except Exception as e:
             logger.error(f"Delete application failed. Response: {e}")
@@ -664,6 +713,7 @@ class VeFaaS:
                     version="2021-03-03",
                     region="cn-beijing",
                     host="open.volcengineapi.com",
+                    session_token=self.session_token,
                 )
 
                 current_status = query_resp.get("Result", {}).get("Ready", False)
@@ -680,6 +730,7 @@ class VeFaaS:
                     version="2021-03-03",
                     region="cn-beijing",
                     host="open.volcengineapi.com",
+                    session_token=self.session_token,
                 )
 
                 # Handle EnableUserCrVpcTunnel response correctly
@@ -705,6 +756,7 @@ class VeFaaS:
                     version="2021-03-03",
                     region="cn-beijing",
                     host="open.volcengineapi.com",
+                    session_token=self.session_token,
                 )
 
                 final_status = verify_resp.get("Result", {}).get("Ready", False)
@@ -874,6 +926,7 @@ class VeFaaS:
             version="2021-03-03",
             region=_APPLICATION_CONTROL_PLANE_REGION,
             host="open.volcengineapi.com",
+            session_token=self.session_token,
         )
 
         try:

@@ -71,6 +71,7 @@ def test_vefaas_code_upload_callback_uses_configured_region() -> None:
         target="CodeUploadCallback",
         body={"FunctionId": "function-id"},
         region="cn-shanghai",
+        session_token="",
     )
 
 

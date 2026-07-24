@@ -160,6 +160,7 @@ def test_list_applications_uses_application_control_plane_region(
     service.ak = "ak"
     service.sk = "sk"
     service.region = "cn-shanghai"
+    service.session_token = ""
     monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.ve_request", _request)
 
     assert service._list_application(app_name="studio-app") == []
@@ -485,6 +486,7 @@ def test_update_application_code_bundle_merges_only_explicit_environment(
 ) -> None:
     updated_requests: list[Any] = []
     service = object.__new__(VeFaaS)
+    service.session_token = ""
     cast(Any, service).client = SimpleNamespace(
         get_function=lambda _: SimpleNamespace(
             envs=[
@@ -518,6 +520,7 @@ def test_application_control_plane_uses_beijing_for_shanghai_deployment(
 ) -> None:
     calls: list[tuple[str, str]] = []
     service = object.__new__(VeFaaS)
+    service.session_token = ""
     cast(Any, service).ak = "ak"
     cast(Any, service).sk = "sk"
     cast(Any, service).region = "cn-shanghai"
@@ -549,6 +552,7 @@ def test_update_application_code_bundle_preserves_unspecified_sandbox_tool(
 ) -> None:
     updated_requests: list[Any] = []
     service = object.__new__(VeFaaS)
+    service.session_token = ""
     cast(Any, service).client = SimpleNamespace(
         get_function=lambda _: SimpleNamespace(
             envs=[
@@ -581,6 +585,7 @@ def test_update_application_code_bundle_does_not_read_or_replace_environment(
 ) -> None:
     updated_requests: list[Any] = []
     service = object.__new__(VeFaaS)
+    service.session_token = ""
     cast(Any, service).client = SimpleNamespace(
         get_function=lambda _: pytest.fail("environment should not be read"),
         update_function=updated_requests.append,

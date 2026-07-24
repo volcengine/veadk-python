@@ -1014,6 +1014,73 @@ export async function getStudioAccess(): Promise<StudioAccess> {
   return access;
 }
 
+export interface StudioReleaseOption {
+  version: string;
+  gitSha: string;
+  createdAt: string;
+  changelog: string[];
+}
+
+export interface StudioUpdateStatus {
+  enabled: boolean;
+  currentVersion: string;
+  latestVersion: string;
+  latestGitSha: string;
+  releases: StudioReleaseOption[];
+  available: boolean;
+  state: "disabled" | "idle" | "updating" | "error";
+  message: string;
+  progressStage:
+    | "idle"
+    | "resolving"
+    | "downloading"
+    | "preparing"
+    | "submitting"
+    | "publishing"
+    | "complete"
+    | "error";
+  progressMessage: string;
+  targetVersion: string;
+  startedAt: number;
+}
+
+/** Check the configured immutable Studio main release channel. */
+export async function getStudioUpdateStatus(
+  targetVersion?: string,
+): Promise<StudioUpdateStatus> {
+  const query = targetVersion
+    ? `?targetVersion=${encodeURIComponent(targetVersion)}`
+    : "";
+  const res = await apiFetch(`/web/studio-update${query}`);
+  if (!res.ok) throw new Error(`检查 Studio 更新失败 (${res.status})`);
+  return (await res.json()) as StudioUpdateStatus;
+}
+
+/** Stage the latest full Studio bundle and submit a VeFaaS release. */
+export async function startStudioUpdate(
+  version: string,
+): Promise<{ version: string }> {
+  const res = await apiFetch("/web/studio-update", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-VeADK-Studio-Update": "1",
+    },
+    body: JSON.stringify({ version }),
+  });
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const payload = (await res.json()) as { detail?: unknown };
+      detail = typeof payload.detail === "string" ? payload.detail : "";
+    } catch {
+      detail = "";
+    }
+    throw new Error(detail || `提交 Studio 更新失败 (${res.status})`);
+  }
+  return (await res.json()) as { version: string };
+}
+
 /** One AgentKit runtime as listed by `/web/runtimes` (control-plane). */
 export interface CloudRuntime {
   name: string;

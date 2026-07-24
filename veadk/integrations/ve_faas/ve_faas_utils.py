@@ -310,7 +310,14 @@ def request(method, date, query, header, ak, sk, token, action, body, region=Reg
     return r.json()
 
 
-def signed_request(ak: str, sk: str, target: str, body: dict, region: str = Region):
+def signed_request(
+    ak: str,
+    sk: str,
+    target: str,
+    body: dict,
+    region: str = Region,
+    session_token: str = "",
+):
     now = datetime.datetime.utcnow()
 
     try:
@@ -321,7 +328,7 @@ def signed_request(ak: str, sk: str, target: str, body: dict, region: str = Regi
             {},
             ak,
             sk,
-            "",
+            session_token,
             target,
             json.dumps(body),
             region=region,

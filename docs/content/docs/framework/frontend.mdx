@@ -257,6 +257,32 @@ Application。未指定 `--region` 和 `--project` 时，会在北京、上海�
 `--sandbox-chat-codex-tool-id` 和 `--sandbox-skill-creator-tool-id` 也只在显式传入时
 更新对应环境变量；未传的 Tool ID 保留云上已有值，不会被清空。
 
+### Studio 一键更新
+
+部署时配置 TOS 发布通道后，管理员可以在导航栏更新 Studio：
+
+```bash
+veadk studio deploy \
+  --user-pool-id <pool-id> \
+  --allowed-client-id <client-id> \
+  --vefaas-app-name <app-name> \
+  --studio-update-bucket <tos-bucket> \
+  --studio-update-region cn-beijing \
+  --studio-update-prefix veadk/studio/main
+```
+
+Studio 每 3 分钟读取一次 `latest.json`，展示新版本的 changelog 和 Git SHA。
+管理员确认后，完整 Bundle 会同时替换 Python 后端和前端资源，再发布原
+Application；访问 URL、SSO Client 和服务端 Secret 保持不变。
+
+`.github/workflows/publish-studio-release.yaml` 只在 Studio 相关源码进入 `main`
+后运行。GitHub checkout 准确 SHA、构建前端并校验固定的离线 wheel，再通过与任务
+绑定的短期 TOS URL 上传预处理源码。API Key 保护的 VeFaaS Release Server 消费并
+删除这个私有对象，构建和发布不可变 Bundle 与 Manifest，更新有数量上限的
+`releases.json`，最后覆盖 `latest.json`。GitHub Secrets 只需
+`STUDIO_RELEASE_SERVER_URL` 和 `STUDIO_RELEASE_SERVER_API_KEY`，不保存 TOS
+AK/SK。
+
 部署注册回调地址时会保留 VeIdentity 登录页，并为该客户端开启跳过授权确认，
 避免用户登录后再次确认授权。
 

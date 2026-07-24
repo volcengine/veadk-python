@@ -49,14 +49,24 @@ def _role_trn(result: dict) -> str | None:
     return role.get("Trn") or role.get("trn")
 
 
-def _ensure_system_policies(svc: Any, role_name: str) -> None:
-    """Attach any missing system policies required by the frontend runtime."""
+def _ensure_role_policies(svc: Any, role_name: str, policy_name: str) -> None:
+    """Attach the current custom policy and any missing system policies."""
     result = _result(svc.list_attached_role_policies({"RoleName": role_name}))
     attached = {
         policy["PolicyName"]
         for policy in result.get("AttachedPolicyMetadata", [])
         if policy.get("PolicyName")
     }
+    if policy_name not in attached:
+        _result(
+            svc.attach_role_policy(
+                {
+                    "RoleName": role_name,
+                    "PolicyName": policy_name,
+                    "PolicyType": "Custom",
+                }
+            )
+        )
     for policy_name in FRONTEND_DEPLOY_SYSTEM_POLICIES:
         if policy_name in attached:
             continue
@@ -70,6 +80,65 @@ def _ensure_system_policies(svc: Any, role_name: str) -> None:
             )
         )
         logger.info(f"Attached system policy {policy_name} to role {role_name}")
+
+
+def _ensure_custom_policy(svc: Any, policy_name: str) -> None:
+    """Create the runtime policy or replace its document when it exists."""
+    policy_document = json.dumps(FRONTEND_DEPLOY_POLICY)
+    try:
+        _result(
+            svc.update_policy(
+                {
+                    "PolicyName": policy_name,
+                    "NewPolicyDocument": policy_document,
+                }
+            )
+        )
+        logger.info(f"Updated IAM policy {policy_name}")
+    except Exception as update_error:
+        logger.info(f"IAM policy {policy_name} is not updatable yet: {update_error}")
+        try:
+            _result(
+                svc.create_policy(
+                    {
+                        "PolicyName": policy_name,
+                        "PolicyDocument": policy_document,
+                        "Description": "VeADK frontend deploy permissions",
+                    }
+                )
+            )
+            logger.info(f"Created IAM policy {policy_name}")
+        except Exception as create_error:
+            raise RuntimeError(
+                f"Could not create or update IAM policy {policy_name}: {create_error}"
+            ) from create_error
+    _verify_custom_policy(svc, policy_name)
+
+
+def _verify_custom_policy(svc: Any, policy_name: str) -> None:
+    """Fail fast unless IAM serves every action required by the frontend."""
+    result = _result(
+        svc.get_policy({"PolicyName": policy_name, "PolicyType": "Custom"})
+    )
+    policy = result.get("Policy", result)
+    document = policy.get("PolicyDocument")
+    if isinstance(document, str):
+        document = json.loads(document)
+    if not isinstance(document, dict):
+        raise RuntimeError(f"IAM policy {policy_name} has no readable document")
+
+    expected_actions = set(FRONTEND_DEPLOY_POLICY["Statement"][0]["Action"])
+    actual_actions = {
+        action
+        for statement in document.get("Statement", [])
+        for action in statement.get("Action", [])
+    }
+    missing = expected_actions - actual_actions
+    if missing:
+        raise RuntimeError(
+            f"IAM policy {policy_name} is missing required actions: "
+            + ", ".join(sorted(missing))
+        )
 
 
 def ensure_frontend_role(
@@ -89,6 +158,7 @@ def ensure_frontend_role(
     svc = IamService()
     svc.set_ak(access_key)
     svc.set_sk(secret_key)
+    _ensure_custom_policy(svc, policy_name)
 
     # Reuse an existing role if present.
     try:
@@ -99,21 +169,8 @@ def ensure_frontend_role(
         trn = _role_trn(existing)
         if trn:
             logger.info(f"Reusing existing IAM role {role_name} ({trn})")
-            _ensure_system_policies(svc, role_name)
+            _ensure_role_policies(svc, role_name, policy_name)
             return trn
-
-    # Create the custom policy (tolerate "already exists").
-    try:
-        svc.create_policy(
-            {
-                "PolicyName": policy_name,
-                "PolicyDocument": json.dumps(FRONTEND_DEPLOY_POLICY),
-                "Description": "VeADK frontend deploy permissions",
-            }
-        )
-        logger.info(f"Created IAM policy {policy_name}")
-    except Exception as e:
-        logger.info(f"CreatePolicy {policy_name} skipped/failed (may exist): {e}")
 
     # Create the role with the vefaas trust relationship.
     created = _result(
@@ -126,25 +183,12 @@ def ensure_frontend_role(
         )
     )
 
-    # Attach the policy to the role (tolerate "already attached").
-    try:
-        svc.attach_role_policy(
-            {
-                "RoleName": role_name,
-                "PolicyName": policy_name,
-                "PolicyType": "Custom",
-            }
-        )
-        logger.info(f"Attached policy {policy_name} to role {role_name}")
-    except Exception as e:
-        logger.info(f"AttachRolePolicy skipped/failed (may be attached): {e}")
-
     trn = _role_trn(created)
     if not trn:
         # CreateRole didn't echo the TRN — read it back.
         trn = _role_trn(_result(svc.get_role({"RoleName": role_name})))
     if not trn:
         raise RuntimeError(f"Could not resolve TRN for role {role_name}")
-    _ensure_system_policies(svc, role_name)
+    _ensure_role_policies(svc, role_name, policy_name)
     logger.info(f"Ensured IAM role {role_name} ({trn})")
     return trn
