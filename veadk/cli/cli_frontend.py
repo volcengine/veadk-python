@@ -3375,6 +3375,98 @@ def _run_frontend_server(
             "pageSize": page_size,
         }
 
+    def _viking_knowledgebase_host(region: str) -> tuple[str, str]:
+        cloud_provider = os.getenv("CLOUD_PROVIDER", "volces").lower()
+        if cloud_provider == "byteplus":
+            return (
+                f"api-knowledgebase.mlp.{region}.bytepluses.com",
+                "https",
+            )
+        return (f"api-knowledgebase.mlp.{region}.volces.com", "https")
+
+    def _collection_attr(collection: Any, name: str, fallback: Any = "") -> Any:
+        value = getattr(collection, name, None)
+        if value is not None:
+            return value
+        data = getattr(collection, "__dict__", {})
+        if isinstance(data, dict):
+            return data.get(name, fallback)
+        return fallback
+
+    @app.get("/web/viking-knowledgebases")
+    async def _web_list_viking_knowledgebases(
+        region: str = "cn-beijing",
+        project: str = "default",
+    ):
+        """List VikingDB KnowledgeBase collections visible to server creds."""
+        from volcengine.viking_knowledgebase import VikingKnowledgeBaseService
+
+        try:
+            ak, sk, token = _resolve_ve_credentials()
+        except HTTPException:
+            raise HTTPException(
+                status_code=409,
+                detail="Server Volcengine credentials not configured "
+                "(set VOLCENGINE_ACCESS_KEY/SECRET_KEY).",
+            )
+
+        project_name = (project or "").strip() or "default"
+        host, scheme = _viking_knowledgebase_host(region)
+        try:
+            client = VikingKnowledgeBaseService(
+                host=host,
+                region=region,
+                ak=ak,
+                sk=sk,
+                sts_token=token or "",
+                scheme=scheme,
+            )
+            collections = await asyncio.to_thread(
+                client.list_collections,
+                project=project_name,
+                brief=True,
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(
+                f"List VikingDB knowledgebases error for {region}: {e}",
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="暂时无法加载 VikingDB 知识库，请稍后重试。",
+            )
+
+        items: list[dict[str, Any]] = []
+        for collection in collections or []:
+            name = str(_collection_attr(collection, "collection_name", "") or "")
+            if not name:
+                continue
+            items.append(
+                {
+                    "id": name,
+                    "name": name,
+                    "description": str(
+                        _collection_attr(collection, "description", "") or ""
+                    ),
+                    "projectName": str(
+                        _collection_attr(collection, "project", project_name)
+                        or project_name
+                    ),
+                    "region": region,
+                    "docCount": _collection_attr(collection, "doc_num", None),
+                    "updatedAt": str(
+                        _collection_attr(collection, "update_time", "") or ""
+                    ),
+                    "resourceId": str(
+                        _collection_attr(collection, "resource_id", "") or ""
+                    ),
+                }
+            )
+
+        return {"items": items, "totalCount": len(items)}
+
     # SkillSpace routes return SKILL.md (SkillMd) content, not the full TOS zip;
     # that keeps the surface small and mirrors how the public Skill Hub picker
     # only needs markdown for basic skills.

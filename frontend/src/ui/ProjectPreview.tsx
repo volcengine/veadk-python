@@ -57,6 +57,7 @@ import type { AgentDraft, NetworkConfig } from "../create/types";
 import { agentTypeMeta } from "../create/agentTypeMeta";
 import {
   FEISHU_ENV,
+  DEFAULT_KB_BACKEND,
   findExporter,
   findKb,
   findLtm,
@@ -312,9 +313,12 @@ function buildTopologyAgent(node: AgentDraft, id = "root"): TopologyAgent {
     tools: displayConfig(tools),
     skills: displayConfig(skills),
     knowledgebase: node.knowledgebase
-      ? findKb(node.knowledgebaseBackend ?? "local")?.label ??
-        node.knowledgebaseBackend ??
-        "默认知识库"
+      ? displayConfig([
+          findKb(node.knowledgebaseBackend ?? DEFAULT_KB_BACKEND)?.label ??
+            node.knowledgebaseBackend ??
+            "默认知识库",
+          node.knowledgebaseIndex,
+        ])
       : "未配置",
     shortTerm: node.memory.shortTerm
       ? findStm(node.shortTermBackend ?? "local")?.label ??
