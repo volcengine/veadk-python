@@ -224,6 +224,18 @@ class TOSVectorConfig(BaseSettings):
     user_agent_customized_key_values: dict[str, str] | None = None
 
 
+class TOSContextBucketConfig(BaseSettings):
+    """Configuration for the TOS ContextBucket controller APIs."""
+
+    model_config = SettingsConfigDict(env_prefix="DATABASE_TOS_CONTEXT_")
+
+    endpoint: str = "tos-cn-beijing.volces.com"
+
+    region: str = "cn-beijing"
+
+    control_endpoint: str | None = None
+
+
 class MSENacosConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="NACOS_")
 

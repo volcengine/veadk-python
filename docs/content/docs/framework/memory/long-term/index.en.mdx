@@ -25,7 +25,7 @@ ltm = LongTermMemory(backend="viking", app_name="ltm_demo")
 
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `backend` | `"local" \| "opensearch" \| "redis" \| "viking" \| "mem0"` or a backend instance | `"opensearch"` | Selects the backend, or pass a `BaseLongTermMemoryBackend` instance directly. `viking_mem` is deprecated and maps to `viking`. |
+| `backend` | `"local" \| "opensearch" \| "redis" \| "viking" \| "mem0" \| "tos_context"` or a backend instance | `"opensearch"` | Selects the backend, or pass a `BaseLongTermMemoryBackend` instance directly. `viking_mem` is deprecated and maps to `viking`. |
 | `backend_config` | `dict` | `{}` | Config passed to the backend constructor; if it lacks `index`, it's filled from `index` or `app_name`. |
 | `top_k` | `int` | `5` | Number of most-similar chunks to retrieve. |
 | `index` | `str` | `""` | Index/collection name for storing memories. Falls back to `app_name`, then `default_app`. |
@@ -33,7 +33,7 @@ ltm = LongTermMemory(backend="viking", app_name="ltm_demo")
 | `user_id` | `str` | `""` | **Deprecated**, kept only for backward compatibility. |
 
 <Callout type="info">
-Vector backends (`local`, `opensearch`, `redis`) embed memories, which requires `pip install "veadk-python[extensions]"` and an embedding model (env prefix `MODEL_EMBEDDING_`, falling back to `MODEL_AGENT_API_KEY`). `viking` and `mem0` are managed services and need no local embedding.
+Vector backends (`local`, `opensearch`, `redis`) embed memories, which requires `pip install "veadk-python[extensions]"` and an embedding model (env prefix `MODEL_EMBEDDING_`, falling back to `MODEL_AGENT_API_KEY`). `viking`, `mem0`, and `tos_context` are managed services and need no local embedding.
 </Callout>
 
 ## Backend contract: `BaseLongTermMemoryBackend`
@@ -70,6 +70,7 @@ Use `local` for debugging; prefer `viking` or `mem0` in production.
 | `mem0` | Mem0 memory (managed) | Mem0 API key | Recommended for production | [Mem0](/en/docs/framework/memory/long-term/mem0) |
 | `opensearch` | OpenSearch vector store | OpenSearch + embedding | Self-hosted vector search | [OpenSearch](/en/docs/framework/memory/long-term/opensearch) |
 | `redis` | Redis vector store | Redis (RediSearch) + embedding | Self-hosted vector search | [Redis](/en/docs/framework/memory/long-term/redis) |
+| `tos_context` | TOS ContextBucket (managed) | Volcengine account (AK/SK; temporary credentials also need `VOLCENGINE_SESSION_TOKEN`) + `tos>=2.9.4b1` | Server-side inference/retrieval, per-user isolation | [TOS ContextBucket](/en/docs/framework/memory/long-term/tos-context#configuration) |
 
 ## Binding to an Agent
 

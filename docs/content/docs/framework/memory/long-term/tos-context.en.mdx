@@ -1,0 +1,91 @@
+---
+title: "TOS ContextBucket (tos_context)"
+---
+
+The `tos_context` backend (`TosContextBucketLTMBackend`) uses the ContextBucket memory capability of Volcengine [TOS](https://www.volcengine.com/product/TOS) as long-term storage. It is a managed service: the server performs memory inference and retrieval, so no self-hosted vector store or local embedding is required.
+
+The backend maps `index` (or `app_name`) to a single **ContextBucket**, and maps the runtime `user_id` to a **ContextSet** under that bucket, so memories are naturally isolated per user. The corresponding ContextBucket and ContextSet are created automatically on first use (lazy ensure).
+
+## When to use
+
+- Production with persistence and managed operations;
+- When you want the ContextBucket memory capability of Volcengine TOS (server-side inference and retrieval);
+- When you want strong isolation by `user_id` (one ContextSet per user).
+
+## Requirements and installation
+
+The ContextBucket API is currently only available in a **pre-release (beta)** TOS SDK: `tos>=2.9.4b1`. VeADK's core dependency is the stable `tos>=2.8.4` (used by TOS object storage and Viking DB), so it does **not** install the beta for you. Before using `backend="tos_context"`, upgrade the TOS SDK explicitly:
+
+```bash
+pip install --upgrade "tos>=2.9.4b1" --pre
+```
+
+<Callout type="warn">
+pip / uv **ignore pre-releases by default**, so you must pass `--pre` (uv uses `--prerelease=allow`). Otherwise `2.9.4b1` won't be installed and you'll still hit the errors below at runtime.
+</Callout>
+
+## Common runtime errors and how to handle them
+
+`tos_context` is fail-closed: when a dependency or config requirement is not met, it **raises at initialization** rather than degrading silently or writing bad data. Common errors:
+
+| Error | Trigger | How to fix |
+| :--- | :--- | :--- |
+| `ImportError` | The `tos` SDK is not installed. | Install it: `pip install --upgrade "tos>=2.9.4b1" --pre`. |
+| `RuntimeError` | `tos` is installed but too old (e.g. `2.8.4`, or stable `2.9.2`); `TosClientV2` lacks the ContextBucket methods. | Upgrade to the pre-release: `pip install --upgrade "tos>=2.9.4b1" --pre`. The error message includes the installed version and this command. |
+| `ValueError` | `account_id` or `control_endpoint` is not configured. | Set the env vars `DATABASE_TOS_CONTEXT_ACCOUNT_ID` and `DATABASE_TOS_CONTEXT_CONTROL_ENDPOINT` (see the configuration table below). |
+
+<Callout type="info">
+**Why a `RuntimeError` instead of an `ImportError` when `tos` is installed?** ContextBucket support was added as new methods on the existing `TosClientV2` class, so an older release still imports fine — it just lacks those methods. At initialization VeADK probes for the required methods (`hasattr`) to decide whether the installed SDK actually supports ContextBucket, turning a silent "imports but fails on call" problem into a clear, actionable error at startup.
+</Callout>
+
+## Configuration
+
+Authenticated via Volcengine AK/SK. Credentials are resolved in this order: explicit AK/SK **first** (env `VOLCENGINE_ACCESS_KEY` / `VOLCENGINE_SECRET_KEY`, with the STS token taken from `VOLCENGINE_SESSION_TOKEN`); **if both are not provided**, it falls back to the VeFaaS IAM credential file (`/var/run/secrets/iam/credential`) for the temporary AK/SK and STS token — the path used for keyless cloud deployments (VeFaaS / AgentKit). Other connection settings use the env prefix `DATABASE_TOS_CONTEXT_`; locally they can be placed under `database.tos_context.*` in `config.yaml` (flattened into the matching env vars).
+
+| Field | Env var | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `volcengine_access_key` | `VOLCENGINE_ACCESS_KEY` | — | Volcengine Access Key (long-term or STS temporary AK). |
+| `volcengine_secret_key` | `VOLCENGINE_SECRET_KEY` | — | Volcengine Secret Key (long-term or STS temporary SK). |
+| `session_token` | `VOLCENGINE_SESSION_TOKEN` | — | STS security token for temporary credentials (optional; only needed with a temporary AK/SK). |
+| `account_id` | `DATABASE_TOS_CONTEXT_ACCOUNT_ID` | — | **Required**. Account ID for the ContextBucket control-plane APIs. |
+| `control_endpoint` | `DATABASE_TOS_CONTEXT_CONTROL_ENDPOINT` | — | **Required**. ContextBucket controller (control-plane) endpoint. |
+| `context_bucket_name` | `DATABASE_TOS_CONTEXT_BUCKET_NAME` | falls back to `index` | ContextBucket name. If unset, uses the `LongTermMemory` `index` (or `app_name`). |
+| `endpoint` | `DATABASE_TOS_CONTEXT_ENDPOINT` | `tos-cn-beijing.volces.com` | TOS data-plane endpoint. |
+| `region` | `DATABASE_TOS_CONTEXT_REGION` | `cn-beijing` | Region. |
+
+<Callout type="warn">
+`account_id` and `control_endpoint` are required; a missing value raises `ValueError` at initialization (fail-closed — no silent degradation).
+</Callout>
+
+<Callout type="info">
+The STS token reuses the global `VOLCENGINE_SESSION_TOKEN` convention (consistent with TOS object storage and other components); the standalone `DATABASE_TOS_CONTEXT_SECURITY_TOKEN` is no longer used. It is not needed when using long-term AK/SK. If `VOLCENGINE_ACCESS_KEY` / `VOLCENGINE_SECRET_KEY` are not both provided, the VeFaaS IAM credential file is read instead; a missing file raises `FileNotFoundError`.
+</Callout>
+
+## Usage
+
+```python
+from veadk import Agent
+from veadk.memory.long_term_memory import LongTermMemory
+
+# index maps to the ContextBucket name and must satisfy the bucket naming rules (see Callout below)
+ltm = LongTermMemory(
+    backend="tos_context",
+    index="demo-agent-memory",
+    top_k=5,
+)
+agent = Agent(
+    name="demo",
+    long_term_memory=ltm,
+    auto_save_session=True,  # persist to long-term memory at session end
+)
+```
+
+At init, if the ContextBucket doesn't exist, VeADK creates it; the first write/search for each `user_id` also creates the corresponding ContextSet if missing (enabling the `memory` scene).
+
+<Callout type="info">
+`index` (the ContextBucket name) must follow TOS bucket naming rules: **length 3–63**, containing only **lowercase letters, digits, and hyphens (`-`)**, and not starting or ending with a hyphen. Use `DATABASE_TOS_CONTEXT_BUCKET_NAME` to override the bucket name derived from `app_name`/`index`.
+</Callout>
+
+<Callout type="info">
+Memories are isolated by `user_id`: different `user_id`s write to different ContextSets, and retrieval only matches memories of the same `user_id`. Use a consistent `user_id` for cross-session recall.
+</Callout>
