@@ -22,6 +22,7 @@ on:
       - ".github/workflows/publish-studio-release.yaml"
       - "frontend/**"
       - "services/studio_release_server/**"
+      - "veadk/services/studio_release_server/**"
       - "veadk/cli/cli.py"
       - "veadk/cli/cli_frontend.py"
       - "veadk/cli/frontend_*.py"
@@ -59,6 +60,11 @@ jobs:
       RELEASE_SERVER_API_KEY: ${{ secrets.STUDIO_RELEASE_SERVER_API_KEY }}
 
     steps:
+      - name: Check out release source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: Validate release server configuration
         run: |
           set -euo pipefail
@@ -76,6 +82,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MANUAL_CHANGELOG: ${{ inputs.changelog }}
+          PUSH_CHANGELOG: ${{ github.event.head_commit.message }}
         run: |
           set -euo pipefail
           changelog="$MANUAL_CHANGELOG"
@@ -88,35 +95,69 @@ jobs:
             )"
           fi
           if [[ -z "$changelog" ]]; then
-            changelog="${{ github.event.head_commit.message }}"
+            changelog="$PUSH_CHANGELOG"
             changelog="${changelog%%$'\n'*}"
           fi
           test -n "$changelog" || {
             echo "Studio release changelog is empty." >&2
             exit 1
           }
-          echo "value=$changelog" >> "$GITHUB_OUTPUT"
+          {
+            echo "value<<STUDIO_CHANGELOG"
+            echo "$changelog"
+            echo "STUDIO_CHANGELOG"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Stage release source
+        id: source
+        run: |
+          set -euo pipefail
+          job_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          archive="$RUNNER_TEMP/studio-release-source.tar.gz"
+          git archive \
+            --format=tar.gz \
+            --prefix="veadk-python-${GITHUB_SHA}/" \
+            --output="$archive" \
+            "$GITHUB_SHA"
+          upload_response="$(curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Content-Type: application/json" \
+            --header "X-API-Key: $RELEASE_SERVER_API_KEY" \
+            --data "$(jq -n --arg requestId "$job_id" \
+              '{requestId:$requestId}')" \
+            "$RELEASE_SERVER_URL/source-upload")"
+          source_key="$(jq -er '.sourceKey' <<<"$upload_response")"
+          upload_url="$(jq -er '.uploadUrl' <<<"$upload_response")"
+          curl --fail-with-body --silent --show-error \
+            --request PUT \
+            --header "Content-Type: application/gzip" \
+            --upload-file "$archive" \
+            "$upload_url"
+          echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
+          echo "source_key=$source_key" >> "$GITHUB_OUTPUT"
 
       - name: Request Studio release
         id: release
         env:
           STUDIO_CHANGELOG: ${{ steps.changelog.outputs.value }}
+          JOB_ID: ${{ steps.source.outputs.job_id }}
+          SOURCE_KEY: ${{ steps.source.outputs.source_key }}
         run: |
           set -euo pipefail
-          job_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           payload="$(jq -n \
             --arg repository "$GITHUB_REPOSITORY" \
             --arg gitSha "$GITHUB_SHA" \
-            --arg requestId "$job_id" \
+            --arg requestId "$JOB_ID" \
             --arg changelog "$STUDIO_CHANGELOG" \
-            '{repository:$repository,gitSha:$gitSha,requestId:$requestId,changelog:[$changelog]}')"
+            --arg sourceKey "$SOURCE_KEY" \
+            '{repository:$repository,gitSha:$gitSha,requestId:$requestId,changelog:[$changelog],sourceKey:$sourceKey}')"
           curl --fail-with-body --silent --show-error \
             --request POST \
             --header "Content-Type: application/json" \
             --header "X-API-Key: $RELEASE_SERVER_API_KEY" \
             --data "$payload" \
             "$RELEASE_SERVER_URL/release" >/dev/null
-          echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
+          echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
 
       - name: Wait for Studio release
         env:

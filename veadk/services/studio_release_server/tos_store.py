@@ -12,6 +12,7 @@ from typing import Any, Protocol
 from veadk.services.studio_release_server.models import (
     ReleaseServerSettings,
     ReleaseStatus,
+    SourceUpload,
 )
 
 _IAM_CREDENTIAL_PATH = Path("/var/run/secrets/iam/credential")
@@ -59,6 +60,29 @@ class JobStore(Protocol):
 
     def put(self, status: ReleaseStatus) -> None:
         """Persist the complete current job state."""
+        ...
+
+
+class SourceStore(Protocol):
+    """Create and consume private source archives used by release jobs."""
+
+    def expected_key(self, job_id: str) -> str:
+        """Return the only accepted source key for one job."""
+        ...
+
+    def prepare_upload(self, job_id: str) -> SourceUpload:
+        """Return a short-lived upload target for one job."""
+        ...
+
+    def download_and_delete(
+        self,
+        source_key: str,
+        destination: Path,
+        *,
+        max_bytes: int,
+        on_progress: Callable[[int], None],
+    ) -> None:
+        """Download one source archive and remove its staging object."""
         ...
 
 
@@ -120,9 +144,82 @@ class TosJobStore:
         )
 
 
+class TosSourceStore:
+    """Stage Git archives through signed TOS URLs without sharing credentials."""
+
+    def __init__(
+        self,
+        settings: ReleaseServerSettings,
+        *,
+        client_factory: Callable[[], Any] | None = None,
+    ) -> None:
+        self._settings = settings
+        self._client_factory = client_factory or self._new_client
+
+    def expected_key(self, job_id: str) -> str:
+        prefix = self._settings.job_prefix.strip().strip("/")
+        return f"{prefix}/sources/{job_id}.tar.gz"
+
+    def prepare_upload(self, job_id: str) -> SourceUpload:
+        import tos
+
+        source_key = self.expected_key(job_id)
+        signed = self._client_factory().pre_signed_url(
+            tos.HttpMethodType.Http_Method_Put,
+            bucket=self._settings.bucket,
+            key=source_key,
+            expires=900,
+        )
+        return SourceUpload(
+            sourceKey=source_key,
+            uploadUrl=signed.signed_url,
+            expiresIn=900,
+        )
+
+    def download_and_delete(
+        self,
+        source_key: str,
+        destination: Path,
+        *,
+        max_bytes: int,
+        on_progress: Callable[[int], None],
+    ) -> None:
+        client = self._client_factory()
+        response = client.get_object(
+            bucket=self._settings.bucket,
+            key=source_key,
+        )
+        size = 0
+        with destination.open("wb") as output:
+            for chunk in response:
+                size += len(chunk)
+                if size > max_bytes:
+                    raise ValueError("Staged source archive exceeds 200 MiB.")
+                output.write(chunk)
+                on_progress(size)
+        client.delete_object(
+            bucket=self._settings.bucket,
+            key=source_key,
+        )
+
+    def _new_client(self) -> Any:
+        import tos
+
+        credentials = resolve_credentials()
+        return tos.TosClientV2(
+            credentials.access_key,
+            credentials.secret_key,
+            security_token=credentials.session_token or None,
+            endpoint=f"tos-{self._settings.region}.volces.com",
+            region=self._settings.region,
+        )
+
+
 __all__ = [
     "JobStore",
+    "SourceStore",
     "TosJobStore",
+    "TosSourceStore",
     "VolcengineCredentials",
     "resolve_credentials",
 ]

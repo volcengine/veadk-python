@@ -15,13 +15,18 @@ from veadk.services.studio_release_server.models import (
     ReleaseRequest,
     ReleaseServerSettings,
     ReleaseStatus,
+    SourceUpload,
+    SourceUploadRequest,
 )
 from veadk.services.studio_release_server.service import (
     ReleaseConflictError,
     ReleaseNotFoundError,
     ReleaseService,
 )
-from veadk.services.studio_release_server.tos_store import TosJobStore
+from veadk.services.studio_release_server.tos_store import (
+    TosJobStore,
+    TosSourceStore,
+)
 
 
 def create_app(
@@ -35,11 +40,19 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         resolved_settings = settings or ReleaseServerSettings.from_env()
         app.state.settings = resolved_settings
-        app.state.release_service = service or ReleaseService(
-            settings=resolved_settings,
-            store=TosJobStore(resolved_settings),
-            builder=StudioReleaseBuilder(resolved_settings),
-        )
+        if service is not None:
+            app.state.release_service = service
+        else:
+            source_store = TosSourceStore(resolved_settings)
+            app.state.release_service = ReleaseService(
+                settings=resolved_settings,
+                store=TosJobStore(resolved_settings),
+                builder=StudioReleaseBuilder(
+                    resolved_settings,
+                    source_store=source_store,
+                ),
+                source_store=source_store,
+            )
         yield
 
     app = FastAPI(
@@ -65,6 +78,23 @@ def create_app(
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.post(
+        "/source-upload",
+        response_model=SourceUpload,
+        response_model_by_alias=True,
+        dependencies=[Depends(require_api_key)],
+    )
+    def source_upload(
+        request: Request,
+        payload: SourceUploadRequest,
+    ) -> SourceUpload:
+        try:
+            return request.app.state.release_service.prepare_source_upload(
+                payload.request_id
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
 
     @app.post(
         "/release",

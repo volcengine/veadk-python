@@ -25,6 +25,7 @@ _GATEWAY_NAME = "test-api-gateway"
 _GATEWAY_SERVICE_NAME = "veadk-studio-release-server"
 _GATEWAY_UPSTREAM_NAME = "veadk-studio-release-server"
 _GATEWAY_ROUTE_NAME = "veadk-studio-release-server"
+_GATEWAY_TIMEOUT_MILLISECONDS = 30 * 60 * 1000
 _BUCKET = "veadk-studio"
 _REGION = "cn-beijing"
 _RELEASE_PREFIX = "veadk/studio/main"
@@ -52,6 +53,7 @@ _TOS_POLICY = {
                 "tos:HeadObject",
                 "tos:ListObjectsV2",
                 "tos:PutObject",
+                "tos:DeleteObject",
             ],
             "Resource": ["*"],
         }
@@ -232,9 +234,7 @@ def _find_function_id(service: Any) -> str:
 def _release_function(service: Any, function_id: str) -> None:
     from volcenginesdkvefaas import GetReleaseStatusRequest, ReleaseRequest
 
-    service.client.release(
-        ReleaseRequest(function_id=function_id, revision_number=0)
-    )
+    service.client.release(ReleaseRequest(function_id=function_id, revision_number=0))
     for _ in range(120):
         response = service.client.get_release_status(
             GetReleaseStatusRequest(function_id=function_id)
@@ -307,9 +307,7 @@ def _ensure_gateway_binding(service: Any, function_id: str) -> str:
         _GATEWAY_SERVICE_NAME,
     )
     if gateway_service is None:
-        service_id = apig.create_gateway_service(
-            gateway_id, _GATEWAY_SERVICE_NAME
-        )
+        service_id = apig.create_gateway_service(gateway_id, _GATEWAY_SERVICE_NAME)
     else:
         service_id = str(gateway_service.id)
 
@@ -363,9 +361,7 @@ def _ensure_gateway_binding(service: Any, function_id: str) -> str:
     else:
         route_payload = route.to_dict()
         if upstream_id not in json.dumps(route_payload):
-            raise RuntimeError(
-                f"Route {_GATEWAY_ROUTE_NAME} targets another upstream."
-            )
+            raise RuntimeError(f"Route {_GATEWAY_ROUTE_NAME} targets another upstream.")
         route_id = str(route.id)
     apig.apig_20221112_client.update_route(
         UpdateRouteRequest(
@@ -389,7 +385,7 @@ def _ensure_gateway_binding(service: Any, function_id: str) -> str:
             advanced_setting=AdvancedSettingForUpdateRouteInput(
                 timeout_setting=TimeoutSettingForUpdateRouteInput(
                     enable=True,
-                    timeout=1800,
+                    timeout=_GATEWAY_TIMEOUT_MILLISECONDS,
                 )
             ),
         ),

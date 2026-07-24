@@ -26,10 +26,13 @@ from veadk.services.studio_release_server.models import (
     ReleaseServerSettings,
 )
 from veadk.services.studio_release_server.tos_store import (
+    SourceStore,
     resolve_credentials,
 )
 
 _MAX_SOURCE_ARCHIVE_BYTES = 200 * 1024 * 1024
+_SOURCE_DOWNLOAD_REPORT_BYTES = 8 * 1024 * 1024
+_SOURCE_DOWNLOAD_TIMEOUT_SECONDS = 10 * 60
 _NODE_VERSION = "22.17.0"
 _NODE_ARCHIVE_SHA256 = {
     "arm64": "140aee84be6774f5fb3f404be72adbe8420b523f824de82daeb5ab218dab7b18",
@@ -56,8 +59,14 @@ class ReleaseBuilder(Protocol):
 class StudioReleaseBuilder:
     """Build Studio from a GitHub commit in an isolated workspace."""
 
-    def __init__(self, settings: ReleaseServerSettings) -> None:
+    def __init__(
+        self,
+        settings: ReleaseServerSettings,
+        *,
+        source_store: SourceStore | None = None,
+    ) -> None:
         self._settings = settings
+        self._source_store = source_store
 
     def build(
         self,
@@ -70,7 +79,7 @@ class StudioReleaseBuilder:
             workspace = Path(tmp)
             fetch_started = time.monotonic()
             on_progress("fetching", "正在按 Git SHA 拉取 GitHub 源码")
-            source_root = self._download_source(request, workspace)
+            source_root = self._download_source(request, workspace, on_progress)
             fetch_seconds = time.monotonic() - fetch_started
 
             tools_started = time.monotonic()
@@ -114,23 +123,74 @@ class StudioReleaseBuilder:
                 },
             )
 
-    def _download_source(self, request: ReleaseRequest, workspace: Path) -> Path:
+    def _download_source(
+        self,
+        request: ReleaseRequest,
+        workspace: Path,
+        on_progress: ProgressCallback,
+    ) -> Path:
         archive = workspace / "source.tar.gz"
+        if request.source_key:
+            if self._source_store is None:
+                raise RuntimeError("Source staging is not configured.")
+            expected_key = self._source_store.expected_key(request.request_id)
+            if request.source_key != expected_key:
+                raise ValueError("sourceKey does not belong to requestId")
+            on_progress("fetching", "正在从 TOS 暂存区获取 GitHub 源码")
+            reported_size = 0
+
+            def report_progress(size: int) -> None:
+                nonlocal reported_size
+                if size - reported_size >= _SOURCE_DOWNLOAD_REPORT_BYTES:
+                    on_progress(
+                        "fetching",
+                        f"已下载暂存源码 {size // (1024 * 1024)} MiB",
+                    )
+                    reported_size = size
+
+            self._source_store.download_and_delete(
+                request.source_key,
+                archive,
+                max_bytes=_MAX_SOURCE_ARCHIVE_BYTES,
+                on_progress=report_progress,
+            )
+            on_progress("extracting", "暂存源码下载完成，正在解压")
+            return self._extract_source(archive, workspace)
+
         url = (
-            f"https://github.com/{request.repository}/archive/{request.git_sha}.tar.gz"
+            f"https://codeload.github.com/{request.repository}/tar.gz/{request.git_sha}"
         )
         http_request = urllib.request.Request(
             url,
             headers={"User-Agent": "veadk-studio-release-server"},
         )
         size = 0
+        reported_size = 0
+        download_started = time.monotonic()
         with urllib.request.urlopen(http_request, timeout=120) as response:
             with archive.open("wb") as output:
                 while chunk := response.read(1024 * 1024):
+                    if (
+                        time.monotonic() - download_started
+                        > _SOURCE_DOWNLOAD_TIMEOUT_SECONDS
+                    ):
+                        raise TimeoutError(
+                            "GitHub source download exceeded 10 minutes."
+                        )
                     size += len(chunk)
                     if size > _MAX_SOURCE_ARCHIVE_BYTES:
                         raise ValueError("GitHub source archive exceeds 200 MiB.")
                     output.write(chunk)
+                    if size - reported_size >= _SOURCE_DOWNLOAD_REPORT_BYTES:
+                        on_progress(
+                            "fetching",
+                            f"已下载 GitHub 源码 {size // (1024 * 1024)} MiB",
+                        )
+                        reported_size = size
+        on_progress("extracting", "GitHub 源码下载完成，正在解压")
+        return self._extract_source(archive, workspace)
+
+    def _extract_source(self, archive: Path, workspace: Path) -> Path:
         extract_root = workspace / "source"
         extract_root.mkdir()
         with tarfile.open(archive, "r:gz") as source_archive:

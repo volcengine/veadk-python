@@ -74,6 +74,7 @@ class ReleaseRequest(BaseModel):
     git_sha: str = Field(alias="gitSha")
     request_id: str = Field(alias="requestId")
     changelog: tuple[str, ...] = ()
+    source_key: str = Field(default="", alias="sourceKey")
 
     @field_validator("repository")
     @classmethod
@@ -107,6 +108,43 @@ class ReleaseRequest(BaseModel):
             raise ValueError("changelog is invalid")
         return cleaned
 
+    @field_validator("source_key")
+    @classmethod
+    def _validate_source_key(cls, value: str) -> str:
+        value = value.strip().strip("/")
+        if value and (
+            len(value) > 512
+            or any(part in {"", ".", ".."} for part in value.split("/"))
+        ):
+            raise ValueError("sourceKey is invalid")
+        return value
+
+
+class SourceUpload(BaseModel):
+    """One short-lived TOS upload target for an exact release request."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    source_key: str = Field(alias="sourceKey")
+    upload_url: str = Field(alias="uploadUrl")
+    expires_in: int = Field(alias="expiresIn")
+
+
+class SourceUploadRequest(BaseModel):
+    """Request a source upload target for one release job."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    request_id: str = Field(alias="requestId")
+
+    @field_validator("request_id")
+    @classmethod
+    def _validate_request_id(cls, value: str) -> str:
+        value = value.strip()
+        if not _JOB_ID_PATTERN.fullmatch(value):
+            raise ValueError("requestId contains unsupported characters")
+        return value
+
 
 class BuildResult(BaseModel):
     """Result returned after TOS publication and verification."""
@@ -131,6 +169,7 @@ class ReleaseStatus(BaseModel):
     repository: str
     git_sha: str = Field(alias="gitSha")
     changelog: tuple[str, ...] = ()
+    source_key: str = Field(default="", alias="sourceKey")
     stage: str
     message: str
     created_at: str = Field(alias="createdAt")

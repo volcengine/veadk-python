@@ -13,8 +13,9 @@ from veadk.services.studio_release_server.models import (
     ReleaseRequest,
     ReleaseServerSettings,
     ReleaseStatus,
+    SourceUpload,
 )
-from veadk.services.studio_release_server.tos_store import JobStore
+from veadk.services.studio_release_server.tos_store import JobStore, SourceStore
 
 logger = logging.getLogger(__name__)
 
@@ -36,11 +37,13 @@ class ReleaseService:
         settings: ReleaseServerSettings,
         store: JobStore,
         builder: ReleaseBuilder,
+        source_store: SourceStore | None = None,
         executor: Executor | None = None,
     ) -> None:
         self._settings = settings
         self._store = store
         self._builder = builder
+        self._source_store = source_store
         self._executor = executor or ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="studio-release"
         )
@@ -56,14 +59,23 @@ class ReleaseService:
         """Create one job and optionally keep the request active until completion."""
         if request.repository != self._settings.repository:
             raise ValueError("repository is not allowed by this release server")
+        if request.source_key:
+            if self._source_store is None:
+                raise ValueError("source staging is not configured")
+            if request.source_key != self._source_store.expected_key(
+                request.request_id
+            ):
+                raise ValueError("sourceKey does not belong to requestId")
         existing = self._store.get(request.request_id)
         if existing is not None:
             if (
                 existing.repository != request.repository
                 or existing.git_sha != request.git_sha
+                or existing.changelog != request.changelog
+                or existing.source_key != request.source_key
             ):
                 raise ReleaseConflictError(
-                    "requestId already belongs to another repository or gitSha"
+                    "requestId already belongs to another release request"
                 )
             return existing
         now = _timestamp()
@@ -73,6 +85,7 @@ class ReleaseService:
             repository=request.repository,
             gitSha=request.git_sha,
             changelog=request.changelog,
+            sourceKey=request.source_key,
             stage="queued",
             message="发布任务已入队",
             createdAt=now,
@@ -90,6 +103,12 @@ class ReleaseService:
             else:
                 self._executor.submit(self._run, request)
         return self.get(request.request_id) if run_inline else status
+
+    def prepare_source_upload(self, job_id: str) -> SourceUpload:
+        """Create a private, short-lived upload target for one release job."""
+        if self._source_store is None:
+            raise ValueError("source staging is not configured")
+        return self._source_store.prepare_upload(job_id)
 
     def get(self, job_id: str) -> ReleaseStatus:
         """Return one durable release status."""
