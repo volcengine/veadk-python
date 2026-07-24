@@ -95,6 +95,10 @@ import {
   SandboxSessionWarning,
 } from "./ui/SandboxSession";
 import defaultSiteLogo from "./assets/volcengine.svg";
+import {
+  identifyAnalyticsUser,
+  trackEvent,
+} from "./analytics/webpro";
 
 // Breadcrumb root label for the create flow and the per-mode leaf labels.
 const CREATE_ROOT = "创建 Agent";
@@ -890,6 +894,12 @@ export default function App() {
   }, [localMode, userId]);
 
   useEffect(() => {
+    if (authStatus !== "authenticated" || localMode || !userInfo) return;
+    const stableUserId = String(userInfo.sub ?? userInfo.user_id ?? "");
+    identifyAnalyticsUser(stableUserId);
+  }, [authStatus, localMode, userInfo]);
+
+  useEffect(() => {
     if (authStatus !== "authenticated" || !userId) {
       setNewChatCapabilities({});
       return;
@@ -1425,8 +1435,21 @@ export default function App() {
     setAttachments((current) => [...current, ...drafts.map((draft) => draft.attachment)]);
     await Promise.all(
       drafts.map(async ({ file, attachment }) => {
+        const uploadStartedAt = performance.now();
+        const mediaType = file.type.startsWith("image/")
+          ? "image"
+          : file.type.startsWith("video/")
+            ? "video"
+            : file.type === "application/pdf"
+              ? "pdf"
+              : "document";
         try {
           const uploaded = await uploadMedia(appName, userId, sid, file);
+          trackEvent(
+            "media_upload_result",
+            { media_type: mediaType, result: "success" },
+            { duration_ms: performance.now() - uploadStartedAt },
+          );
           if (removedAttachmentIdsRef.current.delete(attachment.id)) {
             if (uploaded.uri) await deleteMedia(appName, uploaded.uri);
             return;
@@ -1437,6 +1460,11 @@ export default function App() {
               : item,
           ));
         } catch (e) {
+          trackEvent(
+            "media_upload_result",
+            { media_type: mediaType, result: "error" },
+            { duration_ms: performance.now() - uploadStartedAt },
+          );
           if (removedAttachmentIdsRef.current.delete(attachment.id)) return;
           const message = e instanceof Error ? e.message : String(e);
           setAttachments((current) => current.map((item) =>
@@ -1462,6 +1490,15 @@ export default function App() {
       !userId
     ) return;
     setError("");
+    trackEvent(
+      "agent_message_submit",
+      {
+        has_media: atts.length > 0,
+        has_skill: selectedInvocation.skills.length > 0,
+        has_subagent: Boolean(selectedInvocation.targetAgent),
+      },
+      { attachment_count: atts.length },
+    );
 
     const userBlocks: Turn["blocks"] = [];
     if (selectedInvocation.skills.length > 0 || selectedInvocation.targetAgent) {
@@ -2235,7 +2272,10 @@ export default function App() {
                             <button
                               className="icon-btn"
                               title="Tracing 火焰图"
-                              onClick={() => setTraceOpen(true)}
+                              onClick={() => {
+                                trackEvent("trace_open");
+                                setTraceOpen(true);
+                              }}
                             >
                               <TraceIcon />
                             </button>

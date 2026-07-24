@@ -16,6 +16,7 @@ import type {
 } from "../adk/client";
 import { sessionTitle } from "../blocks";
 import { displayName, profilePictureUrl } from "../adk/identity";
+import { trackEvent } from "../analytics/webpro";
 import { SkillCenterButton } from "./SkillCenter";
 import { SearchButton } from "./Search";
 import { AgentSelector, type SelectedRuntime } from "./AgentSelector";
@@ -148,7 +149,10 @@ function SidebarUser({
     <div className="sidebar-user">
       <button
         className="sidebar-user-btn"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          trackEvent("sidebar_feature_used", { feature: "account_menu" });
+          setOpen((o) => !o);
+        }}
         title={email ? `${name}\n${email}` : name}
       >
         <span
@@ -211,6 +215,7 @@ function SidebarUser({
             <button
               className="account-logout"
               onClick={() => {
+                trackEvent("sidebar_feature_used", { feature: "logout" });
                 setOpen(false);
                 onLogout();
               }}
@@ -261,12 +266,16 @@ export function Sidebar({
   );
   const [collapsed, setCollapsed] = useState(autoCollapsedRef.current);
   const toggleSelector = () => {
+    trackEvent("sidebar_feature_used", { feature: "agent_selector" });
     setSelectorOpen((o) => !o);
   };
   const sorted = [...sessions].sort(
     (a, b) => (b.lastUpdateTime ?? 0) - (a.lastUpdateTime ?? 0),
   );
   const toggleCollapsed = () => {
+    trackEvent("sidebar_feature_used", {
+      feature: collapsed ? "expand" : "collapse",
+    });
     autoCollapsedRef.current = false;
     setCollapsed((value) => !value);
     setSelectorOpen(false);
@@ -362,13 +371,22 @@ export function Sidebar({
             currentId={currentAgentId}
             currentRuntime={currentRuntime}
             runtimeScope={access.capabilities.runtimeScope}
-            onSelect={onSelectAgent}
+            onSelect={(id) => {
+              trackEvent("sidebar_feature_used", { feature: "agent_select" });
+              onSelectAgent(id);
+            }}
           />
         )}
         {show("newChat") && (
           <button
             className="new-chat"
-            onClick={onNewChat}
+            onClick={() => {
+              trackEvent("sidebar_feature_used", {
+                feature: "new_chat",
+                entry: "navigation",
+              });
+              onNewChat();
+            }}
             aria-label="新会话"
             title="新会话"
           >
@@ -376,12 +394,21 @@ export function Sidebar({
             <span className="sidebar-nav-label">新会话</span>
           </button>
         )}
-        {show("search") && <SearchButton onClick={onSearch} />}
-        {show("skillCenter") && <SkillCenterButton onClick={onSkillCenter} />}
+        {show("search") && <SearchButton onClick={() => {
+          trackEvent("sidebar_feature_used", { feature: "search" });
+          onSearch();
+        }} />}
+        {show("skillCenter") && <SkillCenterButton onClick={() => {
+          trackEvent("sidebar_feature_used", { feature: "skill_center" });
+          onSkillCenter();
+        }} />}
         {access.capabilities.createAgents && show("addAgent") && (
           <button
             className="new-chat"
-            onClick={onQuickCreate}
+            onClick={() => {
+              trackEvent("sidebar_feature_used", { feature: "add_agent" });
+              onQuickCreate();
+            }}
             aria-label="添加 Agent"
             title="添加 Agent"
           >
@@ -392,7 +419,10 @@ export function Sidebar({
         {access.capabilities.manageAgents && show("manageAgents") && (
           <button
             className="new-chat"
-            onClick={onManageAgents}
+            onClick={() => {
+              trackEvent("sidebar_feature_used", { feature: "manage_agents" });
+              onManageAgents();
+            }}
             aria-label="管理 Agent"
             title="管理 Agent"
           >
@@ -410,7 +440,13 @@ export function Sidebar({
             <button
               type="button"
               className="history-new-chat"
-              onClick={onNewChat}
+              onClick={() => {
+                trackEvent("sidebar_feature_used", {
+                  feature: "new_chat",
+                  entry: "history",
+                });
+                onNewChat();
+              }}
               aria-label="新建会话"
               title="新建会话"
             >
@@ -431,7 +467,10 @@ export function Sidebar({
               >
                 <button
                   className="history-item-btn"
-                  onClick={() => onPickSession(s.id)}
+                  onClick={() => {
+                    trackEvent("sidebar_feature_used", { feature: "history_open" });
+                    onPickSession(s.id);
+                  }}
                   title={title}
                 >
                   {streamingSids?.has(s.id) && (
@@ -453,6 +492,9 @@ export function Sidebar({
                     <button
                       className="menu-item menu-item--danger"
                       onClick={() => {
+                        trackEvent("sidebar_feature_used", {
+                          feature: "history_delete",
+                        });
                         setMenuFor(null);
                         onDeleteSession(s.id);
                       }}

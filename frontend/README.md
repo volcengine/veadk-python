@@ -88,6 +88,27 @@ Temporary Sandbox state is process-local. Run Studio with one server worker, or
 configure session affinity so create, message, and delete requests from the same
 browser reach the same instance.
 
+### Anonymous frontend analytics
+
+The optional APMPlus WebPro integration records Studio opens and coarse-grained
+feature events such as sidebar actions, chat submission, media type, trace
+viewing, and deployment outcomes. Sidebar actions use the
+`sidebar_feature_used` event with a fixed `feature` category; no selected Agent
+or Session identifier is included. In WebPro Data Analysis, select the `count`
+metric and group by `feature` to compare usage. Analytics never includes prompts,
+responses, filenames, agent names, runtime IDs, credentials, or raw error messages.
+Configure the repository-level `.env` before building the frontend:
+
+```dotenv
+APM_APP_ID=123456
+APM_APP_TOKEN=replace-with-webpro-app-token
+APM_ENV=production
+```
+
+Set `APM_ENABLED=false` to omit analytics. Browsers with Do Not Track enabled are
+also excluded. Authenticated analytics uses only a stable OIDC `sub`/`user_id`;
+local usernames are not sent.
+
 ## Development specification
 
 All frontend changes must follow [`SPEC.md`](SPEC.md). It defines the required

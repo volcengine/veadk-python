@@ -71,6 +71,7 @@ import {
   runtimeEnvVars,
 } from "../create/deploymentEnv";
 import type { DeployStage } from "../adk/client";
+import { trackEvent } from "../analytics/webpro";
 import { buildZip } from "./zip";
 import { ProjectCodeBrowser } from "./CodeBrowserDialog";
 import { DeployIcon } from "./DeployIcon";
@@ -830,6 +831,17 @@ export function ProjectPreview({
     const taskId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let taskRuntimeName = "生成中…";
     const taskStartedAt = Date.now();
+    let lastPhase = "prepare";
+    const networkMode = network?.mode ?? "public";
+    trackEvent(
+      "deploy_start",
+      {
+        region: deployRegion,
+        network_mode: networkMode,
+        feishu_enabled: feishuEnabled,
+      },
+      { agent_count: agentCount },
+    );
     onDeploymentTaskChange?.({
       id: taskId,
       runtimeName: taskRuntimeName,
@@ -842,6 +854,7 @@ export function ProjectPreview({
       const result = await onDeploy(
         project,
         (s) => {
+          lastPhase = s.phase;
           if (s.runtimeName) taskRuntimeName = s.runtimeName;
           if (mountedRef.current) {
             setStageMap((prev) => ({ ...prev, [s.phase]: s }));
@@ -885,6 +898,15 @@ export function ProjectPreview({
         status: "success",
         label: "部署完成",
       });
+      trackEvent(
+        "deploy_result",
+        {
+          region: result.region || deployRegion,
+          network_mode: networkMode,
+          result: "success",
+        },
+        { duration_ms: Date.now() - taskStartedAt, agent_count: agentCount },
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (err instanceof DOMException && err.name === "AbortError") {
@@ -901,6 +923,16 @@ export function ProjectPreview({
           label: "已取消",
           message: "部署已取消，相关 Runtime 资源已请求销毁。",
         });
+        trackEvent(
+          "deploy_result",
+          {
+            region: deployRegion,
+            network_mode: networkMode,
+            result: "cancelled",
+            failed_phase: lastPhase,
+          },
+          { duration_ms: Date.now() - taskStartedAt, agent_count: agentCount },
+        );
         return;
       }
       if (mountedRef.current) setDeployError(message);
@@ -914,6 +946,16 @@ export function ProjectPreview({
         message,
         retry: requestDeploymentConfirmation,
       });
+      trackEvent(
+        "deploy_result",
+        {
+          region: deployRegion,
+          network_mode: networkMode,
+          result: "error",
+          failed_phase: lastPhase,
+        },
+        { duration_ms: Date.now() - taskStartedAt, agent_count: agentCount },
+      );
     } finally {
       if (mountedRef.current) setDeploying(false);
     }
