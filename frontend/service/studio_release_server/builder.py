@@ -34,12 +34,12 @@ from pathlib import Path
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
-from veadk.services.studio_release_server.models import (
+from frontend.service.studio_release_server.models import (
     BuildResult,
     ReleaseRequest,
     ReleaseServerSettings,
 )
-from veadk.services.studio_release_server.tos_store import (
+from frontend.service.studio_release_server.tos_store import (
     SourceStore,
     resolve_credentials,
 )

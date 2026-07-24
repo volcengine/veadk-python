@@ -157,18 +157,30 @@ def _ensure_runtime_role(access_key: str, secret_key: str) -> str:
 
 def _stage_deployment(source_root: Path, destination: Path) -> None:
     """Create the minimal source bundle consumed by the native runtime."""
-    package_root = destination / "veadk"
-    service_source = source_root / "veadk" / "services" / "studio_release_server"
-    service_destination = package_root / "services" / "studio_release_server"
+    service_source = source_root / "frontend" / "service" / "studio_release_server"
+    service_destination = destination / "frontend" / "service" / "studio_release_server"
     service_destination.parent.mkdir(parents=True)
-    shutil.copytree(service_source, service_destination)
-    shutil.copy2(source_root / "veadk" / "__init__.py", package_root / "__init__.py")
-    shutil.copy2(source_root / "veadk" / "version.py", package_root / "version.py")
-    shutil.copy2(
-        source_root / "veadk" / "services" / "__init__.py",
-        package_root / "services" / "__init__.py",
+    shutil.copytree(
+        service_source,
+        service_destination,
+        ignore=shutil.ignore_patterns(
+            "__pycache__",
+            "deploy.py",
+            "deploy.sh",
+            "requirements.txt",
+            "run.sh",
+            "runtime-wheel-requirements.txt",
+        ),
     )
-    deployment_root = source_root / "services" / "studio_release_server"
+    shutil.copy2(
+        source_root / "frontend" / "__init__.py",
+        destination / "frontend" / "__init__.py",
+    )
+    shutil.copy2(
+        source_root / "frontend" / "service" / "__init__.py",
+        destination / "frontend" / "service" / "__init__.py",
+    )
+    deployment_root = service_source
     shutil.copy2(deployment_root / "requirements.txt", destination)
     wheel_requirements = destination / "runtime-wheel-requirements.txt"
     shutil.copy2(

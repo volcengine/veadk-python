@@ -21,8 +21,7 @@ on:
     paths:
       - ".github/workflows/publish-studio-release.yaml"
       - "frontend/**"
-      - "services/studio_release_server/**"
-      - "veadk/services/studio_release_server/**"
+      - "frontend/service/studio_release_server/**"
       - "veadk/cli/cli.py"
       - "veadk/cli/cli_frontend.py"
       - "veadk/cli/frontend_*.py"

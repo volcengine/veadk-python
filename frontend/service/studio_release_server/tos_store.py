@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from veadk.services.studio_release_server.models import (
+from frontend.service.studio_release_server.models import (
     ReleaseServerSettings,
     ReleaseStatus,
     SourceUpload,

@@ -179,6 +179,19 @@ and publishes the immutable Bundle and Manifest before replacing
 `STUDIO_RELEASE_SERVER_URL` and `STUDIO_RELEASE_SERVER_API_KEY` as GitHub
 Secrets; GitHub receives no TOS credentials.
 
+The Release Server runtime and deployment assets are isolated from the public
+Python package under `frontend/service/studio_release_server`. After changing
+the service, deploy it from the repository root:
+
+```bash
+frontend/service/studio_release_server/deploy.sh
+```
+
+The script updates the existing VeFaaS Function, verifies `/healthz`, rotates
+the API key, and updates the two GitHub Secrets. It requires
+`VOLCENGINE_ACCESS_KEY`, `VOLCENGINE_SECRET_KEY`, and an authenticated GitHub
+CLI session.
+
 ## Authentication
 
 The ADK `user_id` (which scopes sessions/memory) comes from the signed-in user.

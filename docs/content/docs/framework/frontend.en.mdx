@@ -338,6 +338,21 @@ Bundle and Manifest, updates the bounded `releases.json` catalog, and replaces
 `STUDIO_RELEASE_SERVER_API_KEY` as GitHub Secrets; GitHub receives no TOS
 AK/SK.
 
+The Release Server runtime and deployment assets live together under
+`frontend/service/studio_release_server/` and are not shipped in the `veadk`
+Python package. After changing that directory, update the existing VeFaaS
+Function from the repository root:
+
+```bash
+frontend/service/studio_release_server/deploy.sh
+```
+
+The script reuses the existing Serverless gateway, checks `/healthz`, rotates
+the API key, and updates the `STUDIO_RELEASE_SERVER_URL` and
+`STUDIO_RELEASE_SERVER_API_KEY` repository Secrets. Set
+`VOLCENGINE_ACCESS_KEY` and `VOLCENGINE_SECRET_KEY`, and authenticate GitHub CLI
+before running it.
+
 When deployment registers the callback URL, it keeps the VeIdentity login page
 enabled and enables skip-consent for that client. This avoids showing a second
 authorization confirmation after login.

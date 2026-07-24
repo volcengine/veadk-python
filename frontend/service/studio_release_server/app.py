@@ -22,22 +22,22 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 
-from veadk.services.studio_release_server.builder import (
+from frontend.service.studio_release_server.builder import (
     StudioReleaseBuilder,
 )
-from veadk.services.studio_release_server.models import (
+from frontend.service.studio_release_server.models import (
     ReleaseRequest,
     ReleaseServerSettings,
     ReleaseStatus,
     SourceUpload,
     SourceUploadRequest,
 )
-from veadk.services.studio_release_server.service import (
+from frontend.service.studio_release_server.service import (
     ReleaseConflictError,
     ReleaseNotFoundError,
     ReleaseService,
 )
-from veadk.services.studio_release_server.tos_store import (
+from frontend.service.studio_release_server.tos_store import (
     TosJobStore,
     TosSourceStore,
 )

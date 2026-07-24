@@ -22,14 +22,14 @@ from concurrent.futures import Executor, ThreadPoolExecutor
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from veadk.services.studio_release_server.builder import ReleaseBuilder
-from veadk.services.studio_release_server.models import (
+from frontend.service.studio_release_server.builder import ReleaseBuilder
+from frontend.service.studio_release_server.models import (
     ReleaseRequest,
     ReleaseServerSettings,
     ReleaseStatus,
     SourceUpload,
 )
-from veadk.services.studio_release_server.tos_store import JobStore, SourceStore
+from frontend.service.studio_release_server.tos_store import JobStore, SourceStore
 
 logger = logging.getLogger(__name__)
 

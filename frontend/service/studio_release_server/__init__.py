@@ -14,9 +14,9 @@
 
 """Public interface for the Studio release server."""
 
-from veadk.services.studio_release_server.app import create_app
-from veadk.services.studio_release_server.builder import StudioReleaseBuilder
-from veadk.services.studio_release_server.models import (
+from frontend.service.studio_release_server.app import create_app
+from frontend.service.studio_release_server.builder import StudioReleaseBuilder
+from frontend.service.studio_release_server.models import (
     BuildResult,
     ReleaseRequest,
     ReleaseServerSettings,
@@ -24,7 +24,7 @@ from veadk.services.studio_release_server.models import (
     SourceUpload,
     SourceUploadRequest,
 )
-from veadk.services.studio_release_server.service import ReleaseService
+from frontend.service.studio_release_server.service import ReleaseService
 
 __all__ = [
     "BuildResult",

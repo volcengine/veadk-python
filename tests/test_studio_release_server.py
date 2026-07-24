@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import importlib.machinery
 import shutil
 import tarfile
 from collections.abc import Callable
@@ -24,8 +25,9 @@ from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
+import pytest
 
-from veadk.services.studio_release_server import (
+from frontend.service.studio_release_server import (
     BuildResult,
     ReleaseRequest,
     ReleaseServerSettings,
@@ -35,6 +37,7 @@ from veadk.services.studio_release_server import (
     StudioReleaseBuilder,
     create_app,
 )
+from frontend.service.studio_release_server import deploy as release_deploy
 
 
 class _InlineExecutor(Executor):
@@ -271,3 +274,45 @@ def test_builder_consumes_staged_source_archive(tmp_path: Path) -> None:
 
     assert (extracted / "frontend" / "package.json").is_file()
     assert source_store.consumed_key == request.source_key
+
+
+def test_stage_deployment_uses_frontend_service_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root = Path(__file__).parents[1]
+    destination = tmp_path / "deployment"
+    destination.mkdir()
+    dependency_specs: dict[str, importlib.machinery.ModuleSpec] = {}
+    for dependency_name in ("tos", "crcmod"):
+        dependency_root = tmp_path / "dependencies" / dependency_name
+        dependency_root.mkdir(parents=True)
+        (dependency_root / "__init__.py").write_text("", encoding="utf-8")
+        spec = importlib.machinery.ModuleSpec(
+            dependency_name, loader=None, is_package=True
+        )
+        spec.submodule_search_locations = [str(dependency_root)]
+        dependency_specs[dependency_name] = spec
+
+    def _install_runtime_wheels(*_args: Any, **_kwargs: Any) -> None:
+        (destination / "site-packages").mkdir()
+
+    monkeypatch.setattr(release_deploy.shutil, "which", lambda _name: "uv")
+    monkeypatch.setattr(release_deploy.subprocess, "run", _install_runtime_wheels)
+    monkeypatch.setattr(
+        release_deploy.importlib.util,
+        "find_spec",
+        dependency_specs.get,
+    )
+
+    release_deploy._stage_deployment(source_root, destination)
+
+    package_root = destination / "frontend" / "service" / "studio_release_server"
+    assert (destination / "frontend" / "__init__.py").is_file()
+    assert (destination / "frontend" / "service" / "__init__.py").is_file()
+    assert (package_root / "app.py").is_file()
+    assert not (package_root / "deploy.py").exists()
+    assert not (package_root / "deploy.sh").exists()
+    assert not (destination / "veadk").exists()
+    assert "frontend.service.studio_release_server.app:app" in (
+        destination / "run.sh"
+    ).read_text(encoding="utf-8")

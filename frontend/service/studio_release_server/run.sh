@@ -17,6 +17,6 @@ fi
 
 export PATH="$SITE_PACKAGES/bin:$PATH"
 export PYTHONPATH="$ROOT_DIR:$SITE_PACKAGES${PYTHONPATH:+:$PYTHONPATH}"
-exec python3 -m uvicorn veadk.services.studio_release_server.app:app \
+exec python3 -m uvicorn frontend.service.studio_release_server.app:app \
   --host "$HOST" \
   --port "$PORT"
