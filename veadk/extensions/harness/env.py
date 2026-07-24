@@ -22,7 +22,6 @@ from typing import Literal
 
 from google.adk.plugins import BasePlugin
 
-from veadk.extensions.harness.plugins import build_harness_plugins
 from veadk.extensions.harness.modules.final_response_verifier import (
     FinalResponseVerifierConfig,
 )
@@ -32,13 +31,14 @@ from veadk.extensions.harness.modules.invocation_context import (
 from veadk.extensions.harness.modules.tool_result_compactor import (
     ToolResultCompactorConfig,
 )
+from veadk.extensions.harness.plugins import build_harness_plugins
 from veadk.extensions.harness.stores import JsonlHarnessStore
 
 
 def harness_enabled_from_env(env: Mapping[str, str] | None = None) -> bool:
     """Return whether Harness plugins should be attached."""
 
-    values = env or os.environ
+    values = env if env is not None else os.environ
     return _truthy(values.get("HARNESS_ENHANCE_ENABLED"))
 
 
@@ -47,18 +47,21 @@ def build_harness_plugins_from_env(
 ) -> list[BasePlugin]:
     """Build Harness plugins from generic runtime environment variables."""
 
-    values = env or os.environ
+    values = env if env is not None else os.environ
     if not harness_enabled_from_env(values):
         return []
-    components = (
-        values.get("HARNESS_ENHANCE_COMPONENTS")
-        or values.get("HARNESS_COMPONENTS")
-        or "invocation_context,compactor,response_verification"
-    )
     profile = (
         values.get("HARNESS_ENHANCE_PROFILE")
         or values.get("HARNESS_PROFILE")
         or "default"
+    )
+    default_components = "invocation_context,compactor,response_verification"
+    if profile == "ops":
+        default_components += ",long_run_control"
+    components = (
+        values.get("HARNESS_ENHANCE_COMPONENTS")
+        or values.get("HARNESS_COMPONENTS")
+        or default_components
     )
     max_context_chars = _int_value(
         values.get("HARNESS_MAX_CONTEXT_CHARS")

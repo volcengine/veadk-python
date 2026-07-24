@@ -89,6 +89,9 @@ eval = [
 harness = [
     "headroom",
 ]
+harness-sidecar = [
+    "agentkit-sdk-python[harness-sidecar]>=0.8.0",
+]
 cli = []
 dev = [
     "pre-commit>=4.2.0",            # Format checking

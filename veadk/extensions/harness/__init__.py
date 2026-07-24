@@ -14,71 +14,73 @@
 
 """Composable Agent Harness SDK."""
 
-from veadk.extensions.harness.plugins import HarnessLongRunControlPlugin
 from veadk.extensions.harness.extension import HarnessExtension, HarnessExtensionConfig
+from veadk.extensions.harness.modules.final_response_verifier import (
+    FinalResponseVerifier,
+    ResultVerifier,
+)
 from veadk.extensions.harness.modules.invocation_context import (
     ContextEngine,
     HarnessInvocationContextBuilder,
     HarnessInvocationContextConfig,
-)
-from veadk.extensions.harness.modules.final_response_verifier import (
-    FinalResponseVerifier,
-    ResultVerifier,
 )
 from veadk.extensions.harness.modules.tool_result_compactor import (
     HeadroomCompressionProvider,
     ToolResultCompactor,
     ToolResultCompressor,
 )
+from veadk.extensions.harness.plugins import HarnessLongRunControlPlugin
 from veadk.extensions.harness.schemas import (
     CapabilityReceipt,
-    ToolReceipt,
     CompactionReport,
+    CompactionResult,
     CompressionReport,
     CompressionRequest,
-    CompactionResult,
     CompressionResult,
     ContextBundle,
-    InvocationContextBlock,
     ConversationMessage,
     EvidenceRef,
     HarnessEvent,
     HarnessIntervention,
-    VerificationDecision,
-    HarnessRunContext,
     HarnessInvocationRef,
+    HarnessRunContext,
+    InvocationContextBlock,
     TaskContract,
+    ToolReceipt,
+    VerificationDecision,
     VerificationReport,
 )
+from veadk.extensions.harness.sidecar import HarnessSidecarDependencyError
 
 __all__ = [
     "CapabilityReceipt",
-    "ToolReceipt",
     "CompactionReport",
+    "CompactionResult",
     "CompressionReport",
     "CompressionRequest",
-    "CompactionResult",
     "CompressionResult",
     "ContextBundle",
-    "InvocationContextBlock",
     "ContextEngine",
     "ConversationMessage",
     "EvidenceRef",
-    "HeadroomCompressionProvider",
-    "HarnessIntervention",
-    "VerificationDecision",
+    "FinalResponseVerifier",
     "HarnessEvent",
     "HarnessExtension",
     "HarnessExtensionConfig",
+    "HarnessIntervention",
     "HarnessInvocationContextBuilder",
     "HarnessInvocationContextConfig",
-    "HarnessRunContext",
     "HarnessInvocationRef",
     "HarnessLongRunControlPlugin",
-    "FinalResponseVerifier",
+    "HarnessRunContext",
+    "HarnessSidecarDependencyError",
+    "HeadroomCompressionProvider",
+    "InvocationContextBlock",
     "ResultVerifier",
     "TaskContract",
+    "ToolReceipt",
     "ToolResultCompactor",
     "ToolResultCompressor",
+    "VerificationDecision",
     "VerificationReport",
 ]

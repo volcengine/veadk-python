@@ -37,5 +37,9 @@ Environment variables:
 """
 
 from veadk.cloud.harness_app.utils import init_harness_agent
+from veadk.extensions.harness import HarnessExtension
 
+harness_extension = HarnessExtension.from_env()
 agent, short_term_memory = init_harness_agent()
+
+__all__ = ["agent", "harness_extension", "short_term_memory"]

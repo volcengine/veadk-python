@@ -52,3 +52,14 @@ def test_build_harness_plugins_from_env_defaults_to_builtin_compression():
 
     assert plugins[0].name == "harness_compress_plugin"
     assert plugins[0].compressor.config.provider == "builtin"
+
+
+def test_ops_profile_enables_long_run_control_by_default():
+    plugins = build_harness_plugins_from_env(
+        {
+            "HARNESS_ENHANCE_ENABLED": "true",
+            "HARNESS_PROFILE": "ops",
+        }
+    )
+
+    assert [plugin.name for plugin in plugins][-1] == "harness_long_run_control_plugin"

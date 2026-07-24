@@ -67,7 +67,7 @@ from veadk.a2a.registry_client import (
     registry_tip_token_from_headers,
 )
 from veadk.a2a.utils.agent_to_a2a import to_a2a
-from veadk.cloud.harness_app.agent import agent, short_term_memory
+from veadk.cloud.harness_app.agent import agent, harness_extension, short_term_memory
 from veadk.cloud.harness_app.harness_plugins import (
     build_harness_plugins_from_enhance,
     build_harness_plugins_from_headers,
@@ -88,6 +88,7 @@ from veadk.cloud.harness_app.utils import (
     has_a2a_registry_config,
     spawn_harness_run_agent,
 )
+from veadk.extensions.harness import HarnessExtension
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.runner import Runner
 from veadk.utils.logger import get_logger
@@ -169,13 +170,19 @@ class HarnessApp:
         short_term_memory: ShortTermMemory,
         harness_name: str = "default",
         max_llm_calls: int | None = None,
+        extension: HarnessExtension | None = None,
     ):
         self.agent = agent
         self.short_term_memory = short_term_memory
         self.harness_name = harness_name
         self.max_llm_calls = max_llm_calls
         self.return_llm_usage = RETURN_LLM_USAGE
-        self.plugins = build_harness_plugins_from_runtime_env()
+        self.harness_extension = extension
+        self.plugins = (
+            extension.plugins()
+            if extension is not None
+            else build_harness_plugins_from_runtime_env()
+        )
         self.runner = Runner(
             agent=agent,
             short_term_memory=short_term_memory,
@@ -205,8 +212,12 @@ class HarnessApp:
             # A mounted sub-app's lifespan is not run automatically. The A2A app
             # registers its routes (agent card + RPC) inside its lifespan, so
             # enter it here or those routes never appear.
-            async with self._a2a_app.router.lifespan_context(self._a2a_app):
-                yield
+            try:
+                async with self._a2a_app.router.lifespan_context(self._a2a_app):
+                    yield
+            finally:
+                if self.harness_extension is not None:
+                    self.harness_extension.close()
 
         # Base app = ADK api routes; then add /harness/invoke; mount A2A last so
         # it catches the well-known / RPC paths the ADK routes don't claim.
@@ -535,7 +546,11 @@ class HarnessApp:
 
 
 harness_app = HarnessApp(
-    agent, short_term_memory, HARNESS_NAME, max_llm_calls=DEFAULT_MAX_LLM_CALLS
+    agent,
+    short_term_memory,
+    HARNESS_NAME,
+    max_llm_calls=DEFAULT_MAX_LLM_CALLS,
+    extension=harness_extension,
 )
 app = harness_app.app
 

@@ -44,6 +44,7 @@ components using the same backend share those vars (e.g. a Viking knowledge base
 and a Viking long-term memory).
 """
 
+from copy import deepcopy
 from typing import Any
 
 from veadk.utils.misc import flatten_dict
@@ -164,12 +165,30 @@ def to_runtime_env(spec: dict[str, Any]) -> dict[str, str]:
     rest = {
         k: v for k, v in spec.items() if k not in COMPONENT_TYPE_ENV and k != "auth"
     }
+    sidecar_section, sidecar_profile = _sidecar_section(spec)
+    if sidecar_section is not None:
+        rest.pop("sidecar", None)
+        rest.pop("harness_sidecar", None)
+        harness = rest.get("harness")
+        if isinstance(harness, dict):
+            harness = deepcopy(harness)
+            harness.pop("sidecar", None)
+            if harness:
+                rest["harness"] = harness
+            else:
+                rest.pop("harness", None)
     for key, value in flatten_dict(rest).items():
         if _is_empty(value):
             continue
         env[key.upper()] = _stringify(value)
 
     _add_harness_enhance_aliases(env, spec)
+    if sidecar_section is not None:
+        _add_harness_sidecar_aliases(
+            env,
+            sidecar_section,
+            profile=sidecar_profile,
+        )
 
     # Component sections: `type` selector + backend-specific connection params.
     for component, type_env in COMPONENT_TYPE_ENV.items():
@@ -237,3 +256,44 @@ def _add_harness_enhance_aliases(env: dict[str, str], spec: dict[str, Any]) -> N
     verifier_mode = verifier.get("mode")
     if not _is_empty(verifier_mode):
         env["HARNESS_VERIFIER_MODE"] = _stringify(verifier_mode)
+
+
+def _sidecar_section(
+    spec: dict[str, Any],
+) -> tuple[dict[str, Any] | bool | None, str]:
+    harness = spec.get("harness")
+    if not isinstance(harness, dict):
+        harness = {}
+    section = harness.get("sidecar")
+    if not isinstance(section, (dict, bool)):
+        section = spec.get("harness_sidecar")
+    if not isinstance(section, (dict, bool)):
+        section = spec.get("sidecar")
+    if not isinstance(section, (dict, bool)):
+        return None, "default"
+    enhance = spec.get("harness_enhance")
+    if not isinstance(enhance, dict):
+        enhance = {}
+    profile = str(
+        harness.get("profile")
+        or enhance.get("profile")
+        or spec.get("profile")
+        or "default"
+    )
+    return section, profile
+
+
+def _add_harness_sidecar_aliases(
+    env: dict[str, str],
+    section: dict[str, Any] | bool,
+    *,
+    profile: str,
+) -> None:
+    try:
+        from agentkit.toolkit.harness import sidecar_config_to_env
+    except (ImportError, AttributeError) as error:
+        raise RuntimeError(
+            "Harness Sidecar config requires "
+            'pip install "veadk-python[harness-sidecar]"'
+        ) from error
+    env.update(sidecar_config_to_env(section, profile=profile))
