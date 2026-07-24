@@ -194,7 +194,8 @@ class AgentDraft(BaseModel):
     shortTermBackend: str = "local"
     longTermBackend: str = "local"
     autoSaveSession: bool = False
-    knowledgebaseBackend: str = "local"
+    knowledgebaseBackend: str = "viking"
+    knowledgebaseIndex: str = ""
     tracingExporters: list[str] = Field(default_factory=list)
     selectedSkills: list[SelectedSkill] = Field(default_factory=list)
     workflow: WorkflowConfig | None = None
@@ -534,10 +535,12 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
                 acc.extras.add(backend.pip_extra)
 
     if draft.knowledgebase:
-        backend = KB_BY_ID.get(draft.knowledgebaseBackend or "local")
+        backend = KB_BY_ID.get(draft.knowledgebaseBackend or "viking")
         if backend:
             _add_import(acc, "from veadk.knowledgebase import KnowledgeBase")
-            idx = ident(f"{draft.name}_kb", f"{var_name}_kb")
+            idx = draft.knowledgebaseIndex.strip() or ident(
+                f"{draft.name}_kb", f"{var_name}_kb"
+            )
             v = f"kb_{var_name}"
             acc.pre_lines.append(
                 f"{v} = KnowledgeBase(backend={_py_str(backend.id)}, "

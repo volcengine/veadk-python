@@ -214,6 +214,7 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     autoSaveSession: asBool(o.autoSaveSession),
     knowledgebase: asBool(o.knowledgebase),
     knowledgebaseBackend: pick(o.knowledgebaseBackend, KB_IDS, DEFAULT_KB_BACKEND),
+    knowledgebaseIndex: asString(o.knowledgebaseIndex),
     tracing: asBool(o.tracing),
     tracingExporters: asStringArray(o.tracingExporters).filter((e) =>
       EXPORTER_IDS.has(e),

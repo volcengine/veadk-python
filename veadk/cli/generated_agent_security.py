@@ -46,6 +46,7 @@ MAX_MCP_TOOLS = 16
 MAX_MCP_ARG_LEN = 512
 MAX_SELECTED_SKILLS = 16
 MAX_ITERATIONS = 20
+MAX_KNOWLEDGEBASE_INDEX_LEN = 128
 
 _METADATA_HOSTS = {
     "metadata.google.internal",
@@ -121,6 +122,11 @@ def _validate_node(
         raise DebugPolicyError(
             f"Unsupported knowledgebaseBackend: {draft.knowledgebaseBackend}"
         )
+    _check_len(
+        "knowledgebaseIndex",
+        draft.knowledgebaseIndex,
+        MAX_KNOWLEDGEBASE_INDEX_LEN,
+    )
     _validate_catalog_ids("tracingExporters", draft.tracingExporters, EXPORTER_BY_ID)
 
     if len(draft.customTools) > MAX_CUSTOM_TOOLS:

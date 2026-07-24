@@ -189,6 +189,21 @@ def test_every_knowledgebase_backend_generates_code_env_and_dependency(
     _assert_python_files_compile(project)
 
 
+def test_viking_knowledgebase_uses_selected_index() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="kb-viking",
+            knowledgebase=True,
+            knowledgebaseBackend="viking",
+            knowledgebaseIndex="existing_kb",
+        )
+    )
+    agent_py = _files(project)["agents/kb_viking/agent.py"]
+
+    assert 'KnowledgeBase(backend="viking", index="existing_kb"' in agent_py
+    _assert_python_files_compile(project)
+
+
 @pytest.mark.parametrize("exporter", TRACING_EXPORTERS, ids=lambda item: item.id)
 def test_every_tracing_exporter_generates_code_and_env(
     exporter: ExporterOption,

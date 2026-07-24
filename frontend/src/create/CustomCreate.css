@@ -1081,6 +1081,9 @@
   font-weight: 500;
   line-height: 1.35;
   text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .cw-a2a-space-option:hover,
 .cw-a2a-space-option:focus-visible {
@@ -1120,6 +1123,31 @@
   align-items: flex-start;
   padding: 9px 11px;
   font-size: 12.5px;
+}
+.cw-viking-kb-picker {
+  gap: 6px;
+}
+.cw-viking-kb-menu {
+  max-height: min(148px, calc(100vh - 260px));
+  padding: 3px;
+  overscroll-behavior: contain;
+  box-shadow: 0 6px 18px hsl(var(--foreground) / 0.06);
+}
+.cw-viking-kb-menu .cw-a2a-space-option {
+  min-height: 28px;
+  padding: 5px 9px;
+  line-height: 1.25;
+}
+.cw-viking-kb-refresh {
+  color: hsl(var(--foreground) / 0.72);
+}
+.cw-viking-kb-refresh:hover:not(:disabled) {
+  border-color: hsl(var(--foreground) / 0.28);
+  background: hsl(var(--muted) / 0.45);
+  color: hsl(var(--foreground));
+}
+.cw-viking-kb-refresh:disabled {
+  color: hsl(var(--muted-foreground));
 }
 .cw-error-text {
   font-size: 12px;

@@ -76,6 +76,10 @@ import {
   type A2aSpaceRef,
 } from "./a2aSpaces";
 import {
+  listVikingKnowledgebases,
+  type VikingKnowledgebaseRef,
+} from "./vikingKnowledgebases";
+import {
   ProjectPreview,
   type DeploymentTaskUpdate,
 } from "../ui/ProjectPreview";
@@ -455,6 +459,10 @@ function a2aSpaceDisplayName(space: A2aSpaceRef): string {
   return space.name.trim() || "未命名智能体中心";
 }
 
+function vikingKnowledgebaseDisplayName(item: VikingKnowledgebaseRef): string {
+  return item.name.trim() || item.id || "未命名知识库";
+}
+
 function A2aSpaceSelect({
   value,
   region,
@@ -621,6 +629,173 @@ function A2aSpaceSelect({
       ) : (
         <span className="cw-help">
           已加载 {spaces.length} 个智能体中心，列表仅展示中心名称。
+        </span>
+      )}
+    </div>
+  );
+}
+
+function VikingKnowledgebaseSelect({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (index: string) => void;
+}) {
+  const [items, setItems] = useState<VikingKnowledgebaseRef[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [open, setOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    listVikingKnowledgebases()
+      .then((next) => {
+        if (!cancelled) setItems(next);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setItems([]);
+          setError(err instanceof Error ? err.message : "加载失败");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadKey]);
+
+  const selectedKnown =
+    !value || items.some((item) => item.id === value.trim());
+  const selectedItem = items.find((item) => item.id === value.trim());
+  const selectedLabel = selectedItem
+    ? vikingKnowledgebaseDisplayName(selectedItem)
+    : value && !selectedKnown
+      ? value
+      : "请选择 VikingDB 知识库";
+  const disabled = loading && items.length === 0;
+
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        pickerRef.current &&
+        !pickerRef.current.contains(target)
+      ) {
+        setOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
+
+  const selectItem = (index: string) => {
+    onChange(index);
+    setOpen(false);
+  };
+
+  return (
+    <div className="cw-a2a-space-picker cw-viking-kb-picker" ref={pickerRef}>
+      <div className="cw-a2a-space-row">
+        <div className="cw-a2a-space-select-wrap">
+          <button
+            type="button"
+            className="cw-a2a-space-trigger"
+            disabled={disabled}
+            aria-haspopup="listbox"
+            aria-expanded={open}
+            aria-label="选择 VikingDB 知识库"
+            onClick={() => setOpen((current) => !current)}
+          >
+            <span className={!value ? "is-placeholder" : undefined}>
+              {selectedLabel}
+            </span>
+            <A2aSelectChevronIcon className="cw-a2a-space-trigger-icon" />
+          </button>
+          {open && (
+            <div
+              className="cw-a2a-space-menu cw-viking-kb-menu"
+              role="listbox"
+              aria-label="VikingDB 知识库"
+            >
+              {value && !selectedKnown && (
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected
+                  className="cw-a2a-space-option is-selected"
+                  onClick={() => selectItem(value)}
+                >
+                  {value}
+                </button>
+              )}
+              {items.map((item) => {
+                const optionLabel = vikingKnowledgebaseDisplayName(item);
+                const selected = item.id === value;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    className={`cw-a2a-space-option ${
+                      selected ? "is-selected" : ""
+                    }`}
+                    title={optionLabel}
+                    onClick={() => selectItem(item.id)}
+                  >
+                    {optionLabel}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        <button
+          type="button"
+          className="cw-icon-btn cw-a2a-space-refresh cw-viking-kb-refresh"
+          title="刷新知识库列表"
+          aria-label="刷新知识库列表"
+          disabled={loading}
+          onClick={() => setReloadKey((key) => key + 1)}
+        >
+          {loading ? (
+            <Loader2 className="cw-i cw-i-sm cw-spin" />
+          ) : (
+            <A2aRefreshIcon className="cw-i cw-i-sm" />
+          )}
+        </button>
+      </div>
+      {error ? (
+        <div className="cw-banner cw-a2a-space-error">
+          <Info className="cw-i" />
+          <span>{error}</span>
+        </div>
+      ) : loading ? (
+        <span className="cw-help cw-a2a-space-status">
+          <Loader2 className="cw-i cw-i-sm cw-spin" />
+          正在加载 VikingDB 知识库…
+        </span>
+      ) : items.length === 0 ? (
+        <span className="cw-help">此账号下暂无 VikingDB 知识库。</span>
+      ) : (
+        <span className="cw-help">
+          已加载 {items.length} 个知识库，选择的知识库会用于当前 Agent。
         </span>
       )}
     </div>
@@ -2796,9 +2971,27 @@ export function CustomCreate({
                           options={KB_BACKENDS}
                           value={node.knowledgebaseBackend}
                           onChange={(id) =>
-                            patch({ knowledgebaseBackend: id })
+                            patch({
+                              knowledgebaseBackend: id,
+                              knowledgebaseIndex:
+                                id === "viking"
+                                  ? node.knowledgebaseIndex
+                                  : "",
+                            })
                           }
                         />
+                        {(node.knowledgebaseBackend ?? DEFAULT_KB_BACKEND) ===
+                          "viking" && (
+                          <div className="cw-field cw-subfield">
+                            <label className="cw-label">VikingDB 知识库</label>
+                            <VikingKnowledgebaseSelect
+                              value={node.knowledgebaseIndex ?? ""}
+                              onChange={(knowledgebaseIndex) =>
+                                patch({ knowledgebaseIndex })
+                              }
+                            />
+                          </div>
+                        )}
                         <RuntimeEnvFields
                           env={
                             KB_BACKENDS.find(

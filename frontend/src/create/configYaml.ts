@@ -66,7 +66,10 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
   }
   if (draft.knowledgebase) {
     o.knowledgebase = true;
-    o.knowledgebaseBackend = draft.knowledgebaseBackend || "opensearch";
+    o.knowledgebaseBackend = draft.knowledgebaseBackend || "viking";
+    if (draft.knowledgebaseIndex?.trim()) {
+      o.knowledgebaseIndex = draft.knowledgebaseIndex.trim();
+    }
   }
   if (draft.tracing && draft.tracingExporters?.length) {
     o.tracing = true;

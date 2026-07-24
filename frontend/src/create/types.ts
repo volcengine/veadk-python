@@ -116,6 +116,8 @@ export interface AgentDraft {
   autoSaveSession?: boolean;
   /** Chosen knowledgebase backend when knowledgebase is enabled. */
   knowledgebaseBackend?: string;
+  /** Existing knowledgebase collection/index selected for managed backends. */
+  knowledgebaseIndex?: string;
   /** Selected tracing exporter ids (apmplus | cozeloop | tls). */
   tracingExporters?: string[];
   /** Skills picked from the Skill Hub — downloaded into the project at build. */
@@ -175,6 +177,7 @@ export function emptyDraft(): AgentDraft {
     longTermBackend: "local",
     autoSaveSession: false,
     knowledgebaseBackend: DEFAULT_KB_BACKEND,
+    knowledgebaseIndex: "",
     tracingExporters: [],
     selectedSkills: [],
     deployment: { feishuEnabled: false },
