@@ -35,6 +35,12 @@ VeADK ships a React frontend that renders [A2UI](/en/docs/framework/a2ui) (agent
   after a reload, users can start another session and AgentKit reclaims the
   abandoned session automatically when its TTL ends.
 - **Smart search**: the *Session* source full-text-searches the current agent's history; the *Web* source calls the agent's mounted web-search tool live (using credentials from the server's environment variables).
+- **Message feedback**: when connected to a cloud AgentKit Runtime, the
+  like/dislike controls below each answer write the question, answer, and
+  feedback state to AgentKit evaluation sets. Each Agent gets stable
+  `{agent_name}_good_case` and `{agent_name}_bad_case` sets; changing or
+  cancelling a rating updates the item idempotently. If a Runtime does not
+  expose Session state updates, the browser keeps a compatibility cache.
 - **Add an AgentKit agent**: paste a URL + API key to connect a remote agent over the ADK protocol; it then appears in the picker.
 - **Custom-agent workbench**: author system prompts in a rich Markdown editor
   with heading and list shortcuts. Local skills accept a dropped folder or ZIP
