@@ -82,9 +82,16 @@ class StudioReleaseBuilder:
             source_root = self._download_source(request, workspace, on_progress)
             fetch_seconds = time.monotonic() - fetch_started
 
+            prepared_root = source_root / ".studio-release"
+            frontend_assets = prepared_root / "frontend"
+            dependency_wheels = prepared_root / "wheels"
             tools_started = time.monotonic()
-            on_progress("preparing", "正在准备 Node 与 uv 构建工具")
-            node_bin = self._ensure_node()
+            if (frontend_assets / "index.html").is_file():
+                on_progress("preparing", "正在校验预构建前端与依赖包")
+                node_bin = None
+            else:
+                on_progress("preparing", "正在准备 Node 与 uv 构建工具")
+                node_bin = self._ensure_node()
             uv = shutil.which("uv")
             if uv is None:
                 raise RuntimeError("uv is not installed in the release server package.")
@@ -101,6 +108,14 @@ class StudioReleaseBuilder:
                 version=version,
                 node_bin=node_bin,
                 uv=Path(uv),
+                frontend_assets=(
+                    frontend_assets
+                    if (frontend_assets / "index.html").is_file()
+                    else None
+                ),
+                dependency_wheels=(
+                    dependency_wheels if dependency_wheels.is_dir() else None
+                ),
             )
             publish_seconds = time.monotonic() - publish_started
 
@@ -239,8 +254,10 @@ class StudioReleaseBuilder:
         source_root: Path,
         output_dir: Path,
         version: str,
-        node_bin: Path,
+        node_bin: Path | None,
         uv: Path,
+        frontend_assets: Path | None,
+        dependency_wheels: Path | None,
     ) -> None:
         credentials = resolve_credentials()
         command = [
@@ -264,12 +281,18 @@ class StudioReleaseBuilder:
         ]
         for item in request.changelog:
             command.extend(("--changelog", item))
+        if frontend_assets is not None:
+            command.extend(("--frontend-assets", str(frontend_assets)))
+        if dependency_wheels is not None:
+            command.extend(("--dependency-wheels", str(dependency_wheels)))
         env = os.environ.copy()
+        path_entries = [str(uv.parent)]
+        if node_bin is not None:
+            path_entries.insert(0, str(node_bin))
+        path_entries.append(env.get("PATH", ""))
         env.update(
             {
-                "PATH": os.pathsep.join(
-                    (str(node_bin), str(uv.parent), env.get("PATH", ""))
-                ),
+                "PATH": os.pathsep.join(path_entries),
                 "PYTHONPATH": os.pathsep.join(
                     (str(source_root), env.get("PYTHONPATH", ""))
                 ),

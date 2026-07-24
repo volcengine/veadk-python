@@ -65,6 +65,13 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.17.0
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
       - name: Validate release server configuration
         run: |
           set -euo pipefail
@@ -114,11 +121,20 @@ jobs:
           set -euo pipefail
           job_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           archive="$RUNNER_TEMP/studio-release-source.tar.gz"
-          git archive \
-            --format=tar.gz \
-            --prefix="veadk-python-${GITHUB_SHA}/" \
-            --output="$archive" \
-            "$GITHUB_SHA"
+          source_parent="$RUNNER_TEMP/studio-release-source"
+          source_root="$source_parent/veadk-python-${GITHUB_SHA}"
+          prepared_root="$source_root/.studio-release"
+          mkdir -p "$source_root" "$prepared_root/frontend"
+          git archive "$GITHUB_SHA" -- \
+            pyproject.toml README.md LICENSE frontend veadk \
+            ':(exclude)veadk/webui' | tar -x -C "$source_root"
+          npm ci --prefix frontend
+          npm run build --prefix frontend -- \
+            --outDir "$prepared_root/frontend"
+          python -m veadk.cli.studio_dependencies \
+            --output-dir "$prepared_root/wheels"
+          tar -C "$source_parent" -czf "$archive" \
+            "veadk-python-${GITHUB_SHA}"
           upload_response="$(curl --fail-with-body --silent --show-error \
             --request POST \
             --header "Content-Type: application/json" \

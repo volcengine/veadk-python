@@ -334,6 +334,8 @@ def build_studio_release(
     version: str,
     git_sha: str,
     changelog: tuple[str, ...] = (),
+    frontend_assets: Path | None = None,
+    dependency_wheels: Path | None = None,
 ) -> tuple[Path, StudioReleaseManifest]:
     """Build the full Studio function bundle from one source checkout."""
     from veadk.cli.studio_package import (
@@ -347,13 +349,20 @@ def build_studio_release(
     output_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="veadk_studio_release_") as tmp:
         workspace = Path(tmp)
-        frontend_assets = workspace / "frontend"
+        resolved_frontend_assets = frontend_assets
+        if resolved_frontend_assets is None:
+            resolved_frontend_assets = workspace / "frontend"
+            build_frontend_assets(source_root, resolved_frontend_assets)
+        elif not (resolved_frontend_assets / "index.html").is_file():
+            raise StudioReleaseError(
+                "Prepared Studio frontend assets contain no index.html."
+            )
         package_dir = workspace / "package"
-        build_frontend_assets(source_root, frontend_assets)
         requirements = build_local_studio_requirements(
             source_root,
             package_dir,
-            frontend_assets=frontend_assets,
+            frontend_assets=resolved_frontend_assets,
+            dependency_wheels=dependency_wheels,
         )
         write_studio_package(
             package_dir,
@@ -426,6 +435,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--region", default="cn-beijing")
     parser.add_argument("--prefix", default=DEFAULT_RELEASE_PREFIX)
     parser.add_argument("--changelog", action="append", default=[])
+    parser.add_argument("--frontend-assets", type=Path)
+    parser.add_argument("--dependency-wheels", type=Path)
     return parser
 
 
@@ -441,6 +452,8 @@ def main() -> None:
         version=args.version,
         git_sha=args.git_sha,
         changelog=tuple(args.changelog),
+        frontend_assets=args.frontend_assets,
+        dependency_wheels=args.dependency_wheels,
     )
     store = StudioReleaseStore(
         bucket=args.bucket,
