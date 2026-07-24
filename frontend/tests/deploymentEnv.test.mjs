@@ -22,6 +22,7 @@ const {
   A2A_REGISTRY_DEFAULTS,
   A2A_REGISTRY_ENV,
   BUILTIN_TOOLS,
+  DEFAULT_KB_BACKEND,
   KB_BACKENDS,
   LTM_BACKENDS,
   MODEL_ENV,
@@ -48,6 +49,18 @@ const codeBrowserStyles = readFileSync(
   new URL("../src/ui/CodeBrowserDialog.css", import.meta.url),
   "utf8",
 );
+const vikingKnowledgebasesSource = readFileSync(
+  new URL("../src/create/vikingKnowledgebases.ts", import.meta.url),
+  "utf8",
+);
+
+test("defaults knowledgebase creation to VikingDB collections", () => {
+  assert.equal(DEFAULT_KB_BACKEND, "viking");
+  assert.equal(KB_BACKENDS[0].id, "viking");
+  assert.notEqual(KB_BACKENDS.findIndex((item) => item.id === "viking"), -1);
+  assert.match(customCreateSource, /<VikingKnowledgebaseSelect/);
+  assert.match(vikingKnowledgebasesSource, /\/web\/viking-knowledgebases/);
+});
 
 test("maps active feature settings to VeADK runtime env rows", () => {
   const specs = [

@@ -289,8 +289,15 @@ export const LTM_BACKENDS: BackendOption[] = [
 /* ------------------------------------------------------------------ *
  * Knowledgebase backends.
  * ------------------------------------------------------------------ */
+export const DEFAULT_KB_BACKEND = "viking";
+
 export const KB_BACKENDS: BackendOption[] = [
-  { id: "local", label: "本地向量库", desc: "进程内 llama-index 向量库。", env: EMBEDDING_ENV, pipExtra: "extensions", needsEmbedding: true },
+  {
+    id: "viking",
+    label: "VikingDB Knowledge",
+    desc: "火山 VikingDB 知识库。",
+    env: VOLC_ENV,
+  },
   {
     id: "opensearch",
     label: "OpenSearch",
@@ -304,12 +311,6 @@ export const KB_BACKENDS: BackendOption[] = [
     ],
     pipExtra: "extensions",
     needsEmbedding: true,
-  },
-  {
-    id: "viking",
-    label: "VikingDB Knowledge",
-    desc: "火山 VikingDB 知识库。",
-    env: VOLC_ENV,
   },
   {
     id: "context_search",
