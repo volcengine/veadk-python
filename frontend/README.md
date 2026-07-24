@@ -289,8 +289,8 @@ memory, so polling and downloads continue to work when FaaS requests reach a
 different instance.
 
 For local Studio, run the AgentKit `credential-hosting` command and bind its
-result to both CodeEnv Tools. A cloud deployment creates both Tools when their
-IDs are omitted. Alternatively, select existing Tools with
+result to both CodeEnv Tools. A cloud deployment creates both Tools in parallel
+when their IDs are omitted. Alternatively, select existing Tools with
 `--sandbox-chat-codex-tool-id` and `--sandbox-skill-creator-tool-id`. The deploy
 command obtains the Ark key with the deployer's Volcengine credentials, stores
 it through AgentKit credential hosting, and binds only the returned ticket and

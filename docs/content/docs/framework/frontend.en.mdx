@@ -223,8 +223,8 @@ frontend-process memory, so polling and downloads continue to work when FaaS
 requests reach different instances.
 
 On the first cloud deployment, the command creates two independent CodeEnv
-Tools with the deployer's AK/SK when Tool IDs are omitted. Existing Tools can be
-selected with `--sandbox-chat-codex-tool-id` and
+Tools in parallel with the deployer's AK/SK when Tool IDs are omitted. Existing
+Tools can be selected with `--sandbox-chat-codex-tool-id` and
 `--sandbox-skill-creator-tool-id`. The Ark credential is resolved with the
 deployer's AK/SK and written directly to both Tools as model environment
 variables. Sandbox sessions inherit those Tool variables. The browser and

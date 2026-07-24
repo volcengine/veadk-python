@@ -30,6 +30,7 @@ import re
 import sys
 
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -3925,29 +3926,40 @@ def frontend_deploy(
         studio_sandbox_tool_name,
     )
 
+    missing_sandbox_tools: dict[str, str] = {}
     for purpose, tool_id in sandbox_tool_ids.items():
         if tool_id:
             continue
         tool_name = studio_sandbox_tool_name(vefaas_app_name, purpose)
         click.echo(f"Ensuring AgentKit {purpose} CodeEnv Tool '{tool_name}'…")
-        try:
-            sandbox_tool_ids[purpose] = ensure_studio_code_env_tool(
-                name=tool_name,
-                region=region,
-                access_key=ak,
-                secret_key=sk,
-                session_token=session_token or "",
-            )
-        except Exception as error:
-            detail = _safe_exception_detail(
-                error,
-                secrets=(ak, sk, session_token),
-            )
-            raise click.ClickException(
-                f"Failed to provision the AgentKit {purpose} CodeEnv Tool. "
-                f"Underlying error:\n{detail}"
-            ) from error
-        click.echo(f"AgentKit {purpose} CodeEnv Tool is ready.")
+        missing_sandbox_tools[purpose] = tool_name
+
+    if missing_sandbox_tools:
+        with ThreadPoolExecutor(max_workers=len(missing_sandbox_tools)) as executor:
+            tool_futures = {
+                purpose: executor.submit(
+                    ensure_studio_code_env_tool,
+                    name=tool_name,
+                    region=region,
+                    access_key=ak,
+                    secret_key=sk,
+                    session_token=session_token or "",
+                )
+                for purpose, tool_name in missing_sandbox_tools.items()
+            }
+            for purpose, future in tool_futures.items():
+                try:
+                    sandbox_tool_ids[purpose] = future.result()
+                except Exception as error:
+                    detail = _safe_exception_detail(
+                        error,
+                        secrets=(ak, sk, session_token),
+                    )
+                    raise click.ClickException(
+                        f"Failed to provision the AgentKit {purpose} CodeEnv Tool. "
+                        f"Underlying error:\n{detail}"
+                    ) from error
+                click.echo(f"AgentKit {purpose} CodeEnv Tool is ready.")
 
     from veadk.cli.frontend_skill_creator import (
         ensure_skill_creator_model_credential,
