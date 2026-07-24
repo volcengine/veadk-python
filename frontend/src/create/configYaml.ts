@@ -66,7 +66,7 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
   }
   if (draft.knowledgebase) {
     o.knowledgebase = true;
-    o.knowledgebaseBackend = draft.knowledgebaseBackend || "local";
+    o.knowledgebaseBackend = draft.knowledgebaseBackend || "opensearch";
   }
   if (draft.tracing && draft.tracingExporters?.length) {
     o.tracing = true;

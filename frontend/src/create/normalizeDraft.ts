@@ -5,10 +5,11 @@ import {
   type CustomTool,
   type SelectedSkill,
 } from "./types";
+import { DEFAULT_KB_BACKEND } from "./veadkCatalog";
 
 const STM_IDS = new Set(["local", "sqlite", "mysql", "postgresql"]);
 const LTM_IDS = new Set(["local", "opensearch", "redis", "viking", "mem0"]);
-const KB_IDS = new Set(["local", "opensearch", "viking", "context_search"]);
+const KB_IDS = new Set(["opensearch", "viking", "context_search"]);
 const EXPORTER_IDS = new Set(["apmplus", "cozeloop", "tls"]);
 const TOOL_IDS = new Set([
   "web_search",
@@ -212,7 +213,7 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     longTermBackend: pick(o.longTermBackend, LTM_IDS, "local"),
     autoSaveSession: asBool(o.autoSaveSession),
     knowledgebase: asBool(o.knowledgebase),
-    knowledgebaseBackend: pick(o.knowledgebaseBackend, KB_IDS, "local"),
+    knowledgebaseBackend: pick(o.knowledgebaseBackend, KB_IDS, DEFAULT_KB_BACKEND),
     tracing: asBool(o.tracing),
     tracingExporters: asStringArray(o.tracingExporters).filter((e) =>
       EXPORTER_IDS.has(e),

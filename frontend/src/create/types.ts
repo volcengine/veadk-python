@@ -32,6 +32,7 @@ export interface McpTool {
 // AgentDraft interface below can reference SelectedSkill, while `export type`
 // makes them available to external importers of "./types" unchanged.
 import type { SelectedSkill, SkillHit, SkillSource } from "./skills/types";
+import { DEFAULT_KB_BACKEND } from "./veadkCatalog";
 export type { SelectedSkill, SkillHit, SkillSource };
 
 
@@ -173,7 +174,7 @@ export function emptyDraft(): AgentDraft {
     shortTermBackend: "local",
     longTermBackend: "local",
     autoSaveSession: false,
-    knowledgebaseBackend: "local",
+    knowledgebaseBackend: DEFAULT_KB_BACKEND,
     tracingExporters: [],
     selectedSkills: [],
     deployment: { feishuEnabled: false },

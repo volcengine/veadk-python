@@ -47,6 +47,7 @@ import {
   STM_BACKENDS,
   LTM_BACKENDS,
   KB_BACKENDS,
+  DEFAULT_KB_BACKEND,
   TRACING_EXPORTERS,
   type BackendOption,
   type EnvVar,
@@ -1213,7 +1214,8 @@ function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
       selections.push({
         env:
           KB_BACKENDS.find(
-            (item) => item.id === (node.knowledgebaseBackend ?? "local"),
+            (item) =>
+              item.id === (node.knowledgebaseBackend ?? DEFAULT_KB_BACKEND),
           )?.env ?? [],
       });
     }
@@ -2802,7 +2804,8 @@ export function CustomCreate({
                             KB_BACKENDS.find(
                                     (item) =>
                                       item.id ===
-                                      (node.knowledgebaseBackend ?? "local"),
+                                      (node.knowledgebaseBackend ??
+                                        DEFAULT_KB_BACKEND),
                             )?.env ?? []
                           }
                           values={draft.deployment?.envValues ?? {}}

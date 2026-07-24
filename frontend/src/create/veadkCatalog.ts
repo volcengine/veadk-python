@@ -289,8 +289,9 @@ export const LTM_BACKENDS: BackendOption[] = [
 /* ------------------------------------------------------------------ *
  * Knowledgebase backends.
  * ------------------------------------------------------------------ */
+export const DEFAULT_KB_BACKEND = "opensearch";
+
 export const KB_BACKENDS: BackendOption[] = [
-  { id: "local", label: "本地向量库", desc: "进程内 llama-index 向量库。", env: EMBEDDING_ENV, pipExtra: "extensions", needsEmbedding: true },
   {
     id: "opensearch",
     label: "OpenSearch",
