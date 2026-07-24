@@ -352,6 +352,7 @@ def ve_request(
     query: dict = {},
     method: Literal["GET", "POST", "PUT", "DELETE"] = "POST",
     scheme: Literal["http", "https"] = "https",
+    session_token: str = "",
 ):
     global Service
     Service = service
@@ -373,11 +374,14 @@ def ve_request(
     import json
 
     try:
+        request_header = dict(header)
+        if session_token:
+            request_header["X-Security-Token"] = session_token
         response_body = request(
             method,
             now,
             query,
-            header,
+            request_header,
             AK,
             SK,
             action,

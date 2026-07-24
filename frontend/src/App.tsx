@@ -24,6 +24,7 @@ import {
   listApps,
   listSessions,
   runSSE,
+  submitMessageFeedback,
   uploadMedia,
   getUiConfig,
   type AdkEvent,
@@ -34,6 +35,7 @@ import {
   type Attachment,
   type FrontendInvocation,
   type ManagedRuntime,
+  type MessageFeedbackRating,
   type SiteBranding,
   type StudioAccess,
   type UiFeatures,
@@ -75,6 +77,7 @@ import type { AgentDraft } from "./create/types";
 import type { DeploymentTaskUpdate } from "./ui/ProjectPreview";
 import { DeploymentErrorMessage } from "./ui/DeploymentErrorMessage";
 import { TextShimmer } from "./ui/text-shimmer/TextShimmer";
+import { StudioUpdateControl } from "./ui/StudioUpdateControl";
 import { createSkillJob, deleteSkillJob } from "./ui/skill-create/api";
 import { SkillCreateWorkspace } from "./ui/skill-create/SkillCreateWorkspace";
 import { SKILL_MODELS, type SkillCreationJob } from "./ui/skill-create/types";
@@ -99,6 +102,10 @@ import {
   identifyAnalyticsUser,
   trackEvent,
 } from "./analytics/webpro";
+import {
+  FeedbackDownIcon,
+  FeedbackUpIcon,
+} from "./ui/icons/FeedbackIcons";
 
 // Breadcrumb root label for the create flow and the per-mode leaf labels.
 const CREATE_ROOT = "创建 Agent";
@@ -629,6 +636,9 @@ export default function App() {
   // banner (per-session transcripts/topology don't need it).
   const viewSidRef = useRef("");
   const [error, setError] = useState("");
+  const [feedbackPendingIds, setFeedbackPendingIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [traceOpen, setTraceOpen] = useState(false);
   const [greeting, setGreeting] = useState(pickGreeting);
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
@@ -1387,7 +1397,7 @@ export default function App() {
     setLoadingSession(true);
     try {
       const s = await getSession(appName, userId, id);
-      setTurnsFor(id, eventsToTurns(s.events ?? []));
+      setTurnsFor(id, eventsToTurns(s.events ?? [], s.state));
     } catch (e) {
       setError(String(e));
     } finally {
@@ -1565,6 +1575,8 @@ export default function App() {
       let acc = emptyAcc();
       let tokens = 0;
       let ts = Date.now() / 1000;
+      let eventId = "";
+      let invocationId = "";
       for await (const event of runSSE({
         appName,
         userId,
@@ -1586,8 +1598,16 @@ export default function App() {
         const usage = event.usageMetadata ?? event.usage_metadata;
         if (usage?.totalTokenCount) tokens = usage.totalTokenCount;
         if (event.timestamp) ts = event.timestamp;
+        if (event.id) eventId = event.id;
+        const nextInvocationId = event.invocationId ?? event.invocation_id;
+        if (nextInvocationId) invocationId = nextInvocationId;
         const blocks = acc.blocks;
-        const meta = { tokens: tokens || undefined, ts };
+        const meta = {
+          tokens: tokens || undefined,
+          ts,
+          eventId: eventId || undefined,
+          invocationId: invocationId || undefined,
+        };
         setTurnsFor(sid, (t) => {
           const next = t.slice();
           const last = next[next.length - 1];
@@ -1659,6 +1679,8 @@ export default function App() {
       let acc = emptyAcc();
       let tokens = 0;
       let ts = Date.now() / 1000;
+      let eventId = lastTurn?.meta?.eventId ?? "";
+      let invocationId = lastTurn?.meta?.invocationId ?? "";
       for await (const event of runSSE({
         appName,
         userId,
@@ -1675,6 +1697,9 @@ export default function App() {
         const usage = event.usageMetadata ?? event.usage_metadata;
         if (usage?.totalTokenCount) tokens = usage.totalTokenCount;
         if (event.timestamp) ts = event.timestamp;
+        if (event.id) eventId = event.id;
+        const nextInvocationId = event.invocationId ?? event.invocation_id;
+        if (nextInvocationId) invocationId = nextInvocationId;
         const blocks = [...base, ...acc.blocks];
         setTurnsFor(sid, (t) => {
           const next = t.slice();
@@ -1683,7 +1708,12 @@ export default function App() {
             next[next.length - 1] = {
               ...last,
               blocks,
-              meta: { tokens: tokens || last.meta?.tokens, ts },
+              meta: {
+                tokens: tokens || last.meta?.tokens,
+                ts,
+                eventId: eventId || last.meta?.eventId,
+                invocationId: invocationId || last.meta?.invocationId,
+              },
             };
           }
           return next;
@@ -1747,6 +1777,60 @@ export default function App() {
           region: currentConn.region ?? "cn-beijing",
         }
       : undefined;
+
+  const rateAssistantTurn = async (
+    turn: Turn,
+    rating: MessageFeedbackRating | null,
+  ) => {
+    const eventId = turn.meta?.eventId;
+    const sid = sessionId;
+    if (!eventId || !sid || !currentRuntime) return;
+    setFeedbackPendingIds((current) => new Set(current).add(eventId));
+    try {
+      const feedback = await submitMessageFeedback({
+        appName,
+        userId,
+        sessionId: sid,
+        eventId,
+        rating,
+      });
+      setTurnsFor(sid, (current) =>
+        current.map((item) =>
+          item.meta?.eventId === eventId
+            ? { ...item, meta: { ...item.meta, feedback } }
+            : item,
+        ),
+      );
+      setSessions((current) =>
+        current.map((item) =>
+          item.id === sid
+            ? {
+                ...item,
+                state: {
+                  ...(item.state ?? {}),
+                  [`veadk_feedback:${eventId}`]: feedback,
+                },
+              }
+            : item,
+        ),
+      );
+    } catch (feedbackError) {
+      if (viewSidRef.current === sid) {
+        setError(
+          feedbackError instanceof Error
+            ? feedbackError.message
+            : String(feedbackError),
+        );
+      }
+    } finally {
+      setFeedbackPendingIds((current) => {
+        const next = new Set(current);
+        next.delete(eventId);
+        return next;
+      });
+    }
+  };
+
   // Selecting an agent (from the sidebar picker) starts a fresh chat; any
   // background stream keeps persisting to its own (old) session.
   const selectAgent = (id: string) => {
@@ -2068,10 +2152,13 @@ export default function App() {
                       ]
               }
               rightContent={
-                <DeploymentTaskStatus
-                  tasks={canCreateAgents ? deploymentTasks : []}
-                  onCancel={cancelDeploymentTask}
-                />
+                <>
+                  {access.role === "admin" && <StudioUpdateControl />}
+                  <DeploymentTaskStatus
+                    tasks={canCreateAgents ? deploymentTasks : []}
+                    onCancel={cancelDeploymentTask}
+                  />
+                </>
               }
             />
             <main className={`main${sandboxSession ? " is-sandbox-session" : ""}`}>
@@ -2244,6 +2331,12 @@ export default function App() {
               );
             }
             const pending = turn.blocks.length === 0;
+            const feedbackRating = turn.meta?.feedback?.rating ?? null;
+            const feedbackEventId = turn.meta?.eventId ?? "";
+            const feedbackPending = feedbackPendingIds.has(feedbackEventId);
+            const canRate = Boolean(
+              currentRuntime && feedbackEventId && turnText(turn),
+            );
             return (
               <motion.div
                 key={i}
@@ -2268,6 +2361,48 @@ export default function App() {
                     {!(isLast && activeConversationBusy) && !turnAwaitingAuth(turn) && (
                       <div className="turn-meta">
                         <div className="turn-actions">
+                          {canRate && (
+                            <>
+                              <button
+                                type="button"
+                                className={`icon-btn feedback-btn${
+                                  feedbackRating === "good"
+                                    ? " feedback-btn--good"
+                                    : ""
+                                }`}
+                                aria-label="赞"
+                                aria-pressed={feedbackRating === "good"}
+                                aria-busy={feedbackPending}
+                                title={feedbackRating === "good" ? "取消点赞" : "赞"}
+                                disabled={feedbackPending}
+                                onClick={() => void rateAssistantTurn(
+                                  turn,
+                                  feedbackRating === "good" ? null : "good",
+                                )}
+                              >
+                                <FeedbackUpIcon className="icon" />
+                              </button>
+                              <button
+                                type="button"
+                                className={`icon-btn feedback-btn${
+                                  feedbackRating === "bad"
+                                    ? " feedback-btn--bad"
+                                    : ""
+                                }`}
+                                aria-label="踩"
+                                aria-pressed={feedbackRating === "bad"}
+                                aria-busy={feedbackPending}
+                                title={feedbackRating === "bad" ? "取消点踩" : "踩"}
+                                disabled={feedbackPending}
+                                onClick={() => void rateAssistantTurn(
+                                  turn,
+                                  feedbackRating === "bad" ? null : "bad",
+                                )}
+                              >
+                                <FeedbackDownIcon className="icon" />
+                              </button>
+                            </>
+                          )}
                           {!sandboxSession && (
                             <button
                               className="icon-btn"

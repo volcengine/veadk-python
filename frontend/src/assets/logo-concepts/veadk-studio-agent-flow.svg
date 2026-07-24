@@ -1,0 +1,11 @@
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <title>VeADK Studio — Agent Flow</title>
+  <path d="M5.15 5.2h2.7v5.46h8.3V5.2h2.7v8.16H7.85v5.44h-2.7V5.2Z" fill="#006EFF"/>
+  <circle cx="6.5" cy="5.2" r="3.15" fill="#006EFF"/>
+  <circle cx="17.5" cy="5.2" r="3.15" fill="#006EFF"/>
+  <circle cx="6.5" cy="18.8" r="3.15" fill="#006EFF"/>
+  <path d="m17.5 9.45 1.23 2.32 2.32 1.23-2.32 1.23-1.23 2.32-1.23-2.32L13.95 13l2.32-1.23 1.23-2.32Z" fill="#00E5E5"/>
+  <circle cx="6.5" cy="5.2" r="1.15" fill="#00E5E5"/>
+  <circle cx="17.5" cy="5.2" r="1.15" fill="#00E5E5"/>
+  <circle cx="6.5" cy="18.8" r="1.15" fill="#00E5E5"/>
+</svg>

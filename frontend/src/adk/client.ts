@@ -24,6 +24,9 @@ export interface AdkUsage {
 }
 
 export interface AdkEvent {
+  id?: string;
+  invocationId?: string;
+  invocation_id?: string;
   author?: string;
   partial?: boolean;
   timestamp?: number;
@@ -68,7 +71,20 @@ export interface AdkSession {
   id: string;
   lastUpdateTime?: number;
   events?: AdkEvent[];
+  state?: Record<string, unknown>;
   [k: string]: unknown;
+}
+
+export type MessageFeedbackRating = "good" | "bad";
+
+export interface MessageFeedbackState {
+  rating: MessageFeedbackRating | null;
+  evaluationSetId?: string | null;
+  evaluationSetName?: string | null;
+  workspaceId?: string | null;
+  evaluationItemId?: string | null;
+  syncStatus: "synced";
+  updatedAt: number;
 }
 
 export interface AdkInlineData {
@@ -334,6 +350,43 @@ export async function getSession(
   );
   if (!res.ok) throw new Error(`get session failed: ${res.status}`);
   return res.json();
+}
+
+export async function submitMessageFeedback(args: {
+  appName: string;
+  userId: string;
+  sessionId: string;
+  eventId: string;
+  rating: MessageFeedbackRating | null;
+  comment?: string;
+}): Promise<MessageFeedbackState> {
+  const { app, ep } = resolve(args.appName);
+  if (!ep.runtimeId) {
+    throw new Error("只有连接到 AgentKit Runtime 的会话支持反馈回流");
+  }
+  const res = await apiFetch(
+    "/web/evaluation/feedback",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runtimeId: ep.runtimeId,
+        region: ep.region ?? "cn-beijing",
+        appName: app,
+        userId: args.userId,
+        sessionId: args.sessionId,
+        eventId: args.eventId,
+        rating: args.rating,
+        comment: args.comment ?? "",
+      }),
+    },
+    {},
+    TRANSFER_REQUEST_TIMEOUT_MS,
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "提交反馈失败"));
+  }
+  return res.json() as Promise<MessageFeedbackState>;
 }
 
 export async function deleteSession(
@@ -1012,6 +1065,73 @@ export async function getStudioAccess(): Promise<StudioAccess> {
     throw new Error("权限服务返回了无法解析的响应");
   }
   return access;
+}
+
+export interface StudioReleaseOption {
+  version: string;
+  gitSha: string;
+  createdAt: string;
+  changelog: string[];
+}
+
+export interface StudioUpdateStatus {
+  enabled: boolean;
+  currentVersion: string;
+  latestVersion: string;
+  latestGitSha: string;
+  releases: StudioReleaseOption[];
+  available: boolean;
+  state: "disabled" | "idle" | "updating" | "error";
+  message: string;
+  progressStage:
+    | "idle"
+    | "resolving"
+    | "downloading"
+    | "preparing"
+    | "submitting"
+    | "publishing"
+    | "complete"
+    | "error";
+  progressMessage: string;
+  targetVersion: string;
+  startedAt: number;
+}
+
+/** Check the configured immutable Studio main release channel. */
+export async function getStudioUpdateStatus(
+  targetVersion?: string,
+): Promise<StudioUpdateStatus> {
+  const query = targetVersion
+    ? `?targetVersion=${encodeURIComponent(targetVersion)}`
+    : "";
+  const res = await apiFetch(`/web/studio-update${query}`);
+  if (!res.ok) throw new Error(`检查 Studio 更新失败 (${res.status})`);
+  return (await res.json()) as StudioUpdateStatus;
+}
+
+/** Stage the latest full Studio bundle and submit a VeFaaS release. */
+export async function startStudioUpdate(
+  version: string,
+): Promise<{ version: string }> {
+  const res = await apiFetch("/web/studio-update", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-VeADK-Studio-Update": "1",
+    },
+    body: JSON.stringify({ version }),
+  });
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const payload = (await res.json()) as { detail?: unknown };
+      detail = typeof payload.detail === "string" ? payload.detail : "";
+    } catch {
+      detail = "";
+    }
+    throw new Error(detail || `提交 Studio 更新失败 (${res.status})`);
+  }
+  return (await res.json()) as { version: string };
 }
 
 /** One AgentKit runtime as listed by `/web/runtimes` (control-plane). */

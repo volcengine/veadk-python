@@ -1648,6 +1648,23 @@ body {
 .icon-btn:disabled { opacity: 0.35; cursor: default; }
 .icon-btn:disabled:hover { background: none; color: hsl(var(--muted-foreground)); }
 .icon-btn .icon { width: 15px; height: 15px; }
+.feedback-btn--good {
+  background: hsl(142 58% 94%);
+  color: hsl(142 62% 34%);
+}
+.feedback-btn--good:hover {
+  background: hsl(142 58% 91%);
+  color: hsl(142 62% 30%);
+}
+.feedback-btn--bad {
+  background: hsl(var(--destructive) / 0.08);
+  color: hsl(var(--destructive));
+}
+.feedback-btn--bad:hover {
+  background: hsl(var(--destructive) / 0.12);
+  color: hsl(var(--destructive));
+}
+.feedback-btn[aria-busy="true"] { opacity: 0.5; }
 .meta-text {
   white-space: nowrap;
   font-size: 12px;

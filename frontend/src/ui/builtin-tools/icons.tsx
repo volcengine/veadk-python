@@ -98,6 +98,27 @@ export function LoadKnowledgebaseIcon(props: ToolIconProps) {
   );
 }
 
+/** A hand-drawn sandbox with a small code prompt inside. */
+export function RunCodeIcon(props: ToolIconProps) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <path d="m4.2 8.4 1.15 10.2h13.3L19.8 8.4" />
+      <path d="M4.2 8.4h15.6L17.9 5H6.1L4.2 8.4Z" />
+      <path d="M7.2 12.2c1.1-1 2.25 1.25 3.4.25 1.05-.9 2.15 1.3 3.3.25" />
+      <path d="m8.2 15.1 1.45 1.35 1.45-1.35M13.55 16.45h2.35" />
+    </svg>
+  );
+}
+
 export function ToolDisclosureIcon(props: ToolIconProps) {
   return (
     <svg

@@ -191,6 +191,51 @@ export const BUILTIN_TOOLS: ToolOption[] = [
     ],
   },
   {
+    id: "run_code",
+    label: "代码执行",
+    desc: "在沙箱中执行代码",
+    importLine: "from veadk.tools.builtin_tools.run_code import run_code",
+    toolNames: ["run_code"],
+    env: [
+      {
+        key: "AGENTKIT_TOOL_ID_SCRIPT",
+        required: true,
+        placeholder: "填写代码执行沙箱 Tool ID",
+        comment: "代码执行沙箱 ID",
+      },
+      {
+        key: "AGENTKIT_TOOL_SERVICE_CODE",
+        required: false,
+        placeholder: "agentkit",
+        comment: "AgentKit Tools 服务代码",
+      },
+      {
+        key: "AGENTKIT_TOOL_REGION",
+        required: false,
+        placeholder: "cn-beijing",
+        comment: "AgentKit Tools 服务地域",
+      },
+      {
+        key: "AGENTKIT_TOOL_HOST",
+        required: false,
+        placeholder: "agentkit.cn-beijing.volces.com",
+        comment: "AgentKit Tools Endpoint",
+      },
+      {
+        key: "AGENTKIT_TOOL_SCHEME",
+        required: false,
+        placeholder: "https",
+        comment: "AgentKit Tools 协议",
+      },
+      {
+        key: "AGENTKIT_TOOL_TTL",
+        required: false,
+        placeholder: "1800",
+        comment: "沙箱会话保留时间（秒）",
+      },
+    ],
+  },
+  {
     id: "vesearch",
     label: "VeSearch 智能搜索",
     desc: "火山 VeSearch（需要 bot 端点）。",

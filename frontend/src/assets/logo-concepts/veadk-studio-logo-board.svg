@@ -1,0 +1,75 @@
+<svg viewBox="0 0 1000 650" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1000" height="650" rx="28" fill="#F3F5F8"/>
+  <text x="56" y="66" fill="#101828" font-family="Avenir Next, PingFang SC, sans-serif" font-size="28" font-weight="650">VeADK Studio · Logo Explorations</text>
+  <text x="56" y="96" fill="#7A8495" font-family="Avenir Next, PingFang SC, sans-serif" font-size="14">延续 Volcengine 的蓝青几何切片语言 · 24px 可识别 · 无渐变</text>
+
+  <defs>
+    <symbol id="pulse" viewBox="0 0 24 24">
+      <path d="M3.02 21.72 7.46 4.48a.34.34 0 0 1 .65 0l4.44 17.24a.34.34 0 0 1-.33.42H3.35a.34.34 0 0 1-.33-.42Z" fill="#006EFF"/>
+      <path d="m11.45 21.72 4.44-17.24a.34.34 0 0 1 .65 0l4.44 17.24a.34.34 0 0 1-.33.42h-8.87a.34.34 0 0 1-.33-.42Z" fill="#006EFF"/>
+      <path d="m7.28 21.7 3.1-11.92a.34.34 0 0 1 .65 0l3.1 11.92a.34.34 0 0 1-.33.43H7.61a.34.34 0 0 1-.33-.43Z" fill="#00E5E5"/>
+      <path d="m10.1 7.11 1.9-2.37 1.9 2.37L12 9.48 10.1 7.11Z" fill="#00E5E5"/>
+    </symbol>
+    <symbol id="canvas" viewBox="0 0 24 24">
+      <path d="M3 3.25h7.05v3.4h-3.4v10.7h3.4v3.4H3V3.25Zm18 0h-7.05v3.4h3.4v10.7h-3.4v3.4H21V3.25Z" fill="#006EFF"/>
+      <path d="m12 6.4 1.34 4.26L17.6 12l-4.26 1.34L12 17.6l-1.34-4.26L6.4 12l4.26-1.34L12 6.4Z" fill="#00E5E5"/>
+      <circle cx="12" cy="12" r="1.7" fill="#006EFF"/>
+    </symbol>
+    <symbol id="flow" viewBox="0 0 24 24">
+      <path d="M5.15 5.2h2.7v5.46h8.3V5.2h2.7v8.16H7.85v5.44h-2.7V5.2Z" fill="#006EFF"/>
+      <circle cx="6.5" cy="5.2" r="3.15" fill="#006EFF"/><circle cx="17.5" cy="5.2" r="3.15" fill="#006EFF"/><circle cx="6.5" cy="18.8" r="3.15" fill="#006EFF"/>
+      <path d="m17.5 9.45 1.23 2.32 2.32 1.23-2.32 1.23-1.23 2.32-1.23-2.32L13.95 13l2.32-1.23 1.23-2.32Z" fill="#00E5E5"/>
+      <circle cx="6.5" cy="5.2" r="1.15" fill="#00E5E5"/><circle cx="17.5" cy="5.2" r="1.15" fill="#00E5E5"/><circle cx="6.5" cy="18.8" r="1.15" fill="#00E5E5"/>
+    </symbol>
+    <symbol id="vector" viewBox="0 0 24 24">
+      <path d="M2.8 3.1h5.05l4.04 14.34a.33.33 0 0 0 .63 0L16.55 3.1h4.65l-5.94 18.1a.92.92 0 0 1-.87.63H9.61a.92.92 0 0 1-.87-.63L2.8 3.1Z" fill="#006EFF"/>
+      <path d="M7.85 3.1h4.3L14 9.55l-2.14 7.59a.33.33 0 0 1-.63 0L7.85 3.1Z" fill="#00E5E5"/>
+      <path d="m17.75 10.05 1.05 2.1 2.1 1.05-2.1 1.05-1.05 2.1-1.05-2.1-2.1-1.05 2.1-1.05 1.05-2.1Z" fill="#00E5E5"/>
+    </symbol>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="6" stdDeviation="11" flood-color="#14213D" flood-opacity=".07"/></filter>
+  </defs>
+
+  <g transform="translate(56 126)" filter="url(#shadow)">
+    <rect width="430" height="220" rx="18" fill="#FFF"/>
+    <use href="#pulse" x="28" y="30" width="60" height="60"/>
+    <text x="110" y="59" fill="#101828" font-family="Avenir Next, PingFang SC, sans-serif" font-size="24" font-weight="650">VeADK Studio</text>
+    <text x="110" y="84" fill="#8A94A6" font-family="Avenir Next, PingFang SC, sans-serif" font-size="12" letter-spacing="1.8">AGENT DEVELOPMENT</text>
+    <text x="28" y="126" fill="#006EFF" font-family="Avenir Next, PingFang SC, sans-serif" font-size="13" font-weight="650">01 · PULSE PEAK</text>
+    <text x="28" y="151" fill="#667085" font-family="Avenir Next, PingFang SC, sans-serif" font-size="13">最接近火山原标，加入 Agent 核心脉冲。</text>
+    <rect x="28" y="176" width="374" height="28" rx="8" fill="#F6F7F9"/>
+    <use href="#pulse" x="38" y="181" width="18" height="18"/><text x="66" y="195" fill="#182230" font-family="Avenir Next, PingFang SC, sans-serif" font-size="13" font-weight="600">VeADK Studio</text>
+  </g>
+
+  <g transform="translate(514 126)" filter="url(#shadow)">
+    <rect width="430" height="220" rx="18" fill="#FFF"/>
+    <use href="#canvas" x="28" y="30" width="60" height="60"/>
+    <text x="110" y="59" fill="#101828" font-family="Avenir Next, PingFang SC, sans-serif" font-size="24" font-weight="650">VeADK Studio</text>
+    <text x="110" y="84" fill="#8A94A6" font-family="Avenir Next, PingFang SC, sans-serif" font-size="12" letter-spacing="1.8">AGENT DEVELOPMENT</text>
+    <text x="28" y="126" fill="#006EFF" font-family="Avenir Next, PingFang SC, sans-serif" font-size="13" font-weight="650">02 · CANVAS CORE</text>
+    <text x="28" y="151" fill="#667085" font-family="Avenir Next, PingFang SC, sans-serif" font-size="13">画布边界包裹智能核心，Studio 感最强。</text>
+    <rect x="28" y="176" width="374" height="28" rx="8" fill="#F6F7F9"/>
+    <use href="#canvas" x="38" y="181" width="18" height="18"/><text x="66" y="195" fill="#182230" font-family="Avenir Next, PingFang SC, sans-serif" font-size="13" font-weight="600">VeADK Studio</text>
+  </g>
+
+  <g transform="translate(56 374)" filter="url(#shadow)">
+    <rect width="430" height="220" rx="18" fill="#FFF"/>
+    <use href="#flow" x="28" y="30" width="60" height="60"/>
+    <text x="110" y="59" fill="#101828" font-family="Avenir Next, PingFang SC, sans-serif" font-size="24" font-weight="650">VeADK Studio</text>
+    <text x="110" y="84" fill="#8A94A6" font-family="Avenir Next, PingFang SC, sans-serif" font-size="12" letter-spacing="1.8">AGENT DEVELOPMENT</text>
+    <text x="28" y="126" fill="#006EFF" font-family="Avenir Next, PingFang SC, sans-serif" font-size="13" font-weight="650">03 · AGENT FLOW</text>
+    <text x="28" y="151" fill="#667085" font-family="Avenir Next, PingFang SC, sans-serif" font-size="13">多个 Agent 节点被编排，产品语义最直接。</text>
+    <rect x="28" y="176" width="374" height="28" rx="8" fill="#F6F7F9"/>
+    <use href="#flow" x="38" y="181" width="18" height="18"/><text x="66" y="195" fill="#182230" font-family="Avenir Next, PingFang SC, sans-serif" font-size="13" font-weight="600">VeADK Studio</text>
+  </g>
+
+  <g transform="translate(514 374)" filter="url(#shadow)">
+    <rect width="430" height="220" rx="18" fill="#FFF"/>
+    <use href="#vector" x="28" y="30" width="60" height="60"/>
+    <text x="110" y="59" fill="#101828" font-family="Avenir Next, PingFang SC, sans-serif" font-size="24" font-weight="650">VeADK Studio</text>
+    <text x="110" y="84" fill="#8A94A6" font-family="Avenir Next, PingFang SC, sans-serif" font-size="12" letter-spacing="1.8">AGENT DEVELOPMENT</text>
+    <text x="28" y="126" fill="#006EFF" font-family="Avenir Next, PingFang SC, sans-serif" font-size="13" font-weight="650">04 · VECTOR V</text>
+    <text x="28" y="151" fill="#667085" font-family="Avenir Next, PingFang SC, sans-serif" font-size="13">V 字母与智能火花结合，品牌独立性最强。</text>
+    <rect x="28" y="176" width="374" height="28" rx="8" fill="#F6F7F9"/>
+    <use href="#vector" x="38" y="181" width="18" height="18"/><text x="66" y="195" fill="#182230" font-family="Avenir Next, PingFang SC, sans-serif" font-size="13" font-weight="600">VeADK Studio</text>
+  </g>
+</svg>
