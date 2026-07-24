@@ -47,8 +47,13 @@ class ReleaseService:
         self._active: set[str] = set()
         self._active_lock = threading.Lock()
 
-    def submit(self, request: ReleaseRequest) -> ReleaseStatus:
-        """Create one job or return the existing idempotent job."""
+    def submit(
+        self,
+        request: ReleaseRequest,
+        *,
+        run_inline: bool = False,
+    ) -> ReleaseStatus:
+        """Create one job and optionally keep the request active until completion."""
         if request.repository != self._settings.repository:
             raise ValueError("repository is not allowed by this release server")
         existing = self._store.get(request.request_id)
@@ -80,8 +85,11 @@ class ReleaseService:
                 self._active.add(request.request_id)
                 should_submit = True
         if should_submit:
-            self._executor.submit(self._run, request)
-        return status
+            if run_inline:
+                self._run(request)
+            else:
+                self._executor.submit(self._run, request)
+        return self.get(request.request_id) if run_inline else status
 
     def get(self, job_id: str) -> ReleaseStatus:
         """Return one durable release status."""

@@ -75,7 +75,7 @@ def create_app(
     )
     def release(request: Request, payload: ReleaseRequest) -> ReleaseStatus:
         try:
-            return request.app.state.release_service.submit(payload)
+            return request.app.state.release_service.submit(payload, run_inline=True)
         except ReleaseConflictError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except ValueError as error:

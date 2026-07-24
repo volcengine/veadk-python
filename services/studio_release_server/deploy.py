@@ -267,7 +267,15 @@ def _ensure_gateway_binding(service: Any, function_id: str) -> str:
         ListGatewayServicesRequest,
         ListUpstreamsRequest,
     )
-    from volcenginesdkapig20221112 import ListRoutesRequest
+    from volcenginesdkapig20221112 import (
+        AdvancedSettingForUpdateRouteInput,
+        ListRoutesRequest,
+        MatchRuleForUpdateRouteInput,
+        PathForUpdateRouteInput,
+        TimeoutSettingForUpdateRouteInput,
+        UpdateRouteRequest,
+        UpstreamListForUpdateRouteInput,
+    )
 
     apig = service.apig_client
     gateway_response = apig.apig_client.list_gateways(
@@ -342,7 +350,7 @@ def _ensure_gateway_binding(service: Any, function_id: str) -> str:
         _GATEWAY_ROUTE_NAME,
     )
     if route is None:
-        apig.create_gateway_service_routes(
+        route_id = apig.create_gateway_service_routes(
             service_id,
             upstream_id,
             _GATEWAY_ROUTE_NAME,
@@ -358,6 +366,35 @@ def _ensure_gateway_binding(service: Any, function_id: str) -> str:
             raise RuntimeError(
                 f"Route {_GATEWAY_ROUTE_NAME} targets another upstream."
             )
+        route_id = str(route.id)
+    apig.apig_20221112_client.update_route(
+        UpdateRouteRequest(
+            id=route_id,
+            name=_GATEWAY_ROUTE_NAME,
+            enable=True,
+            priority=1,
+            match_rule=MatchRuleForUpdateRouteInput(
+                method=["GET", "POST"],
+                path=PathForUpdateRouteInput(
+                    match_content="/",
+                    match_type="Prefix",
+                ),
+            ),
+            upstream_list=[
+                UpstreamListForUpdateRouteInput(
+                    upstream_id=upstream_id,
+                    weight=1,
+                )
+            ],
+            advanced_setting=AdvancedSettingForUpdateRouteInput(
+                timeout_setting=TimeoutSettingForUpdateRouteInput(
+                    enable=True,
+                    timeout=1800,
+                )
+            ),
+        ),
+        async_req=True,
+    ).get()
 
     for _ in range(60):
         service_response = apig.apig_client.list_gateway_services(
