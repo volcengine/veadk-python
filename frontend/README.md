@@ -97,7 +97,8 @@ for VeADK Studio, including these non-negotiable rules:
 - New or updated product icons must be repository-owned, hand-drawn SVG React
   components. Do not add generic icon-library, emoji, or remote-icon usage.
 - Reuse the existing semantic color tokens, restrained enterprise-workbench
-  visual language, bounded scrolling regions, and accessible interaction states.
+  visual language, component inventory, typography and control-size scale,
+  bounded scrolling regions, and accessible interaction states.
 - Feature configuration must remain explicit in its domain section and runtime
   environment summary; secrets must never enter generated source, browser
   persistence, logs, documentation, or committed files.

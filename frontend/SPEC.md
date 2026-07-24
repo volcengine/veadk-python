@@ -135,6 +135,74 @@ hsl(var(--destructive))
 - 新增动效必须支持 `prefers-reduced-motion: reduce`。
 - 动效不得阻塞点击、输入、导航或错误阅读。
 
+### 3.6 可执行视觉度量基线
+
+以下数值来自当前 Studio 的 Sidebar、Navbar、Composer、Agent 选择器、创建工作台
+和工具调用组件。新增组件必须从这些层级中选择，不得为单个页面随意创造新的字号、
+高度或圆角。已有非标准值不要求一次性重构；修改相关组件时应迁移到最近的层级。
+
+#### 字号、行高与字重
+
+| 层级 | 字号 | 建议行高 | 建议字重 | 典型用途 |
+| --- | --- | --- | --- | --- |
+| 展示标题 | `26px` | `1.2` | `600` | 新会话欢迎标题；不得用于普通页面 |
+| 页面标题 | `20px` 至 `21px` | `1.25` | `600` 至 `650` | 独立工作区、结果页主标题 |
+| 区域标题 | `17px` | `1.3` | `600` | 创建工作台区块、重要对话框标题 |
+| 强调文字 | `15px` | `1.4` 至 `1.5` | `500` 至 `600` | Composer 输入、Navbar 标题、主要选择项 |
+| 正文 | `13px` 至 `14px` | `1.5` 至 `1.65` | `400` 至 `500` | 表单内容、菜单、列表、说明文字 |
+| 紧凑正文 | `12px` 至 `12.5px` | `1.45` 至 `1.55` | `400` 至 `550` | 配置项、次级按钮、列表元信息 |
+| 辅助信息 | `11px` 至 `11.5px` | `1.35` 至 `1.5` | `400` 至 `500` | Session、时间、环境变量 |
+| Badge | `9.5px` 至 `10.5px` | `1.2` 至 `1.4` | `500` 至 `600` | 状态、Beta；禁止长文案 |
+
+- 工具调用标题使用 `13px` 至 `13.5px`、`400` 字重，不得加粗。
+- 模型名、Agent 名、Runtime 名和 Session ID 默认使用继承字体；只有真实代码、命令、
+  日志和代码编辑器可以使用等宽字体。
+- 中文正文不得小于 `12px`；`11px` 以下只允许短元信息和 Badge。
+- 标题不通过连续增加字重制造层级。相邻层级优先使用字号、颜色和间距区分。
+- 单行文字必须与同排图标共享 Flex/Grid 居中容器；禁止用任意 `translateY` 修正普通
+  图标。确需光学校正时，必须局部作用于具体图标，并增加回归测试。
+
+#### 控件和布局尺寸
+
+| 对象 | 基线尺寸 | 说明 |
+| --- | --- | --- |
+| Navbar / 品牌栏 | `54px` 高 | 左右区域必须垂直居中 |
+| Sidebar | `236px` 宽，折叠后 `56px` | 窄桌面可按现有断点收窄 |
+| 普通输入框 / 按钮 | `34px` 至 `36px` 高 | 同一操作行必须统一高度 |
+| 紧凑按钮 / 筛选项 | `28px` 至 `32px` 高 | 只用于高密度工具栏和列表 |
+| 主要图标按钮 | `36px × 36px` | Composer 发送、附件等主要操作 |
+| 普通图标按钮 | 至少 `28px × 28px` | SVG 可以更小，点击区域不能随之缩小 |
+| 对话正文列 | 最大 `768px` | Composer、错误和 Transcript 对齐 |
+| 新会话 Composer | 最小 `136px` 高 | 文本区最小 `76px`，底部操作区 `36px` |
+| 主内容面板 | `12px` 圆角、`1px` 边框 | 使用 `--panel` 和 `--border` |
+
+- 标准图标为 `16px`；列表和工具图标可使用 `18px`；主要入口和 Composer 图标可使用
+  `20px`。Chevron、Check 等辅助图标使用 `12px` 至 `15px`。
+- 图标容器必须设置 `flex-shrink: 0`，并用 `inline-flex`、`inline-grid`、
+  `align-items: center` 或 `place-items: center` 对齐。
+- 页面级固定宽高必须来自现有布局约束；禁止用魔法数字补偿父容器错误。
+
+#### 间距与圆角阶梯
+
+- 首选间距为 `4px`、`6px`、`8px`、`10px`、`12px`、`16px`、`20px`、`24px`。
+- `2px` 只用于同组紧密元素；`28px` 及以上只用于页面留白或主区块分隔。
+- 行内图标与文字通常使用 `6px` 至 `9px` Gap；同级按钮组通常使用 `8px`。
+- 小型图标按钮和微型标签使用 `4px` 至 `6px` 圆角。
+- 输入框、普通按钮和列表项使用 `6px` 至 `9px` 圆角。
+- 菜单、卡片、抽屉和面板使用 `10px` 至 `14px` 圆角。
+- `16px` 及以上圆角只用于 Composer 或明确的大型容器；`999px` 只用于 Pill、Badge
+  和圆形按钮。
+
+#### 状态与交互样式
+
+- Hover 只能改变颜色、背景、边框、透明度或轻微阴影，不得改变元素尺寸和排版。
+- 普通列表 Hover 使用低对比中性色；工具调用整行 Hover 只高亮文字，不增加背景。
+- Focus 必须可见，优先沿用 `2px` Ring 和 `1px` Offset 的现有模式。
+- Disabled 必须同时包含视觉弱化和不可点击语义，不得只改变颜色。
+- Selected、Active 和 Previewed 必须有稳定且不同的状态，不得依赖 Hover 表示选中。
+- 加载文字统一使用 `TextShimmer`；禁止在业务组件中重复实现渐变文字动画。
+- Spinner、Shimmer、旋转箭头和脉冲状态都必须在 Reduced Motion 下停止或降级。
+
 ## 4. 图标规范
 
 ### 4.1 产品图标必须自绘
@@ -232,6 +300,107 @@ export function ExampleIcon(props: SVGProps<SVGSVGElement>) {
 - 自定义列表选择应使用合适的 `role`、`aria-selected` 和可见焦点。
 - 动态错误和校验信息应使用 `role="alert"` 或 `aria-live`。
 - 点击区域不得小于当前同级控件的可用尺寸，图标按钮应保持稳定方形区域。
+
+### 5.5 现有组件复用索引
+
+新增 UI 前必须先检查以下组件。已有组件能够覆盖需求时，禁止复制 JSX 和 CSS 创建
+外观相似但行为不同的版本。
+
+| 场景 | 优先复用 | 约束 |
+| --- | --- | --- |
+| 全局框架 | `Sidebar`、`Navbar`、`.main` | 不得另建第二套页面 Shell |
+| Agent 选择 | `AgentSelector`、`AgentIdentityIcon` | Sidebar 与输入框可以有独立作用域样式 |
+| 会话输入 | `Composer`、`NewChatModeSelector` | 保留 IME、键盘、附件和发送状态行为 |
+| 临时会话 | `SandboxLaunchDialog`、`SandboxSession` | 不得复用普通 ADK Session 流程 |
+| Skill A/B 创建 | `SkillCreateWorkspace`、`SkillCandidatePane` | 保持双流输出、模型名和预览切换 |
+| 工具调用 | `BuiltinToolHeader` 和 `ui/builtin-tools/` | 新内置工具通过 Registry 扩展 |
+| 加载文字 | `TextShimmer` | 不得新增独立 Shimmer 实现 |
+| Markdown | `Markdown`、`MarkdownPromptEditor` | 外部 Markdown 禁止启用原始 HTML |
+| 代码查看 | `CodeBrowserDialog`、`CodeEditor` | 不得用普通 Textarea 冒充代码浏览器 |
+| 部署错误 | `DeploymentErrorMessage` | 保留展开、复制、重试和脱敏能力 |
+| Runtime / Agent 拓扑 | `AgentTopology`、`RuntimeIdentityIcon` | 状态色之外必须有文字或形状提示 |
+| 图片、音视频 | `Media` | 复用预览、加载、错误和移除行为 |
+| 搜索 | `Search` | 复用数据源可用性和显式提交逻辑 |
+| A2UI | `src/a2ui/components/` 与 Registry | Renderer 与后端 Catalog 同步更新 |
+
+#### 基准样式映射
+
+组件“对齐”不是只使用相近颜色，而是必须匹配参考实现的结构、尺寸、文字层级、图标、
+边框、圆角、弹层位置和完整交互状态。新增同类组件时按下表选择视觉基准：
+
+| 组件族 | 当前视觉基准 | 必须保持一致的内容 |
+| --- | --- | --- |
+| 下拉选择 | `A2aSpaceSelect`、`.cw-a2a-space-*` | Trigger、Chevron、Menu、Option 和状态 |
+| 分段 Tab | Agent 类型 `.cw-typeradio-*` | 轨道、滑块、选项尺寸、选中和禁用状态 |
+| 表单字段 | `.cw-label`、`.cw-input`、`.cw-help` | 标签、输入、帮助和错误的纵向节奏 |
+| 主要按钮 | `.cw-btn`、`.cw-btn-primary` | 高度、字号、圆角、按下和禁用状态 |
+| 次级按钮 | `.cw-btn-ghost`、`.cw-btn-soft` | 中性背景、边框和 Hover 层级 |
+| 图标按钮 | `.cw-icon-btn` | 方形点击区、图标居中和危险态 |
+| 展开更多 | `.cw-more-options` | 无边框文字按钮、计数 Badge 和 Chevron |
+| 行内错误 | `.cw-banner`、`.cw-error-text` | 错误位置、字号、颜色和解释文案 |
+| 简单确认框 | `.confirm-*` | Scrim、内容宽度、标题和操作区 |
+| 复杂对话框 | `CodeBrowserDialog`、`.cw-skill-dialog` | Header、独立滚动区、关闭和焦点行为 |
+
+基准实现以当前源码为准：A2A 下拉位于 `src/create/CustomCreate.tsx` 的
+`A2aSpaceSelect` 和 `src/create/CustomCreate.css` 的 `.cw-a2a-space-*`；Agent 类型分段
+控件位于相同文件的 `.cw-typeradio-*`。实现新组件时按以下顺序决策：
+
+1. 业务语义和交互一致时，直接复用现有组件。
+2. 数据来源不同但展示和键盘行为一致时，提取共享展示组件，领域请求仍保留在功能目录。
+3. 只有现有模式无法满足产品要求时才新建模式，并在 PR 中说明差异和无法复用的原因。
+4. 基准实现与本文档不一致时不得静默选择；应在同一改动中修正文档或实现。
+
+下拉选择必须以 A2A 中心选择器为基准：
+
+- Trigger 为 `36px` 高、`6px` 圆角、`1px --border`，左右 Padding 与文字基线一致。
+- Trigger 文字使用 `12px`；Placeholder 使用 `--muted-foreground` 和普通字重。
+- Chevron 为仓库内自绘 SVG，使用 `18px` 视觉框；展开时旋转，不更换另一枚图标。
+- Menu 位于 Trigger 下方 `6px`，宽度与 Trigger 一致，最大高度 `238px`，内部
+  Padding 为 `4px`。
+- Option 最小高度 `34px`、`4px` 圆角、`12px` 字号；Hover、Focus 和 Selected
+  使用中性背景，不使用高饱和填充。
+- 必须覆盖 Default、Hover、Focus、Open、Selected、Disabled、Loading、Empty 和
+  Error；长选项必须省略并能通过 `title` 或详情查看全文。
+- 新增第二个相同交互的下拉框时，应提取共享的展示与键盘行为，而不是复制整段 CSS；
+  领域数据加载和文案仍保留在各自组件内。
+
+分段 Tab 必须以 Agent 类型切换为基准：
+
+- 外层轨道为 `44px` 高、`4px` Padding、`4px` Gap、`10px` 圆角，使用弱化的
+  `--secondary` 背景和低对比边框。
+- 选中滑块距离轨道四边 `4px`，使用白色背景、`7px` 圆角和轻边框。
+- 单项最小高度 `34px`，文字使用 `12px` 至 `13px`、`500` 至 `600` 字重。
+- Hover 只使用极浅中性背景；选中态主要通过滑块、前景色和字重表达。
+- 滑块移动沿用 `0.24s cubic-bezier(0.22, 1, 0.36, 1)`，Reduced Motion 下取消。
+- 视觉样式与语义必须分开：互斥配置使用 `radiogroup` / `radio`，页面切换使用
+  `tablist` / `tab` / `tabpanel`，不能为了复用样式使用错误的 ARIA Role。
+- Tab 数量变化时必须重新计算等分宽度和滑块偏移；窄窗口不能出现文字互相覆盖。
+
+- 领域组件放在对应功能目录；只有跨两个以上领域稳定复用的组件才放入 `src/ui/`。
+- 功能专属 CSS 与组件同目录；`src/styles.css` 只承载全局变量、Shell 和真正共享样式。
+- 组件通过 Props 接收业务状态，不得在纯展示组件内重新请求同一份数据。
+- 同一视觉状态使用 `is-active`、`is-open`、`is-done` 等明确类名或 `data-*` 属性，
+  不使用依赖 DOM 层级的模糊选择器表达业务状态。
+- 运行时测量得到的坐标和尺寸可以使用 Inline Style；固定颜色、字号、圆角和间距必须
+  写入 CSS，不得散落在 JSX 中。
+
+### 5.6 基础组件状态契约
+
+所有新增或修改的交互组件必须覆盖适用的状态：
+
+| 组件类型 | 必须覆盖的状态 |
+| --- | --- |
+| Button | Default、Hover、Focus、Active、Disabled、Loading |
+| Input / Textarea | Empty、Filled、Focus、Disabled、Invalid、IME Composition |
+| Select / Menu | Closed、Open、Keyboard Active、Selected、Disabled、Empty |
+| List | Loading、Data、Empty、Error、Selected、Pagination |
+| Dialog / Drawer | Opening、Open、Closing、Focus Return、Escape、Outside Click |
+| Async Task | Preparing、Running、Success、Failed、Cancelled、Retrying |
+
+- Loading 状态不得清空已有数据；刷新列表时应尽量保留可读内容。
+- Error 必须出现在发生问题的组件附近；全局错误只用于影响整个页面的故障。
+- Empty 表示请求成功但没有数据，不能用于表示无权限、未配置或请求失败。
+- Disabled 控件如果由配置缺失导致，必须说明“为什么不可用”和“如何恢复”。
 
 ## 6. Agent 创建与配置规范
 
@@ -350,14 +519,15 @@ AI 每次开发任务必须按以下顺序执行：
 
 1. 阅读相关组件、类型、样式、测试和后端接口。
 2. 明确需求边界、假设和可验证成功标准。
-3. 选择最小实现，说明会影响的代码生成、Runtime 或安全边界。
-4. 先补充复现测试或契约测试，再实现功能。
-5. 使用现有视觉变量和组件完成 UI，产品图标必须自绘。
-6. 验证加载、错误、空状态、取消、重试、窄窗口和键盘行为。
-7. 运行测试、构建、Ruff、Pyright、文档检查和密钥扫描。
-8. 检查 Diff，删除仅由本次改动产生的无用代码，不处理无关历史问题。
-9. 更新 `frontend/README.md` 和相关用户文档。
-10. 在 PR 中列出实际验证结果和仍未覆盖的限制，禁止夸大完成度。
+3. 找到同类基准组件，记录需要对齐的结构、尺寸和状态；没有基准时才提出新模式。
+4. 选择最小实现，说明会影响的代码生成、Runtime 或安全边界。
+5. 先补充复现测试或契约测试，再实现功能。
+6. 使用现有视觉变量和组件完成 UI，产品图标必须自绘。
+7. 验证加载、错误、空状态、取消、重试、窄窗口和键盘行为。
+8. 运行测试、构建、Ruff、Pyright、文档检查和密钥扫描。
+9. 检查 Diff，删除仅由本次改动产生的无用代码，不处理无关历史问题。
+10. 更新 `frontend/README.md` 和相关用户文档。
+11. 在 PR 中列出实际验证结果和仍未覆盖的限制，禁止夸大完成度。
 
 ## 13. PR 审查清单
 
@@ -365,6 +535,8 @@ AI 每次开发任务必须按以下顺序执行：
 - [ ] 所有新增产品图标均为仓库内自绘 SVG。
 - [ ] 没有新增通用图标库用法、Emoji 图标或远程图标。
 - [ ] 使用现有颜色、间距、圆角和状态模式。
+- [ ] 新增下拉、分段 Tab、表单或对话框已与对应基准组件逐项对齐。
+- [ ] 没有复制一套近似 CSS；第二个同类组件已复用或提取共享展示行为。
 - [ ] 键盘、IME、焦点和无障碍属性完整。
 - [ ] 加载、空状态、错误、重试和取消路径完整。
 - [ ] 配置在功能区域与环境变量摘要中均可见。
