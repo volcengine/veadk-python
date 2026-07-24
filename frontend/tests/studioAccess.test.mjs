@@ -60,7 +60,8 @@ test("runtime authorization failures are not reported as unsupported", () => {
 });
 
 test("selected Agent icons are optically aligned with the label", () => {
-  assert.match(stylesSource, /\.agent-row-lead[^}]*transform: translateY\(3px\)/);
+  assert.match(stylesSource, /\.agent-row\s*{[^}]*align-items: center/);
+  assert.doesNotMatch(stylesSource, /\.agent-row-lead[^}]*transform:/);
   assert.match(stylesSource, /\.agent-row-chev\.open[^}]*translateY\(1px\) rotate\(90deg\)/);
 });
 

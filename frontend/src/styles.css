@@ -247,7 +247,7 @@ body {
   border-color: hsl(8 46% 70%);
   background: hsl(8 55% 96%);
 }
-.agent-row-lead { width: 16px; height: 16px; color: hsl(var(--muted-foreground)); flex-shrink: 0; transform: translateY(3px); }
+.agent-row-lead { width: 16px; height: 16px; color: hsl(var(--muted-foreground)); flex-shrink: 0; }
 .agent-row--connected .agent-row-lead { color: hsl(142 48% 38%); }
 .agent-row-name {
   flex: 1;
