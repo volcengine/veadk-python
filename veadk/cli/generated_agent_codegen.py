@@ -348,6 +348,31 @@ def _build_a2a(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
     return var_name
 
 
+def _is_registry_backed_a2a(draft: AgentDraft) -> bool:
+    return draft.agentType == "a2a" and draft.a2aRegistry.enabled
+
+
+def _append_a2a_registry_tools(acc: _Acc, var_name: str) -> tuple[str, str]:
+    _add_import(acc, "from veadk.a2a.registry_client import registry_config_from_env")
+    _add_import(
+        acc,
+        "from veadk.tools.builtin_tools.a2a_registry import build_a2a_registry_tools",
+    )
+    registry_var = _unique_ident(
+        acc,
+        f"a2a_registry_config_{var_name}",
+        "a2a_registry_config",
+    )
+    tools_var = _unique_ident(
+        acc,
+        f"a2a_registry_tools_{var_name}",
+        "a2a_registry_tools",
+    )
+    acc.pre_lines.append(f"{registry_var} = registry_config_from_env()")
+    acc.pre_lines.append(f"{tools_var} = build_a2a_registry_tools({registry_var})")
+    return registry_var, tools_var
+
+
 def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
     if draft.agentType == "a2a":
         if draft.a2aRegistry.enabled:
@@ -420,28 +445,19 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
             tool_exprs.append(v)
 
     registry_var = ""
+    registry_source_var = ""
     if draft.a2aRegistry.enabled:
-        _add_import(
-            acc, "from veadk.a2a.registry_client import registry_config_from_env"
+        registry_source_var = var_name
+    else:
+        for idx, sub in enumerate(draft.subAgents):
+            if _is_registry_backed_a2a(sub):
+                registry_source_var = f"{var_name}_sub_{idx + 1}"
+                break
+    if registry_source_var:
+        registry_var, registry_tools_var = _append_a2a_registry_tools(
+            acc, registry_source_var
         )
-        _add_import(
-            acc,
-            "from veadk.tools.builtin_tools.a2a_registry import "
-            "build_a2a_registry_tools",
-        )
-        registry_var = _unique_ident(
-            acc,
-            f"a2a_registry_config_{var_name}",
-            "a2a_registry_config",
-        )
-        tools_var = _unique_ident(
-            acc,
-            f"a2a_registry_tools_{var_name}",
-            "a2a_registry_tools",
-        )
-        acc.pre_lines.append(f"{registry_var} = registry_config_from_env()")
-        acc.pre_lines.append(f"{tools_var} = build_a2a_registry_tools({registry_var})")
-        tool_exprs.append(f"*{tools_var}")
+        tool_exprs.append(f"*{registry_tools_var}")
         _add_env(acc, A2A_REGISTRY_ENV)
 
     for name in draft.tools:
@@ -551,6 +567,8 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
 
     sub_vars: list[str] = []
     for idx, sub in enumerate(draft.subAgents):
+        if _is_registry_backed_a2a(sub):
+            continue
         child_var = f"{var_name}_sub_{idx + 1}"
         _build_agent(acc, sub, child_var)
         sub_vars.append(child_var)
@@ -559,7 +577,7 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
 
     joined_kwargs = ",\n    ".join(kwargs)
     acc.pre_lines.append(f"{var_name} = Agent(\n    {joined_kwargs},\n)")
-    if draft.a2aRegistry.enabled:
+    if registry_var:
         acc.pre_lines.append(
             f'setattr({var_name}, "_veadk_a2a_registry_config", {registry_var})'
         )

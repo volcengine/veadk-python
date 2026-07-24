@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -64,6 +65,138 @@ def _create_frontend_app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Fas
 def _assert_sdk_call_is_off_event_loop() -> None:
     with pytest.raises(RuntimeError, match="no running event loop"):
         asyncio.get_running_loop()
+
+
+def test_list_a2a_spaces_paginates_and_maps_names(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    class _FakeResponse:
+        def __init__(self, payload: dict[str, Any]) -> None:
+            self.status_code = 200
+            self._payload = payload
+
+        def json(self) -> dict[str, Any]:
+            return self._payload
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        async def __aenter__(self) -> "_FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            del args
+
+        async def post(self, url: str, **kwargs: Any) -> _FakeResponse:
+            body = json.loads(kwargs["content"].decode("utf-8"))
+            calls.append(
+                {
+                    "url": url,
+                    "params": kwargs["params"],
+                    "headers": kwargs["headers"],
+                    "body": body,
+                }
+            )
+            page = body["PageNumber"]
+            items = [
+                {
+                    "Id": "as-1",
+                    "Name": "默认智能体中心",
+                    "IntentEnabled": True,
+                    "ProjectName": "default",
+                    "Tags": [{"Key": "env", "Value": "prod"}],
+                    "IsDefault": True,
+                },
+                {
+                    "Id": "as-2",
+                    "Name": "客服智能体中心",
+                    "IntentEnabled": False,
+                    "ProjectName": "default",
+                    "Tags": [],
+                    "IsDefault": False,
+                },
+            ]
+            if page == 2:
+                items = [
+                    {
+                        "Id": "as-3",
+                        "Name": "销售智能体中心",
+                        "IntentEnabled": True,
+                        "ProjectName": "default",
+                        "Tags": [],
+                        "IsDefault": False,
+                    }
+                ]
+            return _FakeResponse({"Result": {"TotalCount": 3, "Items": items}})
+
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/a2a-spaces",
+            params={"region": "cn-beijing", "page_size": 2, "project": "default"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "items": [
+            {
+                "id": "as-1",
+                "name": "默认智能体中心",
+                "intentEnabled": True,
+                "projectName": "default",
+                "tags": [{"key": "env", "value": "prod"}],
+                "isDefault": True,
+                "region": "cn-beijing",
+            },
+            {
+                "id": "as-2",
+                "name": "客服智能体中心",
+                "intentEnabled": False,
+                "projectName": "default",
+                "tags": [],
+                "isDefault": False,
+                "region": "cn-beijing",
+            },
+            {
+                "id": "as-3",
+                "name": "销售智能体中心",
+                "intentEnabled": True,
+                "projectName": "default",
+                "tags": [],
+                "isDefault": False,
+                "region": "cn-beijing",
+            },
+        ],
+        "totalCount": 3,
+        "page": 1,
+        "pageSize": 2,
+    }
+    assert [call["body"]["PageNumber"] for call in calls] == [1, 2]
+    assert all(call["body"]["PageSize"] == 2 for call in calls)
+    assert all(call["body"]["ProjectName"] == "default" for call in calls)
+    assert calls[0]["params"]["Action"] == "ListA2aSpaces"
+    assert calls[0]["params"]["Version"] == "2025-10-30"
+    assert calls[0]["url"] == "https://agentkit.cn-beijing.volcengineapi.com"
+    assert "Authorization" in calls[0]["headers"]
+    assert "X-Content-Sha256" in calls[0]["headers"]
+
+
+def test_a2a_space_routes_keep_missing_credentials_status(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    monkeypatch.delenv("VOLCENGINE_ACCESS_KEY")
+    monkeypatch.delenv("VOLCENGINE_SECRET_KEY")
+
+    with TestClient(app) as client:
+        response = client.get("/web/a2a-spaces", params={"region": "cn-beijing"})
+
+    assert response.status_code == 409
 
 
 def test_list_skill_spaces_maps_metadata_and_pagination(

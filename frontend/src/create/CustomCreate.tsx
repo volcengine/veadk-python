@@ -71,6 +71,10 @@ import { SkillHubPicker } from "./SkillHubPicker";
 import { LocalPicker } from "./LocalPicker";
 import { SkillSpacePicker } from "./SkillSpacePicker";
 import {
+  listA2aSpaces,
+  type A2aSpaceRef,
+} from "./a2aSpaces";
+import {
   ProjectPreview,
   type DeploymentTaskUpdate,
 } from "../ui/ProjectPreview";
@@ -226,6 +230,43 @@ function DebugRunIcon({ className }: { className?: string }) {
   );
 }
 
+function A2aSelectChevronIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="m7 9 5 5 5-5" />
+    </svg>
+  );
+}
+
+function A2aRefreshIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M18.25 8.2A7.1 7.1 0 0 0 6.1 6.65L4.5 8.25" />
+      <path d="M4.5 4.75v3.5H8" />
+      <path d="M5.75 15.8A7.1 7.1 0 0 0 17.9 17.35l1.6-1.6" />
+      <path d="M19.5 19.25v-3.5H16" />
+    </svg>
+  );
+}
+
 const AGENT_TYPE_GAP_PX = 4;
 const AGENT_TYPE_BAR_LABELS: Record<
   NonNullable<AgentDraft["agentType"]>,
@@ -246,6 +287,10 @@ const A2A_REGISTRY_ENV_TO_FIELD = {
 } as const;
 
 type A2aRegistryEnvKey = keyof typeof A2A_REGISTRY_ENV_TO_FIELD;
+const A2A_REGISTRY_SPACE_ENV_KEY = "REGISTRY_SPACE_ID";
+const A2A_REGISTRY_RUNTIME_ENV = A2A_REGISTRY_ENV.filter(
+  (item) => item.key !== A2A_REGISTRY_SPACE_ENV_KEY,
+);
 
 function a2aRegistryEnvValues(
   registry: AgentDraft["a2aRegistry"] | undefined,
@@ -401,6 +446,182 @@ function RuntimeEnvFields({
           />
         </label>
       ))}
+    </div>
+  );
+}
+
+function a2aSpaceDisplayName(space: A2aSpaceRef): string {
+  return space.name.trim() || "未命名智能体中心";
+}
+
+function A2aSpaceSelect({
+  value,
+  region,
+  invalid,
+  onChange,
+}: {
+  value: string;
+  region: string;
+  invalid: boolean;
+  onChange: (spaceId: string) => void;
+}) {
+  const normalizedRegion = region.trim() || A2A_REGISTRY_DEFAULTS.region;
+  const [spaces, setSpaces] = useState<A2aSpaceRef[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [open, setOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    listA2aSpaces({ region: normalizedRegion })
+      .then((items) => {
+        if (!cancelled) setSpaces(items);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setSpaces([]);
+          setError(err instanceof Error ? err.message : "加载失败");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [normalizedRegion, reloadKey]);
+
+  const selectedKnown =
+    !value || spaces.some((space) => space.id === value.trim());
+  const selectedSpace = spaces.find((space) => space.id === value.trim());
+  const selectedLabel = selectedSpace
+    ? a2aSpaceDisplayName(selectedSpace)
+    : value && !selectedKnown
+      ? "已选择的智能体中心"
+      : "请选择智能体中心";
+  const disabled = loading && spaces.length === 0;
+
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        pickerRef.current &&
+        !pickerRef.current.contains(target)
+      ) {
+        setOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
+
+  const selectSpace = (spaceId: string) => {
+    onChange(spaceId);
+    setOpen(false);
+  };
+
+  return (
+    <div className="cw-a2a-space-picker" ref={pickerRef}>
+      <div className="cw-a2a-space-row">
+        <div className="cw-a2a-space-select-wrap">
+          <button
+            type="button"
+            className={`cw-a2a-space-trigger ${invalid ? "is-error" : ""}`}
+            disabled={disabled}
+            aria-haspopup="listbox"
+            aria-expanded={open}
+            aria-label="选择 AgentKit 智能体中心"
+            onClick={() => setOpen((current) => !current)}
+          >
+            <span className={!value ? "is-placeholder" : undefined}>
+              {selectedLabel}
+            </span>
+            <A2aSelectChevronIcon className="cw-a2a-space-trigger-icon" />
+          </button>
+          {open && (
+            <div
+              className="cw-a2a-space-menu"
+              role="listbox"
+              aria-label="AgentKit 智能体中心"
+            >
+              {value && !selectedKnown && (
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected
+                  className="cw-a2a-space-option is-selected"
+                  onClick={() => selectSpace(value)}
+                >
+                  已选择的智能体中心
+                </button>
+              )}
+              {spaces.map((space) => {
+                const optionLabel = a2aSpaceDisplayName(space);
+                const selected = space.id === value;
+                return (
+                  <button
+                    key={space.id}
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    className={`cw-a2a-space-option ${
+                      selected ? "is-selected" : ""
+                    }`}
+                    title={optionLabel}
+                    onClick={() => selectSpace(space.id)}
+                  >
+                    {optionLabel}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        <button
+          type="button"
+          className="cw-icon-btn cw-a2a-space-refresh"
+          title="刷新智能体中心列表"
+          aria-label="刷新智能体中心列表"
+          disabled={loading}
+          onClick={() => setReloadKey((key) => key + 1)}
+        >
+          {loading ? (
+            <Loader2 className="cw-i cw-i-sm cw-spin" />
+          ) : (
+            <A2aRefreshIcon className="cw-i cw-i-sm" />
+          )}
+        </button>
+      </div>
+      {error ? (
+        <div className="cw-banner cw-a2a-space-error">
+          <Info className="cw-i" />
+          <span>{error}</span>
+        </div>
+      ) : loading ? (
+        <span className="cw-help cw-a2a-space-status">
+          <Loader2 className="cw-i cw-i-sm cw-spin" />
+          正在加载 AgentKit 智能体中心…
+        </span>
+      ) : spaces.length === 0 ? (
+        <span className="cw-help">此账号下暂无 AgentKit 智能体中心。</span>
+      ) : (
+        <span className="cw-help">
+          已加载 {spaces.length} 个智能体中心，列表仅展示中心名称。
+        </span>
+      )}
     </div>
   );
 }
@@ -907,7 +1128,7 @@ function nodeProblem(
     if (isRoot) return "远程 Agent 只能作为子 Agent";
     return n.a2aRegistry?.registrySpaceId.trim()
       ? null
-      : "缺少 AgentKit 智能体中心 ID";
+      : "缺少 AgentKit 智能体中心";
   }
   const nameProblem = agentNameProblem(n.name);
   if (nameProblem) return nameProblem;
@@ -1553,6 +1774,8 @@ export function CustomCreate({
   const [activeId, setActiveId] = useState<StepId>("basic");
   const [buildErr, setBuildErr] = useState("");
   const [modelAdvancedOpen, setModelAdvancedOpen] = useState(false);
+  const [a2aRegistryAdvancedOpen, setA2aRegistryAdvancedOpen] =
+    useState(false);
   const [moreToolTypesOpen, setMoreToolTypesOpen] = useState(false);
   const [advancedConfigOpen, setAdvancedConfigOpen] = useState(false);
 
@@ -1610,6 +1833,9 @@ export function CustomCreate({
   const node = getNode(draft, safePath);
   const isRootAgent = safePath.length === 0;
   const modelAdvancedId = `cw-model-advanced-${safePath.join("-") || "root"}`;
+  const a2aRegistryAdvancedId = `cw-a2a-registry-advanced-${
+    safePath.join("-") || "root"
+  }`;
   const moreToolTypesId = `cw-more-tool-types-${safePath.join("-") || "root"}`;
   const advancedConfigId = `cw-advanced-config-${safePath.join("-") || "root"}`;
   const activeTypeIndex = Math.max(
@@ -2291,22 +2517,71 @@ export function CustomCreate({
                           <div className="cw-remote-center-head">
                             <div className="cw-label">
                               AgentKit 智能体中心
+                              <span className="cw-req">*</span>
                             </div>
                             <p className="cw-help cw-remote-center-description">
                               远程 Agent 的名称、描述和能力来自中心返回的 Agent Card。
                               系统会根据每轮任务动态发现并挂载匹配的 Agent。
                             </p>
                           </div>
-                          <RuntimeEnvFields
-                            env={A2A_REGISTRY_ENV}
-                            values={a2aRegistryEnvValues(node.a2aRegistry, {
-                              includeDefaults: false,
-                            })}
-                            onChange={patchA2aRegistryEnv}
+                          <A2aSpaceSelect
+                            value={node.a2aRegistry?.registrySpaceId ?? ""}
+                            region={
+                              node.a2aRegistry?.registryRegion ||
+                              A2A_REGISTRY_DEFAULTS.region
+                            }
+                            invalid={showErrors && a2aRegistrySpaceMissing}
+                            onChange={(spaceId) =>
+                              patchA2aRegistryEnv(
+                                A2A_REGISTRY_SPACE_ENV_KEY,
+                                spaceId,
+                              )
+                            }
                           />
+                          <button
+                            type="button"
+                            className="cw-more-options"
+                            aria-expanded={a2aRegistryAdvancedOpen}
+                            aria-controls={a2aRegistryAdvancedId}
+                            onClick={() =>
+                              setA2aRegistryAdvancedOpen((open) => !open)
+                            }
+                          >
+                            <span>更多选项</span>
+                            <ChevronRight
+                              className={`cw-more-options-chevron ${
+                                a2aRegistryAdvancedOpen ? "is-open" : ""
+                              }`}
+                              aria-hidden
+                            />
+                          </button>
+                          <AnimatePresence initial={false}>
+                            {a2aRegistryAdvancedOpen && (
+                              <motion.div
+                                id={a2aRegistryAdvancedId}
+                                className="cw-model-advanced"
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: "auto", opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                transition={{
+                                  duration: 0.18,
+                                  ease: "easeOut",
+                                }}
+                              >
+                                <RuntimeEnvFields
+                                  env={A2A_REGISTRY_RUNTIME_ENV}
+                                  values={a2aRegistryEnvValues(
+                                    node.a2aRegistry,
+                                    { includeDefaults: false },
+                                  )}
+                                  onChange={patchA2aRegistryEnv}
+                                />
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
                           {showErrors && a2aRegistrySpaceMissing && (
                             <span className="cw-error-text">
-                              AgentKit 智能体中心 ID 为必填项
+                              请选择 AgentKit 智能体中心
                           </span>
                         )}
                       </div>

@@ -93,8 +93,8 @@ export const A2A_REGISTRY_ENV: EnvVar[] = [
   {
     key: "REGISTRY_SPACE_ID",
     required: true,
-    placeholder: "请输入智能体中心 ID，如 as-yer579143kbrkemozdn6",
-    comment: "AgentKit 智能体中心 ID",
+    placeholder: "请选择智能体中心",
+    comment: "AgentKit 智能体中心",
   },
   {
     key: "REGISTRY_TOP_K",

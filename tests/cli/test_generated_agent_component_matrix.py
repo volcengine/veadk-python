@@ -211,6 +211,43 @@ def test_every_tracing_exporter_generates_code_and_env(
     _assert_python_files_compile(project)
 
 
+def test_a2a_registry_child_attaches_tools_to_llm_parent() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="root-agent",
+            instruction="Use available tools to answer user requests.",
+            subAgents=[
+                AgentDraft(
+                    name="Reliability Review Remote Agent",
+                    description="ignored remote description",
+                    instruction="ignored remote instruction",
+                    agentType="a2a",
+                    a2aRegistry=A2ARegistryConfig(
+                        enabled=True,
+                        registrySpaceId="space-test",
+                    ),
+                )
+            ],
+        )
+    )
+    files = _files(project)
+    agent_py = files["agents/root_agent/agent.py"]
+
+    assert "a2a_registry_config_agent_sub_1 = registry_config_from_env()" in agent_py
+    assert "tools=[*a2a_registry_tools_agent_sub_1]" in agent_py
+    assert (
+        'setattr(agent, "_veadk_a2a_registry_config", '
+        "a2a_registry_config_agent_sub_1)" in agent_py
+    )
+    assert "agent_sub_1 = Agent(" not in agent_py
+    assert "sub_agents=[agent_sub_1]" not in agent_py
+    assert "Reliability Review Remote Agent" not in agent_py
+    assert "ignored remote description" not in agent_py
+    assert "ignored remote instruction" not in agent_py
+    assert "REGISTRY_SPACE_ID=space-test" in files[".env.example"]
+    _assert_python_files_compile(project)
+
+
 def test_a2a_registry_center_generates_tools_and_env() -> None:
     project = generate_project_from_draft(
         AgentDraft(

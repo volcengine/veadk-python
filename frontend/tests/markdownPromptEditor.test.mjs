@@ -329,7 +329,22 @@ test("remote Agent configures only the AgentKit center", () => {
   assert.match(createSource, /loop: "循环型智能体"/);
   assert.match(createSource, /a2a: "远程智能体"/);
   assert.match(createSource, /<wbr \/>/);
-  assert.match(createSource, /AgentKit 智能体中心 ID 为必填项/);
+  assert.match(createSource, /<A2aSpaceSelect/);
+  assert.match(createSource, /请选择 AgentKit 智能体中心/);
+  assert.doesNotMatch(createSource, /AgentKit 智能体中心 ID 为必填项/);
+  assert.match(createSource, /A2A_REGISTRY_RUNTIME_ENV/);
+  assert.doesNotMatch(
+    createSource,
+    /role="option"[\s\S]{0,200}>\s*请选择智能体中心\s*<\/button>/,
+  );
+  assert.match(
+    createSource,
+    /aria-expanded=\{a2aRegistryAdvancedOpen\}[\s\S]*?<span>更多选项<\/span>[\s\S]*?\{a2aRegistryAdvancedOpen && \([\s\S]*?<RuntimeEnvFields/,
+  );
+  assert.match(
+    createSource,
+    /item\.key !== A2A_REGISTRY_SPACE_ENV_KEY/,
+  );
   assert.match(
     createSource,
     /远程 Agent 的名称、描述和能力来自中心返回的 Agent Card/,

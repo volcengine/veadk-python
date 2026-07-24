@@ -32,6 +32,7 @@ import sys
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import click
 
@@ -3189,13 +3190,193 @@ def _run_frontend_server(
         ) or os.path.exists("/var/run/secrets/iam/credential")
         return {"credentials": has_creds}
 
-    # ---- SkillSpace proxy (AgentKit account-scoped skills) ----------------
+    # ---- AgentKit account-scoped resources (A2A Spaces / Skills) ----------
     # These routes sign requests with the SERVER's Volcengine credentials (same
     # chain /web/deploy-agentkit uses) and sit under /web/* so the OAuth2
     # middleware gates them by SSO session when SSO is enabled. The browser
-    # never sees AK/SK. v1 only returns SKILL.md (SkillMd) content, not the
-    # full TOS zip; that keeps the surface small and mirrors how the public
-    # Skill Hub picker only needs markdown for basic skills.
+    # never sees AK/SK.
+
+    def _agentkit_openapi_endpoint(region: str) -> str:
+        host = os.getenv("AGENTKIT_OPENAPI_HOST", "").strip()
+        endpoint = os.getenv("AGENTKIT_OPENAPI_ENDPOINT", "").strip()
+        if endpoint:
+            return endpoint.rstrip("/")
+        if host:
+            return "https://" + host.removeprefix("https://").removeprefix(
+                "http://"
+            ).rstrip("/")
+        return f"https://agentkit.{region}.volcengineapi.com"
+
+    def _agentkit_openapi_headers(
+        *,
+        region: str,
+        action: str,
+        body: str,
+        endpoint: str,
+    ) -> dict[str, str]:
+        from veadk.a2a.registry_client import _volc_sign_v4
+
+        ak, sk, token = _resolve_ve_credentials()
+        parsed = urlparse(endpoint)
+        host = parsed.netloc
+        content_type = "application/json; charset=UTF-8"
+        headers_to_sign = {
+            "Host": host,
+            "Content-Type": content_type,
+        }
+        signed_headers = _volc_sign_v4(
+            access_key=ak,
+            secret_key=sk,
+            service="agentkit",
+            region=region,
+            method="POST",
+            path=parsed.path or "/",
+            query={"Action": action, "Version": "2025-10-30"},
+            headers=headers_to_sign,
+            body=body,
+        )
+        headers = {
+            "Content-Type": content_type,
+            "Host": host,
+            **signed_headers,
+        }
+        if token:
+            headers["X-Security-Token"] = token
+        return headers
+
+    async def _agentkit_openapi_post(
+        *,
+        region: str,
+        action: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        endpoint = _agentkit_openapi_endpoint(region)
+        body = json.dumps(payload, ensure_ascii=False)
+        headers = _agentkit_openapi_headers(
+            region=region,
+            action=action,
+            body=body,
+            endpoint=endpoint,
+        )
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    endpoint,
+                    params={"Action": action, "Version": "2025-10-30"},
+                    headers=headers,
+                    content=body.encode("utf-8"),
+                )
+        except HTTPException:
+            raise
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"AgentKit OpenAPI request failed: {exc}") from exc
+
+        if response.status_code >= 400:
+            request_id = ""
+            try:
+                metadata = response.json().get("ResponseMetadata") or {}
+                request_id = metadata.get("RequestId") or ""
+            except ValueError:
+                pass
+            suffix = f" request_id={request_id}" if request_id else ""
+            raise RuntimeError(
+                f"AgentKit OpenAPI returned HTTP {response.status_code}{suffix}"
+            )
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise RuntimeError("AgentKit OpenAPI returned non-JSON response") from exc
+        error = data.get("ResponseMetadata", {}).get("Error") or data.get("Error")
+        if error:
+            code = error.get("Code") if isinstance(error, dict) else str(error)
+            raise RuntimeError(f"AgentKit OpenAPI returned error: {code}")
+        return data
+
+    @app.get("/web/a2a-spaces")
+    async def _web_list_a2a_spaces(
+        region: str = "cn-beijing",
+        page_size: int = Query(default=100, ge=1, le=100),
+        project: str | None = None,
+    ):
+        """List all AgentKit A2A Spaces visible to server credentials."""
+        try:
+            _resolve_ve_credentials()
+        except HTTPException:
+            raise HTTPException(
+                status_code=409,
+                detail="Server Volcengine credentials not configured "
+                "(set VOLCENGINE_ACCESS_KEY/SECRET_KEY).",
+            )
+
+        all_items: list[dict[str, Any]] = []
+        total_count = 0
+        page = 1
+        project_name = (project or "").strip() or None
+
+        try:
+            while True:
+                payload: dict[str, Any] = {
+                    "PageNumber": page,
+                    "PageSize": page_size,
+                }
+                if project_name:
+                    payload["ProjectName"] = project_name
+                data = await _agentkit_openapi_post(
+                    region=region,
+                    action="ListA2aSpaces",
+                    payload=payload,
+                )
+                result = data.get("Result") or {}
+                total_count = int(result.get("TotalCount") or 0)
+                items = result.get("Items") or []
+                item_count = len(items)
+                for space in items:
+                    if not isinstance(space, dict):
+                        continue
+                    all_items.append(
+                        {
+                            "id": space.get("Id") or "",
+                            "name": space.get("Name") or "",
+                            "intentEnabled": bool(space.get("IntentEnabled")),
+                            "projectName": space.get("ProjectName") or "",
+                            "tags": [
+                                {
+                                    "key": tag.get("Key") or "",
+                                    "value": tag.get("Value") or "",
+                                }
+                                for tag in space.get("Tags") or []
+                                if isinstance(tag, dict)
+                            ],
+                            "isDefault": bool(space.get("IsDefault")),
+                            "region": region,
+                        }
+                    )
+                if (
+                    item_count == 0
+                    or (total_count > 0 and len(all_items) >= total_count)
+                    or (total_count <= 0 and item_count < page_size)
+                ):
+                    break
+                page += 1
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"ListA2aSpaces error for {region}: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=502,
+                detail="暂时无法加载 AgentKit 智能体中心，请稍后重试。",
+            )
+
+        return {
+            "items": all_items,
+            "totalCount": total_count or len(all_items),
+            "page": 1,
+            "pageSize": page_size,
+        }
+
+    # SkillSpace routes return SKILL.md (SkillMd) content, not the full TOS zip;
+    # that keeps the surface small and mirrors how the public Skill Hub picker
+    # only needs markdown for basic skills.
 
     def _skills_client(region: str):
         """Build an AgentkitSkillsClient using server-side creds, or raise

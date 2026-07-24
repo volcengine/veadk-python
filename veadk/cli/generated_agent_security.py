@@ -93,7 +93,8 @@ def _validate_node(
 ) -> int:
     if depth > MAX_DEPTH:
         raise DebugPolicyError(f"Agent tree is too deep (>{MAX_DEPTH})")
-    if not draft.name.strip():
+    registry_backed_remote = draft.agentType == "a2a" and draft.a2aRegistry.enabled
+    if not registry_backed_remote and not draft.name.strip():
         raise DebugPolicyError("Agent name is required")
     _check_len("name", draft.name, MAX_NAME_LEN)
     _check_len("description", draft.description, MAX_DESCRIPTION_LEN)
@@ -102,9 +103,9 @@ def _validate_node(
     if draft.agentType == "loop" and not (1 <= draft.maxIterations <= MAX_ITERATIONS):
         raise DebugPolicyError(f"maxIterations must be between 1 and {MAX_ITERATIONS}")
     if draft.agentType == "a2a":
-        if not draft.a2aUrl.strip():
+        if not registry_backed_remote and not draft.a2aUrl.strip():
             raise DebugPolicyError("A2A URL is required")
-        if not allow_local_runtime_resources:
+        if not registry_backed_remote and not allow_local_runtime_resources:
             validate_url_not_private(draft.a2aUrl, field_name="a2aUrl")
     if draft.a2aRegistry.enabled and not draft.a2aRegistry.registrySpaceId.strip():
         raise DebugPolicyError("A2A registry space id is required")
