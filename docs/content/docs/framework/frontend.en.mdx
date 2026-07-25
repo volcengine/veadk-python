@@ -315,6 +315,52 @@ installed locally.
 replace only the explicitly supplied environment value. Omitting either option
 keeps that Tool ID from the deployed Function instead of clearing it.
 
+### One-click Studio updates
+
+Configure a release channel during deployment:
+
+```bash
+veadk studio deploy \
+  --user-pool-id <pool-id> \
+  --allowed-client-id <client-id> \
+  --vefaas-app-name <app-name> \
+  --studio-update-bucket <tos-bucket> \
+  --studio-update-region cn-beijing \
+  --studio-update-prefix veadk/studio/main
+```
+
+Studio reads `latest.json` every three minutes. Administrators can inspect each
+newer release's changelog and Git SHA and update the current Function without
+changing its Application, URL, SSO client, or server-side secrets. The complete
+Bundle replaces the Python backend and frontend assets together.
+
+`.github/workflows/publish-studio-release.yaml` does not run automatically on
+source changes. Manually dispatch `Publish Studio Release` on `main` and enter
+the user-facing changelog for every release. GitHub checks out the exact SHA,
+builds the frontend, verifies the fixed offline wheels, and uploads a prepared
+source archive through a short-lived job-bound TOS URL. The API-key-protected
+VeFaaS release server consumes and deletes that private object, builds and
+publishes the immutable Bundle and Manifest, updates the bounded
+`releases.json` catalog, and replaces `latest.json` last. Store only
+`STUDIO_RELEASE_SERVER_URL` and
+`STUDIO_RELEASE_SERVER_API_KEY` as GitHub Secrets; GitHub receives no TOS
+AK/SK.
+
+The Release Server runtime and deployment assets live together under
+`frontend/service/studio_release_server/` and are not shipped in the `veadk`
+Python package. After changing that directory, update the existing VeFaaS
+Function from the repository root:
+
+```bash
+frontend/service/studio_release_server/deploy.sh
+```
+
+The script reuses the existing Serverless gateway, checks `/healthz`, rotates
+the API key, and updates the `STUDIO_RELEASE_SERVER_URL` and
+`STUDIO_RELEASE_SERVER_API_KEY` repository Secrets. Set
+`VOLCENGINE_ACCESS_KEY` and `VOLCENGINE_SECRET_KEY`, and authenticate GitHub CLI
+before running it.
+
 When deployment registers the callback URL, it keeps the VeIdentity login page
 enabled and enables skip-consent for that client. This avoids showing a second
 authorization confirmation after login.

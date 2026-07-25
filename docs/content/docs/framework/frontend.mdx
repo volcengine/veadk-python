@@ -261,6 +261,45 @@ Application。未指定 `--region` 和 `--project` 时，会在北京、上海�
 `--sandbox-chat-codex-tool-id` 和 `--sandbox-skill-creator-tool-id` 也只在显式传入时
 更新对应环境变量；未传的 Tool ID 保留云上已有值，不会被清空。
 
+### Studio 一键更新
+
+部署时配置 TOS 发布通道后，管理员可以在导航栏更新 Studio：
+
+```bash
+veadk studio deploy \
+  --user-pool-id <pool-id> \
+  --allowed-client-id <client-id> \
+  --vefaas-app-name <app-name> \
+  --studio-update-bucket <tos-bucket> \
+  --studio-update-region cn-beijing \
+  --studio-update-prefix veadk/studio/main
+```
+
+Studio 每 3 分钟读取一次 `latest.json`，展示新版本的 changelog 和 Git SHA。
+管理员确认后，完整 Bundle 会同时替换 Python 后端和前端资源，再发布原
+Application；访问 URL、SSO Client 和服务端 Secret 保持不变。
+
+`.github/workflows/publish-studio-release.yaml` 不再随源码更新自动运行。每次发版需在
+`main` 分支手动运行 `Publish Studio Release`，并填写面向用户的 changelog。GitHub
+checkout 准确 SHA、构建前端并校验固定的离线 wheel，再通过与任务绑定的短期 TOS
+URL 上传预处理源码。API Key 保护的 VeFaaS Release Server 消费并删除这个私有对象，
+构建和发布不可变 Bundle 与 Manifest，更新有数量上限的 `releases.json`，最后覆盖
+`latest.json`。GitHub Secrets 只需
+`STUDIO_RELEASE_SERVER_URL` 和 `STUDIO_RELEASE_SERVER_API_KEY`，不保存 TOS
+AK/SK。
+
+Release Server 的运行代码和部署资产统一位于
+`frontend/service/studio_release_server/`，不随 `veadk` Python 包发布。修改该目录后，
+在仓库根目录执行以下命令更新现有 VeFaaS Function：
+
+```bash
+frontend/service/studio_release_server/deploy.sh
+```
+
+脚本复用既有 Serverless 网关、检查 `/healthz`、轮换 API Key，并更新仓库中的
+`STUDIO_RELEASE_SERVER_URL` 和 `STUDIO_RELEASE_SERVER_API_KEY` Secrets。执行前需
+配置 `VOLCENGINE_ACCESS_KEY`、`VOLCENGINE_SECRET_KEY`，并确保 GitHub CLI 已登录。
+
 部署注册回调地址时会保留 VeIdentity 登录页，并为该客户端开启跳过授权确认，
 避免用户登录后再次确认授权。
 
