@@ -200,7 +200,7 @@ export const BUILTIN_TOOLS: ToolOption[] = [
       {
         key: "AGENTKIT_TOOL_ID",
         required: true,
-        placeholder: "填写代码执行沙箱 Tool ID",
+        placeholder: "t-xxxx",
         comment: "代码执行沙箱 ID",
       },
       {
