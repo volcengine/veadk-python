@@ -32,10 +32,11 @@ import sys
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import click
+from pydantic import BaseModel, Field
 
 from veadk.cli.frontend_branding import normalize_site_title, resolve_site_logo
 from veadk.utils.logger import get_logger
@@ -191,6 +192,19 @@ def _frontend_allow_origins(vite: bool) -> list[str]:
 
 # Built UI shipped inside the package (output of `npm run build`).
 PACKAGED_WEBUI = Path(__file__).resolve().parent.parent / "webui"
+
+
+class _MessageFeedbackRequest(BaseModel):
+    """One rating change for a persisted assistant Event."""
+
+    runtime_id: str = Field(alias="runtimeId", min_length=1)
+    region: str = Field(default="cn-beijing", min_length=1)
+    app_name: str = Field(alias="appName", min_length=1)
+    user_id: str = Field(alias="userId", min_length=1)
+    session_id: str = Field(alias="sessionId", min_length=1)
+    event_id: str = Field(alias="eventId", min_length=1)
+    rating: Literal["good", "bad"] | None
+    comment: str = Field(default="", max_length=2000)
 
 
 def _mount_session_trace_route(app: Any, memory_exporter: Any) -> None:
@@ -2940,9 +2954,37 @@ def _run_frontend_server(
         )
         return endpoint, apikey, auth_type
 
+    def _runtime_request_headers(
+        request: Request,
+        *,
+        apikey: str,
+        auth_type: str,
+    ) -> dict[str, str]:
+        """Build data-plane headers without exposing Runtime credentials."""
+        validated_authorization = None
+        if auth_type == "custom_jwt":
+            access_token = getattr(request.state, "oauth2_access_token", None)
+            if (
+                getattr(request.state, "oauth2_access_token_validated", False)
+                and access_token
+            ):
+                validated_authorization = access_token
+            elif auth_mode == "gateway":
+                incoming_authorization = request.headers.get("authorization")
+                if _claims_from_forwarded_jwt(incoming_authorization):
+                    validated_authorization = incoming_authorization
+            if not validated_authorization:
+                raise HTTPException(
+                    status_code=401,
+                    detail="OAuth runtime requires an authenticated frontend session",
+                )
+        return _build_agentkit_proxy_headers(
+            dict(request.headers), apikey, validated_authorization
+        )
+
     @app.api_route(
         "/web/runtime-proxy/{runtime_id}/{path:path}",
-        methods=["GET", "POST", "DELETE"],
+        methods=["GET", "POST", "PATCH", "DELETE"],
     )
     async def _runtime_proxy(runtime_id: str, path: str, request: Request):
         """Proxy a data-plane call with its runtime credential injected server-side.
@@ -2974,25 +3016,10 @@ def _run_frontend_server(
         # Use the shared proxy header builder so Origin/Referer and other
         # browser-only headers are stripped (the ADK server rejects them with
         # "origin not allowed" / 403 otherwise).
-        validated_authorization = None
-        if auth_type == "custom_jwt":
-            access_token = getattr(request.state, "oauth2_access_token", None)
-            if (
-                getattr(request.state, "oauth2_access_token_validated", False)
-                and access_token
-            ):
-                validated_authorization = access_token
-            elif auth_mode == "gateway":
-                incoming_authorization = request.headers.get("authorization")
-                if _claims_from_forwarded_jwt(incoming_authorization):
-                    validated_authorization = incoming_authorization
-            if not validated_authorization:
-                raise HTTPException(
-                    status_code=401,
-                    detail="OAuth runtime requires an authenticated frontend session",
-                )
-        headers = _build_agentkit_proxy_headers(
-            dict(request.headers), apikey, validated_authorization
+        headers = _runtime_request_headers(
+            request,
+            apikey=apikey,
+            auth_type=auth_type,
         )
         body = await request.body()
         if request.method == "POST" and path == "run_sse":
@@ -3216,6 +3243,7 @@ def _run_frontend_server(
         action: str,
         body: str,
         endpoint: str,
+        query: dict[str, str] | None = None,
     ) -> dict[str, str]:
         from veadk.a2a.registry_client import _volc_sign_v4
 
@@ -3227,6 +3255,11 @@ def _run_frontend_server(
             "Host": host,
             "Content-Type": content_type,
         }
+        signed_query = {
+            "Action": action,
+            "Version": "2025-10-30",
+            **(query or {}),
+        }
         signed_headers = _volc_sign_v4(
             access_key=ak,
             secret_key=sk,
@@ -3234,7 +3267,7 @@ def _run_frontend_server(
             region=region,
             method="POST",
             path=parsed.path or "/",
-            query={"Action": action, "Version": "2025-10-30"},
+            query=signed_query,
             headers=headers_to_sign,
             body=body,
         )
@@ -3252,20 +3285,27 @@ def _run_frontend_server(
         region: str,
         action: str,
         payload: dict[str, Any],
+        query: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         endpoint = _agentkit_openapi_endpoint(region)
         body = json.dumps(payload, ensure_ascii=False)
+        request_query = {
+            "Action": action,
+            "Version": "2025-10-30",
+            **(query or {}),
+        }
         headers = _agentkit_openapi_headers(
             region=region,
             action=action,
             body=body,
             endpoint=endpoint,
+            query=query,
         )
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
                     endpoint,
-                    params={"Action": action, "Version": "2025-10-30"},
+                    params=request_query,
                     headers=headers,
                     content=body.encode("utf-8"),
                 )
@@ -3291,9 +3331,237 @@ def _run_frontend_server(
             raise RuntimeError("AgentKit OpenAPI returned non-JSON response") from exc
         error = data.get("ResponseMetadata", {}).get("Error") or data.get("Error")
         if error:
-            code = error.get("Code") if isinstance(error, dict) else str(error)
-            raise RuntimeError(f"AgentKit OpenAPI returned error: {code}")
+            from veadk.integrations.agentkit.evaluation import AgentKitOpenApiError
+
+            if isinstance(error, dict):
+                code = str(error.get("Code") or "unknown")
+                message = str(error.get("Message") or "")
+            else:
+                code = str(error)
+                message = ""
+            raise AgentKitOpenApiError(code, message)
         return data
+
+    async def _runtime_json_request(
+        request: Request,
+        *,
+        runtime: Any,
+        runtime_id: str,
+        region: str,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Call one authorized Runtime JSON endpoint from the Studio server."""
+        endpoint, apikey, auth_type = _resolve_runtime_conn(
+            runtime_id,
+            region,
+            runtime,
+        )
+        headers = _runtime_request_headers(
+            request,
+            apikey=apikey,
+            auth_type=auth_type,
+        )
+        headers["Accept"] = "application/json"
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.request(
+                method,
+                f"{endpoint.rstrip('/')}/{path.lstrip('/')}",
+                headers=headers,
+                json=payload,
+            )
+        if response.status_code >= 400:
+            detail = response.text.strip()[:2000]
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=detail or f"Runtime returned HTTP {response.status_code}",
+            )
+        try:
+            data = response.json()
+        except ValueError as error:
+            content_type = response.headers.get("content-type", "unknown")
+            raise RuntimeError(
+                "Runtime returned a non-JSON response "
+                f"(HTTP {response.status_code}, Content-Type: {content_type})"
+            ) from error
+        if not isinstance(data, dict):
+            raise RuntimeError("Runtime returned an invalid JSON response")
+        return data
+
+    @app.post("/web/evaluation/feedback")
+    async def _web_message_feedback(
+        feedback: _MessageFeedbackRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        """Persist one message rating in ADK state and AgentKit evaluation sets."""
+        principal = _current_principal(request)
+        if (
+            principal is None
+            or feedback.user_id.casefold() not in principal.identifiers
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Feedback can only be submitted for the current user",
+            )
+        runtime = _authorized_runtime(
+            request,
+            feedback.runtime_id,
+            feedback.region,
+            coded_access_error=True,
+        )
+        session_path = (
+            f"apps/{quote(feedback.app_name, safe='')}/users/"
+            f"{quote(feedback.user_id, safe='')}/sessions/"
+            f"{quote(feedback.session_id, safe='')}"
+        )
+        agent_info_path = f"web/agent-info/{quote(feedback.app_name, safe='')}"
+        try:
+            session, agent_info = await asyncio.gather(
+                _runtime_json_request(
+                    request,
+                    runtime=runtime,
+                    runtime_id=feedback.runtime_id,
+                    region=feedback.region,
+                    method="GET",
+                    path=session_path,
+                ),
+                _runtime_json_request(
+                    request,
+                    runtime=runtime,
+                    runtime_id=feedback.runtime_id,
+                    region=feedback.region,
+                    method="GET",
+                    path=agent_info_path,
+                ),
+            )
+            from veadk.integrations.agentkit.evaluation import (
+                AgentKitEvaluationDatasetsClient,
+            )
+            from veadk.integrations.agentkit.evaluation.feedback import (
+                extract_feedback_sample,
+                feedback_item_key,
+                feedback_state_key,
+            )
+
+            agent_name = str(agent_info.get("name") or feedback.app_name)
+            project_name = str(getattr(runtime, "project_name", "") or "default")
+            sample = extract_feedback_sample(
+                session,
+                target_event_id=feedback.event_id,
+                runtime_id=feedback.runtime_id,
+                agent_name=agent_name,
+                user_id=feedback.user_id,
+            )
+            state_key = feedback_state_key(feedback.event_id)
+            session_state = session.get("state")
+            previous_value = (
+                session_state.get(state_key)
+                if isinstance(session_state, dict)
+                else None
+            )
+            previous: dict[str, Any] = (
+                previous_value if isinstance(previous_value, dict) else {}
+            )
+
+            async def _evaluation_post(
+                *,
+                action: str,
+                payload: dict[str, Any],
+                query: dict[str, str] | None = None,
+            ) -> dict[str, Any]:
+                return await _agentkit_openapi_post(
+                    region=feedback.region,
+                    action=action,
+                    payload=payload,
+                    query=query,
+                )
+
+            evaluation = AgentKitEvaluationDatasetsClient(
+                _evaluation_post,
+                project_name=project_name,
+            )
+            evaluation_set = None
+            evaluation_item = None
+            if feedback.rating is not None:
+                evaluation_set = await evaluation.ensure_feedback_set(
+                    agent_name,
+                    feedback.rating,
+                )
+                evaluation_item = await evaluation.upsert_item(
+                    evaluation_set_id=evaluation_set.id,
+                    workspace_id=evaluation_set.workspace_id,
+                    item_key=feedback_item_key(
+                        project_name=project_name,
+                        runtime_id=feedback.runtime_id,
+                        session_id=feedback.session_id,
+                        message_id=feedback.event_id,
+                    ),
+                    fields=sample.fields(
+                        rating=feedback.rating,
+                        comment=feedback.comment,
+                    ),
+                )
+
+            previous_rating = str(previous.get("rating") or "")
+            previous_item_id = str(previous.get("evaluationItemId") or "")
+            previous_set_id = str(previous.get("evaluationSetId") or "")
+            previous_workspace_id = str(previous.get("workspaceId") or "")
+            replacing_previous = previous_item_id and (
+                feedback.rating is None or previous_rating != feedback.rating
+            )
+            if replacing_previous and previous_set_id and previous_workspace_id:
+                await evaluation.delete_item(
+                    evaluation_set_id=previous_set_id,
+                    workspace_id=previous_workspace_id,
+                    item_id=previous_item_id,
+                )
+
+            feedback_state = {
+                "rating": feedback.rating,
+                "evaluationSetId": evaluation_set.id if evaluation_set else None,
+                "evaluationSetName": evaluation_set.name if evaluation_set else None,
+                "workspaceId": (
+                    evaluation_set.workspace_id if evaluation_set else None
+                ),
+                "evaluationItemId": evaluation_item.id if evaluation_item else None,
+                "syncStatus": "synced",
+                "statePersistence": "runtime",
+                "updatedAt": time.time(),
+            }
+            try:
+                await _runtime_json_request(
+                    request,
+                    runtime=runtime,
+                    runtime_id=feedback.runtime_id,
+                    region=feedback.region,
+                    method="PATCH",
+                    path=session_path,
+                    payload={"state_delta": {state_key: feedback_state}},
+                )
+            except HTTPException as error:
+                if error.status_code != 404:
+                    raise
+                feedback_state["statePersistence"] = "browser"
+                logger.warning(
+                    "Runtime %s does not expose Session PATCH through its gateway; "
+                    "feedback state will use the browser compatibility cache",
+                    feedback.runtime_id,
+                )
+            return feedback_state
+        except HTTPException:
+            raise
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "同步反馈到 AgentKit 评测集失败：" + _safe_exception_detail(error)
+                ),
+            ) from error
 
     @app.get("/web/a2a-spaces")
     async def _web_list_a2a_spaces(

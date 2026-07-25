@@ -125,6 +125,11 @@ When a cloud image build fails from the bundled Web UI, the deployment error
 includes a credential-safe excerpt from the build log so dependency and
 Dockerfile failures can be diagnosed directly.
 
+When Studio connects to an AgentKit Runtime, users can rate completed answers
+with like/dislike controls. Feedback is written server-side to per-Agent
+`{agent_name}_good_case` and `{agent_name}_bad_case` evaluation sets, with
+stable item keys so repeated clicks and rating changes remain idempotent.
+
 ## Feishu bot channel
 
 VeADK now provides `veadk.extensions.FeishuChannelExtension` for bridging a Feishu bot with a `Runner`. It maps `union_id` to `user_id`, and `thread_id` / `chat_id` to `session_id`, so VeADK memory and tracing can work directly in Feishu conversations.

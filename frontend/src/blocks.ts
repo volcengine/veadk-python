@@ -15,6 +15,7 @@ import type {
   AgentSkill,
   AgentTarget,
   FrontendInvocation,
+  MessageFeedbackState,
 } from "./adk/client";
 import type { A2uiMessage } from "./a2ui/types";
 
@@ -71,6 +72,9 @@ export interface Acc {
 export interface TurnMeta {
   tokens?: number;
   ts?: number; // epoch seconds
+  eventId?: string;
+  invocationId?: string;
+  feedback?: MessageFeedbackState;
 }
 
 export interface Turn {
@@ -300,7 +304,10 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
 }
 
 /** Replay stored session events into chat turns (for history). */
-export function eventsToTurns(events: AdkEvent[]): Turn[] {
+export function eventsToTurns(
+  events: AdkEvent[],
+  sessionState: Record<string, unknown> = {},
+): Turn[] {
   const turns: Turn[] = [];
   let acc = emptyAcc();
   for (const ev of events) {
@@ -352,7 +359,20 @@ export function eventsToTurns(events: AdkEvent[]): Turn[] {
       const meta = (last.meta ??= {});
       if (usage?.totalTokenCount) meta.tokens = usage.totalTokenCount;
       if (ev.timestamp) meta.ts = ev.timestamp;
+      if (ev.id) meta.eventId = ev.id;
+      const invocationId = ev.invocationId ?? ev.invocation_id;
+      if (invocationId) meta.invocationId = invocationId;
     }
+  }
+  for (const turn of turns) {
+    const meta = turn.meta;
+    const eventId = meta?.eventId;
+    if (!eventId) continue;
+    const feedback = sessionState[`veadk_feedback:${eventId}`];
+    if (!feedback || typeof feedback !== "object") continue;
+    const record = feedback as Record<string, unknown>;
+    if (record.rating !== "good" && record.rating !== "bad") continue;
+    meta.feedback = feedback as MessageFeedbackState;
   }
   return turns;
 }

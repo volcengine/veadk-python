@@ -41,6 +41,14 @@ server that `veadk frontend` launches — no separate backend.
 - **AgentKit Skill center**: browse Skill Spaces and their skills with
   server-side pagination by region, then inspect the selected Skill content.
 - **Tracing viewer**: a span tree + detail panel from the ADK debug trace.
+- **Message feedback**: rate persisted Runtime replies with accessible,
+  repository-drawn like/dislike controls. Studio identifies the final ADK Event,
+  stores the latest rating through the existing Session state-delta API, and
+  idempotently syncs the server-derived question and answer to per-Agent
+  `{agent_name}_good_case` or `{agent_name}_bad_case` AgentKit evaluation sets.
+  Studio creates regular evaluation sets and confirms they are list-visible
+  before writing feedback items.
+  Runtime credentials and Volcengine credentials remain server-side.
 - **Smart search**: search sessions, the network through `web_search`, and a
   selected Agent's KnowledgeBase or long-term memory when mounted. The source
   picker follows live Agent metadata and disables unavailable sources before a

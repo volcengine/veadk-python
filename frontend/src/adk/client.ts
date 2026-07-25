@@ -24,6 +24,9 @@ export interface AdkUsage {
 }
 
 export interface AdkEvent {
+  id?: string;
+  invocationId?: string;
+  invocation_id?: string;
   author?: string;
   partial?: boolean;
   timestamp?: number;
@@ -68,7 +71,59 @@ export interface AdkSession {
   id: string;
   lastUpdateTime?: number;
   events?: AdkEvent[];
+  state?: Record<string, unknown>;
   [k: string]: unknown;
+}
+
+export type MessageFeedbackRating = "good" | "bad";
+
+export interface MessageFeedbackState {
+  rating: MessageFeedbackRating | null;
+  evaluationSetId?: string | null;
+  evaluationSetName?: string | null;
+  workspaceId?: string | null;
+  evaluationItemId?: string | null;
+  syncStatus: "syncing" | "synced";
+  statePersistence?: "runtime" | "browser";
+  updatedAt: number;
+}
+
+const MESSAGE_FEEDBACK_CACHE_KEY = "veadk.messageFeedback.v1";
+
+function feedbackCacheScope(
+  runtimeId: string,
+  appName: string,
+  userId: string,
+  sessionId: string,
+): string {
+  return [runtimeId, appName, userId, sessionId].join(":");
+}
+
+function readMessageFeedbackCache(): Record<
+  string,
+  Record<string, MessageFeedbackState>
+> {
+  if (typeof window === "undefined") return {};
+  try {
+    const value = JSON.parse(localStorage.getItem(MESSAGE_FEEDBACK_CACHE_KEY) ?? "{}");
+    return value && typeof value === "object" ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function storeMessageFeedback(
+  scope: string,
+  eventId: string,
+  feedback: MessageFeedbackState,
+): void {
+  if (typeof window === "undefined") return;
+  const cache = readMessageFeedbackCache();
+  cache[scope] = {
+    ...(cache[scope] ?? {}),
+    [`veadk_feedback:${eventId}`]: feedback,
+  };
+  localStorage.setItem(MESSAGE_FEEDBACK_CACHE_KEY, JSON.stringify(cache));
 }
 
 export interface AdkInlineData {
@@ -333,7 +388,60 @@ export async function getSession(
     ep,
   );
   if (!res.ok) throw new Error(`get session failed: ${res.status}`);
-  return res.json();
+  const session = (await res.json()) as AdkSession;
+  if (ep.runtimeId) {
+    const scope = feedbackCacheScope(ep.runtimeId, app, userId, sessionId);
+    session.state = {
+      ...(readMessageFeedbackCache()[scope] ?? {}),
+      ...(session.state ?? {}),
+    };
+  }
+  return session;
+}
+
+export async function submitMessageFeedback(args: {
+  appName: string;
+  userId: string;
+  sessionId: string;
+  eventId: string;
+  rating: MessageFeedbackRating | null;
+  comment?: string;
+}): Promise<MessageFeedbackState> {
+  const { app, ep } = resolve(args.appName);
+  if (!ep.runtimeId) {
+    throw new Error("只有连接到 AgentKit Runtime 的会话支持反馈回流");
+  }
+  const res = await apiFetch(
+    "/web/evaluation/feedback",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runtimeId: ep.runtimeId,
+        region: ep.region ?? "cn-beijing",
+        appName: app,
+        userId: args.userId,
+        sessionId: args.sessionId,
+        eventId: args.eventId,
+        rating: args.rating,
+        comment: args.comment ?? "",
+      }),
+    },
+    {},
+    TRANSFER_REQUEST_TIMEOUT_MS,
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "提交反馈失败"));
+  }
+  const feedback = (await res.json()) as MessageFeedbackState;
+  const scope = feedbackCacheScope(
+    ep.runtimeId,
+    app,
+    args.userId,
+    args.sessionId,
+  );
+  storeMessageFeedback(scope, args.eventId, feedback);
+  return feedback;
 }
 
 export async function deleteSession(
