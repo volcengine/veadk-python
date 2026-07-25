@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -78,6 +79,8 @@ _FEEDBACK_FIELD_KEYS = (
 
 _DUPLICATE_DATASET_ERROR_CODE = "601104504"
 _DUPLICATE_LOOKUP_DELAYS = (0.25, 0.5, 1.0, 2.0, 4.0)
+_MAX_DATASET_NAME_LENGTH = 50
+_FALLBACK_NAME_HASH_LENGTH = 8
 
 
 def _feedback_field_schemas() -> list[dict[str, Any]]:
@@ -100,8 +103,16 @@ def feedback_set_name(agent_name: str, rating: str) -> str:
     """Return the stable good/bad dataset name for an Agent."""
     if rating not in {"good", "bad"}:
         raise ValueError(f"unsupported feedback rating: {rating}")
-    normalized = re.sub(r"\s+", "_", agent_name.strip())[:80] or "agent"
-    return f"{normalized}_{rating}_case"
+    suffix = f"_{rating}_case"
+    normalized = re.sub(r"\s+", "_", agent_name.strip()) or "agent"
+    return f"{normalized[: _MAX_DATASET_NAME_LENGTH - len(suffix)]}{suffix}"
+
+
+def _fallback_set_name(name: str, workspace_id: str) -> str:
+    """Return a stable alternative when AgentKit invisibly reserves a name."""
+    digest = hashlib.sha256(f"{workspace_id}\0{name}".encode()).hexdigest()
+    suffix = f"_{digest[:_FALLBACK_NAME_HASH_LENGTH]}"
+    return f"{name[: _MAX_DATASET_NAME_LENGTH - len(suffix)]}{suffix}"
 
 
 class AgentKitEvaluationDatasetsClient:
@@ -129,29 +140,57 @@ class AgentKitEvaluationDatasetsClient:
         """Return the feedback set, creating it when absent."""
         name = feedback_set_name(agent_name, rating)
         workspace_id = await self._resolve_workspace_id()
+        fallback_name = _fallback_set_name(name, workspace_id)
         existing = await self._find_set(name, workspace_id=workspace_id)
+        if existing is not None:
+            return existing
+        existing = await self._find_set(fallback_name, workspace_id=workspace_id)
         if existing is not None:
             return existing
 
         try:
-            created = await self._post(
-                action="CreateEvaluationSet",
-                query={**self._project_query, "WorkspaceId": workspace_id},
-                payload={
-                    "Name": name,
-                    "Description": "VeADK Studio 对话反馈自动回流评测集",
-                    "EvaluationSetSchema": {
-                        "FieldSchemas": _feedback_field_schemas(),
-                    },
-                },
-            )
+            return await self._create_set(name, workspace_id=workspace_id)
         except AgentKitOpenApiError as error:
             if error.code != _DUPLICATE_DATASET_ERROR_CODE:
                 raise
             existing = await self._wait_for_set(name, workspace_id=workspace_id)
             if existing is not None:
                 return existing
+
+        existing = await self._find_set(fallback_name, workspace_id=workspace_id)
+        if existing is not None:
+            return existing
+        try:
+            return await self._create_set(fallback_name, workspace_id=workspace_id)
+        except AgentKitOpenApiError as error:
+            if error.code != _DUPLICATE_DATASET_ERROR_CODE:
+                raise
+            existing = await self._wait_for_set(
+                fallback_name,
+                workspace_id=workspace_id,
+            )
+            if existing is not None:
+                return existing
             raise
+
+    async def _create_set(
+        self,
+        name: str,
+        *,
+        workspace_id: str,
+    ) -> EvaluationSetRef:
+        """Create one evaluation set and verify its stable identifiers."""
+        created = await self._post(
+            action="CreateEvaluationSet",
+            query={**self._project_query, "WorkspaceId": workspace_id},
+            payload={
+                "Name": name,
+                "Description": "VeADK Studio 对话反馈自动回流评测集",
+                "EvaluationSetSchema": {
+                    "FieldSchemas": _feedback_field_schemas(),
+                },
+            },
+        )
         created_id = str((created.get("Result") or {}).get("EvaluationSetId") or "")
         if not created_id:
             raise RuntimeError("AgentKit did not return the created evaluation set ID")
