@@ -183,19 +183,38 @@ def test_studio_deploy_surfaces_redacted_provisioning_error_chain(
 
 
 @pytest.mark.parametrize(
-    ("target_args", "expected_region", "expected_identity_region", "expected_project"),
+    (
+        "target_args",
+        "expected_region",
+        "expected_identity_region",
+        "expected_project",
+        "expected_update_bucket",
+        "update_bucket_env",
+    ),
     [
-        ([], "cn-beijing", "cn-beijing", "default"),
+        ([], "cn-beijing", "cn-beijing", "default", "veadk-studio", None),
         (
             [
                 "--region",
                 "cn-shanghai",
                 "--project",
                 "studio-project",
+                "--studio-update-bucket",
+                "custom-studio-releases",
             ],
             "cn-shanghai",
             "cn-beijing",
             "studio-project",
+            "custom-studio-releases",
+            "environment-studio-releases",
+        ),
+        (
+            [],
+            "cn-beijing",
+            "cn-beijing",
+            "default",
+            "environment-studio-releases",
+            "environment-studio-releases",
         ),
     ],
 )
@@ -205,9 +224,16 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     expected_region: str,
     expected_identity_region: str,
     expected_project: str,
+    expected_update_bucket: str,
+    update_bucket_env: str | None,
 ) -> None:
     captured: dict[str, object] = {}
     credential_tool_ids: list[str] = []
+
+    if update_bucket_env is None:
+        monkeypatch.delenv("VEADK_STUDIO_UPDATE_BUCKET", raising=False)
+    else:
+        monkeypatch.setenv("VEADK_STUDIO_UPDATE_BUCKET", update_bucket_env)
 
     class _FakeCloudAgentEngine:
         def __init__(self, **kwargs: object) -> None:
@@ -278,6 +304,10 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert veadk_environments["SANDBOX_CHAT_CODEX"] == "chat-code-env-id"
     assert veadk_environments["SANDBOX_SKILL_CREATOR"] == "skill-code-env-id"
     assert veadk_environments["AGENTKIT_SANDBOX_REGION"] == expected_region
+    assert veadk_environments["VEADK_STUDIO_UPDATE_BUCKET"] == expected_update_bucket
+    assert veadk_environments["VEADK_STUDIO_UPDATE_REGION"] == expected_region
+    assert veadk_environments["VEADK_STUDIO_UPDATE_PREFIX"] == "veadk/studio/main"
+    assert veadk_environments["VEADK_STUDIO_PROJECT"] == expected_project
     assert credential_tool_ids == [
         "chat-code-env-id",
         "skill-code-env-id",
