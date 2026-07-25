@@ -66,6 +66,7 @@ import {
   isOrchestratorType,
 } from "./agentTypeMeta";
 import { displayDescription } from "./displayText";
+import { localPickerMatches } from "./localPickerSearch";
 import { draftToYaml } from "./configYaml";
 import type { AgentProject } from "./project";
 import type { SkillSource } from "./skills/types";
@@ -482,6 +483,7 @@ function A2aSpaceSelect({
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [open, setOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const pickerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -515,6 +517,22 @@ function A2aSpaceSelect({
       ? "已选择的智能体中心"
       : "请选择智能体中心";
   const disabled = loading && spaces.length === 0;
+  const filteredSpaces = useMemo(
+    () =>
+      spaces.filter((space) =>
+        localPickerMatches(searchQuery, [
+          a2aSpaceDisplayName(space),
+          space.id,
+          space.projectName,
+        ]),
+      ),
+    [searchQuery, spaces],
+  );
+  const showUnknownSpace = Boolean(
+    value &&
+      !selectedKnown &&
+      localPickerMatches(searchQuery, ["已选择的智能体中心", value]),
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -555,7 +573,10 @@ function A2aSpaceSelect({
             aria-haspopup="listbox"
             aria-expanded={open}
             aria-label="选择 AgentKit 智能体中心"
-            onClick={() => setOpen((current) => !current)}
+            onClick={() => {
+              setSearchQuery("");
+              setOpen((current) => !current);
+            }}
           >
             <span className={!value ? "is-placeholder" : undefined}>
               {selectedLabel}
@@ -565,39 +586,58 @@ function A2aSpaceSelect({
           {open && (
             <div
               className="cw-a2a-space-menu"
-              role="listbox"
-              aria-label="AgentKit 智能体中心"
             >
-              {value && !selectedKnown && (
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected
-                  className="cw-a2a-space-option is-selected"
-                  onClick={() => selectSpace(value)}
-                >
-                  已选择的智能体中心
-                </button>
-              )}
-              {spaces.map((space) => {
-                const optionLabel = a2aSpaceDisplayName(space);
-                const selected = space.id === value;
-                return (
+              <div className="cw-picker-search">
+                <input
+                  className="cw-picker-search-input"
+                  type="search"
+                  value={searchQuery}
+                  autoFocus
+                  autoComplete="off"
+                  aria-label="搜索 AgentKit 智能体中心"
+                  placeholder="搜索名称或 ID"
+                  onChange={(event) => setSearchQuery(event.currentTarget.value)}
+                />
+              </div>
+              <div
+                className="cw-picker-options"
+                role="listbox"
+                aria-label="AgentKit 智能体中心"
+              >
+                {showUnknownSpace && (
                   <button
-                    key={space.id}
                     type="button"
                     role="option"
-                    aria-selected={selected}
-                    className={`cw-a2a-space-option ${
-                      selected ? "is-selected" : ""
-                    }`}
-                    title={optionLabel}
-                    onClick={() => selectSpace(space.id)}
+                    aria-selected
+                    className="cw-a2a-space-option is-selected"
+                    onClick={() => selectSpace(value)}
                   >
-                    {optionLabel}
+                    已选择的智能体中心
                   </button>
-                );
-              })}
+                )}
+                {filteredSpaces.map((space) => {
+                  const optionLabel = a2aSpaceDisplayName(space);
+                  const selected = space.id === value;
+                  return (
+                    <button
+                      key={space.id}
+                      type="button"
+                      role="option"
+                      aria-selected={selected}
+                      className={`cw-a2a-space-option ${
+                        selected ? "is-selected" : ""
+                      }`}
+                      title={`${optionLabel} (${space.id})`}
+                      onClick={() => selectSpace(space.id)}
+                    >
+                      {optionLabel}
+                    </button>
+                  );
+                })}
+                {!showUnknownSpace && filteredSpaces.length === 0 && (
+                  <div className="cw-picker-empty">未找到匹配的智能体中心</div>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -649,6 +689,7 @@ function VikingKnowledgebaseSelect({
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [open, setOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const pickerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -682,6 +723,21 @@ function VikingKnowledgebaseSelect({
       ? value
       : "请选择 VikingDB 知识库";
   const disabled = loading && items.length === 0;
+  const filteredItems = useMemo(
+    () =>
+      items.filter((item) =>
+        localPickerMatches(searchQuery, [
+          vikingKnowledgebaseDisplayName(item),
+          item.id,
+          item.description,
+          item.projectName,
+        ]),
+      ),
+    [items, searchQuery],
+  );
+  const showUnknownItem = Boolean(
+    value && !selectedKnown && localPickerMatches(searchQuery, [value]),
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -722,7 +778,10 @@ function VikingKnowledgebaseSelect({
             aria-haspopup="listbox"
             aria-expanded={open}
             aria-label="选择 VikingDB 知识库"
-            onClick={() => setOpen((current) => !current)}
+            onClick={() => {
+              setSearchQuery("");
+              setOpen((current) => !current);
+            }}
           >
             <span className={!value ? "is-placeholder" : undefined}>
               {selectedLabel}
@@ -732,39 +791,58 @@ function VikingKnowledgebaseSelect({
           {open && (
             <div
               className="cw-a2a-space-menu cw-viking-kb-menu"
-              role="listbox"
-              aria-label="VikingDB 知识库"
             >
-              {value && !selectedKnown && (
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected
-                  className="cw-a2a-space-option is-selected"
-                  onClick={() => selectItem(value)}
-                >
-                  {value}
-                </button>
-              )}
-              {items.map((item) => {
-                const optionLabel = vikingKnowledgebaseDisplayName(item);
-                const selected = item.id === value;
-                return (
+              <div className="cw-picker-search">
+                <input
+                  className="cw-picker-search-input"
+                  type="search"
+                  value={searchQuery}
+                  autoFocus
+                  autoComplete="off"
+                  aria-label="搜索 VikingDB 知识库"
+                  placeholder="搜索名称或 ID"
+                  onChange={(event) => setSearchQuery(event.currentTarget.value)}
+                />
+              </div>
+              <div
+                className="cw-picker-options"
+                role="listbox"
+                aria-label="VikingDB 知识库"
+              >
+                {showUnknownItem && (
                   <button
-                    key={item.id}
                     type="button"
                     role="option"
-                    aria-selected={selected}
-                    className={`cw-a2a-space-option ${
-                      selected ? "is-selected" : ""
-                    }`}
-                    title={optionLabel}
-                    onClick={() => selectItem(item.id)}
+                    aria-selected
+                    className="cw-a2a-space-option is-selected"
+                    onClick={() => selectItem(value)}
                   >
-                    {optionLabel}
+                    {value}
                   </button>
-                );
-              })}
+                )}
+                {filteredItems.map((item) => {
+                  const optionLabel = vikingKnowledgebaseDisplayName(item);
+                  const selected = item.id === value;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      role="option"
+                      aria-selected={selected}
+                      className={`cw-a2a-space-option ${
+                        selected ? "is-selected" : ""
+                      }`}
+                      title={`${optionLabel} (${item.id})`}
+                      onClick={() => selectItem(item.id)}
+                    >
+                      {optionLabel}
+                    </button>
+                  );
+                })}
+                {!showUnknownItem && filteredItems.length === 0 && (
+                  <div className="cw-picker-empty">未找到匹配的知识库</div>
+                )}
+              </div>
             </div>
           )}
         </div>
