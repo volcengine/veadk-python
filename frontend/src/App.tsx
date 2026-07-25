@@ -50,7 +50,8 @@ import {
 } from "./blocks";
 import { Sidebar } from "./ui/Sidebar";
 import { Navbar } from "./ui/Navbar";
-import { AgentTopology } from "./ui/AgentTopology";
+import { AgentInfoDrawer, AgentInfoPanel } from "./ui/AgentTopology";
+import { AgentIdentityIcon } from "./ui/AgentIdentityIcon";
 import { SkillCenterView } from "./ui/SkillCenter";
 import { AddAgentKitView } from "./ui/AddAgentKit";
 import { ManageAgentsView } from "./ui/ManageAgents";
@@ -636,6 +637,9 @@ export default function App() {
     () => new Set(),
   );
   const [traceOpen, setTraceOpen] = useState(false);
+  const [agentInfoOpen, setAgentInfoOpen] = useState(false);
+  const agentInfoTriggerRef = useRef<HTMLButtonElement>(null);
+  const closeAgentInfo = useCallback(() => setAgentInfoOpen(false), []);
   const [greeting, setGreeting] = useState(pickGreeting);
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -1335,6 +1339,7 @@ export default function App() {
   function startNewChat() {
     exitSandboxSession();
     setError("");
+    setAgentInfoOpen(false);
     setGreeting(pickGreeting());
     setNewChatMode("agent");
     discardSkillCreation();
@@ -2113,6 +2118,30 @@ export default function App() {
                             ? undefined
                             : conversationTitle
               }
+              titleLeading={
+                turns.length > 0 &&
+                !sandboxSession &&
+                newChatMode === "agent" &&
+                !showAddMenu &&
+                !showAddAgent &&
+                !skillCenter &&
+                !searchView &&
+                !showManageAgents &&
+                visibleCreateView === null &&
+                appName ? (
+                  <button
+                    ref={agentInfoTriggerRef}
+                    type="button"
+                    className="agent-info-trigger"
+                    aria-label="查看 Agent 信息"
+                    title="Agent 信息"
+                    aria-expanded={agentInfoOpen}
+                    onClick={() => setAgentInfoOpen(true)}
+                  >
+                    <AgentIdentityIcon />
+                  </button>
+                ) : undefined
+              }
               crumbs={
                 skillCenter
                   ? [{ label: "技能中心" }, { label: "AgentKit Skill 空间" }]
@@ -2255,28 +2284,16 @@ export default function App() {
             ) : turns.length === 0 && skillJob ? (
               <SkillCreateWorkspace initialJob={skillJob} />
             ) : turns.length === 0 ? (
-              <>
-                <div className="welcome">
-                  <TextShimmer as="h1" className="welcome-title" duration={4.8} spread={22}>
-                    {sandboxSession
-                      ? "让灵感在临时空间里自由生长"
-                      : newChatMode === "skill-create"
-                        ? "想创建一个什么 Skill？"
-                        : greeting}
-                  </TextShimmer>
-                  {composer}
-                </div>
-                {/* Show the agent's structure as soon as it's selected, before
-                    any conversation — only renders when it has sub-agents. */}
-                {!sandboxSession && newChatMode === "agent" ? (
-                  <AgentTopology
-                    appName={appName}
-                    activeAgent={activeAgent}
-                    seenAgents={seenAgents}
-                    execPath={execPath}
-                  />
-                ) : null}
-              </>
+              <div className="welcome">
+                <TextShimmer as="h1" className="welcome-title" duration={4.8} spread={22}>
+                  {sandboxSession
+                    ? "让灵感在临时空间里自由生长"
+                    : newChatMode === "skill-create"
+                      ? "想创建一个什么 Skill？"
+                      : greeting}
+                </TextShimmer>
+                {composer}
+              </div>
             ) : (
               <>
                 <div className="transcript" ref={scrollRef} onScroll={onScroll}>
@@ -2414,14 +2431,17 @@ export default function App() {
           })}
                 </div>
                 {!sandboxSession && (
-                  <AgentTopology
-                    appName={appName}
+                  <AgentInfoPanel
+                    info={agentInfo}
+                    loading={capabilitiesLoading}
                     activeAgent={activeAgent}
                     seenAgents={seenAgents}
                     execPath={execPath}
                   />
                 )}
-                {composer}
+                <div className="conversation-composer-slot">
+                  {composer}
+                </div>
               </>
             )}
             </main>
@@ -2434,6 +2454,18 @@ export default function App() {
           appName={appName}
           sessionId={sessionId}
           onClose={() => setTraceOpen(false)}
+        />
+      )}
+
+      {agentInfoOpen && turns.length > 0 && (
+        <AgentInfoDrawer
+          info={agentInfo}
+          loading={capabilitiesLoading}
+          activeAgent={activeAgent}
+          seenAgents={seenAgents}
+          execPath={execPath}
+          onClose={closeAgentInfo}
+          returnFocusRef={agentInfoTriggerRef}
         />
       )}
 
