@@ -1,0 +1,168 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Publish Studio Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      changelog:
+        description: User-facing Studio release summary
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: studio-main-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.repository == 'volcengine/veadk-python' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: studio-release
+    env:
+      RELEASE_SERVER_URL: ${{ secrets.STUDIO_RELEASE_SERVER_URL }}
+      RELEASE_SERVER_API_KEY: ${{ secrets.STUDIO_RELEASE_SERVER_API_KEY }}
+
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.17.0
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Validate release server configuration
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_SERVER_URL" || {
+            echo "STUDIO_RELEASE_SERVER_URL is not configured." >&2
+            exit 1
+          }
+          test -n "$RELEASE_SERVER_API_KEY" || {
+            echo "STUDIO_RELEASE_SERVER_API_KEY is not configured." >&2
+            exit 1
+          }
+
+      - name: Resolve release changelog
+        id: changelog
+        env:
+          MANUAL_CHANGELOG: ${{ inputs.changelog }}
+        run: |
+          set -euo pipefail
+          changelog="$MANUAL_CHANGELOG"
+          test -n "$changelog" || {
+            echo "Studio release changelog is empty." >&2
+            exit 1
+          }
+          {
+            echo "value<<STUDIO_CHANGELOG"
+            echo "$changelog"
+            echo "STUDIO_CHANGELOG"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Stage release source
+        id: source
+        run: |
+          set -euo pipefail
+          job_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          archive="$RUNNER_TEMP/studio-release-source.tar.gz"
+          source_parent="$RUNNER_TEMP/studio-release-source"
+          source_root="$source_parent/veadk-python-${GITHUB_SHA}"
+          prepared_root="$source_root/.studio-release"
+          mkdir -p "$source_root" "$prepared_root/frontend"
+          git archive "$GITHUB_SHA" -- \
+            pyproject.toml README.md LICENSE frontend veadk \
+            ':(exclude)veadk/webui' | tar -x -C "$source_root"
+          npm ci --prefix frontend
+          npm run build --prefix frontend -- \
+            --outDir "$prepared_root/frontend"
+          python -m veadk.cli.studio_dependencies \
+            --output-dir "$prepared_root/wheels"
+          tar -C "$source_parent" -czf "$archive" \
+            "veadk-python-${GITHUB_SHA}"
+          upload_response="$(curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Content-Type: application/json" \
+            --header "X-API-Key: $RELEASE_SERVER_API_KEY" \
+            --data "$(jq -n --arg requestId "$job_id" \
+              '{requestId:$requestId}')" \
+            "$RELEASE_SERVER_URL/source-upload")"
+          source_key="$(jq -er '.sourceKey' <<<"$upload_response")"
+          upload_url="$(jq -er '.uploadUrl' <<<"$upload_response")"
+          curl --fail-with-body --silent --show-error \
+            --request PUT \
+            --header "Content-Type: application/gzip" \
+            --upload-file "$archive" \
+            "$upload_url"
+          echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
+          echo "source_key=$source_key" >> "$GITHUB_OUTPUT"
+
+      - name: Request Studio release
+        id: release
+        env:
+          STUDIO_CHANGELOG: ${{ steps.changelog.outputs.value }}
+          JOB_ID: ${{ steps.source.outputs.job_id }}
+          SOURCE_KEY: ${{ steps.source.outputs.source_key }}
+        run: |
+          set -euo pipefail
+          payload="$(jq -n \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg gitSha "$GITHUB_SHA" \
+            --arg requestId "$JOB_ID" \
+            --arg changelog "$STUDIO_CHANGELOG" \
+            --arg sourceKey "$SOURCE_KEY" \
+            '{repository:$repository,gitSha:$gitSha,requestId:$requestId,changelog:[$changelog],sourceKey:$sourceKey}')"
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Content-Type: application/json" \
+            --header "X-API-Key: $RELEASE_SERVER_API_KEY" \
+            --data "$payload" \
+            "$RELEASE_SERVER_URL/release" >/dev/null
+          echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for Studio release
+        env:
+          JOB_ID: ${{ steps.release.outputs.job_id }}
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 180); do
+            response="$(curl --fail-with-body --silent --show-error \
+              --header "X-API-Key: $RELEASE_SERVER_API_KEY" \
+              "$RELEASE_SERVER_URL/status/$JOB_ID")"
+            state="$(jq -r '.state' <<<"$response")"
+            stage="$(jq -r '.stage' <<<"$response")"
+            echo "Studio release state=$state stage=$stage"
+            if [[ "$state" == "succeeded" ]]; then
+              jq '{state,stage,result}' <<<"$response"
+              exit 0
+            fi
+            if [[ "$state" == "failed" ]]; then
+              jq '{state,stage,message,error}' <<<"$response" >&2
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "Studio release timed out after 30 minutes." >&2
+          exit 1

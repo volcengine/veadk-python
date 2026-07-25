@@ -233,6 +233,18 @@ VeADK provides several useful command line tools for faster deployment and optim
   environment variables, title, and logo are preserved; pass `--site-title` or
   `--site-logo` only when those branding values should be replaced. Sandbox Tool
   IDs are also preserved unless the corresponding deploy option is supplied
+- Studio releases use the API-key-protected VeFaaS service in
+  `frontend/service/studio_release_server`: GitHub uploads a prepared archive
+  of the exact target SHA through a short-lived TOS URL, while the service
+  verifies the inputs, builds the immutable Bundle, and publishes it with its
+  VeFaaS IAM role. Runtime code and deployment assets stay in this
+  frontend-owned directory instead of the public `veadk` Python package. After
+  changing the service, run
+  `frontend/service/studio_release_server/deploy.sh`; it updates the existing
+  Function, reuses the configured Serverless gateway, checks `/healthz`, rotates
+  the API key, and updates the repository Secrets. Releases are published only
+  by manually running the `Publish Studio Release` workflow on `main` and
+  providing its user-facing changelog
 
 Studio can assign comma-separated local usernames or OAuth emails to the
 `admin` and `developer` roles:

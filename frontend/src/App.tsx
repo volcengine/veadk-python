@@ -75,6 +75,7 @@ import type { AgentDraft } from "./create/types";
 import type { DeploymentTaskUpdate } from "./ui/ProjectPreview";
 import { DeploymentErrorMessage } from "./ui/DeploymentErrorMessage";
 import { TextShimmer } from "./ui/text-shimmer/TextShimmer";
+import { StudioUpdateControl } from "./ui/StudioUpdateControl";
 import { createSkillJob, deleteSkillJob } from "./ui/skill-create/api";
 import { SkillCreateWorkspace } from "./ui/skill-create/SkillCreateWorkspace";
 import { SKILL_MODELS, type SkillCreationJob } from "./ui/skill-create/types";
@@ -2031,10 +2032,13 @@ export default function App() {
                       ]
               }
               rightContent={
-                <DeploymentTaskStatus
-                  tasks={canCreateAgents ? deploymentTasks : []}
-                  onCancel={cancelDeploymentTask}
-                />
+                <>
+                  {access.role === "admin" && <StudioUpdateControl />}
+                  <DeploymentTaskStatus
+                    tasks={canCreateAgents ? deploymentTasks : []}
+                    onCancel={cancelDeploymentTask}
+                  />
+                </>
               }
             />
             <main className={`main${sandboxSession ? " is-sandbox-session" : ""}`}>

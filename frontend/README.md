@@ -155,6 +155,54 @@ Supported logo formats are PNG, JPEG, GIF, WebP, AVIF, and ICO, up to 5 MB.
 configuration. `veadk studio deploy` accepts the same flags and copies either a
 local image or a downloaded network image into the VeFaaS deployment package.
 
+## In-app Studio updates
+
+Configure an immutable TOS release channel when deploying Studio to let
+administrators update its frontend and Python backend together from the navbar:
+
+```bash
+veadk studio deploy \
+  --user-pool-id <pool-id> \
+  --allowed-client-id <client-id> \
+  --vefaas-app-name <app-name> \
+  --studio-update-bucket <tos-bucket> \
+  --studio-update-region cn-beijing \
+  --studio-update-prefix veadk/studio/main
+```
+
+Studio checks `latest.json` every three minutes and lists newer releases with
+their changelog and Git SHA. An accepted update verifies the selected complete
+Bundle, replaces the current Function code, and releases the existing
+Application without changing its URL or SSO configuration.
+
+When an update fails, the administrator dialog shows the failed stage, a
+searchable error ID, the complete diagnostic timeline and exception chain, and
+a direct link to the deployed Function in the VeFaaS console. The log can be
+copied in full for support, and retrying starts a fresh diagnostic record.
+
+`.github/workflows/publish-studio-release.yaml` runs only when it is manually
+dispatched on `main`. Enter the user-facing changelog when starting the
+workflow. GitHub builds the frontend and verifies the fixed offline wheels for
+the exact checkout, uploads the prepared source through a short-lived job-bound
+URL, and calls the API-key-protected release server. The server builds and
+publishes the immutable Bundle and Manifest before replacing `releases.json`
+and `latest.json`. Configure only
+`STUDIO_RELEASE_SERVER_URL` and `STUDIO_RELEASE_SERVER_API_KEY` as GitHub
+Secrets; GitHub receives no TOS credentials.
+
+The Release Server runtime and deployment assets are isolated from the public
+Python package under `frontend/service/studio_release_server`. After changing
+the service, deploy it from the repository root:
+
+```bash
+frontend/service/studio_release_server/deploy.sh
+```
+
+The script updates the existing VeFaaS Function, verifies `/healthz`, rotates
+the API key, and updates the two GitHub Secrets. It requires
+`VOLCENGINE_ACCESS_KEY`, `VOLCENGINE_SECRET_KEY`, and an authenticated GitHub
+CLI session.
+
 ## Authentication
 
 The ADK `user_id` (which scopes sessions/memory) comes from the signed-in user.

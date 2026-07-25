@@ -854,6 +854,29 @@ def _run_frontend_server(
             "SECRET_KEY, or run inside a VeFaaS function with an IAM role)",
         )
 
+    def _require_studio_admin(request: Request) -> None:
+        if _request_role(request) != StudioRole.ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail="Only Studio administrators can update Studio",
+            )
+
+    from veadk.cli.studio_self_update import (
+        StudioSelfUpdater,
+        StudioUpdateSettings,
+        mount_studio_update_routes,
+    )
+
+    mount_studio_update_routes(
+        app,
+        StudioSelfUpdater(
+            settings=StudioUpdateSettings.from_env(),
+            credential_resolver=_resolve_ve_credentials,
+            branding_logo=branding_logo,
+        ),
+        _require_studio_admin,
+    )
+
     from veadk.cli.frontend_sandbox import (
         AgentkitSandboxGateway,
         SandboxConfigurationError,
@@ -3903,6 +3926,26 @@ def _resolve_studio_cloud_credentials(
     help="Dedicated ready AgentKit CodeEnv Tool ID used by Skill creation mode. "
     "Default: create one during deployment.",
 )
+@click.option(
+    "--studio-update-bucket",
+    default=None,
+    envvar="VEADK_STUDIO_UPDATE_BUCKET",
+    help="TOS bucket containing immutable Studio release bundles. When omitted, "
+    "in-app Studio updates are disabled.",
+)
+@click.option(
+    "--studio-update-region",
+    default=None,
+    envvar="VEADK_STUDIO_UPDATE_REGION",
+    help="TOS region for Studio release bundles. Defaults to --region.",
+)
+@click.option(
+    "--studio-update-prefix",
+    default="veadk/studio/main",
+    show_default=True,
+    envvar="VEADK_STUDIO_UPDATE_PREFIX",
+    help="TOS object prefix for the Studio main release channel.",
+)
 def frontend_deploy(
     user_pool_id: str,
     allowed_client_id: str,
@@ -3924,6 +3967,9 @@ def frontend_deploy(
     studio_developers: str | None,
     sandbox_chat_codex_tool_id: str | None,
     sandbox_skill_creator_tool_id: str | None,
+    studio_update_bucket: str | None,
+    studio_update_region: str | None,
+    studio_update_prefix: str,
 ) -> None:
     """Deploy the SSO web frontend to VeFaaS.
 
@@ -4092,6 +4138,13 @@ def frontend_deploy(
     veadk_environments["SANDBOX_CHAT_CODEX"] = chat_codex_tool_id
     veadk_environments["SANDBOX_SKILL_CREATOR"] = skill_creator_tool_id
     veadk_environments["AGENTKIT_SANDBOX_REGION"] = region
+    if studio_update_bucket:
+        veadk_environments["VEADK_STUDIO_UPDATE_BUCKET"] = studio_update_bucket
+        veadk_environments["VEADK_STUDIO_UPDATE_REGION"] = (
+            studio_update_region or region
+        )
+        veadk_environments["VEADK_STUDIO_UPDATE_PREFIX"] = studio_update_prefix
+        veadk_environments["VEADK_STUDIO_PROJECT"] = project
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
 
@@ -4201,8 +4254,18 @@ def frontend_deploy(
         function_id = getattr(app, "vefaas_function_id", "")
         if url and function_id:
             click.echo(f"Setting OAUTH2_REDIRECT_URI={redirect_uri} and re-releasing…")
+            release_environment = {"OAUTH2_REDIRECT_URI": redirect_uri}
+            if studio_update_bucket:
+                release_environment.update(
+                    {
+                        "VEADK_STUDIO_APPLICATION_ID": app.vefaas_application_id,
+                        "VEADK_STUDIO_FUNCTION_ID": function_id,
+                        "VEADK_STUDIO_RELEASE_VERSION": veadk_version or "bundled",
+                    }
+                )
             engine._vefaas_service.update_function_envs_and_release(
-                function_id, {"OAUTH2_REDIRECT_URI": redirect_uri}
+                function_id,
+                release_environment,
             )
 
         click.echo("")
