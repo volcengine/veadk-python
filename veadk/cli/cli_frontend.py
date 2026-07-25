@@ -4196,10 +4196,10 @@ def _resolve_studio_cloud_credentials(
 )
 @click.option(
     "--studio-update-bucket",
-    default=None,
+    default="veadk-studio",
+    show_default=True,
     envvar="VEADK_STUDIO_UPDATE_BUCKET",
-    help="TOS bucket containing immutable Studio release bundles. When omitted, "
-    "in-app Studio updates are disabled.",
+    help="TOS bucket containing immutable Studio release bundles.",
 )
 @click.option(
     "--studio-update-region",
@@ -4235,7 +4235,7 @@ def frontend_deploy(
     studio_developers: str | None,
     sandbox_chat_codex_tool_id: str | None,
     sandbox_skill_creator_tool_id: str | None,
-    studio_update_bucket: str | None,
+    studio_update_bucket: str,
     studio_update_region: str | None,
     studio_update_prefix: str,
 ) -> None:
@@ -4406,13 +4406,10 @@ def frontend_deploy(
     veadk_environments["SANDBOX_CHAT_CODEX"] = chat_codex_tool_id
     veadk_environments["SANDBOX_SKILL_CREATOR"] = skill_creator_tool_id
     veadk_environments["AGENTKIT_SANDBOX_REGION"] = region
-    if studio_update_bucket:
-        veadk_environments["VEADK_STUDIO_UPDATE_BUCKET"] = studio_update_bucket
-        veadk_environments["VEADK_STUDIO_UPDATE_REGION"] = (
-            studio_update_region or region
-        )
-        veadk_environments["VEADK_STUDIO_UPDATE_PREFIX"] = studio_update_prefix
-        veadk_environments["VEADK_STUDIO_PROJECT"] = project
+    veadk_environments["VEADK_STUDIO_UPDATE_BUCKET"] = studio_update_bucket
+    veadk_environments["VEADK_STUDIO_UPDATE_REGION"] = studio_update_region or region
+    veadk_environments["VEADK_STUDIO_UPDATE_PREFIX"] = studio_update_prefix
+    veadk_environments["VEADK_STUDIO_PROJECT"] = project
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
 
