@@ -25,7 +25,7 @@ export function ToolCapabilityIcon({ className = "icon" }: CapabilityIconProps) 
   );
 }
 
-/** A folded mastery crest: a compact mark for learned skills. */
+/** A quiet four-point spark: a compact mark for reusable skills. */
 export function SkillCapabilityIcon({ className = "icon" }: CapabilityIconProps) {
   return (
     <svg
@@ -38,10 +38,10 @@ export function SkillCapabilityIcon({ className = "icon" }: CapabilityIconProps)
       strokeLinejoin="round"
       aria-hidden
     >
-      <path d="m4.7 7.2 7.3-3 7.3 3-7.3 3.1Z" />
-      <path d="M7.2 9.2v4.2c0 1.7 2.15 3.05 4.8 3.05s4.8-1.35 4.8-3.05V9.2" />
-      <path d="M19.3 7.2v5.25" />
-      <circle cx="19.3" cy="14.4" r="1.15" fill="currentColor" stroke="none" />
+      <g transform="translate(0 2)">
+        <path d="M11.6 3.5c.45 3.75 2.75 6.05 6.5 6.5-3.75.45-6.05 2.75-6.5 6.5-.45-3.75-2.75-6.05-6.5-6.5 3.75-.45 6.05-2.75 6.5-6.5Z" />
+        <path d="M18.7 3.8v3.4M20.4 5.5H17" />
+      </g>
     </svg>
   );
 }

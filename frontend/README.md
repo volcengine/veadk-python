@@ -20,6 +20,9 @@ server that `veadk frontend` launches — no separate backend.
   completed candidates can be compared, downloaded as ZIP files, and added to
   AgentKit.
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
+- **Agent context rail** keeps the selected Agent's description, model, tools,
+  skills, and optional live multi-Agent topology together in the conversation's
+  right workspace, with the transcript protected from overlap on narrower screens.
 - **Built-in tool activity** gives web search, image/video generation, memory,
   and knowledge-base retrieval their own repository-drawn icons and concise
   Chinese running/completed labels. Active work uses the shared Prompt Kit-style
