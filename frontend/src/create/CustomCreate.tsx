@@ -54,6 +54,7 @@ import {
 } from "./veadkCatalog";
 import {
   runtimeEnvConfiguration,
+  runtimeEnvVars,
   type RuntimeEnvConfiguration,
   type RuntimeEnvSelection,
 } from "./deploymentEnv";
@@ -85,6 +86,7 @@ import {
 } from "../ui/ProjectPreview";
 import { Blocks, ThinkingPlaceholder } from "../ui/Blocks";
 import { DeploymentErrorMessage } from "../ui/DeploymentErrorMessage";
+import { isImeCompositionEvent } from "../ui/composerKeyboard";
 import {
   createGeneratedAgentTestRun,
   createGeneratedAgentTestSession,
@@ -1620,8 +1622,28 @@ function codegenDraft(draft: AgentDraft): AgentDraft {
   };
 }
 
+function debugRuntimeDraft(draft: AgentDraft): AgentDraft {
+  const runtimeEnv = collectDeploymentEnv(draft);
+  const values = {
+    ...(draft.deployment?.envValues ?? {}),
+    ...runtimeEnv.fixedValues,
+  };
+  return {
+    ...codegenDraft(draft),
+    deployment: {
+      feishuEnabled: !!draft.deployment?.feishuEnabled,
+      envValues: Object.fromEntries(
+        runtimeEnvVars(runtimeEnv.specs, values).map(({ key, value }) => [
+          key,
+          value,
+        ]),
+      ),
+    },
+  };
+}
+
 function debugSnapshotKey(draft: AgentDraft): string {
-  return JSON.stringify(codegenDraft(draft));
+  return JSON.stringify(debugRuntimeDraft(draft));
 }
 
 function DebugPanel({
@@ -1808,6 +1830,7 @@ function DebugPanel({
             disabled={!ready || busy || stale}
             onChange={(e) => onInput(e.target.value)}
             onKeyDown={(e) => {
+              if (isImeCompositionEvent(e.nativeEvent)) return;
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 onSend();
@@ -2349,7 +2372,7 @@ export function CustomCreate({
       pushLog("提交 Agent 配置");
       setDebugPhase("starting");
       pushLog("初始化调试环境");
-      const run = await createGeneratedAgentTestRun(codegenDraft(draft));
+      const run = await createGeneratedAgentTestRun(debugRuntimeDraft(draft));
       debugRunRef.current = run;
       setDebugRun(run);
       setDebugProjectName(run.appName);

@@ -33,8 +33,10 @@ from veadk.cli.generated_agent_catalog import (
 from veadk.cli.generated_agent_codegen import (
     A2ARegistryConfig,
     AgentDraft,
+    DeploymentConfig,
     GeneratedProject,
     MemoryConfig,
+    debug_runtime_env_from_draft,
     generate_project_from_draft,
 )
 
@@ -85,6 +87,101 @@ def test_component_catalog_does_not_request_auto_resolved_credentials() -> None:
 
     assert component_env_keys.isdisjoint(auto_resolved_credentials)
     assert "MODEL_AGENT_API_KEY" not in _catalog_env_keys(MODEL_ENV)
+
+
+@pytest.mark.parametrize(
+    ("draft_updates", "env"),
+    [({"builtinTools": [option.id]}, option.env) for option in BUILTIN_TOOLS]
+    + [
+        (
+            {
+                "memory": MemoryConfig(shortTerm=True),
+                "shortTermBackend": option.id,
+            },
+            option.env,
+        )
+        for option in STM_BACKENDS
+    ]
+    + [
+        (
+            {
+                "memory": MemoryConfig(longTerm=True),
+                "longTermBackend": option.id,
+            },
+            option.env,
+        )
+        for option in LTM_BACKENDS
+    ]
+    + [
+        (
+            {"knowledgebase": True, "knowledgebaseBackend": option.id},
+            option.env,
+        )
+        for option in KB_BACKENDS
+    ],
+)
+def test_debug_runtime_forwards_active_component_env(
+    draft_updates: dict[str, object],
+    env: tuple[EnvVar, ...],
+) -> None:
+    env_values = {item.key: f"configured-{item.key.lower()}" for item in env}
+    env_values["UNSELECTED_COMPONENT_ENV"] = "blocked"
+    draft = AgentDraft.model_validate(
+        {
+            "name": "debug-env",
+            "deployment": DeploymentConfig(envValues=env_values),
+            **draft_updates,
+        }
+    )
+
+    result = debug_runtime_env_from_draft(draft)
+
+    assert result == {
+        key: value
+        for key, value in env_values.items()
+        if key != "UNSELECTED_COMPONENT_ENV"
+    }
+
+
+@pytest.mark.parametrize("exporter", TRACING_EXPORTERS, ids=lambda item: item.id)
+def test_debug_runtime_forwards_active_tracing_env_and_enable_flag(
+    exporter: ExporterOption,
+) -> None:
+    env_values = {item.key: f"configured-{item.key.lower()}" for item in exporter.env}
+    draft = AgentDraft(
+        name="debug-tracing-env",
+        tracing=True,
+        tracingExporters=[exporter.id],
+        deployment=DeploymentConfig(envValues=env_values),
+    )
+
+    assert debug_runtime_env_from_draft(draft) == {
+        **env_values,
+        exporter.enable_flag: "true",
+    }
+
+
+def test_debug_runtime_materializes_nested_a2a_registry_defaults() -> None:
+    draft = AgentDraft(
+        name="debug-a2a-env",
+        subAgents=[
+            AgentDraft(
+                name="remote-agent",
+                agentType="a2a",
+                a2aRegistry=A2ARegistryConfig(
+                    enabled=True,
+                    registrySpaceId="space-debug",
+                ),
+            )
+        ],
+    )
+
+    assert debug_runtime_env_from_draft(draft) == {
+        "REGISTRY_SPACE_ID": "space-debug",
+        "REGISTRY_TOP_K": "3",
+        "REGISTRY_REGION": "cn-beijing",
+        "REGISTRY_ENDPOINT": "https://open.volcengineapi.com/",
+    }
 
 
 def test_managed_components_keep_only_component_specific_env() -> None:

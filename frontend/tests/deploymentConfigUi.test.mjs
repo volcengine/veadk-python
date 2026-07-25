@@ -45,6 +45,14 @@ test("offers code execution with its sandbox configuration", () => {
     customCreateSource,
     /builtinTools\.includes\("run_code"\)[\s\S]*?<RuntimeEnvFields/,
   );
+  assert.match(
+    customCreateSource,
+    /createGeneratedAgentTestRun\(debugRuntimeDraft\(draft\)\)/,
+  );
+  assert.match(
+    customCreateSource,
+    /if \(isImeCompositionEvent\(e\.nativeEvent\)\) return;[\s\S]*?e\.key === "Enter"/,
+  );
 });
 
 test("shares the create-page agent type icons with the deployment topology", () => {
