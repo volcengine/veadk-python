@@ -1648,6 +1648,15 @@ body {
 .icon-btn:disabled { opacity: 0.35; cursor: default; }
 .icon-btn:disabled:hover { background: none; color: hsl(var(--muted-foreground)); }
 .icon-btn .icon { width: 15px; height: 15px; }
+.feedback-btn:hover { background: none; color: hsl(var(--foreground)); }
+.feedback-btn--good,
+.feedback-btn--bad,
+.feedback-btn--good:hover,
+.feedback-btn--bad:hover { background: none; color: hsl(var(--foreground)); }
+.feedback-btn[aria-busy="true"] { opacity: 1; }
+.feedback-btn--good[aria-busy="true"]:hover,
+.feedback-btn--bad[aria-busy="true"]:hover { color: hsl(var(--foreground)); }
+.feedback-btn .icon { width: 18px; height: 18px; }
 .meta-text {
   white-space: nowrap;
   font-size: 12px;
