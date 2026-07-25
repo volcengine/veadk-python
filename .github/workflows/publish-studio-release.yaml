@@ -21,19 +21,140 @@ on:
         description: User-facing Studio release summary
         required: true
         type: string
+  pull_request:
+    paths:
+      - '.github/workflows/publish-studio-release.yaml'
+      - 'frontend/**'
+      - 'veadk/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'README.md'
+      - 'LICENSE'
 
 permissions:
   contents: read
 
 concurrency:
-  group: studio-main-release
-  cancel-in-progress: false
+  group: studio-release-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  publish:
+  verify:
     if: >-
       github.repository == 'volcengine/veadk-python' &&
+      (github.event_name == 'pull_request' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.17.0
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Test Studio release backend
+        run: |
+          uv run --group dev pytest -q \
+            tests/test_studio_release_server.py \
+            tests/cli/test_studio_release.py
+
+      - name: Stage and test release source
+        id: source
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/studio-release-source.tar.gz"
+          source_parent="$RUNNER_TEMP/studio-release-source"
+          source_root="$source_parent/veadk-python-${GITHUB_SHA}"
+          prepared_root="$source_root/.studio-release"
+          mkdir -p "$source_root" "$prepared_root/frontend"
+          git archive "$GITHUB_SHA" -- \
+            pyproject.toml README.md LICENSE frontend veadk \
+            ':(exclude)veadk/webui' | tar -x -C "$source_root"
+          npm ci --prefix frontend
+          npm test --prefix frontend
+          npm run build --prefix frontend -- \
+            --outDir "$prepared_root/frontend"
+          python -m veadk.cli.studio_dependencies \
+            --output-dir "$prepared_root/wheels"
+          tar -C "$source_parent" -czf "$archive" \
+            "veadk-python-${GITHUB_SHA}"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          echo "source_root=$source_root" >> "$GITHUB_OUTPUT"
+
+      - name: Build and validate Studio bundle
+        env:
+          SOURCE_ROOT: ${{ steps.source.outputs.source_root }}
+        run: |
+          set -euo pipefail
+          output_dir="$RUNNER_TEMP/studio-release-output"
+          version="$(TZ=Asia/Shanghai date +%Y%m%d%H%M%S)"
+          export output_dir version
+          uv run --group dev python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from veadk.cli.studio_release import build_studio_release
+
+          source_root = Path(os.environ["SOURCE_ROOT"])
+          output_dir = Path(os.environ["output_dir"])
+          bundle, manifest = build_studio_release(
+              source_root=source_root,
+              output_dir=output_dir,
+              version=os.environ["version"],
+              git_sha=os.environ["GITHUB_SHA"],
+              changelog=("Pull request release validation",),
+              frontend_assets=source_root / ".studio-release" / "frontend",
+              dependency_wheels=source_root / ".studio-release" / "wheels",
+          )
+          print(
+              json.dumps(
+                  {
+                      "bundle": str(bundle),
+                      "version": manifest.version,
+                      "gitSha": manifest.git_sha,
+                      "sha256": manifest.sha256,
+                      "size": manifest.size,
+                  }
+              )
+          )
+          PY
+          bundles=("$output_dir"/studio-bundle-*.zip)
+          manifests=("$output_dir"/manifest-*.json)
+          test "${#bundles[@]}" -eq 1
+          test "${#manifests[@]}" -eq 1
+          unzip -t "${bundles[0]}"
+
+      - name: Preserve staged source for publishing
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: studio-release-source-${{ github.sha }}
+          path: ${{ steps.source.outputs.archive }}
+          compression-level: 0
+          retention-days: 1
+
+  publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'volcengine/veadk-python' &&
       github.ref == 'refs/heads/main'
+    needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: studio-release
@@ -42,17 +163,11 @@ jobs:
       RELEASE_SERVER_API_KEY: ${{ secrets.STUDIO_RELEASE_SERVER_API_KEY }}
 
     steps:
-      - name: Check out release source
-        uses: actions/checkout@v4
+      - name: Download staged release source
+        uses: actions/download-artifact@v4
         with:
-          fetch-depth: 1
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22.17.0
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          name: studio-release-source-${{ github.sha }}
+          path: ${{ runner.temp }}/studio-release-source
 
       - name: Validate release server configuration
         run: |
@@ -89,26 +204,13 @@ jobs:
             echo "STUDIO_CHANGELOG"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Stage release source
+      - name: Upload staged release source
         id: source
         run: |
           set -euo pipefail
           job_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          archive="$RUNNER_TEMP/studio-release-source.tar.gz"
-          source_parent="$RUNNER_TEMP/studio-release-source"
-          source_root="$source_parent/veadk-python-${GITHUB_SHA}"
-          prepared_root="$source_root/.studio-release"
-          mkdir -p "$source_root" "$prepared_root/frontend"
-          git archive "$GITHUB_SHA" -- \
-            pyproject.toml README.md LICENSE frontend veadk \
-            ':(exclude)veadk/webui' | tar -x -C "$source_root"
-          npm ci --prefix frontend
-          npm run build --prefix frontend -- \
-            --outDir "$prepared_root/frontend"
-          python -m veadk.cli.studio_dependencies \
-            --output-dir "$prepared_root/wheels"
-          tar -C "$source_parent" -czf "$archive" \
-            "veadk-python-${GITHUB_SHA}"
+          archive="$RUNNER_TEMP/studio-release-source/studio-release-source.tar.gz"
+          test -s "$archive"
           upload_response="$(curl --fail-with-body --silent --show-error \
             --proto '=https' \
             --connect-timeout 30 \
