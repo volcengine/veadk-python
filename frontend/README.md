@@ -206,10 +206,12 @@ the service, deploy it from the repository root:
 frontend/service/studio_release_server/deploy.sh
 ```
 
-The script updates the existing VeFaaS Function, verifies `/healthz`, rotates
+The script updates the existing VeFaaS Function, verifies `/readyz`, rotates
 the API key, and updates the two GitHub Secrets. It requires
 `VOLCENGINE_ACCESS_KEY`, `VOLCENGINE_SECRET_KEY`, and an authenticated GitHub
-CLI session.
+CLI session with permission to update Actions Secrets in the upstream repository.
+It validates that permission before changing any cloud resources and verifies the
+new revision with the rotated API key before updating the Secrets.
 
 ## Authentication
 

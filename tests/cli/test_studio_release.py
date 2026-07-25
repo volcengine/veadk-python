@@ -20,6 +20,10 @@ from pathlib import Path
 
 import pytest
 
+from veadk.cli.studio_dependencies import (
+    StudioDependencyWheel,
+    stage_studio_dependency_wheels,
+)
 from veadk.cli.studio_release import (
     StudioReleaseError,
     StudioReleaseManifest,
@@ -29,10 +33,6 @@ from veadk.cli.studio_release import (
     latest_manifest_object_key,
     manifest_object_key,
     release_catalog_object_key,
-)
-from veadk.cli.studio_dependencies import (
-    StudioDependencyWheel,
-    stage_studio_dependency_wheels,
 )
 
 
@@ -164,6 +164,36 @@ def test_publish_does_not_replace_an_immutable_release(tmp_path: Path) -> None:
 
     with pytest.raises(FileExistsError):
         store.publish(bundle, manifest)
+
+
+def test_publish_does_not_move_latest_pointer_to_an_older_release(
+    tmp_path: Path,
+) -> None:
+    client = _FakeTosClient()
+    store = _store(client)
+    newer_content = b"newer"
+    newer_bundle = tmp_path / "newer.zip"
+    newer_bundle.write_bytes(newer_content)
+    newer = StudioReleaseManifest(
+        version="20260724163045",
+        git_sha="b" * 40,
+        sha256=hashlib.sha256(newer_content).hexdigest(),
+        size=len(newer_content),
+        created_at="2026-07-24T16:30:45+08:00",
+    )
+    store.publish(newer_bundle, newer)
+    put_order = list(client.put_order)
+
+    older_content = b"older"
+    older_bundle = tmp_path / "older.zip"
+    older_bundle.write_bytes(older_content)
+    older = _manifest(older_content)
+
+    with pytest.raises(StudioReleaseError, match="must be newer"):
+        store.publish(older_bundle, older)
+
+    assert client.put_order == put_order
+    assert store.latest_manifest() == newer
 
 
 def test_download_rejects_content_with_wrong_digest(tmp_path: Path) -> None:

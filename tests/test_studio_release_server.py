@@ -17,15 +17,19 @@
 from __future__ import annotations
 
 import importlib.machinery
+import io
 import shutil
+import subprocess
 import tarfile
 from collections.abc import Callable
 from concurrent.futures import Executor, Future
+from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
-from fastapi.testclient import TestClient
 import pytest
+from fastapi.testclient import TestClient
 
 from frontend.service.studio_release_server import (
     BuildResult,
@@ -45,7 +49,7 @@ class _InlineExecutor(Executor):
         future: Future[None] = Future()
         try:
             function(*args, **kwargs)
-        except Exception as error:  # pragma: no cover - executor contract
+        except Exception as error:  # noqa: BLE001  # pragma: no cover
             future.set_exception(error)
         else:
             future.set_result(None)
@@ -188,6 +192,21 @@ def test_api_requires_key_and_returns_durable_status() -> None:
     assert current.json()["result"]["gitSha"] == "a" * 40
 
 
+def test_readiness_requires_the_active_revision_api_key() -> None:
+    settings = _settings()
+    app = create_app(settings=settings, service=_service())
+
+    with TestClient(app) as client:
+        unauthorized = client.get("/readyz")
+        ready = client.get(
+            "/readyz",
+            headers={"X-API-Key": settings.api_key},
+        )
+
+    assert unauthorized.status_code == 401
+    assert ready.json() == {"status": "ready"}
+
+
 def test_api_rejects_another_repository() -> None:
     settings = _settings()
     app = create_app(settings=settings, service=_service())
@@ -276,6 +295,26 @@ def test_builder_consumes_staged_source_archive(tmp_path: Path) -> None:
     assert source_store.consumed_key == request.source_key
 
 
+def test_builder_rejects_unsafe_source_archive_entry(tmp_path: Path) -> None:
+    archive = tmp_path / "source.tar.gz"
+    with tarfile.open(archive, "w:gz") as output:
+        root = tarfile.TarInfo("veadk-python")
+        root.type = tarfile.DIRTYPE
+        output.addfile(root)
+        package = tarfile.TarInfo("veadk-python/frontend/package.json")
+        package.size = 2
+        output.addfile(package, io.BytesIO(b"{}"))
+        link = tarfile.TarInfo("veadk-python/frontend/escape")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "../../outside"
+        output.addfile(link)
+
+    builder = StudioReleaseBuilder(_settings())
+
+    with pytest.raises(ValueError, match="unsupported entry"):
+        builder._extract_source(archive, tmp_path)
+
+
 def test_stage_deployment_uses_frontend_service_package(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -316,3 +355,68 @@ def test_stage_deployment_uses_frontend_service_package(
     assert "frontend.service.studio_release_server.app:app" in (
         destination / "run.sh"
     ).read_text(encoding="utf-8")
+
+
+def test_set_github_secret_reads_value_from_stdin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invocation: dict[str, Any] = {}
+
+    def _run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        invocation["command"] = command
+        invocation.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(release_deploy.subprocess, "run", _run)
+
+    release_deploy._set_github_secret("STUDIO_RELEASE_SERVER_URL", "https://x")
+
+    assert invocation["command"] == [
+        "gh",
+        "secret",
+        "set",
+        "STUDIO_RELEASE_SERVER_URL",
+        "--repo",
+        "volcengine/veadk-python",
+    ]
+    assert invocation["input"] == "https://x"
+
+
+def test_github_secret_preflight_checks_access_without_writing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invocation: dict[str, Any] = {}
+
+    def _run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        invocation["command"] = command
+        invocation.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(release_deploy.subprocess, "run", _run)
+
+    release_deploy._validate_github_secret_access()
+
+    assert invocation["command"] == [
+        "gh",
+        "api",
+        "repos/volcengine/veadk-python/actions/secrets/public-key",
+        "--silent",
+    ]
+
+
+def test_release_server_readiness_uses_rotated_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[Any] = []
+
+    def _urlopen(request: Any, *, timeout: int) -> Any:
+        requests.append(request)
+        assert timeout == 10
+        return nullcontext(SimpleNamespace(status=200))
+
+    monkeypatch.setattr(release_deploy.urllib.request, "urlopen", _urlopen)
+
+    release_deploy._wait_for_health("https://release.example.com", "rotated-key")
+
+    assert requests[0].full_url == "https://release.example.com/readyz"
+    assert dict(requests[0].header_items())["X-api-key"] == "rotated-key"
