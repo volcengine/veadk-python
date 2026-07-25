@@ -162,6 +162,14 @@ settings that cannot be derived automatically. Studio forwards its server-side
 Volcengine credentials and lets VeADK resolve Ark, embedding, media, speech,
 VeSearch, and APMPlus keys for debug runs and deployed runtimes:
 
+The custom-agent workbench also supports the built-in `run_code` tool. Selecting
+“代码执行” adds its import and tool binding to generated Python and reveals the
+required `AGENTKIT_TOOL_ID` sandbox field directly below the built-in tool list.
+The optional `AGENTKIT_TOOL_REGION` field defaults to `cn-beijing`.
+Both values are applied to local debug runs and deployed runtimes.
+The tool's `code`, `language`, and `timeout` arguments are supplied by the Agent
+at runtime.
+
 ```bash
 veadk frontend --agents-dir examples           # serve UI + API on http://127.0.0.1:8000
 ```
