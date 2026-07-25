@@ -170,6 +170,11 @@ their changelog and Git SHA. An accepted update verifies the selected complete
 Bundle, replaces the current Function code, and releases the existing
 Application without changing its URL or SSO configuration.
 
+When an update fails, the administrator dialog shows the failed stage, a
+searchable error ID, the complete diagnostic timeline and exception chain, and
+a direct link to the deployed Function in the VeFaaS console. The log can be
+copied in full for support, and retrying starts a fresh diagnostic record.
+
 `.github/workflows/publish-studio-release.yaml` runs only when it is manually
 dispatched on `main`. Enter the user-facing changelog when starting the
 workflow. GitHub builds the frontend and verifies the fixed offline wheels for

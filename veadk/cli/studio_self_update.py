@@ -23,6 +23,8 @@ import stat
 import tempfile
 import threading
 import time
+import traceback
+import uuid
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -112,6 +114,9 @@ class StudioSelfUpdater:
         self._lock = threading.Lock()
         self._submitted_version = ""
         self._last_error = ""
+        self._error_id = ""
+        self._error_stage = ""
+        self._diagnostic_lines: list[str] = []
         self._progress_stage = "idle"
         self._progress_message = ""
         self._target_version = ""
@@ -176,14 +181,15 @@ class StudioSelfUpdater:
         else:
             application_status = self._application_status()
             if application_status == "deploy_fail" and target:
+                self._target_version = target
+                self._record_failure(
+                    RuntimeError("VeFaaS control plane reported deploy_fail."),
+                    "VeFaaS Revision 发布失败",
+                    stage="publishing",
+                )
                 state = "error"
-                message = "VeFaaS Revision 发布失败，请查看服务端日志"
-                progress = {
-                    "progressStage": "error",
-                    "progressMessage": message,
-                    "targetVersion": target,
-                    "startedAt": self._started_at,
-                }
+                message = self._last_error
+                progress = self._progress_payload()
             elif application_status != "deploy_success":
                 target = target or manifest.version
                 state = "updating"
@@ -226,9 +232,7 @@ class StudioSelfUpdater:
         if not self._lock.acquire(blocking=False):
             raise StudioUpdateConflict("A Studio update is already in progress.")
         try:
-            self._last_error = ""
-            self._started_at = int(time.time() * 1000)
-            self._target_version = version or ""
+            self._reset_diagnostics(version)
             self._set_progress("resolving", "正在读取目标版本信息")
             access_key, secret_key, session_token = self._credential_resolver()
             store = self._store(access_key, secret_key, session_token)
@@ -273,8 +277,7 @@ class StudioSelfUpdater:
         except StudioUpdateConflict:
             raise
         except StudioReleaseError as error:
-            self._last_error = str(error)
-            self._set_progress("error", self._last_error)
+            self._record_failure(error, str(error))
             raise
         except Exception as error:
             logger.exception("Failed to submit the Studio self-update")
@@ -293,8 +296,8 @@ class StudioSelfUpdater:
                     "Studio 更新权限不足，请管理员刷新 VeFaaS IAM 策略后重试"
                 )
             else:
-                self._last_error = "Studio 更新提交失败，请查看服务端日志"
-            self._set_progress("error", self._last_error)
+                self._last_error = "Studio 更新提交失败"
+            self._record_failure(error, self._last_error)
             raise StudioReleaseError(self._last_error) from error
         finally:
             self._lock.release()
@@ -303,6 +306,44 @@ class StudioSelfUpdater:
         """Expose the current update stage to the administrator status route."""
         self._progress_stage = stage
         self._progress_message = message
+        self._diagnostic_lines.append(
+            f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {stage}: {message}"
+        )
+
+    def _reset_diagnostics(self, version: str | None) -> None:
+        """Start a fresh diagnostic timeline for one update attempt."""
+        self._last_error = ""
+        self._error_id = ""
+        self._error_stage = ""
+        self._diagnostic_lines = []
+        self._started_at = int(time.time() * 1000)
+        self._target_version = version or ""
+
+    def _record_failure(
+        self,
+        error: BaseException,
+        message: str,
+        *,
+        stage: str | None = None,
+    ) -> None:
+        """Record a complete, administrator-visible failure diagnostic."""
+        failure_stage = stage or self._progress_stage or "unknown"
+        self._last_error = message
+        self._error_id = uuid.uuid4().hex[:12]
+        self._error_stage = failure_stage
+        self._diagnostic_lines.extend(
+            (
+                f"errorId={self._error_id}",
+                f"stage={failure_stage}",
+                f"region={self._settings.region}",
+                f"project={self._settings.project}",
+                f"applicationId={self._settings.application_id}",
+                f"functionId={self._settings.function_id}",
+                "",
+                "".join(traceback.format_exception(error)).rstrip(),
+            )
+        )
+        self._set_progress("error", message)
 
     def _progress_payload(self) -> dict[str, Any]:
         """Return stable progress fields for every status response."""
@@ -311,7 +352,21 @@ class StudioSelfUpdater:
             "progressMessage": self._progress_message,
             "targetVersion": self._target_version,
             "startedAt": self._started_at,
+            "errorId": self._error_id,
+            "errorStage": self._error_stage,
+            "errorLog": "\n".join(self._diagnostic_lines),
+            "consoleUrl": self._console_url(),
         }
+
+    def _console_url(self) -> str:
+        """Return the fixed VeFaaS Function console URL for this Studio."""
+        if not self._settings.region or not self._settings.function_id:
+            return ""
+        return (
+            "https://console.volcengine.com/vefaas/"
+            f"region:vefaas+{self._settings.region}/function/detail/"
+            f"{self._settings.function_id}"
+        )
 
     def _application_status(self) -> str:
         """Read the current Application release status from VeFaaS."""

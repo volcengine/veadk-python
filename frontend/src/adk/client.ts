@@ -1042,6 +1042,10 @@ export interface StudioUpdateStatus {
   progressMessage: string;
   targetVersion: string;
   startedAt: number;
+  errorId: string;
+  errorStage: string;
+  errorLog: string;
+  consoleUrl: string;
 }
 
 /** Check the configured immutable Studio main release channel. */

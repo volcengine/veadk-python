@@ -23,6 +23,16 @@ const UPDATE_STEPS = [
   { id: "publishing", label: "发布新 Revision 并重启服务" },
 ] as const;
 
+const UPDATE_STAGE_LABELS: Record<string, string> = {
+  resolving: "读取版本信息",
+  downloading: "下载更新包",
+  preparing: "准备 Function 代码",
+  submitting: "提交 Function 更新",
+  publishing: "发布 Revision",
+  checking: "检查更新",
+  unknown: "未知阶段",
+};
+
 function formatElapsed(seconds: number) {
   if (seconds < 60) return `${seconds} 秒`;
   return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
@@ -75,6 +85,22 @@ function StudioUpdateIcon({ className }: { className?: string }) {
   );
 }
 
+function VersionChevronIcon() {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path d="m4 6 4 4 4-4" />
+    </svg>
+  );
+}
+
+function VersionCheckIcon() {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path d="m3.5 8.2 2.8 2.8 6.2-6" />
+    </svg>
+  );
+}
+
 export function StudioUpdateControl() {
   const [initialPending] = useState<PendingStudioUpdate | null>(loadPendingUpdate);
   const [status, setStatus] = useState<StudioUpdateStatus | null>(null);
@@ -86,9 +112,35 @@ export function StudioUpdateControl() {
   const [selectedVersion, setSelectedVersion] = useState(
     initialPending?.targetVersion ?? "",
   );
+  const [versionMenuOpen, setVersionMenuOpen] = useState(false);
+  const [logCopyState, setLogCopyState] = useState<"idle" | "copied" | "error">(
+    "idle",
+  );
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const versionPickerRef = useRef<HTMLDivElement>(null);
   const targetVersionRef = useRef(initialPending?.targetVersion ?? "");
   const startedAtRef = useRef(initialPending?.startedAt ?? 0);
+
+  useEffect(() => {
+    if (!versionMenuOpen) return;
+    const closeMenu = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !versionPickerRef.current?.contains(event.target)
+      ) {
+        setVersionMenuOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setVersionMenuOpen(false);
+    };
+    window.addEventListener("pointerdown", closeMenu);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeMenu);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [versionMenuOpen]);
 
   const refresh = useCallback(async () => {
     const next = await getStudioUpdateStatus(targetVersionRef.current || undefined);
@@ -198,8 +250,33 @@ export function StudioUpdateControl() {
       }
       clearPendingUpdate();
       setPhase("error");
-      setMessage(error instanceof Error ? error.message : "Studio 更新失败");
+      const fallbackMessage = error instanceof Error ? error.message : "Studio 更新失败";
+      try {
+        const next = await refresh();
+        setMessage(next.message || fallbackMessage);
+      } catch {
+        setMessage(fallbackMessage);
+      }
     }
+  };
+
+  const errorLog = status.errorLog || message;
+
+  const copyErrorLog = async () => {
+    try {
+      await navigator.clipboard.writeText(errorLog);
+      setLogCopyState("copied");
+    } catch {
+      setLogCopyState("error");
+    }
+  };
+
+  const retryUpdate = () => {
+    setVersionMenuOpen(false);
+    setLogCopyState("idle");
+    setMessage("");
+    setSelectedVersion(targetVersionRef.current || releases[0]?.version || "");
+    setPhase("confirm");
   };
 
   return (
@@ -259,7 +336,45 @@ export function StudioUpdateControl() {
                     : "发现新版本"}
             </div>
             {phase === "error" ? (
-              <p className="confirm-text studio-update-error">{message}</p>
+              <div className="studio-update-error-panel">
+                <p className="confirm-text studio-update-error">{message}</p>
+                <dl className="studio-update-error-meta">
+                  <div>
+                    <dt>失败阶段</dt>
+                    <dd>
+                      {UPDATE_STAGE_LABELS[status.errorStage] ||
+                        status.errorStage ||
+                        "未知阶段"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>错误 ID</dt>
+                    <dd>{status.errorId || "未生成"}</dd>
+                  </div>
+                </dl>
+                <div className="studio-update-log-header">
+                  <span>完整失败日志</span>
+                  <button type="button" onClick={() => void copyErrorLog()}>
+                    {logCopyState === "copied"
+                      ? "已复制"
+                      : logCopyState === "error"
+                        ? "复制失败"
+                        : "复制完整日志"}
+                  </button>
+                </div>
+                <pre className="studio-update-error-log">{errorLog}</pre>
+                {status.consoleUrl && (
+                  <a
+                    className="studio-update-console-link"
+                    href={status.consoleUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    前往 VeFaaS 控制台查看 Function 日志
+                    <span aria-hidden>↗</span>
+                  </a>
+                )}
+              </div>
             ) : phase === "submitting" || phase === "published" ? (
               <>
                 <div className="studio-update-progress-summary">
@@ -310,20 +425,55 @@ export function StudioUpdateControl() {
                   更新会重启 Studio 服务，预计约 3–5 分钟完成更新与发布。期间正在进行的对话、
                   流式响应或部署任务可能中断，登录态不会受到影响。
                 </p>
-                <label className="studio-update-field" htmlFor="studio-update-version">
+                <div className="studio-update-field" ref={versionPickerRef}>
                   <span>选择版本</span>
-                  <select
-                    id="studio-update-version"
-                    value={targetVersion}
-                    onChange={(event) => setSelectedVersion(event.target.value)}
+                  <button
+                    type="button"
+                    className="studio-update-version-trigger"
+                    aria-label="选择版本"
+                    aria-haspopup="listbox"
+                    aria-expanded={versionMenuOpen}
+                    onClick={() => setVersionMenuOpen((open) => !open)}
+                    onKeyDown={(event) => {
+                      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                        event.preventDefault();
+                        setVersionMenuOpen(true);
+                      }
+                    }}
                   >
-                    {releases.map((release) => (
-                      <option key={release.version} value={release.version}>
-                        {release.version}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                    <span>{targetVersion}</span>
+                    <VersionChevronIcon />
+                  </button>
+                  {versionMenuOpen && (
+                    <div
+                      className="studio-update-version-menu"
+                      role="listbox"
+                      aria-label="选择版本"
+                    >
+                      {releases.map((release) => {
+                        const selected = release.version === targetVersion;
+                        return (
+                          <button
+                            key={release.version}
+                            type="button"
+                            role="option"
+                            aria-selected={selected}
+                            className={`studio-update-version-option${
+                              selected ? " is-selected" : ""
+                            }`}
+                            onClick={() => {
+                              setSelectedVersion(release.version);
+                              setVersionMenuOpen(false);
+                            }}
+                          >
+                            <span>{release.version}</span>
+                            {selected && <VersionCheckIcon />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
                 <dl className="studio-update-versions">
                   <div>
                     <dt>当前版本</dt>
@@ -358,6 +508,7 @@ export function StudioUpdateControl() {
                 className="confirm-btn"
                 onClick={() => {
                   setDialogOpen(false);
+                  setVersionMenuOpen(false);
                   if (phase === "confirm") {
                     setPhase("idle");
                     setMessage("");
@@ -373,6 +524,15 @@ export function StudioUpdateControl() {
                   onClick={() => void beginUpdate()}
                 >
                   立即更新
+                </button>
+              )}
+              {phase === "error" && (
+                <button
+                  type="button"
+                  className="confirm-btn studio-update-confirm"
+                  onClick={retryUpdate}
+                >
+                  重新尝试
                 </button>
               )}
             </div>

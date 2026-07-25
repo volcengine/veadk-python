@@ -160,6 +160,9 @@ def test_submit_latest_reports_missing_vefaas_permissions(
         def latest_manifest(self) -> StudioReleaseManifest:
             return manifest
 
+        def release_catalog(self) -> list[StudioReleaseManifest]:
+            return [manifest]
+
         def download_bundle(
             self, release: StudioReleaseManifest, destination: Path
         ) -> None:
@@ -184,6 +187,19 @@ def test_submit_latest_reports_missing_vefaas_permissions(
 
     with pytest.raises(StudioReleaseError, match="Studio 更新权限不足"):
         updater.submit_latest()
+
+    status = updater.status()
+    assert status["state"] == "error"
+    assert status["errorId"]
+    assert status["errorStage"] == "submitting"
+    assert "AccessDenied: permission denied" in status["errorLog"]
+    assert "applicationId=application-id" in status["errorLog"]
+    assert "functionId=function-id" in status["errorLog"]
+    assert "sts-ak" not in status["errorLog"]
+    assert status["consoleUrl"] == (
+        "https://console.volcengine.com/vefaas/"
+        "region:vefaas+cn-beijing/function/detail/function-id"
+    )
 
 
 def test_update_routes_require_admin_and_custom_header() -> None:
@@ -317,6 +333,10 @@ def test_status_recovers_update_from_vefaas_control_plane(
     assert status["state"] == expected_state
     assert status["progressStage"] == expected_stage
     assert status["targetVersion"] == manifest.version
+    if application_status == "deploy_fail":
+        assert status["errorId"]
+        assert status["errorStage"] == "publishing"
+        assert "deploy_fail" in status["errorLog"]
 
 
 def test_status_infers_target_when_another_device_observes_update(
@@ -365,3 +385,70 @@ def test_submit_version_rejects_downgrade(monkeypatch: pytest.MonkeyPatch) -> No
 
     with pytest.raises(StudioReleaseError, match="只能选择比当前版本新的"):
         updater.submit_version(selected.version)
+
+
+def test_retry_clears_previous_failure_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "source.zip"
+    _bundle(archive)
+    content = archive.read_bytes()
+    manifest = StudioReleaseManifest(
+        version="20260724153045",
+        git_sha="a" * 40,
+        sha256=hashlib.sha256(content).hexdigest(),
+        size=len(content),
+        created_at="2026-07-24T15:30:45+08:00",
+    )
+
+    class _Store:
+        def manifest(self, version: str) -> StudioReleaseManifest:
+            assert version == manifest.version
+            return manifest
+
+        def latest_manifest(self) -> StudioReleaseManifest:
+            return manifest
+
+        def release_catalog(self) -> list[StudioReleaseManifest]:
+            return [manifest]
+
+        def download_bundle(
+            self, release: StudioReleaseManifest, destination: Path
+        ) -> None:
+            assert release == manifest
+            destination.write_bytes(content)
+
+    attempts = 0
+
+    class _VeFaaS:
+        def __init__(self, **_kwargs: str) -> None:
+            pass
+
+        def submit_application_code_bundle_update(self, **_kwargs: Any) -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("first attempt failed")
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
+
+    with pytest.raises(StudioReleaseError, match="Studio 更新提交失败"):
+        updater.submit_version(manifest.version)
+    first_error_id = updater.status()["errorId"]
+
+    assert updater.submit_version(manifest.version) == manifest
+    status = updater.status()
+    assert attempts == 2
+    assert first_error_id
+    assert status["errorId"] == ""
+    assert status["errorStage"] == ""
+    assert "first attempt failed" not in status["errorLog"]
+    assert status["progressStage"] == "publishing"
