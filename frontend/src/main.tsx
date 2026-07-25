@@ -6,6 +6,8 @@ import App from "./App";
 import "react-photo-view/dist/react-photo-view.css";
 import "./styles.css";
 
+const intentionalReleaseCiFailure: = true;
+
 // OAuth popup callback landing. When an OAuth authorize flow (see runOAuthPopup
 // in App.tsx) redirects back to our own origin, this same SPA is loaded inside
 // the popup. Detect that case *before* the app boots, hand the full callback
