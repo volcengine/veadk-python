@@ -45,6 +45,8 @@ from frontend.service.studio_release_server.tos_store import (
 )
 
 _MAX_SOURCE_ARCHIVE_BYTES = 200 * 1024 * 1024
+_MAX_SOURCE_EXTRACTED_BYTES = 1024 * 1024 * 1024
+_MAX_SOURCE_ARCHIVE_MEMBERS = 50_000
 _SOURCE_DOWNLOAD_REPORT_BYTES = 8 * 1024 * 1024
 _SOURCE_DOWNLOAD_TIMEOUT_SECONDS = 10 * 60
 _NODE_VERSION = "22.17.0"
@@ -196,26 +198,26 @@ class StudioReleaseBuilder:
         size = 0
         reported_size = 0
         download_started = time.monotonic()
-        with urllib.request.urlopen(http_request, timeout=120) as response:
-            with archive.open("wb") as output:
-                while chunk := response.read(1024 * 1024):
-                    if (
-                        time.monotonic() - download_started
-                        > _SOURCE_DOWNLOAD_TIMEOUT_SECONDS
-                    ):
-                        raise TimeoutError(
-                            "GitHub source download exceeded 10 minutes."
-                        )
-                    size += len(chunk)
-                    if size > _MAX_SOURCE_ARCHIVE_BYTES:
-                        raise ValueError("GitHub source archive exceeds 200 MiB.")
-                    output.write(chunk)
-                    if size - reported_size >= _SOURCE_DOWNLOAD_REPORT_BYTES:
-                        on_progress(
-                            "fetching",
-                            f"已下载 GitHub 源码 {size // (1024 * 1024)} MiB",
-                        )
-                        reported_size = size
+        with (
+            urllib.request.urlopen(http_request, timeout=120) as response,
+            archive.open("wb") as output,
+        ):
+            while chunk := response.read(1024 * 1024):
+                if (
+                    time.monotonic() - download_started
+                    > _SOURCE_DOWNLOAD_TIMEOUT_SECONDS
+                ):
+                    raise TimeoutError("GitHub source download exceeded 10 minutes.")
+                size += len(chunk)
+                if size > _MAX_SOURCE_ARCHIVE_BYTES:
+                    raise ValueError("GitHub source archive exceeds 200 MiB.")
+                output.write(chunk)
+                if size - reported_size >= _SOURCE_DOWNLOAD_REPORT_BYTES:
+                    on_progress(
+                        "fetching",
+                        f"已下载 GitHub 源码 {size // (1024 * 1024)} MiB",
+                    )
+                    reported_size = size
         on_progress("extracting", "GitHub 源码下载完成，正在解压")
         return self._extract_source(archive, workspace)
 
@@ -223,7 +225,17 @@ class StudioReleaseBuilder:
         extract_root = workspace / "source"
         extract_root.mkdir()
         with tarfile.open(archive, "r:gz") as source_archive:
-            source_archive.extractall(extract_root, filter="data")
+            members = source_archive.getmembers()
+            if not members or len(members) > _MAX_SOURCE_ARCHIVE_MEMBERS:
+                raise ValueError("Source archive member count is invalid.")
+            extracted_size = 0
+            for member in members:
+                if not (member.isfile() or member.isdir()):
+                    raise ValueError("Source archive contains an unsupported entry.")
+                extracted_size += member.size
+                if extracted_size > _MAX_SOURCE_EXTRACTED_BYTES:
+                    raise ValueError("Source archive expands beyond 1 GiB.")
+            source_archive.extractall(extract_root, members=members, filter="data")
         roots = [path for path in extract_root.iterdir() if path.is_dir()]
         if len(roots) != 1 or not (roots[0] / "frontend" / "package.json").is_file():
             raise ValueError("GitHub archive is not a VeADK source checkout.")
@@ -347,7 +359,12 @@ class StudioReleaseBuilder:
             bucket=self._settings.bucket,
             key=f"{self._settings.release_prefix.strip().strip('/')}/latest.json",
         )
-        actual = json.loads(b"".join(response))
+        content = bytearray()
+        for chunk in response:
+            if len(content) + len(chunk) > 64 * 1024:
+                raise RuntimeError("Published latest.json is too large.")
+            content.extend(chunk)
+        actual = json.loads(content)
         for field in ("version", "gitSha", "sha256", "size"):
             if actual.get(field) != expected.get(field):
                 raise RuntimeError(f"Published latest.json has mismatched {field}.")

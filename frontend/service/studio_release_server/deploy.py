@@ -105,7 +105,7 @@ def _ensure_runtime_role(access_key: str, secret_key: str) -> str:
                 }
             )
         )
-    except Exception as update_error:
+    except Exception as update_error:  # noqa: BLE001 - SDK has no common error type
         try:
             _result(
                 iam.create_policy(
@@ -116,14 +116,14 @@ def _ensure_runtime_role(access_key: str, secret_key: str) -> str:
                     }
                 )
             )
-        except Exception as create_error:
+        except Exception as create_error:  # noqa: BLE001 - preserve both SDK errors
             raise RuntimeError(
                 f"Could not create or update IAM policy: {create_error}"
             ) from update_error
 
     try:
         role_result = _result(iam.get_role({"RoleName": _ROLE_NAME}))
-    except Exception:
+    except Exception:  # noqa: BLE001 - absent roles are reported as SDK exceptions
         role_result = _result(
             iam.create_role(
                 {
@@ -289,8 +289,8 @@ def _https_endpoint(gateway_service: Any) -> str:
 def _ensure_gateway_binding(service: Any, function_id: str) -> str:
     """Expose one Function through a service on the fixed serverless gateway."""
     from volcenginesdkapig import (
-        ListGatewaysRequest,
         ListGatewayServicesRequest,
+        ListGatewaysRequest,
         ListUpstreamsRequest,
     )
     from volcenginesdkapig20221112 import (
@@ -480,21 +480,44 @@ def _deploy(source_root: Path, api_key: str, role_trn: str) -> tuple[str, str, s
         return endpoint, app_id or "", function_id
 
 
-def _wait_for_health(endpoint: str) -> None:
-    health_url = f"{endpoint}/healthz"
+def _wait_for_health(endpoint: str, api_key: str) -> None:
+    ready_request = urllib.request.Request(
+        f"{endpoint}/readyz",
+        headers={"X-API-Key": api_key},
+    )
     for _ in range(60):
         try:
-            with urllib.request.urlopen(health_url, timeout=10) as response:
+            with urllib.request.urlopen(ready_request, timeout=10) as response:
                 if response.status == 200:
                     return
         except (OSError, urllib.error.URLError):
             time.sleep(5)
-    raise RuntimeError("Release server health check did not become ready in 5 minutes.")
+    raise RuntimeError("Release server readiness check failed for 5 minutes.")
+
+
+def _validate_github_secret_access() -> None:
+    """Fail before cloud changes if GitHub Secrets cannot be updated."""
+    completed = subprocess.run(
+        [
+            "gh",
+            "api",
+            f"repos/{_REPOSITORY}/actions/secrets/public-key",
+            "--silent",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "GitHub Secrets preflight failed; no cloud resources were changed: "
+            f"{completed.stderr}"
+        )
 
 
 def _set_github_secret(name: str, value: str) -> None:
     completed = subprocess.run(
-        ["gh", "secret", "set", name, "--repo", _REPOSITORY, "--body", "-"],
+        ["gh", "secret", "set", name, "--repo", _REPOSITORY],
         input=value,
         text=True,
         capture_output=True,
@@ -524,10 +547,12 @@ def main() -> None:
         raise ValueError(
             "VOLCENGINE_ACCESS_KEY and VOLCENGINE_SECRET_KEY are required."
         )
+    if not args.skip_github_secrets:
+        _validate_github_secret_access()
     role_trn = _ensure_runtime_role(access_key, secret_key)
     api_key = secrets.token_urlsafe(48)
     endpoint, app_id, function_id = _deploy(source_root, api_key, role_trn)
-    _wait_for_health(endpoint)
+    _wait_for_health(endpoint, api_key)
     if not args.skip_github_secrets:
         _set_github_secret("STUDIO_RELEASE_SERVER_URL", endpoint)
         _set_github_secret("STUDIO_RELEASE_SERVER_API_KEY", api_key)

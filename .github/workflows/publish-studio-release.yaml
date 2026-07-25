@@ -35,6 +35,7 @@ jobs:
       github.repository == 'volcengine/veadk-python' &&
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     environment: studio-release
     env:
       RELEASE_SERVER_URL: ${{ secrets.STUDIO_RELEASE_SERVER_URL }}
@@ -60,10 +61,16 @@ jobs:
             echo "STUDIO_RELEASE_SERVER_URL is not configured." >&2
             exit 1
           }
-          test -n "$RELEASE_SERVER_API_KEY" || {
-            echo "STUDIO_RELEASE_SERVER_API_KEY is not configured." >&2
+          release_server_url="${RELEASE_SERVER_URL%/}"
+          if [[ ! "$release_server_url" =~ ^https://[^[:space:]/]+(/[^[:space:]]*)?$ ]]; then
+            echo "STUDIO_RELEASE_SERVER_URL must be an absolute HTTPS URL." >&2
             exit 1
-          }
+          fi
+          if (( ${#RELEASE_SERVER_API_KEY} < 32 )); then
+            echo "STUDIO_RELEASE_SERVER_API_KEY must contain at least 32 characters." >&2
+            exit 1
+          fi
+          echo "RELEASE_SERVER_URL=$release_server_url" >> "$GITHUB_ENV"
 
       - name: Resolve release changelog
         id: changelog
@@ -103,19 +110,25 @@ jobs:
           tar -C "$source_parent" -czf "$archive" \
             "veadk-python-${GITHUB_SHA}"
           upload_response="$(curl --fail-with-body --silent --show-error \
+            --proto '=https' \
+            --connect-timeout 30 \
+            --max-time 60 \
             --request POST \
             --header "Content-Type: application/json" \
             --header "X-API-Key: $RELEASE_SERVER_API_KEY" \
             --data "$(jq -n --arg requestId "$job_id" \
               '{requestId:$requestId}')" \
-            "$RELEASE_SERVER_URL/source-upload")"
+            --url "$RELEASE_SERVER_URL/source-upload")"
           source_key="$(jq -er '.sourceKey' <<<"$upload_response")"
           upload_url="$(jq -er '.uploadUrl' <<<"$upload_response")"
           curl --fail-with-body --silent --show-error \
+            --proto '=https' \
+            --connect-timeout 30 \
+            --max-time 600 \
             --request PUT \
             --header "Content-Type: application/gzip" \
             --upload-file "$archive" \
-            "$upload_url"
+            --url "$upload_url"
           echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
           echo "source_key=$source_key" >> "$GITHUB_OUTPUT"
 
@@ -135,11 +148,14 @@ jobs:
             --arg sourceKey "$SOURCE_KEY" \
             '{repository:$repository,gitSha:$gitSha,requestId:$requestId,changelog:[$changelog],sourceKey:$sourceKey}')"
           curl --fail-with-body --silent --show-error \
+            --proto '=https' \
+            --connect-timeout 30 \
+            --max-time 1800 \
             --request POST \
             --header "Content-Type: application/json" \
             --header "X-API-Key: $RELEASE_SERVER_API_KEY" \
             --data "$payload" \
-            "$RELEASE_SERVER_URL/release" >/dev/null
+            --url "$RELEASE_SERVER_URL/release" >/dev/null
           echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
 
       - name: Wait for Studio release
@@ -149,8 +165,11 @@ jobs:
           set -euo pipefail
           for _ in $(seq 1 180); do
             response="$(curl --fail-with-body --silent --show-error \
+              --proto '=https' \
+              --connect-timeout 30 \
+              --max-time 60 \
               --header "X-API-Key: $RELEASE_SERVER_API_KEY" \
-              "$RELEASE_SERVER_URL/status/$JOB_ID")"
+              --url "$RELEASE_SERVER_URL/status/$JOB_ID")"
             state="$(jq -r '.state' <<<"$response")"
             stage="$(jq -r '.stage' <<<"$response")"
             echo "Studio release state=$state stage=$stage"

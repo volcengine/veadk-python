@@ -54,7 +54,9 @@ class StudioReleaseManifest:
 
     def __post_init__(self) -> None:
         try:
-            parsed_version = datetime.strptime(self.version, "%Y%m%d%H%M%S")
+            parsed_version = datetime.strptime(self.version, "%Y%m%d%H%M%S").replace(
+                tzinfo=ZoneInfo("Asia/Shanghai")
+            )
         except ValueError as error:
             raise StudioReleaseError(
                 "Studio release version must use Beijing time YYYYMMDDHHMMSS."
@@ -268,6 +270,11 @@ class StudioReleaseStore:
                 "Studio release bundle checksum does not match manifest."
             )
         manifest_bytes = manifest.to_json()
+        releases = self._existing_releases()
+        if any(item.version > manifest.version for item in releases):
+            raise StudioReleaseError(
+                "Studio release version must be newer than the published releases."
+            )
         self._client.put_object(
             bucket=self.bucket,
             key=bundle_object_key(self.prefix, manifest.version),
@@ -282,7 +289,6 @@ class StudioReleaseStore:
             content_type="application/json",
             forbid_overwrite=True,
         )
-        releases = self._existing_releases()
         releases = [item for item in releases if item.version != manifest.version]
         releases.append(manifest)
         releases.sort(key=lambda item: item.version, reverse=True)
