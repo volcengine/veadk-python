@@ -191,6 +191,21 @@ export const BUILTIN_TOOLS: ToolOption[] = [
     ],
   },
   {
+    id: "run_code",
+    label: "代码执行",
+    desc: "在沙箱中执行代码",
+    importLine: "from veadk.tools.builtin_tools.run_code import run_code",
+    toolNames: ["run_code"],
+    env: [
+      {
+        key: "AGENTKIT_TOOL_ID",
+        required: true,
+        placeholder: "填写代码执行沙箱 Tool ID",
+        comment: "代码执行沙箱 ID",
+      },
+    ],
+  },
+  {
     id: "vesearch",
     label: "VeSearch 智能搜索",
     desc: "火山 VeSearch（需要 bot 端点）。",

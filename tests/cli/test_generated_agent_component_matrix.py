@@ -128,6 +128,25 @@ def test_managed_components_keep_only_component_specific_env() -> None:
     assert "OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY" not in env_keys
 
 
+def test_run_code_generates_tool_import_and_sandbox_env() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="code-agent",
+            instruction="Execute code when it helps answer the request.",
+            builtinTools=["run_code"],
+        )
+    )
+    files = _files(project)
+    agent_py = files["agents/code_agent/agent.py"]
+    env_example = files[".env.example"]
+
+    assert "from veadk.tools.builtin_tools.run_code import run_code" in agent_py
+    assert "tools=[run_code]" in agent_py
+    assert "AGENTKIT_TOOL_ID=" in env_example
+    assert "AGENTKIT_TOOL_ID_SCRIPT=" not in env_example
+    _assert_python_files_compile(project)
+
+
 @pytest.mark.parametrize("backend", STM_BACKENDS, ids=lambda item: item.id)
 def test_every_short_term_memory_backend_generates_code_and_env(
     backend: BackendOption,

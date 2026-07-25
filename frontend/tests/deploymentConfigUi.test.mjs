@@ -18,6 +18,27 @@ const agentTypeMetaSource = readFileSync(
   new URL("../src/create/agentTypeMeta.tsx", import.meta.url),
   "utf8",
 );
+const catalogSource = readFileSync(
+  new URL("../src/create/veadkCatalog.ts", import.meta.url),
+  "utf8",
+);
+
+test("offers code execution with its sandbox configuration", () => {
+  assert.match(
+    catalogSource,
+    /id: "run_code"[\s\S]*?label: "代码执行"[\s\S]*?desc: "在沙箱中执行代码"/,
+  );
+  assert.match(
+    catalogSource,
+    /importLine: "from veadk\.tools\.builtin_tools\.run_code import run_code"/,
+  );
+  assert.match(catalogSource, /key: "AGENTKIT_TOOL_ID",\s*required: true/);
+  assert.doesNotMatch(catalogSource, /AGENTKIT_TOOL_ID_SCRIPT/);
+  assert.match(
+    customCreateSource,
+    /builtinTools\.includes\("run_code"\)[\s\S]*?<RuntimeEnvFields/,
+  );
+});
 
 test("shares the create-page agent type icons with the deployment topology", () => {
   assert.match(customCreateSource, /from "\.\/agentTypeMeta"/);

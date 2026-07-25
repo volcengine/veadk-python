@@ -71,6 +71,10 @@ server that `veadk frontend` launches — no separate backend.
   its generated internal proxy mounts AgentKit A2A center agents dynamically
   from the center ID, recall count, region, and OpenAPI endpoint. Remote names,
   descriptions, and capabilities come from the returned Agent Cards.
+- **Built-in code execution**: selecting `代码执行` adds VeADK's `run_code`
+  tool to generated Python and reveals the required `AGENTKIT_TOOL_ID` sandbox
+  field below the built-in tool list. The generated `.env.example` contains the
+  same setting.
 - **Auth**: optional VeIdentity SSO, or a local username for dev.
 - **Agent-driven UI (A2UI)**: when an agent emits A2UI, it renders as native
   components (one feature among the above — not required).

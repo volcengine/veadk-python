@@ -1540,6 +1540,19 @@
   container-type: inline-size;
 }
 
+.cw-tool-config {
+  padding: 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--muted) / 0.28);
+}
+
+.cw-tool-config-head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
 .cw-checklist-tools {
   --cw-checklist-row-height: 65px;
   display: grid;

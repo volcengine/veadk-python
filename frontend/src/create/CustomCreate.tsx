@@ -2893,6 +2893,33 @@ export function CustomCreate({
                           scrollRows={6}
                         />
                       </div>
+                      <AnimatePresence initial={false}>
+                        {builtinTools.includes("run_code") && (
+                          <motion.div
+                            className="cw-tool-config"
+                            initial={{ opacity: 0, y: -4 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -4 }}
+                            transition={{ duration: 0.16, ease: "easeOut" }}
+                          >
+                            <div className="cw-tool-config-head">
+                              <span className="cw-label">代码执行配置</span>
+                              <span className="cw-help">
+                                指定 AgentKit 代码执行沙箱。
+                              </span>
+                            </div>
+                            <RuntimeEnvFields
+                              env={
+                                BUILTIN_TOOLS.find(
+                                  (item) => item.id === "run_code",
+                                )?.env ?? []
+                              }
+                              values={draft.deployment?.envValues ?? {}}
+                              onChange={patchDeploymentEnv}
+                            />
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
                     </div>
                     <button
                       type="button"
