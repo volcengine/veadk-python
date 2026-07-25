@@ -203,6 +203,12 @@ export const BUILTIN_TOOLS: ToolOption[] = [
         placeholder: "填写代码执行沙箱 Tool ID",
         comment: "代码执行沙箱 ID",
       },
+      {
+        key: "AGENTKIT_TOOL_REGION",
+        required: false,
+        placeholder: "cn-beijing",
+        comment: "AgentKit Tools 地域",
+      },
     ],
   },
   {

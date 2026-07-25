@@ -42,8 +42,9 @@ VeADK 自带一个 React 前端，用于渲染智能体经由 Google ADK API Ser
   召回数量、地域和 OpenAPI 地址配置。名称、描述和能力由中心返回的 Agent Card
   提供；生成的内部代理会在每轮请求中动态发现和挂载匹配的远程 Agent。
 - 在自定义 Agent 的内置工具中选择「代码执行」会生成 `run_code` 工具，并在工具列表
-  下方要求填写 `AGENTKIT_TOOL_ID`（代码执行沙箱 Tool ID）。代码、语言和超时
-  由 Agent 按工具函数签名在运行时传入，`tool_context` 由 ADK 自动注入。
+  下方要求填写 `AGENTKIT_TOOL_ID`（代码执行沙箱 Tool ID），同时可填写
+  `AGENTKIT_TOOL_REGION`（默认 `cn-beijing`）。代码、语言和超时由 Agent 按工具
+  函数签名在运行时传入，`tool_context` 由 ADK 自动注入。
 - **Tracing 观测**：查看本次会话的调用火焰图。
 - **登录**：支持 SSO（VeIdentity / GitHub / Google / 任意 OIDC）或本地用户名。
 

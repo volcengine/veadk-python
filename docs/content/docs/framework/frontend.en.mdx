@@ -48,8 +48,9 @@ VeADK ships a React frontend that renders [A2UI](/en/docs/framework/a2ui) (agent
   Agents dynamically for each request.
 - Selecting **Code execution** in the custom Agent's built-in tools adds the
   `run_code` tool and reveals the required `AGENTKIT_TOOL_ID` sandbox field
-  below the built-in tool list. The Agent supplies code, language, and timeout
-  at runtime from the tool signature, while ADK injects `tool_context`.
+  and optional `AGENTKIT_TOOL_REGION` field below the built-in tool list. The
+  region defaults to `cn-beijing`. The Agent supplies code, language, and
+  timeout at runtime from the tool signature, while ADK injects `tool_context`.
   Initialization, session, and conversation failures show credential-redacted
   error details and Runner logs that can be expanded and copied. The deployment
   page shows the Agent topology on the left, with hover details, configuration

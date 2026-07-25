@@ -162,7 +162,10 @@ BUILTIN_TOOLS = (
         id="run_code",
         import_line="from veadk.tools.builtin_tools.run_code import run_code",
         tool_names=("run_code",),
-        env=(EnvVar("AGENTKIT_TOOL_ID", True, "", "代码执行沙箱 ID"),),
+        env=(
+            EnvVar("AGENTKIT_TOOL_ID", True, "", "代码执行沙箱 ID"),
+            EnvVar("AGENTKIT_TOOL_REGION", False, "cn-beijing", "AgentKit Tools 地域"),
+        ),
     ),
     ToolOption(
         id="vesearch",

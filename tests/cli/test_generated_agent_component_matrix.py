@@ -143,6 +143,7 @@ def test_run_code_generates_tool_import_and_sandbox_env() -> None:
     assert "from veadk.tools.builtin_tools.run_code import run_code" in agent_py
     assert "tools=[run_code]" in agent_py
     assert "AGENTKIT_TOOL_ID=" in env_example
+    assert "AGENTKIT_TOOL_REGION=cn-beijing" in env_example
     assert "AGENTKIT_TOOL_ID_SCRIPT=" not in env_example
     _assert_python_files_compile(project)
 

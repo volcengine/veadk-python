@@ -33,6 +33,10 @@ test("offers code execution with its sandbox configuration", () => {
     /importLine: "from veadk\.tools\.builtin_tools\.run_code import run_code"/,
   );
   assert.match(catalogSource, /key: "AGENTKIT_TOOL_ID",\s*required: true/);
+  assert.match(
+    catalogSource,
+    /key: "AGENTKIT_TOOL_REGION",\s*required: false,\s*placeholder: "cn-beijing"/,
+  );
   assert.doesNotMatch(catalogSource, /AGENTKIT_TOOL_ID_SCRIPT/);
   assert.match(
     customCreateSource,
