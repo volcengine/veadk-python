@@ -21,7 +21,70 @@ import pytest
 from veadk.integrations.agentkit.evaluation.client import (
     AgentKitEvaluationDatasetsClient,
     AgentKitOpenApiError,
+    feedback_set_name,
 )
+
+
+def test_feedback_set_name_preserves_suffix_within_agentkit_limit() -> None:
+    name = feedback_set_name("a" * 100, "good")
+
+    assert len(name) == 50
+    assert name.endswith("_good_case")
+
+
+class _HiddenDuplicateBackend:
+    def __init__(self, *, race_fallback: bool = False) -> None:
+        self.race_fallback = race_fallback
+        self.created_names: list[str] = []
+        self.visible_sets = [
+            {
+                "Id": "other-set",
+                "Name": "其他评测集",
+                "WorkspaceId": "workspace-1",
+            }
+        ]
+
+    async def __call__(
+        self,
+        *,
+        action: str,
+        payload: dict[str, Any],
+        query: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        del query
+        if action == "ListEvaluationSets":
+            requested_name = str(payload.get("Name") or "")
+            items = self.visible_sets
+            if requested_name:
+                items = [item for item in items if item["Name"] == requested_name]
+            return {"Result": {"EvaluationSets": items}}
+        if action != "CreateEvaluationSet":
+            raise AssertionError(action)
+
+        name = str(payload["Name"])
+        self.created_names.append(name)
+        if name == "dt_good_case":
+            raise AgentKitOpenApiError(
+                "601104504",
+                "dataset name is duplicated in this space",
+            )
+        self.visible_sets.append(
+            {
+                "Id": "fallback-set",
+                "Name": name,
+                "WorkspaceId": "workspace-1",
+            }
+        )
+        if self.race_fallback:
+            raise AgentKitOpenApiError(
+                "601104504",
+                "dataset name is duplicated in this space",
+            )
+        return {"Result": {"EvaluationSetId": "fallback-set"}}
+
+
+async def _no_sleep(delay: float) -> None:
+    del delay
 
 
 @pytest.mark.asyncio
@@ -51,7 +114,7 @@ async def test_ensure_set_creates_and_resolves_workspace() -> None:
                         ]
                     }
                 }
-            if list_count == 3:
+            if list_count == 4:
                 return {
                     "Result": {
                         "EvaluationSets": [
@@ -76,6 +139,7 @@ async def test_ensure_set_creates_and_resolves_workspace() -> None:
     assert [call["action"] for call in calls] == [
         "ListEvaluationSets",
         "ListEvaluationSets",
+        "ListEvaluationSets",
         "CreateEvaluationSet",
         "ListEvaluationSets",
     ]
@@ -84,11 +148,11 @@ async def test_ensure_set_creates_and_resolves_workspace() -> None:
         "ProjectName": "support",
         "WorkspaceId": "workspace-1",
     }
-    assert calls[2]["query"] == {
+    assert calls[3]["query"] == {
         "ProjectName": "support",
         "WorkspaceId": "workspace-1",
     }
-    create_payload = calls[2]["payload"]
+    create_payload = calls[3]["payload"]
     assert create_payload["Name"] == "客服助手_good_case"
     assert "BizCategory" not in create_payload
     field_keys = {
@@ -172,7 +236,7 @@ async def test_ensure_set_recovers_when_duplicate_becomes_visible(
                         ]
                     }
                 }
-            if find_count < 4:
+            if find_count < 5:
                 return {"Result": {"EvaluationSets": []}}
             return {
                 "Result": {
@@ -209,10 +273,92 @@ async def test_ensure_set_recovers_when_duplicate_becomes_visible(
     assert calls == [
         "ListEvaluationSets",
         "ListEvaluationSets",
+        "ListEvaluationSets",
         "CreateEvaluationSet",
         "ListEvaluationSets",
         "ListEvaluationSets",
     ]
+
+
+@pytest.mark.asyncio
+async def test_ensure_set_uses_and_reuses_fallback_for_hidden_duplicate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = _HiddenDuplicateBackend()
+    monkeypatch.setattr(
+        "veadk.integrations.agentkit.evaluation.client.asyncio.sleep",
+        _no_sleep,
+    )
+
+    first_client = AgentKitEvaluationDatasetsClient(backend, project_name="default")
+    first = await first_client.ensure_feedback_set("dt", "good")
+    second_client = AgentKitEvaluationDatasetsClient(backend, project_name="default")
+    second = await second_client.ensure_feedback_set("dt", "good")
+
+    assert backend.created_names[0] == "dt_good_case"
+    assert len(backend.created_names) == 2
+    fallback_name = backend.created_names[1]
+    assert fallback_name.startswith("dt_good_case_")
+    assert len(fallback_name) <= 50
+    assert first.id == "fallback-set"
+    assert first.name == fallback_name
+    assert second == first
+
+
+@pytest.mark.asyncio
+async def test_ensure_set_recovers_when_fallback_creation_races(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = _HiddenDuplicateBackend(race_fallback=True)
+    monkeypatch.setattr(
+        "veadk.integrations.agentkit.evaluation.client.asyncio.sleep",
+        _no_sleep,
+    )
+
+    client = AgentKitEvaluationDatasetsClient(backend, project_name="default")
+    evaluation_set = await client.ensure_feedback_set("dt", "good")
+
+    fallback_name = backend.created_names[1]
+    assert fallback_name.startswith("dt_good_case_")
+    assert evaluation_set.id == "fallback-set"
+    assert evaluation_set.name == fallback_name
+
+
+@pytest.mark.asyncio
+async def test_ensure_set_propagates_non_duplicate_create_error() -> None:
+    create_calls = 0
+
+    async def post(
+        *,
+        action: str,
+        payload: dict[str, Any],
+        query: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        del payload, query
+        nonlocal create_calls
+        if action == "ListEvaluationSets":
+            return {
+                "Result": {
+                    "EvaluationSets": [
+                        {
+                            "Id": "other-set",
+                            "Name": "其他评测集",
+                            "WorkspaceId": "workspace-1",
+                        }
+                    ]
+                }
+            }
+        if action == "CreateEvaluationSet":
+            create_calls += 1
+            raise AgentKitOpenApiError("500", "upstream unavailable")
+        raise AssertionError(action)
+
+    client = AgentKitEvaluationDatasetsClient(post, project_name="default")
+
+    with pytest.raises(AgentKitOpenApiError, match="500: upstream unavailable"):
+        await client.ensure_feedback_set("dt", "good")
+
+    assert create_calls == 1
 
 
 @pytest.mark.asyncio
