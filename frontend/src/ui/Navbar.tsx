@@ -16,6 +16,8 @@ export interface NavbarProps {
   agentLabel?: (id: string) => string;
   /** When set, the left side shows this title instead of the agent picker. */
   title?: string;
+  /** Optional action rendered immediately before the page title. */
+  titleLeading?: ReactNode;
   /** When set, the left side shows a breadcrumb trail (takes priority over title). */
   crumbs?: Crumb[];
   /** Persistent app-level status rendered on the far right. */
@@ -30,6 +32,7 @@ export function Navbar({
   onAppChange,
   agentLabel,
   title,
+  titleLeading,
   crumbs,
   rightContent,
 }: NavbarProps) {
@@ -53,7 +56,10 @@ export function Navbar({
               ))}
             </nav>
           ) : title ? (
-            <div className="navbar-title" title={title}>{title}</div>
+            <div className="navbar-title-group">
+              {titleLeading}
+              <div className="navbar-title" title={title}>{title}</div>
+            </div>
           ) : (
             <AgentSelect
               apps={apps}

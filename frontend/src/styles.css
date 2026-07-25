@@ -2692,6 +2692,37 @@ body {
 .navbar-default {
   min-width: 0;
 }
+.navbar-title-group {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+}
+.agent-info-trigger {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.agent-info-trigger:hover,
+.agent-info-trigger[aria-expanded="true"] {
+  background: hsl(var(--foreground) / 0.06);
+  color: hsl(var(--foreground));
+}
+.agent-info-trigger:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 1px;
+}
+.agent-info-trigger svg { width: 17px; height: 17px; }
 
 .navbar-right {
   flex: 0 0 auto;
@@ -4272,32 +4303,275 @@ a.search-result { text-decoration: none; color: inherit; }
 }
 .main { position: relative; }
 
-/* ---------- agent topology (conversation side rail) ----------
- * Floats in the right-hand whitespace beside the centered transcript. Only
- * rendered when the agent has sub-agents, and only shown when the window is
- * wide enough that it won't overlap the 768px conversation column. */
+/* ---------- agent information rail (conversation side rail) ----------
+ * Uses the right workspace for the selected Agent's capabilities and, when
+ * present, its live topology. Wide layouts reserve this space for the rail so
+ * the 768px conversation column never sits beneath it. */
 .topo {
   position: absolute;
-  top: 68px;
+  top: 28px;
+  bottom: 18px;
   right: 18px;
-  width: 220px;
-  max-height: calc(100% - 150px);
-  overflow-y: auto;
-  padding: 12px;
-  background: hsl(var(--canvas));
+  display: flex;
+  width: 288px;
+  min-height: 0;
+  overflow: hidden;
+  padding: 16px;
+  flex-direction: column;
+  background: hsl(var(--background));
   border: 1px solid hsl(var(--border));
-  border-radius: 12px;
-  box-shadow: 0 4px 16px hsl(0 0% 0% / 0.04);
+  border-radius: 18px;
+  box-shadow: 0 8px 24px hsl(var(--foreground) / 0.035);
   z-index: 2;
 }
-.topo-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin-bottom: 10px;
+.topo.is-loading {
+  bottom: auto;
+  min-height: 88px;
+  display: grid;
+  place-items: center;
 }
-.topo-head-title { font-size: 12px; font-weight: 650; letter-spacing: 0.02em; }
-.topo-head-sub { font-size: 11px; color: hsl(var(--muted-foreground)); }
+.topo.is-drawer {
+  position: static;
+  width: auto;
+  min-height: 0;
+  max-height: none;
+  overflow: visible;
+  padding: 22px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.topo.is-loading.is-drawer { min-height: 112px; }
+.topo-loading-label {
+  font-size: 12px;
+  line-height: 1.5;
+}
+.topo-agent-card {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 0 0 16px;
+  border: 0;
+  border-bottom: 1px solid hsl(var(--border) / 0.72);
+  border-radius: 0;
+  background: transparent;
+}
+.topo-agent-heading {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+.topo-agent-heading h2 {
+  margin: 0;
+  overflow: hidden;
+  color: hsl(var(--foreground));
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topo-agent-heading > span {
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topo-description {
+  display: -webkit-box;
+  margin: 12px 0 0;
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+.topo-module-stack {
+  display: grid;
+  grid-template-rows:
+    minmax(86px, 0.95fr)
+    minmax(102px, 1.15fr)
+    minmax(106px, 0.75fr);
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  gap: 0;
+}
+.topo-module-card {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  padding: 14px 0;
+  flex-direction: column;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.topo-module-card + .topo-module-card {
+  border-top: 1px solid hsl(var(--border) / 0.72);
+}
+.topo-module-title {
+  position: static;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 20px;
+  margin-bottom: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+}
+.topo-module-label {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topo-section-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+.topo-section-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: hsl(var(--muted) / 0.72);
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+}
+.topo-module-scroll {
+  box-sizing: border-box;
+  flex: 1;
+  min-height: 24px;
+  padding-top: 9px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: hsl(var(--border)) transparent;
+  scrollbar-width: thin;
+}
+.topo-module-scroll::-webkit-scrollbar { width: 4px; }
+.topo-module-scroll::-webkit-scrollbar-track { background: transparent; }
+.topo-module-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: hsl(var(--border));
+}
+.topo-module-scroll:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.45);
+  outline-offset: 3px;
+  border-radius: 5px;
+}
+.topo-tools-scroll { max-height: 104px; }
+.topo-skills-scroll { max-height: 152px; }
+.topo-topology-scroll { max-height: 184px; }
+.topo-tool-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+.topo-tool {
+  position: relative;
+  overflow: hidden;
+  padding: 7px 2px 7px 14px;
+  color: hsl(var(--foreground));
+  font-size: 12.5px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topo-tool::before {
+  content: "";
+  position: absolute;
+  top: 13px;
+  left: 2px;
+  width: 5px;
+  height: 5px;
+  border: 1px solid hsl(var(--muted-foreground) / 0.7);
+  border-radius: 2px;
+}
+.topo-tool:first-child { padding-top: 0; }
+.topo-tool:first-child::before { top: 6px; }
+.topo-tool:last-child { padding-bottom: 1px; }
+.topo-tool + .topo-tool {
+  border-top: 1px solid hsl(var(--border) / 0.72);
+}
+.topo-skill-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+.topo-skill {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 0;
+}
+.topo-skill:first-child { padding-top: 0; }
+.topo-skill:last-child { padding-bottom: 1px; }
+.topo-skill + .topo-skill {
+  border-top: 1px solid hsl(var(--border) / 0.72);
+}
+.topo-skill-name {
+  overflow: hidden;
+  color: hsl(var(--foreground));
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topo-skill-description {
+  display: -webkit-box;
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.topo-empty {
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.topo-topology {
+  min-height: 0;
+}
+.topo-topology-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.topo-topology-line {
+  width: 18px;
+  height: 1px;
+  flex: 0 0 18px;
+  background: hsl(var(--foreground) / 0.2);
+}
 .topo-tree { display: flex; flex-direction: column; gap: 4px; }
 /* Nested children indent and grow a connector guide-line on the left. */
 .topo-children {
@@ -4313,28 +4587,30 @@ a.search-result { text-decoration: none; color: inherit; }
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 8px;
-  border: 1px solid hsl(var(--border));
+  min-height: 34px;
+  padding: 6px 7px;
+  border: 0;
   border-radius: 8px;
-  background: hsl(var(--background));
+  background: hsl(var(--muted) / 0.5);
   font-size: 12px;
   transition:
-    border-color 0.15s ease,
     background 0.15s ease,
+    box-shadow 0.15s ease,
     opacity 0.15s ease;
 }
-.topo-icon { width: 14px; height: 14px; flex-shrink: 0; opacity: 0.8; }
+.topo-icon { width: 14px; height: 14px; flex-shrink: 0; opacity: 0.78; }
 .topo-name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 12.5px;
   font-weight: 550;
 }
 .topo-badge {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 10.5px;
   padding: 1px 5px;
   border-radius: 5px;
   background: hsl(var(--muted));
@@ -4342,15 +4618,15 @@ a.search-result { text-decoration: none; color: inherit; }
 }
 /* Currently-executing agent: highlighted ring + gentle pulse. */
 .topo-node.is-active {
-  border-color: hsl(var(--primary));
   background: hsl(var(--primary) / 0.08);
+  box-shadow: inset 2px 0 0 hsl(var(--primary));
   animation: topo-pulse 1.4s ease-in-out infinite;
 }
 .topo-node.is-active .topo-icon { opacity: 1; }
 /* An ancestor on the current delegation chain (handed off, not the leaf). */
 .topo-node.is-onpath {
-  border-color: hsl(var(--primary) / 0.4);
   background: hsl(var(--primary) / 0.04);
+  box-shadow: inset 2px 0 0 hsl(var(--primary) / 0.4);
 }
 /* An agent that ran earlier this turn but isn't the current one. */
 .topo-node.is-done { opacity: 0.55; }
@@ -4370,7 +4646,7 @@ a.search-result { text-decoration: none; color: inherit; }
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 1px;
+  gap: 5px;
   margin-bottom: 9px;
   padding: 6px 8px;
   border-radius: 7px;
@@ -4379,11 +4655,13 @@ a.search-result { text-decoration: none; color: inherit; }
   line-height: 1.4;
 }
 .topo-path-seg { display: inline-flex; align-items: center; min-width: 0; }
-.topo-path-sep {
-  width: 12px;
-  height: 12px;
+.topo-path-seg + .topo-path-seg::before {
+  content: "";
+  width: 7px;
+  height: 1px;
+  margin-right: 5px;
   flex-shrink: 0;
-  color: hsl(var(--muted-foreground));
+  background: hsl(var(--border));
 }
 .topo-path-name { color: hsl(var(--muted-foreground)); }
 .topo-path-name.is-current { color: hsl(var(--primary)); font-weight: 600; }
@@ -4396,9 +4674,56 @@ a.search-result { text-decoration: none; color: inherit; }
     box-shadow: 0 0 0 4px hsl(var(--primary) / 0);
   }
 }
-/* Not enough whitespace to float the rail without covering the transcript. */
-@media (max-width: 1200px) {
+@media (min-width: 1280px) {
+  .agent-info-trigger { display: none; }
+  .topo:not(.is-drawer) .topo-module-scroll { max-height: none; }
+  .main:has(> .topo) > .transcript { padding-right: 322px; }
+  .main:has(> .topo) > .conversation-composer-slot {
+    padding-right: 322px;
+    padding-left: 16px;
+  }
+  .conversation-composer-slot > .composer {
+    margin-right: auto;
+    margin-left: auto;
+  }
+}
+/* Narrow desktops keep the established single-column conversation layout. */
+@media (max-width: 1279px) {
   .topo { display: none; }
+  .topo.is-drawer { display: block; }
+  .topo.is-drawer .topo-module-stack {
+    display: flex;
+    flex-direction: column;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .topo-node { transition: none; }
+  .topo-node.is-active,
+  .topo-remote { animation: none; }
+}
+
+.drawer--agent-info {
+  right: auto;
+  left: 0;
+  width: min(400px, 92vw);
+  border-right: 1px solid hsl(var(--border));
+  border-left: 0;
+  box-shadow: 12px 0 40px hsl(var(--foreground) / 0.14);
+  animation: agent-info-slide-in 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.agent-info-drawer-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+@keyframes agent-info-slide-in {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .drawer--agent-info,
+  .agent-info-scrim { animation: none; }
 }
 
 /* ---------- quick create (cards) ---------- */
