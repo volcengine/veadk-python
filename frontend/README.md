@@ -165,18 +165,20 @@ local image or a downloaded network image into the VeFaaS deployment package.
 
 ## In-app Studio updates
 
-Configure an immutable TOS release channel when deploying Studio to let
-administrators update its frontend and Python backend together from the navbar:
+Studio deployments use the `veadk-studio` TOS bucket in the deployment region
+as their immutable release channel by default, so administrators can update the
+frontend and Python backend together from the navbar without extra options:
 
 ```bash
 veadk studio deploy \
   --user-pool-id <pool-id> \
   --allowed-client-id <client-id> \
-  --vefaas-app-name <app-name> \
-  --studio-update-bucket <tos-bucket> \
-  --studio-update-region cn-beijing \
-  --studio-update-prefix veadk/studio/main
+  --vefaas-app-name <app-name>
 ```
+
+Use `--studio-update-bucket`, `--studio-update-region`, and
+`--studio-update-prefix` (or their `VEADK_STUDIO_UPDATE_*` environment
+variables) to override the default release channel.
 
 Studio checks `latest.json` every three minutes and lists newer releases with
 their changelog and Git SHA. An accepted update verifies the selected complete
