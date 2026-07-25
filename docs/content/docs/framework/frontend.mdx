@@ -275,11 +275,12 @@ Studio 每 3 分钟读取一次 `latest.json`，展示新版本的 changelog 和
 管理员确认后，完整 Bundle 会同时替换 Python 后端和前端资源，再发布原
 Application；访问 URL、SSO Client 和服务端 Secret 保持不变。
 
-`.github/workflows/publish-studio-release.yaml` 只在 Studio 相关源码进入 `main`
-后运行。GitHub checkout 准确 SHA、构建前端并校验固定的离线 wheel，再通过与任务
-绑定的短期 TOS URL 上传预处理源码。API Key 保护的 VeFaaS Release Server 消费并
-删除这个私有对象，构建和发布不可变 Bundle 与 Manifest，更新有数量上限的
-`releases.json`，最后覆盖 `latest.json`。GitHub Secrets 只需
+`.github/workflows/publish-studio-release.yaml` 不再随源码更新自动运行。每次发版需在
+`main` 分支手动运行 `Publish Studio Release`，并填写面向用户的 changelog。GitHub
+checkout 准确 SHA、构建前端并校验固定的离线 wheel，再通过与任务绑定的短期 TOS
+URL 上传预处理源码。API Key 保护的 VeFaaS Release Server 消费并删除这个私有对象，
+构建和发布不可变 Bundle 与 Manifest，更新有数量上限的 `releases.json`，最后覆盖
+`latest.json`。GitHub Secrets 只需
 `STUDIO_RELEASE_SERVER_URL` 和 `STUDIO_RELEASE_SERVER_API_KEY`，不保存 TOS
 AK/SK。
 

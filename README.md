@@ -234,7 +234,9 @@ VeADK provides several useful command line tools for faster deployment and optim
   changing the service, run
   `frontend/service/studio_release_server/deploy.sh`; it updates the existing
   Function, reuses the configured Serverless gateway, checks `/healthz`, rotates
-  the API key, and updates the repository Secrets
+  the API key, and updates the repository Secrets. Releases are published only
+  by manually running the `Publish Studio Release` workflow on `main` and
+  providing its user-facing changelog
 
 Studio can assign comma-separated local usernames or OAuth emails to the
 `admin` and `developer` roles:

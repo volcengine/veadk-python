@@ -170,12 +170,13 @@ their changelog and Git SHA. An accepted update verifies the selected complete
 Bundle, replaces the current Function code, and releases the existing
 Application without changing its URL or SSO configuration.
 
-`.github/workflows/publish-studio-release.yaml` runs after relevant Studio
-changes reach `main`. GitHub builds the frontend and verifies the fixed offline
-wheels for the exact checkout, uploads the prepared source through a short-lived
-job-bound URL, and calls the API-key-protected release server. The server builds
-and publishes the immutable Bundle and Manifest before replacing
-`releases.json` and `latest.json`. Configure only
+`.github/workflows/publish-studio-release.yaml` runs only when it is manually
+dispatched on `main`. Enter the user-facing changelog when starting the
+workflow. GitHub builds the frontend and verifies the fixed offline wheels for
+the exact checkout, uploads the prepared source through a short-lived job-bound
+URL, and calls the API-key-protected release server. The server builds and
+publishes the immutable Bundle and Manifest before replacing `releases.json`
+and `latest.json`. Configure only
 `STUDIO_RELEASE_SERVER_URL` and `STUDIO_RELEASE_SERVER_API_KEY` as GitHub
 Secrets; GitHub receives no TOS credentials.
 

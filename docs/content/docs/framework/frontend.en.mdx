@@ -328,13 +328,15 @@ newer release's changelog and Git SHA and update the current Function without
 changing its Application, URL, SSO client, or server-side secrets. The complete
 Bundle replaces the Python backend and frontend assets together.
 
-`.github/workflows/publish-studio-release.yaml` runs only after relevant Studio
-changes reach `main`. GitHub checks out the exact SHA, builds the frontend,
-verifies the fixed offline wheels, and uploads a prepared source archive through
-a short-lived job-bound TOS URL. The API-key-protected VeFaaS release server
-consumes and deletes that private object, builds and publishes the immutable
-Bundle and Manifest, updates the bounded `releases.json` catalog, and replaces
-`latest.json` last. Store only `STUDIO_RELEASE_SERVER_URL` and
+`.github/workflows/publish-studio-release.yaml` does not run automatically on
+source changes. Manually dispatch `Publish Studio Release` on `main` and enter
+the user-facing changelog for every release. GitHub checks out the exact SHA,
+builds the frontend, verifies the fixed offline wheels, and uploads a prepared
+source archive through a short-lived job-bound TOS URL. The API-key-protected
+VeFaaS release server consumes and deletes that private object, builds and
+publishes the immutable Bundle and Manifest, updates the bounded
+`releases.json` catalog, and replaces `latest.json` last. Store only
+`STUDIO_RELEASE_SERVER_URL` and
 `STUDIO_RELEASE_SERVER_API_KEY` as GitHub Secrets; GitHub receives no TOS
 AK/SK.
 

@@ -15,25 +15,6 @@
 name: Publish Studio Release
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/publish-studio-release.yaml"
-      - "frontend/**"
-      - "frontend/service/studio_release_server/**"
-      - "veadk/cli/cli.py"
-      - "veadk/cli/cli_frontend.py"
-      - "veadk/cli/frontend_*.py"
-      - "veadk/cli/studio_*.py"
-      - "veadk/cloud/**"
-      - "veadk/integrations/ve_apig/**"
-      - "veadk/integrations/ve_faas/**"
-      - "veadk/integrations/ve_identity/**"
-      - "veadk/utils/volcengine_sign.py"
-      - "veadk/config.py"
-      - "pyproject.toml"
-      - "uv.lock"
   workflow_dispatch:
     inputs:
       changelog:
@@ -43,7 +24,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
 
 concurrency:
   group: studio-main-release
@@ -51,7 +31,9 @@ concurrency:
 
 jobs:
   publish:
-    if: github.repository == 'volcengine/veadk-python'
+    if: >-
+      github.repository == 'volcengine/veadk-python' &&
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: studio-release
     env:
@@ -86,24 +68,10 @@ jobs:
       - name: Resolve release changelog
         id: changelog
         env:
-          GH_TOKEN: ${{ github.token }}
           MANUAL_CHANGELOG: ${{ inputs.changelog }}
-          PUSH_CHANGELOG: ${{ github.event.head_commit.message }}
         run: |
           set -euo pipefail
           changelog="$MANUAL_CHANGELOG"
-          if [[ -z "$changelog" ]]; then
-            changelog="$(
-              gh api \
-                -H "Accept: application/vnd.github+json" \
-                "/repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
-                --jq '.[0].title // empty'
-            )"
-          fi
-          if [[ -z "$changelog" ]]; then
-            changelog="$PUSH_CHANGELOG"
-            changelog="${changelog%%$'\n'*}"
-          fi
           test -n "$changelog" || {
             echo "Studio release changelog is empty." >&2
             exit 1
