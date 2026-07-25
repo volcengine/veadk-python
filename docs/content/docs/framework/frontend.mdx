@@ -407,19 +407,6 @@ Studio 会按照 Google ADK 的规则校验根 Agent 与所有嵌套 Agent 的�
 英文字母或下划线开头，后续只能包含英文字母、数字和下划线；不能使用保留名
 `user`，并且在整个 Agent 结构中必须唯一。
 
-### 可选的前端使用统计
-
-Studio 可通过 APMPlus WebPro 采集匿名前端使用统计。构建前在仓库根目录的
-`.env` 中配置 `APM_APP_ID` 与 `APM_APP_TOKEN`；设置
-`APM_ENABLED=false` 可关闭采集，浏览器启用 Do Not Track 时也不会上报。
-
-Sidebar 点击统一记录为 `sidebar_feature_used`，通过固定的 `feature` 维度区分
-Agent 选择、新会话、搜索、Skill 中心、Agent 创建与管理、历史会话等入口。
-在 WebPro 数据分析中选择数值指标 `count`，再按 `feature` 分组，即可查看各入口
-的使用次数。
-埋点不会包含 Prompt、回复、文件名、Agent 名称、Session/Runtime ID、凭据或原始
-错误信息。SSO 场景仅使用稳定的 OIDC `sub`/`user_id`；本地用户名不会上报。
-
 ### 工作原理
 
 <Steps>

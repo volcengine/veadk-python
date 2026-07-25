@@ -3,7 +3,6 @@ import ReactDOM from "react-dom/client";
 import { MotionConfig } from "motion/react";
 import { PhotoProvider } from "react-photo-view";
 import App from "./App";
-import { initAnalytics } from "./analytics/webpro";
 import "react-photo-view/dist/react-photo-view.css";
 import "./styles.css";
 
@@ -12,7 +11,7 @@ import "./styles.css";
 // the popup. Detect that case *before* the app boots, hand the full callback
 // URL (with ?code=&state=) back to the opener, and close — so the user never
 // has to paste anything and the app never mounts in a throwaway window.
-const handledOAuthCallback = (() => {
+(() => {
   const isCallback =
     window.opener &&
     window.opener !== window &&
@@ -28,20 +27,15 @@ const handledOAuthCallback = (() => {
   }
   window.close();
   return true;
-})();
-
-if (!handledOAuthCallback) {
-  ReactDOM.createRoot(document.getElementById("root")!).render(
-    <React.StrictMode>
-      {/* reducedMotion="user" makes all motion components honor the OS
-          prefers-reduced-motion setting (transforms/opacity are stilled). */}
-      <MotionConfig reducedMotion="user">
-        <PhotoProvider maskOpacity={0.9}>
-          <App />
-        </PhotoProvider>
-      </MotionConfig>
-    </React.StrictMode>,
-  );
-
-  void initAnalytics();
-}
+})() ||
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    {/* reducedMotion="user" makes all motion components honor the OS
+        prefers-reduced-motion setting (transforms/opacity are stilled). */}
+    <MotionConfig reducedMotion="user">
+      <PhotoProvider maskOpacity={0.9}>
+        <App />
+      </PhotoProvider>
+    </MotionConfig>
+  </React.StrictMode>,
+);

@@ -492,21 +492,6 @@ must start with an ASCII letter or underscore, may then contain ASCII letters,
 digits, and underscores, cannot be the reserved name `user`, and must be unique
 within the Agent tree.
 
-### Optional frontend usage analytics
-
-Studio can collect anonymous frontend usage analytics through APMPlus WebPro.
-Set `APM_APP_ID` and `APM_APP_TOKEN` in the repository-level `.env` before the
-frontend build. Set `APM_ENABLED=false` to disable collection; browsers with Do
-Not Track enabled are excluded as well.
-
-Sidebar clicks use one `sidebar_feature_used` event with a fixed `feature`
-category for Agent selection, new chat, search, Skill Center, Agent creation and
-management, and conversation history. In WebPro Data Analysis, select the
-numeric `count` metric and group by `feature` to compare usage. Events never
-contain prompts, responses, filenames, Agent names, Session/Runtime IDs,
-credentials, or raw errors. With SSO, only a stable OIDC `sub`/`user_id` is
-used; local usernames are not sent.
-
 ### How it works
 
 <Steps>
