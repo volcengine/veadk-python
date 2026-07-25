@@ -93,6 +93,11 @@ def create_app(
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/readyz", dependencies=[Depends(require_api_key)])
+    def readyz() -> dict[str, str]:
+        """Confirm that the active revision loaded the expected API key."""
+        return {"status": "ready"}
+
     @app.post(
         "/source-upload",
         response_model=SourceUpload,
