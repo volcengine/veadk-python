@@ -39,8 +39,10 @@ VeADK ships a React frontend that renders [A2UI](/en/docs/framework/a2ui) (agent
   like/dislike controls below each answer write the question, answer, and
   feedback state to AgentKit evaluation sets. Each Agent gets stable
   `{agent_name}_good_case` and `{agent_name}_bad_case` sets; changing or
-  cancelling a rating updates the item idempotently. If a Runtime does not
-  expose Session state updates, the browser keeps a compatibility cache.
+  cancelling a rating updates the item idempotently. If the standard name is
+  reserved but hidden by the service, Studio uses and reuses a deterministic
+  suffixed name. If a Runtime does not expose Session state updates, the browser
+  keeps a compatibility cache.
 - **Add an AgentKit agent**: paste a URL + API key to connect a remote agent over the ADK protocol; it then appears in the picker.
 - **Custom-agent workbench**: author system prompts in a rich Markdown editor
   with heading and list shortcuts. Local skills accept a dropped folder or ZIP
