@@ -18,6 +18,42 @@ const agentTypeMetaSource = readFileSync(
   new URL("../src/create/agentTypeMeta.tsx", import.meta.url),
   "utf8",
 );
+const catalogSource = readFileSync(
+  new URL("../src/create/veadkCatalog.ts", import.meta.url),
+  "utf8",
+);
+
+test("offers code execution with its sandbox configuration", () => {
+  assert.match(
+    catalogSource,
+    /id: "run_code"[\s\S]*?label: "代码执行"[\s\S]*?desc: "在沙箱中执行代码"/,
+  );
+  assert.match(
+    catalogSource,
+    /importLine: "from veadk\.tools\.builtin_tools\.run_code import run_code"/,
+  );
+  assert.match(
+    catalogSource,
+    /key: "AGENTKIT_TOOL_ID",\s*required: true,\s*placeholder: "t-xxxx"/,
+  );
+  assert.match(
+    catalogSource,
+    /key: "AGENTKIT_TOOL_REGION",\s*required: false,\s*placeholder: "cn-beijing"/,
+  );
+  assert.doesNotMatch(catalogSource, /AGENTKIT_TOOL_ID_SCRIPT/);
+  assert.match(
+    customCreateSource,
+    /builtinTools\.includes\("run_code"\)[\s\S]*?<RuntimeEnvFields/,
+  );
+  assert.match(
+    customCreateSource,
+    /createGeneratedAgentTestRun\(debugRuntimeDraft\(draft\)\)/,
+  );
+  assert.match(
+    customCreateSource,
+    /if \(isImeCompositionEvent\(e\.nativeEvent\)\) return;[\s\S]*?e\.key === "Enter"/,
+  );
+});
 
 test("shares the create-page agent type icons with the deployment topology", () => {
   assert.match(customCreateSource, /from "\.\/agentTypeMeta"/);

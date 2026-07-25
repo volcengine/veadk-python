@@ -34,6 +34,10 @@
   --builtin-tool-accent: 225 48% 45%;
 }
 
+.builtin-tool-head[data-tool-tone="sandbox"] {
+  --builtin-tool-accent: 32 67% 42%;
+}
+
 .builtin-tool-head:hover {
   color: hsl(var(--foreground));
 }

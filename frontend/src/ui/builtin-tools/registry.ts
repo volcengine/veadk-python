@@ -3,11 +3,18 @@ import {
   ImageGenerateIcon,
   LoadKnowledgebaseIcon,
   LoadMemoryIcon,
+  RunCodeIcon,
   VideoGenerateIcon,
   WebSearchIcon,
 } from "./icons";
 
-export type BuiltinToolTone = "search" | "image" | "video" | "memory" | "knowledge";
+export type BuiltinToolTone =
+  | "search"
+  | "image"
+  | "video"
+  | "memory"
+  | "knowledge"
+  | "sandbox";
 
 export interface BuiltinToolDefinition {
   name: string;
@@ -24,6 +31,13 @@ const BUILTIN_TOOLS: Readonly<Record<string, BuiltinToolDefinition>> = {
     doneLabel: "已完成网络搜索",
     tone: "search",
     icon: WebSearchIcon,
+  },
+  run_code: {
+    name: "run_code",
+    runningLabel: "正在 AgentKit 沙箱中执行代码",
+    doneLabel: "已在 AgentKit 沙箱中完成代码执行",
+    tone: "sandbox",
+    icon: RunCodeIcon,
   },
   image_generate: {
     name: "image_generate",

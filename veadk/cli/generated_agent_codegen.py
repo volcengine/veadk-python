@@ -1120,6 +1120,61 @@ def _a2a_registry_env_values(draft: AgentDraft) -> dict[str, str]:
     return {}
 
 
+def debug_runtime_env_from_draft(draft: AgentDraft) -> dict[str, str]:
+    """Return runtime env values allowed by active components in a debug draft."""
+    allowed_keys: set[str] = set()
+    fixed_values: dict[str, str] = {}
+
+    def allow_env(items: tuple[EnvVar, ...]) -> None:
+        allowed_keys.update(item.key for item in items)
+
+    def visit(node: AgentDraft) -> None:
+        for tool_id in node.builtinTools:
+            tool = TOOL_BY_ID.get(tool_id)
+            if tool:
+                allow_env(tool.env)
+        if node.a2aRegistry.enabled:
+            registry = node.a2aRegistry
+            fixed_values.update(
+                {
+                    "REGISTRY_SPACE_ID": registry.registrySpaceId.strip(),
+                    "REGISTRY_TOP_K": registry.registryTopK.strip() or "3",
+                    "REGISTRY_REGION": registry.registryRegion.strip() or "cn-beijing",
+                    "REGISTRY_ENDPOINT": registry.registryEndpoint.strip()
+                    or "https://open.volcengineapi.com/",
+                }
+            )
+        if node.memory.shortTerm:
+            backend = STM_BY_ID.get(node.shortTermBackend)
+            if backend:
+                allow_env(backend.env)
+        if node.memory.longTerm:
+            backend = LTM_BY_ID.get(node.longTermBackend)
+            if backend:
+                allow_env(backend.env)
+        if node.knowledgebase:
+            backend = KB_BY_ID.get(node.knowledgebaseBackend)
+            if backend:
+                allow_env(backend.env)
+        if node.tracing:
+            for exporter_id in node.tracingExporters:
+                exporter = EXPORTER_BY_ID.get(exporter_id)
+                if exporter:
+                    allow_env(exporter.env)
+                    fixed_values[exporter.enable_flag] = "true"
+        for sub_agent in node.subAgents:
+            visit(sub_agent)
+
+    visit(draft)
+    env = {
+        key: value
+        for key, value in draft.deployment.envValues.items()
+        if key in allowed_keys and value.strip()
+    }
+    env.update(fixed_values)
+    return env
+
+
 def _materialize_a2a_registry_env(env: list[EnvVar], draft: AgentDraft) -> list[EnvVar]:
     values = _a2a_registry_env_values(draft)
     if not values:

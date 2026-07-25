@@ -630,6 +630,14 @@ def test_generated_project_and_debug_run_api_lifecycle(
         "name": "demo-agent",
         "description": "Demo agent",
         "instruction": "Always answer with hello.",
+        "builtinTools": ["run_code"],
+        "deployment": {
+            "envValues": {
+                "AGENTKIT_TOOL_ID": "t-debug",
+                "AGENTKIT_TOOL_REGION": "cn-shanghai",
+                "DATABASE_MYSQL_PASSWORD": "not-selected",
+            }
+        },
     }
     with TestClient(captured["app"]) as client:
         project_response = client.post(
@@ -657,6 +665,9 @@ def test_generated_project_and_debug_run_api_lifecycle(
         process = _FakeProcess.created[-1]
         assert process.env["VOLCENGINE_ACCESS_KEY"] == "test-ak"
         assert process.env["VOLCENGINE_SECRET_KEY"] == "test-sk"
+        assert process.env["AGENTKIT_TOOL_ID"] == "t-debug"
+        assert process.env["AGENTKIT_TOOL_REGION"] == "cn-shanghai"
+        assert "DATABASE_MYSQL_PASSWORD" not in process.env
         generated_files = {
             str(path.relative_to(process.cwd)): path.read_text(encoding="utf-8")
             for path in Path(process.cwd).rglob("*")

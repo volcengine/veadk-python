@@ -518,12 +518,13 @@ if __name__ == "__main__":
 
 - `MODEL_AGENT_API_KEY`：Agent 推理模型的 API Key
 - `VOLCENGINE_ACCESS_KEY` / `VOLCENGINE_SECRET_KEY`：火山引擎 AK / SK
-- `AGENTKIT_TOOL_ID`：默认 AgentKit 沙箱 ID，作为所有沙箱工具的兜底配置
-- `AGENTKIT_TOOL_ID_SCRIPT`：`run_code` 专用沙箱 ID，未配置时回退到 `AGENTKIT_TOOL_ID`
+- `AGENTKIT_TOOL_ID`：`run_code` 使用的代码执行沙箱 ID，也是其他沙箱工具的
+  兜底配置
 - `AGENTKIT_TOOL_ID_SKILLS`：`execute_skills` 专用沙箱 ID，未配置时回退到 `AGENTKIT_TOOL_ID`
 - `AGENTKIT_TOOL_ID_OPENCODE`：`coding` 专用沙箱 ID，未配置时回退到 `AGENTKIT_TOOL_ID`
 - `AGENTKIT_TOOL_HOST`：调用 AgentKit Tools 的 Endpoint
 - `AGENTKIT_TOOL_SERVICE_CODE`：调用 AgentKit Tools 的 ServiceCode
+- `AGENTKIT_TOOL_REGION`：调用 AgentKit Tools 的地域，默认 `cn-beijing`
 
 新增的 `config.yaml` 配置项：
 

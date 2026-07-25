@@ -29,6 +29,9 @@ const {
   STM_BACKENDS,
   TRACING_EXPORTERS,
 } = await loadTypeScriptModule("../src/create/veadkCatalog.ts");
+const { localPickerMatches } = await loadTypeScriptModule(
+  "../src/create/localPickerSearch.ts",
+);
 const customCreateSource = readFileSync(
   new URL("../src/create/CustomCreate.tsx", import.meta.url),
   "utf8",
@@ -60,6 +63,16 @@ test("defaults knowledgebase creation to VikingDB collections", () => {
   assert.notEqual(KB_BACKENDS.findIndex((item) => item.id === "viking"), -1);
   assert.match(customCreateSource, /<VikingKnowledgebaseSelect/);
   assert.match(vikingKnowledgebasesSource, /\/web\/viking-knowledgebases/);
+});
+
+test("filters A2A spaces and Viking knowledgebases locally by name or id", () => {
+  assert.equal(localPickerMatches("客服", ["客服中心", "space-123"]), true);
+  assert.equal(localPickerMatches("SPACE-123", ["客服中心", "space-123"]), true);
+  assert.equal(localPickerMatches("missing", ["客服中心", "space-123"]), false);
+  assert.match(customCreateSource, /filteredSpaces = useMemo/);
+  assert.match(customCreateSource, /filteredItems = useMemo/);
+  assert.match(customCreateSource, /搜索 AgentKit 智能体中心/);
+  assert.match(customCreateSource, /搜索 VikingDB 知识库/);
 });
 
 test("maps active feature settings to VeADK runtime env rows", () => {

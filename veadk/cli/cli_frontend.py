@@ -1322,6 +1322,7 @@ def _run_frontend_server(
         GeneratedAgentProjectRequest,
         GeneratedAgentTestRunRequest,
         GeneratedProject,
+        debug_runtime_env_from_draft,
         generate_project_from_draft,
         normalize_and_validate_draft,
     )
@@ -1478,28 +1479,6 @@ def _run_frontend_server(
         env["PYTHONPATH"] = (
             f"{repo_root}{os.pathsep}{pythonpath}" if pythonpath else repo_root
         )
-        return env
-
-    def _a2a_registry_env_from_draft(draft: AgentDraft) -> dict[str, str]:
-        env: dict[str, str] = {}
-
-        def visit(node: AgentDraft) -> None:
-            registry = node.a2aRegistry
-            if registry.enabled:
-                env.update(
-                    {
-                        "REGISTRY_SPACE_ID": registry.registrySpaceId.strip(),
-                        "REGISTRY_TOP_K": registry.registryTopK.strip() or "3",
-                        "REGISTRY_REGION": registry.registryRegion.strip()
-                        or "cn-beijing",
-                        "REGISTRY_ENDPOINT": registry.registryEndpoint.strip()
-                        or "https://open.volcengineapi.com/",
-                    }
-                )
-            for sub_agent in node.subAgents:
-                visit(sub_agent)
-
-        visit(draft)
         return env
 
     def _read_runner_log_tail(path: PathlibPath, max_chars: int = 6000) -> str:
@@ -1817,7 +1796,7 @@ def _run_frontend_server(
                 str(port),
             ]
             runner_env = _safe_runner_env()
-            runner_env.update(_a2a_registry_env_from_draft(draft))
+            runner_env.update(debug_runtime_env_from_draft(draft))
             with stdout_path.open("w", encoding="utf-8") as stdout_file:
                 with stderr_path.open("w", encoding="utf-8") as stderr_file:
                     proc = subprocess.Popen(

@@ -20,6 +20,7 @@ const TOOL_IDS = new Set([
   "image_edit",
   "video_generate",
   "text_to_speech",
+  "run_code",
   "vesearch",
 ]);
 const AGENT_TYPES = new Set(["llm", "sequential", "parallel", "loop", "a2a"]);
