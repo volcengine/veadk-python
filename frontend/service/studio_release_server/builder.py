@@ -40,6 +40,7 @@ from frontend.service.studio_release_server.models import (
     ReleaseServerSettings,
 )
 from frontend.service.studio_release_server.tos_store import (
+    DependencyStore,
     SourceStore,
     resolve_credentials,
 )
@@ -80,9 +81,11 @@ class StudioReleaseBuilder:
         settings: ReleaseServerSettings,
         *,
         source_store: SourceStore | None = None,
+        dependency_store: DependencyStore | None = None,
     ) -> None:
         self._settings = settings
         self._source_store = source_store
+        self._dependency_store = dependency_store
 
     def build(
         self,
@@ -100,7 +103,11 @@ class StudioReleaseBuilder:
 
             prepared_root = source_root / ".studio-release"
             frontend_assets = prepared_root / "frontend"
-            dependency_wheels = prepared_root / "wheels"
+            dependency_wheels = self._prepare_dependency_wheels(
+                prepared_root,
+                workspace,
+                on_progress,
+            )
             tools_started = time.monotonic()
             if (frontend_assets / "index.html").is_file():
                 on_progress("preparing", "正在校验预构建前端与依赖包")
@@ -130,7 +137,9 @@ class StudioReleaseBuilder:
                     else None
                 ),
                 dependency_wheels=(
-                    dependency_wheels if dependency_wheels.is_dir() else None
+                    dependency_wheels
+                    if dependency_wheels is not None and dependency_wheels.is_dir()
+                    else None
                 ),
             )
             publish_seconds = time.monotonic() - publish_started
@@ -153,6 +162,23 @@ class StudioReleaseBuilder:
                     "totalSeconds": round(total_seconds, 3),
                 },
             )
+
+    def _prepare_dependency_wheels(
+        self,
+        prepared_root: Path,
+        workspace: Path,
+        on_progress: ProgressCallback,
+    ) -> Path | None:
+        dependency_manifest = prepared_root / "dependencies.json"
+        if dependency_manifest.is_file():
+            if self._dependency_store is None:
+                raise RuntimeError("Studio dependency cache is not configured.")
+            on_progress("preparing", "正在从 TOS 缓存恢复 Studio 依赖包")
+            destination = workspace / "dependency-wheels"
+            self._dependency_store.materialize(dependency_manifest, destination)
+            return destination
+        prepared_wheels = prepared_root / "wheels"
+        return prepared_wheels if prepared_wheels.is_dir() else None
 
     def _download_source(
         self,

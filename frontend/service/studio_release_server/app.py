@@ -38,6 +38,7 @@ from frontend.service.studio_release_server.service import (
     ReleaseService,
 )
 from frontend.service.studio_release_server.tos_store import (
+    TosDependencyStore,
     TosJobStore,
     TosSourceStore,
 )
@@ -64,6 +65,7 @@ def create_app(
                 builder=StudioReleaseBuilder(
                     resolved_settings,
                     source_store=source_store,
+                    dependency_store=TosDependencyStore(resolved_settings),
                 ),
                 source_store=source_store,
             )

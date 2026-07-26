@@ -16,8 +16,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.machinery
 import io
+import json
 import shutil
 import subprocess
 import tarfile
@@ -42,6 +44,7 @@ from frontend.service.studio_release_server import (
     create_app,
 )
 from frontend.service.studio_release_server import deploy as release_deploy
+from frontend.service.studio_release_server.tos_store import TosDependencyStore
 
 
 class _InlineExecutor(Executor):
@@ -119,6 +122,48 @@ class _SuccessfulBuilder:
             createdAt="2026-07-24T23:59:59+08:00",
             timings={"totalSeconds": 1.25},
         )
+
+
+class _NotFoundError(Exception):
+    status_code = 404
+
+
+class _DependencyCacheClient:
+    def __init__(self) -> None:
+        self.objects: dict[tuple[str, str], bytes] = {}
+
+    def get_object(self, *, bucket: str, key: str) -> list[bytes]:
+        try:
+            return [self.objects[(bucket, key)]]
+        except KeyError as error:
+            raise _NotFoundError(key) from error
+
+    def put_object(
+        self,
+        *,
+        bucket: str,
+        key: str,
+        content: bytes,
+        content_type: str,
+    ) -> None:
+        assert content_type == "application/octet-stream"
+        self.objects[(bucket, key)] = content
+
+
+class _MemoryDependencyStore:
+    def __init__(self) -> None:
+        self.manifest: Path | None = None
+
+    def materialize(
+        self,
+        manifest: Path,
+        destination: Path,
+    ) -> tuple[Path, ...]:
+        self.manifest = manifest
+        destination.mkdir(parents=True)
+        wheel = destination / "dependency.whl"
+        wheel.write_bytes(b"wheel")
+        return (wheel,)
 
 
 def _settings() -> ReleaseServerSettings:
@@ -313,6 +358,108 @@ def test_builder_rejects_unsafe_source_archive_entry(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="unsupported entry"):
         builder._extract_source(archive, tmp_path)
+
+
+def test_tos_dependency_store_populates_and_reuses_cached_wheel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = b"dependency-wheel"
+    digest = hashlib.sha256(content).hexdigest()
+    manifest = tmp_path / "dependencies.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "wheels": [
+                    {
+                        "filename": "dependency.whl",
+                        "url": "https://example.com/dependency.whl",
+                        "sha256": digest,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    downloads = 0
+
+    def _urlopen(_url: str, *, timeout: int) -> io.BytesIO:
+        nonlocal downloads
+        assert timeout == 120
+        downloads += 1
+        return io.BytesIO(content)
+
+    monkeypatch.setattr(
+        "frontend.service.studio_release_server.tos_store.urllib.request.urlopen",
+        _urlopen,
+    )
+    client = _DependencyCacheClient()
+    store = TosDependencyStore(_settings(), client_factory=lambda: client)
+
+    first = store.materialize(manifest, tmp_path / "first")
+    second = store.materialize(manifest, tmp_path / "second")
+
+    assert [path.read_bytes() for path in first] == [content]
+    assert [path.read_bytes() for path in second] == [content]
+    assert downloads == 1
+
+
+def test_builder_restores_manifest_dependencies_from_cache(tmp_path: Path) -> None:
+    prepared_root = tmp_path / ".studio-release"
+    prepared_root.mkdir()
+    manifest = prepared_root / "dependencies.json"
+    manifest.write_text('{"wheels": []}\n', encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    dependency_store = _MemoryDependencyStore()
+    progress: list[tuple[str, str]] = []
+    builder = StudioReleaseBuilder(
+        _settings(),
+        dependency_store=dependency_store,
+    )
+
+    wheels = builder._prepare_dependency_wheels(
+        prepared_root,
+        workspace,
+        lambda stage, message: progress.append((stage, message)),
+    )
+
+    assert wheels == workspace / "dependency-wheels"
+    assert dependency_store.manifest == manifest
+    assert (wheels / "dependency.whl").read_bytes() == b"wheel"
+    assert progress == [("preparing", "正在从 TOS 缓存恢复 Studio 依赖包")]
+
+
+def test_tos_dependency_store_rejects_download_with_wrong_checksum(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = tmp_path / "dependencies.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "wheels": [
+                    {
+                        "filename": "dependency.whl",
+                        "url": "https://example.com/dependency.whl",
+                        "sha256": "a" * 64,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "frontend.service.studio_release_server.tos_store.urllib.request.urlopen",
+        lambda _url, *, timeout: io.BytesIO(b"tampered"),
+    )
+    store = TosDependencyStore(
+        _settings(),
+        client_factory=lambda: _DependencyCacheClient(),
+    )
+
+    with pytest.raises(ValueError, match="checksum"):
+        store.materialize(manifest, tmp_path / "destination")
 
 
 def test_stage_deployment_uses_frontend_service_package(

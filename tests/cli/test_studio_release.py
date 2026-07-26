@@ -23,6 +23,7 @@ import pytest
 from veadk.cli.studio_dependencies import (
     StudioDependencyWheel,
     stage_studio_dependency_wheels,
+    write_studio_dependency_manifest,
 )
 from veadk.cli.studio_release import (
     StudioReleaseError,
@@ -245,6 +246,43 @@ def test_stage_dependency_wheels_copies_only_verified_content(
 
     assert [path.name for path in staged] == [dependency.filename]
     assert staged[0].read_bytes() == content
+
+
+def test_write_dependency_manifest_uses_pinned_wheel_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dependency = StudioDependencyWheel(
+        filename="prepared.whl",
+        url="https://example.com/prepared.whl",
+        sha256="a" * 64,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_dependencies.STUDIO_DEPENDENCY_WHEELS",
+        (dependency,),
+    )
+    manifest = tmp_path / "dependencies.json"
+
+    write_studio_dependency_manifest(manifest)
+
+    assert json.loads(manifest.read_text(encoding="utf-8")) == {
+        "wheels": [
+            {
+                "filename": dependency.filename,
+                "url": dependency.url,
+                "sha256": dependency.sha256,
+            }
+        ]
+    }
+
+
+def test_publish_workflow_excludes_wheels_from_cross_region_archive() -> None:
+    workflow = (
+        Path(__file__).parents[2] / ".github/workflows/publish-studio-release.yaml"
+    ).read_text(encoding="utf-8")
+
+    assert '--manifest "$prepared_root/dependencies.json"' in workflow
+    assert '--exclude="veadk-python-${GITHUB_SHA}/.studio-release/wheels"' in workflow
 
 
 def test_build_release_uses_prepared_frontend_and_wheels(

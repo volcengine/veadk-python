@@ -101,9 +101,29 @@ def stage_studio_dependency_wheels(
     return tuple(staged)
 
 
+def write_studio_dependency_manifest(destination: Path) -> None:
+    """Write the pinned wheel metadata consumed by the release-server cache."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "wheels": [
+            {
+                "filename": dependency.filename,
+                "url": dependency.url,
+                "sha256": dependency.sha256,
+            }
+            for dependency in STUDIO_DEPENDENCY_WHEELS
+        ]
+    }
+    destination.write_text(
+        json.dumps(payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path)
     return parser
 
 
@@ -111,6 +131,8 @@ def main() -> None:
     """Download verified wheels for a prepared Studio source archive."""
     args = _parser().parse_args()
     staged = stage_studio_dependency_wheels(args.output_dir)
+    if args.manifest is not None:
+        write_studio_dependency_manifest(args.manifest)
     print(json.dumps({"wheels": [path.name for path in staged]}))
 
 
@@ -122,4 +144,5 @@ __all__ = [
     "STUDIO_DEPENDENCY_WHEELS",
     "StudioDependencyWheel",
     "stage_studio_dependency_wheels",
+    "write_studio_dependency_manifest",
 ]
