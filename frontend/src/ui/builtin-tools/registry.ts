@@ -3,6 +3,7 @@ import {
   ImageGenerateIcon,
   LoadKnowledgebaseIcon,
   LoadMemoryIcon,
+  LoadSkillIcon,
   RunCodeIcon,
   VideoGenerateIcon,
   WebSearchIcon,
@@ -14,6 +15,7 @@ export type BuiltinToolTone =
   | "video"
   | "memory"
   | "knowledge"
+  | "skill"
   | "sandbox";
 
 export interface BuiltinToolDefinition {
@@ -66,6 +68,13 @@ const BUILTIN_TOOLS: Readonly<Record<string, BuiltinToolDefinition>> = {
     doneLabel: "已完成知识库检索",
     tone: "knowledge",
     icon: LoadKnowledgebaseIcon,
+  },
+  load_skill: {
+    name: "load_skill",
+    runningLabel: "正在加载技能",
+    doneLabel: "已加载技能",
+    tone: "skill",
+    icon: LoadSkillIcon,
   },
 };
 

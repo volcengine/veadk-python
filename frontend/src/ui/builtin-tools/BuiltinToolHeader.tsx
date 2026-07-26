@@ -5,16 +5,19 @@ import "./builtin-tools.css";
 
 export function BuiltinToolHeader({
   definition,
+  label,
   done,
   open,
   onToggle,
 }: {
   definition: BuiltinToolDefinition;
+  label?: string;
   done: boolean;
   open: boolean;
   onToggle: () => void;
 }) {
   const Icon = definition.icon;
+  const statusLabel = label ?? (done ? definition.doneLabel : definition.runningLabel);
 
   return (
     <button
@@ -28,7 +31,7 @@ export function BuiltinToolHeader({
         <Icon />
       </span>
       {done ? (
-        <span className="builtin-tool-label">{definition.doneLabel}</span>
+        <span className="builtin-tool-label">{statusLabel}</span>
       ) : (
         <TextShimmer
           className="builtin-tool-label"
@@ -36,7 +39,7 @@ export function BuiltinToolHeader({
           spread={18}
           aria-live="polite"
         >
-          {definition.runningLabel}
+          {statusLabel}
         </TextShimmer>
       )}
       <ToolDisclosureIcon className={`builtin-tool-chevron${open ? " is-open" : ""}`} />

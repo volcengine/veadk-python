@@ -98,6 +98,26 @@ export function LoadKnowledgebaseIcon(props: ToolIconProps) {
   );
 }
 
+/** An open skill card with a small activation spark. */
+export function LoadSkillIcon(props: ToolIconProps) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <path d="M4.25 6.25h6.25c1 0 1.5.55 1.5 1.45v11.05c0-.9-.5-1.45-1.5-1.45H4.25V6.25Z" />
+      <path d="M19.75 9.1v8.2H13.5c-1 0-1.5.55-1.5 1.45V7.7c0-.9.5-1.45 1.5-1.45h2.15" />
+      <path d="m19 3.2.58 1.62 1.62.58-1.62.58L19 7.6l-.58-1.62-1.62-.58 1.62-.58L19 3.2Z" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 /** A hand-drawn sandbox with a small code prompt inside. */
 export function RunCodeIcon(props: ToolIconProps) {
   return (
