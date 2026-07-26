@@ -1,13 +1,16 @@
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import {
   ChevronRight,
+  Info,
   LogOut,
   MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
   Trash2,
+  X,
 } from "lucide-react";
+import { createPortal } from "react-dom";
 import type {
   AdkSession,
   SiteBranding,
@@ -93,6 +96,7 @@ export interface SidebarProps {
   onPickSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
   userInfo?: Record<string, unknown>;
+  version: string;
   onLogout: () => void;
 }
 
@@ -128,14 +132,64 @@ function StudioRoleBadge({ role }: { role: StudioAccess["role"] }) {
   );
 }
 
+function SystemInfoDialog({
+  version,
+  onClose,
+}: {
+  version: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  return createPortal(
+    <div className="confirm-scrim" onMouseDown={onClose}>
+      <section
+        className="confirm-box system-info-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="system-info-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="system-info-head">
+          <h2 id="system-info-title">系统信息</h2>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={onClose}
+            aria-label="关闭系统信息"
+            autoFocus
+          >
+            <X className="icon" aria-hidden="true" />
+          </button>
+        </header>
+        <dl className="system-info-meta">
+          <div>
+            <dt>当前版本</dt>
+            <dd>{version || "—"}</dd>
+          </div>
+        </dl>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
 /** Account block pinned at the bottom of the sidebar: avatar + name, with a
- *  popover (opening upward) holding the full identity + logout. */
+ *  popover (opening upward) holding the full identity and account actions. */
 function SidebarUser({
   access,
   userInfo,
+  version,
   onLogout,
-}: Pick<SidebarProps, "access" | "userInfo" | "onLogout">) {
+}: Pick<SidebarProps, "access" | "userInfo" | "version" | "onLogout">) {
   const [open, setOpen] = useState(false);
+  const [systemInfoOpen, setSystemInfoOpen] = useState(false);
   const [failedAvatarUrl, setFailedAvatarUrl] = useState("");
   if (!userInfo) return null;
   const name = displayName(userInfo);
@@ -209,7 +263,18 @@ function SidebarUser({
               </div>
             </div>
             <button
-              className="account-logout"
+              type="button"
+              className="account-action"
+              onClick={() => {
+                setOpen(false);
+                setSystemInfoOpen(true);
+              }}
+            >
+              <Info className="icon" /> 系统信息
+            </button>
+            <button
+              type="button"
+              className="account-action"
               onClick={() => {
                 setOpen(false);
                 onLogout();
@@ -220,6 +285,9 @@ function SidebarUser({
           </div>
         </>
       )}
+      {systemInfoOpen ? (
+        <SystemInfoDialog version={version} onClose={() => setSystemInfoOpen(false)} />
+      ) : null}
     </div>
   );
 }
@@ -246,6 +314,7 @@ export function Sidebar({
   onPickSession,
   onDeleteSession,
   userInfo,
+  version,
   onLogout,
 }: SidebarProps) {
   // onAddAgent is now reached through the "添加 Agent" chooser, not a direct
@@ -469,7 +538,11 @@ export function Sidebar({
       </div>
       )}
 
-      <SidebarUser access={access} userInfo={userInfo} onLogout={onLogout} />
+      <SidebarUser access={access}
+        userInfo={userInfo}
+        version={version}
+        onLogout={onLogout}
+      />
     </aside>
   );
 }

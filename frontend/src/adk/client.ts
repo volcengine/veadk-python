@@ -1026,6 +1026,7 @@ export interface SiteBranding {
 
 export interface UiConfig {
   studio: boolean;
+  version: string;
   branding: SiteBranding;
   features: UiFeatures;
   defaultView: "chat" | "addAgent";
@@ -1041,6 +1042,7 @@ export const DEFAULT_SITE_BRANDING: SiteBranding = {
 
 const DEFAULT_UI_CONFIG: UiConfig = {
   studio: false,
+  version: "",
   branding: DEFAULT_SITE_BRANDING,
   features: {
     newChat: true,
@@ -1069,6 +1071,7 @@ export async function getUiConfig(): Promise<UiConfig> {
       : DEFAULT_SITE_BRANDING.logoUrl;
     return {
       studio: d.studio ?? false,
+      version: typeof d.version === "string" ? d.version : "",
       branding: {
         title: typeof d.branding?.title === "string"
           ? d.branding.title

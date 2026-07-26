@@ -661,6 +661,7 @@ export default function App() {
   });
   const [agentsSource, setAgentsSource] = useState<"local" | "cloud">("cloud");
   const [siteBranding, setSiteBranding] = useState<SiteBranding>(DEFAULT_SITE_BRANDING);
+  const [version, setVersion] = useState("");
   const [defaultView, setDefaultView] = useState<"chat" | "addAgent">("chat");
   const [uiConfigLoaded, setUiConfigLoaded] = useState(false);
   const [localMode, setLocalMode] = useState(false);
@@ -953,6 +954,7 @@ export default function App() {
       setFeatures(cfg.features);
       setAgentsSource(cfg.agentsSource);
       setSiteBranding(cfg.branding);
+      setVersion(cfg.version);
       setDefaultView(cfg.defaultView);
       setUiConfigLoaded(true);
     });
@@ -1943,6 +1945,7 @@ export default function App() {
         }}
         onDeleteSession={removeSession}
         userInfo={userInfo}
+        version={version}
         onLogout={onLogout}
       />
 

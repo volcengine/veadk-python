@@ -3309,7 +3309,7 @@ body {
   font-size: 12px; color: hsl(var(--muted-foreground));
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.account-logout {
+.account-action {
   display: flex; align-items: center; gap: 8px;
   width: 100%;
   margin-top: 10px;
@@ -3321,8 +3321,36 @@ body {
   cursor: pointer;
   transition: background 0.12s;
 }
-.account-logout:hover { background: hsl(var(--foreground) / 0.05); }
-.account-logout .icon { width: 16px; height: 16px; color: hsl(var(--muted-foreground)); }
+.account-action + .account-action { margin-top: 2px; }
+.account-action:hover { background: hsl(var(--foreground) / 0.05); }
+.account-action .icon { width: 16px; height: 16px; color: hsl(var(--muted-foreground)); }
+
+.system-info-dialog {
+  width: 360px;
+  padding: 0;
+  overflow: hidden;
+}
+.system-info-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 20px;
+  padding: 20px 0 16px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+.system-info-head h2 { margin: 0; font-size: 17px; font-weight: 650; }
+.system-info-meta { margin: 0; padding: 18px 20px 20px; }
+.system-info-meta div { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.system-info-meta dt { color: hsl(var(--muted-foreground)); font-size: 13px; }
+.system-info-meta dd {
+  max-width: 100%;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
 
 /* ---------- sidebar account footer ---------- */
 .sidebar-user {

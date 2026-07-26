@@ -54,6 +54,17 @@ CredentialResolver = Callable[[], Credentials]
 AdminGuard = Callable[[Request], None]
 
 
+def current_studio_release_version() -> str:
+    """Return the deployed Studio release id, or its pre-release sentinel."""
+    return os.getenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
+
+
+def current_studio_display_version() -> str:
+    """Prefer a cloud Frontend release id, otherwise show the VeADK version."""
+    release_version = current_studio_release_version()
+    return VERSION if release_version == "bundled" else release_version
+
+
 class StudioUpdateConflict(StudioReleaseError):
     """Raised when an update is already being prepared by this instance."""
 
@@ -129,7 +140,7 @@ class StudioSelfUpdater:
         target_version: str | None = None,
     ) -> dict[str, Any]:
         """Return current and latest versions for the administrator UI."""
-        current = os.getenv("VEADK_STUDIO_RELEASE_VERSION", VERSION)
+        current = current_studio_release_version()
         if not self._settings.enabled:
             return {
                 "enabled": False,
@@ -238,7 +249,7 @@ class StudioSelfUpdater:
             store = self._store(access_key, secret_key, session_token)
             manifest = store.manifest(version) if version else store.latest_manifest()
             self._target_version = manifest.version
-            current = os.getenv("VEADK_STUDIO_RELEASE_VERSION", VERSION)
+            current = current_studio_release_version()
             if current == manifest.version:
                 self._set_progress("complete", "当前已是所选版本")
                 return manifest
