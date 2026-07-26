@@ -37,7 +37,7 @@ test("update submission is explicit and survives a revision switch", () => {
   assert.match(clientSource, /body: JSON\.stringify\(\{ version \}\)/);
   assert.match(controlSource, /RELEASE_POLL_INTERVAL_MS = 3_000/);
   assert.match(controlSource, /Replacing the current Revision may briefly interrupt/);
-  assert.match(controlSource, /next\.currentVersion === target/);
+  assert.match(controlSource, /releaseReached\(next\.currentVersion, target\)/);
   assert.match(controlSource, /targetVersionRef\.current = result\.version/);
   assert.match(controlSource, /!target && !next\.available/);
   assert.match(controlSource, /window\.location\.reload\(\)/);
@@ -50,7 +50,10 @@ test("update state survives refreshes and instance switches", () => {
   assert.match(controlSource, /persistPendingUpdate\(targetVersion/);
   assert.match(controlSource, /clearPendingUpdate\(\)/);
   assert.match(clientSource, /targetVersion\?: string/);
-  assert.match(clientSource, /encodeURIComponent\(targetVersion\)/);
+  assert.match(clientSource, /startedAt\?: number/);
+  assert.match(clientSource, /params\.set\("targetVersion", targetVersion\)/);
+  assert.match(clientSource, /params\.set\("startedAt", String\(startedAt\)\)/);
+  assert.match(controlSource, /current > target/);
 });
 
 test("Studio explains the update restart window", () => {
@@ -72,4 +75,20 @@ test("Studio exposes detailed update stages that can be reopened", () => {
   assert.match(controlSource, /后台运行/);
   assert.match(clientSource, /progressStage:/);
   assert.match(controlStyleSource, /studio-update-progress-dot/);
+});
+
+test("Studio renders bounded VeFaaS logs without stealing manual scroll", () => {
+  assert.match(clientSource, /updateLogs: string\[\]/);
+  assert.match(controlSource, /VeFaaS 更新日志/);
+  assert.match(controlSource, /role="log"/);
+  assert.match(controlSource, /aria-live="off"/);
+  assert.match(
+    controlSource,
+    /root\.scrollHeight - root\.scrollTop - root\.clientHeight < 24/,
+  );
+  assert.match(
+    controlSource,
+    /followRef\.current\) root\.scrollTop = root\.scrollHeight/,
+  );
+  assert.match(controlStyleSource, /font-family: inherit/);
 });

@@ -14,6 +14,7 @@ const STUDIO_UPDATE_STORAGE_KEY = "veadk.studio.pending-update";
 
 type UpdatePhase = "idle" | "confirm" | "submitting" | "published" | "error";
 type PendingStudioUpdate = { targetVersion: string; startedAt: number };
+type LogCopyState = "idle" | "copied" | "error";
 
 const UPDATE_STEPS = [
   { id: "resolving", label: "读取目标版本信息" },
@@ -36,6 +37,11 @@ const UPDATE_STAGE_LABELS: Record<string, string> = {
 function formatElapsed(seconds: number) {
   if (seconds < 60) return `${seconds} 秒`;
   return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+}
+
+function releaseReached(current: string, target: string) {
+  if (current === target) return true;
+  return /^\d{14}$/.test(current) && /^\d{14}$/.test(target) && current > target;
 }
 
 function loadPendingUpdate(): PendingStudioUpdate | null {
@@ -101,6 +107,63 @@ function VersionCheckIcon() {
   );
 }
 
+function StudioUpdateLog({
+  lines,
+  phase,
+  copyState,
+  onCopy,
+}: {
+  lines: string[];
+  phase: "active" | "complete" | "error";
+  copyState: LogCopyState;
+  onCopy: () => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const followRef = useRef(true);
+
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (root && followRef.current) root.scrollTop = root.scrollHeight;
+  }, [lines]);
+
+  return (
+    <section className="studio-update-live-log" aria-label="VeFaaS 更新日志">
+      <div className="studio-update-log-header">
+        <span>
+          <i className={`is-${phase}`} aria-hidden />
+          VeFaaS 更新日志
+          <small>{phase === "active" ? "实时" : phase === "complete" ? "已完成" : "已停止"}</small>
+        </span>
+        <button type="button" onClick={onCopy} disabled={!lines.length}>
+          {copyState === "copied"
+            ? "已复制"
+            : copyState === "error"
+              ? "复制失败"
+              : "复制日志"}
+        </button>
+      </div>
+      <div
+        ref={scrollRef}
+        className="studio-update-log-lines"
+        role="log"
+        aria-live="off"
+        tabIndex={0}
+        onScroll={(event) => {
+          const root = event.currentTarget;
+          followRef.current =
+            root.scrollHeight - root.scrollTop - root.clientHeight < 24;
+        }}
+      >
+        {lines.length ? (
+          lines.map((line, index) => <div key={`${index}-${line}`}>{line}</div>)
+        ) : (
+          <p>{phase === "active" ? "等待 VeFaaS 返回更新日志…" : "本次更新未返回发布日志"}</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export function StudioUpdateControl() {
   const [initialPending] = useState<PendingStudioUpdate | null>(loadPendingUpdate);
   const [status, setStatus] = useState<StudioUpdateStatus | null>(null);
@@ -113,9 +176,7 @@ export function StudioUpdateControl() {
     initialPending?.targetVersion ?? "",
   );
   const [versionMenuOpen, setVersionMenuOpen] = useState(false);
-  const [logCopyState, setLogCopyState] = useState<"idle" | "copied" | "error">(
-    "idle",
-  );
+  const [logCopyState, setLogCopyState] = useState<LogCopyState>("idle");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const versionPickerRef = useRef<HTMLDivElement>(null);
   const targetVersionRef = useRef(initialPending?.targetVersion ?? "");
@@ -143,7 +204,10 @@ export function StudioUpdateControl() {
   }, [versionMenuOpen]);
 
   const refresh = useCallback(async () => {
-    const next = await getStudioUpdateStatus(targetVersionRef.current || undefined);
+    const next = await getStudioUpdateStatus(
+      targetVersionRef.current || undefined,
+      startedAtRef.current || undefined,
+    );
     setStatus(next);
     return next;
   }, []);
@@ -170,7 +234,7 @@ export function StudioUpdateControl() {
         .then((next) => {
           const target = targetVersionRef.current;
           if (
-            (target && next.currentVersion === target) ||
+            (target && releaseReached(next.currentVersion, target)) ||
             (!target && !next.available && Boolean(next.latestVersion))
           ) {
             window.clearInterval(timer);
@@ -238,6 +302,7 @@ export function StudioUpdateControl() {
     persistPendingUpdate(targetVersion, startedAtRef.current);
     setPhase("submitting");
     setMessage("");
+    setLogCopyState("idle");
     try {
       const result = await startStudioUpdate(targetVersion);
       targetVersionRef.current = result.version;
@@ -260,11 +325,15 @@ export function StudioUpdateControl() {
     }
   };
 
-  const errorLog = status.errorLog || message;
+  const updateLogs = status.updateLogs?.length
+    ? status.updateLogs
+    : (status.errorLog || status.progressMessage || message)
+        .split("\n")
+        .filter(Boolean);
 
-  const copyErrorLog = async () => {
+  const copyUpdateLog = async () => {
     try {
-      await navigator.clipboard.writeText(errorLog);
+      await navigator.clipboard.writeText(updateLogs.join("\n"));
       setLogCopyState("copied");
     } catch {
       setLogCopyState("error");
@@ -352,17 +421,12 @@ export function StudioUpdateControl() {
                     <dd>{status.errorId || "未生成"}</dd>
                   </div>
                 </dl>
-                <div className="studio-update-log-header">
-                  <span>完整失败日志</span>
-                  <button type="button" onClick={() => void copyErrorLog()}>
-                    {logCopyState === "copied"
-                      ? "已复制"
-                      : logCopyState === "error"
-                        ? "复制失败"
-                        : "复制完整日志"}
-                  </button>
-                </div>
-                <pre className="studio-update-error-log">{errorLog}</pre>
+                <StudioUpdateLog
+                  lines={updateLogs}
+                  phase="error"
+                  copyState={logCopyState}
+                  onCopy={() => void copyUpdateLog()}
+                />
                 {status.consoleUrl && (
                   <a
                     className="studio-update-console-link"
@@ -415,6 +479,12 @@ export function StudioUpdateControl() {
                     );
                   })}
                 </ol>
+                <StudioUpdateLog
+                  lines={updateLogs}
+                  phase={phase === "published" ? "complete" : "active"}
+                  copyState={logCopyState}
+                  onCopy={() => void copyUpdateLog()}
+                />
                 <p className="studio-update-progress-note">
                   发布阶段会短暂中断连接；关闭此窗口不会停止更新，可随时点击右上角按钮重新查看。
                 </p>

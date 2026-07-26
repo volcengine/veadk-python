@@ -101,10 +101,19 @@ class VeFaaS:
         headers = {
             "Content-Type": "application/zip",
         }
-        response = requests.put(url=upload_url, data=code_zip_data, headers=headers)
+        try:
+            response = requests.put(
+                url=upload_url,
+                data=code_zip_data,
+                headers=headers,
+                timeout=(30, 300),
+            )
+        except requests.RequestException:
+            raise ValueError("Function code upload request failed.") from None
         if not (200 <= response.status_code < 300):
-            error_message = f"Upload failed to {upload_url} with status code {response.status_code}: {response.text}"
-            raise ValueError(error_message)
+            raise ValueError(
+                f"Function code upload failed with status code {response.status_code}."
+            )
 
         # Mount the TOS bucket to function instance
         res = signed_request(
@@ -916,9 +925,27 @@ class VeFaaS:
 
         return url, app_id, function_id
 
-    def _get_application_logs(self, app_id: str) -> list[str]:
-        response = _ = ve_request(
-            request_body={"Id": app_id, "Limit": 99999, "RevisionNumber": 1},
+    def _get_application_logs(
+        self,
+        app_id: str,
+        *,
+        revision_number: int | None = None,
+        limit: int = 200,
+    ) -> list[str]:
+        if revision_number is None:
+            _, application = self._get_application_status(app_id)
+            result = application.get("Result", {})
+            revision_number = int(
+                result.get("NewRevisionNumber")
+                or result.get("StableRevisionNumber")
+                or 1
+            )
+        response = ve_request(
+            request_body={
+                "Id": app_id,
+                "Limit": max(1, min(limit, 500)),
+                "RevisionNumber": revision_number,
+            },
             action="GetApplicationRevisionLog",
             ak=self.ak,
             sk=self.sk,

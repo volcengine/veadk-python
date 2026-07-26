@@ -546,6 +546,40 @@ def test_application_control_plane_uses_beijing_for_shanghai_deployment(
     ]
 
 
+def test_application_logs_use_latest_revision_and_bounded_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[dict[str, Any]] = []
+    service = object.__new__(VeFaaS)
+    service.session_token = ""
+    cast(Any, service).ak = "ak"
+    cast(Any, service).sk = "sk"
+    cast(Any, service).region = "cn-beijing"
+    monkeypatch.setattr(
+        service,
+        "_get_application_status",
+        lambda _app_id: (
+            "deploying",
+            {"Result": {"NewRevisionNumber": 8, "StableRevisionNumber": 7}},
+        ),
+    )
+
+    def _ve_request(**kwargs: Any) -> dict[str, Any]:
+        requests.append(kwargs)
+        return {"Result": {"LogLines": ["building", "published"]}}
+
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.ve_request", _ve_request)
+
+    logs = service._get_application_logs("application-id", limit=99_999)
+
+    assert logs == ["building", "published"]
+    assert requests[0]["request_body"] == {
+        "Id": "application-id",
+        "Limit": 500,
+        "RevisionNumber": 8,
+    }
+
+
 def test_update_application_code_bundle_preserves_unspecified_sandbox_tool(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

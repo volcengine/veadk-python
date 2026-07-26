@@ -93,7 +93,7 @@
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr);
   column-gap: 10px;
-  width: 430px;
+  width: 500px;
 }
 
 .studio-update-dialog > .studio-update-dialog-mark {
@@ -382,6 +382,38 @@
   font-weight: 500;
 }
 
+.studio-update-log-header > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.studio-update-log-header i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: hsl(var(--muted-foreground));
+}
+
+.studio-update-log-header i.is-active {
+  background: #1664ff;
+  box-shadow: 0 0 0 3px rgb(22 100 255 / 11%);
+}
+
+.studio-update-log-header i.is-complete {
+  background: hsl(145 62% 42%);
+}
+
+.studio-update-log-header i.is-error {
+  background: hsl(var(--destructive));
+}
+
+.studio-update-log-header small {
+  color: hsl(var(--muted-foreground));
+  font-size: 10px;
+  font-weight: 400;
+}
+
 .studio-update-log-header button {
   padding: 2px 0;
   border: 0;
@@ -396,21 +428,41 @@
   text-underline-offset: 2px;
 }
 
-.studio-update-error-log {
-  max-height: min(240px, 34vh);
-  margin: 0;
+.studio-update-log-header button:disabled {
+  color: hsl(var(--muted-foreground));
+  cursor: default;
+  text-decoration: none;
+}
+
+.studio-update-log-lines {
+  min-height: 92px;
+  max-height: min(210px, 29vh);
   padding: 11px 12px;
-  overflow: auto;
+  overflow-y: auto;
   border: 1px solid hsl(var(--border));
   border-radius: 0 0 8px 8px;
   background: hsl(var(--foreground) / 0.035);
   color: hsl(var(--foreground));
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 10.5px;
+  font-family: inherit;
+  font-size: 11px;
   line-height: 1.55;
   overflow-wrap: anywhere;
   overscroll-behavior: contain;
-  white-space: pre-wrap;
+  scrollbar-gutter: stable;
+}
+
+.studio-update-log-lines:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.35);
+  outline-offset: -2px;
+}
+
+.studio-update-log-lines > div + div {
+  margin-top: 3px;
+}
+
+.studio-update-log-lines p {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
 }
 
 .studio-update-console-link {
@@ -530,7 +582,7 @@
 }
 
 .studio-update-progress-note {
-  margin: 0 0 18px;
+  margin: 12px 0 18px;
   color: hsl(var(--muted-foreground));
   font-size: 11px;
   line-height: 1.55;

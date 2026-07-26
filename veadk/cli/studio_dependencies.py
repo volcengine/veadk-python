@@ -23,6 +23,12 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+_PYPI_FILE_HOST = "https://files.pythonhosted.org"
+_PYPI_MIRROR_HOSTS = (
+    "https://pypi.tuna.tsinghua.edu.cn",
+    "https://mirrors.aliyun.com/pypi",
+)
+
 
 @dataclass(frozen=True)
 class StudioDependencyWheel:
@@ -86,19 +92,41 @@ def stage_studio_dependency_wheels(
     staged: list[Path] = []
     for dependency in STUDIO_DEPENDENCY_WHEELS:
         if source_dir is None:
-            with urllib.request.urlopen(dependency.url, timeout=60) as response:
-                content = response.read()
+            content = _download_dependency(dependency)
         else:
             source = source_dir / dependency.filename
             if not source.is_file():
                 raise ValueError(f"Missing prepared Studio wheel: {source.name}")
             content = source.read_bytes()
-        if hashlib.sha256(content).hexdigest() != dependency.sha256:
-            raise ValueError(f"{dependency.filename} checksum verification failed.")
+            if hashlib.sha256(content).hexdigest() != dependency.sha256:
+                raise ValueError(f"{dependency.filename} checksum verification failed.")
         target = destination / dependency.filename
         target.write_bytes(content)
         staged.append(target)
     return tuple(staged)
+
+
+def _download_dependency(dependency: StudioDependencyWheel) -> bytes:
+    last_error: OSError | ValueError | None = None
+    for url in _download_urls(dependency.url):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as response:
+                content = response.read()
+            if hashlib.sha256(content).hexdigest() != dependency.sha256:
+                raise ValueError(f"{dependency.filename} checksum verification failed.")
+            return content
+        except (OSError, ValueError) as error:
+            last_error = error
+    if last_error is None:
+        raise RuntimeError(f"{dependency.filename} has no download source.")
+    raise last_error
+
+
+def _download_urls(url: str) -> tuple[str, ...]:
+    if not url.startswith(f"{_PYPI_FILE_HOST}/packages/"):
+        return (url,)
+    path = url.removeprefix(_PYPI_FILE_HOST)
+    return tuple(f"{host}{path}" for host in _PYPI_MIRROR_HOSTS) + (url,)
 
 
 def write_studio_dependency_manifest(destination: Path) -> None:
@@ -122,14 +150,23 @@ def write_studio_dependency_manifest(destination: Path) -> None:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--manifest-only", action="store_true")
     return parser
 
 
 def main() -> None:
     """Download verified wheels for a prepared Studio source archive."""
     args = _parser().parse_args()
+    if args.manifest_only:
+        if args.manifest is None:
+            raise SystemExit("--manifest is required with --manifest-only")
+        write_studio_dependency_manifest(args.manifest)
+        print(json.dumps({"manifest": str(args.manifest)}))
+        return
+    if args.output_dir is None:
+        raise SystemExit("--output-dir is required")
     staged = stage_studio_dependency_wheels(args.output_dir)
     if args.manifest is not None:
         write_studio_dependency_manifest(args.manifest)

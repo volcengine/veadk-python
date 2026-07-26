@@ -65,6 +65,12 @@ def test_vefaas_code_upload_callback_uses_configured_region() -> None:
         upload.return_value = Mock(status_code=200)
         service._upload_and_mount_code("function-id", ".")
 
+    upload.assert_called_once_with(
+        url="https://example.com/upload",
+        data=b"archive",
+        headers={"Content-Type": "application/zip"},
+        timeout=(30, 300),
+    )
     callback.assert_called_once_with(
         ak="test_access_key",
         sk="test_secret_key",
@@ -119,7 +125,11 @@ async def test_cloud():
                 )
 
                 # Test CloudAgentEngine creation and deploy functionality
-                engine = CloudAgentEngine(project="studio-project")
+                engine = CloudAgentEngine(
+                    project="studio-project",
+                    volcengine_access_key="test_access_key",
+                    volcengine_secret_key="test_secret_key",
+                )
                 mock_vefaas_class.assert_called_once_with(
                     access_key="test_access_key",
                     secret_key="test_secret_key",
@@ -182,7 +192,10 @@ async def test_cloud():
                             cloud_app, "_get_vefaas_application_id_by_name"
                         ) as mock_get_id_by_name:
                             mock_get_id_by_name.return_value = None
-                            cloud_app.delete_self()
+                            cloud_app.delete_self(
+                                volcengine_ak="test_access_key",
+                                volcengine_sk="test_secret_key",
+                            )
                             mock_vefaas_client.delete.assert_called_with("app-123")
 
                 # Verify all mocks were called as expected
