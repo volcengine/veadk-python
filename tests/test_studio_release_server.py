@@ -551,6 +551,35 @@ def test_github_secret_preflight_checks_access_without_writing(
     ]
 
 
+def test_skip_github_secrets_reuses_existing_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api_key = "existing-release-key-with-at-least-thirty-two-characters"
+    monkeypatch.setenv("STUDIO_RELEASE_SERVER_API_KEY", api_key)
+
+    assert release_deploy._deployment_api_key(skip_github_secrets=True) == api_key
+
+
+def test_skip_github_secrets_requires_existing_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("STUDIO_RELEASE_SERVER_API_KEY", raising=False)
+
+    with pytest.raises(ValueError, match="STUDIO_RELEASE_SERVER_API_KEY"):
+        release_deploy._deployment_api_key(skip_github_secrets=True)
+
+
+def test_release_server_deploy_workflow_preserves_api_key() -> None:
+    workflow = (
+        Path(__file__).parents[1]
+        / ".github/workflows/deploy-studio-release-server.yaml"
+    ).read_text(encoding="utf-8")
+
+    assert "workflow_dispatch:" in workflow
+    assert "secrets.STUDIO_RELEASE_SERVER_API_KEY" in workflow
+    assert "deploy.sh --skip-github-secrets" in workflow
+
+
 def test_release_server_readiness_uses_rotated_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

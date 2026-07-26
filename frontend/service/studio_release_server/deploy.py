@@ -527,6 +527,19 @@ def _set_github_secret(name: str, value: str) -> None:
         raise RuntimeError(f"Could not set GitHub secret {name}: {completed.stderr}")
 
 
+def _deployment_api_key(*, skip_github_secrets: bool) -> str:
+    """Reuse the configured API key when repository secrets stay unchanged."""
+    if not skip_github_secrets:
+        return secrets.token_urlsafe(48)
+    api_key = os.getenv("STUDIO_RELEASE_SERVER_API_KEY", "").strip()
+    if len(api_key) < 32:
+        raise ValueError(
+            "STUDIO_RELEASE_SERVER_API_KEY must be provided when GitHub "
+            "Secrets are not updated."
+        )
+    return api_key
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", type=Path, default=Path.cwd())
@@ -550,7 +563,7 @@ def main() -> None:
     if not args.skip_github_secrets:
         _validate_github_secret_access()
     role_trn = _ensure_runtime_role(access_key, secret_key)
-    api_key = secrets.token_urlsafe(48)
+    api_key = _deployment_api_key(skip_github_secrets=args.skip_github_secrets)
     endpoint, app_id, function_id = _deploy(source_root, api_key, role_trn)
     _wait_for_health(endpoint, api_key)
     if not args.skip_github_secrets:
