@@ -43,7 +43,9 @@ from frontend.service.studio_release_server import (
     StudioReleaseBuilder,
     create_app,
 )
+from frontend.service.studio_release_server import builder as release_builder
 from frontend.service.studio_release_server import deploy as release_deploy
+from frontend.service.studio_release_server import app as release_app
 from frontend.service.studio_release_server.tos_store import TosDependencyStore
 
 
@@ -232,9 +234,15 @@ def test_api_requires_key_and_returns_durable_status() -> None:
 
     assert unauthorized.status_code == 401
     assert accepted.status_code == 202
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in accepted.text.splitlines()
+        if line.startswith("data: ")
+    ]
     assert current.status_code == 200
     assert current.json()["state"] == "succeeded"
     assert current.json()["result"]["gitSha"] == "a" * 40
+    assert events[-1]["state"] == "succeeded"
 
 
 def test_readiness_requires_the_active_revision_api_key() -> None:
@@ -250,6 +258,57 @@ def test_readiness_requires_the_active_revision_api_key() -> None:
 
     assert unauthorized.status_code == 401
     assert ready.json() == {"status": "ready"}
+
+
+def test_release_stream_emits_terminal_change_with_same_timestamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timestamp = "2026-07-26T16:00:00+08:00"
+    queued = ReleaseStatus(
+        jobId="12345-1",
+        state="queued",
+        repository="volcengine/veadk-python",
+        gitSha="a" * 40,
+        stage="queued",
+        message="queued",
+        createdAt=timestamp,
+        updatedAt=timestamp,
+    )
+    succeeded = queued.model_copy(
+        update={
+            "state": "succeeded",
+            "stage": "complete",
+            "message": "complete",
+        }
+    )
+
+    class _SameTimestampService:
+        def __init__(self) -> None:
+            self.reads = 0
+
+        def submit(self, _request: ReleaseRequest) -> ReleaseStatus:
+            return queued
+
+        def get(self, _job_id: str) -> ReleaseStatus:
+            self.reads += 1
+            return queued if self.reads == 1 else succeeded
+
+    monkeypatch.setattr(release_app.time, "sleep", lambda _seconds: None)
+    app = create_app(settings=_settings(), service=_SameTimestampService())
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/release",
+            headers={"X-API-Key": _settings().api_key},
+            json=_request().model_dump(by_alias=True),
+        )
+
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    assert [event["state"] for event in events] == ["queued", "succeeded"]
 
 
 def test_api_rejects_another_repository() -> None:
@@ -340,6 +399,77 @@ def test_builder_consumes_staged_source_archive(tmp_path: Path) -> None:
     assert source_store.consumed_key == request.source_key
 
 
+def test_builder_prefers_domestic_source_and_node_mirrors() -> None:
+    request = _request()
+    builder = StudioReleaseBuilder(_settings())
+
+    assert builder._source_clone_urls(request) == (
+        "https://github.com/volcengine/veadk-python.git",
+        "https://ghfast.top/https://github.com/volcengine/veadk-python.git",
+    )
+    assert builder._source_urls(request) == (
+        (
+            "https://ghfast.top/https://github.com/volcengine/veadk-python/"
+            f"archive/{request.git_sha}.tar.gz"
+        ),
+        (
+            "https://codeload.github.com/volcengine/veadk-python/tar.gz/"
+            f"{request.git_sha}"
+        ),
+    )
+    assert builder._node_download_urls("node.tar.xz") == (
+        "https://registry.npmmirror.com/-/binary/node/v22.17.0/node.tar.xz",
+        "https://nodejs.org/dist/v22.17.0/node.tar.xz",
+    )
+
+
+def test_builder_shallow_clones_only_main_build_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _request()
+    commands: list[list[str]] = []
+
+    def _run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[Any]:
+        commands.append(command)
+        if command[1] == "clone":
+            destination = Path(command[-1])
+            (destination / "frontend").mkdir(parents=True)
+            (destination / "frontend" / "package.json").write_text(
+                "{}\n", encoding="utf-8"
+            )
+        output: str | bytes = f"{request.git_sha}\n" if kwargs.get("text") else b""
+        return subprocess.CompletedProcess(command, 0, stdout=output, stderr=b"")
+
+    monkeypatch.setattr(release_builder.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(release_builder.subprocess, "run", _run)
+    builder = StudioReleaseBuilder(_settings())
+
+    source = builder._clone_source(
+        request,
+        tmp_path,
+        lambda _stage, _message: None,
+    )
+
+    assert source == tmp_path / "source-clone-0"
+    clone = commands[0]
+    assert clone[1:10] == [
+        "clone",
+        "--quiet",
+        "--depth",
+        "1",
+        "--single-branch",
+        "--branch",
+        "main",
+        "--filter=blob:none",
+        "--sparse",
+    ]
+    sparse = next(command for command in commands if "sparse-checkout" in command)
+    assert "/frontend/" in sparse
+    assert "/veadk/" in sparse
+    assert "!/veadk/webui/" in sparse
+    assert not any("fetch" in command for command in commands)
+
+
 def test_builder_rejects_unsafe_source_archive_entry(tmp_path: Path) -> None:
     archive = tmp_path / "source.tar.gz"
     with tarfile.open(archive, "w:gz") as output:
@@ -419,6 +549,7 @@ def test_builder_restores_manifest_dependencies_from_cache(tmp_path: Path) -> No
     )
 
     wheels = builder._prepare_dependency_wheels(
+        tmp_path,
         prepared_root,
         workspace,
         lambda stage, message: progress.append((stage, message)),
@@ -428,6 +559,32 @@ def test_builder_restores_manifest_dependencies_from_cache(tmp_path: Path) -> No
     assert dependency_store.manifest == manifest
     assert (wheels / "dependency.whl").read_bytes() == b"wheel"
     assert progress == [("preparing", "正在从 TOS 缓存恢复 Studio 依赖包")]
+
+
+def test_builder_generates_dependency_manifest_from_release_source(
+    tmp_path: Path,
+) -> None:
+    source_root = Path(__file__).parents[1]
+    prepared_root = tmp_path / ".studio-release"
+    prepared_root.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    dependency_store = _MemoryDependencyStore()
+    builder = StudioReleaseBuilder(
+        _settings(),
+        dependency_store=dependency_store,
+    )
+
+    wheels = builder._prepare_dependency_wheels(
+        source_root,
+        prepared_root,
+        workspace,
+        lambda _stage, _message: None,
+    )
+
+    assert wheels == workspace / "dependency-wheels"
+    assert dependency_store.manifest == workspace / "dependencies.json"
+    assert json.loads(dependency_store.manifest.read_text(encoding="utf-8"))["wheels"]
 
 
 def test_tos_dependency_store_rejects_download_with_wrong_checksum(
@@ -462,6 +619,40 @@ def test_tos_dependency_store_rejects_download_with_wrong_checksum(
         store.materialize(manifest, tmp_path / "destination")
 
 
+def test_tos_dependency_store_uses_domestic_mirror_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = b"dependency-wheel"
+    urls: list[str] = []
+
+    def _urlopen(url: str, *, timeout: int) -> io.BytesIO:
+        urls.append(url)
+        assert timeout == 120
+        if url.startswith("https://pypi.tuna.tsinghua.edu.cn/"):
+            raise OSError("mirror unavailable")
+        return io.BytesIO(content)
+
+    monkeypatch.setattr(
+        "frontend.service.studio_release_server.tos_store.urllib.request.urlopen",
+        _urlopen,
+    )
+    store = TosDependencyStore(
+        _settings(),
+        client_factory=lambda: _DependencyCacheClient(),
+    )
+
+    downloaded = store._download(
+        "https://files.pythonhosted.org/packages/example/dependency.whl",
+        hashlib.sha256(content).hexdigest(),
+    )
+
+    assert downloaded == content
+    assert urls == [
+        "https://pypi.tuna.tsinghua.edu.cn/packages/example/dependency.whl",
+        "https://mirrors.aliyun.com/pypi/packages/example/dependency.whl",
+    ]
+
+
 def test_stage_deployment_uses_frontend_service_package(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -484,6 +675,11 @@ def test_stage_deployment_uses_frontend_service_package(
 
     monkeypatch.setattr(release_deploy.shutil, "which", lambda _name: "uv")
     monkeypatch.setattr(release_deploy.subprocess, "run", _install_runtime_wheels)
+    monkeypatch.setattr(
+        release_deploy,
+        "_stage_node_archive",
+        lambda _destination: None,
+    )
     monkeypatch.setattr(
         release_deploy.importlib.util,
         "find_spec",

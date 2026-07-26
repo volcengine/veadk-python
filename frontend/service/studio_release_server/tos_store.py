@@ -33,6 +33,11 @@ from frontend.service.studio_release_server.models import (
 
 _IAM_CREDENTIAL_PATH = Path("/var/run/secrets/iam/credential")
 _MAX_DEPENDENCY_WHEEL_BYTES = 128 * 1024 * 1024
+_PYPI_FILE_HOST = "https://files.pythonhosted.org"
+_PYPI_MIRROR_HOSTS = (
+    "https://pypi.tuna.tsinghua.edu.cn",
+    "https://mirrors.aliyun.com/pypi",
+)
 
 
 @dataclass(frozen=True)
@@ -328,13 +333,29 @@ class TosDependencyStore:
         return content
 
     def _download(self, url: str, sha256: str) -> bytes:
-        with urllib.request.urlopen(url, timeout=120) as response:
-            content = response.read(_MAX_DEPENDENCY_WHEEL_BYTES + 1)
-        if len(content) > _MAX_DEPENDENCY_WHEEL_BYTES:
-            raise ValueError("Studio dependency wheel exceeds 128 MiB.")
-        if hashlib.sha256(content).hexdigest() != sha256:
-            raise ValueError("Studio dependency wheel checksum verification failed.")
-        return content
+        last_error: OSError | ValueError | None = None
+        for candidate in self._download_urls(url):
+            try:
+                with urllib.request.urlopen(candidate, timeout=120) as response:
+                    content = response.read(_MAX_DEPENDENCY_WHEEL_BYTES + 1)
+                if len(content) > _MAX_DEPENDENCY_WHEEL_BYTES:
+                    raise ValueError("Studio dependency wheel exceeds 128 MiB.")
+                if hashlib.sha256(content).hexdigest() != sha256:
+                    raise ValueError(
+                        "Studio dependency wheel checksum verification failed."
+                    )
+                return content
+            except (OSError, ValueError) as error:
+                last_error = error
+        if last_error is None:
+            raise RuntimeError("Studio dependency wheel has no download source.")
+        raise last_error
+
+    def _download_urls(self, url: str) -> tuple[str, ...]:
+        if not url.startswith(f"{_PYPI_FILE_HOST}/packages/"):
+            return (url,)
+        path = url.removeprefix(_PYPI_FILE_HOST)
+        return tuple(f"{host}{path}" for host in _PYPI_MIRROR_HOSTS) + (url,)
 
     def _read_limited(self, response: Any) -> bytes:
         content = bytearray()

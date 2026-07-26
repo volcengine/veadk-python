@@ -1357,16 +1357,19 @@ export interface StudioUpdateStatus {
   errorId: string;
   errorStage: string;
   errorLog: string;
+  updateLogs: string[];
   consoleUrl: string;
 }
 
 /** Check the configured immutable Studio main release channel. */
 export async function getStudioUpdateStatus(
   targetVersion?: string,
+  startedAt?: number,
 ): Promise<StudioUpdateStatus> {
-  const query = targetVersion
-    ? `?targetVersion=${encodeURIComponent(targetVersion)}`
-    : "";
+  const params = new URLSearchParams();
+  if (targetVersion) params.set("targetVersion", targetVersion);
+  if (startedAt) params.set("startedAt", String(startedAt));
+  const query = params.size ? `?${params.toString()}` : "";
   const res = await apiFetch(`/web/studio-update${query}`);
   if (!res.ok) throw new Error(`检查 Studio 更新失败 (${res.status})`);
   return (await res.json()) as StudioUpdateStatus;
@@ -1383,7 +1386,7 @@ export async function startStudioUpdate(
       "X-VeADK-Studio-Update": "1",
     },
     body: JSON.stringify({ version }),
-  });
+  }, {}, TRANSFER_REQUEST_TIMEOUT_MS);
   if (!res.ok) {
     let detail = "";
     try {

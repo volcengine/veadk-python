@@ -49,8 +49,25 @@ _MAX_SOURCE_ARCHIVE_BYTES = 200 * 1024 * 1024
 _MAX_SOURCE_EXTRACTED_BYTES = 1024 * 1024 * 1024
 _MAX_SOURCE_ARCHIVE_MEMBERS = 50_000
 _SOURCE_DOWNLOAD_REPORT_BYTES = 8 * 1024 * 1024
-_SOURCE_DOWNLOAD_TIMEOUT_SECONDS = 10 * 60
+_SOURCE_DOWNLOAD_ATTEMPT_SECONDS = 120
+_GITHUB_ARCHIVE_MIRROR = "https://ghfast.top/https://github.com"
+_GITHUB_CLONE_MIRROR = "https://ghfast.top/https://github.com"
+_GIT_CLONE_ATTEMPT_SECONDS = 30
+_SPARSE_CHECKOUT_PATHS = (
+    "/pyproject.toml",
+    "/README.md",
+    "/LICENSE",
+    "/frontend/",
+    "/veadk/",
+    "!/veadk/webui/",
+)
 _NODE_VERSION = "22.17.0"
+_NODE_DOWNLOAD_BASE_URLS = (
+    "https://registry.npmmirror.com/-/binary/node",
+    "https://nodejs.org/dist",
+)
+_NPM_REGISTRY = "https://registry.npmmirror.com"
+_PYPI_SIMPLE_INDEX = "https://mirrors.aliyun.com/pypi/simple/"
 _NODE_ARCHIVE_SHA256 = {
     "arm64": "140aee84be6774f5fb3f404be72adbe8420b523f824de82daeb5ab218dab7b18",
     "x64": "325c0f1261e0c61bcae369a1274028e9cfb7ab7949c05512c5b1e630f7e80e12",
@@ -104,6 +121,7 @@ class StudioReleaseBuilder:
             prepared_root = source_root / ".studio-release"
             frontend_assets = prepared_root / "frontend"
             dependency_wheels = self._prepare_dependency_wheels(
+                source_root,
                 prepared_root,
                 workspace,
                 on_progress,
@@ -165,11 +183,18 @@ class StudioReleaseBuilder:
 
     def _prepare_dependency_wheels(
         self,
+        source_root: Path,
         prepared_root: Path,
         workspace: Path,
         on_progress: ProgressCallback,
     ) -> Path | None:
         dependency_manifest = prepared_root / "dependencies.json"
+        prepared_wheels = prepared_root / "wheels"
+        if not dependency_manifest.is_file() and prepared_wheels.is_dir():
+            return prepared_wheels
+        if not dependency_manifest.is_file():
+            dependency_manifest = workspace / "dependencies.json"
+            self._write_dependency_manifest(source_root, dependency_manifest)
         if dependency_manifest.is_file():
             if self._dependency_store is None:
                 raise RuntimeError("Studio dependency cache is not configured.")
@@ -177,8 +202,33 @@ class StudioReleaseBuilder:
             destination = workspace / "dependency-wheels"
             self._dependency_store.materialize(dependency_manifest, destination)
             return destination
-        prepared_wheels = prepared_root / "wheels"
-        return prepared_wheels if prepared_wheels.is_dir() else None
+        return None
+
+    def _write_dependency_manifest(
+        self,
+        source_root: Path,
+        destination: Path,
+    ) -> None:
+        script = source_root / "veadk" / "cli" / "studio_dependencies.py"
+        if not script.is_file():
+            raise RuntimeError("Studio dependency manifest generator is missing.")
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--manifest-only",
+                "--manifest",
+                str(destination),
+            ],
+            cwd=source_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+            timeout=30,
+        )
+        if completed.returncode != 0 or not destination.is_file():
+            output = completed.stdout[-4000:].decode(errors="replace")
+            raise RuntimeError(f"Could not generate dependency manifest: {output}")
 
     def _download_source(
         self,
@@ -214,9 +264,158 @@ class StudioReleaseBuilder:
             on_progress("extracting", "暂存源码下载完成，正在解压")
             return self._extract_source(archive, workspace)
 
-        url = (
-            f"https://codeload.github.com/{request.repository}/tar.gz/{request.git_sha}"
+        cloned_source = self._clone_source(request, workspace, on_progress)
+        if cloned_source is not None:
+            return cloned_source
+
+        last_error: OSError | tarfile.TarError | None = None
+        for url in self._source_urls(request):
+            try:
+                self._download_source_archive(url, archive, on_progress)
+                with tarfile.open(archive, "r:gz"):
+                    pass
+                last_error = None
+                break
+            except (OSError, tarfile.TarError) as error:
+                last_error = error
+                archive.unlink(missing_ok=True)
+        if last_error is not None:
+            raise last_error
+        on_progress("extracting", "GitHub 源码下载完成，正在解压")
+        return self._extract_source(archive, workspace)
+
+    def _clone_source(
+        self,
+        request: ReleaseRequest,
+        workspace: Path,
+        on_progress: ProgressCallback,
+    ) -> Path | None:
+        git = shutil.which("git")
+        if git is None:
+            on_progress("fetching", "运行环境没有 Git，改用源码归档")
+            return None
+
+        for index, url in enumerate(self._source_clone_urls(request)):
+            destination = workspace / f"source-clone-{index}"
+            on_progress("fetching", "正在浅克隆 main 分支的构建文件")
+            try:
+                subprocess.run(
+                    [
+                        git,
+                        "clone",
+                        "--quiet",
+                        "--depth",
+                        "1",
+                        "--single-branch",
+                        "--branch",
+                        "main",
+                        "--filter=blob:none",
+                        "--sparse",
+                        url,
+                        str(destination),
+                    ],
+                    check=True,
+                    timeout=_GIT_CLONE_ATTEMPT_SECONDS,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                )
+                head = self._git_output(git, destination, "rev-parse", "HEAD")
+                if head != request.git_sha:
+                    on_progress("fetching", "main 已前进，正在获取发布请求的精确 SHA")
+                    subprocess.run(
+                        [
+                            git,
+                            "-C",
+                            str(destination),
+                            "fetch",
+                            "--quiet",
+                            "--depth",
+                            "1",
+                            "origin",
+                            request.git_sha,
+                        ],
+                        check=True,
+                        timeout=_GIT_CLONE_ATTEMPT_SECONDS,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.PIPE,
+                    )
+                    subprocess.run(
+                        [
+                            git,
+                            "-C",
+                            str(destination),
+                            "checkout",
+                            "--quiet",
+                            "--detach",
+                            request.git_sha,
+                        ],
+                        check=True,
+                        timeout=_GIT_CLONE_ATTEMPT_SECONDS,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.PIPE,
+                    )
+                subprocess.run(
+                    [
+                        git,
+                        "-C",
+                        str(destination),
+                        "sparse-checkout",
+                        "set",
+                        "--no-cone",
+                        *_SPARSE_CHECKOUT_PATHS,
+                    ],
+                    check=True,
+                    timeout=_GIT_CLONE_ATTEMPT_SECONDS,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                )
+                if self._git_output(git, destination, "rev-parse", "HEAD") != (
+                    request.git_sha
+                ):
+                    raise RuntimeError("Sparse clone resolved an unexpected Git SHA.")
+                if not (destination / "frontend" / "package.json").is_file():
+                    raise RuntimeError(
+                        "Sparse clone produced no frontend/package.json."
+                    )
+                on_progress("fetching", "main 分支构建文件拉取完成")
+                return destination
+            except (OSError, RuntimeError, subprocess.SubprocessError):
+                shutil.rmtree(destination, ignore_errors=True)
+        on_progress("fetching", "Git 浅克隆失败，改用源码归档")
+        return None
+
+    def _git_output(self, git: str, repository: Path, *arguments: str) -> str:
+        completed = subprocess.run(
+            [git, "-C", str(repository), *arguments],
+            check=True,
+            timeout=_GIT_CLONE_ATTEMPT_SECONDS,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
+        return completed.stdout.strip().lower()
+
+    def _source_clone_urls(self, request: ReleaseRequest) -> tuple[str, ...]:
+        repository = request.repository
+        return (
+            f"https://github.com/{repository}.git",
+            f"{_GITHUB_CLONE_MIRROR}/{repository}.git",
+        )
+
+    def _source_urls(self, request: ReleaseRequest) -> tuple[str, ...]:
+        repository = request.repository
+        git_sha = request.git_sha
+        return (
+            f"{_GITHUB_ARCHIVE_MIRROR}/{repository}/archive/{git_sha}.tar.gz",
+            f"https://codeload.github.com/{repository}/tar.gz/{git_sha}",
+        )
+
+    def _download_source_archive(
+        self,
+        url: str,
+        archive: Path,
+        on_progress: ProgressCallback,
+    ) -> None:
         http_request = urllib.request.Request(
             url,
             headers={"User-Agent": "veadk-studio-release-server"},
@@ -225,15 +424,13 @@ class StudioReleaseBuilder:
         reported_size = 0
         download_started = time.monotonic()
         with (
-            urllib.request.urlopen(http_request, timeout=120) as response,
+            urllib.request.urlopen(http_request, timeout=30) as response,
             archive.open("wb") as output,
         ):
             while chunk := response.read(1024 * 1024):
-                if (
-                    time.monotonic() - download_started
-                    > _SOURCE_DOWNLOAD_TIMEOUT_SECONDS
-                ):
-                    raise TimeoutError("GitHub source download exceeded 10 minutes.")
+                elapsed = time.monotonic() - download_started
+                if elapsed > _SOURCE_DOWNLOAD_ATTEMPT_SECONDS:
+                    raise TimeoutError("GitHub source download attempt timed out.")
                 size += len(chunk)
                 if size > _MAX_SOURCE_ARCHIVE_BYTES:
                     raise ValueError("GitHub source archive exceeds 200 MiB.")
@@ -244,8 +441,6 @@ class StudioReleaseBuilder:
                         f"已下载 GitHub 源码 {size // (1024 * 1024)} MiB",
                     )
                     reported_size = size
-        on_progress("extracting", "GitHub 源码下载完成，正在解压")
-        return self._extract_source(archive, workspace)
 
     def _extract_source(self, archive: Path, workspace: Path) -> Path:
         extract_root = workspace / "source"
@@ -286,18 +481,43 @@ class StudioReleaseBuilder:
         install_root.mkdir(parents=True, exist_ok=True)
         archive_name = f"node-v{_NODE_VERSION}-linux-{architecture}.tar.xz"
         archive_path = install_root / archive_name
-        url = f"https://nodejs.org/dist/v{_NODE_VERSION}/{archive_name}"
-        with urllib.request.urlopen(url, timeout=120) as response:
-            content = response.read()
         expected = _NODE_ARCHIVE_SHA256[architecture]
-        if hashlib.sha256(content).hexdigest() != expected:
-            raise ValueError("Downloaded Node archive checksum does not match.")
+        bundled_archive = Path(__file__).with_name(archive_name)
+        if bundled_archive.is_file():
+            content = bundled_archive.read_bytes()
+            if hashlib.sha256(content).hexdigest() != expected:
+                raise ValueError("Bundled Node archive checksum does not match.")
+        else:
+            last_error: OSError | ValueError | None = None
+            for url in self._node_download_urls(archive_name):
+                try:
+                    with urllib.request.urlopen(url, timeout=120) as response:
+                        content = response.read(128 * 1024 * 1024 + 1)
+                    if len(content) > 128 * 1024 * 1024:
+                        raise ValueError("Downloaded Node archive exceeds 128 MiB.")
+                    if hashlib.sha256(content).hexdigest() != expected:
+                        raise ValueError(
+                            "Downloaded Node archive checksum does not match."
+                        )
+                    break
+                except (OSError, ValueError) as error:
+                    last_error = error
+            else:
+                if last_error is None:
+                    raise RuntimeError("Node has no download source.")
+                raise last_error
         archive_path.write_bytes(content)
         with tarfile.open(archive_path, "r:xz") as node_archive:
             node_archive.extractall(install_root, filter="data")
         if not (node_bin / "npm").is_file():
             raise RuntimeError("Node installation produced no npm executable.")
         return node_bin
+
+    def _node_download_urls(self, archive_name: str) -> tuple[str, ...]:
+        return tuple(
+            f"{base}/v{_NODE_VERSION}/{archive_name}"
+            for base in _NODE_DOWNLOAD_BASE_URLS
+        )
 
     def _run_publisher(
         self,
@@ -352,6 +572,16 @@ class StudioReleaseBuilder:
                 "VOLCENGINE_SECRET_KEY": credentials.secret_key,
                 "VOLCENGINE_SESSION_TOKEN": credentials.session_token,
                 "TZ": "Asia/Shanghai",
+                "PIP_INDEX_URL": _PYPI_SIMPLE_INDEX,
+                "UV_CACHE_DIR": str(
+                    Path(tempfile.gettempdir()) / "studio-release-tools" / "uv-cache"
+                ),
+                "UV_DEFAULT_INDEX": _PYPI_SIMPLE_INDEX,
+                "npm_config_cache": str(
+                    Path(tempfile.gettempdir()) / "studio-release-tools" / "npm-cache"
+                ),
+                "npm_config_registry": _NPM_REGISTRY,
+                "npm_config_replace_registry_host": "always",
             }
         )
         log_path = output_dir.parent / "publisher.log"

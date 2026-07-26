@@ -17,10 +17,13 @@
 from __future__ import annotations
 
 import hmac
-from collections.abc import AsyncIterator
+import json
+import time
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 
 from frontend.service.studio_release_server.builder import (
     StudioReleaseBuilder,
@@ -119,18 +122,40 @@ def create_app(
 
     @app.post(
         "/release",
-        response_model=ReleaseStatus,
-        response_model_by_alias=True,
         status_code=status.HTTP_202_ACCEPTED,
         dependencies=[Depends(require_api_key)],
     )
-    def release(request: Request, payload: ReleaseRequest) -> ReleaseStatus:
+    def release(request: Request, payload: ReleaseRequest) -> StreamingResponse:
         try:
-            return request.app.state.release_service.submit(payload, run_inline=True)
+            release_service = request.app.state.release_service
+            release_service.submit(payload)
         except ReleaseConflictError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+
+        def events() -> Iterator[str]:
+            last_event = ""
+            while True:
+                current = release_service.get(payload.request_id)
+                data = json.dumps(current.public_dict(), ensure_ascii=False)
+                if data != last_event:
+                    yield f"data: {data}\n\n"
+                    last_event = data
+                if current.state in {"succeeded", "failed"}:
+                    return
+                yield ": keepalive\n\n"
+                time.sleep(1)
+
+        return StreamingResponse(
+            events(),
+            status_code=status.HTTP_202_ACCEPTED,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @app.get(
         "/status/{job_id}",
