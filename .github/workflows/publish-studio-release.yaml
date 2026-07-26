@@ -211,26 +211,42 @@ jobs:
           job_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           archive="$RUNNER_TEMP/studio-release-source/studio-release-source.tar.gz"
           test -s "$archive"
-          upload_response="$(curl --fail-with-body --silent --show-error \
-            --proto '=https' \
-            --connect-timeout 30 \
-            --max-time 60 \
-            --request POST \
-            --header "Content-Type: application/json" \
-            --header "X-API-Key: $RELEASE_SERVER_API_KEY" \
-            --data "$(jq -n --arg requestId "$job_id" \
-              '{requestId:$requestId}')" \
-            --url "$RELEASE_SERVER_URL/source-upload")"
-          source_key="$(jq -er '.sourceKey' <<<"$upload_response")"
-          upload_url="$(jq -er '.uploadUrl' <<<"$upload_response")"
-          curl --fail-with-body --silent --show-error \
-            --proto '=https' \
-            --connect-timeout 30 \
-            --max-time 600 \
-            --request PUT \
-            --header "Content-Type: application/gzip" \
-            --upload-file "$archive" \
-            --url "$upload_url"
+          for attempt in 1 2 3; do
+            echo "Uploading staged source to TOS (attempt $attempt/3)."
+            upload_response="$(curl --fail-with-body --silent --show-error \
+              --proto '=https' \
+              --connect-timeout 30 \
+              --max-time 60 \
+              --request POST \
+              --header "Content-Type: application/json" \
+              --header "X-API-Key: $RELEASE_SERVER_API_KEY" \
+              --data "$(jq -n --arg requestId "$job_id" \
+                '{requestId:$requestId}')" \
+              --url "$RELEASE_SERVER_URL/source-upload")"
+            source_key="$(jq -er '.sourceKey' <<<"$upload_response")"
+            upload_url="$(jq -er '.uploadUrl' <<<"$upload_response")"
+            if curl --fail-with-body --silent --show-error \
+              --proto '=https' \
+              --connect-timeout 30 \
+              --max-time 600 \
+              --speed-limit 1024 \
+              --speed-time 60 \
+              --request PUT \
+              --header "Content-Type: application/gzip" \
+              --upload-file "$archive" \
+              --write-out 'TOS upload status=%{http_code} uploaded=%{size_upload} speed=%{speed_upload} time=%{time_total}\n' \
+              --url "$upload_url"; then
+              break
+            else
+              upload_exit=$?
+            fi
+            if (( attempt == 3 )); then
+              echo "TOS source upload failed after 3 attempts." >&2
+              exit "$upload_exit"
+            fi
+            echo "TOS source upload failed; requesting a fresh signed URL before retrying." >&2
+            sleep $((attempt * 10))
+          done
           echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
           echo "source_key=$source_key" >> "$GITHUB_OUTPUT"
 
