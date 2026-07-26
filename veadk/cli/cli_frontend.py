@@ -878,6 +878,7 @@ def _run_frontend_server(
     from veadk.cli.studio_self_update import (
         StudioSelfUpdater,
         StudioUpdateSettings,
+        current_studio_display_version,
         mount_studio_update_routes,
     )
 
@@ -1097,6 +1098,7 @@ def _run_frontend_server(
         is informational."""
         return {
             "studio": studio,
+            "version": current_studio_display_version(),
             "branding": {
                 "title": branding_title,
                 "logoUrl": "/web/site-logo" if branding_logo is not None else "",

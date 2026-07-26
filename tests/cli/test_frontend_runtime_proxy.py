@@ -94,6 +94,7 @@ def test_vite_allows_both_loopback_browser_origins() -> None:
 def test_ui_config_serves_custom_branding(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "20260726093000")
     logo = base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8A"
         "AQUBAScY42YAAAAASUVORK5CYII="
@@ -116,6 +117,7 @@ def test_ui_config_serves_custom_branding(
         "title": "火山助手",
         "logoUrl": "/web/site-logo",
     }
+    assert config_response.json()["version"] == "20260726093000"
     assert logo_response.status_code == 200
     assert logo_response.headers["content-type"].startswith("image/png")
     assert logo_response.content == logo

@@ -27,9 +27,33 @@ from veadk.cli.studio_release import StudioReleaseError, StudioReleaseManifest
 from veadk.cli.studio_self_update import (
     StudioSelfUpdater,
     StudioUpdateSettings,
+    current_studio_display_version,
+    current_studio_release_version,
     extract_studio_bundle,
     mount_studio_update_routes,
 )
+
+
+def test_studio_release_version_defaults_to_bundled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("VEADK_STUDIO_RELEASE_VERSION", raising=False)
+
+    assert current_studio_release_version() == "bundled"
+
+
+def test_studio_display_version_selects_local_or_release_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("veadk.cli.studio_self_update.VERSION", "1.2.3")
+    monkeypatch.delenv("VEADK_STUDIO_RELEASE_VERSION", raising=False)
+    assert current_studio_display_version() == "1.2.3"
+
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
+    assert current_studio_display_version() == "1.2.3"
+
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "20260726123000")
+    assert current_studio_display_version() == "20260726123000"
 
 
 def _manifest() -> StudioReleaseManifest:
