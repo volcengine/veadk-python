@@ -16,8 +16,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +32,7 @@ from frontend.service.studio_release_server.models import (
 )
 
 _IAM_CREDENTIAL_PATH = Path("/var/run/secrets/iam/credential")
+_MAX_DEPENDENCY_WHEEL_BYTES = 128 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -97,6 +100,18 @@ class SourceStore(Protocol):
         on_progress: Callable[[int], None],
     ) -> None:
         """Download one source archive and remove its staging object."""
+        ...
+
+
+class DependencyStore(Protocol):
+    """Materialize verified Studio dependency wheels from a durable cache."""
+
+    def materialize(
+        self,
+        manifest: Path,
+        destination: Path,
+    ) -> tuple[Path, ...]:
+        """Restore cached wheels, populating missing entries from their origin."""
         ...
 
 
@@ -229,9 +244,124 @@ class TosSourceStore:
         )
 
 
+class TosDependencyStore:
+    """Cache pinned Studio wheels in TOS by their immutable checksum."""
+
+    def __init__(
+        self,
+        settings: ReleaseServerSettings,
+        *,
+        client_factory: Callable[[], Any] | None = None,
+    ) -> None:
+        self._settings = settings
+        self._client_factory = client_factory or self._new_client
+
+    def materialize(
+        self,
+        manifest: Path,
+        destination: Path,
+    ) -> tuple[Path, ...]:
+        """Restore every verified wheel, downloading only cache misses."""
+        wheels = self._load_manifest(manifest)
+        destination.mkdir(parents=True, exist_ok=True)
+        client = self._client_factory()
+        staged: list[Path] = []
+        for filename, url, sha256 in wheels:
+            key = self._cache_key(filename, sha256)
+            content = self._get_cached(client, key, sha256)
+            if content is None:
+                content = self._download(url, sha256)
+                client.put_object(
+                    bucket=self._settings.bucket,
+                    key=key,
+                    content=content,
+                    content_type="application/octet-stream",
+                )
+            target = destination / filename
+            target.write_bytes(content)
+            staged.append(target)
+        return tuple(staged)
+
+    def _load_manifest(self, manifest: Path) -> tuple[tuple[str, str, str], ...]:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        raw_wheels = payload.get("wheels") if isinstance(payload, dict) else None
+        if not isinstance(raw_wheels, list) or not raw_wheels or len(raw_wheels) > 32:
+            raise ValueError("Studio dependency manifest is invalid.")
+        wheels: list[tuple[str, str, str]] = []
+        for raw in raw_wheels:
+            if not isinstance(raw, dict):
+                raise ValueError("Studio dependency manifest is invalid.")
+            filename = raw.get("filename")
+            url = raw.get("url")
+            sha256 = raw.get("sha256")
+            if (
+                not isinstance(filename, str)
+                or Path(filename).name != filename
+                or not filename.endswith(".whl")
+                or not isinstance(url, str)
+                or not url.startswith("https://")
+                or not isinstance(sha256, str)
+                or len(sha256) != 64
+            ):
+                raise ValueError("Studio dependency manifest is invalid.")
+            try:
+                int(sha256, 16)
+            except ValueError as error:
+                raise ValueError("Studio dependency manifest is invalid.") from error
+            wheels.append((filename, url, sha256.lower()))
+        return tuple(wheels)
+
+    def _cache_key(self, filename: str, sha256: str) -> str:
+        prefix = self._settings.job_prefix.strip().strip("/")
+        return f"{prefix}/dependency-cache/{sha256}/{filename}"
+
+    def _get_cached(self, client: Any, key: str, sha256: str) -> bytes | None:
+        try:
+            response = client.get_object(bucket=self._settings.bucket, key=key)
+        except Exception as error:  # noqa: BLE001
+            if getattr(error, "status_code", None) == 404:
+                return None
+            raise
+        content = self._read_limited(response)
+        if hashlib.sha256(content).hexdigest() != sha256:
+            return None
+        return content
+
+    def _download(self, url: str, sha256: str) -> bytes:
+        with urllib.request.urlopen(url, timeout=120) as response:
+            content = response.read(_MAX_DEPENDENCY_WHEEL_BYTES + 1)
+        if len(content) > _MAX_DEPENDENCY_WHEEL_BYTES:
+            raise ValueError("Studio dependency wheel exceeds 128 MiB.")
+        if hashlib.sha256(content).hexdigest() != sha256:
+            raise ValueError("Studio dependency wheel checksum verification failed.")
+        return content
+
+    def _read_limited(self, response: Any) -> bytes:
+        content = bytearray()
+        for chunk in response:
+            if len(content) + len(chunk) > _MAX_DEPENDENCY_WHEEL_BYTES:
+                raise ValueError("Cached Studio dependency wheel exceeds 128 MiB.")
+            content.extend(chunk)
+        return bytes(content)
+
+    def _new_client(self) -> Any:
+        import tos
+
+        credentials = resolve_credentials()
+        return tos.TosClientV2(
+            credentials.access_key,
+            credentials.secret_key,
+            security_token=credentials.session_token or None,
+            endpoint=f"tos-{self._settings.region}.volces.com",
+            region=self._settings.region,
+        )
+
+
 __all__ = [
+    "DependencyStore",
     "JobStore",
     "SourceStore",
+    "TosDependencyStore",
     "TosJobStore",
     "TosSourceStore",
     "VolcengineCredentials",

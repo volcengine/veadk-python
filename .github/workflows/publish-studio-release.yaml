@@ -90,8 +90,11 @@ jobs:
           npm run build --prefix frontend -- \
             --outDir "$prepared_root/frontend"
           python -m veadk.cli.studio_dependencies \
-            --output-dir "$prepared_root/wheels"
-          tar -C "$source_parent" -czf "$archive" \
+            --output-dir "$prepared_root/wheels" \
+            --manifest "$prepared_root/dependencies.json"
+          tar -C "$source_parent" \
+            --exclude="veadk-python-${GITHUB_SHA}/.studio-release/wheels" \
+            -czf "$archive" \
             "veadk-python-${GITHUB_SHA}"
           echo "archive=$archive" >> "$GITHUB_OUTPUT"
           echo "source_root=$source_root" >> "$GITHUB_OUTPUT"
