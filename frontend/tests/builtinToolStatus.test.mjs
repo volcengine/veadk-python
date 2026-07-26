@@ -43,6 +43,7 @@ test("maps supported built-in tools to dedicated Chinese running and done labels
     ["run_code", "正在 AgentKit 沙箱中执行代码", "已在 AgentKit 沙箱中完成代码执行"],
     ["load_memory", "正在检索长期记忆", "已完成记忆检索"],
     ["load_knowledgebase", "正在检索知识库", "已完成知识库检索"],
+    ["load_skill", "正在加载技能", "已加载技能"],
   ];
 
   for (const [name, running, done] of expected) {
@@ -58,6 +59,11 @@ test("renders built-in tool calls through the extensible dedicated header", () =
   assert.match(headerSource, /definition\.doneLabel/);
   assert.match(headerSource, /aria-expanded=\{open\}/);
   assert.match(toolStylesSource, /data-tool-tone="search"/);
+  assert.match(toolStylesSource, /data-tool-tone="skill"/);
+  assert.match(blocksSource, /function loadSkillLabel/);
+  assert.match(blocksSource, /label=\{loadSkillLabel\(name, args\)\}/);
+  assert.match(blocksSource, /`使用 \$\{skillName\.trim\(\)\} 技能`/);
+  assert.match(headerSource, /label\?: string/);
   assert.doesNotMatch(headerSource, /builtin-tool-state/);
   assert.doesNotMatch(toolStylesSource, /builtin-tool-state|builtin-tool-breathe/);
 });
@@ -124,6 +130,7 @@ test("uses repository-owned current-color SVG icons for every special tool", () 
     "VideoGenerateIcon",
     "LoadMemoryIcon",
     "LoadKnowledgebaseIcon",
+    "LoadSkillIcon",
     "RunCodeIcon",
   ]) {
     assert.match(iconsSource, new RegExp(`export function ${icon}`));
@@ -154,11 +161,11 @@ test("aligns thinking and special-tool headers on the same visual grid", () => {
   );
   assert.match(
     sharedStylesSource,
-    /\.think-label\s*\{[^}]*font-size:\s*13\.5px[^}]*font-weight:\s*400[^}]*line-height:\s*1\.35/,
+    /\.think-label\s*\{[^}]*font-size:\s*14\.5px[^}]*font-weight:\s*400[^}]*line-height:\s*1\.35/,
   );
   assert.match(
     sharedStylesSource,
-    /\.tool-name\s*\{[^}]*font-size:\s*13\.5px[^}]*font-weight:\s*400[^}]*line-height:\s*1\.35/,
+    /\.tool-name\s*\{[^}]*font-size:\s*14\.5px[^}]*font-weight:\s*400[^}]*line-height:\s*1\.35/,
   );
   assert.match(blocksSource, /<TextShimmer className="think-label" duration=\{2\.4\} spread=\{18\}>/);
 });
