@@ -17,8 +17,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import re
 import stat
 import tempfile
 import threading
@@ -27,6 +29,7 @@ import traceback
 import uuid
 import zipfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -47,6 +50,11 @@ logger = logging.getLogger(__name__)
 _MANIFEST_CACHE_SECONDS = 180
 _MAX_EXTRACTED_BYTES = 600 * 1024 * 1024
 _MAX_ARCHIVE_MEMBERS = 10_000
+_UPDATE_LOG_CACHE_SECONDS = 2
+_UPDATE_LOG_MAX_BYTES = 32 * 1024
+_UPDATE_LOG_MAX_LINES = 200
+_STAGED_RELEASE_GRACE_SECONDS = 60
+_SUBMIT_STATUS_GRACE_MILLISECONDS = 90 * 1000
 _UPDATE_HEADER = "X-VeADK-Studio-Update"
 
 Credentials = tuple[str, str, str | None]
@@ -132,12 +140,16 @@ class StudioSelfUpdater:
         self._progress_message = ""
         self._target_version = ""
         self._started_at = 0
+        self._vefaas_log_lines: list[str] = []
+        self._vefaas_log_revision = 0
+        self._vefaas_logs_expires_at = 0.0
 
     def status(
         self,
         *,
         force: bool = False,
         target_version: str | None = None,
+        started_at: int | None = None,
     ) -> dict[str, Any]:
         """Return current and latest versions for the administrator UI."""
         current = current_studio_release_version()
@@ -174,15 +186,19 @@ class StudioSelfUpdater:
         message = ""
         progress = self._progress_payload()
         target = target_version or self._target_version
+        revision_number = 0
         local_progress = self._progress_stage not in {"idle", "complete", "error"}
         local_state_applies = not target_version or target == self._target_version
-        if target and current == target:
-            progress = {
-                "progressStage": "complete",
-                "progressMessage": "新 Revision 已接管服务",
-                "targetVersion": target,
-                "startedAt": self._started_at,
-            }
+        request_started_at = started_at or self._started_at
+        if target and _release_reached(current, target):
+            progress.update(
+                {
+                    "progressStage": "complete",
+                    "progressMessage": "新 Revision 已接管服务",
+                    "targetVersion": target,
+                    "startedAt": request_started_at,
+                }
+            )
         elif self._last_error and local_state_applies:
             state = "error"
             message = self._last_error
@@ -190,36 +206,103 @@ class StudioSelfUpdater:
             state = "updating"
             message = self._progress_message
         else:
-            application_status = self._application_status()
+            (
+                application_status,
+                deployed_version,
+                revision_number,
+                release_pending,
+            ) = self._application_status()
+            if not target and application_status != "deploy_success":
+                target = deployed_version or manifest.version
             if application_status == "deploy_fail" and target:
-                self._target_version = target
-                self._record_failure(
+                progress = self._status_failure_payload(
                     RuntimeError("VeFaaS control plane reported deploy_fail."),
                     "VeFaaS Revision 发布失败",
                     stage="publishing",
+                    target_version=target,
+                    started_at=request_started_at,
                 )
                 state = "error"
-                message = self._last_error
-                progress = self._progress_payload()
+                message = "VeFaaS Revision 发布失败"
+            elif (
+                application_status == "deploy_success"
+                and target
+                and deployed_version == target
+                and release_pending
+            ):
+                progress = self._status_failure_payload(
+                    RuntimeError(
+                        "Function update is newer than the latest Application release."
+                    ),
+                    "Function 已更新但 Revision 未发布，请重新尝试更新",
+                    stage="publishing",
+                    target_version=target,
+                    started_at=request_started_at,
+                )
+                state = "error"
+                message = "Function 已更新但 Revision 未发布，请重新尝试更新"
+            elif (
+                application_status == "deploy_success"
+                and target
+                and deployed_version
+                and deployed_version != target
+            ):
+                elapsed = int(time.time() * 1000) - request_started_at
+                if request_started_at and elapsed < _SUBMIT_STATUS_GRACE_MILLISECONDS:
+                    state = "updating"
+                    message = "正在等待 Function 更新提交"
+                    progress.update(
+                        {
+                            "progressStage": "submitting",
+                            "progressMessage": message,
+                            "targetVersion": target,
+                            "startedAt": request_started_at,
+                        }
+                    )
+                else:
+                    progress = self._status_failure_payload(
+                        RuntimeError(
+                            f"Target {target} was not submitted; deployed version is "
+                            f"{deployed_version}."
+                        ),
+                        "目标版本未成功提交，请重新尝试更新",
+                        stage="submitting",
+                        target_version=target,
+                        started_at=request_started_at,
+                    )
+                    state = "error"
+                    message = "目标版本未成功提交，请重新尝试更新"
             elif application_status != "deploy_success":
-                target = target or manifest.version
                 state = "updating"
                 message = "VeFaaS 正在发布新 Revision"
-                progress = {
-                    "progressStage": "publishing",
-                    "progressMessage": message,
-                    "targetVersion": target,
-                    "startedAt": self._started_at,
-                }
+                progress.update(
+                    {
+                        "progressStage": "publishing",
+                        "progressMessage": message,
+                        "targetVersion": target,
+                        "startedAt": request_started_at,
+                    }
+                )
             elif target:
                 state = "updating"
                 message = "发布已完成，正在等待新 Revision 接管流量"
-                progress = {
-                    "progressStage": "publishing",
-                    "progressMessage": message,
-                    "targetVersion": target,
-                    "startedAt": self._started_at,
-                }
+                progress.update(
+                    {
+                        "progressStage": "publishing",
+                        "progressMessage": message,
+                        "targetVersion": target,
+                        "startedAt": request_started_at,
+                    }
+                )
+        include_vefaas_logs = bool(target) and (
+            progress["progressStage"] in {"publishing", "complete"}
+            or progress["errorStage"] == "publishing"
+        )
+        progress["updateLogs"] = self._update_logs(
+            include_vefaas=include_vefaas_logs,
+            revision_number=revision_number,
+            local_lines=str(progress["errorLog"]).splitlines(),
+        )
         return {
             "enabled": True,
             "currentVersion": current,
@@ -242,10 +325,12 @@ class StudioSelfUpdater:
             raise StudioReleaseError("Studio self-update is not configured.")
         if not self._lock.acquire(blocking=False):
             raise StudioUpdateConflict("A Studio update is already in progress.")
+        credentials: tuple[str, str, str] = ("", "", "")
         try:
             self._reset_diagnostics(version)
             self._set_progress("resolving", "正在读取目标版本信息")
             access_key, secret_key, session_token = self._credential_resolver()
+            credentials = (access_key, secret_key, session_token or "")
             store = self._store(access_key, secret_key, session_token)
             manifest = store.manifest(version) if version else store.latest_manifest()
             self._target_version = manifest.version
@@ -288,7 +373,7 @@ class StudioSelfUpdater:
         except StudioUpdateConflict:
             raise
         except StudioReleaseError as error:
-            self._record_failure(error, str(error))
+            self._record_failure(error, str(error), secrets=credentials)
             raise
         except Exception as error:
             logger.exception("Failed to submit the Studio self-update")
@@ -308,7 +393,7 @@ class StudioSelfUpdater:
                 )
             else:
                 self._last_error = "Studio 更新提交失败"
-            self._record_failure(error, self._last_error)
+            self._record_failure(error, self._last_error, secrets=credentials)
             raise StudioReleaseError(self._last_error) from error
         finally:
             self._lock.release()
@@ -329,6 +414,9 @@ class StudioSelfUpdater:
         self._diagnostic_lines = []
         self._started_at = int(time.time() * 1000)
         self._target_version = version or ""
+        self._vefaas_log_lines = []
+        self._vefaas_log_revision = 0
+        self._vefaas_logs_expires_at = 0.0
 
     def _record_failure(
         self,
@@ -336,6 +424,7 @@ class StudioSelfUpdater:
         message: str,
         *,
         stage: str | None = None,
+        secrets: tuple[str, ...] = (),
     ) -> None:
         """Record a complete, administrator-visible failure diagnostic."""
         failure_stage = stage or self._progress_stage or "unknown"
@@ -351,7 +440,10 @@ class StudioSelfUpdater:
                 f"applicationId={self._settings.application_id}",
                 f"functionId={self._settings.function_id}",
                 "",
-                "".join(traceback.format_exception(error)).rstrip(),
+                _redact_diagnostic(
+                    "".join(traceback.format_exception(error)).rstrip(),
+                    secrets,
+                ),
             )
         )
         self._set_progress("error", message)
@@ -366,8 +458,98 @@ class StudioSelfUpdater:
             "errorId": self._error_id,
             "errorStage": self._error_stage,
             "errorLog": "\n".join(self._diagnostic_lines),
+            "updateLogs": _tail_log_lines(self._diagnostic_lines),
             "consoleUrl": self._console_url(),
         }
+
+    def _status_failure_payload(
+        self,
+        error: BaseException,
+        message: str,
+        *,
+        stage: str,
+        target_version: str,
+        started_at: int,
+    ) -> dict[str, Any]:
+        """Build one read-only control-plane failure response."""
+        error_id = uuid.uuid4().hex[:12]
+        lines = [
+            *self._diagnostic_lines,
+            f"errorId={error_id}",
+            f"stage={stage}",
+            f"region={self._settings.region}",
+            f"project={self._settings.project}",
+            f"applicationId={self._settings.application_id}",
+            f"functionId={self._settings.function_id}",
+            "",
+            "".join(traceback.format_exception(error)).rstrip(),
+        ]
+        progress = self._progress_payload()
+        progress.update(
+            {
+                "progressStage": "error",
+                "progressMessage": message,
+                "targetVersion": target_version,
+                "startedAt": started_at,
+                "errorId": error_id,
+                "errorStage": stage,
+                "errorLog": "\n".join(lines),
+                "updateLogs": _tail_log_lines(lines),
+            }
+        )
+        return progress
+
+    def _update_logs(
+        self,
+        *,
+        include_vefaas: bool,
+        revision_number: int = 0,
+        local_lines: list[str] | None = None,
+    ) -> list[str]:
+        """Return a bounded, redacted timeline for the update dialog."""
+        lines = list(local_lines if local_lines is not None else self._diagnostic_lines)
+        if include_vefaas:
+            lines.extend(self._load_vefaas_logs(revision_number))
+        return _tail_log_lines(lines)
+
+    def _load_vefaas_logs(self, revision_number: int = 0) -> list[str]:
+        """Read the active Revision log without delaying every status poll."""
+        now = time.monotonic()
+        if (
+            self._vefaas_log_lines
+            and revision_number == self._vefaas_log_revision
+            and now < self._vefaas_logs_expires_at
+        ):
+            return self._vefaas_log_lines
+        access_key, secret_key, session_token = self._credential_resolver()
+        try:
+            from veadk.integrations.ve_faas.ve_faas import VeFaaS
+
+            service = VeFaaS(
+                access_key=access_key,
+                secret_key=secret_key,
+                session_token=session_token or "",
+                region=self._settings.region,
+                project_name=self._settings.project,
+            )
+            raw_lines = service._get_application_logs(
+                self._settings.application_id,
+                revision_number=revision_number or None,
+                limit=_UPDATE_LOG_MAX_LINES,
+            )
+            safe_lines = [
+                _redact_diagnostic(
+                    str(line),
+                    (access_key, secret_key, session_token or ""),
+                )
+                for line in raw_lines
+            ]
+            self._vefaas_log_lines = _tail_log_lines(safe_lines)
+            self._vefaas_log_revision = revision_number
+            self._vefaas_logs_expires_at = now + _UPDATE_LOG_CACHE_SECONDS
+        except Exception:
+            logger.debug("Failed to read VeFaaS update logs", exc_info=True)
+        return self._vefaas_log_lines
 
     def _console_url(self) -> str:
         """Return the fixed VeFaaS Function console URL for this Studio."""
@@ -379,8 +561,8 @@ class StudioSelfUpdater:
             f"{self._settings.function_id}"
         )
 
-    def _application_status(self) -> str:
-        """Read the current Application release status from VeFaaS."""
+    def _application_status(self) -> tuple[str, str, int, bool]:
+        """Read the Application status and Function's configured release version."""
         access_key, secret_key, session_token = self._credential_resolver()
         from veadk.integrations.ve_faas.ve_faas import VeFaaS
 
@@ -391,8 +573,44 @@ class StudioSelfUpdater:
             region=self._settings.region,
             project_name=self._settings.project,
         )
-        status, _ = service._get_application_status(self._settings.application_id)
-        return str(status)
+        status, response = service._get_application_status(
+            self._settings.application_id
+        )
+        result = response.get("Result", {})
+        cloud_resource = result.get("CloudResource", "")
+        if isinstance(cloud_resource, str):
+            try:
+                cloud_resource = json.loads(cloud_resource)
+            except json.JSONDecodeError:
+                cloud_resource = {}
+        function = (
+            cloud_resource.get("framework", {}).get("function", {})
+            if isinstance(cloud_resource, dict)
+            else {}
+        )
+        environment = {
+            str(item.get("Key", "")): str(item.get("Value", ""))
+            for item in function.get("Envs", [])
+            if isinstance(item, dict)
+        }
+        revision_number = int(
+            result.get("NewRevisionNumber") or result.get("StableRevisionNumber") or 0
+        )
+        function_updated_at = _parse_vefaas_time(function.get("LastUpdateTime"))
+        application_updated_at = _parse_vefaas_time(result.get("UpdateTime"))
+        release_pending = bool(
+            function_updated_at
+            and application_updated_at
+            and function_updated_at > application_updated_at
+            and (datetime.now(timezone.utc) - function_updated_at).total_seconds()
+            >= _STAGED_RELEASE_GRACE_SECONDS
+        )
+        return (
+            str(status),
+            environment.get("VEADK_STUDIO_RELEASE_VERSION", ""),
+            revision_number,
+            release_pending,
+        )
 
     def _latest_manifest(self, *, force: bool) -> StudioReleaseManifest:
         now = time.monotonic()
@@ -487,6 +705,69 @@ def _is_release_version(value: str) -> bool:
     return len(value) == 14 and value.isdigit()
 
 
+def _release_reached(current: str, target: str) -> bool:
+    """Return whether the running release is the requested one or newer."""
+    if current == target:
+        return True
+    return (
+        _is_release_version(current)
+        and _is_release_version(target)
+        and current > target
+    )
+
+
+def _redact_diagnostic(text: str, secrets: tuple[str, ...]) -> str:
+    """Remove credentials and signed query strings from administrator logs."""
+    redacted = text
+    for secret in secrets:
+        if secret:
+            redacted = redacted.replace(secret, "***")
+    redacted = re.sub(
+        r"(?i)(\bbearer\s+)[a-z0-9._~+/=-]+",
+        r"\1***",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)((?:api[_-]?key|access[_-]?key|secret[_-]?key|"
+        r"session[_-]?token|security[_-]?token|token|password)\s*[:=]\s*)"
+        r"(?:[\"'][^\"']*[\"']|[^\s,;]+)",
+        r"\1***",
+        redacted,
+    )
+    return re.sub(r"(https?://[^\s?]+)\?[^\s]+", r"\1?[REDACTED]", redacted)
+
+
+def _tail_log_lines(lines: list[str]) -> list[str]:
+    """Keep the newest complete log lines inside the response budget."""
+    flattened = [line for item in lines for line in str(item).splitlines()][
+        -_UPDATE_LOG_MAX_LINES:
+    ]
+    selected: list[str] = []
+    size = 0
+    for line in reversed(flattened):
+        encoded = line.encode("utf-8")
+        if size + len(encoded) + 1 > _UPDATE_LOG_MAX_BYTES:
+            break
+        selected.append(line)
+        size += len(encoded) + 1
+    return list(reversed(selected))
+
+
+def _parse_vefaas_time(value: Any) -> datetime | None:
+    """Parse the two timestamp formats returned by the VeFaaS control plane."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    normalized = value.strip().removesuffix(" UTC").replace("Z", "+00:00")
+    normalized = re.sub(r"\s+([+-]\d{4})$", r"\1", normalized)
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _release_payload(manifest: StudioReleaseManifest) -> dict[str, Any]:
     return {
         "version": manifest.version,
@@ -509,9 +790,17 @@ def mount_studio_update_routes(
         target_version = request.query_params.get("targetVersion")
         if target_version and not _is_release_version(target_version):
             raise HTTPException(status_code=400, detail="版本号格式无效")
+        raw_started_at = request.query_params.get("startedAt")
+        try:
+            started_at = int(raw_started_at) if raw_started_at else None
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="更新时间格式无效") from error
+        if started_at is not None and started_at <= 0:
+            raise HTTPException(status_code=400, detail="更新时间格式无效")
         return await asyncio.to_thread(
             updater.status,
             target_version=target_version,
+            started_at=started_at,
         )
 
     @app.post("/web/studio-update", status_code=202)

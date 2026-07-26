@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -47,6 +48,16 @@ _JOB_PREFIX = "veadk/studio/release-server/jobs"
 _REPOSITORY = "volcengine/veadk-python"
 _ROLE_NAME = "VeADKStudioReleaseServerRole"
 _POLICY_NAME = "VeADKStudioReleaseServerPolicy"
+_NODE_VERSION = "22.17.0"
+_NODE_ARCHIVE_NAME = f"node-v{_NODE_VERSION}-linux-x64.tar.xz"
+_NODE_ARCHIVE_URL = (
+    "https://registry.npmmirror.com/-/binary/node/"
+    f"v{_NODE_VERSION}/{_NODE_ARCHIVE_NAME}"
+)
+_NODE_ARCHIVE_SHA256 = (
+    "325c0f1261e0c61bcae369a1274028e9cfb7ab7949c05512c5b1e630f7e80e12"
+)
+_MAX_NODE_ARCHIVE_BYTES = 128 * 1024 * 1024
 
 _TRUST_POLICY = {
     "Statement": [
@@ -180,6 +191,7 @@ def _stage_deployment(source_root: Path, destination: Path) -> None:
         source_root / "frontend" / "service" / "__init__.py",
         destination / "frontend" / "service" / "__init__.py",
     )
+    _stage_node_archive(service_destination)
     deployment_root = service_source
     shutil.copy2(deployment_root / "requirements.txt", destination)
     wheel_requirements = destination / "runtime-wheel-requirements.txt"
@@ -227,6 +239,17 @@ def _stage_deployment(source_root: Path, destination: Path) -> None:
     run_script = destination / "run.sh"
     shutil.copy2(deployment_root / "run.sh", run_script)
     run_script.chmod(0o755)
+
+
+def _stage_node_archive(service_destination: Path) -> None:
+    """Bundle the pinned Linux Node toolchain for network-free cold builds."""
+    with urllib.request.urlopen(_NODE_ARCHIVE_URL, timeout=120) as response:
+        content = response.read(_MAX_NODE_ARCHIVE_BYTES + 1)
+    if len(content) > _MAX_NODE_ARCHIVE_BYTES:
+        raise ValueError("Node archive exceeds 128 MiB.")
+    if hashlib.sha256(content).hexdigest() != _NODE_ARCHIVE_SHA256:
+        raise ValueError("Node archive checksum does not match.")
+    (service_destination / _NODE_ARCHIVE_NAME).write_bytes(content)
 
 
 def _runtime_environment(api_key: str) -> dict[str, str]:

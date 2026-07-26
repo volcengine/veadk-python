@@ -302,7 +302,7 @@ class OAuth2Config(BaseModel):
     state_max_entries: int = 10000
 
     # HTTP client behavior
-    http_timeout_seconds: float = 10.0
+    http_timeout_seconds: float = 30.0
     http_max_connections: int = 100
     http_max_keepalive_connections: int = 20
 
@@ -797,7 +797,7 @@ class OAuth2Handler:
         except HTTPException:
             raise
         except Exception as e:
-            logger.error("Token exchange error: %s", e)
+            logger.error("Token exchange error: %r", e)
             raise HTTPException(status_code=500, detail="Authentication failed")
 
     async def refresh_access_token(

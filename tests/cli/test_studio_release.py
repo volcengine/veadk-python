@@ -15,6 +15,7 @@
 """Tests for immutable Studio release artifacts."""
 
 import hashlib
+import io
 import json
 from pathlib import Path
 
@@ -248,6 +249,43 @@ def test_stage_dependency_wheels_copies_only_verified_content(
     assert staged[0].read_bytes() == content
 
 
+def test_stage_dependency_wheels_prefers_domestic_mirrors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = b"downloaded-wheel"
+    dependency = StudioDependencyWheel(
+        filename="downloaded.whl",
+        url="https://files.pythonhosted.org/packages/example/downloaded.whl",
+        sha256=hashlib.sha256(content).hexdigest(),
+    )
+    urls: list[str] = []
+
+    def _urlopen(url: str, *, timeout: int) -> io.BytesIO:
+        urls.append(url)
+        assert timeout == 60
+        if url.startswith("https://pypi.tuna.tsinghua.edu.cn/"):
+            raise OSError("mirror unavailable")
+        return io.BytesIO(content)
+
+    monkeypatch.setattr(
+        "veadk.cli.studio_dependencies.STUDIO_DEPENDENCY_WHEELS",
+        (dependency,),
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_dependencies.urllib.request.urlopen",
+        _urlopen,
+    )
+
+    staged = stage_studio_dependency_wheels(tmp_path / "destination")
+
+    assert staged[0].read_bytes() == content
+    assert urls == [
+        "https://pypi.tuna.tsinghua.edu.cn/packages/example/downloaded.whl",
+        "https://mirrors.aliyun.com/pypi/packages/example/downloaded.whl",
+    ]
+
+
 def test_write_dependency_manifest_uses_pinned_wheel_metadata(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -276,13 +314,15 @@ def test_write_dependency_manifest_uses_pinned_wheel_metadata(
     }
 
 
-def test_publish_workflow_excludes_wheels_from_cross_region_archive() -> None:
+def test_publish_workflow_sends_only_release_metadata() -> None:
     workflow = (
         Path(__file__).parents[2] / ".github/workflows/publish-studio-release.yaml"
     ).read_text(encoding="utf-8")
 
-    assert '--manifest "$prepared_root/dependencies.json"' in workflow
-    assert '--exclude="veadk-python-${GITHUB_SHA}/.studio-release/wheels"' in workflow
+    assert "Upload staged release source" not in workflow
+    assert "sourceKey" not in workflow
+    assert '"Accept": "text/event-stream"' in workflow
+    assert 'source_root = Path(os.environ["GITHUB_WORKSPACE"])' in workflow
 
 
 def test_build_release_uses_prepared_frontend_and_wheels(

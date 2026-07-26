@@ -67,41 +67,12 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
 
-      - name: Test Studio release backend
-        run: |
-          uv run --group dev pytest -q \
-            tests/test_studio_release_server.py \
-            tests/cli/test_studio_release.py
-
-      - name: Stage and test release source
-        id: source
-        run: |
-          set -euo pipefail
-          archive="$RUNNER_TEMP/studio-release-source.tar.gz"
-          source_parent="$RUNNER_TEMP/studio-release-source"
-          source_root="$source_parent/veadk-python-${GITHUB_SHA}"
-          prepared_root="$source_root/.studio-release"
-          mkdir -p "$source_root" "$prepared_root/frontend"
-          git archive "$GITHUB_SHA" -- \
-            pyproject.toml README.md LICENSE frontend veadk \
-            ':(exclude)veadk/webui' | tar -x -C "$source_root"
-          npm ci --prefix frontend
-          npm test --prefix frontend
-          npm run build --prefix frontend -- \
-            --outDir "$prepared_root/frontend"
-          python -m veadk.cli.studio_dependencies \
-            --output-dir "$prepared_root/wheels" \
-            --manifest "$prepared_root/dependencies.json"
-          tar -C "$source_parent" \
-            --exclude="veadk-python-${GITHUB_SHA}/.studio-release/wheels" \
-            -czf "$archive" \
-            "veadk-python-${GITHUB_SHA}"
-          echo "archive=$archive" >> "$GITHUB_OUTPUT"
-          echo "source_root=$source_root" >> "$GITHUB_OUTPUT"
-
       - name: Build and validate Studio bundle
         env:
-          SOURCE_ROOT: ${{ steps.source.outputs.source_root }}
+          PIP_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
+          UV_DEFAULT_INDEX: https://mirrors.aliyun.com/pypi/simple/
+          npm_config_registry: https://registry.npmmirror.com
+          npm_config_replace_registry_host: always
         run: |
           set -euo pipefail
           output_dir="$RUNNER_TEMP/studio-release-output"
@@ -114,7 +85,7 @@ jobs:
 
           from veadk.cli.studio_release import build_studio_release
 
-          source_root = Path(os.environ["SOURCE_ROOT"])
+          source_root = Path(os.environ["GITHUB_WORKSPACE"])
           output_dir = Path(os.environ["output_dir"])
           bundle, manifest = build_studio_release(
               source_root=source_root,
@@ -122,8 +93,6 @@ jobs:
               version=os.environ["version"],
               git_sha=os.environ["GITHUB_SHA"],
               changelog=("Pull request release validation",),
-              frontend_assets=source_root / ".studio-release" / "frontend",
-              dependency_wheels=source_root / ".studio-release" / "wheels",
           )
           print(
               json.dumps(
@@ -143,15 +112,6 @@ jobs:
           test "${#manifests[@]}" -eq 1
           unzip -t "${bundles[0]}"
 
-      - name: Preserve staged source for publishing
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
-        with:
-          name: studio-release-source-${{ github.sha }}
-          path: ${{ steps.source.outputs.archive }}
-          compression-level: 0
-          retention-days: 1
-
   publish:
     if: >-
       github.event_name == 'workflow_dispatch' &&
@@ -166,12 +126,6 @@ jobs:
       RELEASE_SERVER_API_KEY: ${{ secrets.STUDIO_RELEASE_SERVER_API_KEY }}
 
     steps:
-      - name: Download staged release source
-        uses: actions/download-artifact@v4
-        with:
-          name: studio-release-source-${{ github.sha }}
-          path: ${{ runner.temp }}/studio-release-source
-
       - name: Validate release server configuration
         run: |
           set -euo pipefail
@@ -190,119 +144,124 @@ jobs:
           fi
           echo "RELEASE_SERVER_URL=$release_server_url" >> "$GITHUB_ENV"
 
-      - name: Resolve release changelog
-        id: changelog
+      - name: Request Studio release
         env:
-          MANUAL_CHANGELOG: ${{ inputs.changelog }}
+          STUDIO_CHANGELOG: ${{ inputs.changelog }}
         run: |
           set -euo pipefail
-          changelog="$MANUAL_CHANGELOG"
-          test -n "$changelog" || {
+          test -n "$STUDIO_CHANGELOG" || {
             echo "Studio release changelog is empty." >&2
             exit 1
           }
-          {
-            echo "value<<STUDIO_CHANGELOG"
-            echo "$changelog"
-            echo "STUDIO_CHANGELOG"
-          } >> "$GITHUB_OUTPUT"
+          python - <<'PY'
+          import http.client
+          import json
+          import os
+          import sys
+          import time
+          import urllib.error
+          import urllib.request
 
-      - name: Upload staged release source
-        id: source
-        run: |
-          set -euo pipefail
-          job_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          archive="$RUNNER_TEMP/studio-release-source/studio-release-source.tar.gz"
-          test -s "$archive"
-          for attempt in 1 2 3; do
-            echo "Uploading staged source to TOS (attempt $attempt/3)."
-            upload_response="$(curl --fail-with-body --silent --show-error \
-              --proto '=https' \
-              --connect-timeout 30 \
-              --max-time 60 \
-              --request POST \
-              --header "Content-Type: application/json" \
-              --header "X-API-Key: $RELEASE_SERVER_API_KEY" \
-              --data "$(jq -n --arg requestId "$job_id" \
-                '{requestId:$requestId}')" \
-              --url "$RELEASE_SERVER_URL/source-upload")"
-            source_key="$(jq -er '.sourceKey' <<<"$upload_response")"
-            upload_url="$(jq -er '.uploadUrl' <<<"$upload_response")"
-            if curl --fail-with-body --silent --show-error \
-              --proto '=https' \
-              --connect-timeout 30 \
-              --max-time 600 \
-              --speed-limit 1024 \
-              --speed-time 60 \
-              --request PUT \
-              --header "Content-Type: application/gzip" \
-              --upload-file "$archive" \
-              --write-out 'TOS upload status=%{http_code} uploaded=%{size_upload} speed=%{speed_upload} time=%{time_total}\n' \
-              --url "$upload_url"; then
-              break
-            else
-              upload_exit=$?
-            fi
-            if (( attempt == 3 )); then
-              echo "TOS source upload failed after 3 attempts." >&2
-              exit "$upload_exit"
-            fi
-            echo "TOS source upload failed; requesting a fresh signed URL before retrying." >&2
-            sleep $((attempt * 10))
-          done
-          echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
-          echo "source_key=$source_key" >> "$GITHUB_OUTPUT"
+          job_id = (
+              f"{os.environ['GITHUB_RUN_ID']}-"
+              f"{os.environ['GITHUB_RUN_ATTEMPT']}"
+          )
+          payload = json.dumps(
+              {
+                  "repository": os.environ["GITHUB_REPOSITORY"],
+                  "gitSha": os.environ["GITHUB_SHA"],
+                  "requestId": job_id,
+                  "changelog": [os.environ["STUDIO_CHANGELOG"]],
+              }
+          ).encode()
+          request = urllib.request.Request(
+              f"{os.environ['RELEASE_SERVER_URL']}/release",
+              data=payload,
+              headers={
+                  "Accept": "text/event-stream",
+                  "Content-Type": "application/json",
+                  "X-API-Key": os.environ["RELEASE_SERVER_API_KEY"],
+              },
+              method="POST",
+          )
+          def report(current):
+              print(
+                  "Studio release "
+                  f"state={current['state']} stage={current['stage']} "
+                  f"message={current['message']}",
+                  flush=True,
+              )
 
-      - name: Request Studio release
-        id: release
-        env:
-          STUDIO_CHANGELOG: ${{ steps.changelog.outputs.value }}
-          JOB_ID: ${{ steps.source.outputs.job_id }}
-          SOURCE_KEY: ${{ steps.source.outputs.source_key }}
-        run: |
-          set -euo pipefail
-          payload="$(jq -n \
-            --arg repository "$GITHUB_REPOSITORY" \
-            --arg gitSha "$GITHUB_SHA" \
-            --arg requestId "$JOB_ID" \
-            --arg changelog "$STUDIO_CHANGELOG" \
-            --arg sourceKey "$SOURCE_KEY" \
-            '{repository:$repository,gitSha:$gitSha,requestId:$requestId,changelog:[$changelog],sourceKey:$sourceKey}')"
-          curl --fail-with-body --silent --show-error \
-            --proto '=https' \
-            --connect-timeout 30 \
-            --max-time 1800 \
-            --request POST \
-            --header "Content-Type: application/json" \
-            --header "X-API-Key: $RELEASE_SERVER_API_KEY" \
-            --data "$payload" \
-            --url "$RELEASE_SERVER_URL/release" >/dev/null
-          echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
+          terminal = None
+          stream_error = None
+          for attempt in range(1, 4):
+              try:
+                  with urllib.request.urlopen(request, timeout=1800) as response:
+                      for raw_line in response:
+                          line = raw_line.decode().strip()
+                          if not line.startswith("data: "):
+                              continue
+                          terminal = json.loads(line.removeprefix("data: "))
+                          report(terminal)
+                  stream_error = None
+                  break
+              except (
+                  OSError,
+                  urllib.error.URLError,
+                  http.client.HTTPException,
+              ) as error:
+                  stream_error = error
+                  print(
+                      f"Studio release stream interrupted (attempt {attempt}/3): "
+                      f"{error}",
+                      file=sys.stderr,
+                      flush=True,
+                  )
+                  if attempt < 3:
+                      time.sleep(2 * attempt)
 
-      - name: Wait for Studio release
-        env:
-          JOB_ID: ${{ steps.release.outputs.job_id }}
-        run: |
-          set -euo pipefail
-          for _ in $(seq 1 180); do
-            response="$(curl --fail-with-body --silent --show-error \
-              --proto '=https' \
-              --connect-timeout 30 \
-              --max-time 60 \
-              --header "X-API-Key: $RELEASE_SERVER_API_KEY" \
-              --url "$RELEASE_SERVER_URL/status/$JOB_ID")"
-            state="$(jq -r '.state' <<<"$response")"
-            stage="$(jq -r '.stage' <<<"$response")"
-            echo "Studio release state=$state stage=$stage"
-            if [[ "$state" == "succeeded" ]]; then
-              jq '{state,stage,result}' <<<"$response"
-              exit 0
-            fi
-            if [[ "$state" == "failed" ]]; then
-              jq '{state,stage,message,error}' <<<"$response" >&2
-              exit 1
-            fi
-            sleep 10
-          done
-          echo "Studio release timed out after 30 minutes." >&2
-          exit 1
+          deadline = time.monotonic() + 1800
+          missing_status = 0
+          while terminal is None or terminal["state"] not in {
+              "succeeded",
+              "failed",
+          }:
+              if time.monotonic() >= deadline:
+                  raise RuntimeError(
+                      "Studio release did not reach a terminal state."
+                  ) from stream_error
+              status_request = urllib.request.Request(
+                  f"{os.environ['RELEASE_SERVER_URL']}/status/{job_id}",
+                  headers={
+                      "X-API-Key": os.environ["RELEASE_SERVER_API_KEY"],
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(
+                      status_request,
+                      timeout=60,
+                  ) as response:
+                      terminal = json.load(response)
+                  missing_status = 0
+                  report(terminal)
+              except urllib.error.HTTPError as error:
+                  if error.code != 404:
+                      print(f"Status check failed: {error}", file=sys.stderr)
+                  else:
+                      missing_status += 1
+                      if missing_status >= 3 and terminal is None:
+                          raise RuntimeError(
+                              "Studio release request was not accepted."
+                          ) from stream_error
+              except (OSError, urllib.error.URLError) as error:
+                  print(f"Status check interrupted: {error}", file=sys.stderr)
+              if terminal is None or terminal["state"] not in {
+                  "succeeded",
+                  "failed",
+              }:
+                  time.sleep(2)
+          if terminal["state"] != "succeeded":
+              print(json.dumps(terminal, ensure_ascii=False), file=sys.stderr)
+              raise SystemExit(1)
+          print(json.dumps(terminal["result"], ensure_ascii=False, indent=2))
+          PY
