@@ -14,10 +14,80 @@ const sidebarSource = readFileSync(
   new URL("../src/ui/Sidebar.tsx", import.meta.url),
   "utf8",
 );
+const blocksSource = readFileSync(
+  new URL("../src/ui/Blocks.tsx", import.meta.url),
+  "utf8",
+);
 const stylesSource = readFileSync(
   new URL("../src/styles.css", import.meta.url),
   "utf8",
 );
+
+test("uses ChatGPT-scale typography for conversation copy", () => {
+  assert.match(stylesSource, /\.bubble\s*\{[^}]*font-size:\s*16px/);
+  assert.match(stylesSource, /\.md\s*\{[^}]*font-size:\s*16px/);
+  assert.match(stylesSource, /\.md\s*\{[^}]*line-height:\s*1\.65/);
+});
+
+test("smoothly positions new turns and follows streamed output until interrupted", () => {
+  assert.match(
+    appSource,
+    /el\.scrollTo\(\{ top: el\.scrollHeight, behavior: "smooth" \}\)/,
+  );
+  assert.match(
+    appSource,
+    /className=\{`transcript\$\{activeConversationPresenting \? " is-streaming" : ""\}`\}/,
+  );
+  assert.doesNotMatch(appSource, /useStickToBottom<HTMLDivElement>\(turns\)/);
+  assert.match(
+    appSource,
+    /conversationAutoFollowRef\.current =\s*el\.scrollHeight - el\.scrollTop - el\.clientHeight < 32/,
+  );
+  assert.match(
+    appSource,
+    /!conversationAutoFollowRef\.current \|\|[\s\S]*?conversationSmoothScrollRef\.current[\s\S]*?el\.scrollTop = el\.scrollHeight/,
+  );
+  assert.match(
+    stylesSource,
+    /\.transcript\.is-streaming\s*\{[^}]*overflow-anchor:\s*none/,
+  );
+  assert.match(
+    stylesSource,
+    /\.transcript\.is-streaming > \.turn--assistant:last-child\s*\{[^}]*min-height:\s*max\(0px, calc\(100% - 180px\)\)/,
+  );
+  assert.match(blocksSource, /STREAM_FRAME_INTERVAL_MS = 28/);
+  assert.match(blocksSource, /window\.requestAnimationFrame\(renderFrame\)/);
+  assert.match(blocksSource, /Math\.min\(18, Math\.max\(2, Math\.ceil\(remaining \/ 6\)\)\)/);
+  assert.match(blocksSource, /prefers-reduced-motion: reduce/);
+  assert.match(
+    blocksSource,
+    /cancelAnimationFrame\(frameRef\.current\);\s*frameRef\.current = null/,
+  );
+  assert.match(
+    appSource,
+    /streaming=\{isLast && \(activeConversationBusy \|\| presentingStream\)\}/,
+  );
+  assert.match(appSource, /finishStreamPresentation[\s\S]*?2400/);
+  assert.match(appSource, /onStreamFrame=\{isLast \? followConversationStreamFrame : undefined\}/);
+  assert.match(blocksSource, /!done \|\| streaming/);
+});
+
+test("keeps thinking and tool status copy legible below the answer hierarchy", () => {
+  const builtinStylesSource = readFileSync(
+    new URL("../src/ui/builtin-tools/builtin-tools.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(stylesSource, /\.think-label\s*\{[^}]*font-size:\s*14\.5px/);
+  assert.match(stylesSource, /\.tool-name\s*\{[^}]*font-size:\s*14\.5px/);
+  assert.match(stylesSource, /\.think-body\s*\{[^}]*font-size:\s*14px/);
+  assert.match(
+    builtinStylesSource,
+    /\.builtin-tool-label\s*\{[^}]*font-size:\s*14\.5px/,
+  );
+  assert.match(stylesSource, /\.think-body\s*\{[^}]*margin:\s*0/);
+  assert.match(stylesSource, /\.think-body\s*\{[^}]*padding:\s*0/);
+  assert.match(stylesSource, /\.think-body\s*\{[^}]*border-left:\s*0/);
+});
 
 test("shows session metadata only after the conversation starts", () => {
   assert.match(appSource, /showMeta=\{turns\.length > 0 && !sandboxSession\}/);

@@ -10,3 +10,7 @@ const source = readFileSync(
 test("proxies the session trace API in development", () => {
   assert.match(source, /["']\/dev["']\s*:\s*API_TARGET/);
 });
+
+test("proxies session capability APIs in development", () => {
+  assert.match(source, /["']\/harness["']\s*:\s*API_TARGET/);
+});

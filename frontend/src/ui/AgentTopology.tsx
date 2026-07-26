@@ -1,7 +1,17 @@
-import { useEffect, type ReactNode, type RefObject } from "react";
-import type { AgentInfo, AgentNode, AgentNodeType } from "../adk/client";
+import { useEffect, useState, type RefObject } from "react";
+import type {
+  AddSessionCapability,
+  AgentInfo,
+  AgentNode,
+  AgentNodeType,
+  SessionCapabilities,
+} from "../adk/client";
 import { AgentIdentityIcon } from "./AgentIdentityIcon";
-import { SkillCapabilityIcon, ToolCapabilityIcon } from "./CapabilityIcons";
+import {
+  sessionToolLabel,
+  SkillCapabilityDialog,
+  ToolCapabilityDialog,
+} from "./SessionCapabilityDialogs";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 
 const TYPE_LABELS: Record<AgentNodeType, string> = {
@@ -114,14 +124,12 @@ function TopoNode({
 
 interface ModuleTitleProps {
   title: string;
-  icon: ReactNode;
   count: number;
 }
 
-function ModuleTitle({ title, icon, count }: ModuleTitleProps) {
+function ModuleTitle({ title, count }: ModuleTitleProps) {
   return (
     <div className="topo-module-title">
-      {icon}
       <span className="topo-module-label" title={title}>{title}</span>
       <span className="topo-section-count" aria-label={`${count} 项`}>
         {count}
@@ -131,25 +139,40 @@ function ModuleTitle({ title, icon, count }: ModuleTitleProps) {
 }
 
 interface AgentInfoPanelProps {
+  appName: string;
   info: AgentInfo | null;
   loading: boolean;
   activeAgent: string;
   seenAgents: Set<string>;
   execPath?: string[];
   variant?: "rail" | "drawer";
+  capabilities?: SessionCapabilities | null;
+  capabilityLoading?: boolean;
+  capabilityMutating?: boolean;
+  builtinTools?: string[];
+  onAddCapability?: (capability: AddSessionCapability) => Promise<boolean>;
+  onRemoveCapability?: (capabilityId: string) => void;
 }
 
 /** Agent metadata and optional multi-Agent topology shown in the conversation's
  * right whitespace. The parent owns metadata loading so this display component
  * never issues a duplicate `/web/agent-info` request. */
 export function AgentInfoPanel({
+  appName,
   info,
   loading,
   activeAgent,
   seenAgents,
   execPath = [],
   variant = "rail",
+  capabilities = null,
+  capabilityLoading = false,
+  capabilityMutating = false,
+  builtinTools = [],
+  onAddCapability,
+  onRemoveCapability,
 }: AgentInfoPanelProps) {
+  const [dialog, setDialog] = useState<"tool" | "skill" | null>(null);
   if (loading && !info) {
     return (
       <aside
@@ -179,9 +202,20 @@ export function AgentInfoPanel({
       children: [],
     },
   );
-  const hasTopology = graph.children.length > 0;
-  const tools = uniqueValues(info.tools);
-  const skills = uniqueSkills(info.skills);
+  const tools = capabilities?.tools ?? uniqueValues(info.tools).map((name) => ({
+    id: `base:tool:${name}`,
+    kind: "tool" as const,
+    name,
+    custom: false,
+  }));
+  const skills = capabilities?.skills ?? uniqueSkills(info.skills).map((skill) => ({
+    id: `base:skill:${skill.name}`,
+    kind: "skill" as const,
+    name: skill.name,
+    description: skill.description,
+    custom: false,
+  }));
+  const canCustomize = Boolean(capabilities && onAddCapability && onRemoveCapability);
   const pathSet = new Set(execPath);
   const displayNames = new Map<string, string>();
   collectDisplayNames(graph, displayNames);
@@ -210,7 +244,6 @@ export function AgentInfoPanel({
           <ModuleTitle
             title="工具"
             count={tools.length}
-            icon={<ToolCapabilityIcon className="topo-section-icon" />}
           />
           <div
             className="topo-module-scroll topo-tools-scroll"
@@ -221,22 +254,53 @@ export function AgentInfoPanel({
             {tools.length > 0 ? (
               <div className="topo-tool-list">
                 {tools.map((tool) => (
-                  <span key={tool} className="topo-tool" title={tool}>
-                    {tool}
-                  </span>
+                  <div key={tool.id} className="topo-tool" title={tool.name}>
+                    <span className="topo-capability-title">
+                      <span className="topo-capability-copy">
+                        <span className="topo-capability-name">{sessionToolLabel(tool.name)}</span>
+                        <code>{tool.name}</code>
+                      </span>
+                      {tool.custom && <span className="topo-custom-badge">自定义</span>}
+                    </span>
+                    {tool.custom && (
+                      <button
+                        type="button"
+                        className="topo-remove-capability"
+                        aria-label={`移除工具 ${tool.name}`}
+                        title="移除"
+                        disabled={capabilityMutating}
+                        onClick={() => onRemoveCapability?.(tool.id)}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
                 ))}
               </div>
             ) : (
               <div className="topo-empty">未配置</div>
             )}
           </div>
+          {canCustomize && (
+            <div className="topo-capability-add-dock">
+              <button
+                type="button"
+                className="topo-capability-add-slot"
+                aria-label="添加内置工具"
+                disabled={capabilityLoading || capabilityMutating}
+                onClick={() => setDialog("tool")}
+              >
+                <span aria-hidden="true">＋</span>
+                <span>在此对话中添加工具</span>
+              </button>
+            </div>
+          )}
         </section>
 
         <section className="topo-module-card topo-skills-card" aria-label="技能">
           <ModuleTitle
             title="技能"
             count={skills.length}
-            icon={<SkillCapabilityIcon className="topo-section-icon" />}
           />
           <div
             className="topo-module-scroll topo-skills-scroll"
@@ -252,7 +316,22 @@ export function AgentInfoPanel({
                     className="topo-skill"
                     title={skill.description || skill.name}
                   >
-                    <span className="topo-skill-name">{skill.name}</span>
+                    <div className="topo-skill-title">
+                      <span className="topo-skill-name">{skill.name}</span>
+                      {skill.custom && <span className="topo-custom-badge">自定义</span>}
+                      {skill.custom && (
+                        <button
+                          type="button"
+                          className="topo-remove-capability"
+                          aria-label={`移除技能 ${skill.name}`}
+                          title="移除"
+                          disabled={capabilityMutating}
+                          onClick={() => onRemoveCapability?.(skill.id)}
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
                     {skill.description && (
                       <span className="topo-skill-description">
                         {skill.description}
@@ -265,13 +344,26 @@ export function AgentInfoPanel({
               <div className="topo-empty">未配置</div>
             )}
           </div>
+          {canCustomize && (
+            <div className="topo-capability-add-dock">
+              <button
+                type="button"
+                className="topo-capability-add-slot"
+                aria-label="添加技能"
+                disabled={capabilityLoading || capabilityMutating}
+                onClick={() => setDialog("skill")}
+              >
+                <span aria-hidden="true">＋</span>
+                <span>在此对话中添加技能</span>
+              </button>
+            </div>
+          )}
         </section>
 
         <section className="topo-module-card topo-topology" aria-label="Agent 拓扑">
           <ModuleTitle
             title="拓扑"
             count={totalNodes(graph)}
-            icon={<AgentIdentityIcon className="topo-section-icon" />}
           />
           <div
             className="topo-module-scroll topo-topology-scroll"
@@ -279,43 +371,54 @@ export function AgentInfoPanel({
             aria-label="Agent 拓扑列表"
             tabIndex={0}
           >
-            {hasTopology ? (
-              <>
-                {execPath.length > 0 && (
-                  <div className="topo-path" aria-label="执行路径">
-                    {execPath.map((name, index) => (
-                      <span key={`${name}-${index}`} className="topo-path-seg">
-                        <span
-                          className={
-                            index === execPath.length - 1
-                              ? "topo-path-name is-current"
-                              : "topo-path-name"
-                          }
-                        >
-                          {displayNames.get(name) ?? name}
-                        </span>
-                      </span>
-                    ))}
-                  </div>
-                )}
-                <div className="topo-tree">
-                  <TopoNode
-                    node={graph}
-                    activeAgent={activeAgent}
-                    seen={seenAgents}
-                    path={pathSet}
-                  />
-                </div>
-              </>
-            ) : (
-              <div className="topo-topology-empty">
-                <span className="topo-topology-line" aria-hidden="true" />
-                <span>单 Agent，无协作拓扑</span>
+            {execPath.length > 1 && (
+              <div className="topo-path" aria-label="执行路径">
+                {execPath.map((name, index) => (
+                  <span key={`${name}-${index}`} className="topo-path-seg">
+                    <span
+                      className={
+                        index === execPath.length - 1
+                          ? "topo-path-name is-current"
+                          : "topo-path-name"
+                      }
+                    >
+                      {displayNames.get(name) ?? name}
+                    </span>
+                  </span>
+                ))}
               </div>
             )}
+            <div className="topo-tree">
+              <TopoNode
+                node={graph}
+                activeAgent={activeAgent}
+                seen={seenAgents}
+                path={pathSet}
+              />
+            </div>
           </div>
         </section>
       </div>
+      {dialog === "tool" && onAddCapability && (
+        <ToolCapabilityDialog
+          agentName={info.name}
+          tools={builtinTools}
+          selectedNames={tools.map((tool) => tool.name)}
+          mutating={capabilityMutating}
+          onAdd={onAddCapability}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog === "skill" && onAddCapability && (
+        <SkillCapabilityDialog
+          appName={appName}
+          agentName={info.name}
+          selectedNames={skills.map((skill) => skill.name)}
+          mutating={capabilityMutating}
+          onAdd={onAddCapability}
+          onClose={() => setDialog(null)}
+        />
+      )}
     </aside>
   );
 }
@@ -337,19 +440,33 @@ function CloseIcon() {
 }
 
 export function AgentInfoDrawer({
+  appName,
   info,
   loading,
   activeAgent,
   seenAgents,
   execPath,
+  capabilities,
+  capabilityLoading,
+  capabilityMutating,
+  builtinTools,
+  onAddCapability,
+  onRemoveCapability,
   onClose,
   returnFocusRef,
 }: {
+  appName: string;
   info: AgentInfo | null;
   loading: boolean;
   activeAgent: string;
   seenAgents: Set<string>;
   execPath: string[];
+  capabilities?: SessionCapabilities | null;
+  capabilityLoading?: boolean;
+  capabilityMutating?: boolean;
+  builtinTools?: string[];
+  onAddCapability?: (capability: AddSessionCapability) => Promise<boolean>;
+  onRemoveCapability?: (capabilityId: string) => void;
   onClose: () => void;
   returnFocusRef: RefObject<HTMLButtonElement>;
 }) {
@@ -396,11 +513,18 @@ export function AgentInfoDrawer({
         <div className="agent-info-drawer-body">
           {info || loading ? (
             <AgentInfoPanel
+              appName={appName}
               info={info}
               loading={loading}
               activeAgent={activeAgent}
               seenAgents={seenAgents}
               execPath={execPath}
+              capabilities={capabilities}
+              capabilityLoading={capabilityLoading}
+              capabilityMutating={capabilityMutating}
+              builtinTools={builtinTools}
+              onAddCapability={onAddCapability}
+              onRemoveCapability={onRemoveCapability}
               variant="drawer"
             />
           ) : (

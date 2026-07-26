@@ -34,6 +34,10 @@
   --builtin-tool-accent: 225 48% 45%;
 }
 
+.builtin-tool-head[data-tool-tone="skill"] {
+  --builtin-tool-accent: 154 50% 34%;
+}
+
 .builtin-tool-head[data-tool-tone="sandbox"] {
   --builtin-tool-accent: 32 67% 42%;
 }
@@ -58,7 +62,7 @@
 }
 
 .builtin-tool-label {
-  font-size: 13.5px;
+  font-size: 14.5px;
   font-weight: 400;
   line-height: 1.35;
 }

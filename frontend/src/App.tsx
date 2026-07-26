@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type WheelEvent,
+} from "react";
 import {
   Check,
   ChevronDown,
@@ -12,6 +19,7 @@ import {
 import { motion } from "motion/react";
 import {
   cancelAgentkitDeployment,
+  addSessionCapability,
   createSession,
   DEFAULT_STUDIO_ACCESS,
   DEFAULT_SITE_BRANDING,
@@ -19,10 +27,13 @@ import {
   deleteSessionMedia,
   deleteSession,
   getAgentInfo,
+  getSessionCapabilities,
   getSession,
   getStudioAccess,
   listApps,
+  listSessionBuiltinTools,
   listSessions,
+  removeSessionCapability,
   runSSE,
   submitMessageFeedback,
   uploadMedia,
@@ -32,11 +43,13 @@ import {
   type AgentNode,
   type AgentTarget,
   type AdkSession,
+  type AddSessionCapability,
   type Attachment,
   type FrontendInvocation,
   type ManagedRuntime,
   type MessageFeedbackRating,
   type SiteBranding,
+  type SessionCapabilities,
   type StudioAccess,
   type UiFeatures,
 } from "./adk/client";
@@ -168,7 +181,6 @@ function loadView(): CreateView {
 import { TraceDrawer } from "./ui/TraceDrawer";
 import { LoginPage } from "./ui/LoginPage";
 import { Markdown } from "./ui/Markdown";
-import { useStickToBottom } from "./ui/useStickToBottom";
 import {
   clearLocalUser,
   logout,
@@ -612,6 +624,13 @@ export default function App() {
   const [invocation, setInvocation] = useState<FrontendInvocation>(emptyInvocation);
   const [agentInfo, setAgentInfo] = useState<AgentInfo | null>(null);
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
+  const [sessionCapabilities, setSessionCapabilities] =
+    useState<SessionCapabilities | null>(null);
+  const [sessionCapabilitiesLoading, setSessionCapabilitiesLoading] =
+    useState(false);
+  const [sessionBuiltinTools, setSessionBuiltinTools] = useState<string[]>([]);
+  const [sessionCapabilityMutating, setSessionCapabilityMutating] =
+    useState(false);
   const removedAttachmentIdsRef = useRef<Set<string>>(new Set());
   // Streaming state is PER SESSION so multiple sessions can stream at once
   // (each /run_sse is an independent request). `streamingSids` = which sessions
@@ -621,7 +640,11 @@ export default function App() {
   const [streamingSids, setStreamingSids] = useState<Set<string>>(
     () => new Set(),
   );
+  const [streamPresentationSids, setStreamPresentationSids] = useState<Set<string>>(
+    () => new Set(),
+  );
   const streamAbortsRef = useRef<Map<string, AbortController>>(new Map());
+  const streamPresentationTimersRef = useRef<Map<string, number>>(new Map());
   const setStreaming = (sid: string, on: boolean) =>
     setStreamingSids((s) => {
       const n = new Set(s);
@@ -629,6 +652,25 @@ export default function App() {
       else n.delete(sid);
       return n;
     });
+  const startStreamPresentation = (sid: string) => {
+    const timer = streamPresentationTimersRef.current.get(sid);
+    if (timer !== undefined) window.clearTimeout(timer);
+    streamPresentationTimersRef.current.delete(sid);
+    setStreamPresentationSids((current) => new Set(current).add(sid));
+  };
+  const finishStreamPresentation = (sid: string) => {
+    const previousTimer = streamPresentationTimersRef.current.get(sid);
+    if (previousTimer !== undefined) window.clearTimeout(previousTimer);
+    const timer = window.setTimeout(() => {
+      streamPresentationTimersRef.current.delete(sid);
+      setStreamPresentationSids((current) => {
+        const next = new Set(current);
+        next.delete(sid);
+        return next;
+      });
+    }, 2400);
+    streamPresentationTimersRef.current.set(sid, timer);
+  };
   // The session currently on screen — used to gate the single global error
   // banner (per-session transcripts/topology don't need it).
   const viewSidRef = useRef("");
@@ -683,10 +725,14 @@ export default function App() {
   // Everything the view needs for the ACTIVE session, derived from the
   // per-session maps above.
   const busy = streamingSids.has(sessionId);
+  const presentingStream = streamPresentationSids.has(sessionId);
   const conversationBusy = busy || initializingSession;
+  const sessionConfigurationBusy = !!sessionId && sessionCapabilitiesLoading;
   const activeConversationBusy = sandboxSession
     ? sandboxBusy
     : conversationBusy;
+  const activeConversationPresenting =
+    activeConversationBusy || (!sandboxSession && presentingStream);
   const activeAgent = activeAgentBySession[sessionId] ?? "";
   const seenAgents = seenAgentsBySession[sessionId] ?? EMPTY_STRING_SET;
   const execPath = execPathBySession[sessionId] ?? EMPTY_STRING_ARR;
@@ -880,7 +926,82 @@ export default function App() {
     setAppName(agentId);
     // startNewChat will be called automatically by the appName change effect
   }
-  const { ref: scrollRef, onScroll } = useStickToBottom<HTMLDivElement>(turns);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const conversationAutoFollowRef = useRef(true);
+  const conversationSmoothScrollRef = useRef(false);
+  const conversationSmoothTimerRef = useRef<number | null>(null);
+  const conversationScrollStateRef = useRef({ key: "", turnCount: 0 });
+  const conversationScrollKey = sandboxSession?.id ?? sessionId;
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const previous = conversationScrollStateRef.current;
+    const conversationChanged = previous.key !== conversationScrollKey;
+    const turnAppended = !conversationChanged && turns.length > previous.turnCount;
+    conversationScrollStateRef.current = {
+      key: conversationScrollKey,
+      turnCount: turns.length,
+    };
+    if (!el || turns.length === 0 || (!conversationChanged && !turnAppended)) return;
+
+    conversationAutoFollowRef.current = true;
+    conversationSmoothScrollRef.current = false;
+    if (conversationSmoothTimerRef.current !== null) {
+      window.clearTimeout(conversationSmoothTimerRef.current);
+      conversationSmoothTimerRef.current = null;
+    }
+
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (conversationChanged || reduceMotion) {
+      el.scrollTop = el.scrollHeight;
+      return;
+    }
+
+    conversationSmoothScrollRef.current = true;
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    conversationSmoothTimerRef.current = window.setTimeout(() => {
+      conversationSmoothScrollRef.current = false;
+      conversationSmoothTimerRef.current = null;
+    }, 450);
+  }, [conversationScrollKey, turns.length]);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (
+      !el ||
+      !conversationAutoFollowRef.current ||
+      conversationSmoothScrollRef.current
+    ) return;
+    el.scrollTop = el.scrollHeight;
+  }, [activeConversationBusy, turns]);
+  useEffect(() => () => {
+    if (conversationSmoothTimerRef.current !== null) {
+      window.clearTimeout(conversationSmoothTimerRef.current);
+    }
+  }, []);
+  const onConversationScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || conversationSmoothScrollRef.current) return;
+    conversationAutoFollowRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 32;
+  }, []);
+  const onConversationWheel = useCallback((event: WheelEvent<HTMLDivElement>) => {
+    if (event.deltaY < 0) {
+      conversationSmoothScrollRef.current = false;
+      conversationAutoFollowRef.current = false;
+    }
+  }, []);
+  const onConversationTouchMove = useCallback(() => {
+    conversationSmoothScrollRef.current = false;
+    conversationAutoFollowRef.current = false;
+  }, []);
+  const followConversationStreamFrame = useCallback(() => {
+    const el = scrollRef.current;
+    if (
+      !el ||
+      !conversationAutoFollowRef.current ||
+      conversationSmoothScrollRef.current
+    ) return;
+    el.scrollTop = el.scrollHeight;
+  }, []);
 
   // Resolve SSO identity first; it provides the ADK user_id.
   const resolveAuth = useCallback(() => {
@@ -1078,6 +1199,37 @@ export default function App() {
   }, [appName]);
   useEffect(() => {
     let cancelled = false;
+    setSessionCapabilities(null);
+    setSessionBuiltinTools([]);
+    if (!appName || !userId || !sessionId) {
+      setSessionCapabilitiesLoading(false);
+      return;
+    }
+    setSessionCapabilitiesLoading(true);
+    getSessionCapabilities(appName, userId, sessionId)
+      .then((capabilities) => {
+        if (cancelled) return;
+        setSessionCapabilities(capabilities);
+        void listSessionBuiltinTools(appName)
+          .then((tools) => {
+            if (!cancelled) setSessionBuiltinTools(tools);
+          })
+          .catch(() => {
+            if (!cancelled) setSessionBuiltinTools([]);
+          });
+      })
+      .catch(() => {
+        if (!cancelled) setSessionCapabilities(null);
+      })
+      .finally(() => {
+        if (!cancelled) setSessionCapabilitiesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [appName, userId, sessionId]);
+  useEffect(() => {
+    let cancelled = false;
     setAgentInfo(null);
     setInvocation(emptyInvocation());
     if (!appName) {
@@ -1115,6 +1267,12 @@ export default function App() {
   // Abort the in-flight stream when the whole view unmounts.
   useEffect(
     () => () => streamAbortsRef.current.forEach((c) => c.abort()),
+    [],
+  );
+  useEffect(
+    () => () => streamPresentationTimersRef.current.forEach((timer) => {
+      window.clearTimeout(timer);
+    }),
     [],
   );
   useEffect(
@@ -1351,6 +1509,8 @@ export default function App() {
       : "";
     viewSidRef.current = "";
     setSessionId("");
+    setSessionCapabilities(null);
+    setSessionBuiltinTools([]);
     setInitializingSession(false);
     setPendingTurns([]);
     setInvocation(emptyInvocation());
@@ -1365,6 +1525,15 @@ export default function App() {
       streamAbortsRef.current.get(id)?.abort();
       await deleteSessionMedia(appName, userId, id);
       await deleteSession(appName, userId, id);
+      const presentationTimer = streamPresentationTimersRef.current.get(id);
+      if (presentationTimer !== undefined) window.clearTimeout(presentationTimer);
+      streamPresentationTimersRef.current.delete(id);
+      setStreamPresentationSids((current) => {
+        if (!current.has(id)) return current;
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
       setTurnsBySession((m) => {
         const { [id]: _drop, ...rest } = m;
         return rest;
@@ -1386,6 +1555,8 @@ export default function App() {
     setNewChatMode("agent");
     discardSkillCreation();
     setInvocation(emptyInvocation());
+    setSessionCapabilities(null);
+    setSessionBuiltinTools([]);
     setSessionId(id);
     // Already have this session's turns (it's cached, or streaming in the
     // background)? Show them instantly and let any live stream keep updating —
@@ -1417,6 +1588,48 @@ export default function App() {
       return sid;
     } finally {
       if (creatingSessionRef.current === pending) creatingSessionRef.current = null;
+    }
+  }
+
+  async function addCapability(capability: AddSessionCapability): Promise<boolean> {
+    if (!appName || !userId || !sessionId || !sessionCapabilities) return false;
+    setSessionCapabilityMutating(true);
+    setError("");
+    try {
+      const updated = await addSessionCapability(
+        appName,
+        userId,
+        sessionId,
+        capability,
+        sessionCapabilities.revision,
+      );
+      setSessionCapabilities(updated);
+      return true;
+    } catch (e) {
+      setError(String(e));
+      return false;
+    } finally {
+      setSessionCapabilityMutating(false);
+    }
+  }
+
+  async function removeCapability(capabilityId: string) {
+    if (!appName || !userId || !sessionId || !sessionCapabilities) return;
+    setSessionCapabilityMutating(true);
+    setError("");
+    try {
+      const updated = await removeSessionCapability(
+        appName,
+        userId,
+        sessionId,
+        capabilityId,
+        sessionCapabilities.revision,
+      );
+      setSessionCapabilities(updated);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSessionCapabilityMutating(false);
     }
   }
 
@@ -1475,6 +1688,7 @@ export default function App() {
     if (
       (!text.trim() && atts.length === 0) ||
       conversationBusy ||
+      sessionConfigurationBusy ||
       !appName ||
       !userId
     ) return;
@@ -1535,6 +1749,7 @@ export default function App() {
     const ctrl = new AbortController();
     streamAbortsRef.current.set(sid, ctrl);
     setStreaming(sid, true);
+    startStreamPresentation(sid);
     viewSidRef.current = sid;
 
     setActiveAgentBySession((m) => ({ ...m, [sid]: "" }));
@@ -1555,6 +1770,7 @@ export default function App() {
         attachments: atts,
         invocation: selectedInvocation,
         signal: ctrl.signal,
+        sessionCapabilities: sessionCapabilities !== null,
       })) {
         if (ctrl.signal.aborted) break;
         const errMsg = event.error ?? event.errorMessage ?? event.error_message;
@@ -1599,6 +1815,7 @@ export default function App() {
     } finally {
       if (streamAbortsRef.current.get(sid) === ctrl) streamAbortsRef.current.delete(sid);
       setStreaming(sid, false);
+      finishStreamPresentation(sid);
       setActiveAgentBySession((m) => ({ ...m, [sid]: "" }));
       setExecPathBySession((m) => ({ ...m, [sid]: [] }));
     }
@@ -1645,6 +1862,7 @@ export default function App() {
     const ctrl = new AbortController();
     streamAbortsRef.current.set(sid, ctrl);
     setStreaming(sid, true);
+    startStreamPresentation(sid);
     try {
       let acc = emptyAcc();
       let tokens = 0;
@@ -1660,6 +1878,7 @@ export default function App() {
           { id: block.callId, name: "adk_request_credential", response },
         ],
         signal: ctrl.signal,
+        sessionCapabilities: sessionCapabilities !== null,
       })) {
         if (ctrl.signal.aborted) break;
         applyStreamSignals(sid, event);
@@ -1701,6 +1920,7 @@ export default function App() {
     } finally {
       if (streamAbortsRef.current.get(sid) === ctrl) streamAbortsRef.current.delete(sid);
       setStreaming(sid, false);
+      finishStreamPresentation(sid);
       setActiveAgentBySession((m) => ({ ...m, [sid]: "" }));
       setExecPathBySession((m) => ({ ...m, [sid]: [] }));
     }
@@ -2299,7 +2519,13 @@ export default function App() {
               </div>
             ) : (
               <>
-                <div className="transcript" ref={scrollRef} onScroll={onScroll}>
+                <div
+                  className={`transcript${activeConversationPresenting ? " is-streaming" : ""}`}
+                  ref={scrollRef}
+                  onScroll={onConversationScroll}
+                  onWheel={onConversationWheel}
+                  onTouchMove={onConversationTouchMove}
+                >
                   {turns.map((turn, i) => {
             const isLast = i === turns.length - 1;
             if (turn.role === "user") {
@@ -2353,7 +2579,14 @@ export default function App() {
                   isLast && activeConversationBusy ? <ThinkingPlaceholder /> : null
                 ) : (
                   <>
-                    <Blocks appName={appName} blocks={turn.blocks} onAction={onAction} onAuth={onAuth} />
+                    <Blocks
+                      appName={appName}
+                      blocks={turn.blocks}
+                      streaming={isLast && (activeConversationBusy || presentingStream)}
+                      onStreamFrame={isLast ? followConversationStreamFrame : undefined}
+                      onAction={onAction}
+                      onAuth={onAuth}
+                    />
                     {/* Finalized turn that produced no visible answer (e.g. only
                         thinking + an empty A2UI surface) — show a fallback note. */}
                     {!(isLast && activeConversationBusy) && !turnHasVisibleContent(turn) && (
@@ -2435,11 +2668,18 @@ export default function App() {
                 </div>
                 {!sandboxSession && (
                   <AgentInfoPanel
+                    appName={appName}
                     info={agentInfo}
                     loading={capabilitiesLoading}
                     activeAgent={activeAgent}
                     seenAgents={seenAgents}
                     execPath={execPath}
+                    capabilities={sessionCapabilities}
+                    capabilityLoading={sessionCapabilitiesLoading}
+                    capabilityMutating={sessionCapabilityMutating}
+                    builtinTools={sessionBuiltinTools}
+                    onAddCapability={addCapability}
+                    onRemoveCapability={(id) => void removeCapability(id)}
                   />
                 )}
                 <div className="conversation-composer-slot">
@@ -2462,11 +2702,18 @@ export default function App() {
 
       {agentInfoOpen && turns.length > 0 && (
         <AgentInfoDrawer
+          appName={appName}
           info={agentInfo}
           loading={capabilitiesLoading}
           activeAgent={activeAgent}
           seenAgents={seenAgents}
           execPath={execPath}
+          capabilities={sessionCapabilities}
+          capabilityLoading={sessionCapabilitiesLoading}
+          capabilityMutating={sessionCapabilityMutating}
+          builtinTools={sessionBuiltinTools}
+          onAddCapability={addCapability}
+          onRemoveCapability={(id) => void removeCapability(id)}
           onClose={closeAgentInfo}
           returnFocusRef={agentInfoTriggerRef}
         />
