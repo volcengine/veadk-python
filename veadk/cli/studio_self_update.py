@@ -757,8 +757,10 @@ def _parse_vefaas_time(value: Any) -> datetime | None:
     """Parse the two timestamp formats returned by the VeFaaS control plane."""
     if not isinstance(value, str) or not value.strip():
         return None
-    normalized = value.strip().removesuffix(" UTC").replace("Z", "+00:00")
-    normalized = re.sub(r"\s+([+-]\d{4})$", r"\1", normalized)
+    normalized = re.sub(r"\s+[A-Za-z]{2,5}$", "", value.strip())
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    normalized = re.sub(r"\s*([+-]\d{2})(\d{2})$", r"\1:\2", normalized)
     try:
         parsed = datetime.fromisoformat(normalized)
     except ValueError:

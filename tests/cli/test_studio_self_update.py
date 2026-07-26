@@ -63,6 +63,9 @@ def test_parse_vefaas_time_supports_application_and_function_formats() -> None:
     assert _parse_vefaas_time(
         "2026-07-26 08:53:15.942 +0000 UTC"
     ) == _parse_vefaas_time("2026-07-26T08:53:15.942Z")
+    assert _parse_vefaas_time(
+        "2026-07-26 16:53:15.942 +0800 CST"
+    ) == _parse_vefaas_time("2026-07-26T08:53:15.942Z")
 
 
 def _manifest() -> StudioReleaseManifest:
