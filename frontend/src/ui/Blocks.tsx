@@ -448,6 +448,8 @@ export function Blocks({
             return (
               <ToolBlock key={i} name={b.name} args={b.args} response={b.response} done={b.done} />
             );
+          case "agent-transfer":
+            return null;
           case "auth":
             return <AuthCard key={i} block={b} onAuth={onAuth} />;
           case "a2ui":

@@ -23,6 +23,7 @@ const A2UI_TOOL = "send_a2ui_json_to_client";
 const VALIDATED_JSON_KEY = "validated_a2ui_json";
 /** ADK's special function call that requests OAuth/credentials for a tool. */
 const REQUEST_EUC = "adk_request_credential";
+const TRANSFER_AGENT_TOOL = "transfer_to_agent";
 
 /** Pull the OAuth2 authorize URL out of an ADK AuthConfig (camelCase over
  *  /run_sse, snake_case in stored history — handle both). */
@@ -49,6 +50,7 @@ export type Block =
   | { kind: "thinking"; text: string; done: boolean }
   | { kind: "text"; text: string }
   | { kind: "tool"; name: string; args?: unknown; response?: unknown; done: boolean }
+  | { kind: "agent-transfer"; agentName: string; done: boolean }
   | { kind: "a2ui"; messages: A2uiMessage[] }
   | { kind: "attachment"; files: AttachmentView[] }
   | { kind: "invocation"; value: FrontendInvocation }
@@ -70,6 +72,7 @@ export interface Acc {
 }
 
 export interface TurnMeta {
+  author?: string;
   tokens?: number;
   ts?: number; // epoch seconds
   eventId?: string;
@@ -89,6 +92,13 @@ export function emptyAcc(): Acc {
 
 const fnCall = (p: AdkPart) => p.functionCall ?? p.function_call;
 const fnResp = (p: AdkPart) => p.functionResponse ?? p.function_response;
+
+function transferAgentName(args: unknown): string {
+  if (!args || typeof args !== "object") return "";
+  const record = args as Record<string, unknown>;
+  const name = record.agentName ?? record.agent_name;
+  return typeof name === "string" ? name : "";
+}
 
 /** ADK/genai serialises inline_data bytes as URL-safe base64 (-_), but a
  *  `data:` URI requires standard base64 (+/). Convert so reloaded images
@@ -249,7 +259,14 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
       appendAttachments(blocks, files);
     } else if (fc) {
       closeThinking(blocks);
-      if (fc.name === REQUEST_EUC) {
+      if (fc.name === TRANSFER_AGENT_TOOL) {
+        const agentName =
+          transferAgentName(fc.args) ||
+          ev.actions?.transferToAgent ||
+          ev.actions?.transfer_to_agent ||
+          "未知 Agent";
+        blocks.push({ kind: "agent-transfer", agentName, done: false });
+      } else if (fc.name === REQUEST_EUC) {
         // MCP/tool OAuth: render a dedicated auth card instead of a tool row.
         const args = (fc.args ?? {}) as Record<string, any>;
         const authConfig = args.authConfig ?? args.auth_config ?? args;
@@ -270,6 +287,15 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
       }
     } else if (fr) {
       closeThinking(blocks);
+      if (fr.name === TRANSFER_AGENT_TOOL) {
+        for (let i = blocks.length - 1; i >= 0; i--) {
+          const b = blocks[i];
+          if (b.kind === "agent-transfer" && !b.done) {
+            b.done = true;
+            break;
+          }
+        }
+      }
       // A credential response resolves the matching auth card.
       if (fr.name === REQUEST_EUC) {
         for (let i = blocks.length - 1; i >= 0; i--) {
@@ -347,9 +373,14 @@ export function eventsToTurns(
       turns.push({ role: "user", blocks, meta: { ts: ev.timestamp } });
       acc = emptyAcc();
     } else {
+      const author = ev.author ?? "";
       let last = turns[turns.length - 1];
-      if (!last || last.role !== "assistant") {
-        last = { role: "assistant", blocks: [], meta: {} };
+      if (
+        !last ||
+        last.role !== "assistant" ||
+        (author && last.meta?.author !== author)
+      ) {
+        last = { role: "assistant", blocks: [], meta: { author: author || undefined } };
         turns.push(last);
         acc = emptyAcc();
       }
@@ -357,6 +388,7 @@ export function eventsToTurns(
       last.blocks = acc.blocks;
       const usage = ev.usageMetadata ?? ev.usage_metadata;
       const meta = (last.meta ??= {});
+      if (author) meta.author = author;
       if (usage?.totalTokenCount) meta.tokens = usage.totalTokenCount;
       if (ev.timestamp) meta.ts = ev.timestamp;
       if (ev.id) meta.eventId = ev.id;
