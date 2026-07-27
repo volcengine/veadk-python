@@ -2090,11 +2090,13 @@ function WorkspaceHeader({
   agentName,
   busy,
   onChange,
+  onDiscard,
 }: {
   mode: WorkspaceMode;
   agentName: string;
   busy: boolean;
   onChange: (mode: WorkspaceMode) => void;
+  onDiscard?: () => void;
 }) {
   const activeIndex = WORKSPACE_MODES.findIndex((item) => item.id === mode);
   return (
@@ -2130,6 +2132,18 @@ function WorkspaceHeader({
           );
         })}
       </nav>
+      {onDiscard && (
+        <div className="cw-workspace-actions">
+          <button
+            type="button"
+            className="cw-discard-edit"
+            disabled={busy}
+            onClick={onDiscard}
+          >
+            放弃编辑
+          </button>
+        </div>
+      )}
     </header>
   );
 }
@@ -2156,7 +2170,9 @@ interface CustomCreateProps extends CreateModeProps {
   /** Called once the persistent deployment task has been created. */
   onDeploymentStarted?: (task: DeploymentTaskUpdate) => void;
   /** Persists the live builder state as a resumable library draft. */
-  onDraftChange?: (draft: AgentDraft) => void;
+  onDraftChange?: (draft: AgentDraft, dirty: boolean) => void;
+  /** Restores the draft state from before this editing session and exits. */
+  onDiscard?: () => void;
 }
 
 export function CustomCreate({
@@ -2170,20 +2186,28 @@ export function CustomCreate({
   onDeploymentComplete,
   onDeploymentStarted,
   onDraftChange,
+  onDiscard,
 }: CustomCreateProps) {
   void onCreate; // outcome is the in-pane project preview, not a navigation
   void onBack; // no footer nav in the single-scroll layout; back lives in app chrome
   const [draft, setDraft] = useState<AgentDraft>(
     () => initialDraft ?? emptyDraft(),
   );
+  const initialDraftSnapshotRef = useRef(JSON.stringify(draft));
+  const lastNotifiedDraftSnapshotRef = useRef(initialDraftSnapshotRef.current);
+  const draftSnapshot = JSON.stringify(draft);
+  const draftDirty = draftSnapshot !== initialDraftSnapshotRef.current;
   const onDraftChangeRef = useRef(onDraftChange);
   useEffect(() => {
     onDraftChangeRef.current = onDraftChange;
   }, [onDraftChange]);
   useEffect(() => {
-    onDraftChangeRef.current?.(draft);
-  }, [draft]);
+    if (draftSnapshot === lastNotifiedDraftSnapshotRef.current) return;
+    lastNotifiedDraftSnapshotRef.current = draftSnapshot;
+    onDraftChangeRef.current?.(draft, draftDirty);
+  }, [draft, draftDirty, draftSnapshot]);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("build");
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const [showErrors, setShowErrors] = useState(false);
   const [validationPulse, setValidationPulse] = useState(0);
   const [project, setProject] = useState<AgentProject | null>(null);
@@ -2777,6 +2801,12 @@ export function CustomCreate({
         agentName={workspaceAgentName(draft)}
         busy={building}
         onChange={handleWorkspaceChange}
+        onDiscard={onDiscard
+          ? () => {
+              if (draftDirty) setDiscardConfirmOpen(true);
+              else onDiscard();
+            }
+          : undefined}
       />
       {buildErr && (
         <div className="cw-workspace-alert" role="alert">
@@ -3687,6 +3717,39 @@ export function CustomCreate({
         </div>
       )}
       </main>
+      {discardConfirmOpen && (
+        <div className="confirm-scrim" onClick={() => setDiscardConfirmOpen(false)}>
+          <div
+            className="confirm-box"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="discard-edit-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="confirm-title" id="discard-edit-title">放弃本次编辑？</div>
+            <div className="confirm-text">本次修改将不会保留，智能体会恢复到进入编辑前的状态。</div>
+            <div className="confirm-actions">
+              <button
+                type="button"
+                className="confirm-btn"
+                onClick={() => setDiscardConfirmOpen(false)}
+              >
+                继续编辑
+              </button>
+              <button
+                type="button"
+                className="confirm-btn confirm-btn--danger"
+                onClick={() => {
+                  setDiscardConfirmOpen(false);
+                  onDiscard?.();
+                }}
+              >
+                放弃编辑
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

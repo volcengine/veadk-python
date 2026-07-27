@@ -67,8 +67,12 @@ test("global sidebar can collapse to a compact icon rail", () => {
   assert.match(sidebarSource, /query\.addEventListener\("change", handleViewportChange\)/);
   assert.match(sidebarSource, /autoCollapsedRef\.current = false;\s*setCollapsed\(\(value\) => !value\)/);
   assert.match(sidebarSource, /aria-label=\{collapsed \? "展开侧边栏" : "收起侧边栏"\}/);
-  assert.match(stylesSource, /\.sidebar\s*\{[\s\S]*?width:\s*236px;/);
+  assert.match(stylesSource, /\.sidebar\s*\{[\s\S]*?width:\s*220px;/);
   assert.match(stylesSource, /\.sidebar\.is-collapsed\s*\{[\s\S]*?width:\s*56px;/);
+  assert.match(
+    stylesSource,
+    /@media \(max-width:\s*860px\)\s*\{\s*\.sidebar\s*\{[\s\S]*?width:\s*192px;/,
+  );
   assert.match(
     stylesSource,
     /\.sidebar\.is-collapsed \.sidebar-history\s*\{[\s\S]*?display:\s*none;/,
@@ -91,6 +95,17 @@ test("sidebar actions use friendly scoped motion", () => {
   assert.match(stylesSource, /\.new-chat--agents:hover \.sidebar-agent-face__eye\s*\{[\s\S]*?animation:\s*sidebar-agent-blink/);
   assert.match(stylesSource, /@keyframes sidebar-agent-blink/);
   assert.match(stylesSource, /@keyframes sidebar-plus-return\s*\{[\s\S]*?48% \{ transform: rotate\(48deg\); \}[\s\S]*?100% \{ transform: rotate\(0deg\); \}/);
+});
+
+test("sidebar navigation keeps a compact ChatGPT-like row height", () => {
+  assert.match(
+    stylesSource,
+    /\.new-chat\s*\{[\s\S]*?height:\s*36px;[\s\S]*?min-height:\s*36px;[\s\S]*?padding:\s*8px 10px;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.agent-row\s*\{[\s\S]*?height:\s*36px;[\s\S]*?min-height:\s*36px;[\s\S]*?padding:\s*8px 10px;/,
+  );
 });
 
 test("username login focuses the name field on arrival", () => {

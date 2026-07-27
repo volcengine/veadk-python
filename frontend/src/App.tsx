@@ -77,6 +77,7 @@ import {
   connectRuntime,
   loadConnections,
   registerConnections,
+  removeRuntimeConnection,
   remoteAppId,
   type RemoteConnection,
 } from "./adk/connections";
@@ -915,6 +916,7 @@ export default function App() {
   const [importedDraft, setImportedDraft] = useState<AgentDraft | null>(null);
   const [savedAgentDrafts, setSavedAgentDrafts] = useState<WorkspaceAgentDraft[]>([]);
   const [editingDraftId, setEditingDraftId] = useState("");
+  const editingDraftBaselineRef = useRef<WorkspaceAgentDraft | null>(null);
   const [searchView, setSearchView] = useState(false);
   // The "管理 Agent" view: lists/deletes the current user's AgentKit runtimes.
   const [manageAgents, setManageAgents] = useState(false);
@@ -979,16 +981,29 @@ export default function App() {
     });
   }, [userId]);
 
+  const restoreWorkspaceDraftBaseline = useCallback((id: string) => {
+    if (!id || !userId) return;
+    const baseline = editingDraftBaselineRef.current;
+    setSavedAgentDrafts((current) => {
+      const remaining = current.filter((item) => item.id !== id);
+      const next = baseline?.id === id ? [baseline, ...remaining] : remaining;
+      localStorage.setItem(workspaceDraftsKey(userId), JSON.stringify(next));
+      return next;
+    });
+  }, [userId]);
+
   useEffect(() => {
     if (!userId) {
       setSavedAgentDrafts([]);
       setEditingDraftId("");
+      editingDraftBaselineRef.current = null;
       return;
     }
     const nextDrafts = loadWorkspaceDrafts(userId);
     setSavedAgentDrafts(nextDrafts);
     const activeId = localStorage.getItem(activeWorkspaceDraftKey(userId)) || "";
     const activeDraft = nextDrafts.find((item) => item.id === activeId);
+    editingDraftBaselineRef.current = activeDraft ?? null;
     if (createView === "custom" && activeDraft) {
       setEditingDraftId(activeDraft.id);
       setImportedDraft(activeDraft.draft);
@@ -1172,6 +1187,7 @@ export default function App() {
       setRuntimeUpdateTarget(null);
       removeWorkspaceDraft(editingDraftId);
       setEditingDraftId("");
+      editingDraftBaselineRef.current = null;
       setFocusedDeploymentTaskId("");
       setFocusedWorkspaceAgentId(agentId);
       setCreateView(null);
@@ -2298,6 +2314,22 @@ export default function App() {
     if (id === appName) setAgentInfoRefreshKey((value) => value + 1);
     setAppName(id);
   };
+
+  const handleRuntimeDeleted = (runtimeId: string) => {
+    const deletedCurrentRuntime = currentRuntime?.runtimeId === runtimeId;
+    setConnections(removeRuntimeConnection(runtimeId));
+    setLibraryRuntimeIds((current) => {
+      if (current === null) return null;
+      const next = new Set(current);
+      next.delete(runtimeId);
+      return next;
+    });
+    if (deletedCurrentRuntime) {
+      viewSidRef.current = "";
+      setSessionId("");
+      setAppName(apps[0] ?? "");
+    }
+  };
   return (
     <div className="layout">
       <Sidebar
@@ -2654,13 +2686,14 @@ export default function App() {
                     return;
                   }
                   setManageAgents(false);
-                  setAddMenu(false);
+                  setAddMenu(true);
+                  setCreateView(null);
                   setImportedDraft(null);
                   setRuntimeUpdateTarget(null);
-                  setEditingDraftId(`draft-${Date.now().toString(36)}`);
+                  setEditingDraftId("");
+                  editingDraftBaselineRef.current = null;
                   setFocusedDeploymentTaskId("");
                   setFocusedWorkspaceAgentId("");
-                  setCreateView("custom");
                   setError("");
                 }}
                 onUpdateAgent={(nextDraft) => {
@@ -2676,15 +2709,11 @@ export default function App() {
                   setImportedDraft(nextDraft);
                   const nextDraftId = `runtime-${currentConn.runtimeId}`;
                   setEditingDraftId(nextDraftId);
+                  editingDraftBaselineRef.current =
+                    savedAgentDrafts.find((item) => item.id === nextDraftId) ?? null;
                   setFocusedDeploymentTaskId("");
                   setFocusedWorkspaceAgentId("");
                   setRuntimeUpdateTarget({
-                    runtimeId: currentConn.runtimeId,
-                    name: currentConn.name,
-                    region: currentConn.region ?? "cn-beijing",
-                    currentVersion: currentConn.currentVersion,
-                  });
-                  saveWorkspaceDraft(nextDraftId, nextDraft, {
                     runtimeId: currentConn.runtimeId,
                     name: currentConn.name,
                     region: currentConn.region ?? "cn-beijing",
@@ -2697,6 +2726,7 @@ export default function App() {
                   setManageAgents(false);
                   setImportedDraft(item.draft);
                   setEditingDraftId(item.id);
+                  editingDraftBaselineRef.current = item;
                   setRuntimeUpdateTarget(item.deploymentTarget ?? null);
                   setFocusedDeploymentTaskId("");
                   setFocusedWorkspaceAgentId("");
@@ -2781,10 +2811,18 @@ export default function App() {
               <QuickCreate
                 onSelect={(k) => {
                   setImportedDraft(null);
+                  setRuntimeUpdateTarget(null);
+                  setEditingDraftId(
+                    k === "custom" ? `draft-${Date.now().toString(36)}` : "",
+                  );
+                  editingDraftBaselineRef.current = null;
                   setCreateView(k);
                 }}
                 onImport={(d) => {
                   setImportedDraft(d);
+                  setRuntimeUpdateTarget(null);
+                  setEditingDraftId(`draft-${Date.now().toString(36)}`);
+                  editingDraftBaselineRef.current = null;
                   setCreateView("custom");
                 }}
               />
@@ -2804,13 +2842,30 @@ export default function App() {
                 onCreate={onCreate}
                 onAgentAdded={onAgentAdded}
                 features={features}
-                onDraftChange={(nextDraft) =>
-                  saveWorkspaceDraft(
-                    editingDraftId,
-                    nextDraft,
-                    runtimeUpdateTarget ?? undefined,
-                  )
-                }
+                onDraftChange={(nextDraft, dirty) => {
+                  if (dirty) {
+                    saveWorkspaceDraft(
+                      editingDraftId,
+                      nextDraft,
+                      runtimeUpdateTarget ?? undefined,
+                    );
+                  } else {
+                    restoreWorkspaceDraftBaseline(editingDraftId);
+                  }
+                }}
+                onDiscard={() => {
+                  restoreWorkspaceDraftBaseline(editingDraftId);
+                  editingDraftBaselineRef.current = null;
+                  setEditingDraftId("");
+                  setImportedDraft(null);
+                  setRuntimeUpdateTarget(null);
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId(appName);
+                  setCreateView(null);
+                  setAddMenu(false);
+                  setManageAgents(true);
+                  setError("");
+                }}
                 onDeploymentTaskChange={updateDeploymentTask}
                 onDeploymentStarted={openDeploymentDetail}
                 deploymentTarget={runtimeUpdateTarget ?? undefined}

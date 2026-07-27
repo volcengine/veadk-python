@@ -1487,6 +1487,8 @@ export interface CloudRuntime {
   currentVersion?: number | null;
   /** True when this runtime was deployed by the current user (veadk:author). */
   isMine: boolean;
+  /** Server-authorized deletion capability for this managed Runtime. */
+  canDelete: boolean;
 }
 
 /** One page of cloud runtimes plus the token to fetch the next page. */

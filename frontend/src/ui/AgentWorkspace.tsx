@@ -752,24 +752,6 @@ export function AgentWorkspace({
                     </dl>
                   </section>
                   {deploymentTask && <DeploymentProgressCard task={deploymentTask} />}
-                  <section className="aw-option-panel aw-settings-card">
-                    <div className="aw-section-head">
-                      <div><h3>优化项</h3><p>针对运行质量开启专项优化策略。</p></div>
-                      <span className="aw-coming-soon">暂未开放</span>
-                    </div>
-                    <div className="aw-option-list" aria-disabled="true">
-                      {[
-                        ["上下文优化", "压缩冗余信息，保留对当前任务最有价值的上下文。"],
-                        ["幻觉抑制", "在证据不足时降低确定性表达并主动请求补充信息。"],
-                        ["工具调用优化", "减少重复调用，并优先复用已经获得的结果。"],
-                      ].map(([title, description]) => (
-                        <label key={title}>
-                          <input type="checkbox" disabled />
-                          <span><strong>{title}</strong><small>{description}</small></span>
-                        </label>
-                      ))}
-                    </div>
-                  </section>
                   <section className="aw-deployment-panel aw-settings-card">
                     <div className="aw-section-head">
                       <div><h3>部署配置</h3><p>配置目标环境与网络访问方式。</p></div>
@@ -789,6 +771,28 @@ export function AgentWorkspace({
                         </dd>
                       </div>
                     </dl>
+                  </section>
+                  <section className="aw-option-panel aw-settings-card">
+                    <div className="aw-section-head">
+                      <div><h3>优化项</h3><p>针对运行质量开启专项优化策略。</p></div>
+                    </div>
+                    <div className="aw-option-content">
+                      <div className="aw-option-list" aria-disabled="true">
+                        {[
+                          ["上下文优化", "压缩冗余信息，保留对当前任务最有价值的上下文。"],
+                          ["幻觉抑制", "在证据不足时降低确定性表达并主动请求补充信息。"],
+                          ["工具调用优化", "减少重复调用，并优先复用已经获得的结果。"],
+                        ].map(([title, description]) => (
+                          <label key={title}>
+                            <input type="checkbox" disabled />
+                            <span><strong>{title}</strong><small>{description}</small></span>
+                          </label>
+                        ))}
+                      </div>
+                      <div className="aw-option-glass" role="status">
+                        <span>暂未开放</span>
+                      </div>
+                    </div>
                   </section>
                 </div>
               )}

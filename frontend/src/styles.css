@@ -84,7 +84,7 @@ body {
 
 /* ---------- sidebar ---------- */
 .sidebar {
-  width: 236px;
+  width: 220px;
   height: 100%;
   min-height: 0;
   flex-shrink: 0;
@@ -99,7 +99,7 @@ body {
 }
 @media (max-width: 860px) {
   .sidebar {
-    width: 204px;
+    width: 192px;
   }
 }
 .sidebar-top {
@@ -185,7 +185,9 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 10px;
+  height: 36px;
+  min-height: 36px;
+  padding: 8px 10px;
   border: none;
   border-radius: 8px;
   background: none;
@@ -218,7 +220,7 @@ body {
 /* The drawer positions two independent floating cards: the Runtime list and,
  * when requested, a tabbed information panel. */
 .agentsel {
-  --agentsel-available-width: calc(100vw - 250px);
+  --agentsel-available-width: calc(100vw - 234px);
   container-type: inline-size;
   position: absolute;
   left: 100%;
@@ -670,7 +672,8 @@ body {
 .agentsel-item-meta { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .agentsel-item-actions { display: flex; align-items: center; gap: 1px; flex-shrink: 0; }
 .agentsel-connect,
-.agentsel-info {
+.agentsel-info,
+.agentsel-delete {
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -685,7 +688,8 @@ body {
   font-size: 11.5px;
   font-weight: 550;
 }
-.agentsel-info {
+.agentsel-info,
+.agentsel-delete {
   display: grid;
   width: 28px;
   height: 28px;
@@ -698,13 +702,34 @@ body {
   color: hsl(var(--foreground));
   box-shadow: none;
 }
+.agentsel-delete {
+  color: hsl(3 42% 43%);
+  transition: opacity 0.14s, background 0.14s, color 0.14s;
+}
+.agentsel-delete:hover:not(:disabled) {
+  background: hsl(3 44% 47% / 0.1);
+  color: hsl(3 55% 38%);
+}
+.agentsel-delete:disabled { opacity: 0.5; cursor: default; }
+@media (hover: hover) {
+  .agentsel-delete {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .agentsel-runtime-item:hover .agentsel-delete,
+  .agentsel-runtime-item:focus-within .agentsel-delete {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
 .agentsel-info.active {
   background: transparent;
   color: hsl(var(--foreground));
   box-shadow: none;
 }
 .agentsel-connect:disabled { opacity: 0.55; cursor: default; }
-.agentsel-info .icon { width: 15px; height: 15px; }
+.agentsel-info .icon,
+.agentsel-delete .icon { width: 15px; height: 15px; }
 .agentsel-rt { display: flex; flex-direction: column; }
 .agentsel-rt-row {
   width: 100%; display: flex; align-items: center; gap: 7px;
@@ -758,7 +783,7 @@ body {
 
 @media (max-width: 860px) {
   .agentsel {
-    --agentsel-available-width: calc(100vw - 218px);
+    --agentsel-available-width: calc(100vw - 206px);
   }
 }
 

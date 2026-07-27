@@ -2889,6 +2889,11 @@ def _run_frontend_server(
                     is_mine = runtime_belongs_to(tags, principal)
                     if (scope == "mine" or role != StudioRole.ADMIN) and not is_mine:
                         continue
+                    can_delete = (
+                        role != StudioRole.USER
+                        and tags.get("veadk:managed") == "true"
+                        and (role == StudioRole.ADMIN or is_mine)
+                    )
                     out.append(
                         {
                             "name": runtime.name,
@@ -2901,6 +2906,7 @@ def _run_frontend_server(
                             "region": reg,
                             "author": tags.get("veadk:author", ""),
                             "isMine": is_mine,
+                            "canDelete": can_delete,
                         }
                     )
                     if len(out) >= target_size:

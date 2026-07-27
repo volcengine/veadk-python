@@ -14,9 +14,11 @@ import {
   Network,
   RefreshCw,
   Search,
+  Trash2,
   X,
 } from "lucide-react";
 import {
+  deleteRuntime,
   getRuntimeAgentInfo,
   getRuntimeDetail,
   getRuntimes,
@@ -56,8 +58,12 @@ export interface AgentSelectorProps {
   currentRuntime?: SelectedRuntime;
   /** Maximum runtime scope granted by the server. */
   runtimeScope: RuntimeScope;
+  /** Whether this identity may delete server-authorized managed Runtimes. */
+  canDeleteRuntimes: boolean;
   /** Called with the picker id once an agent is chosen. */
   onSelect: (id: string) => void;
+  /** Keeps the app's cached connection and selection in sync after deletion. */
+  onRuntimeDeleted?: (runtimeId: string) => void;
 }
 
 const PAGE_SIZE = 15;
@@ -132,7 +138,9 @@ export function AgentSelector({
   currentId,
   currentRuntime,
   runtimeScope,
+  canDeleteRuntimes,
   onSelect,
+  onRuntimeDeleted,
 }: AgentSelectorProps) {
   // Lazily-loaded pages of the full list: pageCache[i] holds page i's runtimes,
   // tokens[i] is the next_token that fetches page i (tokens[0] = "").
@@ -147,6 +155,7 @@ export function AgentSelector({
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [connecting, setConnecting] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const [unsupported, setUnsupported] = useState<Set<string>>(new Set());
   const [previewed, setPreviewed] = useState<SelectedRuntime | undefined>();
   const [detailTab, setDetailTab] = useState<"agent" | "runtime">("agent");
@@ -324,6 +333,36 @@ export function AgentSelector({
       .finally(() => setConnecting(null));
   }
 
+  async function removeRuntime(rt: CloudRuntime) {
+    if (deleting) return;
+    if (!window.confirm(`确定删除 Agent "${rt.name}"？该 Runtime 将被永久删除。`)) {
+      return;
+    }
+    setDeleting(rt.runtimeId);
+    setError("");
+    try {
+      await deleteRuntime(rt.runtimeId, rt.region);
+      setPageCache((pages) =>
+        pages.map((items) =>
+          items.filter((item) => item.runtimeId !== rt.runtimeId),
+        ),
+      );
+      setMineList((items) =>
+        items?.filter((item) => item.runtimeId !== rt.runtimeId) ?? null,
+      );
+      setPreviewed((item) =>
+        item?.runtimeId === rt.runtimeId ? undefined : item,
+      );
+      onRuntimeDeleted?.(rt.runtimeId);
+    } catch (deleteError) {
+      setError(
+        deleteError instanceof Error ? deleteError.message : String(deleteError),
+      );
+    } finally {
+      setDeleting(null);
+    }
+  }
+
   if (!open) return null;
 
   // The visible set: the owner's full list (mineOnly) or the current lazy page,
@@ -442,6 +481,7 @@ export function AgentSelector({
                     {pageItems.map((rt) => {
                       const bad = unsupported.has(rt.runtimeId);
                       const connectingThis = connecting === rt.runtimeId;
+                      const deletingThis = deleting === rt.runtimeId;
                       const active = currentRuntime?.runtimeId === rt.runtimeId;
                       const isPreviewed = previewed?.runtimeId === rt.runtimeId;
                       return (
