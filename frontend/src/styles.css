@@ -483,6 +483,11 @@ body {
   flex-direction: column;
   gap: 6px;
 }
+.agentsel-info-empty {
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+  line-height: 1.5;
+}
 .agentsel-info-list-item {
   display: flex;
   min-width: 0;

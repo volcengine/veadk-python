@@ -18,7 +18,6 @@ import type {
 } from "../adk/client";
 import { sessionTitle } from "../blocks";
 import { displayName, profilePictureUrl } from "../adk/identity";
-import { SkillCenterButton } from "./SkillCenter";
 import { SearchButton } from "./Search";
 import volcengineLogo from "../assets/volcengine.svg";
 
@@ -47,20 +46,18 @@ function QuickCreateIcon() {
 function ManageAgentsIcon() {
   return (
     <svg
-      className="icon"
+      className="icon sidebar-agent-face"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.8"
+      strokeWidth="1.7"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden
     >
-      <circle cx="8.25" cy="7.75" r="3.15" />
-      <path d="M2.9 19.2c.45-3.45 2.48-5.35 5.35-5.35 2.4 0 4.2 1.28 4.98 3.66" />
-      <path d="M17.4 4.5v15M14.8 9h5.2M14.8 15.3h5.2" />
-      <circle cx="17.4" cy="9" r="1.15" fill="currentColor" stroke="none" />
-      <circle cx="17.4" cy="15.3" r="1.15" fill="currentColor" stroke="none" />
+      <rect x="4.25" y="5.25" width="15.5" height="13.5" rx="4.75" />
+      <path className="sidebar-agent-face__eye sidebar-agent-face__eye--left" d="M8.5 10.7v2" />
+      <path className="sidebar-agent-face__eye sidebar-agent-face__eye--right" d="M15.5 10.7v2" />
     </svg>
   );
 }
@@ -299,8 +296,10 @@ export function Sidebar({
   version,
   onLogout,
 }: SidebarProps) {
-  // onAddAgent is now reached through the "添加 Agent" chooser, not a direct
-  // sidebar button; kept in the props contract for the App-level handler.
+  // Creation and Skill Center now live in the unified Agent workspace. Keep
+  // their legacy callbacks in the App contract during migration.
+  void onQuickCreate;
+  void onSkillCenter;
   void onAddAgent;
   // Per-module feature gates; a missing flag defaults to shown.
   const show = (k: keyof NonNullable<typeof features>) => features?.[k] !== false;
@@ -367,7 +366,7 @@ export function Sidebar({
         </div>
         {show("newChat") && (
           <button
-            className="new-chat"
+            className="new-chat new-chat--conversation"
             onClick={onNewChat}
             aria-label="新会话"
             title="新会话"
@@ -376,30 +375,16 @@ export function Sidebar({
             <span className="sidebar-nav-label">新会话</span>
           </button>
         )}
+        <button
+          className="new-chat new-chat--agents"
+          onClick={onManageAgents}
+          aria-label="智能体"
+          title="智能体"
+        >
+          <ManageAgentsIcon />
+          <span className="sidebar-nav-label">智能体</span>
+        </button>
         {show("search") && <SearchButton onClick={onSearch} />}
-        {show("skillCenter") && <SkillCenterButton onClick={onSkillCenter} />}
-        {access.capabilities.createAgents && show("addAgent") && (
-          <button
-            className="new-chat"
-            onClick={onQuickCreate}
-            aria-label="添加 Agent"
-            title="添加 Agent"
-          >
-            <QuickCreateIcon />
-            <span className="sidebar-nav-label">添加 Agent</span>
-          </button>
-        )}
-        {access.capabilities.manageAgents && show("manageAgents") && (
-          <button
-            className="new-chat"
-            onClick={onManageAgents}
-            aria-label="管理 Agent"
-            title="管理 Agent"
-          >
-            <ManageAgentsIcon />
-            <span className="sidebar-nav-label">管理 Agent</span>
-          </button>
-        )}
       </div>
 
       {show("history") && (

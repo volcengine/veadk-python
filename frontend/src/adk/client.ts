@@ -622,6 +622,7 @@ export interface AgentNode {
   id?: string;
   name: string;
   description: string;
+  instruction?: string;
   type: AgentNodeType;
   model: string;
   tools: string[];
@@ -666,6 +667,8 @@ export interface AgentInfo {
   model: string;
   tools: string[];
   skills: AgentSkill[];
+  /** False when an older Agent Server omits Skill introspection entirely. */
+  skillsPreviewSupported: boolean;
   subAgents: string[];
   /** Optional for compatibility with Agent Servers released before this field. */
   components?: AgentComponent[];
@@ -673,6 +676,8 @@ export interface AgentInfo {
   searchSources?: AgentSearchCapability[];
   /** Recursive typed tree; only the local server provides it. */
   graph?: AgentNode;
+  /** Complete sanitized builder state exposed by newly generated Agents. */
+  draft?: AgentDraft;
 }
 
 export interface SessionCapabilityItem {
@@ -877,17 +882,30 @@ async function fetchAgentInfo(app: string, ep: AdkEndpoint): Promise<AgentInfo> 
   const res = await apiFetch(`/web/agent-info/${app}`, {}, ep);
   if (!res.ok) throw new Error(`agent-info failed: ${res.status}`);
   const info = (await res.json()) as Partial<AgentInfo>;
+  if (!info.draft) {
+    try {
+      const draftRes = await apiFetch(`/web/agent-draft/${app}`, {}, ep);
+      if (draftRes.ok) {
+        const payload = (await draftRes.json()) as { draft?: AgentDraft };
+        info.draft = payload.draft;
+      }
+    } catch {
+      // Older or non-Studio Agents do not expose editable builder metadata.
+    }
+  }
   return {
     name: info.name ?? app,
     description: info.description ?? "",
     type: info.type,
     model: info.model ?? "",
     tools: info.tools ?? [],
+    skillsPreviewSupported: Array.isArray(info.skills),
     skills: info.skills ?? [],
     subAgents: info.subAgents ?? [],
     components: info.components ?? [],
     searchSources: info.searchSources ?? [],
     graph: info.graph,
+    draft: info.draft,
   };
 }
 
@@ -1081,6 +1099,7 @@ export interface DeployAgentkitResult {
   runtimeId?: string;
   consoleUrl?: string;
   region?: string;
+  version?: number | null;
   feishuChannel?: {
     enabled: boolean;
     transport: string;
@@ -1124,6 +1143,8 @@ export async function deployAgentkitProject(
   },
   opts?: {
     taskId?: string;
+    runtimeId?: string;
+    description?: string;
     onStage?: (s: DeployStage) => void;
     im?: {
       feishu?: {
@@ -1161,6 +1182,8 @@ export async function deployAgentkitProject(
           files,
           config,
           taskId,
+          runtimeId: opts?.runtimeId,
+          description: opts?.description,
           im: opts?.im,
           envs: opts?.envs,
         }),
@@ -1218,6 +1241,7 @@ export async function deployAgentkitProject(
     runtimeId: final.runtimeId,
     consoleUrl: final.consoleUrl,
     region: final.region,
+    version: final.version,
     feishuChannel: final.feishuChannel,
   };
 }
@@ -1245,6 +1269,7 @@ export interface ManagedRuntime {
   createdAt: string;
   author?: string;
   region: string;
+  currentVersion?: number | null;
 }
 
 /** List AgentKit runtimes the server authorizes this user to manage. */
@@ -1458,6 +1483,8 @@ export interface CloudRuntime {
   status: string;
   region: string;
   author: string;
+  createdAt?: string;
+  currentVersion?: number | null;
   /** True when this runtime was deployed by the current user (veadk:author). */
   isMine: boolean;
 }
@@ -1554,6 +1581,7 @@ export interface RuntimeDetail {
   mcpToolsetId: string;
   artifactUrl: string;
   artifactType: string;
+  networkTypes: string[];
 }
 
 /** Fetch a runtime's control-plane detail (config/status/envs). */

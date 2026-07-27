@@ -24,6 +24,7 @@ import {
   FilePlus,
   Folder,
   Loader2,
+  Maximize2,
   MessageSquare,
   Pencil,
   Plus,
@@ -55,15 +56,9 @@ hljs.registerLanguage("dockerfile", dockerfile);
 hljs.registerLanguage("makefile", makefile);
 import type { AgentProject, ProjectFile } from "../create/project";
 import type { AgentDraft, NetworkConfig } from "../create/types";
-import { agentTypeMeta } from "../create/agentTypeMeta";
+import { AgentBuildCanvas } from "../create/AgentBuildCanvas";
 import {
   FEISHU_ENV,
-  DEFAULT_KB_BACKEND,
-  findExporter,
-  findKb,
-  findLtm,
-  findStm,
-  findTool,
   type EnvVar,
 } from "../create/veadkCatalog";
 import {
@@ -72,21 +67,25 @@ import {
   runtimeEnvVars,
 } from "../create/deploymentEnv";
 import type { DeployStage } from "../adk/client";
+import feishuLogo from "../assets/feishu-logo.svg";
 import { buildZip } from "./zip";
 import { ProjectCodeBrowser } from "./CodeBrowserDialog";
 import { DeploymentErrorMessage } from "./DeploymentErrorMessage";
 import "./ProjectPreview.css";
 
 const CodeEditor = lazy(() => import("./CodeEditor"));
+const ignoreCanvasAction = () => undefined;
 
 interface DeploymentConfirmDialogProps {
   open: boolean;
+  isUpdate: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }
 
 function DeploymentConfirmDialog({
   open,
+  isUpdate,
   onCancel,
   onConfirm,
 }: DeploymentConfirmDialogProps) {
@@ -128,7 +127,7 @@ function DeploymentConfirmDialog({
             <span className="code-browser-title-icon pp-confirm-icon" aria-hidden="true">
               <AlertTriangle />
             </span>
-            <h2 id="pp-confirm-title">确认部署</h2>
+            <h2 id="pp-confirm-title">{isUpdate ? "确认更新" : "确认部署"}</h2>
           </div>
           <button
             type="button"
@@ -141,7 +140,9 @@ function DeploymentConfirmDialog({
         </header>
         <div className="pp-confirm-body">
           <p id="pp-confirm-description">
-            部署后暂不支持修改 Agent 配置，确定部署吗？
+            {isUpdate
+              ? "将更新并发布到当前云端 Runtime，过程可能需要几分钟。确定继续吗？"
+              : "将创建新的云端 Runtime，部署过程可能需要几分钟。确定继续吗？"}
           </p>
         </div>
         <footer className="pp-confirm-actions">
@@ -149,7 +150,7 @@ function DeploymentConfirmDialog({
             取消
           </button>
           <button type="button" className="is-primary" onClick={onConfirm}>
-            确定部署
+            {isUpdate ? "确定更新" : "确定部署"}
           </button>
         </footer>
       </section>
@@ -245,6 +246,7 @@ export interface DeployResult {
   runtimeId?: string;
   consoleUrl?: string;
   region?: string;
+  version?: number | null;
   feishuChannel?: {
     enabled: boolean;
     transport: string;
@@ -442,16 +444,23 @@ export interface DeploymentTaskUpdate {
   region: string;
   startedAt: number;
   status: "running" | "success" | "error" | "cancelled";
+  phase?: string;
   label: string;
   message?: string;
   pct?: number;
+  /** Draft used to render the Agent detail while its Runtime is still publishing. */
+  agentDraft?: AgentDraft;
   /** Re-runs the same project/config as a new deployment task. */
   retry?: () => Promise<void>;
 }
 
 export interface ProjectPreviewProps {
   project: AgentProject;
-  /** Draft tree displayed as the Agent topology on the deployment page. */
+  /** Render inside the Agent workspace without taking over the app toolbar. */
+  embedded?: boolean;
+  /** Keep the deployment layout visible while the final action is unavailable. */
+  deployDisabledReason?: string;
+  /** Draft metadata summarized on the deployment page. */
   agentDraft?: AgentDraft;
   /** Main Agent display name. Generated project names may be normalized. */
   agentName?: string;
@@ -468,6 +477,14 @@ export interface ProjectPreviewProps {
   ) => Promise<DeployResult>;
   /** Called after successfully adding the agent to the connection list. */
   onAgentAdded?: (agentId: string, agentName: string) => void;
+  /** Called as soon as the Runtime has been deployed or updated successfully. */
+  onDeploymentComplete?: (result: DeployResult) => void | Promise<void>;
+  /** Label for the floating deployment action. */
+  deploymentActionLabel?: string;
+  /** Existing Runtime id when this deployment updates an Agent in place. */
+  deploymentRuntimeId?: string;
+  /** Opens the persistent Agent detail as soon as deployment starts. */
+  onDeploymentStarted?: (task: DeploymentTaskUpdate) => void;
   /** Mirrors deployment progress into the app shell so it survives page switches. */
   onDeploymentTaskChange?: (task: DeploymentTaskUpdate) => void;
   /** Whether Feishu Channel was enabled in the configuration step. */
@@ -588,12 +605,18 @@ function ProjectHeaderPortal({
 
 export function ProjectPreview({
   project,
+  embedded = false,
+  deployDisabledReason,
   agentDraft,
   agentName,
   agentCount,
   onChange,
   onDeploy,
   onAgentAdded,
+  onDeploymentComplete,
+  deploymentActionLabel = "部署",
+  deploymentRuntimeId,
+  onDeploymentStarted,
   onDeploymentTaskChange,
   feishuEnabled = false,
   onFeishuEnabledChange,
@@ -625,6 +648,7 @@ export function ProjectPreview({
   const [newPath, setNewPath] = useState("");
   const [deploying, setDeploying] = useState(false);
   const [deployConfirmOpen, setDeployConfirmOpen] = useState(false);
+  const [flowPreviewOpen, setFlowPreviewOpen] = useState(false);
   const [feishuUpdating, setFeishuUpdating] = useState(false);
   const [deployError, setDeployError] = useState<string | null>(null);
   const [deployResult, setDeployResult] = useState<DeployResult | null>(null);
@@ -640,38 +664,26 @@ export function ProjectPreview({
   const [focusedAgentId, setFocusedAgentId] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
-  const topology = useMemo<TopologyAgent>(() => {
-    if (agentDraft) return buildTopologyAgent(agentDraft);
-    return {
-      id: "root",
-      name: agentName || project?.name || "未命名 Agent",
-      type: "llm",
-      description: "",
-      model: "默认模型",
-      tools: "未配置",
-      skills: "未配置",
-      knowledgebase: "未配置",
-      shortTerm: "未配置",
-      longTerm: "未配置",
-      tracing: "未配置",
-      children: [],
-    };
-  }, [agentDraft, agentName, project?.name]);
-  const inspectedAgentId = focusedAgentId ?? hoveredAgentId;
-  const inspectedAgent = inspectedAgentId
-    ? findTopologyAgent(topology, inspectedAgentId)
-    : undefined;
-  const inspectedAgentMeta = inspectedAgent
-    ? agentTypeMeta(inspectedAgent.type)
-    : undefined;
-  const InspectedAgentIcon = inspectedAgentMeta?.icon;
-
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!flowPreviewOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFlowPreviewOpen(false);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [flowPreviewOpen]);
 
   const tree = useMemo(() => {
     if (!project?.files || !Array.isArray(project.files)) {
@@ -849,16 +861,21 @@ export function ProjectPreview({
       setDeploying(true);
     }
     const taskId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    let taskRuntimeName = "生成中…";
+    let taskRuntimeName = agentName?.trim() || project.name || "生成中…";
     const taskStartedAt = Date.now();
-    onDeploymentTaskChange?.({
+    const initialTask: DeploymentTaskUpdate = {
       id: taskId,
       runtimeName: taskRuntimeName,
+      runtimeId: deploymentRuntimeId,
       region: deployRegion,
       startedAt: taskStartedAt,
       status: "running",
+      phase: "prepare",
       label: "准备部署",
-    });
+      agentDraft,
+    };
+    onDeploymentTaskChange?.(initialTask);
+    onDeploymentStarted?.(initialTask);
     try {
       const result = await onDeploy(
         project,
@@ -871,9 +888,11 @@ export function ProjectPreview({
           onDeploymentTaskChange?.({
             id: taskId,
             runtimeName: taskRuntimeName,
+            runtimeId: deploymentRuntimeId,
             region: deployRegion,
             startedAt: taskStartedAt,
             status: "running",
+            phase: s.phase,
             label:
               deploymentSteps.find((step) => step.phase === s.phase)?.label ??
               s.phase,
@@ -897,13 +916,15 @@ export function ProjectPreview({
         setDeployResult(result);
         setActivePhase(null);
       }
+      await onDeploymentComplete?.(result);
       onDeploymentTaskChange?.({
         id: taskId,
         runtimeName: result.agentName || taskRuntimeName,
-        runtimeId: result.runtimeId,
+        runtimeId: result.runtimeId || deploymentRuntimeId,
         region: result.region || deployRegion,
         startedAt: taskStartedAt,
         status: "success",
+        phase: "complete",
         label: "部署完成",
       });
     } catch (err) {
@@ -916,6 +937,7 @@ export function ProjectPreview({
         onDeploymentTaskChange?.({
           id: taskId,
           runtimeName: taskRuntimeName,
+          runtimeId: deploymentRuntimeId,
           region: deployRegion,
           startedAt: taskStartedAt,
           status: "cancelled",
@@ -928,6 +950,7 @@ export function ProjectPreview({
       onDeploymentTaskChange?.({
         id: taskId,
         runtimeName: taskRuntimeName,
+        runtimeId: deploymentRuntimeId,
         region: deployRegion,
         startedAt: taskStartedAt,
         status: "error",
@@ -972,6 +995,7 @@ export function ProjectPreview({
           apps.length > 0
             ? { [apps[0]]: deployResult.agentName }
             : undefined,
+          deployResult.version,
         );
       } else {
         // Legacy: direct URL + apikey (older backends / manual deploys).
@@ -1106,66 +1130,54 @@ export function ProjectPreview({
                   {agentCount ?? 1} 个智能体
                 </div>
               </div>
-              {editable && onChange && (
-                <ProjectCodeBrowser project={project} onChange={onChange} />
-              )}
-            </div>
-            <div className="pp-topology-scroll">
-              <div className="pp-topology-tree">
-                <TopologyNode
-                  agent={topology}
-                  depth={0}
-                  inspectedId={inspectedAgentId}
-                  onHover={setHoveredAgentId}
-                  onFocus={setFocusedAgentId}
-                />
-              </div>
-              {inspectedAgent && inspectedAgentMeta && InspectedAgentIcon && (
-                <div className="pp-agent-inspector" aria-live="polite">
-                  <div className="pp-agent-inspector-head">
-                    <span className="pp-agent-inspector-icon">
-                      <InspectedAgentIcon aria-hidden="true" />
-                    </span>
-                    <div>
-                      <strong>{inspectedAgent.name}</strong>
-                      <span>{inspectedAgentMeta.label}</span>
-                    </div>
-                  </div>
-                  {inspectedAgent.description && (
-                    <p>{inspectedAgent.description}</p>
+              <div className="pp-release-info">
+                <div className="pp-release-info-main">
+                  <h2>{agentName || project.name || "未命名 Agent"}</h2>
+                  {agentDraft?.description && (
+                    <p
+                      className="pp-release-description"
+                      title={agentDraft.description}
+                    >
+                      {agentDraft.description}
+                    </p>
                   )}
-                  <dl className="pp-agent-config-grid">
-                    <dt>模型</dt>
-                    <dd>{inspectedAgent.model}</dd>
-                    <dt>工具</dt>
-                    <dd>{inspectedAgent.tools}</dd>
-                    <dt>技能</dt>
-                    <dd>{inspectedAgent.skills}</dd>
-                    <dt>知识库</dt>
-                    <dd>{inspectedAgent.knowledgebase}</dd>
-                    <dt>短期记忆</dt>
-                    <dd>{inspectedAgent.shortTerm}</dd>
-                    <dt>长期记忆</dt>
-                    <dd>{inspectedAgent.longTerm}</dd>
-                    <dt>观测</dt>
-                    <dd>{inspectedAgent.tracing}</dd>
+                  <dl className="pp-release-facts">
+                    <div>
+                      <dt>Agent 数量</dt>
+                      <dd>{agentCount ?? 1}</dd>
+                    </div>
                   </dl>
                 </div>
-              )}
-            </div>
-            <div className="pp-topology-actions">
-              {onExportYaml && (
-                <button type="button" className="pp-secondary" onClick={onExportYaml}>
-                  <FileDown className="pp-ic" />
-                  导出配置
-                </button>
-              )}
-              {project.files.length > 0 && (
-                <button type="button" className="pp-secondary" onClick={handleDownloadZip}>
-                  <Download className="pp-ic" />
-                  下载源码
-                </button>
-              )}
+                <div className="pp-artifact-actions">
+                  {onExportYaml && (
+                    <button
+                      type="button"
+                      className="pp-secondary"
+                      onClick={onExportYaml}
+                    >
+                      <FileDown className="pp-ic" />
+                      导出配置文件
+                    </button>
+                  )}
+                  {editable && onChange && (
+                    <ProjectCodeBrowser
+                      project={project}
+                      onChange={onChange}
+                      className="pp-artifact-source"
+                    />
+                  )}
+                  {project.files.length > 0 && (
+                    <button
+                      type="button"
+                      className="pp-secondary"
+                      onClick={handleDownloadZip}
+                    >
+                      <Download className="pp-ic" />
+                      导出源码
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
           </section>
         )}
@@ -1446,6 +1458,62 @@ export function ProjectPreview({
                     </label>
                   </div>
                 )}
+                <div className="pp-network-layout">
+                  <div className="pp-network-modes" role="radiogroup" aria-label="网络模式">
+                    {(["public", "private", "both"] as const).map((mode) => (
+                      <label className="pp-network-option" key={mode}>
+                        <input
+                          type="radio"
+                          name="deployment-network-mode"
+                          value={mode}
+                          checked={networkMode === mode}
+                          onChange={() => setNetworkMode(mode)}
+                          disabled={deploying || isRuntimeUpdate || !onNetworkChange}
+                        />
+                        <span>
+                          {mode === "public"
+                            ? "公网"
+                            : mode === "private"
+                              ? "VPC"
+                              : "公网 + VPC"}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  {networkMode !== "public" && (
+                    <div className="pp-network-fields">
+                      <label>
+                        <span>VPC ID</span>
+                        <input
+                          value={network?.vpcId ?? ""}
+                          placeholder="vpc-xxxxxxxx"
+                          disabled={deploying || isRuntimeUpdate}
+                          onChange={(e) => patchNetwork({ vpcId: e.target.value })}
+                        />
+                      </label>
+                      <label>
+                        <span>子网 ID <small>可选，多个用逗号分隔</small></span>
+                        <input
+                          value={network?.subnetIds ?? ""}
+                          placeholder="subnet-xxx, subnet-yyy"
+                          disabled={deploying || isRuntimeUpdate}
+                          onChange={(e) => patchNetwork({ subnetIds: e.target.value })}
+                        />
+                      </label>
+                      <label className="pp-network-check">
+                        <input
+                          type="checkbox"
+                          checked={!!network?.enableSharedInternetAccess}
+                          disabled={deploying || isRuntimeUpdate}
+                          onChange={(e) =>
+                            patchNetwork({ enableSharedInternetAccess: e.target.checked })
+                          }
+                        />
+                        VPC 内共享公网出口
+                      </label>
+                    </div>
+                  )}
+                </div>
               </section>
 
               <section className="pp-config-section pp-env-section">
@@ -1622,12 +1690,17 @@ export function ProjectPreview({
                       }阶段）：`
                     : ""}${deployError}`}
                   onRetry={requestDeploymentConfirmation}
+                  retryLabel={
+                    isRuntimeUpdate ? "重试更新" : "重试部署"
+                  }
                 />
               )}
 
               {deployResult && (
                 <section className="pp-deploy-result">
-                  <div className="pp-deploy-result-header">部署成功</div>
+                  <div className="pp-deploy-result-header">
+                    {isRuntimeUpdate ? "更新成功" : "部署成功"}
+                  </div>
                   <div className="pp-deploy-result-body">
                     {deployResult.region && (
                       <div className="pp-deploy-result-field">
@@ -1694,8 +1767,56 @@ export function ProjectPreview({
           </aside>
         )}
       </div>
+      {flowPreviewOpen && agentDraft &&
+        createPortal(
+          <div
+            className="pp-flow-backdrop"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) {
+                setFlowPreviewOpen(false);
+              }
+            }}
+          >
+            <section
+              className="pp-flow-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-label="执行流程预览"
+            >
+              <header>
+                <div>
+                  <strong>执行流程</strong>
+                  <span>只读预览，可缩放与拖动画布</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setFlowPreviewOpen(false)}
+                  aria-label="关闭执行流程预览"
+                >
+                  <X aria-hidden />
+                </button>
+              </header>
+              <div className="pp-flow-dialog-canvas">
+                <AgentBuildCanvas
+                  draft={agentDraft}
+                  selectedPath={[]}
+                  onSelect={ignoreCanvasAction}
+                  onAdd={ignoreCanvasAction}
+                  onInsert={ignoreCanvasAction}
+                  onInsertRoot={ignoreCanvasAction}
+                  onDelete={ignoreCanvasAction}
+                  onReset={ignoreCanvasAction}
+                  readOnly
+                  interactivePreview
+                />
+              </div>
+            </section>
+          </div>,
+          document.body,
+        )}
       <DeploymentConfirmDialog
         open={deployConfirmOpen}
+        isUpdate={isRuntimeUpdate}
         onCancel={cancelDeploymentConfirmation}
         onConfirm={() => void performDeployment()}
       />

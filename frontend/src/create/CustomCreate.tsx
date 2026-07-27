@@ -69,6 +69,7 @@ import { displayDescription } from "./displayText";
 import { localPickerMatches } from "./localPickerSearch";
 import { draftToYaml } from "./configYaml";
 import type { AgentProject } from "./project";
+import { AgentBuildCanvas } from "./AgentBuildCanvas";
 import type { SkillSource } from "./skills/types";
 import { SkillHubPicker } from "./SkillHubPicker";
 import { LocalPicker } from "./LocalPicker";
@@ -83,6 +84,7 @@ import {
 } from "./vikingKnowledgebases";
 import {
   ProjectPreview,
+  type DeployResult,
   type DeploymentTaskUpdate,
 } from "../ui/ProjectPreview";
 import { Blocks, ThinkingPlaceholder } from "../ui/Blocks";
@@ -280,11 +282,22 @@ const AGENT_TYPE_BAR_LABELS: Record<
   NonNullable<AgentDraft["agentType"]>,
   string
 > = {
-  llm: "LLM 智能体",
-  sequential: "顺序型智能体",
-  parallel: "并行型智能体",
-  loop: "循环型智能体",
+  llm: "智能体",
+  sequential: "分步协作",
+  parallel: "同时处理",
+  loop: "循环执行",
   a2a: "远程智能体",
+};
+
+const AGENT_TYPE_DESCRIPTIONS: Record<
+  NonNullable<AgentDraft["agentType"]>,
+  string
+> = {
+  llm: "理解任务并完成一个具体工作",
+  sequential: "内部步骤按照顺序依次执行",
+  parallel: "内部步骤同时工作，完成后统一汇总",
+  loop: "重复执行内部步骤，直到满足停止条件",
+  a2a: "调用已经存在的远程 Agent",
 };
 
 const A2A_REGISTRY_ENV_TO_FIELD = {
@@ -1336,6 +1349,57 @@ function addChild(root: AgentDraft, path: NodePath): AgentDraft {
   }));
 }
 
+function insertChild(
+  root: AgentDraft,
+  parentPath: NodePath,
+  index: number,
+): AgentDraft {
+  return updateNode(root, parentPath, (n) => {
+    const subAgents = n.subAgents.slice();
+    subAgents.splice(index, 0, emptyDraft());
+    return { ...n, subAgents };
+  });
+}
+
+function nextAvailableAgentName(root: AgentDraft, preferred: string): string {
+  const names = new Set<string>();
+  const visit = (node: AgentDraft) => {
+    if (node.name) names.add(node.name);
+    node.subAgents.forEach(visit);
+  };
+  visit(root);
+
+  if (!names.has(preferred)) return preferred;
+  let suffix = 2;
+  while (names.has(`${preferred}_${suffix}`)) suffix += 1;
+  return `${preferred}_${suffix}`;
+}
+
+function insertAtRootBoundary(
+  root: AgentDraft,
+  position: "before" | "after",
+): AgentDraft {
+  const index = position === "before" ? 0 : root.subAgents.length;
+  if (root.agentType === "sequential") {
+    return insertChild(root, [], index);
+  }
+
+  const originalName = agentNameProblem(root.name) === null
+    ? `${root.name}_step`
+    : "original_step";
+  const original = {
+    ...root,
+    name: nextAvailableAgentName(root, originalName),
+  };
+  const added = emptyDraft();
+  return {
+    ...root,
+    agentType: "sequential",
+    subAgents:
+      position === "before" ? [added, original] : [original, added],
+  };
+}
+
 function removeNode(root: AgentDraft, path: NodePath): AgentDraft {
   if (path.length === 0) return root; // the root is never removable
   const parentPath = path.slice(0, -1);
@@ -1500,7 +1564,7 @@ function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
 /* ---------------------------------------------------------------- *
  * Left structure tree: one selectable, editable node (recursive).
  * ---------------------------------------------------------------- */
-function TreeNode({
+export function TreeNode({
   root,
   path,
   selectedPath,
@@ -1684,6 +1748,7 @@ function TreeNode({
 type DebugPhase =
   "idle" | "building" | "starting" | "ready" | "sending" | "error";
 
+type WorkspaceMode = "build" | "validate" | "publish";
 interface DebugMessage {
   role: "user" | "assistant";
   content: string;
@@ -1698,6 +1763,13 @@ function codegenDraft(draft: AgentDraft): AgentDraft {
       feishuEnabled: !!draft.deployment?.feishuEnabled,
     },
   };
+}
+
+function workspaceAgentName(draft: AgentDraft): string {
+  const rootName = draft.name.trim();
+  if (rootName) return rootName;
+  if (draft.agentType !== "sequential") return "";
+  return draft.subAgents.find((agent) => agent.name.trim())?.name.trim() ?? "";
 }
 
 function debugRuntimeDraft(draft: AgentDraft): AgentDraft {
@@ -1725,6 +1797,7 @@ function debugSnapshotKey(draft: AgentDraft): string {
 }
 
 function DebugPanel({
+  standalone = false,
   enabled,
   disabledReason,
   phase,
@@ -1735,14 +1808,12 @@ function DebugPanel({
   messages,
   input,
   error,
-  deploying,
-  deployError,
   onInput,
   onSend,
   onRestart,
   onIgnoreChanges,
-  onDeploy,
 }: {
+  standalone?: boolean;
   enabled: boolean;
   disabledReason: string;
   phase: DebugPhase;
@@ -1753,13 +1824,10 @@ function DebugPanel({
   messages: DebugMessage[];
   input: string;
   error: string | null;
-  deploying: boolean;
-  deployError: string;
   onInput: (v: string) => void;
   onSend: () => void;
   onRestart: () => void;
   onIgnoreChanges: () => void;
-  onDeploy: () => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const ready = phase === "ready" || phase === "sending";
@@ -1770,7 +1838,7 @@ function DebugPanel({
     enabled && (phase === "building" || phase === "starting");
   const showStaleOverlay = Boolean(run && stale && !showProgressOverlay);
 
-  if (collapsed) {
+  if (collapsed && !standalone) {
     return (
       <aside className="cw-debug is-collapsed" aria-label="调试窗口（已收起）">
         <button
@@ -1787,47 +1855,30 @@ function DebugPanel({
   }
 
   return (
-    <aside className="cw-debug" aria-label="调试窗口">
+    <aside
+      className={`cw-debug${standalone ? " is-standalone" : ""}`}
+      aria-label="调试窗口"
+    >
       <div className="cw-debug-head">
         <div className="cw-debug-title">
-          <button
-            type="button"
-            className="cw-debug-collapse"
-            onClick={() => setCollapsed(true)}
-            aria-label="收起调试栏"
-            title="收起调试栏"
-          >
-            <ChevronRight className="cw-i cw-i-sm" />
-          </button>
-          <span>调试</span>
-        </div>
-        <div className="cw-debug-head-actions">
-          <button
-            type="button"
-            className="cw-debug-deploy"
-            disabled={deploying}
-            onClick={onDeploy}
-            title="查看源码、填写环境变量并部署"
-          >
-            去部署
-            {deploying ? (
-              <Loader2 className="cw-i cw-spin" />
-            ) : (
-              <ArrowRight className="cw-i" />
-            )}
-          </button>
+          {!standalone && (
+            <button
+              type="button"
+              className="cw-debug-collapse"
+              onClick={() => setCollapsed(true)}
+              aria-label="收起调试栏"
+              title="收起调试栏"
+            >
+              <ChevronRight className="cw-i cw-i-sm" />
+            </button>
+          )}
+          <span>{standalone ? "快速调试" : "调试"}</span>
         </div>
       </div>
 
       {!run && phase === "idle" && !enabled && (
         <div className="cw-debug-sub">
           <span>{disabledReason}</span>
-        </div>
-      )}
-
-      {deployError && (
-        <div className="cw-debug-deploy-error" role="alert">
-          {deployError}
         </div>
       )}
 
@@ -2002,6 +2053,87 @@ function DebugPanel({
   );
 }
 
+const WORKSPACE_MODES: Array<{
+  id: WorkspaceMode;
+  label: string;
+}> = [
+  { id: "build", label: "构建" },
+  { id: "validate", label: "调试" },
+  { id: "publish", label: "发布" },
+];
+
+const DEBUG_OPTIMIZATIONS = [
+  {
+    id: "context",
+    label: "上下文优化",
+    description: "压缩历史对话，保留与当前任务相关的信息",
+  },
+  {
+    id: "grounding",
+    label: "幻觉抑制",
+    description: "对不确定内容要求依据，并明确表达未知",
+  },
+  {
+    id: "tools",
+    label: "工具调用优化",
+    description: "减少重复调用，优先复用可信的工具结果",
+  },
+  {
+    id: "latency",
+    label: "响应加速",
+    description: "缓存稳定上下文，降低重复推理开销",
+  },
+] as const;
+
+function WorkspaceHeader({
+  mode,
+  agentName,
+  busy,
+  onChange,
+}: {
+  mode: WorkspaceMode;
+  agentName: string;
+  busy: boolean;
+  onChange: (mode: WorkspaceMode) => void;
+}) {
+  const activeIndex = WORKSPACE_MODES.findIndex((item) => item.id === mode);
+  return (
+    <header className="cw-workspace-header">
+      <div className="cw-workspace-identity">
+        <strong title={agentName}>{agentName || "未命名 Agent"}</strong>
+      </div>
+      <nav className="cw-workspace-stepper" aria-label="Agent 创建步骤">
+        {WORKSPACE_MODES.map((item, index) => {
+          const active = item.id === mode;
+          const complete = index < activeIndex;
+          const pending = item.id === "publish" && busy;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className={`${active ? "is-active" : ""}${complete ? " is-complete" : ""}`}
+              aria-current={active ? "step" : undefined}
+              disabled={pending}
+              onClick={() => onChange(item.id)}
+            >
+              <span className="cw-workspace-step-marker" aria-hidden>
+                {pending ? (
+                  <Loader2 className="cw-i cw-spin" />
+                ) : complete ? (
+                  <Check className="cw-i" />
+                ) : (
+                  index + 1
+                )}
+              </span>
+              <strong>{item.label}</strong>
+            </button>
+          );
+        })}
+      </nav>
+    </header>
+  );
+}
+
 /* ================================================================ *
  * Main component
  * ================================================================ */
@@ -2012,6 +2144,19 @@ interface CustomCreateProps extends CreateModeProps {
   features?: UiFeatures;
   /** Publish deploy progress into the persistent app header. */
   onDeploymentTaskChange?: (task: DeploymentTaskUpdate) => void;
+  /** Existing Runtime target when editing an Agent from the library. */
+  deploymentTarget?: {
+    runtimeId: string;
+    name: string;
+    region: string;
+    currentVersion?: number | null;
+  };
+  /** Called after an existing Runtime has been updated and released. */
+  onDeploymentComplete?: (result: DeployResult) => void | Promise<void>;
+  /** Called once the persistent deployment task has been created. */
+  onDeploymentStarted?: (task: DeploymentTaskUpdate) => void;
+  /** Persists the live builder state as a resumable library draft. */
+  onDraftChange?: (draft: AgentDraft) => void;
 }
 
 export function CustomCreate({
@@ -2021,17 +2166,31 @@ export function CustomCreate({
   initialDraft,
   features,
   onDeploymentTaskChange,
+  deploymentTarget,
+  onDeploymentComplete,
+  onDeploymentStarted,
+  onDraftChange,
 }: CustomCreateProps) {
   void onCreate; // outcome is the in-pane project preview, not a navigation
   void onBack; // no footer nav in the single-scroll layout; back lives in app chrome
   const [draft, setDraft] = useState<AgentDraft>(
     () => initialDraft ?? emptyDraft(),
   );
+  const onDraftChangeRef = useRef(onDraftChange);
+  useEffect(() => {
+    onDraftChangeRef.current = onDraftChange;
+  }, [onDraftChange]);
+  useEffect(() => {
+    onDraftChangeRef.current?.(draft);
+  }, [draft]);
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("build");
   const [showErrors, setShowErrors] = useState(false);
   const [validationPulse, setValidationPulse] = useState(0);
   const [project, setProject] = useState<AgentProject | null>(null);
   const [building, setBuilding] = useState(false);
-  const [deployRegion, setDeployRegion] = useState<string>("cn-beijing");
+  const [deployRegion, setDeployRegion] = useState<string>(
+    deploymentTarget?.region ?? "cn-beijing",
+  );
   const debugEnabled = features?.generatedAgentTestRun === true;
   const debugDisabledReason =
     features?.generatedAgentTestRunDisabledReason ||
@@ -2191,6 +2350,38 @@ export function CustomCreate({
     if (select) setSelectedPath(select);
   };
 
+  const addCanvasStep = (path: NodePath) => {
+    const parent = getNode(draft, path);
+    if (!nodeAcceptsChildren(parent) || path.length >= MAX_TREE_DEPTH) return;
+    const next = addChild(draft, path);
+    const childIndex = getNode(next, path).subAgents.length - 1;
+    applyTree(next, [...path, childIndex]);
+  };
+
+  const insertCanvasStep = (parentPath: NodePath, index: number) => {
+    const parent = getNode(draft, parentPath);
+    if (
+      !nodeAcceptsChildren(parent) ||
+      parentPath.length >= MAX_TREE_DEPTH
+    ) {
+      return;
+    }
+    const safeIndex = Math.max(0, Math.min(index, parent.subAgents.length));
+    const next = insertChild(draft, parentPath, safeIndex);
+    applyTree(next, [...parentPath, safeIndex]);
+  };
+
+  const insertCanvasRootStep = (position: "before" | "after") => {
+    const wasSequential = draft.agentType === "sequential";
+    const next = insertAtRootBoundary(draft, position);
+    const selectedIndex = position === "before"
+      ? 0
+      : wasSequential
+        ? next.subAgents.length - 1
+        : 1;
+    applyTree(next, [selectedIndex]);
+  };
+
   const clearRootAgent = () => {
     if (
       !window.confirm("清空根 Agent 的全部配置和子 Agent？此操作无法撤销。")
@@ -2201,6 +2392,14 @@ export function CustomCreate({
     setSelectedPath([]);
     setShowErrors(false);
     setAdvancedConfigOpen(false);
+  };
+
+  const deleteCanvasStep = (path: NodePath) => {
+    if (path.length === 0) {
+      clearRootAgent();
+      return;
+    }
+    applyTree(removeNode(draft, path), path.slice(0, -1));
   };
 
   // Root-only rich sections read these off the root draft directly.
@@ -2399,30 +2598,19 @@ export function CustomCreate({
     }
   };
 
-  const finish = async () => {
+  const openPublishPreview = async () => {
     setBuildErr("");
-    if (!requireCompleteDraft()) return;
-    // NOTE: do NOT call onCreate() here — it navigates away from the create
-    // view. The generated project preview below IS the outcome of this step.
-
+    if (!requireCompleteDraft()) {
+      setWorkspaceMode("build");
+      return;
+    }
     setBuilding(true);
     try {
-      // Network settings are deployment-only and are not part of the codegen
-      // API schema. Keep them in the local draft while sending only the
-      // channel flag needed to generate the project.
-      const proj = await generateAgentProject(codegenDraft(draft));
-      await cleanupDebugRun();
-      setDebugPhase("idle");
-      setDebugProjectName("");
-      setDebugLogs([]);
-      setDebugMessages([]);
-      setDebugInput("");
-      setDebugError(null);
-      setProject(proj);
-    } catch (err) {
-      setBuildErr(
-        `打开部署页失败：${err instanceof Error ? err.message : String(err)}`,
-      );
+      const generated = await generateAgentProject(codegenDraft(draft));
+      setProject(generated);
+      setWorkspaceMode("publish");
+    } catch (error) {
+      setBuildErr(error instanceof Error ? error.message : String(error));
     } finally {
       setBuilding(false);
     }
@@ -2528,89 +2716,55 @@ export function CustomCreate({
     }
   };
 
-  // ----------------------------------------------------------------
-  // Preview mode: takes over the whole pane, hiding the wizard chrome.
-  // ----------------------------------------------------------------
-  if (project) {
-    const handleDeploy = async (
-      proj: AgentProject,
-      onStage?: (s: DeployStage) => void,
-      options?: Parameters<typeof deployAgentkitProject>[3],
-    ) => {
-      const net = draft.deployment?.network;
-      const network =
-        net && net.mode && net.mode !== "public"
-          ? {
-              mode: net.mode,
-              vpc_id: net.vpcId,
-              subnet_ids: net.subnetIds,
-              enable_shared_internet_access: net.enableSharedInternetAccess,
-            }
-          : undefined;
-      return deployAgentkitProject(
-        proj.name,
-        proj.files,
-        { region: deployRegion, projectName: "default", network },
-        { ...options, onStage },
-      );
-    };
-
-    return (
-      <div className="cw-root cw-root-preview">
-        <div className="cw-preview-body">
-          <ProjectPreview
-            project={project}
-            agentDraft={draft}
-            agentName={draft.name || "未命名 Agent"}
-            agentCount={countDraftAgents(draft)}
-            onChange={setProject}
-            onDeploy={handleDeploy}
-            onAgentAdded={onAgentAdded}
-            onDeploymentTaskChange={onDeploymentTaskChange}
-            feishuEnabled={!!draft.deployment?.feishuEnabled}
-            onFeishuEnabledChange={async (feishuEnabled) => {
-              const nextDraft: AgentDraft = {
-                ...draft,
-                deployment: {
-                  ...(draft.deployment ?? { feishuEnabled: false }),
-                  feishuEnabled,
-                },
-              };
-              const nextProject = await generateAgentProject(codegenDraft(nextDraft));
-              setDraft(nextDraft);
-              setProject(nextProject);
-            }}
-            deploymentEnv={deploymentEnv.specs}
-            deploymentEnvValues={{
-              ...draft.deployment?.envValues,
-              ...deploymentEnv.fixedValues,
-            }}
-            onDeploymentEnvChange={patchDeploymentEnv}
-            network={draft.deployment?.network}
-            onNetworkChange={(network) =>
-              setDraft((current) => ({
-                ...current,
-                deployment: {
-                  ...(current.deployment ?? { feishuEnabled: false }),
-                  network,
-                },
-              }))
-            }
-            deployRegion={deployRegion}
-            onDeployRegionChange={setDeployRegion}
-            onBack={() => setProject(null)}
-            onExportYaml={() =>
-              downloadText(
-                `${draft.name || "agent"}.yaml`,
-                draftToYaml(draft),
-                "text/yaml",
-              )
-            }
-          />
-        </div>
-      </div>
+  const handleDeploy = async (
+    proj: AgentProject,
+    onStage?: (s: DeployStage) => void,
+    options?: Parameters<typeof deployAgentkitProject>[3],
+  ) => {
+    const net = draft.deployment?.network;
+    const network =
+      net && net.mode && net.mode !== "public"
+        ? {
+            mode: net.mode,
+            vpc_id: net.vpcId,
+            subnet_ids: net.subnetIds,
+            enable_shared_internet_access: net.enableSharedInternetAccess,
+          }
+        : undefined;
+    return deployAgentkitProject(
+      proj.name,
+      proj.files,
+      {
+        region: deploymentTarget?.region ?? deployRegion,
+        projectName: "default",
+        network,
+      },
+      {
+        ...options,
+        onStage,
+        runtimeId: deploymentTarget?.runtimeId,
+        description: draft.description,
+      },
     );
-  }
+  };
+
+  const openValidation = () => {
+    if (!requireCompleteDraft()) return;
+    setWorkspaceMode("validate");
+  };
+
+  const handleWorkspaceChange = (nextMode: WorkspaceMode) => {
+    if (nextMode === "publish") {
+      if (project) setWorkspaceMode("publish");
+      else openPublishPreview();
+      return;
+    }
+    if (nextMode === "validate") {
+      openValidation();
+      return;
+    }
+    setWorkspaceMode(nextMode);
+  };
 
   const Section = sectionImpl.current;
 
@@ -2618,22 +2772,30 @@ export function CustomCreate({
 
   return (
     <div className="cw-root">
-      <div className="cw-editor">
-        {/* Left: the Agent structure tree (select / add / remove / reorder). */}
-        <aside className="cw-tree" aria-label="Agent 结构">
-          <div className="cw-tree-head">Agent 结构</div>
-          <TreeNode
-            root={draft}
-            path={[]}
-            selectedPath={safePath}
-            duplicateNames={duplicateNames}
-            showErrors={showErrors}
-            validationPulse={validationPulse}
-            onSelect={setSelectedPath}
-            onChange={applyTree}
-            onClearRoot={clearRootAgent}
-          />
-        </aside>
+      <WorkspaceHeader
+        mode={workspaceMode}
+        agentName={workspaceAgentName(draft)}
+        busy={building}
+        onChange={handleWorkspaceChange}
+      />
+      {buildErr && (
+        <div className="cw-workspace-alert" role="alert">
+          {buildErr}
+        </div>
+      )}
+      <main className="cw-workspace-main" id="cw-workspace-main">
+      {workspaceMode === "build" && (
+        <div className="cw-editor">
+        <AgentBuildCanvas
+          draft={draft}
+          selectedPath={safePath}
+          onSelect={setSelectedPath}
+          onAdd={addCanvasStep}
+          onInsert={insertCanvasStep}
+          onInsertRoot={insertCanvasRootStep}
+          onDelete={deleteCanvasStep}
+          onReset={clearRootAgent}
+        />
         {/* Right: the form for the currently-selected node. The agent-type bar
             is fixed on top (outside the scroll area); the form (left) + step
             nav (right) scroll below it. */}
@@ -2644,7 +2806,8 @@ export function CustomCreate({
               <div
                 className="cw-typeradio cw-typeradio--row"
                 role="radiogroup"
-                aria-label="Agent 类型"
+                aria-label="节点运行方式"
+                data-active-type={node.agentType ?? "llm"}
                 style={
                   {
                     "--cw-agent-type-gap": `${AGENT_TYPE_GAP_PX}px`,
@@ -2667,10 +2830,15 @@ export function CustomCreate({
                   return (
                     <label
                       key={t.id}
+                      data-agent-type={t.id}
                       className={`cw-typeradio-item ${on ? "is-on" : ""} ${
                         remoteTypeDisabled ? "is-disabled" : ""
                       }`}
-                      title={remoteTypeDisabled ? undefined : t.desc}
+                      title={
+                        remoteTypeDisabled
+                          ? undefined
+                          : AGENT_TYPE_DESCRIPTIONS[t.id]
+                      }
                       tabIndex={remoteTypeDisabled ? 0 : undefined}
                       aria-describedby={disabledHintId}
                     >
@@ -2683,9 +2851,7 @@ export function CustomCreate({
                         onChange={() => selectAgentType(t.id)}
                       />
                       <span className="cw-typeradio-title">
-                        {AGENT_TYPE_BAR_LABELS[t.id].replace("智能体", "")}
-                        <wbr />
-                        智能体
+                        {AGENT_TYPE_BAR_LABELS[t.id]}
                       </span>
                       {remoteTypeDisabled && (
                         <span
@@ -2693,7 +2859,7 @@ export function CustomCreate({
                           className="cw-typeradio-disabled-hint"
                           role="tooltip"
                         >
-                          远程 Agent 仅可作为子 Agent
+                          远程智能体只能作为子步骤使用
                         </span>
                       )}
                     </label>
@@ -2714,7 +2880,8 @@ export function CustomCreate({
                         <>
                     <div className="cw-field">
                       <label className="cw-label">
-                        Agent 名称<span className="cw-req">*</span>
+                        {isRootAgent ? "Agent 名称" : "步骤名称"}
+                        <span className="cw-req">*</span>
                       </label>
                       <input
                         className={`cw-input ${invalidClass(nameInvalid)}`}
@@ -2728,14 +2895,14 @@ export function CustomCreate({
                               </span>
                       ) : (
                         <span className="cw-help">
-                                遵循 Google ADK 命名规则，且在 Agent
-                                结构中保持唯一。
+                                遵循 Google ADK 命名规则，且在执行流程中保持唯一。
                         </span>
                       )}
                     </div>
                     <div className="cw-field">
                       <label className="cw-label">
-                        描述<span className="cw-req">*</span>
+                        {isRootAgent ? "描述" : "任务说明"}
+                        <span className="cw-req">*</span>
                       </label>
                       <textarea
                         className={`cw-textarea cw-textarea-sm ${invalidClass(
@@ -2762,9 +2929,8 @@ export function CustomCreate({
                     {orchestrator ? (
                       <>
                         <p className="cw-section-desc">
-                            编排型 Agent 只负责调度子
-                            Agent，不需要模型或系统提示词。请在左侧 「Agent
-                            结构」中为它添加、排序子 Agent。
+                            这是一个协作容器，本身不生成回答。请在左侧画布中
+                            添加任务步骤，并通过拖拽调整它们的位置。
                         </p>
                         {node.agentType === "loop" && (
                           <div className="cw-field">
@@ -3382,29 +3548,145 @@ export function CustomCreate({
             {/* cw-detail-inner */}
           </div>
           {/* cw-detail-scroll */}
+          <button
+            type="button"
+            className="cw-build-next"
+            onClick={openValidation}
+          >
+            <span>下一步：开始调试</span>
+            <ArrowRight className="cw-i" aria-hidden />
+          </button>
         </div>
         {/* cw-detail */}
-        <DebugPanel
-          enabled={debugEnabled}
-          disabledReason={debugDisabledReason}
-          phase={debugPhase}
-          stale={debugStale}
-          run={debugRun}
-          projectName={debugProjectName || draft.name}
-          logs={debugLogs}
-          messages={debugMessages}
-          input={debugInput}
-          error={debugError}
-          deploying={building}
-          deployError={buildErr}
-          onInput={setDebugInput}
-          onSend={sendDebugMessage}
-          onRestart={startDebug}
-          onIgnoreChanges={() => setIgnoredDebugSnapshot(currentDebugSnapshot)}
-          onDeploy={finish}
-        />
-      </div>
-      {/* cw-editor */}
+        </div>
+      )}
+
+      {workspaceMode === "validate" && (
+        <div className="cw-validation-workspace">
+          <aside className="cw-optimization-panel" aria-label="进阶选项">
+            <div className="cw-optimization-head">
+              <span>进阶选项</span>
+              <small>暂未开放，敬请期待</small>
+            </div>
+            <div className="cw-optimization-list">
+              {DEBUG_OPTIMIZATIONS.map((item) => (
+                <label
+                  key={item.id}
+                  className="cw-optimization-option is-disabled"
+                >
+                  <input
+                    type="checkbox"
+                    checked={false}
+                    disabled
+                    readOnly
+                  />
+                  <span className="cw-optimization-check" aria-hidden />
+                  <span className="cw-optimization-copy">
+                    <strong>{item.label}</strong>
+                    <small>{item.description}</small>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </aside>
+          <div className="cw-validation-content">
+            <DebugPanel
+              standalone
+              enabled={debugEnabled}
+              disabledReason={debugDisabledReason}
+              phase={debugPhase}
+              stale={debugStale}
+              run={debugRun}
+              projectName={debugProjectName || draft.name}
+              logs={debugLogs}
+              messages={debugMessages}
+              input={debugInput}
+              error={debugError}
+              onInput={setDebugInput}
+              onSend={sendDebugMessage}
+              onRestart={startDebug}
+              onIgnoreChanges={() =>
+                setIgnoredDebugSnapshot(currentDebugSnapshot)
+              }
+            />
+          </div>
+          <button
+            type="button"
+            className="cw-debug-next"
+            onClick={openPublishPreview}
+          >
+            <span>下一步：部署发布</span>
+            <ArrowRight className="cw-i" aria-hidden />
+          </button>
+        </div>
+      )}
+
+      {workspaceMode === "publish" && (
+        <div className="cw-preview-body">
+          {project ? (
+            <ProjectPreview
+              embedded
+              project={project}
+              agentDraft={draft}
+              agentName={draft.name || "未命名 Agent"}
+              agentCount={countDraftAgents(draft)}
+              onChange={setProject}
+              onDeploy={handleDeploy}
+              onAgentAdded={onAgentAdded}
+              onDeploymentTaskChange={onDeploymentTaskChange}
+              deploymentActionLabel={
+                deploymentTarget ? "更新并发布" : "部署"
+              }
+              deploymentRuntimeId={deploymentTarget?.runtimeId}
+              onDeploymentStarted={onDeploymentStarted}
+              onDeploymentComplete={onDeploymentComplete}
+              feishuEnabled={!!draft.deployment?.feishuEnabled}
+              onFeishuEnabledChange={(feishuEnabled) => {
+                const nextDraft: AgentDraft = {
+                  ...draft,
+                  deployment: {
+                    ...(draft.deployment ?? { feishuEnabled: false }),
+                    feishuEnabled,
+                  },
+                };
+                setDraft(nextDraft);
+              }}
+              deploymentEnv={deploymentEnv.specs}
+              deploymentEnvValues={{
+                ...draft.deployment?.envValues,
+                ...deploymentEnv.fixedValues,
+              }}
+              onDeploymentEnvChange={patchDeploymentEnv}
+              network={draft.deployment?.network}
+              onNetworkChange={(network) =>
+                setDraft((current) => ({
+                  ...current,
+                  deployment: {
+                    ...(current.deployment ?? { feishuEnabled: false }),
+                    network,
+                  },
+                }))
+              }
+              deployRegion={deployRegion}
+              onDeployRegionChange={setDeployRegion}
+              onExportYaml={() =>
+                downloadText(
+                  `${draft.name || "agent"}.yaml`,
+                  draftToYaml(draft),
+                  "text/yaml",
+                )
+              }
+            />
+          ) : (
+            <div className="cw-publish-loading" role="status">
+              <Loader2 className="cw-i cw-spin" />
+              <strong>正在生成发布配置</strong>
+              <span>校验 Agent 结构并准备部署快照…</span>
+            </div>
+          )}
+        </div>
+      )}
+      </main>
     </div>
   );
 }

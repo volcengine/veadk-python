@@ -81,6 +81,27 @@ test("the main navbar owns the complete Agent selector", () => {
   assert.match(agentSelectorSource, /<RuntimeIdentityIcon \/>/);
 });
 
+test("sidebar actions use friendly scoped motion", () => {
+  assert.match(sidebarSource, /className="new-chat new-chat--conversation"/);
+  assert.match(sidebarSource, /className="new-chat new-chat--agents"/);
+  assert.match(sidebarSource, /sidebar-agent-face__eye--left/);
+  assert.match(sidebarSource, /sidebar-agent-face__eye--right/);
+  assert.doesNotMatch(sidebarSource, /sidebar-agent-face__antenna|sidebar-agent-face__ear|sidebar-agent-face__smile/);
+  assert.match(stylesSource, /\.new-chat--conversation:hover > \.icon\s*\{[\s\S]*?animation:\s*sidebar-plus-return/);
+  assert.match(stylesSource, /\.new-chat--agents:hover \.sidebar-agent-face__eye\s*\{[\s\S]*?animation:\s*sidebar-agent-blink/);
+  assert.match(stylesSource, /@keyframes sidebar-agent-blink/);
+  assert.match(stylesSource, /@keyframes sidebar-plus-return\s*\{[\s\S]*?48% \{ transform: rotate\(48deg\); \}[\s\S]*?100% \{ transform: rotate\(0deg\); \}/);
+});
+
+test("username login focuses the name field on arrival", () => {
+  assert.match(loginSource, /className="login-name-input"[\s\S]*?autoFocus/);
+});
+
+test("unified Agent workspace distinguishes local and remote Agents", () => {
+  assert.match(workspaceSource, /agent\.remote \? agent\.host \|\| "远程智能体" : "本地智能体"/);
+  assert.match(workspaceSource, /agent\.remote \? "远程" : "本地"/);
+});
+
 test("history header offers a borderless new-session action", () => {
   assert.match(
     sidebarSource,
