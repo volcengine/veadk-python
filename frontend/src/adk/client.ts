@@ -3,6 +3,12 @@
 // the Vite dev proxy in development.
 
 import { withAuth } from "./auth";
+import { isOAuthLoginRequired, withLocalUser } from "./identity";
+import {
+  isAuthenticationRedirect,
+  waitForAuthentication,
+} from "./authSession";
+import { parseJsonResponse } from "./jsonResponse";
 import { formatRunSseError } from "./runSseError";
 import { parseSSE } from "./sse";
 import {
@@ -12,7 +18,6 @@ import {
 } from "./timeout";
 import type { AgentProject } from "../create/project";
 import type { AgentDraft } from "../create/types";
-import { withLocalUser } from "./identity";
 
 /** An ADK event as serialised over `/run_sse` (camelCase, by_alias=True). */
 export interface AdkUsage {
@@ -226,29 +231,59 @@ function resolve(appName: string): { app: string; ep: AdkEndpoint } {
  *     the apikey; apikey never reaches the browser).
  *  2. `base` + `apiKey` → backend `/agentkit-proxy` (legacy, key in header).
  *  3. neither → the local same-origin server. */
-function apiFetch(
+async function apiFetch(
   path: string,
   init: RequestInit = {},
   ep: AdkEndpoint = {},
   timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
 ): Promise<Response> {
-  const opts = {
+  const baseOpts = {
     ...init,
     headers: withLocalUser(init.headers),
-    signal: requestSignal(init.signal, timeoutMs),
   };
-  if (ep.runtimeId) {
-    const rq = ep.region ? `${path.includes("?") ? "&" : "?"}region=${encodeURIComponent(ep.region)}` : "";
-    return fetch(withAuth(`${API_BASE}/web/runtime-proxy/${ep.runtimeId}${path}${rq}`), opts);
+  const send = () => {
+    const opts = {
+      ...baseOpts,
+      signal: requestSignal(init.signal, timeoutMs),
+    };
+    if (ep.runtimeId) {
+      const rq = ep.region
+        ? `${path.includes("?") ? "&" : "?"}region=${encodeURIComponent(ep.region)}`
+        : "";
+      return fetch(
+        withAuth(`${API_BASE}/web/runtime-proxy/${ep.runtimeId}${path}${rq}`),
+        opts,
+      );
+    }
+    if (ep.base) {
+      // Use backend proxy to avoid CORS issues with remote AgentKit
+      const headers = new Headers(opts.headers);
+      headers.set("X-AgentKit-Base", ep.base);
+      if (ep.apiKey) headers.set("X-AgentKit-Key", ep.apiKey);
+      return fetch(withAuth(`${API_BASE}/agentkit-proxy${path}`), {
+        ...opts,
+        headers,
+      });
+    }
+    return fetch(withAuth(`${API_BASE}${path}`), opts);
+  };
+
+  const requiresLogin = async (response: Response) => {
+    if (isAuthenticationRedirect(response)) return true;
+    if (response.status !== 401) return false;
+    try {
+      return await isOAuthLoginRequired();
+    } catch {
+      return false;
+    }
+  };
+
+  let response = await send();
+  while (await requiresLogin(response)) {
+    await waitForAuthentication(init.signal);
+    response = await send();
   }
-  if (ep.base) {
-    // Use backend proxy to avoid CORS issues with remote AgentKit
-    const headers = new Headers(opts.headers);
-    headers.set("X-AgentKit-Base", ep.base);
-    if (ep.apiKey) headers.set("X-AgentKit-Key", ep.apiKey);
-    return fetch(withAuth(`${API_BASE}/agentkit-proxy${path}`), { ...opts, headers });
-  }
-  return fetch(withAuth(`${API_BASE}${path}`), opts);
+  return response;
 }
 
 function formatErrorDetail(detail: unknown): string {
@@ -1566,7 +1601,7 @@ export async function createGeneratedAgentTestRun(
   if (!res.ok) {
     throw new Error(await httpErrorMessage(res, "创建调试运行失败"));
   }
-  return res.json();
+  return parseJsonResponse<GeneratedAgentTestRun>(res, "创建调试运行失败");
 }
 
 export async function createGeneratedAgentTestSession(
@@ -1581,7 +1616,7 @@ export async function createGeneratedAgentTestSession(
   if (!res.ok) {
     throw new Error(await httpErrorMessage(res, "创建调试会话失败"));
   }
-  const session = await res.json();
+  const session = await parseJsonResponse<{ id: string }>(res, "创建调试会话失败");
   return session.id;
 }
 
