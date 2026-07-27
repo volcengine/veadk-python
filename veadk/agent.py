@@ -188,6 +188,10 @@ class Agent(LlmAgent):
     binary through its RPC mode. Non-``adk`` runtimes are implemented under
     :mod:`veadk.runtime`."""
 
+    codex_runtime_config: Optional[Any] = None
+    """Optional :class:`veadk.runtime.codex.config.CodexRuntimeConfig` (or a
+    matching dict). Codex defaults are fail-closed and invocation-isolated."""
+
     enable_a2ui: bool = False
     """Enable A2UI (agent-driven UI). When True, a `SendA2uiToClientToolset` is
     appended so the agent can reply with declarative UI rendered by a client.

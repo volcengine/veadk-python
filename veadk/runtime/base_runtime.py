@@ -59,6 +59,86 @@ def build_system_append(agent: "Agent") -> str:
     return "\n\n".join(parts)
 
 
+async def resolve_system_append(
+    agent: "Agent", ctx: "InvocationContext"
+) -> tuple[str, str]:
+    """Resolve runtime base/developer instructions for one invocation.
+
+    Unlike :func:`build_system_append`, this handles ADK
+    ``InstructionProvider`` callables and state substitution. The two returned
+    strings are kept separate so external runtimes with native instruction
+    channels do not have to smuggle privileged instructions through user text.
+    """
+    from google.adk.agents.readonly_context import ReadonlyContext
+
+    base_parts: list[str] = []
+    if agent.name:
+        base_parts.append(f"Your name is {agent.name}.")
+    if agent.description:
+        base_parts.append(agent.description)
+
+    readonly = ReadonlyContext(ctx)
+    developer_parts: list[str] = []
+
+    root_agent = getattr(agent, "root_agent", agent)
+    global_instruction = getattr(root_agent, "global_instruction", None)
+    canonical_global = getattr(root_agent, "canonical_global_instruction", None)
+    if global_instruction and callable(canonical_global):
+        raw, bypass_state_injection = await canonical_global(readonly)
+        resolved = str(raw or "")
+        if resolved and not bypass_state_injection:
+            try:
+                from google.adk.utils.instructions_utils import inject_session_state
+
+                resolved = await inject_session_state(resolved, readonly)
+            except Exception:
+                pass
+        if resolved.strip():
+            developer_parts.append(resolved.strip())
+
+    static_instruction = getattr(agent, "static_instruction", None)
+    if static_instruction:
+        try:
+            from google.genai import _transformers
+
+            static_content = _transformers.t_content(static_instruction)
+            static_text = "\n".join(
+                part.text
+                for part in static_content.parts or []
+                if part.text and not part.thought
+            )
+        except Exception:
+            static_text = str(static_instruction)
+        if static_text.strip():
+            developer_parts.append(static_text.strip())
+
+    instruction = ""
+    canonical = getattr(agent, "canonical_instruction", None)
+    if callable(canonical):
+        raw, bypass_state_injection = await canonical(readonly)
+        instruction = str(raw or "")
+        if instruction and not bypass_state_injection:
+            try:
+                from google.adk.utils.instructions_utils import inject_session_state
+
+                instruction = await inject_session_state(instruction, readonly)
+            except Exception:
+                # Older ADK versions do not expose the helper. Keeping the
+                # resolved instruction is preferable to dropping it.
+                pass
+    elif isinstance(agent.instruction, str):
+        instruction = agent.instruction
+    elif callable(agent.instruction):
+        value = agent.instruction(readonly)
+        if hasattr(value, "__await__"):
+            value = await value
+        instruction = str(value or "")
+
+    if instruction.strip():
+        developer_parts.append(instruction.strip())
+    return "\n\n".join(base_parts), "\n\n".join(developer_parts)
+
+
 class BaseRuntime(ABC):
     """Abstract agent runtime.
 

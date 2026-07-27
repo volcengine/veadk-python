@@ -55,8 +55,10 @@ python examples/codex_with_skill_and_mcp/main.py
 
 ## Notes
 
-- Tools execute inside the runtime's shim, so they are invisible to Codex and do
-  not surface as separate ADK events (tracing/UI) today.
-- Interactive MCP auth (mid-turn credential prompts) is not driven under
-  `runtime="codex"`; static auth (headers / bearer token / ve-identity workload
-  tokens) works.
+- Tools are dispatched by the runtime shim, while calls, results, state
+  changes, confirmations, and authentication surface as standard ADK events
+  for Session/Trace/UI.
+- Static authentication (headers / bearer tokens / ve-identity workload
+  tokens) and ADK interactive authentication requested during tool execution
+  are supported. Authentication required before an MCP toolset can list tools
+  still depends on the corresponding ADK/MCP client capability.

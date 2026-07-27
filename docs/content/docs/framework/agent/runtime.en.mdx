@@ -28,7 +28,40 @@ agent = Agent(name="assistant", runtime="codex")
 | Value | Description |
 | :--- | :--- |
 | `adk` (default) | Google ADK's built-in execution flow; fits almost every case. |
-| `codex` | An alternative backend for advanced customization. |
+| `codex` | Uses the OpenAI Codex SDK to drive the inner loop. |
+
+Install the optional dependency before using the Codex runtime:
+
+```bash
+pip install "veadk-python[codex]"
+```
+
+### Codex security configuration
+
+Codex defaults to a session-isolated workspace, the `workspace_write` sandbox, no network access, and denial of escalated operations. Broader access must be enabled explicitly:
+
+```python title="agent.py"
+from veadk import Agent
+from veadk.runtime.codex import CodexRuntimeConfig
+
+agent = Agent(
+    name="assistant",
+    runtime="codex",
+    codex_runtime_config=CodexRuntimeConfig(
+        sandbox="workspace_write",
+        approval_mode="auto_review",
+        network_access=True,
+        # Set this explicitly to work inside an existing project.
+        workspace_root="/workspace/codex",
+    ),
+)
+```
+
+`full_access` and `reuse_workspace=True` relax filesystem isolation and should only be enabled in trusted environments.
+
+### Codex observability
+
+Codex-native lifecycle notifications and ADK Function/MCP tool calls are converted into ADK Events. Runtime logs use stable `codex_*` event names and attribution fields such as `invocation_id`, `call_id`, `tool`, `status`, and `duration_ms`. Tool arguments, tool results, API tokens, credentials, and backend addresses are not logged. Token usage is exposed through `codex_event_type=token_usage` events and the corresponding log entry.
 
 ## Request processing
 

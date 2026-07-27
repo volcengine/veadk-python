@@ -28,6 +28,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import secrets
+from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
 import litellm
@@ -89,9 +91,32 @@ def _shim_timeout() -> float:
         return 0.0
 
 
+def _bearer_token(request: Request) -> str:
+    authorization = request.headers.get("authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    return token.strip() if scheme.lower() == "bearer" else ""
+
+
+def _openai_error(*, status_code: int, error_type: str, message: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": {"type": error_type, "message": message}},
+    )
+
+
 # Cap on shim-internal tool round-trips per turn — bounds runaway loops while
 # allowing several tool calls per turn.
 _AGENT_TOOL_MAX_ITERS = 8
+
+
+@dataclass(frozen=True)
+class ShimTurnContext:
+    """Immutable tool routing data for one Codex invocation."""
+
+    specs: tuple[dict[str, Any], ...]
+    executors: dict[str, Any]
+    max_tool_iterations: int
+    invocation_id: str = ""
 
 
 class ResponsesShim:
@@ -113,25 +138,57 @@ class ResponsesShim:
         self.url: str | None = None
         self._server: uvicorn.Server | None = None
         self._task: asyncio.Task[Any] | None = None
-        # The current turn's agent tools, advertised to the backend as plain
-        # `function` tools and executed here (invisibly to Codex). Set per turn
-        # via set_agent_tools(); see veadk.runtime.codex.tools_bridge.
-        self._agent_specs: list[dict[str, Any]] = []
-        self._agent_executors: dict[str, Any] = {}
+        # Invocation-scoped registry. The opaque token is supplied to the Codex
+        # subprocess as its provider API key and arrives as a Bearer token, so
+        # concurrent turns can never overwrite one another's tools/context.
+        self._turns: dict[str, ShimTurnContext] = {}
         self._app = self._build_app()
 
-    def set_agent_tools(
-        self, specs: list[dict[str, Any]], executors: dict[str, Any]
-    ) -> None:
-        """Register (or clear) the agent tools the shim should inject + execute."""
-        self._agent_specs = specs or []
-        self._agent_executors = executors or {}
+    def register_turn(
+        self,
+        specs: list[dict[str, Any]],
+        executors: dict[str, Any],
+        *,
+        max_tool_iterations: int = _AGENT_TOOL_MAX_ITERS,
+        invocation_id: str = "",
+    ) -> str:
+        """Register immutable routing state and return its opaque bearer token."""
+        token = secrets.token_urlsafe(32)
+        self._turns[token] = ShimTurnContext(
+            specs=tuple(specs or ()),
+            executors=dict(executors or {}),
+            max_tool_iterations=max(1, max_tool_iterations),
+            invocation_id=invocation_id,
+        )
+        logger.debug(
+            "codex_shim_turn_registered invocation_id=%s tool_count=%d",
+            invocation_id,
+            len(executors or {}),
+        )
+        return token
+
+    def unregister_turn(self, token: str) -> None:
+        """Remove one invocation's routing state."""
+        context = self._turns.pop(token, None)
+        if context is not None:
+            logger.debug(
+                "codex_shim_turn_unregistered invocation_id=%s",
+                context.invocation_id,
+            )
 
     def _build_app(self) -> FastAPI:
         app = FastAPI()
 
         @app.post("/v1/responses")
         async def responses(request: Request) -> Any:
+            token = _bearer_token(request)
+            turn_context = self._turns.get(token)
+            if turn_context is None:
+                return _openai_error(
+                    status_code=401,
+                    error_type="authentication_error",
+                    message="Unknown or expired Codex invocation token.",
+                )
             body = await request.json()
             model = body["model"]
             stream = bool(body.get("stream", False))
@@ -144,14 +201,14 @@ class ResponsesShim:
             # Codex's own non-`function` tools are dropped, since Ark rejects
             # their schema (e.g. the hosted `web_search`'s `external_web_access`);
             # this leaves Codex's web search disabled on a chat backend.
-            agent_executors: dict[str, Any] = self._agent_executors
+            agent_executors = turn_context.executors
             if isinstance(call_kwargs.get("tools"), list):
                 kept = [t for t in call_kwargs["tools"] if t.get("type") == "function"]
                 have = {t.get("name") for t in kept}
-                kept.extend(t for t in self._agent_specs if t.get("name") not in have)
+                kept.extend(t for t in turn_context.specs if t.get("name") not in have)
                 call_kwargs["tools"] = kept
-            elif self._agent_specs:
-                call_kwargs["tools"] = list(self._agent_specs)
+            elif turn_context.specs:
+                call_kwargs["tools"] = list(turn_context.specs)
             # On multi-step turns Codex replays prior assistant messages in
             # `input` without a `status` field, but Ark's Responses API
             # requires `status` on assistant messages (MissingParameter:
@@ -196,12 +253,12 @@ class ResponsesShim:
             # The shim resolves the agent's tools itself; with none registered
             # the loop is disabled and the path is unchanged for tool-less runs.
             exec_names = set(agent_executors)
-            max_iters = _AGENT_TOOL_MAX_ITERS if agent_executors else 0
+            max_iters = turn_context.max_tool_iterations if agent_executors else 0
             iters = 0
             while True:
                 result = await litellm.aresponses(**call_kwargs)
                 resp = _to_dict(result)
-                if max_iters <= 0 or iters >= max_iters:
+                if max_iters <= 0:
                     break
                 conv = call_kwargs.get("input")
                 if not isinstance(conv, list):
@@ -214,13 +271,46 @@ class ResponsesShim:
                 ]
                 if not calls:
                     break
-                for fc in calls:
+
+                if iters >= max_iters:
+                    logger.warning(
+                        "codex_tool_iteration_limit invocation_id=%s limit=%d",
+                        turn_context.invocation_id,
+                        max_iters,
+                    )
+                    return _openai_error(
+                        status_code=409,
+                        error_type="tool_iteration_limit",
+                        message=(
+                            "Codex tool iteration budget exhausted "
+                            f"after {max_iters} round(s)."
+                        ),
+                    )
+
+                async def _execute(fc: dict[str, Any]) -> tuple[dict[str, Any], str]:
                     cid = fc.get("call_id") or fc.get("id")
                     try:
                         args = json.loads(fc.get("arguments") or "{}")
-                    except json.JSONDecodeError:
-                        args = {}
-                    out = await agent_executors[fc["name"]](args)
+                    except json.JSONDecodeError as e:
+                        return fc, json.dumps(
+                            {
+                                "error": f"Invalid JSON tool arguments: {e}",
+                                "status": "failed",
+                            }
+                        )
+                    if not isinstance(args, dict):
+                        return fc, json.dumps(
+                            {
+                                "error": "Tool arguments must decode to an object.",
+                                "status": "failed",
+                            }
+                        )
+                    out = await agent_executors[fc["name"]](args, str(cid))
+                    return fc, out
+
+                executed = await asyncio.gather(*(_execute(fc) for fc in calls))
+                for fc, out in executed:
+                    cid = fc.get("call_id") or fc.get("id")
                     conv.append(
                         {
                             "type": "function_call",
@@ -240,19 +330,6 @@ class ResponsesShim:
                     )
                 iters += 1
 
-            # If we broke at the iteration cap with an executable function_call
-            # still pending, strip it so it never leaks to Codex (which cannot
-            # run it and would desync the next turn / emit a null delta).
-            if exec_names and isinstance(resp.get("output"), list):
-                resp["output"] = [
-                    it
-                    for it in resp["output"]
-                    if not (
-                        it.get("type") == "function_call"
-                        and it.get("name") in exec_names
-                    )
-                ]
-
             if stream:
                 return StreamingResponse(
                     _synth_sse(resp), media_type="text/event-stream"
@@ -262,6 +339,11 @@ class ResponsesShim:
         @app.exception_handler(APIError)
         async def _on_api_error(_request: Request, exc: APIError) -> JSONResponse:
             status = getattr(exc, "status_code", 500) or 500
+            logger.warning(
+                "codex_backend_api_error status_code=%s error_type=%s",
+                status,
+                type(exc).__name__,
+            )
             return JSONResponse(
                 status_code=status,
                 content={
@@ -299,7 +381,7 @@ class ResponsesShim:
 
         port = server.servers[0].sockets[0].getsockname()[1]
         self.url = f"http://127.0.0.1:{port}"
-        logger.info(f"Responses shim started at {self.url} -> {self.api_base}")
+        logger.info("codex_shim_started listen_url=%s", self.url)
         return self.url
 
     async def stop(self) -> None:
