@@ -112,5 +112,6 @@ async def test_tracing_with_apmplus_global_provider():
     # init OpentelemetryTracer
     tracer = OpentelemetryTracer(exporters=exporters)
 
-    # apmplus exporter won't init again, so there are cozeloop, tls, in_memory exporter
-    assert len(tracer.exporters) == 3  # with extra 1 built-in exporters
+    # apmplus exporter won't init again, so there are cozeloop, tls, and in_memory exporter
+    # Note: APMPlusExporter still exists in the list but isn't registered with the tracer provider
+    assert len(tracer.exporters) == 4  # with extra 1 built-in exporters
