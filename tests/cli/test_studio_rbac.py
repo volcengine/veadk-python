@@ -330,11 +330,13 @@ def test_non_admin_runtime_list_scans_pages_and_ignores_all_scope(
     assert [item["runtimeId"] for item in developer.json()["runtimes"]] == [
         "runtime-own"
     ]
+    assert developer.json()["runtimes"][0]["canDelete"] is True
     assert admin.status_code == 200
     assert [item["runtimeId"] for item in admin.json()["runtimes"]] == [
         "runtime-other",
         "runtime-own",
     ]
+    assert all(item["canDelete"] is True for item in admin.json()["runtimes"])
 
 
 def test_runtime_detail_proxy_and_delete_enforce_role_and_owner(

@@ -64,6 +64,7 @@ export interface SidebarProps {
   /** The connected runtime (drives the picker's detail panel). */
   currentRuntime?: SelectedRuntime;
   onSelectAgent?: (id: string) => void;
+  onRuntimeDeleted?: (runtimeId: string) => void;
   onNewChat: () => void;
   onSearch: () => void;
   onQuickCreate: () => void;
@@ -282,6 +283,7 @@ export function Sidebar({
   currentAgentLabel = "",
   currentRuntime,
   onSelectAgent,
+  onRuntimeDeleted,
   onNewChat,
   onSearch,
   onQuickCreate,
@@ -375,15 +377,6 @@ export function Sidebar({
             <span className="agent-row-name">
               {currentAgentLabel || "选择 Agent"}
             </span>
-            {currentRuntime?.region && (
-              <span className="agent-row-region">
-                {currentRuntime.region === "cn-beijing"
-                  ? "北京"
-                  : currentRuntime.region === "cn-shanghai"
-                    ? "上海"
-                    : currentRuntime.region}
-              </span>
-            )}
             <ChevronRight
               className={`icon agent-row-chev ${selectorOpen ? "open" : ""}`}
             />
@@ -399,7 +392,9 @@ export function Sidebar({
             currentId={currentAgentId}
             currentRuntime={currentRuntime}
             runtimeScope={access.capabilities.runtimeScope}
+            canDeleteRuntimes={access.capabilities.manageAgents}
             onSelect={onSelectAgent}
+            onRuntimeDeleted={onRuntimeDeleted}
           />
         )}
         {show("newChat") && (
