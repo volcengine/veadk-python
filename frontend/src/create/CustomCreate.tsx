@@ -84,6 +84,7 @@ import {
 } from "./vikingKnowledgebases";
 import {
   ProjectPreview,
+  type DeployResult,
   type DeploymentTaskUpdate,
 } from "../ui/ProjectPreview";
 import { Blocks, ThinkingPlaceholder } from "../ui/Blocks";
@@ -2125,6 +2126,10 @@ interface CustomCreateProps extends CreateModeProps {
     region: string;
     currentVersion?: number | null;
   };
+  /** Called after an existing Runtime has been updated and released. */
+  onDeploymentComplete?: (result: DeployResult) => void | Promise<void>;
+  /** Called once the persistent deployment task has been created. */
+  onDeploymentStarted?: (task: DeploymentTaskUpdate) => void;
   /** Persists the live builder state as a resumable library draft. */
   onDraftChange?: (draft: AgentDraft, dirty: boolean) => void;
   /** Restores the draft state from before this editing session and exits. */
@@ -2139,6 +2144,8 @@ export function CustomCreate({
   features,
   onDeploymentTaskChange,
   deploymentTarget,
+  onDeploymentComplete,
+  onDeploymentStarted,
   onDraftChange,
   onDiscard,
 }: CustomCreateProps) {
@@ -3605,6 +3612,10 @@ export function CustomCreate({
               onDeploy={handleDeploy}
               onAgentAdded={onAgentAdded}
               onDeploymentTaskChange={onDeploymentTaskChange}
+              deploymentActionLabel={deploymentTarget ? "更新并发布" : "部署"}
+              deploymentRuntimeId={deploymentTarget?.runtimeId}
+              onDeploymentStarted={onDeploymentStarted}
+              onDeploymentComplete={onDeploymentComplete}
               feishuEnabled={!!draft.deployment?.feishuEnabled}
               onFeishuEnabledChange={(feishuEnabled) => {
                 const nextDraft: AgentDraft = {

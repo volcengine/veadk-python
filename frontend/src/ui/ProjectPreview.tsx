@@ -81,12 +81,14 @@ const CodeEditor = lazy(() => import("./CodeEditor"));
 
 interface DeploymentConfirmDialogProps {
   open: boolean;
+  isUpdate: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }
 
 function DeploymentConfirmDialog({
   open,
+  isUpdate,
   onCancel,
   onConfirm,
 }: DeploymentConfirmDialogProps) {
@@ -128,7 +130,7 @@ function DeploymentConfirmDialog({
             <span className="code-browser-title-icon pp-confirm-icon" aria-hidden="true">
               <AlertTriangle />
             </span>
-            <h2 id="pp-confirm-title">确认部署</h2>
+            <h2 id="pp-confirm-title">{isUpdate ? "确认更新" : "确认部署"}</h2>
           </div>
           <button
             type="button"
@@ -141,7 +143,9 @@ function DeploymentConfirmDialog({
         </header>
         <div className="pp-confirm-body">
           <p id="pp-confirm-description">
-            部署后暂不支持修改 Agent 配置，确定部署吗？
+            {isUpdate
+              ? "将更新并发布到当前云端 Runtime，过程可能需要几分钟。确定继续吗？"
+              : "将创建新的云端 Runtime，部署过程可能需要几分钟。确定继续吗？"}
           </p>
         </div>
         <footer className="pp-confirm-actions">
@@ -149,7 +153,7 @@ function DeploymentConfirmDialog({
             取消
           </button>
           <button type="button" className="is-primary" onClick={onConfirm}>
-            确定部署
+            {isUpdate ? "确定更新" : "确定部署"}
           </button>
         </footer>
       </section>
@@ -245,6 +249,7 @@ export interface DeployResult {
   runtimeId?: string;
   consoleUrl?: string;
   region?: string;
+  version?: number | null;
   feishuChannel?: {
     enabled: boolean;
     transport: string;
@@ -470,6 +475,14 @@ export interface ProjectPreviewProps {
   ) => Promise<DeployResult>;
   /** Called after successfully adding the agent to the connection list. */
   onAgentAdded?: (agentId: string, agentName: string) => void;
+  /** Called as soon as the Runtime has been deployed or updated successfully. */
+  onDeploymentComplete?: (result: DeployResult) => void | Promise<void>;
+  /** Label for the floating deployment action. */
+  deploymentActionLabel?: string;
+  /** Existing Runtime id when this deployment updates an Agent in place. */
+  deploymentRuntimeId?: string;
+  /** Opens the persistent Agent detail as soon as deployment starts. */
+  onDeploymentStarted?: (task: DeploymentTaskUpdate) => void;
   /** Mirrors deployment progress into the app shell so it survives page switches. */
   onDeploymentTaskChange?: (task: DeploymentTaskUpdate) => void;
   /** Whether Feishu Channel was enabled in the configuration step. */
@@ -596,6 +609,10 @@ export function ProjectPreview({
   onChange,
   onDeploy,
   onAgentAdded,
+  onDeploymentComplete,
+  deploymentActionLabel = "部署",
+  deploymentRuntimeId,
+  onDeploymentStarted,
   onDeploymentTaskChange,
   feishuEnabled = false,
   onFeishuEnabledChange,
@@ -614,6 +631,7 @@ export function ProjectPreview({
   deployDisabledReason,
 }: ProjectPreviewProps) {
   const editable = typeof onChange === "function";
+  const isRuntimeUpdate = deploymentActionLabel.includes("更新");
   const deploymentSteps = deploymentPrimaryPane
     ? CODE_PACKAGE_DEPLOY_STEPS
     : DEPLOY_STEPS;
@@ -851,18 +869,21 @@ export function ProjectPreview({
       setDeploying(true);
     }
     const taskId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    let taskRuntimeName = "生成中…";
+    let taskRuntimeName = agentName?.trim() || project.name || "生成中…";
     const taskStartedAt = Date.now();
-    onDeploymentTaskChange?.({
+    const initialTask: DeploymentTaskUpdate = {
       id: taskId,
       runtimeName: taskRuntimeName,
+      runtimeId: deploymentRuntimeId,
       region: deployRegion,
       startedAt: taskStartedAt,
       status: "running",
       phase: "prepare",
       label: "准备部署",
       agentDraft,
-    });
+    };
+    onDeploymentTaskChange?.(initialTask);
+    onDeploymentStarted?.(initialTask);
     try {
       const result = await onDeploy(
         project,
@@ -875,6 +896,7 @@ export function ProjectPreview({
           onDeploymentTaskChange?.({
             id: taskId,
             runtimeName: taskRuntimeName,
+            runtimeId: deploymentRuntimeId,
             region: deployRegion,
             startedAt: taskStartedAt,
             status: "running",
@@ -903,10 +925,11 @@ export function ProjectPreview({
         setDeployResult(result);
         setActivePhase(null);
       }
+      await onDeploymentComplete?.(result);
       onDeploymentTaskChange?.({
         id: taskId,
         runtimeName: result.agentName || taskRuntimeName,
-        runtimeId: result.runtimeId,
+        runtimeId: result.runtimeId || deploymentRuntimeId,
         region: result.region || deployRegion,
         startedAt: taskStartedAt,
         status: "success",
@@ -924,6 +947,7 @@ export function ProjectPreview({
         onDeploymentTaskChange?.({
           id: taskId,
           runtimeName: taskRuntimeName,
+          runtimeId: deploymentRuntimeId,
           region: deployRegion,
           startedAt: taskStartedAt,
           status: "cancelled",
@@ -938,6 +962,7 @@ export function ProjectPreview({
       onDeploymentTaskChange?.({
         id: taskId,
         runtimeName: taskRuntimeName,
+        runtimeId: deploymentRuntimeId,
         region: deployRegion,
         startedAt: taskStartedAt,
         status: "error",
@@ -1700,7 +1725,11 @@ export function ProjectPreview({
                 disabled={deploying || feishuUpdating || deployDisabled}
                 title={deployDisabled ? deployDisabledReason : undefined}
               >
-                {deploying ? "部署中…" : deployError ? "重试部署" : "部署"}
+                {deploying
+                  ? `${deploymentActionLabel}中…`
+                  : deployError
+                    ? `重试${deploymentActionLabel}`
+                    : deploymentActionLabel}
               </button>
             </div>
           </aside>
@@ -1708,6 +1737,7 @@ export function ProjectPreview({
       </div>
       <DeploymentConfirmDialog
         open={deployConfirmOpen}
+        isUpdate={isRuntimeUpdate}
         onCancel={cancelDeploymentConfirmation}
         onConfirm={() => void performDeployment()}
       />

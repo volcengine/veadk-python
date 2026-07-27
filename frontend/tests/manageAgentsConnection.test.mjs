@@ -6,6 +6,10 @@ const manageSource = readFileSync(
   new URL("../src/ui/ManageAgents.tsx", import.meta.url),
   "utf8",
 );
+const workspaceSource = readFileSync(
+  new URL("../src/ui/AgentWorkspace.tsx", import.meta.url),
+  "utf8",
+);
 const appSource = readFileSync(
   new URL("../src/App.tsx", import.meta.url),
   "utf8",
@@ -19,14 +23,15 @@ const manageStyles = readFileSync(
   "utf8",
 );
 
-test("managed runtimes can connect through the global Agent selector", () => {
+test("managed runtimes connect through the Agent workspace and global selector", () => {
   assert.match(manageSource, /onConnect:\s*\(runtime:\s*ManagedRuntime\)/);
   assert.match(manageSource, /连接到此 Agent/);
   assert.match(manageSource, /currentRuntimeId === rt\.runtimeId[\s\S]*?已连接/);
   assert.match(
     appSource,
-    /<ManageAgentsView[\s\S]*?currentRuntimeId=\{currentRuntime\?\.runtimeId\}[\s\S]*?onConnect=\{connectManagedRuntime\}/,
+    /<AgentWorkspace[\s\S]*?agents=\{workspaceAgentEntries\}[\s\S]*?onSelectAgent=\{selectAgent\}/,
   );
+  assert.match(workspaceSource, /onSelectAgent\(agent\.id\)/);
   assert.match(
     manageStyles,
     /@media \(max-width:\s*700px\)[\s\S]*?\.manage-item-actions\s*\{[\s\S]*?width:\s*100%;/,

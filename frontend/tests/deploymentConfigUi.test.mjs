@@ -143,8 +143,15 @@ test("requires explicit confirmation before starting deployment", () => {
   assert.match(performDeployment, /await onDeploy/);
   assert.match(
     projectPreviewSource,
-    /部署后暂不支持修改 Agent 配置，确定部署吗？/,
+    /将创建新的云端 Runtime，部署过程可能需要几分钟。确定继续吗？/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /将更新并发布到当前云端 Runtime，过程可能需要几分钟。确定继续吗？/,
   );
   assert.match(projectPreviewSource, />\s*取消\s*</);
-  assert.match(projectPreviewSource, />\s*确定部署\s*</);
+  assert.match(
+    projectPreviewSource,
+    /isUpdate \? "确定更新" : "确定部署"/,
+  );
 });
