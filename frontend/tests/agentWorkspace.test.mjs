@@ -60,6 +60,7 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
 
   assert.match(customCreateSource, /onDeploymentComplete\?: \(result: DeployResult\)/);
   assert.match(customCreateSource, /onDeploymentStarted\?: \(task: DeploymentTaskUpdate\)/);
+  assert.match(customCreateSource, /<ProjectPreview[\s\S]*?embedded[\s\S]*?project=\{project\}/);
   assert.match(customCreateSource, /deploymentActionLabel=\{deploymentTarget \? "更新并发布" : "部署"\}/);
   assert.match(customCreateSource, /deploymentRuntimeId=\{deploymentTarget\?\.runtimeId\}/);
   assert.match(customCreateSource, /onDeploymentStarted=\{onDeploymentStarted\}/);

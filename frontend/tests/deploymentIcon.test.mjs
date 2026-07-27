@@ -6,6 +6,7 @@ const projectPreviewSource = readFileSync(
   new URL("../src/ui/ProjectPreview.tsx", import.meta.url),
   "utf8",
 );
+
 test("keeps the deployment action text-only", () => {
   assert.doesNotMatch(projectPreviewSource, /DeployIcon|CloudUpload|RotateCcw/);
   assert.match(

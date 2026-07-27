@@ -3604,6 +3604,7 @@ export function CustomCreate({
         <div className="cw-preview-body">
           {project ? (
             <ProjectPreview
+              embedded
               project={project}
               agentDraft={draft}
               agentName={draft.name || "未命名 Agent"}
