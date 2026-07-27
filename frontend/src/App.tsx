@@ -86,6 +86,8 @@ import { IntelligentCreate } from "./create/IntelligentCreate";
 import { CustomCreate } from "./create/CustomCreate";
 import { TemplateCreate } from "./create/TemplateCreate";
 import { WorkflowCreate } from "./create/WorkflowCreate";
+import { CodePackageCreate } from "./create/CodePackageCreate";
+import { FileArchive } from "lucide-react";
 import type { AgentDraft } from "./create/types";
 import type { DeploymentTaskUpdate } from "./ui/ProjectPreview";
 import { DeploymentErrorMessage } from "./ui/DeploymentErrorMessage";
@@ -118,14 +120,17 @@ import {
 
 // Breadcrumb root label for the create flow and the per-mode leaf labels.
 const CREATE_ROOT = "创建 Agent";
-const MODE_LABEL: Record<QuickCreateKind, string> = {
+type CreateMode = QuickCreateKind | "package";
+
+const MODE_LABEL: Record<CreateMode, string> = {
   intelligent: "智能模式",
   custom: "自定义",
   template: "从模板新建",
   workflow: "工作流",
+  package: "代码包部署",
 };
 
-type CreateView = "menu" | QuickCreateKind | null;
+type CreateView = "menu" | CreateMode | null;
 
 // Persist the last view so a page refresh restores where the user was.
 const LS = { app: "veadk.appName", view: "veadk.view", session: "veadk.sessionId" } as const;
@@ -2398,6 +2403,17 @@ export default function App() {
                       setCreateView("menu");
                     },
                   },
+                  {
+                    key: "package",
+                    icon: FileArchive,
+                    title: "从代码包添加和部署",
+                    desc: "上传 Agent 项目压缩包，查看代码并直接部署到 AgentKit Runtime。",
+                    onClick: () => {
+                      setAddMenu(false);
+                      setImportedDraft(null);
+                      setCreateView("package");
+                    },
+                  },
                 ]}
               />
             ) : searchView ? (
@@ -2476,6 +2492,15 @@ export default function App() {
               <TemplateCreate onBack={() => setCreateView("menu")} onCreate={onCreate} />
             ) : visibleCreateView === "workflow" ? (
               <WorkflowCreate onBack={() => setCreateView("menu")} onCreate={onCreate} />
+            ) : visibleCreateView === "package" ? (
+              <CodePackageCreate
+                onBack={() => {
+                  setCreateView(null);
+                  setAddMenu(true);
+                }}
+                onAgentAdded={onAgentAdded}
+                onDeploymentTaskChange={updateDeploymentTask}
+              />
             ) : turns.length === 0 && skillJob ? (
               <SkillCreateWorkspace initialJob={skillJob} />
             ) : turns.length === 0 ? (

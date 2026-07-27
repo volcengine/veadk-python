@@ -12,6 +12,8 @@ import { createPortal } from "react-dom";
 import {
   AlertTriangle,
   ArrowLeft,
+  Check,
+  ChevronDown,
   ChevronRight,
   Download,
   ExternalLink,
@@ -25,7 +27,6 @@ import {
   MessageSquare,
   Pencil,
   Plus,
-  RotateCcw,
   Trash2,
   X,
 } from "lucide-react";
@@ -73,7 +74,6 @@ import {
 import type { DeployStage } from "../adk/client";
 import { buildZip } from "./zip";
 import { ProjectCodeBrowser } from "./CodeBrowserDialog";
-import { DeployIcon } from "./DeployIcon";
 import { DeploymentErrorMessage } from "./DeploymentErrorMessage";
 import "./ProjectPreview.css";
 
@@ -257,6 +257,13 @@ const DEPLOY_STEPS: { phase: string; label: string }[] = [
   { phase: "build", label: "构建镜像" },
   { phase: "deploy", label: "部署" },
   { phase: "publish", label: "发布" },
+];
+
+const CODE_PACKAGE_DEPLOY_STEPS: { phase: string; label: string }[] = [
+  { phase: "upload", label: "上传代码包" },
+  { phase: "build", label: "镜像打包" },
+  { phase: "deploy", label: "创建 Runtime" },
+  { phase: "publish", label: "发布服务" },
 ];
 
 type TopologyAgentType = NonNullable<AgentDraft["agentType"]>;
@@ -481,7 +488,13 @@ export interface ProjectPreviewProps {
   onDeployRegionChange?: (region: string) => void;
   /** Deploy-page toolbar actions. */
   onBack?: () => void;
+  backLabel?: string;
   onExportYaml?: () => void;
+  /** Replaces the Agent topology pane for deployment flows with their own source area. */
+  deploymentPrimaryPane?: ReactNode;
+  /** Keeps deployment configuration visible while its primary input is incomplete. */
+  deployDisabled?: boolean;
+  deployDisabledReason?: string;
 }
 
 // --- tree model -------------------------------------------------------------
@@ -592,9 +605,16 @@ export function ProjectPreview({
   deployRegion = "cn-beijing",
   onDeployRegionChange,
   onBack,
+  backLabel = "返回配置",
   onExportYaml,
+  deploymentPrimaryPane,
+  deployDisabled = false,
+  deployDisabledReason,
 }: ProjectPreviewProps) {
   const editable = typeof onChange === "function";
+  const deploymentSteps = deploymentPrimaryPane
+    ? CODE_PACKAGE_DEPLOY_STEPS
+    : DEPLOY_STEPS;
 
   // Initialize all hooks BEFORE any conditional returns (React hooks rule)
   const [selected, setSelected] = useState<string | null>(
@@ -615,6 +635,7 @@ export function ProjectPreview({
   const [addingAgent, setAddingAgent] = useState(false);
   const [envRows, setEnvRows] = useState<EnvRow[]>([]);
   const [showEnvValues, setShowEnvValues] = useState(false);
+  const [regionMenuOpen, setRegionMenuOpen] = useState(false);
   const [hoveredAgentId, setHoveredAgentId] = useState<string | null>(null);
   const [focusedAgentId, setFocusedAgentId] = useState<string | null>(null);
   const mountedRef = useRef(true);
@@ -788,7 +809,7 @@ export function ProjectPreview({
   }
 
   async function requestDeploymentConfirmation() {
-    if (!onDeploy || deploying) return;
+    if (!onDeploy || deploying || deployDisabled) return;
     if (networkMode !== "public" && !network?.vpcId?.trim()) {
       setDeployError("使用 VPC 网络时，请填写 VPC ID。");
       return;
@@ -854,7 +875,7 @@ export function ProjectPreview({
             startedAt: taskStartedAt,
             status: "running",
             label:
-              DEPLOY_STEPS.find((step) => step.phase === s.phase)?.label ??
+              deploymentSteps.find((step) => step.phase === s.phase)?.label ??
               s.phase,
             message: s.message,
             pct: s.pct,
@@ -1054,7 +1075,7 @@ export function ProjectPreview({
   }
 
   return (
-    <div className={`pp-root${onDeploy ? " is-deploy" : ""}`}>
+    <div className={`pp-root${onDeploy ? " is-deploy" : ""}${deploymentPrimaryPane ? " has-primary-pane" : ""}`}>
       {onDeploy && (
         <ProjectHeaderPortal
           left={
@@ -1062,7 +1083,7 @@ export function ProjectPreview({
               {onBack && (
                 <button type="button" className="pp-toolbar-back" onClick={onBack}>
                   <ArrowLeft className="pp-ic" />
-                  返回配置
+                  {backLabel}
                 </button>
               )}
               <span className="pp-toolbar-title">
@@ -1076,7 +1097,7 @@ export function ProjectPreview({
       )}
 
       <div className="pp-body">
-        {onDeploy && (
+        {onDeploy && !deploymentPrimaryPane && (
           <section className="pp-topology-pane" aria-label="Agent 拓扑">
             <div className="pp-topology-head">
               <div>
@@ -1253,64 +1274,130 @@ export function ProjectPreview({
               <div className="pp-config-title">部署配置</div>
             </div>
             <div className="pp-config-scroll">
-              <section className="pp-config-section">
-                <div className="pp-config-label">发布区域</div>
-                <select
-                  className="pp-config-select"
-                  value={deployRegion}
-                  onChange={(e) => onDeployRegionChange?.(e.target.value)}
-                  aria-label="部署区域"
-                  disabled={deploying || !onDeployRegionChange}
-                >
-                  <option value="cn-beijing">华北 2（北京）</option>
-                  <option value="cn-shanghai">华东 2（上海）</option>
-                </select>
-              </section>
+              {deploymentPrimaryPane}
 
-              <section className="pp-config-section">
-                <div className="pp-config-label">消息渠道</div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={feishuEnabled}
-                  className={`pp-channel${feishuEnabled ? " is-on" : ""}`}
-                  onClick={() => void handleFeishuToggle()}
-                  disabled={deploying || feishuUpdating || !onFeishuEnabledChange}
-                >
-                  <span className="pp-channel-title">
-                    {feishuUpdating ? "飞书（正在更新代码…）" : "飞书"}
-                  </span>
-                  <span className="pp-switch" aria-hidden>
-                    <span />
-                  </span>
-                </button>
-                {feishuEnabled && (
-                  <div className="pp-channel-fields">
-                    {FEISHU_ENV.map((env) => (
-                      <label key={env.key}>
-                        <span>
-                          {env.comment || env.key}
-                          {env.required && <small>必填</small>}
-                        </span>
-                        <code>{env.key}</code>
-                        <input
-                          type={env.key.includes("SECRET") ? "password" : "text"}
-                          value={deploymentEnvValues[env.key] ?? ""}
-                          placeholder={env.placeholder}
-                          disabled={deploying || !onDeploymentEnvChange}
-                          autoComplete="off"
-                          onChange={(event) =>
-                            onDeploymentEnvChange?.(env.key, event.currentTarget.value)
-                          }
-                        />
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </section>
+              {!deploymentPrimaryPane && (
+                <section className="pp-config-section">
+                  <div className="pp-config-label">发布区域</div>
+                  <select
+                    className="pp-config-select"
+                    value={deployRegion}
+                    onChange={(e) => onDeployRegionChange?.(e.target.value)}
+                    aria-label="部署区域"
+                    disabled={deploying || !onDeployRegionChange}
+                  >
+                    <option value="cn-beijing">华北 2（北京）</option>
+                    <option value="cn-shanghai">华东 2（上海）</option>
+                  </select>
+                </section>
+              )}
+
+              {!deploymentPrimaryPane && (
+                <section className="pp-config-section">
+                  <div className="pp-config-label">消息渠道</div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={feishuEnabled}
+                    className={`pp-channel${feishuEnabled ? " is-on" : ""}`}
+                    onClick={() => void handleFeishuToggle()}
+                    disabled={deploying || feishuUpdating || !onFeishuEnabledChange}
+                  >
+                    <span className="pp-channel-title">
+                      {feishuUpdating ? "飞书（正在更新代码…）" : "飞书"}
+                    </span>
+                    <span className="pp-switch" aria-hidden>
+                      <span />
+                    </span>
+                  </button>
+                  {feishuEnabled && (
+                    <div className="pp-channel-fields">
+                      {FEISHU_ENV.map((env) => (
+                        <label key={env.key}>
+                          <span>
+                            {env.comment || env.key}
+                            {env.required && <small>必填</small>}
+                          </span>
+                          <code>{env.key}</code>
+                          <input
+                            type={env.key.includes("SECRET") ? "password" : "text"}
+                            value={deploymentEnvValues[env.key] ?? ""}
+                            placeholder={env.placeholder}
+                            disabled={deploying || !onDeploymentEnvChange}
+                            autoComplete="off"
+                            onChange={(event) =>
+                              onDeploymentEnvChange?.(env.key, event.currentTarget.value)
+                            }
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              )}
 
               <section className="pp-config-section">
                 <div className="pp-config-label">网络</div>
+                {deploymentPrimaryPane && (
+                  <div
+                    className="pp-network-region"
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") setRegionMenuOpen(false);
+                    }}
+                  >
+                    <span>发布区域</span>
+                    <button
+                      type="button"
+                      className="pp-region-trigger"
+                      aria-label="部署区域"
+                      aria-haspopup="listbox"
+                      aria-expanded={regionMenuOpen}
+                      disabled={deploying || !onDeployRegionChange}
+                      onClick={() => setRegionMenuOpen((open) => !open)}
+                    >
+                      <span>
+                        {deployRegion === "cn-shanghai"
+                          ? "华东 2（上海）"
+                          : "华北 2（北京）"}
+                      </span>
+                      <ChevronDown
+                        className={`pp-region-chevron${regionMenuOpen ? " is-open" : ""}`}
+                      />
+                    </button>
+                    {regionMenuOpen && (
+                      <>
+                        <div
+                          className="menu-scrim"
+                          onClick={() => setRegionMenuOpen(false)}
+                        />
+                        <div className="pp-region-menu" role="listbox" aria-label="部署区域">
+                          {[
+                            { value: "cn-beijing", label: "华北 2（北京）" },
+                            { value: "cn-shanghai", label: "华东 2（上海）" },
+                          ].map((region) => {
+                            const selected = region.value === deployRegion;
+                            return (
+                              <button
+                                key={region.value}
+                                type="button"
+                                role="option"
+                                aria-selected={selected}
+                                className={`pp-region-option${selected ? " is-selected" : ""}`}
+                                onClick={() => {
+                                  onDeployRegionChange?.(region.value);
+                                  setRegionMenuOpen(false);
+                                }}
+                              >
+                                <span>{region.label}</span>
+                                {selected && <Check aria-hidden="true" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
                 <div className="pp-network-modes" role="radiogroup" aria-label="网络模式">
                   {(["public", "private", "both"] as const).map((mode) => (
                     <button
@@ -1481,9 +1568,9 @@ export function ProjectPreview({
                 <section className="pp-config-section pp-progress-section">
                   <div className="pp-config-label">部署进度</div>
                   <ol className="pp-steps">
-                    {DEPLOY_STEPS.map((step, index) => {
+                    {deploymentSteps.map((step, index) => {
                       const activeIndex = activePhase
-                        ? DEPLOY_STEPS.findIndex((item) => item.phase === activePhase)
+                        ? deploymentSteps.findIndex((item) => item.phase === activePhase)
                         : -1;
                       const failed =
                         !!deployError &&
@@ -1530,7 +1617,7 @@ export function ProjectPreview({
                   className="pp-error"
                   message={`${activePhase
                     ? `部署失败（${
-                        DEPLOY_STEPS.find((step) => step.phase === activePhase)?.label ??
+                        deploymentSteps.find((step) => step.phase === activePhase)?.label ??
                         activePhase
                       }阶段）：`
                     : ""}${deployError}`}
@@ -1591,19 +1678,16 @@ export function ProjectPreview({
               )}
             </div>
             <div className="pp-config-actions">
+              {deployDisabled && deployDisabledReason && (
+                <span className="pp-deploy-hint">{deployDisabledReason}</span>
+              )}
               <button
                 type="button"
                 className="pp-deploy"
                 onClick={requestDeploymentConfirmation}
-                disabled={deploying || feishuUpdating}
+                disabled={deploying || feishuUpdating || deployDisabled}
+                title={deployDisabled ? deployDisabledReason : undefined}
               >
-                {deploying ? (
-                  <Loader2 className="pp-ic spin" />
-                ) : deployError ? (
-                  <RotateCcw className="pp-ic" />
-                ) : (
-                  <DeployIcon className="pp-ic" />
-                )}
                 {deploying ? "部署中…" : deployError ? "重试部署" : "部署"}
               </button>
             </div>
