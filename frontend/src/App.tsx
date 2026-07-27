@@ -24,6 +24,7 @@ import {
   createSession,
   DEFAULT_STUDIO_ACCESS,
   DEFAULT_SITE_BRANDING,
+  deleteRuntime,
   deleteMedia,
   deleteSessionMedia,
   deleteSession,
@@ -78,6 +79,7 @@ import {
   connectRuntime,
   loadConnections,
   registerConnections,
+  removeRuntimeConnection,
   remoteAppId,
   type AgentEntry,
   type RemoteConnection,
@@ -957,6 +959,9 @@ export default function App() {
   const [libraryRuntimeIds, setLibraryRuntimeIds] = useState<Set<string> | null>(
     null,
   );
+  const [libraryRuntimePermissions, setLibraryRuntimePermissions] = useState<
+    Record<string, { canDelete: boolean }>
+  >({});
   const [runtimeUpdateTarget, setRuntimeUpdateTarget] = useState<{
     runtimeId: string;
     name: string;
@@ -1002,6 +1007,23 @@ export default function App() {
       return next;
     });
   }, [userId]);
+
+  const deleteWorkspaceDrafts = useCallback((draftsToDelete: WorkspaceAgentDraft[]) => {
+    if (!userId || draftsToDelete.length === 0) return;
+    const deletedDraftIds = new Set(draftsToDelete.map((item) => item.id));
+    setSavedAgentDrafts((current) => {
+      const next = current.filter((item) => !deletedDraftIds.has(item.id));
+      localStorage.setItem(workspaceDraftsKey(userId), JSON.stringify(next));
+      return next;
+    });
+    if (deletedDraftIds.has(editingDraftId)) {
+      setEditingDraftId("");
+      setImportedDraft(null);
+      setRuntimeUpdateTarget(null);
+      editingDraftBaselineRef.current = null;
+      localStorage.removeItem(activeWorkspaceDraftKey(userId));
+    }
+  }, [editingDraftId, userId]);
 
   const restoreWorkspaceDraftBaseline = useCallback((id: string) => {
     if (!id || !userId) return;
@@ -1054,6 +1076,73 @@ export default function App() {
     localStorage.setItem(workspaceAgentOrderKey(userId), JSON.stringify(deduped));
   }, [userId]);
 
+  const deleteWorkspaceAgents = useCallback(async (agentsToDelete: AgentEntry[]) => {
+    const targets = agentsToDelete.filter(
+      (agent): agent is AgentEntry & { runtimeId: string } =>
+        Boolean(agent.runtimeId) && agent.canDelete === true,
+    );
+    if (targets.length === 0) return;
+
+    const deletedRuntimeIds = new Set<string>();
+    const deletedAgentIds = new Set<string>();
+    const failures: string[] = [];
+    for (const agent of targets) {
+      try {
+        await deleteRuntime(agent.runtimeId, agent.region ?? "cn-beijing");
+        removeRuntimeConnection(agent.runtimeId);
+        deletedRuntimeIds.add(agent.runtimeId);
+        deletedAgentIds.add(agent.id);
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        failures.push(`${agent.label}: ${message}`);
+      }
+    }
+
+    if (deletedRuntimeIds.size > 0) {
+      setConnections(loadConnections());
+      setLibraryRuntimeIds((current) => {
+        if (!current) return current;
+        const next = new Set(current);
+        for (const runtimeId of deletedRuntimeIds) next.delete(runtimeId);
+        return next;
+      });
+      setLibraryRuntimePermissions((current) =>
+        Object.fromEntries(
+          Object.entries(current).filter(([runtimeId]) => !deletedRuntimeIds.has(runtimeId)),
+        ),
+      );
+      setWorkspaceAgentOrder((current) => {
+        const next = current.filter((id) => !deletedAgentIds.has(id));
+        if (userId) {
+          localStorage.setItem(workspaceAgentOrderKey(userId), JSON.stringify(next));
+        }
+        return next;
+      });
+      setSavedAgentDrafts((current) => {
+        const next = current.filter(
+          (item) =>
+            !item.deploymentTarget?.runtimeId ||
+            !deletedRuntimeIds.has(item.deploymentTarget.runtimeId),
+        );
+        if (userId) {
+          localStorage.setItem(workspaceDraftsKey(userId), JSON.stringify(next));
+        }
+        return next;
+      });
+      if (targets.some((agent) => agent.id === appName)) {
+        viewSidRef.current = "";
+        setSessionId("");
+        setAppName("");
+      }
+    }
+
+    if (failures.length > 0) {
+      const shown = failures.slice(0, 3).join("；");
+      const suffix = failures.length > 3 ? `；另有 ${failures.length - 3} 个失败` : "";
+      throw new Error(`${failures.length} 个 Agent 删除失败：${shown}${suffix}`);
+    }
+  }, [appName, userId]);
+
   const refreshAgentLibrary = useCallback(async () => {
     setAgentLibraryLoading(true);
     setAgentLibraryError("");
@@ -1072,6 +1161,14 @@ export default function App() {
       } while (nextToken && runtimes.length < 2000);
 
       setLibraryRuntimeIds(new Set(runtimes.map((runtime) => runtime.runtimeId)));
+      setLibraryRuntimePermissions(
+        Object.fromEntries(
+          runtimes.map((runtime) => [
+            runtime.runtimeId,
+            { canDelete: runtime.canDelete },
+          ]),
+        ),
+      );
       const failures: string[] = [];
       for (const runtime of runtimes) {
         try {
@@ -2273,11 +2370,18 @@ export default function App() {
   const showAddAgent = canCreateAgents && addAgent;
   const showManageAgents = manageAgents;
   const agentEntries = buildAgentEntries(apps, connections);
-  const workspaceAgentEntries = agentEntries.filter(
-    (entry) =>
-      entry.runtimeId &&
-      (libraryRuntimeIds === null || libraryRuntimeIds.has(entry.runtimeId)),
-  );
+  const workspaceAgentEntries: AgentEntry[] = agentEntries
+    .filter(
+      (entry) =>
+        entry.runtimeId &&
+        (libraryRuntimeIds === null || libraryRuntimeIds.has(entry.runtimeId)),
+    )
+    .map((entry) => ({
+      ...entry,
+      canDelete: entry.runtimeId
+        ? libraryRuntimePermissions[entry.runtimeId]?.canDelete === true
+        : false,
+    }));
   const orderedWorkspaceAgentEntries: AgentEntry[] = (() => {
     if (workspaceAgentEntries.length === 0) return workspaceAgentEntries;
     const orderIndex = new Map(workspaceAgentOrder.map((id, index) => [id, index]));
@@ -2745,6 +2849,8 @@ export default function App() {
                 focusedAgentId={focusedWorkspaceAgentId}
                 onRetryAgents={() => void refreshAgentLibrary()}
                 onAgentOrderChange={saveWorkspaceAgentOrder}
+                onDeleteAgents={deleteWorkspaceAgents}
+                onDeleteDrafts={deleteWorkspaceDrafts}
                 onSelectAgent={selectAgent}
                 onCreateAgent={() => {
                   if (!canCreateAgents) {

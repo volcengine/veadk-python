@@ -36,6 +36,8 @@ export interface AgentEntry {
   runtimeId?: string;
   region?: string;
   currentVersion?: number | null;
+  /** Server-authorized permission for Studio-managed Runtime deletion. */
+  canDelete?: boolean;
 }
 
 const STORAGE_KEY = "veadk_agentkit_connections";
