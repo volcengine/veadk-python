@@ -955,6 +955,104 @@ body {
   min-height: max(0px, calc(100% - 180px));
 }
 
+.turn--subagent {
+  isolation: isolate;
+  position: relative;
+  width: 100%;
+  max-width: 768px;
+  margin-top: 34px;
+  margin-bottom: 48px;
+  padding: 30px 16px 14px;
+  gap: 10px;
+  border: 1px solid hsl(215 20% 88% / 0.82);
+  border-radius: 14px;
+  background: hsl(210 22% 98% / 0.68);
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.8),
+    0 14px 36px hsl(215 28% 28% / 0.06);
+  backdrop-filter: blur(18px) saturate(115%);
+  -webkit-backdrop-filter: blur(18px) saturate(115%);
+}
+.turn--subagent::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  background:
+    radial-gradient(circle at 12% 8%, hsl(210 38% 92% / 0.55), transparent 38%),
+    radial-gradient(circle at 88% 78%, hsl(220 22% 91% / 0.42), transparent 42%),
+    linear-gradient(120deg, hsl(0 0% 100% / 0.56), hsl(215 24% 96% / 0.26));
+  content: "";
+  pointer-events: none;
+}
+.transcript.is-streaming > .turn--subagent:last-child { min-height: 0; }
+.subagent-run-label {
+  position: absolute;
+  top: 0;
+  left: 14px;
+  display: inline-flex;
+  min-height: 36px;
+  max-width: calc(100% - 28px);
+  padding: 4px 9px 4px 4px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid hsl(215 18% 86%);
+  border-radius: 10px;
+  background: hsl(var(--background));
+  box-shadow: 0 4px 12px hsl(215 25% 30% / 0.07);
+  transform: translateY(-50%);
+}
+.subagent-run-handoff {
+  display: inline-flex;
+  height: 26px;
+  padding: 0 8px 0 6px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  border-radius: 7px;
+  background: hsl(210 22% 95%);
+  color: hsl(215 12% 43%);
+  font-size: 12px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+.subagent-run-handoff svg { width: 15px; height: 15px; flex: 0 0 15px; }
+.subagent-run-title {
+  min-width: 0;
+  overflow: hidden;
+  color: hsl(var(--foreground));
+  font-size: 14.5px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.subagent-run-description {
+  display: -webkit-box;
+  margin: 0;
+  padding: 0 2px 4px;
+  overflow: hidden;
+  color: hsl(215 10% 43%);
+  font-size: 13.5px;
+  line-height: 1.6;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.turn--subagent .turn-meta {
+  position: absolute;
+  bottom: -38px;
+  left: 0;
+  margin-top: 0;
+}
+
+@media (max-width: 700px) {
+  .turn--subagent {
+    width: 100%;
+    padding: 30px 10px 12px;
+  }
+  .subagent-run-label { left: 10px; max-width: calc(100% - 20px); }
+}
+
 .bubble { line-height: 1.65; font-size: 16px; }
 .turn--user .bubble {
   max-width: 85%;

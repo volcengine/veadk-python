@@ -13,6 +13,7 @@ import {
   CircleCheck,
   CircleX,
   Copy,
+  CornerDownRight,
   ListTodo,
   Loader2,
 } from "lucide-react";
@@ -142,7 +143,7 @@ function emptyInvocation(): FrontendInvocation {
 }
 
 function findAgentNode(node: AgentNode, name: string): AgentNode | undefined {
-  if (node.name === name) return node;
+  if (node.name === name || node.id === name) return node;
   for (const child of node.children) {
     const found = findAgentNode(child, name);
     if (found) return found;
@@ -253,6 +254,7 @@ function turnHasVisibleContent(turn: Turn): boolean {
     if (b.kind === "text") return b.text.trim().length > 0;
     if (b.kind === "attachment") return b.files.length > 0;
     if (b.kind === "tool") return !(b.name === A2UI_TOOL_NAME && b.done);
+    if (b.kind === "agent-transfer") return false;
     if (b.kind === "a2ui") return buildSurfaces(b.messages).some((s) => s.components[s.rootId]);
     if (b.kind === "auth") return true; // the OAuth card counts as content
     return false; // thinking is not an answer
@@ -735,6 +737,11 @@ export default function App() {
   const seenAgents = seenAgentsBySession[sessionId] ?? EMPTY_STRING_SET;
   const execPath = execPathBySession[sessionId] ?? EMPTY_STRING_ARR;
   const rootCapabilityNode = agentInfo?.graph;
+  const rootAgentNames = [
+    agentInfo?.name,
+    rootCapabilityNode?.name,
+    rootCapabilityNode?.id,
+  ].filter((name): name is string => Boolean(name));
   const skillCapabilityNode = invocation.targetAgent && rootCapabilityNode
     ? findAgentNode(rootCapabilityNode, invocation.targetAgent.name)
     : rootCapabilityNode;
@@ -1810,6 +1817,7 @@ export default function App() {
 
     try {
       let acc = emptyAcc();
+      let currentStreamAuthor = "";
       let tokens = 0;
       let ts = Date.now() / 1000;
       let eventId = "";
@@ -1832,6 +1840,13 @@ export default function App() {
         }
         // Live topology: author + transfer/end signals, keyed by session.
         applyStreamSignals(sid, event);
+        const eventAuthor = event.author && event.author !== "user"
+          ? event.author
+          : "";
+        if (eventAuthor && eventAuthor !== currentStreamAuthor) {
+          currentStreamAuthor = eventAuthor;
+          acc = emptyAcc();
+        }
         acc = applyEvent(acc, event);
         const usage = event.usageMetadata ?? event.usage_metadata;
         if (usage?.totalTokenCount) tokens = usage.totalTokenCount;
@@ -1841,6 +1856,7 @@ export default function App() {
         if (nextInvocationId) invocationId = nextInvocationId;
         const blocks = acc.blocks;
         const meta = {
+          author: currentStreamAuthor || undefined,
           tokens: tokens || undefined,
           ts,
           eventId: eventId || undefined,
@@ -1849,7 +1865,14 @@ export default function App() {
         setTurnsFor(sid, (t) => {
           const next = t.slice();
           const last = next[next.length - 1];
-          if (last?.role === "assistant") next[next.length - 1] = { ...last, blocks, meta };
+          if (
+            last?.role === "assistant" &&
+            (!last.meta?.author || last.meta.author === currentStreamAuthor)
+          ) {
+            next[next.length - 1] = { ...last, blocks, meta };
+          } else {
+            next.push({ role: "assistant", blocks, meta });
+          }
           return next;
         });
       }
@@ -1917,6 +1940,8 @@ export default function App() {
     startStreamPresentation(sid);
     try {
       let acc = emptyAcc();
+      let currentStreamAuthor = lastTurn?.meta?.author ?? "";
+      let currentBase = base;
       let tokens = 0;
       let ts = Date.now() / 1000;
       let eventId = lastTurn?.meta?.eventId ?? "";
@@ -1934,6 +1959,14 @@ export default function App() {
       })) {
         if (ctrl.signal.aborted) break;
         applyStreamSignals(sid, event);
+        const eventAuthor = event.author && event.author !== "user"
+          ? event.author
+          : "";
+        if (eventAuthor && eventAuthor !== currentStreamAuthor) {
+          currentStreamAuthor = eventAuthor;
+          currentBase = [];
+          acc = emptyAcc();
+        }
         acc = applyEvent(acc, event);
         const usage = event.usageMetadata ?? event.usage_metadata;
         if (usage?.totalTokenCount) tokens = usage.totalTokenCount;
@@ -1941,21 +1974,28 @@ export default function App() {
         if (event.id) eventId = event.id;
         const nextInvocationId = event.invocationId ?? event.invocation_id;
         if (nextInvocationId) invocationId = nextInvocationId;
-        const blocks = [...base, ...acc.blocks];
+        const blocks = [...currentBase, ...acc.blocks];
         setTurnsFor(sid, (t) => {
           const next = t.slice();
           const last = next[next.length - 1];
-          if (last?.role === "assistant") {
+          const meta = {
+            author: currentStreamAuthor || last?.meta?.author,
+            tokens: tokens || last?.meta?.tokens,
+            ts,
+            eventId: eventId || last?.meta?.eventId,
+            invocationId: invocationId || last?.meta?.invocationId,
+          };
+          if (
+            last?.role === "assistant" &&
+            (!last.meta?.author || last.meta.author === currentStreamAuthor)
+          ) {
             next[next.length - 1] = {
               ...last,
               blocks,
-              meta: {
-                tokens: tokens || last.meta?.tokens,
-                ts,
-                eventId: eventId || last.meta?.eventId,
-                invocationId: invocationId || last.meta?.invocationId,
-              },
+              meta,
             };
+          } else {
+            next.push({ role: "assistant", blocks, meta });
           }
           return next;
         });
@@ -2622,6 +2662,22 @@ export default function App() {
                 </motion.div>
               );
             }
+            const agentAuthor = turn.meta?.author ?? "";
+            const agentNode = agentAuthor && rootCapabilityNode
+              ? findAgentNode(rootCapabilityNode, agentAuthor)
+              : undefined;
+            const isSubAgent = Boolean(
+              agentAuthor &&
+              rootAgentNames.length > 0 &&
+              !rootAgentNames.includes(agentAuthor),
+            );
+            const agentDisplayName = agentNode?.name || agentAuthor;
+            const agentDescription = agentNode?.description ||
+              (isSubAgent ? "正在执行主 Agent 移交的任务。" : "");
+            if (
+              turn.blocks.length > 0 &&
+              turn.blocks.every((block) => block.kind === "agent-transfer")
+            ) return null;
             const pending = turn.blocks.length === 0;
             const feedbackRating = turn.meta?.feedback?.rating ?? null;
             const feedbackEventId = turn.meta?.eventId ?? "";
@@ -2632,11 +2688,25 @@ export default function App() {
             return (
               <motion.div
                 key={i}
-                className="turn turn--assistant"
+                className={`turn turn--assistant${isSubAgent ? " turn--subagent" : ""}`}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.2, ease: "easeOut" }}
               >
+                {isSubAgent && (
+                  <>
+                    <div className="subagent-run-label">
+                      <span className="subagent-run-handoff">
+                        <CornerDownRight />
+                        <span>智能体移交</span>
+                      </span>
+                      <span className="subagent-run-title">{agentDisplayName}</span>
+                    </div>
+                    <p className="subagent-run-description" title={agentDescription}>
+                      {agentDescription}
+                    </p>
+                  </>
+                )}
                 {pending ? (
                   isLast && activeConversationBusy ? <ThinkingPlaceholder /> : null
                 ) : (
