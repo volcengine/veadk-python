@@ -268,10 +268,10 @@ test("materializes A2A registry defaults for deployment env", () => {
   );
 });
 
-test("summarizes the Agent above the deployment configuration", () => {
+test("summarizes the Agent beside the deployment configuration", () => {
   assert.match(customCreateSource, /agentDraft=\{draft\}/);
-  assert.match(projectPreviewSource, /className="pp-flow-thumbnail"/);
-  assert.match(projectPreviewSource, /<AgentBuildCanvas[\s\S]*?readOnly/);
+  assert.match(projectPreviewSource, /className="pp-topology-pane"/);
+  assert.match(projectPreviewSource, /aria-label="Agent 拓扑"/);
   assert.match(projectPreviewSource, /Agent 数量/);
   assert.match(projectPreviewSource, />\s*导出配置文件\s*</);
   assert.match(projectPreviewSource, /<ProjectCodeBrowser[\s\S]*?pp-artifact-source/);
@@ -283,13 +283,10 @@ test("summarizes the Agent above the deployment configuration", () => {
   assert.match(projectPreviewStyles, /\.pp-release-preview\s*\{[\s\S]*?box-sizing:\s*border-box/);
 });
 
-test("enlarges the read-only execution canvas without topology configuration", () => {
-  assert.match(
-    projectPreviewSource,
-    /className="pp-flow-dialog"[\s\S]*?interactivePreview/,
-  );
-  assert.match(projectPreviewSource, /只读预览，可缩放与拖动画布/);
-  assert.doesNotMatch(projectPreviewSource, /pp-topology-pane|inspectedAgent/);
+test("keeps deployment source inspection editable without a preview modal", () => {
+  assert.match(projectPreviewSource, /<ProjectCodeBrowser[\s\S]*?onChange=\{onChange\}/);
+  assert.match(projectPreviewSource, /deploymentPrimaryPane/);
+  assert.doesNotMatch(projectPreviewSource, /className="pp-flow-dialog"[\s\S]*?interactivePreview/);
 });
 
 test("uses an unboxed 查看源码 trigger", () => {

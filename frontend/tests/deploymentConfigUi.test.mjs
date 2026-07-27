@@ -55,36 +55,17 @@ test("offers code execution with its sandbox configuration", () => {
   );
 });
 
-test("reuses the build canvas as a read-only expandable deployment preview", () => {
-  assert.match(
-    projectPreviewSource,
-    /import \{ AgentBuildCanvas \} from "\.\.\/create\/AgentBuildCanvas"/,
-  );
-  assert.match(
-    projectPreviewSource,
-    /className="pp-flow-thumbnail"[\s\S]*?<AgentBuildCanvas[\s\S]*?readOnly/,
-  );
-  assert.match(
-    projectPreviewSource,
-    /className="pp-flow-dialog"[\s\S]*?<AgentBuildCanvas[\s\S]*?interactivePreview/,
-  );
-  assert.doesNotMatch(projectPreviewSource, /Agent 拓扑|pp-topology-pane/);
+test("summarizes the Agent beside deployment settings", () => {
+  assert.match(projectPreviewSource, /className="pp-topology-pane"/);
+  assert.match(projectPreviewSource, /aria-label="Agent 拓扑"/);
+  assert.match(projectPreviewSource, /<dt>Agent 数量<\/dt>/);
   assert.match(projectPreviewSource, /导出配置文件/);
   assert.match(projectPreviewSource, />\s*导出源码\s*</);
   assert.match(
     projectPreviewSource,
     /className="pp-release-description"[\s\S]*?title=\{agentDraft\.description\}/,
   );
-  assert.match(
-    projectPreviewSource,
-    /<dt>Agent 数量<\/dt>/,
-  );
   assert.doesNotMatch(projectPreviewSource, /优化选项|暂未开放/);
-  assert.match(
-    projectPreviewSource,
-    /className="pp-flow-expand"[\s\S]*?aria-label="放大查看执行流程"[\s\S]*?<Maximize2 aria-hidden \/>/,
-  );
-  assert.doesNotMatch(projectPreviewSource, /<span>放大查看<\/span>/);
   assert.match(
     projectPreviewStyles,
     /\.pp-release-info\s*\{[\s\S]*?height:\s*100%;[\s\S]*?\.pp-artifact-actions\s*\{[\s\S]*?margin-top:\s*auto;/,
@@ -162,39 +143,23 @@ test("aligns the publish overview and deployment settings to one restrained cont
   assert.doesNotMatch(projectPreviewSource, /DeployIcon|RotateCcw className="pp-ic"/);
   assert.match(
     projectPreviewStyles,
-    /\.pp-config-actions \.pp-deploy\s*\{[\s\S]*?background:\s*hsl\(var\(--background\) \/ 0\.68\);[\s\S]*?backdrop-filter:\s*blur\(24px\) saturate\(170%\);[\s\S]*?font-size:\s*13px;/,
+    /\.pp-config-actions \.pp-deploy\s*\{[\s\S]*?background:\s*hsl\(var\(--secondary\) \/ 0\.86\);[\s\S]*?backdrop-filter:\s*blur\(7px\);/,
   );
 });
 
-test("uses a flipping Feishu channel card instead of a switch", () => {
+test("uses a compact Feishu switch with inline credentials", () => {
   assert.match(
     projectPreviewSource,
-    /className=\{`pp-channel-card\$\{feishuEnabled \? " is-flipped" : ""\}`\}/,
+    /role="switch"[\s\S]*?aria-checked=\{feishuEnabled\}/,
   );
-  assert.match(projectPreviewSource, /import feishuLogo from "\.\.\/assets\/feishu-logo\.svg"/);
-  assert.match(projectPreviewSource, /<img src=\{feishuLogo\} alt="" \/>/);
-  assert.match(projectPreviewSource, /飞书配置/);
-  assert.match(projectPreviewSource, /取消中…/);
-  assert.doesNotMatch(projectPreviewSource, /role="switch"|className="pp-switch"/);
+  assert.match(projectPreviewSource, /className=\{`pp-channel\$\{feishuEnabled \? " is-on" : ""\}`\}/);
+  assert.match(projectPreviewSource, /飞书（正在更新代码…）/);
+  assert.match(projectPreviewSource, /className="pp-switch"/);
+  assert.match(projectPreviewSource, /FEISHU_ENV\.map/);
+  assert.doesNotMatch(projectPreviewSource, /import feishuLogo from "\.\.\/assets\/feishu-logo\.svg"/);
   assert.match(
     projectPreviewStyles,
-    /\.pp-channel-card-inner\s*\{[\s\S]*?transform-style:\s*preserve-3d;[\s\S]*?transition:\s*transform 420ms/,
-  );
-  assert.match(
-    projectPreviewStyles,
-    /\.pp-channel-card\.is-flipped \.pp-channel-card-inner\s*\{[\s\S]*?rotateY\(180deg\)/,
-  );
-  assert.match(
-    projectPreviewStyles,
-    /\.pp-channel-card\s*\{[\s\S]*?width:\s*clamp\(154px, 33\.333%, 236px\);[\s\S]*?aspect-ratio:\s*1;/,
-  );
-  assert.doesNotMatch(
-    projectPreviewStyles,
-    /\.pp-channel-card\.is-flipped\s*\{[\s\S]*?(?:width|height):/,
-  );
-  assert.match(
-    projectPreviewStyles,
-    /\.pp-channel-remove\s*\{[\s\S]*?background:\s*hsl\(var\(--destructive\) \/ 0\.07\);[\s\S]*?color:\s*hsl\(0 46% 36%\);/,
+    /\.pp-switch\s*\{[\s\S]*?border-radius:\s*999px/,
   );
 });
 
@@ -243,7 +208,7 @@ test("shows the total environment variable count beside the section title", () =
 test("lays out network settings in two columns and keeps environment variables compact", () => {
   assert.match(
     projectPreviewSource,
-    /className="pp-network-layout"[\s\S]*?type="radio"[\s\S]*?className="pp-network-fields"/,
+    /className="pp-network-layout"[\s\S]*?type="radio"[\s\S]*?disabled=\{deploying \|\| isRuntimeUpdate \|\| !onNetworkChange\}[\s\S]*?className="pp-network-fields"/,
   );
   assert.match(
     projectPreviewStyles,
@@ -297,5 +262,4 @@ test("requires explicit confirmation before starting deployment", () => {
     projectPreviewSource,
     /disabled=\{deploying \|\| isRuntimeUpdate \|\| !onNetworkChange\}/,
   );
-  assert.match(projectPreviewSource, /现有 Runtime 的区域与网络模式保持不变。/);
 });

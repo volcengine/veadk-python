@@ -24,7 +24,6 @@ import {
   FilePlus,
   Folder,
   Loader2,
-  Maximize2,
   MessageSquare,
   Pencil,
   Plus,
@@ -56,7 +55,6 @@ hljs.registerLanguage("dockerfile", dockerfile);
 hljs.registerLanguage("makefile", makefile);
 import type { AgentProject, ProjectFile } from "../create/project";
 import type { AgentDraft, NetworkConfig } from "../create/types";
-import { AgentBuildCanvas } from "../create/AgentBuildCanvas";
 import {
   FEISHU_ENV,
   type EnvVar,
@@ -67,15 +65,12 @@ import {
   runtimeEnvVars,
 } from "../create/deploymentEnv";
 import type { DeployStage } from "../adk/client";
-import feishuLogo from "../assets/feishu-logo.svg";
 import { buildZip } from "./zip";
 import { ProjectCodeBrowser } from "./CodeBrowserDialog";
 import { DeploymentErrorMessage } from "./DeploymentErrorMessage";
 import "./ProjectPreview.css";
 
 const CodeEditor = lazy(() => import("./CodeEditor"));
-const ignoreCanvasAction = () => undefined;
-
 interface DeploymentConfirmDialogProps {
   open: boolean;
   isUpdate: boolean;
@@ -268,160 +263,6 @@ const CODE_PACKAGE_DEPLOY_STEPS: { phase: string; label: string }[] = [
   { phase: "publish", label: "发布服务" },
 ];
 
-type TopologyAgentType = NonNullable<AgentDraft["agentType"]>;
-
-interface TopologyAgent {
-  id: string;
-  name: string;
-  type: TopologyAgentType;
-  description: string;
-  model: string;
-  tools: string;
-  skills: string;
-  knowledgebase: string;
-  shortTerm: string;
-  longTerm: string;
-  tracing: string;
-  children: TopologyAgent[];
-}
-
-function trimDescription(value: string): string {
-  return value.trim().replace(/[。.!！]+$/u, "");
-}
-
-function displayConfig(
-  values: (string | undefined)[],
-  emptyValue = "未配置",
-): string {
-  const configured = [...new Set(values.map((value) => value?.trim()).filter(Boolean))];
-  return configured.join("、") || emptyValue;
-}
-
-function buildTopologyAgent(node: AgentDraft, id = "root"): TopologyAgent {
-  const type = node.agentType ?? "llm";
-  const tools = [
-    ...(node.builtinTools ?? []).map((toolId) => findTool(toolId)?.label ?? toolId),
-    ...(node.customTools ?? []).map((tool) => tool.name),
-    ...(node.mcpTools ?? []).map((tool) => tool.name),
-    ...(node.tools ?? []),
-  ];
-  const skills = [
-    ...(node.selectedSkills ?? []).map((skill) => skill.name),
-    ...(node.skills ?? []),
-  ];
-  const longTermBackend = node.memory.longTerm
-    ? findLtm(node.longTermBackend ?? "local")?.label ?? node.longTermBackend
-    : undefined;
-
-  return {
-    id,
-    name: node.name.trim() || "未命名 Agent",
-    type,
-    description: trimDescription(node.description),
-    model: type === "llm" ? node.modelName || node.model || "默认模型" : "不适用",
-    tools: displayConfig(tools),
-    skills: displayConfig(skills),
-    knowledgebase: node.knowledgebase
-      ? displayConfig([
-          findKb(node.knowledgebaseBackend ?? DEFAULT_KB_BACKEND)?.label ??
-            node.knowledgebaseBackend ??
-            "默认知识库",
-          node.knowledgebaseIndex,
-        ])
-      : "未配置",
-    shortTerm: node.memory.shortTerm
-      ? findStm(node.shortTermBackend ?? "local")?.label ??
-        node.shortTermBackend ??
-        "默认后端"
-      : "未配置",
-    longTerm: longTermBackend
-      ? `${longTermBackend}${node.autoSaveSession ? " · 自动保存会话" : ""}`
-      : "未配置",
-    tracing: node.tracing
-      ? displayConfig(
-          (node.tracingExporters ?? []).map(
-            (exporterId) => findExporter(exporterId)?.label ?? exporterId,
-          ),
-          "默认观测",
-        )
-      : "未配置",
-    children: node.subAgents.map((child, index) =>
-      buildTopologyAgent(child, `${id}.${index}`),
-    ),
-  };
-}
-
-function findTopologyAgent(
-  root: TopologyAgent,
-  id: string,
-): TopologyAgent | undefined {
-  if (root.id === id) return root;
-  for (const child of root.children) {
-    const match = findTopologyAgent(child, id);
-    if (match) return match;
-  }
-  return undefined;
-}
-
-function TopologyNode({
-  agent,
-  depth,
-  inspectedId,
-  onHover,
-  onFocus,
-}: {
-  agent: TopologyAgent;
-  depth: number;
-  inspectedId: string | null;
-  onHover: (id: string | null) => void;
-  onFocus: (id: string | null) => void;
-}) {
-  const meta = agentTypeMeta(agent.type);
-  const Icon = meta.icon;
-  return (
-    <div className="pp-topology-branch">
-      <button
-        type="button"
-        className={`pp-agent-node${agent.id === inspectedId ? " is-inspected" : ""}`}
-        style={{
-          marginLeft: depth * 16,
-          width: `calc(100% - ${depth * 16}px)`,
-        }}
-        onMouseEnter={() => onHover(agent.id)}
-        onMouseLeave={() => onHover(null)}
-        onFocus={() => onFocus(agent.id)}
-        onBlur={() => onFocus(null)}
-        aria-label={`查看 ${agent.name} 配置`}
-      >
-        <span className="pp-agent-node-icon">
-          <Icon aria-hidden="true" />
-        </span>
-        <span className="pp-agent-node-main">
-          <span className="pp-agent-node-name">{agent.name}</span>
-          <span className="pp-agent-node-type">{meta.label}</span>
-        </span>
-        {agent.children.length > 0 && (
-          <span className="pp-agent-child-count">{agent.children.length}</span>
-        )}
-      </button>
-      {agent.children.length > 0 && (
-        <div className="pp-topology-children">
-          {agent.children.map((child) => (
-            <TopologyNode
-              key={child.id}
-              agent={child}
-              depth={depth + 1}
-              inspectedId={inspectedId}
-              onHover={onHover}
-              onFocus={onFocus}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export interface DeployOptions {
   taskId?: string;
   im?: {
@@ -458,8 +299,6 @@ export interface ProjectPreviewProps {
   project: AgentProject;
   /** Render inside the Agent workspace without taking over the app toolbar. */
   embedded?: boolean;
-  /** Keep the deployment layout visible while the final action is unavailable. */
-  deployDisabledReason?: string;
   /** Draft metadata summarized on the deployment page. */
   agentDraft?: AgentDraft;
   /** Main Agent display name. Generated project names may be normalized. */
@@ -606,7 +445,6 @@ function ProjectHeaderPortal({
 export function ProjectPreview({
   project,
   embedded = false,
-  deployDisabledReason,
   agentDraft,
   agentName,
   agentCount,
@@ -638,6 +476,7 @@ export function ProjectPreview({
   const deploymentSteps = deploymentPrimaryPane
     ? CODE_PACKAGE_DEPLOY_STEPS
     : DEPLOY_STEPS;
+  const isRuntimeUpdate = Boolean(deploymentRuntimeId);
 
   // Initialize all hooks BEFORE any conditional returns (React hooks rule)
   const [selected, setSelected] = useState<string | null>(
@@ -648,7 +487,6 @@ export function ProjectPreview({
   const [newPath, setNewPath] = useState("");
   const [deploying, setDeploying] = useState(false);
   const [deployConfirmOpen, setDeployConfirmOpen] = useState(false);
-  const [flowPreviewOpen, setFlowPreviewOpen] = useState(false);
   const [feishuUpdating, setFeishuUpdating] = useState(false);
   const [deployError, setDeployError] = useState<string | null>(null);
   const [deployResult, setDeployResult] = useState<DeployResult | null>(null);
@@ -660,8 +498,6 @@ export function ProjectPreview({
   const [envRows, setEnvRows] = useState<EnvRow[]>([]);
   const [showEnvValues, setShowEnvValues] = useState(false);
   const [regionMenuOpen, setRegionMenuOpen] = useState(false);
-  const [hoveredAgentId, setHoveredAgentId] = useState<string | null>(null);
-  const [focusedAgentId, setFocusedAgentId] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -670,20 +506,6 @@ export function ProjectPreview({
       mountedRef.current = false;
     };
   }, []);
-
-  useEffect(() => {
-    if (!flowPreviewOpen) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setFlowPreviewOpen(false);
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [flowPreviewOpen]);
 
   const tree = useMemo(() => {
     if (!project?.files || !Array.isArray(project.files)) {
@@ -1099,7 +921,7 @@ export function ProjectPreview({
   }
 
   return (
-    <div className={`pp-root${onDeploy ? " is-deploy" : ""}${deploymentPrimaryPane ? " has-primary-pane" : ""}`}>
+    <div className={`pp-root${onDeploy ? " is-deploy" : ""}${deploymentPrimaryPane ? " has-primary-pane" : ""}${embedded ? " is-embedded" : ""}`}>
       {onDeploy && (
         <ProjectHeaderPortal
           left={
@@ -1296,7 +1118,7 @@ export function ProjectPreview({
                     value={deployRegion}
                     onChange={(e) => onDeployRegionChange?.(e.target.value)}
                     aria-label="部署区域"
-                    disabled={deploying || !onDeployRegionChange}
+                    disabled={deploying || isRuntimeUpdate || !onDeployRegionChange}
                   >
                     <option value="cn-beijing">华北 2（北京）</option>
                     <option value="cn-shanghai">华东 2（上海）</option>
@@ -1408,54 +1230,6 @@ export function ProjectPreview({
                         </div>
                       </>
                     )}
-                  </div>
-                )}
-                <div className="pp-network-modes" role="radiogroup" aria-label="网络模式">
-                  {(["public", "private", "both"] as const).map((mode) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      role="radio"
-                      aria-checked={networkMode === mode}
-                      className={networkMode === mode ? "is-on" : ""}
-                      onClick={() => setNetworkMode(mode)}
-                      disabled={deploying || !onNetworkChange}
-                    >
-                      {mode === "public" ? "公网" : mode === "private" ? "VPC" : "公网 + VPC"}
-                    </button>
-                  ))}
-                </div>
-                {networkMode !== "public" && (
-                  <div className="pp-network-fields">
-                    <label>
-                      <span>VPC ID</span>
-                      <input
-                        value={network?.vpcId ?? ""}
-                        placeholder="vpc-xxxxxxxx"
-                        disabled={deploying}
-                        onChange={(e) => patchNetwork({ vpcId: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      <span>子网 ID <small>可选，多个用逗号分隔</small></span>
-                      <input
-                        value={network?.subnetIds ?? ""}
-                        placeholder="subnet-xxx, subnet-yyy"
-                        disabled={deploying}
-                        onChange={(e) => patchNetwork({ subnetIds: e.target.value })}
-                      />
-                    </label>
-                    <label className="pp-network-check">
-                      <input
-                        type="checkbox"
-                        checked={!!network?.enableSharedInternetAccess}
-                        disabled={deploying}
-                        onChange={(e) =>
-                          patchNetwork({ enableSharedInternetAccess: e.target.checked })
-                        }
-                      />
-                      VPC 内共享公网出口
-                    </label>
                   </div>
                 )}
                 <div className="pp-network-layout">
@@ -1761,59 +1535,16 @@ export function ProjectPreview({
                 disabled={deploying || feishuUpdating || deployDisabled}
                 title={deployDisabled ? deployDisabledReason : undefined}
               >
-                {deploying ? "部署中…" : deployError ? "重试部署" : "部署"}
+                {deploying
+                  ? `${deploymentActionLabel}中…`
+                  : deployError
+                    ? `重试${deploymentActionLabel}`
+                    : deploymentActionLabel}
               </button>
             </div>
           </aside>
         )}
       </div>
-      {flowPreviewOpen && agentDraft &&
-        createPortal(
-          <div
-            className="pp-flow-backdrop"
-            onMouseDown={(event) => {
-              if (event.target === event.currentTarget) {
-                setFlowPreviewOpen(false);
-              }
-            }}
-          >
-            <section
-              className="pp-flow-dialog"
-              role="dialog"
-              aria-modal="true"
-              aria-label="执行流程预览"
-            >
-              <header>
-                <div>
-                  <strong>执行流程</strong>
-                  <span>只读预览，可缩放与拖动画布</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setFlowPreviewOpen(false)}
-                  aria-label="关闭执行流程预览"
-                >
-                  <X aria-hidden />
-                </button>
-              </header>
-              <div className="pp-flow-dialog-canvas">
-                <AgentBuildCanvas
-                  draft={agentDraft}
-                  selectedPath={[]}
-                  onSelect={ignoreCanvasAction}
-                  onAdd={ignoreCanvasAction}
-                  onInsert={ignoreCanvasAction}
-                  onInsertRoot={ignoreCanvasAction}
-                  onDelete={ignoreCanvasAction}
-                  onReset={ignoreCanvasAction}
-                  readOnly
-                  interactivePreview
-                />
-              </div>
-            </section>
-          </div>,
-          document.body,
-        )}
       <DeploymentConfirmDialog
         open={deployConfirmOpen}
         isUpdate={isRuntimeUpdate}

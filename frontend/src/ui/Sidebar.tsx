@@ -23,26 +23,7 @@ import volcengineLogo from "../assets/volcengine.svg";
 
 const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
 
-/** Hand-drawn "quick create" mark: a lightning bolt (speed) with a spark. */
-function QuickCreateIcon() {
-  return (
-    <svg
-      className="icon"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <path d="M12.5 3 5.5 13h5l-1 8 8-11h-5l.5-7z" fill="currentColor" stroke="none" />
-      <path d="M19 4.5v3M17.5 6h3" opacity="0.85" />
-    </svg>
-  );
-}
-
-/** Agent roster with two compact tuning rails — management without a generic cube. */
+/** A minimal Agent face that stays friendly and legible at sidebar-icon size. */
 function ManageAgentsIcon() {
   return (
     <svg

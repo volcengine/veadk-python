@@ -77,7 +77,6 @@ import {
   connectRuntime,
   loadConnections,
   registerConnections,
-  removeRuntimeConnection,
   remoteAppId,
   type RemoteConnection,
 } from "./adk/connections";
@@ -2313,21 +2312,6 @@ export default function App() {
     setAppName(id);
   };
 
-  const handleRuntimeDeleted = (runtimeId: string) => {
-    const deletedCurrentRuntime = currentRuntime?.runtimeId === runtimeId;
-    setConnections(removeRuntimeConnection(runtimeId));
-    setLibraryRuntimeIds((current) => {
-      if (current === null) return null;
-      const next = new Set(current);
-      next.delete(runtimeId);
-      return next;
-    });
-    if (deletedCurrentRuntime) {
-      viewSidRef.current = "";
-      setSessionId("");
-      setAppName(apps[0] ?? "");
-    }
-  };
   return (
     <div className="layout">
       <Sidebar

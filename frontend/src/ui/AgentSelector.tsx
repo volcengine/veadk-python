@@ -59,7 +59,7 @@ export interface AgentSelectorProps {
   /** Maximum runtime scope granted by the server. */
   runtimeScope: RuntimeScope;
   /** Whether this identity may delete server-authorized managed Runtimes. */
-  canDeleteRuntimes: boolean;
+  canDeleteRuntimes?: boolean;
   /** Called with the picker id once an agent is chosen. */
   onSelect: (id: string) => void;
   /** Keeps the app's cached connection and selection in sync after deletion. */
@@ -138,7 +138,7 @@ export function AgentSelector({
   currentId,
   currentRuntime,
   runtimeScope,
-  canDeleteRuntimes,
+  canDeleteRuntimes = false,
   onSelect,
   onRuntimeDeleted,
 }: AgentSelectorProps) {
@@ -525,6 +525,22 @@ export function AgentSelector({
                                   onClick={() => togglePreview(rt)}
                                 >
                                   <Info className="icon" />
+                                </button>
+                              ) : null}
+                              {canDeleteRuntimes && rt.canDelete ? (
+                                <button
+                                  type="button"
+                                  className="agentsel-delete"
+                                  aria-label={`删除 ${rt.name}`}
+                                  title="删除 Runtime"
+                                  disabled={deletingThis}
+                                  onClick={() => void removeRuntime(rt)}
+                                >
+                                  {deletingThis ? (
+                                    <Loader2 className="icon spin" />
+                                  ) : (
+                                    <Trash2 className="icon" />
+                                  )}
                                 </button>
                               ) : null}
                             </div>

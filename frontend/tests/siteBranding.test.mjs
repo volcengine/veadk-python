@@ -18,6 +18,10 @@ const agentSelectorSource = readFileSync(
   new URL("../src/ui/AgentSelector.tsx", import.meta.url),
   "utf8",
 );
+const workspaceSource = readFileSync(
+  new URL("../src/ui/AgentWorkspace.tsx", import.meta.url),
+  "utf8",
+);
 const loginSource = readFileSync(
   new URL("../src/ui/LoginPage.tsx", import.meta.url),
   "utf8",
@@ -91,20 +95,14 @@ test("sidebar actions use friendly scoped motion", () => {
   assert.match(sidebarSource, /sidebar-agent-face__eye--left/);
   assert.match(sidebarSource, /sidebar-agent-face__eye--right/);
   assert.doesNotMatch(sidebarSource, /sidebar-agent-face__antenna|sidebar-agent-face__ear|sidebar-agent-face__smile/);
-  assert.match(stylesSource, /\.new-chat--conversation:hover > \.icon\s*\{[\s\S]*?animation:\s*sidebar-plus-return/);
-  assert.match(stylesSource, /\.new-chat--agents:hover \.sidebar-agent-face__eye\s*\{[\s\S]*?animation:\s*sidebar-agent-blink/);
-  assert.match(stylesSource, /@keyframes sidebar-agent-blink/);
-  assert.match(stylesSource, /@keyframes sidebar-plus-return\s*\{[\s\S]*?48% \{ transform: rotate\(48deg\); \}[\s\S]*?100% \{ transform: rotate\(0deg\); \}/);
+  assert.match(stylesSource, /\.new-chat:hover\s*\{[\s\S]*?background:\s*hsl\(var\(--foreground\) \/ 0\.05\)/);
+  assert.match(stylesSource, /\.new-chat \.icon\s*\{[\s\S]*?width:\s*18px;[\s\S]*?height:\s*18px;/);
 });
 
 test("sidebar navigation keeps a compact ChatGPT-like row height", () => {
   assert.match(
     stylesSource,
     /\.new-chat\s*\{[\s\S]*?height:\s*36px;[\s\S]*?min-height:\s*36px;[\s\S]*?padding:\s*8px 10px;/,
-  );
-  assert.match(
-    stylesSource,
-    /\.agent-row\s*\{[\s\S]*?height:\s*36px;[\s\S]*?min-height:\s*36px;[\s\S]*?padding:\s*8px 10px;/,
   );
 });
 

@@ -26,7 +26,7 @@ test("reduces the primary sidebar to new chat, agents, and search", () => {
 test("renders the unified agent workspace from the app", () => {
   assert.match(appSource, /AgentWorkspace,[\s\S]*from "\.\/ui\/AgentWorkspace"/);
   assert.match(appSource, /showManageAgents \? \([\s\S]*?<AgentWorkspace/);
-  assert.match(appSource, /showManageAgents[\s\S]*?\? "智能体"/);
+  assert.match(appSource, /showManageAgents[\s\S]*?\? "管理 Agent"/);
 });
 
 test("starts new Agents from the creation-method chooser", () => {
