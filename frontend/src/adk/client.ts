@@ -1109,6 +1109,12 @@ export async function deployAgentkitProject(
 
   let res: Response;
   try {
+    opts?.onStage?.({
+      level: "info",
+      phase: "upload",
+      message: "正在上传代码包",
+      pct: 0,
+    });
     res = await apiFetch(
       "/web/deploy-agentkit",
       {
@@ -1127,6 +1133,12 @@ export async function deployAgentkitProject(
       {},
       0,
     );
+    opts?.onStage?.({
+      level: "success",
+      phase: "upload",
+      message: "代码包上传完成",
+      pct: 100,
+    });
   } catch (error) {
     clearController();
     throw error;
