@@ -10,6 +10,8 @@ const sidebarSource = read("ui/Sidebar.tsx");
 const searchSource = read("ui/Search.tsx");
 const workspaceSource = read("ui/AgentWorkspace.tsx");
 const workspaceStyles = read("ui/AgentWorkspace.css");
+const customCreateSource = read("create/CustomCreate.tsx");
+const customCreateStyles = read("create/CustomCreate.css");
 
 test("reduces the primary sidebar to new chat, agents, and search", () => {
   const newChat = sidebarSource.indexOf('aria-label="新会话"');
@@ -25,6 +27,20 @@ test("renders the unified agent workspace from the app", () => {
   assert.match(appSource, /AgentWorkspace,[\s\S]*from "\.\/ui\/AgentWorkspace"/);
   assert.match(appSource, /showManageAgents \? \([\s\S]*?<AgentWorkspace/);
   assert.match(appSource, /showManageAgents[\s\S]*?\? "智能体"/);
+});
+
+test("starts new Agents from the creation-method chooser", () => {
+  const createStart = appSource.indexOf("onCreateAgent={() => {");
+  const updateStart = appSource.indexOf("onUpdateAgent={(nextDraft)", createStart);
+  assert.ok(createStart >= 0 && updateStart > createStart);
+  const createBlock = appSource.slice(createStart, updateStart);
+  assert.match(createBlock, /setAddMenu\(true\)/);
+  assert.match(createBlock, /setCreateView\(null\)/);
+  assert.doesNotMatch(createBlock, /setCreateView\("custom"\)/);
+  assert.match(
+    appSource,
+    /<QuickCreate[\s\S]*?onSelect=\{\(k\) => \{[\s\S]*?k === "custom" \? `draft-\$\{Date\.now\(\)\.toString\(36\)\}` : ""[\s\S]*?setCreateView\(k\)/,
+  );
 });
 
 test("normalizes legacy cloud topology nodes with omitted collections", () => {
@@ -54,10 +70,13 @@ test("combines basic information, evaluation sets, optimization, and deployment"
   }
   assert.doesNotMatch(workspaceSource, /label: "优化项"|label: "部署配置"/);
   assert.match(workspaceSource, /<AgentBuildCanvas[\s\S]*?readOnly[\s\S]*?interactivePreview/);
-  assert.match(workspaceSource, /className="aw-basic-stack"[\s\S]*?aw-canvas-card[\s\S]*?aw-details-card[\s\S]*?aw-option-panel[\s\S]*?aw-deployment-panel[\s\S]*?onUpdateAgent\(draft\)/);
+  assert.match(workspaceSource, /className="aw-basic-stack"[\s\S]*?aw-canvas-card[\s\S]*?aw-details-card[\s\S]*?aw-deployment-panel[\s\S]*?aw-option-panel[\s\S]*?onUpdateAgent\(draft\)/);
   assert.match(workspaceSource, /上下文优化[\s\S]*?幻觉抑制[\s\S]*?工具调用优化/);
   assert.match(workspaceSource, /aw-deployment-panel[\s\S]*?aw-readonly-config/);
   assert.doesNotMatch(workspaceSource, /aw-readonly-badge|>只读</);
+  assert.doesNotMatch(workspaceSource, /aw-coming-soon/);
+  assert.match(workspaceSource, /className="aw-option-content"[\s\S]*?className="aw-option-list"[\s\S]*?className="aw-option-glass" role="status"[\s\S]*?暂未开放/);
+  assert.match(workspaceStyles, /\.aw-option-glass\s*\{[\s\S]*?backdrop-filter:\s*blur\(10px\)/);
   assert.doesNotMatch(workspaceSource, /保存配置|workspace-network|setDeploymentSaved/);
   assert.match(workspaceStyles, /\.aw-basic-actions\s*\{[\s\S]*?position:\s*absolute[\s\S]*?left:\s*50%[\s\S]*?transform:\s*translateX\(-50%\)/);
   assert.match(workspaceSource, /section === "evaluations"[\s\S]*?className="aw-case-filters"[\s\S]*?<CaseTable/);
@@ -86,6 +105,37 @@ test("shows the selected Agent deployment progress and reuses its draft for upda
   assert.match(appSource, /setImportedDraft\(nextDraft\)[\s\S]*?runtimeId: currentConn\.runtimeId[\s\S]*?setCreateView\("custom"\)/);
   assert.match(appSource, /initialDraft=\{importedDraft \?\? undefined\}[\s\S]*?deploymentTarget=\{runtimeUpdateTarget \?\? undefined\}/);
   assert.match(appSource, /getAgentInfo\(appName\)[\s\S]*?\}, \[agentInfoRefreshKey, appName\]\)/);
+});
+
+test("creates update drafts only after a real edit and supports discarding changes", () => {
+  const updateStart = appSource.indexOf("onUpdateAgent={(nextDraft)");
+  const editDraftStart = appSource.indexOf("onEditDraft={(item)", updateStart);
+  assert.ok(updateStart >= 0 && editDraftStart > updateStart);
+  assert.doesNotMatch(appSource.slice(updateStart, editDraftStart), /saveWorkspaceDraft/);
+  assert.match(
+    customCreateSource,
+    /initialDraftSnapshotRef = useRef\(JSON\.stringify\(draft\)\)[\s\S]*?lastNotifiedDraftSnapshotRef[\s\S]*?draftDirty = draftSnapshot !== initialDraftSnapshotRef\.current/,
+  );
+  assert.match(
+    customCreateSource,
+    /if \(draftSnapshot === lastNotifiedDraftSnapshotRef\.current\) return;[\s\S]*?onDraftChangeRef\.current\?\.\(draft, draftDirty\)/,
+  );
+  assert.match(
+    appSource,
+    /onDraftChange=\{\(nextDraft, dirty\) => \{[\s\S]*?if \(dirty\)[\s\S]*?saveWorkspaceDraft[\s\S]*?restoreWorkspaceDraftBaseline\(editingDraftId\)/,
+  );
+  assert.match(
+    customCreateSource,
+    /className="cw-discard-edit"[\s\S]*?放弃编辑[\s\S]*?放弃本次编辑？/,
+  );
+  assert.match(
+    appSource,
+    /onDiscard=\{\(\) => \{[\s\S]*?restoreWorkspaceDraftBaseline\(editingDraftId\)[\s\S]*?setManageAgents\(true\)/,
+  );
+  assert.match(
+    customCreateStyles,
+    /\.cw-discard-edit:hover:not\(:disabled\)\s*\{[\s\S]*?var\(--destructive\)/,
+  );
 });
 
 test("supports configurable evaluation groups and historical results", () => {

@@ -44,6 +44,34 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.cw-workspace-actions {
+  grid-column: 3;
+  justify-self: end;
+}
+.cw-discard-edit {
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 560;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+.cw-discard-edit:hover:not(:disabled) {
+  background: hsl(var(--destructive) / 0.08);
+  color: hsl(var(--destructive));
+}
+.cw-discard-edit:focus-visible {
+  outline: 2px solid hsl(var(--destructive) / 0.22);
+  outline-offset: 2px;
+}
+.cw-discard-edit:disabled {
+  cursor: wait;
+  opacity: 0.48;
+}
 .cw-workspace-stepper {
   grid-column: 2;
   min-width: 0;
@@ -3617,6 +3645,12 @@
     width: 100%;
     max-width: 480px;
     justify-self: center;
+  }
+  .cw-workspace-actions {
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    grid-column: 1;
   }
   .cw-validation-workspace {
     grid-template-columns: minmax(0, 1fr);

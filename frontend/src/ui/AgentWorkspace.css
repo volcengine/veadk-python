@@ -1069,19 +1069,36 @@
   border-radius: 14px;
 }
 
-.aw-coming-soon {
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: hsl(var(--secondary) / 0.72);
-  color: hsl(var(--muted-foreground));
-  font-size: 10.5px;
-  font-weight: 600;
+.aw-option-content {
+  position: relative;
+  overflow: hidden;
+  border-radius: 11px;
 }
 
 .aw-option-list {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.aw-option-glass {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(
+    135deg,
+    hsl(var(--background) / 0.68),
+    hsl(var(--background) / 0.5)
+  );
+  -webkit-backdrop-filter: blur(10px) saturate(88%);
+  backdrop-filter: blur(10px) saturate(88%);
+  color: hsl(var(--foreground) / 0.72);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
 }
 
 .aw-option-list > label {
