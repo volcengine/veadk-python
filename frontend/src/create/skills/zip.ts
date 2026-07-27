@@ -8,6 +8,11 @@ export interface ZipEntry {
   text: string;
 }
 
+export interface UnzipOptions {
+  maxEntries?: number;
+  maxUncompressedBytes?: number;
+}
+
 function u16(b: Uint8Array, o: number) {
   return b[o] | (b[o + 1] << 8);
 }
@@ -24,7 +29,10 @@ async function inflateRaw(data: Uint8Array): Promise<Uint8Array> {
   return out;
 }
 
-export async function unzip(buf: Uint8Array): Promise<ZipEntry[]> {
+export async function unzip(
+  buf: Uint8Array,
+  options: UnzipOptions = {},
+): Promise<ZipEntry[]> {
   // Find the End Of Central Directory record (signature 0x06054b50), scanning
   // backwards (it's within the last 65557 bytes).
   const EOCD = 0x06054b50;
@@ -38,19 +46,31 @@ export async function unzip(buf: Uint8Array): Promise<ZipEntry[]> {
   if (eocd < 0) throw new Error("无效的 zip：找不到 EOCD");
 
   const count = u16(buf, eocd + 10);
+  if (options.maxEntries !== undefined && count > options.maxEntries) {
+    throw new Error(`zip 文件数不能超过 ${options.maxEntries} 个`);
+  }
   let p = u32(buf, eocd + 16); // central directory offset
   const dec = new TextDecoder("utf-8");
   const entries: ZipEntry[] = [];
+  let uncompressedBytes = 0;
 
   for (let i = 0; i < count; i++) {
     if (u32(buf, p) !== 0x02014b50) break; // central dir header signature
     const method = u16(buf, p + 10);
     const compSize = u32(buf, p + 20);
+    const size = u32(buf, p + 24);
     const nameLen = u16(buf, p + 28);
     const extraLen = u16(buf, p + 30);
     const commentLen = u16(buf, p + 32);
     const localOff = u32(buf, p + 42);
     const name = dec.decode(buf.subarray(p + 46, p + 46 + nameLen));
+    uncompressedBytes += size;
+    if (
+      options.maxUncompressedBytes !== undefined &&
+      uncompressedBytes > options.maxUncompressedBytes
+    ) {
+      throw new Error("zip 解压后的内容过大");
+    }
 
     // Local file header: 30 bytes fixed + name + extra, then file data.
     const lNameLen = u16(buf, localOff + 26);
