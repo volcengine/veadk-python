@@ -10,6 +10,14 @@ const sidebarSource = readFileSync(
   new URL("../src/ui/Sidebar.tsx", import.meta.url),
   "utf8",
 );
+const navbarSource = readFileSync(
+  new URL("../src/ui/Navbar.tsx", import.meta.url),
+  "utf8",
+);
+const agentSelectorSource = readFileSync(
+  new URL("../src/ui/AgentSelector.tsx", import.meta.url),
+  "utf8",
+);
 const loginSource = readFileSync(
   new URL("../src/ui/LoginPage.tsx", import.meta.url),
   "utf8",
@@ -67,12 +75,10 @@ test("global sidebar can collapse to a compact icon rail", () => {
   );
 });
 
-test("connected cloud Agent uses a calm green selector icon", () => {
-  assert.match(sidebarSource, /agent-row--connected/);
-  assert.match(
-    stylesSource,
-    /\.agent-row--connected \.agent-row-lead\s*\{[^}]*color:\s*hsl\(142 48% 38%\);/,
-  );
+test("the main navbar owns the complete Agent selector", () => {
+  assert.match(navbarSource, /<AgentSelector[\s\S]*?variant="navbar"/);
+  assert.match(agentSelectorSource, /const active = currentRuntime\?\.runtimeId === rt\.runtimeId/);
+  assert.match(agentSelectorSource, /<RuntimeIdentityIcon \/>/);
 });
 
 test("history header offers a borderless new-session action", () => {
@@ -100,8 +106,10 @@ test("sidebar brand row aligns with the main header", () => {
     stylesSource,
     /\.navbar\s*\{[\s\S]*?flex:\s*0 0 54px;[\s\S]*?padding:\s*0 10px;/,
   );
-  assert.match(sidebarSource, /const MAIN_PANEL_TOP_PX = 54;/);
-  assert.match(sidebarSource, /anchorTop=\{MAIN_PANEL_TOP_PX\}/);
+  assert.match(
+    stylesSource,
+    /\.agentsel--navbar\s*\{[\s\S]*?top:\s*calc\(100% \+ 7px\);/,
+  );
 });
 
 test("welcome headings share the neutral TextShimmer and stable smoke avatars", () => {

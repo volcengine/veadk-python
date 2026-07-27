@@ -12,17 +12,30 @@ const stylesSource = readFileSync(
   "utf8",
 );
 
-test("uses the active session name in the conversation header", () => {
-  assert.match(appSource, /function activeSessionTitle/);
-  assert.match(appSource, /sessionTitle\(session\?\.events\)/);
-  assert.match(appSource, /turn\.role !== "user"/);
-  assert.match(appSource, /: conversationTitle/);
+test("uses the selected Agent in new-chat, search, and conversation headers", () => {
+  assert.doesNotMatch(appSource, /function activeSessionTitle|conversationTitle/);
+  assert.match(appSource, /agentLabel=\{labelOf\}/);
+  assert.match(appSource, /agentsSource=\{agentsSource\}/);
+  assert.match(navbarSource, /appName \? label\(appName\) : "选择 Agent"/);
+  assert.match(navbarSource, /<AgentSelector[\s\S]*?variant="navbar"/);
 });
 
-test("keeps long session names inside the available header width", () => {
-  assert.match(navbarSource, /className="navbar-title" title=\{title\}/);
+test("keeps the Agent trigger visually aligned with the previous title", () => {
   assert.match(
     stylesSource,
-    /\.navbar-title\s*\{[^}]*max-width:\s*min\(60vw, 640px\)[^}]*text-overflow:\s*ellipsis[^}]*white-space:\s*nowrap/,
+    /\.agent-dd-trigger\s*\{[\s\S]*?font-size:\s*16px;[\s\S]*?font-weight:\s*650;/,
+  );
+  assert.match(stylesSource, /\.agent-dd-current\s*\{[\s\S]*?text-overflow:\s*ellipsis;/);
+  assert.match(
+    stylesSource,
+    /\.navbar-left\s*\{[\s\S]*?container-type:\s*inline-size;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.agent-dd\s*\{[\s\S]*?max-width:\s*33\.333cqw;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.agent-dd-trigger\s*\{[\s\S]*?max-width:\s*100%;/,
   );
 });

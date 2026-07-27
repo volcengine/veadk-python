@@ -206,7 +206,7 @@ export const sandboxClient: AgentKitSandboxClient = {
 
   async sendMessage(message, options = {}) {
     if (!message.sessionId || !message.text.trim()) {
-      throw new Error("临时会话缺少有效的消息内容。");
+      throw new Error("内置智能体会话缺少有效的消息内容。");
     }
     const response = await fetch(
       withAuth(`${SANDBOX_API}/${encodeURIComponent(message.sessionId)}/messages`),

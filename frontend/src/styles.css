@@ -198,8 +198,7 @@ body {
 .new-chat .icon { width: 18px; height: 18px; }
 .new-chat:hover { background: hsl(var(--foreground) / 0.05); }
 
-.sidebar.is-collapsed .new-chat,
-.sidebar.is-collapsed .agent-row {
+.sidebar.is-collapsed .new-chat {
   align-self: center;
   width: 36px;
   height: 36px;
@@ -209,67 +208,12 @@ body {
   overflow: hidden;
   white-space: nowrap;
 }
-.sidebar.is-collapsed .agent-row-name,
-.sidebar.is-collapsed .agent-row-region,
-.sidebar.is-collapsed .agent-row-chev,
 .sidebar.is-collapsed .sidebar-nav-label {
   display: none;
 }
 .sidebar.is-collapsed .sidebar-history {
   display: none;
 }
-
-/* ---------- agent picker (sidebar row + right-edge slide-out) ---------- */
-.agent-row {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin: 2px 0 6px;
-  padding: 9px 10px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 8px;
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-  transition: background 0.12s, border-color 0.12s;
-}
-.agent-row:hover { background: hsl(var(--foreground) / 0.04); border-color: hsl(var(--foreground) / 0.2); }
-.agent-row--empty {
-  border-color: hsl(8 48% 78%);
-  background: hsl(8 60% 97.5%);
-  color: hsl(8 34% 42%);
-}
-.agent-row--empty .agent-row-lead { color: hsl(8 44% 53%); }
-.agent-row--empty .agent-row-chev { color: hsl(8 24% 57%); }
-.agent-row--empty:hover {
-  border-color: hsl(8 46% 70%);
-  background: hsl(8 55% 96%);
-}
-.agent-row-lead { width: 16px; height: 16px; color: hsl(var(--muted-foreground)); flex-shrink: 0; }
-.agent-row--connected .agent-row-lead { color: hsl(142 48% 38%); }
-.agent-row-name {
-  flex: 1;
-  min-width: 0;
-  text-align: left;
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.agent-row-region {
-  flex-shrink: 0;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: hsl(var(--secondary));
-  color: hsl(var(--muted-foreground));
-  font-size: 10px;
-  font-weight: 550;
-  line-height: 1.5;
-}
-.agent-row-chev { width: 15px; height: 15px; color: hsl(var(--muted-foreground)); transition: transform 0.15s; flex-shrink: 0; transform: translateY(1px); }
-.agent-row-chev.open { transform: translateY(1px) rotate(90deg); }
 
 /* The drawer positions two independent floating cards: the Runtime list and,
  * when requested, a tabbed information panel. */
@@ -295,6 +239,19 @@ body {
 }
 .agentsel.has-detail {
   width: min(688px, var(--agentsel-available-width));
+}
+.agentsel--navbar {
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 0;
+  z-index: 44;
+  width: min(clamp(264px, 26vw, 288px), calc(100vw - 48px));
+  height: min(640px, calc(100dvh - 74px));
+  margin-left: 0;
+}
+.agentsel--navbar .agentsel-main {
+  width: 100%;
+  flex-basis: auto;
 }
 .sidebar.is-collapsed .agentsel {
   --agentsel-available-width: calc(100vw - 70px);
@@ -967,13 +924,14 @@ body {
 
 /* new-chat empty state: centered greeting + composer */
 .welcome {
+  position: relative;
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 0 16px 6vh;
-  gap: 22px;
+  padding: 0 16px clamp(64px, 12vh, 104px);
+  gap: 32px;
 }
 .welcome-title {
   margin: 0;
@@ -1830,6 +1788,7 @@ body {
   margin: 0 auto;
   padding: 6px 16px 18px;
 }
+.composer--new-chat { position: relative; }
 .composer-box {
   position: relative;
   display: flex;
@@ -1866,12 +1825,13 @@ body {
 }
 .composer--new-chat .new-chat-mode {
   position: absolute;
-  right: 52px;
+  left: 52px;
   bottom: 10px;
   display: flex;
   align-items: center;
   min-height: 36px;
 }
+.composer--new-chat.composer--skill-mode .new-chat-mode { left: 10px; }
 .composer--new-chat .comp-send {
   position: absolute;
   right: 10px;
@@ -1880,6 +1840,90 @@ body {
 .composer--new-chat .comp-send .icon {
   width: 20px;
   height: 20px;
+}
+.prompt-suggestions {
+  position: absolute;
+  top: calc(100% + 12px);
+  left: 0;
+  z-index: 1;
+  display: grid;
+  width: 100%;
+  gap: 3px;
+}
+.prompt-suggestion {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 46px;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(10px);
+  animation: prompt-suggestion-enter 440ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  transition: background 140ms ease, color 140ms ease, transform 140ms ease;
+}
+.prompt-suggestion:nth-child(2) { animation-delay: 65ms; }
+.prompt-suggestion:nth-child(3) { animation-delay: 130ms; }
+.prompt-suggestion:hover {
+  background: hsl(var(--foreground) / 0.025);
+  color: hsl(var(--foreground));
+}
+.prompt-suggestion:focus-visible {
+  outline: 2px solid hsl(var(--primary) / 0.42);
+  outline-offset: -2px;
+}
+.prompt-suggestion:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.prompt-suggestion > svg {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.35;
+  transform-origin: center;
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.prompt-suggestion:nth-child(1):hover > svg {
+  transform: rotate(-8deg) scale(1.06);
+}
+.prompt-suggestion:nth-child(2):hover > svg {
+  transform: rotate(6deg) scale(1.07);
+}
+.prompt-suggestion:nth-child(3):hover > svg {
+  transform: rotate(-5deg) scale(1.06);
+}
+@keyframes prompt-suggestion-enter {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .prompt-suggestion {
+    opacity: 1;
+    transform: none;
+    animation: none;
+    transition: none;
+  }
+  .prompt-suggestion > svg {
+    transition: none;
+  }
+  .prompt-suggestion:hover > svg {
+    transform: none;
+  }
 }
 .composer-meta {
   display: flex;
@@ -2691,6 +2735,7 @@ body {
 .navbar-left {
   flex: 1;
   min-width: 0;
+  container-type: inline-size;
 }
 
 .navbar-default {
@@ -3074,7 +3119,11 @@ body {
 }
 
 /* ChatGPT-style agent dropdown */
-.agent-dd { position: relative; }
+.agent-dd {
+  position: relative;
+  min-width: 0;
+  max-width: 33.333cqw;
+}
 .agent-dd-trigger {
   display: inline-flex;
   align-items: center;
@@ -3090,10 +3139,12 @@ body {
   letter-spacing: -0.01em;
   cursor: pointer;
   transition: background 0.12s;
+  max-width: 100%;
 }
 .agent-dd-trigger:hover { background: hsl(var(--foreground) / 0.05); }
 .agent-dd-current {
-  max-width: 320px;
+  min-width: 0;
+  max-width: 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3105,121 +3156,7 @@ body {
   transition: transform 0.2s ease;
 }
 .agent-dd-chev.open { transform: rotate(180deg); }
-.agent-dd-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 31;
-  min-width: 240px;
-  max-width: 360px;
-  max-height: min(560px, calc(100dvh - 84px));
-  padding: 6px;
-  background: hsl(var(--panel));
-  border: 1px solid hsl(var(--border));
-  border-radius: 14px;
-  box-shadow: 0 8px 28px hsl(var(--foreground) / 0.14);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  overflow-y: auto;
-  overscroll-behavior-y: contain;
-  scrollbar-gutter: stable;
-  animation: ddpop 0.14s ease;
-}
 @keyframes ddpop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
-.agent-dd-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 10px;
-  border: none;
-  border-radius: 10px;
-  background: none;
-  color: hsl(var(--foreground));
-  font: inherit;
-  font-size: 14px;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.12s;
-}
-.agent-dd-row { position: relative; }
-.agent-dd-item { width: 100%; }
-.agent-dd-item:hover { background: hsl(var(--foreground) / 0.05); }
-.agent-dd-item.active { background: hsl(var(--foreground) / 0.04); }
-.agent-dd-item-name {
-  flex: 1;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-/* green "active" indicator dot for the selected agent */
-.agent-dd-item-dot {
-  width: 8px;
-  height: 8px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  background: hsl(142 71% 45%);
-  box-shadow: 0 0 0 3px hsl(142 71% 45% / 0.18);
-}
-
-/* hover flyout: model + tools for the agent under the cursor */
-.agent-dd-flyout {
-  position: absolute;
-  /* top is set dynamically via inline style */
-  left: 248px; /* min-width of menu (240px) + gap (8px) */
-  z-index: 32;
-  width: 280px;
-  padding: 12px 14px;
-  background: hsl(var(--panel));
-  border: 1px solid hsl(var(--border));
-  border-radius: 14px;
-  box-shadow: 0 8px 28px hsl(var(--foreground) / 0.14);
-  animation: ddpop 0.12s ease;
-}
-/* invisible bridge across the gap so the cursor never leaves the row */
-.agent-dd-flyout::before {
-  content: "";
-  position: absolute;
-  top: 0; bottom: 0; left: -12px;
-  width: 14px;
-}
-.agent-dd-fly-loading {
-  display: flex; align-items: center; gap: 8px;
-  font-size: 13px; color: hsl(var(--muted-foreground));
-}
-.agent-dd-fly-name { font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
-.agent-dd-fly-desc {
-  margin-top: 3px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: hsl(var(--muted-foreground));
-}
-.agent-dd-fly-field {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 10px;
-  font-size: 12.5px;
-  color: hsl(var(--foreground));
-}
-.agent-dd-fly-field .icon { width: 14px; height: 14px; flex-shrink: 0; color: hsl(var(--muted-foreground)); }
-.agent-dd-fly-field--tools { align-items: flex-start; }
-.agent-dd-fly-field--tools .icon { margin-top: 3px; }
-.agent-dd-fly-label { color: hsl(var(--muted-foreground)); }
-.agent-dd-fly-model {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-  word-break: break-all;
-}
-.agent-dd-fly-chips { display: flex; flex-wrap: wrap; gap: 5px; }
-.agent-dd-chip {
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: hsl(var(--foreground) / 0.06);
-  font-size: 11.5px;
-  white-space: nowrap;
-}
 
 /* ---------- account (avatar button + click popover) ---------- */
 .account { position: relative; }

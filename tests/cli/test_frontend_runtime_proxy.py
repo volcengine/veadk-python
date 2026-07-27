@@ -87,6 +87,8 @@ def test_vite_allows_both_loopback_browser_origins() -> None:
     assert _frontend_allow_origins(vite=True) == [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
     ]
     assert _frontend_allow_origins(vite=False) == []
 

@@ -36,9 +36,9 @@ const skillStylesSource = readFileSync(
   "utf8",
 );
 
-test("offers Agent, temporary Sandbox, and Skill creation modes in the new-chat composer", () => {
+test("offers Agent, built-in agents, and Skill creation modes in the new-chat composer", () => {
   assert.match(selectorSource, /value: "agent"[\s\S]*?label: "Agent"/);
-  assert.match(selectorSource, /value: "temporary"[\s\S]*?AgentKit 沙箱/);
+  assert.match(selectorSource, /value: "temporary"[\s\S]*?label: "内置智能体"/);
   assert.match(selectorSource, /value: "skill-create"[\s\S]*?label: "创建 Skill"/);
   assert.match(selectorSource, /aria-haspopup="listbox"/);
   assert.match(composerSource, /<NewChatModeSelector/);
@@ -55,7 +55,7 @@ test("preserves the existing Agent submit flow and resets mode on a new chat", (
   assert.match(appSource, /function startNewChat\(\)[\s\S]*?setNewChatMode\("agent"\)/);
   assert.match(
     appSource,
-    /showModeSelector=\{[\s\S]*?skillJob === null &&[\s\S]*?canCreateAgents[\s\S]*?\}/,
+    /showModeSelector=\{[\s\S]*?turns\.length === 0 &&[\s\S]*?skillJob === null[\s\S]*?\}/,
   );
   assert.match(
     appSource,

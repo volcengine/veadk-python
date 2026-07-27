@@ -37,6 +37,53 @@ type CompletionItem =
   | { kind: "skill"; value: AgentSkill }
   | { kind: "agent"; value: AgentTarget };
 
+function AnalyzePromptIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <circle cx="8.2" cy="8.2" r="4.7" />
+      <path d="m11.7 11.7 4.1 4.1" />
+      <path d="M14.8 2.7v3.2M13.2 4.3h3.2" />
+      <circle cx="8.2" cy="8.2" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function PlanPromptIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <circle cx="4.2" cy="15.4" r="1.4" />
+      <circle cx="15.7" cy="4.2" r="1.4" />
+      <path d="M5.7 15.1c3.5-.3 1.8-4.7 5.1-5.1 2.8-.4 2.1-3.7 3.5-4.8" />
+      <path d="m12.7 14.2 1.5 1.5 2.9-3.3" />
+    </svg>
+  );
+}
+
+function RewritePromptIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M3.2 5.2h7.1M3.2 9.5h5.2M3.2 13.8h4" />
+      <path d="m10.1 14.8.6-2.8 4.7-4.7 2.2 2.2-4.7 4.7-2.8.6Z" />
+      <path d="M14.5 3.1v2.5M13.2 4.4h2.6" />
+    </svg>
+  );
+}
+
+const STARTER_PROMPTS = [
+  {
+    icon: AnalyzePromptIcon,
+    text: "帮我分析一个问题，并给出清晰的解决思路",
+  },
+  {
+    icon: PlanPromptIcon,
+    text: "根据我的目标，制定一份可执行的行动计划",
+  },
+  {
+    icon: RewritePromptIcon,
+    text: "帮我整理并润色一段内容，让表达更清晰",
+  },
+] as const;
+
 export interface ComposerProps {
   sessionId: string;
   sessionInitializing?: boolean;
@@ -148,6 +195,16 @@ export function Composer({
     input.current?.click();
   }
 
+  function applyStarterPrompt(prompt: string) {
+    onChange(prompt);
+    setMenuOpen(false);
+    setTrigger(null);
+    requestAnimationFrame(() => {
+      ref.current?.focus();
+      ref.current?.setSelectionRange(prompt.length, prompt.length);
+    });
+  }
+
   function updateCompletion(nextValue: string, cursor: number) {
     const prefix = nextValue.slice(0, cursor);
     const match = /(^|\s)([/@])([^\s/@]*)$/.exec(prefix);
@@ -209,7 +266,7 @@ export function Composer({
   }
 
   return (
-    <div className={`composer${newChatLayout ? " composer--new-chat" : ""}`}>
+    <div className={`composer${newChatLayout ? " composer--new-chat" : ""}${skillMode ? " composer--skill-mode" : ""}`}>
       {!skillMode ? (
         <InvocationChips
           value={invocation}
@@ -319,6 +376,16 @@ export function Composer({
           )}
         </div> : null}
 
+        {showModeSelector && onModeChange ? (
+          <NewChatModeSelector
+            value={newChatMode}
+            onChange={onModeChange}
+            disabled={busy}
+            temporaryEnabled={temporaryEnabled}
+            skillCreateEnabled={skillCreateEnabled}
+          />
+        ) : null}
+
         <div className="composer-input-stack">
           <textarea
             ref={ref}
@@ -378,16 +445,6 @@ export function Composer({
             }}
           />
         </div>
-        {showModeSelector && onModeChange ? (
-          <NewChatModeSelector
-            value={newChatMode}
-            agentName={agentName}
-            onChange={onModeChange}
-            disabled={busy}
-            temporaryEnabled={temporaryEnabled}
-            skillCreateEnabled={skillCreateEnabled}
-          />
-        ) : null}
         <motion.button
           type="button"
           className="comp-send"
@@ -400,6 +457,26 @@ export function Composer({
           {busy ? <Loader2 className="icon spin" /> : <ArrowUp className="icon" />}
         </motion.button>
       </div>
+
+      {newChatLayout && newChatMode === "agent" && !value.trim() ? (
+        <div className="prompt-suggestions" aria-label="快捷提示">
+          {STARTER_PROMPTS.map((prompt) => {
+            const PromptIcon = prompt.icon;
+            return (
+              <button
+                key={prompt.text}
+                type="button"
+                className="prompt-suggestion"
+                disabled={disabled || busy}
+                onClick={() => applyStarterPrompt(prompt.text)}
+              >
+                <PromptIcon />
+                <span>{prompt.text}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
 
       {showMeta && (
         <div className="composer-meta">
