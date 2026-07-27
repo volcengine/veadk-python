@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import {
   ArrowRight,
   Check,
@@ -283,6 +283,7 @@ function DeploymentProgressCard({ task }: { task: DeploymentTaskUpdate }) {
 export interface AgentWorkspaceProps {
   agents: AgentEntry[];
   drafts?: WorkspaceAgentDraft[];
+  agentOrder?: string[];
   selectedAgentId: string;
   agentInfo: AgentInfo | null;
   agentInfoAgentId: string;
@@ -295,6 +296,7 @@ export interface AgentWorkspaceProps {
   focusedDeploymentTaskId?: string;
   focusedAgentId?: string;
   onRetryAgents?: () => void;
+  onAgentOrderChange?: (agentIds: string[]) => void;
   onSelectAgent: (id: string) => void;
   onCreateAgent: () => void;
   onUpdateAgent: (draft: AgentDraft) => void;
@@ -304,6 +306,7 @@ export interface AgentWorkspaceProps {
 export function AgentWorkspace({
   agents,
   drafts = [],
+  agentOrder = [],
   agentInfo,
   agentInfoAgentId,
   loadingAgentInfo,
@@ -315,6 +318,7 @@ export function AgentWorkspace({
   focusedDeploymentTaskId = "",
   focusedAgentId = "",
   onRetryAgents,
+  onAgentOrderChange,
   onSelectAgent,
   onCreateAgent,
   onUpdateAgent,
@@ -329,6 +333,10 @@ export function AgentWorkspace({
   const [query, setQuery] = useState("");
   const [caseFilter, setCaseFilter] = useState<CaseKind>("good");
   const [caseQuery, setCaseQuery] = useState("");
+  const [draggingAgentId, setDraggingAgentId] = useState("");
+  const [dropAgentId, setDropAgentId] = useState("");
+  const [dropPlacement, setDropPlacement] = useState<"before" | "after">("before");
+  const suppressAgentClickRef = useRef(false);
   const cases = DEFAULT_CASES;
   const [evaluationGroups, setEvaluationGroups] = useState(DEFAULT_EVALUATION_GROUPS);
   const [activeEvaluationGroupId, setActiveEvaluationGroupId] = useState("");
@@ -344,20 +352,72 @@ export function AgentWorkspace({
     );
   }, [agents]);
 
+  const agentByRuntimeId = useMemo(() => {
+    const next = new Map<string, AgentEntry>();
+    for (const agent of agents) {
+      if (agent.runtimeId) next.set(agent.runtimeId, agent);
+    }
+    return next;
+  }, [agents]);
+  const updateDraftByRuntimeId = useMemo(() => {
+    const next = new Map<string, WorkspaceAgentDraft>();
+    for (const item of drafts) {
+      const runtimeId = item.deploymentTarget?.runtimeId;
+      if (!runtimeId || !agentByRuntimeId.has(runtimeId)) continue;
+      const previous = next.get(runtimeId);
+      if (!previous || item.updatedAt > previous.updatedAt) next.set(runtimeId, item);
+    }
+    return next;
+  }, [agentByRuntimeId, drafts]);
+  const latestTaskByRuntimeId = useMemo(() => {
+    const next = new Map<string, DeploymentTaskUpdate>();
+    for (const task of deploymentTasks) {
+      if (!task.runtimeId) continue;
+      const previous = next.get(task.runtimeId);
+      if (!previous || task.startedAt > previous.startedAt) {
+        next.set(task.runtimeId, task);
+      }
+    }
+    return next;
+  }, [deploymentTasks]);
+
   const filteredAgents = useMemo(() => {
     const keyword = query.trim().toLowerCase();
     if (!keyword) return agents;
-    return agents.filter((agent) =>
-      `${agent.label} ${agent.app} ${agent.host ?? ""}`.toLowerCase().includes(keyword),
-    );
-  }, [agents, query]);
+    return agents.filter((agent) => {
+      const updateDraft = agent.runtimeId
+        ? updateDraftByRuntimeId.get(agent.runtimeId)
+        : undefined;
+      const deploymentTask = agent.runtimeId
+        ? latestTaskByRuntimeId.get(agent.runtimeId)
+        : undefined;
+      return [
+        agent.label,
+        agent.app,
+        agent.host ?? "",
+        updateDraft?.draft.name ?? "",
+        updateDraft?.draft.description ?? "",
+        deploymentTask?.runtimeName ?? "",
+      ].join(" ").toLowerCase().includes(keyword);
+    });
+  }, [agents, latestTaskByRuntimeId, query, updateDraftByRuntimeId]);
   const filteredDrafts = useMemo(() => {
     const keyword = query.trim().toLowerCase();
-    if (!keyword) return drafts;
-    return drafts.filter((item) =>
-      `${item.draft.name} ${item.draft.description}`.toLowerCase().includes(keyword),
-    );
-  }, [drafts, query]);
+    return drafts.filter((item) => {
+      const runtimeId = item.deploymentTarget?.runtimeId;
+      if (runtimeId && agentByRuntimeId.has(runtimeId)) return false;
+      if (!keyword) return true;
+      return `${item.draft.name} ${item.draft.description}`.toLowerCase().includes(keyword);
+    });
+  }, [agentByRuntimeId, drafts, query]);
+  const standaloneDraftCount = useMemo(
+    () =>
+      drafts.filter((item) => {
+        const runtimeId = item.deploymentTarget?.runtimeId;
+        return !runtimeId || !agentByRuntimeId.has(runtimeId);
+      }).length,
+    [agentByRuntimeId, drafts],
+  );
   const filteredEvaluationGroups = useMemo(() => {
     const keyword = query.trim().toLowerCase();
     if (!keyword) return evaluationGroups;
@@ -371,9 +431,32 @@ export function AgentWorkspace({
   const selectedPendingTask = deploymentTasks.find(
     (task) => task.id === activeDeploymentTaskId,
   );
+  const selectedAgentUpdateDraft = selectedAgent?.runtimeId
+    ? updateDraftByRuntimeId.get(selectedAgent.runtimeId)
+    : undefined;
   const selectedAgentInfo =
     activeAgentId && agentInfoAgentId === activeAgentId ? agentInfo : null;
-  const listedAgents = filteredAgents;
+  const listedAgents = useMemo(() => {
+    const originalOrder = new Map(agents.map((agent, index) => [agent.id, index]));
+    const savedOrder = new Map(agentOrder.map((id, index) => [id, index]));
+    return [...filteredAgents].sort((left, right) => {
+      const leftTask = left.runtimeId
+        ? latestTaskByRuntimeId.get(left.runtimeId)
+        : undefined;
+      const rightTask = right.runtimeId
+        ? latestTaskByRuntimeId.get(right.runtimeId)
+        : undefined;
+      const leftStartedAt = leftTask?.status === "running" ? leftTask.startedAt : 0;
+      const rightStartedAt = rightTask?.status === "running" ? rightTask.startedAt : 0;
+      if (leftStartedAt !== rightStartedAt) return rightStartedAt - leftStartedAt;
+      const leftOrder = savedOrder.get(left.id);
+      const rightOrder = savedOrder.get(right.id);
+      if (leftOrder != null && rightOrder != null) return leftOrder - rightOrder;
+      if (leftOrder != null) return -1;
+      if (rightOrder != null) return 1;
+      return (originalOrder.get(left.id) ?? 0) - (originalOrder.get(right.id) ?? 0);
+    });
+  }, [agentOrder, agents, filteredAgents, latestTaskByRuntimeId]);
   const selectedName =
     selectedAgent?.label ||
     selectedAgentInfo?.name ||
@@ -387,8 +470,15 @@ export function AgentWorkspace({
     () =>
       selectedPendingTask?.agentDraft ??
       selectedDraft?.draft ??
+      selectedAgentUpdateDraft?.draft ??
       infoToDraft(selectedAgentInfo, selectedAgent?.label ?? "agent"),
-    [selectedAgentInfo, selectedAgent?.label, selectedDraft?.draft, selectedPendingTask?.agentDraft],
+    [
+      selectedAgentInfo,
+      selectedAgent?.label,
+      selectedAgentUpdateDraft?.draft,
+      selectedDraft?.draft,
+      selectedPendingTask?.agentDraft,
+    ],
   );
   const deploymentTask = useMemo(() => {
     if (selectedPendingTask) return selectedPendingTask;
@@ -414,11 +504,24 @@ export function AgentWorkspace({
   }, [deploymentTasks, selectedAgent, selectedDraft, selectedPendingTask]);
   useEffect(() => {
     if (!focusedDeploymentTaskId) return;
+    const focusedTask = deploymentTasks.find(
+      (task) => task.id === focusedDeploymentTaskId,
+    );
+    const matchingAgent = focusedTask?.runtimeId
+      ? agentByRuntimeId.get(focusedTask.runtimeId)
+      : undefined;
+    if (matchingAgent) {
+      setActiveDeploymentTaskId("");
+      setActiveDraftId("");
+      setActiveAgentId(matchingAgent.id);
+      setSection("basic");
+      return;
+    }
     setActiveAgentId("");
     setActiveDraftId("");
     setActiveDeploymentTaskId(focusedDeploymentTaskId);
     setSection("basic");
-  }, [focusedDeploymentTaskId]);
+  }, [agentByRuntimeId, deploymentTasks, focusedDeploymentTaskId]);
 
   useEffect(() => {
     if (!focusedAgentId || !agents.some((agent) => agent.id === focusedAgentId)) return;
@@ -456,6 +559,54 @@ export function AgentWorkspace({
     setEvaluationGroups((current) =>
       current.map((group) => (group.id === nextGroup.id ? nextGroup : group)),
     );
+  };
+
+  const orderedAgentIds = () => {
+    const currentIds = new Set(agents.map((agent) => agent.id));
+    const savedIds = agentOrder.filter((id) => currentIds.has(id));
+    const saved = new Set(savedIds);
+    return [
+      ...savedIds,
+      ...agents.filter((agent) => !saved.has(agent.id)).map((agent) => agent.id),
+    ];
+  };
+
+  const moveAgentNear = (
+    agentId: string,
+    targetAgentId: string,
+    placement: "before" | "after",
+  ) => {
+    if (!onAgentOrderChange || agentId === targetAgentId) return;
+    const next = orderedAgentIds().filter((id) => id !== agentId);
+    const targetIndex = next.indexOf(targetAgentId);
+    const insertIndex = targetIndex < 0
+      ? next.length
+      : placement === "after"
+        ? targetIndex + 1
+        : targetIndex;
+    next.splice(insertIndex, 0, agentId);
+    onAgentOrderChange(next);
+  };
+
+  const updateDropPlacement = (
+    event: DragEvent<HTMLButtonElement>,
+    agentId: string,
+  ) => {
+    if (!draggingAgentId || draggingAgentId === agentId) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    setDropAgentId(agentId);
+    setDropPlacement(event.clientY > rect.top + rect.height / 2 ? "after" : "before");
+  };
+
+  const moveAgentByOffset = (agentId: string, offset: number) => {
+    if (!onAgentOrderChange) return;
+    const next = orderedAgentIds();
+    const index = next.indexOf(agentId);
+    const targetIndex = Math.max(0, Math.min(next.length - 1, index + offset));
+    if (index < 0 || index === targetIndex) return;
+    next.splice(index, 1);
+    next.splice(targetIndex, 0, agentId);
+    onAgentOrderChange(next);
   };
 
   const createEvaluationGroup = () => {
@@ -609,38 +760,135 @@ export function AgentWorkspace({
                   </button>
                 );
               })}
-              {listedAgents.map((agent) => (
-                <button
-                  type="button"
-                  key={agent.id}
-                  className={`aw-agent-item${agent.id === activeAgentId ? " is-active" : ""}`}
-                  onClick={() => {
-                    setActiveDeploymentTaskId("");
-                    setActiveDraftId("");
-                    setActiveAgentId(agent.id);
-                    setSection("basic");
-                    onSelectAgent(agent.id);
-                  }}
-                >
-                  <span className="aw-agent-copy">
-                    <span className="aw-agent-name-row">
-                      <strong>{agent.label}</strong>
-                      {agent.currentVersion != null && (
-                        <span className="aw-version-badge">
-                          v{agent.currentVersion}
-                        </span>
-                      )}
+              {listedAgents.map((agent) => {
+                const runtimeTask = agent.runtimeId
+                  ? latestTaskByRuntimeId.get(agent.runtimeId)
+                  : undefined;
+                const updateDraft = agent.runtimeId
+                  ? updateDraftByRuntimeId.get(agent.runtimeId)
+                  : undefined;
+                const statusBadge =
+                  runtimeTask?.status === "running"
+                    ? { label: "部署中", className: " is-deploying" }
+                    : runtimeTask?.status === "error"
+                      ? { label: "失败", className: " is-error" }
+                      : runtimeTask?.status === "cancelled"
+                        ? { label: "已取消", className: " is-muted" }
+                        : updateDraft
+                          ? { label: "待更新", className: "" }
+                          : null;
+                const metaText = runtimeTask?.status === "running"
+                  ? "正在更新部署"
+                  : updateDraft
+                    ? "待更新"
+                    : agent.remote
+                      ? agent.host || "远程智能体"
+                      : "本地智能体";
+                const agentItemClass = [
+                  "aw-agent-item",
+                  "aw-agent-item--sortable",
+                  agent.id === activeAgentId ? "is-active" : "",
+                  agent.id === draggingAgentId ? "is-dragging" : "",
+                  agent.id === dropAgentId && agent.id !== draggingAgentId
+                    ? `is-drop-target is-drop-${dropPlacement}`
+                    : "",
+                ].filter(Boolean).join(" ");
+                return (
+                  <button
+                    type="button"
+                    key={agent.id}
+                    draggable={!!onAgentOrderChange}
+                    className={agentItemClass}
+                    aria-keyshortcuts={onAgentOrderChange ? "Alt+ArrowUp Alt+ArrowDown" : undefined}
+                    onDragStart={(event) => {
+                      if (!onAgentOrderChange) return;
+                      suppressAgentClickRef.current = true;
+                      setDraggingAgentId(agent.id);
+                      event.dataTransfer.effectAllowed = "move";
+                      event.dataTransfer.setData("text/plain", agent.id);
+                    }}
+                    onDragEnter={(event) => {
+                      updateDropPlacement(event, agent.id);
+                    }}
+                    onDragOver={(event) => {
+                      if (!draggingAgentId || draggingAgentId === agent.id) return;
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = "move";
+                      updateDropPlacement(event, agent.id);
+                    }}
+                    onDragLeave={(event) => {
+                      const nextTarget = event.relatedTarget;
+                      if (
+                        nextTarget instanceof Node &&
+                        event.currentTarget.contains(nextTarget)
+                      ) return;
+                      if (dropAgentId === agent.id) setDropAgentId("");
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      const draggedId =
+                        event.dataTransfer.getData("text/plain") || draggingAgentId;
+                      moveAgentNear(draggedId, agent.id, dropPlacement);
+                      setDraggingAgentId("");
+                      setDropAgentId("");
+                      setDropPlacement("before");
+                    }}
+                    onDragEnd={() => {
+                      setDraggingAgentId("");
+                      setDropAgentId("");
+                      setDropPlacement("before");
+                      window.setTimeout(() => {
+                        suppressAgentClickRef.current = false;
+                      }, 0);
+                    }}
+                    onKeyDown={(event) => {
+                      if (!event.altKey) return;
+                      if (event.key === "ArrowUp") {
+                        event.preventDefault();
+                        moveAgentByOffset(agent.id, -1);
+                      } else if (event.key === "ArrowDown") {
+                        event.preventDefault();
+                        moveAgentByOffset(agent.id, 1);
+                      }
+                    }}
+                    onClick={(event) => {
+                      if (suppressAgentClickRef.current) {
+                        event.preventDefault();
+                        suppressAgentClickRef.current = false;
+                        return;
+                      }
+                      setActiveDeploymentTaskId("");
+                      setActiveDraftId("");
+                      setActiveAgentId(agent.id);
+                      setSection("basic");
+                      onSelectAgent(agent.id);
+                    }}
+                  >
+                    <span className="aw-agent-copy">
+                      <span className="aw-agent-name-row">
+                        <strong>{agent.label}</strong>
+                        {agent.currentVersion != null && (
+                          <span className="aw-version-badge">
+                            v{agent.currentVersion}
+                          </span>
+                        )}
+                        {statusBadge && (
+                          <span className={`aw-draft-badge${statusBadge.className}`}>
+                            {statusBadge.label}
+                          </span>
+                        )}
+                      </span>
+                      <small>{metaText}</small>
                     </span>
-                    <small>{agent.remote ? agent.host || "远程智能体" : "本地智能体"}</small>
-                  </span>
-                  <ArrowRight aria-hidden />
-                </button>
-              ))}
+                    <ArrowRight aria-hidden />
+                  </button>
+                );
+              })}
               </>
             )}
           </div>
           <div className="aw-list-count">
-            共 {view === "library" ? agents.length + drafts.length : evaluationGroups.length} 个
+            共 {view === "library" ? agents.length + standaloneDraftCount : evaluationGroups.length} 个
           </div>
         </aside>
 
@@ -674,6 +922,7 @@ export function AgentWorkspace({
                     <span>v{selectedAgent.currentVersion}</span>
                   )}
                   {selectedDraft && <span>草稿</span>}
+                  {selectedAgentUpdateDraft && <span>待更新</span>}
                   {!selectedAgent && !selectedDraft && selectedPendingTask && (
                     <span>{selectedPendingTask.label}</span>
                   )}
@@ -745,7 +994,9 @@ export function AgentWorkspace({
                               ? "部署失败"
                               : deploymentTask?.status === "cancelled"
                                 ? "已取消"
-                                : <><span className="aw-status-dot" />可用</>}
+                                : selectedAgentUpdateDraft
+                                  ? "待更新"
+                                  : <><span className="aw-status-dot" />可用</>}
                         </dd>
                       </div>
                     </dl>
@@ -830,12 +1081,18 @@ export function AgentWorkspace({
                 <button
                   type="button"
                   className="aw-update"
-                  disabled={selectedDraft
+                  disabled={selectedDraft || selectedAgentUpdateDraft
                     ? !canCreate
                     : !selectedAgent?.runtimeId || !canUpdate || loadingAgentInfo || !selectedAgentInfo}
-                  onClick={() => selectedDraft ? onEditDraft?.(selectedDraft) : onUpdateAgent(draft)}
+                  onClick={() =>
+                    selectedDraft
+                      ? onEditDraft?.(selectedDraft)
+                      : selectedAgentUpdateDraft
+                        ? onEditDraft?.(selectedAgentUpdateDraft)
+                        : onUpdateAgent(draft)
+                  }
                 >
-                  {selectedDraft ? "继续编辑" : "更新"}
+                  {selectedDraft || selectedAgentUpdateDraft ? "继续编辑" : "更新"}
                 </button>
               </div>
             )}

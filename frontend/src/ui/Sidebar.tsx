@@ -339,7 +339,13 @@ export function Sidebar({
     <aside className={`sidebar ${collapsed ? "is-collapsed" : ""}`}>
       <div className="sidebar-top">
         <div className="sidebar-brand-row">
-          <div className="brand">
+          <button
+            type="button"
+            className="brand"
+            onClick={onNewChat}
+            aria-label="返回首页"
+            title="返回首页"
+          >
             <img
               className="brand-logo"
               src={branding.logoUrl || volcengineLogo}
@@ -349,7 +355,7 @@ export function Sidebar({
               aria-hidden
             />
             <span className="brand-title">{branding.title}</span>
-          </div>
+          </button>
           <button
             type="button"
             className="sidebar-collapse-toggle"

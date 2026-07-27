@@ -122,9 +122,16 @@ body {
   display: flex;
   align-items: center;
   gap: 9px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
   font-weight: 600;
   font-size: 15px;
   letter-spacing: -0.01em;
+  font-family: inherit;
+  text-align: left;
 }
 .brand-title {
   overflow: hidden;
@@ -133,6 +140,10 @@ body {
 }
 .brand-logo,
 .brand-title,
+.brand {
+  cursor: pointer;
+}
+
 .login-brand-logo,
 .login-brand,
 .login-title {

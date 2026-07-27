@@ -22,7 +22,7 @@ const projectPreviewSource = readFileSync(
 
 test("Agent navigation opens the PR 748 workspace with creation and evaluation", () => {
   assert.match(appSource, /import \{[\s\S]*?AgentWorkspace[\s\S]*?\} from "\.\/ui\/AgentWorkspace"/);
-  assert.match(appSource, /<AgentWorkspace[\s\S]*?agents=\{workspaceAgentEntries\}/);
+  assert.match(appSource, /<AgentWorkspace[\s\S]*?agents=\{orderedWorkspaceAgentEntries\}/);
   assert.match(workspaceSource, /智能体库/);
   assert.match(workspaceSource, /评测/);
   assert.match(workspaceSource, /view === "library" \? "新建 Agent" : "新建评测组"/);
@@ -72,6 +72,51 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(projectPreviewSource, /onDeploymentStarted\?\.\(initialTask\)/);
   assert.match(projectPreviewSource, /await onDeploymentComplete\?\.\(result\)/);
   assert.match(projectPreviewSource, /runtimeId: result\.runtimeId \|\| deploymentRuntimeId/);
+});
+
+test("runtime update deployments stay on the existing agent row", () => {
+  assert.match(workspaceSource, /const updateDraftByRuntimeId = useMemo/);
+  assert.match(workspaceSource, /const latestTaskByRuntimeId = useMemo/);
+  assert.match(
+    workspaceSource,
+    /if \(runtimeId && agentByRuntimeId\.has\(runtimeId\)\) return false/,
+  );
+  assert.match(workspaceSource, /leftTask\?\.status === "running"/);
+  assert.match(
+    workspaceSource,
+    /\{ label: "部署中", className: " is-deploying" \}/,
+  );
+  assert.match(
+    workspaceSource,
+    /selectedAgentUpdateDraft[\s\S]*?onEditDraft\?\.\(selectedAgentUpdateDraft\)/,
+  );
+  assert.match(
+    workspaceSource,
+    /const matchingAgent = focusedTask\?\.runtimeId[\s\S]*?agentByRuntimeId\.get/,
+  );
+  assert.match(workspaceStyles, /\.aw-draft-badge\.is-deploying/);
+});
+
+test("workspace agents can be reordered by drag or keyboard", () => {
+  assert.match(appSource, /function workspaceAgentOrderKey\(userId: string\)/);
+  assert.match(appSource, /const \[workspaceAgentOrder, setWorkspaceAgentOrder\] = useState<string\[\]>\(\[\]\)/);
+  assert.match(appSource, /const saveWorkspaceAgentOrder = useCallback/);
+  assert.match(appSource, /agents=\{orderedWorkspaceAgentEntries\}/);
+  assert.match(appSource, /agentOrder=\{workspaceAgentOrder\}/);
+  assert.match(appSource, /onAgentOrderChange=\{saveWorkspaceAgentOrder\}/);
+
+  assert.match(workspaceSource, /agentOrder\?: string\[\]/);
+  assert.match(workspaceSource, /onAgentOrderChange\?: \(agentIds: string\[\]\) => void/);
+  assert.match(workspaceSource, /draggable=\{!!onAgentOrderChange\}/);
+  assert.match(workspaceSource, /onDrop=\{\(event\) => \{/);
+  assert.match(workspaceSource, /moveAgentNear\(draggedId, agent\.id, dropPlacement\)/);
+  assert.match(workspaceSource, /event\.clientY > rect\.top \+ rect\.height \/ 2 \? "after" : "before"/);
+  assert.match(workspaceSource, /aria-keyshortcuts=\{onAgentOrderChange \? "Alt\+ArrowUp Alt\+ArrowDown"/);
+  assert.match(workspaceSource, /moveAgentByOffset\(agent\.id, -1\)/);
+  assert.match(workspaceSource, /moveAgentByOffset\(agent\.id, 1\)/);
+  assert.match(workspaceStyles, /\.aw-agent-item\[draggable="true"\]/);
+  assert.match(workspaceStyles, /\.aw-agent-item\.is-drop-target/);
+  assert.match(workspaceStyles, /\.aw-agent-item\.is-drop-after/);
 });
 
 test("evaluation tab remains the PR 748 placeholder until the real feature lands", () => {

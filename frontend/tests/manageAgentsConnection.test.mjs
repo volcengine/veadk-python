@@ -29,7 +29,7 @@ test("managed runtimes connect through the Agent workspace and global selector",
   assert.match(manageSource, /currentRuntimeId === rt\.runtimeId[\s\S]*?已连接/);
   assert.match(
     appSource,
-    /<AgentWorkspace[\s\S]*?agents=\{workspaceAgentEntries\}[\s\S]*?onSelectAgent=\{selectAgent\}/,
+    /<AgentWorkspace[\s\S]*?agents=\{orderedWorkspaceAgentEntries\}[\s\S]*?onSelectAgent=\{selectAgent\}/,
   );
   assert.match(workspaceSource, /onSelectAgent\(agent\.id\)/);
   assert.match(

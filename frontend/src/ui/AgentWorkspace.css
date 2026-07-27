@@ -234,6 +234,31 @@
   background: hsl(var(--secondary) / 0.28);
 }
 
+.aw-agent-item[draggable="true"] {
+  cursor: grab;
+}
+
+.aw-agent-item[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.aw-agent-item.is-dragging {
+  opacity: 0.46;
+}
+
+.aw-agent-item.is-drop-target {
+  border-color: hsl(var(--foreground) / 0.46);
+  background: hsl(var(--secondary) / 0.54);
+}
+
+.aw-agent-item.is-drop-before {
+  box-shadow: inset 0 2px 0 hsl(var(--foreground) / 0.44);
+}
+
+.aw-agent-item.is-drop-after {
+  box-shadow: inset 0 -2px 0 hsl(var(--foreground) / 0.44);
+}
+
 .aw-agent-copy {
   min-width: 0;
   display: flex;
@@ -280,6 +305,16 @@
 .aw-draft-badge.is-deploying {
   background: hsl(214 34% 92%);
   color: hsl(215 48% 34%);
+}
+
+.aw-draft-badge.is-error {
+  background: hsl(0 72% 51% / 0.12);
+  color: hsl(var(--destructive));
+}
+
+.aw-draft-badge.is-muted {
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
 }
 
 .aw-agent-copy strong,

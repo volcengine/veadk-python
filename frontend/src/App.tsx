@@ -79,6 +79,7 @@ import {
   loadConnections,
   registerConnections,
   remoteAppId,
+  type AgentEntry,
   type RemoteConnection,
 } from "./adk/connections";
 import { Blocks, ThinkingPlaceholder } from "./ui/Blocks";
@@ -154,11 +155,27 @@ function activeWorkspaceDraftKey(userId: string): string {
   return `${workspaceDraftsKey(userId)}.active`;
 }
 
+function workspaceAgentOrderKey(userId: string): string {
+  return `veadk.agentOrder.${encodeURIComponent(userId)}`;
+}
+
 function loadWorkspaceDrafts(userId: string): WorkspaceAgentDraft[] {
   if (!userId) return [];
   try {
     const value = JSON.parse(localStorage.getItem(workspaceDraftsKey(userId)) || "[]");
     return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
+function loadWorkspaceAgentOrder(userId: string): string[] {
+  if (!userId) return [];
+  try {
+    const value = JSON.parse(localStorage.getItem(workspaceAgentOrderKey(userId)) || "[]");
+    return Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string")
+      : [];
   } catch {
     return [];
   }
@@ -919,6 +936,7 @@ export default function App() {
   // A draft imported from YAML, used to pre-fill the custom wizard once.
   const [importedDraft, setImportedDraft] = useState<AgentDraft | null>(null);
   const [savedAgentDrafts, setSavedAgentDrafts] = useState<WorkspaceAgentDraft[]>([]);
+  const [workspaceAgentOrder, setWorkspaceAgentOrder] = useState<string[]>([]);
   const [editingDraftId, setEditingDraftId] = useState("");
   const editingDraftBaselineRef = useRef<WorkspaceAgentDraft | null>(null);
   const [searchView, setSearchView] = useState(false);
@@ -999,12 +1017,14 @@ export default function App() {
   useEffect(() => {
     if (!userId) {
       setSavedAgentDrafts([]);
+      setWorkspaceAgentOrder([]);
       setEditingDraftId("");
       editingDraftBaselineRef.current = null;
       return;
     }
     const nextDrafts = loadWorkspaceDrafts(userId);
     setSavedAgentDrafts(nextDrafts);
+    setWorkspaceAgentOrder(loadWorkspaceAgentOrder(userId));
     const activeId = localStorage.getItem(activeWorkspaceDraftKey(userId)) || "";
     const activeDraft = nextDrafts.find((item) => item.id === activeId);
     editingDraftBaselineRef.current = activeDraft ?? null;
@@ -1026,6 +1046,13 @@ export default function App() {
       localStorage.removeItem(key);
     }
   }, [createView, editingDraftId, userId]);
+
+  const saveWorkspaceAgentOrder = useCallback((nextOrder: string[]) => {
+    if (!userId) return;
+    const deduped = [...new Set(nextOrder.filter(Boolean))];
+    setWorkspaceAgentOrder(deduped);
+    localStorage.setItem(workspaceAgentOrderKey(userId), JSON.stringify(deduped));
+  }, [userId]);
 
   const refreshAgentLibrary = useCallback(async () => {
     setAgentLibraryLoading(true);
@@ -2251,6 +2278,18 @@ export default function App() {
       entry.runtimeId &&
       (libraryRuntimeIds === null || libraryRuntimeIds.has(entry.runtimeId)),
   );
+  const orderedWorkspaceAgentEntries: AgentEntry[] = (() => {
+    if (workspaceAgentEntries.length === 0) return workspaceAgentEntries;
+    const orderIndex = new Map(workspaceAgentOrder.map((id, index) => [id, index]));
+    return [...workspaceAgentEntries].sort((left, right) => {
+      const leftIndex = orderIndex.get(left.id);
+      const rightIndex = orderIndex.get(right.id);
+      if (leftIndex != null && rightIndex != null) return leftIndex - rightIndex;
+      if (leftIndex != null) return -1;
+      if (rightIndex != null) return 1;
+      return workspaceAgentEntries.indexOf(left) - workspaceAgentEntries.indexOf(right);
+    });
+  })();
   const labelOf = (id: string) => agentEntries.find((e) => e.id === id)?.label ?? id;
   // The runtime backing the current selection (if it's a cloud runtime app) —
   // drives the picker's side detail panel.
@@ -2690,8 +2729,9 @@ export default function App() {
 
             {showManageAgents ? (
               <AgentWorkspace
-                agents={workspaceAgentEntries}
+                agents={orderedWorkspaceAgentEntries}
                 drafts={savedAgentDrafts}
+                agentOrder={workspaceAgentOrder}
                 selectedAgentId={appName}
                 agentInfo={agentInfo}
                 agentInfoAgentId={appName}
@@ -2704,6 +2744,7 @@ export default function App() {
                 focusedDeploymentTaskId={focusedDeploymentTaskId}
                 focusedAgentId={focusedWorkspaceAgentId}
                 onRetryAgents={() => void refreshAgentLibrary()}
+                onAgentOrderChange={saveWorkspaceAgentOrder}
                 onSelectAgent={selectAgent}
                 onCreateAgent={() => {
                   if (!canCreateAgents) {
