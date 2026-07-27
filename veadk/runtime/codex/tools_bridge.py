@@ -439,8 +439,7 @@ def _make_executor(
             raise
         except Exception as e:  # noqa: BLE001 - report failure to model + session
             logger.warning(
-                "codex_tool_failed invocation_id=%s call_id=%s tool=%s "
-                "error_type=%s",
+                "codex_tool_failed invocation_id=%s call_id=%s tool=%s error_type=%s",
                 ctx.invocation_id,
                 call_id,
                 tool.name,

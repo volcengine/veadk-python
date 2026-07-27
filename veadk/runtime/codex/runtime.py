@@ -154,8 +154,7 @@ class CodexRuntime(BaseRuntime):
             )
         except BaseException as e:
             logger.error(
-                "codex_runtime_setup_failed invocation_id=%s stage=tools "
-                "error_type=%s",
+                "codex_runtime_setup_failed invocation_id=%s stage=tools error_type=%s",
                 ctx.invocation_id,
                 type(e).__name__,
             )
@@ -199,8 +198,7 @@ class CodexRuntime(BaseRuntime):
             )
         except BaseException as e:
             logger.error(
-                "codex_runtime_setup_failed invocation_id=%s stage=input "
-                "error_type=%s",
+                "codex_runtime_setup_failed invocation_id=%s stage=input error_type=%s",
                 ctx.invocation_id,
                 type(e).__name__,
             )
