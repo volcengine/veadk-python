@@ -395,7 +395,7 @@ export function Composer({
             disabled={disabled}
             placeholder={skillMode
               ? `描述你想创建的 Skill，将使用 ${SKILL_MODELS.join(" 和 ")} 并行创建…`
-              : disabled ? "请选择 Agent" : `向 ${agentName} 发消息…`}
+              : disabled ? "请在页面左上角选择智能体" : `向 ${agentName} 发消息…`}
             aria-expanded={Boolean(trigger)}
             onChange={(e) => {
               onChange(e.target.value);
