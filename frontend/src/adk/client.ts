@@ -315,7 +315,23 @@ async function httpErrorMessage(res: Response, fallback: string): Promise<string
     const detail = formatErrorDetail(data.detail ?? data.error);
     return detail || text || `${fallback} (${res.status})`;
   } catch {
+    if (text.trimStart().startsWith("<")) {
+      return `${fallback}：服务端返回了网页内容（HTTP ${res.status}），请重新登录后重试；若问题持续，请检查 Studio API 网关路由。`;
+    }
     return text || `${fallback} (${res.status})`;
+  }
+}
+
+async function jsonResponse<T>(res: Response, fallback: string): Promise<T> {
+  const contentType = res.headers.get("content-type") ?? "";
+  const responseType = contentType.split(";", 1)[0] || "Content-Type 缺失";
+  const text = await res.text().catch(() => "");
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(
+      `${fallback}：服务端返回了非 JSON 响应（${responseType}），请重新登录后重试；若问题持续，请检查 Studio API 网关路由。`,
+    );
   }
 }
 
@@ -1514,8 +1530,10 @@ export async function getRuntimes(
   });
   if (opts.nextToken) p.set("next_token", opts.nextToken);
   const res = await apiFetch(`/web/runtimes?${p.toString()}`);
-  if (!res.ok) throw new Error(`加载 Runtime 失败 (${res.status})`);
-  const d = (await res.json()) as Partial<RuntimePage>;
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "加载 Runtime 失败"));
+  }
+  const d = await jsonResponse<Partial<RuntimePage>>(res, "加载 Runtime 失败");
   return { runtimes: d.runtimes ?? [], nextToken: d.nextToken ?? "" };
 }
 

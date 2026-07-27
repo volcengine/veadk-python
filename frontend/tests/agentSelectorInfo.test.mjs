@@ -94,6 +94,16 @@ test("Runtime metadata failures use bounded, actionable Chinese messages", () =>
   );
 });
 
+test("Runtime list rejects HTML gateway fallbacks with an actionable error", () => {
+  assert.match(
+    clientSource,
+    /jsonResponse<Partial<RuntimePage>>\(res, "加载 Runtime 失败"\)/,
+  );
+  assert.match(clientSource, /服务端返回了非 JSON 响应/);
+  assert.match(clientSource, /请重新登录后重试；若问题持续，请检查 Studio API 网关路由/);
+  assert.doesNotMatch(selectorSource, /Unexpected token/);
+});
+
 test("Agent information includes structure, capabilities, and mounted components", () => {
   assert.match(clientSource, /components\?: AgentComponent\[\]/);
   assert.match(clientSource, /skillsPreviewSupported:\s*boolean/);

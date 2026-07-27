@@ -293,7 +293,6 @@ export interface AgentWorkspaceProps {
   agentsError?: string;
   deploymentTasks?: DeploymentTaskUpdate[];
   focusedDeploymentTaskId?: string;
-  focusedAgentId?: string;
   onRetryAgents?: () => void;
   onSelectAgent: (id: string) => void;
   onCreateAgent: () => void;
@@ -304,6 +303,7 @@ export interface AgentWorkspaceProps {
 export function AgentWorkspace({
   agents,
   drafts = [],
+  selectedAgentId,
   agentInfo,
   agentInfoAgentId,
   loadingAgentInfo,
@@ -313,7 +313,6 @@ export function AgentWorkspace({
   agentsError = "",
   deploymentTasks = [],
   focusedDeploymentTaskId = "",
-  focusedAgentId = "",
   onRetryAgents,
   onSelectAgent,
   onCreateAgent,
@@ -322,9 +321,11 @@ export function AgentWorkspace({
 }: AgentWorkspaceProps) {
   const [view, setView] = useState<WorkspaceView>("library");
   const [section, setSection] = useState<AgentSection>("basic");
-  const [activeAgentId, setActiveAgentId] = useState("");
   const [activeDraftId, setActiveDraftId] = useState("");
   const [activeDeploymentTaskId, setActiveDeploymentTaskId] = useState("");
+  const activeAgentId = activeDraftId || activeDeploymentTaskId
+    ? ""
+    : selectedAgentId;
   const [runtimeDetail, setRuntimeDetail] = useState<RuntimeDetail | null>(null);
   const [query, setQuery] = useState("");
   const [caseFilter, setCaseFilter] = useState<CaseKind>("good");
@@ -414,19 +415,10 @@ export function AgentWorkspace({
   }, [deploymentTasks, selectedAgent, selectedDraft, selectedPendingTask]);
   useEffect(() => {
     if (!focusedDeploymentTaskId) return;
-    setActiveAgentId("");
     setActiveDraftId("");
     setActiveDeploymentTaskId(focusedDeploymentTaskId);
     setSection("basic");
   }, [focusedDeploymentTaskId]);
-
-  useEffect(() => {
-    if (!focusedAgentId || !agents.some((agent) => agent.id === focusedAgentId)) return;
-    setActiveDeploymentTaskId("");
-    setActiveDraftId("");
-    setActiveAgentId(focusedAgentId);
-    setSection("basic");
-  }, [agents, focusedAgentId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -590,7 +582,6 @@ export function AgentWorkspace({
                     key={item.id}
                     className={`aw-agent-item${item.id === activeDraftId ? " is-active" : ""}`}
                     onClick={() => {
-                      setActiveAgentId("");
                       setActiveDeploymentTaskId("");
                       setActiveDraftId(item.id);
                       setSection("basic");
@@ -617,7 +608,6 @@ export function AgentWorkspace({
                   onClick={() => {
                     setActiveDeploymentTaskId("");
                     setActiveDraftId("");
-                    setActiveAgentId(agent.id);
                     setSection("basic");
                     onSelectAgent(agent.id);
                   }}

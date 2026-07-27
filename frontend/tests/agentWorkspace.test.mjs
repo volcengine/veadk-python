@@ -107,6 +107,18 @@ test("shows the selected Agent deployment progress and reuses its draft for upda
   assert.match(appSource, /getAgentInfo\(appName\)[\s\S]*?\}, \[agentInfoRefreshKey, appName\]\)/);
 });
 
+test("keeps the workspace detail aligned with the global Agent selection", () => {
+  assert.match(
+    workspaceSource,
+    /const activeAgentId = activeDraftId \|\| activeDeploymentTaskId[\s\S]*?selectedAgentId/,
+  );
+  assert.doesNotMatch(workspaceSource, /setActiveAgentId/);
+  assert.match(
+    appSource,
+    /const selectAgent = \(id: string\) => \{[\s\S]*?setFocusedDeploymentTaskId\(""\)[\s\S]*?setAppName\(id\)/,
+  );
+});
+
 test("creates update drafts only after a real edit and supports discarding changes", () => {
   const updateStart = appSource.indexOf("onUpdateAgent={(nextDraft)");
   const editDraftStart = appSource.indexOf("onEditDraft={(item)", updateStart);

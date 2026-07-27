@@ -942,7 +942,6 @@ export default function App() {
     currentVersion?: number | null;
   } | null>(null);
   const [focusedDeploymentTaskId, setFocusedDeploymentTaskId] = useState("");
-  const [focusedWorkspaceAgentId, setFocusedWorkspaceAgentId] = useState("");
   // Shown when the user clicks the breadcrumb root to leave a create mode;
   // warns that the in-progress draft will be discarded.
   const [confirmLeave, setConfirmLeave] = useState(false);
@@ -1163,7 +1162,6 @@ export default function App() {
     setCreateView(null);
     setAddMenu(false);
     setManageAgents(true);
-    setFocusedWorkspaceAgentId("");
     setFocusedDeploymentTaskId(task.id);
     setError("");
   }, []);
@@ -1189,7 +1187,6 @@ export default function App() {
       setEditingDraftId("");
       editingDraftBaselineRef.current = null;
       setFocusedDeploymentTaskId("");
-      setFocusedWorkspaceAgentId(agentId);
       setCreateView(null);
       setManageAgents(true);
       setAppName(agentId);
@@ -2309,6 +2306,7 @@ export default function App() {
   // background stream keeps persisting to its own (old) session.
   const selectAgent = (id: string) => {
     setConnections(loadConnections());
+    setFocusedDeploymentTaskId("");
     viewSidRef.current = "";
     setSessionId("");
     if (id === appName) setAgentInfoRefreshKey((value) => value + 1);
@@ -2677,7 +2675,6 @@ export default function App() {
                 agentsError={agentLibraryError}
                 deploymentTasks={deploymentTasks}
                 focusedDeploymentTaskId={focusedDeploymentTaskId}
-                focusedAgentId={focusedWorkspaceAgentId}
                 onRetryAgents={() => void refreshAgentLibrary()}
                 onSelectAgent={selectAgent}
                 onCreateAgent={() => {
@@ -2693,7 +2690,6 @@ export default function App() {
                   setEditingDraftId("");
                   editingDraftBaselineRef.current = null;
                   setFocusedDeploymentTaskId("");
-                  setFocusedWorkspaceAgentId("");
                   setError("");
                 }}
                 onUpdateAgent={(nextDraft) => {
@@ -2712,7 +2708,6 @@ export default function App() {
                   editingDraftBaselineRef.current =
                     savedAgentDrafts.find((item) => item.id === nextDraftId) ?? null;
                   setFocusedDeploymentTaskId("");
-                  setFocusedWorkspaceAgentId("");
                   setRuntimeUpdateTarget({
                     runtimeId: currentConn.runtimeId,
                     name: currentConn.name,
@@ -2729,7 +2724,6 @@ export default function App() {
                   editingDraftBaselineRef.current = item;
                   setRuntimeUpdateTarget(item.deploymentTarget ?? null);
                   setFocusedDeploymentTaskId("");
-                  setFocusedWorkspaceAgentId("");
                   setCreateView("custom");
                   setError("");
                 }}
@@ -2860,7 +2854,6 @@ export default function App() {
                   setImportedDraft(null);
                   setRuntimeUpdateTarget(null);
                   setFocusedDeploymentTaskId("");
-                  setFocusedWorkspaceAgentId(appName);
                   setCreateView(null);
                   setAddMenu(false);
                   setManageAgents(true);
