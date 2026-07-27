@@ -28,6 +28,7 @@ import {
   deleteSession,
   getAgentInfo,
   getSessionCapabilities,
+  getRuntimes,
   getSession,
   getStudioAccess,
   listApps,
@@ -45,8 +46,8 @@ import {
   type AdkSession,
   type AddSessionCapability,
   type Attachment,
+  type CloudRuntime,
   type FrontendInvocation,
-  type ManagedRuntime,
   type MessageFeedbackRating,
   type SiteBranding,
   type SessionCapabilities,
@@ -67,7 +68,10 @@ import { AgentInfoDrawer, AgentInfoPanel } from "./ui/AgentTopology";
 import { AgentIdentityIcon } from "./ui/AgentIdentityIcon";
 import { SkillCenterView } from "./ui/SkillCenter";
 import { AddAgentKitView } from "./ui/AddAgentKit";
-import { ManageAgentsView } from "./ui/ManageAgents";
+import {
+  AgentWorkspace,
+  type WorkspaceAgentDraft,
+} from "./ui/AgentWorkspace";
 import { SearchView } from "./ui/Search";
 import {
   buildAgentEntries,
@@ -177,6 +181,24 @@ function loadView(): CreateView {
   return v === "menu" || v === "intelligent" || v === "custom" || v === "template" || v === "workflow"
     ? v
     : null;
+}
+
+function workspaceDraftsKey(userId: string): string {
+  return `veadk.agentDrafts.${encodeURIComponent(userId)}`;
+}
+
+function activeWorkspaceDraftKey(userId: string): string {
+  return `${workspaceDraftsKey(userId)}.active`;
+}
+
+function loadWorkspaceDrafts(userId: string): WorkspaceAgentDraft[] {
+  if (!userId) return [];
+  try {
+    const value = JSON.parse(localStorage.getItem(workspaceDraftsKey(userId)) || "[]");
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
 }
 import { TraceDrawer } from "./ui/TraceDrawer";
 import { LoginPage } from "./ui/LoginPage";
@@ -623,6 +645,8 @@ export default function App() {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [invocation, setInvocation] = useState<FrontendInvocation>(emptyInvocation);
   const [agentInfo, setAgentInfo] = useState<AgentInfo | null>(null);
+  const [agentInfoAgentId, setAgentInfoAgentId] = useState("");
+  const [agentInfoRefreshKey, setAgentInfoRefreshKey] = useState(0);
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
   const [sessionCapabilities, setSessionCapabilities] =
     useState<SessionCapabilities | null>(null);
@@ -891,6 +915,8 @@ export default function App() {
   const [addMenu, setAddMenu] = useState(false);
   // A draft imported from YAML, used to pre-fill the custom wizard once.
   const [importedDraft, setImportedDraft] = useState<AgentDraft | null>(null);
+  const [savedAgentDrafts, setSavedAgentDrafts] = useState<WorkspaceAgentDraft[]>([]);
+  const [editingDraftId, setEditingDraftId] = useState("");
   const [searchView, setSearchView] = useState(false);
   // The "管理 Agent" view: lists/deletes the current user's AgentKit runtimes.
   const [manageAgents, setManageAgents] = useState(false);
@@ -904,12 +930,129 @@ export default function App() {
     registerConnections(c);
     return c;
   });
+  const [agentLibraryLoading, setAgentLibraryLoading] = useState(false);
+  const [agentLibraryError, setAgentLibraryError] = useState("");
+  const [libraryRuntimeIds, setLibraryRuntimeIds] = useState<Set<string> | null>(
+    null,
+  );
+  const [runtimeUpdateTarget, setRuntimeUpdateTarget] = useState<{
+    runtimeId: string;
+    name: string;
+    region: string;
+    currentVersion?: number | null;
+  } | null>(null);
+  const [focusedDeploymentTaskId, setFocusedDeploymentTaskId] = useState("");
+  const [focusedWorkspaceAgentId, setFocusedWorkspaceAgentId] = useState("");
   // Shown when the user clicks the breadcrumb root to leave a create mode;
   // warns that the in-progress draft will be discarded.
   const [confirmLeave, setConfirmLeave] = useState(false);
   // Restore the previously-open session only once, after apps/user resolve.
   const restoredRef = useRef(false);
   const defaultViewAppliedRef = useRef(false);
+
+  const saveWorkspaceDraft = useCallback(
+    (
+      id: string,
+      draft: AgentDraft,
+      deploymentTarget?: WorkspaceAgentDraft["deploymentTarget"],
+    ) => {
+      if (!id || !userId) return;
+      setSavedAgentDrafts((current) => {
+        const nextItem: WorkspaceAgentDraft = {
+          id,
+          draft,
+          updatedAt: Date.now(),
+          deploymentTarget,
+        };
+        const next = [nextItem, ...current.filter((item) => item.id !== id)];
+        localStorage.setItem(workspaceDraftsKey(userId), JSON.stringify(next));
+        return next;
+      });
+    },
+    [userId],
+  );
+
+  const removeWorkspaceDraft = useCallback((id: string) => {
+    if (!id || !userId) return;
+    setSavedAgentDrafts((current) => {
+      const next = current.filter((item) => item.id !== id);
+      localStorage.setItem(workspaceDraftsKey(userId), JSON.stringify(next));
+      return next;
+    });
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId) {
+      setSavedAgentDrafts([]);
+      setEditingDraftId("");
+      return;
+    }
+    const nextDrafts = loadWorkspaceDrafts(userId);
+    setSavedAgentDrafts(nextDrafts);
+    const activeId = localStorage.getItem(activeWorkspaceDraftKey(userId)) || "";
+    const activeDraft = nextDrafts.find((item) => item.id === activeId);
+    if (createView === "custom" && activeDraft) {
+      setEditingDraftId(activeDraft.id);
+      setImportedDraft(activeDraft.draft);
+      setRuntimeUpdateTarget(activeDraft.deploymentTarget ?? null);
+    }
+    // Restore only when identity changes; later edits are already in state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId) return;
+    const key = activeWorkspaceDraftKey(userId);
+    if (createView === "custom" && editingDraftId) {
+      localStorage.setItem(key, editingDraftId);
+    } else {
+      localStorage.removeItem(key);
+    }
+  }, [createView, editingDraftId, userId]);
+
+  const refreshAgentLibrary = useCallback(async () => {
+    setAgentLibraryLoading(true);
+    setAgentLibraryError("");
+    try {
+      const runtimes: CloudRuntime[] = [];
+      let nextToken = "";
+      do {
+        const page = await getRuntimes({
+          scope: "mine",
+          region: "all",
+          pageSize: 100,
+          nextToken,
+        });
+        runtimes.push(...page.runtimes);
+        nextToken = page.nextToken;
+      } while (nextToken && runtimes.length < 2000);
+
+      setLibraryRuntimeIds(new Set(runtimes.map((runtime) => runtime.runtimeId)));
+      const failures: string[] = [];
+      for (const runtime of runtimes) {
+        try {
+          await connectRuntime(
+            runtime.runtimeId,
+            runtime.name,
+            runtime.region,
+            runtime.currentVersion,
+          );
+        } catch {
+          failures.push(runtime.name);
+        }
+      }
+      setConnections(loadConnections());
+      if (failures.length > 0) {
+        setAgentLibraryError(
+          `${failures.length} 个 Runtime 暂时无法读取，请稍后重试。`,
+        );
+      }
+    } catch (cause) {
+      setAgentLibraryError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setAgentLibraryLoading(false);
+    }
+  }, []);
 
   // Placeholder: persisting/registering the created agent is a follow-up.
   function onCreate(draft: AgentDraft) {
@@ -1002,6 +1145,44 @@ export default function App() {
     ) return;
     el.scrollTop = el.scrollHeight;
   }, []);
+
+  const openDeploymentDetail = useCallback((task: DeploymentTaskUpdate) => {
+    setCreateView(null);
+    setAddMenu(false);
+    setManageAgents(true);
+    setFocusedWorkspaceAgentId("");
+    setFocusedDeploymentTaskId(task.id);
+    setError("");
+  }, []);
+
+  const finishDeployment = useCallback(
+    async (result: import("./ui/ProjectPreview").DeployResult) => {
+      if (!result.runtimeId) throw new Error("部署完成，但未返回 Runtime ID。");
+      const fallbackRegion = runtimeUpdateTarget?.region ?? "cn-beijing";
+      const agentId = await connectRuntime(
+        result.runtimeId,
+        result.agentName,
+        result.region ?? fallbackRegion,
+        result.version,
+      );
+      setConnections(loadConnections());
+      setLibraryRuntimeIds((current) => {
+        const next = new Set(current ?? []);
+        next.add(result.runtimeId!);
+        return next;
+      });
+      setRuntimeUpdateTarget(null);
+      removeWorkspaceDraft(editingDraftId);
+      setEditingDraftId("");
+      setFocusedDeploymentTaskId("");
+      setFocusedWorkspaceAgentId(agentId);
+      setCreateView(null);
+      setManageAgents(true);
+      setAppName(agentId);
+      setAgentInfoRefreshKey((value) => value + 1);
+    },
+    [editingDraftId, removeWorkspaceDraft, runtimeUpdateTarget],
+  );
 
   // Resolve SSO identity first; it provides the ADK user_id.
   const resolveAuth = useCallback(() => {
@@ -1172,17 +1353,19 @@ export default function App() {
         // Restore the last-used agent; otherwise land on a known-good default
         // (prefer a servable, conversational agent — numbered examples like
         // 01_quickstart are standalone scripts with no root_agent and can't load).
-        // Cloud mode: nothing is selected by default — the user picks a runtime
-        // each session (the sidebar shows the red "请选择 Agent" prompt until then).
+        const saved = localStorage.getItem(LS.app);
+        const remoteIds = connections.flatMap((connection) =>
+          connection.apps.map((app) => remoteAppId(connection.id, app)),
+        );
+        // Cloud mode restores the last connected Runtime when it is still
+        // registered locally. A missing or removed connection stays unselected.
         if (agentsSource === "cloud") {
-          setAppName("");
+          setAppName(saved && remoteIds.includes(saved) ? saved : "");
           return;
         }
         // Local mode: restore the last-used agent, else a known-good default
         // (prefer a servable, conversational agent — numbered examples like
         // 01_quickstart are standalone scripts with no root_agent and can't load).
-        const saved = localStorage.getItem(LS.app);
-        const remoteIds = connections.flatMap((c) => c.apps.map((a) => remoteAppId(c.id, a)));
         const valid = saved && (list.includes(saved) || remoteIds.includes(saved));
         const fallback =
           ["web_search_agent", "web_demo"].find((a) => list.includes(a)) ??
@@ -1196,7 +1379,7 @@ export default function App() {
   // Persist the current view/agent/session so a refresh restores them.
   useEffect(() => {
     if (appName) localStorage.setItem(LS.app, appName);
-  }, [appName]);
+  }, [agentInfoRefreshKey, appName]);
   useEffect(() => {
     let cancelled = false;
     setSessionCapabilities(null);
@@ -1231,6 +1414,7 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     setAgentInfo(null);
+    setAgentInfoAgentId("");
     setInvocation(emptyInvocation());
     if (!appName) {
       setCapabilitiesLoading(false);
@@ -1239,10 +1423,16 @@ export default function App() {
     setCapabilitiesLoading(true);
     getAgentInfo(appName)
       .then((info) => {
-        if (!cancelled) setAgentInfo(info);
+        if (!cancelled) {
+          setAgentInfo(info);
+          setAgentInfoAgentId(appName);
+        }
       })
       .catch(() => {
-        if (!cancelled) setAgentInfo(null);
+        if (!cancelled) {
+          setAgentInfo(null);
+          setAgentInfoAgentId("");
+        }
       })
       .finally(() => {
         if (!cancelled) setCapabilitiesLoading(false);
@@ -1250,7 +1440,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [appName]);
+  }, [agentInfoRefreshKey, appName]);
   useEffect(() => {
     if (!access) return;
     localStorage.setItem(
@@ -1951,8 +2141,13 @@ export default function App() {
   const visibleCreateView = canCreateAgents ? createView : null;
   const showAddMenu = canCreateAgents && addMenu;
   const showAddAgent = canCreateAgents && addAgent;
-  const showManageAgents = canManageAgents && manageAgents;
+  const showManageAgents = manageAgents;
   const agentEntries = buildAgentEntries(apps, connections);
+  const workspaceAgentEntries = agentEntries.filter(
+    (entry) =>
+      entry.runtimeId &&
+      (libraryRuntimeIds === null || libraryRuntimeIds.has(entry.runtimeId)),
+  );
   const labelOf = (id: string) => agentEntries.find((e) => e.id === id)?.label ?? id;
   // The runtime backing the current selection (if it's a cloud runtime app) —
   // drives the picker's side detail panel.
@@ -2042,23 +2237,15 @@ export default function App() {
     }
   };
 
-  // Selecting an agent (from the sidebar picker) starts a fresh chat; any
+  // Selecting an agent starts a fresh chat; any
   // background stream keeps persisting to its own (old) session.
   const selectAgent = (id: string) => {
     setConnections(loadConnections());
     viewSidRef.current = "";
     setSessionId("");
+    if (id === appName) setAgentInfoRefreshKey((value) => value + 1);
     setAppName(id);
   };
-  const connectManagedRuntime = async (runtime: ManagedRuntime) => {
-    const agentId = await connectRuntime(
-      runtime.runtimeId,
-      runtime.name,
-      runtime.region,
-    );
-    selectAgent(agentId);
-  };
-
   return (
     <div className="layout">
       <Sidebar
@@ -2138,10 +2325,6 @@ export default function App() {
           setError("");
         }}
         onManageAgents={() => {
-          if (!canManageAgents) {
-            setError("当前账号没有管理 Agent 的权限。");
-            return;
-          }
           if (sandboxSession) exitSandboxSession();
           viewSidRef.current = "";
           setSessionId("");
@@ -2152,6 +2335,7 @@ export default function App() {
           setSearchView(false);
           setManageAgents(true);
           setError("");
+          void refreshAgentLibrary();
         }}
         onPickSession={(id) => {
           setCreateView(null);
@@ -2284,8 +2468,7 @@ export default function App() {
               showModeSelector={
                 !sandboxSession &&
                 turns.length === 0 &&
-                skillJob === null &&
-                canCreateAgents
+                skillJob === null
               }
               temporaryEnabled={newChatCapabilities.temporaryEnabled}
               skillCreateEnabled={newChatCapabilities.skillCreateEnabled}
@@ -2336,7 +2519,7 @@ export default function App() {
                       : searchView
                         ? "搜索"
                         : showManageAgents
-                          ? "管理 Agent"
+                          ? "智能体"
                           : visibleCreateView
                             ? undefined
                             : conversationTitle
@@ -2406,9 +2589,77 @@ export default function App() {
             )}
 
             {showManageAgents ? (
-              <ManageAgentsView
-                currentRuntimeId={currentRuntime?.runtimeId}
-                onConnect={connectManagedRuntime}
+              <AgentWorkspace
+                agents={workspaceAgentEntries}
+                drafts={savedAgentDrafts}
+                selectedAgentId={appName}
+                agentInfo={agentInfo}
+                agentInfoAgentId={agentInfoAgentId}
+                loadingAgentInfo={capabilitiesLoading}
+                canCreate={canCreateAgents}
+                canUpdate={canCreateAgents || canManageAgents}
+                loadingAgents={agentLibraryLoading}
+                agentsError={agentLibraryError}
+                deploymentTasks={deploymentTasks}
+                focusedDeploymentTaskId={focusedDeploymentTaskId}
+                focusedAgentId={focusedWorkspaceAgentId}
+                onRetryAgents={() => void refreshAgentLibrary()}
+                onSelectAgent={selectAgent}
+                onCreateAgent={() => {
+                  if (!canCreateAgents) {
+                    setError("当前账号没有添加 Agent 的权限。");
+                    return;
+                  }
+                  setManageAgents(false);
+                  setAddMenu(false);
+                  setImportedDraft(null);
+                  setRuntimeUpdateTarget(null);
+                  setEditingDraftId(`draft-${Date.now().toString(36)}`);
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId("");
+                  setCreateView("custom");
+                  setError("");
+                }}
+                onUpdateAgent={(nextDraft) => {
+                  if (!canManageAgents && !canCreateAgents) {
+                    setError("当前账号没有管理 Agent 的权限。");
+                    return;
+                  }
+                  if (!currentConn?.runtimeId) {
+                    setError("仅支持更新已部署的云端智能体。");
+                    return;
+                  }
+                  setManageAgents(false);
+                  setImportedDraft(nextDraft);
+                  const nextDraftId = `runtime-${currentConn.runtimeId}`;
+                  setEditingDraftId(nextDraftId);
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId("");
+                  setRuntimeUpdateTarget({
+                    runtimeId: currentConn.runtimeId,
+                    name: currentConn.name,
+                    region: currentConn.region ?? "cn-beijing",
+                    currentVersion: currentConn.currentVersion,
+                  });
+                  saveWorkspaceDraft(nextDraftId, nextDraft, {
+                    runtimeId: currentConn.runtimeId,
+                    name: currentConn.name,
+                    region: currentConn.region ?? "cn-beijing",
+                    currentVersion: currentConn.currentVersion,
+                  });
+                  setCreateView("custom");
+                  setError("");
+                }}
+                onEditDraft={(item) => {
+                  setManageAgents(false);
+                  setImportedDraft(item.draft);
+                  setEditingDraftId(item.id);
+                  setRuntimeUpdateTarget(item.deploymentTarget ?? null);
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId("");
+                  setCreateView("custom");
+                  setError("");
+                }}
               />
             ) : showAddMenu ? (
               <StackCards
@@ -2493,12 +2744,23 @@ export default function App() {
               />
             ) : visibleCreateView === "custom" ? (
               <CustomCreate
+                key={editingDraftId || "custom"}
                 initialDraft={importedDraft ?? undefined}
                 onBack={() => setCreateView("menu")}
                 onCreate={onCreate}
                 onAgentAdded={onAgentAdded}
                 features={features}
+                onDraftChange={(nextDraft) =>
+                  saveWorkspaceDraft(
+                    editingDraftId,
+                    nextDraft,
+                    runtimeUpdateTarget ?? undefined,
+                  )
+                }
                 onDeploymentTaskChange={updateDeploymentTask}
+                onDeploymentStarted={openDeploymentDetail}
+                deploymentTarget={runtimeUpdateTarget ?? undefined}
+                onDeploymentComplete={finishDeployment}
               />
             ) : visibleCreateView === "template" ? (
               <TemplateCreate onBack={() => setCreateView("menu")} onCreate={onCreate} />

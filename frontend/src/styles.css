@@ -198,6 +198,50 @@ body {
 .new-chat .icon { width: 18px; height: 18px; }
 .new-chat:hover { background: hsl(var(--foreground) / 0.05); }
 
+.new-chat--conversation > .icon {
+  transform-origin: center;
+}
+
+.new-chat--conversation:hover > .icon {
+  animation: sidebar-plus-return 650ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.sidebar-agent-face {
+  overflow: visible;
+}
+
+.sidebar-agent-face__eye {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.sidebar-agent-face__smile {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.new-chat--agents:hover .sidebar-agent-face__eye {
+  animation: sidebar-agent-blink 760ms ease-in-out both;
+}
+
+@keyframes sidebar-plus-return {
+  0% { transform: rotate(0deg); }
+  48% { transform: rotate(48deg); }
+  100% { transform: rotate(0deg); }
+}
+
+@keyframes sidebar-agent-blink {
+  0%, 34%, 48%, 62%, 100% { transform: scaleY(1); }
+  41%, 55% { transform: scaleY(0.08); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .new-chat--conversation:hover > .icon,
+  .new-chat--agents:hover .sidebar-agent-face__eye {
+    animation: none;
+  }
+}
+
 .sidebar.is-collapsed .new-chat,
 .sidebar.is-collapsed .agent-row {
   align-self: center;
@@ -525,6 +569,11 @@ body {
   min-width: 0;
   flex-direction: column;
   gap: 6px;
+}
+.agentsel-info-empty {
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+  line-height: 1.5;
 }
 .agentsel-info-list-item {
   display: flex;
@@ -1844,7 +1893,21 @@ body {
   display: block;
   min-height: 136px;
   padding: 10px;
-  border-radius: 16px;
+  border-color: hsl(var(--foreground) / 0.11);
+  border-radius: 24px;
+  background: hsl(var(--background) / 0.98);
+  box-shadow:
+    0 1px 2px hsl(var(--foreground) / 0.035),
+    0 9px 28px hsl(var(--foreground) / 0.08);
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+}
+.composer--new-chat .composer-box:focus-within {
+  border-color: hsl(var(--foreground) / 0.17);
+  box-shadow:
+    0 2px 4px hsl(var(--foreground) / 0.035),
+    0 12px 32px hsl(var(--foreground) / 0.1);
 }
 .composer-input-stack {
   display: flex;

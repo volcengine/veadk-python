@@ -10,6 +10,10 @@ const sidebarSource = readFileSync(
   new URL("../src/ui/Sidebar.tsx", import.meta.url),
   "utf8",
 );
+const workspaceSource = readFileSync(
+  new URL("../src/ui/AgentWorkspace.tsx", import.meta.url),
+  "utf8",
+);
 const loginSource = readFileSync(
   new URL("../src/ui/LoginPage.tsx", import.meta.url),
   "utf8",
@@ -67,12 +71,35 @@ test("global sidebar can collapse to a compact icon rail", () => {
   );
 });
 
-test("connected cloud Agent uses a calm green selector icon", () => {
-  assert.match(sidebarSource, /agent-row--connected/);
+test("keeps Agent selection in the sidebar", () => {
+  assert.match(sidebarSource, /import \{ AgentSelector, type SelectedRuntime \}/);
+  assert.match(sidebarSource, /className=\{`agent-row/);
+  assert.match(sidebarSource, /currentAgentLabel \|\| "选择 Agent"/);
   assert.match(
-    stylesSource,
-    /\.agent-row--connected \.agent-row-lead\s*\{[^}]*color:\s*hsl\(142 48% 38%\);/,
+    sidebarSource,
+    /<AgentSelector[\s\S]*?runtimeScope=\{access\.capabilities\.runtimeScope\}[\s\S]*?onSelect=\{onSelectAgent\}/,
   );
+});
+
+test("sidebar actions use friendly scoped motion", () => {
+  assert.match(sidebarSource, /className="new-chat new-chat--conversation"/);
+  assert.match(sidebarSource, /className="new-chat new-chat--agents"/);
+  assert.match(sidebarSource, /sidebar-agent-face__eye--left/);
+  assert.match(sidebarSource, /sidebar-agent-face__eye--right/);
+  assert.doesNotMatch(sidebarSource, /sidebar-agent-face__antenna|sidebar-agent-face__ear|sidebar-agent-face__smile/);
+  assert.match(stylesSource, /\.new-chat--conversation:hover > \.icon\s*\{[\s\S]*?animation:\s*sidebar-plus-return/);
+  assert.match(stylesSource, /\.new-chat--agents:hover \.sidebar-agent-face__eye\s*\{[\s\S]*?animation:\s*sidebar-agent-blink/);
+  assert.match(stylesSource, /@keyframes sidebar-agent-blink/);
+  assert.match(stylesSource, /@keyframes sidebar-plus-return\s*\{[\s\S]*?48% \{ transform: rotate\(48deg\); \}[\s\S]*?100% \{ transform: rotate\(0deg\); \}/);
+});
+
+test("username login focuses the name field on arrival", () => {
+  assert.match(loginSource, /className="login-name-input"[\s\S]*?autoFocus/);
+});
+
+test("unified Agent workspace distinguishes local and remote Agents", () => {
+  assert.match(workspaceSource, /agent\.remote \? agent\.host \|\| "远程智能体" : "本地智能体"/);
+  assert.match(workspaceSource, /agent\.remote \? "远程" : "本地"/);
 });
 
 test("history header offers a borderless new-session action", () => {
@@ -100,8 +127,6 @@ test("sidebar brand row aligns with the main header", () => {
     stylesSource,
     /\.navbar\s*\{[\s\S]*?flex:\s*0 0 54px;[\s\S]*?padding:\s*0 10px;/,
   );
-  assert.match(sidebarSource, /const MAIN_PANEL_TOP_PX = 54;/);
-  assert.match(sidebarSource, /anchorTop=\{MAIN_PANEL_TOP_PX\}/);
 });
 
 test("welcome headings share the neutral TextShimmer and stable smoke avatars", () => {

@@ -107,6 +107,51 @@ test("form step rail aligns to the right edge of the detail area", () => {
   );
 });
 
+test("workspace title follows the original named agent inside an anonymous root sequence", () => {
+  assert.match(
+    createSource,
+    /function workspaceAgentName\(draft: AgentDraft\): string \{[\s\S]*?if \(rootName\) return rootName;[\s\S]*?draft\.agentType !== "sequential"[\s\S]*?draft\.subAgents\.find\(\(agent\) => agent\.name\.trim\(\)\)/,
+  );
+  assert.match(createSource, /agentName=\{workspaceAgentName\(draft\)\}/);
+});
+
+test("build workspace has a validated primary path into debugging", () => {
+  assert.match(
+    createSource,
+    /const openValidation = \(\) => \{[\s\S]*?if \(!requireCompleteDraft\(\)\) return;[\s\S]*?setWorkspaceMode\("validate"\);/,
+  );
+  assert.match(
+    createSource,
+    /className="cw-build-next"[\s\S]*?onClick=\{openValidation\}[\s\S]*?下一步：开始调试/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-build-next\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?right:\s*20px;[\s\S]*?bottom:\s*20px;/,
+  );
+});
+
+test("debug workspace uses optimization checkboxes and a floating publish action", () => {
+  assert.match(createSource, /label: "上下文优化"/);
+  assert.match(createSource, /label: "幻觉抑制"/);
+  assert.match(
+    createSource,
+    /className="cw-optimization-panel" aria-label="进阶选项"[\s\S]*?type="checkbox"/,
+  );
+  assert.match(createSource, /暂未开放，敬请期待/);
+  assert.match(createSource, /type="checkbox"[\s\S]*?disabled/);
+  assert.doesNotMatch(createSource, /当前仅保存前端选择/);
+  assert.match(
+    createSource,
+    /className="cw-debug-next"[\s\S]*?onClick=\{openPublishPreview\}[\s\S]*?下一步：部署发布/,
+  );
+  assert.doesNotMatch(createSource, />验证中心</);
+  assert.doesNotMatch(createSource, /className="cw-debug-deploy"/);
+  assert.match(
+    createStyles,
+    /\.cw-debug-next\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?right:\s*20px;[\s\S]*?bottom:\s*24px;/,
+  );
+});
+
 test("narrow workbench stacks sections instead of squeezing the form", () => {
   assert.match(
     appStyles,
@@ -114,11 +159,7 @@ test("narrow workbench stacks sections instead of squeezing the form", () => {
   );
   assert.match(
     createStyles,
-    /@media \(max-width:\s*1080px\)\s*\{[\s\S]*?\.cw-detail\s*\{[\s\S]*?height:\s*min\(720px,\s*calc\(100dvh\s*-\s*120px\)\);[\s\S]*?\.cw-debug\s*\{[\s\S]*?flex:\s*0\s+0\s+100%;/,
-  );
-  assert.match(
-    createStyles,
-    /@media \(max-width:\s*860px\)\s*\{[\s\S]*?\.cw-editor\s*\{[\s\S]*?flex-direction:\s*column;[\s\S]*?\.cw-tree\s*\{[\s\S]*?width:\s*100%;[\s\S]*?\.cw-detail\s*\{[\s\S]*?width:\s*100%;/,
+    /@media \(max-width:\s*860px\)\s*\{[\s\S]*?\.cw-editor\s*\{[\s\S]*?flex-direction:\s*column;[\s\S]*?\.cw-tree\s*\{[\s\S]*?width:\s*100%;[\s\S]*?\.cw-detail\s*\{[\s\S]*?width:\s*100%;[\s\S]*?height:\s*min\(720px,\s*calc\(100dvh\s*-\s*120px\)\);/,
   );
   assert.match(
     createStyles,
@@ -323,12 +364,11 @@ test("nested Agent forms omit root-only advanced configuration", () => {
 });
 
 test("remote Agent configures only the AgentKit center", () => {
-  assert.match(createSource, /llm: "LLM 智能体"/);
-  assert.match(createSource, /sequential: "顺序型智能体"/);
-  assert.match(createSource, /parallel: "并行型智能体"/);
-  assert.match(createSource, /loop: "循环型智能体"/);
+  assert.match(createSource, /llm: "智能体"/);
+  assert.match(createSource, /sequential: "分步协作"/);
+  assert.match(createSource, /parallel: "同时处理"/);
+  assert.match(createSource, /loop: "循环执行"/);
   assert.match(createSource, /a2a: "远程智能体"/);
-  assert.match(createSource, /<wbr \/>/);
   assert.match(createSource, /<A2aSpaceSelect/);
   assert.match(createSource, /请选择 AgentKit 智能体中心/);
   assert.doesNotMatch(createSource, /AgentKit 智能体中心 ID 为必填项/);
@@ -358,7 +398,7 @@ test("remote Agent configures only the AgentKit center", () => {
     /if \(isRootAgent && agentType === "a2a"\) return;/,
   );
   assert.match(createSource, /disabled=\{remoteTypeDisabled\}/);
-  assert.match(createSource, /远程 Agent 仅可作为子 Agent/);
+  assert.match(createSource, /远程智能体只能作为子步骤使用/);
   assert.match(
     createSource,
     /className="cw-typeradio-disabled-hint"[\s\S]*?role="tooltip"/,

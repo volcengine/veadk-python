@@ -35,6 +35,14 @@ test("expands only the new-chat composer into a multiline input", () => {
   assert.match(stylesSource, /\.composer--new-chat \.composer-menu-wrap[\s\S]*?bottom: 10px/);
   assert.match(stylesSource, /\.composer--new-chat \.comp-send[\s\S]*?bottom: 10px/);
   assert.match(stylesSource, /\.composer--new-chat \.comp-send \.icon[\s\S]*?width: 20px/);
+  assert.match(
+    stylesSource,
+    /\.composer--new-chat \.composer-box\s*\{[\s\S]*?border-radius:\s*24px[\s\S]*?box-shadow:[\s\S]*?0 9px 28px/,
+  );
+  assert.match(
+    stylesSource,
+    /\.composer--new-chat \.composer-box:focus-within\s*\{[\s\S]*?box-shadow:[\s\S]*?0 12px 32px/,
+  );
 });
 
 test("places the mode selector beside send and labels Agent mode with the current Agent", () => {

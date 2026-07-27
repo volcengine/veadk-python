@@ -29,6 +29,18 @@ test("loads temporary-session and Skill-creation capabilities independently", ()
   assert.match(appSource, /skillCreateEnabled/);
 });
 
+test("keeps the mode selector visible while unavailable modes remain disabled", () => {
+  assert.match(
+    appSource,
+    /showModeSelector=\{[\s\S]*?!sandboxSession &&[\s\S]*?turns\.length === 0 &&[\s\S]*?skillJob === null[\s\S]*?\}/,
+  );
+  const selectorExpression = appSource.slice(
+    appSource.indexOf("showModeSelector={"),
+    appSource.indexOf("temporaryEnabled={"),
+  );
+  assert.doesNotMatch(selectorExpression, /canCreateAgents|temporaryEnabled \|\|/);
+});
+
 test("disables only the unavailable mode and explains that an administrator must configure it", () => {
   assert.match(composerSource, /temporaryEnabled\?: boolean/);
   assert.match(composerSource, /skillCreateEnabled\?: boolean/);

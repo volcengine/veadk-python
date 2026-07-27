@@ -11,12 +11,11 @@ const deployIconSource = readFileSync(
   "utf8",
 );
 
-test("uses the custom deployment mark only for the idle deploy action", () => {
-  assert.match(projectPreviewSource, /import \{ DeployIcon \} from "\.\/DeployIcon"/);
-  assert.doesNotMatch(projectPreviewSource, /CloudUpload/);
+test("keeps the deployment action text-only", () => {
+  assert.doesNotMatch(projectPreviewSource, /DeployIcon|CloudUpload/);
   assert.match(
     projectPreviewSource,
-    /deploying \? \([\s\S]*?<Loader2[\s\S]*?deployError \? \([\s\S]*?<RotateCcw[\s\S]*?<DeployIcon className="pp-ic" \/>/,
+    /deploying[\s\S]*?`\$\{deploymentActionLabel\}中…`[\s\S]*?deployError[\s\S]*?`重试\$\{deploymentActionLabel\}`[\s\S]*?: deploymentActionLabel/,
   );
 });
 

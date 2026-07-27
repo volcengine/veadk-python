@@ -55,7 +55,7 @@ test("preserves the existing Agent submit flow and resets mode on a new chat", (
   assert.match(appSource, /function startNewChat\(\)[\s\S]*?setNewChatMode\("agent"\)/);
   assert.match(
     appSource,
-    /showModeSelector=\{[\s\S]*?skillJob === null &&[\s\S]*?canCreateAgents[\s\S]*?\}/,
+    /showModeSelector=\{[\s\S]*?turns\.length === 0 &&[\s\S]*?skillJob === null[\s\S]*?\}/,
   );
   assert.match(
     appSource,

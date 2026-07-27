@@ -19,6 +19,18 @@ test("uses the active session name in the conversation header", () => {
   assert.match(appSource, /: conversationTitle/);
 });
 
+test("keeps the full Agent selector available before a new conversation", () => {
+  assert.match(navbarSource, /className="agent-dd-trigger"[\s\S]*?setOpen/);
+});
+
+test("restores the last selected cloud Agent after reload", () => {
+  assert.match(appSource, /const saved = localStorage\.getItem\(LS\.app\)/);
+  assert.match(
+    appSource,
+    /if \(agentsSource === "cloud"\) \{[\s\S]*?setAppName\(saved && remoteIds\.includes\(saved\) \? saved : ""\)/,
+  );
+});
+
 test("keeps long session names inside the available header width", () => {
   assert.match(navbarSource, /className="navbar-title" title=\{title\}/);
   assert.match(

@@ -47,6 +47,7 @@ from veadk.agent_metadata import (
     agent_skill_summaries,
 )
 from veadk.agent_search import search_agent_component
+from veadk.cli.frontend_invocation import FrontendInvocationPlugin
 from veadk.integrations.agentkit.session_capabilities import (
     CapabilityError,
     SessionCapabilityService,
@@ -171,10 +172,12 @@ def _agent_node(
             for child in getattr(agent, "sub_agents", []) or []
         ]
     mode = getattr(agent, "mode", None)
+    instruction = getattr(agent, "instruction", "")
     return {
         "id": agent_id,
         "name": _display_name(agent_id, display_names),
         "description": getattr(agent, "description", "") or "",
+        "instruction": instruction if isinstance(instruction, str) else "",
         "type": _agent_type(agent),
         "model": _model_name(getattr(agent, "model", "")),
         "tools": [_tool_label(tool) for tool in getattr(agent, "tools", []) or []],
@@ -378,6 +381,7 @@ def _add_introspection_routes(
     app: FastAPI,
     root_agent: BaseAgent,
     display_names: Mapping[str, str],
+    agent_draft: Mapping[str, Any] | None = None,
 ) -> None:
     @app.get("/ping")
     def ping() -> dict[str, str]:
@@ -404,6 +408,7 @@ def _add_introspection_routes(
                 for child in getattr(root_agent, "sub_agents", []) or []
             ],
             "graph": node,
+            "draft": dict(agent_draft) if agent_draft is not None else None,
         }
 
     @app.get("/web/search")
@@ -552,7 +557,11 @@ def _dynamic_runner(
     if services.session_service is None:
         raise RuntimeError("ADK session service is unavailable")
     run_agent = _spawn_dynamic_a2a_agent(root_agent, prompt)
-    agent_app = App(name=app_name, root_agent=run_agent, plugins=[])
+    agent_app = App(
+        name=app_name,
+        root_agent=run_agent,
+        plugins=[FrontendInvocationPlugin()],
+    )
     return AdkRunner(
         app=agent_app,
         artifact_service=services.artifact_service,
@@ -629,7 +638,7 @@ def _configure_dynamic_a2a_routes(
 
     services = _RuntimeServices(app)
     session_service = services.session_service
-    if session_service is None or not _has_a2a_registry_config(root_agent):
+    if session_service is None:
         return
 
     @app.post("/run", response_model=None)
@@ -910,6 +919,7 @@ def create_agentkit_app(
     root_agent: BaseAgent,
     display_names: Mapping[str, str] | None = None,
     *,
+    agent_draft: Mapping[str, Any] | None = None,
     enable_feishu: bool = False,
 ) -> FastAPI:
     """Create an AgentKit-compatible FastAPI app for ``root_agent``.
@@ -921,6 +931,7 @@ def create_agentkit_app(
     Args:
         root_agent: Root ADK agent served by AgentKit.
         display_names: User-facing names keyed by technical agent name.
+        agent_draft: Optional sanitized builder draft for read-only editing metadata.
         enable_feishu: Whether to start the Feishu channel with credentials from
             ``FEISHU_APP_ID`` and ``FEISHU_APP_SECRET``.
 
@@ -943,7 +954,7 @@ def create_agentkit_app(
 
     if enable_feishu:
         _configure_feishu_lifecycle(app, root_agent, short_term_memory)
-    _add_introspection_routes(app, root_agent, names)
+    _add_introspection_routes(app, root_agent, names, agent_draft)
     _mount_webui(app)
     _prioritize_platform_routes(app)
     return app
