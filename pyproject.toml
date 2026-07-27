@@ -56,6 +56,9 @@ dependencies = [
 veadk = "veadk.cli.cli:veadk"
 
 [project.optional-dependencies]
+codex = [
+    "openai-codex==0.1.0b3",
+]
 extensions = [
     "redis>=5.0",                                           # For Redis database
     "cozeloop>=0.1.21",                                     # For Cozeloop Prompt manager

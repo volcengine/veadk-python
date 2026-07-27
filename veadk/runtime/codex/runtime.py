@@ -34,21 +34,49 @@ which bundles the Codex CLI binary via its ``openai-codex-cli-bin`` dependency.
 
 from __future__ import annotations
 
+import asyncio
+import atexit
+import hashlib
 import os
+import shutil
 import tempfile
+import time
+from pathlib import Path
 from typing import TYPE_CHECKING, AsyncGenerator
 
-from openai_codex import AsyncCodex  # type: ignore[import-not-found]
+from openai_codex import (  # type: ignore[import-not-found]
+    ApprovalMode,
+    AsyncCodex,
+    CodexConfig,
+    ImageInput,
+    LocalImageInput,
+    MentionInput,
+    Sandbox,
+    TextInput,
+)
 from openai_codex.generated.v2_all import (  # type: ignore[import-not-found]
-    ItemCompletedNotification,
+    Personality,
+    ReasoningEffort,
     TurnCompletedNotification,
 )
 
-from veadk.runtime.base_runtime import BaseRuntime, build_system_append
+from veadk.runtime.base_runtime import BaseRuntime, resolve_system_append
+from veadk.runtime.codex.config import CodexRuntimeConfig
+from veadk.runtime.codex.config import codex_subprocess_env
+from veadk.runtime.codex.config import toml_string
 from veadk.runtime.codex.proxy import get_shim
 from veadk.runtime.codex.skills import sync_skills_to_codex_home
-from veadk.runtime.codex.tools_bridge import build_executable_tools, close_toolsets
-from veadk.runtime.codex.translate import build_prompt, item_to_events
+from veadk.runtime.codex.tools_bridge import (
+    build_executable_tools,
+    close_toolsets,
+    resume_authenticated_tools,
+    resume_confirmed_tools,
+)
+from veadk.runtime.codex.translate import (
+    build_input_attachments,
+    build_prompt,
+    notification_to_events,
+)
 from veadk.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -61,10 +89,9 @@ logger = get_logger(__name__)
 
 _PROVIDER_ID = "veadk"
 _KEY_ENV = "VEADK_CODEX_API_KEY"
-_LOCAL_SHIM_TOKEN = "veadk-local"
-
-# Cache one isolated CODEX_HOME per (shim_url, model).
-_CODEX_HOMES: dict[tuple[str, str], str] = {}
+_QUEUE_DONE = object()
+_SESSION_WORKSPACE_ROOT = tempfile.mkdtemp(prefix="veadk-codex-workspaces-")
+atexit.register(shutil.rmtree, _SESSION_WORKSPACE_ROOT, ignore_errors=True)
 
 
 class CodexRuntime(BaseRuntime):
@@ -76,6 +103,7 @@ class CodexRuntime(BaseRuntime):
         self, agent: "Agent", ctx: "InvocationContext"
     ) -> AsyncGenerator["Event", None]:
         model = self._resolve_model(agent)
+        runtime_config = CodexRuntimeConfig.from_agent(agent)
         api_base = agent.model_api_base or os.getenv("OPENAI_BASE_URL")
         api_key = agent.model_api_key or os.getenv("OPENAI_API_KEY")
         if not api_base or not api_key:
@@ -86,83 +114,207 @@ class CodexRuntime(BaseRuntime):
 
         shim = await get_shim(api_base, api_key)
         shim_url = shim.url or ""
-        codex_home = _prepare_codex_home(shim_url, model)
+        workspace, cleanup_workspace = _prepare_workspace(runtime_config, ctx)
+        codex_home = _prepare_codex_home(shim_url, model, runtime_config)
         # Expose the agent's skills to Codex by materializing them under
         # `$CODEX_HOME/skills/`, where Codex's native skill system discovers
         # them. Best-effort: a skill failure must not abort the turn.
         try:
-            sync_skills_to_codex_home(agent, codex_home)
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"codex: skill sync skipped: {e}")
-
-        # Bridge the agent's ADK tools (function/MCP) to the shim: it advertises
-        # them to the backend as plain `function` tools and executes them itself,
-        # so they never reach Codex (whose `namespace` MCP form Ark rejects). See
-        # veadk.runtime.codex.tools_bridge / proxy.
-        tool_specs, tool_executors, opened_toolsets = await build_executable_tools(
-            agent, ctx
-        )
-        shim.set_agent_tools(tool_specs, tool_executors)
-
-        # Codex has no clean SDK channel to append to its base system prompt, so
-        # the agent identity/instruction is folded into a leading block of the
-        # input (a labelled preamble), not the transcript itself.
-        prompt = build_prompt(ctx)
-        append_text = build_system_append(agent)
-        if append_text:
-            prompt = (
-                f"# System instructions\n\n{append_text}\n\n# Conversation\n\n{prompt}"
+            sync_skills_to_codex_home(
+                agent, codex_home, invocation_id=ctx.invocation_id
             )
-        logger.info(f"codex runtime: model={model}, shim={shim_url}")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "codex_skill_sync_failed invocation_id=%s error_type=%s",
+                ctx.invocation_id,
+                type(e).__name__,
+            )
 
-        # Isolate from the host's ~/.codex and pin the backend credential. The
-        # Codex app-server subprocess reads these from the environment at spawn.
-        previous = {k: os.environ.get(k) for k in ("CODEX_HOME", _KEY_ENV)}
-        os.environ["CODEX_HOME"] = codex_home
-        os.environ[_KEY_ENV] = _LOCAL_SHIM_TOKEN
+        event_queue: asyncio.Queue[object] = asyncio.Queue()
+
+        async def _emit_tool_event(event: "Event") -> None:
+            await event_queue.put(event)
+
         try:
-            # Stream the turn: emit ADK events as each Codex item completes
-            # (reasoning, tool calls, messages) instead of collecting the whole
-            # turn first. This keeps the BaseRuntime async-generator contract
-            # truly incremental, so thinking/tool steps show up live (a blocking
-            # thread.run() would leave the client silent for the whole turn).
-            async with AsyncCodex() as codex:
-                thread = await codex.thread_start(model=model)
-                turn = await thread.turn(prompt)
+            tool_bundle = await build_executable_tools(
+                agent,
+                ctx,
+                event_sink=_emit_tool_event,
+                timeout_seconds=runtime_config.tool_timeout_seconds,
+            )
+            resumed_events = [
+                *await resume_authenticated_tools(tool_bundle, ctx),
+                *await resume_confirmed_tools(tool_bundle, ctx),
+            ]
+            turn_token = shim.register_turn(
+                tool_bundle.specs,
+                tool_bundle.executors,
+                max_tool_iterations=runtime_config.max_tool_iterations,
+                invocation_id=ctx.invocation_id,
+            )
+        except BaseException as e:
+            logger.error(
+                "codex_runtime_setup_failed invocation_id=%s stage=tools "
+                "error_type=%s",
+                ctx.invocation_id,
+                type(e).__name__,
+            )
+            if "tool_bundle" in locals():
+                await close_toolsets(tool_bundle.opened_toolsets)
+            shutil.rmtree(codex_home, ignore_errors=True)
+            if cleanup_workspace:
+                shutil.rmtree(workspace, ignore_errors=True)
+            raise
+
+        try:
+            # Persist resumed confirmation responses before constructing history,
+            # so Codex sees the completed/rejected tool result exactly once.
+            for event in resumed_events:
+                yield event
+
+            # Keep privileged instructions out of the user transcript. The SDK
+            # exposes native base/developer instruction channels.
+            prompt = build_prompt(ctx)
+            base_instructions, developer_instructions = await resolve_system_append(
+                agent, ctx
+            )
+            input_items = _build_codex_input(prompt, ctx, workspace)
+            logger.info(
+                "codex_runtime_start invocation_id=%s agent=%s model=%s "
+                "sandbox=%s approval_mode=%s network_access=%s tool_count=%d",
+                ctx.invocation_id,
+                agent.name,
+                model,
+                runtime_config.sandbox,
+                runtime_config.approval_mode,
+                runtime_config.network_access,
+                len(tool_bundle.executors),
+            )
+
+            # CodexConfig.env is copied into only this subprocess. Never mutate
+            # process-wide CODEX_HOME or credential variables.
+            sdk_config = CodexConfig(
+                cwd=workspace,
+                env=codex_subprocess_env(codex_home, turn_token),
+            )
+        except BaseException as e:
+            logger.error(
+                "codex_runtime_setup_failed invocation_id=%s stage=input "
+                "error_type=%s",
+                ctx.invocation_id,
+                type(e).__name__,
+            )
+            shim.unregister_turn(turn_token)
+            await close_toolsets(tool_bundle.opened_toolsets)
+            shutil.rmtree(codex_home, ignore_errors=True)
+            if cleanup_workspace:
+                shutil.rmtree(workspace, ignore_errors=True)
+            raise
+        turn = None
+        pump: asyncio.Task[None] | None = None
+        run_started_at = time.monotonic()
+        run_status = "failed"
+        try:
+            async with AsyncCodex(config=sdk_config) as codex:
+                thread = await codex.thread_start(
+                    model=model,
+                    model_provider=_PROVIDER_ID,
+                    base_instructions=base_instructions or None,
+                    developer_instructions=developer_instructions or None,
+                    cwd=workspace,
+                    ephemeral=True,
+                    approval_mode=_approval_mode(runtime_config),
+                    sandbox=_sandbox(runtime_config),
+                    personality=Personality(runtime_config.personality),
+                )
+                turn = await thread.turn(
+                    input_items,
+                    cwd=workspace,
+                    approval_mode=_approval_mode(runtime_config),
+                    sandbox=_sandbox(runtime_config),
+                    effort=ReasoningEffort(runtime_config.reasoning_effort),
+                )
                 stream = turn.stream()
-                try:
-                    async for note in stream:
-                        payload = note.payload
-                        if (
-                            isinstance(payload, ItemCompletedNotification)
-                            and payload.turn_id == turn.id
-                        ):
-                            for event in item_to_events(
-                                payload.item, agent.name, ctx.invocation_id
+
+                async def _pump_codex() -> None:
+                    active_tool_items: set[str] = set()
+                    try:
+                        async for note in stream:
+                            payload = note.payload
+                            payload_turn_id = getattr(payload, "turn_id", None)
+                            if isinstance(payload, TurnCompletedNotification):
+                                payload_turn_id = payload.turn.id
+                            if payload_turn_id and payload_turn_id != turn.id:
+                                continue
+                            for event in notification_to_events(
+                                payload,
+                                agent.name,
+                                ctx.invocation_id,
+                                active_tool_items=active_tool_items,
                             ):
-                                yield event
-                        elif (
-                            isinstance(payload, TurnCompletedNotification)
-                            and payload.turn.id == turn.id
-                            and payload.turn.error
-                        ):
-                            raise RuntimeError(payload.turn.error.message)
-                finally:
-                    # stream() is an async generator at runtime; close it to
-                    # unregister the turn's notification listener.
-                    aclose = getattr(stream, "aclose", None)
-                    if aclose is not None:
-                        await aclose()
+                                _scope_event(event, ctx)
+                                if (
+                                    event.custom_metadata
+                                    and event.custom_metadata.get("codex_event_type")
+                                    == "token_usage"
+                                ):
+                                    logger.info(
+                                        "codex_token_usage invocation_id=%s usage=%s",
+                                        ctx.invocation_id,
+                                        event.custom_metadata.get("token_usage"),
+                                    )
+                                await event_queue.put(event)
+                    except BaseException as e:
+                        await event_queue.put(e)
+                    finally:
+                        aclose = getattr(stream, "aclose", None)
+                        if aclose is not None:
+                            await aclose()
+                        await event_queue.put(_QUEUE_DONE)
+
+                pump = asyncio.create_task(_pump_codex())
+                while True:
+                    queued = await event_queue.get()
+                    if queued is _QUEUE_DONE:
+                        break
+                    if isinstance(queued, BaseException):
+                        raise queued
+                    yield queued  # type: ignore[misc]
+                await pump
+                run_status = "completed"
+        except asyncio.CancelledError:
+            run_status = "cancelled"
+            if turn is not None:
+                try:
+                    await turn.interrupt()
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "codex_interrupt_failed invocation_id=%s",
+                        ctx.invocation_id,
+                    )
+            raise
+        except BaseException as e:
+            logger.error(
+                "codex_runtime_failed invocation_id=%s error_type=%s",
+                ctx.invocation_id,
+                type(e).__name__,
+            )
+            raise
         finally:
-            # Drop this turn's tools from the (shared) shim and release any MCP
-            # sessions opened for them.
-            shim.set_agent_tools([], {})
-            await close_toolsets(opened_toolsets)
-            for key, value in previous.items():
-                if value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = value
+            if pump is not None and not pump.done():
+                pump.cancel()
+                await asyncio.gather(pump, return_exceptions=True)
+            shim.unregister_turn(turn_token)
+            await close_toolsets(tool_bundle.opened_toolsets)
+            shutil.rmtree(codex_home, ignore_errors=True)
+            if cleanup_workspace:
+                shutil.rmtree(workspace, ignore_errors=True)
+            logger.info(
+                "codex_runtime_complete invocation_id=%s status=%s duration_ms=%d",
+                ctx.invocation_id,
+                run_status,
+                round((time.monotonic() - run_started_at) * 1000),
+            )
 
     def _resolve_model(self, agent: "Agent") -> str:
         name = agent.model_name
@@ -177,48 +329,107 @@ class CodexRuntime(BaseRuntime):
         return name
 
 
-def _prepare_codex_home(shim_url: str, model: str) -> str:
-    """Create (and cache) an isolated CODEX_HOME with a config.toml.
+def _prepare_codex_home(
+    shim_url: str, model: str, runtime_config: CodexRuntimeConfig
+) -> str:
+    """Create an invocation-isolated CODEX_HOME with a config.toml.
 
     The config points Codex at the local Responses shim using a dedicated
     ``veadk`` provider, so the run never touches the host's ``~/.codex``.
     """
-    cache_key = (shim_url, model)
-    cached = _CODEX_HOMES.get(cache_key)
-    if cached is not None:
-        return cached
-
     home = tempfile.mkdtemp(prefix="veadk-codex-")
-    # Defaults tuned for a server-side agent on a single chat backend:
-    # - review_model points the auto-review reviewer at the configured model;
-    #   Codex's default reviewer ("codex-auto-review") is not a real model on
-    #   the backend and would 404 through the shim.
-    # - approval_policy=never + sandbox_mode=danger-full-access let the agent
-    #   read, write, run commands and reach the network (e.g. fetch from
-    #   arXiv) without an approval round-trip.
-    # - disable_response_storage: the chat-backed Responses shim has no
-    #   server-side response store.
+    os.chmod(home, 0o700)
+    approval_policy = (
+        "on-request" if runtime_config.approval_mode == "auto_review" else "never"
+    )
+    sandbox_mode = {
+        "read_only": "read-only",
+        "workspace_write": "workspace-write",
+        "full_access": "danger-full-access",
+    }[runtime_config.sandbox]
     config = (
-        f'model = "{model}"\n'
-        f'model_provider = "{_PROVIDER_ID}"\n'
-        f'review_model = "{model}"\n'
-        f'approval_policy = "never"\n'
-        f'sandbox_mode = "danger-full-access"\n'
+        f"model = {toml_string(model)}\n"
+        f"model_provider = {toml_string(_PROVIDER_ID)}\n"
+        f"review_model = {toml_string(model)}\n"
+        f"approval_policy = {toml_string(approval_policy)}\n"
+        f"sandbox_mode = {toml_string(sandbox_mode)}\n"
         f"disable_response_storage = true\n"
-        f'model_reasoning_effort = "medium"\n'
-        f'personality = "pragmatic"\n\n'
+        f"model_reasoning_effort = {toml_string(runtime_config.reasoning_effort)}\n"
+        f"personality = {toml_string(runtime_config.personality)}\n\n"
         f"[model_providers.{_PROVIDER_ID}]\n"
-        f'name = "{_PROVIDER_ID}"\n'
-        f'base_url = "{shim_url}/v1"\n'
-        f'env_key = "{_KEY_ENV}"\n'
+        f"name = {toml_string(_PROVIDER_ID)}\n"
+        f"base_url = {toml_string(f'{shim_url}/v1')}\n"
+        f"env_key = {toml_string(_KEY_ENV)}\n"
         f'wire_api = "responses"\n\n'
-        # Only consulted under sandbox_mode="workspace-write"; harmless under
-        # full-access, but lets a narrower mode still reach the network.
         f"[sandbox_workspace_write]\n"
-        f"network_access = true\n"
+        f"network_access = {str(runtime_config.network_access).lower()}\n"
     )
     with open(os.path.join(home, "config.toml"), "w", encoding="utf-8") as f:
         f.write(config)
 
-    _CODEX_HOMES[cache_key] = home
     return home
+
+
+def _prepare_workspace(
+    runtime_config: CodexRuntimeConfig, ctx: "InvocationContext"
+) -> tuple[str, bool]:
+    root = runtime_config.workspace_root
+    if root and runtime_config.reuse_workspace:
+        Path(root).mkdir(parents=True, exist_ok=True)
+        return root, False
+
+    session = getattr(ctx, "session", None)
+    session_id = str(getattr(session, "id", "session"))
+    scope = "\0".join(
+        (
+            str(getattr(session, "app_name", "")),
+            str(getattr(session, "user_id", "")),
+            session_id,
+            str(getattr(getattr(ctx, "agent", None), "name", "")),
+        )
+    )
+    digest = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:16]
+    safe_id = "".join(ch for ch in session_id if ch.isalnum() or ch in "-_")[:32]
+    base = Path(root or _SESSION_WORKSPACE_ROOT)
+    base.mkdir(parents=True, exist_ok=True)
+    workspace = base / f"{safe_id or 'session'}-{digest}"
+    workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(workspace, 0o700)
+    return str(workspace), False
+
+
+def _approval_mode(config: CodexRuntimeConfig) -> ApprovalMode:
+    return (
+        ApprovalMode.auto_review
+        if config.approval_mode == "auto_review"
+        else ApprovalMode.deny_all
+    )
+
+
+def _sandbox(config: CodexRuntimeConfig) -> Sandbox:
+    return {
+        "read_only": Sandbox.read_only,
+        "workspace_write": Sandbox.workspace_write,
+        "full_access": Sandbox.full_access,
+    }[config.sandbox]
+
+
+def _build_codex_input(
+    prompt: str, ctx: "InvocationContext", workspace: str
+) -> list[object]:
+    items: list[object] = [TextInput(prompt)]
+    for attachment in build_input_attachments(ctx, workspace):
+        kind = attachment["kind"]
+        value = attachment["value"]
+        if kind == "local_image":
+            items.append(LocalImageInput(value))
+        elif kind == "remote_image":
+            items.append(ImageInput(value))
+        else:
+            items.append(MentionInput(attachment["name"], value))
+    return items
+
+
+def _scope_event(event: "Event", ctx: "InvocationContext") -> None:
+    event.branch = getattr(ctx, "branch", None)
+    event.isolation_scope = getattr(ctx, "isolation_scope", None)
