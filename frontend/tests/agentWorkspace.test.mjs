@@ -113,7 +113,7 @@ test("workspace agents can be reordered by drag or keyboard", () => {
 
   assert.match(workspaceSource, /agentOrder\?: string\[\]/);
   assert.match(workspaceSource, /onAgentOrderChange\?: \(agentIds: string\[\]\) => void/);
-  assert.match(workspaceSource, /draggable=\{!!onAgentOrderChange\}/);
+  assert.match(workspaceSource, /draggable=\{!!onAgentOrderChange && !selectionMode\}/);
   assert.match(workspaceSource, /onDrop=\{\(event\) => \{/);
   assert.match(workspaceSource, /moveAgentNear\(draggedId, agent\.id, dropPlacement\)/);
   assert.match(workspaceSource, /event\.clientY > rect\.top \+ rect\.height \/ 2 \? "after" : "before"/);
@@ -125,7 +125,7 @@ test("workspace agents can be reordered by drag or keyboard", () => {
   assert.match(workspaceStyles, /\.aw-agent-item\.is-drop-after/);
 });
 
-test("workspace supports deleting individual authorized agents", () => {
+test("workspace supports selecting and deleting authorized agents", () => {
   assert.match(appSource, /deleteRuntime/);
   assert.match(appSource, /removeRuntimeConnection/);
   assert.match(appSource, /libraryRuntimePermissions/);
@@ -139,19 +139,23 @@ test("workspace supports deleting individual authorized agents", () => {
 
   assert.match(workspaceSource, /onDeleteAgents\?: \(agents: AgentEntry\[\]\) => Promise<void>/);
   assert.match(workspaceSource, /onDeleteDrafts\?: \(drafts: WorkspaceAgentDraft\[\]\) => void/);
-  assert.doesNotMatch(workspaceSource, /selectionMode/);
-  assert.doesNotMatch(workspaceSource, /删除所选/);
+  assert.match(workspaceSource, /const \[selectionMode, setSelectionMode\] = useState\(false\)/);
+  assert.match(workspaceSource, /const \[selectedAgentIds, setSelectedAgentIds\] = useState<Set<string>>/);
+  assert.match(workspaceSource, /const \[selectedDraftIds, setSelectedDraftIds\] = useState<Set<string>>/);
+  assert.match(workspaceSource, /selectedDeletableAgents/);
+  assert.match(workspaceSource, /selectedDeletableDrafts/);
+  assert.match(workspaceSource, /window\.confirm\(confirmText\)/);
+  assert.match(workspaceSource, /await onDeleteAgents\(selectedDeletableAgents\)/);
+  assert.match(workspaceSource, /onDeleteDrafts\?\.\(selectedDeletableDrafts\)/);
+  assert.match(workspaceSource, /aria-pressed=\{selectionMode \? isSelectedForDelete : undefined\}/);
+  assert.match(workspaceSource, /删除所选/);
   assert.match(workspaceSource, /const deleteSingleAgent = async/);
   assert.match(workspaceSource, /const deleteSingleDraft = /);
   assert.match(workspaceSource, /删除 Agent/);
   assert.match(workspaceSource, /删除草稿/);
-  assert.doesNotMatch(workspaceStyles, /\.aw-selection-toolbar/);
-  assert.doesNotMatch(workspaceStyles, /\.aw-select-marker/);
+  assert.match(workspaceStyles, /\.aw-selection-toolbar/);
+  assert.match(workspaceStyles, /\.aw-select-marker\.is-checked/);
   assert.match(workspaceStyles, /\.aw-head-delete/);
-  assert.match(
-    workspaceSource,
-    /className="aw-basic-actions"[\s\S]*?className="aw-update studio-update-action"[\s\S]*?className="aw-head-delete studio-update-action"/,
-  );
 });
 
 test("evaluation tab remains the PR 748 placeholder until the real feature lands", () => {

@@ -341,6 +341,9 @@ export function AgentWorkspace({
   const [draggingAgentId, setDraggingAgentId] = useState("");
   const [dropAgentId, setDropAgentId] = useState("");
   const [dropPlacement, setDropPlacement] = useState<"before" | "after">("before");
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedAgentIds, setSelectedAgentIds] = useState<Set<string>>(() => new Set());
+  const [selectedDraftIds, setSelectedDraftIds] = useState<Set<string>>(() => new Set());
   const [deletingAgents, setDeletingAgents] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const suppressAgentClickRef = useRef(false);
@@ -473,6 +476,16 @@ export function AgentWorkspace({
   const selectedEvaluationGroup = evaluationGroups.find(
     (group) => group.id === activeEvaluationGroupId,
   );
+  const deletableListedAgents = listedAgents.filter((agent) => agent.canDelete === true);
+  const selectedDeletableAgents = listedAgents.filter(
+    (agent) => selectedAgentIds.has(agent.id) && agent.canDelete === true,
+  );
+  const selectedDeletableDrafts = filteredDrafts.filter((item) =>
+    selectedDraftIds.has(item.id),
+  );
+  const deletableItemCount = deletableListedAgents.length + filteredDrafts.length;
+  const selectedDeleteCount =
+    selectedDeletableAgents.length + selectedDeletableDrafts.length;
   const draft = useMemo(
     () =>
       selectedPendingTask?.agentDraft ??
@@ -557,6 +570,26 @@ export function AgentWorkspace({
     };
   }, [selectedAgent?.region, selectedAgent?.runtimeId]);
 
+  useEffect(() => {
+    const selectableIds = new Set(
+      listedAgents
+        .filter((agent) => agent.canDelete === true)
+        .map((agent) => agent.id),
+    );
+    setSelectedAgentIds((current) => {
+      const next = new Set([...current].filter((id) => selectableIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [listedAgents]);
+
+  useEffect(() => {
+    const selectableIds = new Set(filteredDrafts.map((item) => item.id));
+    setSelectedDraftIds((current) => {
+      const next = new Set([...current].filter((id) => selectableIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [filteredDrafts]);
+
   const visibleCases = cases.filter((item) => {
     if (item.kind !== caseFilter) return false;
     const keyword = caseQuery.trim().toLowerCase();
@@ -615,6 +648,82 @@ export function AgentWorkspace({
     next.splice(index, 1);
     next.splice(targetIndex, 0, agentId);
     onAgentOrderChange(next);
+  };
+
+  const toggleAgentSelection = (agent: AgentEntry) => {
+    if (agent.canDelete !== true) return;
+    setDeleteError("");
+    setSelectedAgentIds((current) => {
+      const next = new Set(current);
+      if (next.has(agent.id)) {
+        next.delete(agent.id);
+      } else {
+        next.add(agent.id);
+      }
+      return next;
+    });
+  };
+
+  const toggleDraftSelection = (draftItem: WorkspaceAgentDraft) => {
+    setDeleteError("");
+    setSelectedDraftIds((current) => {
+      const next = new Set(current);
+      if (next.has(draftItem.id)) {
+        next.delete(draftItem.id);
+      } else {
+        next.add(draftItem.id);
+      }
+      return next;
+    });
+  };
+
+  const selectAllListedAgents = () => {
+    setDeleteError("");
+    setSelectedAgentIds(new Set(deletableListedAgents.map((agent) => agent.id)));
+    setSelectedDraftIds(new Set(filteredDrafts.map((item) => item.id)));
+  };
+
+  const clearAgentSelection = () => {
+    setDeleteError("");
+    setSelectedAgentIds(new Set());
+    setSelectedDraftIds(new Set());
+    setSelectionMode(false);
+  };
+
+  const deleteSelectedItems = async () => {
+    if (selectedDeleteCount === 0 || deletingAgents) return;
+    const runtimeCount = selectedDeletableAgents.length;
+    const draftCount = selectedDeletableDrafts.length;
+    const confirmText = runtimeCount === 1 && draftCount === 0
+      ? `确定删除 Agent "${selectedDeletableAgents[0].label}"？该 Runtime 将被永久删除。`
+      : runtimeCount === 0 && draftCount === 1
+        ? `确定删除草稿 "${selectedDeletableDrafts[0].draft.name || "未命名 Agent"}"？`
+        : `确定删除选中的 ${selectedDeleteCount} 个项目？${runtimeCount > 0 ? `${runtimeCount} 个 Runtime 将被永久删除。` : ""}`;
+    if (!window.confirm(confirmText)) return;
+    setDeletingAgents(true);
+    setDeleteError("");
+    try {
+      if (selectedDeletableAgents.length > 0) {
+        if (!onDeleteAgents) throw new Error("当前页面不支持删除已部署 Agent。");
+        await onDeleteAgents(selectedDeletableAgents);
+      }
+      if (selectedDeletableDrafts.length > 0) {
+        onDeleteDrafts?.(selectedDeletableDrafts);
+      }
+      setSelectedAgentIds(new Set());
+      setSelectedDraftIds(new Set());
+      setSelectionMode(false);
+      if (selectedDeletableAgents.some((agent) => agent.id === activeAgentId)) {
+        setActiveAgentId("");
+      }
+      if (selectedDeletableDrafts.some((item) => item.id === activeDraftId)) {
+        setActiveDraftId("");
+      }
+    } catch (cause) {
+      setDeleteError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setDeletingAgents(false);
+    }
   };
 
   const deleteSingleAgent = async (agent: AgentEntry) => {
@@ -726,6 +835,50 @@ export function AgentWorkspace({
             <Plus aria-hidden />
             <span>{view === "library" ? "新建 Agent" : "新建评测组"}</span>
           </button>
+          {view === "library" && (onDeleteAgents || onDeleteDrafts) && (
+            <div className={`aw-selection-toolbar${selectionMode ? " is-active" : ""}`}>
+              {selectionMode ? (
+                <>
+                  <span className="aw-selection-count">
+                    已选 {selectedDeleteCount} 个
+                  </span>
+                  <button
+                    type="button"
+                    onClick={selectAllListedAgents}
+                    disabled={deletableItemCount === 0 || deletingAgents}
+                  >
+                    全选
+                  </button>
+                  <button
+                    type="button"
+                    className="aw-selection-danger"
+                    onClick={() => void deleteSelectedItems()}
+                    disabled={selectedDeleteCount === 0 || deletingAgents}
+                  >
+                    {deletingAgents ? "删除中…" : "删除所选"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearAgentSelection}
+                    disabled={deletingAgents}
+                  >
+                    取消
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeleteError("");
+                    setSelectionMode(true);
+                  }}
+                  disabled={deletableItemCount === 0}
+                >
+                  选择
+                </button>
+              )}
+            </div>
+          )}
           {view === "library" && deleteError && (
             <div className="aw-delete-error" role="alert">{deleteError}</div>
           )}
@@ -772,18 +925,35 @@ export function AgentWorkspace({
                           candidate.runtimeId === item.deploymentTarget.runtimeId),
                     )
                     .sort((left, right) => right.startedAt - left.startedAt)[0];
+                  const isSelectedForDelete = selectedDraftIds.has(item.id);
                   return (
                     <button
                       type="button"
                       key={item.id}
-                      className={`aw-agent-item${item.id === activeDraftId ? " is-active" : ""}`}
+                      className={[
+                        "aw-agent-item",
+                        selectionMode ? "is-selecting" : "",
+                        isSelectedForDelete ? "is-selected-for-delete" : "",
+                        item.id === activeDraftId ? "is-active" : "",
+                      ].filter(Boolean).join(" ")}
+                      aria-pressed={selectionMode ? isSelectedForDelete : undefined}
                       onClick={() => {
+                        if (selectionMode) {
+                          toggleDraftSelection(item);
+                          return;
+                        }
                         setActiveAgentId("");
                         setActiveDeploymentTaskId("");
                         setActiveDraftId(item.id);
                         setSection("basic");
                       }}
                     >
+                      {selectionMode && (
+                        <span
+                          className={`aw-select-marker${isSelectedForDelete ? " is-checked" : ""}`}
+                          aria-hidden="true"
+                        />
+                      )}
                       <span className="aw-agent-copy">
                         <span className="aw-agent-name-row">
                           <strong>{item.draft.name || "未命名 Agent"}</strong>
@@ -804,6 +974,8 @@ export function AgentWorkspace({
                   const updateDraft = agent.runtimeId
                     ? updateDraftByRuntimeId.get(agent.runtimeId)
                     : undefined;
+                  const isSelectedForDelete = selectedAgentIds.has(agent.id);
+                  const canDeleteAgent = agent.canDelete === true;
                   const statusBadge =
                     runtimeTask?.status === "running"
                       ? { label: "部署中", className: " is-deploying" }
@@ -825,6 +997,9 @@ export function AgentWorkspace({
                   "aw-agent-item",
                   "aw-agent-item--sortable",
                   agent.id === activeAgentId ? "is-active" : "",
+                  selectionMode ? "is-selecting" : "",
+                  isSelectedForDelete ? "is-selected-for-delete" : "",
+                  selectionMode && !canDeleteAgent ? "is-selection-disabled" : "",
                   agent.id === draggingAgentId ? "is-dragging" : "",
                   agent.id === dropAgentId && agent.id !== draggingAgentId
                     ? `is-drop-target is-drop-${dropPlacement}`
@@ -834,8 +1009,9 @@ export function AgentWorkspace({
                   <button
                     type="button"
                     key={agent.id}
-                    draggable={!!onAgentOrderChange}
+                    draggable={!!onAgentOrderChange && !selectionMode}
                     className={agentItemClass}
+                    aria-pressed={selectionMode ? isSelectedForDelete : undefined}
                     aria-keyshortcuts={onAgentOrderChange ? "Alt+ArrowUp Alt+ArrowDown" : undefined}
                     onDragStart={(event) => {
                       if (!onAgentOrderChange) return;
@@ -889,6 +1065,11 @@ export function AgentWorkspace({
                       }
                     }}
                     onClick={(event) => {
+                      if (selectionMode) {
+                        event.preventDefault();
+                        toggleAgentSelection(agent);
+                        return;
+                      }
                       if (suppressAgentClickRef.current) {
                         event.preventDefault();
                         suppressAgentClickRef.current = false;
@@ -901,6 +1082,12 @@ export function AgentWorkspace({
                       onSelectAgent(agent.id);
                     }}
                   >
+                    {selectionMode && (
+                      <span
+                        className={`aw-select-marker${isSelectedForDelete ? " is-checked" : ""}`}
+                        aria-hidden="true"
+                      />
+                    )}
                     <span className="aw-agent-copy">
                       <span className="aw-agent-name-row">
                         <strong>{agent.label}</strong>
@@ -966,6 +1153,39 @@ export function AgentWorkspace({
                 </div>
                 <p>{draft.description || (loadingAgentInfo ? "正在读取智能体信息…" : "暂无描述")}</p>
               </div>
+              {(selectedAgent?.canDelete || selectedDraft || selectedAgentUpdateDraft) && (
+                <div className="aw-head-actions">
+                  {(selectedDraft || selectedAgentUpdateDraft) && (
+                    <button
+                      type="button"
+                      className="aw-head-delete aw-head-delete--draft"
+                      onClick={() => {
+                        const draftToDelete = selectedDraft ?? selectedAgentUpdateDraft;
+                        if (draftToDelete) deleteSingleDraft(draftToDelete);
+                      }}
+                      disabled={deletingAgents}
+                      aria-label="删除草稿"
+                      title="删除草稿"
+                    >
+                      <Trash2 aria-hidden />
+                      <span>删除草稿</span>
+                    </button>
+                  )}
+                  {selectedAgent?.canDelete && (
+                    <button
+                      type="button"
+                      className="aw-head-delete"
+                      onClick={() => void deleteSingleAgent(selectedAgent)}
+                      disabled={deletingAgents}
+                      aria-label="删除 Agent"
+                      title="删除 Agent"
+                    >
+                      <Trash2 aria-hidden />
+                      <span>{deletingAgents ? "删除中…" : "删除 Agent"}</span>
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
             <nav className="aw-agent-tabs" aria-label="智能体详情">
               {AGENT_SECTIONS.map((item) => (
