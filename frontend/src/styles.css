@@ -930,8 +930,8 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 0 16px clamp(64px, 12vh, 104px);
-  gap: 32px;
+  padding: 0 16px clamp(96px, 18vh, 152px);
+  gap: 40px;
 }
 .welcome-title {
   margin: 0;
@@ -1803,7 +1803,11 @@ body {
   display: block;
   min-height: 136px;
   padding: 10px;
+  border-color: hsl(var(--border) / 0.55);
   border-radius: 16px;
+  box-shadow:
+    0 8px 32px rgb(0 0 0 / 0.028),
+    0 24px 72px 8px rgb(0 0 0 / 0.02);
 }
 .composer-input-stack {
   display: flex;
@@ -1843,7 +1847,7 @@ body {
 }
 .prompt-suggestions {
   position: absolute;
-  top: calc(100% + 12px);
+  top: calc(100% + 18px);
   left: 0;
   z-index: 1;
   display: grid;

@@ -155,6 +155,7 @@ test("addresses the selected Agent by its display name in the composer", () => {
     /agentName=\{[\s\S]*?sandboxSession[\s\S]*?"AgentKit 沙箱"[\s\S]*?labelOf\(appName\)/,
   );
   assert.match(composerSource, /`向 \$\{agentName\} 发消息…`/);
+  assert.match(composerSource, /请在页面左上角选择智能体/);
   assert.doesNotMatch(composerSource, /给智能体发消息/);
 });
 
