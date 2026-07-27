@@ -18,6 +18,10 @@ const clientSource = readFileSync(
   new URL("../src/adk/client.ts", import.meta.url),
   "utf8",
 );
+const skillspaceClientSource = readFileSync(
+  new URL("../src/create/skills/skillspace.ts", import.meta.url),
+  "utf8",
+);
 const navbarSource = readFileSync(
   new URL("../src/ui/Navbar.tsx", import.meta.url),
   "utf8",
@@ -235,8 +239,14 @@ test("uses searchable dialogs for public Skill Hub and AgentKit Skill Center", (
   assert.match(capabilityDialogsSource, /searchSessionPublicSkills\(appName, publicQuery\.trim\(\)\)/);
   assert.match(capabilityDialogsSource, /skillSourceId: `findskill:\$\{skill\.slug\}`/);
   assert.match(clientSource, /\/harness\/skills\/findskill/);
-  assert.match(capabilityDialogsSource, /listSessionSkillSpaces\(appName\)/);
-  assert.match(capabilityDialogsSource, /listSessionSkillsInSpace\(appName, selectedSpace\.id/);
+  assert.match(capabilityDialogsSource, /listSkillSpaces\(\)/);
+  assert.match(
+    capabilityDialogsSource,
+    /listSkillsInSpace\(selectedSpace\.id, selectedSpace\.region\)/,
+  );
+  assert.doesNotMatch(capabilityDialogsSource, /listSessionSkillSpaces/);
+  assert.doesNotMatch(capabilityDialogsSource, /listSessionSkillsInSpace/);
+  assert.match(skillspaceClientSource, /"\/web\/skill-spaces\?region=all"/);
   assert.match(capabilityDialogsSource, /label="搜索 Skill Space"/);
   assert.match(capabilityDialogsSource, /label="搜索 AgentKit 技能"/);
   assert.match(capabilityDialogsSource, /skillSourceId: selectedSpace\.id/);
