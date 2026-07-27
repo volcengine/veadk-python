@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
-  listSessionSkillsInSpace,
-  listSessionSkillSpaces,
   searchSessionPublicSkills,
   type AddSessionCapability,
   type SessionPublicSkill,
-  type SessionSkillCatalogItem,
-  type SessionSkillSpace,
 } from "../adk/client";
+import {
+  listSkillsInSpace,
+  listSkillSpaces,
+  type SkillSpaceRef,
+  type SkillSpaceSkill,
+} from "../create/skills/skillspace";
 import { BUILTIN_TOOLS } from "../create/veadkCatalog";
 import { ToolCapabilityIcon } from "./CapabilityIcons";
 
@@ -255,9 +257,9 @@ export function SkillCapabilityDialog({
   const [publicTotal, setPublicTotal] = useState(0);
   const [publicLoading, setPublicLoading] = useState(true);
   const [publicError, setPublicError] = useState("");
-  const [spaces, setSpaces] = useState<SessionSkillSpace[]>([]);
-  const [selectedSpace, setSelectedSpace] = useState<SessionSkillSpace | null>(null);
-  const [skills, setSkills] = useState<SessionSkillCatalogItem[]>([]);
+  const [spaces, setSpaces] = useState<SkillSpaceRef[]>([]);
+  const [selectedSpace, setSelectedSpace] = useState<SkillSpaceRef | null>(null);
+  const [skills, setSkills] = useState<SkillSpaceSkill[]>([]);
   const [spaceQuery, setSpaceQuery] = useState("");
   const [skillQuery, setSkillQuery] = useState("");
   const [spacesLoading, setSpacesLoading] = useState(true);
@@ -299,7 +301,7 @@ export function SkillCapabilityDialog({
     let active = true;
     setSpacesLoading(true);
     setError("");
-    void listSessionSkillSpaces(appName)
+    void listSkillSpaces()
       .then((items) => {
         if (!active) return;
         setSpaces(items);
@@ -312,7 +314,7 @@ export function SkillCapabilityDialog({
         if (active) setSpacesLoading(false);
       });
     return () => { active = false; };
-  }, [appName, sourceTab]);
+  }, [sourceTab]);
 
   useEffect(() => {
     if (sourceTab !== "agentkit") return;
@@ -323,7 +325,7 @@ export function SkillCapabilityDialog({
     let active = true;
     setSkillsLoading(true);
     setError("");
-    void listSessionSkillsInSpace(appName, selectedSpace.id, selectedSpace.region)
+    void listSkillsInSpace(selectedSpace.id, selectedSpace.region)
       .then((items) => {
         if (active) setSkills(items);
       })
@@ -334,7 +336,7 @@ export function SkillCapabilityDialog({
         if (active) setSkillsLoading(false);
       });
     return () => { active = false; };
-  }, [appName, selectedSpace, sourceTab]);
+  }, [selectedSpace, sourceTab]);
 
   const filteredSpaces = useMemo(() => {
     const normalized = spaceQuery.trim().toLowerCase();
@@ -352,7 +354,7 @@ export function SkillCapabilityDialog({
     );
   }, [skillQuery, skills]);
 
-  const addSkill = async (skill: SessionSkillCatalogItem) => {
+  const addSkill = async (skill: SkillSpaceSkill) => {
     if (!selectedSpace) return;
     setPending(skill.skillId);
     const added = await onAdd({
