@@ -18,6 +18,8 @@ const identitySource = readFileSync(
 ).replace('from "./timeout"', `from "${timeoutUrl}"`);
 const {
   fetchProviders,
+  isOAuthLoginRequired,
+  openLoginWindow,
   profilePictureUrl,
   resolveIdentity,
   withLocalUser,
@@ -27,6 +29,7 @@ const {
 
 const originalFetch = globalThis.fetch;
 const originalWarn = console.warn;
+const originalWindow = globalThis.window;
 test.before(() => {
   console.warn = () => {};
 });
@@ -34,6 +37,7 @@ test.afterEach(() => {
   globalThis.fetch = originalFetch;
   delete globalThis.localStorage;
   delete globalThis.sessionStorage;
+  globalThis.window = originalWindow;
 });
 test.after(() => {
   console.warn = originalWarn;
@@ -144,4 +148,37 @@ test("provider lookup surfaces failures instead of returning an empty list", asy
     globalThis.fetch = async () => new Response("<!doctype html>", { status: 200 });
     await assert.rejects(fetchProviders(), /无法解析/);
   });
+});
+
+test("distinguishes an expired built-in OAuth session from an API-specific 401", async () => {
+  globalThis.fetch = async (url) => {
+    if (url === "/oauth2/userinfo") return new Response("", { status: 401 });
+    return Response.json({ providers: [{ id: "oidc", loginUrl: "/oauth2/login" }] });
+  };
+  assert.equal(await isOAuthLoginRequired(), true);
+
+  globalThis.fetch = async (url) => {
+    if (url === "/oauth2/userinfo") return Response.json({ sub: "u-1" });
+    return Response.json({ providers: [{ id: "oidc", loginUrl: "/oauth2/login" }] });
+  };
+  assert.equal(await isOAuthLoginRequired(), false);
+});
+
+test("popup login preserves the editor without exposing its opener", () => {
+  let destination = "";
+  const popup = {
+    opener: {},
+    location: { replace: (url) => { destination = url; } },
+  };
+  globalThis.window = {
+    location: { pathname: "/create", search: "?step=debug", hash: "#agent" },
+    open: () => popup,
+  };
+
+  assert.equal(openLoginWindow(), popup);
+  assert.equal(popup.opener, null);
+  assert.equal(
+    destination,
+    "/oauth2/login?redirect=%2Fcreate%3Fstep%3Ddebug%23agent",
+  );
 });

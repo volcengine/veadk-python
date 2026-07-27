@@ -122,6 +122,37 @@ export function login(): void {
   loginTo("/oauth2/login");
 }
 
+/** Open the login flow without unloading the current editing context. */
+export function openLoginWindow(): Window | null {
+  const here = window.location.pathname + window.location.search + window.location.hash;
+  const loginWindow = window.open(
+    "about:blank",
+    "_blank",
+    "popup,width=520,height=720",
+  );
+  if (!loginWindow) return null;
+  try {
+    loginWindow.opener = null;
+    loginWindow.location.replace(
+      `/oauth2/login?redirect=${encodeURIComponent(here)}`,
+    );
+  } catch {
+    loginWindow.close();
+    return null;
+  }
+  return loginWindow;
+}
+
+/** Confirm that a 401 came from an expired built-in OAuth session rather than
+ * an upstream runtime or another API-specific authorization check. */
+export async function isOAuthLoginRequired(): Promise<boolean> {
+  const [identity, providers] = await Promise.all([
+    resolveIdentity(),
+    fetchProviders(),
+  ]);
+  return identity.status === "unauthenticated" && providers.length > 0;
+}
+
 export function logout(): void {
   window.location.assign("/oauth2/logout");
 }
