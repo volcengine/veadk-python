@@ -1,4 +1,9 @@
 .abc-root {
+  --cw-workbench-toolbar-height: 64px;
+  --cw-workspace-ink: 222 24% 13%;
+  --cw-workspace-accent: 162 44% 32%;
+  --cw-workspace-accent-soft: 156 34% 92%;
+  --cw-workspace-warm: 42 28% 96%;
   flex: 0 1 52%;
   min-width: 460px;
   min-height: 0;
@@ -181,6 +186,12 @@
   --abc-type-border: 213 32% 62%;
 }
 
+.abc-group.is-llm {
+  --abc-type-tone: 220 9% 24%;
+  --abc-type-soft: 220 10% 97%;
+  --abc-type-border: 220 9% 66%;
+}
+
 .abc-group.is-loop {
   --abc-type-tone: 151 34% 34%;
   --abc-type-soft: 148 32% 94%;
@@ -193,7 +204,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 10px 16px;
+  padding: 10px 132px 10px 72px;
   border-bottom: 1px solid hsl(var(--border) / 0.75);
 }
 
@@ -222,8 +233,8 @@
 
 .abc-group-head em {
   position: absolute;
-  top: 50%;
-  right: 16px;
+  top: 12px;
+  right: 22px;
   padding: 3px 7px;
   border-radius: 999px;
   background: hsl(var(--background) / 0.82);
@@ -231,14 +242,10 @@
   font-size: 9px;
   font-style: normal;
   font-weight: 600;
-  transform: translateY(-50%);
+  white-space: nowrap;
 }
 
 .abc-group-add {
-  position: absolute;
-  right: 24px;
-  bottom: 24px;
-  left: 24px;
   height: 40px;
   display: flex;
   align-items: center;
@@ -256,6 +263,72 @@
     border-color 150ms ease,
     background-color 150ms ease,
     color 150ms ease;
+}
+
+.abc-group-boundary-actions {
+  position: absolute;
+  inset: 64px 0 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.abc-group-boundary-add {
+  position: absolute;
+  top: 50%;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid hsl(var(--abc-type-tone) / 0.32);
+  border-radius: 50%;
+  background: hsl(var(--background) / 0.94);
+  box-shadow: 0 6px 18px hsl(var(--foreground) / 0.08);
+  color: hsl(var(--abc-type-tone));
+  cursor: pointer;
+  opacity: 0.72;
+  pointer-events: auto;
+  transform: translateY(-50%);
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    box-shadow 150ms ease,
+    opacity 150ms ease;
+}
+
+.abc-group-boundary-add.is-start {
+  left: 18px;
+}
+
+.abc-group-boundary-add.is-end {
+  right: 18px;
+}
+
+.abc-group-boundary-add:hover {
+  border-color: hsl(var(--abc-type-tone) / 0.64);
+  background: hsl(var(--abc-type-soft) / 0.92);
+  box-shadow: 0 8px 22px hsl(var(--foreground) / 0.1);
+  opacity: 1;
+}
+
+.abc-group-boundary-add:focus-visible {
+  outline: 2px solid hsl(var(--abc-type-tone) / 0.5);
+  outline-offset: 2px;
+  opacity: 1;
+}
+
+.abc-group-boundary-add svg {
+  width: 14px;
+  height: 14px;
+}
+
+.abc-group-add-empty,
+.abc-group-add-bottom {
+  position: absolute;
+  right: 24px;
+  bottom: 24px;
+  left: 24px;
 }
 
 .abc-group-add:hover {
@@ -364,7 +437,7 @@
 }
 
 .abc-group:has(> .abc-node-delete) .abc-group-head em {
-  right: 46px;
+  right: 48px;
 }
 
 .abc-loop-handle {
@@ -519,13 +592,6 @@
   transform: scale(1);
 }
 
-.abc-edge-add.is-boundary:hover {
-  border-color: hsl(var(--cw-workspace-accent) / 0.82);
-  box-shadow:
-    0 0 0 3px hsl(var(--cw-workspace-accent) / 0.09),
-    0 6px 16px hsl(var(--foreground) / 0.12);
-}
-
 .abc-edge-add:focus-visible {
   outline: 2px solid hsl(var(--cw-workspace-accent) / 0.5);
   outline-offset: 2px;
@@ -645,6 +711,10 @@
 
 .abc-minimap-node-group.is-sequential .abc-minimap-shell {
   stroke: hsl(213 40% 40% / 0.82);
+}
+
+.abc-minimap-node-group.is-llm .abc-minimap-shell {
+  stroke: hsl(220 9% 38% / 0.78);
 }
 
 .abc-minimap-node-group.is-loop .abc-minimap-shell {

@@ -155,7 +155,7 @@ test("debug workspace uses optimization checkboxes and a floating publish action
 test("narrow workbench stacks sections instead of squeezing the form", () => {
   assert.match(
     appStyles,
-    /@media \(max-width:\s*860px\)\s*\{[\s\S]*?\.sidebar\s*\{[\s\S]*?width:\s*192px;/,
+    /@media \(max-width:\s*860px\)\s*\{[\s\S]*?\.sidebar\s*\{[\s\S]*?width:\s*204px;/,
   );
   assert.match(
     createStyles,

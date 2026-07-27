@@ -270,26 +270,22 @@ test("materializes A2A registry defaults for deployment env", () => {
 
 test("summarizes the Agent above the deployment configuration", () => {
   assert.match(customCreateSource, /agentDraft=\{draft\}/);
-  assert.match(projectPreviewSource, /className="pp-flow-thumbnail"/);
-  assert.match(projectPreviewSource, /<AgentBuildCanvas[\s\S]*?readOnly/);
-  assert.match(projectPreviewSource, /Agent 数量/);
-  assert.match(projectPreviewSource, />\s*导出配置文件\s*</);
-  assert.match(projectPreviewSource, /<ProjectCodeBrowser[\s\S]*?pp-artifact-source/);
-  assert.match(projectPreviewSource, />\s*导出源码\s*</);
+  assert.match(projectPreviewSource, /className="pp-topology-pane"/);
+  assert.match(projectPreviewSource, /<TopologyNode/);
+  assert.match(projectPreviewSource, /className="pp-topology-count"/);
+  assert.match(projectPreviewSource, />\s*导出配置\s*</);
+  assert.match(projectPreviewSource, />\s*下载源码\s*</);
   assert.match(
     projectPreviewStyles,
-    /grid-template-rows:\s*226px auto/,
+    /\.pp-topology-pane\s*\{[\s\S]*?display:\s*flex;/,
   );
-  assert.match(projectPreviewStyles, /\.pp-release-preview\s*\{[\s\S]*?box-sizing:\s*border-box/);
+  assert.match(projectPreviewStyles, /\.pp-topology-scroll\s*\{[\s\S]*?overflow-y:\s*auto/);
 });
 
-test("enlarges the read-only execution canvas without topology configuration", () => {
-  assert.match(
-    projectPreviewSource,
-    /className="pp-flow-dialog"[\s\S]*?interactivePreview/,
-  );
-  assert.match(projectPreviewSource, /只读预览，可缩放与拖动画布/);
-  assert.doesNotMatch(projectPreviewSource, /pp-topology-pane|inspectedAgent/);
+test("uses a topology pane instead of the old execution-canvas preview", () => {
+  assert.match(projectPreviewSource, /className="pp-topology-pane"/);
+  assert.match(projectPreviewSource, /inspectedAgent/);
+  assert.doesNotMatch(projectPreviewSource, /className="pp-flow-dialog"/);
 });
 
 test("uses an unboxed 查看源码 trigger", () => {

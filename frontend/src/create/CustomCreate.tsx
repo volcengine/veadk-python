@@ -84,7 +84,6 @@ import {
 } from "./vikingKnowledgebases";
 import {
   ProjectPreview,
-  type DeployResult,
   type DeploymentTaskUpdate,
 } from "../ui/ProjectPreview";
 import { Blocks, ThinkingPlaceholder } from "../ui/Blocks";
@@ -1361,45 +1360,6 @@ function insertChild(
   });
 }
 
-function nextAvailableAgentName(root: AgentDraft, preferred: string): string {
-  const names = new Set<string>();
-  const visit = (node: AgentDraft) => {
-    if (node.name) names.add(node.name);
-    node.subAgents.forEach(visit);
-  };
-  visit(root);
-
-  if (!names.has(preferred)) return preferred;
-  let suffix = 2;
-  while (names.has(`${preferred}_${suffix}`)) suffix += 1;
-  return `${preferred}_${suffix}`;
-}
-
-function insertAtRootBoundary(
-  root: AgentDraft,
-  position: "before" | "after",
-): AgentDraft {
-  const index = position === "before" ? 0 : root.subAgents.length;
-  if (root.agentType === "sequential") {
-    return insertChild(root, [], index);
-  }
-
-  const originalName = agentNameProblem(root.name) === null
-    ? `${root.name}_step`
-    : "original_step";
-  const original = {
-    ...root,
-    name: nextAvailableAgentName(root, originalName),
-  };
-  const added = emptyDraft();
-  return {
-    ...root,
-    agentType: "sequential",
-    subAgents:
-      position === "before" ? [added, original] : [original, added],
-  };
-}
-
 function removeNode(root: AgentDraft, path: NodePath): AgentDraft {
   if (path.length === 0) return root; // the root is never removable
   const parentPath = path.slice(0, -1);
@@ -2165,10 +2125,6 @@ interface CustomCreateProps extends CreateModeProps {
     region: string;
     currentVersion?: number | null;
   };
-  /** Called after an existing Runtime has been updated and released. */
-  onDeploymentComplete?: (result: DeployResult) => void | Promise<void>;
-  /** Called once the persistent deployment task has been created. */
-  onDeploymentStarted?: (task: DeploymentTaskUpdate) => void;
   /** Persists the live builder state as a resumable library draft. */
   onDraftChange?: (draft: AgentDraft, dirty: boolean) => void;
   /** Restores the draft state from before this editing session and exits. */
@@ -2183,8 +2139,6 @@ export function CustomCreate({
   features,
   onDeploymentTaskChange,
   deploymentTarget,
-  onDeploymentComplete,
-  onDeploymentStarted,
   onDraftChange,
   onDiscard,
 }: CustomCreateProps) {
@@ -2393,17 +2347,6 @@ export function CustomCreate({
     const safeIndex = Math.max(0, Math.min(index, parent.subAgents.length));
     const next = insertChild(draft, parentPath, safeIndex);
     applyTree(next, [...parentPath, safeIndex]);
-  };
-
-  const insertCanvasRootStep = (position: "before" | "after") => {
-    const wasSequential = draft.agentType === "sequential";
-    const next = insertAtRootBoundary(draft, position);
-    const selectedIndex = position === "before"
-      ? 0
-      : wasSequential
-        ? next.subAgents.length - 1
-        : 1;
-    applyTree(next, [selectedIndex]);
   };
 
   const clearRootAgent = () => {
@@ -2822,7 +2765,6 @@ export function CustomCreate({
           onSelect={setSelectedPath}
           onAdd={addCanvasStep}
           onInsert={insertCanvasStep}
-          onInsertRoot={insertCanvasRootStep}
           onDelete={deleteCanvasStep}
           onReset={clearRootAgent}
         />
@@ -3655,7 +3597,6 @@ export function CustomCreate({
         <div className="cw-preview-body">
           {project ? (
             <ProjectPreview
-              embedded
               project={project}
               agentDraft={draft}
               agentName={draft.name || "未命名 Agent"}
@@ -3664,12 +3605,6 @@ export function CustomCreate({
               onDeploy={handleDeploy}
               onAgentAdded={onAgentAdded}
               onDeploymentTaskChange={onDeploymentTaskChange}
-              deploymentActionLabel={
-                deploymentTarget ? "更新并发布" : "部署"
-              }
-              deploymentRuntimeId={deploymentTarget?.runtimeId}
-              onDeploymentStarted={onDeploymentStarted}
-              onDeploymentComplete={onDeploymentComplete}
               feishuEnabled={!!draft.deployment?.feishuEnabled}
               onFeishuEnabledChange={(feishuEnabled) => {
                 const nextDraft: AgentDraft = {

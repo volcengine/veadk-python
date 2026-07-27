@@ -710,7 +710,6 @@ export function AgentWorkspace({
                         onSelect={() => undefined}
                         onAdd={() => undefined}
                         onInsert={() => undefined}
-                        onInsertRoot={() => undefined}
                         onDelete={() => undefined}
                         onReset={() => undefined}
                         readOnly

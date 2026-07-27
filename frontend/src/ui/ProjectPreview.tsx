@@ -442,9 +442,11 @@ export interface DeploymentTaskUpdate {
   region: string;
   startedAt: number;
   status: "running" | "success" | "error" | "cancelled";
+  phase?: string;
   label: string;
   message?: string;
   pct?: number;
+  agentDraft?: AgentDraft;
   /** Re-runs the same project/config as a new deployment task. */
   retry?: () => Promise<void>;
 }
@@ -857,7 +859,9 @@ export function ProjectPreview({
       region: deployRegion,
       startedAt: taskStartedAt,
       status: "running",
+      phase: "prepare",
       label: "准备部署",
+      agentDraft,
     });
     try {
       const result = await onDeploy(
@@ -874,11 +878,13 @@ export function ProjectPreview({
             region: deployRegion,
             startedAt: taskStartedAt,
             status: "running",
+            phase: s.phase,
             label:
               deploymentSteps.find((step) => step.phase === s.phase)?.label ??
               s.phase,
             message: s.message,
             pct: s.pct,
+            agentDraft,
           });
         },
         feishuEnabled
@@ -904,7 +910,9 @@ export function ProjectPreview({
         region: result.region || deployRegion,
         startedAt: taskStartedAt,
         status: "success",
+        phase: "complete",
         label: "部署完成",
+        agentDraft,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -919,8 +927,10 @@ export function ProjectPreview({
           region: deployRegion,
           startedAt: taskStartedAt,
           status: "cancelled",
+          phase: "complete",
           label: "已取消",
           message: "部署已取消，相关 Runtime 资源已请求销毁。",
+          agentDraft,
         });
         return;
       }
@@ -931,8 +941,10 @@ export function ProjectPreview({
         region: deployRegion,
         startedAt: taskStartedAt,
         status: "error",
+        phase: activePhase ?? "deploy",
         label: "部署失败",
         message,
+        agentDraft,
         retry: requestDeploymentConfirmation,
       });
     } finally {

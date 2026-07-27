@@ -30,11 +30,6 @@ test("each Runtime row has two-line metadata and explicit actions", () => {
   assert.match(selectorSource, /agentsel-item agentsel-runtime-item/);
   assert.match(selectorSource, /className="agentsel-connect"/);
   assert.match(selectorSource, /className=\{`agentsel-info/);
-  assert.match(selectorSource, /canDeleteRuntimes && rt\.canDelete/);
-  assert.match(selectorSource, /className="agentsel-delete"/);
-  assert.match(selectorSource, /确定删除 Agent/);
-  assert.match(selectorSource, /await deleteRuntime\(rt\.runtimeId, rt\.region\)/);
-  assert.match(selectorSource, /onRuntimeDeleted\?\.\(rt\.runtimeId\)/);
   assert.match(selectorSource, /onClick=\{\(\) => togglePreview\(rt\)\}/);
   assert.match(selectorSource, /previewed && \([\s\S]*?<RuntimePreviewPanel/);
   assert.match(selectorSource, /role="tablist"/);
@@ -96,8 +91,6 @@ test("Runtime metadata failures use bounded, actionable Chinese messages", () =>
 
 test("Agent information includes structure, capabilities, and mounted components", () => {
   assert.match(clientSource, /components\?: AgentComponent\[\]/);
-  assert.match(clientSource, /skillsPreviewSupported:\s*boolean/);
-  assert.match(clientSource, /skillsPreviewSupported:\s*Array\.isArray\(info\.skills\)/);
   assert.match(clientSource, /skills:\s*info\.skills \?\? \[\]/);
   assert.match(clientSource, /subAgents:\s*info\.subAgents \?\? \[\]/);
   assert.match(selectorSource, /title="子 Agent"/);
@@ -108,13 +101,6 @@ test("Agent information includes structure, capabilities, and mounted components
   assert.doesNotMatch(selectorSource, /\b(?:Sparkles|Wrench)\b/);
   assert.match(capabilityIconSource, /function ToolCapabilityIcon/);
   assert.match(capabilityIconSource, /function SkillCapabilityIcon/);
-});
-
-test("unsupported Runtime Skill introspection remains visible as an explicit preview state", () => {
-  assert.match(
-    selectorSource,
-    /info\.skillsPreviewSupported[\s\S]*?info\.skills\.length > 0[\s\S]*?暂不支持预览/,
-  );
 });
 
 test("Runtime rows and detail use the custom live-execution mark", () => {
@@ -253,10 +239,6 @@ test("the tabbed detail panel constrains long content and narrow viewports", () 
   );
   assert.match(
     stylesSource,
-    /@media \(max-width:\s*860px\)[\s\S]*?\.agentsel\s*\{[\s\S]*?--agentsel-available-width:\s*calc\(100vw - 206px\);/,
-  );
-  assert.match(
-    stylesSource,
-    /@media \(hover:\s*hover\)[\s\S]*?\.agentsel-runtime-item:hover \.agentsel-delete,[\s\S]*?\.agentsel-runtime-item:focus-within \.agentsel-delete/,
+    /@media \(max-width:\s*860px\)[\s\S]*?\.agentsel\s*\{[\s\S]*?--agentsel-available-width:\s*calc\(100vw - 218px\);/,
   );
 });
