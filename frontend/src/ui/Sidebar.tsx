@@ -1,6 +1,5 @@
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import {
-  ChevronRight,
   Info,
   LogOut,
   MoreHorizontal,
@@ -21,12 +20,9 @@ import { sessionTitle } from "../blocks";
 import { displayName, profilePictureUrl } from "../adk/identity";
 import { SkillCenterButton } from "./SkillCenter";
 import { SearchButton } from "./Search";
-import { AgentSelector, type SelectedRuntime } from "./AgentSelector";
-import { AgentIdentityIcon } from "./AgentIdentityIcon";
 import volcengineLogo from "../assets/volcengine.svg";
 
 const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
-const MAIN_PANEL_TOP_PX = 54;
 
 /** Hand-drawn "quick create" mark: a lightning bolt (speed) with a spark. */
 function QuickCreateIcon() {
@@ -79,14 +75,6 @@ export interface SidebarProps {
   access: StudioAccess;
   /** Session ids that are currently streaming a reply (shows a live dot). */
   streamingSids?: Set<string>;
-  /** Agent picker: source, local app list, current selection + label. */
-  agentsSource?: "local" | "cloud";
-  localApps?: string[];
-  currentAgentId?: string;
-  currentAgentLabel?: string;
-  /** The connected runtime (drives the picker's detail panel). */
-  currentRuntime?: SelectedRuntime;
-  onSelectAgent?: (id: string) => void;
   onNewChat: () => void;
   onSearch: () => void;
   onQuickCreate: () => void;
@@ -299,12 +287,6 @@ export function Sidebar({
   features,
   access,
   streamingSids,
-  agentsSource = "local",
-  localApps = [],
-  currentAgentId = "",
-  currentAgentLabel = "",
-  currentRuntime,
-  onSelectAgent,
   onNewChat,
   onSearch,
   onQuickCreate,
@@ -323,22 +305,17 @@ export function Sidebar({
   // Per-module feature gates; a missing flag defaults to shown.
   const show = (k: keyof NonNullable<typeof features>) => features?.[k] !== false;
   const [menuFor, setMenuFor] = useState<string | null>(null);
-  const [selectorOpen, setSelectorOpen] = useState(false);
   const autoCollapsedRef = useRef(
     typeof window !== "undefined" &&
       window.matchMedia(SIDEBAR_AUTO_COLLAPSE_QUERY).matches,
   );
   const [collapsed, setCollapsed] = useState(autoCollapsedRef.current);
-  const toggleSelector = () => {
-    setSelectorOpen((o) => !o);
-  };
   const sorted = [...sessions].sort(
     (a, b) => (b.lastUpdateTime ?? 0) - (a.lastUpdateTime ?? 0),
   );
   const toggleCollapsed = () => {
     autoCollapsedRef.current = false;
     setCollapsed((value) => !value);
-    setSelectorOpen(false);
     setMenuFor(null);
   };
   useEffect(() => {
@@ -388,52 +365,6 @@ export function Sidebar({
             )}
           </button>
         </div>
-        {onSelectAgent &&
-          (() => {
-            // Cloud mode with nothing connected: a red prompt so the default
-            // isn't mistaken for a real agent.
-            const needsPick = agentsSource === "cloud" && !currentAgentId;
-            const isConnected =
-              agentsSource === "cloud" && !needsPick && Boolean(currentRuntime);
-            const selectedRegion =
-              agentsSource === "cloud" && !needsPick && currentRuntime?.region
-                ? currentRuntime.region === "cn-beijing"
-                  ? "北京"
-                  : currentRuntime.region === "cn-shanghai"
-                    ? "上海"
-                    : currentRuntime.region
-                : "";
-            return (
-              <button
-                className={`agent-row ${needsPick ? "agent-row--empty" : ""} ${isConnected ? "agent-row--connected" : ""}`}
-                onClick={toggleSelector}
-                aria-label={needsPick ? "请选择 Agent" : currentAgentLabel || "选择 Agent"}
-                title="切换 Agent"
-              >
-                <AgentIdentityIcon className="icon agent-row-lead" />
-                <span className="agent-row-name">
-                  {needsPick ? "请选择 Agent" : currentAgentLabel || "选择 Agent"}
-                </span>
-                {selectedRegion && (
-                  <span className="agent-row-region">{selectedRegion}</span>
-                )}
-                <ChevronRight className={`icon agent-row-chev ${selectorOpen ? "open" : ""}`} />
-              </button>
-            );
-          })()}
-        {onSelectAgent && (
-          <AgentSelector
-            open={selectorOpen}
-            onClose={() => setSelectorOpen(false)}
-            anchorTop={MAIN_PANEL_TOP_PX}
-            agentsSource={agentsSource}
-            localApps={localApps}
-            currentId={currentAgentId}
-            currentRuntime={currentRuntime}
-            runtimeScope={access.capabilities.runtimeScope}
-            onSelect={onSelectAgent}
-          />
-        )}
         {show("newChat") && (
           <button
             className="new-chat"

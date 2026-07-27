@@ -29,7 +29,7 @@ test("loads temporary-session and Skill-creation capabilities independently", ()
   assert.match(appSource, /skillCreateEnabled/);
 });
 
-test("disables only the unavailable mode and explains that an administrator must configure it", () => {
+test("keeps Codex selectable while explaining unavailable Skill creation", () => {
   assert.match(composerSource, /temporaryEnabled\?: boolean/);
   assert.match(composerSource, /skillCreateEnabled\?: boolean/);
   assert.match(composerSource, /temporaryEnabled=\{temporaryEnabled\}/);
@@ -39,6 +39,8 @@ test("disables only the unavailable mode and explains that an administrator must
   assert.match(selectorSource, /管理员未配置/);
   assert.match(selectorSource, /if \(modeDisabled\(mode\)\) return/);
   assert.match(selectorSource, /disabled=\{modeDisabled\(mode\)\}/);
+  assert.doesNotMatch(selectorSource, /disabled=\{temporaryEnabled !== true\}/);
+  assert.match(selectorSource, /temporaryEnabled === false \? "启动时检查运行环境"/);
   assert.doesNotMatch(selectorSource, /value:\s*"agent"[\s\S]*?disabled:\s*true/);
 });
 

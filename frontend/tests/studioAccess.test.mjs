@@ -60,9 +60,12 @@ test("runtime authorization failures are not reported as unsupported", () => {
 });
 
 test("selected Agent icons are optically aligned with the label", () => {
-  assert.match(stylesSource, /\.agent-row\s*{[^}]*align-items: center/);
-  assert.doesNotMatch(stylesSource, /\.agent-row-lead[^}]*transform:/);
-  assert.match(stylesSource, /\.agent-row-chev\.open[^}]*translateY\(1px\) rotate\(90deg\)/);
+  assert.match(stylesSource, /\.agentsel-item\s*{[^}]*align-items:\s*center/);
+  assert.match(
+    stylesSource,
+    /\.agentsel-item \.icon\s*{[^}]*width:\s*16px;[^}]*height:\s*16px;/,
+  );
+  assert.doesNotMatch(stylesSource, /\.agentsel-item \.icon[^}]*transform:/);
 });
 
 test("deployment and management requests rely on server identity, not author input", () => {

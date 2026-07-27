@@ -11,6 +11,18 @@ const selectorSource = readFileSync(
   new URL("../src/ui/new-chat-modes/NewChatModeSelector.tsx", import.meta.url),
   "utf8",
 );
+const sidebarSource = readFileSync(
+  new URL("../src/ui/Sidebar.tsx", import.meta.url),
+  "utf8",
+);
+const agentSelectorSource = readFileSync(
+  new URL("../src/ui/AgentSelector.tsx", import.meta.url),
+  "utf8",
+);
+const navbarSource = readFileSync(
+  new URL("../src/ui/Navbar.tsx", import.meta.url),
+  "utf8",
+);
 const modeStylesSource = readFileSync(
   new URL("../src/ui/new-chat-modes/new-chat-modes.css", import.meta.url),
   "utf8",
@@ -23,7 +35,7 @@ const stylesSource = readFileSync(
 test("expands only the new-chat composer into a multiline input", () => {
   assert.match(
     composerSource,
-    /className=\{`composer\$\{newChatLayout \? " composer--new-chat" : ""\}`\}/,
+    /className=\{`composer\$\{newChatLayout \? " composer--new-chat" : ""\}\$\{skillMode \? " composer--skill-mode" : ""\}`\}/,
   );
   assert.match(composerSource, /rows=\{newChatLayout \? 4 : 1\}/);
   assert.match(
@@ -37,18 +49,14 @@ test("expands only the new-chat composer into a multiline input", () => {
   assert.match(stylesSource, /\.composer--new-chat \.comp-send \.icon[\s\S]*?width: 20px/);
 });
 
-test("places the mode selector beside send and labels Agent mode with the current Agent", () => {
-  assert.match(composerSource, /<NewChatModeSelector[\s\S]*?agentName=\{agentName\}/);
-  assert.match(selectorSource, /agentName: string/);
-  assert.match(
-    selectorSource,
-    /current\.value === "agent" \? agentName : current\.label/,
-  );
-  assert.match(selectorSource, /value: "temporary"[\s\S]*?label: "临时会话"/);
+test("places the mode selector beside add and moves Agent selection to the navbar", () => {
+  assert.match(composerSource, /<NewChatModeSelector[\s\S]*?value=\{newChatMode\}/);
+  assert.match(selectorSource, /value: "agent"[\s\S]*?label: "Agent"/);
+  assert.match(selectorSource, /value: "temporary"[\s\S]*?label: "内置智能体"/);
   assert.match(selectorSource, /value: "skill-create"[\s\S]*?label: "创建 Skill"/);
   assert.match(
     stylesSource,
-    /\.composer--new-chat \.new-chat-mode[\s\S]*?right: 52px[\s\S]*?bottom: 10px/,
+    /\.composer--new-chat \.new-chat-mode[\s\S]*?left: 52px[\s\S]*?bottom: 10px/,
   );
   assert.match(
     modeStylesSource,
@@ -56,8 +64,78 @@ test("places the mode selector beside send and labels Agent mode with the curren
   );
   assert.match(
     modeStylesSource,
-    /\.new-chat-mode__menu\s*\{[\s\S]*?top:\s*calc\(100% \+ 7px\);[\s\S]*?right:\s*0;/,
+    /\.new-chat-mode__menu\s*\{[\s\S]*?top:\s*calc\(100% \+ 7px\);[\s\S]*?left:\s*0;/,
   );
   assert.match(selectorSource, /<AgentIdentityIcon className="new-chat-mode__agent-icon"/);
-  assert.match(selectorSource, /new-chat-mode__temporary-icon[\s\S]*?strokeDasharray/);
+  assert.match(selectorSource, /className="new-chat-mode__temporary-icon"[\s\S]*?m10 2\.8 6\.1 3\.45/);
+  assert.doesNotMatch(selectorSource, /M5 6\.2h10v7\.6H5z/);
+  assert.doesNotMatch(selectorSource, /<AgentSelector/);
+  assert.match(navbarSource, /<AgentSelector[\s\S]*?variant="navbar"/);
+  assert.match(selectorSource, /Codex 智能体/);
+  assert.match(selectorSource, /codexLogo/);
+  assert.match(selectorSource, /\{ label: "ArkClaw", logo: arkClawLogo \}/);
+  assert.match(selectorSource, /\{ label: "Hermes 智能体", logo: hermesLogo \}/);
+  assert.match(selectorSource, /className="new-chat-mode__builtin-icon" src=\{logo\}/);
+  assert.doesNotMatch(selectorSource, />[CAH]<\/span>/);
+  assert.match(
+    modeStylesSource,
+    /\.new-chat-mode__builtin-icon\s*\{[\s\S]*?width:\s*24px;[\s\S]*?object-fit:\s*contain;/,
+  );
+  assert.match(agentSelectorSource, /variant\?: "drawer" \| "navbar"/);
+  assert.doesNotMatch(sidebarSource, /<AgentSelector|className=\{`agent-row/);
+  assert.match(stylesSource, /\.welcome\s*\{[\s\S]*?gap:\s*32px;/);
+  assert.match(
+    stylesSource,
+    /\.welcome\s*\{[\s\S]*?padding:\s*0 16px clamp\(64px, 12vh, 104px\);/,
+  );
+});
+
+test("shows animated starter prompts below the empty new-chat composer", () => {
+  assert.match(composerSource, /const STARTER_PROMPTS = \[/);
+  assert.match(composerSource, /function AnalyzePromptIcon\(\)/);
+  assert.match(composerSource, /function PlanPromptIcon\(\)/);
+  assert.match(composerSource, /function RewritePromptIcon\(\)/);
+  assert.doesNotMatch(composerSource, /\bLightbulb\b|\bListChecks\b|\bPencilLine\b/);
+  assert.match(
+    composerSource,
+    /newChatLayout && newChatMode === "agent" && !value\.trim\(\)/,
+  );
+  assert.match(composerSource, /className="prompt-suggestions"/);
+  assert.match(composerSource, /onClick=\{\(\) => applyStarterPrompt\(prompt\.text\)\}/);
+  assert.match(composerSource, /ref\.current\?\.focus\(\)/);
+  assert.match(stylesSource, /\.prompt-suggestion\s*\{[\s\S]*?font-size:\s*15px;/);
+  assert.match(stylesSource, /\.comp-input\s*\{[\s\S]*?font-size:\s*15px;/);
+  assert.match(
+    stylesSource,
+    /\.composer--new-chat\s*\{[\s\S]*?position:\s*relative;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.prompt-suggestions\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?top:\s*calc\(100% \+ 12px\);/,
+  );
+  assert.match(stylesSource, /@keyframes prompt-suggestion-enter/);
+  assert.match(
+    stylesSource,
+    /\.prompt-suggestion > svg\s*\{[\s\S]*?stroke:\s*currentColor;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.prompt-suggestion:nth-child\(1\):hover > svg\s*\{[\s\S]*?transform:/,
+  );
+  assert.match(
+    stylesSource,
+    /\.prompt-suggestion:nth-child\(2\):hover > svg\s*\{[\s\S]*?transform:/,
+  );
+  assert.match(
+    stylesSource,
+    /\.prompt-suggestion:nth-child\(3\):hover > svg\s*\{[\s\S]*?transform:/,
+  );
+  assert.match(
+    stylesSource,
+    /\.prompt-suggestion:nth-child\(2\)[\s\S]*?animation-delay:/,
+  );
+  assert.match(
+    stylesSource,
+    /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.prompt-suggestion[\s\S]*?animation: none/,
+  );
 });

@@ -137,6 +137,15 @@ test("the tabbed detail panel constrains long content and narrow viewports", () 
   );
   assert.match(
     stylesSource,
+    /\.agentsel--navbar\s*\{[\s\S]*?width:\s*min\(clamp\(264px, 26vw, 288px\), calc\(100vw - 48px\)\);[\s\S]*?height:\s*min\(640px, calc\(100dvh - 74px\)\);/,
+  );
+  assert.match(
+    stylesSource,
+    /\.agentsel--navbar \.agentsel-main\s*\{[\s\S]*?width:\s*100%;[\s\S]*?flex-basis:\s*auto;/,
+  );
+  assert.doesNotMatch(selectorSource, /min\(420px, calc\(100dvh - 64px\)\)/);
+  assert.match(
+    stylesSource,
     /\.agentsel\.has-detail\s*\{[\s\S]*?width:\s*min\(688px, var\(--agentsel-available-width\)\);/,
   );
   assert.match(
@@ -177,7 +186,7 @@ test("the tabbed detail panel constrains long content and narrow viewports", () 
   );
   assert.match(
     selectorSource,
-    /className=\{`agentsel \$\{previewed \? "has-detail" : ""\}`\}/,
+    /className=\{`agentsel agentsel--\$\{variant\}\$\{previewed && variant === "drawer" \? " has-detail" : ""\}`\}/,
   );
   assert.match(
     stylesSource,

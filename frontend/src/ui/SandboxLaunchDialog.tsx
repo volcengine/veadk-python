@@ -62,7 +62,7 @@ export function SandboxLaunchDialog({
     ? "正在初始化沙箱"
     : state === "error"
       ? "启动失败"
-      : "启用临时会话";
+      : "启用 Codex 智能体";
 
   return createPortal(
     <div
@@ -93,11 +93,11 @@ export function SandboxLaunchDialog({
             </p>
           ) : loading ? (
             <p id="sandbox-dialog-description" aria-live="polite">
-              正在寻找可用工具并创建临时 Session，通常需要一点时间。
+              正在寻找可用工具并创建内置智能体会话，通常需要一点时间。
             </p>
           ) : (
             <p id="sandbox-dialog-description">
-              将启动 AgentKit 沙箱与 Codex Agent 开启临时会话，您的会话将不会被持久化保存。
+              将启动 AgentKit 沙箱与 Codex 智能体，本次对话不会被持久化保存。
             </p>
           )}
         </div>

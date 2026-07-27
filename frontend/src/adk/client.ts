@@ -361,7 +361,11 @@ export async function createSession(
     { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
     ep,
   );
-  if (!res.ok) throw new Error(`create session failed: ${res.status}`);
+  if (!res.ok) {
+    const fallback = `创建会话失败 (${res.status})`;
+    const detail = await httpErrorMessage(res, "创建会话失败");
+    throw new Error(detail === fallback ? fallback : `${fallback}：${detail}`);
+  }
   const session = await res.json();
   return session.id;
 }
