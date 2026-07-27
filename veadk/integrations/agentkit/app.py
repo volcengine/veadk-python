@@ -378,14 +378,17 @@ def _add_introspection_routes(
     app: FastAPI,
     root_agent: BaseAgent,
     display_names: Mapping[str, str],
+    *,
+    app_name: str | None = None,
 ) -> None:
+    expected_name = app_name or str(getattr(root_agent, "name", "") or "")
+
     @app.get("/ping")
     def ping() -> dict[str, str]:
         return {"status": "ok"}
 
     @app.get("/web/agent-info/{app_name}")
     def agent_info(app_name: str) -> dict[str, Any]:
-        expected_name = str(getattr(root_agent, "name", "") or "")
         if app_name != expected_name:
             raise HTTPException(status_code=404, detail="unknown agent: " + app_name)
         node = _agent_node(root_agent, display_names)
@@ -413,7 +416,6 @@ def _add_introspection_routes(
         q: str,
         user_id: str = "",
     ) -> dict[str, Any]:
-        expected_name = str(getattr(root_agent, "name", "") or "")
         if app_name != expected_name:
             raise HTTPException(status_code=404, detail="unknown agent: " + app_name)
         if source not in {"knowledge", "memory"}:

@@ -88,6 +88,11 @@ from veadk.cloud.harness_app.utils import (
     has_a2a_registry_config,
     spawn_harness_run_agent,
 )
+from veadk.integrations.agentkit.app import (
+    _ADK_SERVER_STATE_KEY,
+    _add_introspection_routes,
+    _configure_session_capability_routes,
+)
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.runner import Runner
 from veadk.utils.logger import get_logger
@@ -211,6 +216,14 @@ class HarnessApp:
         # Base app = ADK api routes; then add /harness/invoke; mount A2A last so
         # it catches the well-known / RPC paths the ADK routes don't claim.
         self.app = self._server.get_fast_api_app(lifespan=lifespan)
+        setattr(self.app.state, _ADK_SERVER_STATE_KEY, self._server)
+        _configure_session_capability_routes(self.app, self.agent)
+        _add_introspection_routes(
+            self.app,
+            self.agent,
+            {},
+            app_name=self.harness_name,
+        )
         self.mount()
         self._mount_run_sse_override()
         self.app.mount("/", self._a2a_app)
