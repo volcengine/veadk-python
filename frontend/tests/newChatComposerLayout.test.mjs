@@ -68,4 +68,12 @@ test("places the mode selector beside send and labels Agent mode with the curren
   );
   assert.match(selectorSource, /<AgentIdentityIcon className="new-chat-mode__agent-icon"/);
   assert.match(selectorSource, /new-chat-mode__temporary-icon[\s\S]*?strokeDasharray/);
+  assert.match(
+    selectorSource,
+    /className="new-chat-mode__label"[\s\S]*?title=\{mode\.value === "agent" \? agentName : undefined\}/,
+  );
+  assert.match(
+    modeStylesSource,
+    /\.new-chat-mode__label-text\s*\{[\s\S]*?overflow:\s*hidden;[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?white-space:\s*nowrap;/,
+  );
 });

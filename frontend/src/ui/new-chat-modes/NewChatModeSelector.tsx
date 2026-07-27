@@ -189,8 +189,13 @@ export function NewChatModeSelector({
             >
               <span className="new-chat-mode__option-icon"><ModeIcon mode={mode.value} /></span>
               <span className="new-chat-mode__copy">
-                <span className="new-chat-mode__label">
-                  {mode.value === "agent" ? agentName : mode.label}
+                <span
+                  className="new-chat-mode__label"
+                  title={mode.value === "agent" ? agentName : undefined}
+                >
+                  <span className="new-chat-mode__label-text">
+                    {mode.value === "agent" ? agentName : mode.label}
+                  </span>
                   {mode.value === "skill-create" ? (
                     <span className="new-chat-mode__beta">Beta</span>
                   ) : null}
