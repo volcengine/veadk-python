@@ -94,7 +94,16 @@ test("sidebar actions use friendly scoped motion", () => {
 });
 
 test("username login focuses the name field on arrival", () => {
-  assert.match(loginSource, /className="login-name-input"[\s\S]*?autoFocus/);
+  assert.match(loginSource, /const nameInputRef = useRef<HTMLInputElement>\(null\)/);
+  assert.match(
+    loginSource,
+    /const showUsernameLogin = providers !== null && providers\.length === 0;[\s\S]*?useEffect\(\(\) => \{[\s\S]*?nameInputRef\.current\?\.focus\(\);[\s\S]*?\}, \[showUsernameLogin\]\);/,
+  );
+  assert.match(
+    loginSource,
+    /<input[\s\S]*?ref=\{nameInputRef\}[\s\S]*?className="login-name-input"/,
+  );
+  assert.doesNotMatch(loginSource, /\}, \[name\]\);/);
 });
 
 test("unified Agent workspace distinguishes local and remote Agents", () => {
