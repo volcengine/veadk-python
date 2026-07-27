@@ -104,6 +104,18 @@ test("shows Agent tools, skills, and topology for every Agent", () => {
   assert.ok(topologyIndex > skillsIndex);
 });
 
+test("distinguishes unsupported Skill preview from a supported empty list", () => {
+  assert.match(railSource, /info\.skillsPreviewSupported/);
+  assert.match(
+    railSource,
+    /count=\{info\.skillsPreviewSupported \? skills\.length : undefined\}/,
+  );
+  assert.match(
+    railSource,
+    /!info\.skillsPreviewSupported[\s\S]*?暂不支持预览[\s\S]*?skills\.length > 0[\s\S]*?未配置/,
+  );
+});
+
 test("keeps Agent information out of the new-session empty state", () => {
   const emptyState = appSource.slice(
     appSource.indexOf(": turns.length === 0 ? ("),

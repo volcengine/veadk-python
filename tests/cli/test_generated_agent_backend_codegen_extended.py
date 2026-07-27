@@ -61,20 +61,22 @@ from veadk.cli.generated_agent_skills import (
 # These hashes lock the complete generated project contents, not just Python
 # syntax or selected snippets.
 _MINIMAL_FRONTEND_GOLDEN = {
-    "app.py": "c7807c570167793fc8c5a8a72e9f3c32aac0820db3098cb52edb1488c34a8e5f",
+    "app.py": "3a5838b3c702202c0a26d8560e396e3c3c46e223b99e2e1d74eb434d653474df",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
-    "agents/demo_agent/agent.py": "b2d22094a8ea61e8ab6e2b633d7695c5fa5e883f03516cb8771e7ec00be0fe1f",
-    "agents/demo_agent/__init__.py": "62d651c229ddd771cf0cc0a8b0e05e96b739a737fe71e41fe8bf1df484150c36",
+    "agents/demo_agent/agent.py": "f4867047f9cb0e700a7c3e1b1ef5c6376af6637855f49d846b47d42cb253a63b",
+    "agents/demo_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
+    "agents/demo_agent/dynamic_a2a.py": "d4ba7d6b28ba4f6091ea06d3896225386c90d99d4b3172216a0e4235744e6323",
     ".env.example": "ec3258da9bef4e74333376d8554c265ccb12a4a1e5d4e1e1b0acdf5c9ae93ab6",
     "requirements.txt": "9a04e5f16e94d5e751681082776f1c99f13da7a577c8753c3835e0ea507245e4",
     "README.md": "a34208314cf9061c02662028d7a9dd97448e6b73c1d732cb4aeaa8f70dbbc684",
 }
 
 _FULL_FRONTEND_GOLDEN = {
-    "app.py": "a9903cf7e095733e9b8658182a0954a81d8a98b431f8ab995ce3818950127006",
+    "app.py": "56183a125e505c543294356fc9c7662a5eedb3b8661070f6be1df9b579e35ed4",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
-    "agents/full_agent/agent.py": "72af9cb24761f83ddc20951706ba3c154b65423cc35962131aefb55fe7c3d8fe",
-    "agents/full_agent/__init__.py": "62d651c229ddd771cf0cc0a8b0e05e96b739a737fe71e41fe8bf1df484150c36",
+    "agents/full_agent/agent.py": "1b706ef02dfbe38620fc242cf46e7e8af645c3758f8425f42a8ad56b22e5c031",
+    "agents/full_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
+    "agents/full_agent/dynamic_a2a.py": "d4ba7d6b28ba4f6091ea06d3896225386c90d99d4b3172216a0e4235744e6323",
     ".env.example": "054a10f8bc0e046158349ebccdc67a1182c22c4c63ee5b51bf7c2c1674abe052",
     "requirements.txt": "4a941e1bf7efb43d57f608649ac238f2e5ea833f9e0aae92f8bc3fef67b8874e",
     "README.md": "1bf4dc889c7d1076f50784d253b53412ba7c49bcb69a5d948f9092dbbecb18ac",
@@ -212,8 +214,11 @@ def test_codegen_preserves_agent_display_names_for_topology() -> None:
     assert "'agent_sub_1': '订单助手'" in agent_py
     assert "create_agentkit_app(" in app_py
     assert "AGENT_DISPLAY_NAMES" in app_py
-    assert 'app.get("/web/agent-info' not in app_py
-    assert len(app_py.splitlines()) == 25
+    assert "AGENT_DRAFT" in app_py
+    assert '"agent_draft" in signature(create_agentkit_app).parameters' in app_py
+    assert '_app_options["agent_draft"] = AGENT_DRAFT' in app_py
+    assert '@app.get("/web/agent-info/{app_name}")' in app_py
+    assert '"draft": AGENT_DRAFT' in app_py
 
 
 def test_codegen_enables_feishu_without_exposing_lifecycle_code() -> None:
@@ -226,7 +231,7 @@ def test_codegen_enables_feishu_without_exposing_lifecycle_code() -> None:
     files = _file_map(project)
     app_py = files["app.py"]
 
-    assert "enable_feishu=True" in app_py
+    assert '"enable_feishu": True' in app_py
     assert "FeishuChannelExtension" not in app_py
     assert "asynccontextmanager" not in app_py
     assert "veadk-python[extensions]" in files["requirements.txt"]
@@ -872,11 +877,27 @@ def test_agentkit_app_adds_dynamic_a2a_tools_per_run() -> None:
     assert "def _configure_dynamic_a2a_routes(" in source
     assert "def _run_request_custom_metadata(" in source
     assert 'getattr(req, "custom_metadata", None)' in source
+    assert "plugins=[FrontendInvocationPlugin()]" in source
+    assert "session_service is None or not _has_a2a_registry_config" not in source
     assert "req.custom_metadata" not in source
     assert '@app.post("/run_sse")' in source
     assert '@app.post("/invoke")' in source
     assert "types.UserContent" in source
     assert '@app.post("/run", response_model=None)' in source
+
+
+def test_generated_agent_always_enables_per_invocation_metadata() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(name="demo-agent", description="Demo agent")
+    )
+    files = _file_map(project)
+
+    assert "agents/demo_agent/dynamic_a2a.py" in files
+    assert "enable_dynamic_a2a_tools(app, root_agent)" in files["app.py"]
+    assert (
+        "plugins=[FrontendInvocationPlugin()]"
+        in files["agents/demo_agent/dynamic_a2a.py"]
+    )
 
 
 def test_frontend_deploy_forwards_a2a_registry_runtime_env_keys() -> None:

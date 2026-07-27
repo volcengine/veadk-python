@@ -91,6 +91,8 @@ test("Runtime metadata failures use bounded, actionable Chinese messages", () =>
 
 test("Agent information includes structure, capabilities, and mounted components", () => {
   assert.match(clientSource, /components\?: AgentComponent\[\]/);
+  assert.match(clientSource, /skillsPreviewSupported:\s*boolean/);
+  assert.match(clientSource, /skillsPreviewSupported:\s*Array\.isArray\(info\.skills\)/);
   assert.match(clientSource, /skills:\s*info\.skills \?\? \[\]/);
   assert.match(clientSource, /subAgents:\s*info\.subAgents \?\? \[\]/);
   assert.match(selectorSource, /title="子 Agent"/);
@@ -101,6 +103,13 @@ test("Agent information includes structure, capabilities, and mounted components
   assert.doesNotMatch(selectorSource, /\b(?:Sparkles|Wrench)\b/);
   assert.match(capabilityIconSource, /function ToolCapabilityIcon/);
   assert.match(capabilityIconSource, /function SkillCapabilityIcon/);
+});
+
+test("unsupported Runtime Skill introspection remains visible as an explicit preview state", () => {
+  assert.match(
+    selectorSource,
+    /info\.skillsPreviewSupported[\s\S]*?info\.skills\.length > 0[\s\S]*?暂不支持预览/,
+  );
 });
 
 test("Runtime rows and detail use the custom live-execution mark", () => {

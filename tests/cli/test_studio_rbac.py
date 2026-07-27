@@ -21,6 +21,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import yaml
 from click.testing import CliRunner
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -435,3 +436,78 @@ def test_runtime_detail_proxy_and_delete_enforce_role_and_owner(
         )
 
     assert deleted == ["runtime-developer", "runtime-other"]
+
+
+def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    runtime = _runtime("runtime-developer", "developer")
+    runtime.role_name = "runtime-role"
+    runtime.current_version_number = 3
+    captured_config: dict[str, Any] = {}
+    get_calls = 0
+
+    def get_runtime(_self: Any, _request: Any) -> SimpleNamespace:
+        nonlocal get_calls
+        get_calls += 1
+        runtime.current_version_number = 4 if get_calls > 1 else 3
+        return runtime
+
+    def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
+        captured_config.update(yaml.safe_load(Path(config_file).read_text()))
+        return SimpleNamespace(
+            success=True,
+            error=None,
+            deploy_result=SimpleNamespace(
+                endpoint_url="https://runtime.example.com",
+                metadata={
+                    "runtime_id": runtime.runtime_id,
+                    "runtime_name": runtime.name,
+                    "runtime_endpoint": "https://runtime.example.com",
+                    "runtime_apikey": "secret",
+                },
+            ),
+        )
+
+    monkeypatch.setattr(AgentkitRuntimeClient, "get_runtime", get_runtime)
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        admins="admin",
+        developers="developer",
+    )
+
+    with TestClient(app) as client:
+        with client.stream(
+            "POST",
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "updated-agent",
+                "description": "Updated description",
+                "runtimeId": runtime.runtime_id,
+                "files": [{"path": "app.py", "content": "app = object()\n"}],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+            },
+        ) as response:
+            frames = [
+                json.loads(line.removeprefix("data: "))
+                for line in response.iter_lines()
+                if line.startswith("data: ")
+            ]
+
+    assert response.status_code == 200
+    assert frames[-1]["success"] is True
+    assert frames[-1]["runtimeId"] == runtime.runtime_id
+    assert frames[-1]["version"] == 4
+    cloud = captured_config["launch_types"]["cloud"]
+    assert cloud["runtime_id"] == runtime.runtime_id
+    assert cloud["runtime_name"] == runtime.name
+    assert cloud["runtime_role_name"] == "runtime-role"
+    assert cloud["image_tag"] == "veadk-v4"
+    assert "runtime_network" not in cloud
+    assert captured_config["common"]["description"] == "Updated description"
