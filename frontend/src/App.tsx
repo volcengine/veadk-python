@@ -57,7 +57,6 @@ import {
   applyEvent,
   emptyAcc,
   eventsToTurns,
-  sessionTitle,
   type Block,
   type Turn,
 } from "./blocks";
@@ -135,17 +134,6 @@ const EMPTY_STRING_ARR: string[] = [];
 
 function emptyInvocation(): FrontendInvocation {
   return { skills: [] };
-}
-
-function activeSessionTitle(session: AdkSession | undefined, turns: Turn[]): string {
-  const persistedTitle = sessionTitle(session?.events);
-  if (persistedTitle !== "新会话") return persistedTitle;
-  for (const turn of turns) {
-    if (turn.role !== "user") continue;
-    const text = turn.blocks.find((block) => block.kind === "text")?.text.trim();
-    if (text) return text;
-  }
-  return "新会话";
 }
 
 function findAgentNode(node: AgentNode, name: string): AgentNode | undefined {
@@ -597,12 +585,6 @@ export default function App() {
     ? turnsBySession[sessionId] ?? []
     : pendingTurns;
   const turns = sandboxSession ? sandboxTurns : persistentTurns;
-  const conversationTitle = sandboxSession
-    ? "灵光一现"
-    : activeSessionTitle(
-        sessions.find((session) => session.id === sessionId),
-        turns,
-      );
   const setTurnsFor = (
     sid: string,
     updater: Turn[] | ((prev: Turn[]) => Turn[]),
@@ -1479,7 +1461,7 @@ export default function App() {
       setSandboxTurns((current) => current.slice(0, -2));
       setInput(text);
       setError(
-        `临时会话发送失败：${
+        `内置智能体发送失败：${
           messageError instanceof Error
             ? messageError.message
             : String(messageError)
@@ -2042,7 +2024,7 @@ export default function App() {
     }
   };
 
-  // Selecting an agent (from the sidebar picker) starts a fresh chat; any
+  // Selecting an agent starts a fresh chat; any
   // background stream keeps persisting to its own (old) session.
   const selectAgent = (id: string) => {
     setConnections(loadConnections());
@@ -2064,12 +2046,6 @@ export default function App() {
       <Sidebar
         branding={siteBranding}
         access={access}
-        agentsSource={agentsSource}
-        localApps={apps}
-        currentAgentId={appName}
-        currentAgentLabel={appName ? labelOf(appName) : ""}
-        currentRuntime={currentRuntime}
-        onSelectAgent={selectAgent}
         features={features}
         sessions={sessions}
         currentSessionId={sessionId}
@@ -2284,8 +2260,7 @@ export default function App() {
               showModeSelector={
                 !sandboxSession &&
                 turns.length === 0 &&
-                skillJob === null &&
-                canCreateAgents
+                skillJob === null
               }
               temporaryEnabled={newChatCapabilities.temporaryEnabled}
               skillCreateEnabled={newChatCapabilities.skillCreateEnabled}
@@ -2322,24 +2297,21 @@ export default function App() {
         return (
           <section className="main-shell">
             <Navbar
-              apps={agentEntries.map((e) => e.id)}
               appName={appName}
               onAppChange={selectAgent}
               agentLabel={labelOf}
+              agentsSource={agentsSource}
+              localApps={apps}
+              currentRuntime={currentRuntime}
+              runtimeScope={access.capabilities.runtimeScope}
               title={
                 showAddMenu
                   ? "添加 Agent"
                   : showAddAgent
                     ? "添加 AgentKit 智能体"
-                    : skillCenter
-                      ? undefined
-                      : searchView
-                        ? "搜索"
-                        : showManageAgents
-                          ? "管理 Agent"
-                          : visibleCreateView
-                            ? undefined
-                            : conversationTitle
+                    : showManageAgents
+                      ? "管理 Agent"
+                      : undefined
               }
               titleLeading={
                 turns.length > 0 &&
