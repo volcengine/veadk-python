@@ -2266,7 +2266,8 @@ export default function App() {
               skillCreateEnabled={newChatCapabilities.skillCreateEnabled}
               onModeChange={(mode) => {
                 if (
-                  mode === "skill-create" && !newChatCapabilities.skillCreateEnabled
+                  (mode === "temporary" && !newChatCapabilities.temporaryEnabled) ||
+                  (mode === "skill-create" && !newChatCapabilities.skillCreateEnabled)
                 ) return;
                 if (mode === "temporary") {
                   setNewChatMode(mode);

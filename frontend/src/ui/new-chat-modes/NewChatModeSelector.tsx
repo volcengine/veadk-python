@@ -88,14 +88,20 @@ export function NewChatModeSelector({
   const current = MODES.find((mode) => mode.value === value) ?? MODES[0];
   const currentLabel = current.value === "temporary" ? "Codex 智能体" : current.label;
 
+  function modeEnabled(mode: ModeOption): boolean | undefined {
+    if (mode.value === "temporary") return temporaryEnabled;
+    if (mode.value === "skill-create") return skillCreateEnabled;
+    return true;
+  }
+
   function modeDisabled(mode: ModeOption): boolean {
-    return mode.value === "skill-create" && skillCreateEnabled !== true;
+    return modeEnabled(mode) !== true;
   }
 
   function modeDescription(mode: ModeOption): string {
-    if (mode.value !== "skill-create") return mode.description;
-    if (skillCreateEnabled === undefined) return "正在检查配置";
-    if (!skillCreateEnabled) return "管理员未配置";
+    const enabled = modeEnabled(mode);
+    if (enabled === undefined) return "正在检查配置";
+    if (!enabled) return "管理员未配置";
     return mode.description;
   }
 
@@ -249,7 +255,7 @@ export function NewChatModeSelector({
             <img className="new-chat-mode__builtin-icon" src={codexLogo} alt="" aria-hidden="true" />
             <span className="new-chat-mode__copy">
               <span className="new-chat-mode__label">Codex 智能体</span>
-              <span>{temporaryEnabled === false ? "启动时检查运行环境" : "在沙箱中执行任务"}</span>
+              <span>在沙箱中执行任务</span>
             </span>
           </button>
           {UNAVAILABLE_BUILTIN_AGENTS.map(({ label, logo }) => (

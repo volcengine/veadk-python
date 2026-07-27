@@ -29,7 +29,7 @@ test("loads temporary-session and Skill-creation capabilities independently", ()
   assert.match(appSource, /skillCreateEnabled/);
 });
 
-test("keeps Codex selectable while explaining unavailable Skill creation", () => {
+test("disables built-in Agents and Skill creation until configured", () => {
   assert.match(composerSource, /temporaryEnabled\?: boolean/);
   assert.match(composerSource, /skillCreateEnabled\?: boolean/);
   assert.match(composerSource, /temporaryEnabled=\{temporaryEnabled\}/);
@@ -37,10 +37,16 @@ test("keeps Codex selectable while explaining unavailable Skill creation", () =>
   assert.match(selectorSource, /temporaryEnabled\?: boolean/);
   assert.match(selectorSource, /skillCreateEnabled\?: boolean/);
   assert.match(selectorSource, /管理员未配置/);
+  assert.match(selectorSource, /if \(mode\.value === "temporary"\) return temporaryEnabled/);
+  assert.match(selectorSource, /if \(mode\.value === "skill-create"\) return skillCreateEnabled/);
+  assert.match(selectorSource, /return modeEnabled\(mode\) !== true/);
   assert.match(selectorSource, /if \(modeDisabled\(mode\)\) return/);
   assert.match(selectorSource, /disabled=\{modeDisabled\(mode\)\}/);
-  assert.doesNotMatch(selectorSource, /disabled=\{temporaryEnabled !== true\}/);
-  assert.match(selectorSource, /temporaryEnabled === false \? "启动时检查运行环境"/);
+  assert.match(
+    appSource,
+    /mode === "temporary" && !newChatCapabilities\.temporaryEnabled/,
+  );
+  assert.doesNotMatch(selectorSource, /启动时检查运行环境/);
   assert.doesNotMatch(selectorSource, /value:\s*"agent"[\s\S]*?disabled:\s*true/);
 });
 
