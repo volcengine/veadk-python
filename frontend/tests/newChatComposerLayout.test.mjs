@@ -43,6 +43,8 @@ test("expands only the new-chat composer into a multiline input", () => {
     /newChatLayout=\{!sandboxSession && turns\.length === 0 && skillJob === null\}/,
   );
   assert.match(stylesSource, /\.composer--new-chat \.composer-box[\s\S]*?min-height:/);
+  assert.match(stylesSource, /\.composer--new-chat \.composer-box[\s\S]*?border-color:/);
+  assert.match(stylesSource, /\.composer--new-chat \.composer-box[\s\S]*?box-shadow:/);
   assert.match(stylesSource, /\.composer--new-chat \.comp-input[\s\S]*?min-height:/);
   assert.match(stylesSource, /\.composer--new-chat \.composer-menu-wrap[\s\S]*?bottom: 10px/);
   assert.match(stylesSource, /\.composer--new-chat \.comp-send[\s\S]*?bottom: 10px/);
@@ -83,10 +85,10 @@ test("places the mode selector beside add and moves Agent selection to the navba
   );
   assert.match(agentSelectorSource, /variant\?: "drawer" \| "navbar"/);
   assert.doesNotMatch(sidebarSource, /<AgentSelector|className=\{`agent-row/);
-  assert.match(stylesSource, /\.welcome\s*\{[\s\S]*?gap:\s*32px;/);
+  assert.match(stylesSource, /\.welcome\s*\{[\s\S]*?gap:\s*40px;/);
   assert.match(
     stylesSource,
-    /\.welcome\s*\{[\s\S]*?padding:\s*0 16px clamp\(64px, 12vh, 104px\);/,
+    /\.welcome\s*\{[\s\S]*?padding:\s*0 16px clamp\(96px, 18vh, 152px\);/,
   );
 });
 
@@ -111,7 +113,7 @@ test("shows animated starter prompts below the empty new-chat composer", () => {
   );
   assert.match(
     stylesSource,
-    /\.prompt-suggestions\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?top:\s*calc\(100% \+ 12px\);/,
+    /\.prompt-suggestions\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?top:\s*calc\(100% \+ 18px\);/,
   );
   assert.match(stylesSource, /@keyframes prompt-suggestion-enter/);
   assert.match(
