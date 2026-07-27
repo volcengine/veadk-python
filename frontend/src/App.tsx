@@ -173,14 +173,21 @@ function loadView(): CreateView {
 }
 import { TraceDrawer } from "./ui/TraceDrawer";
 import { LoginPage } from "./ui/LoginPage";
+import { AuthExpiredDialog } from "./ui/AuthExpiredDialog";
 import { Markdown } from "./ui/Markdown";
 import {
   clearLocalUser,
   logout,
+  openLoginWindow,
   resolveIdentity,
   setLocalUser,
   type AuthStatus,
 } from "./adk/identity";
+import {
+  AUTHENTICATION_REQUIRED_EVENT,
+  authenticationRestored,
+  isAuthenticationPending,
+} from "./adk/authSession";
 import type { A2uiAction, A2uiComponent } from "./a2ui/types";
 import { buildSurfaces } from "./a2ui/Surface";
 
@@ -671,6 +678,10 @@ export default function App() {
   const closeAgentInfo = useCallback(() => setAgentInfoOpen(false), []);
   const [greeting, setGreeting] = useState(pickGreeting);
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  const [authExpired, setAuthExpired] = useState(false);
+  const [authRecoveryChecking, setAuthRecoveryChecking] = useState(false);
+  const [authRecoveryError, setAuthRecoveryError] = useState("");
+  const authRecoveryActiveRef = useRef(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [userId, setUserId] = useState("");
   const [userInfo, setUserInfo] = useState<Record<string, unknown> | undefined>();
@@ -1007,6 +1018,60 @@ export default function App() {
   useEffect(() => {
     resolveAuth();
   }, [resolveAuth]);
+
+  useEffect(() => {
+    const showExpiredDialog = () => {
+      setAuthRecoveryError("");
+      setAuthExpired(true);
+    };
+    window.addEventListener(AUTHENTICATION_REQUIRED_EVENT, showExpiredDialog);
+    if (isAuthenticationPending()) showExpiredDialog();
+    return () =>
+      window.removeEventListener(
+        AUTHENTICATION_REQUIRED_EVENT,
+        showExpiredDialog,
+      );
+  }, []);
+
+  const recoverAuthentication = useCallback(async () => {
+    if (authRecoveryActiveRef.current) return;
+    authRecoveryActiveRef.current = true;
+    const loginWindow = openLoginWindow();
+    if (!loginWindow) {
+      authRecoveryActiveRef.current = false;
+      setAuthRecoveryError("登录窗口被浏览器拦截，请允许弹出窗口后重试。");
+      return;
+    }
+    setAuthRecoveryChecking(true);
+    setAuthRecoveryError("");
+    try {
+      while (true) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        try {
+          const identity = await resolveIdentity();
+          if (identity.status === "authenticated") {
+            setUserId(identity.userId);
+            setUserInfo(identity.info);
+            setLocalMode(!!identity.local);
+            setAuthStatus(identity.status);
+            setAuthExpired(false);
+            authenticationRestored();
+            loginWindow.close();
+            return;
+          }
+        } catch {
+          // The gateway may return its login page until the popup completes.
+        }
+        if (loginWindow.closed) {
+          setAuthRecoveryError("登录窗口已关闭，请重新登录以继续当前操作。");
+          return;
+        }
+      }
+    } finally {
+      authRecoveryActiveRef.current = false;
+      setAuthRecoveryChecking(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (localMode && userId) setLocalUser(userId);
@@ -2722,6 +2787,13 @@ export default function App() {
         error={sandboxLaunchError}
         onCancel={cancelSandboxLaunch}
         onConfirm={() => void launchSandboxSession()}
+      />
+
+      <AuthExpiredDialog
+        open={authExpired}
+        checking={authRecoveryChecking}
+        error={authRecoveryError}
+        onLogin={() => void recoverAuthentication()}
       />
 
       {confirmLeave && (
