@@ -53,7 +53,9 @@ _SKILLS_SUBDIR = "skills"
 _SKILL_MANIFEST = "SKILL.md"
 
 
-def sync_skills_to_codex_home(agent: "Agent", codex_home: str) -> int:
+def sync_skills_to_codex_home(
+    agent: "Agent", codex_home: str, *, invocation_id: str = ""
+) -> int:
     """Materialize the agent's skills into ``<codex_home>/skills/``.
 
     The skills directory is rebuilt from scratch on every call so it always
@@ -66,12 +68,15 @@ def sync_skills_to_codex_home(agent: "Agent", codex_home: str) -> int:
 
     seen: set[str] = set()
     written = 0
-    for name, writer in _iter_skill_writers(agent):
+    for name, writer in _iter_skill_writers(agent, invocation_id):
         if name in seen:
             continue
         skill_dir = _safe_child(root, name)
         if skill_dir is None:
-            logger.warning(f"codex: skipping skill with unsafe name {name!r}")
+            logger.warning(
+                "codex_skill_skipped invocation_id=%s reason=unsafe_name",
+                invocation_id,
+            )
             continue
         try:
             os.makedirs(skill_dir, exist_ok=True)
@@ -79,29 +84,41 @@ def sync_skills_to_codex_home(agent: "Agent", codex_home: str) -> int:
             seen.add(name)
             written += 1
         except Exception as e:  # noqa: BLE001 - one bad skill must not fail the turn
-            logger.warning(f"codex: failed to materialize skill {name!r}: {e}")
+            logger.warning(
+                "codex_skill_materialize_failed invocation_id=%s error_type=%s",
+                invocation_id,
+                type(e).__name__,
+            )
             shutil.rmtree(skill_dir, ignore_errors=True)
 
     if written:
-        logger.info(f"codex: materialized {written} skill(s) into {root}")
+        logger.debug(
+            "codex_skills_ready invocation_id=%s skill_count=%d",
+            invocation_id,
+            written,
+        )
     return written
 
 
-def _iter_skill_writers(agent: "Agent") -> Iterator[tuple[str, Any]]:
+def _iter_skill_writers(
+    agent: "Agent", invocation_id: str
+) -> Iterator[tuple[str, Any]]:
     """Yield ``(name, writer)`` pairs for every discoverable skill.
 
     ``writer`` is a callable ``(skill_dir) -> None`` that populates the target
     directory. ADK-native skills take precedence over legacy ones on a name
     clash (they are yielded first).
     """
-    yield from _iter_adk_skill_writers(agent)
-    yield from _iter_legacy_skill_writers(agent)
+    yield from _iter_adk_skill_writers(agent, invocation_id)
+    yield from _iter_legacy_skill_writers(agent, invocation_id)
 
 
 # --- ADK-native skills (google.adk SkillToolset) ---------------------------------
 
 
-def _iter_adk_skill_writers(agent: "Agent") -> Iterator[tuple[str, Any]]:
+def _iter_adk_skill_writers(
+    agent: "Agent", invocation_id: str
+) -> Iterator[tuple[str, Any]]:
     try:
         from google.adk.tools.skill_toolset import SkillToolset
     except Exception:  # noqa: BLE001 - ADK skills optional / version-dependent
@@ -111,16 +128,16 @@ def _iter_adk_skill_writers(agent: "Agent") -> Iterator[tuple[str, Any]]:
         if not isinstance(tool, SkillToolset):
             continue
         for name, skill in (getattr(tool, "_skills", None) or {}).items():
-            yield str(name), _make_adk_skill_writer(skill)
+            yield str(name), _make_adk_skill_writer(skill, invocation_id)
 
 
-def _make_adk_skill_writer(skill: Any) -> Any:
+def _make_adk_skill_writer(skill: Any, invocation_id: str) -> Any:
     def _write(skill_dir: str) -> None:
         frontmatter = _dump_frontmatter(skill.frontmatter)
         body = getattr(skill, "instructions", "") or ""
         with open(os.path.join(skill_dir, _SKILL_MANIFEST), "w", encoding="utf-8") as f:
             f.write(f"{frontmatter}\n{body}\n" if body else frontmatter)
-        _write_resources(skill_dir, getattr(skill, "resources", None))
+        _write_resources(skill_dir, getattr(skill, "resources", None), invocation_id)
 
     return _write
 
@@ -143,21 +160,23 @@ def _dump_frontmatter(frontmatter: Any) -> str:
     return f"---\n{header}\n---\n"
 
 
-def _write_resources(skill_dir: str, resources: Any) -> None:
+def _write_resources(skill_dir: str, resources: Any, invocation_id: str) -> None:
     """Write an ADK skill's L3 resources (references / assets / scripts) to disk."""
     if resources is None:
         return
     for attr in ("references", "assets"):
         for rel, content in (getattr(resources, attr, None) or {}).items():
-            _write_child(skill_dir, str(rel), content)
+            _write_child(skill_dir, str(rel), content, invocation_id)
     for rel, script in (getattr(resources, "scripts", None) or {}).items():
-        _write_child(skill_dir, str(rel), str(script))
+        _write_child(skill_dir, str(rel), str(script), invocation_id)
 
 
 # --- Legacy VeADK skills (agent.skills_dict) -------------------------------------
 
 
-def _iter_legacy_skill_writers(agent: "Agent") -> Iterator[tuple[str, Any]]:
+def _iter_legacy_skill_writers(
+    agent: "Agent", invocation_id: str
+) -> Iterator[tuple[str, Any]]:
     skills_dict = getattr(agent, "skills_dict", None)
     if not skills_dict:
         return
@@ -178,8 +197,9 @@ def _iter_legacy_skill_writers(agent: "Agent") -> Iterator[tuple[str, Any]]:
             yield str(name), _make_remote_skill_writer(skill, materialize)
         else:
             logger.warning(
-                f"codex: skill {name!r} is remote but the materializer is "
-                "unavailable; skipping"
+                "codex_skill_skipped invocation_id=%s "
+                "reason=remote_materializer_unavailable",
+                invocation_id,
             )
 
 
@@ -213,10 +233,13 @@ def _safe_child(base: str, rel: str) -> str | None:
     return None
 
 
-def _write_child(base: str, rel: str, content: Any) -> None:
+def _write_child(base: str, rel: str, content: Any, invocation_id: str) -> None:
     dest = _safe_child(base, rel)
     if dest is None:
-        logger.warning(f"codex: skipping skill resource with unsafe path {rel!r}")
+        logger.warning(
+            "codex_skill_resource_skipped invocation_id=%s reason=unsafe_path",
+            invocation_id,
+        )
         return
     os.makedirs(os.path.dirname(dest) or base, exist_ok=True)
     if isinstance(content, (bytes, bytearray)):

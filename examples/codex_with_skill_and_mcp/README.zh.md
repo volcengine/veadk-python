@@ -47,6 +47,6 @@ python examples/codex_with_skill_and_mcp/main.py
 
 ## 说明
 
-- 工具在 runtime 的 shim 内执行，因此对 Codex 不可见，目前不会作为独立的 ADK 事件出现（trace/前端看不到这步）。
-- 交互式 MCP 鉴权（对话中途弹凭证）在 `runtime="codex"` 下不驱动；静态鉴权（header / bearer token / ve-identity workload token）可用。
+- 工具由 runtime 的 shim 调度，但调用、结果、状态变更、确认和鉴权都会作为标准 ADK 事件进入 Session/Trace/UI。
+- 支持静态鉴权（header / bearer token / ve-identity workload token）以及工具执行中触发的 ADK 交互式鉴权；MCP toolset 在列举工具前触发的鉴权仍取决于对应 ADK/MCP 客户端能力。
 ```
