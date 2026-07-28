@@ -67,6 +67,7 @@ import {
 import { displayDescription } from "./displayText";
 import { localPickerMatches } from "./localPickerSearch";
 import { draftToYaml } from "./configYaml";
+import { normalizeDraft } from "./normalizeDraft";
 import type { AgentProject } from "./project";
 import { AgentBuildCanvas } from "./AgentBuildCanvas";
 import type { SkillSource } from "./skills/types";
@@ -94,6 +95,7 @@ import {
   createGeneratedAgentTestSession,
   deleteGeneratedAgentTestRun,
   deployAgentkitProject,
+  generateAgentDraftFromRequirement,
   generateAgentProject,
   runGeneratedAgentTestSSE,
 } from "../adk/client";
@@ -2278,6 +2280,10 @@ export function CustomCreate({
   const [draft, setDraft] = useState<AgentDraft>(
     () => initialDraft ?? emptyDraft(),
   );
+  const [aiRequirement, setAiRequirement] = useState("");
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiGenerated, setAiGenerated] = useState(false);
+  const [aiErrorDialog, setAiErrorDialog] = useState<string | null>(null);
   const initialDraftSnapshotRef = useRef(JSON.stringify(draft));
   const lastNotifiedDraftSnapshotRef = useRef(initialDraftSnapshotRef.current);
   const draftSnapshot = JSON.stringify(draft);
@@ -2463,6 +2469,37 @@ export function CustomCreate({
   const applyTree = (nextRoot: AgentDraft, select?: NodePath) => {
     setDraft(nextRoot);
     if (select) setSelectedPath(select);
+  };
+
+  const handleGenerateDraft = async () => {
+    const requirement = aiRequirement.trim();
+    if (!requirement || aiGenerating) return;
+    if (
+      draftDirty &&
+      !window.confirm("生成的新配置会替换当前画布和属性，确定继续吗？")
+    ) {
+      return;
+    }
+
+    setAiGenerating(true);
+    setAiGenerated(false);
+    setAiErrorDialog(null);
+    setBuildErr("");
+    try {
+      const result = await generateAgentDraftFromRequirement(requirement);
+      setDraft(normalizeDraft(result.draft));
+      setSelectedPath([]);
+      setProject(null);
+      setShowErrors(false);
+      setBuildErr("");
+      setAiGenerated(true);
+    } catch (error) {
+      setAiErrorDialog(
+        error instanceof Error ? error.message : "生成 Agent 配置失败",
+      );
+    } finally {
+      setAiGenerating(false);
+    }
   };
 
   const addCanvasStep = (path: NodePath) => {
@@ -3089,6 +3126,83 @@ export function CustomCreate({
       )}
       <main className="cw-workspace-main" id="cw-workspace-main">
       {workspaceMode === "build" && (
+        <div className="cw-build-workspace">
+        <section
+          className={`cw-ai-compose${aiGenerating ? " is-generating" : ""}${aiGenerated ? " is-success" : ""}`}
+          aria-label="AI 自动填写 Agent 配置"
+        >
+          <AnimatePresence initial={false} mode="wait">
+            {aiGenerated ? (
+              <motion.div
+                key="success"
+                className="cw-ai-compose-success"
+                role="status"
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.98 }}
+                transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+              >
+                <span className="cw-ai-success-check" aria-hidden />
+                <strong>生成成功</strong>
+                <button
+                  type="button"
+                  className="cw-ai-regenerate"
+                  onClick={() => setAiGenerated(false)}
+                >
+                  重新生成
+                </button>
+              </motion.div>
+            ) : (
+              <motion.div
+                key="compose"
+                className="cw-ai-compose-entry"
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.98 }}
+                transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+              >
+                <form
+                  className="cw-ai-compose-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void handleGenerateDraft();
+                  }}
+                >
+                  <input
+                    type="text"
+                    value={aiRequirement}
+                    maxLength={8000}
+                    disabled={aiGenerating}
+                    placeholder="输入您的目标"
+                    onChange={(event) => setAiRequirement(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void handleGenerateDraft();
+                      }
+                    }}
+                  />
+                  <button
+                    type="submit"
+                    disabled={aiGenerating || !aiRequirement.trim()}
+                    aria-label={aiGenerating ? "正在智能生成" : "智能生成"}
+                  >
+                    {aiGenerating ? (
+                      <span className="cw-ai-orb" aria-hidden>
+                        <span />
+                      </span>
+                    ) : (
+                      "智能生成"
+                    )}
+                  </button>
+                </form>
+                <p className="cw-ai-compose-note">
+                  使用 doubao-seed-2-0-lite-260428 模型生成，将会产生 Token 消耗
+                </p>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </section>
         <div className="cw-editor">
         <AgentBuildCanvas
           draft={draft}
@@ -3839,6 +3953,7 @@ export function CustomCreate({
         </div>
         {/* cw-detail */}
         </div>
+        </div>
       )}
 
       {workspaceMode === "validate" && (
@@ -3979,6 +4094,37 @@ export function CustomCreate({
                 }}
               >
                 放弃编辑
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {aiErrorDialog && (
+        <div className="confirm-scrim" onClick={() => setAiErrorDialog(null)}>
+          <div
+            className="confirm-box cw-ai-error-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="ai-generate-error-title"
+            aria-describedby="ai-generate-error-message"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="confirm-title" id="ai-generate-error-title">
+              智能生成失败
+            </div>
+            <div
+              className="cw-ai-error-message"
+              id="ai-generate-error-message"
+            >
+              {aiErrorDialog}
+            </div>
+            <div className="confirm-actions">
+              <button
+                type="button"
+                className="confirm-btn cw-ai-error-close"
+                onClick={() => setAiErrorDialog(null)}
+              >
+                关闭
               </button>
             </div>
           </div>

@@ -123,8 +123,10 @@ def _redact_debug_text(text: str) -> str:
         redacted,
     )
     return re.sub(
-        r"(?i)((?:api[_-]?key|auth[_-]?token|access[_-]?token|secret|"
-        r"password|token)\s*[:=]\s*)(?:[\"'][^\"']*[\"']|[^\s,;]+)",
+        r"(?i)((?:api[_-]?key|access[_-]?key(?:[_-]?id)?|secret[_-]?key|"
+        r"auth[_-]?token|access[_-]?token|client[_-]?secret|credential|"
+        r"signature|secret|password|token)\s*[:=]\s*)"
+        r"(?:[\"'][^\"']*[\"']|[^\s,;]+)",
         r"\1***",
         redacted,
     )
@@ -1381,6 +1383,10 @@ def _run_frontend_server(
         validate_debug_policy,
         validate_project_policy,
     )
+    from veadk.cli.generated_agent_planner import (
+        GeneratedAgentDraftRequest,
+        generate_agent_draft,
+    )
     from veadk.cli.generated_agent_skills import materialize_selected_skills
 
     _TEST_RUN_MAX_FILES = 100
@@ -1927,6 +1933,28 @@ def _run_frontend_server(
         data = await request.json()
         project = await _generate_project_from_request(data, debug=False)
         return project.model_dump()
+
+    @app.post("/web/generated-agent-drafts")
+    async def _generate_agent_draft(request: Request):
+        _require_agent_management(request)
+        try:
+            payload = GeneratedAgentDraftRequest.model_validate(await request.json())
+        except ValidationError as error:
+            raise HTTPException(status_code=422, detail=error.errors()) from error
+
+        try:
+            return await generate_agent_draft(payload.requirement)
+        except TimeoutError as error:
+            raise HTTPException(
+                status_code=504,
+                detail="生成配置超时，请稍后重试。",
+            ) from error
+        except Exception as error:
+            logger.exception("Failed to generate Agent draft from requirement")
+            raise HTTPException(
+                status_code=502,
+                detail=_safe_exception_detail(error),
+            ) from error
 
     @app.post("/web/generated-agent-test-runs")
     async def _create_generated_agent_test_run(request: Request):
