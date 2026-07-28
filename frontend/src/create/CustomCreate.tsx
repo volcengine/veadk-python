@@ -3268,7 +3268,7 @@ export function CustomCreate({
                         <>
                     <div className="cw-field">
                       <label className="cw-label">
-                        {isRootAgent ? "Agent 名称" : "步骤名称"}
+                        {isRootAgent ? "Agent 名称" : "名称"}
                         <span className="cw-req">*</span>
                       </label>
                       <input
@@ -3289,7 +3289,7 @@ export function CustomCreate({
                     </div>
                     <div className="cw-field">
                       <label className="cw-label">
-                        {isRootAgent ? "描述" : "任务说明"}
+                        {isRootAgent ? "描述" : "智能体描述"}
                         <span className="cw-req">*</span>
                       </label>
                       <textarea

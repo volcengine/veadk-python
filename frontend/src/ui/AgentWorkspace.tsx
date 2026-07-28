@@ -15,6 +15,7 @@ import {
 import {
   deleteAgentFeedbackCases,
   getAgentFeedbackCases,
+  getRuntimeAgentInfo,
   getRuntimeDetail,
   type AgentFeedbackCase,
   type AgentFeedbackSetSummary,
@@ -375,6 +376,7 @@ export interface AgentWorkspaceProps {
   focusedAgentId?: string;
   focusedAgentSection?: AgentSection;
   focusedCaseKind?: CaseKind;
+  detailOnly?: boolean;
   onRetryAgents?: () => void;
   onAgentOrderChange?: (agentIds: string[]) => void;
   onDeleteAgents?: (agents: AgentEntry[]) => Promise<void>;
@@ -404,6 +406,7 @@ export function AgentWorkspace({
   focusedAgentId = "",
   focusedAgentSection = "basic",
   focusedCaseKind = "good",
+  detailOnly = false,
   onRetryAgents,
   onAgentOrderChange,
   onDeleteAgents,
@@ -422,6 +425,8 @@ export function AgentWorkspace({
   const [activeDraftId, setActiveDraftId] = useState("");
   const [activeDeploymentTaskId, setActiveDeploymentTaskId] = useState("");
   const [runtimeDetail, setRuntimeDetail] = useState<RuntimeDetail | null>(null);
+  const [detailAgentInfo, setDetailAgentInfo] = useState<AgentInfo | null>(null);
+  const [detailAgentInfoResolved, setDetailAgentInfoResolved] = useState(false);
   const [query, setQuery] = useState("");
   const [caseFilter, setCaseFilter] = useState<CaseKind>("good");
   const [caseQuery, setCaseQuery] = useState("");
@@ -543,8 +548,11 @@ export function AgentWorkspace({
   const selectedAgentUpdateDraft = selectedAgent?.runtimeId
     ? updateDraftByRuntimeId.get(selectedAgent.runtimeId)
     : undefined;
-  const selectedAgentInfo =
-    activeAgentId && agentInfoAgentId === activeAgentId ? agentInfo : null;
+  const selectedAgentInfo = detailOnly
+    ? detailAgentInfo
+    : activeAgentId && agentInfoAgentId === activeAgentId
+      ? agentInfo
+      : null;
   const listedAgents = useMemo(() => {
     const originalOrder = new Map(agents.map((agent, index) => [agent.id, index]));
     const savedOrder = new Map(agentOrder.map((id, index) => [id, index]));
@@ -660,6 +668,29 @@ export function AgentWorkspace({
       setCaseQuery("");
     }
   }, [agents, focusedAgentId, focusedAgentSection, focusedCaseKind]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setDetailAgentInfo(null);
+    setDetailAgentInfoResolved(!detailOnly || !selectedAgent?.runtimeId);
+    if (!detailOnly || !selectedAgent?.runtimeId) return;
+    void getRuntimeAgentInfo(
+      selectedAgent.runtimeId,
+      selectedAgent.region ?? "cn-beijing",
+    )
+      .then((info) => {
+        if (!cancelled) setDetailAgentInfo(info);
+      })
+      .catch(() => {
+        if (!cancelled) setDetailAgentInfo(null);
+      })
+      .finally(() => {
+        if (!cancelled) setDetailAgentInfoResolved(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [detailOnly, selectedAgent?.region, selectedAgent?.runtimeId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1076,7 +1107,7 @@ export function AgentWorkspace({
   };
 
   return (
-    <div className="aw-root">
+    <div className={`aw-root${detailOnly ? " is-detail-only" : ""}`}>
       <nav className="aw-view-tabs" aria-label="智能体工作台">
         <button
           type="button"
@@ -1430,6 +1461,18 @@ export function AgentWorkspace({
           </main>
         ) : (
           <main className="aw-main">
+            {selectedAgent && !selectedAgentInfo &&
+              (loadingAgentInfo || (detailOnly && !detailAgentInfoResolved)) && (
+              <div className="aw-detail-loading" role="status" aria-live="polite">
+                <div className="aw-detail-loading-card">
+                  <span className="loading-gap-spinner" aria-hidden="true" />
+                  <span>
+                    <strong>正在加载智能体</strong>
+                    <small>正在读取配置与运行信息…</small>
+                  </span>
+                </div>
+              </div>
+            )}
             <div className="aw-agent-head">
               <div>
                 <div className="aw-agent-title-row">
@@ -1729,7 +1772,7 @@ export function AgentWorkspace({
                   className="aw-update studio-update-action"
                   disabled={selectedDraft || selectedAgentUpdateDraft
                     ? !canCreate
-                    : !selectedAgent?.runtimeId || !canUpdate || loadingAgentInfo || !selectedAgentInfo}
+                    : !selectedAgent?.runtimeId || !canUpdate || (!loadingAgentInfo && !selectedAgentInfo)}
                   onClick={() =>
                     selectedDraft
                       ? onEditDraft?.(selectedDraft)

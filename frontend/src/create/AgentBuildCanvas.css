@@ -136,11 +136,12 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 10px 132px 10px 72px;
+  padding: 9px 56px;
   border-bottom: 1px solid hsl(var(--border) / 0.75);
 }
 
 .abc-group-head > span:first-child {
+  width: 100%;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -156,25 +157,14 @@
 }
 
 .abc-group-head small {
+  display: -webkit-box;
   overflow: hidden;
   color: hsl(var(--muted-foreground));
   font-size: 9.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.abc-group-head em {
-  position: absolute;
-  top: 12px;
-  right: 22px;
-  padding: 3px 7px;
-  border-radius: 999px;
-  background: hsl(var(--background) / 0.82);
-  color: hsl(var(--muted-foreground));
-  font-size: 9px;
-  font-style: normal;
-  font-weight: 600;
-  white-space: nowrap;
+  line-height: 1.3;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .abc-group-add {
@@ -387,10 +377,6 @@
   z-index: 4;
 }
 
-.abc-group:has(> .abc-node-delete) .abc-group-head em {
-  right: 48px;
-}
-
 .abc-loop-handle {
   left: 50% !important;
   opacity: 0;
@@ -406,13 +392,6 @@
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.04em;
-}
-
-.abc-node-meta small {
-  color: hsl(var(--muted-foreground));
-  font-size: 8.5px;
-  font-weight: 550;
-  letter-spacing: 0;
 }
 
 .abc-node-copy > strong {

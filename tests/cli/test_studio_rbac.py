@@ -302,8 +302,11 @@ def test_non_admin_runtime_list_scans_pages_and_ignores_all_scope(
 
     other = _runtime("runtime-other", "someone-else")
     own = _runtime("runtime-own", "developer")
+    developer_tag_filters: list[tuple[str, list[str]]] = []
 
     def list_runtimes(_self: Any, request: Any) -> SimpleNamespace:
+        for item in getattr(request, "tag_filters", None) or []:
+            developer_tag_filters.append((item.key, item.values))
         if getattr(request, "next_token", None) == "page-2":
             return SimpleNamespace(agent_kit_runtimes=[own], next_token="")
         return SimpleNamespace(agent_kit_runtimes=[other], next_token="page-2")
@@ -331,6 +334,7 @@ def test_non_admin_runtime_list_scans_pages_and_ignores_all_scope(
         "runtime-own"
     ]
     assert developer.json()["runtimes"][0]["canDelete"] is True
+    assert ("veadk:owner", ["developer"]) in developer_tag_filters
     assert admin.status_code == 200
     assert [item["runtimeId"] for item in admin.json()["runtimes"]] == [
         "runtime-other",

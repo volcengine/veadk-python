@@ -4377,6 +4377,7 @@
   .cw-detail {
     flex: none;
     width: 100%;
+    max-width: none;
     height: min(720px, calc(100dvh - 120px));
     min-height: 560px;
   }
