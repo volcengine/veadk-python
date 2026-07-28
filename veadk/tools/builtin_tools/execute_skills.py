@@ -42,6 +42,11 @@ _SKILL_API_UPGRADE_HINT = (
     "请升级 Skill 沙箱镜像或切换到支持 Skill HTTP API 的新版沙箱。"
 )
 
+_SKILL_STREAM_MISSING_HINT = (
+    "提示：当前 Skill 沙箱镜像未实现 /v1/skills/stream 接口（HTTP 404）。"
+    "请升级 Skill 沙箱镜像到支持 /v1/skills/stream 的新版沙箱。"
+)
+
 
 class _SkillApiCompatibilityMiss(Exception):
     """Raised when the sandbox endpoint is unreachable so legacy fallback should apply."""
@@ -118,8 +123,13 @@ def _post_skill_api_json(
             return response.read()
     except error.HTTPError as exc:
         if exc.code in _SKILL_API_UPGRADE_STATUS_CODES:
+            hint = (
+                _SKILL_STREAM_MISSING_HINT
+                if path.rstrip("/").endswith("/v1/skills/stream")
+                else _SKILL_API_UPGRADE_HINT
+            )
             raise _SkillApiUpgradeRequired(
-                f"Skill HTTP API returned HTTP {exc.code}. {_SKILL_API_UPGRADE_HINT}"
+                f"Skill HTTP API returned HTTP {exc.code}. {hint}"
             ) from exc
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(
