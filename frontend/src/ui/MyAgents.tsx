@@ -163,10 +163,14 @@ function AgentCard({
   agent,
   onUse,
   onViewDetails,
+  connecting,
+  connected,
 }: {
   agent: MyAgentCardData;
-  onUse?: (agent: MyAgentCardData) => void;
+  onUse?: (agent: MyAgentCardData) => Promise<void>;
   onViewDetails?: (agent: MyAgentCardData) => void;
+  connecting?: boolean;
+  connected?: boolean;
 }) {
   return (
     <article className="my-agent-card">
@@ -191,11 +195,17 @@ function AgentCard({
       <div className="my-agent-actions">
         <button
           type="button"
-          className="my-agent-use"
-          disabled={!agent.runtime}
-          onClick={() => onUse?.(agent)}
+          className={`my-agent-use${connected ? " is-connected" : ""}`}
+          disabled={!agent.runtime || connecting || connected}
+          aria-busy={connecting || undefined}
+          onClick={() => void onUse?.(agent)}
         >
-          使用
+          {connecting ? (
+            <>
+              <span className="my-agent-use-spinner" aria-hidden="true" />
+              <span>连接中</span>
+            </>
+          ) : connected ? "已连接" : "使用"}
         </button>
         <button
           type="button"
@@ -215,14 +225,18 @@ function AgentSection({
   onCreateAgent,
   onUseAgent,
   onViewAgentDetails,
+  connectingAgentId,
+  connectedRuntimeId,
   loading,
   serverPagination,
   onPageSizeChange,
 }: {
   section: MyAgentSectionData;
   onCreateAgent?: () => void;
-  onUseAgent?: (agent: MyAgentCardData) => void;
+  onUseAgent?: (agent: MyAgentCardData) => Promise<void>;
   onViewAgentDetails?: (agent: MyAgentCardData) => void;
+  connectingAgentId?: string;
+  connectedRuntimeId?: string;
   loading?: boolean;
   serverPagination?: {
     page: number;
@@ -287,6 +301,8 @@ function AgentSection({
             agent={agent}
             onUse={onUseAgent}
             onViewDetails={onViewAgentDetails}
+            connecting={agent.id === connectingAgentId}
+            connected={agent.runtime?.runtimeId === connectedRuntimeId}
           />
         ))}
         {loading && (
@@ -321,20 +337,23 @@ function AgentSection({
 
 export interface MyAgentsProps {
   onCreateAgent: () => void;
-  onUseAgent: (agent: MyAgentCardData) => void;
+  onUseAgent: (agent: MyAgentCardData) => Promise<void>;
   onViewAgentDetails: (agent: MyAgentCardData) => void;
+  connectedRuntimeId?: string;
 }
 
 export function MyAgents({
   onCreateAgent,
   onUseAgent,
   onViewAgentDetails,
+  connectedRuntimeId = "",
 }: MyAgentsProps) {
   const [runtimeAgents, setRuntimeAgents] = useState<MyAgentCardData[]>([]);
   const [loadingRuntimes, setLoadingRuntimes] = useState(true);
   const [runtimePage, setRuntimePage] = useState(1);
   const [runtimeNextToken, setRuntimeNextToken] = useState("");
   const [runtimePageSize, setRuntimePageSize] = useState(0);
+  const [connectingAgentId, setConnectingAgentId] = useState("");
   const runtimePageSizeRef = useRef(0);
   const runtimePageTokensRef = useRef([""]);
   const runtimeRequestRef = useRef(0);
@@ -396,6 +415,16 @@ export function MyAgents({
     void fetchRuntimePage(previousPage, previousToken, runtimePageSize);
   };
 
+  const useAgent = useCallback(async (agent: MyAgentCardData) => {
+    if (connectingAgentId) return;
+    setConnectingAgentId(agent.id);
+    try {
+      await onUseAgent(agent);
+    } finally {
+      setConnectingAgentId("");
+    }
+  }, [connectingAgentId, onUseAgent]);
+
   const sections = useMemo<MyAgentSectionData[]>(
     () => [
       { title: "通用智能体", agents: runtimeAgents },
@@ -411,8 +440,10 @@ export function MyAgents({
           section={section}
           key={section.title}
           onCreateAgent={index === 0 ? onCreateAgent : undefined}
-          onUseAgent={onUseAgent}
+          onUseAgent={useAgent}
           onViewAgentDetails={onViewAgentDetails}
+          connectingAgentId={connectingAgentId}
+          connectedRuntimeId={connectedRuntimeId}
           loading={index === 0 && loadingRuntimes}
           onPageSizeChange={index === 0 ? updateRuntimePageSize : undefined}
           serverPagination={index === 0 ? {

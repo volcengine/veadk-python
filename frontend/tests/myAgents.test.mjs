@@ -47,7 +47,7 @@ test("agent cards keep only requested information and actions", () => {
   assert.match(pageSource, /<dt>工具<\/dt>/);
   assert.match(pageSource, /<dt>技能<\/dt>/);
   assert.match(pageSource, /<dt>创建时间<\/dt>/);
-  assert.match(pageSource, />\s*使用\s*<\/button>/);
+  assert.match(pageSource, /connected \? "已连接" : "使用"/);
   assert.match(pageSource, />\s*查看详情\s*<\/button>/);
   assert.doesNotMatch(pageSource, /<small|<code/);
   assert.doesNotMatch(pageStyles, /font-family/);
@@ -113,7 +113,7 @@ test("loads owned runtimes into the general agents section", () => {
 
 test("wires general agent creation, details, and use actions into App navigation", () => {
   assert.match(pageSource, /onClick=\{onCreateAgent\}/);
-  assert.match(pageSource, /onClick=\{\(\) => onUse\?\.\(agent\)\}/);
+  assert.match(pageSource, /onClick=\{\(\) => void onUse\?\.\(agent\)\}/);
   assert.match(pageSource, /onClick=\{\(\) => onViewDetails\?\.\(agent\)\}/);
   assert.match(pageSource, /onCreateAgent=\{index === 0 \? onCreateAgent : undefined\}/);
   assert.match(appSource, /const openAgentCreateFromMyAgents/);
@@ -122,6 +122,24 @@ test("wires general agent creation, details, and use actions into App navigation
   assert.doesNotMatch(appSource, /const openMyAgentDetails[\s\S]*?connectRuntime\(/);
   assert.match(appSource, /const detailAgentEntry:[\s\S]*?id: `detail:\$\{agentDetailTarget\.runtime\.runtimeId\}`/);
   assert.match(appSource, /<MyAgents[\s\S]*?onCreateAgent=\{openAgentCreateFromMyAgents\}[\s\S]*?onUseAgent=/);
+});
+
+test("shows connecting progress and preserves the connected Runtime state", () => {
+  assert.match(pageSource, /const \[connectingAgentId, setConnectingAgentId\] = useState\(""\)/);
+  assert.match(
+    pageSource,
+    /setConnectingAgentId\(agent\.id\)[\s\S]*?await onUseAgent\(agent\)[\s\S]*?setConnectingAgentId\(""\)/,
+  );
+  assert.match(pageSource, /aria-busy=\{connecting \|\| undefined\}/);
+  assert.match(pageSource, /className="my-agent-use-spinner"[\s\S]*?<span>连接中<\/span>/);
+  assert.match(pageSource, /connected \? "已连接" : "使用"/);
+  assert.match(pageSource, /disabled=\{!agent\.runtime \|\| connecting \|\| connected\}/);
+  assert.match(appSource, /connectedRuntimeId=\{currentRuntime\?\.runtimeId\}/);
+  assert.match(pageStyles, /\.my-agent-use-spinner\s*\{[\s\S]*?border-right-color: transparent/);
+  assert.match(
+    pageStyles,
+    /\.my-agent-actions \.my-agent-use\.is-connected,[\s\S]*?background: hsl\(142 55% 94%\)[\s\S]*?color: hsl\(142 62% 30%\)/,
+  );
 });
 
 test("authenticated users land on the Agent page by default", () => {

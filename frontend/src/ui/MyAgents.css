@@ -214,6 +214,10 @@
 }
 
 .my-agent-actions .my-agent-use {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   border-color: hsl(var(--foreground) / 0.68);
   background: hsl(var(--foreground) / 0.74);
   color: hsl(var(--background));
@@ -221,6 +225,25 @@
 
 .my-agent-actions .my-agent-use:hover {
   background: hsl(var(--foreground) / 0.84);
+}
+
+.my-agent-use-spinner {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 11px;
+  box-sizing: border-box;
+  border: 1.25px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: loading-gap-spin 0.7s linear infinite;
+}
+
+.my-agent-actions .my-agent-use.is-connected,
+.my-agent-actions .my-agent-use.is-connected:disabled {
+  border-color: hsl(142 60% 38% / 0.3);
+  background: hsl(142 55% 94%);
+  color: hsl(142 62% 30%);
+  opacity: 1;
 }
 
 .my-agent-add:focus-visible,
@@ -282,5 +305,9 @@
 @media (prefers-reduced-motion: reduce) {
   .my-agent-card {
     transition: none;
+  }
+
+  .my-agent-use-spinner {
+    animation-duration: 1.4s;
   }
 }

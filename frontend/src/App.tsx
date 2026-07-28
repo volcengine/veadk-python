@@ -3088,8 +3088,9 @@ export default function App() {
             {myAgents ? (
               <MyAgents
                 onCreateAgent={openAgentCreateFromMyAgents}
-                onUseAgent={(agent) => void connectMyAgent(agent)}
+                onUseAgent={connectMyAgent}
                 onViewAgentDetails={openMyAgentDetails}
+                connectedRuntimeId={currentRuntime?.runtimeId}
               />
             ) : showManageAgents ? (
               <AgentWorkspace
