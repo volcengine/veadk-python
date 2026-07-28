@@ -297,6 +297,63 @@ class TestEnsureAgentkitSessionEndpoint(unittest.TestCase):
             },
         )
 
+    def test_uses_create_session_endpoint_without_getting_session(self):
+        class FakeCreateSessionRequest:
+            def __init__(self, **_kwargs):
+                pass
+
+        class FakeClient:
+            def __init__(self, **_kwargs):
+                pass
+
+            def create_session(self, _request):
+                return types.SimpleNamespace(
+                    session_id="session-1",
+                    endpoint="https://public.example",
+                    internal_endpoint="http://internal.example",
+                )
+
+            def get_session(self, _request):
+                raise AssertionError(
+                    "get_session should not be called when create returns endpoint"
+                )
+
+        fake_tools_types = types.ModuleType("agentkit.sdk.tools.types")
+        fake_tools_types.CreateSessionRequest = FakeCreateSessionRequest
+        fake_tools_client = types.ModuleType("agentkit.sdk.tools.client")
+        fake_tools_client.AgentkitToolsClient = FakeClient
+        fake_tools_package = types.ModuleType("agentkit.sdk.tools")
+        fake_tools_package.types = fake_tools_types
+
+        with patch.dict(
+            sys.modules,
+            {
+                "agentkit": types.ModuleType("agentkit"),
+                "agentkit.sdk": types.ModuleType("agentkit.sdk"),
+                "agentkit.sdk.tools": fake_tools_package,
+                "agentkit.sdk.tools.types": fake_tools_types,
+                "agentkit.sdk.tools.client": fake_tools_client,
+            },
+        ):
+            with (
+                patch.object(
+                    self.agentkit_module,
+                    "get_agentkit_endpoint_config",
+                    return_value=("agentkit", "cn-beijing", "host", "https"),
+                ),
+                patch.object(
+                    self.agentkit_module,
+                    "get_agentkit_credentials",
+                    return_value=("ak", "sk", {}),
+                ),
+            ):
+                endpoint = self.agentkit_module.ensure_agentkit_session_endpoint(
+                    tool_id="tool-1",
+                    tool_user_session_id="user-session-1",
+                )
+
+        self.assertEqual(endpoint, "https://public.example")
+
 
 if __name__ == "__main__":
     unittest.main()

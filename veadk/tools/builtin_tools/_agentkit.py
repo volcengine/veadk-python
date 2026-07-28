@@ -236,9 +236,19 @@ def ensure_agentkit_session_endpoint(
             Ttl=ttl,
         )
     )
+    public_endpoint = getattr(session, "endpoint", None)
+    internal_endpoint = getattr(session, "internal_endpoint", None)
+    endpoint = (
+        internal_endpoint or public_endpoint
+        if prefer_internal_endpoint
+        else public_endpoint or internal_endpoint
+    )
+    if endpoint:
+        return endpoint
+
     session_id = session.session_id
     if not session_id:
-        return session.internal_endpoint or session.endpoint or ""
+        return ""
 
     current_session = client.get_session(
         tools_types.GetSessionRequest(

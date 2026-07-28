@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterable
 from typing import Optional
 from urllib import error, request
 from urllib.parse import urlsplit, urlunsplit
@@ -28,32 +29,22 @@ from veadk.tools.builtin_tools._agentkit import (
     resolve_agentkit_tool_id,
 )
 from veadk.tools.builtin_tools.run_sandbox_agent import run_sandbox_agent
-from veadk.utils.logger import get_logger
-
-logger = get_logger(__name__)
 
 
-_SKILL_API_UPGRADE_STATUS_CODES = frozenset({404})
+_SKILL_API_UPGRADE_STATUS_CODES = frozenset({404, 405})
 _SKILL_API_TIMEOUT = 900
 
-_SKILL_API_UPGRADE_HINT = (
-    "提示：当前 Skill 沙箱镜像未实现 Skill HTTP API "
-    "(/v1/skills/execute|stream)，可能是旧版沙箱镜像。"
-    "请升级 Skill 沙箱镜像或切换到支持 Skill HTTP API 的新版沙箱。"
-)
 
-_SKILL_STREAM_MISSING_HINT = (
-    "提示：当前 Skill 沙箱镜像未实现 /v1/skills/stream 接口（HTTP 404）。"
-    "请升级 Skill 沙箱镜像到支持 /v1/skills/stream 的新版沙箱。"
-)
-
-
-class _SkillApiCompatibilityMiss(Exception):
-    """Raised when the sandbox endpoint is unreachable so legacy fallback should apply."""
-
-
-class _SkillApiUpgradeRequired(Exception):
-    """Raised when the sandbox is reachable but does not expose the Skill HTTP API."""
+def _skill_api_upgrade_hint(path: str) -> str:
+    api_path = (
+        "/v1/skills/stream"
+        if path.rstrip("/").endswith("/stream")
+        else "/v1/skills/execute"
+    )
+    return (
+        f"提示：当前 Skill 沙箱镜像未实现 {api_path} 接口，可能是旧版沙箱镜像。"
+        "请升级 Skill 沙箱镜像或切换到支持 Skill HTTP API 的新版沙箱。"
+    )
 
 
 def _tool_user_session_id(tool_context: ToolContext) -> str:
@@ -64,9 +55,7 @@ def _tool_user_session_id(tool_context: ToolContext) -> str:
     return agent_name + "_" + user_id + "_" + session_id
 
 
-def _tip_token_key(tool_context: ToolContext | None) -> str | None:
-    if tool_context is None:
-        return os.getenv("TIP_TOKEN_KEY") or None
+def _tip_token_key(tool_context: ToolContext) -> str | None:
     state = tool_context.state or {}
     return (
         state.get("TIP_TOKEN_KEY")
@@ -76,18 +65,9 @@ def _tip_token_key(tool_context: ToolContext | None) -> str | None:
     )
 
 
-def _skill_api_enabled(env_vars: Optional[dict[str, str]]) -> bool:
-    protocol = os.getenv("VEADK_EXECUTE_SKILLS_PROTOCOL", "auto").strip().lower()
-    if protocol in {"legacy", "runcode", "run_code"}:
-        return False
-    # Per-execution env vars are guaranteed by the legacy RunCode path. The new
-    # Skill HTTP API does not accept arbitrary per-request env overrides.
-    return not env_vars
-
-
 def _skill_api_url(endpoint: str, path: str) -> str:
     if not endpoint:
-        raise _SkillApiCompatibilityMiss("AgentKit session endpoint is empty")
+        raise RuntimeError("AgentKit session endpoint is empty")
     parts = urlsplit(endpoint)
     endpoint_path = parts.path.rstrip("/")
     skill_path = path.lstrip("/")
@@ -104,7 +84,8 @@ def _post_skill_api_json(
     payload: dict[str, object],
     tip_token_key: str | None,
     timeout: int,
-) -> bytes:
+    stream: bool,
+) -> str:
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
@@ -120,23 +101,21 @@ def _post_skill_api_json(
     )
     try:
         with request.urlopen(req, timeout=timeout) as response:
-            return response.read()
+            if stream:
+                return _parse_skill_stream_response(response)
+            return _parse_skill_execute_response(response.read())
     except error.HTTPError as exc:
         if exc.code in _SKILL_API_UPGRADE_STATUS_CODES:
-            hint = (
-                _SKILL_STREAM_MISSING_HINT
-                if path.rstrip("/").endswith("/v1/skills/stream")
-                else _SKILL_API_UPGRADE_HINT
-            )
-            raise _SkillApiUpgradeRequired(
-                f"Skill HTTP API returned HTTP {exc.code}. {hint}"
+            raise RuntimeError(
+                f"Skill HTTP API returned HTTP {exc.code}. "
+                f"{_skill_api_upgrade_hint(path)}"
             ) from exc
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(
             f"Skill HTTP API request failed with HTTP {exc.code}: {detail}"
         ) from exc
     except error.URLError as exc:
-        raise _SkillApiCompatibilityMiss(
+        raise RuntimeError(
             f"Skill HTTP API endpoint is not reachable: {exc.reason}"
         ) from exc
 
@@ -156,7 +135,7 @@ def _parse_skill_execute_response(raw: bytes) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-def _parse_skill_stream_response(raw: bytes) -> str:
+def _parse_skill_stream_response(raw: bytes | Iterable[bytes]) -> str:
     chunks: list[str] = []
     event_name = "message"
     data_lines: list[str] = []
@@ -185,7 +164,9 @@ def _parse_skill_stream_response(raw: bytes) -> str:
         event_name = "message"
         data_lines = []
 
-    for line in raw.decode("utf-8", errors="replace").splitlines():
+    raw_lines = raw.splitlines() if isinstance(raw, bytes) else raw
+    for raw_line in raw_lines:
+        line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
         if not line:
             flush_event()
             continue
@@ -212,24 +193,22 @@ def _execute_skills_via_skill_api(
         endpoint = ensure_agentkit_session_endpoint(
             tool_id=tool_id,
             tool_user_session_id=_tool_user_session_id(tool_context),
-            tool_state=tool_context.state if tool_context else None,
+            tool_state=tool_context.state,
             ttl=max(timeout, 1800),
         )
     except Exception as exc:
-        raise _SkillApiCompatibilityMiss(
+        raise RuntimeError(
             f"AgentKit session endpoint is not available: {exc}"
         ) from exc
     path = "/v1/skills/stream" if prefer_stream else "/v1/skills/execute"
-    raw = _post_skill_api_json(
+    return _post_skill_api_json(
         endpoint=endpoint,
         path=path,
         payload={"prompt": workflow_prompt},
         tip_token_key=_tip_token_key(tool_context),
         timeout=timeout,
+        stream=prefer_stream,
     )
-    if prefer_stream:
-        return _parse_skill_stream_response(raw)
-    return _parse_skill_execute_response(raw)
 
 
 def execute_skills(
@@ -245,43 +224,36 @@ def execute_skills(
     Args:
         workflow_prompt (str): instruction of workflow
         env_vars (Optional[dict[str, str]]): Environment variables passed to the
-            skill agent process for this execution only.
+            skill agent process for this execution only. Requests with custom
+            environment variables use the legacy RunCode execution path.
 
     Returns:
         str: The output of the code execution.
     """
-    timeout = _SKILL_API_TIMEOUT
+    if tool_context is None:
+        raise ValueError("tool_context is required for execute_skills")
+
     tool_id = resolve_agentkit_tool_id("AGENTKIT_TOOL_ID_SKILLS")
-
-    if tool_context is not None and _skill_api_enabled(env_vars):
-        try:
-            return _execute_skills_via_skill_api(
-                workflow_prompt=workflow_prompt,
-                tool_id=tool_id,
-                tool_context=tool_context,
-                prefer_stream=prefer_stream,
-                timeout=timeout,
-            )
-        except _SkillApiUpgradeRequired as exc:
-            raise RuntimeError(str(exc)) from exc
-        except _SkillApiCompatibilityMiss as exc:
-            logger.warning(
-                f"Skill HTTP API endpoint unreachable, falling back to legacy RunCode: {exc}"
-            )
-
-    account_id = get_agentkit_account_id(tool_context.state if tool_context else None)
-    extra_env_vars = {}
-    if account_id:
-        extra_env_vars["TOS_SKILLS_DIR"] = (
-            f"tos://agentkit-platform-{account_id}/skills/"
-        )
     if env_vars:
-        extra_env_vars.update(env_vars)
+        account_id = get_agentkit_account_id(tool_context.state)
+        extra_env_vars = dict(env_vars)
+        if account_id:
+            extra_env_vars.setdefault(
+                "TOS_SKILLS_DIR",
+                f"tos://agentkit-platform-{account_id}/skills/",
+            )
+        return run_sandbox_agent(
+            workflow_prompt=workflow_prompt,
+            tool_id=tool_id,
+            tool_context=tool_context,
+            timeout=_SKILL_API_TIMEOUT,
+            extra_env_vars=extra_env_vars,
+        )
 
-    return run_sandbox_agent(
+    return _execute_skills_via_skill_api(
         workflow_prompt=workflow_prompt,
         tool_id=tool_id,
         tool_context=tool_context,
-        timeout=timeout,
-        extra_env_vars=extra_env_vars,
+        prefer_stream=prefer_stream,
+        timeout=_SKILL_API_TIMEOUT,
     )
