@@ -43,7 +43,10 @@ from veadk.utils.volcengine_sign import ve_request
 
 logger = get_logger(__name__)
 
-_APPLICATION_CONTROL_PLANE_REGION = "cn-beijing"
+_APPLICATION_TEMPLATE_IDS = {
+    "cn-beijing": "6874f3360bdbc40008ecf8c7",
+    "cn-shanghai": "6943b9de4fa45c0008ea04e1",
+}
 
 
 class VeFaaS:
@@ -76,7 +79,9 @@ class VeFaaS:
 
         self.apig_client = APIGateway(self.ak, self.sk, self.region)
 
-        self.template_id = "6874f3360bdbc40008ecf8c7"
+        self.template_id = _APPLICATION_TEMPLATE_IDS.get(
+            region, _APPLICATION_TEMPLATE_IDS["cn-beijing"]
+        )
 
     def _upload_and_mount_code(self, function_id: str, path: str):
         """Upload code to VeFaaS temp bucket and mount to function instance.
@@ -194,7 +199,7 @@ class VeFaaS:
             sk=self.sk,
             service="vefaas",
             version="2021-03-03",
-            region=_APPLICATION_CONTROL_PLANE_REGION,
+            region=self.region,
             host="open.volcengineapi.com",
             session_token=self.session_token,
         )
@@ -216,7 +221,7 @@ class VeFaaS:
             sk=self.sk,
             service="vefaas",
             version="2021-03-03",
-            region=_APPLICATION_CONTROL_PLANE_REGION,
+            region=self.region,
             host="open.volcengineapi.com",
             session_token=self.session_token,
         )
@@ -261,7 +266,7 @@ class VeFaaS:
             sk=self.sk,
             service="vefaas",
             version="2021-03-03",
-            region=_APPLICATION_CONTROL_PLANE_REGION,
+            region=self.region,
             host="open.volcengineapi.com",
             session_token=self.session_token,
         )
@@ -295,7 +300,7 @@ class VeFaaS:
                     sk=self.sk,
                     service="vefaas",
                     version="2021-03-03",
-                    region=_APPLICATION_CONTROL_PLANE_REGION,
+                    region=self.region,
                     host="open.volcengineapi.com",
                     session_token=self.session_token,
                 )
@@ -545,7 +550,7 @@ class VeFaaS:
                 sk=self.sk,
                 service="vefaas",
                 version="2021-03-03",
-                region=_APPLICATION_CONTROL_PLANE_REGION,
+                region=self.region,
                 host="open.volcengineapi.com",
                 session_token=self.session_token,
             )
@@ -951,7 +956,7 @@ class VeFaaS:
             sk=self.sk,
             service="vefaas",
             version="2021-03-03",
-            region=_APPLICATION_CONTROL_PLANE_REGION,
+            region=self.region,
             host="open.volcengineapi.com",
             session_token=self.session_token,
         )
