@@ -412,6 +412,59 @@ async def test_skillspace_materialization_deduplicates_nested_selection() -> Non
 
 
 @pytest.mark.asyncio
+async def test_skillspace_materialization_passes_names_to_resolver() -> None:
+    skill = SelectedSkill(
+        source="skillspace",
+        folder="display-skill",
+        name="Display Skill",
+        skillSpaceId="space-1",
+        skillSpaceName="Demo Space",
+        skillSpaceRegion="cn-shanghai",
+        skillId="skill-1",
+        version="v1",
+    )
+    draft = AgentDraft(name="root", selectedSkills=[skill])
+    project = GeneratedProject(name="root", files=[])
+    call: dict[str, object] = {}
+
+    async def resolve(
+        space_id: str,
+        skill_id: str,
+        version: str | None,
+        region: str | None,
+        *,
+        skill_space_name: str | None = None,
+        skill_name: str | None = None,
+    ) -> str:
+        call.update(
+            {
+                "space_id": space_id,
+                "skill_id": skill_id,
+                "version": version,
+                "region": region,
+                "skill_space_name": skill_space_name,
+                "skill_name": skill_name,
+            }
+        )
+        return "---\nname: display-skill\ndescription: Shared.\n---\n"
+
+    await materialize_selected_skills(
+        draft,
+        project,
+        resolve_skillspace_detail=resolve,
+    )
+
+    assert call == {
+        "space_id": "space-1",
+        "skill_id": "skill-1",
+        "version": "v1",
+        "region": "cn-shanghai",
+        "skill_space_name": "Demo Space",
+        "skill_name": "Display Skill",
+    }
+
+
+@pytest.mark.asyncio
 async def test_skillspace_materialization_normalizes_legacy_frontmatter() -> None:
     skill = SelectedSkill(
         source="skillspace",

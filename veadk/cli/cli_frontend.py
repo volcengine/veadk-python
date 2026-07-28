@@ -1686,23 +1686,50 @@ def _run_frontend_server(
         skill_id: str,
         version: str | None,
         region: str | None = None,
+        *,
+        skill_space_name: str | None = None,
+        skill_name: str | None = None,
     ) -> str:
-        from agentkit.sdk.skills.types import GetSkillVersionRequest
+        from agentkit.sdk.skills.types import (
+            GetSkillInfoRequest,
+            GetSkillVersionRequest,
+        )
 
+        client = _skills_client(region or "cn-beijing")
         try:
-            client = _skills_client(region or "cn-beijing")
             resp = client.get_skill_version(
                 GetSkillVersionRequest(id=skill_id, skill_version=version)
             )
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(
-                f"GetSkillVersion({skill_id}@{version}) error for region "
-                f"{region or 'cn-beijing'}: {e}",
-                exc_info=True,
-            )
-            raise HTTPException(status_code=502, detail=f"SkillSpaces API error: {e}")
+        except Exception as version_error:
+            if skill_space_name and skill_name:
+                try:
+                    resp = client.get_skill_info(
+                        GetSkillInfoRequest(
+                            SkillName=skill_name,
+                            SkillSpaceName=skill_space_name,
+                            SkillSpaceId=space_id,
+                        )
+                    )
+                except Exception:
+                    logger.error(
+                        f"GetSkillVersion({skill_id}@{version}) error for region "
+                        f"{region or 'cn-beijing'}: {version_error}",
+                        exc_info=True,
+                    )
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"SkillSpaces API error: {version_error}",
+                    ) from version_error
+            else:
+                logger.error(
+                    f"GetSkillVersion({skill_id}@{version}) error for region "
+                    f"{region or 'cn-beijing'}: {version_error}",
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"SkillSpaces API error: {version_error}",
+                ) from version_error
         return await asyncio.to_thread(
             _skill_md_from_version_response,
             space_id=space_id,

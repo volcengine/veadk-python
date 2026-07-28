@@ -126,6 +126,8 @@ async def _materialize_skillspace_skill(
             skill.skillId,
             skill.version or None,
             skill.skillSpaceRegion or None,
+            skill_space_name=skill.skillSpaceName or None,
+            skill_name=skill.name or None,
         )
     except TypeError:
         skill_md = await resolver(
