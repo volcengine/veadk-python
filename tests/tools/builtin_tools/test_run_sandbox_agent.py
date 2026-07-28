@@ -273,7 +273,21 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         self.assertEqual("tip-from-state", request_obj.headers["X-tip-token-key"])
         self.assertIn(b'"prompt": "do work"', request_obj.data)
 
-    def test_falls_back_to_legacy_runcode_when_skill_api_returns_404(self):
+    def test_skill_api_url_preserves_agentkit_endpoint_query_auth(self):
+        module = _load_execute_skills_module(
+            lambda **_kwargs: "fallback",
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "",
+        )
+
+        self.assertEqual(
+            "https://sandbox.test/v1/skills/execute?faasInstanceName=inst&Authorization=key",
+            module._skill_api_url(
+                "https://sandbox.test/?faasInstanceName=inst&Authorization=key",
+                "/v1/skills/execute",
+            ),
+        )
+
+    def test_requires_sandbox_upgrade_when_skill_api_returns_404(self):
         class NotFoundResponse:
             def read(self):
                 return b"not found"
@@ -302,13 +316,15 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         )
 
         with patch.object(module.request, "urlopen", fake_urlopen):
-            result = module.execute_skills("do work", tool_context=self._tool_context())
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"HTTP 404.*(?:升级|upgrade).*Skill HTTP API",
+            ):
+                module.execute_skills("do work", tool_context=self._tool_context())
 
-        self.assertEqual(result, "legacy result")
-        self.assertEqual(1, len(fallback_calls))
-        self.assertEqual("do work", fallback_calls[0]["workflow_prompt"])
+        self.assertEqual([], fallback_calls)
 
-    def test_falls_back_to_legacy_runcode_when_skill_api_returns_405(self):
+    def test_requires_sandbox_upgrade_when_skill_api_returns_405(self):
         class MethodNotAllowedResponse:
             def read(self):
                 return b"method not allowed"
@@ -337,10 +353,13 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         )
 
         with patch.object(module.request, "urlopen", fake_urlopen):
-            result = module.execute_skills("do work", tool_context=self._tool_context())
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"HTTP 405.*(?:升级|upgrade).*Skill HTTP API",
+            ):
+                module.execute_skills("do work", tool_context=self._tool_context())
 
-        self.assertEqual(result, "legacy result")
-        self.assertEqual(1, len(fallback_calls))
+        self.assertEqual([], fallback_calls)
 
     def test_falls_back_to_legacy_runcode_when_session_endpoint_is_unavailable(self):
         fallback_calls = []

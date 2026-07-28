@@ -18,7 +18,7 @@ import json
 import os
 from typing import Optional
 from urllib import error, request
-from urllib.parse import urljoin
+from urllib.parse import urlsplit, urlunsplit
 
 from google.adk.tools import ToolContext
 
@@ -33,12 +33,22 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-_SKILL_API_COMPATIBILITY_STATUS_CODES = frozenset({404, 405})
+_SKILL_API_UPGRADE_STATUS_CODES = frozenset({404})
 _SKILL_API_TIMEOUT = 900
+
+_SKILL_API_UPGRADE_HINT = (
+    "提示：当前 Skill 沙箱镜像未实现 Skill HTTP API "
+    "(/v1/skills/execute|stream)，可能是旧版沙箱镜像。"
+    "请升级 Skill 沙箱镜像或切换到支持 Skill HTTP API 的新版沙箱。"
+)
 
 
 class _SkillApiCompatibilityMiss(Exception):
-    """Raised when the sandbox does not expose the new Skill HTTP API."""
+    """Raised when the sandbox endpoint is unreachable so legacy fallback should apply."""
+
+
+class _SkillApiUpgradeRequired(Exception):
+    """Raised when the sandbox is reachable but does not expose the Skill HTTP API."""
 
 
 def _tool_user_session_id(tool_context: ToolContext) -> str:
@@ -73,7 +83,13 @@ def _skill_api_enabled(env_vars: Optional[dict[str, str]]) -> bool:
 def _skill_api_url(endpoint: str, path: str) -> str:
     if not endpoint:
         raise _SkillApiCompatibilityMiss("AgentKit session endpoint is empty")
-    return urljoin(endpoint.rstrip("/") + "/", path.lstrip("/"))
+    parts = urlsplit(endpoint)
+    endpoint_path = parts.path.rstrip("/")
+    skill_path = path.lstrip("/")
+    joined_path = f"{endpoint_path}/{skill_path}" if endpoint_path else f"/{skill_path}"
+    return urlunsplit(
+        (parts.scheme, parts.netloc, joined_path, parts.query, parts.fragment)
+    )
 
 
 def _post_skill_api_json(
@@ -101,9 +117,9 @@ def _post_skill_api_json(
         with request.urlopen(req, timeout=timeout) as response:
             return response.read()
     except error.HTTPError as exc:
-        if exc.code in _SKILL_API_COMPATIBILITY_STATUS_CODES:
-            raise _SkillApiCompatibilityMiss(
-                f"Skill HTTP API is not available: {exc.code}"
+        if exc.code in _SKILL_API_UPGRADE_STATUS_CODES:
+            raise _SkillApiUpgradeRequired(
+                f"Skill HTTP API returned HTTP {exc.code}. {_SKILL_API_UPGRADE_HINT}"
             ) from exc
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(
@@ -236,8 +252,12 @@ def execute_skills(
                 prefer_stream=prefer_stream,
                 timeout=timeout,
             )
+        except _SkillApiUpgradeRequired as exc:
+            raise RuntimeError(str(exc)) from exc
         except _SkillApiCompatibilityMiss as exc:
-            logger.debug(f"Falling back to legacy SkillEnv execution: {exc}")
+            logger.warning(
+                f"Skill HTTP API endpoint unreachable, falling back to legacy RunCode: {exc}"
+            )
 
     account_id = get_agentkit_account_id(tool_context.state if tool_context else None)
     extra_env_vars = {}
