@@ -45,7 +45,7 @@ logger = get_logger(__name__)
 
 _APPLICATION_TEMPLATE_IDS = {
     "cn-beijing": "6874f3360bdbc40008ecf8c7",
-    "cn-shanghai": "6943b9de4fa45c0008ea04e1",
+    "cn-shanghai": "6a685988162bcd00083c9001",
 }
 
 
