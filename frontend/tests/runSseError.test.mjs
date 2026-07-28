@@ -28,6 +28,14 @@ test("adds persistent-memory guidance to run_sse 404 variants", () => {
   }
 });
 
+test("adds upgrade guidance when run_sse may be missing", () => {
+  const formatted = formatRunSseError("run_sse failed: 404");
+
+  assert.match(formatted, /接口不存在/);
+  assert.match(formatted, /升级/);
+  assert.match(formatted, /Skill 沙箱/);
+});
+
 test("leaves unrelated errors unchanged", () => {
   for (const error of ["run_sse failed: 500", "create_session failed: 404"]) {
     assert.equal(formatRunSseError(error), error);
