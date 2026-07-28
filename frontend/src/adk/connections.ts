@@ -20,6 +20,7 @@ export interface RemoteConnection {
    *  set, `base`/`apiKey` are unused and the apikey stays server-side. */
   runtimeId?: string;
   region?: string;
+  currentVersion?: number | null;
   apps: string[];
   /** Optional app ID -> friendly name mapping (e.g., "a_1" -> "a_1-4zkzsezc") */
   appLabels?: Record<string, string>;
@@ -32,6 +33,11 @@ export interface AgentEntry {
   app: string; // real ADK app name
   remote: boolean;
   host?: string; // remote host, for display
+  runtimeId?: string;
+  region?: string;
+  currentVersion?: number | null;
+  /** Server-authorized permission for Studio-managed Runtime deletion. */
+  canDelete?: boolean;
 }
 
 const STORAGE_KEY = "veadk_agentkit_connections";
@@ -91,6 +97,7 @@ export function addRuntimeConnection(
   region: string,
   apps: string[],
   appLabels?: Record<string, string>,
+  currentVersion?: number | null,
 ): RemoteConnection {
   const conn: RemoteConnection = {
     id: `rt_${runtimeId}`,
@@ -99,6 +106,7 @@ export function addRuntimeConnection(
     region,
     apps,
     appLabels,
+    currentVersion,
   };
   const list = [...loadConnections().filter((c) => c.runtimeId !== runtimeId), conn];
   persist(list);
@@ -111,6 +119,7 @@ export async function connectRuntime(
   runtimeId: string,
   name: string,
   region: string,
+  currentVersion?: number | null,
 ): Promise<string> {
   let apps: string[] | null;
   try {
@@ -126,7 +135,14 @@ export async function connectRuntime(
     throw new Error("该 Runtime 暂不支持连接，请确认服务已正常运行。");
   }
   const labels = Object.fromEntries(apps.map((app) => [app, name]));
-  const connection = addRuntimeConnection(runtimeId, name, region, apps, labels);
+  const connection = addRuntimeConnection(
+    runtimeId,
+    name,
+    region,
+    apps,
+    labels,
+    currentVersion,
+  );
   return remoteAppId(connection.id, apps[0]);
 }
 
@@ -188,6 +204,9 @@ export function buildAgentEntries(
         app,
         remote: true,
         host: c.runtimeId ? c.name : hostOf(c.base ?? ""),
+        runtimeId: c.runtimeId,
+        region: c.region,
+        currentVersion: c.currentVersion,
       };
     }),
   );

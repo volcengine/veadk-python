@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowRight, Github, LogIn } from "lucide-react";
 import type { SiteBranding } from "../adk/client";
 import { fetchProviders, loginTo, USERNAME_RE, type Provider } from "../adk/identity";
@@ -21,6 +21,7 @@ export function LoginPage({ branding, onUsername }: LoginPageProps) {
   const [providerError, setProviderError] = useState("");
   const [providerAttempt, setProviderAttempt] = useState(0);
   const [name, setName] = useState("");
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let active = true;
@@ -39,6 +40,12 @@ export function LoginPage({ branding, onUsername }: LoginPageProps) {
       active = false;
     };
   }, [providerAttempt]);
+
+  const showUsernameLogin = providers !== null && providers.length === 0;
+
+  useEffect(() => {
+    if (showUsernameLogin) nameInputRef.current?.focus();
+  }, [showUsernameLogin]);
 
   const valid = USERNAME_RE.test(name);
   const submit = () => {
@@ -97,12 +104,12 @@ export function LoginPage({ branding, onUsername }: LoginPageProps) {
                 }}
               >
                 <input
+                  ref={nameInputRef}
                   className="login-name-input"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="用户名（字母 + 数字，最多 16 位）"
                   maxLength={16}
-                  autoFocus
                 />
                 <button
                   type="submit"

@@ -22,6 +22,10 @@ const projectPreviewStyles = readFileSync(
   new URL("../src/ui/ProjectPreview.css", import.meta.url),
   "utf8",
 );
+const appStyles = readFileSync(
+  new URL("../src/styles.css", import.meta.url),
+  "utf8",
+);
 const clientSource = readFileSync(
   new URL("../src/adk/client.ts", import.meta.url),
   "utf8",
@@ -128,12 +132,13 @@ test("uses a themed region menu and a centered icon-free deploy button", () => {
 });
 
 test("uses the PR 748 update-button treatment for deployment", () => {
+  assert.match(projectPreviewSource, /className="pp-deploy studio-update-action"/);
   assert.match(
-    projectPreviewStyles,
-    /\.pp-config-actions \.pp-deploy\s*\{[\s\S]*?min-width:\s*104px;[\s\S]*?min-height:\s*40px;[\s\S]*?border-radius:\s*999px;/,
+    appStyles,
+    /\.studio-update-action\s*\{[\s\S]*?min-width:\s*104px;[\s\S]*?min-height:\s*40px;[\s\S]*?border-radius:\s*999px;/,
   );
   assert.match(
-    projectPreviewStyles,
-    /\.pp-config-actions \.pp-deploy:hover:not\(:disabled\)\s*\{[\s\S]*?background:\s*hsl\(var\(--foreground\)\);[\s\S]*?color:\s*hsl\(var\(--background\)\);/,
+    appStyles,
+    /\.studio-update-action:not\(:disabled\):hover\s*\{[\s\S]*?background:\s*#29292b;[\s\S]*?color:\s*#fff;/,
   );
 });

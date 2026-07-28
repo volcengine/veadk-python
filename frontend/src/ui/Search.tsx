@@ -41,9 +41,9 @@ function SourceChevron({ open }: { open: boolean }) {
 
 export function SearchButton({ onClick }: { onClick: () => void }) {
   return (
-    <button className="new-chat" onClick={onClick} aria-label="智能搜索" title="智能搜索">
+    <button className="new-chat" onClick={onClick} aria-label="搜索" title="搜索">
       <SearchGlyph />
-      <span className="sidebar-nav-label">智能搜索</span>
+      <span className="sidebar-nav-label">搜索</span>
     </button>
   );
 }

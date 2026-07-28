@@ -20,13 +20,16 @@ test("Studio access fails closed until the server-derived role is known", () => 
   assert.match(appSource, /setAccess\(DEFAULT_STUDIO_ACCESS\)/);
 });
 
-test("ordinary users cannot render or open Agent creation and management", () => {
-  assert.match(sidebarSource, /access\.capabilities\.createAgents && show\("addAgent"\)/);
-  assert.match(sidebarSource, /access\.capabilities\.manageAgents && show\("manageAgents"\)/);
+test("Agent workspace creation and update actions obey Studio access", () => {
+  assert.doesNotMatch(sidebarSource, /access\.capabilities\.createAgents && show\("addAgent"\)/);
+  assert.doesNotMatch(sidebarSource, /access\.capabilities\.manageAgents && show\("manageAgents"\)/);
+  assert.match(sidebarSource, /onClick=\{onManageAgents\}[\s\S]*?aria-label="智能体"/);
   assert.match(appSource, /const visibleCreateView = canCreateAgents \? createView : null/);
-  assert.match(appSource, /const showManageAgents = canManageAgents && manageAgents/);
+  assert.match(appSource, /const showManageAgents = manageAgents/);
+  assert.match(appSource, /if \(!access\.capabilities\.manageAgents\) setManageAgents\(false\)/);
+  assert.match(appSource, /<AgentWorkspace[\s\S]*?canCreate=\{canCreateAgents\}[\s\S]*?canUpdate=\{canCreateAgents \|\| canManageAgents\}/);
   assert.match(appSource, /if \(!canCreateAgents\)[\s\S]*?当前账号没有添加 Agent 的权限/);
-  assert.match(appSource, /if \(!canManageAgents\)[\s\S]*?当前账号没有管理 Agent 的权限/);
+  assert.match(appSource, /if \(!canManageAgents && !canCreateAgents\)[\s\S]*?当前账号没有管理 Agent 的权限/);
 });
 
 test("sidebar shows the OAuth email and translated role badge", () => {

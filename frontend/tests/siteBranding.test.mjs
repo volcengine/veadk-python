@@ -41,6 +41,10 @@ test("applies configured branding to the UI, document title, and favicon", () =>
   assert.match(sidebarSource, /\{branding\.title\}/);
   assert.match(sidebarSource, /branding\.logoUrl \|\| volcengineLogo/);
   assert.match(sidebarSource, /width=\{20\}\s*height=\{20\}/);
+  assert.match(
+    sidebarSource,
+    /className="brand"[\s\S]*?onClick=\{onNewChat\}[\s\S]*?aria-label="返回首页"/,
+  );
   assert.match(loginSource, /width=\{20\}\s*height=\{20\}/);
   assert.match(
     loginSource,
@@ -55,7 +59,11 @@ test("applies configured branding to the UI, document title, and favicon", () =>
   assert.match(stylesSource, /object-fit: contain/);
   assert.match(
     stylesSource,
-    /\.brand-logo,[\s\S]*?\.brand-title,[\s\S]*?\.login-brand-logo,[\s\S]*?\.login-brand,[\s\S]*?\.login-title\s*\{[\s\S]*?cursor:\s*text;/,
+    /\.brand-logo,[\s\S]*?\.brand-title,[\s\S]*?\.brand\s*\{[\s\S]*?cursor:\s*pointer;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.login-brand-logo,[\s\S]*?\.login-brand,[\s\S]*?\.login-title\s*\{[\s\S]*?cursor:\s*text;/,
   );
   assert.match(htmlSource, /<link rel="icon"/);
   assert.match(htmlSource, /<title>VeADK Studio<\/title>/);
@@ -77,6 +85,7 @@ test("global sidebar can collapse to a compact icon rail", () => {
 
 test("the main navbar owns the complete Agent selector", () => {
   assert.match(navbarSource, /<AgentSelector[\s\S]*?variant="navbar"/);
+  assert.doesNotMatch(sidebarSource, /<AgentSelector/);
   assert.match(agentSelectorSource, /const active = currentRuntime\?\.runtimeId === rt\.runtimeId/);
   assert.match(agentSelectorSource, /<RuntimeIdentityIcon \/>/);
 });

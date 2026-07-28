@@ -124,16 +124,18 @@ function TopoNode({
 
 interface ModuleTitleProps {
   title: string;
-  count: number;
+  count?: number;
 }
 
 function ModuleTitle({ title, count }: ModuleTitleProps) {
   return (
     <div className="topo-module-title">
       <span className="topo-module-label" title={title}>{title}</span>
-      <span className="topo-section-count" aria-label={`${count} 项`}>
-        {count}
-      </span>
+      {count !== undefined && (
+        <span className="topo-section-count" aria-label={`${count} 项`}>
+          {count}
+        </span>
+      )}
     </div>
   );
 }
@@ -300,7 +302,7 @@ export function AgentInfoPanel({
         <section className="topo-module-card topo-skills-card" aria-label="技能">
           <ModuleTitle
             title="技能"
-            count={skills.length}
+            count={info.skillsPreviewSupported ? skills.length : undefined}
           />
           <div
             className="topo-module-scroll topo-skills-scroll"
@@ -308,7 +310,9 @@ export function AgentInfoPanel({
             aria-label="技能列表"
             tabIndex={0}
           >
-            {skills.length > 0 ? (
+            {!info.skillsPreviewSupported ? (
+              <div className="topo-empty">暂不支持预览</div>
+            ) : skills.length > 0 ? (
               <div className="topo-skill-list">
                 {skills.map((skill) => (
                   <div

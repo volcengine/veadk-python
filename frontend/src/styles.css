@@ -122,9 +122,16 @@ body {
   display: flex;
   align-items: center;
   gap: 9px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
   font-weight: 600;
   font-size: 15px;
   letter-spacing: -0.01em;
+  font-family: inherit;
+  text-align: left;
 }
 .brand-title {
   overflow: hidden;
@@ -133,6 +140,10 @@ body {
 }
 .brand-logo,
 .brand-title,
+.brand {
+  cursor: pointer;
+}
+
 .login-brand-logo,
 .login-brand,
 .login-title {
@@ -185,7 +196,9 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 10px;
+  height: 36px;
+  min-height: 36px;
+  padding: 8px 10px;
   border: none;
   border-radius: 8px;
   background: none;
@@ -197,6 +210,89 @@ body {
 }
 .new-chat .icon { width: 18px; height: 18px; }
 .new-chat:hover { background: hsl(var(--foreground) / 0.05); }
+
+.new-chat--conversation > .icon {
+  transform-origin: center;
+}
+
+.new-chat--conversation:hover > .icon {
+  animation: sidebar-plus-return 650ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.sidebar-agent-face {
+  overflow: visible;
+}
+
+.sidebar-agent-face__eye {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.new-chat--agents:hover .sidebar-agent-face__eye {
+  animation: sidebar-agent-blink 760ms ease-in-out both;
+}
+
+@keyframes sidebar-plus-return {
+  0% { transform: rotate(0deg); }
+  48% { transform: rotate(48deg); }
+  100% { transform: rotate(0deg); }
+}
+
+@keyframes sidebar-agent-blink {
+  0%, 34%, 48%, 62%, 100% { transform: scaleY(1); }
+  41%, 55% { transform: scaleY(0.08); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .new-chat--conversation:hover > .icon,
+  .new-chat--agents:hover .sidebar-agent-face__eye {
+    animation: none;
+  }
+}
+
+/* Shared primary action used by Agent detail and creation/deployment flows. */
+.studio-update-action {
+  min-width: 104px;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 17px;
+  border: 0;
+  border-radius: 999px;
+  background: #111;
+  color: #fff;
+  box-shadow: none;
+  -webkit-backdrop-filter: blur(7px);
+  backdrop-filter: blur(7px);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 650;
+  transition:
+    background-color 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 180ms ease,
+    box-shadow 240ms ease,
+    backdrop-filter 240ms ease;
+}
+
+.studio-update-action:not(:disabled):hover {
+  border: 0;
+  background: #29292b;
+  color: #fff;
+  box-shadow: 0 7px 18px hsl(0 0% 0% / 0.16);
+}
+
+.studio-update-action:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.55);
+  outline-offset: 2px;
+}
+
+.studio-update-action:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
 
 .sidebar.is-collapsed .new-chat {
   align-self: center;

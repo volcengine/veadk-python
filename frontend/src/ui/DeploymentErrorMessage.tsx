@@ -5,10 +5,12 @@ export function DeploymentErrorMessage({
   message,
   className = "",
   onRetry,
+  retryLabel = "重试部署",
 }: {
   message: string;
   className?: string;
   onRetry?: () => Promise<void>;
+  retryLabel?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -50,7 +52,7 @@ export function DeploymentErrorMessage({
             onClick={() => void retry()}
           >
             {retrying ? <Loader2 className="spin" /> : <RotateCcw />}
-            {retrying ? "重试中…" : "重试部署"}
+            {retrying ? "重试中…" : retryLabel}
           </button>
         )}
         <button

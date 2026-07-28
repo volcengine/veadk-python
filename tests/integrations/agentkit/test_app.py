@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 from google.adk.agents.base_agent import BaseAgent
 
 import veadk
+from veadk.cli.frontend_invocation import FrontendInvocationPlugin
 import veadk.integrations.agentkit.app as agentkit_app
 
 
@@ -99,6 +100,7 @@ def test_create_agentkit_app_preserves_platform_route_contract() -> None:
             "id": "agent",
             "name": "客服智能体",
             "description": "Customer support",
+            "instruction": "",
             "type": "llm",
             "model": "doubao-model",
             "tools": ["search_orders"],
@@ -111,6 +113,7 @@ def test_create_agentkit_app_preserves_platform_route_contract() -> None:
                     "id": "agent_sub_1",
                     "name": "订单助手",
                     "description": "Handles orders",
+                    "instruction": "",
                     "type": "llm",
                     "model": "child-model",
                     "tools": [],
@@ -122,9 +125,61 @@ def test_create_agentkit_app_preserves_platform_route_contract() -> None:
                 }
             ],
         },
+        "draft": None,
     }
     assert client.get("/web/agent-info/unknown").status_code == 404
     assert client.get("/web/agent-graph").json()["graph"] == info.json()["graph"]
+
+
+def test_agent_info_exposes_sanitized_builder_draft() -> None:
+    draft = {"name": "agent", "instruction": "Answer with the configured prompt."}
+    client = TestClient(
+        agentkit_app.create_agentkit_app(_root_agent(), agent_draft=draft)
+    )
+
+    assert client.get("/web/agent-info/agent").json()["draft"] == draft
+
+
+def test_dynamic_runner_registers_frontend_invocation_plugin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_agent = _root_agent()
+    monkeypatch.setattr(
+        agentkit_app,
+        "_spawn_dynamic_a2a_agent",
+        lambda agent, prompt: agent,
+    )
+    captured: dict[str, Any] = {}
+
+    class FakeApp:
+        def __init__(self, **kwargs: Any) -> None:
+            self.plugins = kwargs["plugins"]
+
+    monkeypatch.setattr(agentkit_app, "App", FakeApp)
+
+    def fake_runner(**kwargs: Any) -> object:
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(agentkit_app, "AdkRunner", fake_runner)
+    services = SimpleNamespace(
+        artifact_service=None,
+        session_service=object(),
+        memory_service=None,
+        credential_service=None,
+        auto_create_session=False,
+    )
+
+    agentkit_app._dynamic_runner(
+        services,
+        app_name="agent",
+        root_agent=root_agent,
+        prompt="hello",
+    )
+
+    plugins = captured["app"].plugins
+    assert len(plugins) == 1
+    assert isinstance(plugins[0], FrontendInvocationPlugin)
 
 
 def test_agent_info_exposes_mounted_skills_and_components() -> None:

@@ -707,23 +707,29 @@ function AgentInfoContent({ runtime }: { runtime: SelectedRuntime }) {
               />
             )}
 
-          {info.skills.length > 0 && (
-              <section className="agentsel-info-section">
-                <h3>
-                  <SkillCapabilityIcon /> 技能
-                </h3>
-              <div className="agentsel-info-list">
-                {info.skills.map((skill) => (
-                  <div key={skill.name} className="agentsel-info-list-item">
-                    <strong title={skill.name}>{skill.name}</strong>
-                    {skill.description && (
-                      <span title={skill.description}>{skill.description}</span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
+          <section className="agentsel-info-section">
+            <h3>
+              <SkillCapabilityIcon /> 技能
+            </h3>
+            {info.skillsPreviewSupported ? (
+              info.skills.length > 0 ? (
+                <div className="agentsel-info-list">
+                  {info.skills.map((skill) => (
+                    <div key={skill.name} className="agentsel-info-list-item">
+                      <strong title={skill.name}>{skill.name}</strong>
+                      {skill.description && (
+                        <span title={skill.description}>{skill.description}</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="agentsel-info-empty">未配置</div>
+              )
+            ) : (
+              <div className="agentsel-info-empty">暂不支持预览</div>
+            )}
+          </section>
 
           {components.length > 0 && (
             <section className="agentsel-info-section">
@@ -759,6 +765,7 @@ function AgentInfoContent({ runtime }: { runtime: SelectedRuntime }) {
           {!info.description &&
             info.subAgents.length === 0 &&
             info.tools.length === 0 &&
+            info.skillsPreviewSupported &&
             info.skills.length === 0 &&
             components.length === 0 && (
               <div className="agentsel-panel-empty">

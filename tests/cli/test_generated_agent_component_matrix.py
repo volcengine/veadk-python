@@ -373,9 +373,10 @@ def test_a2a_registry_child_attaches_tools_to_llm_parent() -> None:
     )
     assert "agent_sub_1 = Agent(" not in agent_py
     assert "sub_agents=[agent_sub_1]" not in agent_py
-    assert "Reliability Review Remote Agent" not in agent_py
-    assert "ignored remote description" not in agent_py
-    assert "ignored remote instruction" not in agent_py
+    runtime_agent_py = agent_py.split("AGENT_DRAFT =", 1)[0]
+    assert "Reliability Review Remote Agent" not in runtime_agent_py
+    assert "ignored remote description" not in runtime_agent_py
+    assert "ignored remote instruction" not in runtime_agent_py
     assert "REGISTRY_SPACE_ID=space-test" in files[".env.example"]
     _assert_python_files_compile(project)
 
@@ -416,9 +417,10 @@ def test_a2a_registry_center_generates_tools_and_env() -> None:
         "a2a_registry_config_agent_sub_1)" in agent_py
     )
     assert 'name="agent_sub_1"' in agent_py
-    assert "ignored-remote-name" not in agent_py
-    assert "ignored remote description" not in agent_py
-    assert "ignored remote instruction" not in agent_py
+    runtime_agent_py = agent_py.split("AGENT_DRAFT =", 1)[0]
+    assert "ignored-remote-name" not in runtime_agent_py
+    assert "ignored remote description" not in runtime_agent_py
+    assert "ignored remote instruction" not in runtime_agent_py
     assert "build_remote_a2a_agent_tools(prompt, registry_config)" in dynamic_py
     assert "def _run_request_custom_metadata(" in dynamic_py
     assert 'getattr(req, "custom_metadata", None)' in dynamic_py
@@ -497,7 +499,8 @@ def test_nested_a2a_registry_agent_generates_dynamic_helper() -> None:
     agent_py = files["agents/root_sequential/agent.py"]
     assert "agent_sub_1 = Agent(" in agent_py
     assert 'name="agent_sub_1"' in agent_py
-    assert "registry-worker" not in agent_py
+    runtime_agent_py = agent_py.split("AGENT_DRAFT =", 1)[0]
+    assert "registry-worker" not in runtime_agent_py
     assert "REGISTRY_SPACE_ID=space-test" in files[".env.example"]
     assert (
         "_has_a2a_registry_config(child)"
