@@ -24,6 +24,7 @@ import {
   createSession,
   DEFAULT_STUDIO_ACCESS,
   DEFAULT_SITE_BRANDING,
+  deleteRuntime,
   deleteMedia,
   deleteSessionMedia,
   deleteSession,
@@ -31,6 +32,7 @@ import {
   getSessionCapabilities,
   getSession,
   getStudioAccess,
+  getRuntimes,
   listApps,
   listSessionBuiltinTools,
   listSessions,
@@ -47,7 +49,7 @@ import {
   type AddSessionCapability,
   type Attachment,
   type FrontendInvocation,
-  type ManagedRuntime,
+  type CloudRuntime,
   type MessageFeedbackRating,
   type SiteBranding,
   type SessionCapabilities,
@@ -67,14 +69,19 @@ import { AgentInfoDrawer, AgentInfoPanel } from "./ui/AgentTopology";
 import { AgentIdentityIcon } from "./ui/AgentIdentityIcon";
 import { SkillCenterView } from "./ui/SkillCenter";
 import { AddAgentKitView } from "./ui/AddAgentKit";
-import { ManageAgentsView } from "./ui/ManageAgents";
+import {
+  AgentWorkspace,
+  type WorkspaceAgentDraft,
+} from "./ui/AgentWorkspace";
 import { SearchView } from "./ui/Search";
 import {
   buildAgentEntries,
   connectRuntime,
   loadConnections,
   registerConnections,
+  removeRuntimeConnection,
   remoteAppId,
+  type AgentEntry,
   type RemoteConnection,
 } from "./adk/connections";
 import { Blocks, ThinkingPlaceholder } from "./ui/Blocks";
@@ -90,7 +97,7 @@ import { WorkflowCreate } from "./create/WorkflowCreate";
 import { CodePackageCreate } from "./create/CodePackageCreate";
 import { FileArchive } from "lucide-react";
 import type { AgentDraft } from "./create/types";
-import type { DeploymentTaskUpdate } from "./ui/ProjectPreview";
+import type { DeployResult, DeploymentTaskUpdate } from "./ui/ProjectPreview";
 import { DeploymentErrorMessage } from "./ui/DeploymentErrorMessage";
 import { TextShimmer } from "./ui/text-shimmer/TextShimmer";
 import { StudioUpdateControl } from "./ui/StudioUpdateControl";
@@ -140,6 +147,40 @@ const EMPTY_STRING_ARR: string[] = [];
 
 function emptyInvocation(): FrontendInvocation {
   return { skills: [] };
+}
+
+function workspaceDraftsKey(userId: string): string {
+  return `veadk.agentDrafts.${encodeURIComponent(userId)}`;
+}
+
+function activeWorkspaceDraftKey(userId: string): string {
+  return `${workspaceDraftsKey(userId)}.active`;
+}
+
+function workspaceAgentOrderKey(userId: string): string {
+  return `veadk.agentOrder.${encodeURIComponent(userId)}`;
+}
+
+function loadWorkspaceDrafts(userId: string): WorkspaceAgentDraft[] {
+  if (!userId) return [];
+  try {
+    const value = JSON.parse(localStorage.getItem(workspaceDraftsKey(userId)) || "[]");
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
+function loadWorkspaceAgentOrder(userId: string): string[] {
+  if (!userId) return [];
+  try {
+    const value = JSON.parse(localStorage.getItem(workspaceAgentOrderKey(userId)) || "[]");
+    return Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string")
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 function findAgentNode(node: AgentNode, name: string): AgentNode | undefined {
@@ -896,8 +937,12 @@ export default function App() {
   const [addMenu, setAddMenu] = useState(false);
   // A draft imported from YAML, used to pre-fill the custom wizard once.
   const [importedDraft, setImportedDraft] = useState<AgentDraft | null>(null);
+  const [savedAgentDrafts, setSavedAgentDrafts] = useState<WorkspaceAgentDraft[]>([]);
+  const [workspaceAgentOrder, setWorkspaceAgentOrder] = useState<string[]>([]);
+  const [editingDraftId, setEditingDraftId] = useState("");
+  const editingDraftBaselineRef = useRef<WorkspaceAgentDraft | null>(null);
   const [searchView, setSearchView] = useState(false);
-  // The "管理 Agent" view: lists/deletes the current user's AgentKit runtimes.
+  // The #748 Agent workspace: library, evaluation groups, and draft management.
   const [manageAgents, setManageAgents] = useState(false);
   // A search result may belong to a different agent; remember it so the
   // agent-switch effect opens it instead of resetting to a fresh chat.
@@ -909,12 +954,246 @@ export default function App() {
     registerConnections(c);
     return c;
   });
+  const [agentLibraryLoading, setAgentLibraryLoading] = useState(false);
+  const [agentLibraryError, setAgentLibraryError] = useState("");
+  const [libraryRuntimeIds, setLibraryRuntimeIds] = useState<Set<string> | null>(
+    null,
+  );
+  const [libraryRuntimePermissions, setLibraryRuntimePermissions] = useState<
+    Record<string, { canDelete: boolean }>
+  >({});
+  const [runtimeUpdateTarget, setRuntimeUpdateTarget] = useState<{
+    runtimeId: string;
+    name: string;
+    region: string;
+    currentVersion?: number | null;
+  } | null>(null);
+  const [focusedDeploymentTaskId, setFocusedDeploymentTaskId] = useState("");
+  const [focusedWorkspaceAgentId, setFocusedWorkspaceAgentId] = useState("");
   // Shown when the user clicks the breadcrumb root to leave a create mode;
   // warns that the in-progress draft will be discarded.
   const [confirmLeave, setConfirmLeave] = useState(false);
   // Restore the previously-open session only once, after apps/user resolve.
   const restoredRef = useRef(false);
   const defaultViewAppliedRef = useRef(false);
+
+  const saveWorkspaceDraft = useCallback(
+    (
+      id: string,
+      draft: AgentDraft,
+      deploymentTarget?: WorkspaceAgentDraft["deploymentTarget"],
+    ) => {
+      if (!id || !userId) return;
+      setSavedAgentDrafts((current) => {
+        const nextItem: WorkspaceAgentDraft = {
+          id,
+          draft,
+          updatedAt: Date.now(),
+          deploymentTarget,
+        };
+        const next = [nextItem, ...current.filter((item) => item.id !== id)];
+        localStorage.setItem(workspaceDraftsKey(userId), JSON.stringify(next));
+        return next;
+      });
+    },
+    [userId],
+  );
+
+  const removeWorkspaceDraft = useCallback((id: string) => {
+    if (!id || !userId) return;
+    setSavedAgentDrafts((current) => {
+      const next = current.filter((item) => item.id !== id);
+      localStorage.setItem(workspaceDraftsKey(userId), JSON.stringify(next));
+      return next;
+    });
+  }, [userId]);
+
+  const deleteWorkspaceDrafts = useCallback((draftsToDelete: WorkspaceAgentDraft[]) => {
+    if (!userId || draftsToDelete.length === 0) return;
+    const deletedDraftIds = new Set(draftsToDelete.map((item) => item.id));
+    setSavedAgentDrafts((current) => {
+      const next = current.filter((item) => !deletedDraftIds.has(item.id));
+      localStorage.setItem(workspaceDraftsKey(userId), JSON.stringify(next));
+      return next;
+    });
+    if (deletedDraftIds.has(editingDraftId)) {
+      setEditingDraftId("");
+      setImportedDraft(null);
+      setRuntimeUpdateTarget(null);
+      editingDraftBaselineRef.current = null;
+      localStorage.removeItem(activeWorkspaceDraftKey(userId));
+    }
+  }, [editingDraftId, userId]);
+
+  const restoreWorkspaceDraftBaseline = useCallback((id: string) => {
+    if (!id || !userId) return;
+    const baseline = editingDraftBaselineRef.current;
+    setSavedAgentDrafts((current) => {
+      const remaining = current.filter((item) => item.id !== id);
+      const next = baseline?.id === id ? [baseline, ...remaining] : remaining;
+      localStorage.setItem(workspaceDraftsKey(userId), JSON.stringify(next));
+      return next;
+    });
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId) {
+      setSavedAgentDrafts([]);
+      setWorkspaceAgentOrder([]);
+      setEditingDraftId("");
+      editingDraftBaselineRef.current = null;
+      return;
+    }
+    const nextDrafts = loadWorkspaceDrafts(userId);
+    setSavedAgentDrafts(nextDrafts);
+    setWorkspaceAgentOrder(loadWorkspaceAgentOrder(userId));
+    const activeId = localStorage.getItem(activeWorkspaceDraftKey(userId)) || "";
+    const activeDraft = nextDrafts.find((item) => item.id === activeId);
+    editingDraftBaselineRef.current = activeDraft ?? null;
+    if (createView === "custom" && activeDraft) {
+      setEditingDraftId(activeDraft.id);
+      setImportedDraft(activeDraft.draft);
+      setRuntimeUpdateTarget(activeDraft.deploymentTarget ?? null);
+    }
+    // Restore only when identity changes; later edits are already in state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId) return;
+    const key = activeWorkspaceDraftKey(userId);
+    if (createView === "custom" && editingDraftId) {
+      localStorage.setItem(key, editingDraftId);
+    } else {
+      localStorage.removeItem(key);
+    }
+  }, [createView, editingDraftId, userId]);
+
+  const saveWorkspaceAgentOrder = useCallback((nextOrder: string[]) => {
+    if (!userId) return;
+    const deduped = [...new Set(nextOrder.filter(Boolean))];
+    setWorkspaceAgentOrder(deduped);
+    localStorage.setItem(workspaceAgentOrderKey(userId), JSON.stringify(deduped));
+  }, [userId]);
+
+  const deleteWorkspaceAgents = useCallback(async (agentsToDelete: AgentEntry[]) => {
+    const targets = agentsToDelete.filter(
+      (agent): agent is AgentEntry & { runtimeId: string } =>
+        Boolean(agent.runtimeId) && agent.canDelete === true,
+    );
+    if (targets.length === 0) return;
+
+    const deletedRuntimeIds = new Set<string>();
+    const deletedAgentIds = new Set<string>();
+    const failures: string[] = [];
+    for (const agent of targets) {
+      try {
+        await deleteRuntime(agent.runtimeId, agent.region ?? "cn-beijing");
+        removeRuntimeConnection(agent.runtimeId);
+        deletedRuntimeIds.add(agent.runtimeId);
+        deletedAgentIds.add(agent.id);
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        failures.push(`${agent.label}: ${message}`);
+      }
+    }
+
+    if (deletedRuntimeIds.size > 0) {
+      setConnections(loadConnections());
+      setLibraryRuntimeIds((current) => {
+        if (!current) return current;
+        const next = new Set(current);
+        for (const runtimeId of deletedRuntimeIds) next.delete(runtimeId);
+        return next;
+      });
+      setLibraryRuntimePermissions((current) =>
+        Object.fromEntries(
+          Object.entries(current).filter(([runtimeId]) => !deletedRuntimeIds.has(runtimeId)),
+        ),
+      );
+      setWorkspaceAgentOrder((current) => {
+        const next = current.filter((id) => !deletedAgentIds.has(id));
+        if (userId) {
+          localStorage.setItem(workspaceAgentOrderKey(userId), JSON.stringify(next));
+        }
+        return next;
+      });
+      setSavedAgentDrafts((current) => {
+        const next = current.filter(
+          (item) =>
+            !item.deploymentTarget?.runtimeId ||
+            !deletedRuntimeIds.has(item.deploymentTarget.runtimeId),
+        );
+        if (userId) {
+          localStorage.setItem(workspaceDraftsKey(userId), JSON.stringify(next));
+        }
+        return next;
+      });
+      if (targets.some((agent) => agent.id === appName)) {
+        viewSidRef.current = "";
+        setSessionId("");
+        setAppName("");
+      }
+    }
+
+    if (failures.length > 0) {
+      const shown = failures.slice(0, 3).join("；");
+      const suffix = failures.length > 3 ? `；另有 ${failures.length - 3} 个失败` : "";
+      throw new Error(`${failures.length} 个 Agent 删除失败：${shown}${suffix}`);
+    }
+  }, [appName, userId]);
+
+  const refreshAgentLibrary = useCallback(async () => {
+    setAgentLibraryLoading(true);
+    setAgentLibraryError("");
+    try {
+      const runtimes: CloudRuntime[] = [];
+      let nextToken = "";
+      do {
+        const page = await getRuntimes({
+          scope: "mine",
+          region: "all",
+          pageSize: 100,
+          nextToken,
+        });
+        runtimes.push(...page.runtimes);
+        nextToken = page.nextToken;
+      } while (nextToken && runtimes.length < 2000);
+
+      setLibraryRuntimeIds(new Set(runtimes.map((runtime) => runtime.runtimeId)));
+      setLibraryRuntimePermissions(
+        Object.fromEntries(
+          runtimes.map((runtime) => [
+            runtime.runtimeId,
+            { canDelete: runtime.canDelete },
+          ]),
+        ),
+      );
+      const failures: string[] = [];
+      for (const runtime of runtimes) {
+        try {
+          await connectRuntime(
+            runtime.runtimeId,
+            runtime.name,
+            runtime.region,
+            runtime.currentVersion,
+          );
+        } catch {
+          failures.push(runtime.name);
+        }
+      }
+      setConnections(loadConnections());
+      if (failures.length > 0) {
+        setAgentLibraryError(
+          `${failures.length} 个 Runtime 暂时无法读取，请稍后重试。`,
+        );
+      }
+    } catch (cause) {
+      setAgentLibraryError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setAgentLibraryLoading(false);
+    }
+  }, []);
 
   // Placeholder: persisting/registering the created agent is a follow-up.
   function onCreate(draft: AgentDraft) {
@@ -927,10 +1206,56 @@ export default function App() {
   function onAgentAdded(agentId: string, agentName: string) {
     console.log("Agent added, navigating to:", agentId, agentName);
     setConnections(loadConnections()); // Refresh connections to pick up the new agent
+    setLibraryRuntimeIds(null);
+    removeWorkspaceDraft(editingDraftId);
+    setEditingDraftId("");
+    editingDraftBaselineRef.current = null;
+    setRuntimeUpdateTarget(null);
+    setFocusedDeploymentTaskId("");
+    setFocusedWorkspaceAgentId(agentId);
     setCreateView(null);
+    setManageAgents(true);
     setAppName(agentId);
     // startNewChat will be called automatically by the appName change effect
   }
+
+  const openDeploymentDetail = useCallback((task: DeploymentTaskUpdate) => {
+    setCreateView(null);
+    setAddMenu(false);
+    setManageAgents(true);
+    setFocusedWorkspaceAgentId("");
+    setFocusedDeploymentTaskId(task.id);
+    setError("");
+  }, []);
+
+  const finishDeployment = useCallback(
+    async (result: DeployResult) => {
+      if (!result.runtimeId) throw new Error("部署完成，但未返回 Runtime ID。");
+      const fallbackRegion = runtimeUpdateTarget?.region ?? "cn-beijing";
+      const agentId = await connectRuntime(
+        result.runtimeId,
+        result.agentName,
+        result.region ?? fallbackRegion,
+        result.version,
+      );
+      setConnections(loadConnections());
+      setLibraryRuntimeIds((current) => {
+        const next = new Set(current ?? []);
+        next.add(result.runtimeId!);
+        return next;
+      });
+      setRuntimeUpdateTarget(null);
+      removeWorkspaceDraft(editingDraftId);
+      setEditingDraftId("");
+      editingDraftBaselineRef.current = null;
+      setFocusedDeploymentTaskId("");
+      setFocusedWorkspaceAgentId(agentId);
+      setCreateView(null);
+      setManageAgents(true);
+      setAppName(agentId);
+    },
+    [editingDraftId, removeWorkspaceDraft, runtimeUpdateTarget],
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
   const conversationAutoFollowRef = useRef(true);
   const conversationSmoothScrollRef = useRef(false);
@@ -2043,8 +2368,32 @@ export default function App() {
   const visibleCreateView = canCreateAgents ? createView : null;
   const showAddMenu = canCreateAgents && addMenu;
   const showAddAgent = canCreateAgents && addAgent;
-  const showManageAgents = canManageAgents && manageAgents;
+  const showManageAgents = manageAgents;
   const agentEntries = buildAgentEntries(apps, connections);
+  const workspaceAgentEntries: AgentEntry[] = agentEntries
+    .filter(
+      (entry) =>
+        entry.runtimeId &&
+        (libraryRuntimeIds === null || libraryRuntimeIds.has(entry.runtimeId)),
+    )
+    .map((entry) => ({
+      ...entry,
+      canDelete: entry.runtimeId
+        ? libraryRuntimePermissions[entry.runtimeId]?.canDelete === true
+        : false,
+    }));
+  const orderedWorkspaceAgentEntries: AgentEntry[] = (() => {
+    if (workspaceAgentEntries.length === 0) return workspaceAgentEntries;
+    const orderIndex = new Map(workspaceAgentOrder.map((id, index) => [id, index]));
+    return [...workspaceAgentEntries].sort((left, right) => {
+      const leftIndex = orderIndex.get(left.id);
+      const rightIndex = orderIndex.get(right.id);
+      if (leftIndex != null && rightIndex != null) return leftIndex - rightIndex;
+      if (leftIndex != null) return -1;
+      if (rightIndex != null) return 1;
+      return workspaceAgentEntries.indexOf(left) - workspaceAgentEntries.indexOf(right);
+    });
+  })();
   const labelOf = (id: string) => agentEntries.find((e) => e.id === id)?.label ?? id;
   // The runtime backing the current selection (if it's a cloud runtime app) —
   // drives the picker's side detail panel.
@@ -2142,14 +2491,6 @@ export default function App() {
     setSessionId("");
     setAppName(id);
   };
-  const connectManagedRuntime = async (runtime: ManagedRuntime) => {
-    const agentId = await connectRuntime(
-      runtime.runtimeId,
-      runtime.name,
-      runtime.region,
-    );
-    selectAgent(agentId);
-  };
 
   return (
     <div className="layout">
@@ -2224,10 +2565,6 @@ export default function App() {
           setError("");
         }}
         onManageAgents={() => {
-          if (!canManageAgents) {
-            setError("当前账号没有管理 Agent 的权限。");
-            return;
-          }
           if (sandboxSession) exitSandboxSession();
           viewSidRef.current = "";
           setSessionId("");
@@ -2238,6 +2575,7 @@ export default function App() {
           setSearchView(false);
           setManageAgents(true);
           setError("");
+          void refreshAgentLibrary();
         }}
         onPickSession={(id) => {
           setCreateView(null);
@@ -2420,7 +2758,7 @@ export default function App() {
                   : showAddAgent
                     ? "添加 AgentKit 智能体"
                     : showManageAgents
-                      ? "管理 Agent"
+                      ? "智能体"
                       : undefined
               }
               titleLeading={
@@ -2488,9 +2826,79 @@ export default function App() {
             )}
 
             {showManageAgents ? (
-              <ManageAgentsView
-                currentRuntimeId={currentRuntime?.runtimeId}
-                onConnect={connectManagedRuntime}
+              <AgentWorkspace
+                agents={orderedWorkspaceAgentEntries}
+                drafts={savedAgentDrafts}
+                agentOrder={workspaceAgentOrder}
+                selectedAgentId={appName}
+                agentInfo={agentInfo}
+                agentInfoAgentId={appName}
+                loadingAgentInfo={capabilitiesLoading}
+                canCreate={canCreateAgents}
+                canUpdate={canCreateAgents || canManageAgents}
+                loadingAgents={agentLibraryLoading}
+                agentsError={agentLibraryError}
+                deploymentTasks={deploymentTasks}
+                focusedDeploymentTaskId={focusedDeploymentTaskId}
+                focusedAgentId={focusedWorkspaceAgentId}
+                onRetryAgents={() => void refreshAgentLibrary()}
+                onAgentOrderChange={saveWorkspaceAgentOrder}
+                onDeleteAgents={deleteWorkspaceAgents}
+                onDeleteDrafts={deleteWorkspaceDrafts}
+                onSelectAgent={selectAgent}
+                onCreateAgent={() => {
+                  if (!canCreateAgents) {
+                    setError("当前账号没有添加 Agent 的权限。");
+                    return;
+                  }
+                  setManageAgents(false);
+                  setAddMenu(true);
+                  setCreateView(null);
+                  setImportedDraft(null);
+                  setRuntimeUpdateTarget(null);
+                  setEditingDraftId("");
+                  editingDraftBaselineRef.current = null;
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId("");
+                  setError("");
+                }}
+                onUpdateAgent={(nextDraft) => {
+                  if (!canManageAgents && !canCreateAgents) {
+                    setError("当前账号没有管理 Agent 的权限。");
+                    return;
+                  }
+                  if (!currentConn?.runtimeId) {
+                    setError("仅支持更新已部署的云端智能体。");
+                    return;
+                  }
+                  setManageAgents(false);
+                  setImportedDraft(nextDraft);
+                  const nextDraftId = `runtime-${currentConn.runtimeId}`;
+                  setEditingDraftId(nextDraftId);
+                  editingDraftBaselineRef.current =
+                    savedAgentDrafts.find((item) => item.id === nextDraftId) ?? null;
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId("");
+                  setRuntimeUpdateTarget({
+                    runtimeId: currentConn.runtimeId,
+                    name: currentConn.name,
+                    region: currentConn.region ?? "cn-beijing",
+                    currentVersion: currentConn.currentVersion,
+                  });
+                  setCreateView("custom");
+                  setError("");
+                }}
+                onEditDraft={(item) => {
+                  setManageAgents(false);
+                  setImportedDraft(item.draft);
+                  setEditingDraftId(item.id);
+                  editingDraftBaselineRef.current = item;
+                  setRuntimeUpdateTarget(item.deploymentTarget ?? null);
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId("");
+                  setCreateView("custom");
+                  setError("");
+                }}
               />
             ) : showAddMenu ? (
               <StackCards
@@ -2569,10 +2977,22 @@ export default function App() {
               <QuickCreate
                 onSelect={(k) => {
                   setImportedDraft(null);
+                  setRuntimeUpdateTarget(null);
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId("");
+                  setEditingDraftId(
+                    k === "custom" ? `draft-${Date.now().toString(36)}` : "",
+                  );
+                  editingDraftBaselineRef.current = null;
                   setCreateView(k);
                 }}
                 onImport={(d) => {
                   setImportedDraft(d);
+                  setRuntimeUpdateTarget(null);
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId("");
+                  setEditingDraftId(`draft-${Date.now().toString(36)}`);
+                  editingDraftBaselineRef.current = null;
                   setCreateView("custom");
                 }}
               />
@@ -2586,12 +3006,41 @@ export default function App() {
               />
             ) : visibleCreateView === "custom" ? (
               <CustomCreate
+                key={editingDraftId || "custom"}
                 initialDraft={importedDraft ?? undefined}
                 onBack={() => setCreateView("menu")}
                 onCreate={onCreate}
                 onAgentAdded={onAgentAdded}
                 features={features}
                 onDeploymentTaskChange={updateDeploymentTask}
+                deploymentTarget={runtimeUpdateTarget ?? undefined}
+                onDraftChange={(draft, dirty) => {
+                  if (!editingDraftId) return;
+                  if (dirty) {
+                    saveWorkspaceDraft(
+                      editingDraftId,
+                      draft,
+                      runtimeUpdateTarget ?? undefined,
+                    );
+                  } else {
+                    restoreWorkspaceDraftBaseline(editingDraftId);
+                  }
+                }}
+                onDiscard={editingDraftId ? () => {
+                  restoreWorkspaceDraftBaseline(editingDraftId);
+                  setEditingDraftId("");
+                  editingDraftBaselineRef.current = null;
+                  setImportedDraft(null);
+                  setRuntimeUpdateTarget(null);
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId(appName);
+                  setCreateView(null);
+                  setAddMenu(false);
+                  setManageAgents(true);
+                  setError("");
+                } : undefined}
+                onDeploymentStarted={openDeploymentDetail}
+                onDeploymentComplete={finishDeployment}
               />
             ) : visibleCreateView === "template" ? (
               <TemplateCreate onBack={() => setCreateView("menu")} onCreate={onCreate} />

@@ -1073,10 +1073,12 @@ def _run_frontend_server(
                 for s in getattr(agent, "sub_agents", []) or []
             ]
         mode = getattr(agent, "mode", None)
+        instruction = getattr(agent, "instruction", "")
         return {
             "id": name,
             "name": name,
             "description": getattr(agent, "description", "") or "",
+            "instruction": instruction if isinstance(instruction, str) else "",
             "type": _agent_type(agent),
             "model": _model_name(getattr(agent, "model", "")),
             "tools": [_tool_label(t) for t in getattr(agent, "tools", []) or []],
@@ -1351,6 +1353,7 @@ def _run_frontend_server(
     # This replaces the old in-process temp-agent loader. Generated Python code
     # is only loaded by a short-lived subprocess runner.
     import atexit
+    import importlib.util
     import secrets
     import shutil
     import socket
@@ -1736,13 +1739,27 @@ def _run_frontend_server(
             else []
         )
         if project.name in apps:
-            return project.name
-        if len(apps) == 1:
-            return apps[0]
-        raise HTTPException(
-            status_code=400,
-            detail="Generated project must contain exactly one agents/<name>/agent.py",
-        )
+            app_name = project.name
+        elif len(apps) == 1:
+            app_name = apps[0]
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Generated project must contain exactly one agents/<name>/agent.py",
+            )
+
+        # ADK imports an app as ``<app_name>.agent``. Names such as ``abc``
+        # collide with already-importable Python modules and are then reported
+        # by ADK as if the generated root_agent did not exist.
+        try:
+            conflicts_with_module = importlib.util.find_spec(app_name) is not None
+        except (ImportError, AttributeError, ValueError):
+            conflicts_with_module = app_name in sys.modules
+        if conflicts_with_module:
+            debug_app_name = f"veadk_debug_{app_name}"
+            (agents_dir / app_name).rename(agents_dir / debug_app_name)
+            return debug_app_name
+        return app_name
 
     def _free_local_port() -> int:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -2033,6 +2050,8 @@ def _run_frontend_server(
     def _destroy_deploy_task_runtime(task: dict[str, Any]) -> bool:
         """Destroy a task's Runtime once, if creation has reached that stage."""
         with _deploy_tasks_lock:
+            if not task.get("destroy_on_cancel", True):
+                return False
             runtime_id = str(task.get("runtime_id") or "")
             if not runtime_id or task.get("destroyed") or task.get("destroying"):
                 return False
@@ -2103,6 +2122,7 @@ def _run_frontend_server(
         principal = _require_agent_management(request)
         data = await request.json()
         agent_name = (data.get("name") or "").strip()
+        runtime_id = (data.get("runtimeId") or "").strip()
         files = data.get("files", [])
         config = data.get("config", {})
         task_id = str(data.get("taskId") or f"deploy-{id(request)}").strip()
@@ -2115,6 +2135,20 @@ def _run_frontend_server(
 
         region = config.get("region", "cn-beijing")
         project_name = config.get("projectName", "default")
+        existing_runtime = None
+        if runtime_id:
+            try:
+                existing_runtime = _authorized_runtime(
+                    request,
+                    runtime_id,
+                    region,
+                    managed_only=True,
+                )
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error("resolve update runtime failed: %s", e, exc_info=True)
+                raise HTTPException(status_code=502, detail=str(e)) from e
         # Network config (advanced): optional VPC/private networking.
         # Shape: { mode: "public"|"private"|"both", vpc_id?, subnet_ids?, enable_shared_internet_access? }
         # When absent or mode=public, use the default public endpoint.
@@ -2213,11 +2247,24 @@ def _run_frontend_server(
         cloud_config: dict = {
             "region": region,
             "project_name": project_name,
-            "image_tag": "latest",
+            "image_tag": (
+                f"veadk-v{(getattr(existing_runtime, 'current_version_number', 0) or 0) + 1}"
+                if existing_runtime is not None
+                else "latest"
+            ),
             "runtime_envs": runtime_envs,
             "python_version": "3.12",
         }
-        if runtime_network:
+        if existing_runtime is not None:
+            cloud_config.update(
+                {
+                    "runtime_id": runtime_id,
+                    "runtime_name": getattr(existing_runtime, "name", "") or agent_name,
+                    "runtime_role_name": getattr(existing_runtime, "role_name", "")
+                    or "Auto",
+                }
+            )
+        elif runtime_network:
             cloud_config["runtime_network"] = runtime_network
         if region and region != "cn-beijing":
             region_suffix = region.split("-")[-1]  # "shanghai" from "cn-shanghai"
@@ -2239,6 +2286,7 @@ def _run_frontend_server(
             "common": {
                 "agent_name": agent_name,
                 "entry_point": "app.py",
+                "description": str(data.get("description") or ""),
                 "python_version": "3.12",
                 "launch_type": "cloud",
             },
@@ -2250,11 +2298,14 @@ def _run_frontend_server(
 
         task_state: dict[str, Any] = {
             "cancel_event": _threading.Event(),
-            "runtime_id": "",
-            "runtime_name": "",
+            "runtime_id": runtime_id,
+            "runtime_name": (
+                getattr(existing_runtime, "name", "") if existing_runtime else ""
+            ),
             "region": region,
             "destroyed": False,
             "destroying": False,
+            "destroy_on_cancel": not bool(runtime_id),
             "owner_id": owner_id,
         }
         events: "_queue.Queue" = _queue.Queue()
@@ -2566,6 +2617,22 @@ def _run_frontend_server(
                                 "region": region,
                             }
                         )
+                        if runtime_id:
+                            _rt_conn_cache.pop((region, runtime_id), None)
+                        try:
+                            refreshed_runtime = _get_runtime(
+                                str(meta.get("runtime_id") or runtime_id),
+                                region,
+                            )
+                            final["version"] = getattr(
+                                refreshed_runtime,
+                                "current_version_number",
+                                None,
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "read deployed runtime version failed: %s", e
+                            )
                     else:
                         err = getattr(res, "error", None) if res else None
                         err_text = (
@@ -2677,6 +2744,9 @@ def _run_frontend_server(
                             "runtimeId": r.runtime_id,
                             "status": r.status,
                             "createdAt": r.created_at,
+                            "currentVersion": getattr(
+                                r, "current_version_number", None
+                            ),
                             "author": tags.get("veadk:author", ""),
                             "region": reg,
                         }
@@ -2773,6 +2843,11 @@ def _run_frontend_server(
                 "mcpToolsetId": getattr(r, "mcp_toolset_id", "") or "",
                 "artifactUrl": getattr(r, "artifact_url", "") or "",
                 "artifactType": getattr(r, "artifact_type", "") or "",
+                "networkTypes": [
+                    getattr(item, "network_type", "") or ""
+                    for item in (getattr(r, "network_configurations", None) or [])
+                    if getattr(item, "network_type", "")
+                ],
             }
         except HTTPException:
             raise
@@ -2829,15 +2904,24 @@ def _run_frontend_server(
                     is_mine = runtime_belongs_to(tags, principal)
                     if (scope == "mine" or role != StudioRole.ADMIN) and not is_mine:
                         continue
+                    can_delete = (
+                        role != StudioRole.USER
+                        and tags.get("veadk:managed") == "true"
+                        and (role == StudioRole.ADMIN or is_mine)
+                    )
                     out.append(
                         {
                             "name": runtime.name,
                             "runtimeId": runtime.runtime_id,
                             "status": runtime.status,
                             "createdAt": runtime.created_at,
+                            "currentVersion": getattr(
+                                runtime, "current_version_number", None
+                            ),
                             "region": reg,
                             "author": tags.get("veadk:author", ""),
                             "isMine": is_mine,
+                            "canDelete": can_delete,
                         }
                     )
                     if len(out) >= target_size:

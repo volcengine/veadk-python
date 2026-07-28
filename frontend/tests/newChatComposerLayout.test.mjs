@@ -51,7 +51,7 @@ test("expands only the new-chat composer into a multiline input", () => {
   assert.match(stylesSource, /\.composer--new-chat \.comp-send \.icon[\s\S]*?width: 20px/);
 });
 
-test("places the mode selector beside add and moves Agent selection to the navbar", () => {
+test("places the mode selector beside add while keeping Agent selection available", () => {
   assert.match(composerSource, /<NewChatModeSelector[\s\S]*?value=\{newChatMode\}/);
   assert.match(selectorSource, /value: "agent"[\s\S]*?label: "Agent"/);
   assert.match(selectorSource, /value: "temporary"[\s\S]*?label: "内置智能体"/);
@@ -84,7 +84,8 @@ test("places the mode selector beside add and moves Agent selection to the navba
     /\.new-chat-mode__builtin-icon\s*\{[\s\S]*?width:\s*24px;[\s\S]*?object-fit:\s*contain;/,
   );
   assert.match(agentSelectorSource, /variant\?: "drawer" \| "navbar"/);
-  assert.doesNotMatch(sidebarSource, /<AgentSelector|className=\{`agent-row/);
+  assert.doesNotMatch(sidebarSource, /<AgentSelector/);
+  assert.doesNotMatch(sidebarSource, /className=\{`agent-row/);
   assert.match(stylesSource, /\.welcome\s*\{[\s\S]*?gap:\s*40px;/);
   assert.match(
     stylesSource,
