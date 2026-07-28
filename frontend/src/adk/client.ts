@@ -1620,6 +1620,33 @@ export async function generateAgentProject(
   return res.json();
 }
 
+export interface GeneratedAgentDraftResult {
+  draft: AgentDraft;
+  summary: string;
+  unresolvedItems: string[];
+}
+
+const GENERATED_AGENT_DRAFT_TIMEOUT_MS = 190_000;
+
+export async function generateAgentDraftFromRequirement(
+  requirement: string,
+): Promise<GeneratedAgentDraftResult> {
+  const res = await apiFetch(
+    "/web/generated-agent-drafts",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ requirement }),
+    },
+    {},
+    GENERATED_AGENT_DRAFT_TIMEOUT_MS,
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "生成 Agent 配置失败"));
+  }
+  return parseJsonResponse<GeneratedAgentDraftResult>(res, "生成 Agent 配置失败");
+}
+
 export async function createGeneratedAgentTestRun(
   draft: AgentDraft,
 ): Promise<GeneratedAgentTestRun> {

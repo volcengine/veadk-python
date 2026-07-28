@@ -188,6 +188,364 @@
   overflow: hidden;
   background: #fff;
 }
+.cw-build-workspace {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.cw-ai-compose {
+  position: relative;
+  z-index: 3;
+  flex: 0 0 auto;
+  margin: 8px var(--cw-workspace-gutter) 0;
+  overflow: hidden;
+  padding: 14px;
+  border: 0;
+  border-radius: 20px;
+  background:
+    radial-gradient(ellipse at 12% 10%, rgba(225, 217, 255, 0.72), transparent 43%),
+    radial-gradient(ellipse at 88% 88%, rgba(238, 223, 255, 0.58), transparent 42%),
+    radial-gradient(ellipse at 54% 36%, rgba(245, 239, 255, 0.82), transparent 56%),
+    rgba(248, 246, 252, 0.74);
+}
+.cw-ai-compose::before,
+.cw-ai-compose::after {
+  position: absolute;
+  inset: -85% -20%;
+  content: "";
+  pointer-events: none;
+  opacity: 0;
+  filter: blur(22px);
+  will-change: transform, opacity;
+}
+.cw-ai-compose::before {
+  background:
+    radial-gradient(circle at 30% 50%, rgba(176, 154, 255, 0.62), transparent 30%),
+    radial-gradient(circle at 66% 42%, rgba(226, 178, 255, 0.52), transparent 29%);
+}
+.cw-ai-compose::after {
+  background:
+    radial-gradient(circle at 38% 58%, rgba(153, 214, 255, 0.42), transparent 24%),
+    radial-gradient(circle at 74% 48%, rgba(200, 181, 255, 0.58), transparent 31%);
+}
+.cw-ai-compose.is-generating::before {
+  opacity: 0.62;
+  animation: cw-ai-banner-smoke-a 7s ease-in-out infinite alternate;
+}
+.cw-ai-compose.is-generating::after {
+  opacity: 0.54;
+  animation: cw-ai-banner-smoke-b 8.5s ease-in-out infinite alternate;
+}
+.cw-ai-compose-entry {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+}
+.cw-ai-compose-form {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+  padding: 6px 7px 6px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow:
+    0 10px 28px rgba(65, 48, 100, 0.07),
+    0 1px 3px rgba(65, 48, 100, 0.04);
+  backdrop-filter: blur(12px);
+  transition: background-color 220ms ease, box-shadow 220ms ease;
+}
+.cw-ai-compose.is-generating .cw-ai-compose-form {
+  background: rgba(235, 235, 240, 0.9);
+  box-shadow:
+    0 10px 28px rgba(65, 48, 100, 0.05),
+    inset 0 0 0 1px rgba(84, 76, 100, 0.04);
+}
+.cw-ai-compose-note {
+  margin: 7px 12px 0;
+  color: hsl(var(--muted-foreground) / 0.76);
+  font-size: 11px;
+  line-height: 16px;
+}
+.cw-ai-compose-success {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 6px 8px 6px 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow:
+    0 10px 28px rgba(35, 105, 67, 0.07),
+    0 1px 3px rgba(35, 105, 67, 0.04);
+  backdrop-filter: blur(12px);
+}
+.cw-ai-compose-success strong {
+  color: hsl(149 48% 28%);
+  font-size: 14px;
+  font-weight: 650;
+}
+.cw-ai-success-check {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border-radius: 50%;
+  background: hsl(147 55% 42%);
+  box-shadow: 0 6px 16px hsl(147 55% 42% / 0.2);
+  animation: cw-ai-success-pop 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.cw-ai-success-check::after {
+  position: absolute;
+  top: 6px;
+  left: 9px;
+  width: 6px;
+  height: 10px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  content: "";
+  transform: rotate(45deg);
+}
+.cw-ai-regenerate {
+  height: 28px;
+  margin-left: 2px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: hsl(147 38% 93%);
+  color: hsl(149 48% 27%);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 620;
+  transition: background-color 150ms ease, transform 150ms ease;
+}
+.cw-ai-regenerate:hover {
+  background: hsl(147 38% 89%);
+  transform: translateY(-1px);
+}
+.cw-ai-compose-form input {
+  min-width: 0;
+  height: 42px;
+  padding: 10px 0;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  background: transparent;
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+}
+.cw-ai-compose-form input::placeholder {
+  color: hsl(var(--muted-foreground) / 0.72);
+}
+.cw-ai-compose.is-generating .cw-ai-compose-form input {
+  color: hsl(var(--muted-foreground) / 0.78);
+  cursor: wait;
+}
+.cw-ai-compose-form button {
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 12px;
+  background: hsl(250 12% 18%);
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+  transition: transform 150ms ease, opacity 150ms ease, background-color 150ms ease;
+}
+.cw-ai-compose-form button:hover:not(:disabled) {
+  background: hsl(258 16% 25%);
+  transform: translateY(-1px);
+}
+.cw-ai-compose-form button:disabled {
+  cursor: not-allowed;
+  opacity: 0.34;
+}
+.cw-ai-compose.is-generating .cw-ai-compose-form button:disabled {
+  width: 42px;
+  padding: 0;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow:
+    0 0 18px rgba(134, 101, 255, 0.2),
+    0 0 30px rgba(77, 191, 255, 0.12);
+  opacity: 1;
+  overflow: hidden;
+  animation: cw-ai-orb-button 2.4s ease-in-out infinite;
+}
+.cw-ai-compose-form button .cw-i {
+  width: 14px;
+  height: 14px;
+}
+.cw-ai-orb {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  display: block;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 48% 48%, #fff 0 4%, transparent 13%),
+    conic-gradient(
+      from 20deg,
+      #8ae6ff,
+      #6c61ff 22%,
+      #e47cff 46%,
+      #7c5cff 68%,
+      #74dcff 88%,
+      #8ae6ff
+    );
+  filter: saturate(1.2);
+  animation: cw-ai-orb-spin 2.15s linear infinite;
+}
+.cw-ai-orb::before,
+.cw-ai-orb::after,
+.cw-ai-orb > span {
+  position: absolute;
+  border-radius: 50%;
+  content: "";
+}
+.cw-ai-orb::before {
+  inset: 3px;
+  background:
+    radial-gradient(circle at 68% 28%, rgba(255, 255, 255, 0.94), transparent 18%),
+    radial-gradient(circle at 35% 70%, rgba(106, 226, 255, 0.9), transparent 28%),
+    radial-gradient(circle at 50% 50%, rgba(202, 112, 255, 0.92), rgba(83, 57, 206, 0.42) 58%, transparent 76%);
+  filter: blur(2px);
+  animation: cw-ai-smoke-drift 1.65s ease-in-out infinite alternate;
+}
+.cw-ai-orb::after {
+  inset: -3px;
+  border: 1px solid rgba(185, 227, 255, 0.55);
+  filter: blur(1px);
+  animation: cw-ai-smoke-ring 2s ease-out infinite;
+}
+.cw-ai-orb > span {
+  inset: 8px;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow:
+    0 0 8px #fff,
+    0 0 13px #9de7ff;
+  filter: blur(2px);
+  animation: cw-ai-core-pulse 1.15s ease-in-out infinite alternate;
+}
+@keyframes cw-ai-orb-button {
+  0%,
+  100% {
+    transform: scale(0.96);
+  }
+  50% {
+    transform: scale(1.04);
+  }
+}
+@keyframes cw-ai-orb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes cw-ai-smoke-drift {
+  from {
+    transform: translate(-1px, 1px) scale(0.92) rotate(-12deg);
+  }
+  to {
+    transform: translate(1px, -1px) scale(1.08) rotate(16deg);
+  }
+}
+@keyframes cw-ai-smoke-ring {
+  0% {
+    opacity: 0.72;
+    transform: scale(0.78);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.16);
+  }
+}
+@keyframes cw-ai-core-pulse {
+  from {
+    opacity: 0.6;
+    transform: scale(0.72);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+@keyframes cw-ai-banner-smoke-a {
+  from {
+    transform: translate3d(-9%, 6%, 0) rotate(-5deg) scale(0.88);
+  }
+  to {
+    transform: translate3d(8%, -5%, 0) rotate(7deg) scale(1.08);
+  }
+}
+@keyframes cw-ai-banner-smoke-b {
+  from {
+    transform: translate3d(8%, -7%, 0) rotate(6deg) scale(1.06);
+  }
+  to {
+    transform: translate3d(-7%, 6%, 0) rotate(-8deg) scale(0.9);
+  }
+}
+@keyframes cw-ai-success-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.55);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cw-ai-compose.is-generating .cw-ai-compose-form button:disabled,
+  .cw-ai-orb,
+  .cw-ai-orb::before,
+  .cw-ai-orb::after,
+  .cw-ai-orb > span,
+  .cw-ai-compose.is-generating::before,
+  .cw-ai-compose.is-generating::after {
+    animation-duration: 6s;
+  }
+  .cw-ai-success-check {
+    animation: none;
+  }
+}
+.cw-ai-error-dialog {
+  width: 460px;
+  font-family: inherit;
+}
+.cw-ai-error-message {
+  max-height: min(320px, 50vh);
+  margin: 10px 0 18px;
+  overflow: auto;
+  color: hsl(var(--foreground) / 0.78);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.cw-ai-error-close {
+  border-color: transparent;
+  background: hsl(var(--foreground));
+  color: hsl(var(--background));
+}
+.cw-ai-error-close:hover {
+  background: hsl(var(--foreground) / 0.86);
+}
 .cw-workspace-alert {
   position: absolute;
   z-index: 30;
