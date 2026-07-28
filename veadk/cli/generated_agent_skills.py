@@ -160,11 +160,6 @@ def _materialize_local_skill(skill: SelectedSkill) -> list[GeneratedFile]:
         out.append(GeneratedFile(path=path, content=file.content))
     if skill_md_content is None:
         raise DebugPolicyError(f"Local skill {folder} is missing SKILL.md")
-    declared_name = _validate_skill_md(skill_md_content, f"Local skill {folder}")
-    if declared_name != folder:
-        raise DebugPolicyError(
-            f"Local skill folder '{folder}' does not match SKILL.md name '{declared_name}'"
-        )
     return out
 
 

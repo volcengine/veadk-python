@@ -1360,7 +1360,6 @@ def _run_frontend_server(
     import shutil
     import socket
     import subprocess
-    import tempfile
     import threading as _test_threading
     import time
     from dataclasses import dataclass
@@ -4431,7 +4430,6 @@ def frontend_deploy(
     the public URL. Inside the function the frontend uses the bound IAM role's
     STS credentials to manage AgentKit runtimes.
     """
-    import tempfile
     import shutil
 
     from veadk.config import veadk_environments
@@ -4789,7 +4787,6 @@ def frontend_update(
 ) -> None:
     """Build local Studio sources and update an existing VeFaaS Application."""
     import shutil
-    import tempfile
 
     from veadk.cli.studio_package import (
         build_frontend_assets,

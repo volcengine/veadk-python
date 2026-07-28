@@ -440,9 +440,7 @@ async def test_skillspace_materialization_normalizes_legacy_frontmatter() -> Non
         resolve_skillspace_detail=resolve,
     )
 
-    assert [file.path for file in project.files] == [
-        "skills/gate-info-web3/SKILL.md"
-    ]
+    assert [file.path for file in project.files] == ["skills/gate-info-web3/SKILL.md"]
     frontmatter = project.files[0].content.split("---", 2)[1]
     parsed = yaml.safe_load(frontmatter)
     assert parsed["description"] == (
