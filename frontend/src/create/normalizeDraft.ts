@@ -80,6 +80,9 @@ function parseSubAgents(v: unknown): AgentDraft[] {
   if (!Array.isArray(v)) return [];
   return v.map((s) => {
     const so = (s && typeof s === "object" ? s : {}) as Record<string, unknown>;
+    const mem = (
+      so.memory && typeof so.memory === "object" ? so.memory : {}
+    ) as Record<string, unknown>;
     const a2aRegistry = asA2aRegistry(so.a2aRegistry);
     const parsedType = asAgentType(so.agentType);
     const agentType =
@@ -92,11 +95,30 @@ function parseSubAgents(v: unknown): AgentDraft[] {
       agentType,
       maxIterations: asMaxIterations(so.maxIterations),
       a2aUrl: asString(so.a2aUrl),
+      modelName: asString(so.modelName),
+      modelProvider: asString(so.modelProvider),
+      modelApiBase: asString(so.modelApiBase),
       builtinTools: asStringArray(so.builtinTools).filter((t) => TOOL_IDS.has(t)),
       customTools: asCustomTools(so.customTools),
+      memory: { shortTerm: asBool(mem.shortTerm), longTerm: asBool(mem.longTerm) },
+      shortTermBackend: pick(so.shortTermBackend, STM_IDS, "local"),
+      longTermBackend: pick(so.longTermBackend, LTM_IDS, "local"),
+      autoSaveSession: asBool(so.autoSaveSession),
+      knowledgebase: asBool(so.knowledgebase),
+      knowledgebaseBackend: pick(
+        so.knowledgebaseBackend,
+        KB_IDS,
+        DEFAULT_KB_BACKEND,
+      ),
+      knowledgebaseIndex: asString(so.knowledgebaseIndex),
+      tracing: asBool(so.tracing),
+      tracingExporters: asStringArray(so.tracingExporters).filter((e) =>
+        EXPORTER_IDS.has(e),
+      ),
       a2aRegistry:
         agentType === "a2a" ? { ...a2aRegistry, enabled: true } : a2aRegistry,
       subAgents: parseSubAgents(so.subAgents),
+      selectedSkills: parseSelectedSkills(so),
     };
   });
 }

@@ -31,6 +31,7 @@ from pydantic import ValidationError
 from veadk.cli.cli_frontend import (
     _redact_debug_text,
     _run_frontend_server,
+    _safe_exception_detail,
     _studio_deploy_run_script,
 )
 from veadk.cli.generated_agent_codegen import (
@@ -716,6 +717,27 @@ def test_debug_text_redacts_environment_and_inline_markers(
     assert bearer_marker not in redacted
     assert "authToken=***" in redacted
     assert "Bearer ***" in redacted
+
+
+def test_model_error_detail_preserves_cause_and_redacts_credentials() -> None:
+    api_key = "model-api-key-123456"
+    access_key = "model-access-key-123456"
+    try:
+        try:
+            raise RuntimeError(
+                "Ark request failed: model access denied; "
+                f"api_key={api_key}; access_key={access_key}"
+            )
+        except RuntimeError as cause:
+            raise ValueError("模型请求失败") from cause
+    except ValueError as error:
+        detail = _safe_exception_detail(error)
+
+    assert "模型请求失败" in detail
+    assert "model access denied" in detail
+    assert api_key not in detail
+    assert access_key not in detail
+    assert detail.count("***") == 2
 
 
 def test_generated_project_and_debug_run_api_lifecycle(
