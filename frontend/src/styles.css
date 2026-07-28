@@ -5676,3 +5676,18 @@ a.search-result { text-decoration: none; color: inherit; }
   color: #fff;
 }
 .confirm-btn--danger:hover { background: hsl(var(--destructive) / 0.9); }
+
+.app-toast {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  z-index: 120;
+  padding: 9px 14px;
+  border-radius: 8px;
+  background: hsl(var(--foreground));
+  color: hsl(var(--background));
+  box-shadow: 0 8px 24px hsl(var(--foreground) / 0.18);
+  font-size: 13px;
+  font-weight: 400;
+  transform: translateX(-50%);
+}

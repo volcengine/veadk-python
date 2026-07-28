@@ -130,13 +130,32 @@ test("wires general agent creation, details, and use actions into App navigation
   assert.match(pageSource, /onClick=\{onCreateAgent\}/);
   assert.match(pageSource, /onClick=\{\(\) => void onUse\?\.\(agent\)\}/);
   assert.match(pageSource, /onClick=\{\(\) => onViewDetails\?\.\(agent\)\}/);
-  assert.match(pageSource, /onCreateAgent=\{index === 0 \? onCreateAgent : undefined\}/);
+  assert.match(pageSource, /onCreateAgent=\{createActions\[index\]\}/);
   assert.match(appSource, /const openAgentCreateFromMyAgents/);
   assert.match(appSource, /const connectMyAgent[\s\S]*?connectRuntime[\s\S]*?startNewChat\(\)[\s\S]*?setAppName\(agentId\)/);
   assert.match(appSource, /const openMyAgentDetails[\s\S]*?setAgentDetailTarget\(agent\)[\s\S]*?setManageAgents\(true\)/);
   assert.doesNotMatch(appSource, /const openMyAgentDetails[\s\S]*?connectRuntime\(/);
   assert.match(appSource, /const detailAgentEntry:[\s\S]*?id: `detail:\$\{agentDetailTarget\.runtime\.runtimeId\}`/);
   assert.match(appSource, /<MyAgents[\s\S]*?onCreateAgent=\{openAgentCreateFromMyAgents\}[\s\S]*?onUseAgent=/);
+});
+
+test("routes add cards to Codex launch and coming-soon flows", () => {
+  assert.match(pageSource, /onCreateCodexAgent: \(\) => void/);
+  assert.match(
+    pageSource,
+    /const createActions = \[[\s\S]*?onCreateAgent,[\s\S]*?onCreateCodexAgent,[\s\S]*?undefined,[\s\S]*?undefined,[\s\S]*?\]/,
+  );
+  assert.match(pageSource, /onCreateAgent=\{createActions\[index\]\}/);
+  assert.match(pageSource, /title: "OpenClaw 智能体", agents: \[\], comingSoon: true/);
+  assert.match(pageSource, /title: "Hermes 智能体", agents: \[\], comingSoon: true/);
+  assert.match(pageSource, /className="my-agent-coming-soon-overlay" role="status"[\s\S]*?敬请期待/);
+  assert.match(pageStyles, /\.my-agent-coming-soon-overlay\s*\{[\s\S]*?position: absolute[\s\S]*?inset: 0/);
+  assert.match(appSource, /onCreateCodexAgent=\{openSandboxLaunch\}/);
+  assert.match(appSource, /function openSandboxLaunch\(\)[\s\S]*?setSandboxLaunchOpen\(true\)/);
+  assert.match(
+    appSource,
+    /async function launchSandboxSession\(\)[\s\S]*?setSandboxSession\(nextSession\)[\s\S]*?setAgentDetailTarget\(null\)[\s\S]*?setMyAgents\(false\)[\s\S]*?setSandboxLaunchOpen\(false\)/,
+  );
 });
 
 test("shows connecting progress and preserves the connected Runtime state", () => {
@@ -155,6 +174,15 @@ test("shows connecting progress and preserves the connected Runtime state", () =
     pageStyles,
     /\.my-agent-actions \.my-agent-use\.is-connected,[\s\S]*?background: hsl\(142 55% 94%\)[\s\S]*?color: hsl\(142 62% 30%\)/,
   );
+});
+
+test("prompts users to choose an Agent only while disconnected", () => {
+  assert.match(
+    pageSource,
+    /!connectedRuntimeId && \([\s\S]*?className="my-agents-connect-banner" role="status"[\s\S]*?请选择一个智能体以对话/,
+  );
+  assert.match(pageStyles, /\.my-agents-connect-banner\s*\{[\s\S]*?margin-bottom:\s*24px;/);
+  assert.match(appSource, /connectedRuntimeId=\{currentRuntime\?\.runtimeId\}/);
 });
 
 test("authenticated users land on the Agent page by default", () => {

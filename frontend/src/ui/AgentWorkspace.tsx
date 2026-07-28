@@ -607,6 +607,29 @@ export function AgentWorkspace({
       selectedPendingTask?.agentDraft,
     ],
   );
+  const toolNames = useMemo(() => {
+    if (selectedAgentInfo) return selectedAgentInfo.tools;
+    const builtinNames = (draft.builtinTools ?? []).map(
+      (id) => BUILTIN_TOOLS.find((tool) => tool.id === id)?.label ?? id,
+    );
+    return Array.from(new Set([
+      ...draft.tools,
+      ...builtinNames,
+      ...(draft.customTools ?? []).map((tool) => tool.name),
+      ...(draft.mcpTools ?? []).map((tool) => tool.name),
+    ].filter(Boolean)));
+  }, [draft, selectedAgentInfo]);
+  const skillNames = useMemo(() => {
+    if (selectedAgentInfo) {
+      return selectedAgentInfo.skillsPreviewSupported
+        ? selectedAgentInfo.skills.map((skill) => skill.name)
+        : null;
+    }
+    return Array.from(new Set([
+      ...(draft.selectedSkills ?? []).map((skill) => skill.name),
+      ...draft.skills,
+    ].filter(Boolean)));
+  }, [draft, selectedAgentInfo]);
   const deploymentTask = useMemo(() => {
     if (selectedPendingTask) return selectedPendingTask;
     if (selectedDraft) {
@@ -629,6 +652,12 @@ export function AgentWorkspace({
       )
       .sort((left, right) => right.startedAt - left.startedAt)[0];
   }, [deploymentTasks, selectedAgent, selectedDraft, selectedPendingTask]);
+  const executionFlowKey = selectedAgentInfo
+    ? `runtime:${selectedAgent?.runtimeId ?? selectedAgentInfo.name}:${countDraftNodes(draft)}`
+    : `draft:${selectedPendingTask?.id ?? selectedDraft?.id ?? selectedAgent?.id ?? selectedName}`;
+  const loadingExecutionFlow = Boolean(
+    detailOnly && selectedAgent?.runtimeId && !detailAgentInfoResolved,
+  );
   useEffect(() => {
     if (!focusedDeploymentTaskId) return;
     const focusedTask = deploymentTasks.find(
@@ -1455,10 +1484,6 @@ export function AgentWorkspace({
           <main className="aw-main aw-empty-selection">
             <p>未选择智能体</p>
           </main>
-        ) : deploymentTask?.status === "running" ? (
-          <main className="aw-main aw-deployment-focus">
-            <DeploymentProgressCard task={deploymentTask} />
-          </main>
         ) : (
           <main className="aw-main">
             {selectedAgent && !selectedAgentInfo &&
@@ -1522,6 +1547,11 @@ export function AgentWorkspace({
                 </div>
               )}
             </div>
+            {deploymentTask && deploymentTask.status !== "success" && (
+              <div className="aw-detail-deployment">
+                <DeploymentProgressCard task={deploymentTask} />
+              </div>
+            )}
             <nav className="aw-agent-tabs" aria-label="智能体详情">
               {AGENT_SECTIONS.map((item) => (
                 <button
@@ -1539,22 +1569,56 @@ export function AgentWorkspace({
             <div className="aw-content">
               {section === "basic" && (
                 <div className="aw-basic-stack">
+                  <section className="aw-deployment-panel aw-settings-card">
+                    <div className="aw-section-head">
+                      <div><h3>部署配置</h3><p>配置目标环境与网络访问方式。</p></div>
+                    </div>
+                    <dl className="aw-readonly-config">
+                      <div>
+                        <dt>运行状态</dt>
+                        <dd className={runtimeDetail?.status.toLowerCase() === "ready" ? "is-ready" : undefined}>
+                          {runtimeDetail?.status.toLowerCase() === "ready" && <span className="aw-status-dot" />}
+                          {runtimeDetail?.status || "读取中…"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>部署区域</dt>
+                        <dd>{runtimeDetail?.region || selectedAgent?.region || deploymentTask?.region || "暂未提供"}</dd>
+                      </div>
+                      <div>
+                        <dt>网络访问</dt>
+                        <dd>
+                          {runtimeDetail?.networkTypes.length
+                            ? runtimeDetail.networkTypes.join(" / ")
+                            : "暂未提供"}
+                        </dd>
+                      </div>
+                    </dl>
+                  </section>
                   <section className="aw-canvas-card">
                     <div className="aw-card-head">
                       <strong>执行流程</strong>
                     </div>
                     <div className="aw-canvas">
-                      <AgentBuildCanvas
-                        draft={draft}
-                        direction="horizontal"
-                        selectedPath={[]}
-                        onSelect={() => undefined}
-                        onAdd={() => undefined}
-                        onInsert={() => undefined}
-                        onDelete={() => undefined}
-                        readOnly
-                        interactivePreview
-                      />
+                      {loadingExecutionFlow ? (
+                        <div className="aw-canvas-loading" role="status" aria-live="polite">
+                          <span className="loading-gap-spinner" aria-hidden="true" />
+                          <span>正在加载执行流程</span>
+                        </div>
+                      ) : (
+                        <AgentBuildCanvas
+                          key={executionFlowKey}
+                          draft={draft}
+                          direction="horizontal"
+                          selectedPath={[]}
+                          onSelect={() => undefined}
+                          onAdd={() => undefined}
+                          onInsert={() => undefined}
+                          onDelete={() => undefined}
+                          readOnly
+                          interactivePreview
+                        />
+                      )}
                     </div>
                   </section>
                   <section className="aw-details-card">
@@ -1564,8 +1628,22 @@ export function AgentWorkspace({
                     <dl className="aw-facts">
                       <div><dt>模型</dt><dd>{selectedAgentInfo?.model || draft.modelName || "暂未提供"}</dd></div>
                       <div><dt>智能体数量</dt><dd>{selectedAgentInfo?.graph ? countNodes(selectedAgentInfo.graph) : countDraftNodes(draft)}</dd></div>
-                      <div><dt>工具</dt><dd>{selectedAgentInfo?.tools.length ?? (draft.tools.length + (draft.builtinTools?.length ?? 0) + (draft.customTools?.length ?? 0) + (draft.mcpTools?.length ?? 0))}</dd></div>
-                      <div><dt>技能</dt><dd>{selectedAgentInfo ? (selectedAgentInfo.skillsPreviewSupported ? selectedAgentInfo.skills.length : "暂不支持预览") : (draft.selectedSkills?.length ?? draft.skills.length)}</dd></div>
+                      <div>
+                        <dt>工具</dt>
+                        <dd className="aw-fact-badges">
+                          {toolNames.length ? toolNames.map((name) => <span key={name}>{name}</span>) : "暂无"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>技能</dt>
+                        <dd className="aw-fact-badges">
+                          {skillNames === null
+                            ? "暂不支持预览"
+                            : skillNames.length
+                              ? skillNames.map((name) => <span key={name}>{name}</span>)
+                              : "暂无"}
+                        </dd>
+                      </div>
                       <div>
                         <dt>当前版本</dt>
                         <dd>
@@ -1588,27 +1666,6 @@ export function AgentWorkspace({
                                 : selectedAgentUpdateDraft
                                   ? "待更新"
                                   : <><span className="aw-status-dot" />可用</>}
-                        </dd>
-                      </div>
-                    </dl>
-                  </section>
-                  {deploymentTask && <DeploymentProgressCard task={deploymentTask} />}
-                  <section className="aw-deployment-panel aw-settings-card">
-                    <div className="aw-section-head">
-                      <div><h3>部署配置</h3><p>配置目标环境与网络访问方式。</p></div>
-                    </div>
-                    <dl className="aw-readonly-config">
-                      <div><dt>运行状态</dt><dd>{runtimeDetail?.status || "读取中…"}</dd></div>
-                      <div>
-                        <dt>部署区域</dt>
-                            <dd>{runtimeDetail?.region || selectedAgent?.region || deploymentTask?.region || "暂未提供"}</dd>
-                      </div>
-                      <div>
-                        <dt>网络访问</dt>
-                        <dd>
-                          {runtimeDetail?.networkTypes.length
-                            ? runtimeDetail.networkTypes.join(" / ")
-                            : "暂未提供"}
                         </dd>
                       </div>
                     </dl>

@@ -15,12 +15,14 @@ export interface MyAgentCardData {
     runtimeId: string;
     region: string;
     currentVersion?: number | null;
+    canDelete: boolean;
   };
 }
 
 interface MyAgentSectionData {
   title: string;
   agents: MyAgentCardData[];
+  comingSoon?: boolean;
 }
 
 const MAX_ROWS = 2;
@@ -50,6 +52,7 @@ function runtimeToAgent(runtime: CloudRuntime): MyAgentCardData {
       runtimeId: runtime.runtimeId,
       region: runtime.region,
       currentVersion: runtime.currentVersion,
+      canDelete: runtime.canDelete,
     },
   };
 }
@@ -82,6 +85,7 @@ async function loadRuntimeAgents(
             runtimeId: runtime.runtimeId,
             region: runtime.region,
             currentVersion: runtime.currentVersion,
+            canDelete: runtime.canDelete,
           },
         };
         onList([agent]);
@@ -164,6 +168,7 @@ function AgentSection({
   loading,
   serverPagination,
   onPageSizeChange,
+  comingSoon,
 }: {
   section: MyAgentSectionData;
   onCreateAgent?: () => void;
@@ -179,6 +184,7 @@ function AgentSection({
     onNext: () => void;
   };
   onPageSizeChange?: (pageSize: number) => void;
+  comingSoon?: boolean;
 }) {
   const gridRef = useRef<HTMLDivElement>(null);
   const [columns, setColumns] = useState(1);
@@ -218,59 +224,67 @@ function AgentSection({
   return (
     <section className="my-agents-section">
       <h2>{section.title}</h2>
-      <div className="my-agent-grid" ref={gridRef}>
-        <button
-          type="button"
-          className="my-agent-add"
-          aria-label={`添加${section.title}`}
-          disabled={!onCreateAgent}
-          onClick={onCreateAgent}
-        >
-          <Plus aria-hidden="true" />
-          <span>添加智能体</span>
-        </button>
-        {visibleAgents.map((agent) => (
-          <AgentCard
-            key={agent.id}
-            agent={agent}
-            onUse={onUseAgent}
-            onViewDetails={onViewAgentDetails}
-            connecting={agent.id === connectingAgentId}
-            connected={agent.runtime?.runtimeId === connectedRuntimeId}
-          />
-        ))}
-        {loading && (
-          <div className="my-agent-loading" role="status" aria-live="polite">
-            <span className="loading-gap-spinner" aria-hidden="true" />
-            <span>加载中</span>
+      <div className="my-agent-section-content">
+        <div className="my-agent-grid" ref={gridRef}>
+          <button
+            type="button"
+            className="my-agent-add"
+            aria-label={`添加${section.title}`}
+            disabled={!onCreateAgent || comingSoon}
+            onClick={onCreateAgent}
+          >
+            <Plus aria-hidden="true" />
+            <span>添加智能体</span>
+          </button>
+          {visibleAgents.map((agent) => (
+            <AgentCard
+              key={agent.id}
+              agent={agent}
+              onUse={onUseAgent}
+              onViewDetails={onViewAgentDetails}
+              connecting={agent.id === connectingAgentId}
+              connected={agent.runtime?.runtimeId === connectedRuntimeId}
+            />
+          ))}
+          {loading && (
+            <div className="my-agent-loading" role="status" aria-live="polite">
+              <span className="loading-gap-spinner" aria-hidden="true" />
+              <span>加载中</span>
+            </div>
+          )}
+        </div>
+        <nav className="my-agent-pagination" aria-label={`${section.title}分页`}>
+          <button
+            type="button"
+            aria-label="上一页"
+            disabled={currentPage === 1 || loading}
+            onClick={serverPagination?.onPrevious ?? (() => setPage(page - 1))}
+          >
+            ‹
+          </button>
+          <span>{serverPagination ? currentPage : `${page} / ${pageCount}`}</span>
+          <button
+            type="button"
+            aria-label="下一页"
+            disabled={loading || (serverPagination ? !serverPagination.hasNext : page === pageCount)}
+            onClick={serverPagination?.onNext ?? (() => setPage(page + 1))}
+          >
+            ›
+          </button>
+        </nav>
+        {comingSoon && (
+          <div className="my-agent-coming-soon-overlay" role="status">
+            敬请期待
           </div>
         )}
       </div>
-      <nav className="my-agent-pagination" aria-label={`${section.title}分页`}>
-        <button
-          type="button"
-          aria-label="上一页"
-          disabled={currentPage === 1 || loading}
-          onClick={serverPagination?.onPrevious ?? (() => setPage(page - 1))}
-        >
-          ‹
-        </button>
-        <span>{serverPagination ? currentPage : `${page} / ${pageCount}`}</span>
-        <button
-          type="button"
-          aria-label="下一页"
-          disabled={loading || (serverPagination ? !serverPagination.hasNext : page === pageCount)}
-          onClick={serverPagination?.onNext ?? (() => setPage(page + 1))}
-        >
-          ›
-        </button>
-      </nav>
     </section>
   );
 }
 
 export interface MyAgentsProps {
   onCreateAgent: () => void;
+  onCreateCodexAgent: () => void;
   onUseAgent: (agent: MyAgentCardData) => Promise<void>;
   onViewAgentDetails: (agent: MyAgentCardData) => void;
   connectedRuntimeId?: string;
@@ -278,6 +292,7 @@ export interface MyAgentsProps {
 
 export function MyAgents({
   onCreateAgent,
+  onCreateCodexAgent,
   onUseAgent,
   onViewAgentDetails,
   connectedRuntimeId = "",
@@ -364,19 +379,30 @@ export function MyAgents({
     () => [
       { title: "通用智能体", agents: runtimeAgents },
       { title: "Codex 智能体", agents: [] },
-      { title: "OpenClaw 智能体", agents: [] },
-      { title: "Hermes 智能体", agents: [] },
+      { title: "OpenClaw 智能体", agents: [], comingSoon: true },
+      { title: "Hermes 智能体", agents: [], comingSoon: true },
     ],
     [runtimeAgents],
   );
+  const createActions = [
+    onCreateAgent,
+    onCreateCodexAgent,
+    undefined,
+    undefined,
+  ];
 
   return (
     <div className="my-agents-page">
+      {!connectedRuntimeId && (
+        <div className="my-agents-connect-banner" role="status">
+          请选择一个智能体以对话
+        </div>
+      )}
       {sections.map((section, index) => (
         <AgentSection
           section={section}
           key={section.title}
-          onCreateAgent={index === 0 ? onCreateAgent : undefined}
+          onCreateAgent={createActions[index]}
           onUseAgent={useAgent}
           onViewAgentDetails={onViewAgentDetails}
           connectingAgentId={connectingAgentId}
@@ -389,6 +415,7 @@ export function MyAgents({
             onPrevious: previousRuntimePage,
             onNext: nextRuntimePage,
           } : undefined}
+          comingSoon={section.comingSoon}
         />
       ))}
     </div>

@@ -716,6 +716,11 @@ export default function App() {
   // banner (per-session transcripts/topology don't need it).
   const viewSidRef = useRef("");
   const [error, setError] = useState("");
+  const [toast, setToast] = useState("");
+  const toastTimerRef = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
+  }, []);
   const [feedbackPendingIds, setFeedbackPendingIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -1238,6 +1243,7 @@ export default function App() {
   const openDeploymentDetail = useCallback((task: DeploymentTaskUpdate) => {
     setCreateView(null);
     setAddMenu(false);
+    setAgentDetailTarget(null);
     setManageAgents(true);
     setFocusedWorkspaceAgentId("");
     setFocusedWorkspaceAgentSection("basic");
@@ -1265,7 +1271,6 @@ export default function App() {
       removeWorkspaceDraft(editingDraftId);
       setEditingDraftId("");
       editingDraftBaselineRef.current = null;
-      setFocusedDeploymentTaskId("");
       setFocusedWorkspaceAgentId(agentId);
       setFocusedWorkspaceAgentSection("basic");
       setCreateView(null);
@@ -1827,6 +1832,8 @@ export default function App() {
       setAddMenu(false);
       setSearchView(false);
       setManageAgents(false);
+      setAgentDetailTarget(null);
+      setMyAgents(false);
       setSandboxLaunchOpen(false);
       setSandboxLaunchState("confirm");
     } catch (launchError) {
@@ -1954,6 +1961,32 @@ export default function App() {
     discardDraftAttachments(attachments);
     setAttachments([]);
     if (abandonedSession) void abandonDraftSession(abandonedSession);
+  }
+
+  function showToast(message: string) {
+    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
+    setToast(message);
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast("");
+      toastTimerRef.current = null;
+    }, 3000);
+  }
+
+  function openNewChat() {
+    setCreateView(null);
+    setSkillCenter(false);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSearchView(false);
+    setManageAgents(false);
+    setAgentDetailTarget(null);
+    if (!appName && !sandboxSession) {
+      setMyAgents(true);
+      showToast("请先选择 agent");
+      return;
+    }
+    setMyAgents(false);
+    startNewChat();
   }
 
   async function removeSession(id: string) {
@@ -2688,6 +2721,7 @@ export default function App() {
   const openMyAgentDetails = (agent: MyAgentCardData) => {
     if (!agent.runtime) return;
     setAgentDetailTarget(agent);
+    setFocusedDeploymentTaskId("");
     setFocusedWorkspaceAgentId("");
     setMyAgents(false);
     setManageAgents(true);
@@ -2705,6 +2739,8 @@ export default function App() {
     setSearchView(false);
     setManageAgents(false);
     setAgentDetailTarget(null);
+    setFocusedDeploymentTaskId("");
+    setFocusedWorkspaceAgentId("");
     setMyAgents(true);
     setError("");
   };
@@ -2731,6 +2767,7 @@ export default function App() {
         runtimeId: agentDetailTarget.runtime.runtimeId,
         region: agentDetailTarget.runtime.region,
         currentVersion: agentDetailTarget.runtime.currentVersion,
+        canDelete: agentDetailTarget.runtime.canDelete,
       }
     : null;
 
@@ -2743,17 +2780,7 @@ export default function App() {
         sessions={sessions}
         currentSessionId={sessionId}
         streamingSids={streamingSids}
-        onNewChat={() => {
-          setCreateView(null);
-          setSkillCenter(false);
-          setAddAgent(false);
-          setAddMenu(false);
-          setSearchView(false);
-          setManageAgents(false);
-          setAgentDetailTarget(null);
-          setMyAgents(false);
-          startNewChat();
-        }}
+        onNewChat={openNewChat}
         onSearch={() => {
           if (sandboxSession) exitSandboxSession();
           setCreateView(null);
@@ -2992,7 +3019,9 @@ export default function App() {
               runtimeScope={access.capabilities.runtimeScope}
               onBrowseAgents={openMyAgentsPage}
               title={
-                myAgents
+                sandboxSession
+                  ? "Codex 智能体"
+                  : myAgents
                   ? "智能体"
                   : showAddMenu
                   ? "添加 Agent"
@@ -3088,6 +3117,7 @@ export default function App() {
             {myAgents ? (
               <MyAgents
                 onCreateAgent={openAgentCreateFromMyAgents}
+                onCreateCodexAgent={openSandboxLaunch}
                 onUseAgent={connectMyAgent}
                 onViewAgentDetails={openMyAgentDetails}
                 connectedRuntimeId={currentRuntime?.runtimeId}
@@ -3111,7 +3141,7 @@ export default function App() {
                 focusedAgentId={detailAgentEntry?.id ?? focusedWorkspaceAgentId}
                 focusedAgentSection={focusedWorkspaceAgentSection}
                 focusedCaseKind={focusedWorkspaceCaseKind}
-                detailOnly={!!detailAgentEntry}
+                detailOnly={!!detailAgentEntry || !!focusedDeploymentTaskId}
                 onRetryAgents={() => void refreshAgentLibrary()}
                 onAgentOrderChange={saveWorkspaceAgentOrder}
                 onDeleteAgents={deleteWorkspaceAgents}
@@ -3593,6 +3623,12 @@ export default function App() {
         onCancel={cancelSandboxLaunch}
         onConfirm={() => void launchSandboxSession()}
       />
+
+      {toast && (
+        <div className="app-toast" role="status" aria-live="polite">
+          {toast}
+        </div>
+      )}
 
       <AuthExpiredDialog
         open={authExpired}

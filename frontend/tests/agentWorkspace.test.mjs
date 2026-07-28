@@ -79,13 +79,34 @@ test("focused agent details can render without the workspace tabs or list sideba
   assert.match(workspaceStyles, /\.aw-root\.is-detail-only \.aw-workspace\s*\{[\s\S]*?grid-template-columns: minmax\(0, 1fr\)/);
   assert.match(
     appSource,
-    /focusedAgentId=\{detailAgentEntry\?\.id \?\? focusedWorkspaceAgentId\}[\s\S]*?detailOnly=\{!!detailAgentEntry\}/,
+    /focusedAgentId=\{detailAgentEntry\?\.id \?\? focusedWorkspaceAgentId\}[\s\S]*?detailOnly=\{!!detailAgentEntry \|\| !!focusedDeploymentTaskId\}/,
   );
+});
+
+test("agent details show capability badges and deployment state before the flow", () => {
+  assert.match(workspaceSource, /const toolNames = useMemo/);
+  assert.match(workspaceSource, /const skillNames = useMemo/);
+  assert.match(workspaceSource, /<dt>工具<\/dt>[\s\S]*?className="aw-fact-badges"[\s\S]*?toolNames\.map/);
+  assert.match(workspaceSource, /<dt>技能<\/dt>[\s\S]*?className="aw-fact-badges"[\s\S]*?skillNames\.map/);
+  assert.match(workspaceStyles, /\.aw-fact-badges span\s*\{[\s\S]*?border-radius:\s*999px;/);
+  assert.ok(
+    workspaceSource.indexOf("<h3>部署配置</h3>") < workspaceSource.indexOf("<strong>执行流程</strong>"),
+  );
+  assert.match(workspaceSource, /status\.toLowerCase\(\) === "ready"[\s\S]*?className="aw-status-dot"/);
+  assert.match(workspaceStyles, /\.aw-readonly-config dd\.is-ready\s*\{[\s\S]*?color:\s*hsl\(142 62% 30%\)/);
+  assert.match(workspaceSource, /const executionFlowKey = selectedAgentInfo/);
+  assert.match(workspaceSource, /detailOnly && selectedAgent\?\.runtimeId && !detailAgentInfoResolved/);
+  assert.match(
+    workspaceSource,
+    /loadingExecutionFlow \? \([\s\S]*?className="aw-canvas-loading"[\s\S]*?正在加载执行流程[\s\S]*?<AgentBuildCanvas[\s\S]*?key=\{executionFlowKey\}/,
+  );
+  assert.match(workspaceStyles, /\.aw-canvas-loading\s*\{[\s\S]*?align-items:\s*center;/);
 });
 
 test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => {
   assert.match(appSource, /const openDeploymentDetail = useCallback/);
   assert.match(appSource, /setFocusedDeploymentTaskId\(task\.id\)/);
+  assert.match(appSource, /setAgentDetailTarget\(null\)[\s\S]*?setFocusedDeploymentTaskId\(task\.id\)/);
   assert.match(appSource, /const finishDeployment = useCallback/);
   assert.match(appSource, /await connectRuntime\([\s\S]*?result\.runtimeId[\s\S]*?result\.version/);
   assert.match(appSource, /onDeploymentStarted=\{openDeploymentDetail\}/);
@@ -104,6 +125,16 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(projectPreviewSource, /onDeploymentComplete\?: \(result: DeployResult\)/);
   assert.match(projectPreviewSource, /const isRuntimeUpdate = deploymentActionLabel\.includes\("更新"\)/);
   assert.match(projectPreviewSource, /onDeploymentStarted\?\.\(initialTask\)/);
+  assert.doesNotMatch(workspaceSource, /aw-deployment-focus/);
+  assert.match(
+    workspaceSource,
+    /className="aw-agent-head"[\s\S]*?deploymentTask\.status !== "success"[\s\S]*?className="aw-detail-deployment"[\s\S]*?<DeploymentProgressCard task=\{deploymentTask\} \/>[\s\S]*?<nav className="aw-agent-tabs"/,
+  );
+  assert.doesNotMatch(
+    workspaceSource,
+    /className="aw-basic-stack">\s*\{deploymentTask && <DeploymentProgressCard/,
+  );
+  assert.match(workspaceStyles, /\.aw-detail-deployment\s*\{[\s\S]*?padding:\s*0 24px 16px;/);
   assert.match(projectPreviewSource, /await onDeploymentComplete\?\.\(result\)/);
   assert.match(projectPreviewSource, /runtimeId: result\.runtimeId \|\| deploymentRuntimeId/);
 });
@@ -202,6 +233,10 @@ test("workspace supports deleting individual authorized agents", () => {
   assert.match(appSource, /libraryRuntimePermissions/);
   assert.match(appSource, /canDelete: runtime\.canDelete/);
   assert.match(appSource, /canDelete: entry\.runtimeId[\s\S]*?libraryRuntimePermissions\[entry\.runtimeId\]\?\.canDelete === true/);
+  assert.match(
+    appSource,
+    /const detailAgentEntry:[\s\S]*?canDelete: agentDetailTarget\.runtime\.canDelete/,
+  );
   assert.match(appSource, /const deleteWorkspaceAgents = useCallback/);
   assert.match(appSource, /await deleteRuntime\(agent\.runtimeId, agent\.region \?\? "cn-beijing"\)/);
   assert.match(appSource, /onDeleteAgents=\{deleteWorkspaceAgents\}/);
@@ -227,6 +262,14 @@ test("workspace supports deleting individual authorized agents", () => {
   assert.match(workspaceStyles, /\.aw-selection-toolbar/);
   assert.match(workspaceStyles, /\.aw-select-marker\.is-checked/);
   assert.match(workspaceStyles, /\.aw-head-delete/);
+  assert.match(
+    workspaceStyles,
+    /\.aw-head-delete\.studio-update-action:hover:not\(:disabled\)[\s\S]*?color:\s*#fff;/,
+  );
+  assert.match(
+    workspaceSource,
+    /className="aw-basic-actions"[\s\S]*?className="aw-update studio-update-action"[\s\S]*?className="aw-head-delete studio-update-action"/,
+  );
 });
 
 test("agent detail evaluation tab reads feedback datasets", () => {

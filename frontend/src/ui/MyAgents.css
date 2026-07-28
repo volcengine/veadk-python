@@ -7,8 +7,19 @@
   background: hsl(var(--background));
 }
 
+.my-agents-connect-banner {
+  margin-bottom: 24px;
+  padding: 11px 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+  background: hsl(var(--secondary) / 0.48);
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .my-agents-section + .my-agents-section {
-  margin-top: 36px;
+  margin-top: 16px;
 }
 
 .my-agents-section h2 {
@@ -40,6 +51,25 @@
   color: hsl(var(--muted-foreground));
   font-size: 13px;
   backdrop-filter: blur(2px);
+}
+
+.my-agent-section-content {
+  position: relative;
+}
+
+.my-agent-coming-soon-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--background) / 0.78);
+  color: hsl(var(--foreground));
+  font-size: 15px;
+  font-weight: 400;
+  backdrop-filter: blur(3px);
 }
 
 .my-agent-card,
