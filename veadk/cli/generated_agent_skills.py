@@ -53,6 +53,7 @@ async def materialize_selected_skills(
 ) -> None:
     existing = {file.path for file in project.files}
     for skill in _collect_selected_skills(draft):
+        original_folder = skill.folder
         if skill.source == "skillhub":
             files = await _download_skillhub_skill(skill)
         elif skill.source == "skillspace":
@@ -63,6 +64,12 @@ async def materialize_selected_skills(
             )
         else:
             files = _materialize_local_skill(skill)
+        if (
+            skill.source != "local"
+            and original_folder
+            and original_folder != skill.folder
+        ):
+            _replace_project_skill_folder(project, original_folder, skill.folder)
         _append_skill_files(project, existing, files)
 
 
@@ -110,7 +117,9 @@ async def _download_skillhub_skill(skill: SelectedSkill) -> list[GeneratedFile]:
     if len(content) > MAX_SKILL_TOTAL_BYTES:
         raise DebugPolicyError("Skill Hub zip is too large")
     folder = _safe_folder(skill.folder or slug.rsplit("/", 1)[-1] or "skill")
-    return _files_from_zip(content, folder, f"Skill Hub skill {slug}")
+    files = _files_from_zip(content, folder, f"Skill Hub skill {slug}")
+    skill.folder = _folder_from_generated_files(files) or folder
+    return files
 
 
 async def _materialize_skillspace_skill(
@@ -138,6 +147,8 @@ async def _materialize_skillspace_skill(
     skill_md = _normalize_skill_md_frontmatter(
         skill_md, f"SkillSpace skill {skill.skillId}"
     )
+    folder = _skill_md_folder_name(skill_md) or folder
+    skill.folder = folder
     return [GeneratedFile(path=f"skills/{folder}/SKILL.md", content=skill_md)]
 
 
@@ -165,7 +176,7 @@ def _materialize_local_skill(skill: SelectedSkill) -> list[GeneratedFile]:
 
 
 def _files_from_zip(content: bytes, folder: str, label: str) -> list[GeneratedFile]:
-    files: list[GeneratedFile] = []
+    extracted: list[tuple[str, str]] = []
     total = 0
     with zipfile.ZipFile(io.BytesIO(content)) as archive:
         infos = [info for info in archive.infolist() if not info.is_dir()]
@@ -179,15 +190,18 @@ def _files_from_zip(content: bytes, folder: str, label: str) -> list[GeneratedFi
             if total > MAX_SKILL_TOTAL_BYTES:
                 raise DebugPolicyError(f"{label} is too large")
             rel = _normalize_relative_path(info.filename)
-            target = f"skills/{folder}/{rel}"
             with archive.open(info) as fh:
                 text = _decode_skill_file(fh.read(), f"{label} file {info.filename}")
             if _SKILL_MD_RE.search(rel):
                 skill_md_content = text
-            files.append(GeneratedFile(path=target, content=text))
+            extracted.append((rel, text))
     if skill_md_content is None:
         raise DebugPolicyError(f"{label} is missing SKILL.md")
-    return files
+    folder = _skill_md_folder_name(skill_md_content) or folder
+    return [
+        GeneratedFile(path=f"skills/{folder}/{rel}", content=text)
+        for rel, text in extracted
+    ]
 
 
 def _decode_skill_file(content: bytes, label: str) -> str:
@@ -252,6 +266,47 @@ def _normalize_relative_path(path: str) -> str:
     if normalized.startswith("skills/"):
         raise DebugPolicyError(f"Skill zip must not contain generated path: {path}")
     return normalized
+
+
+def _skill_md_folder_name(text: str) -> str | None:
+    try:
+        meta, _ = _parse_skill_md(text, "SKILL.md")
+    except DebugPolicyError:
+        return None
+    name = str(meta.get("name") or "").strip()
+    if _FOLDER_RE.fullmatch(name) and name not in {".", ".."}:
+        return name
+    return None
+
+
+def _folder_from_generated_files(files: list[GeneratedFile]) -> str | None:
+    for file in files:
+        parts = PurePosixPath(file.path).parts
+        if len(parts) >= 3 and parts[0] == "skills":
+            return parts[1]
+    return None
+
+
+def _py_string(value: str) -> str:
+    escaped = (
+        (value or "").replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    )
+    return f'"{escaped}"'
+
+
+def _replace_project_skill_folder(
+    project: GeneratedProject, old_folder: str, new_folder: str
+) -> None:
+    old_loader = f'/ "skills" / {_py_string(old_folder)}'
+    new_loader = f'/ "skills" / {_py_string(new_folder)}'
+    old_draft_folder = f"'folder': '{old_folder}'"
+    new_draft_folder = f"'folder': '{new_folder}'"
+    for file in project.files:
+        if not file.path.endswith("/agent.py"):
+            continue
+        file.content = file.content.replace(old_loader, new_loader).replace(
+            old_draft_folder, new_draft_folder
+        )
 
 
 def _parse_skill_md(text: str, where: str) -> tuple[dict[str, object], str]:

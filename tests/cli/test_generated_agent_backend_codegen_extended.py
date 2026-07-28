@@ -465,6 +465,49 @@ async def test_skillspace_materialization_passes_names_to_resolver() -> None:
 
 
 @pytest.mark.asyncio
+async def test_skillspace_materialization_aligns_folder_with_skill_md_name() -> None:
+    skill = SelectedSkill(
+        source="skillspace",
+        folder="intelligent-diagnosis-report",
+        name="intelligent-diagnosis-report",
+        skillSpaceId="space-1",
+        skillSpaceName="Demo Space",
+        skillId="skill-1",
+        version="v1",
+    )
+    draft = AgentDraft(name="car", selectedSkills=[skill])
+    project = generate_project_from_draft(draft)
+
+    async def resolve(
+        space_id: str,
+        skill_id: str,
+        version: str | None,
+        region: str | None = None,
+        **_: object,
+    ) -> str:
+        del space_id, skill_id, version, region
+        return "---\nname: domain-test-skill\ndescription: Shared.\n---\n"
+
+    await materialize_selected_skills(
+        draft,
+        project,
+        resolve_skillspace_detail=resolve,
+    )
+
+    files = _file_map(project)
+    agent_py = files["agents/car/agent.py"]
+    assert (
+        'load_skill_from_dir(_Path(__file__).parent.parent.parent / "skills" / '
+        '"domain-test-skill")'
+    ) in agent_py
+    assert "'folder': 'domain-test-skill'" in agent_py
+    assert ' / "skills" / "intelligent-diagnosis-report")' not in agent_py
+    assert files["skills/domain-test-skill/SKILL.md"].startswith(
+        "---\nname: domain-test-skill\n"
+    )
+
+
+@pytest.mark.asyncio
 async def test_skillspace_materialization_normalizes_legacy_frontmatter() -> None:
     skill = SelectedSkill(
         source="skillspace",
