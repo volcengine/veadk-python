@@ -1743,8 +1743,8 @@ def _run_frontend_server(
                 )
                 raise HTTPException(
                     status_code=502,
-                    detail=f"SkillSpaces API error: {version_error}",
-                ) from version_error
+                        detail=f"SkillSpaces API error: {version_error}",
+                    ) from version_error
         return await asyncio.to_thread(
             _skill_md_from_version_response,
             space_id=space_id,
