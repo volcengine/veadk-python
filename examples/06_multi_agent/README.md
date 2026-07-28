@@ -41,9 +41,28 @@ python main.py
 
 You'll get a polished paragraph that passed through all three stages.
 
+## Parallel case
+
+[`parallel.py`](./parallel.py) adds a fan-out/fan-in workflow:
+
+```text
+                  +-> benefits analyst -+
+user proposal ----+                     +-> synthesizer
+                  +-> risks analyst ----+
+```
+
+The two analysts have no dependency on each other, so a `ParallelAgent` runs
+them concurrently. Their `benefits` and `risks` outputs are stored in shared
+session state. The outer `SequentialAgent` waits for that parallel stage to
+finish before the synthesizer builds the final decision brief.
+
+```bash
+python parallel.py
+```
+
 ## What to try next
 
-- VeADK also ships `ParallelAgent` (run sub-agents concurrently) and `LoopAgent`
-  (repeat until a condition). Same `sub_agents=[...]` pattern.
+- VeADK also ships `LoopAgent` (repeat until a condition), using the same
+  `sub_agents=[...]` pattern.
 - For *dynamic* delegation (a coordinator that chooses which specialist to call),
   pass `sub_agents=[...]` to a regular `Agent` and let the LLM route.
