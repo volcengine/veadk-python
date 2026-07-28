@@ -40,9 +40,27 @@ python main.py
 
 你会得到一段经过三个阶段处理、润色后的文字。
 
+## 并行案例
+
+[`parallel.py`](./parallel.py) 展示了先扇出、再汇总的工作流：
+
+```text
+              +-> 收益分析 -+
+用户提案 ------+             +-> 综合结论
+              +-> 风险分析 -+
+```
+
+两个分析任务互不依赖，因此由 `ParallelAgent` 并发执行。它们分别把结果写入共享
+会话状态的 `benefits` 和 `risks`。外层 `SequentialAgent` 会等待并行阶段全部完成，
+再让综合智能体生成最终的决策摘要。
+
+```bash
+python parallel.py
+```
+
 ## 下一步
 
-- VeADK 还提供 `ParallelAgent`（并发运行子智能体）与 `LoopAgent`（循环直到满足条件），
-  用法都是同样的 `sub_agents=[...]`。
+- VeADK 还提供 `LoopAgent`（循环直到满足条件），用法是同样的
+  `sub_agents=[...]`。
 - 若需要*动态*委派（由一个协调者智能体自行决定调用哪个专家），
   可直接给普通 `Agent` 传入 `sub_agents=[...]`，让大模型来路由。
