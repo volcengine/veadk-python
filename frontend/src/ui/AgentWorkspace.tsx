@@ -7,12 +7,17 @@ import {
   CircleX,
   FlaskConical,
   Loader2,
+  MessageCircle,
   Plus,
   Search,
   Trash2,
 } from "lucide-react";
 import {
+  deleteAgentFeedbackCases,
+  getAgentFeedbackCases,
   getRuntimeDetail,
+  type AgentFeedbackCase,
+  type AgentFeedbackSetSummary,
   type AgentInfo,
   type AgentNode,
   type RuntimeDetail,
@@ -29,13 +34,7 @@ type AgentSection = "basic" | "evaluations";
 type EvaluationSection = "config" | "history";
 type CaseKind = "good" | "bad";
 
-interface AgentCase {
-  id: string;
-  kind: CaseKind;
-  input: string;
-  expectation: string;
-  tag: string;
-}
+type AgentCase = AgentFeedbackCase & { tag?: string };
 
 interface EvaluationRun {
   id: string;
@@ -70,30 +69,82 @@ export interface WorkspaceAgentDraft {
 const DEFAULT_CASES: AgentCase[] = [
   {
     id: "case-1",
+    itemKey: "case-1",
     kind: "good",
     input: "总结本周客户反馈，并按优先级归类。",
-    expectation: "覆盖主要问题，给出清晰的优先级与下一步动作。",
+    output: "覆盖主要问题，给出清晰的优先级与下一步动作。",
+    referenceOutput: "覆盖主要问题，给出清晰的优先级与下一步动作。",
+    comment: "",
+    agentName: "示例 Agent",
+    sessionId: "",
+    messageId: "",
+    runtimeId: "",
+    invocationId: "",
+    userId: "",
+    createdAt: "",
+    evaluationSetId: "",
+    evaluationSetName: "示例 good case",
+    workspaceId: "",
     tag: "总结",
   },
   {
     id: "case-2",
+    itemKey: "case-2",
     kind: "good",
     input: "查询最新公开资料并附上来源。",
-    expectation: "调用搜索工具，结论与引用一一对应。",
+    output: "调用搜索工具，结论与引用一一对应。",
+    referenceOutput: "调用搜索工具，结论与引用一一对应。",
+    comment: "",
+    agentName: "示例 Agent",
+    sessionId: "",
+    messageId: "",
+    runtimeId: "",
+    invocationId: "",
+    userId: "",
+    createdAt: "",
+    evaluationSetId: "",
+    evaluationSetName: "示例 good case",
+    workspaceId: "",
     tag: "工具调用",
   },
   {
     id: "case-3",
+    itemKey: "case-3",
     kind: "bad",
     input: "在信息不足时直接给出确定结论。",
-    expectation: "应明确说明未知，并主动询问缺失信息。",
+    output: "应明确说明未知，并主动询问缺失信息。",
+    referenceOutput: "",
+    comment: "",
+    agentName: "示例 Agent",
+    sessionId: "",
+    messageId: "",
+    runtimeId: "",
+    invocationId: "",
+    userId: "",
+    createdAt: "",
+    evaluationSetId: "",
+    evaluationSetName: "示例 bad case",
+    workspaceId: "",
     tag: "幻觉",
   },
   {
     id: "case-4",
+    itemKey: "case-4",
     kind: "bad",
     input: "连续重复调用相同工具获取同一结果。",
-    expectation: "复用已有结果，避免无意义的重复调用。",
+    output: "复用已有结果，避免无意义的重复调用。",
+    referenceOutput: "",
+    comment: "",
+    agentName: "示例 Agent",
+    sessionId: "",
+    messageId: "",
+    runtimeId: "",
+    invocationId: "",
+    userId: "",
+    createdAt: "",
+    evaluationSetId: "",
+    evaluationSetName: "示例 bad case",
+    workspaceId: "",
     tag: "效率",
   },
 ];
@@ -175,6 +226,32 @@ function countDraftNodes(draft: AgentDraft): number {
     (total, child) => total + countDraftNodes(child),
     0,
   );
+}
+
+function caseTimeValue(value: string): number {
+  if (!value) return 0;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return numeric < 1_000_000_000_000 ? numeric * 1000 : numeric;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatCaseTime(value: string): string {
+  const time = caseTimeValue(value);
+  if (!time) return "时间未知";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(time));
+}
+
+function feedbackSetFor(
+  sets: AgentFeedbackSetSummary[],
+  kind: CaseKind,
+): AgentFeedbackSetSummary | undefined {
+  return sets.find((set) => set.kind === kind);
 }
 
 const DEPLOYMENT_STEPS = [
@@ -296,11 +373,16 @@ export interface AgentWorkspaceProps {
   deploymentTasks?: DeploymentTaskUpdate[];
   focusedDeploymentTaskId?: string;
   focusedAgentId?: string;
+  focusedAgentSection?: AgentSection;
+  focusedCaseKind?: CaseKind;
   onRetryAgents?: () => void;
   onAgentOrderChange?: (agentIds: string[]) => void;
   onDeleteAgents?: (agents: AgentEntry[]) => Promise<void>;
   onDeleteDrafts?: (drafts: WorkspaceAgentDraft[]) => void;
   onSelectAgent: (id: string) => void;
+  onTalkAgent?: (id: string) => void;
+  onOpenFeedbackCase?: (item: AgentFeedbackCase) => void | Promise<void>;
+  onFeedbackCasesDeleted?: (items: AgentFeedbackCase[]) => void;
   onCreateAgent: () => void;
   onUpdateAgent: (draft: AgentDraft) => void;
   onEditDraft?: (draft: WorkspaceAgentDraft) => void;
@@ -320,11 +402,16 @@ export function AgentWorkspace({
   deploymentTasks = [],
   focusedDeploymentTaskId = "",
   focusedAgentId = "",
+  focusedAgentSection = "basic",
+  focusedCaseKind = "good",
   onRetryAgents,
   onAgentOrderChange,
   onDeleteAgents,
   onDeleteDrafts,
   onSelectAgent,
+  onTalkAgent,
+  onOpenFeedbackCase,
+  onFeedbackCasesDeleted,
   onCreateAgent,
   onUpdateAgent,
   onEditDraft,
@@ -346,8 +433,20 @@ export function AgentWorkspace({
   const [selectedDraftIds, setSelectedDraftIds] = useState<Set<string>>(() => new Set());
   const [deletingAgents, setDeletingAgents] = useState(false);
   const [deleteError, setDeleteError] = useState("");
+  const [feedbackCases, setFeedbackCases] = useState<AgentCase[]>([]);
+  const [feedbackSets, setFeedbackSets] = useState<AgentFeedbackSetSummary[]>([]);
+  const [feedbackCasesLoading, setFeedbackCasesLoading] = useState(false);
+  const [feedbackCasesError, setFeedbackCasesError] = useState("");
+  const [feedbackReloadToken, setFeedbackReloadToken] = useState(0);
+  const [caseSelectionMode, setCaseSelectionMode] = useState(false);
+  const [selectedCaseIds, setSelectedCaseIds] = useState<Set<string>>(() => new Set());
+  const [deletingCases, setDeletingCases] = useState(false);
+  const [caseDeleteError, setCaseDeleteError] = useState("");
+  const [focusedCaseId, setFocusedCaseId] = useState("");
+  const [expandedCaseIds, setExpandedCaseIds] = useState<Set<string>>(() => new Set());
   const suppressAgentClickRef = useRef(false);
-  const cases = DEFAULT_CASES;
+  const appliedFocusKeyRef = useRef("");
+  const caseTableRef = useRef<HTMLDivElement | null>(null);
   const [evaluationGroups, setEvaluationGroups] = useState(DEFAULT_EVALUATION_GROUPS);
   const [activeEvaluationGroupId, setActiveEvaluationGroupId] = useState("");
 
@@ -544,12 +643,23 @@ export function AgentWorkspace({
   }, [agentByRuntimeId, deploymentTasks, focusedDeploymentTaskId]);
 
   useEffect(() => {
-    if (!focusedAgentId || !agents.some((agent) => agent.id === focusedAgentId)) return;
+    if (!focusedAgentId) {
+      appliedFocusKeyRef.current = "";
+      return;
+    }
+    const focusKey = `${focusedAgentId}:${focusedAgentSection}:${focusedCaseKind}`;
+    if (appliedFocusKeyRef.current === focusKey) return;
+    if (!agents.some((agent) => agent.id === focusedAgentId)) return;
+    appliedFocusKeyRef.current = focusKey;
     setActiveDeploymentTaskId("");
     setActiveDraftId("");
     setActiveAgentId(focusedAgentId);
-    setSection("basic");
-  }, [agents, focusedAgentId]);
+    setSection(focusedAgentSection);
+    if (focusedAgentSection === "evaluations") {
+      setCaseFilter(focusedCaseKind);
+      setCaseQuery("");
+    }
+  }, [agents, focusedAgentId, focusedAgentSection, focusedCaseKind]);
 
   useEffect(() => {
     let cancelled = false;
@@ -571,6 +681,76 @@ export function AgentWorkspace({
   }, [selectedAgent?.region, selectedAgent?.runtimeId]);
 
   useEffect(() => {
+    let cancelled = false;
+    setFeedbackCases([]);
+    setFeedbackSets([]);
+    setFeedbackCasesError("");
+    if (section !== "evaluations" || !selectedAgent?.runtimeId) {
+      setFeedbackCasesLoading(false);
+      return;
+    }
+    setFeedbackCasesLoading(true);
+    void getAgentFeedbackCases({
+      runtimeId: selectedAgent.runtimeId,
+      region: selectedAgent.region ?? "cn-beijing",
+      appName: selectedAgent.app,
+      pageSize: 100,
+    })
+      .then((response) => {
+        if (cancelled) return;
+        setFeedbackSets(response.sets);
+        setFeedbackCases(
+          response.items
+            .map((item) => ({
+              ...item,
+              tag: item.kind === "good" ? "Good case" : "Bad case",
+            }))
+            .sort((left, right) => (
+              caseTimeValue(right.createdAt) - caseTimeValue(left.createdAt)
+            )),
+        );
+      })
+      .catch((cause) => {
+        if (!cancelled) {
+          setFeedbackCasesError(cause instanceof Error ? cause.message : String(cause));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setFeedbackCasesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    feedbackReloadToken,
+    section,
+    selectedAgent?.app,
+    selectedAgent?.region,
+    selectedAgent?.runtimeId,
+  ]);
+
+  useEffect(() => {
+    const caseIds = new Set(feedbackCases.map((item) => item.id));
+    setSelectedCaseIds((current) => {
+      const next = new Set([...current].filter((id) => caseIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+    setExpandedCaseIds((current) => {
+      const next = new Set([...current].filter((id) => caseIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+    if (focusedCaseId && !caseIds.has(focusedCaseId)) setFocusedCaseId("");
+  }, [feedbackCases, focusedCaseId]);
+
+  useEffect(() => {
+    setCaseSelectionMode(false);
+    setSelectedCaseIds(new Set());
+    setExpandedCaseIds(new Set());
+    setCaseDeleteError("");
+    setFocusedCaseId("");
+  }, [selectedAgent?.runtimeId]);
+
+  useEffect(() => {
     const selectableIds = new Set(
       listedAgents
         .filter((agent) => agent.canDelete === true)
@@ -590,12 +770,124 @@ export function AgentWorkspace({
     });
   }, [filteredDrafts]);
 
+  const cases = selectedAgent?.runtimeId ? feedbackCases : DEFAULT_CASES;
   const visibleCases = cases.filter((item) => {
     if (item.kind !== caseFilter) return false;
     const keyword = caseQuery.trim().toLowerCase();
     if (!keyword) return true;
-    return `${item.input} ${item.expectation} ${item.tag}`.toLowerCase().includes(keyword);
+    return [
+      item.input,
+      item.output,
+      item.referenceOutput,
+      item.comment,
+      item.tag ?? "",
+      item.sessionId,
+      item.messageId,
+      item.userId,
+      item.evaluationSetName,
+    ].join(" ").toLowerCase().includes(keyword);
   });
+  const selectedVisibleCases = visibleCases.filter((item) => selectedCaseIds.has(item.id));
+  const canManageCases = Boolean(selectedAgent?.runtimeId);
+
+  const focusCaseKind = (kind: CaseKind) => {
+    setCaseFilter(kind);
+    setCaseQuery("");
+    setCaseDeleteError("");
+    const firstCase = cases.find((item) => item.kind === kind);
+    setFocusedCaseId(firstCase?.id ?? "");
+    window.setTimeout(() => {
+      caseTableRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
+  };
+
+  const toggleCaseSelection = (item: AgentCase) => {
+    setCaseDeleteError("");
+    setSelectedCaseIds((current) => {
+      const next = new Set(current);
+      if (next.has(item.id)) {
+        next.delete(item.id);
+      } else {
+        next.add(item.id);
+      }
+      return next;
+    });
+  };
+
+  const selectAllVisibleCases = () => {
+    setCaseDeleteError("");
+    setSelectedCaseIds(new Set(visibleCases.map((item) => item.id)));
+  };
+
+  const clearCaseSelection = () => {
+    setCaseDeleteError("");
+    setSelectedCaseIds(new Set());
+    setCaseSelectionMode(false);
+  };
+
+  const toggleCaseExpansion = (caseId: string) => {
+    setExpandedCaseIds((current) => {
+      const next = new Set(current);
+      if (next.has(caseId)) {
+        next.delete(caseId);
+      } else {
+        next.add(caseId);
+      }
+      return next;
+    });
+  };
+
+  const openFeedbackCase = (item: AgentCase) => {
+    setFocusedCaseId(item.id);
+    setCaseDeleteError("");
+    if (!item.sessionId || !item.messageId) return;
+    void onOpenFeedbackCase?.(item);
+  };
+
+  const deleteCases = async (items: AgentCase[]) => {
+    if (!selectedAgent?.runtimeId || deletingCases || items.length === 0) return;
+    const confirmText = items.length === 1
+      ? "确定删除这条反馈案例？原始聊天记录不会被删除。"
+      : `确定删除选中的 ${items.length} 条反馈案例？原始聊天记录不会被删除。`;
+    if (!window.confirm(confirmText)) return;
+    const ids = items.map((item) => item.id);
+    const idSet = new Set(ids);
+    setDeletingCases(true);
+    setCaseDeleteError("");
+    try {
+      await deleteAgentFeedbackCases({
+        runtimeId: selectedAgent.runtimeId,
+        region: selectedAgent.region ?? "cn-beijing",
+        appName: selectedAgent.app,
+        itemIds: ids,
+      });
+      const deletedByKind = new Map<CaseKind, number>();
+      for (const item of items) {
+        deletedByKind.set(item.kind, (deletedByKind.get(item.kind) ?? 0) + 1);
+      }
+      setFeedbackCases((current) => current.filter((item) => !idSet.has(item.id)));
+      setFeedbackSets((current) =>
+        current.map((set) => ({
+          ...set,
+          itemCount: Math.max(0, set.itemCount - (deletedByKind.get(set.kind) ?? 0)),
+        })),
+      );
+      setSelectedCaseIds((current) =>
+        new Set([...current].filter((id) => !idSet.has(id))),
+      );
+      setExpandedCaseIds((current) =>
+        new Set([...current].filter((id) => !idSet.has(id))),
+      );
+      if (focusedCaseId && idSet.has(focusedCaseId)) setFocusedCaseId("");
+      if (items.length > 1) setCaseSelectionMode(false);
+      onFeedbackCasesDeleted?.(items);
+    } catch (cause) {
+      setCaseDeleteError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setDeletingCases(false);
+    }
+  };
+
   const updateEvaluationGroup = (nextGroup: EvaluationGroup) => {
     setEvaluationGroups((current) =>
       current.map((group) => (group.id === nextGroup.id ? nextGroup : group)),
@@ -1305,6 +1597,29 @@ export function AgentWorkspace({
 
               {section === "evaluations" && (
                 <section className="aw-cases">
+                  {selectedAgent?.runtimeId ? (
+                    <div className="aw-case-summary">
+                      {(["good", "bad"] as const).map((kind) => {
+                        const set = feedbackSetFor(feedbackSets, kind);
+                        const count = set?.itemCount ??
+                          feedbackCases.filter((item) => item.kind === kind).length;
+                        return (
+                          <button
+                            type="button"
+                            key={kind}
+                            onClick={() => focusCaseKind(kind)}
+                          >
+                            <strong>{count}</strong>
+                            <span>{kind === "good" ? "Good cases" : "Bad cases"}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="aw-case-note">
+                      只有已部署到 AgentKit Runtime 的 Agent 会同步展示用户反馈评测集。
+                    </div>
+                  )}
                   <div className="aw-case-filters">
                     {(["good", "bad"] as const).map((filter) => (
                       <button
@@ -1328,12 +1643,87 @@ export function AgentWorkspace({
                       aria-label="搜索评测案例"
                     />
                   </label>
-                  <CaseTable cases={visibleCases} />
+                  {canManageCases && (
+                    <div className={`aw-case-toolbar${caseSelectionMode ? " is-active" : ""}`}>
+                      {caseSelectionMode ? (
+                        <>
+                          <span className="aw-selection-count">
+                            已选 {selectedVisibleCases.length} 条
+                          </span>
+                          <button
+                            type="button"
+                            onClick={selectAllVisibleCases}
+                            disabled={visibleCases.length === 0 || deletingCases}
+                          >
+                            全选当前
+                          </button>
+                          <button
+                            type="button"
+                            className="aw-selection-danger"
+                            onClick={() => void deleteCases(selectedVisibleCases)}
+                            disabled={selectedVisibleCases.length === 0 || deletingCases}
+                          >
+                            {deletingCases ? "删除中…" : "删除所选"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={clearCaseSelection}
+                            disabled={deletingCases}
+                          >
+                            取消
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCaseDeleteError("");
+                            setCaseSelectionMode(true);
+                          }}
+                          disabled={visibleCases.length === 0 || deletingCases}
+                        >
+                          选择案例
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {caseDeleteError && (
+                    <div className="aw-delete-error" role="alert">{caseDeleteError}</div>
+                  )}
+                  <div ref={caseTableRef}>
+                    <CaseTable
+                      cases={visibleCases}
+                      loading={feedbackCasesLoading}
+                      error={feedbackCasesError}
+                      runtimeBacked={Boolean(selectedAgent?.runtimeId)}
+                      selectionMode={caseSelectionMode}
+                      selectedCaseIds={selectedCaseIds}
+                      focusedCaseId={focusedCaseId}
+                      expandedCaseIds={expandedCaseIds}
+                      deleting={deletingCases}
+                      canDelete={canManageCases}
+                      onOpenCase={openFeedbackCase}
+                      onToggleCase={toggleCaseSelection}
+                      onToggleExpanded={toggleCaseExpansion}
+                      onDeleteCase={(item) => void deleteCases([item])}
+                      onRetry={() => setFeedbackReloadToken((value) => value + 1)}
+                    />
+                  </div>
                 </section>
               )}
             </div>
             {section === "basic" && (selectedAgent || selectedDraft) && (
               <div className="aw-basic-actions">
+                {selectedAgent && (
+                  <button
+                    type="button"
+                    className="aw-talk studio-update-action"
+                    onClick={() => onTalkAgent?.(selectedAgent.id)}
+                  >
+                    <MessageCircle aria-hidden />
+                    <span>去对话</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   className="aw-update studio-update-action"
@@ -1394,22 +1784,160 @@ export function AgentWorkspace({
   );
 }
 
-function CaseTable({ cases }: { cases: AgentCase[] }) {
+function CaseTable({
+  cases,
+  loading = false,
+  error = "",
+  runtimeBacked = false,
+  selectionMode = false,
+  selectedCaseIds,
+  focusedCaseId = "",
+  expandedCaseIds,
+  deleting = false,
+  canDelete = false,
+  onOpenCase,
+  onToggleCase,
+  onToggleExpanded,
+  onDeleteCase,
+  onRetry,
+}: {
+  cases: AgentCase[];
+  loading?: boolean;
+  error?: string;
+  runtimeBacked?: boolean;
+  selectionMode?: boolean;
+  selectedCaseIds?: Set<string>;
+  focusedCaseId?: string;
+  expandedCaseIds?: Set<string>;
+  deleting?: boolean;
+  canDelete?: boolean;
+  onOpenCase?: (item: AgentCase) => void;
+  onToggleCase?: (item: AgentCase) => void;
+  onToggleExpanded?: (caseId: string) => void;
+  onDeleteCase?: (item: AgentCase) => void;
+  onRetry?: () => void;
+}) {
   return (
     <div className="aw-case-table">
       <div className="aw-case-row aw-case-row-head">
-        <span>用户输入</span><span>期望行为</span><span>标签</span>
+        <span>用户输入</span><span>Agent 输出</span><span>来源</span>
       </div>
-      {cases.length === 0 ? (
-        <div className="aw-case-empty">没有匹配的案例</div>
+      {loading ? (
+        <div className="aw-case-empty">正在读取 AgentKit 评测集…</div>
+      ) : error ? (
+        <div className="aw-case-empty aw-case-error">
+          <span>{error}</span>
+          {onRetry && <button type="button" onClick={onRetry}>重试</button>}
+        </div>
+      ) : cases.length === 0 ? (
+        <div className="aw-case-empty">
+          {runtimeBacked ? "暂无用户反馈案例" : "没有匹配的案例"}
+        </div>
       ) : (
-        cases.map((item) => (
-          <div className="aw-case-row" key={item.id}>
-            <strong>{item.input}</strong>
-            <p>{item.expectation}</p>
-            <span className="aw-case-tag">{item.tag}</span>
-          </div>
-        ))
+        cases.map((item) => {
+          const isSelected = selectedCaseIds?.has(item.id) ?? false;
+          const isExpanded = expandedCaseIds?.has(item.id) ?? false;
+          const outputLength =
+            item.output.length + item.referenceOutput.length;
+          const canExpand = outputLength > 220;
+          return (
+            <div
+              className={[
+                "aw-case-row",
+                focusedCaseId === item.id ? "is-focused" : "",
+                selectionMode ? "is-selecting" : "",
+                isSelected ? "is-selected-for-delete" : "",
+              ].filter(Boolean).join(" ")}
+              key={item.id}
+              role="row"
+              tabIndex={0}
+              aria-selected={selectionMode ? isSelected : undefined}
+              onClick={() => {
+                if (selectionMode) {
+                  onToggleCase?.(item);
+                  return;
+                }
+                onOpenCase?.(item);
+              }}
+              onKeyDown={(event) => {
+                if (event.target !== event.currentTarget) return;
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                if (selectionMode) {
+                  onToggleCase?.(item);
+                } else {
+                  onOpenCase?.(item);
+                }
+              }}
+            >
+              <div className="aw-case-text">
+                <span className="aw-case-title-line">
+                  {selectionMode && (
+                    <span
+                      className={`aw-select-marker${isSelected ? " is-checked" : ""}`}
+                      aria-hidden="true"
+                    />
+                  )}
+                  <strong title={item.input}>{item.input || "无用户输入"}</strong>
+                </span>
+                {item.comment && <small title={item.comment}>备注：{item.comment}</small>}
+              </div>
+              <div className={`aw-case-output${isExpanded ? " is-expanded" : ""}`}>
+                <p className="aw-case-output-preview" title={item.output}>
+                  {item.output || "无可见回复"}
+                </p>
+                {item.referenceOutput && (
+                  <small
+                    className="aw-case-output-preview"
+                    title={item.referenceOutput}
+                  >
+                    Reference: {item.referenceOutput}
+                  </small>
+                )}
+                {canExpand && (
+                  <button
+                    type="button"
+                    className="aw-case-expand"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onToggleExpanded?.(item.id);
+                    }}
+                  >
+                    {isExpanded ? "收起" : "展开"}
+                  </button>
+                )}
+              </div>
+              <div className="aw-case-meta">
+                <span className="aw-case-meta-top">
+                  <span className={`aw-case-tag is-${item.kind}`}>
+                    {item.kind === "good" ? "Good case" : "Bad case"}
+                  </span>
+                  {canDelete && (
+                    <button
+                      type="button"
+                      className="aw-case-delete"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onDeleteCase?.(item);
+                      }}
+                      disabled={deleting}
+                      title="删除反馈案例"
+                      aria-label="删除反馈案例"
+                    >
+                      <Trash2 aria-hidden />
+                    </button>
+                  )}
+                </span>
+                <small>{formatCaseTime(item.createdAt)}</small>
+                {(item.userId || item.sessionId) && (
+                  <small title={[item.userId, item.sessionId].filter(Boolean).join(" · ")}>
+                    {[item.userId, item.sessionId].filter(Boolean).join(" · ")}
+                  </small>
+                )}
+              </div>
+            </div>
+          );
+        })
       )}
     </div>
   );

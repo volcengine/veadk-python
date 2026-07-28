@@ -1613,6 +1613,12 @@
   color: hsl(var(--muted-foreground));
   font-size: 10.5px;
 }
+.cw-ab-ready-title {
+  color: hsl(var(--foreground));
+  font-size: 20px;
+  font-weight: 760;
+  line-height: 1.1;
+}
 .cw-ab-starting {
   align-content: center;
   gap: 8px;
@@ -1655,8 +1661,14 @@
 .cw-ab-deploy-footer {
   flex: 0 0 auto;
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 8px;
   padding: 0 12px 12px;
+}
+.cw-ab-footer-start {
+  min-width: 0;
+  background: hsl(var(--secondary) / 0.58);
 }
 .cw-ab-deploy {
   min-height: 32px;

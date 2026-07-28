@@ -19,10 +19,21 @@ const projectPreviewSource = readFileSync(
   new URL("../src/ui/ProjectPreview.tsx", import.meta.url),
   "utf8",
 );
+const clientSource = readFileSync(
+  new URL("../src/adk/client.ts", import.meta.url),
+  "utf8",
+);
 
 test("Agent navigation opens the PR 748 workspace with creation and evaluation", () => {
   assert.match(appSource, /import \{[\s\S]*?AgentWorkspace[\s\S]*?\} from "\.\/ui\/AgentWorkspace"/);
   assert.match(appSource, /<AgentWorkspace[\s\S]*?agents=\{orderedWorkspaceAgentEntries\}/);
+  assert.match(appSource, /const selectWorkspaceAgentFromNavbar = \(id: string\) => \{/);
+  assert.match(
+    appSource,
+    /setFocusedWorkspaceAgentId\(id\)[\s\S]*?setFocusedWorkspaceAgentSection\("basic"\)[\s\S]*?selectAgent\(id\)/,
+  );
+  assert.match(appSource, /onAppChange=\{showManageAgents \? selectWorkspaceAgentFromNavbar : selectAgent\}/);
+  assert.doesNotMatch(appSource, /showManageAgents\s*\?\s*"智能体"/);
   assert.match(workspaceSource, /智能体库/);
   assert.match(workspaceSource, /评测/);
   assert.match(workspaceSource, /view === "library" \? "新建 Agent" : "新建评测组"/);
@@ -49,7 +60,6 @@ test("workspace layout keeps the library and evaluation panes available", () => 
   assert.match(workspaceStyles, /\.aw-view-tabs button\s*\{[\s\S]*?font-size:\s*14px;/);
   assert.match(workspaceStyles, /\.aw-workspace-frame/);
   assert.match(workspaceStyles, /\.aw-sidebar/);
-  assert.doesNotMatch(workspaceSource, />\s*选择\s*</);
   assert.doesNotMatch(workspaceSource, /只读预览，可拖动与缩放/);
   assert.match(workspaceStyles, /\.aw-canvas\s*\{[\s\S]*?height:\s*220px;/);
   assert.doesNotMatch(workspaceStyles, /\.aw-canvas-card\s*\{[^}]*min-height:\s*330px/);
@@ -101,6 +111,19 @@ test("runtime update deployments stay on the existing agent row", () => {
     /const matchingAgent = focusedTask\?\.runtimeId[\s\S]*?agentByRuntimeId\.get/,
   );
   assert.match(workspaceStyles, /\.aw-draft-badge\.is-deploying/);
+});
+
+test("deployed agent detail can jump directly to chat", () => {
+  assert.match(workspaceSource, /onTalkAgent\?: \(id: string\) => void/);
+  assert.match(workspaceSource, /className="aw-talk studio-update-action"[\s\S]*?去对话/);
+  assert.match(workspaceSource, /onClick=\{\(\) => onTalkAgent\?\.\(selectedAgent\.id\)\}/);
+  assert.match(appSource, /const talkToWorkspaceAgent = \(id: string\) => \{/);
+  assert.match(
+    appSource,
+    /setManageAgents\(false\)[\s\S]*?selectAgent\(id\)/,
+  );
+  assert.match(appSource, /onTalkAgent=\{talkToWorkspaceAgent\}/);
+  assert.match(workspaceStyles, /\.aw-talk svg/);
 });
 
 test("workspace agents can be reordered by drag or keyboard", () => {
@@ -156,6 +179,60 @@ test("workspace supports selecting and deleting authorized agents", () => {
   assert.match(workspaceStyles, /\.aw-selection-toolbar/);
   assert.match(workspaceStyles, /\.aw-select-marker\.is-checked/);
   assert.match(workspaceStyles, /\.aw-head-delete/);
+});
+
+test("agent detail evaluation tab reads feedback datasets", () => {
+  assert.match(clientSource, /export interface AgentFeedbackCase/);
+  assert.match(clientSource, /export async function getAgentFeedbackCases/);
+  assert.match(clientSource, /export async function deleteAgentFeedbackCases/);
+  assert.match(clientSource, /export function clearMessageFeedbackCache/);
+  assert.match(clientSource, /\/web\/evaluation\/feedback-cases\?\$\{query\.toString\(\)\}/);
+  assert.match(clientSource, /\/web\/evaluation\/feedback-cases\/delete/);
+  assert.match(workspaceSource, /getAgentFeedbackCases\(\{/);
+  assert.match(workspaceSource, /deleteAgentFeedbackCases\(\{/);
+  assert.match(workspaceSource, /setFeedbackSets\(response\.sets\)/);
+  assert.match(workspaceSource, /setFeedbackCases\(/);
+  assert.match(workspaceSource, /focusCaseKind\(kind\)/);
+  assert.match(workspaceSource, /selectedCaseIds/);
+  assert.match(workspaceSource, /expandedCaseIds/);
+  assert.match(workspaceSource, /onOpenFeedbackCase/);
+  assert.match(workspaceSource, /openFeedbackCase/);
+  assert.match(workspaceSource, /onFeedbackCasesDeleted/);
+  assert.match(workspaceSource, /focusedAgentSection/);
+  assert.match(workspaceSource, /focusedCaseKind/);
+  assert.match(workspaceSource, /appliedFocusKeyRef/);
+  assert.match(workspaceSource, /if \(appliedFocusKeyRef\.current === focusKey\) return/);
+  assert.match(workspaceSource, /onToggleExpanded/);
+  assert.match(workspaceSource, /deleteCases\(selectedVisibleCases\)/);
+  assert.match(workspaceSource, /onDeleteCase=\{\(item\) => void deleteCases\(\[item\]\)\}/);
+  assert.match(appSource, /openFeedbackCaseInStudio/);
+  assert.match(appSource, /returnToFeedbackCases/);
+  assert.match(appSource, /feedbackCaseReturnAgentId/);
+  assert.match(appSource, /feedbackCaseReturnKind/);
+  assert.match(appSource, /focusedWorkspaceAgentSection/);
+  assert.match(appSource, /focusedWorkspaceCaseKind/);
+  assert.match(appSource, /focusedCaseKind=\{focusedWorkspaceCaseKind\}/);
+  assert.match(appSource, /返回评测案例/);
+  assert.match(appSource, /clearDeletedFeedbackCases/);
+  assert.match(appSource, /clearMessageFeedbackCache/);
+  assert.match(appSource, /onFeedbackCasesDeleted=\{clearDeletedFeedbackCases\}/);
+  assert.match(appSource, /onOpenFeedbackCase=\{\(item\) => void openFeedbackCaseInStudio\(item\)\}/);
+  assert.match(appSource, /turnNodeRefs/);
+  assert.match(appSource, /is-feedback-target/);
+  assert.match(workspaceSource, /feedbackSetFor\(feedbackSets, kind\)/);
+  assert.match(workspaceSource, /Good cases/);
+  assert.match(workspaceSource, /Bad cases/);
+  assert.match(workspaceSource, /AgentKit 评测集/);
+  assert.match(workspaceStyles, /\.aw-case-summary/);
+  assert.match(appSource, /case-return-bar/);
+  assert.match(workspaceStyles, /\.aw-case-toolbar/);
+  assert.match(workspaceStyles, /\.aw-case-delete/);
+  assert.match(workspaceStyles, /\.aw-case-output-preview/);
+  assert.match(workspaceStyles, /-webkit-line-clamp: 3/);
+  assert.match(workspaceStyles, /\.aw-case-expand/);
+  assert.match(workspaceStyles, /\.aw-case-row\.is-focused/);
+  assert.match(workspaceStyles, /\.aw-case-tag\.is-good/);
+  assert.match(workspaceStyles, /\.aw-case-error/);
 });
 
 test("evaluation tab remains the PR 748 placeholder until the real feature lands", () => {

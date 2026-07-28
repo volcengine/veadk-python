@@ -16,6 +16,12 @@ test("uses the selected Agent in new-chat, search, and conversation headers", ()
   assert.doesNotMatch(appSource, /function activeSessionTitle|conversationTitle/);
   assert.match(appSource, /agentLabel=\{labelOf\}/);
   assert.match(appSource, /agentsSource=\{agentsSource\}/);
+  assert.match(appSource, /void refreshAgentLibrary\(\)/);
+  assert.match(
+    appSource,
+    /if \(agentsSource === "cloud"\) \{[\s\S]*?remoteIds[\s\S]*?remoteIds\.includes\(saved\)[\s\S]*?remoteIds\[0\] \?\? ""/,
+  );
+  assert.doesNotMatch(appSource, /if \(agentsSource === "cloud"\) \{\s*setAppName\(""\)/);
   assert.match(navbarSource, /appName \? label\(appName\) : "选择 Agent"/);
   assert.match(navbarSource, /<AgentSelector[\s\S]*?variant="navbar"/);
 });

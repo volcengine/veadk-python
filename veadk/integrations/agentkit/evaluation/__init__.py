@@ -17,6 +17,7 @@
 from .client import (
     AgentKitEvaluationDatasetsClient,
     AgentKitOpenApiError,
+    EvaluationFeedbackItem,
     EvaluationItemRef,
     EvaluationSetRef,
 )
@@ -24,6 +25,7 @@ from .client import (
 __all__ = [
     "AgentKitEvaluationDatasetsClient",
     "AgentKitOpenApiError",
+    "EvaluationFeedbackItem",
     "EvaluationItemRef",
     "EvaluationSetRef",
 ]
