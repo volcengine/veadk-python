@@ -509,8 +509,8 @@ def _skill_zip(files: dict[str, str]) -> bytes:
     return output.getvalue()
 
 
-def test_skillhub_zip_accepts_safe_files_and_rejects_path_escape() -> None:
-    skill_md = "---\nname: demo-skill\ndescription: Demo.\n---\n"
+def test_skillhub_zip_accepts_safe_files_without_metadata_validation() -> None:
+    skill_md = "---\nname: clawhub/534422530/89d9f5\n---\n"
     files = _files_from_zip(
         _skill_zip({"SKILL.md": skill_md, "scripts/run.py": "print('ok')\n"}),
         "demo-skill",
@@ -520,6 +520,7 @@ def test_skillhub_zip_accepts_safe_files_and_rejects_path_escape() -> None:
         "skills/demo-skill/SKILL.md",
         "skills/demo-skill/scripts/run.py",
     ]
+    assert files[0].content == skill_md
 
     with pytest.raises(DebugPolicyError, match="Illegal skill file path"):
         _files_from_zip(

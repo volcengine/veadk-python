@@ -135,7 +135,6 @@ async def _materialize_skillspace_skill(
             skill.skillId,
             skill.version or None,
         )
-    _validate_skill_md(skill_md, f"SkillSpace skill {skill.skillId}")
     skill_md = _normalize_skill_md_frontmatter(
         skill_md, f"SkillSpace skill {skill.skillId}"
     )
@@ -188,7 +187,6 @@ def _files_from_zip(content: bytes, folder: str, label: str) -> list[GeneratedFi
             files.append(GeneratedFile(path=target, content=text))
     if skill_md_content is None:
         raise DebugPolicyError(f"{label} is missing SKILL.md")
-    _validate_skill_md(skill_md_content, label)
     return files
 
 
@@ -256,21 +254,6 @@ def _normalize_relative_path(path: str) -> str:
     return normalized
 
 
-def _validate_skill_md(text: str, where: str) -> str:
-    meta, _ = _parse_skill_md(text, where)
-    name = str(meta.get("name") or "").strip()
-    description = str(meta.get("description") or "").strip()
-    if not name:
-        raise DebugPolicyError(f"{where} SKILL.md is missing name")
-    if len(name) > 64 or not re.fullmatch(r"[a-z0-9-]+", name):
-        raise DebugPolicyError(f"{where} SKILL.md name is invalid")
-    if not description:
-        raise DebugPolicyError(f"{where} SKILL.md is missing description")
-    if len(description) > 1024 or re.search(r"<[^>]+>", description):
-        raise DebugPolicyError(f"{where} SKILL.md description is invalid")
-    return name
-
-
 def _parse_skill_md(text: str, where: str) -> tuple[dict[str, object], str]:
     lines = (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
     if not lines or lines[0].strip() != "---":
@@ -314,6 +297,9 @@ def _parse_legacy_frontmatter_lines(lines: list[str]) -> dict[str, object]:
 
 
 def _normalize_skill_md_frontmatter(text: str, where: str) -> str:
-    meta, body = _parse_skill_md(text, where)
+    try:
+        meta, body = _parse_skill_md(text, where)
+    except DebugPolicyError:
+        return text
     header = yaml.safe_dump(meta, allow_unicode=True, sort_keys=False).strip()
     return f"---\n{header}\n---\n{body}"
