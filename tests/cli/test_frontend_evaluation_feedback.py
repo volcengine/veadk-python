@@ -371,9 +371,7 @@ def test_message_feedback_uncheck_deletes_case_by_stable_item_key(
 
     assert response.status_code == 200
     assert response.json()["rating"] is None
-    assert "BatchDeleteEvaluationSetItems" in [
-        call["action"] for call in openapi_calls
-    ]
+    assert "BatchDeleteEvaluationSetItems" in [call["action"] for call in openapi_calls]
     patch = session_patches[0]["state_delta"]["veadk_feedback:assistant-event"]
     assert patch["rating"] is None
     assert patch["evaluationItemId"] is None
@@ -647,7 +645,9 @@ def test_feedback_cases_delete_removes_dataset_items_and_clears_rating(
                                                 },
                                                 {
                                                     "Key": "message_id",
-                                                    "Content": {"Text": "assistant-event"},
+                                                    "Content": {
+                                                        "Text": "assistant-event"
+                                                    },
                                                 },
                                                 {
                                                     "Key": "user_id",
@@ -688,12 +688,8 @@ def test_feedback_cases_delete_removes_dataset_items_and_clears_rating(
 
     assert response.status_code == 200
     assert response.json()["deletedCount"] == 1
-    assert "BatchDeleteEvaluationSetItems" in [
-        call["action"] for call in openapi_calls
-    ]
-    feedback_patch = session_patches[0]["state_delta"][
-        "veadk_feedback:assistant-event"
-    ]
+    assert "BatchDeleteEvaluationSetItems" in [call["action"] for call in openapi_calls]
+    feedback_patch = session_patches[0]["state_delta"]["veadk_feedback:assistant-event"]
     assert feedback_patch["rating"] is None
     assert feedback_patch["evaluationItemId"] is None
     assert feedback_patch["syncStatus"] == "synced"
