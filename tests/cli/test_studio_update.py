@@ -185,7 +185,7 @@ def test_application_template_matches_deployment_region(
 
     service = VeFaaS("ak", "sk", region="cn-shanghai")
 
-    assert service.template_id == "6943b9de4fa45c0008ea04e1"
+    assert service.template_id == "6a685988162bcd00083c9001"
 
 
 def test_load_deployed_site_logo_uses_current_branding_url(
