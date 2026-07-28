@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import zipfile
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -446,6 +447,54 @@ def test_get_skill_detail_runs_sdk_call_off_event_loop(
     assert region == "cn-shanghai"
     assert request.id == "skill-1"
     assert request.skill_version == "1.2.0"
+
+
+def test_get_skill_detail_falls_back_to_skillspace_package(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _FakeSkillsClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_skill_version(self, request: Any) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                name="ticket-classifier",
+                description="识别工单类型",
+                version="1.2.0",
+                skill_md="",
+                bucket_name="skills-bucket",
+                tos_path="skills/ticket-classifier.zip",
+            )
+
+    def _download_skill(skill: Any, zip_path: Path) -> bool:
+        assert skill.bucket_name == "skills-bucket"
+        assert skill.path == "skills/ticket-classifier.zip"
+        with zipfile.ZipFile(zip_path, "w") as archive:
+            archive.writestr(
+                "ticket-classifier/SKILL.md",
+                "---\nname: ticket-classifier\ndescription: Tickets.\n---\nBody.\n",
+            )
+        return True
+
+    monkeypatch.setattr(
+        "agentkit.sdk.skills.client.AgentkitSkillsClient", _FakeSkillsClient
+    )
+    monkeypatch.setattr(
+        "veadk.skills.materializer._download_legacy_skill_space_skill",
+        _download_skill,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/skill-spaces/space-1/skills/skill-1",
+            params={"region": "cn-shanghai", "version": "1.2.0"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["skillMd"].endswith("Body.\n")
 
 
 def test_skill_space_routes_keep_missing_credentials_status(

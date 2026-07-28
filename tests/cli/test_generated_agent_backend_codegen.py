@@ -189,6 +189,35 @@ async def test_local_skill_materialization_accepts_safe_skill() -> None:
 
 
 @pytest.mark.asyncio
+async def test_local_skill_materialization_keeps_validation_minimal() -> None:
+    skill_md = "---\nname: Display Skill\n---\n\n# Local\n"
+    draft = AgentDraft(
+        name="demo",
+        instruction="You are helpful.",
+        selectedSkills=[
+            SelectedSkill(
+                source="local",
+                folder="local-folder",
+                name="Display Skill",
+                localFiles=[
+                    GeneratedFile(
+                        path="skills/local-folder/SKILL.md",
+                        content=skill_md,
+                    )
+                ],
+            )
+        ],
+    )
+    project = GeneratedProject(name="demo", files=[])
+
+    await materialize_selected_skills(draft, project)
+
+    assert project.files == [
+        GeneratedFile(path="skills/local-folder/SKILL.md", content=skill_md)
+    ]
+
+
+@pytest.mark.asyncio
 async def test_local_skill_materialization_rejects_path_escape() -> None:
     skill_md = "---\nname: local-skill\ndescription: Local skill.\n---\n"
     draft = AgentDraft(

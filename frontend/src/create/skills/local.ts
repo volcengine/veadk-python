@@ -1,13 +1,8 @@
 // Local skill upload: read a browser folder (via <input webkitdirectory>) or a
 // .zip file into SkillHit entries. Each skill directory must contain a
-// SKILL.md (case-insensitive) with valid frontmatter. Validation mirrors what
-// ADK's skill loader requires (so skills actually load at runtime):
-//   - SKILL.md starts with a closed `--- ... ---` frontmatter block
-//   - `name`: required, <=64 chars, matches [a-z0-9-]+ (kebab-case)
-//   - `description`: required, <=1024 chars, no XML tags
-//   - quoted name/description values are accepted (quotes stripped) — real YAML
-//     parsers handle them fine, and the platform's line-based parser only
-//     applies to pushed skills, not locally-uploaded ones.
+// SKILL.md (case-insensitive). We keep local upload validation intentionally
+// light: identify the skill folder, keep paths inside that folder, and let ADK
+// report any deeper SKILL.md/frontmatter issues when the agent actually loads.
 //
 // Resulting ProjectFiles are rooted at `skills/<frontmatter-name>/...` so they
 // merge cleanly with the existing Skill Hub download layout. Zip-slip paths
@@ -30,22 +25,12 @@ interface RawEntry {
 
 const SKILL_MD_RE = /(^|\/)skill\.md$/i;
 
-/** Validation error: carries a human-readable message. */
-class SkillValidationError extends Error {}
-
-/** Parse a YAML "key: value" line the same way the agentkit validator does
- *  (simple line-based, no full YAML parser, rejects quoted name/description).
- *  Returns { name, description } on success, throws on any violation. */
-function parseAndValidateSkillMd(text: string, where: string): {
+function readSkillMdMetadata(text: string): {
   name: string;
   description: string;
 } {
   const lines = (text ?? "").replace(/\r\n?/g, "\n").split("\n");
-  if (!lines.length || lines[0].trim() !== "---") {
-    throw new SkillValidationError(
-      `${where} 的 SKILL.md 必须以 YAML frontmatter (--- ... ---) 开头`,
-    );
-  }
+  if (!lines.length || lines[0].trim() !== "---") return { name: "", description: "" };
   let endIdx = -1;
   for (let i = 1; i < lines.length; i++) {
     if (lines[i].trim() === "---") {
@@ -53,11 +38,7 @@ function parseAndValidateSkillMd(text: string, where: string): {
       break;
     }
   }
-  if (endIdx < 0) {
-    throw new SkillValidationError(
-      `${where} 的 SKILL.md frontmatter 未闭合（缺少结束 ---）`,
-    );
-  }
+  if (endIdx < 0) return { name: "", description: "" };
   const meta: Record<string, string> = {};
   for (let i = 1; i < endIdx; i++) {
     const s = lines[i].trim();
@@ -72,43 +53,33 @@ function parseAndValidateSkillMd(text: string, where: string): {
     meta[key] = val;
   }
 
-  const name = (meta.name || "").trim();
-  const description = (meta.description || "").trim();
-  validateName(name, where);
-  validateDescription(description, where);
-  return { name, description };
+  return {
+    name: (meta.name || "").trim(),
+    description: (meta.description || "").trim(),
+  };
 }
 
 function isQuoted(v: string): boolean {
   return v.length >= 2 && ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'")));
 }
 
-function validateName(name: string, where: string) {
-  if (!name) {
-    throw new SkillValidationError(`${where} 的 SKILL.md 缺少必填的 name frontmatter`);
+function safeSkillFolder(...candidates: string[]): string {
+  for (const candidate of candidates) {
+    const folder = candidate
+      .trim()
+      .replace(/\\/g, "/")
+      .split("/")
+      .filter(Boolean)
+      .pop()
+      ?.replace(/[^A-Za-z0-9_-]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    if (folder) return folder.slice(0, 64);
   }
-  if (name.length > 64) {
-    throw new SkillValidationError(`${where} 的 name 长度超过 64 个字符`);
-  }
-  if (!/^[a-z0-9-]+$/.test(name)) {
-    throw new SkillValidationError(
-      `${where} 的 name 必须匹配 [a-z0-9-]+（小写字母、数字、短横线）`,
-    );
-  }
+  return "local-skill";
 }
 
-function validateDescription(desc: string, where: string) {
-  if (!desc) {
-    throw new SkillValidationError(
-      `${where} 的 SKILL.md 缺少必填的 description frontmatter`,
-    );
-  }
-  if (desc.length > 1024) {
-    throw new SkillValidationError(`${where} 的 description 长度超过 1024 个字符`);
-  }
-  if (/<[^>]+>/.test(desc)) {
-    throw new SkillValidationError(`${where} 的 description 不能包含 XML 标签`);
-  }
+function displaySkillName(folder: string, frontmatterName: string): string {
+  return frontmatterName.trim() || folder;
 }
 
 /** Normalize path separators and strip a single common wrapper folder if the
@@ -173,16 +144,8 @@ function materializeHit(
   if (!md) {
     return { hit: null, error: `${where} 缺少 SKILL.md` };
   }
-  let fm: { name: string; description: string };
-  try {
-    fm = parseAndValidateSkillMd(md.text, where);
-  } catch (e) {
-    return {
-      hit: null,
-      error: e instanceof Error ? e.message : String(e),
-    };
-  }
-  const folder = fm.name;
+  const fm = readSkillMdMetadata(md.text);
+  const folder = safeSkillFolder(fm.name, folderKey, sourceLabel.replace(/\.[^.]+$/, ""));
   const projectFiles: ProjectFile[] = [];
   for (const e of files) {
     // Zip-slip guard: reject paths containing '..' or that would escape
@@ -201,8 +164,8 @@ function materializeHit(
     hit: {
       source: "local",
       id: `local:${folder}:${files.length}`,
-      name: fm.name,
-      description: fm.description,
+      name: displaySkillName(folder, fm.name),
+      description: fm.description || "本地 Skill",
       folder,
       localFiles: projectFiles,
     },
