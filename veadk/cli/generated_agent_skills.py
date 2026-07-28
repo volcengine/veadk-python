@@ -24,6 +24,7 @@ from pathlib import PurePosixPath
 from urllib.parse import quote, urlencode
 
 import httpx
+import yaml
 
 from veadk.cli.generated_agent_codegen import (
     AgentDraft,
@@ -133,6 +134,9 @@ async def _materialize_skillspace_skill(
             skill.version or None,
         )
     _validate_skill_md(skill_md, f"SkillSpace skill {skill.skillId}")
+    skill_md = _normalize_skill_md_frontmatter(
+        skill_md, f"SkillSpace skill {skill.skillId}"
+    )
     return [GeneratedFile(path=f"skills/{folder}/SKILL.md", content=skill_md)]
 
 
@@ -256,6 +260,21 @@ def _normalize_relative_path(path: str) -> str:
 
 
 def _validate_skill_md(text: str, where: str) -> str:
+    meta, _ = _parse_skill_md(text, where)
+    name = str(meta.get("name") or "").strip()
+    description = str(meta.get("description") or "").strip()
+    if not name:
+        raise DebugPolicyError(f"{where} SKILL.md is missing name")
+    if len(name) > 64 or not re.fullmatch(r"[a-z0-9-]+", name):
+        raise DebugPolicyError(f"{where} SKILL.md name is invalid")
+    if not description:
+        raise DebugPolicyError(f"{where} SKILL.md is missing description")
+    if len(description) > 1024 or re.search(r"<[^>]+>", description):
+        raise DebugPolicyError(f"{where} SKILL.md description is invalid")
+    return name
+
+
+def _parse_skill_md(text: str, where: str) -> tuple[dict[str, object], str]:
     lines = (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
     if not lines or lines[0].strip() != "---":
         raise DebugPolicyError(f"{where} SKILL.md must start with frontmatter")
@@ -266,8 +285,23 @@ def _validate_skill_md(text: str, where: str) -> str:
             break
     if end_idx < 0:
         raise DebugPolicyError(f"{where} SKILL.md frontmatter is not closed")
-    meta: dict[str, str] = {}
-    for line in lines[1:end_idx]:
+    try:
+        parsed = yaml.safe_load("\n".join(lines[1:end_idx])) or {}
+    except yaml.YAMLError as e:
+        parsed = _parse_legacy_frontmatter_lines(lines[1:end_idx])
+        if not parsed:
+            raise DebugPolicyError(
+                f"{where} SKILL.md frontmatter is invalid YAML: {e}"
+            ) from e
+    if not isinstance(parsed, dict):
+        raise DebugPolicyError(f"{where} SKILL.md frontmatter must be a mapping")
+    body = "\n".join(lines[end_idx + 1 :])
+    return parsed, body
+
+
+def _parse_legacy_frontmatter_lines(lines: list[str]) -> dict[str, object]:
+    meta: dict[str, object] = {}
+    for line in lines:
         stripped = line.strip()
         if not stripped or stripped.startswith("#") or ":" not in stripped:
             continue
@@ -279,14 +313,10 @@ def _validate_skill_md(text: str, where: str) -> str:
         ):
             value = value[1:-1]
         meta[key.strip()] = value
-    name = (meta.get("name") or "").strip()
-    description = (meta.get("description") or "").strip()
-    if not name:
-        raise DebugPolicyError(f"{where} SKILL.md is missing name")
-    if len(name) > 64 or not re.fullmatch(r"[a-z0-9-]+", name):
-        raise DebugPolicyError(f"{where} SKILL.md name is invalid")
-    if not description:
-        raise DebugPolicyError(f"{where} SKILL.md is missing description")
-    if len(description) > 1024 or re.search(r"<[^>]+>", description):
-        raise DebugPolicyError(f"{where} SKILL.md description is invalid")
-    return name
+    return meta
+
+
+def _normalize_skill_md_frontmatter(text: str, where: str) -> str:
+    meta, body = _parse_skill_md(text, where)
+    header = yaml.safe_dump(meta, allow_unicode=True, sort_keys=False).strip()
+    return f"---\n{header}\n---\n{body}"

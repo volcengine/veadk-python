@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -408,6 +409,45 @@ async def test_skillspace_materialization_deduplicates_nested_selection() -> Non
 
     assert calls == [("space-1", "skill-1", "v1")]
     assert [file.path for file in project.files] == ["skills/shared-skill/SKILL.md"]
+
+
+@pytest.mark.asyncio
+async def test_skillspace_materialization_normalizes_legacy_frontmatter() -> None:
+    skill = SelectedSkill(
+        source="skillspace",
+        folder="gate-info-web3",
+        name="gate-info-web3",
+        skillSpaceId="space-1",
+        skillId="skill-1",
+        version="v1",
+    )
+    draft = AgentDraft(name="root", selectedSkills=[skill])
+    project = GeneratedProject(name="root", files=[])
+
+    async def resolve(space_id: str, skill_id: str, version: str | None) -> str:
+        del space_id, skill_id, version
+        return (
+            "---\n"
+            "name: gate-info-web3\n"
+            "description: Fetch market facts. Legacy alias: gate-info-defianalysis.\n"
+            "---\n"
+            "Use this skill for market analysis.\n"
+        )
+
+    await materialize_selected_skills(
+        draft,
+        project,
+        resolve_skillspace_detail=resolve,
+    )
+
+    assert [file.path for file in project.files] == [
+        "skills/gate-info-web3/SKILL.md"
+    ]
+    frontmatter = project.files[0].content.split("---", 2)[1]
+    parsed = yaml.safe_load(frontmatter)
+    assert parsed["description"] == (
+        "Fetch market facts. Legacy alias: gate-info-defianalysis."
+    )
 
 
 def _skill_zip(files: dict[str, str]) -> bytes:
