@@ -2497,12 +2497,6 @@ export default function App() {
       <Sidebar
         branding={siteBranding}
         access={access}
-        agentsSource={agentsSource}
-        localApps={apps}
-        currentAgentId={appName}
-        currentAgentLabel={appName ? labelOf(appName) : ""}
-        currentRuntime={currentRuntime}
-        onSelectAgent={selectAgent}
         features={features}
         sessions={sessions}
         currentSessionId={sessionId}

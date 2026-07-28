@@ -10,6 +10,10 @@ const projectPreviewStyles = readFileSync(
   new URL("../src/ui/ProjectPreview.css", import.meta.url),
   "utf8",
 );
+const appStyles = readFileSync(
+  new URL("../src/styles.css", import.meta.url),
+  "utf8",
+);
 const customCreateSource = readFileSync(
   new URL("../src/create/CustomCreate.tsx", import.meta.url),
   "utf8",
@@ -47,7 +51,7 @@ test("offers code execution with its sandbox configuration", () => {
   );
   assert.match(
     customCreateSource,
-    /createGeneratedAgentTestRun\(debugRuntimeDraft\(draft\)\)/,
+    /createGeneratedAgentTestRun\([\s\S]*?debugRuntimeDraft\(variantDraft\)/,
   );
   assert.match(
     customCreateSource,
@@ -79,7 +83,10 @@ test("reuses the build canvas as a read-only expandable deployment preview", () 
     projectPreviewSource,
     /<dt>Agent 数量<\/dt>/,
   );
-  assert.doesNotMatch(projectPreviewSource, /优化选项|暂未开放/);
+  assert.match(projectPreviewSource, /<dt>模型<\/dt>/);
+  assert.match(projectPreviewSource, /<dt>描述<\/dt>/);
+  assert.match(projectPreviewSource, /<dt>系统提示词<\/dt>/);
+  assert.match(projectPreviewSource, /<dt>优化选项<\/dt>/);
   assert.match(
     projectPreviewSource,
     /className="pp-flow-expand"[\s\S]*?aria-label="放大查看执行流程"[\s\S]*?<Maximize2 aria-hidden \/>/,
@@ -87,7 +94,7 @@ test("reuses the build canvas as a read-only expandable deployment preview", () 
   assert.doesNotMatch(projectPreviewSource, /<span>放大查看<\/span>/);
   assert.match(
     projectPreviewStyles,
-    /\.pp-release-info\s*\{[\s\S]*?height:\s*100%;[\s\S]*?\.pp-artifact-actions\s*\{[\s\S]*?margin-top:\s*auto;/,
+    /\.pp-release-info\s*\{[\s\S]*?height:\s*100%;[\s\S]*?\.pp-artifact-actions\s*\{[\s\S]*?margin-top:\s*18px;/,
   );
 });
 
@@ -113,7 +120,7 @@ test("lets the whole publish page scroll while keeping deployment settings unbox
 test("aligns the publish overview and deployment settings to one restrained content width", () => {
   assert.match(
     projectPreviewStyles,
-    /--pp-publish-content-width:\s*58%/,
+    /--pp-publish-content-width:\s*min\(760px, max\(680px, calc\(100% - 48px\)\)\)/,
   );
   assert.match(
     projectPreviewStyles,
@@ -161,8 +168,12 @@ test("aligns the publish overview and deployment settings to one restrained cont
   );
   assert.doesNotMatch(projectPreviewSource, /DeployIcon|RotateCcw className="pp-ic"/);
   assert.match(
-    projectPreviewStyles,
-    /\.pp-config-actions \.pp-deploy\s*\{[\s\S]*?background:\s*hsl\(var\(--background\) \/ 0\.68\);[\s\S]*?backdrop-filter:\s*blur\(24px\) saturate\(170%\);[\s\S]*?font-size:\s*13px;/,
+    projectPreviewSource,
+    /className="pp-deploy studio-update-action"/,
+  );
+  assert.match(
+    appStyles,
+    /\.studio-update-action\s*\{[\s\S]*?background:\s*#111;[\s\S]*?color:\s*#fff;[\s\S]*?backdrop-filter:\s*blur\(7px\);[\s\S]*?font-size:\s*12\.5px;/,
   );
 });
 
@@ -186,12 +197,15 @@ test("uses a flipping Feishu channel card instead of a switch", () => {
   );
   assert.match(
     projectPreviewStyles,
-    /\.pp-channel-card\s*\{[\s\S]*?width:\s*clamp\(154px, 33\.333%, 236px\);[\s\S]*?aspect-ratio:\s*1;/,
+    /\.pp-channel-card\s*\{[\s\S]*?width:\s*clamp\(154px, 33\.333%, 236px\);[\s\S]*?height:\s*112px;/,
   );
-  assert.doesNotMatch(
+  assert.match(
     projectPreviewStyles,
-    /\.pp-channel-card\.is-flipped\s*\{[\s\S]*?(?:width|height):/,
+    /\.pp-channel-card\.is-flipped\s*\{[\s\S]*?height:\s*176px/,
   );
+
+  assert.doesNotMatch(projectPreviewSource, /<select[\s\S]*?aria-label="部署区域"/);
+  assert.match(projectPreviewSource, /deploymentRegionPicker\(false\)/);
   assert.match(
     projectPreviewStyles,
     /\.pp-channel-remove\s*\{[\s\S]*?background:\s*hsl\(var\(--destructive\) \/ 0\.07\);[\s\S]*?color:\s*hsl\(0 46% 36%\);/,
@@ -221,7 +235,7 @@ test("places the add-variable row before any environment variable rows", () => {
   assert.doesNotMatch(projectPreviewSource, /pp-env-empty|暂无环境变量/);
   assert.match(
     projectPreviewStyles,
-    /\.pp-env-add\s*\{[\s\S]*?min-height:\s*52px;[\s\S]*?border:\s*1px dashed/,
+    /\.pp-env-add\s*\{[\s\S]*?min-height:\s*40px;[\s\S]*?border:\s*1px dashed/,
   );
 });
 
@@ -240,7 +254,7 @@ test("shows the total environment variable count beside the section title", () =
   );
 });
 
-test("lays out network settings in two columns and keeps environment variables compact", () => {
+test("lays out network settings in two columns", () => {
   assert.match(
     projectPreviewSource,
     /className="pp-network-layout"[\s\S]*?type="radio"[\s\S]*?className="pp-network-fields"/,
@@ -249,9 +263,16 @@ test("lays out network settings in two columns and keeps environment variables c
     projectPreviewStyles,
     /\.pp-network-layout\s*\{[\s\S]*?grid-template-columns:\s*minmax\(132px, 0\.36fr\) minmax\(0, 0\.64fr\);/,
   );
+});
+
+test("uses the full deployment width for compact environment variables", () => {
   assert.match(
     projectPreviewStyles,
-    /\.pp-env-section\s*\{[\s\S]*?width:\s*min\(72%, 560px\);/,
+    /\.pp-env-section\s*\{[\s\S]*?width:\s*100%/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-env-add\s*\{[\s\S]*?min-height:\s*40px/,
   );
 });
 

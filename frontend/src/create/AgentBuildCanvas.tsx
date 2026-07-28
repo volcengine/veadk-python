@@ -20,6 +20,7 @@ import {
   ReactFlow,
   ReactFlowProvider,
   useEdgesState,
+  useNodesInitialized,
   useNodesState,
   useReactFlow,
   type Edge,
@@ -116,16 +117,19 @@ function rendersAsGroup(agent: AgentDraft, path: NodePath): boolean {
   );
 }
 
+export type CanvasDirection = "horizontal" | "vertical";
+
 function measureAgent(
   agent: AgentDraft,
   path: NodePath = [],
+  direction: CanvasDirection = "horizontal",
 ): { width: number; height: number } {
   const type = agent.agentType ?? "llm";
   if (!rendersAsGroup(agent, path)) {
     return { width: NODE_WIDTH, height: NODE_HEIGHT };
   }
   const sizes = agent.subAgents.map((child, index) =>
-    measureAgent(child, [...path, index]),
+    measureAgent(child, [...path, index], direction),
   );
   const widestChild = sizes.length
     ? Math.max(...sizes.map((size) => size.width))
@@ -133,10 +137,12 @@ function measureAgent(
   const tallestChild = sizes.length
     ? Math.max(...sizes.map((size) => size.height))
     : 0;
-  const horizontalPadding =
-    sizes.length && type !== "parallel"
-      ? GROUP_BOUNDARY_PADDING
-      : GROUP_PADDING;
+  const flowPadding = sizes.length && type !== "parallel"
+    ? GROUP_BOUNDARY_PADDING
+    : GROUP_PADDING;
+  const horizontalChildren = direction === "horizontal"
+    ? type !== "parallel"
+    : type === "parallel";
   const bottomSpace = sizes.length
     ? type === "parallel"
       ? GROUP_ADD_GAP + GROUP_ADD_HEIGHT
@@ -144,27 +150,27 @@ function measureAgent(
         ? LOOP_EDGE_SPACE
         : 0
     : GROUP_ADD_HEIGHT;
-  if (type === "parallel") {
+  if (!horizontalChildren) {
     return {
       width: Math.max(
         GROUP_MIN_WIDTH,
-        widestChild + horizontalPadding * 2,
+        widestChild + GROUP_PADDING * 2,
       ),
       height:
         GROUP_HEADER_HEIGHT +
-        GROUP_PADDING +
+        flowPadding +
         sizes.reduce((sum, size) => sum + size.height, 0) +
         GROUP_GAP * Math.max(0, sizes.length - 1) +
         bottomSpace +
-        GROUP_PADDING,
+        flowPadding,
     };
   }
   return {
     width: Math.max(
       GROUP_MIN_WIDTH,
       sizes.reduce((sum, size) => sum + size.width, 0) +
-        GROUP_GAP * Math.max(0, sizes.length - 1) +
-        horizontalPadding * 2,
+      GROUP_GAP * Math.max(0, sizes.length - 1) +
+      flowPadding * 2,
     ),
     height:
       GROUP_HEADER_HEIGHT +
@@ -253,7 +259,10 @@ function makeEdge(
   };
 }
 
-function buildCanvasGraph(root: AgentDraft): {
+function buildCanvasGraph(
+  root: AgentDraft,
+  direction: CanvasDirection,
+): {
   nodes: CanvasNode[];
   edges: CanvasEdge[];
 } {
@@ -322,7 +331,7 @@ function buildCanvasGraph(root: AgentDraft): {
   ): string {
     const type = agent.agentType ?? "sequential";
     const id = pathId(path);
-    const size = measureAgent(agent, path);
+    const size = measureAgent(agent, path, direction);
     nodes.push({
       id,
       type: "group",
@@ -347,26 +356,29 @@ function buildCanvasGraph(root: AgentDraft): {
     });
 
     const childSizes = agent.subAgents.map((child, index) =>
-      measureAgent(child, [...path, index]),
+      measureAgent(child, [...path, index], direction),
     );
-    const horizontalPadding = childSizes.length && type !== "parallel"
+    const flowPadding = childSizes.length && type !== "parallel"
       ? GROUP_BOUNDARY_PADDING
       : GROUP_PADDING;
-    let cursor = GROUP_PADDING;
+    const horizontalChildren = direction === "horizontal"
+      ? type !== "parallel"
+      : type === "parallel";
+    let cursor = flowPadding;
     const childIds = agent.subAgents.map((child, index) => {
       const childSize = childSizes[index];
       const childPosition =
-        type === "parallel"
+        horizontalChildren
           ? {
-              x: (size.width - childSize.width) / 2,
-              y: GROUP_HEADER_HEIGHT + cursor,
+              x: cursor,
+              y: GROUP_HEADER_HEIGHT + GROUP_PADDING,
             }
           : {
-              x: horizontalPadding + cursor - GROUP_PADDING,
-              y: GROUP_HEADER_HEIGHT + GROUP_PADDING,
+              x: (size.width - childSize.width) / 2,
+              y: GROUP_HEADER_HEIGHT + cursor,
             };
       cursor +=
-        (type === "parallel" ? childSize.height : childSize.width) + GROUP_GAP;
+        (horizontalChildren ? childSize.width : childSize.height) + GROUP_GAP;
       return addContainedNode(
         child,
         [...path, index],
@@ -443,13 +455,17 @@ function buildCanvasGraph(root: AgentDraft): {
   exits.forEach((exitId) =>
     edges.push(makeEdge(exitId, "terminal-output")),
   );
-  return layoutGraph(nodes, edges);
+  return layoutGraph(nodes, edges, direction);
 }
 
-function layoutGraph(nodes: CanvasNode[], edges: CanvasEdge[]) {
+function layoutGraph(
+  nodes: CanvasNode[],
+  edges: CanvasEdge[],
+  direction: CanvasDirection,
+) {
   const graph = new dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
   graph.setGraph({
-    rankdir: "LR",
+    rankdir: direction === "vertical" ? "TB" : "LR",
     ranksep: 50,
     nodesep: 34,
     edgesep: 14,
@@ -503,6 +519,7 @@ type CanvasActions = {
 };
 
 const CanvasActionsContext = createContext<CanvasActions | null>(null);
+const CanvasDirectionContext = createContext<CanvasDirection>("horizontal");
 
 function InsertStepEdge({
   id,
@@ -583,6 +600,10 @@ function InsertStepEdge({
 
 function AgentCanvasNode({ data, selected }: NodeProps<CanvasNode>) {
   const actions = useContext(CanvasActionsContext);
+  const direction = useContext(CanvasDirectionContext);
+  const targetPosition = direction === "vertical" ? Position.Top : Position.Left;
+  const sourcePosition = direction === "vertical" ? Position.Bottom : Position.Right;
+  const loopPosition = direction === "vertical" ? Position.Right : Position.Bottom;
   const type = data.pattern ?? "llm";
   const copy = PATTERN_COPY[type];
   const Icon = copy.icon;
@@ -592,7 +613,7 @@ function AgentCanvasNode({ data, selected }: NodeProps<CanvasNode>) {
         data.containedIn ? ` is-contained-in-${data.containedIn}` : ""
       }${selected ? " is-selected" : ""}`}
     >
-      <Handle type="target" position={Position.Left} className="abc-handle" />
+      <Handle type="target" position={targetPosition} className="abc-handle" />
       {type !== "llm" && (
         <span className="abc-node-icon"><Icon /></span>
       )}
@@ -618,19 +639,19 @@ function AgentCanvasNode({ data, selected }: NodeProps<CanvasNode>) {
           <Trash2 />
         </button>
       )}
-      <Handle type="source" position={Position.Right} className="abc-handle" />
+      <Handle type="source" position={sourcePosition} className="abc-handle" />
       {data.containedIn === "loop" && (
         <>
           <Handle
             id="loop-target"
             type="target"
-            position={Position.Bottom}
+            position={loopPosition}
             className="abc-handle abc-loop-handle"
           />
           <Handle
             id="loop-source"
             type="source"
-            position={Position.Bottom}
+            position={loopPosition}
             className="abc-handle abc-loop-handle"
           />
         </>
@@ -641,6 +662,10 @@ function AgentCanvasNode({ data, selected }: NodeProps<CanvasNode>) {
 
 function AgentGroupNode({ data, selected }: NodeProps<CanvasNode>) {
   const actions = useContext(CanvasActionsContext);
+  const direction = useContext(CanvasDirectionContext);
+  const targetPosition = direction === "vertical" ? Position.Top : Position.Left;
+  const sourcePosition = direction === "vertical" ? Position.Bottom : Position.Right;
+  const loopPosition = direction === "vertical" ? Position.Right : Position.Bottom;
   const type = data.pattern ?? "sequential";
   const copy = PATTERN_COPY[type];
   const childUnit = type === "llm" ? "子 Agent" : "步骤";
@@ -655,7 +680,7 @@ function AgentGroupNode({ data, selected }: NodeProps<CanvasNode>) {
         : "添加下一个步骤";
   return (
     <div className={`abc-group is-${type}${selected ? " is-selected" : ""}`}>
-      <Handle type="target" position={Position.Left} className="abc-handle" />
+      <Handle type="target" position={targetPosition} className="abc-handle" />
       <header className="abc-group-head">
         <span>
           <strong title={data.title}>{data.title}</strong>
@@ -743,19 +768,19 @@ function AgentGroupNode({ data, selected }: NodeProps<CanvasNode>) {
           <Trash2 />
         </button>
       )}
-      <Handle type="source" position={Position.Right} className="abc-handle" />
+      <Handle type="source" position={sourcePosition} className="abc-handle" />
       {data.containedIn === "loop" && (
         <>
           <Handle
             id="loop-target"
             type="target"
-            position={Position.Bottom}
+            position={loopPosition}
             className="abc-handle abc-loop-handle"
           />
           <Handle
             id="loop-source"
             type="source"
-            position={Position.Bottom}
+            position={loopPosition}
             className="abc-handle abc-loop-handle"
           />
         </>
@@ -765,11 +790,20 @@ function AgentGroupNode({ data, selected }: NodeProps<CanvasNode>) {
 }
 
 function TerminalNode({ data }: NodeProps<CanvasNode>) {
+  const direction = useContext(CanvasDirectionContext);
   return (
     <div className="abc-terminal">
-      <Handle type="target" position={Position.Left} className="abc-handle" />
+      <Handle
+        type="target"
+        position={direction === "vertical" ? Position.Top : Position.Left}
+        className="abc-handle"
+      />
       <span>{data.title}</span>
-      <Handle type="source" position={Position.Right} className="abc-handle" />
+      <Handle
+        type="source"
+        position={direction === "vertical" ? Position.Bottom : Position.Right}
+        className="abc-handle"
+      />
     </div>
   );
 }
@@ -957,11 +991,12 @@ export interface AgentBuildCanvasProps {
   onAdd: (path: NodePath) => void;
   onInsert: (parentPath: NodePath, index: number) => void;
   onDelete: (path: NodePath) => void;
-  onReset: () => void;
   /** Show the graph without any structure-changing actions. */
   readOnly?: boolean;
   /** Allow pan and zoom while remaining read-only. */
   interactivePreview?: boolean;
+  /** Lay out the workflow from left to right or top to bottom. */
+  direction?: CanvasDirection;
 }
 
 function AgentBuildCanvasInner({
@@ -971,19 +1006,23 @@ function AgentBuildCanvasInner({
   onAdd,
   onInsert,
   onDelete,
-  onReset,
   readOnly = false,
   interactivePreview = false,
+  direction = "horizontal",
 }: AgentBuildCanvasProps) {
-  const initialGraph = useMemo(() => buildCanvasGraph(draft), []);
+  const initialGraph = useMemo(() => buildCanvasGraph(draft, direction), []);
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(
     initialGraph.nodes,
   );
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialGraph.edges);
-  const lastStructure = useRef(structureKey(draft));
+  const nodesInitialized = useNodesInitialized();
+  const lastStructure = useRef(`${direction}:${structureKey(draft)}`);
   const canvasRef = useRef<HTMLDivElement>(null);
   const { fitView } = useReactFlow<CanvasNode, CanvasEdge>();
-  const currentGraph = useMemo(() => buildCanvasGraph(draft), [draft]);
+  const currentGraph = useMemo(
+    () => buildCanvasGraph(draft, direction),
+    [direction, draft],
+  );
   const [compactCanvas, setCompactCanvas] = useState(() =>
     window.matchMedia("(max-width: 860px)").matches,
   );
@@ -1011,7 +1050,7 @@ function AgentBuildCanvasInner({
   }, []);
 
   useEffect(() => {
-    const nextStructure = structureKey(draft);
+    const nextStructure = `${direction}:${structureKey(draft)}`;
     const structureChanged = nextStructure !== lastStructure.current;
     lastStructure.current = nextStructure;
     setEdges(currentGraph.edges);
@@ -1041,6 +1080,11 @@ function AgentBuildCanvasInner({
   }, [compactCanvas, fitAfterLayout]);
 
   useEffect(() => {
+    if (!nodesInitialized) return;
+    fitAfterLayout();
+  }, [currentGraph, fitAfterLayout, nodesInitialized]);
+
+  useEffect(() => {
     if (!readOnly || !canvasRef.current) return;
     const observer = new ResizeObserver(() => fitAfterLayout());
     observer.observe(canvasRef.current);
@@ -1048,47 +1092,18 @@ function AgentBuildCanvasInner({
     return () => observer.disconnect();
   }, [fitAfterLayout, readOnly]);
 
-  const autoLayout = useCallback(() => {
-    const next = buildCanvasGraph(draft);
-    setNodes(
-      next.nodes.map((node) => ({
-        ...node,
-        selected:
-          node.data.kind === "agent" &&
-          !!node.data.path &&
-          samePath(node.data.path, selectedPath),
-      })),
-    );
-    setEdges(next.edges);
-    fitAfterLayout();
-  }, [draft, fitAfterLayout, selectedPath, setEdges, setNodes]);
-
   const canvasActions = useMemo(
     () =>
       readOnly ? null : { onAdd, onInsert, onDelete },
     [onAdd, onDelete, onInsert, readOnly],
   );
   return (
+    <CanvasDirectionContext.Provider value={direction}>
     <CanvasActionsContext.Provider value={canvasActions}>
     <section
-      className={`abc-root${readOnly ? " is-readonly" : ""}`}
+      className={`abc-root is-${direction}${readOnly ? " is-readonly" : ""}`}
       aria-label={readOnly ? "只读 Agent 执行画布" : "Agent 执行画布"}
     >
-      <header className="abc-head">
-        <div className="abc-head-copy">
-          <strong>执行流程</strong>
-        </div>
-        {!readOnly && (
-          <div className="abc-head-actions">
-            <button type="button" onClick={autoLayout} title="自动整理节点">
-              自动整理
-            </button>
-            <button type="button" onClick={onReset} title="重置执行流程">
-              重置
-            </button>
-          </div>
-        )}
-      </header>
       <div ref={canvasRef} className="abc-canvas">
         <ReactFlow<CanvasNode, CanvasEdge>
           nodes={nodes}
@@ -1153,6 +1168,7 @@ function AgentBuildCanvasInner({
       </div>
     </section>
     </CanvasActionsContext.Provider>
+    </CanvasDirectionContext.Provider>
   );
 }
 

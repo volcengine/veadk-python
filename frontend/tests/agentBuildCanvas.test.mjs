@@ -10,6 +10,18 @@ const customCreateSource = readFileSync(
   new URL("../src/create/CustomCreate.tsx", import.meta.url),
   "utf8",
 );
+const customCreateStyles = readFileSync(
+  new URL("../src/create/CustomCreate.css", import.meta.url),
+  "utf8",
+);
+const projectPreviewSource = readFileSync(
+  new URL("../src/ui/ProjectPreview.tsx", import.meta.url),
+  "utf8",
+);
+const agentWorkspaceSource = readFileSync(
+  new URL("../src/ui/AgentWorkspace.tsx", import.meta.url),
+  "utf8",
+);
 const cssSource = readFileSync(
   new URL("../src/create/AgentBuildCanvas.css", import.meta.url),
   "utf8",
@@ -33,10 +45,24 @@ test("labels LLM nodes as 智能体", () => {
 
 test("defines canvas workspace variables without relying on the create page shell", () => {
   const rootRule = cssSource.match(/\.abc-root\s*\{[^}]*\}/)?.[0] ?? "";
+  const canvasRule = cssSource.match(/\.abc-canvas\s*\{[^}]*\}/)?.[0] ?? "";
   assert.match(rootRule, /--cw-workspace-ink: 222 24% 13%;/);
   assert.match(rootRule, /--cw-workspace-accent: 162 44% 32%;/);
   assert.match(rootRule, /--cw-workspace-warm: 42 28% 96%;/);
-  assert.match(cssSource, /\.abc-terminal\s*\{[\s\S]*?background: hsl\(var\(--cw-workspace-ink\)\);/);
+  assert.match(rootRule, /border-right:\s*0;/);
+  assert.match(rootRule, /background:\s*#fff;/);
+  assert.match(canvasRule, /background:\s*#fff;/);
+  assert.doesNotMatch(canvasRule, /radial-gradient|#fbfbfc/);
+  assert.match(
+    cssSource,
+    /\.abc-terminal\s*\{[\s\S]*?background: hsl\(var\(--secondary\) \/ 0\.68\);[\s\S]*?box-shadow: none;[\s\S]*?color: hsl\(var\(--foreground\) \/ 0\.76\);/,
+  );
+});
+
+test("starts directly with the workflow canvas without a toolbar", () => {
+  assert.doesNotMatch(source, /className="abc-head"/);
+  assert.doesNotMatch(source, /onReset|自动整理|重置执行流程/);
+  assert.doesNotMatch(cssSource, /\.abc-head/);
 });
 
 test("keeps the root workflow agent visible instead of flattening its children", () => {
@@ -103,10 +129,9 @@ test("keeps the group count badge clear of centered title copy", () => {
 test("uses distinct restrained type colors and removes the LLM node icon", () => {
   assert.match(source, /loop:\s*\{[\s\S]*?label:\s*"循环执行"/);
   assert.match(source, /\{type !== "llm" && \(/);
-  assert.match(
-    customCreateSource,
-    /data-active-type=\{node\.agentType \?\? "llm"\}/,
-  );
+  assert.match(customCreateSource, /<Section meta=\{metaOf\("type"\)\}>/);
+  assert.match(customCreateSource, /role="radiogroup" aria-label="Agent 类型"/);
+  assert.match(customCreateSource, /className="cw-agent-type-radio"/);
   assert.match(customCreateSource, /data-agent-type=\{t\.id\}/);
 });
 
@@ -121,4 +146,27 @@ test("supports a read-only preview without mutation affordances", () => {
     /readOnly[\s\S]*?padding: 0\.16, minZoom: 0\.05, maxZoom: 0\.9/,
   );
   assert.match(source, /panOnDrag=\{!readOnly \|\| interactivePreview\}/);
+});
+
+test("lays out creation vertically while keeping detail and deployment previews horizontal", () => {
+  assert.match(source, /direction\?: CanvasDirection/);
+  assert.match(source, /rankdir: direction === "vertical" \? "TB" : "LR"/);
+  assert.match(source, /direction === "vertical" \? Position\.Top : Position\.Left/);
+  assert.match(source, /direction === "vertical" \? Position\.Bottom : Position\.Right/);
+  assert.match(customCreateSource, /<AgentBuildCanvas[\s\S]*?direction="vertical"/);
+  assert.match(agentWorkspaceSource, /<AgentBuildCanvas[\s\S]*?direction="horizontal"/);
+  assert.match(projectPreviewSource, /<AgentBuildCanvas[\s\S]*?direction="horizontal"/);
+  assert.match(
+    customCreateStyles,
+    /\.cw-editor > \.abc-root\s*\{[\s\S]*?flex-basis:\s*42%;[\s\S]*?min-width:\s*380px;/,
+  );
+  assert.match(
+    customCreateStyles,
+    /\.cw-detail\s*\{[\s\S]*?flex:\s*1 1 58%;[\s\S]*?max-width:\s*780px;/,
+  );
+});
+
+test("refits the graph after React Flow finishes measuring its nodes", () => {
+  assert.match(source, /const nodesInitialized = useNodesInitialized\(\)/);
+  assert.match(source, /if \(!nodesInitialized\) return;[\s\S]*?fitAfterLayout\(\)/);
 });

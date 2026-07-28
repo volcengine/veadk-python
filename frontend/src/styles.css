@@ -250,8 +250,51 @@ body {
   }
 }
 
-.sidebar.is-collapsed .new-chat,
-.sidebar.is-collapsed .agent-row {
+/* Shared primary action used by Agent detail and creation/deployment flows. */
+.studio-update-action {
+  min-width: 104px;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 17px;
+  border: 0;
+  border-radius: 999px;
+  background: #111;
+  color: #fff;
+  box-shadow: none;
+  -webkit-backdrop-filter: blur(7px);
+  backdrop-filter: blur(7px);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 650;
+  transition:
+    background-color 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 180ms ease,
+    box-shadow 240ms ease,
+    backdrop-filter 240ms ease;
+}
+
+.studio-update-action:not(:disabled):hover {
+  border: 0;
+  background: #29292b;
+  color: #fff;
+  box-shadow: 0 7px 18px hsl(0 0% 0% / 0.16);
+}
+
+.studio-update-action:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.55);
+  outline-offset: 2px;
+}
+
+.studio-update-action:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.sidebar.is-collapsed .new-chat {
   align-self: center;
   width: 36px;
   height: 36px;
@@ -261,74 +304,11 @@ body {
   overflow: hidden;
   white-space: nowrap;
 }
-.sidebar.is-collapsed .agent-row-name,
-.sidebar.is-collapsed .agent-row-chev,
 .sidebar.is-collapsed .sidebar-nav-label {
   display: none;
 }
 .sidebar.is-collapsed .sidebar-history {
   display: none;
-}
-
-/* ---------- agent picker (sidebar row + right-edge slide-out) ---------- */
-.agent-row {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin: 2px 0 6px;
-  height: 36px;
-  min-height: 36px;
-  padding: 8px 10px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 8px;
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
-}
-.agent-row:hover {
-  background: hsl(var(--foreground) / 0.04);
-  border-color: hsl(var(--foreground) / 0.2);
-}
-.agent-row--empty {
-  border-style: dashed;
-  color: hsl(8 34% 42%);
-  background: hsl(8 40% 97%);
-}
-.agent-row--empty .agent-row-lead { color: hsl(8 44% 53%); }
-.agent-row--empty .agent-row-chev { color: hsl(8 24% 57%); }
-.agent-row--empty:hover {
-  border-color: hsl(8 44% 70%);
-  background: hsl(8 48% 96%);
-}
-.agent-row-lead {
-  width: 16px;
-  height: 16px;
-  color: hsl(var(--muted-foreground));
-  flex-shrink: 0;
-}
-.agent-row--connected .agent-row-lead { color: hsl(142 48% 38%); }
-.agent-row-name {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
-  font-weight: 600;
-}
-.agent-row-chev {
-  width: 15px;
-  height: 15px;
-  color: hsl(var(--muted-foreground));
-  transition: transform 0.15s;
-  flex-shrink: 0;
-  transform: translateY(1px);
-}
-.agent-row-chev.open {
-  transform: translateY(1px) rotate(90deg);
 }
 
 /* The drawer positions two independent floating cards: the Runtime list and,

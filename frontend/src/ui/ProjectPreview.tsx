@@ -312,6 +312,13 @@ export interface ProjectPreviewProps {
   agentName?: string;
   /** Root Agent plus all recursively nested sub-Agents. */
   agentCount?: number;
+  /** Debug configuration selected as the release candidate. */
+  releaseConfiguration?: {
+    modelName: string;
+    description: string;
+    instruction: string;
+    optimizations: string[];
+  };
   /** When provided, files are editable and changes call onChange with the new project. Omit for read-only. */
   onChange?: (project: AgentProject) => void;
   /** One-click deploy handler. Should return deploy result (URL + API Key). Omit to hide the deploy button.
@@ -455,6 +462,7 @@ export function ProjectPreview({
   agentDraft,
   agentName,
   agentCount,
+  releaseConfiguration,
   onChange,
   onDeploy,
   onAgentAdded,
@@ -506,6 +514,62 @@ export function ProjectPreview({
   const [showEnvValues, setShowEnvValues] = useState(false);
   const [regionMenuOpen, setRegionMenuOpen] = useState(false);
   const mountedRef = useRef(true);
+
+  const deploymentRegionPicker = (showLabel: boolean) => (
+    <div
+      className="pp-network-region"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") setRegionMenuOpen(false);
+      }}
+    >
+      {showLabel && <span>发布区域</span>}
+      <button
+        type="button"
+        className="pp-region-trigger"
+        aria-label="部署区域"
+        aria-haspopup="listbox"
+        aria-expanded={regionMenuOpen}
+        disabled={deploying || isRuntimeUpdate || !onDeployRegionChange}
+        onClick={() => setRegionMenuOpen((open) => !open)}
+      >
+        <span>
+          {deployRegion === "cn-shanghai" ? "华东 2（上海）" : "华北 2（北京）"}
+        </span>
+        <ChevronDown
+          className={`pp-region-chevron${regionMenuOpen ? " is-open" : ""}`}
+        />
+      </button>
+      {regionMenuOpen && (
+        <>
+          <div className="menu-scrim" onClick={() => setRegionMenuOpen(false)} />
+          <div className="pp-region-menu" role="listbox" aria-label="部署区域">
+            {[
+              { value: "cn-beijing", label: "华北 2（北京）" },
+              { value: "cn-shanghai", label: "华东 2（上海）" },
+            ].map((region) => {
+              const selected = region.value === deployRegion;
+              return (
+                <button
+                  key={region.value}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  className={`pp-region-option${selected ? " is-selected" : ""}`}
+                  onClick={() => {
+                    onDeployRegionChange?.(region.value);
+                    setRegionMenuOpen(false);
+                  }}
+                >
+                  <span>{region.label}</span>
+                  {selected && <Check aria-hidden="true" />}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
 
   useEffect(() => {
     mountedRef.current = true;
@@ -971,12 +1035,12 @@ export function ProjectPreview({
                 {agentDraft && (
                   <AgentBuildCanvas
                     draft={agentDraft}
+                    direction="horizontal"
                     selectedPath={[]}
                     onSelect={ignoreCanvasAction}
                     onAdd={ignoreCanvasAction}
                     onInsert={ignoreCanvasAction}
                     onDelete={ignoreCanvasAction}
-                    onReset={ignoreCanvasAction}
                     readOnly
                     interactivePreview
                   />
@@ -1007,6 +1071,34 @@ export function ProjectPreview({
                       <dt>Agent 数量</dt>
                       <dd>{agentCount ?? 1}</dd>
                     </div>
+                    {releaseConfiguration && (
+                      <>
+                        <div>
+                          <dt>模型</dt>
+                          <dd>{releaseConfiguration.modelName}</dd>
+                        </div>
+                        <div>
+                          <dt>描述</dt>
+                          <dd className="pp-release-fact-long">
+                            {releaseConfiguration.description}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>系统提示词</dt>
+                          <dd className="pp-release-fact-long pp-release-prompt">
+                            {releaseConfiguration.instruction}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>优化选项</dt>
+                          <dd>
+                            {releaseConfiguration.optimizations.length > 0
+                              ? releaseConfiguration.optimizations.join("、")
+                              : "未启用"}
+                          </dd>
+                        </div>
+                      </>
+                    )}
                   </dl>
                 </div>
                 <div className="pp-artifact-actions">
@@ -1152,16 +1244,7 @@ export function ProjectPreview({
               {!deploymentPrimaryPane && (
                 <section className="pp-config-section">
                   <div className="pp-config-label">发布区域</div>
-                  <select
-                    className="pp-config-select"
-                    value={deployRegion}
-                    onChange={(e) => onDeployRegionChange?.(e.target.value)}
-                    aria-label="部署区域"
-                    disabled={deploying || isRuntimeUpdate || !onDeployRegionChange}
-                  >
-                    <option value="cn-beijing">华北 2（北京）</option>
-                    <option value="cn-shanghai">华东 2（上海）</option>
-                  </select>
+                  {deploymentRegionPicker(false)}
                 </section>
               )}
 
@@ -1257,66 +1340,7 @@ export function ProjectPreview({
 
               <section className="pp-config-section">
                 <div className="pp-config-label">网络</div>
-                {deploymentPrimaryPane && (
-                  <div
-                    className="pp-network-region"
-                    onKeyDown={(event) => {
-                      if (event.key === "Escape") setRegionMenuOpen(false);
-                    }}
-                  >
-                    <span>发布区域</span>
-                    <button
-                      type="button"
-                      className="pp-region-trigger"
-                      aria-label="部署区域"
-                      aria-haspopup="listbox"
-                      aria-expanded={regionMenuOpen}
-                      disabled={deploying || !onDeployRegionChange}
-                      onClick={() => setRegionMenuOpen((open) => !open)}
-                    >
-                      <span>
-                        {deployRegion === "cn-shanghai"
-                          ? "华东 2（上海）"
-                          : "华北 2（北京）"}
-                      </span>
-                      <ChevronDown
-                        className={`pp-region-chevron${regionMenuOpen ? " is-open" : ""}`}
-                      />
-                    </button>
-                    {regionMenuOpen && (
-                      <>
-                        <div
-                          className="menu-scrim"
-                          onClick={() => setRegionMenuOpen(false)}
-                        />
-                        <div className="pp-region-menu" role="listbox" aria-label="部署区域">
-                          {[
-                            { value: "cn-beijing", label: "华北 2（北京）" },
-                            { value: "cn-shanghai", label: "华东 2（上海）" },
-                          ].map((region) => {
-                            const selected = region.value === deployRegion;
-                            return (
-                              <button
-                                key={region.value}
-                                type="button"
-                                role="option"
-                                aria-selected={selected}
-                                className={`pp-region-option${selected ? " is-selected" : ""}`}
-                                onClick={() => {
-                                  onDeployRegionChange?.(region.value);
-                                  setRegionMenuOpen(false);
-                                }}
-                              >
-                                <span>{region.label}</span>
-                                {selected && <Check aria-hidden="true" />}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </>
-                    )}
-                  </div>
-                )}
+                {deploymentPrimaryPane && deploymentRegionPicker(true)}
                 {isRuntimeUpdate && (
                   <p className="pp-config-note">现有 Runtime 的区域与网络模式保持不变。</p>
                 )}
@@ -1615,7 +1639,7 @@ export function ProjectPreview({
             <div className="pp-config-actions">
               <button
                 type="button"
-                className="pp-deploy"
+                className="pp-deploy studio-update-action"
                 onClick={requestDeploymentConfirmation}
                 disabled={deploying || feishuUpdating || deployDisabled || !!deployDisabledReason}
                 title={deployDisabledReason}
@@ -1662,12 +1686,12 @@ export function ProjectPreview({
               <div className="pp-flow-dialog-canvas">
                 <AgentBuildCanvas
                   draft={agentDraft}
+                  direction="horizontal"
                   selectedPath={[]}
                   onSelect={ignoreCanvasAction}
                   onAdd={ignoreCanvasAction}
                   onInsert={ignoreCanvasAction}
                   onDelete={ignoreCanvasAction}
-                  onReset={ignoreCanvasAction}
                   readOnly
                   interactivePreview
                 />

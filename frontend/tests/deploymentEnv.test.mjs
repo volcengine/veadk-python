@@ -206,7 +206,10 @@ test("keeps the generated project stable when only deployment channel settings c
     /onFeishuEnabledChange=\{\(feishuEnabled\) => \{[\s\S]*?setDraft\(nextDraft\);/,
   );
   assert.doesNotMatch(customCreateSource, /buildPreviewProject/);
-  assert.match(customCreateSource, /generateAgentProject\(codegenDraft\(draft\)\)/);
+  assert.match(
+    customCreateSource,
+    /generateAgentProject\(codegenDraft\(releaseDraft\)\)/,
+  );
   assert.match(projectPreviewSource, /await onFeishuEnabledChange\(!feishuEnabled\)/);
   assert.match(projectPreviewSource, /deploying \|\| feishuUpdating/);
 });
@@ -278,7 +281,7 @@ test("summarizes the Agent above the deployment configuration", () => {
   assert.match(projectPreviewSource, />\s*导出源码\s*</);
   assert.match(
     projectPreviewStyles,
-    /grid-template-rows:\s*226px auto/,
+    /grid-template-rows:\s*auto auto/,
   );
   assert.match(projectPreviewStyles, /\.pp-release-preview\s*\{[\s\S]*?box-sizing:\s*border-box/);
 });

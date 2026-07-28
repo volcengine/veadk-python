@@ -85,6 +85,7 @@ test("global sidebar can collapse to a compact icon rail", () => {
 
 test("the main navbar owns the complete Agent selector", () => {
   assert.match(navbarSource, /<AgentSelector[\s\S]*?variant="navbar"/);
+  assert.doesNotMatch(sidebarSource, /<AgentSelector/);
   assert.match(agentSelectorSource, /const active = currentRuntime\?\.runtimeId === rt\.runtimeId/);
   assert.match(agentSelectorSource, /<RuntimeIdentityIcon \/>/);
 });

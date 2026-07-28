@@ -1353,6 +1353,7 @@ def _run_frontend_server(
     # This replaces the old in-process temp-agent loader. Generated Python code
     # is only loaded by a short-lived subprocess runner.
     import atexit
+    import importlib.util
     import secrets
     import shutil
     import socket
@@ -1738,13 +1739,27 @@ def _run_frontend_server(
             else []
         )
         if project.name in apps:
-            return project.name
-        if len(apps) == 1:
-            return apps[0]
-        raise HTTPException(
-            status_code=400,
-            detail="Generated project must contain exactly one agents/<name>/agent.py",
-        )
+            app_name = project.name
+        elif len(apps) == 1:
+            app_name = apps[0]
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Generated project must contain exactly one agents/<name>/agent.py",
+            )
+
+        # ADK imports an app as ``<app_name>.agent``. Names such as ``abc``
+        # collide with already-importable Python modules and are then reported
+        # by ADK as if the generated root_agent did not exist.
+        try:
+            conflicts_with_module = importlib.util.find_spec(app_name) is not None
+        except (ImportError, AttributeError, ValueError):
+            conflicts_with_module = app_name in sys.modules
+        if conflicts_with_module:
+            debug_app_name = f"veadk_debug_{app_name}"
+            (agents_dir / app_name).rename(agents_dir / debug_app_name)
+            return debug_app_name
+        return app_name
 
     def _free_local_port() -> int:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:

@@ -57,7 +57,7 @@
   position: relative;
   min-height: 44px;
   padding: 0;
-  font-size: 12.5px;
+  font-size: 14px;
   font-weight: 580;
 }
 
@@ -76,7 +76,6 @@
   background: hsl(var(--foreground));
 }
 
-.aw-update,
 .aw-run {
   display: inline-flex;
   align-items: center;
@@ -92,13 +91,8 @@
   transition: opacity 160ms ease, transform 160ms ease;
 }
 
-.aw-update:not(:disabled):hover,
 .aw-run:not(:disabled):hover {
   transform: translateY(-1px);
-}
-
-.aw-update:not(:disabled):hover {
-  transform: none;
 }
 
 .aw-root button:focus-visible,
@@ -114,7 +108,6 @@
   height: 15px;
 }
 
-.aw-update:disabled,
 .aw-run:disabled,
 .aw-create-card:disabled {
   cursor: default;
@@ -204,62 +197,6 @@
   overflow-y: auto;
 }
 
-.aw-selection-toolbar {
-  flex: 0 0 auto;
-  min-height: 32px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.aw-selection-toolbar button {
-  min-height: 30px;
-  padding: 0 10px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 8px;
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
-  cursor: pointer;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 580;
-}
-
-.aw-selection-toolbar button:hover:not(:disabled) {
-  background: hsl(var(--secondary) / 0.55);
-}
-
-.aw-selection-toolbar button:disabled {
-  cursor: default;
-  opacity: 0.42;
-}
-
-.aw-selection-toolbar.is-active {
-  padding: 6px 8px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 9px;
-  background: hsl(var(--secondary) / 0.3);
-}
-
-.aw-selection-count {
-  flex: 1;
-  min-width: 0;
-  color: hsl(var(--muted-foreground));
-  font-size: 12px;
-  font-weight: 550;
-  white-space: nowrap;
-}
-
-.aw-selection-toolbar .aw-selection-danger {
-  border-color: hsl(var(--destructive) / 0.28);
-  color: hsl(var(--destructive));
-}
-
-.aw-selection-toolbar .aw-selection-danger:hover:not(:disabled) {
-  background: hsl(var(--destructive) / 0.08);
-}
-
 .aw-delete-error {
   margin-top: 8px;
   padding: 8px 10px;
@@ -323,44 +260,6 @@
 
 .aw-agent-item.is-drop-after {
   box-shadow: inset 0 -2px 0 hsl(var(--foreground) / 0.44);
-}
-
-.aw-agent-item.is-selecting {
-  gap: 10px;
-}
-
-.aw-agent-item.is-selected-for-delete {
-  border-color: hsl(var(--foreground) / 0.36);
-  background: hsl(var(--secondary) / 0.44);
-}
-
-.aw-agent-item.is-selection-disabled {
-  opacity: 0.58;
-}
-
-.aw-select-marker {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 16px;
-  display: inline-grid;
-  place-items: center;
-  border: 1px solid hsl(var(--border));
-  border-radius: 5px;
-  background: hsl(var(--background));
-}
-
-.aw-select-marker.is-checked {
-  border-color: hsl(var(--foreground));
-  background: hsl(var(--foreground));
-}
-
-.aw-select-marker.is-checked::after {
-  content: "";
-  width: 7px;
-  height: 4px;
-  border-bottom: 1.6px solid hsl(var(--background));
-  border-left: 1.6px solid hsl(var(--background));
-  transform: rotate(-45deg) translateY(-1px);
 }
 
 .aw-agent-copy {
@@ -603,52 +502,23 @@
   justify-content: center;
 }
 
-.aw-head-actions {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.aw-head-delete {
-  min-height: 34px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 0 12px;
-  border: 1px solid hsl(var(--destructive) / 0.24);
-  border-radius: 999px;
-  background: hsl(var(--destructive) / 0.07);
+.aw-head-delete.studio-update-action {
+  border: 1px solid hsl(var(--destructive) / 0.34);
+  background: rgba(255, 255, 255, 0.76);
   color: hsl(var(--destructive));
-  cursor: pointer;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 620;
+  -webkit-backdrop-filter: blur(7px);
+  backdrop-filter: blur(7px);
 }
 
-.aw-head-delete:hover:not(:disabled) {
-  background: hsl(var(--destructive) / 0.12);
-}
-
-.aw-head-delete:disabled {
-  cursor: default;
-  opacity: 0.46;
+.aw-head-delete.studio-update-action:hover:not(:disabled) {
+  border: 1px solid hsl(var(--destructive));
+  background: hsl(var(--destructive));
+  color: hsl(var(--destructive-foreground));
 }
 
 .aw-head-delete svg {
   width: 14px;
   height: 14px;
-}
-
-.aw-head-delete--draft {
-  border-color: hsl(var(--border));
-  background: transparent;
-  color: hsl(var(--foreground));
-}
-
-.aw-head-delete--draft:hover:not(:disabled) {
-  background: hsl(var(--secondary) / 0.54);
 }
 
 .aw-agent-title-row {
@@ -681,30 +551,7 @@
 }
 
 .aw-update {
-  min-width: 104px;
-  min-height: 40px;
   align-self: center;
-  border: 0;
-  border-radius: 999px;
-  background: rgba(232, 232, 237, 0.72);
-  color: hsl(0 0% 8%);
-  box-shadow: none;
-  -webkit-backdrop-filter: blur(7px);
-  backdrop-filter: blur(7px);
-  transition:
-    background-color 240ms cubic-bezier(0.22, 1, 0.36, 1),
-    color 180ms ease,
-    box-shadow 240ms ease,
-    backdrop-filter 240ms ease;
-}
-
-.aw-update:not(:disabled):hover {
-  border: 0;
-  background: #000;
-  color: white;
-  box-shadow: none;
-  -webkit-backdrop-filter: blur(7px);
-  backdrop-filter: blur(7px);
 }
 
 .aw-agent-tabs {
@@ -771,7 +618,6 @@
 }
 
 .aw-canvas-card {
-  min-height: 330px;
   overflow: hidden;
 }
 
@@ -1021,7 +867,7 @@
 }
 
 .aw-canvas {
-  height: 282px;
+  height: 220px;
   min-height: 0;
   border-top: 1px solid hsl(var(--border));
 }
@@ -1033,10 +879,6 @@
   min-height: 0;
   border: 0;
   background: hsl(42 28% 97%);
-}
-
-.aw-canvas .abc-head {
-  display: none;
 }
 
 .aw-canvas .abc-canvas {
@@ -1354,6 +1196,9 @@
   bottom: 20px;
   left: 50%;
   display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
   padding: 0;
   border: 0;
   border-radius: 10px;

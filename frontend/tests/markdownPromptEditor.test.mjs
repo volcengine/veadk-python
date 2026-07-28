@@ -115,6 +115,92 @@ test("workspace title follows the original named agent inside an anonymous root 
   assert.match(createSource, /agentName=\{workspaceAgentName\(draft\)\}/);
 });
 
+test("workspace lifecycle header is one rounded glass bar with text-only step sliders", () => {
+  const headerRule = createStyles.match(/\.cw-workspace-header\s*\{[^}]*\}/)?.[0] ?? "";
+  const stepperRule = createStyles.match(/\.cw-workspace-stepper\s*\{[^}]*\}/)?.[0] ?? "";
+  assert.match(headerRule, /min-height:\s*56px/);
+  assert.match(headerRule, /border-radius:\s*16px/);
+  assert.match(headerRule, /background:\s*rgba\(246, 246, 248, 0\.82\)/);
+  assert.match(headerRule, /backdrop-filter:\s*blur\(7px\)/);
+  assert.match(headerRule, /border:\s*0/);
+  assert.match(headerRule, /box-shadow:\s*none/);
+  assert.match(stepperRule, /display:\s*flex/);
+  assert.match(stepperRule, /gap:\s*12px/);
+  assert.doesNotMatch(stepperRule, /background:/);
+  assert.match(
+    createStyles,
+    /\.cw-workspace-stepper button\s*\{[\s\S]*?min-width:\s*124px;[\s\S]*?border-radius:\s*10px;[\s\S]*?background:\s*rgba\(237, 237, 241, 0\.78\)/,
+  );
+  assert.match(createStyles, /\.cw-workspace-stepper button\.is-active\s*\{[\s\S]*?background:\s*rgba\(218, 218, 224, 0\.86\);[\s\S]*?box-shadow:\s*none/);
+  assert.match(createStyles, /\.cw-workspace-stepper button > strong\s*\{[\s\S]*?font-size:\s*14px/);
+  assert.doesNotMatch(createSource, /cw-workspace-step-marker/);
+});
+
+test("debug comparison configuration explains duplicate disabled actions", () => {
+  assert.match(
+    createSource,
+    /className=\{`cw-ab-config-done-wrap\$\{disabledReason \? " is-disabled" : ""\}`\}[\s\S]*?className="cw-ab-config-done"[\s\S]*?disabled=\{[\s\S]*?configurationUnavailable[\s\S]*?className="cw-ab-config-done-tip" role="tooltip"/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-ab-config-done:disabled\s*\{[\s\S]*?background:[\s\S]*?color:[\s\S]*?cursor:\s*not-allowed/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-ab-config-done-wrap\.is-disabled:hover \.cw-ab-config-done-tip/,
+  );
+});
+
+test("debug variants configure and deploy their own model, description, and prompt", () => {
+  assert.match(
+    createSource,
+    /interface DebugVariant \{[\s\S]*?modelName: string;[\s\S]*?description: string;[\s\S]*?instruction: string;/,
+  );
+  assert.match(
+    createSource,
+    /<span>描述<\/span>[\s\S]*?value=\{variant\.description\}[\s\S]*?<span>系统提示词<\/span>[\s\S]*?value=\{variant\.instruction\}/,
+  );
+  assert.match(
+    createSource,
+    /const releaseDraft = releaseVariant[\s\S]*?modelName: releaseVariant\.modelName \|\| draft\.modelName,[\s\S]*?description: releaseVariant\.description,[\s\S]*?instruction: releaseVariant\.instruction/,
+  );
+  assert.match(
+    createSource,
+    /const variantDraft: AgentDraft = \{[\s\S]*?description: variant\.description,[\s\S]*?instruction: variant\.instruction/,
+  );
+  assert.match(
+    createSource,
+    /function debugVariantConfigurationKey[\s\S]*?modelName: variant\.modelName\.trim\(\)[\s\S]*?description: variant\.description\.trim\(\)[\s\S]*?instruction: variant\.instruction\.trim\(\)/,
+  );
+});
+
+test("debug comparison highlights the test configuration entry", () => {
+  assert.match(
+    createStyles,
+    /\.cw-ab-config-trigger\s*\{[\s\S]*?background:\s*hsl\(45 92% 90%\);[\s\S]*?color:\s*hsl\(37 70% 30%\)/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-ab-config-trigger:hover:not\(:disabled\)\s*\{[\s\S]*?background:\s*hsl\(44 88% 84%\)/,
+  );
+});
+
+test("debug comparison keeps equal spacing above cards and composer", () => {
+  assert.match(
+    createStyles,
+    /\.cw-ab-stage\s*\{[\s\S]*?padding:\s*8px var\(--cw-workspace-gutter\)/,
+  );
+});
+
+test("agent type is a form section with radio choices", () => {
+  assert.match(createSource, /<Section meta=\{metaOf\("type"\)\}>/);
+  assert.match(createSource, /role="radiogroup" aria-label="Agent 类型"/);
+  assert.match(createSource, /type="radio"[\s\S]*?className="cw-agent-type-radio"/);
+  assert.match(createStyles, /\.cw-agent-type-options\s*\{[\s\S]*?display:\s*grid/);
+  assert.match(createStyles, /\.cw-agent-type-option\.is-on\s*\{/);
+  assert.doesNotMatch(createSource, /cw-typebar|cw-typeradio/);
+});
+
 test("build workspace has a validated primary path into debugging", () => {
   assert.match(
     createSource,
@@ -122,34 +208,72 @@ test("build workspace has a validated primary path into debugging", () => {
   );
   assert.match(
     createSource,
-    /className="cw-build-next"[\s\S]*?onClick=\{openValidation\}[\s\S]*?下一步：开始调试/,
+    /className="cw-build-next studio-update-action"[\s\S]*?onClick=\{openValidation\}[\s\S]*?>开始调试</,
   );
   assert.match(
     createStyles,
-    /\.cw-build-next\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?right:\s*20px;[\s\S]*?bottom:\s*20px;/,
+    /\.cw-build-next\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?left:\s*50%;[\s\S]*?transform:\s*translateX\(-50%\);/,
   );
+  assert.match(
+    createStyles,
+    /\.cw-build-next\.studio-update-action\s*\{[\s\S]*?background:\s*#111;[\s\S]*?color:\s*#fff;/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-build-next\.studio-update-action:not\(:disabled\):hover\s*\{[\s\S]*?background:\s*#29292b;[\s\S]*?box-shadow:\s*0 7px 18px hsl\(0 0% 0% \/ 0\.16\);[\s\S]*?transform:\s*translateX\(-50%\);/,
+  );
+  assert.doesNotMatch(createSource, /下一步：开始调试|<ArrowRight/);
 });
 
-test("debug workspace uses optimization checkboxes and a floating publish action", () => {
+test("debug workspace compares multiple configurations behind one shared input", () => {
   assert.match(createSource, /label: "上下文优化"/);
   assert.match(createSource, /label: "幻觉抑制"/);
+  assert.doesNotMatch(createSource, /className="cw-optimization-panel"/);
   assert.match(
     createSource,
-    /className="cw-optimization-panel" aria-label="进阶选项"[\s\S]*?type="checkbox"/,
+    /function DebugComparisonWorkspace[\s\S]*?aria-label="A\/B 调试工作台"/,
   );
-  assert.match(createSource, /暂未开放，敬请期待/);
-  assert.match(createSource, /type="checkbox"[\s\S]*?disabled/);
-  assert.doesNotMatch(createSource, /当前仅保存前端选择/);
+  assert.match(createSource, /className="cw-ab-add"[\s\S]*?添加对照组/);
+  assert.doesNotMatch(createSource, /快速调试|同一条输入将同时发送到全部对照组/);
+  assert.match(createSource, /className="cw-ab-config-trigger"[\s\S]*?测试配置/);
+  assert.match(createSource, /cw-ab-card-inner\$\{variant\.configOpen \? " is-flipped" : ""\}/);
+  assert.match(createSource, /checked=\{variant\.optimizations\.includes\(item\.id\)\}/);
+  assert.match(createSource, /className="cw-ab-optimizations-disabled"[\s\S]*?<em>待开放<\/em>/);
+  assert.match(createSource, /const startDebugVariant = async \(id: string\)/);
   assert.match(
     createSource,
-    /className="cw-debug-next"[\s\S]*?onClick=\{openPublishPreview\}[\s\S]*?下一步：部署发布/,
+    /const completeDebugVariantConfig = \(id: string\) => \{[\s\S]*?if \(id === "baseline"\)[\s\S]*?void startDebugVariant\(id\);/,
   );
+  assert.match(createSource, /完成并启动/);
+  assert.match(createSource, /targets\.map\(async \(variant\)/);
+  assert.match(createSource, /modelName: variant\.modelName \|\| draft\.modelName/);
+  assert.match(createSource, /variants\.length < 3/);
+  assert.doesNotMatch(createSource, /name="debug-release-variant"|发布候选/);
+  assert.match(
+    createSource,
+    /className="cw-ab-deploy"[\s\S]*?onClick=\{\(\) => onDeployVariant\(variant\.id\)\}[\s\S]*?部署该配置/,
+  );
+  assert.doesNotMatch(createSource, /下一步：部署发布|>部署发布</);
   assert.doesNotMatch(createSource, />验证中心</);
   assert.doesNotMatch(createSource, /className="cw-debug-deploy"/);
+  assert.doesNotMatch(createStyles, /\.cw-debug-next/);
+  assert.match(createStyles, /\.cw-ab-deploy\s*\{[\s\S]*?background:\s*#111;[\s\S]*?color:\s*#fff;/);
+  assert.match(createStyles, /\.cw-ab-card-face\s*\{[\s\S]*?border:\s*1px dashed/);
   assert.match(
     createStyles,
-    /\.cw-debug-next\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?right:\s*20px;[\s\S]*?bottom:\s*24px;/,
+    /\.cw-ab-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/,
   );
+  assert.match(createStyles, /\.cw-ab-card-inner\.is-flipped\s*\{[\s\S]*?rotateY\(180deg\)/);
+  assert.match(createStyles, /\.cw-ab-config\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/);
+  assert.match(
+    createStyles,
+    /\.cw-ab-workspace\s*\{[\s\S]*?display:\s*grid;[\s\S]*?grid-template-rows:\s*minmax\(0, 1fr\) auto;/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-ab-composer\s*\{[\s\S]*?position:\s*relative;[\s\S]*?min-width:\s*0;/,
+  );
+  assert.doesNotMatch(createStyles, /\.cw-ab-head|\.cw-ab-overlay/);
 });
 
 test("narrow workbench stacks sections instead of squeezing the form", () => {
@@ -163,7 +287,7 @@ test("narrow workbench stacks sections instead of squeezing the form", () => {
   );
   assert.match(
     createStyles,
-    /@media \(max-width:\s*700px\)\s*\{[\s\S]*?\.cw-typeradio-item\s*\{[\s\S]*?padding-inline:\s*6px;/,
+    /\.cw-agent-type-options\s*\{[\s\S]*?grid-template-columns:\s*repeat\(auto-fit, minmax\(150px, 1fr\)\)/,
   );
   assert.match(
     createStyles,
@@ -228,44 +352,41 @@ test("MCP tools live under an accessible more-tool-types disclosure", () => {
   );
 });
 
-test("debug panel can collapse without clearing its external run state", () => {
+test("leaving debug confirms and cleans every temporary environment", () => {
   assert.match(
     createSource,
-    /const \[collapsed, setCollapsed\] = useState\(false\)/,
+    /const confirmLeaveDebug = async \(\) => \{/,
   );
-  assert.match(createSource, /aria-label="收起调试栏"/);
-  assert.match(createSource, /aria-label="展开调试栏"/);
   assert.match(
     createSource,
-    /className="cw-debug-expand"[\s\S]*?<DebugConsoleIcon className="cw-i" \/>[\s\S]*?<\/button>/,
-  );
-  assert.doesNotMatch(createSource, /ChevronLeft/);
-  assert.match(
-    createStyles,
-    /\.cw-debug-expand\s*\{[\s\S]*?width:\s*34px;[\s\S]*?height:\s*34px;/,
+    /离开调试页面后，当前环境将被清理。您可以通过重新启动环境进行新的测试。/,
   );
   assert.match(
-    createStyles,
-    /\.cw-debug\s*\{[\s\S]*?transition:[\s\S]*?width 0\.22s[\s\S]*?flex-basis 0\.22s/,
-  );
-  assert.match(createStyles, /@keyframes cw-debug-content-in/);
-  assert.match(
-    createStyles,
-    /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.cw-debug\s*\{\s*transition:\s*none;/,
+    createSource,
+    /await cleanupDebugRuns\(\);/,
   );
   assert.match(
-    createStyles,
-    /\.cw-debug\.is-collapsed\s*\{[\s\S]*?width:\s*48px;/,
+    createSource,
+    /current\.map\(\(variant\) => \(\{[\s\S]*?phase: "idle"/,
   );
+  assert.match(createSource, /if \(!\(await confirmLeaveDebug\(\)\)\) return;/);
 });
 
 test("debug environment uses a dedicated hand-drawn run icon", () => {
   assert.match(createSource, /function DebugRunIcon/);
   assert.match(
     createSource,
-    /<DebugRunIcon className="cw-i cw-debug-run-icon" \/>[\s\S]*?启动调试环境/,
+    /<DebugRunIcon className="cw-i cw-debug-run-icon" \/>[\s\S]*?\{startLabel\}/,
   );
   assert.doesNotMatch(createSource, /<Bug className="cw-i" \/>/);
+  assert.match(
+    createStyles,
+    /\.cw-debug-start\s*\{[\s\S]*?background:\s*#111;[\s\S]*?box-shadow:\s*none;[\s\S]*?color:\s*#fff;/,
+  );
+  assert.match(
+    createStyles,
+    /\.cw-debug-start:hover:not\(:disabled\)\s*\{[\s\S]*?background:\s*#29292b;[\s\S]*?box-shadow:\s*0 7px 18px hsl\(0 0% 0% \/ 0\.16\);\s*\}/,
+  );
 });
 
 test("root Agent exposes a confirmed custom clear action", () => {
@@ -401,15 +522,15 @@ test("remote Agent configures only the AgentKit center", () => {
   assert.match(createSource, /远程智能体只能作为子步骤使用/);
   assert.match(
     createSource,
-    /className="cw-typeradio-disabled-hint"[\s\S]*?role="tooltip"/,
+    /className="cw-agent-type-disabled-hint"[\s\S]*?role="tooltip"/,
   );
   assert.match(
     createStyles,
-    /\.cw-typeradio-item\.is-disabled:hover \.cw-typeradio-disabled-hint/,
+    /\.cw-agent-type-option\.is-disabled:hover \.cw-agent-type-disabled-hint/,
   );
   assert.match(
     createStyles,
-    /\.cw-typeradio-disabled-hint\s*\{[\s\S]*?top:\s*calc\(100% \+ 17px\)/,
+    /\.cw-agent-type-disabled-hint\s*\{[\s\S]*?top:\s*calc\(100% \+ 17px\)/,
   );
   assert.match(createSource, /\{!a2a && \(\s*<>[\s\S]*?Agent 名称/);
   assert.match(

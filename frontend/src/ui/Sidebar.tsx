@@ -1,6 +1,5 @@
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import {
-  ChevronRight,
   Info,
   LogOut,
   MoreHorizontal,
@@ -20,12 +19,9 @@ import type {
 import { sessionTitle } from "../blocks";
 import { displayName, profilePictureUrl } from "../adk/identity";
 import { SearchButton } from "./Search";
-import { AgentSelector, type SelectedRuntime } from "./AgentSelector";
-import { AgentIdentityIcon } from "./AgentIdentityIcon";
 import volcengineLogo from "../assets/volcengine.svg";
 
 const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
-const MAIN_PANEL_TOP_PX = 54;
 
 /** A minimal Agent face that stays friendly and legible at sidebar-icon size. */
 function ManageAgentsIcon() {
@@ -57,14 +53,6 @@ export interface SidebarProps {
   access: StudioAccess;
   /** Session ids that are currently streaming a reply (shows a live dot). */
   streamingSids?: Set<string>;
-  /** Agent picker: source, local app list, current selection + label. */
-  agentsSource?: "local" | "cloud";
-  localApps?: string[];
-  currentAgentId?: string;
-  currentAgentLabel?: string;
-  /** The connected runtime (drives the picker's detail panel). */
-  currentRuntime?: SelectedRuntime;
-  onSelectAgent?: (id: string) => void;
   onNewChat: () => void;
   onSearch: () => void;
   onQuickCreate: () => void;
@@ -277,12 +265,6 @@ export function Sidebar({
   features,
   access,
   streamingSids,
-  agentsSource = "local",
-  localApps = [],
-  currentAgentId = "",
-  currentAgentLabel = "",
-  currentRuntime,
-  onSelectAgent,
   onNewChat,
   onSearch,
   onQuickCreate,
@@ -302,7 +284,6 @@ export function Sidebar({
   // Per-module feature gates; a missing flag defaults to shown.
   const show = (k: keyof NonNullable<typeof features>) => features?.[k] !== false;
   const [menuFor, setMenuFor] = useState<string | null>(null);
-  const [selectorOpen, setSelectorOpen] = useState(false);
   const autoCollapsedRef = useRef(
     typeof window !== "undefined" &&
       window.matchMedia(SIDEBAR_AUTO_COLLAPSE_QUERY).matches,
@@ -314,7 +295,6 @@ export function Sidebar({
   const toggleCollapsed = () => {
     autoCollapsedRef.current = false;
     setCollapsed((value) => !value);
-    setSelectorOpen(false);
     setMenuFor(null);
   };
   useEffect(() => {
@@ -370,35 +350,6 @@ export function Sidebar({
             )}
           </button>
         </div>
-        {onSelectAgent && (
-          <button
-            className={`agent-row ${agentsSource === "cloud" && !currentAgentId ? "agent-row--empty" : ""} ${currentRuntime ? "agent-row--connected" : ""}`}
-            onClick={() => setSelectorOpen((open) => !open)}
-            aria-label={currentAgentLabel || "选择 Agent"}
-            title="切换 Agent"
-          >
-            <AgentIdentityIcon className="icon agent-row-lead" />
-            <span className="agent-row-name">
-              {currentAgentLabel || "选择 Agent"}
-            </span>
-            <ChevronRight
-              className={`icon agent-row-chev ${selectorOpen ? "open" : ""}`}
-            />
-          </button>
-        )}
-        {onSelectAgent && (
-          <AgentSelector
-            open={selectorOpen}
-            onClose={() => setSelectorOpen(false)}
-            anchorTop={MAIN_PANEL_TOP_PX}
-            agentsSource={agentsSource}
-            localApps={localApps}
-            currentId={currentAgentId}
-            currentRuntime={currentRuntime}
-            runtimeScope={access.capabilities.runtimeScope}
-            onSelect={onSelectAgent}
-          />
-        )}
         {show("newChat") && (
           <button
             className="new-chat new-chat--conversation"

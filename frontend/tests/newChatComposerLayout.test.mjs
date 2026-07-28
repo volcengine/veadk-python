@@ -84,8 +84,8 @@ test("places the mode selector beside add while keeping Agent selection availabl
     /\.new-chat-mode__builtin-icon\s*\{[\s\S]*?width:\s*24px;[\s\S]*?object-fit:\s*contain;/,
   );
   assert.match(agentSelectorSource, /variant\?: "drawer" \| "navbar"/);
-  assert.match(sidebarSource, /<AgentSelector[\s\S]*?anchorTop=\{MAIN_PANEL_TOP_PX\}/);
-  assert.match(sidebarSource, /className=\{`agent-row/);
+  assert.doesNotMatch(sidebarSource, /<AgentSelector/);
+  assert.doesNotMatch(sidebarSource, /className=\{`agent-row/);
   assert.match(stylesSource, /\.welcome\s*\{[\s\S]*?gap:\s*40px;/);
   assert.match(
     stylesSource,

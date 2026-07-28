@@ -10,7 +10,6 @@ import {
 } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
-  ArrowRight,
   ArrowUp,
   Bot,
   Boxes,
@@ -148,7 +147,7 @@ interface StepMeta {
 const STEPS: StepMeta[] = [
   {
     id: "type",
-    label: "类型",
+    label: "Agent 类型",
     hint: "选择 Agent 类型",
     icon: Shapes,
     required: true,
@@ -186,35 +185,6 @@ function ClearAgentIcon({ className }: { className?: string }) {
       <path d="m12.7 10.3 4 4" />
       <path d="M6.3 19h12.4" />
       <path d="m5.5 8.2.5-1.4 1.4-.5L6 5.8l-.5-1.4L5 5.8l-1.4.5 1.4.5.5 1.4Z" />
-    </svg>
-  );
-}
-
-/** Custom debug-console mark: a compact runtime panel with a live trace. */
-function DebugConsoleIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.65"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="3.25" y="4.25" width="17.5" height="15.5" rx="2.75" />
-      <path d="M3.75 8.75h16.5" />
-      <circle cx="6.35" cy="6.5" r="0.72" fill="currentColor" stroke="none" />
-      <circle
-        cx="8.85"
-        cy="6.5"
-        r="0.72"
-        fill="currentColor"
-        stroke="none"
-        opacity="0.45"
-      />
-      <path d="M6 14h2.2l1.35-2.8 2.1 5.5 1.7-3.1H18" />
     </svg>
   );
 }
@@ -277,7 +247,6 @@ function A2aRefreshIcon({ className }: { className?: string }) {
   );
 }
 
-const AGENT_TYPE_GAP_PX = 4;
 const AGENT_TYPE_BAR_LABELS: Record<
   NonNullable<AgentDraft["agentType"]>,
   string
@@ -1706,8 +1675,7 @@ export function TreeNode({
   );
 }
 
-type DebugPhase =
-  "idle" | "building" | "starting" | "ready" | "sending" | "error";
+type DebugPhase = "idle" | "starting" | "ready" | "sending" | "error";
 
 type WorkspaceMode = "build" | "validate" | "publish";
 interface DebugMessage {
@@ -1715,6 +1683,20 @@ interface DebugMessage {
   content: string;
   blocks?: Block[];
   error?: string;
+}
+
+interface DebugVariant {
+  id: string;
+  name: string;
+  modelName: string;
+  description: string;
+  instruction: string;
+  optimizations: string[];
+  configOpen: boolean;
+  phase: DebugPhase;
+  runtimeSnapshot: string;
+  messages: DebugMessage[];
+  error: string | null;
 }
 
 function codegenDraft(draft: AgentDraft): AgentDraft {
@@ -1757,167 +1739,386 @@ function debugSnapshotKey(draft: AgentDraft): string {
   return JSON.stringify(debugRuntimeDraft(draft));
 }
 
-function DebugPanel({
-  standalone = false,
+function debugVariantSnapshot(
+  draftSnapshot: string,
+  variant: Pick<
+    DebugVariant,
+    "modelName" | "description" | "instruction" | "optimizations"
+  >,
+): string {
+  return JSON.stringify({
+    draftSnapshot,
+    modelName: variant.modelName,
+    description: variant.description,
+    instruction: variant.instruction,
+    optimizations: variant.optimizations,
+  });
+}
+
+function debugVariantConfigurationKey(
+  variant: Pick<
+    DebugVariant,
+    "modelName" | "description" | "instruction" | "optimizations"
+  >,
+): string {
+  return JSON.stringify({
+    modelName: variant.modelName.trim(),
+    description: variant.description.trim(),
+    instruction: variant.instruction.trim(),
+    optimizations: variant.optimizations,
+  });
+}
+
+function DebugComparisonWorkspace({
   enabled,
   disabledReason,
-  phase,
-  stale,
-  run,
-  projectName,
-  logs,
-  messages,
+  variants,
+  draftSnapshot,
   input,
-  error,
   onInput,
   onSend,
-  onRestart,
-  onIgnoreChanges,
+  onStartVariant,
+  onDeployVariant,
+  onAddVariant,
+  onRemoveVariant,
+  onToggleConfig,
+  onCompleteConfig,
+  onConfigChange,
 }: {
-  standalone?: boolean;
   enabled: boolean;
   disabledReason: string;
-  phase: DebugPhase;
-  stale: boolean;
-  run: GeneratedAgentTestRun | null;
-  projectName: string;
-  logs: string[];
-  messages: DebugMessage[];
+  variants: DebugVariant[];
+  draftSnapshot: string;
   input: string;
-  error: string | null;
   onInput: (v: string) => void;
   onSend: () => void;
-  onRestart: () => void;
-  onIgnoreChanges: () => void;
+  onStartVariant: (id: string) => void;
+  onDeployVariant: (id: string) => void;
+  onAddVariant: () => void;
+  onRemoveVariant: (id: string) => void;
+  onToggleConfig: (id: string) => void;
+  onCompleteConfig: (id: string) => void;
+  onConfigChange: (
+    id: string,
+    field: "modelName" | "description" | "instruction",
+    value: string,
+  ) => void;
 }) {
-  const [collapsed, setCollapsed] = useState(false);
-  const ready = phase === "ready" || phase === "sending";
-  const busy =
-    phase === "building" || phase === "starting" || phase === "sending";
-  const showInitialOverlay = enabled && !run && phase === "idle";
-  const showProgressOverlay =
-    enabled && (phase === "building" || phase === "starting");
-  const showStaleOverlay = Boolean(run && stale && !showProgressOverlay);
-
-  if (collapsed && !standalone) {
+  const runningVariants = variants.filter((variant) => {
+    if (variant.phase !== "ready") return false;
     return (
-      <aside className="cw-debug is-collapsed" aria-label="调试窗口（已收起）">
-        <button
-          type="button"
-          className="cw-debug-expand"
-          onClick={() => setCollapsed(false)}
-          aria-label="展开调试栏"
-          title="展开调试栏"
-        >
-          <DebugConsoleIcon className="cw-i" />
-        </button>
-      </aside>
+      variant.runtimeSnapshot === debugVariantSnapshot(draftSnapshot, variant)
     );
-  }
+  });
+  const sending = variants.some((variant) => variant.phase === "sending");
+  const canSend = runningVariants.length > 0 && !sending;
 
   return (
-    <aside
-      className={`cw-debug${standalone ? " is-standalone" : ""}`}
-      aria-label="调试窗口"
-    >
-      <div className="cw-debug-head">
-        <div className="cw-debug-title">
-          {!standalone && (
-            <button
-              type="button"
-              className="cw-debug-collapse"
-              onClick={() => setCollapsed(true)}
-              aria-label="收起调试栏"
-              title="收起调试栏"
-            >
-              <ChevronRight className="cw-i cw-i-sm" />
-            </button>
-          )}
-          <span>{standalone ? "快速调试" : "调试"}</span>
-        </div>
-      </div>
-
-      {!run && phase === "idle" && !enabled && (
-        <div className="cw-debug-sub">
-          <span>{disabledReason}</span>
-        </div>
-      )}
-
-      <div className="cw-debug-stage">
-        <div className="cw-debug-body">
+    <section className="cw-ab-workspace" aria-label="A/B 调试工作台">
+      <div className="cw-ab-stage">
         {!enabled ? (
-            <div className="cw-debug-empty">{disabledReason}</div>
-        ) : phase === "error" ? (
-          <div className="cw-debug-error">
-            <DeploymentErrorMessage
-              message={error || "调试失败"}
-              className="cw-debug-error-detail"
-              onRetry={async () => {
-                await onRestart();
-              }}
-            />
-            {logs.length > 0 && (
-              <div className="cw-debug-progress">
-                {logs.map((line, i) => (
-                  <div key={`${line}-${i}`} className="cw-debug-logline">
-                    <span>{line}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <div className="cw-debug-empty">{disabledReason}</div>
         ) : (
-          <div className="cw-debug-chat">
-            {messages.length === 0 ? (
-              <div className="cw-debug-chat-empty">
-                输入消息开始验证当前 Agent。
-              </div>
-            ) : (
-              messages.map((msg, i) => (
-                <div
-                  key={i}
-                  className={`cw-debug-msg cw-debug-msg-${msg.role}`}
+          <div className="cw-ab-grid">
+            {variants.map((variant, variantIndex) => {
+              const modelName = variant.modelName.trim();
+              const description = variant.description.trim();
+              const instruction = variant.instruction.trim();
+              const configurationKey = debugVariantConfigurationKey(variant);
+              const duplicateConfiguration = Boolean(
+                modelName && description && instruction &&
+                  variants.findIndex(
+                    (item) =>
+                      debugVariantConfigurationKey(item) === configurationKey,
+                  ) !== variantIndex,
+              );
+              const configurationUnavailable =
+                !modelName || !description || !instruction || duplicateConfiguration;
+              const stale = Boolean(
+                variant.runtimeSnapshot &&
+                  variant.runtimeSnapshot !==
+                    debugVariantSnapshot(draftSnapshot, variant),
+              );
+              const starting = variant.phase === "starting";
+              const ready = variant.phase === "ready" && !stale;
+              const busy = starting || variant.phase === "sending";
+              const startDisabled =
+                busy || variant.configOpen || configurationUnavailable;
+              const disabledReason = !modelName
+                ? "请先选择模型"
+                : !description
+                  ? "请填写描述"
+                  : !instruction
+                    ? "请填写系统提示词"
+                    : duplicateConfiguration
+                      ? "该配置与已有测试组相同"
+                      : "";
+              const startLabel = starting
+                ? "正在启动"
+                : stale
+                  ? "应用配置并重启"
+                  : ready
+                    ? "重新启动环境"
+                    : variant.phase === "error"
+                      ? "重新启动环境"
+                      : "启动环境";
+              return (
+                <article
+                  key={variant.id}
+                  className="cw-ab-card"
                 >
-                  <div className="cw-debug-role">
-                    {msg.role === "user" ? "你" : projectName || "Agent"}
+                  <div
+                    className={`cw-ab-card-inner${variant.configOpen ? " is-flipped" : ""}`}
+                  >
+                    <section
+                      className="cw-ab-card-face cw-ab-card-front"
+                      aria-hidden={variant.configOpen}
+                    >
+                      <header className="cw-ab-card-head">
+                        <div className="cw-ab-card-title">
+                          <strong>{variant.name}</strong>
+                          <span>{variant.modelName || "默认模型"}</span>
+                        </div>
+                        <div className="cw-ab-card-actions">
+                          <button
+                            type="button"
+                            className="cw-ab-config-trigger"
+                            disabled={variant.configOpen || busy}
+                            onClick={() => onToggleConfig(variant.id)}
+                          >
+                            测试配置
+                          </button>
+                          {variant.id !== "baseline" && (
+                            <button
+                              type="button"
+                              className="cw-ab-remove"
+                              aria-label={`删除${variant.name}`}
+                              disabled={variant.configOpen || busy}
+                              onClick={() => onRemoveVariant(variant.id)}
+                            >
+                              <Trash2 className="cw-i" />
+                            </button>
+                          )}
+                        </div>
+                      </header>
+
+                      <div className="cw-ab-conversation">
+                        {variant.error ? (
+                          <DeploymentErrorMessage
+                            message={variant.error}
+                            className="cw-debug-error-detail"
+                            onRetry={async () => {
+                              await onStartVariant(variant.id);
+                            }}
+                          />
+                        ) : starting ? (
+                          <div className="cw-ab-empty cw-ab-starting">
+                            <Loader2 className="cw-i cw-spin" />
+                            <span>正在创建独立测试环境</span>
+                          </div>
+                        ) : stale ? (
+                          <div className="cw-ab-empty cw-ab-launch">
+                            <span>配置已变更，请重新启动此环境</span>
+                            <button
+                              type="button"
+                              className="cw-ab-start"
+                              disabled={startDisabled}
+                              onClick={() => onStartVariant(variant.id)}
+                            >
+                              <RefreshCw className="cw-i" />
+                              {startLabel}
+                            </button>
+                          </div>
+                        ) : variant.messages.length === 0 ? (
+                          <div className="cw-ab-empty cw-ab-launch">
+                            <button
+                              type="button"
+                              className="cw-ab-start"
+                              disabled={startDisabled}
+                              title={disabledReason || undefined}
+                              onClick={() => onStartVariant(variant.id)}
+                            >
+                              {ready ? (
+                                <RefreshCw className="cw-i" />
+                              ) : (
+                                <DebugRunIcon className="cw-i cw-debug-run-icon" />
+                              )}
+                              {startLabel}
+                            </button>
+                            {disabledReason ? (
+                              <span className="cw-ab-launch-hint">
+                                {disabledReason}
+                              </span>
+                            ) : ready ? (
+                              <span className="cw-ab-launch-hint">等待测试输入</span>
+                            ) : null}
+                          </div>
+                        ) : (
+                          variant.messages.map((message, index) => (
+                            <div
+                              key={index}
+                              className={`cw-debug-msg cw-debug-msg-${message.role}`}
+                            >
+                              <div className="cw-debug-content">
+                                {message.role === "user" ? (
+                                  message.content
+                                ) : message.error ? (
+                                  <DeploymentErrorMessage
+                                    message={message.error}
+                                    className="cw-debug-msg-error"
+                                  />
+                                ) : message.blocks && message.blocks.length > 0 ? (
+                                  <Blocks blocks={message.blocks} onAction={() => {}} />
+                                ) : message.content ? (
+                                  message.content
+                                ) : index === variant.messages.length - 1 &&
+                                  variant.phase === "sending" ? (
+                                  <ThinkingPlaceholder />
+                                ) : null}
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+
+                      <footer className="cw-ab-deploy-footer">
+                        <button
+                          type="button"
+                          className="cw-ab-deploy"
+                          disabled={busy || !modelName}
+                          onClick={() => onDeployVariant(variant.id)}
+                        >
+                          部署该配置
+                        </button>
+                      </footer>
+
+                    </section>
+
+                    <section
+                      className="cw-ab-card-face cw-ab-card-back"
+                      aria-hidden={!variant.configOpen}
+                    >
+                      <header className="cw-ab-config-head">
+                        <div>
+                          <strong>测试配置</strong>
+                          <span>{variant.name}</span>
+                        </div>
+                        <span
+                          className={`cw-ab-config-done-wrap${disabledReason ? " is-disabled" : ""}`}
+                          tabIndex={disabledReason ? 0 : undefined}
+                        >
+                          <button
+                            type="button"
+                            className="cw-ab-config-done"
+                            disabled={
+                              !variant.configOpen || configurationUnavailable
+                            }
+                            onClick={() => onCompleteConfig(variant.id)}
+                          >
+                            {variant.id === "baseline" ? "完成配置" : "完成并启动"}
+                          </button>
+                          {disabledReason && (
+                            <span className="cw-ab-config-done-tip" role="tooltip">
+                              {disabledReason}
+                            </span>
+                          )}
+                        </span>
+                      </header>
+                      <div className="cw-ab-config">
+                        <label>
+                          <span>模型</span>
+                          <input
+                            value={variant.modelName}
+                            placeholder="使用 Agent 当前模型"
+                            disabled={!variant.configOpen}
+                            onChange={(event) =>
+                              onConfigChange(
+                                variant.id,
+                                "modelName",
+                                event.target.value,
+                              )
+                            }
+                          />
+                        </label>
+                        <label>
+                          <span>描述</span>
+                          <textarea
+                            rows={2}
+                            value={variant.description}
+                            disabled={!variant.configOpen}
+                            onChange={(event) =>
+                              onConfigChange(
+                                variant.id,
+                                "description",
+                                event.target.value,
+                              )
+                            }
+                          />
+                        </label>
+                        <label>
+                          <span>系统提示词</span>
+                          <textarea
+                            rows={5}
+                            value={variant.instruction}
+                            disabled={!variant.configOpen}
+                            onChange={(event) =>
+                              onConfigChange(
+                                variant.id,
+                                "instruction",
+                                event.target.value,
+                              )
+                            }
+                          />
+                        </label>
+                        <fieldset className="cw-ab-optimizations-disabled">
+                          <legend>
+                            <span>优化选项</span>
+                            <em>待开放</em>
+                          </legend>
+                          <div className="cw-ab-optimization-list">
+                            {DEBUG_OPTIMIZATIONS.map((item) => (
+                              <label key={item.id}>
+                                <input
+                                  type="checkbox"
+                                  checked={variant.optimizations.includes(item.id)}
+                                  disabled
+                                />
+                                <span>{item.label}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </fieldset>
+                        <p>设置完成后返回正面，再启动当前测试环境。</p>
+                      </div>
+                    </section>
                   </div>
-                  <div className="cw-debug-content">
-                    {msg.role === "user" ? (
-                      msg.content
-                    ) : msg.error ? (
-                      <DeploymentErrorMessage
-                        message={msg.error}
-                        className="cw-debug-msg-error"
-                      />
-                    ) : msg.blocks && msg.blocks.length > 0 ? (
-                      <Blocks blocks={msg.blocks} onAction={() => {}} />
-                    ) : msg.content ? (
-                      msg.content
-                    ) : i === messages.length - 1 && phase === "sending" ? (
-                      <ThinkingPlaceholder />
-                    ) : null}
-                  </div>
-                </div>
-              ))
+                </article>
+              );
+            })}
+
+            {variants.length < 3 && (
+              <button type="button" className="cw-ab-add" onClick={onAddVariant}>
+                <Plus className="cw-i" />
+                <strong>添加对照组</strong>
+                <span>最多同时创建 3 个测试组</span>
+              </button>
             )}
           </div>
         )}
       </div>
 
-      <div className="cw-debug-composer">
+      <div className="cw-ab-composer">
         <div className="cw-debug-composerbox">
           <textarea
             className="cw-debug-input"
             rows={1}
             value={input}
             placeholder={
-              stale
-                ? "更新 Agent 后可继续调试"
-                : ready
-                  ? "输入测试消息..."
-                  : "调试环境启动后可输入"
+              canSend
+                ? "输入测试消息，将发送到所有已启动测试组..."
+                : "请先启动至少一个测试组"
             }
-            disabled={!ready || busy || stale}
+            disabled={!canSend}
             onChange={(e) => onInput(e.target.value)}
             onKeyDown={(e) => {
               if (isImeCompositionEvent(e.nativeEvent)) return;
@@ -1931,10 +2132,10 @@ function DebugPanel({
             type="button"
             className="cw-debug-send"
             title="发送"
-            disabled={!ready || busy || stale || !input.trim()}
+            disabled={!canSend || !input.trim()}
             onClick={onSend}
           >
-            {phase === "sending" ? (
+            {sending ? (
               <Loader2 className="cw-i cw-spin" />
             ) : (
               <ArrowUp className="cw-i" />
@@ -1942,75 +2143,7 @@ function DebugPanel({
           </button>
         </div>
       </div>
-
-        {(showInitialOverlay || showProgressOverlay || showStaleOverlay) && (
-          <div className="cw-debug-overlay" role="status" aria-live="polite">
-            <div className="cw-debug-overlay-content">
-              <strong className="cw-debug-overlay-title">
-                {showProgressOverlay
-                  ? "正在初始化调试环境"
-                  : showStaleOverlay
-                    ? "Agent 配置已变更"
-                    : "启动调试环境"}
-              </strong>
-              {showProgressOverlay ? (
-                <div className="cw-debug-overlay-progress">
-                  {logs.map((line, i) => (
-                    <div key={`${line}-${i}`} className="cw-debug-logline">
-                      {i === logs.length - 1 ? (
-                        <Loader2 className="cw-i cw-spin" />
-                      ) : (
-                        <Check className="cw-i" />
-                      )}
-                      <span>{line}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : showStaleOverlay ? (
-                <>
-                  <span className="cw-debug-overlay-copy">
-                    当前对话仍在使用上一次配置。更新后，新配置才会生效。
-                  </span>
-                <div className="cw-debug-overlay-actions">
-                  <button
-                    type="button"
-                    className="cw-debug-ignore"
-                    disabled={busy}
-                    onClick={onIgnoreChanges}
-                  >
-                    忽略
-                  </button>
-                  <button
-                    type="button"
-                    className="cw-debug-start"
-                    disabled={busy}
-                    onClick={onRestart}
-                  >
-                    <RefreshCw className="cw-i" />
-                    更新 Agent
-                  </button>
-                </div>
-                </>
-              ) : (
-                <>
-                  <span className="cw-debug-overlay-copy">
-                    启动后会生成代码并创建临时运行环境。
-                  </span>
-                  <button
-                    type="button"
-                    className="cw-debug-start"
-                    onClick={onRestart}
-                  >
-                    <DebugRunIcon className="cw-i cw-debug-run-icon" />
-                    启动调试环境
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-    </aside>
+    </section>
   );
 }
 
@@ -2079,15 +2212,6 @@ function WorkspaceHeader({
               disabled={pending}
               onClick={() => onChange(item.id)}
             >
-              <span className="cw-workspace-step-marker" aria-hidden>
-                {pending ? (
-                  <Loader2 className="cw-i cw-spin" />
-                ) : complete ? (
-                  <Check className="cw-i" />
-                ) : (
-                  index + 1
-                )}
-              </span>
               <strong>{item.label}</strong>
             </button>
           );
@@ -2180,17 +2304,28 @@ export function CustomCreate({
   const debugDisabledReason =
     features?.generatedAgentTestRunDisabledReason ||
     "当前后端暂不支持生成 Agent 调试运行。";
-  const [debugPhase, setDebugPhase] = useState<DebugPhase>("idle");
-  const [debugRun, setDebugRun] = useState<GeneratedAgentTestRun | null>(null);
-  const debugRunRef = useRef<GeneratedAgentTestRun | null>(null);
-  const [debugSessionId, setDebugSessionId] = useState<string | null>(null);
-  const [debugProjectName, setDebugProjectName] = useState("");
-  const [debugLogs, setDebugLogs] = useState<string[]>([]);
-  const [debugMessages, setDebugMessages] = useState<DebugMessage[]>([]);
+  const [debugVariants, setDebugVariants] = useState<DebugVariant[]>(() => [
+    {
+      id: "baseline",
+      name: "基准组",
+      modelName: (initialDraft ?? emptyDraft()).modelName ?? "",
+      description: (initialDraft ?? emptyDraft()).description,
+      instruction: (initialDraft ?? emptyDraft()).instruction,
+      optimizations: [],
+      configOpen: false,
+      phase: "idle",
+      runtimeSnapshot: "",
+      messages: [],
+      error: null,
+    },
+  ]);
+  const [selectedVariantId, setSelectedVariantId] = useState("baseline");
+  const debugVariantSequenceRef = useRef(1);
+  const debugRunsRef = useRef(
+    new Map<string, { run: GeneratedAgentTestRun; sessionId: string }>(),
+  );
+  const [activeDebugRunCount, setActiveDebugRunCount] = useState(0);
   const [debugInput, setDebugInput] = useState("");
-  const [debugError, setDebugError] = useState<string | null>(null);
-  const [debugSnapshot, setDebugSnapshot] = useState("");
-  const [ignoredDebugSnapshot, setIgnoredDebugSnapshot] = useState("");
   // The section nearest the top of the scroll container (scroll-spy) — drives
   // the right-hand step nav highlight.
   const [activeId, setActiveId] = useState<StepId>("basic");
@@ -2209,12 +2344,12 @@ export function CustomCreate({
 
   useEffect(() => {
     return () => {
-      const run = debugRunRef.current;
-      if (run) {
+      for (const { run } of debugRunsRef.current.values()) {
         deleteGeneratedAgentTestRun(run.runId).catch((err) =>
           console.warn("清理调试运行失败", err),
         );
       }
+      debugRunsRef.current.clear();
     };
   }, []);
 
@@ -2260,11 +2395,6 @@ export function CustomCreate({
   }`;
   const moreToolTypesId = `cw-more-tool-types-${safePath.join("-") || "root"}`;
   const advancedConfigId = `cw-advanced-config-${safePath.join("-") || "root"}`;
-  const activeTypeIndex = Math.max(
-    0,
-    AGENT_TYPES.findIndex((type) => type.id === (node.agentType ?? "llm")),
-  );
-
   const patch = (p: Partial<AgentDraft>) =>
     setDraft((d) => updateNode(d, safePath, (n) => ({ ...n, ...p })));
 
@@ -2432,20 +2562,14 @@ export function CustomCreate({
     [draft, duplicateNames],
   );
   const canFinish = problems.length === 0;
-  const currentDebugSnapshot = useMemo(() => debugSnapshotKey(draft), [draft]);
-  const deploymentEnv = useMemo(() => collectDeploymentEnv(draft), [draft]);
-  const debugStale = Boolean(
-    debugRun &&
-      debugSnapshot &&
-      debugSnapshot !== currentDebugSnapshot &&
-      ignoredDebugSnapshot !== currentDebugSnapshot,
+  const currentDebugSnapshot = useMemo(
+    () => debugSnapshotKey(draft),
+    [draft],
   );
-
-  useEffect(() => {
-    if (ignoredDebugSnapshot && ignoredDebugSnapshot !== currentDebugSnapshot) {
-      setIgnoredDebugSnapshot("");
-    }
-  }, [currentDebugSnapshot, ignoredDebugSnapshot]);
+  const selectedDebugVariant =
+    debugVariants.find((variant) => variant.id === selectedVariantId) ??
+    debugVariants[0];
+  const deploymentEnv = useMemo(() => collectDeploymentEnv(draft), [draft]);
 
   // Per-step completion, for the nav's done-checkmarks + progress fill.
   const completion = useMemo<Record<StepId, boolean>>(
@@ -2481,12 +2605,12 @@ export function CustomCreate({
 
   // The nav only lists the sections actually rendered for THIS node's type —
   // orchestrators / A2A leaves have far fewer than an LLM (type lives in the
-  // top bar; sub-agents live in the left tree; both are excluded here).
+  // form; sub-agents live in the left tree and are excluded here).
   const rootOnlyStepIds: StepId[] = isRootAgent ? ["advanced"] : [];
   const navStepIds: StepId[] =
     orchestrator || a2a
-      ? ["basic"]
-      : ["basic", "model", "tools", "skills", "knowledge", ...rootOnlyStepIds];
+      ? ["type", "basic"]
+      : ["type", "basic", "model", "tools", "skills", "knowledge", ...rootOnlyStepIds];
   const navSteps = STEPS.filter((s) => navStepIds.includes(s.id));
   const navStepKey = navStepIds.join("|");
   const selectedNodeKey = safePath.join(".");
@@ -2556,23 +2680,54 @@ export function CustomCreate({
     return false;
   };
 
-  const cleanupDebugRun = async () => {
-    const run = debugRunRef.current;
-    debugRunRef.current = null;
-    setDebugRun(null);
-    setDebugSessionId(null);
-    setDebugSnapshot("");
-    setIgnoredDebugSnapshot("");
-    if (run) {
-      try {
-        await deleteGeneratedAgentTestRun(run.runId);
-      } catch (err) {
-        console.warn("清理调试运行失败", err);
-      }
+  const cleanupDebugRuns = async () => {
+    const runs = [...debugRunsRef.current.values()];
+    debugRunsRef.current.clear();
+    setActiveDebugRunCount(0);
+    setDebugVariants((current) =>
+      current.map((variant) => ({
+        ...variant,
+        phase: "idle",
+        runtimeSnapshot: "",
+        messages: [],
+        error: null,
+      })),
+    );
+    await Promise.all(
+      runs.map(async ({ run }) => {
+        try {
+          await deleteGeneratedAgentTestRun(run.runId);
+        } catch (err) {
+          console.warn("清理调试运行失败", err);
+        }
+      }),
+    );
+  };
+
+  const cleanupDebugVariantRun = async (id: string) => {
+    const runtime = debugRunsRef.current.get(id);
+    if (!runtime) return;
+    debugRunsRef.current.delete(id);
+    setActiveDebugRunCount(debugRunsRef.current.size);
+    try {
+      await deleteGeneratedAgentTestRun(runtime.run.runId);
+    } catch (err) {
+      console.warn("清理调试运行失败", err);
     }
   };
 
-  const openPublishPreview = async () => {
+  const confirmLeaveDebug = async () => {
+    if (workspaceMode !== "validate" || activeDebugRunCount === 0) return true;
+    const confirmed = window.confirm(
+      "离开调试页面后，当前环境将被清理。您可以通过重新启动环境进行新的测试。",
+    );
+    if (!confirmed) return false;
+    await cleanupDebugRuns();
+    return true;
+  };
+
+  const openPublishPreview = async (variantId?: string) => {
+    if (!(await confirmLeaveDebug())) return;
     setBuildErr("");
     if (!requireCompleteDraft()) {
       setWorkspaceMode("build");
@@ -2580,7 +2735,20 @@ export function CustomCreate({
     }
     setBuilding(true);
     try {
-      const generated = await generateAgentProject(codegenDraft(draft));
+      const releaseVariant = variantId
+        ? debugVariants.find((variant) => variant.id === variantId)
+        : selectedDebugVariant;
+      if (releaseVariant) setSelectedVariantId(releaseVariant.id);
+      const releaseDraft = releaseVariant
+        ? {
+            ...draft,
+            modelName: releaseVariant.modelName || draft.modelName,
+            description: releaseVariant.description,
+            instruction: releaseVariant.instruction,
+          }
+        : draft;
+      const generated = await generateAgentProject(codegenDraft(releaseDraft));
+      if (releaseDraft !== draft) setDraft(releaseDraft);
       setProject(generated);
       setWorkspaceMode("publish");
     } catch (error) {
@@ -2590,104 +2758,247 @@ export function CustomCreate({
     }
   };
 
-  const startDebug = async () => {
+  const startDebugVariant = async (id: string) => {
     if (!debugEnabled || building) return;
     if (!requireCompleteDraft()) return;
+    const variant = debugVariants.find((item) => item.id === id);
+    if (!variant || variant.phase === "starting" || variant.phase === "sending") {
+      return;
+    }
+    const modelName = variant.modelName.trim();
+    const description = variant.description.trim();
+    const instruction = variant.instruction.trim();
+    const configurationKey = debugVariantConfigurationKey(variant);
+    const variantIndex = debugVariants.findIndex((item) => item.id === id);
+    const firstMatchingIndex = debugVariants.findIndex(
+      (item) => debugVariantConfigurationKey(item) === configurationKey,
+    );
+    if (
+      !modelName ||
+      !description ||
+      !instruction ||
+      firstMatchingIndex !== variantIndex
+    ) return;
 
-    const snapshot = debugSnapshotKey(draft);
-    setIgnoredDebugSnapshot("");
-    setDebugError(null);
-    setDebugMessages([]);
+    const snapshot = debugVariantSnapshot(currentDebugSnapshot, variant);
+    setDebugVariants((current) =>
+      current.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              configOpen: false,
+              phase: "starting",
+              messages: [],
+              error: null,
+            }
+          : item,
+      ),
+    );
     setDebugInput("");
-    setDebugLogs([]);
-    setDebugPhase("building");
 
+    let createdRun: GeneratedAgentTestRun | null = null;
     try {
-      await cleanupDebugRun();
-      const logs: string[] = [];
-      const pushLog = (line: string) => {
-        logs.push(line);
-        setDebugLogs([...logs]);
+      await cleanupDebugVariantRun(id);
+      const variantDraft: AgentDraft = {
+        ...draft,
+        modelName: variant.modelName || draft.modelName,
+        description: variant.description,
+        instruction: variant.instruction,
       };
-      pushLog("提交 Agent 配置");
-      setDebugPhase("starting");
-      pushLog("初始化调试环境");
-      const run = await createGeneratedAgentTestRun(debugRuntimeDraft(draft));
-      debugRunRef.current = run;
-      setDebugRun(run);
-      setDebugProjectName(run.appName);
-      pushLog("创建调试会话");
-      const sid = await createGeneratedAgentTestSession(run.runId, "test_user");
-      setDebugSessionId(sid);
-      setDebugSnapshot(snapshot);
-      pushLog("调试环境就绪");
-      setDebugPhase("ready");
+      createdRun = await createGeneratedAgentTestRun(
+        debugRuntimeDraft(variantDraft),
+      );
+      const sessionId = await createGeneratedAgentTestSession(
+        createdRun.runId,
+        "test_user",
+      );
+      debugRunsRef.current.set(id, { run: createdRun, sessionId });
+      setActiveDebugRunCount(debugRunsRef.current.size);
+      setDebugVariants((current) =>
+        current.map((item) =>
+          item.id === id
+            ? { ...item, phase: "ready", runtimeSnapshot: snapshot }
+            : item,
+        ),
+      );
     } catch (err) {
-      setDebugError(err instanceof Error ? err.message : String(err));
-      setDebugPhase("error");
+      if (createdRun) {
+        try {
+          await deleteGeneratedAgentTestRun(createdRun.runId);
+        } catch (cleanupError) {
+          console.warn("清理调试运行失败", cleanupError);
+        }
+      }
+      setDebugVariants((current) =>
+        current.map((item) =>
+          item.id === id
+            ? {
+                ...item,
+                phase: "error",
+                runtimeSnapshot: "",
+                error: err instanceof Error ? err.message : String(err),
+              }
+            : item,
+        ),
+      );
     }
   };
 
   const sendDebugMessage = async () => {
-    const run = debugRunRef.current;
-    const sessionId = debugSessionId;
     const text = debugInput.trim();
-    if (!run || !sessionId || !text || debugPhase === "sending") return;
+    const targets = debugVariants.filter(
+      (variant) =>
+        variant.phase === "ready" &&
+        variant.runtimeSnapshot ===
+          debugVariantSnapshot(currentDebugSnapshot, variant) &&
+        debugRunsRef.current.has(variant.id),
+    );
+    if (!text || targets.length === 0) return;
 
     setDebugInput("");
-    setDebugPhase("sending");
-    setDebugMessages((prev) => [
-      ...prev,
-      { role: "user", content: text },
-      { role: "assistant", content: "", blocks: [] },
-    ]);
+    const targetIds = new Set(targets.map((variant) => variant.id));
+    setDebugVariants((current) =>
+      current.map((variant) =>
+        targetIds.has(variant.id)
+          ? {
+              ...variant,
+              phase: "sending",
+              messages: [
+                ...variant.messages,
+                { role: "user", content: text },
+                { role: "assistant", content: "", blocks: [] },
+              ],
+            }
+          : variant,
+      ),
+    );
 
-    try {
-      let acc = emptyAcc();
-      let fullText = "";
-      for await (const event of runGeneratedAgentTestSSE({
-        runId: run.runId,
-        userId: "test_user",
-        sessionId,
-        text,
-      })) {
-        const error = event.error || event.errorMessage || event.error_message;
-        if (error) {
-          setDebugMessages((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            if (last?.role === "assistant") last.error = String(error);
-            return next;
-          });
-          break;
-        }
-        acc = applyEvent(acc, event);
-        fullText = acc.blocks
-          .filter((b) => b.kind === "text")
-          .map((b) => (b as { text: string }).text)
-          .join("");
-        setDebugMessages((prev) => {
-          const next = [...prev];
-          const last = next[next.length - 1];
-          if (last?.role === "assistant") {
-            last.content = fullText;
-            last.blocks = acc.blocks;
+    await Promise.all(
+      targets.map(async (variant) => {
+        const runtime = debugRunsRef.current.get(variant.id);
+        if (!runtime) return;
+        try {
+          let acc = emptyAcc();
+          for await (const event of runGeneratedAgentTestSSE({
+            runId: runtime.run.runId,
+            userId: "test_user",
+            sessionId: runtime.sessionId,
+            text,
+          })) {
+            const eventError =
+              event.error || event.errorMessage || event.error_message;
+            setDebugVariants((current) =>
+              current.map((item) => {
+                if (item.id !== variant.id) return item;
+                const messages = [...item.messages];
+                const last = { ...messages[messages.length - 1] };
+                if (eventError) {
+                  last.error = String(eventError);
+                } else {
+                  acc = applyEvent(acc, event);
+                  last.content = acc.blocks
+                    .filter((block) => block.kind === "text")
+                    .map((block) => (block as { text: string }).text)
+                    .join("");
+                  last.blocks = acc.blocks;
+                }
+                messages[messages.length - 1] = last;
+                return { ...item, messages };
+              }),
+            );
+            if (eventError) break;
           }
-          return next;
-        });
-      }
-      setDebugPhase("ready");
-    } catch (err) {
-      setDebugMessages((prev) => {
-        const next = [...prev];
-        const last = next[next.length - 1];
-        if (last?.role === "assistant") {
-          last.error = err instanceof Error ? err.message : String(err);
+        } catch (err) {
+          setDebugVariants((current) =>
+            current.map((item) => {
+              if (item.id !== variant.id) return item;
+              const messages = [...item.messages];
+              const last = { ...messages[messages.length - 1] };
+              last.error = err instanceof Error ? err.message : String(err);
+              messages[messages.length - 1] = last;
+              return { ...item, messages };
+            }),
+          );
+        } finally {
+          setDebugVariants((current) =>
+            current.map((item) =>
+              item.id === variant.id ? { ...item, phase: "ready" } : item,
+            ),
+          );
         }
-        return next;
-      });
-      setDebugPhase("ready");
+      }),
+    );
+  };
+
+  const addDebugVariant = () => {
+    setDebugVariants((current) => {
+      if (current.length >= 3) return current;
+      const sequence = debugVariantSequenceRef.current++;
+      const id = `variant-${sequence}`;
+      return [
+        ...current,
+        {
+          id,
+          name: `对照组 ${sequence}`,
+          modelName: draft.modelName ?? "",
+          description: draft.description,
+          instruction: draft.instruction,
+          optimizations: [],
+          configOpen: true,
+          phase: "idle",
+          runtimeSnapshot: "",
+          messages: [],
+          error: null,
+        },
+      ];
+    });
+  };
+
+  const removeDebugVariant = async (id: string) => {
+    await cleanupDebugVariantRun(id);
+    setDebugVariants((current) => current.filter((variant) => variant.id !== id));
+    if (selectedVariantId === id) setSelectedVariantId("baseline");
+  };
+
+  const patchDebugVariant = (id: string, patch: Partial<DebugVariant>) =>
+    setDebugVariants((current) =>
+      current.map((variant) =>
+        variant.id === id ? { ...variant, ...patch } : variant,
+      ),
+    );
+
+  const updateDebugVariantConfig = (
+    id: string,
+    field: "modelName" | "description" | "instruction",
+    value: string,
+  ) => {
+    patchDebugVariant(id, { [field]: value });
+    if (selectedVariantId !== id || id === "baseline") return;
+    setSelectedVariantId("baseline");
+  };
+
+  const completeDebugVariantConfig = (id: string) => {
+    const variant = debugVariants.find((item) => item.id === id);
+    if (!variant) return;
+    const modelName = variant.modelName.trim();
+    const description = variant.description.trim();
+    const instruction = variant.instruction.trim();
+    const configurationKey = debugVariantConfigurationKey(variant);
+    const variantIndex = debugVariants.findIndex((item) => item.id === id);
+    const firstMatchingIndex = debugVariants.findIndex(
+      (item) => debugVariantConfigurationKey(item) === configurationKey,
+    );
+    if (
+      !modelName ||
+      !description ||
+      !instruction ||
+      firstMatchingIndex !== variantIndex
+    ) return;
+    if (id === "baseline") {
+      patchDebugVariant(id, { configOpen: false });
+      return;
     }
+    void startDebugVariant(id);
   };
 
   const handleDeploy = async (
@@ -2724,10 +3035,22 @@ export function CustomCreate({
 
   const openValidation = () => {
     if (!requireCompleteDraft()) return;
+    setDebugVariants((current) =>
+      current.map((variant) =>
+        variant.id === "baseline" && !debugRunsRef.current.has(variant.id)
+          ? {
+              ...variant,
+              modelName: draft.modelName ?? "",
+              description: draft.description,
+              instruction: draft.instruction,
+            }
+          : variant,
+      ),
+    );
     setWorkspaceMode("validate");
   };
 
-  const handleWorkspaceChange = (nextMode: WorkspaceMode) => {
+  const handleWorkspaceChange = async (nextMode: WorkspaceMode) => {
     if (nextMode === "publish") {
       if (project) setWorkspaceMode("publish");
       else openPublishPreview();
@@ -2737,6 +3060,7 @@ export function CustomCreate({
       openValidation();
       return;
     }
+    if (!(await confirmLeaveDebug())) return;
     setWorkspaceMode(nextMode);
   };
 
@@ -2768,38 +3092,22 @@ export function CustomCreate({
         <div className="cw-editor">
         <AgentBuildCanvas
           draft={draft}
+          direction="vertical"
           selectedPath={safePath}
           onSelect={setSelectedPath}
           onAdd={addCanvasStep}
           onInsert={insertCanvasStep}
           onDelete={deleteCanvasStep}
-          onReset={clearRootAgent}
         />
-        {/* Right: the form for the currently-selected node. The agent-type bar
-            is fixed on top (outside the scroll area); the form (left) + step
-            nav (right) scroll below it. */}
+        {/* Right: the form for the currently-selected node. */}
         <div className="cw-detail">
-          {/* Fixed top bar: pick the agent type. */}
-          <div className="cw-typebar">
-            <div className="cw-typebar-inner">
-              <div
-                className="cw-typeradio cw-typeradio--row"
-                role="radiogroup"
-                aria-label="节点运行方式"
-                data-active-type={node.agentType ?? "llm"}
-                style={
-                  {
-                    "--cw-agent-type-gap": `${AGENT_TYPE_GAP_PX}px`,
-                    "--cw-agent-type-slider-width": `calc((100% - ${
-                      8 + AGENT_TYPE_GAP_PX * (AGENT_TYPES.length - 1)
-                    }px) / ${AGENT_TYPES.length})`,
-                    "--cw-active-type-offset": `calc(${activeTypeIndex * 100}% + ${
-                      activeTypeIndex * AGENT_TYPE_GAP_PX
-                    }px)`,
-                  } as CSSProperties
-                }
-              >
-                <span className="cw-typeradio-slider" aria-hidden />
+          {/* Scroll area: form on the left, step nav on the right. */}
+          <div className="cw-detail-scroll" ref={scrollRef}>
+          <div className="cw-detail-inner">
+            <div className="cw-lower">
+            <div className="cw-form-col">
+            <Section meta={metaOf("type")}>
+              <div className="cw-agent-type-options" role="radiogroup" aria-label="Agent 类型">
                 {AGENT_TYPES.map((t) => {
                   const on = (node.agentType ?? "llm") === t.id;
                   const remoteTypeDisabled = isRootAgent && t.id === "a2a";
@@ -2810,7 +3118,7 @@ export function CustomCreate({
                     <label
                       key={t.id}
                       data-agent-type={t.id}
-                      className={`cw-typeradio-item ${on ? "is-on" : ""} ${
+                      className={`cw-agent-type-option ${on ? "is-on" : ""} ${
                         remoteTypeDisabled ? "is-disabled" : ""
                       }`}
                       title={
@@ -2824,18 +3132,19 @@ export function CustomCreate({
                       <input
                         type="radio"
                         name="agentType"
-                        className="cw-typeradio-input"
+                        className="cw-agent-type-radio"
                         checked={on}
                         disabled={remoteTypeDisabled}
                         onChange={() => selectAgentType(t.id)}
                       />
-                      <span className="cw-typeradio-title">
-                        {AGENT_TYPE_BAR_LABELS[t.id]}
+                      <span className="cw-agent-type-copy">
+                        <strong>{AGENT_TYPE_BAR_LABELS[t.id]}</strong>
+                        <small>{AGENT_TYPE_DESCRIPTIONS[t.id]}</small>
                       </span>
                       {remoteTypeDisabled && (
                         <span
                           id={disabledHintId}
-                          className="cw-typeradio-disabled-hint"
+                          className="cw-agent-type-disabled-hint"
                           role="tooltip"
                         >
                           远程智能体只能作为子步骤使用
@@ -2845,14 +3154,7 @@ export function CustomCreate({
                   );
                 })}
               </div>
-            </div>
-          </div>
-
-          {/* Scroll area: form on the left, step nav on the right. */}
-          <div className="cw-detail-scroll" ref={scrollRef}>
-          <div className="cw-detail-inner">
-            <div className="cw-lower">
-            <div className="cw-form-col">
+            </Section>
             <Section meta={metaOf("basic")}>
                 <div className="cw-form">
                       {!a2a && (
@@ -3529,11 +3831,10 @@ export function CustomCreate({
           {/* cw-detail-scroll */}
           <button
             type="button"
-            className="cw-build-next"
+            className="cw-build-next studio-update-action"
             onClick={openValidation}
           >
-            <span>下一步：开始调试</span>
-            <ArrowRight className="cw-i" aria-hidden />
+            <span>开始调试</span>
           </button>
         </div>
         {/* cw-detail */}
@@ -3542,61 +3843,27 @@ export function CustomCreate({
 
       {workspaceMode === "validate" && (
         <div className="cw-validation-workspace">
-          <aside className="cw-optimization-panel" aria-label="进阶选项">
-            <div className="cw-optimization-head">
-              <span>进阶选项</span>
-              <small>暂未开放，敬请期待</small>
-            </div>
-            <div className="cw-optimization-list">
-              {DEBUG_OPTIMIZATIONS.map((item) => (
-                <label
-                  key={item.id}
-                  className="cw-optimization-option is-disabled"
-                >
-                  <input
-                    type="checkbox"
-                    checked={false}
-                    disabled
-                    readOnly
-                  />
-                  <span className="cw-optimization-check" aria-hidden />
-                  <span className="cw-optimization-copy">
-                    <strong>{item.label}</strong>
-                    <small>{item.description}</small>
-                  </span>
-                </label>
-              ))}
-            </div>
-          </aside>
           <div className="cw-validation-content">
-            <DebugPanel
-              standalone
+            <DebugComparisonWorkspace
               enabled={debugEnabled}
               disabledReason={debugDisabledReason}
-              phase={debugPhase}
-              stale={debugStale}
-              run={debugRun}
-              projectName={debugProjectName || draft.name}
-              logs={debugLogs}
-              messages={debugMessages}
+              variants={debugVariants}
+              draftSnapshot={currentDebugSnapshot}
               input={debugInput}
-              error={debugError}
               onInput={setDebugInput}
               onSend={sendDebugMessage}
-              onRestart={startDebug}
-              onIgnoreChanges={() =>
-                setIgnoredDebugSnapshot(currentDebugSnapshot)
-              }
+              onStartVariant={startDebugVariant}
+              onDeployVariant={(id) => void openPublishPreview(id)}
+              onAddVariant={addDebugVariant}
+              onRemoveVariant={removeDebugVariant}
+              onToggleConfig={(id) => {
+                const variant = debugVariants.find((item) => item.id === id);
+                if (variant) patchDebugVariant(id, { configOpen: !variant.configOpen });
+              }}
+              onCompleteConfig={completeDebugVariantConfig}
+              onConfigChange={updateDebugVariantConfig}
             />
           </div>
-          <button
-            type="button"
-            className="cw-debug-next"
-            onClick={openPublishPreview}
-          >
-            <span>下一步：部署发布</span>
-            <ArrowRight className="cw-i" aria-hidden />
-          </button>
         </div>
       )}
 
@@ -3609,6 +3876,26 @@ export function CustomCreate({
               agentDraft={draft}
               agentName={draft.name || "未命名 Agent"}
               agentCount={countDraftAgents(draft)}
+              releaseConfiguration={
+                selectedDebugVariant
+                  ? {
+                      modelName:
+                        selectedDebugVariant.modelName ||
+                        draft.modelName ||
+                        "默认模型",
+                      description: selectedDebugVariant.description,
+                      instruction: selectedDebugVariant.instruction,
+                      optimizations: selectedDebugVariant.optimizations.flatMap(
+                        (id) => {
+                          const option = DEBUG_OPTIMIZATIONS.find(
+                            (item) => item.id === id,
+                          );
+                          return option ? [option.label] : [];
+                        },
+                      ),
+                    }
+                  : undefined
+              }
               onChange={setProject}
               onDeploy={handleDeploy}
               onAgentAdded={onAgentAdded}

@@ -75,8 +75,7 @@
   white-space: nowrap;
 }
 
-.pp-secondary,
-.pp-deploy {
+.pp-secondary {
   min-height: 34px;
   display: inline-flex;
   align-items: center;
@@ -105,18 +104,6 @@
   background: hsl(var(--accent));
 }
 
-.pp-deploy {
-  min-width: 82px;
-  border: 1px solid hsl(var(--primary));
-  background: hsl(var(--primary));
-  color: hsl(var(--primary-foreground));
-}
-
-.pp-deploy:hover:not(:disabled) {
-  background: hsl(var(--primary) / 0.9);
-}
-
-.pp-deploy:disabled,
 .pp-secondary:disabled {
   opacity: 0.55;
   cursor: default;
@@ -403,7 +390,7 @@
 }
 
 .pp-root.is-deploy {
-  --pp-publish-content-width: 58%;
+  --pp-publish-content-width: min(760px, max(680px, calc(100% - 48px)));
   overflow-y: auto;
 }
 
@@ -411,7 +398,7 @@
   flex: 0 0 auto;
   min-height: 100%;
   display: grid;
-  grid-template-rows: 226px auto;
+  grid-template-rows: auto auto;
   overflow: visible;
 }
 
@@ -457,12 +444,12 @@
 
 .pp-release-preview {
   width: var(--pp-publish-content-width);
-  height: 100%;
+  min-height: 300px;
   box-sizing: border-box;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 0.86fr) minmax(335px, 1.14fr);
-  gap: 28px;
+  grid-template-columns: minmax(320px, 0.9fr) minmax(300px, 1.1fr);
+  gap: 24px;
   margin: 0 auto;
   padding: 28px 0 12px;
 }
@@ -487,11 +474,6 @@
   flex: 1 1 auto;
   border: 0;
   background: transparent;
-}
-
-.pp-flow-thumbnail .abc-head,
-.pp-flow-dialog-canvas .abc-head {
-  display: none;
 }
 
 .pp-flow-thumbnail .abc-canvas,
@@ -603,11 +585,25 @@
   white-space: nowrap;
 }
 
+.pp-release-facts .pp-release-fact-long {
+  display: -webkit-box;
+  overflow: hidden;
+  line-height: 1.45;
+  text-overflow: clip;
+  white-space: pre-wrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.pp-release-facts .pp-release-prompt {
+  -webkit-line-clamp: 3;
+}
+
 .pp-artifact-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: auto;
+  margin-top: 18px;
   padding-top: 12px;
 }
 
@@ -770,33 +766,6 @@
   transform: translateX(-50%);
 }
 
-.pp-config-actions .pp-deploy {
-  min-width: 104px;
-  min-height: 40px;
-  border: 1px solid hsl(var(--background) / 0.82);
-  border-radius: 999px;
-  background: hsl(var(--background) / 0.68);
-  box-shadow:
-    0 16px 38px hsl(var(--foreground) / 0.16),
-    inset 0 1px 0 hsl(var(--background) / 0.96),
-    inset 0 -1px 0 hsl(var(--foreground) / 0.05);
-  backdrop-filter: blur(24px) saturate(170%);
-  -webkit-backdrop-filter: blur(24px) saturate(170%);
-  color: hsl(var(--foreground));
-  font-size: 13px;
-  letter-spacing: 0.01em;
-}
-
-.pp-config-actions .pp-deploy:hover:not(:disabled) {
-  background: hsl(var(--foreground));
-  color: hsl(var(--background));
-  transform: translateY(-1px);
-}
-
-.pp-config-actions .pp-deploy:disabled {
-  opacity: 0.82;
-}
-
 .pp-config-section {
   width: 100%;
   min-width: 0;
@@ -873,8 +842,13 @@
   position: relative;
   width: clamp(154px, 33.333%, 236px);
   max-width: 100%;
-  aspect-ratio: 1;
+  height: 112px;
   perspective: 1200px;
+  transition: height 180ms ease;
+}
+
+.pp-channel-card.is-flipped {
+  height: 176px;
 }
 
 .pp-channel-card-inner {
@@ -905,11 +879,11 @@
 
 .pp-channel-card-front {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 14px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 11px;
+  padding: 12px;
   color: hsl(var(--foreground));
   cursor: pointer;
   font: inherit;
@@ -1216,7 +1190,7 @@
 }
 
 .pp-env-section {
-  width: min(72%, 560px);
+  width: 100%;
   padding-bottom: 16px;
 }
 
@@ -1309,7 +1283,7 @@
 
 .pp-env-add {
   width: 100%;
-  min-height: 52px;
+  min-height: 40px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1585,13 +1559,8 @@
 }
 
 @media (max-width: 1120px) {
-  .pp-root.is-deploy {
-    --pp-publish-content-width: min(62%, calc(100% - 48px));
-  }
-
   .pp-release-preview {
-    grid-template-columns: minmax(0, 0.9fr) minmax(260px, 1.1fr);
-    gap: 24px;
+    grid-template-columns: minmax(320px, 0.9fr) minmax(300px, 1.1fr);
   }
 
   .pp-sidebar {
@@ -1640,6 +1609,7 @@
   }
 
   .pp-release-preview {
+    min-width: 0;
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: 220px auto;
   }

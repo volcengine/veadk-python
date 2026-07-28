@@ -21,7 +21,7 @@ import secrets
 import socket
 import zipfile
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -483,6 +483,7 @@ class _FakeResponse:
 
 class _FakeAsyncClient:
     streamed_payloads: list[dict[str, Any]] = []
+    listed_apps: ClassVar[list[str]] = ["demo_agent"]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         pass
@@ -495,7 +496,7 @@ class _FakeAsyncClient:
 
     async def get(self, url: str) -> _FakeResponse:
         assert url.endswith("/list-apps")
-        return _FakeResponse(json_data=["demo_agent"])
+        return _FakeResponse(json_data=self.listed_apps)
 
     async def post(self, url: str, json: Any) -> _FakeResponse:
         assert "/sessions" in url
@@ -589,6 +590,7 @@ def test_generated_project_and_debug_run_api_lifecycle(
     captured: dict[str, Any] = {}
     _FakeProcess.created.clear()
     _FakeAsyncClient.streamed_payloads.clear()
+    _FakeAsyncClient.listed_apps = ["demo_agent"]
     monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
     monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-sk")
 
@@ -667,7 +669,24 @@ def test_generated_project_and_debug_run_api_lifecycle(
         assert run["appName"] == "demo_agent"
         assert run["runId"].startswith("tr_")
 
-        process = _FakeProcess.created[-1]
+        _FakeAsyncClient.listed_apps = ["veadk_debug_abc"]
+        try:
+            reserved_name_response = client.post(
+                "/web/generated-agent-test-runs",
+                json={"draft": {**draft, "name": "abc"}},
+            )
+        finally:
+            _FakeAsyncClient.listed_apps = ["demo_agent"]
+        assert reserved_name_response.status_code == 200
+        reserved_name_run = reserved_name_response.json()
+        assert reserved_name_run["appName"] == "veadk_debug_abc"
+        reserved_process = _FakeProcess.created[-1]
+        assert (
+            Path(reserved_process.cwd) / "agents/veadk_debug_abc/agent.py"
+        ).is_file()
+        assert not (Path(reserved_process.cwd) / "agents/abc").exists()
+
+        process = _FakeProcess.created[-2]
         assert process.env["VOLCENGINE_ACCESS_KEY"] == "test-ak"
         assert process.env["VOLCENGINE_SECRET_KEY"] == "test-sk"
         assert process.env["AGENTKIT_TOOL_ID"] == "t-debug"
