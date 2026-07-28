@@ -18,6 +18,10 @@ const localPickerSource = readFileSync(
   new URL("../src/create/LocalPicker.tsx", import.meta.url),
   "utf8",
 );
+const localSkillSource = readFileSync(
+  new URL("../src/create/skills/local.ts", import.meta.url),
+  "utf8",
+);
 const configYamlSource = readFileSync(
   new URL("../src/create/configYaml.ts", import.meta.url),
   "utf8",
@@ -465,6 +469,10 @@ test("local Skill folders and ZIP archives support drag and drop", () => {
   );
   assert.match(localPickerSource, /readZipSkills\(dropped\[0\]\.file\)/);
   assert.match(localPickerSource, /readFolderSkills\(dropped\.map/);
+  assert.match(localSkillSource, /function readSkillMdMetadata/);
+  assert.match(localSkillSource, /function safeSkillFolder/);
+  assert.doesNotMatch(localSkillSource, /function validateName/);
+  assert.doesNotMatch(localSkillSource, /function validateDescription/);
   assert.match(
     createStyles,
     /\.cw-local-dropzone\.is-dragging\s*\{[\s\S]*?border-color:/,

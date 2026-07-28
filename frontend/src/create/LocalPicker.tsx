@@ -1,6 +1,6 @@
 // Local skill picker: user uploads a folder (via <input webkitdirectory>) or a
-// .zip file from their computer. Each skill directory must contain a SKILL.md
-// with name/description frontmatter. Files are materialized client-side and
+// .zip file from their computer. Each skill directory must contain a SKILL.md.
+// Files are materialized client-side and
 // embedded directly in SelectedSkill.localFiles so they survive YAML
 // round-trip and project generation without any network round-trip.
 
@@ -85,7 +85,7 @@ export function LocalPicker({
   const [dragging, setDragging] = useState(false);
   const dragDepthRef = useRef(0);
 
-  // Match by folder name (frontmatter `name`), the de-dup key for local uploads.
+  // Match by generated folder name, the de-dup key for local uploads.
   const isSelectedByFolder = (folder: string) =>
     selected.some((s) => s.source === "local" && s.folder === folder);
 
@@ -125,8 +125,8 @@ export function LocalPicker({
 
   const showResult = (res: LocalReadResult) => {
     // Merge new hits into the displayed list (append, don't replace) so
-    // repeated uploads accumulate. De-dupe by folder name (frontmatter
-    // `name`) across both the displayed list and already-selected skills.
+    // repeated uploads accumulate. De-dupe by generated folder name across
+    // both the displayed list and already-selected skills.
     const existing = new Set([
       ...foundHitsRef.current.map((h) => h.folder || h.name),
       ...selectedRef.current
@@ -244,7 +244,7 @@ export function LocalPicker({
       </div>
 
       <p className="cw-local-hint">
-        每个技能需包含 SKILL.md（含 name / description frontmatter）。支持包含多个技能的目录。
+        每个技能需包含 SKILL.md。支持包含多个技能的目录。
       </p>
 
       {busy && <p className="cw-empty-line">正在读取文件…</p>}

@@ -28,6 +28,8 @@ import json
 import os
 import re
 import sys
+import tempfile
+import zipfile
 
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
@@ -1358,7 +1360,6 @@ def _run_frontend_server(
     import shutil
     import socket
     import subprocess
-    import tempfile
     import threading as _test_threading
     import time
     from dataclasses import dataclass
@@ -1596,32 +1597,146 @@ def _run_frontend_server(
     def _http_policy_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=400, detail=str(exc))
 
+    def _skill_version_attr(resp: object, *names: str) -> str:
+        for name in names:
+            value = getattr(resp, name, None)
+            if value:
+                return str(value)
+        return ""
+
+    def _read_skill_md_from_zip(zip_path: Path, skill_id: str) -> str:
+        try:
+            with zipfile.ZipFile(zip_path, "r") as archive:
+                candidates = [
+                    info
+                    for info in archive.infolist()
+                    if (
+                        not info.is_dir()
+                        and info.filename.lower().endswith("skill.md")
+                        and not info.filename.startswith(("/", "\\"))
+                        and ".." not in Path(info.filename).parts
+                    )
+                ]
+                if not candidates:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="Skill version package has no SKILL.md content",
+                    )
+                chosen = sorted(
+                    candidates,
+                    key=lambda info: (len(Path(info.filename).parts), info.filename),
+                )[0]
+                raw = archive.read(chosen)
+        except HTTPException:
+            raise
+        except zipfile.BadZipFile as e:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Skill version package for {skill_id} is not a valid zip",
+            ) from e
+        for encoding in ("utf-8-sig", "gb18030"):
+            try:
+                return raw.decode(encoding)
+            except UnicodeDecodeError:
+                pass
+        raise HTTPException(
+            status_code=502,
+            detail=f"Skill version package for {skill_id} has unsupported encoding",
+        )
+
+    def _skill_md_from_version_response(
+        *,
+        space_id: str,
+        skill_id: str,
+        version: str | None,
+        resp: object,
+    ) -> str:
+        skill_md = _skill_version_attr(resp, "skill_md", "skillMd")
+        if skill_md:
+            return skill_md
+        bucket_name = _skill_version_attr(resp, "bucket_name", "bucketName")
+        tos_path = _skill_version_attr(resp, "tos_path", "tosPath", "path")
+        if not bucket_name or not tos_path:
+            raise HTTPException(
+                status_code=404, detail="Skill version has no SKILL.md content"
+            )
+        from veadk.skills.materializer import _download_legacy_skill_space_skill
+        from veadk.skills.skill import Skill as VeADKSkill
+
+        remote_skill = VeADKSkill(
+            name=_skill_version_attr(resp, "name") or skill_id,
+            description=_skill_version_attr(resp, "description"),
+            path=tos_path,
+            skill_space_id=space_id,
+            bucket_name=bucket_name,
+            id=skill_id,
+            version_id=version or _skill_version_attr(resp, "version"),
+        )
+        with tempfile.TemporaryDirectory(prefix="veadk_skillspace_") as temp_dir:
+            zip_path = Path(temp_dir) / "skill.zip"
+            if not _download_legacy_skill_space_skill(remote_skill, zip_path):
+                raise HTTPException(
+                    status_code=502,
+                    detail="Failed to download SkillSpace skill package",
+                )
+            return _read_skill_md_from_zip(zip_path, skill_id)
+
     async def _resolve_skillspace_skill_md(
         space_id: str,
         skill_id: str,
         version: str | None,
         region: str | None = None,
+        *,
+        skill_space_name: str | None = None,
+        skill_name: str | None = None,
     ) -> str:
-        from agentkit.sdk.skills.types import GetSkillVersionRequest
+        from agentkit.sdk.skills.types import (
+            GetSkillInfoRequest,
+            GetSkillVersionRequest,
+        )
 
+        client = _skills_client(region or "cn-beijing")
         try:
-            client = _skills_client(region or "cn-beijing")
             resp = client.get_skill_version(
                 GetSkillVersionRequest(id=skill_id, skill_version=version)
             )
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(
-                f"GetSkillVersion({skill_id}@{version}) error for region {region or 'cn-beijing'}: {e}",
-                exc_info=True,
-            )
-            raise HTTPException(status_code=502, detail=f"SkillSpaces API error: {e}")
-        if not resp.skill_md:
-            raise HTTPException(
-                status_code=404, detail="Skill version has no SKILL.md content"
-            )
-        return str(resp.skill_md)
+        except Exception as version_error:
+            if skill_space_name and skill_name:
+                try:
+                    resp = client.get_skill_info(
+                        GetSkillInfoRequest(
+                            SkillName=skill_name,
+                            SkillSpaceName=skill_space_name,
+                            SkillSpaceId=space_id,
+                        )
+                    )
+                except Exception:
+                    logger.error(
+                        f"GetSkillVersion({skill_id}@{version}) error for region "
+                        f"{region or 'cn-beijing'}: {version_error}",
+                        exc_info=True,
+                    )
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"SkillSpaces API error: {version_error}",
+                    ) from version_error
+            else:
+                logger.error(
+                    f"GetSkillVersion({skill_id}@{version}) error for region "
+                    f"{region or 'cn-beijing'}: {version_error}",
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"SkillSpaces API error: {version_error}",
+                ) from version_error
+        return await asyncio.to_thread(
+            _skill_md_from_version_response,
+            space_id=space_id,
+            skill_id=skill_id,
+            version=version,
+            resp=resp,
+        )
 
     def _draft_for_debug_run(draft: AgentDraft) -> AgentDraft:
         """Return a debug-safe draft by omitting stdio MCP tools recursively."""
@@ -4001,10 +4116,13 @@ def _run_frontend_server(
                 detail="暂时无法加载该技能详情，请稍后重试。",
             )
 
-        if not resp.skill_md:
-            raise HTTPException(
-                status_code=404, detail="Skill version has no SKILL.md content"
-            )
+        skill_md = await asyncio.to_thread(
+            _skill_md_from_version_response,
+            space_id=space_id,
+            skill_id=skill_id,
+            version=version,
+            resp=resp,
+        )
 
         return {
             "skillId": skill_id,
@@ -4012,7 +4130,7 @@ def _run_frontend_server(
             "name": resp.name or "",
             "description": resp.description or "",
             "version": resp.version or version or "",
-            "skillMd": resp.skill_md,
+            "skillMd": skill_md,
             "bucketName": resp.bucket_name or "",
             "tosPath": resp.tos_path or "",
         }
@@ -4339,7 +4457,6 @@ def frontend_deploy(
     the public URL. Inside the function the frontend uses the bound IAM role's
     STS credentials to manage AgentKit runtimes.
     """
-    import tempfile
     import shutil
 
     from veadk.config import veadk_environments
@@ -4697,7 +4814,6 @@ def frontend_update(
 ) -> None:
     """Build local Studio sources and update an existing VeFaaS Application."""
     import shutil
-    import tempfile
 
     from veadk.cli.studio_package import (
         build_frontend_assets,

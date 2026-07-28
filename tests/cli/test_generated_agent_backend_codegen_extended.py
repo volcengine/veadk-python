@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -410,6 +411,139 @@ async def test_skillspace_materialization_deduplicates_nested_selection() -> Non
     assert [file.path for file in project.files] == ["skills/shared-skill/SKILL.md"]
 
 
+@pytest.mark.asyncio
+async def test_skillspace_materialization_passes_names_to_resolver() -> None:
+    skill = SelectedSkill(
+        source="skillspace",
+        folder="display-skill",
+        name="Display Skill",
+        skillSpaceId="space-1",
+        skillSpaceName="Demo Space",
+        skillSpaceRegion="cn-shanghai",
+        skillId="skill-1",
+        version="v1",
+    )
+    draft = AgentDraft(name="root", selectedSkills=[skill])
+    project = GeneratedProject(name="root", files=[])
+    call: dict[str, object] = {}
+
+    async def resolve(
+        space_id: str,
+        skill_id: str,
+        version: str | None,
+        region: str | None,
+        *,
+        skill_space_name: str | None = None,
+        skill_name: str | None = None,
+    ) -> str:
+        call.update(
+            {
+                "space_id": space_id,
+                "skill_id": skill_id,
+                "version": version,
+                "region": region,
+                "skill_space_name": skill_space_name,
+                "skill_name": skill_name,
+            }
+        )
+        return "---\nname: display-skill\ndescription: Shared.\n---\n"
+
+    await materialize_selected_skills(
+        draft,
+        project,
+        resolve_skillspace_detail=resolve,
+    )
+
+    assert call == {
+        "space_id": "space-1",
+        "skill_id": "skill-1",
+        "version": "v1",
+        "region": "cn-shanghai",
+        "skill_space_name": "Demo Space",
+        "skill_name": "Display Skill",
+    }
+
+
+@pytest.mark.asyncio
+async def test_skillspace_materialization_aligns_folder_with_skill_md_name() -> None:
+    skill = SelectedSkill(
+        source="skillspace",
+        folder="intelligent-diagnosis-report",
+        name="intelligent-diagnosis-report",
+        skillSpaceId="space-1",
+        skillSpaceName="Demo Space",
+        skillId="skill-1",
+        version="v1",
+    )
+    draft = AgentDraft(name="car", selectedSkills=[skill])
+    project = generate_project_from_draft(draft)
+
+    async def resolve(
+        space_id: str,
+        skill_id: str,
+        version: str | None,
+        region: str | None = None,
+        **_: object,
+    ) -> str:
+        del space_id, skill_id, version, region
+        return "---\nname: domain-test-skill\ndescription: Shared.\n---\n"
+
+    await materialize_selected_skills(
+        draft,
+        project,
+        resolve_skillspace_detail=resolve,
+    )
+
+    files = _file_map(project)
+    agent_py = files["agents/car/agent.py"]
+    assert (
+        'load_skill_from_dir(_Path(__file__).parent.parent.parent / "skills" / '
+        '"domain-test-skill")'
+    ) in agent_py
+    assert "'folder': 'domain-test-skill'" in agent_py
+    assert ' / "skills" / "intelligent-diagnosis-report")' not in agent_py
+    assert files["skills/domain-test-skill/SKILL.md"].startswith(
+        "---\nname: domain-test-skill\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_skillspace_materialization_normalizes_legacy_frontmatter() -> None:
+    skill = SelectedSkill(
+        source="skillspace",
+        folder="gate-info-web3",
+        name="gate-info-web3",
+        skillSpaceId="space-1",
+        skillId="skill-1",
+        version="v1",
+    )
+    draft = AgentDraft(name="root", selectedSkills=[skill])
+    project = GeneratedProject(name="root", files=[])
+
+    async def resolve(space_id: str, skill_id: str, version: str | None) -> str:
+        del space_id, skill_id, version
+        return (
+            "---\n"
+            "name: gate-info-web3\n"
+            "description: Fetch market facts. Legacy alias: gate-info-defianalysis.\n"
+            "---\n"
+            "Use this skill for market analysis.\n"
+        )
+
+    await materialize_selected_skills(
+        draft,
+        project,
+        resolve_skillspace_detail=resolve,
+    )
+
+    assert [file.path for file in project.files] == ["skills/gate-info-web3/SKILL.md"]
+    frontmatter = project.files[0].content.split("---", 2)[1]
+    parsed = yaml.safe_load(frontmatter)
+    assert parsed["description"] == (
+        "Fetch market facts. Legacy alias: gate-info-defianalysis."
+    )
+
+
 def _skill_zip(files: dict[str, str]) -> bytes:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:
@@ -418,8 +552,8 @@ def _skill_zip(files: dict[str, str]) -> bytes:
     return output.getvalue()
 
 
-def test_skillhub_zip_accepts_safe_files_and_rejects_path_escape() -> None:
-    skill_md = "---\nname: demo-skill\ndescription: Demo.\n---\n"
+def test_skillhub_zip_accepts_safe_files_without_metadata_validation() -> None:
+    skill_md = "---\nname: clawhub/534422530/89d9f5\n---\n"
     files = _files_from_zip(
         _skill_zip({"SKILL.md": skill_md, "scripts/run.py": "print('ok')\n"}),
         "demo-skill",
@@ -429,6 +563,7 @@ def test_skillhub_zip_accepts_safe_files_and_rejects_path_escape() -> None:
         "skills/demo-skill/SKILL.md",
         "skills/demo-skill/scripts/run.py",
     ]
+    assert files[0].content == skill_md
 
     with pytest.raises(DebugPolicyError, match="Illegal skill file path"):
         _files_from_zip(
