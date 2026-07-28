@@ -23,72 +23,6 @@ interface MyAgentSectionData {
   agents: MyAgentCardData[];
 }
 
-const STATIC_SECTIONS: MyAgentSectionData[] = [
-  {
-    title: "Codex 智能体",
-    agents: [
-      {
-        id: "codex-code-review",
-        name: "代码评审助手",
-        description: "检查代码变更，定位风险并给出可以直接执行的修改建议。",
-        toolCount: 7,
-        skillCount: 5,
-        createdAt: "2026-07-22",
-      },
-      {
-        id: "codex-test-coverage",
-        name: "测试补全助手",
-        description: "分析现有测试覆盖，补充关键路径与边界场景。",
-        toolCount: 5,
-        skillCount: 4,
-        createdAt: "2026-07-15",
-      },
-    ],
-  },
-  {
-    title: "OpenClaw 智能体",
-    agents: [
-      {
-        id: "openclaw-research",
-        name: "资料研究助手",
-        description: "围绕目标主题收集资料、核对来源并整理关键结论。",
-        toolCount: 8,
-        skillCount: 3,
-        createdAt: "2026-07-21",
-      },
-      {
-        id: "openclaw-competitor-watch",
-        name: "竞品观察助手",
-        description: "持续整理竞品动态，提炼产品变化与市场信号。",
-        toolCount: 6,
-        skillCount: 4,
-        createdAt: "2026-07-12",
-      },
-    ],
-  },
-  {
-    title: "Hermes 智能体",
-    agents: [
-      {
-        id: "hermes-data-analysis",
-        name: "数据分析助手",
-        description: "理解业务问题，分析数据并形成结构化结论。",
-        toolCount: 5,
-        skillCount: 6,
-        createdAt: "2026-07-20",
-      },
-      {
-        id: "hermes-report",
-        name: "报告生成助手",
-        description: "根据分析结果生成简洁、完整且便于分享的报告。",
-        toolCount: 4,
-        skillCount: 5,
-        createdAt: "2026-07-10",
-      },
-    ],
-  },
-];
-
 const MAX_ROWS = 2;
 const MIN_CARD_WIDTH = 174;
 const GRID_GAP = 12;
@@ -419,6 +353,7 @@ export function MyAgents({
     if (connectingAgentId) return;
     setConnectingAgentId(agent.id);
     try {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       await onUseAgent(agent);
     } finally {
       setConnectingAgentId("");
@@ -428,7 +363,9 @@ export function MyAgents({
   const sections = useMemo<MyAgentSectionData[]>(
     () => [
       { title: "通用智能体", agents: runtimeAgents },
-      ...STATIC_SECTIONS,
+      { title: "Codex 智能体", agents: [] },
+      { title: "OpenClaw 智能体", agents: [] },
+      { title: "Hermes 智能体", agents: [] },
     ],
     [runtimeAgents],
   );

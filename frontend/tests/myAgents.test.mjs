@@ -41,6 +41,21 @@ test("shows four agent families with a dashed add card first", () => {
   assert.match(pageStyles, /\.my-agent-card,\s*\.my-agent-add\s*\{[\s\S]*?aspect-ratio: 1;/);
 });
 
+test("renders only account-backed agents and never ships placeholder cards", () => {
+  assert.doesNotMatch(pageSource, /STATIC_SECTIONS/);
+  assert.doesNotMatch(
+    pageSource,
+    /codex-code-review|codex-test-coverage|openclaw-research|hermes-data-analysis/,
+  );
+  assert.equal(
+    (pageSource.match(/title: "通用智能体", agents: runtimeAgents/g) ?? []).length,
+    1,
+  );
+  for (const title of ["Codex 智能体", "OpenClaw 智能体", "Hermes 智能体"]) {
+    assert.match(pageSource, new RegExp(`title: "${title}", agents: \\[\\]`));
+  }
+});
+
 test("agent cards keep only requested information and actions", () => {
   assert.match(pageSource, /<h3>\{agent\.name\}<\/h3>/);
   assert.match(pageSource, /\{agent\.description\}/);
@@ -128,7 +143,7 @@ test("shows connecting progress and preserves the connected Runtime state", () =
   assert.match(pageSource, /const \[connectingAgentId, setConnectingAgentId\] = useState\(""\)/);
   assert.match(
     pageSource,
-    /setConnectingAgentId\(agent\.id\)[\s\S]*?await onUseAgent\(agent\)[\s\S]*?setConnectingAgentId\(""\)/,
+    /setConnectingAgentId\(agent\.id\)[\s\S]*?requestAnimationFrame[\s\S]*?await onUseAgent\(agent\)[\s\S]*?setConnectingAgentId\(""\)/,
   );
   assert.match(pageSource, /aria-busy=\{connecting \|\| undefined\}/);
   assert.match(pageSource, /className="my-agent-use-spinner"[\s\S]*?<span>连接中<\/span>/);
