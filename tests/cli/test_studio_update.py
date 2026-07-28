@@ -147,7 +147,7 @@ def test_find_studio_deployments_searches_regions_and_filters_project(
     ]
 
 
-def test_list_applications_uses_application_control_plane_region(
+def test_list_applications_uses_deployment_region(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     requested_regions: list[str] = []
@@ -164,7 +164,28 @@ def test_list_applications_uses_application_control_plane_region(
     monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.ve_request", _request)
 
     assert service._list_application(app_name="studio-app") == []
-    assert requested_regions == ["cn-beijing"]
+    assert requested_regions == ["cn-shanghai"]
+
+
+def test_application_template_matches_deployment_region(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "veadk.integrations.ve_faas.ve_faas.volcenginesdkcore.ApiClient",
+        lambda _: object(),
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_faas.ve_faas.volcenginesdkvefaas.VEFAASApi",
+        lambda _: object(),
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_faas.ve_faas.APIGateway",
+        lambda *_: object(),
+    )
+
+    service = VeFaaS("ak", "sk", region="cn-shanghai")
+
+    assert service.template_id == "6943b9de4fa45c0008ea04e1"
 
 
 def test_load_deployed_site_logo_uses_current_branding_url(
@@ -515,7 +536,7 @@ def test_update_application_code_bundle_merges_only_explicit_environment(
     }
 
 
-def test_application_control_plane_uses_beijing_for_shanghai_deployment(
+def test_application_operations_use_deployment_region(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, str]] = []
@@ -524,25 +545,51 @@ def test_application_control_plane_uses_beijing_for_shanghai_deployment(
     cast(Any, service).ak = "ak"
     cast(Any, service).sk = "sk"
     cast(Any, service).region = "cn-shanghai"
+    cast(Any, service).template_id = "template-id"
 
     def _ve_request(**kwargs: object) -> dict[str, object]:
         action = cast(str, kwargs["action"])
         region = cast(str, kwargs["region"])
         calls.append((action, region))
+        if action == "CreateApplication":
+            request_body = cast(dict[str, Any], kwargs["request_body"])
+            config = cast(dict[str, Any], request_body["Config"])
+            assert config["Region"] == "cn-shanghai"
+            return {"Result": {"Status": "create_success", "Id": "application-id"}}
         if action == "GetApplication":
             return {"Result": {"Status": "create_success"}}
-        return {"Result": {"Items": [], "Total": 0}}
+        if action == "ListApplications":
+            return {"Result": {"Items": [], "Total": 0}}
+        if action == "GetApplicationRevisionLog":
+            return {"Result": {"LogLines": []}}
+        return {}
 
     monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.ve_request", _ve_request)
 
+    application_id = service._create_application(
+        "studio-app",
+        "studio-function",
+        "gateway",
+        "upstream",
+        "service",
+    )
+    service._start_application_release(application_id)
     status, _ = service._get_application_status("application-id")
     applications = service._list_application(app_name="studio-app")
+    service.delete("application-id")
+    logs = service._get_application_logs("application-id", revision_number=1)
 
+    assert application_id == "application-id"
     assert status == "create_success"
     assert applications == []
+    assert logs == []
     assert calls == [
-        ("GetApplication", "cn-beijing"),
-        ("ListApplications", "cn-beijing"),
+        ("CreateApplication", "cn-shanghai"),
+        ("ReleaseApplication", "cn-shanghai"),
+        ("GetApplication", "cn-shanghai"),
+        ("ListApplications", "cn-shanghai"),
+        ("DeleteApplication", "cn-shanghai"),
+        ("GetApplicationRevisionLog", "cn-shanghai"),
     ]
 
 
