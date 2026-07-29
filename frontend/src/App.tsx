@@ -95,6 +95,7 @@ import { CustomCreate } from "./create/CustomCreate";
 import { TemplateCreate } from "./create/TemplateCreate";
 import { WorkflowCreate } from "./create/WorkflowCreate";
 import { CodePackageCreate } from "./create/CodePackageCreate";
+import { LegacyMigrationCreate } from "./create/LegacyMigrationCreate";
 import { FileArchive } from "lucide-react";
 import type { AgentDraft } from "./create/types";
 import type { DeployResult, DeploymentTaskUpdate } from "./ui/ProjectPreview";
@@ -128,7 +129,7 @@ import {
 
 // Breadcrumb root label for the create flow and the per-mode leaf labels.
 const CREATE_ROOT = "创建 Agent";
-type CreateMode = QuickCreateKind | "package";
+type CreateMode = QuickCreateKind | "package" | "migration";
 
 const MODE_LABEL: Record<CreateMode, string> = {
   intelligent: "智能模式",
@@ -136,6 +137,7 @@ const MODE_LABEL: Record<CreateMode, string> = {
   template: "从模板新建",
   workflow: "工作流",
   package: "代码包部署",
+  migration: "从存量系统迁移",
 };
 
 type CreateView = "menu" | CreateMode | null;
@@ -209,7 +211,7 @@ function mentionableDescendants(node: AgentNode): AgentTarget[] {
 
 function loadView(): CreateView {
   const v = typeof localStorage !== "undefined" ? localStorage.getItem(LS.view) : null;
-  return v === "menu" || v === "intelligent" || v === "custom" || v === "template" || v === "workflow"
+  return v === "menu" || v === "intelligent" || v === "custom" || v === "template" || v === "workflow" || v === "migration"
     ? v
     : null;
 }
@@ -239,6 +241,20 @@ function ScratchIcon({ className }: { className?: string }) {
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
       <ellipse cx="12" cy="12" rx="6.6" ry="8.2" />
       <path d="M12 8.2l1.05 2.75 2.75 1.05-2.75 1.05L12 15.8l-1.05-2.75L8.2 12l2.75-1.05z" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+/** Hand-drawn migration mark: two systems connected by a bidirectional path. */
+function MigrationIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="3.4" y="4" width="6.4" height="5.2" rx="1.5" />
+      <rect x="14.2" y="14.8" width="6.4" height="5.2" rx="1.5" />
+      <path d="M9.8 6.6h5.1c2.4 0 3.7 1.3 3.7 3.7v1.1" />
+      <path d="m16.4 9.4 2.2 2.2 2.2-2.2" />
+      <path d="M14.2 17.4H9.1c-2.4 0-3.7-1.3-3.7-3.7v-1.1" />
+      <path d="m7.6 14.6-2.2-2.2-2.2 2.2" />
     </svg>
   );
 }
@@ -933,7 +949,7 @@ export default function App() {
   const [hasCreds, setHasCreds] = useState(true);
   const [skillCenter, setSkillCenter] = useState(false);
   const [addAgent, setAddAgent] = useState(false);
-  // The "添加 Agent" chooser (two cards: AgentKit / 从 0 快速创建).
+  // The "添加 Agent" chooser.
   const [addMenu, setAddMenu] = useState(false);
   // A draft imported from YAML, used to pre-fill the custom wizard once.
   const [importedDraft, setImportedDraft] = useState<AgentDraft | null>(null);
@@ -2802,6 +2818,17 @@ export default function App() {
                         },
                         { label: "从 0 快速创建" },
                       ]
+                    : visibleCreateView === "migration"
+                      ? [
+                          {
+                            label: "添加 Agent",
+                            onClick: () => {
+                              setCreateView(null);
+                              setAddMenu(true);
+                            },
+                          },
+                          { label: MODE_LABEL.migration },
+                        ]
                     : [
                         { label: "从 0 快速创建", onClick: () => setConfirmLeave(true) },
                         { label: MODE_LABEL[visibleCreateView] },
@@ -2925,6 +2952,17 @@ export default function App() {
                       setAddMenu(false);
                       setImportedDraft(null);
                       setCreateView("package");
+                    },
+                  },
+                  {
+                    key: "migration",
+                    icon: MigrationIcon,
+                    title: "从存量系统迁移",
+                    desc: "迁移 LangGraph、LangChain、Dify 等已有 Agent 工程。",
+                    onClick: () => {
+                      setAddMenu(false);
+                      setImportedDraft(null);
+                      setCreateView("migration");
                     },
                   },
                 ]}
@@ -3054,6 +3092,13 @@ export default function App() {
                 }}
                 onAgentAdded={onAgentAdded}
                 onDeploymentTaskChange={updateDeploymentTask}
+              />
+            ) : visibleCreateView === "migration" ? (
+              <LegacyMigrationCreate
+                onBack={() => {
+                  setCreateView(null);
+                  setAddMenu(true);
+                }}
               />
             ) : turns.length === 0 && skillJob ? (
               <SkillCreateWorkspace initialJob={skillJob} />
