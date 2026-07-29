@@ -11,6 +11,10 @@ const connectionsSource = read("adk/connections.ts");
 const selectorSource = read("ui/AgentSelector.tsx");
 const sidebarSource = read("ui/Sidebar.tsx");
 const stylesSource = read("styles.css");
+const cliFrontendSource = readFileSync(
+  new URL("../../veadk/cli/cli_frontend.py", import.meta.url),
+  "utf8",
+);
 
 test("Studio access fails closed until the server-derived role is known", () => {
   assert.match(clientSource, /export type StudioRole = "admin" \| "developer" \| "user"/);
@@ -54,6 +58,13 @@ test("runtime selection obeys the server-granted scope", () => {
 test("runtime authorization failures are not reported as unsupported", () => {
   assert.match(clientSource, /response\.clone\(\)\.json\(\)/);
   assert.match(clientSource, /runtime_access_denied/);
+  assert.match(clientSource, /runtime_private_endpoint_unreachable/);
+  assert.match(clientSource, /Runtime 已部署成功，但当前 Studio 无法访问私网 Runtime/);
+  assert.match(cliFrontendSource, /endpoint_network_type == "private"[\s\S]*?runtime_private_endpoint_unreachable/);
+  assert.match(cliFrontendSource, /def _runtime_proxy_should_retry_probe[\s\S]*?normalized == "list-apps"[\s\S]*?normalized\.startswith\("web\/agent-info\/"\)/);
+  assert.match(cliFrontendSource, /parts\[0\] == "apps"[\s\S]*?parts\[2\] == "users"[\s\S]*?parts\[4\] == "sessions"/);
+  assert.match(cliFrontendSource, /max_attempts = 10 if retry_probe else 1/);
+  assert.match(cliFrontendSource, /runtime-proxy probe retry/);
   assert.match(clientSource, /res\.status === 404[\s\S]*?RuntimeProbeError/);
   assert.match(clientSource, /res\.status === 401 \|\| res\.status === 403/);
   assert.match(clientSource, /error instanceof RuntimeAccessDeniedError \|\|[\s\S]*?error instanceof RuntimeProbeError/);
