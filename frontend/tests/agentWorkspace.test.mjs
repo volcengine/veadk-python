@@ -145,6 +145,15 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(projectPreviewSource, /const isRuntimeUpdate = deploymentActionLabel\.includes\("更新"\)/);
   assert.match(projectPreviewSource, /onDeploymentStarted\?\.\(initialTask\)/);
   assert.match(projectPreviewSource, /RuntimeProbeError/);
+  assert.match(projectPreviewSource, /import \{ mergeDeployBuildLog \} from "\.\/deployBuildLog"/);
+  assert.match(projectPreviewSource, /latestBuildLog = mergeDeployBuildLog\(latestBuildLog, s\.buildLog\)/);
+  assert.match(projectPreviewSource, /const pendingBuildLog = \(\): DeployBuildLogSnapshot/);
+  assert.match(projectPreviewSource, /s\.phase === "build" && !latestBuildLog[\s\S]*?latestBuildLog = pendingBuildLog\(\)/);
+  assert.match(projectPreviewSource, /let latestPhase = initialTask\.phase \?\? "prepare"/);
+  assert.match(projectPreviewSource, /const mergeBuildFailureLog = \(message: string\): DeployBuildLogSnapshot \| undefined =>/);
+  assert.match(projectPreviewSource, /"----- 构建失败 -----"[\s\S]*?latestBuildLog = mergeDeployBuildLog\(latestBuildLog/);
+  assert.match(projectPreviewSource, /latestPhase = s\.phase/);
+  assert.match(projectPreviewSource, /message: failedInBuild \? "构建镜像失败，详见构建日志。" : message/);
   assert.match(
     projectPreviewSource,
     /await onDeploymentComplete\?\.\(result\)[\s\S]*?catch \(error\)[\s\S]*?error instanceof RuntimeProbeError[\s\S]*?status: "success"[\s\S]*?label: "部署完成，暂未连接"[\s\S]*?message: error\.message/,
@@ -152,8 +161,37 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.doesNotMatch(workspaceSource, /aw-deployment-focus/);
   assert.match(
     workspaceSource,
-    /className="aw-agent-head"[\s\S]*?deploymentTask\.status !== "success" \|\| deploymentTask\.message[\s\S]*?className="aw-detail-deployment"[\s\S]*?<DeploymentProgressCard task=\{deploymentTask\} \/>[\s\S]*?<nav className="aw-agent-tabs"/,
+    /const focusedDeploymentTaskActive = Boolean\([\s\S]*?focusedDeploymentTaskId[\s\S]*?deploymentTask\.id === focusedDeploymentTaskId/,
   );
+  assert.match(
+    workspaceSource,
+    /const selectedPendingTask = focusedDeploymentTaskId[\s\S]*?deploymentTasks\.find\(\(task\) => task\.id === focusedDeploymentTaskId\)[\s\S]*?: undefined/,
+  );
+  assert.match(
+    workspaceSource,
+    /const shouldShowDeploymentTask = Boolean\([\s\S]*?deploymentTask\.status !== "success"[\s\S]*?focusedDeploymentTaskActive/,
+  );
+  assert.match(workspaceSource, /if \(!focusedDeploymentTaskId\) return;/);
+  assert.doesNotMatch(workspaceSource, /activeDeploymentTaskId/);
+  assert.match(
+    workspaceSource,
+    /className="aw-agent-head"[\s\S]*?\{deploymentTask && shouldShowDeploymentTask && \([\s\S]*?className="aw-detail-deployment"[\s\S]*?<DeploymentProgressCard task=\{deploymentTask\} \/>[\s\S]*?<nav className="aw-agent-tabs"/,
+  );
+  assert.match(workspaceSource, /const BUILD_STEP_INDEX = DEPLOYMENT_STEPS\.findIndex/);
+  assert.match(workspaceSource, /const shouldAutoExpand = Boolean\([\s\S]*?deploymentStepIndex\(task\) === BUILD_STEP_INDEX/);
+  assert.match(workspaceSource, /useState\(shouldAutoExpand\)/);
+  assert.match(workspaceSource, /setExpanded\(shouldAutoExpand\)/);
+  assert.match(workspaceSource, /const logTextRef = useRef<HTMLPreElement \| null>\(null\)/);
+  assert.match(workspaceSource, /node\.scrollTop = node\.scrollHeight/);
+  assert.match(workspaceSource, /log\.omittedEarly[\s\S]*?"已省略早期日志"[\s\S]*?log\.snapshotTruncated[\s\S]*?"仅显示最近的构建日志"/);
+  assert.match(workspaceSource, /log\.pendingMessage/);
+  assert.match(workspaceSource, /className="aw-deploy-log-empty">\{pendingMessage\}/);
+  assert.match(workspaceSource, /hasLogText[\s\S]*?\? <pre ref=\{logTextRef\}>\{visibleText\}<\/pre>[\s\S]*?: <div className="aw-deploy-log-empty">\{pendingMessage\}<\/div>/);
+  assert.match(workspaceSource, /step\.phase === "build" && task\.buildLog[\s\S]*?className="aw-deploy-step-log"[\s\S]*?<DeploymentBuildLog task=\{task\} \/>/);
+  assert.doesNotMatch(workspaceSource, /<\/ol>\s*<DeploymentBuildLog task=\{task\} \/>/);
+  assert.match(workspaceStyles, /\.aw-deploy-step-log\s*\{[\s\S]*?margin-top:\s*10px;/);
+  assert.match(workspaceStyles, /\.aw-deploy-log-empty\s*\{/);
+  assert.match(workspaceStyles, /\.aw-deploy-log\.is-collapsed header\s*\{[\s\S]*?border-bottom:\s*0;/);
   assert.doesNotMatch(
     workspaceSource,
     /className="aw-basic-stack">\s*\{deploymentTask && <DeploymentProgressCard/,

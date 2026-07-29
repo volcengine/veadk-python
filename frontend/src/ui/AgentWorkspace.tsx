@@ -5,6 +5,7 @@ import {
   CircleAlert,
   CircleCheck,
   CircleX,
+  Copy,
   FlaskConical,
   Loader2,
   MessageCircle,
@@ -279,6 +280,7 @@ const DEPLOYMENT_STEPS = [
   { phase: "publish", label: "发布服务", description: "等待服务就绪并生成访问地址" },
   { phase: "complete", label: "部署完成", description: "智能体已可以正常使用" },
 ] as const;
+const BUILD_STEP_INDEX = DEPLOYMENT_STEPS.findIndex((step) => step.phase === "build");
 
 function deploymentStepIndex(task: DeploymentTaskUpdate): number {
   if (task.status === "success") return DEPLOYMENT_STEPS.length - 1;
@@ -291,6 +293,121 @@ function deploymentStepIndex(task: DeploymentTaskUpdate): number {
   } as Record<string, string>)[task.label];
   const index = DEPLOYMENT_STEPS.findIndex((step) => step.phase === phase);
   return index < 0 ? 0 : index;
+}
+
+function formatBuildLogTime(updatedAt: number): string {
+  if (!updatedAt) return "";
+  try {
+    return new Intl.DateTimeFormat("zh-CN", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(new Date(updatedAt));
+  } catch {
+    return "";
+  }
+}
+
+function DeploymentBuildLog({ task }: { task: DeploymentTaskUpdate }) {
+  const log = task.buildLog;
+  const logTextRef = useRef<HTMLPreElement | null>(null);
+  const shouldAutoExpand = Boolean(
+    log?.status !== "complete"
+    && (task.status === "running" || task.status === "error")
+    && deploymentStepIndex(task) === BUILD_STEP_INDEX,
+  );
+  const [expanded, setExpanded] = useState(shouldAutoExpand);
+  const [copied, setCopied] = useState(false);
+  const hasLogText = Boolean(log?.text || log?.error);
+  const text = log?.text || log?.error || "";
+  const lines = text.split("\n");
+  const visibleText = expanded ? text : lines.slice(-36).join("\n");
+  const pendingMessage = log?.pendingMessage || "正在等待构建日志…";
+
+  useEffect(() => {
+    if (!log) return;
+    setExpanded(shouldAutoExpand);
+  }, [task.id, log?.status, shouldAutoExpand]);
+
+  useEffect(() => {
+    if (!expanded || !hasLogText) return;
+    const node = logTextRef.current;
+    if (!node) return;
+    node.scrollTop = node.scrollHeight;
+  }, [expanded, hasLogText, visibleText]);
+
+  if (!log || (!log.text && log.status !== "error" && !log.pendingMessage)) return null;
+
+  const updatedAt = formatBuildLogTime(log.updatedAt);
+  const statusLabel = log.status === "complete"
+    ? "已同步"
+    : log.status === "error"
+      ? "读取失败"
+      : "同步中";
+  const truncationLabel = log.omittedEarly
+    ? "已省略早期日志"
+    : log.snapshotTruncated
+      ? "仅显示最近的构建日志"
+      : log.truncated
+        ? "已省略部分日志"
+        : "";
+  const meta = [
+    statusLabel,
+    log.lineCount ? `${log.lineCount} 行` : "",
+    truncationLabel,
+    updatedAt,
+  ].filter(Boolean).join(" · ");
+
+  async function copyLog() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  return (
+    <section
+      className={`aw-deploy-log is-${log.status}${expanded ? "" : " is-collapsed"}`}
+      aria-label="构建日志"
+    >
+      <header>
+        <div>
+          <strong>构建日志</strong>
+          <span>{meta}</span>
+        </div>
+        <div className="aw-deploy-log-actions">
+          {hasLogText && (
+            <button
+              type="button"
+              onClick={() => setExpanded((value) => !value)}
+            >
+              {expanded ? "收起" : "展开"}
+            </button>
+          )}
+          {hasLogText && (
+            <button
+              type="button"
+              onClick={() => void copyLog()}
+              aria-label={copied ? "已复制构建日志" : "复制构建日志"}
+              title={copied ? "已复制" : "复制构建日志"}
+            >
+              {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+              <span>{copied ? "已复制" : "复制"}</span>
+            </button>
+          )}
+        </div>
+      </header>
+      {expanded && (
+        hasLogText
+          ? <pre ref={logTextRef}>{visibleText}</pre>
+          : <div className="aw-deploy-log-empty">{pendingMessage}</div>
+      )}
+    </section>
+  );
 }
 
 function DeploymentProgressCard({ task }: { task: DeploymentTaskUpdate }) {
@@ -367,6 +484,11 @@ function DeploymentProgressCard({ task }: { task: DeploymentTaskUpdate }) {
               <div className="aw-deploy-step-copy">
                 <strong>{step.label}</strong>
                 <p>{message || step.description}</p>
+                {step.phase === "build" && task.buildLog && (
+                  <div className="aw-deploy-step-log">
+                    <DeploymentBuildLog task={task} />
+                  </div>
+                )}
               </div>
             </li>
           );
@@ -440,7 +562,6 @@ export function AgentWorkspace({
   const [section, setSection] = useState<AgentSection>("basic");
   const [activeAgentId, setActiveAgentId] = useState("");
   const [activeDraftId, setActiveDraftId] = useState("");
-  const [activeDeploymentTaskId, setActiveDeploymentTaskId] = useState("");
   const [runtimeDetail, setRuntimeDetail] = useState<RuntimeDetail | null>(null);
   const [detailAgentInfo, setDetailAgentInfo] = useState<AgentInfo | null>(null);
   const [detailAgentInfoResolved, setDetailAgentInfoResolved] = useState(false);
@@ -559,9 +680,9 @@ export function AgentWorkspace({
 
   const selectedAgent = agents.find((agent) => agent.id === activeAgentId);
   const selectedDraft = drafts.find((item) => item.id === activeDraftId);
-  const selectedPendingTask = deploymentTasks.find(
-    (task) => task.id === activeDeploymentTaskId,
-  );
+  const selectedPendingTask = focusedDeploymentTaskId
+    ? deploymentTasks.find((task) => task.id === focusedDeploymentTaskId)
+    : undefined;
   const selectedAgentUpdateDraft = selectedAgent?.runtimeId
     ? updateDraftByRuntimeId.get(selectedAgent.runtimeId)
     : undefined;
@@ -669,6 +790,17 @@ export function AgentWorkspace({
       )
       .sort((left, right) => right.startedAt - left.startedAt)[0];
   }, [deploymentTasks, selectedAgent, selectedDraft, selectedPendingTask]);
+  const focusedDeploymentTaskActive = Boolean(
+    focusedDeploymentTaskId
+    && deploymentTask
+    && deploymentTask.id === focusedDeploymentTaskId,
+  );
+  const shouldShowDeploymentTask = Boolean(
+    deploymentTask && (
+      deploymentTask.status !== "success"
+      || focusedDeploymentTaskActive
+    ),
+  );
   const draftFlowKey = useMemo(() => canvasDraftKey(draft), [draft]);
   const displayCurrentVersion =
     selectedAgent?.currentVersion ?? runtimeDetail?.currentVersion ?? null;
@@ -689,7 +821,6 @@ export function AgentWorkspace({
       ? agentByRuntimeId.get(focusedTask.runtimeId)
       : undefined;
     if (matchingAgent) {
-      setActiveDeploymentTaskId("");
       setActiveDraftId("");
       setActiveAgentId(matchingAgent.id);
       setSection("basic");
@@ -697,7 +828,6 @@ export function AgentWorkspace({
     }
     setActiveAgentId("");
     setActiveDraftId("");
-    setActiveDeploymentTaskId(focusedDeploymentTaskId);
     setSection("basic");
   }, [agentByRuntimeId, deploymentTasks, focusedDeploymentTaskId]);
 
@@ -710,7 +840,6 @@ export function AgentWorkspace({
     if (appliedFocusKeyRef.current === focusKey) return;
     if (!agents.some((agent) => agent.id === focusedAgentId)) return;
     appliedFocusKeyRef.current = focusKey;
-    setActiveDeploymentTaskId("");
     setActiveDraftId("");
     setActiveAgentId(focusedAgentId);
     setSection(focusedAgentSection);
@@ -1326,7 +1455,6 @@ export function AgentWorkspace({
                           return;
                         }
                         setActiveAgentId("");
-                        setActiveDeploymentTaskId("");
                         setActiveDraftId(item.id);
                         setSection("basic");
                       }}
@@ -1458,7 +1586,6 @@ export function AgentWorkspace({
                         suppressAgentClickRef.current = false;
                         return;
                       }
-                      setActiveDeploymentTaskId("");
                       setActiveDraftId("");
                       setActiveAgentId(agent.id);
                       setSection("basic");
@@ -1578,7 +1705,7 @@ export function AgentWorkspace({
                 </div>
               )}
             </div>
-            {deploymentTask && (deploymentTask.status !== "success" || deploymentTask.message) && (
+            {deploymentTask && shouldShowDeploymentTask && (
               <div className="aw-detail-deployment">
                 <DeploymentProgressCard task={deploymentTask} />
               </div>
