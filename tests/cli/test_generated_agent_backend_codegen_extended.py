@@ -509,6 +509,62 @@ async def test_skillspace_materialization_aligns_folder_with_skill_md_name() -> 
 
 
 @pytest.mark.asyncio
+async def test_skillspace_materialization_keeps_full_package_files() -> None:
+    skill = SelectedSkill(
+        source="skillspace",
+        folder="intelligent-diagnosis-report",
+        name="intelligent-diagnosis-report",
+        skillSpaceId="space-1",
+        skillSpaceName="Demo Space",
+        skillId="skill-1",
+        version="v1",
+    )
+    draft = AgentDraft(name="car", selectedSkills=[skill])
+    project = generate_project_from_draft(draft)
+
+    async def resolve(
+        space_id: str,
+        skill_id: str,
+        version: str | None,
+        region: str | None = None,
+        **_: object,
+    ) -> list[GeneratedFile]:
+        del space_id, skill_id, version, region
+        return _files_from_zip(
+            _skill_zip(
+                {
+                    "cloud-package/SKILL.md": (
+                        "---\n"
+                        "name: domain-test-skill\n"
+                        "description: Shared.\n"
+                        "---\n"
+                    ),
+                    "cloud-package/helpers/report.py": "REPORT = 'ok'\n",
+                }
+            ),
+            "intelligent-diagnosis-report",
+            "SkillSpace skill skill-1",
+        )
+
+    await materialize_selected_skills(
+        draft,
+        project,
+        resolve_skillspace_detail=resolve,
+    )
+
+    files = _file_map(project)
+    assert (
+        'load_skill_from_dir(_Path(__file__).parent.parent.parent / "skills" / '
+        '"domain-test-skill")'
+    ) in files["agents/car/agent.py"]
+    assert files["skills/domain-test-skill/SKILL.md"].startswith(
+        "---\nname: domain-test-skill\n"
+    )
+    assert files["skills/domain-test-skill/helpers/report.py"] == "REPORT = 'ok'\n"
+    assert "skills/domain-test-skill/cloud-package/SKILL.md" not in files
+
+
+@pytest.mark.asyncio
 async def test_skillspace_materialization_normalizes_legacy_frontmatter() -> None:
     skill = SelectedSkill(
         source="skillspace",

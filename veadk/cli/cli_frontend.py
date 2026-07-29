@@ -1382,6 +1382,7 @@ def _run_frontend_server(
         AgentDraft,
         GeneratedAgentProjectRequest,
         GeneratedAgentTestRunRequest,
+        GeneratedFile,
         GeneratedProject,
         debug_runtime_env_from_draft,
         generate_project_from_draft,
@@ -1396,7 +1397,10 @@ def _run_frontend_server(
         GeneratedAgentDraftRequest,
         generate_agent_draft,
     )
-    from veadk.cli.generated_agent_skills import materialize_selected_skills
+    from veadk.cli.generated_agent_skills import (
+        _files_from_zip,
+        materialize_selected_skills,
+    )
 
     _TEST_RUN_MAX_FILES = 100
     _TEST_RUN_MAX_FILE_BYTES = 256 * 1024
@@ -1696,7 +1700,49 @@ def _run_frontend_server(
                 )
             return _read_skill_md_from_zip(zip_path, skill_id)
 
-    async def _resolve_skillspace_skill_md(
+    def _skill_files_from_version_response(
+        *,
+        space_id: str,
+        skill_id: str,
+        version: str | None,
+        resp: object,
+        folder: str,
+    ) -> str | list[GeneratedFile]:
+        skill_md = _skill_version_attr(resp, "skill_md", "skillMd")
+        if skill_md:
+            return skill_md
+        bucket_name = _skill_version_attr(resp, "bucket_name", "bucketName")
+        tos_path = _skill_version_attr(resp, "tos_path", "tosPath", "path")
+        if not bucket_name or not tos_path:
+            raise HTTPException(
+                status_code=404, detail="Skill version has no SKILL.md content"
+            )
+        from veadk.skills.materializer import _download_legacy_skill_space_skill
+        from veadk.skills.skill import Skill as VeADKSkill
+
+        remote_skill = VeADKSkill(
+            name=_skill_version_attr(resp, "name") or skill_id,
+            description=_skill_version_attr(resp, "description"),
+            path=tos_path,
+            skill_space_id=space_id,
+            bucket_name=bucket_name,
+            id=skill_id,
+            version_id=version or _skill_version_attr(resp, "version"),
+        )
+        with tempfile.TemporaryDirectory(prefix="veadk_skillspace_") as temp_dir:
+            zip_path = Path(temp_dir) / "skill.zip"
+            if not _download_legacy_skill_space_skill(remote_skill, zip_path):
+                raise HTTPException(
+                    status_code=502,
+                    detail="Failed to download SkillSpace skill package",
+                )
+            return _files_from_zip(
+                zip_path.read_bytes(),
+                folder,
+                f"SkillSpace skill {skill_id}",
+            )
+
+    async def _resolve_skillspace_skill_materialization(
         space_id: str,
         skill_id: str,
         version: str | None,
@@ -1704,7 +1750,7 @@ def _run_frontend_server(
         *,
         skill_space_name: str | None = None,
         skill_name: str | None = None,
-    ) -> str:
+    ) -> str | list[GeneratedFile]:
         from agentkit.sdk.skills.types import (
             GetSkillInfoRequest,
             GetSkillVersionRequest,
@@ -1746,11 +1792,12 @@ def _run_frontend_server(
                     detail=f"SkillSpaces API error: {version_error}",
                 ) from version_error
         return await asyncio.to_thread(
-            _skill_md_from_version_response,
+            _skill_files_from_version_response,
             space_id=space_id,
             skill_id=skill_id,
             version=version,
             resp=resp,
+            folder=skill_name or skill_id,
         )
 
     def _draft_for_debug_run(draft: AgentDraft) -> AgentDraft:
@@ -1792,7 +1839,7 @@ def _run_frontend_server(
             await materialize_selected_skills(
                 draft,
                 project,
-                resolve_skillspace_detail=_resolve_skillspace_skill_md,
+                resolve_skillspace_detail=_resolve_skillspace_skill_materialization,
             )
             return project, draft
         except ValidationError as e:

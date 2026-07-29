@@ -35,7 +35,8 @@ from veadk.cli.generated_agent_codegen import (
 from veadk.cli.generated_agent_security import DebugPolicyError
 
 
-SkillSpaceResolver = Callable[..., Awaitable[str]]
+SkillSpaceResolverResult = str | list[GeneratedFile]
+SkillSpaceResolver = Callable[..., Awaitable[SkillSpaceResolverResult]]
 
 SKILLHUB_BASE = "https://skills.volces.com/v1/skills"
 MAX_SKILL_FILES = 80
@@ -130,7 +131,7 @@ async def _materialize_skillspace_skill(
         raise DebugPolicyError("SkillSpace skill is missing ids")
     folder = _safe_folder(skill.folder or skill.name or skill.skillId)
     try:
-        skill_md = await resolver(
+        resolved = await resolver(
             skill.skillSpaceId,
             skill.skillId,
             skill.version or None,
@@ -139,17 +140,62 @@ async def _materialize_skillspace_skill(
             skill_name=skill.name or None,
         )
     except TypeError:
-        skill_md = await resolver(
+        resolved = await resolver(
             skill.skillSpaceId,
             skill.skillId,
             skill.version or None,
         )
-    skill_md = _normalize_skill_md_frontmatter(
-        skill_md, f"SkillSpace skill {skill.skillId}"
+    if isinstance(resolved, str):
+        skill_md = _normalize_skill_md_frontmatter(
+            resolved, f"SkillSpace skill {skill.skillId}"
+        )
+        folder = _skill_md_folder_name(skill_md) or folder
+        skill.folder = folder
+        return [GeneratedFile(path=f"skills/{folder}/SKILL.md", content=skill_md)]
+
+    files = _normalize_skillspace_files(
+        resolved,
+        folder,
+        f"SkillSpace skill {skill.skillId}",
     )
-    folder = _skill_md_folder_name(skill_md) or folder
-    skill.folder = folder
-    return [GeneratedFile(path=f"skills/{folder}/SKILL.md", content=skill_md)]
+    skill.folder = _folder_from_generated_files(files) or folder
+    return files
+
+
+def _normalize_skillspace_files(
+    files: list[GeneratedFile],
+    folder: str,
+    label: str,
+) -> list[GeneratedFile]:
+    if not files:
+        raise DebugPolicyError(f"{label} has no files")
+    skill_md_content: str | None = None
+    current_folder: str | None = None
+    for file in files:
+        path = _normalize_project_path(file.path)
+        parts = PurePosixPath(path).parts
+        if len(parts) < 3 or parts[0] != "skills":
+            raise DebugPolicyError(f"{label} file must be under skills/: {file.path}")
+        if current_folder is None:
+            current_folder = parts[1]
+        if _SKILL_MD_RE.search(path):
+            skill_md_content = file.content
+    if skill_md_content is None:
+        raise DebugPolicyError(f"{label} is missing SKILL.md")
+    skill_md = _normalize_skill_md_frontmatter(
+        skill_md_content,
+        label,
+    )
+    target_folder = _skill_md_folder_name(skill_md) or current_folder or folder
+    out: list[GeneratedFile] = []
+    for file in files:
+        path = _normalize_project_path(file.path)
+        parts = PurePosixPath(path).parts
+        if len(parts) >= 3 and parts[0] == "skills":
+            path = "/".join(("skills", target_folder, *parts[2:]))
+        content = skill_md if _SKILL_MD_RE.search(path) else file.content
+        out.append(GeneratedFile(path=path, content=content))
+    return out
 
 
 def _materialize_local_skill(skill: SelectedSkill) -> list[GeneratedFile]:
@@ -182,7 +228,7 @@ def _files_from_zip(content: bytes, folder: str, label: str) -> list[GeneratedFi
         infos = [info for info in archive.infolist() if not info.is_dir()]
         if len(infos) > MAX_SKILL_FILES:
             raise DebugPolicyError(f"{label} contains too many files")
-        skill_md_content: str | None = None
+        skill_md_candidates: list[tuple[str, str]] = []
         for info in infos:
             if info.file_size > MAX_SKILL_FILE_BYTES:
                 raise DebugPolicyError(f"{label} file is too large: {info.filename}")
@@ -193,15 +239,38 @@ def _files_from_zip(content: bytes, folder: str, label: str) -> list[GeneratedFi
             with archive.open(info) as fh:
                 text = _decode_skill_file(fh.read(), f"{label} file {info.filename}")
             if _SKILL_MD_RE.search(rel):
-                skill_md_content = text
+                skill_md_candidates.append((rel, text))
             extracted.append((rel, text))
-    if skill_md_content is None:
+    if not skill_md_candidates:
         raise DebugPolicyError(f"{label} is missing SKILL.md")
+    skill_md_rel, skill_md_content = sorted(
+        skill_md_candidates,
+        key=lambda item: (len(PurePosixPath(item[0]).parts), item[0]),
+    )[0]
+    extracted = _strip_skill_zip_prefix(extracted, skill_md_rel)
     folder = _skill_md_folder_name(skill_md_content) or folder
     return [
         GeneratedFile(path=f"skills/{folder}/{rel}", content=text)
         for rel, text in extracted
     ]
+
+
+def _strip_skill_zip_prefix(
+    files: list[tuple[str, str]], skill_md_rel: str
+) -> list[tuple[str, str]]:
+    base_parts = PurePosixPath(skill_md_rel).parent.parts
+    if not base_parts:
+        return files
+    out: list[tuple[str, str]] = []
+    for rel, text in files:
+        parts = PurePosixPath(rel).parts
+        if parts[: len(base_parts)] == base_parts:
+            stripped = "/".join(parts[len(base_parts) :])
+            if stripped:
+                out.append((stripped, text))
+        else:
+            out.append((rel, text))
+    return out
 
 
 def _decode_skill_file(content: bytes, label: str) -> str:
