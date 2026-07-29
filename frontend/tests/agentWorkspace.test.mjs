@@ -144,10 +144,15 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(projectPreviewSource, /onDeploymentComplete\?: \(result: DeployResult\)/);
   assert.match(projectPreviewSource, /const isRuntimeUpdate = deploymentActionLabel\.includes\("更新"\)/);
   assert.match(projectPreviewSource, /onDeploymentStarted\?\.\(initialTask\)/);
+  assert.match(projectPreviewSource, /RuntimeProbeError/);
+  assert.match(
+    projectPreviewSource,
+    /await onDeploymentComplete\?\.\(result\)[\s\S]*?catch \(error\)[\s\S]*?error instanceof RuntimeProbeError[\s\S]*?status: "success"[\s\S]*?label: "部署完成，暂未连接"[\s\S]*?message: error\.message/,
+  );
   assert.doesNotMatch(workspaceSource, /aw-deployment-focus/);
   assert.match(
     workspaceSource,
-    /className="aw-agent-head"[\s\S]*?deploymentTask\.status !== "success"[\s\S]*?className="aw-detail-deployment"[\s\S]*?<DeploymentProgressCard task=\{deploymentTask\} \/>[\s\S]*?<nav className="aw-agent-tabs"/,
+    /className="aw-agent-head"[\s\S]*?deploymentTask\.status !== "success" \|\| deploymentTask\.message[\s\S]*?className="aw-detail-deployment"[\s\S]*?<DeploymentProgressCard task=\{deploymentTask\} \/>[\s\S]*?<nav className="aw-agent-tabs"/,
   );
   assert.doesNotMatch(
     workspaceSource,

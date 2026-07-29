@@ -66,7 +66,7 @@ import {
   runtimeEnvDisplayRows,
   runtimeEnvVars,
 } from "../create/deploymentEnv";
-import type { DeployStage } from "../adk/client";
+import { RuntimeProbeError, type DeployStage } from "../adk/client";
 import feishuLogo from "../assets/feishu-logo.svg";
 import { buildZip } from "./zip";
 import { ProjectCodeBrowser } from "./CodeBrowserDialog";
@@ -823,7 +823,6 @@ export function ProjectPreview({
         setDeployResult(result);
         setActivePhase(null);
       }
-      await onDeploymentComplete?.(result);
       onDeploymentTaskChange?.({
         id: taskId,
         runtimeName: result.agentName || taskRuntimeName,
@@ -834,6 +833,22 @@ export function ProjectPreview({
         phase: "complete",
         label: "部署完成",
       });
+      try {
+        await onDeploymentComplete?.(result);
+      } catch (error) {
+        if (!(error instanceof RuntimeProbeError)) throw error;
+        onDeploymentTaskChange?.({
+          id: taskId,
+          runtimeName: result.agentName || taskRuntimeName,
+          runtimeId: result.runtimeId || deploymentRuntimeId,
+          region: result.region || deployRegion,
+          startedAt: taskStartedAt,
+          status: "success",
+          phase: "complete",
+          label: "部署完成，暂未连接",
+          message: error.message,
+        });
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (err instanceof DOMException && err.name === "AbortError") {

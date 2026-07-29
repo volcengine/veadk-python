@@ -411,6 +411,8 @@ export class RuntimeProbeError extends Error {
 
 const PRIVATE_RUNTIME_UNREACHABLE_MESSAGE =
   "Runtime 已部署成功，但当前 Studio 无法访问私网 Runtime。请使用已绑定相同 VPC 的 Studio 访问，或改用公网 / 公网+VPC 部署。";
+const RUNTIME_ENDPOINT_UNREACHABLE_MESSAGE =
+  "Runtime 已部署成功，但 Studio 暂时无法连接服务。网关域名可能仍在生效，或当前网络/DNS 无法访问该 Runtime，请稍后在智能体管理页重试连接。";
 
 async function runtimeProxyErrorCode(response: Response): Promise<string> {
   try {
@@ -442,6 +444,17 @@ export async function fetchRemoteApps(
     runtimeErrorCode === "runtime_private_endpoint_unreachable"
   ) {
     throw new RuntimeProbeError(PRIVATE_RUNTIME_UNREACHABLE_MESSAGE);
+  }
+  if (
+    ep?.runtimeId &&
+    [
+      "runtime_proxy_connect_error",
+      "runtime_proxy_timeout",
+      "runtime_json_connect_error",
+      "runtime_json_timeout",
+    ].includes(runtimeErrorCode)
+  ) {
+    throw new RuntimeProbeError(RUNTIME_ENDPOINT_UNREACHABLE_MESSAGE);
   }
   if (ep?.runtimeId && res.status === 404) {
     throw new RuntimeProbeError(
