@@ -3206,26 +3206,88 @@ def _run_frontend_server(
 
     # Cache resolved (endpoint, apikey, auth type) per runtime so the data-plane
     # proxy does not call GetRuntime on every request. Short TTL; cleared on a 401.
-    _rt_conn_cache: dict[tuple[str, str], tuple[str, str, str, float]] = {}
+    _rt_conn_cache: dict[tuple[str, str], tuple[str, str, str, str, float]] = {}
+
+    def _runtime_endpoint_host(endpoint: str) -> str:
+        parsed = urlparse(endpoint or "")
+        return parsed.hostname or parsed.netloc or ""
+
+    def _runtime_proxy_should_retry_probe(method: str, path: str) -> bool:
+        if method.upper() != "GET":
+            return False
+        normalized = path.strip("/")
+        if normalized == "list-apps" or normalized.startswith("web/agent-info/"):
+            return True
+        parts = normalized.split("/")
+        return (
+            len(parts) == 5
+            and parts[0] == "apps"
+            and parts[2] == "users"
+            and parts[4] == "sessions"
+        )
+
+    def _runtime_proxy_retry_delay(attempt: int) -> float:
+        return min(5.0, float(2 ** max(0, attempt - 1)))
+
+    def _runtime_network_error_detail(
+        endpoint_network_type: str,
+        *,
+        timeout: bool,
+        json_request: bool = False,
+    ) -> str:
+        if endpoint_network_type == "private":
+            return "runtime_private_endpoint_unreachable"
+        if json_request:
+            return "runtime_json_timeout" if timeout else "runtime_json_connect_error"
+        return "runtime_proxy_timeout" if timeout else "runtime_proxy_connect_error"
+
+    def _runtime_network_log_items(runtime: Any) -> list[dict[str, Any]]:
+        items = []
+        for index, nc in enumerate(
+            getattr(runtime, "network_configurations", None) or []
+        ):
+            endpoint = getattr(nc, "endpoint", "") or ""
+            items.append(
+                {
+                    "index": index,
+                    "network_type": getattr(nc, "network_type", "") or "",
+                    "endpoint_present": bool(endpoint),
+                    "endpoint_host": _runtime_endpoint_host(endpoint),
+                }
+            )
+        return items
 
     def _resolve_runtime_conn(
         runtime_id: str,
         region: str,
         runtime: Any | None = None,
-    ) -> tuple[str, str, str]:
+    ) -> tuple[str, str, str, str]:
         import time as _time
 
         cache_key = (region, runtime_id)
         cached = _rt_conn_cache.get(cache_key)
-        if cached and cached[3] > _time.time():
-            return cached[0], cached[1], cached[2]
+        if cached and cached[4] > _time.time():
+            logger.info(
+                "runtime conn cache hit runtime_id=%s region=%s endpoint_host=%s "
+                "auth_type=%s network_type=%s",
+                runtime_id,
+                region,
+                _runtime_endpoint_host(cached[0]),
+                cached[2],
+                cached[3],
+            )
+            return cached[0], cached[1], cached[2], cached[3]
         r = runtime if runtime is not None else _get_runtime(runtime_id, region)
         endpoint = ""
+        endpoint_source = ""
+        endpoint_network_type = ""
         for nc in getattr(r, "network_configurations", None) or []:
             ep = getattr(nc, "endpoint", "") or ""
             if ep:
+                endpoint_network_type = getattr(nc, "network_type", "") or ""
                 endpoint = ep
-                if getattr(nc, "network_type", "") == "public":
+                endpoint_source = f"network_config:{endpoint_network_type or 'unknown'}"
+                if endpoint_network_type == "public":
                     break
         apikey = ""
         auth = getattr(r, "authorizer_configuration", None)
@@ -3237,7 +3299,36 @@ def _run_frontend_server(
             auth_type = "key_auth"
         elif custom_jwt_auth:
             auth_type = "custom_jwt"
+        top_level_endpoint = getattr(r, "endpoint", "") or ""
+        logger.info(
+            "resolved runtime metadata runtime_id=%s region=%s runtime_name=%s "
+            "status=%s version=%s top_endpoint_present=%s top_endpoint_host=%s "
+            "network_configs=%s selected_endpoint_source=%s "
+            "selected_endpoint_host=%s auth_type=%s",
+            runtime_id,
+            region,
+            getattr(r, "name", "") or "",
+            getattr(r, "status", "") or "",
+            getattr(r, "current_version_number", "") or "",
+            bool(top_level_endpoint),
+            _runtime_endpoint_host(top_level_endpoint),
+            _runtime_network_log_items(r),
+            endpoint_source or "none",
+            _runtime_endpoint_host(endpoint),
+            auth_type,
+        )
         if not endpoint:
+            logger.warning(
+                "runtime has no selected endpoint runtime_id=%s region=%s "
+                "status=%s top_endpoint_present=%s top_endpoint_host=%s "
+                "network_configs=%s",
+                runtime_id,
+                region,
+                getattr(r, "status", "") or "",
+                bool(top_level_endpoint),
+                _runtime_endpoint_host(top_level_endpoint),
+                _runtime_network_log_items(r),
+            )
             raise HTTPException(
                 status_code=502, detail="runtime has no public endpoint"
             )
@@ -3245,9 +3336,10 @@ def _run_frontend_server(
             endpoint,
             apikey,
             auth_type,
+            endpoint_network_type,
             _time.time() + 300,
         )
-        return endpoint, apikey, auth_type
+        return endpoint, apikey, auth_type, endpoint_network_type
 
     def _runtime_request_headers(
         request: Request,
@@ -3294,7 +3386,7 @@ def _run_frontend_server(
                 region,
                 coded_access_error=True,
             )
-            endpoint, apikey, auth_type = _resolve_runtime_conn(
+            endpoint, apikey, auth_type, endpoint_network_type = _resolve_runtime_conn(
                 runtime_id,
                 region,
                 runtime,
@@ -3308,6 +3400,18 @@ def _run_frontend_server(
         # Drop the SSO gateway querystring; keep any real API query params.
         qs = {k: v for k, v in request.query_params.items() if k != "region"}
         target = f"{endpoint.rstrip('/')}/{path}"
+        target_host = _runtime_endpoint_host(target)
+        logger.info(
+            "runtime-proxy upstream request runtime_id=%s region=%s method=%s "
+            "path=%s target_host=%s query_keys=%s auth_type=%s",
+            runtime_id,
+            region,
+            request.method,
+            path,
+            target_host,
+            sorted(qs.keys()),
+            auth_type,
+        )
         # Use the shared proxy header builder so Origin/Referer and other
         # browser-only headers are stripped (the ADK server rejects them with
         # "origin not allowed" / 403 otherwise).
@@ -3341,14 +3445,110 @@ def _run_frontend_server(
 
         from fastapi.responses import StreamingResponse
 
+        retry_probe = _runtime_proxy_should_retry_probe(request.method, path)
+        max_attempts = 10 if retry_probe else 1
+        timeout = httpx.Timeout(10.0, connect=5.0) if retry_probe else None
+
         # Open the upstream stream so we can forward status + body incrementally.
-        client = httpx.AsyncClient(timeout=None)
-        req = client.build_request(
-            request.method, target, params=qs, headers=headers, content=body
-        )
-        upstream = await client.send(req, stream=True)
+        client = httpx.AsyncClient(timeout=timeout)
+        upstream = None
+        for attempt in range(1, max_attempts + 1):
+            req = client.build_request(
+                request.method, target, params=qs, headers=headers, content=body
+            )
+            try:
+                upstream = await client.send(req, stream=True)
+                if attempt > 1:
+                    logger.info(
+                        "runtime-proxy probe succeeded after retry "
+                        "runtime_id=%s region=%s path=%s target_host=%s "
+                        "attempt=%s max_attempts=%s",
+                        runtime_id,
+                        region,
+                        path,
+                        target_host,
+                        attempt,
+                        max_attempts,
+                    )
+                break
+            except (httpx.ConnectError, httpx.TimeoutException) as error:
+                timed_out = isinstance(error, httpx.TimeoutException)
+                if attempt < max_attempts:
+                    delay = _runtime_proxy_retry_delay(attempt)
+                    logger.warning(
+                        "runtime-proxy probe retry runtime_id=%s region=%s "
+                        "method=%s path=%s target_host=%s network_type=%s "
+                        "attempt=%s max_attempts=%s delay=%.1fs error=%s",
+                        runtime_id,
+                        region,
+                        request.method,
+                        path,
+                        target_host,
+                        endpoint_network_type,
+                        attempt,
+                        max_attempts,
+                        delay,
+                        error,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                await client.aclose()
+                logger.error(
+                    "runtime-proxy %s runtime_id=%s region=%s method=%s "
+                    "path=%s target_host=%s query_keys=%s network_type=%s "
+                    "attempt=%s max_attempts=%s error=%s",
+                    "timeout" if timed_out else "connect failed",
+                    runtime_id,
+                    region,
+                    request.method,
+                    path,
+                    target_host,
+                    sorted(qs.keys()),
+                    endpoint_network_type,
+                    attempt,
+                    max_attempts,
+                    error,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=504 if timed_out else 502,
+                    detail=_runtime_network_error_detail(
+                        endpoint_network_type,
+                        timeout=timed_out,
+                    ),
+                ) from error
+            except httpx.HTTPError as error:
+                await client.aclose()
+                logger.error(
+                    "runtime-proxy request failed runtime_id=%s region=%s "
+                    "method=%s path=%s target_host=%s query_keys=%s error=%s",
+                    runtime_id,
+                    region,
+                    request.method,
+                    path,
+                    target_host,
+                    sorted(qs.keys()),
+                    error,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=502, detail="runtime_proxy_request_error"
+                ) from error
+        if upstream is None:
+            await client.aclose()
+            raise HTTPException(status_code=502, detail="runtime_proxy_request_error")
         if upstream.status_code == 401:
             _rt_conn_cache.pop((region, runtime_id), None)
+        logger.info(
+            "runtime-proxy upstream response runtime_id=%s region=%s method=%s "
+            "path=%s target_host=%s status=%s",
+            runtime_id,
+            region,
+            request.method,
+            path,
+            target_host,
+            upstream.status_code,
+        )
         if upstream.status_code >= 400:
             # Buffer error responses so we can log the body and still forward it.
             body_chunks = []
@@ -3648,7 +3848,7 @@ def _run_frontend_server(
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Call one authorized Runtime JSON endpoint from the Studio server."""
-        endpoint, apikey, auth_type = _resolve_runtime_conn(
+        endpoint, apikey, auth_type, endpoint_network_type = _resolve_runtime_conn(
             runtime_id,
             region,
             runtime,
@@ -3661,15 +3861,95 @@ def _run_frontend_server(
         headers["Accept"] = "application/json"
         if payload is not None:
             headers["Content-Type"] = "application/json"
+        target = f"{endpoint.rstrip('/')}/{path.lstrip('/')}"
+        target_host = _runtime_endpoint_host(target)
+        logger.info(
+            "runtime json request runtime_id=%s region=%s method=%s path=%s "
+            "target_host=%s payload_present=%s auth_type=%s",
+            runtime_id,
+            region,
+            method,
+            path,
+            target_host,
+            payload is not None,
+            auth_type,
+        )
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.request(
-                method,
-                f"{endpoint.rstrip('/')}/{path.lstrip('/')}",
-                headers=headers,
-                json=payload,
-            )
+            try:
+                response = await client.request(
+                    method,
+                    target,
+                    headers=headers,
+                    json=payload,
+                )
+            except httpx.ConnectError as error:
+                logger.error(
+                    "runtime json connect failed runtime_id=%s region=%s "
+                    "method=%s path=%s target_host=%s error=%s",
+                    runtime_id,
+                    region,
+                    method,
+                    path,
+                    target_host,
+                    error,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail=_runtime_network_error_detail(
+                        endpoint_network_type,
+                        timeout=False,
+                        json_request=True,
+                    ),
+                ) from error
+            except httpx.TimeoutException as error:
+                logger.error(
+                    "runtime json timeout runtime_id=%s region=%s method=%s "
+                    "path=%s target_host=%s error=%s",
+                    runtime_id,
+                    region,
+                    method,
+                    path,
+                    target_host,
+                    error,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=504,
+                    detail=_runtime_network_error_detail(
+                        endpoint_network_type,
+                        timeout=True,
+                        json_request=True,
+                    ),
+                ) from error
+            except httpx.HTTPError as error:
+                logger.error(
+                    "runtime json request failed runtime_id=%s region=%s "
+                    "method=%s path=%s target_host=%s error=%s",
+                    runtime_id,
+                    region,
+                    method,
+                    path,
+                    target_host,
+                    error,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=502, detail="runtime_json_request_error"
+                ) from error
         if response.status_code >= 400:
             detail = response.text.strip()[:2000]
+            logger.warning(
+                "runtime json upstream error runtime_id=%s region=%s method=%s "
+                "path=%s target_host=%s status=%s body=%s",
+                runtime_id,
+                region,
+                method,
+                path,
+                target_host,
+                response.status_code,
+                detail[:500],
+            )
             raise HTTPException(
                 status_code=response.status_code,
                 detail=detail or f"Runtime returned HTTP {response.status_code}",

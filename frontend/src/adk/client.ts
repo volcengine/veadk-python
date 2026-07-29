@@ -409,6 +409,9 @@ export class RuntimeProbeError extends Error {
   }
 }
 
+const PRIVATE_RUNTIME_UNREACHABLE_MESSAGE =
+  "Runtime 已部署成功，但当前 Studio 无法访问私网 Runtime。请使用已绑定相同 VPC 的 Studio 访问，或改用公网 / 公网+VPC 部署。";
+
 async function runtimeProxyErrorCode(response: Response): Promise<string> {
   try {
     const payload = (await response.clone().json()) as {
@@ -433,6 +436,12 @@ export async function fetchRemoteApps(
     : "";
   if (ep?.runtimeId && runtimeErrorCode === "runtime_access_denied") {
     throw new RuntimeAccessDeniedError();
+  }
+  if (
+    ep?.runtimeId &&
+    runtimeErrorCode === "runtime_private_endpoint_unreachable"
+  ) {
+    throw new RuntimeProbeError(PRIVATE_RUNTIME_UNREACHABLE_MESSAGE);
   }
   if (ep?.runtimeId && res.status === 404) {
     throw new RuntimeProbeError(
