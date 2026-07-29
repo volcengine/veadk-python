@@ -668,6 +668,7 @@ def test_remote_skill_zip_normalizes_malformed_frontmatter() -> None:
         "---\n"
         "name: superpowers-writing-plans\n"
         "description: Write practical plans.\n"
+        "metadata: ''\n"
         "use_cases:\n"
         "  - User has an approved design or product brief\n"
         "  - \"write a plan\" / \"make a plan\" / \"implementation plan\": now\n"
@@ -685,6 +686,7 @@ def test_remote_skill_zip_normalizes_malformed_frontmatter() -> None:
     parsed = yaml.safe_load(frontmatter)
     assert parsed["name"] == "superpowers-writing-plans"
     assert parsed["description"] == "Write practical plans."
+    assert parsed["metadata"] == {}
 
 
 class _FakeResponse:

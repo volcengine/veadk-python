@@ -430,5 +430,7 @@ def _normalize_skill_md_frontmatter(text: str, where: str) -> str:
         meta, body = _parse_skill_md(text, where)
     except DebugPolicyError:
         return text
+    if "metadata" in meta and not isinstance(meta["metadata"], dict):
+        meta["metadata"] = {}
     header = yaml.safe_dump(meta, allow_unicode=True, sort_keys=False).strip()
     return f"---\n{header}\n---\n{body}"
