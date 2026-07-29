@@ -713,8 +713,8 @@ class ArkLlm(Gemini):
         if not llm_request_has_field("previous_interaction_id"):
             raise ImportError(
                 "If using the ResponsesAPI, "
-                "please upgrade the version of google-adk to `1.21.0` or higher with the command: "
-                "`pip install -U 'google-adk>=1.21.0'`"
+                "please upgrade the version of google-adk to `1.34.0` or higher with the command: "
+                "`pip install -U 'google-adk>=1.34.0'`"
             )
         super().__init__(**kwargs)
         self.enable_responses_cache = kwargs.get("enable_responses_cache", True)
