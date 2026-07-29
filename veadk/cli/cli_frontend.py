@@ -1732,6 +1732,8 @@ def _run_frontend_server(
         with tempfile.TemporaryDirectory(prefix="veadk_skillspace_") as temp_dir:
             zip_path = Path(temp_dir) / "skill.zip"
             if not _download_legacy_skill_space_skill(remote_skill, zip_path):
+                if skill_md:
+                    return skill_md
                 raise HTTPException(
                     status_code=502,
                     detail="Failed to download SkillSpace skill package",

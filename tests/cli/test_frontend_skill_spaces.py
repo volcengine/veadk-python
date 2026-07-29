@@ -512,6 +512,50 @@ def test_get_skill_detail_falls_back_to_skillspace_package(
     ]
 
 
+def test_get_skill_detail_falls_back_to_skill_md_when_package_download_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _FakeSkillsClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_skill_version(self, request: Any) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                name="ticket-classifier",
+                description="识别工单类型",
+                version="1.2.0",
+                skill_md="---\nname: ticket-classifier\n---\nBody.\n",
+                bucket_name="skills-bucket",
+                tos_path="skills/ticket-classifier.zip",
+            )
+
+    def _download_skill(skill: Any, zip_path: Path) -> bool:
+        del skill, zip_path
+        return False
+
+    monkeypatch.setattr(
+        "agentkit.sdk.skills.client.AgentkitSkillsClient", _FakeSkillsClient
+    )
+    monkeypatch.setattr(
+        "veadk.skills.materializer._download_legacy_skill_space_skill",
+        _download_skill,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/skill-spaces/space-1/skills/skill-1",
+            params={"region": "cn-shanghai", "version": "1.2.0"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["skillMd"].endswith("Body.\n")
+    assert body["files"] == []
+
+
 def test_skill_space_routes_keep_missing_credentials_status(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
