@@ -439,7 +439,24 @@ def _normalize_skill_md_frontmatter(text: str, where: str) -> str:
         meta, body = _parse_skill_md(text, where)
     except DebugPolicyError:
         return text
+    name = _adk_skill_name(str(meta.get("name") or where))
+    meta["name"] = name
+    description = str(meta.get("description") or f"{name} skill").strip()
+    if len(description) > 1024:
+        description = description[:1024]
+    meta["description"] = description
     if "metadata" in meta and not isinstance(meta["metadata"], dict):
         meta["metadata"] = {}
+    if "compatibility" in meta and meta["compatibility"] is not None:
+        meta["compatibility"] = str(meta["compatibility"])[:500]
+    for key in ("license", "allowed_tools", "allowed-tools"):
+        if key in meta and meta[key] is not None and not isinstance(meta[key], str):
+            meta[key] = str(meta[key])
     header = yaml.safe_dump(meta, allow_unicode=True, sort_keys=False).strip()
     return f"---\n{header}\n---\n{body}"
+
+
+def _adk_skill_name(value: str) -> str:
+    name = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    name = re.sub(r"-+", "-", name)
+    return (name or "skill")[:64].strip("-") or "skill"

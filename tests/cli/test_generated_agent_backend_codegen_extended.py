@@ -708,6 +708,27 @@ def test_remote_skill_zip_normalizes_malformed_frontmatter() -> None:
     assert parsed["metadata"] == {}
 
 
+def test_remote_skill_zip_normalizes_adk_incompatible_name() -> None:
+    skill_md = (
+        "---\n"
+        "name: stock_analyzer\n"
+        "description: Stock analysis.\n"
+        "---\n"
+        "Analyze stocks.\n"
+    )
+
+    files = _files_from_zip(
+        _skill_zip({"SKILL.md": skill_md}),
+        "stock_analyzer",
+        "Skill Hub skill stock_analyzer",
+    )
+
+    frontmatter = files[0].content.split("---", 2)[1]
+    parsed = yaml.safe_load(frontmatter)
+    assert parsed["name"] == "stock-analyzer"
+    assert [file.path for file in files] == ["skills/stock-analyzer/SKILL.md"]
+
+
 class _FakeResponse:
     def __init__(
         self,
