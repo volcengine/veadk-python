@@ -1190,25 +1190,6 @@ export default function App() {
           ]),
         ),
       );
-      const failures: string[] = [];
-      for (const runtime of runtimes) {
-        try {
-          await connectRuntime(
-            runtime.runtimeId,
-            runtime.name,
-            runtime.region,
-            runtime.currentVersion,
-          );
-        } catch {
-          failures.push(runtime.name);
-        }
-      }
-      setConnections(loadConnections());
-      if (failures.length > 0) {
-        setAgentLibraryError(
-          `${failures.length} 个 Runtime 暂时无法读取，请稍后重试。`,
-        );
-      }
     } catch (cause) {
       setAgentLibraryError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -1537,11 +1518,17 @@ export default function App() {
   }, [access]);
 
   useEffect(() => {
-    if (authStatus !== "authenticated" || agentsSource !== "cloud" || !uiConfigLoaded) {
+    if (
+      authStatus !== "authenticated" ||
+      agentsSource !== "cloud" ||
+      !uiConfigLoaded ||
+      !manageAgents ||
+      agentDetailTarget
+    ) {
       return;
     }
     void refreshAgentLibrary();
-  }, [agentsSource, authStatus, refreshAgentLibrary, uiConfigLoaded]);
+  }, [agentDetailTarget, agentsSource, authStatus, manageAgents, refreshAgentLibrary, uiConfigLoaded]);
 
   useEffect(() => {
     document.title = siteBranding.title;
@@ -1603,25 +1590,25 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (authStatus === "unauthenticated") return; // login page is shown instead
+    if (authStatus !== "authenticated") return;
+    if (agentsSource === "cloud") {
+      const saved = localStorage.getItem(LS.app);
+      const remoteIds = connections.flatMap((c) =>
+        c.apps.map((a) => remoteAppId(c.id, a)),
+      );
+      setAppName((current) => {
+        if (current && remoteIds.includes(current)) return current;
+        if (saved && remoteIds.includes(saved)) return saved;
+        return remoteIds[0] ?? "";
+      });
+      return;
+    }
     listApps()
       .then((list) => {
         setApps(list);
         // Restore the last-used agent; otherwise land on a known-good default
         // (prefer a servable, conversational agent — numbered examples like
         // 01_quickstart are standalone scripts with no root_agent and can't load).
-        if (agentsSource === "cloud") {
-          const saved = localStorage.getItem(LS.app);
-          const remoteIds = connections.flatMap((c) =>
-            c.apps.map((a) => remoteAppId(c.id, a)),
-          );
-          setAppName((current) => {
-            if (current && remoteIds.includes(current)) return current;
-            if (saved && remoteIds.includes(saved)) return saved;
-            return remoteIds[0] ?? "";
-          });
-          return;
-        }
         // Local mode: restore the last-used agent, else a known-good default
         // (prefer a servable, conversational agent — numbered examples like
         // 01_quickstart are standalone scripts with no root_agent and can't load).
@@ -1645,7 +1632,7 @@ export default function App() {
     let cancelled = false;
     setSessionCapabilities(null);
     setSessionBuiltinTools([]);
-    if (!appName || !userId || !sessionId) {
+    if (myAgents || agentDetailTarget || !appName || !userId || !sessionId) {
       setSessionCapabilitiesLoading(false);
       return;
     }
@@ -1671,12 +1658,12 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [appName, userId, sessionId]);
+  }, [agentDetailTarget, appName, myAgents, userId, sessionId]);
   useEffect(() => {
     let cancelled = false;
     setAgentInfo(null);
     setInvocation(emptyInvocation());
-    if (!appName) {
+    if (authStatus !== "authenticated" || myAgents || agentDetailTarget || !appName) {
       setCapabilitiesLoading(false);
       return;
     }
@@ -1694,7 +1681,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [appName, agentInfoRefreshKey]);
+  }, [agentDetailTarget, appName, agentInfoRefreshKey, authStatus, myAgents]);
   useEffect(() => {
     if (!access) return;
     localStorage.setItem(
@@ -1731,7 +1718,7 @@ export default function App() {
   // very first resolve, restore the previously-open session (if it still
   // exists and we weren't on a create view); otherwise start a fresh chat.
   useEffect(() => {
-    if (!appName || !userId) return;
+    if (myAgents || agentDetailTarget || !appName || !userId) return;
     (async () => {
       const list = await refreshSessions(appName);
       if (!restoredRef.current) {
@@ -1745,7 +1732,7 @@ export default function App() {
       startNewChat();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appName, userId]);
+  }, [agentDetailTarget, appName, myAgents, userId]);
 
   // After switching agent from a search result, open the target session (runs
   // after the agent-switch effect above, so it wins over its startNewChat()).
@@ -2602,6 +2589,12 @@ export default function App() {
           region: currentConn.region ?? "cn-beijing",
         }
       : undefined;
+  const connectedRuntimeId =
+    currentRuntime?.runtimeId ??
+    connections.reduce(
+      (runtimeId, connection) => connection.runtimeId ?? runtimeId,
+      "",
+    );
 
   const rateAssistantTurn = async (
     turn: Turn,
@@ -2762,12 +2755,19 @@ export default function App() {
     selectAgent(id);
   };
 
+  const detailConnection = agentDetailTarget?.runtime
+    ? connections.find(
+        (connection) =>
+          connection.runtimeId === agentDetailTarget.runtime?.runtimeId,
+      )
+    : undefined;
   const detailAgentEntry: AgentEntry | null = agentDetailTarget?.runtime
     ? {
         id: `detail:${agentDetailTarget.runtime.runtimeId}`,
         label: agentDetailTarget.name,
         app: agentDetailTarget.name,
         remote: true,
+        runtimeApp: detailConnection?.apps[0],
         runtimeId: agentDetailTarget.runtime.runtimeId,
         region: agentDetailTarget.runtime.region,
         currentVersion: agentDetailTarget.runtime.currentVersion,
@@ -3124,7 +3124,7 @@ export default function App() {
                 onCreateCodexAgent={openSandboxLaunch}
                 onUseAgent={connectMyAgent}
                 onViewAgentDetails={openMyAgentDetails}
-                connectedRuntimeId={currentRuntime?.runtimeId}
+                connectedRuntimeId={connectedRuntimeId}
               />
             ) : showManageAgents ? (
               <AgentWorkspace
