@@ -32,7 +32,7 @@ from veadk.cli.cli_frontend import _run_frontend_server
 
 def _create_frontend_app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> FastAPI:
     captured: dict[str, Any] = {}
-    monkeypatch.setattr("dotenv.find_dotenv", lambda: "")
+    monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
     monkeypatch.setattr(
         "uvicorn.run",
         lambda app, **kwargs: captured.setdefault("app", app),
@@ -426,8 +426,8 @@ def test_get_skill_detail_runs_sdk_call_off_event_loop(
                 description="识别工单类型",
                 version="1.2.0",
                 skill_md="---\nname: ticket-classifier\n---\n",
-                bucket_name="skills-bucket",
-                tos_path="skills/ticket-classifier.zip",
+                bucket_name="",
+                tos_path="",
             )
 
     monkeypatch.setattr(
@@ -464,7 +464,7 @@ def test_get_skill_detail_falls_back_to_skillspace_package(
                 name="ticket-classifier",
                 description="识别工单类型",
                 version="1.2.0",
-                skill_md="",
+                skill_md="---\nname: stale-copy\ndescription: Stale.\n---\n",
                 bucket_name="skills-bucket",
                 tos_path="skills/ticket-classifier.zip",
             )
@@ -476,6 +476,10 @@ def test_get_skill_detail_falls_back_to_skillspace_package(
             archive.writestr(
                 "ticket-classifier/SKILL.md",
                 "---\nname: ticket-classifier\ndescription: Tickets.\n---\nBody.\n",
+            )
+            archive.writestr(
+                "ticket-classifier/scripts/classify.py",
+                "def classify(text):\n    return 'ticket'\n",
             )
         return True
 
@@ -494,7 +498,62 @@ def test_get_skill_detail_falls_back_to_skillspace_package(
         )
 
     assert response.status_code == 200
-    assert response.json()["skillMd"].endswith("Body.\n")
+    body = response.json()
+    assert body["skillMd"].endswith("Body.\n")
+    assert body["files"] == [
+        {
+            "path": "skills/ticket-classifier/SKILL.md",
+            "content": body["skillMd"],
+        },
+        {
+            "path": "skills/ticket-classifier/scripts/classify.py",
+            "content": "def classify(text):\n    return 'ticket'\n",
+        },
+    ]
+
+
+def test_get_skill_detail_falls_back_to_skill_md_when_package_download_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _FakeSkillsClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_skill_version(self, request: Any) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                name="ticket-classifier",
+                description="识别工单类型",
+                version="1.2.0",
+                skill_md="---\nname: ticket-classifier\n---\nBody.\n",
+                bucket_name="skills-bucket",
+                tos_path="skills/ticket-classifier.zip",
+            )
+
+    def _download_skill(skill: Any, zip_path: Path) -> bool:
+        del skill, zip_path
+        return False
+
+    monkeypatch.setattr(
+        "agentkit.sdk.skills.client.AgentkitSkillsClient", _FakeSkillsClient
+    )
+    monkeypatch.setattr(
+        "veadk.skills.materializer._download_legacy_skill_space_skill",
+        _download_skill,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/skill-spaces/space-1/skills/skill-1",
+            params={"region": "cn-shanghai", "version": "1.2.0"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["skillMd"].endswith("Body.\n")
+    assert body["files"] == []
 
 
 def test_skill_space_routes_keep_missing_credentials_status(

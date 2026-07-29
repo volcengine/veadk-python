@@ -184,10 +184,18 @@ def test_full_project_matches_frontend_codegen_golden() -> None:
     draft = _full_draft()
     project = generate_project_from_draft(draft)
     files = _file_map(project)
+    agent_py = files["agents/full_agent/agent.py"]
 
     assert project.name == "full_agent"
     assert "enableA2ui" not in draft.model_dump()
-    assert "enable_a2ui" not in files["agents/full_agent/agent.py"]
+    assert "enable_a2ui" not in agent_py
+    assert "skills_agent = SkillToolset(skills=[" in agent_py
+    root_agent_block = agent_py.rsplit("agent = Agent(", 1)[1].split(
+        "\n)\n\nAGENT_DISPLAY_NAMES",
+        1,
+    )[0]
+    assert "tools=[" in root_agent_block
+    assert "skills_agent" in root_agent_block.split("tools=[", 1)[1].split("]", 1)[0]
     assert "[a2ui]" not in files["requirements.txt"]
     assert _content_hashes(project) == _FULL_FRONTEND_GOLDEN
 
@@ -380,6 +388,25 @@ def test_project_allows_stdio_mcp_but_debug_rejects_it() -> None:
     validate_debug_policy(debug_draft, allow_local_runtime_resources=True)
 
 
+def test_policy_allows_many_selected_skills() -> None:
+    draft = AgentDraft(
+        name="many-skills",
+        instruction="Use the selected skills.",
+        selectedSkills=[
+            SelectedSkill(
+                source="skillhub",
+                folder=f"skill-{idx}",
+                name=f"skill-{idx}",
+                slug=f"skill-{idx}",
+            )
+            for idx in range(20)
+        ],
+    )
+
+    validate_project_policy(draft)
+    validate_debug_policy(draft)
+
+
 @pytest.mark.asyncio
 async def test_skillspace_materialization_deduplicates_nested_selection() -> None:
     skill = SelectedSkill(
@@ -509,6 +536,59 @@ async def test_skillspace_materialization_aligns_folder_with_skill_md_name() -> 
 
 
 @pytest.mark.asyncio
+async def test_skillspace_materialization_keeps_full_package_files() -> None:
+    skill = SelectedSkill(
+        source="skillspace",
+        folder="intelligent-diagnosis-report",
+        name="intelligent-diagnosis-report",
+        skillSpaceId="space-1",
+        skillSpaceName="Demo Space",
+        skillId="skill-1",
+        version="v1",
+    )
+    draft = AgentDraft(name="car", selectedSkills=[skill])
+    project = generate_project_from_draft(draft)
+
+    async def resolve(
+        space_id: str,
+        skill_id: str,
+        version: str | None,
+        region: str | None = None,
+        **_: object,
+    ) -> list[GeneratedFile]:
+        del space_id, skill_id, version, region
+        return _files_from_zip(
+            _skill_zip(
+                {
+                    "cloud-package/SKILL.md": (
+                        "---\nname: domain-test-skill\ndescription: Shared.\n---\n"
+                    ),
+                    "cloud-package/helpers/report.py": "REPORT = 'ok'\n",
+                }
+            ),
+            "intelligent-diagnosis-report",
+            "SkillSpace skill skill-1",
+        )
+
+    await materialize_selected_skills(
+        draft,
+        project,
+        resolve_skillspace_detail=resolve,
+    )
+
+    files = _file_map(project)
+    assert (
+        'load_skill_from_dir(_Path(__file__).parent.parent.parent / "skills" / '
+        '"domain-test-skill")'
+    ) in files["agents/car/agent.py"]
+    assert files["skills/domain-test-skill/SKILL.md"].startswith(
+        "---\nname: domain-test-skill\n"
+    )
+    assert files["skills/domain-test-skill/helpers/report.py"] == "REPORT = 'ok'\n"
+    assert "skills/domain-test-skill/cloud-package/SKILL.md" not in files
+
+
+@pytest.mark.asyncio
 async def test_skillspace_materialization_normalizes_legacy_frontmatter() -> None:
     skill = SelectedSkill(
         source="skillspace",
@@ -561,10 +641,15 @@ def test_skillhub_zip_accepts_safe_files_without_metadata_validation() -> None:
         "test skill",
     )
     assert [file.path for file in files] == [
-        "skills/demo-skill/SKILL.md",
-        "skills/demo-skill/scripts/run.py",
+        "skills/clawhub-534422530-89d9f5/SKILL.md",
+        "skills/clawhub-534422530-89d9f5/scripts/run.py",
     ]
-    assert files[0].content == skill_md
+    assert files[0].content == (
+        "---\n"
+        "name: clawhub-534422530-89d9f5\n"
+        "description: clawhub-534422530-89d9f5 skill\n"
+        "---\n"
+    )
 
     with pytest.raises(DebugPolicyError, match="Illegal skill file path"):
         _files_from_zip(
@@ -572,6 +657,25 @@ def test_skillhub_zip_accepts_safe_files_without_metadata_validation() -> None:
             "demo-skill",
             "test skill",
         )
+
+
+def test_remote_skill_zip_accepts_existing_skills_wrapper() -> None:
+    skill_md = "---\nname: wrapped-skill\ndescription: Wrapped.\n---\n"
+    files = _files_from_zip(
+        _skill_zip(
+            {
+                "skills/wrapped-skill/SKILL.md": skill_md,
+                "skills/wrapped-skill/scripts/run.py": "print('ok')\n",
+            }
+        ),
+        "display name with spaces",
+        "Skill Hub skill wrapped-skill",
+    )
+
+    assert [file.path for file in files] == [
+        "skills/wrapped-skill/SKILL.md",
+        "skills/wrapped-skill/scripts/run.py",
+    ]
 
 
 def test_skillhub_zip_accepts_gb18030_text_files() -> None:
@@ -586,6 +690,53 @@ def test_skillhub_zip_accepts_gb18030_text_files() -> None:
     assert files[0].content.startswith("---")
     assert "数据处理" in files[0].content
     assert "说明：￥" in files[1].content
+
+
+def test_remote_skill_zip_normalizes_malformed_frontmatter() -> None:
+    skill_md = (
+        "---\n"
+        "name: superpowers-writing-plans\n"
+        "description: Write practical plans.\n"
+        "metadata: ''\n"
+        "use_cases:\n"
+        "  - User has an approved design or product brief\n"
+        '  - "write a plan" / "make a plan" / "implementation plan": now\n'
+        "---\n"
+        "Plan writing instructions.\n"
+    )
+
+    files = _files_from_zip(
+        _skill_zip({"SKILL.md": skill_md}),
+        "superpowers-writing-plans",
+        "Skill Hub skill superpowers-writing-plans",
+    )
+
+    frontmatter = files[0].content.split("---", 2)[1]
+    parsed = yaml.safe_load(frontmatter)
+    assert parsed["name"] == "superpowers-writing-plans"
+    assert parsed["description"] == "Write practical plans."
+    assert parsed["metadata"] == {}
+
+
+def test_remote_skill_zip_normalizes_adk_incompatible_name() -> None:
+    skill_md = (
+        "---\n"
+        "name: stock_analyzer\n"
+        "description: Stock analysis.\n"
+        "---\n"
+        "Analyze stocks.\n"
+    )
+
+    files = _files_from_zip(
+        _skill_zip({"SKILL.md": skill_md}),
+        "stock_analyzer",
+        "Skill Hub skill stock_analyzer",
+    )
+
+    frontmatter = files[0].content.split("---", 2)[1]
+    parsed = yaml.safe_load(frontmatter)
+    assert parsed["name"] == "stock-analyzer"
+    assert [file.path for file in files] == ["skills/stock-analyzer/SKILL.md"]
 
 
 class _FakeResponse:
@@ -751,7 +902,7 @@ def test_generated_project_and_debug_run_api_lifecycle(
     monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
     monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-sk")
 
-    monkeypatch.setattr("dotenv.find_dotenv", lambda: "")
+    monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
     monkeypatch.setattr(
         "uvicorn.run",
         lambda app, **kwargs: captured.setdefault("app", app),
@@ -950,7 +1101,7 @@ def test_generated_agent_debug_omits_stdio_mcp_on_remote_bind(
 ) -> None:
     captured: dict[str, Any] = {}
     _FakeProcess.created.clear()
-    monkeypatch.setattr("dotenv.find_dotenv", lambda: "")
+    monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
     monkeypatch.setattr(
         "uvicorn.run",
         lambda app, **kwargs: captured.setdefault("app", app),
@@ -1034,6 +1185,94 @@ def test_generated_agent_debug_omits_stdio_mcp_on_remote_bind(
             f"/web/generated-agent-test-runs/{run['runId']}"
         )
         assert delete_response.status_code == 200
+
+
+def test_generated_agent_debug_allows_large_skill_projects(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, Any] = {}
+    _FakeProcess.created.clear()
+    _FakeAsyncClient.listed_apps = ["large_skill_project"]
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-sk")
+    monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
+    monkeypatch.setattr(
+        "uvicorn.run",
+        lambda app, **kwargs: captured.setdefault("app", app),
+    )
+
+    _run_frontend_server(
+        agents_dir=str(tmp_path),
+        frontend_dir=None,
+        site_logo=None,
+        site_title=None,
+        host="127.0.0.1",
+        port=8765,
+        dev=True,
+        vite=True,
+        oauth2_user_pool=None,
+        oauth2_user_pool_client=None,
+        oauth2_user_pool_uid=None,
+        oauth2_user_pool_client_uid=None,
+        oauth2_redirect_uri=None,
+        oauth2_provider=None,
+        oauth2_provider_label=None,
+        auth_mode="frontend",
+        generated_agent_test_run_ttl=60,
+        open_browser=False,
+    )
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProcess)
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+    real_socket = socket.socket
+    monkeypatch.setattr(
+        "socket.socket",
+        lambda *args, **kwargs: (
+            real_socket(*args, **kwargs)
+            if len(args) >= 4 or "fileno" in kwargs
+            else _FakeSocket(*args, **kwargs)
+        ),
+    )
+
+    draft = {
+        "name": "large-skill-project",
+        "instruction": "Use all selected skills.",
+        "selectedSkills": [
+            {
+                "source": "local",
+                "folder": f"skill-{idx}",
+                "name": f"skill-{idx}",
+                "localFiles": [
+                    {
+                        "path": f"skills/skill-{idx}/SKILL.md",
+                        "content": (
+                            f"---\nname: skill-{idx}\ndescription: Skill {idx}.\n---\n"
+                        ),
+                    },
+                    {
+                        "path": f"skills/skill-{idx}/helper.py",
+                        "content": f"VALUE = {idx}\n",
+                    },
+                    {
+                        "path": f"skills/skill-{idx}/README.md",
+                        "content": f"# Skill {idx}\n",
+                    },
+                ],
+            }
+            for idx in range(40)
+        ],
+    }
+
+    with TestClient(captured["app"]) as client:
+        run_response = client.post(
+            "/web/generated-agent-test-runs",
+            json={"draft": draft},
+        )
+
+    assert run_response.status_code == 200
+    assert run_response.json()["appName"] == "large_skill_project"
+    assert _FakeProcess.created[-1].cmd
 
 
 def test_studio_deploy_run_script_allows_generated_agent_debug() -> None:
