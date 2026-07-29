@@ -215,6 +215,7 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
     def test_prefers_new_skill_execute_api_when_endpoint_is_available(self):
         captured_requests = []
         health_endpoints = []
+        session_kwargs = []
 
         class FakeResponse:
             def __enter__(self):
@@ -231,7 +232,9 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
             return FakeResponse()
 
         module = _load_execute_skills_module(
-            ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test",
+            ensure_agentkit_session_endpoint=lambda **kwargs: (
+                session_kwargs.append(kwargs) or "https://sandbox.test"
+            ),
             wait_for_skill_api_health=lambda **kwargs: health_endpoints.append(
                 kwargs["endpoint"]
             ),
@@ -241,6 +244,7 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
             result = module.execute_skills("do work", tool_context=self._tool_context())
 
         self.assertEqual(result, "api result")
+        self.assertTrue(session_kwargs[0]["wait_until_ready"])
         self.assertEqual(["https://sandbox.test"], health_endpoints)
         self.assertEqual(1, len(captured_requests))
         request_obj, timeout = captured_requests[0]

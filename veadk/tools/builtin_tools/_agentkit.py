@@ -221,17 +221,19 @@ def ensure_agentkit_session_endpoint(
     tool_state: Optional[dict[str, Any]] = None,
     ttl: int = 1800,
     prefer_internal_endpoint: bool = False,
+    wait_until_ready: bool = False,
     ready_timeout: float = _SESSION_READY_TIMEOUT,
     poll_interval: float = _SESSION_POLL_INTERVAL,
 ) -> str:
-    """Create or reuse a Ready AgentKit tool session and return its endpoint."""
+    """Create or reuse an AgentKit tool session and return its endpoint."""
     from agentkit.sdk.tools import types as tools_types
     from agentkit.sdk.tools.client import AgentkitToolsClient
 
-    if ready_timeout < 0:
-        raise ValueError("ready_timeout must be greater than or equal to 0")
-    if poll_interval <= 0:
-        raise ValueError("poll_interval must be greater than 0")
+    if wait_until_ready:
+        if ready_timeout < 0:
+            raise ValueError("ready_timeout must be greater than or equal to 0")
+        if poll_interval <= 0:
+            raise ValueError("poll_interval must be greater than 0")
 
     _, region, _, _ = get_agentkit_endpoint_config()
     ak, sk, header = get_agentkit_credentials(tool_state)
@@ -249,6 +251,30 @@ def ensure_agentkit_session_endpoint(
             Ttl=ttl,
         )
     )
+    if not wait_until_ready:
+        public_endpoint = getattr(session, "endpoint", None)
+        internal_endpoint = getattr(session, "internal_endpoint", None)
+        endpoint = (
+            internal_endpoint or public_endpoint
+            if prefer_internal_endpoint
+            else public_endpoint or internal_endpoint
+        )
+        if endpoint:
+            return endpoint
+
+        session_id = session.session_id
+        if not session_id:
+            return ""
+        current_session = client.get_session(
+            tools_types.GetSessionRequest(
+                ToolId=tool_id,
+                SessionId=session_id,
+            )
+        )
+        if prefer_internal_endpoint:
+            return current_session.internal_endpoint or current_session.endpoint or ""
+        return current_session.endpoint or current_session.internal_endpoint or ""
+
     session_id = session.session_id
     if not session_id:
         raise RuntimeError("AgentKit CreateSession response is missing SessionId")

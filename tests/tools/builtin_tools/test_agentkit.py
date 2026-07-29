@@ -298,7 +298,7 @@ class TestEnsureAgentkitSessionEndpoint(unittest.TestCase):
             },
         )
 
-    def test_waits_for_ready_even_when_create_session_returns_endpoint(self):
+    def test_uses_create_session_endpoint_without_waiting_by_default(self):
         captured = {"get_calls": 0}
 
         class FakeCreateSessionRequest:
@@ -322,11 +322,8 @@ class TestEnsureAgentkitSessionEndpoint(unittest.TestCase):
 
             def get_session(self, _request):
                 captured["get_calls"] += 1
-                return types.SimpleNamespace(
-                    session_id="session-1",
-                    status="Ready",
-                    endpoint="https://public.example",
-                    internal_endpoint="http://internal.example",
+                raise AssertionError(
+                    "get_session should not be called when waiting is disabled"
                 )
 
         fake_tools_types = types.ModuleType("agentkit.sdk.tools.types")
@@ -365,7 +362,7 @@ class TestEnsureAgentkitSessionEndpoint(unittest.TestCase):
                 )
 
         self.assertEqual(endpoint, "https://public.example")
-        self.assertEqual(captured["get_calls"], 1)
+        self.assertEqual(captured["get_calls"], 0)
 
     def test_polls_until_session_is_ready(self):
         statuses = iter(["Starting", "Ready"])
@@ -422,6 +419,7 @@ class TestEnsureAgentkitSessionEndpoint(unittest.TestCase):
                 endpoint = self.agentkit_module.ensure_agentkit_session_endpoint(
                     tool_id="tool-1",
                     tool_user_session_id="user-session-1",
+                    wait_until_ready=True,
                 )
 
         self.assertEqual(endpoint, "https://public.example")
@@ -476,6 +474,7 @@ class TestEnsureAgentkitSessionEndpoint(unittest.TestCase):
                     self.agentkit_module.ensure_agentkit_session_endpoint(
                         tool_id="tool-1",
                         tool_user_session_id="user-session-1",
+                        wait_until_ready=True,
                     )
 
 

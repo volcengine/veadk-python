@@ -243,6 +243,7 @@ def _execute_skills_via_skill_api(
             tool_user_session_id=_tool_user_session_id(tool_context),
             tool_state=tool_context.state,
             ttl=max(timeout, 1800),
+            wait_until_ready=True,
         )
     except Exception as exc:
         raise RuntimeError(
