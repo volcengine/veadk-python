@@ -255,6 +255,23 @@ function feedbackSetFor(
   return sets.find((set) => set.kind === kind);
 }
 
+function canvasDraftKey(draft: AgentDraft): string {
+  const visit = (node: AgentDraft): unknown => [
+    node.name,
+    node.description,
+    node.agentType ?? "llm",
+    node.modelName ?? "",
+    node.tools ?? [],
+    node.builtinTools ?? [],
+    (node.customTools ?? []).map((tool) => tool.name),
+    (node.mcpTools ?? []).map((tool) => tool.name),
+    node.skills ?? [],
+    (node.selectedSkills ?? []).map((skill) => skill.name),
+    (node.subAgents ?? []).map(visit),
+  ];
+  return JSON.stringify(visit(draft));
+}
+
 const DEPLOYMENT_STEPS = [
   { phase: "prepare", label: "准备部署", description: "校验配置并创建部署任务" },
   { phase: "build", label: "构建镜像", description: "生成运行环境与智能体代码" },
@@ -652,9 +669,14 @@ export function AgentWorkspace({
       )
       .sort((left, right) => right.startedAt - left.startedAt)[0];
   }, [deploymentTasks, selectedAgent, selectedDraft, selectedPendingTask]);
+  const draftFlowKey = useMemo(() => canvasDraftKey(draft), [draft]);
+  const displayCurrentVersion =
+    selectedAgent?.currentVersion ?? runtimeDetail?.currentVersion ?? null;
+  const runtimeVersionKey =
+    displayCurrentVersion ?? selectedPendingTask?.startedAt ?? "unknown";
   const executionFlowKey = selectedAgentInfo
-    ? `runtime:${selectedAgent?.runtimeId ?? selectedAgentInfo.name}:${countDraftNodes(draft)}`
-    : `draft:${selectedPendingTask?.id ?? selectedDraft?.id ?? selectedAgent?.id ?? selectedName}`;
+    ? `runtime:${selectedAgent?.runtimeId ?? selectedAgentInfo.name}:v${runtimeVersionKey}:${draftFlowKey}`
+    : `draft:${selectedPendingTask?.id ?? selectedDraft?.id ?? selectedAgent?.id ?? selectedName}:${draftFlowKey}`;
   const loadingExecutionFlow = Boolean(
     detailOnly && selectedAgent?.runtimeId && !detailAgentInfoResolved,
   );
@@ -719,7 +741,12 @@ export function AgentWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [detailOnly, selectedAgent?.region, selectedAgent?.runtimeId]);
+  }, [
+    detailOnly,
+    selectedAgent?.currentVersion,
+    selectedAgent?.region,
+    selectedAgent?.runtimeId,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -738,7 +765,11 @@ export function AgentWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [selectedAgent?.region, selectedAgent?.runtimeId]);
+  }, [
+    selectedAgent?.currentVersion,
+    selectedAgent?.region,
+    selectedAgent?.runtimeId,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1502,8 +1533,8 @@ export function AgentWorkspace({
               <div>
                 <div className="aw-agent-title-row">
                   <h2>{selectedName}</h2>
-                  {selectedAgent?.currentVersion != null && (
-                    <span>v{selectedAgent.currentVersion}</span>
+                  {displayCurrentVersion != null && (
+                    <span>v{displayCurrentVersion}</span>
                   )}
                   {selectedDraft && <span>草稿</span>}
                   {selectedAgentUpdateDraft && <span>待更新</span>}
@@ -1647,10 +1678,8 @@ export function AgentWorkspace({
                       <div>
                         <dt>当前版本</dt>
                         <dd>
-                          {runtimeDetail?.currentVersion != null
-                            ? `v${runtimeDetail.currentVersion}`
-                            : selectedAgent?.currentVersion != null
-                              ? `v${selectedAgent.currentVersion}`
+                          {displayCurrentVersion != null
+                            ? `v${displayCurrentVersion}`
                             : "暂未提供"}
                         </dd>
                       </div>

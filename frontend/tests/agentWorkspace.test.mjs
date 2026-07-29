@@ -95,10 +95,23 @@ test("agent details show capability badges and deployment state before the flow"
   assert.match(workspaceSource, /status\.toLowerCase\(\) === "ready"[\s\S]*?className="aw-status-dot"/);
   assert.match(workspaceStyles, /\.aw-readonly-config dd\.is-ready\s*\{[\s\S]*?color:\s*hsl\(142 62% 30%\)/);
   assert.match(workspaceSource, /const executionFlowKey = selectedAgentInfo/);
+  assert.match(workspaceSource, /const draftFlowKey = useMemo\(\(\) => canvasDraftKey\(draft\), \[draft\]\)/);
+  assert.match(workspaceSource, /const displayCurrentVersion =[\s\S]*?selectedAgent\?\.currentVersion \?\? runtimeDetail\?\.currentVersion \?\? null/);
+  assert.match(workspaceSource, /const runtimeVersionKey =[\s\S]*?displayCurrentVersion \?\? selectedPendingTask\?\.startedAt/);
+  assert.match(workspaceSource, /<span>v\{displayCurrentVersion\}<\/span>/);
+  assert.match(workspaceSource, /\? `v\$\{displayCurrentVersion\}`[\s\S]*?: "暂未提供"/);
   assert.match(workspaceSource, /detailOnly && selectedAgent\?\.runtimeId && !detailAgentInfoResolved/);
   assert.match(
     workspaceSource,
     /loadingExecutionFlow \? \([\s\S]*?className="aw-canvas-loading"[\s\S]*?正在加载执行流程[\s\S]*?<AgentBuildCanvas[\s\S]*?key=\{executionFlowKey\}/,
+  );
+  assert.match(
+    workspaceSource,
+    /`runtime:\$\{selectedAgent\?\.runtimeId \?\? selectedAgentInfo\.name\}:v\$\{runtimeVersionKey\}:\$\{draftFlowKey\}`/,
+  );
+  assert.match(
+    workspaceSource,
+    /selectedAgent\?\.currentVersion,[\s\S]*?selectedAgent\?\.region,[\s\S]*?selectedAgent\?\.runtimeId/,
   );
   assert.match(workspaceStyles, /\.aw-canvas-loading\s*\{[\s\S]*?align-items:\s*center;/);
 });
@@ -109,6 +122,12 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(appSource, /setAgentDetailTarget\(null\)[\s\S]*?setFocusedDeploymentTaskId\(task\.id\)/);
   assert.match(appSource, /const finishDeployment = useCallback/);
   assert.match(appSource, /await connectRuntime\([\s\S]*?result\.runtimeId[\s\S]*?result\.version/);
+  assert.match(appSource, /const \[agentInfoRefreshKey, setAgentInfoRefreshKey\] = useState\(0\)/);
+  assert.match(appSource, /}, \[appName, agentInfoRefreshKey\]\);/);
+  assert.match(
+    appSource,
+    /const finishDeployment = useCallback[\s\S]*?setConnections\(loadConnections\(\)\);[\s\S]*?setAgentInfoRefreshKey\(\(key\) => key \+ 1\)/,
+  );
   assert.match(appSource, /onDeploymentStarted=\{openDeploymentDetail\}/);
   assert.match(appSource, /onDeploymentComplete=\{finishDeployment\}/);
 
