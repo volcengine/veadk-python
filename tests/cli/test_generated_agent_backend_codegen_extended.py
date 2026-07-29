@@ -636,10 +636,15 @@ def test_skillhub_zip_accepts_safe_files_without_metadata_validation() -> None:
         "test skill",
     )
     assert [file.path for file in files] == [
-        "skills/demo-skill/SKILL.md",
-        "skills/demo-skill/scripts/run.py",
+        "skills/clawhub-534422530-89d9f5/SKILL.md",
+        "skills/clawhub-534422530-89d9f5/scripts/run.py",
     ]
-    assert files[0].content == skill_md
+    assert files[0].content == (
+        "---\n"
+        "name: clawhub-534422530-89d9f5\n"
+        "description: clawhub-534422530-89d9f5 skill\n"
+        "---\n"
+    )
 
     with pytest.raises(DebugPolicyError, match="Illegal skill file path"):
         _files_from_zip(
