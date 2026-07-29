@@ -128,6 +128,15 @@
   grid-template-columns: 304px minmax(0, 1fr);
 }
 
+.aw-root.is-detail-only .aw-view-tabs,
+.aw-root.is-detail-only .aw-sidebar {
+  display: none;
+}
+
+.aw-root.is-detail-only .aw-workspace {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .aw-sidebar {
   min-width: 0;
   min-height: 0;
@@ -567,6 +576,51 @@
   background: hsl(var(--background));
 }
 
+.aw-detail-loading {
+  position: absolute;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: hsl(var(--background) / 0.72);
+  -webkit-backdrop-filter: blur(5px);
+  backdrop-filter: blur(5px);
+}
+
+.aw-detail-loading-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid hsl(var(--border) / 0.8);
+  border-radius: 12px;
+  background: hsl(var(--background) / 0.94);
+  box-shadow: 0 14px 40px hsl(var(--foreground) / 0.1);
+}
+
+.aw-detail-loading-card > span:not(.loading-gap-spinner) {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.aw-detail-loading-card > .loading-gap-spinner {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+}
+
+.aw-detail-loading-card strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.aw-detail-loading-card small {
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+}
+
 .aw-empty-selection {
   align-items: center;
   justify-content: center;
@@ -655,7 +709,7 @@
 .aw-head-delete.studio-update-action:hover:not(:disabled) {
   border: 1px solid hsl(var(--destructive));
   background: hsl(var(--destructive));
-  color: hsl(var(--destructive-foreground));
+  color: #fff;
 }
 
 .aw-agent-title-row {
@@ -763,6 +817,17 @@
   overflow: hidden;
 }
 
+.aw-canvas-loading {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+}
+
 .aw-details-card {
   overflow: hidden;
 }
@@ -777,18 +842,9 @@
   background: hsl(var(--panel));
 }
 
-.aw-deployment-focus {
-  min-height: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow-y: auto;
-  padding: 32px;
-}
-
-.aw-deployment-focus .aw-deploy-progress-card {
-  max-width: 720px;
-  margin: auto;
+.aw-detail-deployment {
+  flex: 0 0 auto;
+  padding: 0 24px 16px;
 }
 
 .aw-deploy-progress-head,
@@ -1070,6 +1126,29 @@
   font-size: 12px;
   font-weight: 600;
   text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-facts .aw-fact-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+  overflow: visible;
+  white-space: normal;
+}
+
+.aw-fact-badges span {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 3px 7px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 999px;
+  background: hsl(var(--secondary) / 0.55);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1592,6 +1671,10 @@
   color: hsl(var(--foreground));
   font-size: 12px;
   font-weight: 600;
+}
+
+.aw-readonly-config dd.is-ready {
+  color: hsl(142 62% 30%);
 }
 
 .aw-basic-actions {

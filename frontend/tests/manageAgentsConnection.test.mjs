@@ -23,14 +23,12 @@ const manageStyles = readFileSync(
   "utf8",
 );
 
-test("managed runtimes connect through the Agent workspace and global selector", () => {
+test("managed runtimes connect through the Agent page", () => {
   assert.match(manageSource, /onConnect:\s*\(runtime:\s*ManagedRuntime\)/);
   assert.match(manageSource, /连接到此 Agent/);
   assert.match(manageSource, /currentRuntimeId === rt\.runtimeId[\s\S]*?已连接/);
-  assert.match(
-    appSource,
-    /<AgentWorkspace[\s\S]*?agents=\{orderedWorkspaceAgentEntries\}[\s\S]*?onSelectAgent=\{selectAgent\}/,
-  );
+  assert.match(appSource, /connectMyAgent[\s\S]*?connectRuntime\(/);
+  assert.match(appSource, /<MyAgents[\s\S]*?onUseAgent=\{/);
   assert.match(workspaceSource, /onSelectAgent\(agent\.id\)/);
   assert.match(
     manageStyles,

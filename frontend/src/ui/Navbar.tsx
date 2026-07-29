@@ -1,5 +1,5 @@
 import { Fragment, type ReactNode, useState } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, ChevronRight } from "lucide-react";
 import type { RuntimeScope } from "../adk/client";
 import { AgentSelector, type SelectedRuntime } from "./AgentSelector";
 
@@ -18,6 +18,7 @@ export interface NavbarProps {
   localApps: string[];
   currentRuntime?: SelectedRuntime;
   runtimeScope: RuntimeScope;
+  onBrowseAgents?: () => void;
   /** When set, the left side shows this title instead of the agent picker. */
   title?: string;
   /** Optional action rendered immediately before the page title. */
@@ -38,6 +39,7 @@ export function Navbar({
   localApps,
   currentRuntime,
   runtimeScope,
+  onBrowseAgents,
   title,
   titleLeading,
   crumbs,
@@ -78,6 +80,7 @@ export function Navbar({
                 localApps={localApps}
                 currentRuntime={currentRuntime}
                 runtimeScope={runtimeScope}
+                onBrowseAgents={onBrowseAgents}
               />
             </div>
           )}
@@ -101,6 +104,7 @@ function AgentSelect({
   localApps,
   currentRuntime,
   runtimeScope,
+  onBrowseAgents,
 }: Pick<
   NavbarProps,
   | "appName"
@@ -110,9 +114,31 @@ function AgentSelect({
   | "localApps"
   | "currentRuntime"
   | "runtimeScope"
+  | "onBrowseAgents"
 >) {
   const [open, setOpen] = useState(false);
   const label = (id: string) => (agentLabel ? agentLabel(id) : id);
+
+  if (agentsSource === "cloud") {
+    return (
+      <div className="agent-switch">
+        <span className="agent-dd-current">
+          {appName ? label(appName) : "选择 Agent"}
+        </span>
+        {appName && onBrowseAgents ? (
+          <button
+            type="button"
+            className="agent-switch-action"
+            aria-label="切换智能体"
+            title="切换智能体"
+            onClick={onBrowseAgents}
+          >
+            <ArrowLeftRight aria-hidden="true" />
+          </button>
+        ) : null}
+      </div>
+    );
+  }
 
   function close() {
     setOpen(false);

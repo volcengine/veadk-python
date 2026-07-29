@@ -108,7 +108,10 @@ export function addRuntimeConnection(
     appLabels,
     currentVersion,
   };
-  const list = [...loadConnections().filter((c) => c.runtimeId !== runtimeId), conn];
+  const list = loadConnections();
+  const existingIndex = list.findIndex((item) => item.runtimeId === runtimeId);
+  if (existingIndex === -1) list.push(conn);
+  else list[existingIndex] = conn;
   persist(list);
   registerConnections(list);
   return conn;

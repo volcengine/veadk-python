@@ -23,7 +23,40 @@ test("uses the selected Agent in new-chat, search, and conversation headers", ()
   );
   assert.doesNotMatch(appSource, /if \(agentsSource === "cloud"\) \{\s*setAppName\(""\)/);
   assert.match(navbarSource, /appName \? label\(appName\) : "选择 Agent"/);
-  assert.match(navbarSource, /<AgentSelector[\s\S]*?variant="navbar"/);
+  assert.match(navbarSource, /agentsSource === "cloud"[\s\S]*?aria-label="切换智能体"/);
+  assert.match(navbarSource, /<ArrowLeftRight aria-hidden="true"/);
+  assert.match(appSource, /onBrowseAgents=\{openMyAgentsPage\}/);
+});
+
+test("shows the Codex identity instead of the Agent picker in sandbox sessions", () => {
+  assert.match(
+    appSource,
+    /title=\{[\s\S]*?sandboxSession[\s\S]*?\? "Codex 智能体"[\s\S]*?: myAgents/,
+  );
+});
+
+test("redirects new chat to Agent selection when no Agent is active", () => {
+  assert.match(
+    appSource,
+    /function openNewChat\(\)[\s\S]*?if \(!appName && !sandboxSession\)[\s\S]*?setMyAgents\(true\)[\s\S]*?showToast\("请先选择 agent"\)[\s\S]*?return;/,
+  );
+  assert.match(appSource, /onNewChat=\{openNewChat\}/);
+  assert.match(appSource, /className="app-toast" role="status" aria-live="polite"/);
+  assert.match(stylesSource, /\.app-toast\s*\{[\s\S]*?position:\s*fixed;/);
+});
+
+test("only using an Agent selects it for the main conversation", () => {
+  assert.match(
+    appSource,
+    /const connectMyAgent[\s\S]*?connectRuntime[\s\S]*?setAppName\(agentId\)/,
+  );
+  const detailHandlerStart = appSource.indexOf("const openMyAgentDetails");
+  const detailHandlerEnd = appSource.indexOf("\n  };", detailHandlerStart);
+  assert.ok(detailHandlerStart >= 0 && detailHandlerEnd > detailHandlerStart);
+  assert.doesNotMatch(
+    appSource.slice(detailHandlerStart, detailHandlerEnd),
+    /setAppName\(/,
+  );
 });
 
 test("keeps the Agent trigger visually aligned with the previous title", () => {

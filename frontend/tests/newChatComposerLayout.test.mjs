@@ -51,7 +51,8 @@ test("expands only the new-chat composer into a multiline input", () => {
   assert.match(stylesSource, /\.composer--new-chat \.comp-send \.icon[\s\S]*?width: 20px/);
 });
 
-test("places the mode selector beside add while keeping Agent selection available", () => {
+test("keeps alternate chat modes hidden from the new-chat composer", () => {
+  assert.match(appSource, /showModeSelector=\{false\}/);
   assert.match(composerSource, /<NewChatModeSelector[\s\S]*?value=\{newChatMode\}/);
   assert.match(selectorSource, /value: "agent"[\s\S]*?label: "Agent"/);
   assert.match(selectorSource, /value: "temporary"[\s\S]*?label: "内置智能体"/);

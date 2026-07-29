@@ -83,8 +83,7 @@ test("renders the root LLM agent as a child-capable container", () => {
     /type === "llm" && \(path\.length === 0 \|\| agent\.subAgents\.length > 0\)/,
   );
   assert.match(source, /type === "llm"\s*\?\s*"添加子 Agent"/);
-  assert.match(source, /智能体 · 可根据任务调用框内子 Agent/);
-  assert.match(source, /const childUnit = type === "llm" \? "子 Agent" : "步骤"/);
+  assert.match(source, /<small>\{data\.description\}<\/small>/);
 });
 
 test("shows the concrete group agent name in workflow containers", () => {
@@ -94,7 +93,6 @@ test("shows the concrete group agent name in workflow containers", () => {
 
 test("does not reserve delete-button space on the non-removable root agent", () => {
   assert.match(source, /actions && data\.path !== undefined && data\.path\.length > 0/);
-  assert.match(cssSource, /\.abc-group:has\(> \.abc-node-delete\) \.abc-group-head em\s*\{[\s\S]*?right: 48px;/);
 });
 
 test("keeps boundary insertion controls inside the group container", () => {
@@ -119,11 +117,23 @@ test("uses a single bottom add action for parallel groups", () => {
   assert.match(cssSource, /\.abc-group-add-empty,\n\.abc-group-add-bottom\s*\{/);
 });
 
-test("keeps the group count badge clear of centered title copy", () => {
-  const badgeRule = cssSource.match(/\.abc-group-head em\s*\{[^}]*\}/)?.[0] ?? "";
-  assert.match(cssSource, /\.abc-group-head\s*\{[\s\S]*?padding: 10px 132px 10px 72px;/);
-  assert.match(badgeRule, /top: 12px;/);
-  assert.doesNotMatch(badgeRule, /text-overflow: ellipsis;/);
+test("uses the agent description as a two-line subtitle without count badges", () => {
+  assert.match(
+    source,
+    /description: agent\.description\.trim\(\) \|\| PATTERN_COPY\[type\]\.description/,
+  );
+  assert.match(source, /<small>\{data\.description\}<\/small>/);
+  assert.doesNotMatch(source, /data\.childCount && <small>/);
+  assert.doesNotMatch(source, /个\{childUnit\}|个步骤<\/small>/);
+  assert.doesNotMatch(source, /<em>\{childCount\}/);
+  assert.match(
+    cssSource,
+    /\.abc-group-head small\s*\{[\s\S]*?display: -webkit-box;[\s\S]*?-webkit-line-clamp: 2;/,
+  );
+  assert.match(
+    cssSource,
+    /\.abc-node-copy > small\s*\{[\s\S]*?-webkit-line-clamp: 2;/,
+  );
 });
 
 test("uses distinct restrained type colors and removes the LLM node icon", () => {
@@ -164,6 +174,16 @@ test("lays out creation vertically while keeping detail and deployment previews 
     customCreateStyles,
     /\.cw-detail\s*\{[\s\S]*?flex:\s*1 1 58%;[\s\S]*?max-width:\s*780px;/,
   );
+  assert.match(
+    customCreateStyles,
+    /@media \(max-width: 860px\)[\s\S]*?\.cw-detail\s*\{[\s\S]*?width:\s*100%;[\s\S]*?max-width:\s*none;/,
+  );
+});
+
+test("uses concise labels for child agent basics", () => {
+  assert.match(customCreateSource, /\{isRootAgent \? "Agent 名称" : "名称"\}/);
+  assert.match(customCreateSource, /\{isRootAgent \? "描述" : "智能体描述"\}/);
+  assert.doesNotMatch(customCreateSource, /"步骤名称"|"任务说明"/);
 });
 
 test("refits the graph after React Flow finishes measuring its nodes", () => {
