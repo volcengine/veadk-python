@@ -109,6 +109,50 @@ import "./CustomCreate.css";
 
 const MarkdownPromptEditor = lazy(() => import("./MarkdownPromptEditor"));
 
+const DEBUG_TEST_RUN_STORAGE_KEY = "veadk.generatedAgentTestRuns";
+
+function readStoredDebugTestRunIds(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(
+      window.sessionStorage.getItem(DEBUG_TEST_RUN_STORAGE_KEY) ?? "[]",
+    );
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (item): item is string => typeof item === "string" && item.length > 0,
+    );
+  } catch {
+    return [];
+  }
+}
+
+function writeStoredDebugTestRunIds(runIds: string[]) {
+  if (typeof window === "undefined") return;
+  const uniqueRunIds = Array.from(new Set(runIds)).slice(-20);
+  try {
+    if (uniqueRunIds.length) {
+      window.sessionStorage.setItem(
+        DEBUG_TEST_RUN_STORAGE_KEY,
+        JSON.stringify(uniqueRunIds),
+      );
+    } else {
+      window.sessionStorage.removeItem(DEBUG_TEST_RUN_STORAGE_KEY);
+    }
+  } catch {
+    // Best-effort cleanup bookkeeping only.
+  }
+}
+
+function rememberDebugTestRun(runId: string) {
+  writeStoredDebugTestRunIds([...readStoredDebugTestRunIds(), runId]);
+}
+
+function forgetDebugTestRun(runId: string) {
+  writeStoredDebugTestRunIds(
+    readStoredDebugTestRunIds().filter((item) => item !== runId),
+  );
+}
+
 /** Trigger a browser download of a text file. */
 function downloadText(filename: string, text: string, mime = "text/plain") {
   const url = URL.createObjectURL(
@@ -2341,12 +2385,33 @@ export function CustomCreate({
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const sectionRefs = useRef<Partial<Record<StepId, HTMLElement | null>>>({});
 
+  async function cleanupStoredDebugRuns() {
+    const activeRunIds = new Set(
+      [...debugRunsRef.current.values()].map(({ run }) => run.runId),
+    );
+    const staleRunIds = readStoredDebugTestRunIds().filter(
+      (runId) => !activeRunIds.has(runId),
+    );
+    if (!staleRunIds.length) return;
+    await Promise.all(
+      staleRunIds.map(async (runId) => {
+        try {
+          await deleteGeneratedAgentTestRun(runId);
+          forgetDebugTestRun(runId);
+        } catch (err) {
+          console.warn("清理遗留调试运行失败", err);
+        }
+      }),
+    );
+  }
+
   useEffect(() => {
+    void cleanupStoredDebugRuns();
     return () => {
       for (const { run } of debugRunsRef.current.values()) {
-        deleteGeneratedAgentTestRun(run.runId).catch((err) =>
-          console.warn("清理调试运行失败", err),
-        );
+        deleteGeneratedAgentTestRun(run.runId)
+          .then(() => forgetDebugTestRun(run.runId))
+          .catch((err) => console.warn("清理调试运行失败", err));
       }
       debugRunsRef.current.clear();
     };
@@ -2727,6 +2792,7 @@ export function CustomCreate({
       runs.map(async ({ run }) => {
         try {
           await deleteGeneratedAgentTestRun(run.runId);
+          forgetDebugTestRun(run.runId);
         } catch (err) {
           console.warn("清理调试运行失败", err);
         }
@@ -2741,6 +2807,7 @@ export function CustomCreate({
     setActiveDebugRunCount(debugRunsRef.current.size);
     try {
       await deleteGeneratedAgentTestRun(runtime.run.runId);
+      forgetDebugTestRun(runtime.run.runId);
     } catch (err) {
       console.warn("清理调试运行失败", err);
     }
@@ -2829,6 +2896,7 @@ export function CustomCreate({
     let createdRun: GeneratedAgentTestRun | null = null;
     try {
       await cleanupDebugVariantRun(id);
+      await cleanupStoredDebugRuns();
       const variantDraft: AgentDraft = {
         ...draft,
         modelName: variant.modelName || draft.modelName,
@@ -2838,6 +2906,7 @@ export function CustomCreate({
       createdRun = await createGeneratedAgentTestRun(
         debugRuntimeDraft(variantDraft),
       );
+      rememberDebugTestRun(createdRun.runId);
       const sessionId = await createGeneratedAgentTestSession(
         createdRun.runId,
         "test_user",
@@ -2855,6 +2924,7 @@ export function CustomCreate({
       if (createdRun) {
         try {
           await deleteGeneratedAgentTestRun(createdRun.runId);
+          forgetDebugTestRun(createdRun.runId);
         } catch (cleanupError) {
           console.warn("清理调试运行失败", cleanupError);
         }

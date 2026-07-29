@@ -1087,6 +1087,17 @@ def test_frontend_deploy_forwards_a2a_registry_runtime_env_keys() -> None:
     assert '"A2A_REGISTRY_ACCESS_KEY",' in source
 
 
+def test_generated_agent_test_run_limit_is_owner_scoped() -> None:
+    source = Path("veadk/cli/cli_frontend.py").read_text()
+
+    assert "_test_runs_creating: dict[str, int]" in source
+    assert 'owner_id = principal.owner_id if principal else ""' in source
+    assert "active_count = sum(" in source
+    assert "1 for run in _test_runs.values() if run.owner_id == owner_id" in source
+    assert "_test_runs_creating.get(owner_id, 0)" in source
+    assert "owner_id=owner_id" in source
+
+
 def test_generated_agent_test_runner_enables_dynamic_a2a_helper() -> None:
     source = Path("veadk/cli/generated_agent_test_runner.py").read_text()
 

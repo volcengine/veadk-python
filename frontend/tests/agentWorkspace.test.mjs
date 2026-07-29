@@ -96,7 +96,10 @@ test("agent details show capability badges and deployment state before the flow"
   assert.match(workspaceStyles, /\.aw-readonly-config dd\.is-ready\s*\{[\s\S]*?color:\s*hsl\(142 62% 30%\)/);
   assert.match(workspaceSource, /const executionFlowKey = selectedAgentInfo/);
   assert.match(workspaceSource, /const draftFlowKey = useMemo\(\(\) => canvasDraftKey\(draft\), \[draft\]\)/);
-  assert.match(workspaceSource, /const runtimeVersionKey =[\s\S]*?runtimeDetail\?\.currentVersion[\s\S]*?selectedAgent\?\.currentVersion/);
+  assert.match(workspaceSource, /const displayCurrentVersion =[\s\S]*?selectedAgent\?\.currentVersion \?\? runtimeDetail\?\.currentVersion \?\? null/);
+  assert.match(workspaceSource, /const runtimeVersionKey =[\s\S]*?displayCurrentVersion \?\? selectedPendingTask\?\.startedAt/);
+  assert.match(workspaceSource, /<span>v\{displayCurrentVersion\}<\/span>/);
+  assert.match(workspaceSource, /\? `v\$\{displayCurrentVersion\}`[\s\S]*?: "暂未提供"/);
   assert.match(workspaceSource, /detailOnly && selectedAgent\?\.runtimeId && !detailAgentInfoResolved/);
   assert.match(
     workspaceSource,

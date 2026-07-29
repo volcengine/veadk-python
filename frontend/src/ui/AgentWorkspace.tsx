@@ -670,11 +670,10 @@ export function AgentWorkspace({
       .sort((left, right) => right.startedAt - left.startedAt)[0];
   }, [deploymentTasks, selectedAgent, selectedDraft, selectedPendingTask]);
   const draftFlowKey = useMemo(() => canvasDraftKey(draft), [draft]);
+  const displayCurrentVersion =
+    selectedAgent?.currentVersion ?? runtimeDetail?.currentVersion ?? null;
   const runtimeVersionKey =
-    runtimeDetail?.currentVersion ??
-    selectedAgent?.currentVersion ??
-    selectedPendingTask?.startedAt ??
-    "unknown";
+    displayCurrentVersion ?? selectedPendingTask?.startedAt ?? "unknown";
   const executionFlowKey = selectedAgentInfo
     ? `runtime:${selectedAgent?.runtimeId ?? selectedAgentInfo.name}:v${runtimeVersionKey}:${draftFlowKey}`
     : `draft:${selectedPendingTask?.id ?? selectedDraft?.id ?? selectedAgent?.id ?? selectedName}:${draftFlowKey}`;
@@ -1534,8 +1533,8 @@ export function AgentWorkspace({
               <div>
                 <div className="aw-agent-title-row">
                   <h2>{selectedName}</h2>
-                  {selectedAgent?.currentVersion != null && (
-                    <span>v{selectedAgent.currentVersion}</span>
+                  {displayCurrentVersion != null && (
+                    <span>v{displayCurrentVersion}</span>
                   )}
                   {selectedDraft && <span>草稿</span>}
                   {selectedAgentUpdateDraft && <span>待更新</span>}
@@ -1679,10 +1678,8 @@ export function AgentWorkspace({
                       <div>
                         <dt>当前版本</dt>
                         <dd>
-                          {runtimeDetail?.currentVersion != null
-                            ? `v${runtimeDetail.currentVersion}`
-                            : selectedAgent?.currentVersion != null
-                              ? `v${selectedAgent.currentVersion}`
+                          {displayCurrentVersion != null
+                            ? `v${displayCurrentVersion}`
                             : "暂未提供"}
                         </dd>
                       </div>
