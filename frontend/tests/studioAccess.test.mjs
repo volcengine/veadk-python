@@ -60,6 +60,9 @@ test("runtime authorization failures are not reported as unsupported", () => {
   assert.match(clientSource, /runtime_access_denied/);
   assert.match(clientSource, /runtime_private_endpoint_unreachable/);
   assert.match(clientSource, /Runtime 已部署成功，但当前 Studio 无法访问私网 Runtime/);
+  assert.match(clientSource, /runtime_proxy_connect_error/);
+  assert.match(clientSource, /runtime_proxy_timeout/);
+  assert.match(clientSource, /Runtime 已部署成功，但 Studio 暂时无法连接服务/);
   assert.match(cliFrontendSource, /endpoint_network_type == "private"[\s\S]*?runtime_private_endpoint_unreachable/);
   assert.match(cliFrontendSource, /def _runtime_proxy_should_retry_probe[\s\S]*?normalized == "list-apps"[\s\S]*?normalized\.startswith\("web\/agent-info\/"\)/);
   assert.match(cliFrontendSource, /parts\[0\] == "apps"[\s\S]*?parts\[2\] == "users"[\s\S]*?parts\[4\] == "sessions"/);

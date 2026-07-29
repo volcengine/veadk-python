@@ -1578,7 +1578,7 @@ export function AgentWorkspace({
                 </div>
               )}
             </div>
-            {deploymentTask && deploymentTask.status !== "success" && (
+            {deploymentTask && (deploymentTask.status !== "success" || deploymentTask.message) && (
               <div className="aw-detail-deployment">
                 <DeploymentProgressCard task={deploymentTask} />
               </div>
