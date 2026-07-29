@@ -859,9 +859,9 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 8px 10px 6px 20px;
-  font-size: 12px;
-  font-weight: 500;
-  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+  font-weight: 600;
+  color: hsl(var(--foreground));
 }
 .history-refresh {
   background: none; border: none; cursor: pointer; padding: 2px;

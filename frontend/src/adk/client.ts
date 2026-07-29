@@ -413,6 +413,15 @@ const PRIVATE_RUNTIME_UNREACHABLE_MESSAGE =
   "Runtime 已部署成功，但当前 Studio 无法访问私网 Runtime。请使用已绑定相同 VPC 的 Studio 访问，或改用公网 / 公网+VPC 部署。";
 const RUNTIME_ENDPOINT_UNREACHABLE_MESSAGE =
   "Runtime 已部署成功，但 Studio 暂时无法连接服务。网关域名可能仍在生效，或当前网络/DNS 无法访问该 Runtime，请稍后在智能体管理页重试连接。";
+const RUNTIME_APPS_CACHE_TTL_MS = 30_000;
+const runtimeAppsCache = new Map<
+  string,
+  { apps: string[]; expiresAt: number }
+>();
+
+function runtimeAppsCacheKey(runtimeId: string, region: string): string {
+  return `${region}:${runtimeId}`;
+}
 
 async function runtimeProxyErrorCode(response: Response): Promise<string> {
   try {
@@ -470,7 +479,14 @@ export async function fetchRemoteApps(
   if (!res.ok) {
     throw new Error(await httpErrorMessage(res, "读取 Agent 列表失败"));
   }
-  return res.json();
+  const apps = (await res.json()) as string[];
+  if (ep?.runtimeId) {
+    runtimeAppsCache.set(runtimeAppsCacheKey(ep.runtimeId, ep.region ?? ""), {
+      apps,
+      expiresAt: Date.now() + RUNTIME_APPS_CACHE_TTL_MS,
+    });
+  }
+  return apps;
 }
 
 export async function createSession(
@@ -1011,11 +1027,15 @@ export async function removeSessionCapability(
   return normalizeSessionCapabilities(await res.json());
 }
 
-async function fetchAgentInfo(app: string, ep: AdkEndpoint): Promise<AgentInfo> {
+async function fetchAgentInfo(
+  app: string,
+  ep: AdkEndpoint,
+  loadDraft = true,
+): Promise<AgentInfo> {
   const res = await apiFetch(`/web/agent-info/${app}`, {}, ep);
   if (!res.ok) throw new Error(`agent-info failed: ${res.status}`);
   const info = (await res.json()) as Partial<AgentInfo>;
-  if (!info.draft) {
+  if (loadDraft && !info.draft) {
     try {
       const draftRes = await apiFetch(`/web/agent-draft/${app}`, {}, ep);
       if (draftRes.ok) {
@@ -1044,17 +1064,20 @@ async function fetchAgentInfo(app: string, ep: AdkEndpoint): Promise<AgentInfo> 
 
 export async function getAgentInfo(appName: string): Promise<AgentInfo> {
   const { app, ep } = resolve(appName);
-  return fetchAgentInfo(app, ep);
+  return fetchAgentInfo(app, ep, false);
 }
 
 /** Read Agent metadata for a Runtime without connecting or persisting it. */
 export async function getRuntimeAgentInfo(
   runtimeId: string,
   region: string,
+  knownApp?: string,
 ): Promise<AgentInfo> {
   const ep = { runtimeId, region };
-  const apps = await fetchRemoteApps("", "", ep);
-  const app = apps[0];
+  const cacheKey = runtimeAppsCacheKey(runtimeId, region);
+  const cached = runtimeAppsCache.get(cacheKey);
+  if (cached && cached.expiresAt <= Date.now()) runtimeAppsCache.delete(cacheKey);
+  const app = knownApp || cached?.apps[0] || (await fetchRemoteApps("", "", ep))[0];
   if (!app) throw new Error("该 Runtime 未提供可预览的 Agent。");
   return fetchAgentInfo(app, ep);
 }

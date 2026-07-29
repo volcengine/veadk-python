@@ -99,7 +99,10 @@ test("history header offers a borderless new-session action", () => {
     stylesSource,
     /\.history-new-chat\s*\{[\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;/,
   );
-  assert.match(stylesSource, /\.history-head\s*\{[\s\S]*?padding:\s*8px 10px 6px 20px;/);
+  assert.match(
+    stylesSource,
+    /\.history-head\s*\{[\s\S]*?padding:\s*8px 10px 6px 20px;[\s\S]*?font-size:\s*13px;[\s\S]*?font-weight:\s*600;[\s\S]*?color:\s*hsl\(var\(--foreground\)\);/,
+  );
   assert.match(
     stylesSource,
     /\.history-new-chat:hover\s*\{[\s\S]*?background:\s*transparent;[\s\S]*?color:\s*hsl\(var\(--foreground\)\);/,

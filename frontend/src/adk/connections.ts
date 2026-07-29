@@ -31,6 +31,7 @@ export interface AgentEntry {
   id: string; // selection id passed to the ADK client
   label: string; // shown in the dropdown
   app: string; // real ADK app name
+  runtimeApp?: string; // known Runtime app name, when already connected
   remote: boolean;
   host?: string; // remote host, for display
   runtimeId?: string;

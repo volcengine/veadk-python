@@ -728,6 +728,7 @@ export function AgentWorkspace({
     void getRuntimeAgentInfo(
       selectedAgent.runtimeId,
       selectedAgent.region ?? "cn-beijing",
+      selectedAgent.runtimeApp,
     )
       .then((info) => {
         if (!cancelled) setDetailAgentInfo(info);
@@ -745,6 +746,7 @@ export function AgentWorkspace({
     detailOnly,
     selectedAgent?.currentVersion,
     selectedAgent?.region,
+    selectedAgent?.runtimeApp,
     selectedAgent?.runtimeId,
   ]);
 
@@ -1517,8 +1519,7 @@ export function AgentWorkspace({
           </main>
         ) : (
           <main className="aw-main">
-            {selectedAgent && !selectedAgentInfo &&
-              (loadingAgentInfo || (detailOnly && !detailAgentInfoResolved)) && (
+            {selectedAgent && !selectedAgentInfo && loadingAgentInfo && (
               <div className="aw-detail-loading" role="status" aria-live="polite">
                 <div className="aw-detail-loading-card">
                   <span className="loading-gap-spinner" aria-hidden="true" />
@@ -1542,7 +1543,7 @@ export function AgentWorkspace({
                     <span>{selectedPendingTask.label}</span>
                   )}
                 </div>
-                <p>{draft.description || (loadingAgentInfo ? "正在读取智能体信息…" : "暂无描述")}</p>
+                <p>{draft.description || (loadingAgentInfo || (detailOnly && !detailAgentInfoResolved) ? "正在读取智能体信息…" : "暂无描述")}</p>
               </div>
               {(selectedAgent?.canDelete || selectedDraft || selectedAgentUpdateDraft) && (
                 <div className="aw-head-actions">
