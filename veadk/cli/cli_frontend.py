@@ -1382,6 +1382,7 @@ def _run_frontend_server(
         AgentDraft,
         GeneratedAgentProjectRequest,
         GeneratedAgentTestRunRequest,
+        GeneratedFile,
         GeneratedProject,
         debug_runtime_env_from_draft,
         generate_project_from_draft,
@@ -1396,9 +1397,12 @@ def _run_frontend_server(
         GeneratedAgentDraftRequest,
         generate_agent_draft,
     )
-    from veadk.cli.generated_agent_skills import materialize_selected_skills
+    from veadk.cli.generated_agent_skills import (
+        _files_from_zip,
+        materialize_selected_skills,
+    )
 
-    _TEST_RUN_MAX_FILES = 100
+    _TEST_RUN_MAX_FILES = 300
     _TEST_RUN_MAX_FILE_BYTES = 256 * 1024
     _TEST_RUN_MAX_TOTAL_BYTES = 2 * 1024 * 1024
     _TEST_RUN_MAX_ACTIVE = 3
@@ -1696,7 +1700,51 @@ def _run_frontend_server(
                 )
             return _read_skill_md_from_zip(zip_path, skill_id)
 
-    async def _resolve_skillspace_skill_md(
+    def _skill_files_from_version_response(
+        *,
+        space_id: str,
+        skill_id: str,
+        version: str | None,
+        resp: object,
+        folder: str,
+    ) -> str | list[GeneratedFile]:
+        skill_md = _skill_version_attr(resp, "skill_md", "skillMd")
+        bucket_name = _skill_version_attr(resp, "bucket_name", "bucketName")
+        tos_path = _skill_version_attr(resp, "tos_path", "tosPath", "path")
+        if not bucket_name or not tos_path:
+            if skill_md:
+                return skill_md
+            raise HTTPException(
+                status_code=404, detail="Skill version has no SKILL.md content"
+            )
+        from veadk.skills.materializer import _download_legacy_skill_space_skill
+        from veadk.skills.skill import Skill as VeADKSkill
+
+        remote_skill = VeADKSkill(
+            name=_skill_version_attr(resp, "name") or skill_id,
+            description=_skill_version_attr(resp, "description"),
+            path=tos_path,
+            skill_space_id=space_id,
+            bucket_name=bucket_name,
+            id=skill_id,
+            version_id=version or _skill_version_attr(resp, "version"),
+        )
+        with tempfile.TemporaryDirectory(prefix="veadk_skillspace_") as temp_dir:
+            zip_path = Path(temp_dir) / "skill.zip"
+            if not _download_legacy_skill_space_skill(remote_skill, zip_path):
+                if skill_md:
+                    return skill_md
+                raise HTTPException(
+                    status_code=502,
+                    detail="Failed to download SkillSpace skill package",
+                )
+            return _files_from_zip(
+                zip_path.read_bytes(),
+                folder,
+                f"SkillSpace skill {skill_id}",
+            )
+
+    async def _resolve_skillspace_skill_materialization(
         space_id: str,
         skill_id: str,
         version: str | None,
@@ -1704,7 +1752,7 @@ def _run_frontend_server(
         *,
         skill_space_name: str | None = None,
         skill_name: str | None = None,
-    ) -> str:
+    ) -> str | list[GeneratedFile]:
         from agentkit.sdk.skills.types import (
             GetSkillInfoRequest,
             GetSkillVersionRequest,
@@ -1746,11 +1794,12 @@ def _run_frontend_server(
                     detail=f"SkillSpaces API error: {version_error}",
                 ) from version_error
         return await asyncio.to_thread(
-            _skill_md_from_version_response,
+            _skill_files_from_version_response,
             space_id=space_id,
             skill_id=skill_id,
             version=version,
             resp=resp,
+            folder=skill_name or skill_id,
         )
 
     def _draft_for_debug_run(draft: AgentDraft) -> AgentDraft:
@@ -1792,7 +1841,7 @@ def _run_frontend_server(
             await materialize_selected_skills(
                 draft,
                 project,
-                resolve_skillspace_detail=_resolve_skillspace_skill_md,
+                resolve_skillspace_detail=_resolve_skillspace_skill_materialization,
             )
             return project, draft
         except ValidationError as e:
@@ -1818,7 +1867,10 @@ def _run_frontend_server(
         if not files:
             raise HTTPException(status_code=400, detail="No files provided")
         if len(files) > _TEST_RUN_MAX_FILES:
-            raise HTTPException(status_code=400, detail="Too many files")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Too many files ({len(files)} > {_TEST_RUN_MAX_FILES})",
+            )
 
         base = PathlibPath(temp_dir).resolve()
         total = 0
@@ -4599,9 +4651,8 @@ def _run_frontend_server(
 
         return {"items": items, "totalCount": len(items)}
 
-    # SkillSpace routes return SKILL.md (SkillMd) content, not the full TOS zip;
-    # that keeps the surface small and mirrors how the public Skill Hub picker
-    # only needs markdown for basic skills.
+    # SkillSpace routes run sync SDK calls in worker threads. Detail responses
+    # include full package files when the version exposes a TOS zip.
 
     def _skills_client(region: str):
         """Build an AgentkitSkillsClient using server-side creds, or raise
@@ -4748,9 +4799,7 @@ def _run_frontend_server(
         version: str | None = None,
         region: str = "cn-beijing",
     ):
-        """Fetch a specific skill version's SKILL.md content (SkillMd) plus
-        metadata. v1 returns SkillMd only; the TOS zip (scripts/assets) is a
-        follow-up."""
+        """Fetch a specific skill version's SKILL.md content plus package files."""
         from agentkit.sdk.skills.types import GetSkillVersionRequest
 
         try:
@@ -4770,13 +4819,27 @@ def _run_frontend_server(
                 detail="暂时无法加载该技能详情，请稍后重试。",
             )
 
-        skill_md = await asyncio.to_thread(
-            _skill_md_from_version_response,
+        resolved = await asyncio.to_thread(
+            _skill_files_from_version_response,
             space_id=space_id,
             skill_id=skill_id,
             version=version,
             resp=resp,
+            folder=resp.name or skill_id,
         )
+        if isinstance(resolved, str):
+            skill_md = resolved
+            files = []
+        else:
+            files = [{"path": file.path, "content": file.content} for file in resolved]
+            skill_md = next(
+                (
+                    file.content
+                    for file in resolved
+                    if file.path.lower().endswith("/skill.md")
+                ),
+                "",
+            )
 
         return {
             "skillId": skill_id,
@@ -4785,6 +4848,7 @@ def _run_frontend_server(
             "description": resp.description or "",
             "version": resp.version or version or "",
             "skillMd": skill_md,
+            "files": files,
             "bucketName": resp.bucket_name or "",
             "tosPath": resp.tos_path or "",
         }

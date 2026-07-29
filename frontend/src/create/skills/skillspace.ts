@@ -30,6 +30,7 @@ export interface SkillDetail {
   description: string;
   version: string;
   skillMd: string;
+  files?: ProjectFile[];
   bucketName: string;
   tosPath: string;
 }
@@ -148,8 +149,9 @@ export function toHit(space: SkillSpaceRef, s: SkillSpaceSkill): SkillHit {
   };
 }
 
-/** Download a SkillSpace skill's SKILL.md into a ProjectFile. v1: only the
- *  SKILL.md (SkillMd); TOS zip (scripts/assets) is a follow-up. */
+/** Download a SkillSpace skill package into ProjectFiles. The backend returns
+ *  full package files when the cloud version exposes a TOS zip, and falls back
+ *  to SKILL.md-only for older metadata-only responses. */
 export async function downloadSkillSpaceSkill(
   spaceId: string,
   skillId: string,
@@ -158,6 +160,7 @@ export async function downloadSkillSpaceSkill(
   region?: string,
 ): Promise<ProjectFile[]> {
   const d = await getSkillDetail(spaceId, skillId, version, region);
+  if (Array.isArray(d.files) && d.files.length > 0) return d.files;
   return [{ path: `skills/${folder}/SKILL.md`, content: d.skillMd }];
 }
 

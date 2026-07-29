@@ -44,7 +44,6 @@ MAX_CUSTOM_TOOL_NAME_LEN = 64
 MAX_CUSTOM_TOOL_DESCRIPTION_LEN = 2048
 MAX_MCP_TOOLS = 16
 MAX_MCP_ARG_LEN = 512
-MAX_SELECTED_SKILLS = 16
 MAX_ITERATIONS = 20
 MAX_KNOWLEDGEBASE_INDEX_LEN = 128
 
@@ -148,9 +147,6 @@ def _validate_node(
             validate_url_not_private(tool.url, field_name="mcpTools.url")
         for arg in tool.args:
             _check_len("MCP arg", arg, MAX_MCP_ARG_LEN)
-
-    if len(draft.selectedSkills) > MAX_SELECTED_SKILLS:
-        raise DebugPolicyError("Too many selected skills")
 
     total = 1
     for sub in draft.subAgents:
