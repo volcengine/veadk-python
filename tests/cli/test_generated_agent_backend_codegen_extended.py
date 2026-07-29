@@ -1156,6 +1156,95 @@ def test_generated_agent_debug_omits_stdio_mcp_on_remote_bind(
         assert delete_response.status_code == 200
 
 
+def test_generated_agent_debug_allows_large_skill_projects(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, Any] = {}
+    _FakeProcess.created.clear()
+    _FakeAsyncClient.listed_apps = ["large_skill_project"]
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-sk")
+    monkeypatch.setattr("dotenv.find_dotenv", lambda: "")
+    monkeypatch.setattr(
+        "uvicorn.run",
+        lambda app, **kwargs: captured.setdefault("app", app),
+    )
+
+    _run_frontend_server(
+        agents_dir=str(tmp_path),
+        frontend_dir=None,
+        site_logo=None,
+        site_title=None,
+        host="127.0.0.1",
+        port=8765,
+        dev=True,
+        vite=True,
+        oauth2_user_pool=None,
+        oauth2_user_pool_client=None,
+        oauth2_user_pool_uid=None,
+        oauth2_user_pool_client_uid=None,
+        oauth2_redirect_uri=None,
+        oauth2_provider=None,
+        oauth2_provider_label=None,
+        auth_mode="frontend",
+        generated_agent_test_run_ttl=60,
+        open_browser=False,
+    )
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProcess)
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+    real_socket = socket.socket
+    monkeypatch.setattr(
+        "socket.socket",
+        lambda *args, **kwargs: (
+            real_socket(*args, **kwargs)
+            if len(args) >= 4 or "fileno" in kwargs
+            else _FakeSocket(*args, **kwargs)
+        ),
+    )
+
+    draft = {
+        "name": "large-skill-project",
+        "instruction": "Use all selected skills.",
+        "selectedSkills": [
+            {
+                "source": "local",
+                "folder": f"skill-{idx}",
+                "name": f"skill-{idx}",
+                "localFiles": [
+                    {
+                        "path": f"skills/skill-{idx}/SKILL.md",
+                        "content": (
+                            f"---\nname: skill-{idx}\n"
+                            f"description: Skill {idx}.\n---\n"
+                        ),
+                    },
+                    {
+                        "path": f"skills/skill-{idx}/helper.py",
+                        "content": f"VALUE = {idx}\n",
+                    },
+                    {
+                        "path": f"skills/skill-{idx}/README.md",
+                        "content": f"# Skill {idx}\n",
+                    },
+                ],
+            }
+            for idx in range(40)
+        ],
+    }
+
+    with TestClient(captured["app"]) as client:
+        run_response = client.post(
+            "/web/generated-agent-test-runs",
+            json={"draft": draft},
+        )
+
+    assert run_response.status_code == 200
+    assert run_response.json()["appName"] == "large_skill_project"
+    assert _FakeProcess.created[-1].cmd
+
+
 def test_studio_deploy_run_script_allows_generated_agent_debug() -> None:
     run_script = _studio_deploy_run_script("site-logo.png")
 

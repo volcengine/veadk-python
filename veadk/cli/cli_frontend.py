@@ -1402,7 +1402,7 @@ def _run_frontend_server(
         materialize_selected_skills,
     )
 
-    _TEST_RUN_MAX_FILES = 100
+    _TEST_RUN_MAX_FILES = 300
     _TEST_RUN_MAX_FILE_BYTES = 256 * 1024
     _TEST_RUN_MAX_TOTAL_BYTES = 2 * 1024 * 1024
     _TEST_RUN_MAX_ACTIVE = 3
@@ -1865,7 +1865,10 @@ def _run_frontend_server(
         if not files:
             raise HTTPException(status_code=400, detail="No files provided")
         if len(files) > _TEST_RUN_MAX_FILES:
-            raise HTTPException(status_code=400, detail="Too many files")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Too many files ({len(files)} > {_TEST_RUN_MAX_FILES})",
+            )
 
         base = PathlibPath(temp_dir).resolve()
         total = 0
