@@ -117,7 +117,9 @@ async def _download_skillhub_skill(skill: SelectedSkill) -> list[GeneratedFile]:
     content = res.content
     if len(content) > MAX_SKILL_TOTAL_BYTES:
         raise DebugPolicyError("Skill Hub zip is too large")
-    folder = _safe_folder(skill.folder or slug.rsplit("/", 1)[-1] or "skill")
+    folder = _safe_folder_or_default(
+        skill.folder or slug.rsplit("/", 1)[-1] or "skill"
+    )
     files = _files_from_zip(content, folder, f"Skill Hub skill {slug}")
     skill.folder = _folder_from_generated_files(files) or folder
     return files
@@ -129,7 +131,7 @@ async def _materialize_skillspace_skill(
 ) -> list[GeneratedFile]:
     if not skill.skillSpaceId or not skill.skillId:
         raise DebugPolicyError("SkillSpace skill is missing ids")
-    folder = _safe_folder(skill.folder or skill.name or skill.skillId)
+    folder = _safe_folder_or_default(skill.folder or skill.name or skill.skillId)
     try:
         resolved = await resolver(
             skill.skillSpaceId,
@@ -323,6 +325,16 @@ def _safe_folder(folder: str) -> str:
     return folder
 
 
+def _safe_folder_or_default(folder: str, default: str = "skill") -> str:
+    folder = (folder or "").strip()
+    if _FOLDER_RE.fullmatch(folder) and folder not in {".", ".."}:
+        return folder
+    sanitized = re.sub(r"[^A-Za-z0-9_-]+", "-", folder).strip("-")
+    if sanitized and sanitized not in {".", ".."}:
+        return sanitized[:64]
+    return default
+
+
 def _normalize_project_path(path: str) -> str:
     if not isinstance(path, str) or "\x00" in path:
         raise DebugPolicyError("Invalid skill file path")
@@ -336,10 +348,7 @@ def _normalize_project_path(path: str) -> str:
 
 
 def _normalize_relative_path(path: str) -> str:
-    normalized = _normalize_project_path(path)
-    if normalized.startswith("skills/"):
-        raise DebugPolicyError(f"Skill zip must not contain generated path: {path}")
-    return normalized
+    return _normalize_project_path(path)
 
 
 def _skill_md_folder_name(text: str) -> str | None:

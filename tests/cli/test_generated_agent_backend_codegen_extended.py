@@ -649,6 +649,25 @@ def test_skillhub_zip_accepts_safe_files_without_metadata_validation() -> None:
         )
 
 
+def test_remote_skill_zip_accepts_existing_skills_wrapper() -> None:
+    skill_md = "---\nname: wrapped-skill\ndescription: Wrapped.\n---\n"
+    files = _files_from_zip(
+        _skill_zip(
+            {
+                "skills/wrapped-skill/SKILL.md": skill_md,
+                "skills/wrapped-skill/scripts/run.py": "print('ok')\n",
+            }
+        ),
+        "display name with spaces",
+        "Skill Hub skill wrapped-skill",
+    )
+
+    assert [file.path for file in files] == [
+        "skills/wrapped-skill/SKILL.md",
+        "skills/wrapped-skill/scripts/run.py",
+    ]
+
+
 def test_skillhub_zip_accepts_gb18030_text_files() -> None:
     skill_md = "---\nname: demo-skill\ndescription: 数据处理。\n---\n".encode("gb18030")
     output = io.BytesIO()
