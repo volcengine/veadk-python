@@ -97,6 +97,15 @@ test("passes the selected region and network to AgentKit deployment", () => {
   assert.match(packageCreateSource, /deployAgentkitProject\(/);
 });
 
+test("uses the shared deployment lifecycle for uploaded packages", () => {
+  assert.match(appSource, /<CodePackageCreate[\s\S]*?onDeploymentStarted=\{openDeploymentDetail\}/);
+  assert.match(appSource, /<CodePackageCreate[\s\S]*?onDeploymentComplete=\{finishDeployment\}/);
+  assert.match(packageCreateSource, /onDeploymentStarted\?: \(task: DeploymentTaskUpdate\)/);
+  assert.match(packageCreateSource, /onDeploymentComplete\?: \(result: DeployResult\)/);
+  assert.match(packageCreateSource, /onDeploymentStarted=\{onDeploymentStarted\}/);
+  assert.match(packageCreateSource, /onDeploymentComplete=\{onDeploymentComplete\}/);
+});
+
 test("hides message channels for code package deployment", () => {
   assert.match(
     projectPreviewSource,
@@ -127,6 +136,14 @@ test("uses a themed region menu and a centered icon-free deploy button", () => {
   assert.match(
     projectPreviewStyles,
     /\.pp-root\.is-deploy\.has-primary-pane \.pp-config-actions\s*\{[\s\S]*?justify-content:\s*center/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-root\.is-deploy\.has-primary-pane \.pp-config-actions\s*\{[\s\S]*?position:\s*sticky/,
+  );
+  assert.match(
+    projectPreviewStyles,
+    /\.pp-root\.is-deploy\.has-primary-pane \.pp-config-actions\s*\{[\s\S]*?bottom:\s*0/,
   );
   assert.doesNotMatch(projectPreviewSource, /<DeployIcon/);
 });

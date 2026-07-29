@@ -3362,6 +3362,8 @@ export default function App() {
                 }}
                 onAgentAdded={onAgentAdded}
                 onDeploymentTaskChange={updateDeploymentTask}
+                onDeploymentStarted={openDeploymentDetail}
+                onDeploymentComplete={finishDeployment}
               />
             ) : turns.length === 0 && skillJob ? (
               <SkillCreateWorkspace initialJob={skillJob} />

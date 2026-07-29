@@ -6,7 +6,11 @@ import {
   type DragEvent,
 } from "react";
 import { deployAgentkitProject, type DeployStage } from "../adk/client";
-import { ProjectPreview, type DeploymentTaskUpdate } from "../ui/ProjectPreview";
+import {
+  ProjectPreview,
+  type DeployResult,
+  type DeploymentTaskUpdate,
+} from "../ui/ProjectPreview";
 import { CodeBrowserDialog } from "../ui/CodeBrowserDialog";
 import type { AgentProject, ProjectFile } from "./project";
 import type { NetworkConfig } from "./types";
@@ -21,6 +25,8 @@ interface CodePackageCreateProps {
   onBack: () => void;
   onAgentAdded?: (agentId: string, agentName: string) => void;
   onDeploymentTaskChange?: (task: DeploymentTaskUpdate) => void;
+  onDeploymentStarted?: (task: DeploymentTaskUpdate) => void;
+  onDeploymentComplete?: (result: DeployResult) => void | Promise<void>;
 }
 
 function packageProjectName(fileName: string): string {
@@ -79,6 +85,8 @@ export function CodePackageCreate({
   onBack,
   onAgentAdded,
   onDeploymentTaskChange,
+  onDeploymentStarted,
+  onDeploymentComplete,
 }: CodePackageCreateProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const loadRunRef = useRef(0);
@@ -174,6 +182,8 @@ export function CodePackageCreate({
         onDeploy={handleDeploy}
         onAgentAdded={onAgentAdded}
         onDeploymentTaskChange={onDeploymentTaskChange}
+        onDeploymentStarted={onDeploymentStarted}
+        onDeploymentComplete={onDeploymentComplete}
         network={network}
         onNetworkChange={setNetwork}
         deployRegion={deployRegion}

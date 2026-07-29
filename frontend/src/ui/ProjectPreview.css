@@ -420,9 +420,19 @@
 }
 
 .pp-root.is-deploy.has-primary-pane .pp-config-actions {
-  position: relative;
+  position: sticky;
+  bottom: 0;
+  width: var(--pp-publish-content-width);
+  margin: 0 auto;
   justify-content: center;
-  padding: 12px 18px 18px;
+  padding: 12px 0 18px;
+  background:
+    linear-gradient(
+      to bottom,
+      hsl(var(--secondary) / 0),
+      hsl(var(--secondary) / 0.18) 34%,
+      hsl(var(--secondary) / 0.18)
+    );
   transform: none;
 }
 
