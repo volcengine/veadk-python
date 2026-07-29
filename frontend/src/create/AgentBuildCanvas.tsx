@@ -347,7 +347,7 @@ function buildCanvasGraph(
           agent.name.trim() ||
           (path.length === 0 ? "主 Agent" : PATTERN_COPY[type].label),
         pattern: type,
-        description: PATTERN_COPY[type].description,
+        description: agent.description.trim() || PATTERN_COPY[type].description,
         childCount: agent.subAgents.length,
         containedIn,
         layoutWidth: size.width,
@@ -620,7 +620,6 @@ function AgentCanvasNode({ data, selected }: NodeProps<CanvasNode>) {
       <span className="abc-node-copy">
         <span className="abc-node-meta">
           <span>{copy.label}</span>
-          {!!data.childCount && <small>{data.childCount} 个步骤</small>}
         </span>
         <strong>{data.title}</strong>
         <small>{data.description}</small>
@@ -667,8 +666,6 @@ function AgentGroupNode({ data, selected }: NodeProps<CanvasNode>) {
   const sourcePosition = direction === "vertical" ? Position.Bottom : Position.Right;
   const loopPosition = direction === "vertical" ? Position.Right : Position.Bottom;
   const type = data.pattern ?? "sequential";
-  const copy = PATTERN_COPY[type];
-  const childUnit = type === "llm" ? "子 Agent" : "步骤";
   const childCount = data.childCount ?? 0;
   const addLabel =
     type === "llm"
@@ -684,15 +681,8 @@ function AgentGroupNode({ data, selected }: NodeProps<CanvasNode>) {
       <header className="abc-group-head">
         <span>
           <strong title={data.title}>{data.title}</strong>
-          <small>
-            {type === "llm"
-              ? "智能体 · 可根据任务调用框内子 Agent"
-              : type === "parallel"
-                ? `${copy.label} · 框内步骤同时开始，全部完成后再继续`
-                : `${copy.label} · ${copy.description}`}
-          </small>
+          <small>{data.description}</small>
         </span>
-        <em>{childCount} 个{childUnit}</em>
       </header>
       {actions &&
         data.path !== undefined &&

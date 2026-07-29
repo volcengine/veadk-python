@@ -6,6 +6,29 @@ import App from "./App";
 import "react-photo-view/dist/react-photo-view.css";
 import "./styles.css";
 
+const PRELOAD_RECOVERY_KEY = "veadk.preloadRecoveryAt";
+
+// An open tab can still reference hashed lazy chunks from the previous release.
+// Reload once so the browser picks up the current HTML and asset manifest.
+window.addEventListener("vite:preloadError", (event) => {
+  const now = Date.now();
+  let lastRecoveryAt = 0;
+  try {
+    lastRecoveryAt = Number(sessionStorage.getItem(PRELOAD_RECOVERY_KEY) || "0");
+  } catch {
+    /* storage unavailable */
+  }
+  if (now - lastRecoveryAt < 10_000) return;
+
+  event.preventDefault();
+  try {
+    sessionStorage.setItem(PRELOAD_RECOVERY_KEY, String(now));
+  } catch {
+    /* storage unavailable */
+  }
+  window.location.reload();
+});
+
 // OAuth popup callback landing. When an OAuth authorize flow (see runOAuthPopup
 // in App.tsx) redirects back to our own origin, this same SPA is loaded inside
 // the popup. Detect that case *before* the app boots, hand the full callback

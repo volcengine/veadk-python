@@ -2992,6 +2992,23 @@ body {
   min-width: 0;
   gap: 6px;
 }
+.loading-gap-spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  box-sizing: border-box;
+  border: 1.5px solid #111;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: loading-gap-spin 0.7s linear infinite;
+}
+@keyframes loading-gap-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .loading-gap-spinner { animation-duration: 1.4s; }
+}
 .agent-info-trigger {
   display: inline-flex;
   width: 30px;
@@ -3401,6 +3418,44 @@ body {
   transition: transform 0.2s ease;
 }
 .agent-dd-chev.open { transform: rotate(180deg); }
+.agent-switch {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 33.333cqw;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.agent-switch-action {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.agent-switch-action:hover {
+  background: hsl(var(--foreground) / 0.06);
+  color: hsl(var(--foreground));
+}
+.agent-switch-action:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 1px;
+}
+.agent-switch-action svg {
+  width: 16px;
+  height: 16px;
+}
 @keyframes ddpop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 
 /* ---------- account (avatar button + click popover) ---------- */
@@ -5621,3 +5676,18 @@ a.search-result { text-decoration: none; color: inherit; }
   color: #fff;
 }
 .confirm-btn--danger:hover { background: hsl(var(--destructive) / 0.9); }
+
+.app-toast {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  z-index: 120;
+  padding: 9px 14px;
+  border-radius: 8px;
+  background: hsl(var(--foreground));
+  color: hsl(var(--background));
+  box-shadow: 0 8px 24px hsl(var(--foreground) / 0.18);
+  font-size: 13px;
+  font-weight: 400;
+  transform: translateX(-50%);
+}

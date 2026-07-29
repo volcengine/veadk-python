@@ -23,10 +23,17 @@ const clientSource = readFileSync(
   new URL("../src/adk/client.ts", import.meta.url),
   "utf8",
 );
+const connectionsSource = readFileSync(
+  new URL("../src/adk/connections.ts", import.meta.url),
+  "utf8",
+);
 
 test("Agent navigation opens the PR 748 workspace with creation and evaluation", () => {
   assert.match(appSource, /import \{[\s\S]*?AgentWorkspace[\s\S]*?\} from "\.\/ui\/AgentWorkspace"/);
-  assert.match(appSource, /<AgentWorkspace[\s\S]*?agents=\{orderedWorkspaceAgentEntries\}/);
+  assert.match(
+    appSource,
+    /<AgentWorkspace[\s\S]*?agents=\{detailAgentEntry \? \[detailAgentEntry\] : orderedWorkspaceAgentEntries\}/,
+  );
   assert.match(appSource, /const selectWorkspaceAgentFromNavbar = \(id: string\) => \{/);
   assert.match(
     appSource,
@@ -65,9 +72,41 @@ test("workspace layout keeps the library and evaluation panes available", () => 
   assert.doesNotMatch(workspaceStyles, /\.aw-canvas-card\s*\{[^}]*min-height:\s*330px/);
 });
 
+test("focused agent details can render without the workspace tabs or list sidebar", () => {
+  assert.match(workspaceSource, /detailOnly\?: boolean/);
+  assert.match(workspaceSource, /aw-root\$\{detailOnly \? " is-detail-only" : ""\}/);
+  assert.match(workspaceStyles, /\.aw-root\.is-detail-only \.aw-view-tabs,[\s\S]*?\.aw-root\.is-detail-only \.aw-sidebar[\s\S]*?display: none/);
+  assert.match(workspaceStyles, /\.aw-root\.is-detail-only \.aw-workspace\s*\{[\s\S]*?grid-template-columns: minmax\(0, 1fr\)/);
+  assert.match(
+    appSource,
+    /focusedAgentId=\{detailAgentEntry\?\.id \?\? focusedWorkspaceAgentId\}[\s\S]*?detailOnly=\{!!detailAgentEntry \|\| !!focusedDeploymentTaskId\}/,
+  );
+});
+
+test("agent details show capability badges and deployment state before the flow", () => {
+  assert.match(workspaceSource, /const toolNames = useMemo/);
+  assert.match(workspaceSource, /const skillNames = useMemo/);
+  assert.match(workspaceSource, /<dt>工具<\/dt>[\s\S]*?className="aw-fact-badges"[\s\S]*?toolNames\.map/);
+  assert.match(workspaceSource, /<dt>技能<\/dt>[\s\S]*?className="aw-fact-badges"[\s\S]*?skillNames\.map/);
+  assert.match(workspaceStyles, /\.aw-fact-badges span\s*\{[\s\S]*?border-radius:\s*999px;/);
+  assert.ok(
+    workspaceSource.indexOf("<h3>部署配置</h3>") < workspaceSource.indexOf("<strong>执行流程</strong>"),
+  );
+  assert.match(workspaceSource, /status\.toLowerCase\(\) === "ready"[\s\S]*?className="aw-status-dot"/);
+  assert.match(workspaceStyles, /\.aw-readonly-config dd\.is-ready\s*\{[\s\S]*?color:\s*hsl\(142 62% 30%\)/);
+  assert.match(workspaceSource, /const executionFlowKey = selectedAgentInfo/);
+  assert.match(workspaceSource, /detailOnly && selectedAgent\?\.runtimeId && !detailAgentInfoResolved/);
+  assert.match(
+    workspaceSource,
+    /loadingExecutionFlow \? \([\s\S]*?className="aw-canvas-loading"[\s\S]*?正在加载执行流程[\s\S]*?<AgentBuildCanvas[\s\S]*?key=\{executionFlowKey\}/,
+  );
+  assert.match(workspaceStyles, /\.aw-canvas-loading\s*\{[\s\S]*?align-items:\s*center;/);
+});
+
 test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => {
   assert.match(appSource, /const openDeploymentDetail = useCallback/);
   assert.match(appSource, /setFocusedDeploymentTaskId\(task\.id\)/);
+  assert.match(appSource, /setAgentDetailTarget\(null\)[\s\S]*?setFocusedDeploymentTaskId\(task\.id\)/);
   assert.match(appSource, /const finishDeployment = useCallback/);
   assert.match(appSource, /await connectRuntime\([\s\S]*?result\.runtimeId[\s\S]*?result\.version/);
   assert.match(appSource, /onDeploymentStarted=\{openDeploymentDetail\}/);
@@ -86,6 +125,16 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(projectPreviewSource, /onDeploymentComplete\?: \(result: DeployResult\)/);
   assert.match(projectPreviewSource, /const isRuntimeUpdate = deploymentActionLabel\.includes\("更新"\)/);
   assert.match(projectPreviewSource, /onDeploymentStarted\?\.\(initialTask\)/);
+  assert.doesNotMatch(workspaceSource, /aw-deployment-focus/);
+  assert.match(
+    workspaceSource,
+    /className="aw-agent-head"[\s\S]*?deploymentTask\.status !== "success"[\s\S]*?className="aw-detail-deployment"[\s\S]*?<DeploymentProgressCard task=\{deploymentTask\} \/>[\s\S]*?<nav className="aw-agent-tabs"/,
+  );
+  assert.doesNotMatch(
+    workspaceSource,
+    /className="aw-basic-stack">\s*\{deploymentTask && <DeploymentProgressCard/,
+  );
+  assert.match(workspaceStyles, /\.aw-detail-deployment\s*\{[\s\S]*?padding:\s*0 24px 16px;/);
   assert.match(projectPreviewSource, /await onDeploymentComplete\?\.\(result\)/);
   assert.match(projectPreviewSource, /runtimeId: result\.runtimeId \|\| deploymentRuntimeId/);
 });
@@ -130,7 +179,10 @@ test("workspace agents can be reordered by drag or keyboard", () => {
   assert.match(appSource, /function workspaceAgentOrderKey\(userId: string\)/);
   assert.match(appSource, /const \[workspaceAgentOrder, setWorkspaceAgentOrder\] = useState<string\[\]>\(\[\]\)/);
   assert.match(appSource, /const saveWorkspaceAgentOrder = useCallback/);
-  assert.match(appSource, /agents=\{orderedWorkspaceAgentEntries\}/);
+  assert.match(
+    appSource,
+    /agents=\{detailAgentEntry \? \[detailAgentEntry\] : orderedWorkspaceAgentEntries\}/,
+  );
   assert.match(appSource, /agentOrder=\{workspaceAgentOrder\}/);
   assert.match(appSource, /onAgentOrderChange=\{saveWorkspaceAgentOrder\}/);
 
@@ -148,12 +200,43 @@ test("workspace agents can be reordered by drag or keyboard", () => {
   assert.match(workspaceStyles, /\.aw-agent-item\.is-drop-after/);
 });
 
-test("workspace supports selecting and deleting authorized agents", () => {
+test("runtime refresh preserves agent order and detail loading uses an overlay", () => {
+  assert.match(
+    connectionsSource,
+    /const existingIndex = list\.findIndex\(\(item\) => item\.runtimeId === runtimeId\)/,
+  );
+  assert.match(connectionsSource, /else list\[existingIndex\] = conn/);
+  assert.doesNotMatch(
+    connectionsSource,
+    /loadConnections\(\)\.filter\(\(c\) => c\.runtimeId !== runtimeId\), conn/,
+  );
+  assert.match(workspaceSource, /className="aw-detail-loading" role="status"/);
+  assert.match(
+    workspaceSource,
+    /className="aw-detail-loading"[\s\S]*?className="loading-gap-spinner"/,
+  );
+  assert.match(workspaceSource, /正在加载智能体/);
+  assert.match(
+    workspaceSource,
+    /!canUpdate \|\| \(!loadingAgentInfo && !selectedAgentInfo\)/,
+  );
+  assert.doesNotMatch(
+    workspaceSource,
+    /!canUpdate \|\| loadingAgentInfo \|\| !selectedAgentInfo/,
+  );
+  assert.match(workspaceStyles, /\.aw-detail-loading\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?inset:\s*0;/);
+});
+
+test("workspace supports deleting individual authorized agents", () => {
   assert.match(appSource, /deleteRuntime/);
   assert.match(appSource, /removeRuntimeConnection/);
   assert.match(appSource, /libraryRuntimePermissions/);
   assert.match(appSource, /canDelete: runtime\.canDelete/);
   assert.match(appSource, /canDelete: entry\.runtimeId[\s\S]*?libraryRuntimePermissions\[entry\.runtimeId\]\?\.canDelete === true/);
+  assert.match(
+    appSource,
+    /const detailAgentEntry:[\s\S]*?canDelete: agentDetailTarget\.runtime\.canDelete/,
+  );
   assert.match(appSource, /const deleteWorkspaceAgents = useCallback/);
   assert.match(appSource, /await deleteRuntime\(agent\.runtimeId, agent\.region \?\? "cn-beijing"\)/);
   assert.match(appSource, /onDeleteAgents=\{deleteWorkspaceAgents\}/);
@@ -179,6 +262,14 @@ test("workspace supports selecting and deleting authorized agents", () => {
   assert.match(workspaceStyles, /\.aw-selection-toolbar/);
   assert.match(workspaceStyles, /\.aw-select-marker\.is-checked/);
   assert.match(workspaceStyles, /\.aw-head-delete/);
+  assert.match(
+    workspaceStyles,
+    /\.aw-head-delete\.studio-update-action:hover:not\(:disabled\)[\s\S]*?color:\s*#fff;/,
+  );
+  assert.match(
+    workspaceSource,
+    /className="aw-basic-actions"[\s\S]*?className="aw-update studio-update-action"[\s\S]*?className="aw-head-delete studio-update-action"/,
+  );
 });
 
 test("agent detail evaluation tab reads feedback datasets", () => {

@@ -3027,10 +3027,14 @@ def _run_frontend_server(
             ["cn-beijing", "cn-shanghai"] if region in {"all", "", "*"} else [region]
         )
         page_size = max(1, min(page_size, 100))
+        restrict_to_owner = scope == "mine" or role != StudioRole.ADMIN
 
         # next_token format for cross-region mode: "all:<offset>".
         async def _list_region(
-            reg: str, tok: str, max_results: int = page_size
+            reg: str,
+            tok: str,
+            max_results: int = page_size,
+            tag_filter: tuple[str, str] | None = None,
         ) -> tuple[list[dict], str]:
             from agentkit.sdk.runtime.client import AgentkitRuntimeClient
             from agentkit.sdk.runtime import types as _rt
@@ -3047,6 +3051,12 @@ def _run_frontend_server(
             target_size = max(1, min(max_results, 100))
             for _ in range(20):
                 kw: dict = {"max_results": max(1, target_size - len(out))}
+                if tag_filter is not None:
+                    kw["tag_filters"] = [
+                        _rt.TagFiltersItemForListRuntimes.model_validate(
+                            {"Key": tag_filter[0], "Values": [tag_filter[1]]}
+                        )
+                    ]
                 if current_token:
                     kw["next_token"] = current_token
                 request = _rt.ListRuntimesRequest(**kw)
@@ -3085,6 +3095,46 @@ def _run_frontend_server(
             return out[:target_size], next_page_token
 
         try:
+            if restrict_to_owner and principal is not None:
+                if next_token:
+                    match = re.fullmatch(r"mine:(\d+)", next_token)
+                    if match is None:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="invalid owned runtime page token",
+                        )
+                    offset = int(match.group(1))
+                else:
+                    offset = 0
+                window_end = offset + page_size
+                owned_by_id: dict[str, dict] = {}
+                owned_has_more = False
+                ownership_filters = {
+                    ("veadk:owner", principal.owner_id),
+                    ("veadk:author", principal.display_name),
+                }
+                for reg in regions:
+                    for tag_filter in ownership_filters:
+                        items, following_token = await _list_region(
+                            reg,
+                            "",
+                            window_end,
+                            tag_filter,
+                        )
+                        for item in items:
+                            owned_by_id[item["runtimeId"]] = item
+                        owned_has_more = owned_has_more or bool(following_token)
+                owned_runtimes = sorted(
+                    owned_by_id.values(),
+                    key=lambda item: item.get("createdAt") or "",
+                    reverse=True,
+                )
+                page_end = min(window_end, len(owned_runtimes))
+                page = owned_runtimes[offset:page_end]
+                has_more = page_end < len(owned_runtimes) or owned_has_more
+                following_token = f"mine:{page_end}" if has_more else ""
+                return {"runtimes": page, "nextToken": following_token}
+
             if len(regions) == 1:
                 out, nxt = await _list_region(regions[0], next_token)
                 return {"runtimes": out, "nextToken": nxt}
@@ -3127,16 +3177,16 @@ def _run_frontend_server(
                 return items, bool(following_token)
 
             all_runtimes: list[dict] = []
-            region_results = await asyncio.gather(
-                *(_list_region_window(reg) for reg in regions),
-                return_exceptions=True,
-            )
             regional_has_more = False
-            for reg, result in zip(regions, region_results, strict=True):
-                if isinstance(result, BaseException):
-                    logger.warning(f"list runtimes [{reg}] failed: {result}")
+            # The AgentKit SDK runtime client shares transport state internally;
+            # concurrent regional ListRuntimes calls can block each other for
+            # tens of seconds. Regions are few, so query them sequentially.
+            for reg in regions:
+                try:
+                    items, has_more = await _list_region_window(reg)
+                except Exception as exc:
+                    logger.warning(f"list runtimes [{reg}] failed: {exc}")
                     continue
-                items, has_more = result
                 all_runtimes.extend(items)
                 regional_has_more = regional_has_more or has_more
             all_runtimes.sort(

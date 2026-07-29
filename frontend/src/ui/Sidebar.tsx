@@ -58,7 +58,7 @@ export interface SidebarProps {
   onQuickCreate: () => void;
   onSkillCenter: () => void;
   onAddAgent: () => void;
-  onManageAgents: () => void;
+  onMyAgents: () => void;
   onPickSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
   userInfo?: Record<string, unknown>;
@@ -270,7 +270,7 @@ export function Sidebar({
   onQuickCreate,
   onSkillCenter,
   onAddAgent,
-  onManageAgents,
+  onMyAgents,
   onPickSession,
   onDeleteSession,
   userInfo,
@@ -363,7 +363,7 @@ export function Sidebar({
         )}
         <button
           className="new-chat new-chat--agents"
-          onClick={onManageAgents}
+          onClick={onMyAgents}
           aria-label="智能体"
           title="智能体"
         >

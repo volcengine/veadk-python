@@ -47,16 +47,13 @@ test("offers Agent, built-in agents, and Skill creation modes in the new-chat co
   assert.match(appSource, /mode === "temporary"[\s\S]*?openSandboxLaunch\(\)/);
 });
 
-test("preserves the existing Agent submit flow and resets mode on a new chat", () => {
+test("preserves the existing Agent submit flow while hiding the mode selector", () => {
   assert.match(
     appSource,
     /if \(!sandboxSession && newChatMode === "skill-create"\)[\s\S]*?return;[\s\S]*?const text = input;[\s\S]*?send\(text, atts, selectedInvocation\)/,
   );
   assert.match(appSource, /function startNewChat\(\)[\s\S]*?setNewChatMode\("agent"\)/);
-  assert.match(
-    appSource,
-    /showModeSelector=\{[\s\S]*?turns\.length === 0 &&[\s\S]*?skillJob === null[\s\S]*?\}/,
-  );
+  assert.match(appSource, /showModeSelector=\{false\}/);
   assert.match(
     appSource,
     /mode === "skill-create"[\s\S]*?discardDraftAttachments\(attachments\)[\s\S]*?setAttachments\(\[\]\)/,
