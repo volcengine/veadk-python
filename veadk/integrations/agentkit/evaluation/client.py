@@ -63,6 +63,15 @@ class EvaluationItemRef:
     is_new: bool
 
 
+@dataclass(frozen=True)
+class EvaluationFeedbackItem:
+    """One feedback-derived evaluation set item."""
+
+    id: str
+    item_key: str
+    fields: dict[str, str]
+
+
 _FEEDBACK_FIELD_KEYS = (
     "input",
     "reference_output",
@@ -273,6 +282,41 @@ class AgentKitEvaluationDatasetsClient:
             is_new=bool(output.get("IsNewItem")),
         )
 
+    async def list_feedback_items(
+        self,
+        *,
+        agent_name: str,
+        rating: str,
+        page_size: int = 100,
+    ) -> tuple[EvaluationSetRef | None, list[EvaluationFeedbackItem]]:
+        """List feedback items for one Agent/rating without creating datasets."""
+        if rating not in {"good", "bad"}:
+            raise ValueError(f"unsupported feedback rating: {rating}")
+        workspace_id = await self._resolve_workspace_id()
+        set_name = feedback_set_name(agent_name, rating)
+        evaluation_set = await self._find_set(
+            set_name,
+            workspace_id=workspace_id,
+        )
+        if evaluation_set is None:
+            evaluation_set = await self._find_set(
+                _fallback_set_name(set_name, workspace_id),
+                workspace_id=workspace_id,
+            )
+        if evaluation_set is None:
+            return None, []
+        response = await self._post(
+            action="ListEvaluationSetItems",
+            query={
+                **self._project_query,
+                "WorkspaceId": evaluation_set.workspace_id,
+                "EvaluationSetId": evaluation_set.id,
+            },
+            payload={"PageNumber": 1, "PageSize": max(1, min(page_size, 200))},
+        )
+        items = _extract_items(response)
+        return evaluation_set, [_parse_feedback_item(item) for item in items]
+
     async def delete_item(
         self,
         *,
@@ -333,3 +377,52 @@ class AgentKitEvaluationDatasetsClient:
             if existing is not None:
                 return existing
         return None
+
+
+def _extract_items(response: dict[str, Any]) -> list[dict[str, Any]]:
+    result = response.get("Result") or {}
+    candidates = (
+        result.get("Items"),
+        result.get("EvaluationSetItems"),
+        result.get("ItemDetails"),
+        result.get("EvaluationItems"),
+    )
+    for candidate in candidates:
+        if isinstance(candidate, list):
+            return [item for item in candidate if isinstance(item, dict)]
+    return []
+
+
+def _parse_feedback_item(item: dict[str, Any]) -> EvaluationFeedbackItem:
+    turns = item.get("Turns")
+    first_turn = turns[0] if isinstance(turns, list) and turns else {}
+    if not isinstance(first_turn, dict):
+        first_turn = {}
+    field_data = (
+        first_turn.get("FieldDataList")
+        or first_turn.get("FieldData")
+        or item.get("FieldDataList")
+        or item.get("FieldData")
+        or []
+    )
+    fields: dict[str, str] = {}
+    if isinstance(field_data, list):
+        for field in field_data:
+            if not isinstance(field, dict):
+                continue
+            key = str(field.get("Key") or field.get("Name") or "")
+            if not key:
+                continue
+            content = field.get("Content")
+            value = ""
+            if isinstance(content, dict):
+                raw_value = content.get("Text") or content.get("Value") or ""
+                value = str(raw_value)
+            elif content is not None:
+                value = str(content)
+            fields[key] = value
+    return EvaluationFeedbackItem(
+        id=str(item.get("ItemId") or item.get("Id") or ""),
+        item_key=str(item.get("ItemKey") or ""),
+        fields=fields,
+    )

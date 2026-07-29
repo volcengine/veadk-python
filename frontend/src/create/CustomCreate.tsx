@@ -1909,9 +1909,6 @@ function DebugComparisonWorkspace({
                           <DeploymentErrorMessage
                             message={variant.error}
                             className="cw-debug-error-detail"
-                            onRetry={async () => {
-                              await onStartVariant(variant.id);
-                            }}
                           />
                         ) : starting ? (
                           <div className="cw-ab-empty cw-ab-starting">
@@ -1921,39 +1918,21 @@ function DebugComparisonWorkspace({
                         ) : stale ? (
                           <div className="cw-ab-empty cw-ab-launch">
                             <span>配置已变更，请重新启动此环境</span>
-                            <button
-                              type="button"
-                              className="cw-ab-start"
-                              disabled={startDisabled}
-                              onClick={() => onStartVariant(variant.id)}
-                            >
-                              <RefreshCw className="cw-i" />
-                              {startLabel}
-                            </button>
                           </div>
                         ) : variant.messages.length === 0 ? (
                           <div className="cw-ab-empty cw-ab-launch">
-                            <button
-                              type="button"
-                              className="cw-ab-start"
-                              disabled={startDisabled}
-                              title={disabledReason || undefined}
-                              onClick={() => onStartVariant(variant.id)}
-                            >
-                              {ready ? (
-                                <RefreshCw className="cw-i" />
-                              ) : (
-                                <DebugRunIcon className="cw-i cw-debug-run-icon" />
-                              )}
-                              {startLabel}
-                            </button>
-                            {disabledReason ? (
+                            {ready ? (
+                              <>
+                                <strong className="cw-ab-ready-title">已就绪</strong>
+                                <span className="cw-ab-launch-hint">
+                                  可在下方输入测试消息
+                                </span>
+                              </>
+                            ) : (
                               <span className="cw-ab-launch-hint">
-                                {disabledReason}
+                                {disabledReason || "启动环境后即可加入本轮测试"}
                               </span>
-                            ) : ready ? (
-                              <span className="cw-ab-launch-hint">等待测试输入</span>
-                            ) : null}
+                            )}
                           </div>
                         ) : (
                           variant.messages.map((message, index) => (
@@ -1984,6 +1963,20 @@ function DebugComparisonWorkspace({
                       </div>
 
                       <footer className="cw-ab-deploy-footer">
+                        <button
+                          type="button"
+                          className="cw-ab-start cw-ab-footer-start"
+                          disabled={startDisabled}
+                          title={disabledReason || undefined}
+                          onClick={() => onStartVariant(variant.id)}
+                        >
+                          {ready || stale || variant.phase === "error" ? (
+                            <RefreshCw className="cw-i" />
+                          ) : (
+                            <DebugRunIcon className="cw-i cw-debug-run-icon" />
+                          )}
+                          {startLabel}
+                        </button>
                         <button
                           type="button"
                           className="cw-ab-deploy"

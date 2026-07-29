@@ -93,6 +93,43 @@ export interface MessageFeedbackState {
   updatedAt: number;
 }
 
+export interface AgentFeedbackSetSummary {
+  kind: MessageFeedbackRating;
+  evaluationSetId: string | null;
+  evaluationSetName: string | null;
+  workspaceId: string | null;
+  itemCount: number;
+}
+
+export interface AgentFeedbackCase {
+  id: string;
+  itemKey: string;
+  kind: MessageFeedbackRating;
+  input: string;
+  output: string;
+  referenceOutput: string;
+  comment: string;
+  agentName: string;
+  sessionId: string;
+  messageId: string;
+  runtimeId: string;
+  invocationId: string;
+  userId: string;
+  createdAt: string;
+  evaluationSetId: string;
+  evaluationSetName: string;
+  workspaceId: string;
+}
+
+export interface AgentFeedbackCasesResponse {
+  agentName: string;
+  runtimeId: string;
+  region: string;
+  projectName: string;
+  sets: AgentFeedbackSetSummary[];
+  items: AgentFeedbackCase[];
+}
+
 const MESSAGE_FEEDBACK_CACHE_KEY = "veadk.messageFeedback.v1";
 
 function feedbackCacheScope(
@@ -128,6 +165,34 @@ function storeMessageFeedback(
     ...(cache[scope] ?? {}),
     [`veadk_feedback:${eventId}`]: feedback,
   };
+  localStorage.setItem(MESSAGE_FEEDBACK_CACHE_KEY, JSON.stringify(cache));
+}
+
+export function clearMessageFeedbackCache(args: {
+  runtimeId: string;
+  appName: string;
+  userId: string;
+  sessionId: string;
+  eventIds: string[];
+}): void {
+  if (typeof window === "undefined") return;
+  const scope = feedbackCacheScope(
+    args.runtimeId,
+    args.appName,
+    args.userId,
+    args.sessionId,
+  );
+  const cache = readMessageFeedbackCache();
+  const scoped = cache[scope];
+  if (!scoped) return;
+  for (const eventId of args.eventIds) {
+    delete scoped[`veadk_feedback:${eventId}`];
+  }
+  if (Object.keys(scoped).length === 0) {
+    delete cache[scope];
+  } else {
+    cache[scope] = scoped;
+  }
   localStorage.setItem(MESSAGE_FEEDBACK_CACHE_KEY, JSON.stringify(cache));
 }
 
@@ -481,6 +546,52 @@ export async function submitMessageFeedback(args: {
   );
   storeMessageFeedback(scope, args.eventId, feedback);
   return feedback;
+}
+
+export async function getAgentFeedbackCases(args: {
+  runtimeId: string;
+  region?: string;
+  appName: string;
+  pageSize?: number;
+}): Promise<AgentFeedbackCasesResponse> {
+  const query = new URLSearchParams({
+    runtimeId: args.runtimeId,
+    region: args.region ?? "cn-beijing",
+    appName: args.appName,
+    page_size: String(args.pageSize ?? 100),
+  });
+  const res = await apiFetch(`/web/evaluation/feedback-cases?${query.toString()}`);
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "读取评测集失败"));
+  }
+  return res.json();
+}
+
+export async function deleteAgentFeedbackCases(args: {
+  runtimeId: string;
+  region?: string;
+  appName: string;
+  itemIds: string[];
+}): Promise<{ deletedCount: number }> {
+  const res = await apiFetch(
+    "/web/evaluation/feedback-cases/delete",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runtimeId: args.runtimeId,
+        region: args.region ?? "cn-beijing",
+        appName: args.appName,
+        itemIds: args.itemIds,
+      }),
+    },
+    {},
+    TRANSFER_REQUEST_TIMEOUT_MS,
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "删除评测案例失败"));
+  }
+  return res.json();
 }
 
 export async function deleteSession(

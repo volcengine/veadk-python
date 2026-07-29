@@ -218,6 +218,15 @@ class _MessageFeedbackRequest(BaseModel):
     comment: str = Field(default="", max_length=2000)
 
 
+class _DeleteFeedbackCasesRequest(BaseModel):
+    """Feedback-derived evaluation cases to remove from AgentKit."""
+
+    runtime_id: str = Field(alias="runtimeId", min_length=1)
+    region: str = Field(default="cn-beijing", min_length=1)
+    app_name: str = Field(alias="appName", min_length=1)
+    item_ids: list[str] = Field(alias="itemIds", min_length=1, max_length=100)
+
+
 def _mount_session_trace_route(app: Any, memory_exporter: Any) -> None:
     """Expose the session trace endpoint used by the VeADK frontend."""
 
@@ -3719,6 +3728,13 @@ def _run_frontend_server(
                 _evaluation_post,
                 project_name=project_name,
             )
+            item_key = feedback_item_key(
+                project_name=project_name,
+                runtime_id=feedback.runtime_id,
+                session_id=feedback.session_id,
+                message_id=feedback.event_id,
+            )
+            deleted_previous_item_ids: set[str] = set()
             evaluation_set = None
             evaluation_item = None
             if feedback.rating is not None:
@@ -3729,12 +3745,7 @@ def _run_frontend_server(
                 evaluation_item = await evaluation.upsert_item(
                     evaluation_set_id=evaluation_set.id,
                     workspace_id=evaluation_set.workspace_id,
-                    item_key=feedback_item_key(
-                        project_name=project_name,
-                        runtime_id=feedback.runtime_id,
-                        session_id=feedback.session_id,
-                        message_id=feedback.event_id,
-                    ),
+                    item_key=item_key,
                     fields=sample.fields(
                         rating=feedback.rating,
                         comment=feedback.comment,
@@ -3754,6 +3765,35 @@ def _run_frontend_server(
                     workspace_id=previous_workspace_id,
                     item_id=previous_item_id,
                 )
+                deleted_previous_item_ids.add(previous_item_id)
+
+            fallback_delete_ratings: tuple[str, ...] = ()
+            if feedback.rating is None:
+                fallback_delete_ratings = ("good", "bad")
+            elif feedback.rating == "good":
+                fallback_delete_ratings = ("bad",)
+            elif feedback.rating == "bad":
+                fallback_delete_ratings = ("good",)
+            for stale_rating in fallback_delete_ratings:
+                stale_set, stale_items = await evaluation.list_feedback_items(
+                    agent_name=agent_name,
+                    rating=stale_rating,
+                    page_size=200,
+                )
+                if stale_set is None:
+                    continue
+                for stale_item in stale_items:
+                    if (
+                        stale_item.item_key != item_key
+                        or stale_item.id in deleted_previous_item_ids
+                    ):
+                        continue
+                    await evaluation.delete_item(
+                        evaluation_set_id=stale_set.id,
+                        workspace_id=stale_set.workspace_id,
+                        item_id=stale_item.id,
+                    )
+                    deleted_previous_item_ids.add(stale_item.id)
 
             feedback_state = {
                 "rating": feedback.rating,
@@ -3797,6 +3837,255 @@ def _run_frontend_server(
                 detail=(
                     "同步反馈到 AgentKit 评测集失败：" + _safe_exception_detail(error)
                 ),
+            ) from error
+
+    @app.get("/web/evaluation/feedback-cases")
+    async def _web_feedback_cases(
+        request: Request,
+        runtimeId: str = Query(..., min_length=1),
+        appName: str = Query(..., min_length=1),
+        region: str = Query(default="cn-beijing", min_length=1),
+        page_size: int = Query(default=100, ge=1, le=200),
+    ) -> dict[str, Any]:
+        """List AgentKit evaluation-set items created from message feedback."""
+        runtime = _authorized_runtime(
+            request,
+            runtimeId,
+            region,
+            coded_access_error=True,
+        )
+        agent_info_path = f"web/agent-info/{quote(appName, safe='')}"
+        try:
+            agent_info = await _runtime_json_request(
+                request,
+                runtime=runtime,
+                runtime_id=runtimeId,
+                region=region,
+                method="GET",
+                path=agent_info_path,
+            )
+            from veadk.integrations.agentkit.evaluation import (
+                AgentKitEvaluationDatasetsClient,
+            )
+
+            agent_name = str(agent_info.get("name") or appName)
+            project_name = str(getattr(runtime, "project_name", "") or "default")
+
+            async def _evaluation_post(
+                *,
+                action: str,
+                payload: dict[str, Any],
+                query: dict[str, str] | None = None,
+            ) -> dict[str, Any]:
+                return await _agentkit_openapi_post(
+                    region=region,
+                    action=action,
+                    payload=payload,
+                    query=query,
+                )
+
+            evaluation = AgentKitEvaluationDatasetsClient(
+                _evaluation_post,
+                project_name=project_name,
+            )
+            response_sets: list[dict[str, Any]] = []
+            response_items: list[dict[str, Any]] = []
+            for rating in ("good", "bad"):
+                evaluation_set, items = await evaluation.list_feedback_items(
+                    agent_name=agent_name,
+                    rating=rating,
+                    page_size=page_size,
+                )
+                if evaluation_set is None:
+                    response_sets.append(
+                        {
+                            "kind": rating,
+                            "evaluationSetId": None,
+                            "evaluationSetName": None,
+                            "workspaceId": None,
+                            "itemCount": 0,
+                        }
+                    )
+                    continue
+                response_sets.append(
+                    {
+                        "kind": rating,
+                        "evaluationSetId": evaluation_set.id,
+                        "evaluationSetName": evaluation_set.name,
+                        "workspaceId": evaluation_set.workspace_id,
+                        "itemCount": len(items),
+                    }
+                )
+                for item in items:
+                    fields = item.fields
+                    response_items.append(
+                        {
+                            "id": item.id or item.item_key,
+                            "itemKey": item.item_key,
+                            "kind": rating,
+                            "input": fields.get("input", ""),
+                            "output": fields.get("output", ""),
+                            "referenceOutput": fields.get("reference_output", ""),
+                            "comment": fields.get("feedback_comment", ""),
+                            "agentName": fields.get("agent_name", agent_name),
+                            "sessionId": fields.get("session_id", ""),
+                            "messageId": fields.get("message_id", ""),
+                            "runtimeId": fields.get("runtime_id", runtimeId),
+                            "invocationId": fields.get("invocation_id", ""),
+                            "userId": fields.get("user_id", ""),
+                            "createdAt": fields.get("created_at", ""),
+                            "evaluationSetId": evaluation_set.id,
+                            "evaluationSetName": evaluation_set.name,
+                            "workspaceId": evaluation_set.workspace_id,
+                        }
+                    )
+            return {
+                "agentName": agent_name,
+                "runtimeId": runtimeId,
+                "region": region,
+                "projectName": project_name,
+                "sets": response_sets,
+                "items": response_items,
+            }
+        except HTTPException:
+            raise
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(
+                status_code=502,
+                detail="读取 AgentKit 评测集失败：" + _safe_exception_detail(error),
+            ) from error
+
+    @app.post("/web/evaluation/feedback-cases/delete")
+    async def _web_delete_feedback_cases(
+        deletion: _DeleteFeedbackCasesRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        """Remove feedback cases and clear their thumbs state without deleting chat."""
+        requested_ids = {
+            item_id.strip()
+            for item_id in deletion.item_ids
+            if item_id and item_id.strip()
+        }
+        if not requested_ids:
+            raise HTTPException(status_code=400, detail="No feedback cases selected")
+        runtime = _authorized_runtime(
+            request,
+            deletion.runtime_id,
+            deletion.region,
+            coded_access_error=True,
+        )
+        agent_info_path = f"web/agent-info/{quote(deletion.app_name, safe='')}"
+        try:
+            agent_info = await _runtime_json_request(
+                request,
+                runtime=runtime,
+                runtime_id=deletion.runtime_id,
+                region=deletion.region,
+                method="GET",
+                path=agent_info_path,
+            )
+            from veadk.integrations.agentkit.evaluation import (
+                AgentKitEvaluationDatasetsClient,
+            )
+            from veadk.integrations.agentkit.evaluation.feedback import (
+                feedback_state_key,
+            )
+
+            agent_name = str(agent_info.get("name") or deletion.app_name)
+            project_name = str(getattr(runtime, "project_name", "") or "default")
+
+            async def _evaluation_post(
+                *,
+                action: str,
+                payload: dict[str, Any],
+                query: dict[str, str] | None = None,
+            ) -> dict[str, Any]:
+                return await _agentkit_openapi_post(
+                    region=deletion.region,
+                    action=action,
+                    payload=payload,
+                    query=query,
+                )
+
+            evaluation = AgentKitEvaluationDatasetsClient(
+                _evaluation_post,
+                project_name=project_name,
+            )
+            matched: list[tuple[str, str, dict[str, str]]] = []
+            for rating in ("good", "bad"):
+                evaluation_set, items = await evaluation.list_feedback_items(
+                    agent_name=agent_name,
+                    rating=rating,
+                    page_size=200,
+                )
+                if evaluation_set is None:
+                    continue
+                for item in items:
+                    if item.id not in requested_ids:
+                        continue
+                    matched.append(
+                        (evaluation_set.id, evaluation_set.workspace_id, item.fields)
+                    )
+                    await evaluation.delete_item(
+                        evaluation_set_id=evaluation_set.id,
+                        workspace_id=evaluation_set.workspace_id,
+                        item_id=item.id,
+                    )
+
+            for _set_id, _workspace_id, fields in matched:
+                session_id = str(fields.get("session_id") or "")
+                message_id = str(fields.get("message_id") or "")
+                user_id = str(fields.get("user_id") or "")
+                if not session_id or not message_id or not user_id:
+                    continue
+                session_path = (
+                    f"apps/{quote(deletion.app_name, safe='')}/users/"
+                    f"{quote(user_id, safe='')}/sessions/"
+                    f"{quote(session_id, safe='')}"
+                )
+                feedback_state = {
+                    "rating": None,
+                    "evaluationSetId": None,
+                    "evaluationSetName": None,
+                    "workspaceId": None,
+                    "evaluationItemId": None,
+                    "syncStatus": "synced",
+                    "statePersistence": "runtime",
+                    "updatedAt": time.time(),
+                }
+                try:
+                    await _runtime_json_request(
+                        request,
+                        runtime=runtime,
+                        runtime_id=deletion.runtime_id,
+                        region=deletion.region,
+                        method="PATCH",
+                        path=session_path,
+                        payload={
+                            "state_delta": {
+                                feedback_state_key(message_id): feedback_state,
+                            }
+                        },
+                    )
+                except HTTPException as error:
+                    if error.status_code != 404:
+                        raise
+                    logger.warning(
+                        "Runtime %s does not expose Session PATCH; feedback case "
+                        "was deleted but message state could not be cleared",
+                        deletion.runtime_id,
+                    )
+            return {"deletedCount": len(matched)}
+        except HTTPException:
+            raise
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(
+                status_code=502,
+                detail="删除 AgentKit 评测案例失败：" + _safe_exception_detail(error),
             ) from error
 
     @app.get("/web/a2a-spaces")

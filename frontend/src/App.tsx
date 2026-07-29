@@ -7,6 +7,7 @@ import {
   type WheelEvent,
 } from "react";
 import {
+  ArrowLeft,
   Check,
   ChevronDown,
   CircleAlert,
@@ -21,6 +22,7 @@ import { motion } from "motion/react";
 import {
   cancelAgentkitDeployment,
   addSessionCapability,
+  clearMessageFeedbackCache,
   createSession,
   DEFAULT_STUDIO_ACCESS,
   DEFAULT_SITE_BRANDING,
@@ -45,6 +47,7 @@ import {
   type AgentInfo,
   type AgentNode,
   type AgentTarget,
+  type AgentFeedbackCase,
   type AdkSession,
   type AddSessionCapability,
   type Attachment,
@@ -944,6 +947,14 @@ export default function App() {
   const [searchView, setSearchView] = useState(false);
   // The #748 Agent workspace: library, evaluation groups, and draft management.
   const [manageAgents, setManageAgents] = useState(false);
+  const [feedbackCaseReturnAgentId, setFeedbackCaseReturnAgentId] = useState("");
+  const [feedbackCaseReturnKind, setFeedbackCaseReturnKind] =
+    useState<"good" | "bad">("good");
+  const [focusedWorkspaceAgentSection, setFocusedWorkspaceAgentSection] =
+    useState<"basic" | "evaluations">("basic");
+  const [focusedWorkspaceCaseKind, setFocusedWorkspaceCaseKind] =
+    useState<"good" | "bad">("good");
+  const [feedbackTargetEventId, setFeedbackTargetEventId] = useState("");
   // A search result may belong to a different agent; remember it so the
   // agent-switch effect opens it instead of resetting to a fresh chat.
   const pendingOpenRef = useRef<{ app: string; sid: string } | null>(null);
@@ -1213,6 +1224,7 @@ export default function App() {
     setRuntimeUpdateTarget(null);
     setFocusedDeploymentTaskId("");
     setFocusedWorkspaceAgentId(agentId);
+    setFocusedWorkspaceAgentSection("basic");
     setCreateView(null);
     setManageAgents(true);
     setAppName(agentId);
@@ -1224,6 +1236,7 @@ export default function App() {
     setAddMenu(false);
     setManageAgents(true);
     setFocusedWorkspaceAgentId("");
+    setFocusedWorkspaceAgentSection("basic");
     setFocusedDeploymentTaskId(task.id);
     setError("");
   }, []);
@@ -1250,6 +1263,7 @@ export default function App() {
       editingDraftBaselineRef.current = null;
       setFocusedDeploymentTaskId("");
       setFocusedWorkspaceAgentId(agentId);
+      setFocusedWorkspaceAgentSection("basic");
       setCreateView(null);
       setManageAgents(true);
       setAppName(agentId);
@@ -1257,6 +1271,7 @@ export default function App() {
     [editingDraftId, removeWorkspaceDraft, runtimeUpdateTarget],
   );
   const scrollRef = useRef<HTMLDivElement>(null);
+  const turnNodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const conversationAutoFollowRef = useRef(true);
   const conversationSmoothScrollRef = useRef(false);
   const conversationSmoothTimerRef = useRef<number | null>(null);
@@ -1302,6 +1317,17 @@ export default function App() {
     ) return;
     el.scrollTop = el.scrollHeight;
   }, [activeConversationBusy, turns]);
+  useEffect(() => {
+    if (!feedbackTargetEventId || manageAgents || turns.length === 0) return;
+    const node = turnNodeRefs.current.get(feedbackTargetEventId);
+    if (!node) return;
+    conversationAutoFollowRef.current = false;
+    node.scrollIntoView({ behavior: "smooth", block: "center" });
+    const timer = window.setTimeout(() => {
+      setFeedbackTargetEventId("");
+    }, 2600);
+    return () => window.clearTimeout(timer);
+  }, [feedbackTargetEventId, manageAgents, turns]);
   useEffect(() => () => {
     if (conversationSmoothTimerRef.current !== null) {
       window.clearTimeout(conversationSmoothTimerRef.current);
@@ -1491,6 +1517,13 @@ export default function App() {
   }, [access]);
 
   useEffect(() => {
+    if (authStatus !== "authenticated" || agentsSource !== "cloud" || !uiConfigLoaded) {
+      return;
+    }
+    void refreshAgentLibrary();
+  }, [agentsSource, authStatus, refreshAgentLibrary, uiConfigLoaded]);
+
+  useEffect(() => {
     document.title = siteBranding.title;
     let favicon = document.querySelector<HTMLLinkElement>('link[rel~="icon"]');
     if (!favicon) {
@@ -1556,10 +1589,16 @@ export default function App() {
         // Restore the last-used agent; otherwise land on a known-good default
         // (prefer a servable, conversational agent — numbered examples like
         // 01_quickstart are standalone scripts with no root_agent and can't load).
-        // Cloud mode: nothing is selected by default — the user picks a runtime
-        // each session (the sidebar shows the red "请选择 Agent" prompt until then).
         if (agentsSource === "cloud") {
-          setAppName("");
+          const saved = localStorage.getItem(LS.app);
+          const remoteIds = connections.flatMap((c) =>
+            c.apps.map((a) => remoteAppId(c.id, a)),
+          );
+          setAppName((current) => {
+            if (current && remoteIds.includes(current)) return current;
+            if (saved && remoteIds.includes(saved)) return saved;
+            return remoteIds[0] ?? "";
+          });
           return;
         }
         // Local mode: restore the last-used agent, else a known-good default
@@ -1575,7 +1614,7 @@ export default function App() {
         setAppName(valid ? saved : fallback || "");
       })
       .catch((e) => setError(String(e)));
-  }, [authStatus, agentsSource]);
+  }, [authStatus, agentsSource, connections]);
 
   // Persist the current view/agent/session so a refresh restores them.
   useEffect(() => {
@@ -1954,6 +1993,112 @@ export default function App() {
       setError(String(e));
     } finally {
       setLoadingSession(false);
+    }
+  }
+
+  async function openFeedbackCaseInStudio(item: AgentFeedbackCase) {
+    if (!item.sessionId || !item.messageId) {
+      setError("这条案例缺少会话定位信息，无法跳转。");
+      return;
+    }
+    setSearchView(false);
+    setCreateView(null);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSkillCenter(false);
+    setManageAgents(false);
+    setFeedbackCaseReturnAgentId(appName);
+    setFeedbackCaseReturnKind(item.kind);
+    setFeedbackTargetEventId(item.messageId);
+    await pickSession(item.sessionId);
+  }
+
+  function returnToFeedbackCases() {
+    const agentId = feedbackCaseReturnAgentId || appName;
+    setSearchView(false);
+    setCreateView(null);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSkillCenter(false);
+    setFocusedDeploymentTaskId("");
+    setFocusedWorkspaceAgentId(agentId);
+    setFocusedWorkspaceAgentSection("evaluations");
+    setFocusedWorkspaceCaseKind(feedbackCaseReturnKind);
+    setManageAgents(true);
+    setFeedbackCaseReturnAgentId("");
+    setFeedbackTargetEventId("");
+  }
+
+  function clearDeletedFeedbackCases(items: AgentFeedbackCase[]) {
+    const clearBySession = new Map<string, Set<string>>();
+    const clearByCacheScope = new Map<string, {
+      runtimeId: string;
+      appName: string;
+      userId: string;
+      sessionId: string;
+      eventIds: Set<string>;
+    }>();
+    for (const item of items) {
+      if (!item.sessionId || !item.messageId) continue;
+      const sessionEvents = clearBySession.get(item.sessionId) ?? new Set<string>();
+      sessionEvents.add(item.messageId);
+      clearBySession.set(item.sessionId, sessionEvents);
+      if (item.runtimeId && item.userId) {
+        const key = [
+          item.runtimeId,
+          appName,
+          item.userId,
+          item.sessionId,
+        ].join(":");
+        const scope = clearByCacheScope.get(key) ?? {
+          runtimeId: item.runtimeId,
+          appName,
+          userId: item.userId,
+          sessionId: item.sessionId,
+          eventIds: new Set<string>(),
+        };
+        scope.eventIds.add(item.messageId);
+        clearByCacheScope.set(key, scope);
+      }
+    }
+    if (clearBySession.size === 0) return;
+    setTurnsBySession((current) => {
+      const next = { ...current };
+      for (const [sid, eventIds] of clearBySession) {
+        const existing = next[sid];
+        if (!existing) continue;
+        next[sid] = existing.map((turn) =>
+          turn.meta?.eventId && eventIds.has(turn.meta.eventId)
+            ? { ...turn, meta: { ...turn.meta, feedback: undefined } }
+            : turn,
+        );
+      }
+      return next;
+    });
+    setSessions((current) =>
+      current.map((session) => {
+        const eventIds = clearBySession.get(session.id);
+        if (!eventIds || !session.state) return session;
+        const state = { ...session.state };
+        for (const eventId of eventIds) delete state[`veadk_feedback:${eventId}`];
+        return { ...session, state };
+      }),
+    );
+    setFeedbackPendingIds((current) => {
+      const next = new Set(current);
+      for (const eventIds of clearBySession.values()) {
+        for (const eventId of eventIds) next.delete(eventId);
+      }
+      return next;
+    });
+    for (const scope of clearByCacheScope.values()) {
+      clearMessageFeedbackCache({
+        runtimeId: scope.runtimeId,
+        appName: scope.appName,
+        userId: scope.userId,
+        sessionId: scope.sessionId,
+        eventIds: [...scope.eventIds],
+      });
     }
   }
 
@@ -2492,6 +2637,25 @@ export default function App() {
     setAppName(id);
   };
 
+  const talkToWorkspaceAgent = (id: string) => {
+    setCreateView(null);
+    setSkillCenter(false);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSearchView(false);
+    setManageAgents(false);
+    setFeedbackCaseReturnAgentId("");
+    setFeedbackTargetEventId("");
+    selectAgent(id);
+  };
+
+  const selectWorkspaceAgentFromNavbar = (id: string) => {
+    setFocusedDeploymentTaskId("");
+    setFocusedWorkspaceAgentId(id);
+    setFocusedWorkspaceAgentSection("basic");
+    selectAgent(id);
+  };
+
   return (
     <div className="layout">
       <Sidebar
@@ -2746,7 +2910,7 @@ export default function App() {
           <section className="main-shell">
             <Navbar
               appName={appName}
-              onAppChange={selectAgent}
+              onAppChange={showManageAgents ? selectWorkspaceAgentFromNavbar : selectAgent}
               agentLabel={labelOf}
               agentsSource={agentsSource}
               localApps={apps}
@@ -2757,9 +2921,7 @@ export default function App() {
                   ? "添加 Agent"
                   : showAddAgent
                     ? "添加 AgentKit 智能体"
-                    : showManageAgents
-                      ? "智能体"
-                      : undefined
+                    : undefined
               }
               titleLeading={
                 turns.length > 0 &&
@@ -2824,6 +2986,20 @@ export default function App() {
                 <Loader2 className="icon spin" /> 加载会话…
               </div>
             )}
+            {feedbackCaseReturnAgentId &&
+              !showManageAgents &&
+              !showAddMenu &&
+              !showAddAgent &&
+              !searchView &&
+              !skillCenter &&
+              visibleCreateView === null && (
+                <div className="case-return-bar">
+                  <button type="button" onClick={returnToFeedbackCases}>
+                    <ArrowLeft aria-hidden />
+                    <span>返回评测案例</span>
+                  </button>
+                </div>
+              )}
 
             {showManageAgents ? (
               <AgentWorkspace
@@ -2841,11 +3017,16 @@ export default function App() {
                 deploymentTasks={deploymentTasks}
                 focusedDeploymentTaskId={focusedDeploymentTaskId}
                 focusedAgentId={focusedWorkspaceAgentId}
+                focusedAgentSection={focusedWorkspaceAgentSection}
+                focusedCaseKind={focusedWorkspaceCaseKind}
                 onRetryAgents={() => void refreshAgentLibrary()}
                 onAgentOrderChange={saveWorkspaceAgentOrder}
                 onDeleteAgents={deleteWorkspaceAgents}
                 onDeleteDrafts={deleteWorkspaceDrafts}
                 onSelectAgent={selectAgent}
+                onTalkAgent={talkToWorkspaceAgent}
+                onOpenFeedbackCase={(item) => void openFeedbackCaseInStudio(item)}
+                onFeedbackCasesDeleted={clearDeletedFeedbackCases}
                 onCreateAgent={() => {
                   if (!canCreateAgents) {
                     setError("当前账号没有添加 Agent 的权限。");
@@ -3137,7 +3318,19 @@ export default function App() {
             return (
               <motion.div
                 key={i}
-                className={`turn turn--assistant${isSubAgent ? " turn--subagent" : ""}`}
+                ref={(node) => {
+                  if (!feedbackEventId) return;
+                  if (node) {
+                    turnNodeRefs.current.set(feedbackEventId, node);
+                  } else {
+                    turnNodeRefs.current.delete(feedbackEventId);
+                  }
+                }}
+                className={[
+                  "turn turn--assistant",
+                  isSubAgent ? "turn--subagent" : "",
+                  feedbackTargetEventId === feedbackEventId ? "is-feedback-target" : "",
+                ].filter(Boolean).join(" ")}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.2, ease: "easeOut" }}

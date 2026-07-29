@@ -7,12 +7,15 @@ const source = readFileSync(
   "utf8",
 );
 
-test("debug errors support full expansion, copying, and retry", () => {
+test("debug errors support full expansion, copying, and footer restart", () => {
   assert.match(
     source,
     /import \{ DeploymentErrorMessage \} from "\.\.\/ui\/DeploymentErrorMessage"/,
   );
   assert.match(source, /className="cw-debug-error-detail"/);
   assert.match(source, /className="cw-debug-msg-error"/);
-  assert.match(source, /onRetry=\{async \(\) =>/);
+  assert.match(
+    source,
+    /className="cw-ab-start cw-ab-footer-start"[\s\S]*?onClick=\{\(\) => onStartVariant\(variant\.id\)\}/,
+  );
 });

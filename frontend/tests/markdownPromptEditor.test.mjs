@@ -257,10 +257,17 @@ test("debug workspace compares multiple configurations behind one shared input",
     createSource,
     /className="cw-ab-deploy"[\s\S]*?onClick=\{\(\) => onDeployVariant\(variant\.id\)\}[\s\S]*?部署该配置/,
   );
+  assert.match(createSource, /className="cw-ab-ready-title"[\s\S]*?已就绪/);
+  assert.match(
+    createSource,
+    /className="cw-ab-start cw-ab-footer-start"[\s\S]*?onClick=\{\(\) => onStartVariant\(variant\.id\)\}[\s\S]*?\{startLabel\}/,
+  );
   assert.doesNotMatch(createSource, /下一步：部署发布|>部署发布</);
   assert.doesNotMatch(createSource, />验证中心</);
   assert.doesNotMatch(createSource, /className="cw-debug-deploy"/);
   assert.doesNotMatch(createStyles, /\.cw-debug-next/);
+  assert.match(createStyles, /\.cw-ab-ready-title\s*\{[\s\S]*?font-size:\s*20px;/);
+  assert.match(createStyles, /\.cw-ab-footer-start\s*\{/);
   assert.match(createStyles, /\.cw-ab-deploy\s*\{[\s\S]*?background:\s*#111;[\s\S]*?color:\s*#fff;/);
   assert.match(createStyles, /\.cw-ab-card-face\s*\{[\s\S]*?border:\s*1px dashed/);
   assert.match(
