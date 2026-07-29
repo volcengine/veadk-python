@@ -664,6 +664,7 @@ export default function App() {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [invocation, setInvocation] = useState<FrontendInvocation>(emptyInvocation);
   const [agentInfo, setAgentInfo] = useState<AgentInfo | null>(null);
+  const [agentInfoRefreshKey, setAgentInfoRefreshKey] = useState(0);
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
   const [sessionCapabilities, setSessionCapabilities] =
     useState<SessionCapabilities | null>(null);
@@ -1262,6 +1263,7 @@ export default function App() {
         result.version,
       );
       setConnections(loadConnections());
+      setAgentInfoRefreshKey((key) => key + 1);
       setLibraryRuntimeIds((current) => {
         const next = new Set(current ?? []);
         next.add(result.runtimeId!);
@@ -1692,7 +1694,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [appName]);
+  }, [appName, agentInfoRefreshKey]);
   useEffect(() => {
     if (!access) return;
     localStorage.setItem(
@@ -2679,6 +2681,7 @@ export default function App() {
   // background stream keeps persisting to its own (old) session.
   const selectAgent = (id: string) => {
     setConnections(loadConnections());
+    if (id === appName) setAgentInfoRefreshKey((key) => key + 1);
     viewSidRef.current = "";
     setSessionId("");
     setMyAgents(false);
@@ -2708,6 +2711,7 @@ export default function App() {
         agent.runtime.currentVersion,
       );
       setConnections(loadConnections());
+      setAgentInfoRefreshKey((key) => key + 1);
       setAgentDetailTarget(null);
       setMyAgents(false);
       setManageAgents(false);

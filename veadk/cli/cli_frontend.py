@@ -1415,7 +1415,7 @@ def _run_frontend_server(
         owner_id: str
 
     _test_runs: dict[str, _GeneratedAgentTestRun] = {}
-    _test_runs_creating = {"count": 0}
+    _test_runs_creating: dict[str, int] = {}
     _test_runs_lock = _test_threading.Lock()
 
     def _terminate_test_run(run: _GeneratedAgentTestRun) -> None:
@@ -1968,12 +1968,15 @@ def _run_frontend_server(
     @app.post("/web/generated-agent-test-runs")
     async def _create_generated_agent_test_run(request: Request):
         principal = _require_agent_management(request)
+        owner_id = principal.owner_id if principal else ""
         _cleanup_expired_test_runs()
         data = await request.json()
 
         reserved = False
         with _test_runs_lock:
-            active_count = len(_test_runs) + _test_runs_creating["count"]
+            active_count = sum(
+                1 for run in _test_runs.values() if run.owner_id == owner_id
+            ) + _test_runs_creating.get(owner_id, 0)
             if active_count >= _TEST_RUN_MAX_ACTIVE:
                 raise HTTPException(
                     status_code=429,
@@ -1983,7 +1986,7 @@ def _run_frontend_server(
                         "请稍后重试或关闭不再使用的调试页面。"
                     ),
                 )
-            _test_runs_creating["count"] += 1
+            _test_runs_creating[owner_id] = _test_runs_creating.get(owner_id, 0) + 1
             reserved = True
 
         temp_dir = ""
@@ -2038,7 +2041,7 @@ def _run_frontend_server(
                 base_url=base_url,
                 process=proc,
                 expires_at=expires_at,
-                owner_id=principal.owner_id if principal else "",
+                owner_id=owner_id,
             )
             with _test_runs_lock:
                 _test_runs[run_id] = run
@@ -2067,10 +2070,14 @@ def _run_frontend_server(
         finally:
             if reserved:
                 with _test_runs_lock:
-                    _test_runs_creating["count"] = max(
+                    creating_count = max(
                         0,
-                        _test_runs_creating["count"] - 1,
+                        _test_runs_creating.get(owner_id, 0) - 1,
                     )
+                    if creating_count:
+                        _test_runs_creating[owner_id] = creating_count
+                    else:
+                        _test_runs_creating.pop(owner_id, None)
 
     @app.post("/web/generated-agent-test-runs/{run_id}/sessions")
     async def _create_generated_agent_test_session(run_id: str, request: Request):
