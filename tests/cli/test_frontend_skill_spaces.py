@@ -426,8 +426,8 @@ def test_get_skill_detail_runs_sdk_call_off_event_loop(
                 description="识别工单类型",
                 version="1.2.0",
                 skill_md="---\nname: ticket-classifier\n---\n",
-                bucket_name="skills-bucket",
-                tos_path="skills/ticket-classifier.zip",
+                bucket_name="",
+                tos_path="",
             )
 
     monkeypatch.setattr(
@@ -464,7 +464,7 @@ def test_get_skill_detail_falls_back_to_skillspace_package(
                 name="ticket-classifier",
                 description="识别工单类型",
                 version="1.2.0",
-                skill_md="",
+                skill_md="---\nname: stale-copy\ndescription: Stale.\n---\n",
                 bucket_name="skills-bucket",
                 tos_path="skills/ticket-classifier.zip",
             )
@@ -476,6 +476,10 @@ def test_get_skill_detail_falls_back_to_skillspace_package(
             archive.writestr(
                 "ticket-classifier/SKILL.md",
                 "---\nname: ticket-classifier\ndescription: Tickets.\n---\nBody.\n",
+            )
+            archive.writestr(
+                "ticket-classifier/scripts/classify.py",
+                "def classify(text):\n    return 'ticket'\n",
             )
         return True
 
@@ -494,7 +498,18 @@ def test_get_skill_detail_falls_back_to_skillspace_package(
         )
 
     assert response.status_code == 200
-    assert response.json()["skillMd"].endswith("Body.\n")
+    body = response.json()
+    assert body["skillMd"].endswith("Body.\n")
+    assert body["files"] == [
+        {
+            "path": "skills/ticket-classifier/SKILL.md",
+            "content": body["skillMd"],
+        },
+        {
+            "path": "skills/ticket-classifier/scripts/classify.py",
+            "content": "def classify(text):\n    return 'ticket'\n",
+        },
+    ]
 
 
 def test_skill_space_routes_keep_missing_credentials_status(

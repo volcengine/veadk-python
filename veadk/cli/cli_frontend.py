@@ -1709,11 +1709,11 @@ def _run_frontend_server(
         folder: str,
     ) -> str | list[GeneratedFile]:
         skill_md = _skill_version_attr(resp, "skill_md", "skillMd")
-        if skill_md:
-            return skill_md
         bucket_name = _skill_version_attr(resp, "bucket_name", "bucketName")
         tos_path = _skill_version_attr(resp, "tos_path", "tosPath", "path")
         if not bucket_name or not tos_path:
+            if skill_md:
+                return skill_md
             raise HTTPException(
                 status_code=404, detail="Skill version has no SKILL.md content"
             )
@@ -4649,9 +4649,8 @@ def _run_frontend_server(
 
         return {"items": items, "totalCount": len(items)}
 
-    # SkillSpace routes return SKILL.md (SkillMd) content, not the full TOS zip;
-    # that keeps the surface small and mirrors how the public Skill Hub picker
-    # only needs markdown for basic skills.
+    # SkillSpace routes run sync SDK calls in worker threads. Detail responses
+    # include full package files when the version exposes a TOS zip.
 
     def _skills_client(region: str):
         """Build an AgentkitSkillsClient using server-side creds, or raise
@@ -4798,9 +4797,7 @@ def _run_frontend_server(
         version: str | None = None,
         region: str = "cn-beijing",
     ):
-        """Fetch a specific skill version's SKILL.md content (SkillMd) plus
-        metadata. v1 returns SkillMd only; the TOS zip (scripts/assets) is a
-        follow-up."""
+        """Fetch a specific skill version's SKILL.md content plus package files."""
         from agentkit.sdk.skills.types import GetSkillVersionRequest
 
         try:
@@ -4820,13 +4817,30 @@ def _run_frontend_server(
                 detail="暂时无法加载该技能详情，请稍后重试。",
             )
 
-        skill_md = await asyncio.to_thread(
-            _skill_md_from_version_response,
+        resolved = await asyncio.to_thread(
+            _skill_files_from_version_response,
             space_id=space_id,
             skill_id=skill_id,
             version=version,
             resp=resp,
+            folder=resp.name or skill_id,
         )
+        if isinstance(resolved, str):
+            skill_md = resolved
+            files = []
+        else:
+            files = [
+                {"path": file.path, "content": file.content}
+                for file in resolved
+            ]
+            skill_md = next(
+                (
+                    file.content
+                    for file in resolved
+                    if file.path.lower().endswith("/skill.md")
+                ),
+                "",
+            )
 
         return {
             "skillId": skill_id,
@@ -4835,6 +4849,7 @@ def _run_frontend_server(
             "description": resp.description or "",
             "version": resp.version or version or "",
             "skillMd": skill_md,
+            "files": files,
             "bucketName": resp.bucket_name or "",
             "tosPath": resp.tos_path or "",
         }
