@@ -184,10 +184,18 @@ def test_full_project_matches_frontend_codegen_golden() -> None:
     draft = _full_draft()
     project = generate_project_from_draft(draft)
     files = _file_map(project)
+    agent_py = files["agents/full_agent/agent.py"]
 
     assert project.name == "full_agent"
     assert "enableA2ui" not in draft.model_dump()
-    assert "enable_a2ui" not in files["agents/full_agent/agent.py"]
+    assert "enable_a2ui" not in agent_py
+    assert "skills_agent = SkillToolset(skills=[" in agent_py
+    root_agent_block = agent_py.rsplit("agent = Agent(", 1)[1].split(
+        "\n)\n\nAGENT_DISPLAY_NAMES",
+        1,
+    )[0]
+    assert "tools=[" in root_agent_block
+    assert "skills_agent" in root_agent_block.split("tools=[", 1)[1].split("]", 1)[0]
     assert "[a2ui]" not in files["requirements.txt"]
     assert _content_hashes(project) == _FULL_FRONTEND_GOLDEN
 
