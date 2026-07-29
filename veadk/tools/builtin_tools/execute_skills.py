@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Iterable
 from typing import Optional
 from urllib import error, request
@@ -32,7 +33,11 @@ from veadk.tools.builtin_tools.run_sandbox_agent import run_sandbox_agent
 
 
 _SKILL_API_UPGRADE_STATUS_CODES = frozenset({404, 405})
+_SKILL_API_TRANSIENT_STATUS_CODES = frozenset({502, 503, 504})
 _SKILL_API_TIMEOUT = 900
+_SKILL_API_HEALTH_TIMEOUT = 30.0
+_SKILL_API_HEALTH_POLL_INTERVAL = 1.0
+_SKILL_API_HEALTH_REQUEST_TIMEOUT = 5.0
 
 
 def _skill_api_upgrade_hint(path: str) -> str:
@@ -120,6 +125,49 @@ def _post_skill_api_json(
         ) from exc
 
 
+def _wait_for_skill_api_health(
+    *,
+    endpoint: str,
+    timeout: float = _SKILL_API_HEALTH_TIMEOUT,
+    poll_interval: float = _SKILL_API_HEALTH_POLL_INTERVAL,
+) -> None:
+    """Wait until the Skill API upstream is reachable through the session endpoint."""
+    deadline = time.monotonic() + timeout
+    last_error = "unknown error"
+    while True:
+        req = request.Request(
+            _skill_api_url(endpoint, "/v1/skills/healthz"),
+            headers={"Accept": "application/json"},
+            method="GET",
+        )
+        try:
+            remaining = max(0.001, deadline - time.monotonic())
+            with request.urlopen(
+                req,
+                timeout=min(_SKILL_API_HEALTH_REQUEST_TIMEOUT, remaining),
+            ):
+                return
+        except error.HTTPError as exc:
+            if exc.code in _SKILL_API_UPGRADE_STATUS_CODES:
+                # Some compatible images predate the dedicated health endpoint.
+                return
+            if exc.code not in _SKILL_API_TRANSIENT_STATUS_CODES:
+                detail = exc.read().decode("utf-8", errors="replace")
+                raise RuntimeError(
+                    f"Skill HTTP API health check failed with HTTP {exc.code}: {detail}"
+                ) from exc
+            last_error = f"HTTP {exc.code}"
+        except error.URLError as exc:
+            last_error = str(exc.reason)
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(
+                f"Timed out waiting for Skill HTTP API health check: {last_error}"
+            )
+        time.sleep(min(poll_interval, remaining))
+
+
 def _parse_skill_execute_response(raw: bytes) -> str:
     try:
         payload = json.loads(raw.decode("utf-8"))
@@ -200,6 +248,7 @@ def _execute_skills_via_skill_api(
         raise RuntimeError(
             f"AgentKit session endpoint is not available: {exc}"
         ) from exc
+    _wait_for_skill_api_health(endpoint=endpoint)
     path = "/v1/skills/stream" if prefer_stream else "/v1/skills/execute"
     return _post_skill_api_json(
         endpoint=endpoint,

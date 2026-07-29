@@ -230,6 +230,7 @@ class TestEnsureAgentkitSessionEndpoint(unittest.TestCase):
                 return types.SimpleNamespace(
                     endpoint="https://public.example",
                     internal_endpoint="http://internal.example",
+                    status="Ready",
                 )
 
         fake_tools_types = types.ModuleType("agentkit.sdk.tools.types")
@@ -297,8 +298,14 @@ class TestEnsureAgentkitSessionEndpoint(unittest.TestCase):
             },
         )
 
-    def test_uses_create_session_endpoint_without_getting_session(self):
+    def test_waits_for_ready_even_when_create_session_returns_endpoint(self):
+        captured = {"get_calls": 0}
+
         class FakeCreateSessionRequest:
+            def __init__(self, **_kwargs):
+                pass
+
+        class FakeGetSessionRequest:
             def __init__(self, **_kwargs):
                 pass
 
@@ -314,12 +321,17 @@ class TestEnsureAgentkitSessionEndpoint(unittest.TestCase):
                 )
 
             def get_session(self, _request):
-                raise AssertionError(
-                    "get_session should not be called when create returns endpoint"
+                captured["get_calls"] += 1
+                return types.SimpleNamespace(
+                    session_id="session-1",
+                    status="Ready",
+                    endpoint="https://public.example",
+                    internal_endpoint="http://internal.example",
                 )
 
         fake_tools_types = types.ModuleType("agentkit.sdk.tools.types")
         fake_tools_types.CreateSessionRequest = FakeCreateSessionRequest
+        fake_tools_types.GetSessionRequest = FakeGetSessionRequest
         fake_tools_client = types.ModuleType("agentkit.sdk.tools.client")
         fake_tools_client.AgentkitToolsClient = FakeClient
         fake_tools_package = types.ModuleType("agentkit.sdk.tools")
@@ -353,6 +365,118 @@ class TestEnsureAgentkitSessionEndpoint(unittest.TestCase):
                 )
 
         self.assertEqual(endpoint, "https://public.example")
+        self.assertEqual(captured["get_calls"], 1)
+
+    def test_polls_until_session_is_ready(self):
+        statuses = iter(["Starting", "Ready"])
+
+        class FakeRequest:
+            def __init__(self, **_kwargs):
+                pass
+
+        class FakeClient:
+            def __init__(self, **_kwargs):
+                pass
+
+            def create_session(self, _request):
+                return types.SimpleNamespace(session_id="session-1")
+
+            def get_session(self, _request):
+                return types.SimpleNamespace(
+                    status=next(statuses),
+                    endpoint="https://public.example",
+                    internal_endpoint=None,
+                )
+
+        fake_tools_types = types.ModuleType("agentkit.sdk.tools.types")
+        fake_tools_types.CreateSessionRequest = FakeRequest
+        fake_tools_types.GetSessionRequest = FakeRequest
+        fake_tools_client = types.ModuleType("agentkit.sdk.tools.client")
+        fake_tools_client.AgentkitToolsClient = FakeClient
+        fake_tools_package = types.ModuleType("agentkit.sdk.tools")
+        fake_tools_package.types = fake_tools_types
+
+        with patch.dict(
+            sys.modules,
+            {
+                "agentkit": types.ModuleType("agentkit"),
+                "agentkit.sdk": types.ModuleType("agentkit.sdk"),
+                "agentkit.sdk.tools": fake_tools_package,
+                "agentkit.sdk.tools.types": fake_tools_types,
+                "agentkit.sdk.tools.client": fake_tools_client,
+            },
+        ):
+            with (
+                patch.object(
+                    self.agentkit_module,
+                    "get_agentkit_endpoint_config",
+                    return_value=("agentkit", "cn-beijing", "host", "https"),
+                ),
+                patch.object(
+                    self.agentkit_module,
+                    "get_agentkit_credentials",
+                    return_value=("ak", "sk", {}),
+                ),
+                patch.object(self.agentkit_module.time, "sleep") as sleep,
+            ):
+                endpoint = self.agentkit_module.ensure_agentkit_session_endpoint(
+                    tool_id="tool-1",
+                    tool_user_session_id="user-session-1",
+                )
+
+        self.assertEqual(endpoint, "https://public.example")
+        sleep.assert_called_once_with(1.0)
+
+    def test_raises_when_session_enters_failed_status(self):
+        class FakeRequest:
+            def __init__(self, **_kwargs):
+                pass
+
+        class FakeClient:
+            def __init__(self, **_kwargs):
+                pass
+
+            def create_session(self, _request):
+                return types.SimpleNamespace(session_id="session-1")
+
+            def get_session(self, _request):
+                return types.SimpleNamespace(status="Failed")
+
+        fake_tools_types = types.ModuleType("agentkit.sdk.tools.types")
+        fake_tools_types.CreateSessionRequest = FakeRequest
+        fake_tools_types.GetSessionRequest = FakeRequest
+        fake_tools_client = types.ModuleType("agentkit.sdk.tools.client")
+        fake_tools_client.AgentkitToolsClient = FakeClient
+        fake_tools_package = types.ModuleType("agentkit.sdk.tools")
+        fake_tools_package.types = fake_tools_types
+
+        with patch.dict(
+            sys.modules,
+            {
+                "agentkit": types.ModuleType("agentkit"),
+                "agentkit.sdk": types.ModuleType("agentkit.sdk"),
+                "agentkit.sdk.tools": fake_tools_package,
+                "agentkit.sdk.tools.types": fake_tools_types,
+                "agentkit.sdk.tools.client": fake_tools_client,
+            },
+        ):
+            with (
+                patch.object(
+                    self.agentkit_module,
+                    "get_agentkit_endpoint_config",
+                    return_value=("agentkit", "cn-beijing", "host", "https"),
+                ),
+                patch.object(
+                    self.agentkit_module,
+                    "get_agentkit_credentials",
+                    return_value=("ak", "sk", {}),
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "terminal status Failed"):
+                    self.agentkit_module.ensure_agentkit_session_endpoint(
+                        tool_id="tool-1",
+                        tool_user_session_id="user-session-1",
+                    )
 
 
 if __name__ == "__main__":

@@ -80,6 +80,7 @@ def _load_execute_skills_module(
     *,
     ensure_agentkit_session_endpoint=lambda **_kwargs: "",
     run_sandbox_agent=lambda **_kwargs: "",
+    wait_for_skill_api_health=lambda **_kwargs: None,
 ):
     module_path = (
         Path(__file__).resolve().parents[3]
@@ -138,6 +139,8 @@ def _load_execute_skills_module(
         assert spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+        if wait_for_skill_api_health is not None:
+            module._wait_for_skill_api_health = wait_for_skill_api_health
         return module
 
 
@@ -211,6 +214,7 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
 
     def test_prefers_new_skill_execute_api_when_endpoint_is_available(self):
         captured_requests = []
+        health_endpoints = []
 
         class FakeResponse:
             def __enter__(self):
@@ -228,12 +232,16 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
 
         module = _load_execute_skills_module(
             ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test",
+            wait_for_skill_api_health=lambda **kwargs: health_endpoints.append(
+                kwargs["endpoint"]
+            ),
         )
 
         with patch.object(module.request, "urlopen", fake_urlopen):
             result = module.execute_skills("do work", tool_context=self._tool_context())
 
         self.assertEqual(result, "api result")
+        self.assertEqual(["https://sandbox.test"], health_endpoints)
         self.assertEqual(1, len(captured_requests))
         request_obj, timeout = captured_requests[0]
         self.assertEqual("https://sandbox.test/v1/skills/execute", request_obj.full_url)
@@ -241,6 +249,74 @@ class TestExecuteSkillsSkillApi(unittest.TestCase):
         self.assertEqual("POST", request_obj.get_method())
         self.assertEqual("tip-from-state", request_obj.headers["X-tip-token-key"])
         self.assertIn(b'"prompt": "do work"', request_obj.data)
+
+    def test_health_check_retries_502_until_upstream_is_ready(self):
+        attempts = []
+
+        class HealthyResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+        class ErrorResponse:
+            def read(self):
+                return b"bad gateway"
+
+            def close(self):
+                return None
+
+        module = _load_execute_skills_module(wait_for_skill_api_health=None)
+
+        def fake_urlopen(req, **_kwargs):
+            attempts.append((req.full_url, req.get_method()))
+            if len(attempts) == 1:
+                raise module.error.HTTPError(
+                    url=req.full_url,
+                    code=502,
+                    msg="Bad Gateway",
+                    hdrs={},
+                    fp=ErrorResponse(),
+                )
+            return HealthyResponse()
+
+        with (
+            patch.object(module.request, "urlopen", fake_urlopen),
+            patch.object(module.time, "sleep") as sleep,
+        ):
+            module._wait_for_skill_api_health(endpoint="https://sandbox.test")
+
+        self.assertEqual(
+            [
+                ("https://sandbox.test/v1/skills/healthz", "GET"),
+                ("https://sandbox.test/v1/skills/healthz", "GET"),
+            ],
+            attempts,
+        )
+        sleep.assert_called_once_with(1.0)
+
+    def test_health_check_allows_images_without_health_endpoint(self):
+        class NotFoundResponse:
+            def read(self):
+                return b"not found"
+
+            def close(self):
+                return None
+
+        module = _load_execute_skills_module(wait_for_skill_api_health=None)
+
+        def fake_urlopen(req, **_kwargs):
+            raise module.error.HTTPError(
+                url=req.full_url,
+                code=404,
+                msg="Not Found",
+                hdrs={},
+                fp=NotFoundResponse(),
+            )
+
+        with patch.object(module.request, "urlopen", fake_urlopen):
+            module._wait_for_skill_api_health(endpoint="https://sandbox.test")
 
     def test_env_vars_use_legacy_runcode_execution(self):
         captured_kwargs = {}

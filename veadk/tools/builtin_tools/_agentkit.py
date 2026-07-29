@@ -14,6 +14,7 @@
 
 import json
 import os
+import time
 from typing import Any, Optional
 
 from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
@@ -22,6 +23,11 @@ from veadk.utils.logger import get_logger
 from veadk.utils.volcengine_sign import ve_request
 
 logger = get_logger(__name__)
+
+
+_SESSION_READY_TIMEOUT = 120.0
+_SESSION_POLL_INTERVAL = 1.0
+_SESSION_TERMINAL_STATUSES = frozenset({"failed", "terminating", "terminated"})
 
 
 def resolve_agentkit_tool_id(*preferred_env_names: str) -> str:
@@ -215,10 +221,17 @@ def ensure_agentkit_session_endpoint(
     tool_state: Optional[dict[str, Any]] = None,
     ttl: int = 1800,
     prefer_internal_endpoint: bool = False,
+    ready_timeout: float = _SESSION_READY_TIMEOUT,
+    poll_interval: float = _SESSION_POLL_INTERVAL,
 ) -> str:
-    """Create or reuse an AgentKit tool session and return its HTTP endpoint."""
+    """Create or reuse a Ready AgentKit tool session and return its endpoint."""
     from agentkit.sdk.tools import types as tools_types
     from agentkit.sdk.tools.client import AgentkitToolsClient
+
+    if ready_timeout < 0:
+        raise ValueError("ready_timeout must be greater than or equal to 0")
+    if poll_interval <= 0:
+        raise ValueError("poll_interval must be greater than 0")
 
     _, region, _, _ = get_agentkit_endpoint_config()
     ak, sk, header = get_agentkit_credentials(tool_state)
@@ -236,26 +249,49 @@ def ensure_agentkit_session_endpoint(
             Ttl=ttl,
         )
     )
-    public_endpoint = getattr(session, "endpoint", None)
-    internal_endpoint = getattr(session, "internal_endpoint", None)
-    endpoint = (
-        internal_endpoint or public_endpoint
-        if prefer_internal_endpoint
-        else public_endpoint or internal_endpoint
-    )
-    if endpoint:
-        return endpoint
-
     session_id = session.session_id
     if not session_id:
-        return ""
+        raise RuntimeError("AgentKit CreateSession response is missing SessionId")
 
-    current_session = client.get_session(
-        tools_types.GetSessionRequest(
-            ToolId=tool_id,
-            SessionId=session_id,
+    deadline = time.monotonic() + ready_timeout
+    last_status = "Unknown"
+    while True:
+        current_session = client.get_session(
+            tools_types.GetSessionRequest(
+                ToolId=tool_id,
+                SessionId=session_id,
+            )
         )
-    )
-    if prefer_internal_endpoint:
-        return current_session.internal_endpoint or current_session.endpoint or ""
-    return current_session.endpoint or current_session.internal_endpoint or ""
+        status = (getattr(current_session, "status", None) or "").strip()
+        last_status = status or "Unknown"
+        logger.debug(f"AgentKit session {session_id} status: {last_status}")
+        normalized_status = status.lower()
+        if normalized_status == "ready":
+            public_endpoint = getattr(current_session, "endpoint", None) or getattr(
+                session, "endpoint", None
+            )
+            internal_endpoint = getattr(
+                current_session, "internal_endpoint", None
+            ) or getattr(session, "internal_endpoint", None)
+            endpoint = (
+                internal_endpoint or public_endpoint
+                if prefer_internal_endpoint
+                else public_endpoint or internal_endpoint
+            )
+            if endpoint:
+                return endpoint
+            raise RuntimeError(
+                f"AgentKit session {session_id} is Ready but has no endpoint"
+            )
+        if normalized_status in _SESSION_TERMINAL_STATUSES:
+            raise RuntimeError(
+                f"AgentKit session {session_id} entered terminal status {last_status}"
+            )
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(
+                f"Timed out waiting for AgentKit session {session_id} to become "
+                f"Ready; last status: {last_status}"
+            )
+        time.sleep(min(poll_interval, remaining))
