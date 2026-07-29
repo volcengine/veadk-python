@@ -39,7 +39,7 @@ def _create_frontend_app(
     site_title: str | None = None,
 ) -> FastAPI:
     captured: dict[str, Any] = {}
-    monkeypatch.setattr("dotenv.find_dotenv", lambda: "")
+    monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
     monkeypatch.setattr(
         "uvicorn.run",
         lambda app, **kwargs: captured.setdefault("app", app),
@@ -174,6 +174,10 @@ def test_runtime_list_paginates_across_regions(
     with TestClient(app) as client:
         first = client.get("/web/runtimes", params={"region": "all", "page_size": 2})
         first_calls = list(calls)
+        cached_first = client.get(
+            "/web/runtimes", params={"region": "all", "page_size": 2}
+        )
+        cached_first_calls = list(calls)
         second = client.get(
             "/web/runtimes",
             params={
@@ -199,6 +203,8 @@ def test_runtime_list_paginates_across_regions(
         ("cn-beijing", "0", 2),
         ("cn-shanghai", "0", 2),
     ]
+    assert cached_first.json() == first.json()
+    assert cached_first_calls == first_calls
     assert first.json()["nextToken"] == "all:2"
     assert [item["name"] for item in second.json()["runtimes"]] == [
         "beijing-mid",

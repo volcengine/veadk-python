@@ -1,11 +1,9 @@
 // Auth forwarding for cloud deployments.
 //
-// This frontend never puts anything in the page querystring itself, so any
-// query params present on load must have been injected by the identity gateway
-// (auth token, signature, etc.) — whatever their custom names. We therefore
-// capture the entire incoming querystring, stash it, strip it from the visible
-// address bar, and re-attach it verbatim to every API request and to any page
-// navigation. Cookies (e.g. VeADK's `veadk_session`) are sent automatically.
+// Except for local development helpers, query params present on load are
+// injected by the identity gateway (auth token, signature, etc.). Capture and
+// forward those auth params while keeping local-only params in the address bar.
+// Cookies (e.g. VeADK's `veadk_session`) are sent automatically.
 
 const STORAGE_KEY = "veadk_auth_qs";
 
@@ -15,14 +13,20 @@ let cached: string | null = null;
 function authQuery(): string {
   if (cached !== null) return cached;
 
-  const incoming = window.location.search.replace(/^\?/, "");
+  const params = new URLSearchParams(window.location.search);
+  const incoming = params.toString();
   if (incoming) {
     sessionStorage.setItem(STORAGE_KEY, incoming);
-    // Keep it out of the address bar / history / bookmarks.
-    window.history.replaceState(null, "", window.location.pathname + window.location.hash);
     cached = incoming;
   } else {
     cached = sessionStorage.getItem(STORAGE_KEY) ?? "";
+  }
+  if (window.location.search) {
+    window.history.replaceState(
+      null,
+      "",
+      window.location.pathname + window.location.hash,
+    );
   }
   return cached;
 }

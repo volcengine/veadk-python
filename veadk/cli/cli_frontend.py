@@ -34,6 +34,7 @@ import zipfile
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from time import monotonic
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -3066,6 +3067,10 @@ def _run_frontend_server(
             logger.error(f"get runtime detail failed: {e}", exc_info=True)
             raise HTTPException(status_code=502, detail=str(e))
 
+    _runtime_list_cache_ttl_seconds = 30.0
+    _runtime_list_cache: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
+    _runtime_list_locks: dict[tuple[Any, ...], asyncio.Lock] = {}
+
     @app.get("/web/runtimes")
     async def _web_runtimes(
         request: Request,
@@ -3087,6 +3092,22 @@ def _run_frontend_server(
         )
         page_size = max(1, min(page_size, 100))
         restrict_to_owner = scope == "mine" or role != StudioRole.ADMIN
+        principal_key = (
+            getattr(principal, "owner_id", ""),
+            getattr(principal, "display_name", ""),
+        )
+        cache_key = (
+            principal_key,
+            role,
+            scope,
+            page_size,
+            next_token,
+            region,
+        )
+        cached = _runtime_list_cache.get(cache_key)
+        if cached and monotonic() - cached[0] < _runtime_list_cache_ttl_seconds:
+            return cached[1]
+        list_lock = _runtime_list_locks.setdefault(cache_key, asyncio.Lock())
 
         # next_token format for cross-region mode: "all:<offset>".
         async def _list_region(
@@ -3153,6 +3174,16 @@ def _run_frontend_server(
                 current_token = next_page_token
             return out[:target_size], next_page_token
 
+        await list_lock.acquire()
+        cached = _runtime_list_cache.get(cache_key)
+        if cached and monotonic() - cached[0] < _runtime_list_cache_ttl_seconds:
+            list_lock.release()
+            return cached[1]
+
+        def _cache_result(payload: dict[str, Any]) -> dict[str, Any]:
+            _runtime_list_cache[cache_key] = (monotonic(), payload)
+            return payload
+
         try:
             if restrict_to_owner and principal is not None:
                 if next_token:
@@ -3192,11 +3223,11 @@ def _run_frontend_server(
                 page = owned_runtimes[offset:page_end]
                 has_more = page_end < len(owned_runtimes) or owned_has_more
                 following_token = f"mine:{page_end}" if has_more else ""
-                return {"runtimes": page, "nextToken": following_token}
+                return _cache_result({"runtimes": page, "nextToken": following_token})
 
             if len(regions) == 1:
                 out, nxt = await _list_region(regions[0], next_token)
-                return {"runtimes": out, "nextToken": nxt}
+                return _cache_result({"runtimes": out, "nextToken": nxt})
 
             if next_token:
                 match = re.fullmatch(r"all:(\d+)", next_token)
@@ -3256,12 +3287,14 @@ def _run_frontend_server(
             page = all_runtimes[offset:page_end]
             has_more = page_end < len(all_runtimes) or regional_has_more
             following_token = f"all:{page_end}" if has_more else ""
-            return {"runtimes": page, "nextToken": following_token}
+            return _cache_result({"runtimes": page, "nextToken": following_token})
         except HTTPException:
             raise
         except Exception as e:
             logger.error(f"list runtimes failed: {e}", exc_info=True)
             raise HTTPException(status_code=502, detail=str(e))
+        finally:
+            list_lock.release()
 
     # Cache resolved (endpoint, apikey, auth type) per runtime so the data-plane
     # proxy does not call GetRuntime on every request. Short TTL; cleared on a 401.

@@ -81,6 +81,10 @@ test("focused agent details can render without the workspace tabs or list sideba
     appSource,
     /focusedAgentId=\{detailAgentEntry\?\.id \?\? focusedWorkspaceAgentId\}[\s\S]*?detailOnly=\{!!detailAgentEntry \|\| !!focusedDeploymentTaskId\}/,
   );
+  assert.match(appSource, /runtimeApp: detailConnection\?\.apps\[0\]/);
+  assert.match(workspaceSource, /getRuntimeAgentInfo\([\s\S]*?selectedAgent\.runtimeApp/);
+  assert.match(clientSource, /loadDraft = true/);
+  assert.match(clientSource, /return fetchAgentInfo\(app, ep, false\)/);
 });
 
 test("agent details show capability badges and deployment state before the flow", () => {
@@ -123,7 +127,7 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(appSource, /const finishDeployment = useCallback/);
   assert.match(appSource, /await connectRuntime\([\s\S]*?result\.runtimeId[\s\S]*?result\.version/);
   assert.match(appSource, /const \[agentInfoRefreshKey, setAgentInfoRefreshKey\] = useState\(0\)/);
-  assert.match(appSource, /}, \[appName, agentInfoRefreshKey\]\);/);
+  assert.match(appSource, /}, \[agentDetailTarget, appName, agentInfoRefreshKey, authStatus, myAgents\]\);/);
   assert.match(
     appSource,
     /const finishDeployment = useCallback[\s\S]*?setConnections\(loadConnections\(\)\);[\s\S]*?setAgentInfoRefreshKey\(\(key\) => key \+ 1\)/,
