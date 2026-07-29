@@ -396,3 +396,95 @@ async def test_upsert_item_uses_item_key_and_set_scope() -> None:
         "EvaluationSetId": "set-1",
     }
     assert calls[0]["payload"]["Items"][0]["ItemKey"] == "stable-key"
+
+
+@pytest.mark.asyncio
+async def test_list_feedback_items_reads_set_items() -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def post(
+        *,
+        action: str,
+        payload: dict[str, Any],
+        query: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        calls.append({"action": action, "payload": payload, "query": query})
+        if action == "ListEvaluationSets":
+            if payload.get("Name"):
+                return {
+                    "Result": {
+                        "EvaluationSets": [
+                            {
+                                "Id": "set-1",
+                                "Name": "客服助手_good_case",
+                                "WorkspaceId": "workspace-1",
+                            }
+                        ]
+                    }
+                }
+            return {
+                "Result": {
+                    "EvaluationSets": [
+                        {
+                            "Id": "workspace-probe",
+                            "Name": "其他评测集",
+                            "WorkspaceId": "workspace-1",
+                        }
+                    ]
+                }
+            }
+        if action == "ListEvaluationSetItems":
+            return {
+                "Result": {
+                    "Items": [
+                        {
+                            "ItemId": "item-1",
+                            "ItemKey": "stable-key",
+                            "Turns": [
+                                {
+                                    "FieldDataList": [
+                                        {
+                                            "Key": "input",
+                                            "Content": {
+                                                "ContentType": "Text",
+                                                "Text": "问题",
+                                            },
+                                        },
+                                        {
+                                            "Key": "output",
+                                            "Content": {
+                                                "ContentType": "Text",
+                                                "Text": "回答",
+                                            },
+                                        },
+                                    ]
+                                }
+                            ],
+                        }
+                    ]
+                }
+            }
+        raise AssertionError(action)
+
+    client = AgentKitEvaluationDatasetsClient(post, project_name="support")
+    evaluation_set, items = await client.list_feedback_items(
+        agent_name="客服助手",
+        rating="good",
+        page_size=20,
+    )
+
+    assert evaluation_set is not None
+    assert evaluation_set.id == "set-1"
+    assert items[0].id == "item-1"
+    assert items[0].fields["input"] == "问题"
+    assert items[0].fields["output"] == "回答"
+    assert [call["action"] for call in calls] == [
+        "ListEvaluationSets",
+        "ListEvaluationSets",
+        "ListEvaluationSetItems",
+    ]
+    assert calls[-1]["query"] == {
+        "ProjectName": "support",
+        "WorkspaceId": "workspace-1",
+        "EvaluationSetId": "set-1",
+    }
