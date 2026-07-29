@@ -4831,10 +4831,7 @@ def _run_frontend_server(
             skill_md = resolved
             files = []
         else:
-            files = [
-                {"path": file.path, "content": file.content}
-                for file in resolved
-            ]
+            files = [{"path": file.path, "content": file.content} for file in resolved]
             skill_md = next(
                 (
                     file.content

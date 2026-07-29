@@ -561,10 +561,7 @@ async def test_skillspace_materialization_keeps_full_package_files() -> None:
             _skill_zip(
                 {
                     "cloud-package/SKILL.md": (
-                        "---\n"
-                        "name: domain-test-skill\n"
-                        "description: Shared.\n"
-                        "---\n"
+                        "---\nname: domain-test-skill\ndescription: Shared.\n---\n"
                     ),
                     "cloud-package/helpers/report.py": "REPORT = 'ok'\n",
                 }
@@ -703,7 +700,7 @@ def test_remote_skill_zip_normalizes_malformed_frontmatter() -> None:
         "metadata: ''\n"
         "use_cases:\n"
         "  - User has an approved design or product brief\n"
-        "  - \"write a plan\" / \"make a plan\" / \"implementation plan\": now\n"
+        '  - "write a plan" / "make a plan" / "implementation plan": now\n'
         "---\n"
         "Plan writing instructions.\n"
     )
@@ -1250,8 +1247,7 @@ def test_generated_agent_debug_allows_large_skill_projects(
                     {
                         "path": f"skills/skill-{idx}/SKILL.md",
                         "content": (
-                            f"---\nname: skill-{idx}\n"
-                            f"description: Skill {idx}.\n---\n"
+                            f"---\nname: skill-{idx}\ndescription: Skill {idx}.\n---\n"
                         ),
                     },
                     {

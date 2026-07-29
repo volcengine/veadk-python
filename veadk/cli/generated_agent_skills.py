@@ -117,9 +117,7 @@ async def _download_skillhub_skill(skill: SelectedSkill) -> list[GeneratedFile]:
     content = res.content
     if len(content) > MAX_SKILL_TOTAL_BYTES:
         raise DebugPolicyError("Skill Hub zip is too large")
-    folder = _safe_folder_or_default(
-        skill.folder or slug.rsplit("/", 1)[-1] or "skill"
-    )
+    folder = _safe_folder_or_default(skill.folder or slug.rsplit("/", 1)[-1] or "skill")
     files = _files_from_zip(content, folder, f"Skill Hub skill {slug}")
     skill.folder = _folder_from_generated_files(files) or folder
     return files
