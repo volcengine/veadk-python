@@ -247,6 +247,11 @@ def _files_from_zip(content: bytes, folder: str, label: str) -> list[GeneratedFi
         skill_md_candidates,
         key=lambda item: (len(PurePosixPath(item[0]).parts), item[0]),
     )[0]
+    skill_md_content = _normalize_skill_md_frontmatter(skill_md_content, label)
+    extracted = [
+        (rel, skill_md_content if rel == skill_md_rel else text)
+        for rel, text in extracted
+    ]
     extracted = _strip_skill_zip_prefix(extracted, skill_md_rel)
     folder = _skill_md_folder_name(skill_md_content) or folder
     return [

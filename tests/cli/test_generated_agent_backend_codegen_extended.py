@@ -380,6 +380,25 @@ def test_project_allows_stdio_mcp_but_debug_rejects_it() -> None:
     validate_debug_policy(debug_draft, allow_local_runtime_resources=True)
 
 
+def test_policy_allows_many_selected_skills() -> None:
+    draft = AgentDraft(
+        name="many-skills",
+        instruction="Use the selected skills.",
+        selectedSkills=[
+            SelectedSkill(
+                source="skillhub",
+                folder=f"skill-{idx}",
+                name=f"skill-{idx}",
+                slug=f"skill-{idx}",
+            )
+            for idx in range(20)
+        ],
+    )
+
+    validate_project_policy(draft)
+    validate_debug_policy(draft)
+
+
 @pytest.mark.asyncio
 async def test_skillspace_materialization_deduplicates_nested_selection() -> None:
     skill = SelectedSkill(
@@ -642,6 +661,30 @@ def test_skillhub_zip_accepts_gb18030_text_files() -> None:
     assert files[0].content.startswith("---")
     assert "数据处理" in files[0].content
     assert "说明：￥" in files[1].content
+
+
+def test_remote_skill_zip_normalizes_malformed_frontmatter() -> None:
+    skill_md = (
+        "---\n"
+        "name: superpowers-writing-plans\n"
+        "description: Write practical plans.\n"
+        "use_cases:\n"
+        "  - User has an approved design or product brief\n"
+        "  - \"write a plan\" / \"make a plan\" / \"implementation plan\": now\n"
+        "---\n"
+        "Plan writing instructions.\n"
+    )
+
+    files = _files_from_zip(
+        _skill_zip({"SKILL.md": skill_md}),
+        "superpowers-writing-plans",
+        "Skill Hub skill superpowers-writing-plans",
+    )
+
+    frontmatter = files[0].content.split("---", 2)[1]
+    parsed = yaml.safe_load(frontmatter)
+    assert parsed["name"] == "superpowers-writing-plans"
+    assert parsed["description"] == "Write practical plans."
 
 
 class _FakeResponse:
