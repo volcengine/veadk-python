@@ -79,13 +79,13 @@ DEFAULT_NACOS_INSTANCE_NAME = "veadk"
 provider = os.getenv("CLOUD_PROVIDER")
 
 if provider and provider.lower() == "byteplus":
-    DEFAULT_MODEL_AGENT_NAME = "seed-1-6-250915"
+    DEFAULT_MODEL_AGENT_NAME = "dola-seed-2-1-turbo-260628"
     DEFAULT_MODEL_AGENT_API_BASE = "https://ark.ap-southeast.bytepluses.com/api/v3"
     DEFAULT_IMAGE_EDIT_MODEL_NAME = "seededit-3-0-i2i-250628"
     DEFAULT_IMAGE_EDIT_MODEL_API_BASE = "https://ark.ap-southeast.bytepluses.com/api/v3"
-    DEFAULT_VIDEO_MODEL_NAME = "seedance-1-5-pro-251215"
+    DEFAULT_VIDEO_MODEL_NAME = "dreamina-seedance-2-0-260128"
     DEFAULT_VIDEO_MODEL_API_BASE = "https://ark.ap-southeast.bytepluses.com/api/v3"
-    DEFAULT_IMAGE_GENERATE_MODEL_NAME = "seedream-4-5-251128"
+    DEFAULT_IMAGE_GENERATE_MODEL_NAME = "dola-seedream-5-0-pro-260628"
     DEFAULT_IMAGE_GENERATE_MODEL_API_BASE = (
         "https://ark.ap-southeast.bytepluses.com/api/v3"
     )
