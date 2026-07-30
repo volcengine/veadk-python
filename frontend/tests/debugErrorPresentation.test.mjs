@@ -6,18 +6,89 @@ const source = readFileSync(
   new URL("../src/create/CustomCreate.tsx", import.meta.url),
   "utf8",
 );
+const errorComponentSource = readFileSync(
+  new URL("../src/ui/DeploymentErrorMessage.tsx", import.meta.url),
+  "utf8",
+);
+const clientSource = readFileSync(
+  new URL("../src/adk/client.ts", import.meta.url),
+  "utf8",
+);
+const projectPreviewSource = readFileSync(
+  new URL("../src/ui/ProjectPreview.tsx", import.meta.url),
+  "utf8",
+);
+const appSource = readFileSync(
+  new URL("../src/App.tsx", import.meta.url),
+  "utf8",
+);
 
-test("debug errors support full expansion, copying, and footer restart", () => {
+test("debug errors show the complete backend detail by default", () => {
   assert.match(
     source,
     /import \{ DeploymentErrorMessage \} from "\.\.\/ui\/DeploymentErrorMessage"/,
   );
-  assert.match(source, /className="cw-debug-error-detail"/);
-  assert.match(source, /className="cw-debug-msg-error"/);
+  assert.match(
+    source,
+    /message=\{variant\.error\}[\s\S]*?className="cw-debug-error-detail"[\s\S]*?defaultExpanded/,
+  );
+  assert.match(
+    source,
+    /message=\{message\.error\}[\s\S]*?className="cw-debug-msg-error"[\s\S]*?defaultExpanded/,
+  );
+  assert.match(errorComponentSource, /defaultExpanded = true/);
+  assert.match(errorComponentSource, /useState\(defaultExpanded\)/);
+  assert.match(errorComponentSource, /role="alert"/);
   assert.match(
     source,
     /className="cw-ab-start cw-ab-footer-start"[\s\S]*?onClick=\{\(\) => onStartVariant\(variant\.id\)\}/,
   );
+});
+
+test("creation and deployment keep friendly context and the original error", () => {
+  assert.match(
+    source,
+    /<DeploymentErrorMessage[\s\S]*?className="cw-workspace-alert"[\s\S]*?message=\{buildErr\}/,
+  );
+  assert.match(
+    source,
+    /setBuildErr\(error instanceof Error \? error\.message : String\(error\)\)/,
+  );
+  assert.match(
+    source,
+    /className="cw-ai-error-message"[\s\S]*?\{aiErrorDialog\}/,
+  );
+  assert.match(
+    clientSource,
+    /if \(!res\.ok\) \{[\s\S]*?httpErrorMessage\(res, "部署失败"\)[\s\S]*?throw new Error\(detail\)/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /<DeploymentErrorMessage[\s\S]*?className="pp-error"[\s\S]*?\$\{deployError\}/,
+  );
+  assert.match(
+    appSource,
+    /<DeploymentErrorMessage[\s\S]*?className="global-deploy-error"[\s\S]*?message=\{task\.message\}/,
+  );
+});
+
+test("generated-agent debug requests preserve backend error details", () => {
+  assert.match(
+    clientSource,
+    /if \(typeof detail === "string"\) return detail/,
+  );
+  for (const fallback of [
+    "创建调试运行失败",
+    "创建调试会话失败",
+    "加载调试调用链路失败",
+    "调试运行失败",
+    "清理调试运行失败",
+  ]) {
+    assert.match(
+      clientSource,
+      new RegExp(`new Error\\(await httpErrorMessage\\(res, "${fallback}"\\)\\)`),
+    );
+  }
 });
 
 test("debug test runs are persisted and reclaimed after refresh", () => {

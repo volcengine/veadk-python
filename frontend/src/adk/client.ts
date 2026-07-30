@@ -1770,9 +1770,9 @@ export async function deployAgentkitProject(
     throw error;
   }
   if (!res.ok) {
-    const t = await res.text().catch(() => "");
+    const detail = await httpErrorMessage(res, "部署失败");
     clearController();
-    throw new Error(t || `部署失败 (${res.status})`);
+    throw new Error(detail);
   }
 
   let final: DeployFrame | null = null;

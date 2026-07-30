@@ -271,7 +271,7 @@ test("container agents require child agents before debug or publish", () => {
   );
   assert.match(
     createSource,
-    /\{buildErr && \([\s\S]*?className="cw-workspace-alert" role="alert"[\s\S]*?\{buildErr\}/,
+    /\{buildErr && \([\s\S]*?<DeploymentErrorMessage[\s\S]*?className="cw-workspace-alert"[\s\S]*?message=\{buildErr\}/,
   );
   assert.doesNotMatch(
     createSource,
