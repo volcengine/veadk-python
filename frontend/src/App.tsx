@@ -78,7 +78,11 @@ import {
   AgentWorkspace,
   type WorkspaceAgentDraft,
 } from "./ui/AgentWorkspace";
-import { MyAgents, type MyAgentCardData } from "./ui/MyAgents";
+import {
+  MyAgents,
+  invalidateRuntimeAgentCache,
+  type MyAgentCardData,
+} from "./ui/MyAgents";
 import { SearchView } from "./ui/Search";
 import {
   buildAgentEntries,
@@ -1021,6 +1025,9 @@ export default function App() {
   const [libraryRuntimePermissions, setLibraryRuntimePermissions] = useState<
     Record<string, { canDelete: boolean }>
   >({});
+  const [hiddenRuntimeIds, setHiddenRuntimeIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [runtimeUpdateTarget, setRuntimeUpdateTarget] = useState<{
     runtimeId: string;
     name: string;
@@ -1145,8 +1152,17 @@ export default function App() {
     );
     if (targets.length === 0) return;
 
+    const pendingRuntimeIds = new Set(targets.map((agent) => agent.runtimeId));
+    setHiddenRuntimeIds((current) => {
+      const next = new Set(current);
+      for (const runtimeId of pendingRuntimeIds) next.add(runtimeId);
+      return next;
+    });
+    invalidateRuntimeAgentCache(pendingRuntimeIds);
+
     const deletedRuntimeIds = new Set<string>();
     const deletedAgentIds = new Set<string>();
+    const failedRuntimeIds = new Set<string>();
     const failures: string[] = [];
     for (const agent of targets) {
       try {
@@ -1157,11 +1173,13 @@ export default function App() {
         deletedAgentIds.add(agent.id);
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause);
+        failedRuntimeIds.add(agent.runtimeId);
         failures.push(`${agent.label}: ${message}`);
       }
     }
 
     if (deletedRuntimeIds.size > 0) {
+      invalidateRuntimeAgentCache(deletedRuntimeIds);
       setConnections(loadConnections());
       setLibraryRuntimeIds((current) => {
         if (!current) return current;
@@ -1197,6 +1215,30 @@ export default function App() {
         setSessionId("");
         setAppName("");
       }
+      if (
+        agentDetailTarget?.runtime &&
+        deletedRuntimeIds.has(agentDetailTarget.runtime.runtimeId)
+      ) {
+        setCreateView(null);
+        setSkillCenter(false);
+        setAddAgent(false);
+        setAddMenu(false);
+        setSearchView(false);
+        setManageAgents(false);
+        setAgentDetailTarget(null);
+        setFocusedDeploymentTaskId("");
+        setFocusedWorkspaceAgentId("");
+        setMyAgents(true);
+        setError("");
+      }
+    }
+
+    if (failedRuntimeIds.size > 0) {
+      setHiddenRuntimeIds((current) => {
+        const next = new Set(current);
+        for (const runtimeId of failedRuntimeIds) next.delete(runtimeId);
+        return next;
+      });
     }
 
     if (failures.length > 0) {
@@ -1204,7 +1246,7 @@ export default function App() {
       const suffix = failures.length > 3 ? `；另有 ${failures.length - 3} 个失败` : "";
       throw new Error(`${failures.length} 个 Agent 删除失败：${shown}${suffix}`);
     }
-  }, [appName, userId]);
+  }, [agentDetailTarget, appName, userId]);
 
   const refreshAgentLibrary = useCallback(async () => {
     setAgentLibraryLoading(true);
@@ -3239,6 +3281,7 @@ export default function App() {
                 onUseAgent={connectMyAgent}
                 onViewAgentDetails={openMyAgentDetails}
                 connectedRuntimeId={connectedRuntimeId}
+                hiddenRuntimeIds={hiddenRuntimeIds}
               />
             ) : showManageAgents ? (
               <AgentWorkspace

@@ -11,6 +11,10 @@ const workspaceStyles = readFileSync(
   new URL("../src/ui/AgentWorkspace.css", import.meta.url),
   "utf8",
 );
+const appStyles = readFileSync(
+  new URL("../src/styles.css", import.meta.url),
+  "utf8",
+);
 const customCreateSource = readFileSync(
   new URL("../src/create/CustomCreate.tsx", import.meta.url),
   "utf8",
@@ -310,6 +314,10 @@ test("workspace keeps agent deletion in selection mode and the floating detail a
   assert.match(appSource, /const deleteWorkspaceAgents = useCallback/);
   assert.match(appSource, /await deleteRuntime\(agent\.runtimeId, agent\.region\)/);
   assert.doesNotMatch(appSource, /agent\.region \?\? "cn-beijing"/);
+  assert.match(
+    appSource,
+    /deletedRuntimeIds\.has\(agentDetailTarget\.runtime\.runtimeId\)[\s\S]*?setManageAgents\(false\)[\s\S]*?setAgentDetailTarget\(null\)[\s\S]*?setMyAgents\(true\)/,
+  );
   assert.match(appSource, /onDeleteAgents=\{deleteWorkspaceAgents\}/);
   assert.match(appSource, /const deleteWorkspaceDrafts = useCallback/);
   assert.match(appSource, /onDeleteDrafts=\{deleteWorkspaceDrafts\}/);
@@ -321,25 +329,76 @@ test("workspace keeps agent deletion in selection mode and the floating detail a
   assert.match(workspaceSource, /const \[selectedDraftIds, setSelectedDraftIds\] = useState<Set<string>>/);
   assert.match(workspaceSource, /selectedDeletableAgents/);
   assert.match(workspaceSource, /selectedDeletableDrafts/);
-  assert.match(workspaceSource, /window\.confirm\(confirmText\)/);
-  assert.match(workspaceSource, /await onDeleteAgents\(selectedDeletableAgents\)/);
-  assert.match(workspaceSource, /onDeleteDrafts\?\.\(selectedDeletableDrafts\)/);
+  const deleteSelectedStart = workspaceSource.indexOf("const deleteSelectedItems");
+  const deleteSingleAgentStart = workspaceSource.indexOf("const deleteSingleAgent");
+  const deleteSingleDraftStart = workspaceSource.indexOf("const deleteSingleDraft");
+  const createEvaluationGroupStart = workspaceSource.indexOf("const createEvaluationGroup");
+  assert.ok(deleteSelectedStart >= 0 && deleteSingleAgentStart > deleteSelectedStart);
+  assert.ok(deleteSingleDraftStart > deleteSingleAgentStart);
+  assert.ok(createEvaluationGroupStart > deleteSingleDraftStart);
+  assert.doesNotMatch(
+    workspaceSource.slice(deleteSelectedStart, createEvaluationGroupStart),
+    /window\.confirm/,
+  );
+  assert.match(workspaceSource, /const \[deleteConfirmTarget, setDeleteConfirmTarget\]/);
+  assert.match(workspaceSource, /createPortal\(/);
+  assert.match(workspaceSource, /function DeleteWarningIcon\(props: SVGProps<SVGSVGElement>\)/);
+  assert.match(workspaceSource, /function DialogCloseIcon\(props: SVGProps<SVGSVGElement>\)/);
+  assert.doesNotMatch(
+    workspaceSource.slice(0, workspaceSource.indexOf("} from \"lucide-react\"")),
+    /\bAlertTriangle\b|^\s*X,\s*$/m,
+  );
+  assert.match(workspaceSource, /role="alertdialog"/);
+  assert.match(workspaceSource, /aria-modal="true"/);
+  assert.match(workspaceSource, /aria-labelledby="aw-delete-confirm-title"/);
+  assert.match(workspaceSource, /aria-describedby="aw-delete-confirm-description"/);
+  assert.match(workspaceSource, /className="studio-confirm-backdrop"/);
+  assert.match(workspaceSource, /className="studio-confirm-dialog studio-confirm-dialog--danger"/);
+  assert.match(workspaceSource, /className="studio-confirm-head"/);
+  assert.match(workspaceSource, /className="studio-confirm-body"/);
+  assert.match(workspaceSource, /className="studio-confirm-actions"/);
+  assert.match(workspaceSource, /className="studio-confirm-primary"/);
+  assert.doesNotMatch(
+    workspaceSource.slice(workspaceSource.indexOf("deleteConfirmTarget && createPortal")),
+    /pp-confirm|code-browser/,
+  );
+  assert.match(workspaceSource, /setDeleteConfirmTarget\(\{[\s\S]*?kind: "selection"/);
+  assert.match(workspaceSource, /setDeleteConfirmTarget\(\{[\s\S]*?kind: "agent"/);
+  assert.match(workspaceSource, /setDeleteConfirmTarget\(\{[\s\S]*?kind: "draft"/);
+  assert.match(workspaceSource, /onClick=\{\(\) => void confirmDeleteTarget\(\)\}/);
+  assert.match(workspaceSource, /await onDeleteAgents\(agentsToDelete\)/);
+  assert.match(workspaceSource, /onDeleteDrafts\?\.\(draftsToDelete\)/);
   assert.match(workspaceSource, /aria-pressed=\{selectionMode \? isSelectedForDelete : undefined\}/);
   assert.match(workspaceSource, /删除所选/);
-  assert.match(workspaceSource, /const deleteSingleAgent = async/);
+  assert.match(workspaceSource, /const deleteSingleAgent = \(agent: AgentEntry\) =>/);
   assert.match(workspaceSource, /const deleteSingleDraft = /);
   assert.equal(workspaceSource.match(/aria-label="删除 Agent"/g)?.length, 1);
   assert.match(workspaceSource, /删除草稿/);
   assert.match(workspaceStyles, /\.aw-selection-toolbar/);
   assert.match(workspaceStyles, /\.aw-select-marker\.is-checked/);
   assert.match(workspaceStyles, /\.aw-head-delete/);
+  assert.doesNotMatch(workspaceStyles, /\.aw-delete-confirm/);
+  assert.match(appStyles, /\.studio-confirm-dialog\s*\{[\s\S]*?width:\s*min\(420px, calc\(100vw - 40px\)\)/);
+  assert.match(appStyles, /\.studio-confirm-head\s*\{[\s\S]*?flex:\s*0 0 58px/);
+  assert.match(appStyles, /\.studio-confirm-head\s*\{[\s\S]*?padding:\s*0 16px 0 18px/);
+  assert.match(appStyles, /\.studio-confirm-body\s*\{[\s\S]*?padding:\s*24px 20px/);
+  assert.match(
+    appStyles,
+    /\.studio-confirm-actions\s*\{[\s\S]*?padding:\s*12px 16px;[\s\S]*?border-top:\s*1px solid hsl\(var\(--border\)\)/,
+  );
+  assert.match(appStyles, /\.studio-confirm-close:focus-visible/);
+  assert.match(appStyles, /\.studio-confirm-dialog--danger \.studio-confirm-actions \.studio-confirm-primary/);
   assert.match(
     workspaceStyles,
     /\.aw-head-delete\.studio-update-action:hover:not\(:disabled\)[\s\S]*?color:\s*#fff;/,
   );
   assert.match(
     workspaceSource,
-    /className="aw-basic-actions"[\s\S]*?className="aw-update studio-update-action"[\s\S]*?className="aw-head-delete studio-update-action"/,
+    /className="aw-head-delete"[\s\S]*?aria-label="删除 Agent"/,
+  );
+  assert.doesNotMatch(
+    workspaceSource,
+    /className="aw-basic-actions"[\s\S]*?className="aw-head-delete studio-update-action"/,
   );
 });
 

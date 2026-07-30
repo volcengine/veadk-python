@@ -5967,6 +5967,191 @@ a.search-result { text-decoration: none; color: inherit; }
 }
 .confirm-btn--danger:hover { background: hsl(var(--destructive) / 0.9); }
 
+/* ---------- studio confirm dialog ---------- */
+.studio-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: hsl(var(--foreground) / 0.22);
+  backdrop-filter: blur(3px);
+  animation: studio-confirm-fade-in 140ms ease-out;
+}
+
+.studio-confirm-dialog {
+  width: min(420px, calc(100vw - 40px));
+  height: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--background));
+  box-shadow: 0 24px 64px hsl(var(--foreground) / 0.16);
+  animation: studio-confirm-rise-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.studio-confirm-head {
+  flex: 0 0 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 0 16px 0 18px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.studio-confirm-title-wrap {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.studio-confirm-title-icon {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: hsl(38 92% 50% / 0.12);
+  color: hsl(32 92% 38%);
+}
+
+.studio-confirm-title-icon svg,
+.studio-confirm-close svg {
+  width: 16px;
+  height: 16px;
+}
+
+.studio-confirm-title-wrap h2 {
+  min-width: 0;
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.studio-confirm-close {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.studio-confirm-close:hover:not(:disabled) {
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+}
+
+.studio-confirm-close:focus-visible,
+.studio-confirm-actions button:focus-visible {
+  outline: 2px solid hsl(var(--primary) / 0.34);
+  outline-offset: 2px;
+}
+
+.studio-confirm-close:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.studio-confirm-body {
+  padding: 24px 20px;
+}
+
+.studio-confirm-body p {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.studio-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid hsl(var(--border));
+}
+
+.studio-confirm-actions button {
+  min-width: 76px;
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.studio-confirm-actions button:hover:not(:disabled) {
+  background: hsl(var(--secondary));
+}
+
+.studio-confirm-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.studio-confirm-actions .studio-confirm-primary {
+  border-color: hsl(var(--primary));
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+
+.studio-confirm-actions .studio-confirm-primary:hover:not(:disabled) {
+  background: hsl(var(--primary) / 0.9);
+}
+
+.studio-confirm-dialog--danger .studio-confirm-title-icon {
+  background: hsl(var(--destructive) / 0.1);
+  color: hsl(var(--destructive));
+}
+
+.studio-confirm-dialog--danger .studio-confirm-actions .studio-confirm-primary {
+  border-color: hsl(var(--destructive));
+  background: hsl(var(--destructive));
+  color: #fff;
+}
+
+.studio-confirm-dialog--danger .studio-confirm-actions .studio-confirm-primary:hover:not(:disabled) {
+  background: hsl(var(--destructive) / 0.9);
+}
+
+@keyframes studio-confirm-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes studio-confirm-rise-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-confirm-backdrop,
+  .studio-confirm-dialog {
+    animation: none;
+  }
+}
+
 .app-toast {
   position: fixed;
   top: 20px;

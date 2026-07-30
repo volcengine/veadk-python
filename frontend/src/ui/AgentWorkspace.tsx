@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type SVGProps,
+} from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowRight,
   Check,
@@ -37,12 +45,71 @@ type EvaluationSection = "config" | "history";
 type CaseKind = "good" | "bad";
 
 type AgentCase = AgentFeedbackCase & { tag?: string };
+type DeleteConfirmTarget =
+  | {
+      kind: "selection";
+      title: string;
+      description: string;
+      confirmLabel: string;
+      agents: AgentEntry[];
+      drafts: WorkspaceAgentDraft[];
+    }
+  | {
+      kind: "agent";
+      title: string;
+      description: string;
+      confirmLabel: string;
+      agent: AgentEntry;
+    }
+  | {
+      kind: "draft";
+      title: string;
+      description: string;
+      confirmLabel: string;
+      draft: WorkspaceAgentDraft;
+    };
 
 interface EvaluationRun {
   id: string;
   createdAt: string;
   score: number;
   status: "completed";
+}
+
+function DeleteWarningIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <path d="M12 4.2 21 19H3L12 4.2Z" />
+      <path d="M12 9.4v4.2" />
+      <path d="M12 16.8h.01" />
+    </svg>
+  );
+}
+
+function DialogCloseIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <path d="m7 7 10 10" />
+      <path d="m17 7-10 10" />
+    </svg>
+  );
 }
 
 interface EvaluationGroup {
@@ -576,6 +643,8 @@ export function AgentWorkspace({
   const [selectedDraftIds, setSelectedDraftIds] = useState<Set<string>>(() => new Set());
   const [deletingAgents, setDeletingAgents] = useState(false);
   const [deleteError, setDeleteError] = useState("");
+  const [deleteConfirmTarget, setDeleteConfirmTarget] =
+    useState<DeleteConfirmTarget | null>(null);
   const [feedbackCases, setFeedbackCases] = useState<AgentCase[]>([]);
   const [feedbackSets, setFeedbackSets] = useState<AgentFeedbackSetSummary[]>([]);
   const [feedbackCasesLoading, setFeedbackCasesLoading] = useState(false);
@@ -588,6 +657,7 @@ export function AgentWorkspace({
   const [focusedCaseId, setFocusedCaseId] = useState("");
   const [expandedCaseIds, setExpandedCaseIds] = useState<Set<string>>(() => new Set());
   const suppressAgentClickRef = useRef(false);
+  const deleteCancelButtonRef = useRef<HTMLButtonElement>(null);
   const appliedFocusKeyRef = useRef("");
   const caseTableRef = useRef<HTMLDivElement | null>(null);
   const [evaluationGroups, setEvaluationGroups] = useState(DEFAULT_EVALUATION_GROUPS);
@@ -994,6 +1064,23 @@ export function AgentWorkspace({
     });
   }, [filteredDrafts]);
 
+  useEffect(() => {
+    if (!deleteConfirmTarget) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    deleteCancelButtonRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !deletingAgents) {
+        setDeleteConfirmTarget(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [deleteConfirmTarget, deletingAgents]);
+
   const cases = selectedAgent?.runtimeId ? feedbackCases : DEFAULT_CASES;
   const visibleCases = cases.filter((item) => {
     if (item.kind !== caseFilter) return false;
@@ -1211,35 +1298,62 @@ export function AgentWorkspace({
     setSelectionMode(false);
   };
 
-  const deleteSelectedItems = async () => {
+  const deleteSelectedItems = () => {
     if (selectedDeleteCount === 0 || deletingAgents) return;
     const runtimeCount = selectedDeletableAgents.length;
     const draftCount = selectedDeletableDrafts.length;
-    const confirmText = runtimeCount === 1 && draftCount === 0
-      ? `确定删除 Agent "${selectedDeletableAgents[0].label}"？该 Runtime 将被永久删除。`
-      : runtimeCount === 0 && draftCount === 1
-        ? `确定删除草稿 "${selectedDeletableDrafts[0].draft.name || "未命名 Agent"}"？`
-        : `确定删除选中的 ${selectedDeleteCount} 个项目？${runtimeCount > 0 ? `${runtimeCount} 个 Runtime 将被永久删除。` : ""}`;
-    if (!window.confirm(confirmText)) return;
+    setDeleteError("");
+    setDeleteConfirmTarget({
+      kind: "selection",
+      title: runtimeCount === 1 && draftCount === 0
+        ? "删除 Agent？"
+        : runtimeCount === 0 && draftCount === 1
+          ? "删除草稿？"
+          : "删除所选项目？",
+      description: runtimeCount === 1 && draftCount === 0
+        ? `"${selectedDeletableAgents[0].label}" 对应的云端 Runtime 将被永久删除，此操作不可撤销。`
+        : runtimeCount === 0 && draftCount === 1
+          ? `"${selectedDeletableDrafts[0].draft.name || "未命名 Agent"}" 将从本地草稿中删除。`
+          : `将删除选中的 ${selectedDeleteCount} 个项目。${runtimeCount > 0 ? `${runtimeCount} 个云端 Runtime 将被永久删除，此操作不可撤销。` : "草稿删除后无法恢复。"}`,
+      confirmLabel: runtimeCount === 0 && draftCount === 1 ? "删除草稿" : "删除所选",
+      agents: selectedDeletableAgents,
+      drafts: selectedDeletableDrafts,
+    });
+  };
+
+  const confirmDeleteTarget = async () => {
+    if (!deleteConfirmTarget || deletingAgents) return;
     setDeletingAgents(true);
     setDeleteError("");
     try {
-      if (selectedDeletableAgents.length > 0) {
+      if (deleteConfirmTarget.kind === "selection") {
+        const { agents: agentsToDelete, drafts: draftsToDelete } = deleteConfirmTarget;
+        if (agentsToDelete.length > 0) {
+          if (!onDeleteAgents) throw new Error("当前页面不支持删除已部署 Agent。");
+          await onDeleteAgents(agentsToDelete);
+        }
+        if (draftsToDelete.length > 0) {
+          onDeleteDrafts?.(draftsToDelete);
+        }
+        setSelectedAgentIds(new Set());
+        setSelectedDraftIds(new Set());
+        setSelectionMode(false);
+        if (agentsToDelete.some((agent) => agent.id === activeAgentId)) {
+          setActiveAgentId("");
+        }
+        if (draftsToDelete.some((item) => item.id === activeDraftId)) {
+          setActiveDraftId("");
+        }
+      } else if (deleteConfirmTarget.kind === "agent") {
         if (!onDeleteAgents) throw new Error("当前页面不支持删除已部署 Agent。");
-        await onDeleteAgents(selectedDeletableAgents);
+        await onDeleteAgents([deleteConfirmTarget.agent]);
+        if (activeAgentId === deleteConfirmTarget.agent.id) setActiveAgentId("");
+      } else {
+        if (!onDeleteDrafts) throw new Error("当前页面不支持删除草稿。");
+        onDeleteDrafts([deleteConfirmTarget.draft]);
+        if (activeDraftId === deleteConfirmTarget.draft.id) setActiveDraftId("");
       }
-      if (selectedDeletableDrafts.length > 0) {
-        onDeleteDrafts?.(selectedDeletableDrafts);
-      }
-      setSelectedAgentIds(new Set());
-      setSelectedDraftIds(new Set());
-      setSelectionMode(false);
-      if (selectedDeletableAgents.some((agent) => agent.id === activeAgentId)) {
-        setActiveAgentId("");
-      }
-      if (selectedDeletableDrafts.some((item) => item.id === activeDraftId)) {
-        setActiveDraftId("");
-      }
+      setDeleteConfirmTarget(null);
     } catch (cause) {
       setDeleteError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -1247,30 +1361,29 @@ export function AgentWorkspace({
     }
   };
 
-  const deleteSingleAgent = async (agent: AgentEntry) => {
+  const deleteSingleAgent = (agent: AgentEntry) => {
     if (!onDeleteAgents || agent.canDelete !== true || deletingAgents) return;
-    if (!window.confirm(`确定删除 Agent "${agent.label}"？该 Runtime 将被永久删除。`)) {
-      return;
-    }
-    setDeletingAgents(true);
     setDeleteError("");
-    try {
-      await onDeleteAgents([agent]);
-      if (activeAgentId === agent.id) setActiveAgentId("");
-    } catch (cause) {
-      setDeleteError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setDeletingAgents(false);
-    }
+    setDeleteConfirmTarget({
+      kind: "agent",
+      title: "删除 Agent？",
+      description: `"${agent.label}" 对应的云端 Runtime 将被永久删除，此操作不可撤销。`,
+      confirmLabel: "删除 Agent",
+      agent,
+    });
   };
 
   const deleteSingleDraft = (draftItem: WorkspaceAgentDraft) => {
     if (!onDeleteDrafts || deletingAgents) return;
     const name = draftItem.draft.name || "未命名 Agent";
-    if (!window.confirm(`确定删除草稿 "${name}"？`)) return;
     setDeleteError("");
-    onDeleteDrafts([draftItem]);
-    if (activeDraftId === draftItem.id) setActiveDraftId("");
+    setDeleteConfirmTarget({
+      kind: "draft",
+      title: "删除草稿？",
+      description: `"${name}" 将从本地草稿中删除。`,
+      confirmLabel: "删除草稿",
+      draft: draftItem,
+    });
   };
 
   const createEvaluationGroup = () => {
@@ -1305,6 +1418,7 @@ export function AgentWorkspace({
   };
 
   return (
+    <>
     <div className={`aw-root${detailOnly ? " is-detail-only" : ""}`}>
       <nav className="aw-view-tabs" aria-label="智能体工作台">
         <button
@@ -1679,7 +1793,7 @@ export function AgentWorkspace({
                 </div>
                 <p>{draft.description || (loadingAgentInfo || (detailOnly && !detailAgentInfoResolved) ? "正在读取智能体信息…" : "暂无描述")}</p>
               </div>
-              {(selectedDraft || selectedAgentUpdateDraft) && (
+              {(selectedDraft || selectedAgentUpdateDraft || selectedAgent?.canDelete) && (
                 <div className="aw-head-actions">
                   {(selectedDraft || selectedAgentUpdateDraft) && (
                     <button
@@ -1695,6 +1809,19 @@ export function AgentWorkspace({
                     >
                       <Trash2 aria-hidden />
                       <span>删除草稿</span>
+                    </button>
+                  )}
+                  {selectedAgent?.canDelete && (
+                    <button
+                      type="button"
+                      className="aw-head-delete"
+                      onClick={() => void deleteSingleAgent(selectedAgent)}
+                      disabled={deletingAgents}
+                      aria-label="删除 Agent"
+                      title="删除 Agent"
+                    >
+                      <Trash2 aria-hidden />
+                      <span>{deletingAgents ? "删除中…" : "删除 Agent"}</span>
                     </button>
                   )}
                 </div>
@@ -1991,35 +2118,6 @@ export function AgentWorkspace({
                 >
                   {selectedDraft || selectedAgentUpdateDraft ? "继续编辑" : "更新"}
                 </button>
-                {(selectedDraft || selectedAgentUpdateDraft) && (
-                  <button
-                    type="button"
-                    className="aw-head-delete studio-update-action"
-                    onClick={() => {
-                      const draftToDelete = selectedDraft ?? selectedAgentUpdateDraft;
-                      if (draftToDelete) deleteSingleDraft(draftToDelete);
-                    }}
-                    disabled={deletingAgents}
-                    aria-label="删除草稿"
-                    title="删除草稿"
-                  >
-                    <Trash2 aria-hidden />
-                    <span>删除草稿</span>
-                  </button>
-                )}
-                {selectedAgent?.canDelete && (
-                  <button
-                    type="button"
-                    className="aw-head-delete studio-update-action"
-                    onClick={() => void deleteSingleAgent(selectedAgent)}
-                    disabled={deletingAgents}
-                    aria-label="删除 Agent"
-                    title="删除 Agent"
-                  >
-                    <Trash2 aria-hidden />
-                    <span>{deletingAgents ? "删除中…" : "删除 Agent"}</span>
-                  </button>
-                )}
               </div>
             )}
           </main>
@@ -2032,6 +2130,71 @@ export function AgentWorkspace({
         )}
       </div>
     </div>
+    {deleteConfirmTarget && createPortal(
+      <div
+        className="studio-confirm-backdrop"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget && !deletingAgents) {
+            setDeleteConfirmTarget(null);
+          }
+        }}
+      >
+        <section
+          className="studio-confirm-dialog studio-confirm-dialog--danger"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="aw-delete-confirm-title"
+          aria-describedby="aw-delete-confirm-description"
+          aria-busy={deletingAgents || undefined}
+        >
+          <header className="studio-confirm-head">
+            <div className="studio-confirm-title-wrap">
+              <span
+                className="studio-confirm-title-icon"
+                aria-hidden="true"
+              >
+                <DeleteWarningIcon />
+              </span>
+              <h2 id="aw-delete-confirm-title">{deleteConfirmTarget.title}</h2>
+            </div>
+            <button
+              type="button"
+              className="studio-confirm-close"
+              onClick={() => setDeleteConfirmTarget(null)}
+              disabled={deletingAgents}
+              aria-label="关闭删除确认"
+            >
+              <DialogCloseIcon />
+            </button>
+          </header>
+          <div className="studio-confirm-body">
+            <p id="aw-delete-confirm-description">
+              {deleteConfirmTarget.description}
+            </p>
+          </div>
+          <footer className="studio-confirm-actions">
+            <button
+              ref={deleteCancelButtonRef}
+              type="button"
+              onClick={() => setDeleteConfirmTarget(null)}
+              disabled={deletingAgents}
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              className="studio-confirm-primary"
+              onClick={() => void confirmDeleteTarget()}
+              disabled={deletingAgents}
+            >
+              {deletingAgents ? "删除中..." : deleteConfirmTarget.confirmLabel}
+            </button>
+          </footer>
+        </section>
+      </div>,
+      document.body,
+    )}
+    </>
   );
 }
 
