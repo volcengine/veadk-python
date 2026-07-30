@@ -76,7 +76,12 @@ def _load_run_sandbox_agent_module():
         return module
 
 
-def _load_execute_skills_module(run_sandbox_agent):
+def _load_execute_skills_module(
+    *,
+    ensure_agentkit_session_endpoint=lambda **_kwargs: "",
+    run_sandbox_agent=lambda **_kwargs: "",
+    wait_for_skill_api_health=lambda **_kwargs: None,
+):
     module_path = (
         Path(__file__).resolve().parents[3]
         / "veadk"
@@ -101,12 +106,17 @@ def _load_execute_skills_module(run_sandbox_agent):
     fake_agentkit = types.ModuleType("veadk.tools.builtin_tools._agentkit")
     fake_agentkit.get_agentkit_account_id = lambda _state: "test-account"
     fake_agentkit.resolve_agentkit_tool_id = lambda _name: "test-tool"
+    fake_agentkit.ensure_agentkit_session_endpoint = ensure_agentkit_session_endpoint
     fake_runner = types.ModuleType("veadk.tools.builtin_tools.run_sandbox_agent")
     fake_runner.run_sandbox_agent = run_sandbox_agent
     fake_utils = types.ModuleType("veadk.utils")
     fake_utils.__path__ = []  # type: ignore[attr-defined]
     fake_logger = types.ModuleType("veadk.utils.logger")
-    fake_logger.get_logger = lambda _name: object()
+    fake_logger.get_logger = lambda _name: types.SimpleNamespace(
+        debug=lambda *_args, **_kwargs: None,
+        warning=lambda *_args, **_kwargs: None,
+        error=lambda *_args, **_kwargs: None,
+    )
 
     stub_modules = {
         "google": fake_google,
@@ -129,6 +139,8 @@ def _load_execute_skills_module(run_sandbox_agent):
         assert spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+        if wait_for_skill_api_health is not None:
+            module._wait_for_skill_api_health = wait_for_skill_api_health
         return module
 
 
@@ -188,28 +200,350 @@ class TestMergeExecutionEnvVars(unittest.TestCase):
         self.assertIn('srv_pythonpath = env.get("SRV_PYTHONPATH")', code)
 
 
-class TestExecuteSkillsEnvVars(unittest.TestCase):
-    def test_passes_custom_env_vars_to_each_sandbox_execution(self):
+class TestExecuteSkillsSkillApi(unittest.TestCase):
+    def _tool_context(self):
+        invocation_context = types.SimpleNamespace(
+            session=types.SimpleNamespace(id="session-1"),
+            agent=types.SimpleNamespace(name="agent"),
+            user_id="user",
+        )
+        return types.SimpleNamespace(
+            state={"TIP_TOKEN_KEY": "tip-from-state"},
+            _invocation_context=invocation_context,
+        )
+
+    def test_prefers_new_skill_execute_api_when_endpoint_is_available(self):
+        captured_requests = []
+        health_endpoints = []
+        session_kwargs = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self):
+                return b'{"content": "api result"}'
+
+        def fake_urlopen(request, timeout=None):
+            captured_requests.append((request, timeout))
+            return FakeResponse()
+
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **kwargs: (
+                session_kwargs.append(kwargs) or "https://sandbox.test"
+            ),
+            wait_for_skill_api_health=lambda **kwargs: health_endpoints.append(
+                kwargs["endpoint"]
+            ),
+        )
+
+        with patch.object(module.request, "urlopen", fake_urlopen):
+            result = module.execute_skills("do work", tool_context=self._tool_context())
+
+        self.assertEqual(result, "api result")
+        self.assertTrue(session_kwargs[0]["wait_until_ready"])
+        self.assertEqual(["https://sandbox.test"], health_endpoints)
+        self.assertEqual(1, len(captured_requests))
+        request_obj, timeout = captured_requests[0]
+        self.assertEqual("https://sandbox.test/v1/skills/execute", request_obj.full_url)
+        self.assertEqual(900, timeout)
+        self.assertEqual("POST", request_obj.get_method())
+        self.assertEqual("tip-from-state", request_obj.headers["X-tip-token-key"])
+        self.assertIn(b'"prompt": "do work"', request_obj.data)
+
+    def test_health_check_retries_502_until_upstream_is_ready(self):
+        attempts = []
+
+        class HealthyResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+        class ErrorResponse:
+            def read(self):
+                return b"bad gateway"
+
+            def close(self):
+                return None
+
+        module = _load_execute_skills_module(wait_for_skill_api_health=None)
+
+        def fake_urlopen(req, **_kwargs):
+            attempts.append((req.full_url, req.get_method()))
+            if len(attempts) == 1:
+                raise module.error.HTTPError(
+                    url=req.full_url,
+                    code=502,
+                    msg="Bad Gateway",
+                    hdrs={},
+                    fp=ErrorResponse(),
+                )
+            return HealthyResponse()
+
+        with (
+            patch.object(module.request, "urlopen", fake_urlopen),
+            patch.object(module.time, "sleep") as sleep,
+        ):
+            module._wait_for_skill_api_health(endpoint="https://sandbox.test")
+
+        self.assertEqual(
+            [
+                ("https://sandbox.test/v1/skills/healthz", "GET"),
+                ("https://sandbox.test/v1/skills/healthz", "GET"),
+            ],
+            attempts,
+        )
+        sleep.assert_called_once_with(1.0)
+
+    def test_health_check_allows_images_without_health_endpoint(self):
+        class NotFoundResponse:
+            def read(self):
+                return b"not found"
+
+            def close(self):
+                return None
+
+        module = _load_execute_skills_module(wait_for_skill_api_health=None)
+
+        def fake_urlopen(req, **_kwargs):
+            raise module.error.HTTPError(
+                url=req.full_url,
+                code=404,
+                msg="Not Found",
+                hdrs={},
+                fp=NotFoundResponse(),
+            )
+
+        with patch.object(module.request, "urlopen", fake_urlopen):
+            module._wait_for_skill_api_health(endpoint="https://sandbox.test")
+
+    def test_env_vars_use_legacy_runcode_execution(self):
         captured_kwargs = {}
 
         def fake_run_sandbox_agent(**kwargs):
             captured_kwargs.update(kwargs)
-            return "done"
+            return "legacy result"
 
-        module = _load_execute_skills_module(fake_run_sandbox_agent)
-        tool_context = types.SimpleNamespace(state={})
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: self.fail(
+                "Skill API must not be used when env_vars are provided"
+            ),
+            run_sandbox_agent=fake_run_sandbox_agent,
+        )
 
         result = module.execute_skills(
             "do work",
-            tool_context=tool_context,
+            tool_context=self._tool_context(),
             env_vars={"CUSTOM_VALUE": "custom", "TOS_SKILLS_DIR": ""},
         )
 
-        self.assertEqual(result, "done")
+        self.assertEqual(result, "legacy result")
         self.assertEqual(
-            captured_kwargs["extra_env_vars"],
             {"CUSTOM_VALUE": "custom", "TOS_SKILLS_DIR": ""},
+            captured_kwargs["extra_env_vars"],
         )
+
+    def test_skill_api_url_preserves_agentkit_endpoint_query_auth(self):
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "",
+        )
+
+        self.assertEqual(
+            "https://sandbox.test/v1/skills/execute?faasInstanceName=inst&Authorization=key",
+            module._skill_api_url(
+                "https://sandbox.test/?faasInstanceName=inst&Authorization=key",
+                "/v1/skills/execute",
+            ),
+        )
+
+    def test_requires_sandbox_upgrade_when_skill_api_returns_404(self):
+        class NotFoundResponse:
+            def read(self):
+                return b"not found"
+
+            def close(self):
+                return None
+
+        def fake_urlopen(_request, **_kwargs):
+            raise module.error.HTTPError(
+                url="https://sandbox.test/v1/skills/execute",
+                code=404,
+                msg="Not Found",
+                hdrs={},
+                fp=NotFoundResponse(),
+            )
+
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test",
+        )
+
+        with patch.object(module.request, "urlopen", fake_urlopen):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"HTTP 404.*(?:升级|upgrade).*Skill",
+            ):
+                module.execute_skills("do work", tool_context=self._tool_context())
+
+    def test_requires_sandbox_upgrade_when_skill_api_returns_405(self):
+        class MethodNotAllowedResponse:
+            def read(self):
+                return b"method not allowed"
+
+            def close(self):
+                return None
+
+        def fake_urlopen(_request, **_kwargs):
+            raise module.error.HTTPError(
+                url="https://sandbox.test/v1/skills/execute",
+                code=405,
+                msg="Method Not Allowed",
+                hdrs={},
+                fp=MethodNotAllowedResponse(),
+            )
+
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test",
+        )
+
+        with patch.object(module.request, "urlopen", fake_urlopen):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"HTTP 405.*(?:升级|upgrade).*Skill",
+            ):
+                module.execute_skills("do work", tool_context=self._tool_context())
+
+    def test_raises_runtime_error_when_session_endpoint_is_unavailable(self):
+        def raise_endpoint_error(**_kwargs):
+            raise RuntimeError("session unsupported")
+
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=raise_endpoint_error,
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError, r"AgentKit session endpoint is not available"
+        ):
+            module.execute_skills("do work", tool_context=self._tool_context())
+
+    def test_missing_tool_context_raises_value_error(self):
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: self.fail(
+                "Skill API requires a tool_context"
+            ),
+        )
+
+        with self.assertRaisesRegex(ValueError, r"tool_context is required"):
+            module.execute_skills("do work", tool_context=None)
+
+    def test_non_compatibility_skill_api_http_error_is_not_swallowed(self):
+        class ServerErrorResponse:
+            def read(self):
+                return b"internal error"
+
+            def close(self):
+                return None
+
+        def fake_urlopen(_request, **_kwargs):
+            raise module.error.HTTPError(
+                url="https://sandbox.test/v1/skills/execute",
+                code=500,
+                msg="Internal Server Error",
+                hdrs={},
+                fp=ServerErrorResponse(),
+            )
+
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test",
+        )
+
+        with patch.object(module.request, "urlopen", fake_urlopen):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 500: internal error"):
+                module.execute_skills("do work", tool_context=self._tool_context())
+
+    def test_stream_mode_aggregates_text_chunks_from_skill_api_sse(self):
+        sse_body = (
+            "event: chunk\n"
+            'data: {"request_id":"req_1","type":"progress","content":"started","metadata":{}}\n\n'
+            "event: chunk\n"
+            'data: {"request_id":"req_1","type":"text","content":"hello ","metadata":{}}\n\n'
+            "event: chunk\n"
+            'data: {"request_id":"req_1","type":"text","content":"world","metadata":{}}\n\n'
+            "event: done\n"
+            'data: {"request_id":"req_1","type":"progress","content":"done","metadata":{}}\n\n'
+        ).encode()
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self):
+                raise AssertionError("stream response must not be buffered with read()")
+
+            def __iter__(self):
+                return iter(sse_body.splitlines(keepends=True))
+
+        captured_urls = []
+
+        def fake_urlopen(request, **_kwargs):
+            captured_urls.append(request.full_url)
+            return FakeResponse()
+
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test/",
+        )
+
+        with patch.object(module.request, "urlopen", fake_urlopen):
+            result = module.execute_skills(
+                "do work",
+                tool_context=self._tool_context(),
+                prefer_stream=True,
+            )
+
+        self.assertEqual(result, "hello world")
+        self.assertEqual(["https://sandbox.test/v1/skills/stream"], captured_urls)
+
+    def test_stream_mode_raises_skill_api_error_event(self):
+        sse_body = (
+            "event: error\n"
+            'data: {"request_id":"req_1","type":"text","content":"skill failed","metadata":{}}\n\n'
+        ).encode()
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self):
+                raise AssertionError("stream response must not be buffered with read()")
+
+            def __iter__(self):
+                return iter(sse_body.splitlines(keepends=True))
+
+        module = _load_execute_skills_module(
+            ensure_agentkit_session_endpoint=lambda **_kwargs: "https://sandbox.test",
+        )
+
+        with patch.object(
+            module.request,
+            "urlopen",
+            lambda *_args, **_kwargs: FakeResponse(),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "skill failed"):
+                module.execute_skills(
+                    "do work",
+                    tool_context=self._tool_context(),
+                    prefer_stream=True,
+                )
 
 
 if __name__ == "__main__":
