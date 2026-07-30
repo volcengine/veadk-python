@@ -64,6 +64,8 @@ test("renders only account-backed agents and never ships placeholder cards", () 
 });
 
 test("offers the existing create action for the active agent type", () => {
+  assert.match(pageSource, /canCreate: boolean/);
+  assert.match(pageSource, /\{canCreate && \(/);
   assert.match(pageSource, /activeType === "general"[\s\S]*?onCreateAgent/);
   assert.match(pageSource, /activeType === "codex" \? onCreateCodexAgent : undefined/);
   assert.match(pageSource, /className="my-agent-add"/);
@@ -102,9 +104,10 @@ test("creation time remains compact without data-plane metadata", () => {
   assert.match(pageStyles, /\.my-agent-created-at dd\s*\{[\s\S]*?font-weight: 400/);
 });
 
-test("loads owned runtimes into the general agents section", () => {
+test("loads the runtime scope granted to the current role", () => {
   assert.match(pageSource, /getRuntimes/);
-  assert.match(pageSource, /scope: "mine"/);
+  assert.match(pageSource, /runtimeScope: RuntimeScope/);
+  assert.match(pageSource, /scope: runtimeScope/);
   assert.match(pageSource, /const \[region, setRegion\] = useState<RuntimeRegion>\("cn-beijing"\)/);
   assert.match(pageSource, /region,\s*pageSize: RUNTIME_PAGE_SIZE/);
   assert.doesNotMatch(pageSource, /region: "all"/);
@@ -118,13 +121,25 @@ test("loads owned runtimes into the general agents section", () => {
   assert.match(pageSource, /onList\(page\.runtimes\.map\(runtimeToAgent\)\)/);
   assert.match(pageSource, /runtimeRequestRef\.current !== requestId/);
   assert.match(pageSource, /const runtimePageRequests = new Map/);
-  assert.match(pageSource, /const requestKey = `\$\{region\}:\$\{nextToken\}`/);
+  assert.match(pageSource, /const requestKey = `\$\{runtimeScope\}:\$\{region\}:\$\{nextToken\}`/);
   assert.match(pageSource, /runtimePageRequests\.get\(requestKey\)/);
   assert.match(pageSource, /runtimePageRequests\.set\(requestKey, request\)/);
   assert.match(pageSource, /const RUNTIME_PAGE_CACHE_TTL_MS = 30_000/);
   assert.match(pageSource, /runtimePageCache\.get\(requestKey\)/);
   assert.match(pageSource, /runtimePageCache\.set\(requestKey/);
   assert.match(pageSource, /setRuntimeAgents\(\(current\) => reset \? agents : \[\.\.\.current, \.\.\.agents\]\)/);
+  assert.match(appSource, /<MyAgents[\s\S]*?runtimeScope=\{access\.capabilities\.runtimeScope\}/);
+  assert.match(appSource, /const grantedRuntimeScope = access\?\.capabilities\.runtimeScope \?\? "mine"/);
+  assert.match(appSource, /const refreshAgentLibrary[\s\S]*?scope: grantedRuntimeScope/);
+});
+
+test("marks runtimes created by the administrator", () => {
+  assert.match(pageSource, /isMine\?: boolean/);
+  assert.match(pageSource, /isMine: runtime\.isMine/);
+  assert.match(pageSource, /showOwnership=\{runtimeScope === "all"\}/);
+  assert.match(pageSource, /showOwnership && agent\.isMine/);
+  assert.match(pageSource, /className="runtime-owner-badge"[\s\S]*?>我创建的</);
+  assert.match(appSource, /canCreate=\{canCreateAgents\}/);
 });
 
 test("hides deleted Runtime cards and invalidates stale Runtime pages", () => {

@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SVGProps } from "react";
 
-import { getRuntimeAgentInfo, getRuntimes, type CloudRuntime } from "../adk/client";
+import {
+  getRuntimeAgentInfo,
+  getRuntimes,
+  type CloudRuntime,
+  type RuntimeScope,
+} from "../adk/client";
 import "./MyAgents.css";
 
 export interface MyAgentCardData {
@@ -10,6 +15,7 @@ export interface MyAgentCardData {
   name: string;
   description: string;
   createdAt: string;
+  isMine?: boolean;
   runtime?: {
     runtimeId: string;
     region: string;
@@ -117,6 +123,7 @@ function runtimeToAgent(runtime: CloudRuntime): MyAgentCardData {
     name: runtime.name,
     description: runtime.name,
     createdAt: formatCreatedAt(runtime.createdAt ?? ""),
+    isMine: runtime.isMine,
     runtime: {
       runtimeId: runtime.runtimeId,
       region: runtime.region,
@@ -127,11 +134,12 @@ function runtimeToAgent(runtime: CloudRuntime): MyAgentCardData {
 }
 
 async function loadRuntimeAgents(
+  runtimeScope: RuntimeScope,
   region: RuntimeRegion,
   nextToken: string,
   onList: (agents: MyAgentCardData[]) => void,
 ): Promise<string> {
-  const requestKey = `${region}:${nextToken}`;
+  const requestKey = `${runtimeScope}:${region}:${nextToken}`;
   const cached = runtimePageCache.get(requestKey);
   if (cached && cached.expiresAt > Date.now()) {
     onList(cached.page.runtimes.map(runtimeToAgent));
@@ -141,7 +149,7 @@ async function loadRuntimeAgents(
   let request = runtimePageRequests.get(requestKey);
   if (!request) {
     request = getRuntimes({
-      scope: "mine",
+      scope: runtimeScope,
       region,
       pageSize: RUNTIME_PAGE_SIZE,
       nextToken,
@@ -168,6 +176,7 @@ async function loadRuntimeAgents(
           name: info.name || runtime.name,
           description: info.description || runtime.name,
           createdAt: formatCreatedAt(runtime.createdAt ?? ""),
+          isMine: runtime.isMine,
           runtime: {
             runtimeId: runtime.runtimeId,
             region: runtime.region,
@@ -190,12 +199,14 @@ function AgentCard({
   onViewDetails,
   connecting,
   connected,
+  showOwnership,
 }: {
   agent: MyAgentCardData;
   onUse?: (agent: MyAgentCardData) => Promise<void>;
   onViewDetails?: (agent: MyAgentCardData) => void;
   connecting?: boolean;
   connected?: boolean;
+  showOwnership?: boolean;
 }) {
   return (
     <article className="my-agent-card">
@@ -207,7 +218,12 @@ function AgentCard({
         aria-label={`查看 ${agent.name} 详情`}
       >
         <span className="my-agent-card-copy">
-          <h3>{agent.name}</h3>
+          <span className="my-agent-card-title">
+            <h3>{agent.name}</h3>
+            {showOwnership && agent.isMine && (
+              <span className="runtime-owner-badge">我创建的</span>
+            )}
+          </span>
           <dl className="my-agent-meta">
             <div className="my-agent-created-at">
               <dt>创建时间</dt>
@@ -232,6 +248,8 @@ function AgentCard({
 }
 
 export interface MyAgentsProps {
+  canCreate: boolean;
+  runtimeScope: RuntimeScope;
   onCreateAgent: (region: RuntimeRegion) => void;
   onCreateCodexAgent: () => void;
   onUseAgent: (agent: MyAgentCardData) => Promise<void>;
@@ -241,6 +259,8 @@ export interface MyAgentsProps {
 }
 
 export function MyAgents({
+  canCreate,
+  runtimeScope,
   onCreateAgent,
   onCreateCodexAgent,
   onUseAgent,
@@ -265,7 +285,7 @@ export function MyAgents({
     const requestId = ++runtimeRequestRef.current;
     setLoadingRuntimes(true);
     setRuntimeError("");
-    return loadRuntimeAgents(region, token, (agents) => {
+    return loadRuntimeAgents(runtimeScope, region, token, (agents) => {
       if (runtimeRequestRef.current !== requestId) return;
       setRuntimeAgents((current) => reset ? agents : [...current, ...agents]);
     })
@@ -279,7 +299,7 @@ export function MyAgents({
       .finally(() => {
         if (runtimeRequestRef.current === requestId) setLoadingRuntimes(false);
       });
-  }, [region]);
+  }, [region, runtimeScope]);
 
   useEffect(() => {
     setRuntimeAgents([]);
@@ -349,9 +369,9 @@ export function MyAgents({
   const emptyMessage = activeType === "openclaw" || activeType === "hermes"
     ? "暂未开放"
     : query.trim() ? "没有匹配的智能体" : `${activeLabel}暂无内容`;
-  const createAgent = activeType === "general"
+  const createAgent = canCreate && activeType === "general"
     ? () => onCreateAgent(region)
-    : activeType === "codex" ? onCreateCodexAgent : undefined;
+    : canCreate && activeType === "codex" ? onCreateCodexAgent : undefined;
 
   return (
     <div className="my-agents-page">
@@ -409,7 +429,11 @@ export function MyAgents({
               )}
             </div>
           </div>
-          <p>在此处浏览您的所有智能体</p>
+          <p>
+            {runtimeScope === "all"
+              ? "在此处浏览所有智能体"
+              : "在此处浏览您的所有智能体"}
+          </p>
         </div>
         <label className="my-agent-search">
           <SearchIcon />
@@ -437,15 +461,17 @@ export function MyAgents({
             </button>
           ))}
         </nav>
-        <button
-          type="button"
-          className="my-agent-add"
-          disabled={!createAgent}
-          onClick={() => createAgent?.()}
-        >
-          <AddIcon />
-          {createLabel}
-        </button>
+        {canCreate && (
+          <button
+            type="button"
+            className="my-agent-add"
+            disabled={!createAgent}
+            onClick={() => createAgent?.()}
+          >
+            <AddIcon />
+            {createLabel}
+          </button>
+        )}
       </div>
 
       <section
@@ -465,7 +491,7 @@ export function MyAgents({
           </div>
         ) : showEmpty ? (
           <div className="my-agent-empty">
-            {!query.trim() && activeType === "general" ? (
+            {!query.trim() && activeType === "general" && canCreate ? (
               <p>
                 暂无智能体，
                 <button
@@ -493,6 +519,7 @@ export function MyAgents({
                 onViewDetails={onViewAgentDetails}
                 connecting={agent.id === connectingAgentId}
                 connected={agent.runtime?.runtimeId === connectedRuntimeId}
+                showOwnership={runtimeScope === "all"}
               />
             ))}
           </div>
