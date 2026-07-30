@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for Studio's temporary AgentKit Sandbox conversations."""
+"""Tests for Studio's reusable AgentKit Sandbox Sessions."""
 
 from __future__ import annotations
 
@@ -47,16 +47,49 @@ class _FakeGateway:
         self.tool_ids: list[str] = []
         self.deleted: list[SandboxCloudSession] = []
         self.thread_ids: list[str | None] = []
+        self.sessions: dict[str, SandboxCloudSession] = {
+            "remote-existing": SandboxCloudSession(
+                tool_id="tool-studio",
+                instance_id="remote-existing",
+                user_session_id="existing-agent",
+                endpoint="https://sandbox.example/existing?Authorization=secret",
+                region="cn-beijing",
+                status="Ready",
+                created_at="2026-07-30T08:00:00Z",
+                expire_at="2026-07-30T16:00:00Z",
+                tool_type="CodeEnv",
+            )
+        }
+
+    async def list_sessions(self, tool_id: str) -> list[SandboxCloudSession]:
+        self.tool_ids.append(tool_id)
+        return [
+            session for session in self.sessions.values() if session.tool_id == tool_id
+        ]
+
+    async def get_session(self, tool_id: str, session_id: str) -> SandboxCloudSession:
+        self.tool_ids.append(tool_id)
+        session = self.sessions.get(session_id)
+        if session is None or session.tool_id != tool_id:
+            raise SandboxSessionNotFoundError("AgentKit Session 不存在或已过期。")
+        return session
 
     async def create_session(self, tool_id: str) -> SandboxCloudSession:
         self.created += 1
         self.tool_ids.append(tool_id)
-        return SandboxCloudSession(
+        session = SandboxCloudSession(
             tool_id=tool_id,
             instance_id=f"remote-{self.created}",
             user_session_id=f"user-{self.created}",
             endpoint="https://sandbox.example/path?Authorization=secret",
+            region="cn-beijing",
+            status="Ready",
+            created_at="2026-07-30T09:00:00Z",
+            expire_at="2026-07-30T17:00:00Z",
+            tool_type="CodeEnv",
         )
+        self.sessions[session.instance_id] = session
+        return session
 
     async def delete_session(self, session: SandboxCloudSession) -> None:
         self.deleted.append(session)
@@ -105,32 +138,61 @@ def _app(gateway: _FakeGateway, tool_id: str | None = "tool-studio") -> FastAPI:
     return app
 
 
-def test_sandbox_routes_start_stream_and_delete_without_exposing_endpoint() -> None:
+def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
     gateway = _FakeGateway()
     with TestClient(_app(gateway)) as client:
+        listed = client.get("/web/sandbox/sessions", headers={"X-Test-User": "alice"})
         create = client.post("/web/sandbox/sessions", headers={"X-Test-User": "alice"})
 
         assert create.status_code == 200
-        assert create.json()["status"] == "ready"
+        assert create.json()["status"] == "Ready"
         assert "endpoint" not in create.json()
         assert "secret" not in create.text
         session_id = create.json()["sessionId"]
+        not_connected = client.post(
+            f"/web/sandbox/sessions/{session_id}/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "not connected yet"},
+        )
+        connected = client.post(
+            "/web/sandbox/sessions/remote-existing/connect",
+            headers={"X-Test-User": "alice"},
+        )
 
         first = client.post(
-            f"/web/sandbox/sessions/{session_id}/messages",
+            "/web/sandbox/sessions/remote-existing/messages",
             headers={"X-Test-User": "alice"},
             json={"message": "hello"},
         )
         second = client.post(
-            f"/web/sandbox/sessions/{session_id}/messages",
+            "/web/sandbox/sessions/remote-existing/messages",
             headers={"X-Test-User": "alice"},
             json={"message": "again"},
         )
-        deleted = client.delete(
-            f"/web/sandbox/sessions/{session_id}",
+        disconnected = client.delete(
+            "/web/sandbox/sessions/remote-existing",
             headers={"X-Test-User": "alice"},
         )
 
+    assert listed.status_code == 200
+    assert listed.json() == {
+        "sessions": [
+            {
+                "sessionId": "remote-existing",
+                "userSessionId": "existing-agent",
+                "status": "Ready",
+                "createdAt": "2026-07-30T08:00:00Z",
+                "expireAt": "2026-07-30T16:00:00Z",
+                "toolType": "CodeEnv",
+                "region": "cn-beijing",
+            }
+        ]
+    }
+    assert connected.status_code == 200
+    assert connected.json()["sessionId"] == "remote-existing"
+    assert "endpoint" not in connected.json()
+    assert "secret" not in connected.text
+    assert not_connected.status_code == 404
     assert first.status_code == 200
     assert "event: activity" in first.text
     assert '"kind": "thinking"' in first.text
@@ -140,9 +202,9 @@ def test_sandbox_routes_start_stream_and_delete_without_exposing_endpoint() -> N
     assert "event: done" in first.text
     assert second.status_code == 200
     assert gateway.thread_ids == [None, "thread-1"]
-    assert deleted.json() == {"deleted": True}
-    assert [item.instance_id for item in gateway.deleted] == ["remote-1"]
-    assert gateway.tool_ids == ["tool-studio"]
+    assert disconnected.json() == {"disconnected": True}
+    assert gateway.deleted == []
+    assert session_id == "remote-1"
 
 
 def test_sandbox_capabilities_report_configured_tool(
@@ -180,7 +242,7 @@ async def test_sandbox_start_requires_preconfigured_chat_tool(
     service = SandboxConversationService(gateway)
 
     with pytest.raises(SandboxConfigurationError, match="管理员未配置"):
-        await service.start("alice")
+        await service.create("alice")
 
     assert gateway.created == 0
 
@@ -254,13 +316,18 @@ def test_sandbox_route_hides_sessions_owned_by_another_user() -> None:
     with TestClient(_app(gateway)) as client:
         created = client.post("/web/sandbox/sessions", headers={"X-Test-User": "alice"})
         session_id = created.json()["sessionId"]
+        connected = client.post(
+            f"/web/sandbox/sessions/{session_id}/connect",
+            headers={"X-Test-User": "alice"},
+        )
         response = client.delete(
             f"/web/sandbox/sessions/{session_id}",
             headers={"X-Test-User": "bob"},
         )
 
+    assert connected.status_code == 200
     assert response.status_code == 404
-    assert [item.instance_id for item in gateway.deleted] == ["remote-1"]
+    assert gateway.deleted == []
 
 
 def test_sandbox_route_rejects_empty_message() -> None:
@@ -286,7 +353,8 @@ def test_sandbox_route_requires_an_identity() -> None:
 @pytest.mark.asyncio
 async def test_service_owner_check_does_not_reveal_session() -> None:
     service = SandboxConversationService(_FakeGateway(), tool_id="tool-studio")
-    session = await service.start("alice")
+    cloud = await service.create("alice")
+    session = await service.connect(cloud.instance_id, "alice")
 
     with pytest.raises(SandboxSessionNotFoundError):
         await service.close(session.session_id, "bob")
@@ -298,11 +366,11 @@ async def test_service_allows_multiple_sessions_for_the_same_owner() -> None:
     service = SandboxConversationService(gateway, tool_id="tool-studio")
 
     first, second = await asyncio.gather(
-        service.start("alice"),
-        service.start("alice"),
+        service.create("alice"),
+        service.create("alice"),
     )
 
-    assert first.session_id != second.session_id
+    assert first.instance_id != second.instance_id
     assert gateway.created == 2
 
 
@@ -356,6 +424,140 @@ async def test_gateway_accepts_an_already_expired_session_as_deleted() -> None:
 
 
 @pytest.mark.asyncio
+async def test_gateway_lists_all_sessions_from_the_configured_tool_region() -> None:
+    calls: list[tuple[str, str | None]] = []
+
+    class _Client:
+        def __init__(self, region: str) -> None:
+            self.region = region
+
+        def list_sessions(self, request: object) -> SimpleNamespace:
+            next_token = getattr(request, "next_token")
+            calls.append((self.region, next_token))
+            if self.region == "cn-beijing":
+                raise RuntimeError("InvalidResource.NotFound")
+            if next_token is None:
+                return SimpleNamespace(
+                    session_infos=[
+                        SimpleNamespace(
+                            session_id="remote-old",
+                            user_session_id="old-agent",
+                            endpoint="https://sandbox.example/old?Authorization=secret",
+                            status="Ready",
+                            created_at="2026-07-29T08:00:00Z",
+                            expire_at="2026-07-30T08:00:00Z",
+                            tool_type="CodeEnv",
+                        )
+                    ],
+                    next_token="page-2",
+                )
+            return SimpleNamespace(
+                session_infos=[
+                    SimpleNamespace(
+                        session_id="remote-new",
+                        user_session_id="new-agent",
+                        endpoint="https://sandbox.example/new?Authorization=secret",
+                        status="Ready",
+                        created_at="2026-07-30T08:00:00Z",
+                        expire_at="2026-07-31T08:00:00Z",
+                        tool_type="CodeEnv",
+                    )
+                ],
+                next_token=None,
+            )
+
+    gateway = AgentkitSandboxGateway(
+        _Client,
+        region_candidates=("cn-beijing", "cn-shanghai"),
+    )
+
+    sessions = await gateway.list_sessions("tool-1")
+
+    assert [session.instance_id for session in sessions] == [
+        "remote-new",
+        "remote-old",
+    ]
+    assert all(session.region == "cn-shanghai" for session in sessions)
+    assert calls == [
+        ("cn-beijing", None),
+        ("cn-shanghai", None),
+        ("cn-shanghai", "page-2"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_gateway_uses_the_installed_agentkit_list_sessions_contract() -> None:
+    from agentkit.sdk.tools import types as tools_types
+
+    requests: list[dict[str, object]] = []
+
+    class _Client:
+        def list_sessions(
+            self, request: tools_types.ListSessionsRequest
+        ) -> tools_types.ListSessionsResponse:
+            requests.append(request.model_dump(by_alias=True, exclude_none=True))
+            return tools_types.ListSessionsResponse(
+                SessionInfos=[
+                    tools_types.SessionInfosForListSessions(
+                        SessionId="remote-sdk",
+                        UserSessionId="sdk-agent",
+                        Status="Ready",
+                        Endpoint=("https://sandbox.example/path?Authorization=secret"),
+                        CreatedAt="2026-07-30T08:00:00Z",
+                        ExpireAt="2026-07-30T16:00:00Z",
+                        ToolType="CodeEnv",
+                    )
+                ]
+            )
+
+    sessions = await AgentkitSandboxGateway(_Client()).list_sessions("tool-sdk")
+
+    assert requests == [{"MaxResults": 100, "ToolId": "tool-sdk"}]
+    assert len(sessions) == 1
+    assert sessions[0].instance_id == "remote-sdk"
+    assert sessions[0].user_session_id == "sdk-agent"
+    assert sessions[0].status == "Ready"
+    assert sessions[0].created_at == "2026-07-30T08:00:00Z"
+    assert sessions[0].expire_at == "2026-07-30T16:00:00Z"
+    assert sessions[0].tool_type == "CodeEnv"
+
+
+@pytest.mark.asyncio
+async def test_gateway_gets_an_existing_session_without_exposing_its_region() -> None:
+    calls: list[str] = []
+
+    class _Client:
+        def __init__(self, region: str) -> None:
+            self.region = region
+
+        def get_session(self, request: object) -> SimpleNamespace:
+            del request
+            calls.append(self.region)
+            if self.region == "cn-beijing":
+                raise RuntimeError("InvalidResource.NotFound")
+            return SimpleNamespace(
+                session_id="remote-1",
+                user_session_id="agent-1",
+                endpoint="https://sandbox.example/path?Authorization=secret",
+                status="Ready",
+                created_at="2026-07-30T08:00:00Z",
+                expire_at="2026-07-31T08:00:00Z",
+                tool_type="CodeEnv",
+            )
+
+    gateway = AgentkitSandboxGateway(
+        _Client,
+        region_candidates=("cn-beijing", "cn-shanghai"),
+    )
+
+    session = await gateway.get_session("tool-1", "remote-1")
+
+    assert session.instance_id == "remote-1"
+    assert session.region == "cn-shanghai"
+    assert calls == ["cn-beijing", "cn-shanghai"]
+
+
+@pytest.mark.asyncio
 async def test_gateway_retries_session_creation_in_shanghai_and_deletes_there() -> None:
     created_regions: list[str] = []
     deleted_regions: list[str] = []
@@ -393,6 +595,24 @@ async def test_gateway_retries_session_creation_in_shanghai_and_deletes_there() 
 
 
 @pytest.mark.asyncio
+async def test_gateway_accepts_create_response_while_session_is_starting() -> None:
+    class _Client:
+        def create_session(self, request: object) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                session_id="remote-creating",
+                user_session_id="user-creating",
+                endpoint=None,
+            )
+
+    session = await AgentkitSandboxGateway(_Client()).create_session("tool-1")
+
+    assert session.instance_id == "remote-creating"
+    assert session.status == "Creating"
+    assert session.endpoint == ""
+
+
+@pytest.mark.asyncio
 async def test_gateway_does_not_retry_non_not_found_creation_errors() -> None:
     regions: list[str] = []
 
@@ -417,36 +637,38 @@ async def test_gateway_does_not_retry_non_not_found_creation_errors() -> None:
 
 
 @pytest.mark.asyncio
-async def test_delete_failure_keeps_session_for_cleanup_retry() -> None:
+async def test_disconnect_never_deletes_the_cloud_session() -> None:
     class _FailDeleteGateway(_FakeGateway):
         async def delete_session(self, session: SandboxCloudSession) -> None:
             del session
             raise SandboxProvisioningError("delete failed")
 
     service = SandboxConversationService(_FailDeleteGateway(), tool_id="tool-studio")
-    session = await service.start("alice")
+    cloud = await service.create("alice")
+    session = await service.connect(cloud.instance_id, "alice")
 
-    with pytest.raises(SandboxProvisioningError):
-        await service.close(session.session_id, "alice")
+    await service.close(session.session_id, "alice")
 
-    service.require_owned(session.session_id, "alice")
+    with pytest.raises(SandboxSessionNotFoundError):
+        service.require_owned(session.session_id, "alice")
 
 
 @pytest.mark.asyncio
-async def test_expiry_and_close_all_delete_cloud_sessions() -> None:
+async def test_expiry_and_close_all_only_drop_local_connections() -> None:
     gateway = _FakeGateway()
     service = SandboxConversationService(gateway, tool_id="tool-studio")
-    expired = await service.start("alice")
+    expired = await service.connect("remote-existing", "alice")
     expired.expires_at = time.monotonic() - 1
 
     await service.cleanup_expired()
-    active = await service.start("bob")
+    active = await service.connect("remote-existing", "bob")
     await service.close_all()
 
-    assert [item.instance_id for item in gateway.deleted] == [
-        expired.cloud.instance_id,
-        active.cloud.instance_id,
-    ]
+    with pytest.raises(SandboxSessionNotFoundError):
+        service.require_owned(expired.session_id, "alice")
+    with pytest.raises(SandboxSessionNotFoundError):
+        service.require_owned(active.session_id, "bob")
+    assert gateway.deleted == []
 
 
 def test_sse_error_has_an_explicit_done_frame() -> None:
@@ -463,6 +685,10 @@ def test_sse_error_has_an_explicit_done_frame() -> None:
 
     with TestClient(_app(_FailStreamGateway())) as client:
         created = client.post("/web/sandbox/sessions", headers={"X-Test-User": "alice"})
+        client.post(
+            f"/web/sandbox/sessions/{created.json()['sessionId']}/connect",
+            headers={"X-Test-User": "alice"},
+        )
         response = client.post(
             f"/web/sandbox/sessions/{created.json()['sessionId']}/messages",
             headers={"X-Test-User": "alice"},

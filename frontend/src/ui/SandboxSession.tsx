@@ -31,10 +31,10 @@ export function SandboxSessionWarning({ onExit }: { onExit: () => void }) {
     <div className="sandbox-session-warning" role="status">
       <span className="sandbox-session-warning-dot" aria-hidden="true" />
       <span className="sandbox-session-warning-copy">
-        当前为 Codex 智能体会话，退出后对话内容消失
+        当前已连接 Codex 智能体，返回列表不会删除沙箱
       </span>
       <button type="button" onClick={onExit}>
-        退出内置智能体
+        返回智能体列表
       </button>
     </div>
   );

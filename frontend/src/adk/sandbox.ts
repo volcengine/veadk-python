@@ -4,7 +4,9 @@ import { requestSignal } from "./timeout";
 import type { Block } from "../blocks";
 
 const SANDBOX_API = "/web/sandbox/sessions";
+const LIST_TIMEOUT_MS = 30_000;
 const START_TIMEOUT_MS = 330_000;
+const CONNECT_TIMEOUT_MS = 60_000;
 const MESSAGE_TIMEOUT_MS = 600_000;
 const CLOSE_TIMEOUT_MS = 15_000;
 
@@ -16,7 +18,12 @@ export interface SandboxRequestOptions {
 export interface SandboxSession {
   id: string;
   toolName: "codex";
+  userSessionId: string;
+  status: string;
   createdAt: string;
+  expireAt: string;
+  toolType: string;
+  region: string;
 }
 
 export interface SandboxMessage {
@@ -30,7 +37,12 @@ export interface SandboxReply {
 }
 
 export interface AgentKitSandboxClient {
+  listSessions(options?: SandboxRequestOptions): Promise<SandboxSession[]>;
   startSession(options?: SandboxRequestOptions): Promise<SandboxSession>;
+  connectSession(
+    sessionId: string,
+    options?: SandboxRequestOptions,
+  ): Promise<SandboxSession>;
   sendMessage(
     message: SandboxMessage,
     options?: SandboxRequestOptions,
@@ -41,9 +53,18 @@ export interface AgentKitSandboxClient {
   ): Promise<void>;
 }
 
-interface CreateSessionResponse {
+interface SessionResponse {
   sessionId: string;
+  userSessionId?: string;
   status: string;
+  createdAt?: string;
+  expireAt?: string;
+  toolType?: string;
+  region?: string;
+}
+
+interface ListSessionsResponse {
+  sessions?: SessionResponse[];
 }
 
 interface SandboxErrorPayload {
@@ -81,6 +102,22 @@ async function responseError(response: Response, fallback: string): Promise<Erro
       ? (nestedDetail as SandboxErrorPayload).message
       : (nestedDetail ?? payload.message);
   return new Error(typeof detail === "string" && detail ? detail : fallback);
+}
+
+function parseSession(data: SessionResponse): SandboxSession {
+  if (!data.sessionId || !data.status) {
+    throw new Error("AgentKit 沙箱返回了无效的 Session 信息。");
+  }
+  return {
+    id: data.sessionId,
+    toolName: "codex",
+    userSessionId: data.userSessionId ?? "",
+    status: data.status,
+    createdAt: data.createdAt ?? "",
+    expireAt: data.expireAt ?? "",
+    toolType: data.toolType ?? "",
+    region: data.region ?? "",
+  };
 }
 
 async function parseSandboxStream(
@@ -184,6 +221,22 @@ async function parseSandboxStream(
 }
 
 export const sandboxClient: AgentKitSandboxClient = {
+  async listSessions(options = {}) {
+    const response = await fetch(withAuth(SANDBOX_API), {
+      method: "GET",
+      headers: sandboxHeaders(),
+      signal: requestSignal(options.signal, LIST_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      throw await responseError(response, "无法读取 Codex 智能体，请稍后重试。");
+    }
+    const data = (await response.json()) as ListSessionsResponse;
+    if (!Array.isArray(data.sessions)) {
+      throw new Error("AgentKit 沙箱返回了无效的 Session 列表。");
+    }
+    return data.sessions.map(parseSession);
+  },
+
   async startSession(options = {}) {
     const response = await fetch(withAuth(SANDBOX_API), {
       method: "POST",
@@ -193,15 +246,27 @@ export const sandboxClient: AgentKitSandboxClient = {
     if (!response.ok) {
       throw await responseError(response, "无法启动 AgentKit 沙箱，请稍后重试。");
     }
-    const data = (await response.json()) as CreateSessionResponse;
-    if (!data.sessionId || data.status !== "ready") {
-      throw new Error("AgentKit 沙箱返回了无效的会话信息。");
+    return parseSession((await response.json()) as SessionResponse);
+  },
+
+  async connectSession(sessionId, options = {}) {
+    if (!sessionId) throw new Error("缺少要连接的 AgentKit Session。");
+    const response = await fetch(
+      withAuth(`${SANDBOX_API}/${encodeURIComponent(sessionId)}/connect`),
+      {
+        method: "POST",
+        headers: sandboxHeaders({ "Content-Type": "application/json" }),
+        signal: requestSignal(options.signal, CONNECT_TIMEOUT_MS),
+      },
+    );
+    if (!response.ok) {
+      throw await responseError(response, "无法连接 Codex 智能体，请稍后重试。");
     }
-    return {
-      id: data.sessionId,
-      toolName: "codex",
-      createdAt: new Date().toISOString(),
-    };
+    const session = parseSession((await response.json()) as SessionResponse);
+    if (session.status.toLowerCase() !== "ready") {
+      throw new Error(`AgentKit Session 尚未就绪，当前状态：${session.status}。`);
+    }
+    return session;
   },
 
   async sendMessage(message, options = {}) {
@@ -237,7 +302,7 @@ export const sandboxClient: AgentKitSandboxClient = {
       },
     );
     if (!response.ok && response.status !== 404) {
-      throw await responseError(response, "无法清理 AgentKit 沙箱会话。");
+      throw await responseError(response, "无法断开 Codex 智能体连接。");
     }
   },
 };

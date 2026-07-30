@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Reusable AgentKit Sandbox access for temporary Studio conversations."""
+"""Reusable AgentKit Sandbox Sessions for Studio Codex agents."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 STUDIO_SANDBOX_TOOL_NAME = "veadk-studio-codex"
-STUDIO_SANDBOX_TTL_SECONDS = 3_600
+STUDIO_SANDBOX_TTL_SECONDS = 28_800
 STUDIO_SANDBOX_MAX_ACTIVE = 20
 _SANDBOX_CHAT_TOOL_ENV = "SANDBOX_CHAT_CODEX"
 _CREATE_SESSION_START_FAIL_CODE = "ErrCreateSessionFail"
@@ -71,9 +71,16 @@ class SandboxProvisioningError(SandboxError):
 
 
 class SandboxSessionNotFoundError(SandboxError):
-    """The temporary conversation does not exist or is not owned by the user."""
+    """The cloud Session or local conversation connection is unavailable."""
 
     code = "SANDBOX_SESSION_NOT_FOUND"
+
+
+class SandboxSessionUnavailableError(SandboxError):
+    """The cloud Session exists but cannot accept a conversation yet."""
+
+    code = "SANDBOX_SESSION_UNAVAILABLE"
+    retryable = True
 
 
 class SandboxInvocationError(SandboxError):
@@ -84,7 +91,7 @@ class SandboxInvocationError(SandboxError):
 
 
 class SandboxCapacityError(SandboxError):
-    """The user or Studio has reached the temporary-session limit."""
+    """Studio has reached its local conversation-bridge limit."""
 
     code = "SANDBOX_CAPACITY_EXCEEDED"
     retryable = True
@@ -148,18 +155,22 @@ def _public_event_text(value: object) -> str:
 
 @dataclass(frozen=True)
 class SandboxCloudSession:
-    """Remote AgentKit Sandbox session data kept only on the server."""
+    """Remote AgentKit Sandbox Session data kept only on the server."""
 
     tool_id: str
     instance_id: str
     user_session_id: str
     endpoint: str
     region: str = ""
+    status: str = "Unknown"
+    created_at: str = ""
+    expire_at: str = ""
+    tool_type: str = ""
 
 
 @dataclass
 class SandboxConversation:
-    """Server-side state for one non-persistent Studio conversation."""
+    """Server-side connection state for one reusable cloud Session."""
 
     session_id: str
     owner_id: str
@@ -186,7 +197,15 @@ class SandboxStreamEvent:
 
 
 class SandboxCloudGateway(Protocol):
-    """AgentKit operations needed by the Studio conversation service."""
+    """AgentKit operations needed by the Studio Session service."""
+
+    async def list_sessions(self, tool_id: str) -> list[SandboxCloudSession]:
+        """List every Session belonging to the configured Tool."""
+        raise NotImplementedError
+
+    async def get_session(self, tool_id: str, session_id: str) -> SandboxCloudSession:
+        """Resolve one existing Session and its private Endpoint."""
+        raise NotImplementedError
 
     async def create_session(self, tool_id: str) -> SandboxCloudSession:
         """Create a fresh remote Sandbox session."""
@@ -268,16 +287,118 @@ class AgentkitSandboxGateway:
                 if (session.status or "").lower() != "ready":
                     continue
                 if session.session_id and session.endpoint:
-                    return SandboxCloudSession(
-                        tool_id=tool_id,
-                        instance_id=session.session_id,
-                        user_session_id=user_session_id,
-                        endpoint=session.endpoint,
+                    return self._cloud_session(
+                        tool_id,
+                        session,
                         region=region,
+                        fallback_user_session_id=user_session_id,
                     )
             if attempt < 5:
                 await asyncio.sleep(5)
         return None
+
+    @staticmethod
+    def _cloud_session(
+        tool_id: str,
+        value: Any,
+        *,
+        region: str = "",
+        fallback_user_session_id: str = "",
+    ) -> SandboxCloudSession:
+        instance_id = str(getattr(value, "session_id", "") or "").strip()
+        if not instance_id:
+            raise SandboxProvisioningError("AgentKit Session 响应缺少 SessionId。")
+        return SandboxCloudSession(
+            tool_id=tool_id,
+            instance_id=instance_id,
+            user_session_id=str(
+                getattr(value, "user_session_id", "") or fallback_user_session_id
+            ).strip(),
+            endpoint=str(getattr(value, "endpoint", "") or "").strip(),
+            region=region,
+            status=str(getattr(value, "status", "") or "Unknown").strip(),
+            created_at=str(getattr(value, "created_at", "") or "").strip(),
+            expire_at=str(getattr(value, "expire_at", "") or "").strip(),
+            tool_type=str(getattr(value, "tool_type", "") or "").strip(),
+        )
+
+    async def list_sessions(self, tool_id: str) -> list[SandboxCloudSession]:
+        from agentkit.sdk.tools import types as tools_types
+
+        regions = self._region_candidates or ("",)
+        for index, region in enumerate(regions):
+            sessions: dict[str, SandboxCloudSession] = {}
+            next_token: str | None = None
+            seen_tokens: set[str] = set()
+            try:
+                for _page in range(100):
+                    response = await self._call(
+                        "list_sessions",
+                        tools_types.ListSessionsRequest(
+                            ToolId=tool_id,
+                            MaxResults=100,
+                            NextToken=next_token,
+                        ),
+                        region=region,
+                    )
+                    for value in response.session_infos or []:
+                        session = self._cloud_session(
+                            tool_id,
+                            value,
+                            region=region,
+                        )
+                        sessions[session.instance_id] = session
+                    next_token = str(response.next_token or "").strip() or None
+                    if next_token is None:
+                        return sorted(
+                            sessions.values(),
+                            key=lambda item: item.created_at,
+                            reverse=True,
+                        )
+                    if next_token in seen_tokens:
+                        raise SandboxProvisioningError(
+                            "AgentKit ListSessions 返回了重复的 NextToken。"
+                        )
+                    seen_tokens.add(next_token)
+                raise SandboxProvisioningError(
+                    "AgentKit ListSessions 分页超过安全上限。"
+                )
+            except SandboxError:
+                raise
+            except Exception as error:
+                if is_agentkit_resource_not_found(error) and index + 1 < len(regions):
+                    continue
+                raise SandboxProvisioningError(
+                    f"读取 AgentKit Session 失败：{_safe_error_message(error)}"
+                ) from error
+        raise SandboxProvisioningError("无法在支持的地域读取 AgentKit Session。")
+
+    async def get_session(self, tool_id: str, session_id: str) -> SandboxCloudSession:
+        from agentkit.sdk.tools import types as tools_types
+
+        regions = self._region_candidates or ("",)
+        for index, region in enumerate(regions):
+            try:
+                response = await self._call(
+                    "get_session",
+                    tools_types.GetSessionRequest(
+                        ToolId=tool_id,
+                        SessionId=session_id,
+                    ),
+                    region=region,
+                )
+                return self._cloud_session(tool_id, response, region=region)
+            except Exception as error:
+                if is_agentkit_resource_not_found(error) and index + 1 < len(regions):
+                    continue
+                if is_agentkit_resource_not_found(error):
+                    raise SandboxSessionNotFoundError(
+                        "AgentKit Session 不存在或已过期。"
+                    ) from error
+                raise SandboxProvisioningError(
+                    f"读取 AgentKit Session 失败：{_safe_error_message(error)}"
+                ) from error
+        raise SandboxSessionNotFoundError("AgentKit Session 不存在或已过期。")
 
     async def create_session(self, tool_id: str) -> SandboxCloudSession:
         from agentkit.sdk.tools import types as tools_types
@@ -324,16 +445,15 @@ class AgentkitSandboxGateway:
 
             instance_id = (response.session_id or "").strip()
             endpoint = (response.endpoint or "").strip()
-            if not instance_id or not endpoint:
-                raise SandboxProvisioningError(
-                    "AgentKit 创建会话响应缺少 SessionId 或 Endpoint。"
-                )
+            if not instance_id:
+                raise SandboxProvisioningError("AgentKit 创建会话响应缺少 SessionId。")
             return SandboxCloudSession(
                 tool_id=tool_id,
                 instance_id=instance_id,
                 user_session_id=response.user_session_id or user_session_id,
                 endpoint=endpoint,
                 region=region,
+                status="Ready" if endpoint else "Creating",
             )
         raise SandboxProvisioningError("无法在支持的地域创建 AgentKit 沙箱会话。")
 
@@ -349,13 +469,14 @@ class AgentkitSandboxGateway:
         cloud: SandboxCloudSession | None = None
         try:
             response = await create_task
-            if response.session_id and response.endpoint:
+            if response.session_id:
                 cloud = SandboxCloudSession(
                     tool_id=tool_id,
                     instance_id=response.session_id,
                     user_session_id=response.user_session_id or user_session_id,
-                    endpoint=response.endpoint,
+                    endpoint=response.endpoint or "",
                     region=region,
+                    status="Ready" if response.endpoint else "Creating",
                 )
         except Exception as error:
             if _CREATE_SESSION_START_FAIL_CODE in str(error):
@@ -639,7 +760,7 @@ class AgentkitSandboxGateway:
         except asyncio.CancelledError:
             raise
         except TimeoutError as error:
-            raise SandboxInvocationError("临时会话响应超时，请重试。") from error
+            raise SandboxInvocationError("Codex 智能体响应超时，请重试。") from error
         except SandboxError:
             raise
         except Exception as error:
@@ -653,19 +774,19 @@ class AgentkitSandboxGateway:
 
 
 class SandboxConversationService:
-    """Own temporary conversation lifecycle and per-user isolation."""
+    """Manage reusable cloud Sessions and per-user conversation connections."""
 
     def __init__(
         self, gateway: SandboxCloudGateway, tool_id: str | None = None
     ) -> None:
         self._gateway = gateway
         self._configured_tool_id = (tool_id or "").strip()
-        self._sessions: dict[str, SandboxConversation] = {}
+        self._sessions: dict[tuple[str, str], SandboxConversation] = {}
         self._registry_lock = asyncio.Lock()
         self._sessions_starting = 0
 
     def capabilities(self) -> dict[str, object]:
-        """Report whether the dedicated temporary-chat Tool is configured."""
+        """Report whether the dedicated Codex Tool is configured."""
         enabled = bool(self._tool_id(required=False))
         return {"enabled": enabled, "reason": "" if enabled else "管理员未配置"}
 
@@ -678,37 +799,66 @@ class SandboxConversationService:
             raise SandboxConfigurationError("管理员未配置")
         return tool_id
 
-    async def start(self, owner_id: str) -> SandboxConversation:
-        cloud: SandboxCloudSession | None = None
+    async def list_sessions(self, owner_id: str) -> list[SandboxCloudSession]:
+        """List the configured account's Sessions without exposing Endpoints."""
+        del owner_id
+        return await self._gateway.list_sessions(self._tool_id())
+
+    async def create(self, owner_id: str) -> SandboxCloudSession:
+        """Create a cloud Session without opening a conversation connection."""
+        del owner_id
         tool_id = self._tool_id()
         await self.cleanup_expired()
         async with self._registry_lock:
             if len(self._sessions) + self._sessions_starting >= (
                 STUDIO_SANDBOX_MAX_ACTIVE
             ):
-                raise SandboxCapacityError("临时会话并发数已达上限，请稍后重试。")
+                raise SandboxCapacityError("Sandbox 创建或连接数已达上限，请稍后重试。")
             self._sessions_starting += 1
         try:
-            cloud = await self._gateway.create_session(tool_id)
-            session = SandboxConversation(
-                session_id=str(uuid.uuid4()),
+            return await self._gateway.create_session(tool_id)
+        finally:
+            async with self._registry_lock:
+                self._sessions_starting -= 1
+
+    async def connect(self, session_id: str, owner_id: str) -> SandboxConversation:
+        """Attach an existing Ready cloud Session to the conversation bridge."""
+        key = (owner_id, session_id)
+        existing = self._sessions.get(key)
+        if existing is not None:
+            return existing
+        await self.cleanup_expired()
+        async with self._registry_lock:
+            existing = self._sessions.get(key)
+            if existing is not None:
+                return existing
+            if len(self._sessions) + self._sessions_starting >= (
+                STUDIO_SANDBOX_MAX_ACTIVE
+            ):
+                raise SandboxCapacityError("智能体连接数已达上限，请稍后重试。")
+            self._sessions_starting += 1
+        try:
+            cloud = await self._gateway.get_session(self._tool_id(), session_id)
+            if cloud.status.lower() != "ready" or not cloud.endpoint:
+                status = cloud.status or "Unknown"
+                raise SandboxSessionUnavailableError(
+                    f"AgentKit Session 尚未就绪，当前状态：{status}。"
+                )
+            conversation = SandboxConversation(
+                session_id=cloud.instance_id,
                 owner_id=owner_id,
                 cloud=cloud,
             )
-            self._sessions[session.session_id] = session
-            return session
-        except asyncio.CancelledError:
-            if cloud is not None:
-                await asyncio.shield(self._gateway.delete_session(cloud))
-            raise
+            self._sessions[key] = conversation
+            return conversation
         finally:
             async with self._registry_lock:
                 self._sessions_starting -= 1
 
     def _owned(self, session_id: str, owner_id: str) -> SandboxConversation:
-        session = self._sessions.get(session_id)
-        if session is None or session.owner_id != owner_id:
-            raise SandboxSessionNotFoundError("临时会话不存在或已过期。")
+        session = self._sessions.get((owner_id, session_id))
+        if session is None:
+            raise SandboxSessionNotFoundError("智能体尚未连接，请返回列表后重新进入。")
         return session
 
     def require_owned(self, session_id: str, owner_id: str) -> None:
@@ -729,13 +879,13 @@ class SandboxConversationService:
                     yield event
 
     async def close(self, session_id: str, owner_id: str) -> None:
+        """Disconnect the local bridge without deleting the cloud Session."""
         session = self._owned(session_id, owner_id)
         async with session.lock:
-            await self._gateway.delete_session(session.cloud)
-            self._sessions.pop(session_id, None)
+            self._sessions.pop((owner_id, session_id), None)
 
     async def cleanup_expired(self) -> None:
-        """Delete sessions that exceeded their remote TTL."""
+        """Drop local connections that exceeded their remote TTL window."""
         now = time.monotonic()
         expired = [
             (session.session_id, session.owner_id)
@@ -747,26 +897,14 @@ class SandboxConversationService:
                 await self.close(session_id, owner_id)
             except SandboxError as error:
                 logger.warning(
-                    "Failed to clean up expired Sandbox session %s: %s",
+                    "Failed to disconnect expired Sandbox Session %s: %s",
                     session_id,
                     _safe_error_message(error),
                 )
 
     async def close_all(self) -> None:
-        """Best-effort process-shutdown cleanup for all cloud sessions."""
-        sessions = [
-            (session.session_id, session.owner_id)
-            for session in self._sessions.values()
-        ]
-        for session_id, owner_id in sessions:
-            try:
-                await self.close(session_id, owner_id)
-            except SandboxError as error:
-                logger.warning(
-                    "Failed to clean up Sandbox session %s at shutdown: %s",
-                    session_id,
-                    _safe_error_message(error),
-                )
+        """Drop local connections while leaving cloud Sessions reusable."""
+        self._sessions.clear()
         await self._gateway.drain()
 
 
@@ -775,7 +913,7 @@ def mount_sandbox_routes(
     service: SandboxConversationService,
     owner_resolver: Callable[[Any], str],
 ) -> None:
-    """Mount thin Studio HTTP routes for temporary Sandbox conversations."""
+    """Mount Studio HTTP routes for reusable Sandbox Sessions."""
     from fastapi import HTTPException
     from fastapi.responses import StreamingResponse
 
@@ -785,6 +923,8 @@ def mount_sandbox_routes(
             status_code = 503
         elif isinstance(error, SandboxSessionNotFoundError):
             status_code = 404
+        elif isinstance(error, SandboxSessionUnavailableError):
+            status_code = 409
         elif isinstance(error, SandboxProvisioningError):
             status_code = 502
         elif isinstance(error, SandboxCapacityError):
@@ -798,20 +938,51 @@ def mount_sandbox_routes(
             },
         )
 
+    def _public_session(session: SandboxCloudSession) -> dict[str, str]:
+        return {
+            "sessionId": session.instance_id,
+            "userSessionId": session.user_session_id,
+            "status": session.status,
+            "createdAt": session.created_at,
+            "expireAt": session.expire_at,
+            "toolType": session.tool_type,
+            "region": session.region,
+        }
+
     @app.get("/web/sandbox/capabilities")
     async def _sandbox_capabilities(request: Request) -> dict[str, object]:
         owner_resolver(request)
         return service.capabilities()
 
+    @app.get("/web/sandbox/sessions")
+    async def _list_sandbox_sessions(request: Request) -> dict[str, object]:
+        try:
+            sessions = await service.list_sessions(owner_resolver(request))
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {"sessions": [_public_session(session) for session in sessions]}
+
     @app.post("/web/sandbox/sessions")
     async def _start_sandbox_session(request: Request) -> dict[str, str]:
         try:
-            session = await service.start(owner_resolver(request))
+            session = await service.create(owner_resolver(request))
         except SandboxError as error:
             raise _http_error(error) from error
         return {
-            "sessionId": session.session_id,
-            "status": "ready",
+            **_public_session(session),
+            "toolName": STUDIO_SANDBOX_TOOL_NAME,
+        }
+
+    @app.post("/web/sandbox/sessions/{session_id}/connect")
+    async def _connect_sandbox_session(
+        session_id: str, request: Request
+    ) -> dict[str, str]:
+        try:
+            session = await service.connect(session_id, owner_resolver(request))
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {
+            **_public_session(session.cloud),
             "toolName": STUDIO_SANDBOX_TOOL_NAME,
         }
 
@@ -856,7 +1027,8 @@ def mount_sandbox_routes(
                     await asyncio.shield(service.close(session_id, owner_id))
                 except SandboxError:
                     logger.warning(
-                        "Failed to clean up cancelled Sandbox session %s", session_id
+                        "Failed to disconnect cancelled Sandbox Session %s",
+                        session_id,
                     )
                 raise
             except SandboxError as error:
@@ -877,14 +1049,14 @@ def mount_sandbox_routes(
         )
 
     @app.delete("/web/sandbox/sessions/{session_id}")
-    async def _delete_sandbox_session(
+    async def _disconnect_sandbox_session(
         session_id: str, request: Request
     ) -> dict[str, bool]:
         try:
             await service.close(session_id, owner_resolver(request))
         except SandboxError as error:
             raise _http_error(error) from error
-        return {"deleted": True}
+        return {"disconnected": True}
 
     cleanup_task: asyncio.Task[None] | None = None
 

@@ -18,6 +18,10 @@ const sandboxSessionSource = readFileSync(
   new URL("../src/ui/SandboxSession.tsx", import.meta.url),
   "utf8",
 );
+const myAgentsSource = readFileSync(
+  new URL("../src/ui/MyAgents.tsx", import.meta.url),
+  "utf8",
+);
 const stylesSource = readFileSync(
   new URL("../src/ui/SandboxSession.css", import.meta.url),
   "utf8",
@@ -33,11 +37,18 @@ const modeSelectorSource = readFileSync(
 
 test("sandbox access is isolated behind a reusable typed client", () => {
   assert.match(sandboxClientSource, /export interface AgentKitSandboxClient/);
+  assert.match(sandboxClientSource, /listSessions\(options\?: SandboxRequestOptions\)/);
   assert.match(sandboxClientSource, /startSession\(options\?: SandboxRequestOptions\)/);
+  assert.match(
+    sandboxClientSource,
+    /connectSession\([\s\S]*options\?: SandboxRequestOptions/,
+  );
   assert.match(sandboxClientSource, /sendMessage\([\s\S]*options\?: SandboxRequestOptions/);
   assert.match(sandboxClientSource, /closeSession\([\s\S]*options\?: SandboxRequestOptions/);
   assert.match(sandboxClientSource, /signal\?: AbortSignal/);
   assert.match(sandboxClientSource, /\/web\/sandbox\/sessions/);
+  assert.match(sandboxClientSource, /method: "GET"/);
+  assert.match(sandboxClientSource, /\/connect/);
   assert.match(sandboxClientSource, /withAuth/);
   assert.match(sandboxClientSource, /withLocalUser/);
   assert.match(sandboxClientSource, /Accept: "text\/event-stream"/);
@@ -49,7 +60,7 @@ test("sandbox access is isolated behind a reusable typed client", () => {
   assert.doesNotMatch(sandboxClientSource, /setTimeout|crypto\.randomUUID/);
 });
 
-test("new-chat built-in agent mode launches the AgentKit sandbox", () => {
+test("new-chat built-in agent mode opens the AgentKit sandbox creator", () => {
   assert.match(modeSelectorSource, /value: "temporary"[\s\S]*?label: "内置智能体"/);
   assert.match(appSource, /mode === "temporary"[\s\S]*?openSandboxLaunch\(\)/);
   assert.doesNotMatch(appSource, /<SandboxEntryButton/);
@@ -57,21 +68,20 @@ test("new-chat built-in agent mode launches the AgentKit sandbox", () => {
 
 test("sandbox launch dialog covers confirmation loading failure and retry", () => {
   assert.match(dialogSource, /role="dialog"/);
-  assert.match(dialogSource, /启用 Codex 智能体/);
-  assert.match(dialogSource, /将启动 AgentKit 沙箱与 Codex 智能体/);
-  assert.match(dialogSource, /本次对话不会被持久化保存/);
-  assert.match(dialogSource, /正在初始化沙箱/);
+  assert.match(dialogSource, /创建 Codex 智能体/);
+  assert.match(dialogSource, /创建一个可重复进入的 AgentKit 沙箱/);
+  assert.match(dialogSource, /正在创建沙箱/);
   assert.match(dialogSource, /启动失败/);
   assert.match(dialogSource, /重新尝试/);
   assert.match(dialogSource, /if \(event\.key === "Escape"/);
   assert.match(appSource, /sandboxLaunchAbortRef\.current\?\.abort\(\)/);
 });
 
-test("active sandbox conversation is visibly temporary and never uses normal sessions", () => {
-  assert.match(sandboxSessionSource, /当前为 Codex 智能体会话，退出后对话内容消失/);
-  assert.match(sandboxSessionSource, /退出内置智能体/);
+test("active sandbox conversation returns to the reusable Session list", () => {
+  assert.match(sandboxSessionSource, /返回列表不会删除沙箱/);
+  assert.match(sandboxSessionSource, /返回智能体列表/);
   assert.match(appSource, /sandboxClient\.sendMessage/);
-  assert.doesNotMatch(sandboxClientSource, /runSSE|listSessions/);
+  assert.doesNotMatch(sandboxClientSource, /runSSE/);
   assert.match(stylesSource, /\.main\.is-sandbox-session::before/);
   assert.match(stylesSource, /\.sandbox-session-warning/);
   assert.match(
@@ -85,6 +95,47 @@ test("active sandbox conversation is visibly temporary and never uses normal ses
   assert.match(
     stylesSource,
     /\.main\.is-sandbox-session[\s\S]*linear-gradient\([\s\S]*to bottom/,
+  );
+});
+
+test("creating a sandbox refreshes the list while opening an item connects it", () => {
+  const launchStart = appSource.indexOf("async function launchSandboxSession");
+  const connectStart = appSource.indexOf("async function connectSandboxSession");
+  const launchSource = appSource.slice(launchStart, connectStart);
+  assert.ok(launchStart >= 0 && connectStart > launchStart);
+  assert.match(
+    launchSource,
+    /const nextSession = await sandboxClient\.startSession[\s\S]*?setCodexSessionsRefreshKey/,
+  );
+  assert.doesNotMatch(
+    launchSource,
+    /setSandboxSession\(nextSession\)/,
+  );
+  assert.match(
+    appSource,
+    /async function connectSandboxSession[\s\S]*?sandboxClient\.connectSession[\s\S]*?setSandboxSession/,
+  );
+  assert.match(
+    appSource,
+    /function returnToCodexAgents[\s\S]*?exitSandboxSession\(\)[\s\S]*?setAgentDirectoryType\("codex"\)[\s\S]*?setMyAgents\(true\)/,
+  );
+  const clientCreateStart = sandboxClientSource.indexOf("async startSession");
+  const clientConnectStart = sandboxClientSource.indexOf("async connectSession");
+  assert.ok(clientCreateStart >= 0 && clientConnectStart > clientCreateStart);
+  assert.doesNotMatch(
+    sandboxClientSource.slice(clientCreateStart, clientConnectStart),
+    /status\.toLowerCase\(\) !== "ready"/,
+  );
+  assert.match(
+    myAgentsSource,
+    /CODEX_TRANSITIONAL_STATUSES[\s\S]*?setTimeout\([\s\S]*?fetchCodexSessions\(\)[\s\S]*?3_000/,
+  );
+});
+
+test("active sandbox conversation does not wait for normal Agent capabilities", () => {
+  assert.match(
+    appSource,
+    /turns\.length === 0 && !sandboxSession && !newChatCapabilitiesReady/,
   );
 });
 
