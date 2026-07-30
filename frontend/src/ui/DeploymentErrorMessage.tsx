@@ -6,13 +6,15 @@ export function DeploymentErrorMessage({
   className = "",
   onRetry,
   retryLabel = "重试部署",
+  defaultExpanded = true,
 }: {
   message: string;
   className?: string;
   onRetry?: () => Promise<void>;
   retryLabel?: string;
+  defaultExpanded?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const [copied, setCopied] = useState(false);
   const [retrying, setRetrying] = useState(false);
 
@@ -41,6 +43,7 @@ export function DeploymentErrorMessage({
       className={`deploy-error-message${expanded ? " is-expanded" : ""}${
         className ? ` ${className}` : ""
       }`}
+      role="alert"
     >
       <p className="deploy-error-message-text">{message}</p>
       <div className="deploy-error-message-actions">
