@@ -17,7 +17,6 @@ import {
   ChevronRight,
   Cpu,
   Database,
-  Eye,
   FolderUp,
   Globe,
   Info,
@@ -211,10 +210,19 @@ const STEPS: StepMeta[] = [
   { id: "tools", label: "工具", hint: "可调用的能力", icon: Wrench },
   { id: "skills", label: "技能", hint: "声明式技能", icon: Sparkles },
   { id: "knowledge", label: "知识库", hint: "外部知识检索", icon: Database },
-  { id: "advanced", label: "进阶配置", hint: "记忆与观测", icon: Layers },
+  { id: "advanced", label: "进阶配置", hint: "记忆", icon: Layers },
   { id: "subagents", label: "子 Agent", hint: "嵌套协作", icon: Boxes },
   { id: "review", label: "完成", hint: "预览并创建", icon: Rocket },
 ];
+
+const HIDDEN_CREATE_TOOL_IDS = new Set([
+  "web_scraper",
+  "text_to_speech",
+  "vesearch",
+]);
+const VISIBLE_BUILTIN_TOOLS = BUILTIN_TOOLS.filter(
+  (tool) => !HIDDEN_CREATE_TOOL_IDS.has(tool.id),
+);
 
 /** Root-only reset mark: a tilted eraser clearing the current draft. */
 function ClearAgentIcon({ className }: { className?: string }) {
@@ -2658,12 +2666,10 @@ export function CustomCreate({
   // Root-only rich sections read these off the root draft directly.
   const builtinTools = node.builtinTools ?? [];
   const mcpTools = node.mcpTools ?? [];
-  const tracingExporters = node.tracingExporters ?? [];
   const selectedSkills = node.selectedSkills ?? [];
   const advancedEnabledCount = [
     node.memory.shortTerm,
     node.memory.longTerm,
-    node.tracing,
   ].filter(Boolean).length;
 
   const toggleBuiltin = (id: string) =>
@@ -2673,16 +2679,6 @@ export function CustomCreate({
         : [...builtinTools, id],
     });
 
-  const toggleExporter = (id: string) => {
-    const next = tracingExporters.includes(id)
-      ? tracingExporters.filter((x) => x !== id)
-      : [...tracingExporters, id];
-    // Auto-enable tracing when at least one exporter is chosen.
-    patch({
-      tracingExporters: next,
-      tracing: next.length > 0 ? true : node.tracing,
-    });
-  };
   // Detail-pane branching is driven by the SELECTED node's type.
   const orchestrator = isOrchestratorType(node.agentType);
   const a2a = isA2aType(node.agentType);
@@ -2735,7 +2731,7 @@ export function CustomCreate({
       tools: builtinTools.length > 0 || mcpTools.length > 0,
       skills: selectedSkills.length > 0,
       knowledge: node.knowledgebase,
-      advanced: node.memory.shortTerm || node.memory.longTerm || node.tracing,
+      advanced: node.memory.shortTerm || node.memory.longTerm,
       subagents: (node.subAgents?.length ?? 0) > 0,
       review: canFinish,
     }),
@@ -3721,7 +3717,7 @@ export function CustomCreate({
                       </span>
                       <div className="cw-tools-list-shell">
                         <Checklist
-                          items={BUILTIN_TOOLS}
+                          items={VISIBLE_BUILTIN_TOOLS}
                           selected={builtinTools}
                           onToggle={toggleBuiltin}
                           scrollRows={6}
@@ -4006,48 +4002,6 @@ export function CustomCreate({
                               title="自动保存会话到长期记忆"
                               desc="会话结束时自动把内容写入长期记忆，无需手动调用。"
                               icon={Database}
-                            />
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <div className="cw-advanced-group">
-                      <div className="cw-advanced-group-head">
-                        <span>观测</span>
-                      </div>
-                      <div className="cw-form cw-toggle-stack">
-                        <Toggle
-                          checked={node.tracing}
-                          onChange={(v) => patch({ tracing: v })}
-                          title="观测 / Tracing"
-                          desc="记录每一步的调用链路与耗时，便于调试与性能分析。"
-                          icon={Eye}
-                        />
-                        {node.tracing && (
-                          <div className="cw-field cw-subfield">
-                                        <label className="cw-label">
-                                          Tracing 导出器
-                                        </label>
-                            <span className="cw-help">
-                                          选择一个或多个观测平台，生成时会写入对应的
-                                          ENABLE_* 开关与环境变量。
-                            </span>
-                            <Checklist
-                              items={TRACING_EXPORTERS}
-                              selected={tracingExporters}
-                              onToggle={toggleExporter}
-                            />
-                            <RuntimeEnvFields
-                                          env={TRACING_EXPORTERS.filter(
-                                            (item) =>
-                                              tracingExporters.includes(
-                                                item.id,
-                                              ),
-                              ).flatMap((item) => item.env)}
-                                          values={
-                                            draft.deployment?.envValues ?? {}
-                                          }
-                              onChange={patchDeploymentEnv}
                             />
                           </div>
                         )}

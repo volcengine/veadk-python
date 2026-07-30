@@ -379,7 +379,11 @@ test("advanced model connection settings use an accessible disclosure", () => {
 });
 
 test("built-in tools adapt columns and scroll after six rows", () => {
-  assert.match(createSource, /items=\{BUILTIN_TOOLS\}[\s\S]*?scrollRows=\{6\}/);
+  assert.match(createSource, /items=\{VISIBLE_BUILTIN_TOOLS\}[\s\S]*?scrollRows=\{6\}/);
+  assert.match(
+    createSource,
+    /HIDDEN_CREATE_TOOL_IDS = new Set\(\[[\s\S]*?"web_scraper"[\s\S]*?"text_to_speech"[\s\S]*?"vesearch"/,
+  );
   assert.match(
     createStyles,
     /\.cw-tools-list-shell\s*\{[\s\S]*?container-type:\s*inline-size;/,
@@ -610,7 +614,7 @@ test("remote Agent configures only the AgentKit center", () => {
   assert.doesNotMatch(createSource, /metaOf\("a2aCenter"\)/);
 });
 
-test("memory and tracing are grouped under advanced configuration", () => {
+test("advanced configuration only exposes memory settings", () => {
   assert.match(createSource, /aria-expanded=\{advancedConfigOpen\}/);
   assert.match(
     createSource,
@@ -623,8 +627,11 @@ test("memory and tracing are grouped under advanced configuration", () => {
   );
   assert.match(
     createSource,
-    /\{advancedConfigOpen && \([\s\S]*?<span>记忆<\/span>[\s\S]*?<span>观测<\/span>/,
+    /\{advancedConfigOpen && \([\s\S]*?<span>记忆<\/span>/,
   );
+  assert.doesNotMatch(createSource, /<span>观测<\/span>/);
+  assert.doesNotMatch(createSource, /观测 \/ Tracing/);
+  assert.doesNotMatch(createSource, /Tracing 导出器/);
   assert.doesNotMatch(createSource, /<span>观测与呈现<\/span>/);
   assert.doesNotMatch(
     createStyles,
