@@ -89,6 +89,7 @@ import {
 } from "../ui/ProjectPreview";
 import { Blocks, ThinkingPlaceholder } from "../ui/Blocks";
 import { DeploymentErrorMessage } from "../ui/DeploymentErrorMessage";
+import { StudioConfirmDialog } from "../ui/StudioConfirmDialog";
 import { TraceDrawer } from "../ui/TraceDrawer";
 import { isImeCompositionEvent } from "../ui/composerKeyboard";
 import {
@@ -2400,6 +2401,10 @@ export function CustomCreate({
   const [debugInput, setDebugInput] = useState("");
   const [debugTraceTarget, setDebugTraceTarget] =
     useState<DebugTraceTarget | null>(null);
+  const [debugLeaveConfirmOpen, setDebugLeaveConfirmOpen] = useState(false);
+  const [debugLeaveCleaning, setDebugLeaveCleaning] = useState(false);
+  const debugLeaveConfirmResolverRef =
+    useRef<((confirmed: boolean) => void) | null>(null);
   // The section nearest the top of the scroll container (scroll-spy) — drives
   // the right-hand step nav highlight.
   const [activeId, setActiveId] = useState<StepId>("basic");
@@ -2445,6 +2450,13 @@ export function CustomCreate({
           .catch((err) => console.warn("清理调试运行失败", err));
       }
       debugRunsRef.current.clear();
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      debugLeaveConfirmResolverRef.current?.(false);
+      debugLeaveConfirmResolverRef.current = null;
     };
   }, []);
 
@@ -2856,14 +2868,37 @@ export function CustomCreate({
     });
   };
 
+  const resolveDebugLeaveConfirm = (confirmed: boolean) => {
+    const resolve = debugLeaveConfirmResolverRef.current;
+    debugLeaveConfirmResolverRef.current = null;
+    resolve?.(confirmed);
+  };
+
+  const cancelDebugLeaveConfirm = () => {
+    if (debugLeaveCleaning) return;
+    setDebugLeaveConfirmOpen(false);
+    resolveDebugLeaveConfirm(false);
+  };
+
+  const acceptDebugLeaveConfirm = async () => {
+    if (debugLeaveCleaning) return;
+    setDebugLeaveCleaning(true);
+    try {
+      await cleanupDebugRuns();
+      setDebugLeaveConfirmOpen(false);
+      resolveDebugLeaveConfirm(true);
+    } finally {
+      setDebugLeaveCleaning(false);
+    }
+  };
+
   const confirmLeaveDebug = async () => {
     if (workspaceMode !== "validate" || activeDebugRunCount === 0) return true;
-    const confirmed = window.confirm(
-      "离开调试页面后，当前环境将被清理。您可以通过重新启动环境进行新的测试。",
-    );
-    if (!confirmed) return false;
-    await cleanupDebugRuns();
-    return true;
+    if (debugLeaveConfirmResolverRef.current) return false;
+    return new Promise<boolean>((resolve) => {
+      debugLeaveConfirmResolverRef.current = resolve;
+      setDebugLeaveConfirmOpen(true);
+    });
   };
 
   const openPublishPreview = async (variantId?: string) => {
@@ -4181,6 +4216,18 @@ export function CustomCreate({
           sessionId={debugTraceTarget.sessionId}
           title={`调用链路 · ${debugTraceTarget.variantName}`}
           onClose={() => setDebugTraceTarget(null)}
+        />
+      )}
+      {debugLeaveConfirmOpen && (
+        <StudioConfirmDialog
+          variant="warning"
+          title="离开调试？"
+          description="离开调试页面后，当前环境将被清理。您可以通过重新启动环境进行新的测试。"
+          confirmLabel={debugLeaveCleaning ? "清理中..." : "确定离开"}
+          closeLabel="关闭离开调试确认"
+          busy={debugLeaveCleaning}
+          onCancel={cancelDebugLeaveConfirm}
+          onConfirm={() => void acceptDebugLeaveConfirm()}
         />
       )}
       {discardConfirmOpen && (

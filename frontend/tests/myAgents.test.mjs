@@ -141,6 +141,10 @@ test("hides deleted Runtime cards and invalidates stale Runtime pages", () => {
   assert.match(appSource, /const \[hiddenRuntimeIds, setHiddenRuntimeIds\] = useState<Set<string>>/);
   assert.match(appSource, /invalidateRuntimeAgentCache\(pendingRuntimeIds\)/);
   assert.match(appSource, /invalidateRuntimeAgentCache\(deletedRuntimeIds\)/);
+  assert.match(appSource, /const selectedRuntimeId = runtimeIdForSelection\(connections, appName\)/);
+  assert.match(appSource, /deletedCurrentSelection[\s\S]*?deletedRuntimeIds\.has\(selectedRuntimeId\)/);
+  assert.match(appSource, /clearSelectedAgentAfterRemoval\(\)/);
+  assert.match(appSource, /agentSelectionClearedRef\.current = true/);
   assert.match(appSource, /hiddenRuntimeIds=\{hiddenRuntimeIds\}/);
 });
 
@@ -274,7 +278,8 @@ test("uses connected Runtime state only for the card action", () => {
   assert.match(pageSource, /agent\.runtime\?\.runtimeId === connectedRuntimeId/);
   assert.match(pageSource, /const connectedIndex = availableAgents\.findIndex/);
   assert.match(pageSource, /availableAgents\[connectedIndex\][\s\S]*?availableAgents\.slice\(0, connectedIndex\)/);
-  assert.match(appSource, /const connectedRuntimeId =[\s\S]*?currentRuntime\?\.runtimeId \?\?[\s\S]*?connections\.reduce/);
+  assert.match(appSource, /const connectedRuntimeId = currentRuntime\?\.runtimeId \?\? ""/);
+  assert.doesNotMatch(appSource, /const connectedRuntimeId =[\s\S]*?connections\.reduce/);
   assert.match(appSource, /connectedRuntimeId=\{connectedRuntimeId\}/);
 });
 

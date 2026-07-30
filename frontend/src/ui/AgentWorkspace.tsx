@@ -4,9 +4,7 @@ import {
   useRef,
   useState,
   type DragEvent,
-  type SVGProps,
 } from "react";
-import { createPortal } from "react-dom";
 import {
   ArrowRight,
   Check,
@@ -37,6 +35,7 @@ import { AgentBuildCanvas } from "../create/AgentBuildCanvas";
 import { emptyDraft, type AgentDraft } from "../create/types";
 import { BUILTIN_TOOLS } from "../create/veadkCatalog";
 import type { DeploymentTaskUpdate } from "./ProjectPreview";
+import { StudioConfirmDialog } from "./StudioConfirmDialog";
 import "./AgentWorkspace.css";
 
 type WorkspaceView = "library" | "evaluation";
@@ -74,42 +73,6 @@ interface EvaluationRun {
   createdAt: string;
   score: number;
   status: "completed";
-}
-
-function DeleteWarningIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      {...props}
-    >
-      <path d="M12 4.2 21 19H3L12 4.2Z" />
-      <path d="M12 9.4v4.2" />
-      <path d="M12 16.8h.01" />
-    </svg>
-  );
-}
-
-function DialogCloseIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      aria-hidden="true"
-      {...props}
-    >
-      <path d="m7 7 10 10" />
-      <path d="m17 7-10 10" />
-    </svg>
-  );
 }
 
 interface EvaluationGroup {
@@ -657,7 +620,6 @@ export function AgentWorkspace({
   const [focusedCaseId, setFocusedCaseId] = useState("");
   const [expandedCaseIds, setExpandedCaseIds] = useState<Set<string>>(() => new Set());
   const suppressAgentClickRef = useRef(false);
-  const deleteCancelButtonRef = useRef<HTMLButtonElement>(null);
   const appliedFocusKeyRef = useRef("");
   const caseTableRef = useRef<HTMLDivElement | null>(null);
   const [evaluationGroups, setEvaluationGroups] = useState(DEFAULT_EVALUATION_GROUPS);
@@ -1063,23 +1025,6 @@ export function AgentWorkspace({
       return next.size === current.size ? current : next;
     });
   }, [filteredDrafts]);
-
-  useEffect(() => {
-    if (!deleteConfirmTarget) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    deleteCancelButtonRef.current?.focus();
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !deletingAgents) {
-        setDeleteConfirmTarget(null);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [deleteConfirmTarget, deletingAgents]);
 
   const cases = selectedAgent?.runtimeId ? feedbackCases : DEFAULT_CASES;
   const visibleCases = cases.filter((item) => {
@@ -2130,71 +2075,19 @@ export function AgentWorkspace({
         )}
       </div>
     </div>
-    {deleteConfirmTarget && createPortal(
-      <div
-        className="studio-confirm-backdrop"
-        onMouseDown={(event) => {
-          if (event.target === event.currentTarget && !deletingAgents) {
-            setDeleteConfirmTarget(null);
-          }
-        }}
-      >
-        <section
-          className="studio-confirm-dialog studio-confirm-dialog--danger"
-          role="alertdialog"
-          aria-modal="true"
-          aria-labelledby="aw-delete-confirm-title"
-          aria-describedby="aw-delete-confirm-description"
-          aria-busy={deletingAgents || undefined}
-        >
-          <header className="studio-confirm-head">
-            <div className="studio-confirm-title-wrap">
-              <span
-                className="studio-confirm-title-icon"
-                aria-hidden="true"
-              >
-                <DeleteWarningIcon />
-              </span>
-              <h2 id="aw-delete-confirm-title">{deleteConfirmTarget.title}</h2>
-            </div>
-            <button
-              type="button"
-              className="studio-confirm-close"
-              onClick={() => setDeleteConfirmTarget(null)}
-              disabled={deletingAgents}
-              aria-label="关闭删除确认"
-            >
-              <DialogCloseIcon />
-            </button>
-          </header>
-          <div className="studio-confirm-body">
-            <p id="aw-delete-confirm-description">
-              {deleteConfirmTarget.description}
-            </p>
-          </div>
-          <footer className="studio-confirm-actions">
-            <button
-              ref={deleteCancelButtonRef}
-              type="button"
-              onClick={() => setDeleteConfirmTarget(null)}
-              disabled={deletingAgents}
-            >
-              取消
-            </button>
-            <button
-              type="button"
-              className="studio-confirm-primary"
-              onClick={() => void confirmDeleteTarget()}
-              disabled={deletingAgents}
-            >
-              {deletingAgents ? "删除中..." : deleteConfirmTarget.confirmLabel}
-            </button>
-          </footer>
-        </section>
-      </div>,
-      document.body,
+    {deleteConfirmTarget && (
+      <StudioConfirmDialog
+        variant="danger"
+        title={deleteConfirmTarget.title}
+        description={deleteConfirmTarget.description}
+        confirmLabel={deletingAgents ? "删除中..." : deleteConfirmTarget.confirmLabel}
+        closeLabel="关闭删除确认"
+        busy={deletingAgents}
+        onCancel={() => setDeleteConfirmTarget(null)}
+        onConfirm={() => void confirmDeleteTarget()}
+      />
     )}
-    </>
+  </>
   );
 }
 

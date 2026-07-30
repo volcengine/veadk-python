@@ -196,6 +196,25 @@ test("debug comparison keeps equal spacing above cards and composer", () => {
   );
 });
 
+test("leaving debug mode uses the shared Studio confirm dialog", () => {
+  const confirmStart = createSource.indexOf("const confirmLeaveDebug = async () =>");
+  const publishStart = createSource.indexOf("const openPublishPreview = async", confirmStart);
+  assert.ok(confirmStart >= 0 && publishStart > confirmStart);
+  assert.match(createSource, /import \{ StudioConfirmDialog \} from "\.\.\/ui\/StudioConfirmDialog"/);
+  assert.match(createSource, /const \[debugLeaveConfirmOpen, setDebugLeaveConfirmOpen\] = useState\(false\)/);
+  assert.match(createSource, /debugLeaveConfirmResolverRef/);
+  assert.doesNotMatch(
+    createSource.slice(confirmStart, publishStart),
+    /window\.confirm/,
+  );
+  assert.match(
+    createSource,
+    /debugLeaveConfirmOpen && \([\s\S]*?<StudioConfirmDialog[\s\S]*?variant="warning"[\s\S]*?title="离开调试？"/,
+  );
+  assert.match(createSource, /confirmLabel=\{debugLeaveCleaning \? "清理中\.\.\." : "确定离开"\}/);
+  assert.match(createSource, /onConfirm=\{\(\) => void acceptDebugLeaveConfirm\(\)\}/);
+});
+
 test("agent type is a form section with radio choices", () => {
   assert.match(createSource, /<Section meta=\{metaOf\("type"\)\}>/);
   assert.match(createSource, /role="radiogroup" aria-label="Agent 类型"/);

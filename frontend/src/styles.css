@@ -6120,6 +6120,11 @@ a.search-result { text-decoration: none; color: inherit; }
   background: hsl(var(--primary) / 0.9);
 }
 
+.studio-confirm-dialog--warning .studio-confirm-title-icon {
+  background: hsl(38 92% 50% / 0.12);
+  color: hsl(32 92% 38%);
+}
+
 .studio-confirm-dialog--danger .studio-confirm-title-icon {
   background: hsl(var(--destructive) / 0.1);
   color: hsl(var(--destructive));

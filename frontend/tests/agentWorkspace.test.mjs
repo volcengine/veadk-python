@@ -19,6 +19,10 @@ const customCreateSource = readFileSync(
   new URL("../src/create/CustomCreate.tsx", import.meta.url),
   "utf8",
 );
+const studioConfirmSource = readFileSync(
+  new URL("../src/ui/StudioConfirmDialog.tsx", import.meta.url),
+  "utf8",
+);
 const projectPreviewSource = readFileSync(
   new URL("../src/ui/ProjectPreview.tsx", import.meta.url),
   "utf8",
@@ -314,6 +318,12 @@ test("workspace keeps agent deletion in selection mode and the floating detail a
   assert.match(appSource, /const deleteWorkspaceAgents = useCallback/);
   assert.match(appSource, /await deleteRuntime\(agent\.runtimeId, agent\.region\)/);
   assert.doesNotMatch(appSource, /agent\.region \?\? "cn-beijing"/);
+  assert.match(appSource, /const selectedRuntimeId = runtimeIdForSelection\(connections, appName\)/);
+  assert.match(appSource, /deletedCurrentSelection[\s\S]*?deletedRuntimeIds\.has\(selectedRuntimeId\)/);
+  assert.doesNotMatch(
+    appSource,
+    /if \(targets\.some\(\(agent\) => agent\.id === appName\)\) \{[\s\S]*?setAppName\(""\)[\s\S]*?\}/,
+  );
   assert.match(
     appSource,
     /deletedRuntimeIds\.has\(agentDetailTarget\.runtime\.runtimeId\)[\s\S]*?setManageAgents\(false\)[\s\S]*?setAgentDetailTarget\(null\)[\s\S]*?setMyAgents\(true\)/,
@@ -341,31 +351,36 @@ test("workspace keeps agent deletion in selection mode and the floating detail a
     /window\.confirm/,
   );
   assert.match(workspaceSource, /const \[deleteConfirmTarget, setDeleteConfirmTarget\]/);
-  assert.match(workspaceSource, /createPortal\(/);
-  assert.match(workspaceSource, /function DeleteWarningIcon\(props: SVGProps<SVGSVGElement>\)/);
-  assert.match(workspaceSource, /function DialogCloseIcon\(props: SVGProps<SVGSVGElement>\)/);
+  assert.match(workspaceSource, /import \{ StudioConfirmDialog \} from "\.\/StudioConfirmDialog"/);
+  assert.match(workspaceSource, /<StudioConfirmDialog[\s\S]*?variant="danger"/);
+  assert.match(workspaceSource, /closeLabel="关闭删除确认"/);
+  assert.match(studioConfirmSource, /createPortal\(/);
+  assert.match(studioConfirmSource, /function ConfirmWarningIcon\(props: SVGProps<SVGSVGElement>\)/);
+  assert.match(studioConfirmSource, /function ConfirmCloseIcon\(props: SVGProps<SVGSVGElement>\)/);
   assert.doesNotMatch(
     workspaceSource.slice(0, workspaceSource.indexOf("} from \"lucide-react\"")),
     /\bAlertTriangle\b|^\s*X,\s*$/m,
   );
-  assert.match(workspaceSource, /role="alertdialog"/);
-  assert.match(workspaceSource, /aria-modal="true"/);
-  assert.match(workspaceSource, /aria-labelledby="aw-delete-confirm-title"/);
-  assert.match(workspaceSource, /aria-describedby="aw-delete-confirm-description"/);
-  assert.match(workspaceSource, /className="studio-confirm-backdrop"/);
-  assert.match(workspaceSource, /className="studio-confirm-dialog studio-confirm-dialog--danger"/);
-  assert.match(workspaceSource, /className="studio-confirm-head"/);
-  assert.match(workspaceSource, /className="studio-confirm-body"/);
-  assert.match(workspaceSource, /className="studio-confirm-actions"/);
-  assert.match(workspaceSource, /className="studio-confirm-primary"/);
+  assert.match(studioConfirmSource, /role="alertdialog"/);
+  assert.match(studioConfirmSource, /aria-modal="true"/);
+  assert.match(studioConfirmSource, /aria-labelledby=\{titleId\}/);
+  assert.match(studioConfirmSource, /aria-describedby=\{descriptionId\}/);
+  assert.match(studioConfirmSource, /className="studio-confirm-backdrop"/);
+  assert.match(studioConfirmSource, /studio-confirm-dialog--\$\{variant\}/);
+  assert.match(studioConfirmSource, /className="studio-confirm-head"/);
+  assert.match(studioConfirmSource, /className="studio-confirm-body"/);
+  assert.match(studioConfirmSource, /className="studio-confirm-actions"/);
+  assert.match(studioConfirmSource, /className="studio-confirm-primary"/);
+  assert.match(appStyles, /\.studio-confirm-dialog--warning \.studio-confirm-title-icon/);
+  assert.match(appStyles, /\.studio-confirm-dialog--danger \.studio-confirm-title-icon/);
   assert.doesNotMatch(
-    workspaceSource.slice(workspaceSource.indexOf("deleteConfirmTarget && createPortal")),
+    studioConfirmSource,
     /pp-confirm|code-browser/,
   );
   assert.match(workspaceSource, /setDeleteConfirmTarget\(\{[\s\S]*?kind: "selection"/);
   assert.match(workspaceSource, /setDeleteConfirmTarget\(\{[\s\S]*?kind: "agent"/);
   assert.match(workspaceSource, /setDeleteConfirmTarget\(\{[\s\S]*?kind: "draft"/);
-  assert.match(workspaceSource, /onClick=\{\(\) => void confirmDeleteTarget\(\)\}/);
+  assert.match(workspaceSource, /onConfirm=\{\(\) => void confirmDeleteTarget\(\)\}/);
   assert.match(workspaceSource, /await onDeleteAgents\(agentsToDelete\)/);
   assert.match(workspaceSource, /onDeleteDrafts\?\.\(draftsToDelete\)/);
   assert.match(workspaceSource, /aria-pressed=\{selectionMode \? isSelectedForDelete : undefined\}/);
