@@ -1041,9 +1041,20 @@ function AgentBuildCanvasInner({
         : { padding: 0.14, minZoom: 0.42, maxZoom: 1.1 },
     [compactCanvas, readOnly],
   );
-  const fitAfterLayout = useCallback(() => {
+  const fitAfterLayout = useCallback((attempt = 0) => {
     window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => void fitView(fitOptions));
+      window.requestAnimationFrame(() => {
+        const container = canvasRef.current;
+        if (
+          container &&
+          (container.clientWidth === 0 || container.clientHeight === 0) &&
+          attempt < 8
+        ) {
+          fitAfterLayout(attempt + 1);
+          return;
+        }
+        void fitView(fitOptions);
+      });
     });
   }, [fitOptions, fitView]);
 
@@ -1137,6 +1148,7 @@ function AgentBuildCanvasInner({
           zoomOnScroll={!readOnly || interactivePreview}
           fitView
           fitViewOptions={fitOptions}
+          onInit={() => fitAfterLayout()}
           minZoom={readOnly ? 0.05 : 0.35}
           maxZoom={1.6}
           proOptions={{ hideAttribution: true }}

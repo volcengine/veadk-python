@@ -42,7 +42,9 @@ import {
   listSessions,
   removeSessionCapability,
   runSSE,
+  refreshAgentFeedbackCases,
   submitMessageFeedback,
+  upsertCachedAgentFeedbackCase,
   uploadMedia,
   getUiConfig,
   type AdkEvent,
@@ -325,6 +327,13 @@ function turnText(turn: Turn): string {
     .map((b) => (b.kind === "text" ? b.text : ""))
     .join("")
     .trim();
+}
+
+function previousUserTurnText(turns: Turn[], turnIndex: number): string {
+  for (let index = turnIndex - 1; index >= 0; index -= 1) {
+    if (turns[index].role === "user") return turnText(turns[index]);
+  }
+  return "";
 }
 
 const A2UI_TOOL_NAME = "send_a2ui_json_to_client";
@@ -1037,6 +1046,8 @@ export default function App() {
   const [focusedWorkspaceCaseKind, setFocusedWorkspaceCaseKind] =
     useState<"good" | "bad">("good");
   const [feedbackTargetEventId, setFeedbackTargetEventId] = useState("");
+  const [feedbackCasePreview, setFeedbackCasePreview] =
+    useState<AgentFeedbackCase | null>(null);
   const [myAgents, setMyAgents] = useState(false);
   // A search result may belong to a different agent; remember it so the
   // agent-switch effect opens it instead of resetting to a fresh chat.
@@ -2297,6 +2308,14 @@ export default function App() {
         eventIds: [...scope.eventIds],
       });
     }
+    setFeedbackCasePreview((current) => {
+      if (!current) return current;
+      return items.some((item) =>
+        item.id === current.id || item.messageId === current.messageId
+      )
+        ? null
+        : current;
+    });
   }
 
   async function ensureSession(activate = true): Promise<string> {
@@ -2785,15 +2804,27 @@ export default function App() {
           region: currentConn.region,
         }
       : undefined;
-  const connectedRuntimeId = currentRuntime?.runtimeId ?? "";
+  const connectedRuntimeId =
+    currentRuntime?.runtimeId ??
+    connections.reduce(
+      (runtimeId, connection) => connection.runtimeId ?? runtimeId,
+      "",
+    );
+  const currentRuntimeAppName = currentConn
+    ? currentConn.apps.find((app) =>
+        remoteAppId(currentConn.id, app) === appName
+      ) ?? agentInfo?.appName ?? currentConn.apps[0] ?? currentConn.name
+    : "";
 
   const rateAssistantTurn = async (
     turn: Turn,
     rating: MessageFeedbackRating | null,
+    input = "",
   ) => {
     const eventId = turn.meta?.eventId;
     const sid = sessionId;
     if (!eventId || !sid || !currentRuntime) return;
+    const output = turnText(turn);
     const previousFeedback = turn.meta?.feedback;
     const optimisticFeedback = {
       ...previousFeedback,
@@ -2809,6 +2840,23 @@ export default function App() {
       ),
     );
     setFeedbackPendingIds((current) => new Set(current).add(eventId));
+    if (currentConn?.runtimeId && currentRuntimeAppName) {
+      upsertCachedAgentFeedbackCase({
+        runtimeId: currentConn.runtimeId,
+        region: currentConn.region ?? "cn-beijing",
+        appName: currentRuntimeAppName,
+        userId,
+        sessionId: sid,
+        messageId: eventId,
+        invocationId: turn.meta?.invocationId,
+        rating,
+        input,
+        output,
+        createdAt: turn.meta?.ts
+          ? new Date(turn.meta.ts * 1000).toISOString()
+          : undefined,
+      });
+    }
     try {
       const feedback = await submitMessageFeedback({
         appName,
@@ -2837,6 +2885,29 @@ export default function App() {
             : item,
         ),
       );
+      if (currentConn?.runtimeId && currentRuntimeAppName) {
+        upsertCachedAgentFeedbackCase({
+          runtimeId: currentConn.runtimeId,
+          region: currentConn.region ?? "cn-beijing",
+          appName: currentRuntimeAppName,
+          userId,
+          sessionId: sid,
+          messageId: eventId,
+          invocationId: turn.meta?.invocationId,
+          rating: feedback.rating,
+          input,
+          output,
+          createdAt: turn.meta?.ts
+            ? new Date(turn.meta.ts * 1000).toISOString()
+            : undefined,
+        });
+        refreshAgentFeedbackCases({
+          runtimeId: currentConn.runtimeId,
+          region: currentConn.region ?? "cn-beijing",
+          appName: currentRuntimeAppName,
+          pageSize: 100,
+        });
+      }
     } catch (feedbackError) {
       setTurnsFor(sid, (current) =>
         current.map((item) =>
@@ -2845,6 +2916,23 @@ export default function App() {
             : item,
         ),
       );
+      if (currentConn?.runtimeId && currentRuntimeAppName) {
+        upsertCachedAgentFeedbackCase({
+          runtimeId: currentConn.runtimeId,
+          region: currentConn.region ?? "cn-beijing",
+          appName: currentRuntimeAppName,
+          userId,
+          sessionId: sid,
+          messageId: eventId,
+          invocationId: turn.meta?.invocationId,
+          rating: previousFeedback?.rating ?? null,
+          input,
+          output,
+          createdAt: turn.meta?.ts
+            ? new Date(turn.meta.ts * 1000).toISOString()
+            : undefined,
+        });
+      }
       if (viewSidRef.current === sid) {
         setError(
           feedbackError instanceof Error
@@ -2859,6 +2947,75 @@ export default function App() {
         return next;
       });
     }
+  };
+
+  const openCurrentAgentCases = (
+    kind?: MessageFeedbackRating | null,
+    turn?: Turn,
+    input = "",
+  ) => {
+    if (!currentRuntime || !currentConn?.runtimeId) return;
+    const realApp = currentRuntimeAppName;
+    const displayName =
+      currentConn.appLabels?.[realApp] ??
+      agentInfo?.name ??
+      currentConn.name;
+    const caseKind = kind === "bad" ? "bad" : "good";
+    const eventId = turn?.meta?.eventId ?? "";
+    const output = turn ? turnText(turn) : "";
+    if ((kind === "good" || kind === "bad") && eventId && output && sessionId) {
+      const createdAt = turn?.meta?.ts
+        ? new Date(turn.meta.ts * 1000).toISOString()
+        : new Date().toISOString();
+      setFeedbackCasePreview({
+        id: `local:${currentConn.runtimeId}:${sessionId}:${eventId}`,
+        itemKey: `local:${eventId}`,
+        kind: caseKind,
+        input,
+        output,
+        referenceOutput: output,
+        comment: "",
+        agentName: realApp,
+        sessionId,
+        messageId: eventId,
+        runtimeId: currentConn.runtimeId,
+        invocationId: turn?.meta?.invocationId ?? "",
+        userId,
+        createdAt,
+        evaluationSetId: "",
+        evaluationSetName: "",
+        workspaceId: "",
+      });
+    } else {
+      setFeedbackCasePreview(null);
+    }
+    setFeedbackCaseReturnAgentId("");
+    setFeedbackTargetEventId("");
+    setAgentDetailTarget({
+      id: currentConn.runtimeId,
+      appName: realApp,
+      name: displayName,
+      description: agentInfo?.description || currentConn.name,
+      createdAt: "—",
+      runtime: {
+        runtimeId: currentConn.runtimeId,
+        region: currentConn.region ?? "cn-beijing",
+        currentVersion: currentConn.currentVersion,
+        canDelete: libraryRuntimePermissions[currentConn.runtimeId]?.canDelete === true,
+      },
+    });
+    setFocusedDeploymentTaskId("");
+    setFocusedWorkspaceAgentId("");
+    setFocusedWorkspaceAgentSection("evaluations");
+    setFocusedWorkspaceCaseKind(caseKind);
+    setMyAgents(false);
+    setManageAgents(true);
+    setCreateView(null);
+    setSkillCenter(false);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSearchView(false);
+    setError("");
   };
 
   // Selecting an agent starts a fresh chat; any
@@ -2943,17 +3100,29 @@ export default function App() {
     setError("");
   };
 
-  const talkToWorkspaceAgent = (id: string) => {
+  const talkToWorkspaceAgent = async (agent: AgentEntry) => {
     setFeedbackCaseReturnAgentId("");
     setFeedbackTargetEventId("");
-    if (agentDetailTarget) {
-      void connectMyAgent(agentDetailTarget);
-      return;
-    }
     setFocusedDeploymentTaskId("");
     setFocusedWorkspaceAgentId("");
+    setAgentDetailTarget(null);
     setManageAgents(false);
-    void selectAgent(id);
+    if (agent.runtimeId && agent.id.startsWith("detail:")) {
+      try {
+        const agentId = await connectRuntime(
+          agent.runtimeId,
+          agent.label,
+          agent.region ?? "cn-beijing",
+          agent.currentVersion,
+        );
+        setConnections(loadConnections());
+        selectAgent(agentId);
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
+      return;
+    }
+    selectAgent(agent.id);
   };
 
   const selectWorkspaceAgentFromNavbar = (id: string) => {
@@ -2973,7 +3142,7 @@ export default function App() {
     ? {
         id: `detail:${agentDetailTarget.runtime.runtimeId}`,
         label: agentDetailTarget.name,
-        app: agentDetailTarget.name,
+        app: agentDetailTarget.appName ?? agentDetailTarget.name,
         remote: true,
         runtimeApp: detailConnection?.apps[0],
         runtimeId: agentDetailTarget.runtime.runtimeId,
@@ -3363,6 +3532,7 @@ export default function App() {
                 focusedAgentId={detailAgentEntry?.id ?? focusedWorkspaceAgentId}
                 focusedAgentSection={focusedWorkspaceAgentSection}
                 focusedCaseKind={focusedWorkspaceCaseKind}
+                feedbackCasePreview={feedbackCasePreview}
                 detailOnly={!!detailAgentEntry || !!focusedDeploymentTaskId}
                 onRetryAgents={() => void refreshAgentLibrary()}
                 onAgentOrderChange={saveWorkspaceAgentOrder}
@@ -3673,6 +3843,7 @@ export default function App() {
             const canRate = Boolean(
               currentRuntime && feedbackEventId && turnText(turn),
             );
+            const feedbackInput = canRate ? previousUserTurnText(turns, i) : "";
             return (
               <motion.div
                 key={i}
@@ -3753,6 +3924,7 @@ export default function App() {
                                 onClick={() => void rateAssistantTurn(
                                   turn,
                                   feedbackRating === "good" ? null : "good",
+                                  feedbackInput,
                                 )}
                               >
                                 <FeedbackUpIcon
@@ -3775,12 +3947,26 @@ export default function App() {
                                 onClick={() => void rateAssistantTurn(
                                   turn,
                                   feedbackRating === "bad" ? null : "bad",
+                                  feedbackInput,
                                 )}
                               >
                                 <FeedbackDownIcon
                                   className="icon"
                                   filled={feedbackRating === "bad"}
                                 />
+                              </button>
+                              <button
+                                type="button"
+                                className="icon-btn feedback-btn"
+                                aria-label="查看评测案例"
+                                title="查看评测案例"
+                                onClick={() => openCurrentAgentCases(
+                                  feedbackRating,
+                                  turn,
+                                  feedbackInput,
+                                )}
+                              >
+                                <ListTodo className="icon" aria-hidden />
                               </button>
                             </>
                           )}
