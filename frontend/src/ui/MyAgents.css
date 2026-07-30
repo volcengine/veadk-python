@@ -465,9 +465,9 @@
   gap: 3px 12px;
 }
 
-.codex-session-id {
+.codex-session-user-id {
   display: block;
-  margin-top: 5px;
+  margin-top: 4px;
   overflow: hidden;
   color: hsl(var(--muted-foreground));
   font-size: 10.5px;

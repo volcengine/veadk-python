@@ -34,6 +34,12 @@ from urllib.parse import urlsplit, urlunsplit
 from fastapi import Request
 
 from veadk.cli.agentkit_sandbox_region import is_agentkit_resource_not_found
+from veadk.cli.agentkit_session_metadata import (
+    SESSION_DISPLAY_NAME_MAX_LENGTH,
+    build_create_session_request,
+    call_session_client,
+    session_display_name,
+)
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -41,6 +47,7 @@ logger = get_logger(__name__)
 STUDIO_SANDBOX_TOOL_NAME = "veadk-studio-codex"
 STUDIO_SANDBOX_TTL_SECONDS = 28_800
 STUDIO_SANDBOX_MAX_ACTIVE = 20
+STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH = SESSION_DISPLAY_NAME_MAX_LENGTH
 _SANDBOX_CHAT_TOOL_ENV = "SANDBOX_CHAT_CODEX"
 _CREATE_SESSION_START_FAIL_CODE = "ErrCreateSessionFail"
 _SESSION_NOT_FOUND_CODE = "InvalidResource.NotFound"
@@ -61,6 +68,12 @@ class SandboxConfigurationError(SandboxError):
     """Required server-side Sandbox configuration is missing."""
 
     code = "SANDBOX_NOT_CONFIGURED"
+
+
+class SandboxValidationError(SandboxError):
+    """A Studio Sandbox request did not satisfy the public contract."""
+
+    code = "SANDBOX_INVALID_REQUEST"
 
 
 class SandboxProvisioningError(SandboxError):
@@ -166,6 +179,7 @@ class SandboxCloudSession:
     created_at: str = ""
     expire_at: str = ""
     tool_type: str = ""
+    display_name: str = ""
 
 
 @dataclass
@@ -207,7 +221,9 @@ class SandboxCloudGateway(Protocol):
         """Resolve one existing Session and its private Endpoint."""
         raise NotImplementedError
 
-    async def create_session(self, tool_id: str) -> SandboxCloudSession:
+    async def create_session(
+        self, tool_id: str, display_name: str = ""
+    ) -> SandboxCloudSession:
         """Create a fresh remote Sandbox session."""
         raise NotImplementedError
 
@@ -259,8 +275,12 @@ class AgentkitSandboxGateway:
             client = self._client(region) if self._region_candidates else self._client()
         else:
             client = self._client
-        method = getattr(client, method_name)
-        return await asyncio.to_thread(method, request)
+        return await asyncio.to_thread(
+            call_session_client,
+            client,
+            method_name,
+            request,
+        )
 
     async def _reconcile_created_session(
         self, tool_id: str, user_session_id: str, region: str = ""
@@ -320,6 +340,7 @@ class AgentkitSandboxGateway:
             created_at=str(getattr(value, "created_at", "") or "").strip(),
             expire_at=str(getattr(value, "expire_at", "") or "").strip(),
             tool_type=str(getattr(value, "tool_type", "") or "").strip(),
+            display_name=session_display_name(value),
         )
 
     async def list_sessions(self, tool_id: str) -> list[SandboxCloudSession]:
@@ -400,17 +421,17 @@ class AgentkitSandboxGateway:
                 ) from error
         raise SandboxSessionNotFoundError("AgentKit Session 不存在或已过期。")
 
-    async def create_session(self, tool_id: str) -> SandboxCloudSession:
-        from agentkit.sdk.tools import types as tools_types
-
+    async def create_session(
+        self, tool_id: str, display_name: str = ""
+    ) -> SandboxCloudSession:
         user_session_id = f"studio-{uuid.uuid4()}"
         regions = self._region_candidates or ("",)
         for index, region in enumerate(regions):
-            request = tools_types.CreateSessionRequest(
-                ToolId=tool_id,
-                Ttl=STUDIO_SANDBOX_TTL_SECONDS,
-                TtlUnit="second",
-                UserSessionId=user_session_id,
+            request = build_create_session_request(
+                tool_id=tool_id,
+                ttl_seconds=STUDIO_SANDBOX_TTL_SECONDS,
+                user_session_id=user_session_id,
+                display_name=display_name,
             )
             create_task = asyncio.create_task(
                 self._call("create_session", request, region=region)
@@ -454,6 +475,7 @@ class AgentkitSandboxGateway:
                 endpoint=endpoint,
                 region=region,
                 status="Ready" if endpoint else "Creating",
+                display_name=display_name,
             )
         raise SandboxProvisioningError("无法在支持的地域创建 AgentKit 沙箱会话。")
 
@@ -804,9 +826,18 @@ class SandboxConversationService:
         del owner_id
         return await self._gateway.list_sessions(self._tool_id())
 
-    async def create(self, owner_id: str) -> SandboxCloudSession:
+    async def create(
+        self, owner_id: str, display_name: object = ""
+    ) -> SandboxCloudSession:
         """Create a cloud Session without opening a conversation connection."""
         del owner_id
+        if not isinstance(display_name, str):
+            raise SandboxValidationError("智能体名称必须是文本。")
+        display_name = display_name.strip()
+        if len(display_name) > STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH:
+            raise SandboxValidationError(
+                f"智能体名称不能超过 {STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH} 个字符。"
+            )
         tool_id = self._tool_id()
         await self.cleanup_expired()
         async with self._registry_lock:
@@ -816,7 +847,7 @@ class SandboxConversationService:
                 raise SandboxCapacityError("Sandbox 创建或连接数已达上限，请稍后重试。")
             self._sessions_starting += 1
         try:
-            return await self._gateway.create_session(tool_id)
+            return await self._gateway.create_session(tool_id, display_name)
         finally:
             async with self._registry_lock:
                 self._sessions_starting -= 1
@@ -921,6 +952,8 @@ def mount_sandbox_routes(
         status_code = 500
         if isinstance(error, SandboxConfigurationError):
             status_code = 503
+        elif isinstance(error, SandboxValidationError):
+            status_code = 422
         elif isinstance(error, SandboxSessionNotFoundError):
             status_code = 404
         elif isinstance(error, SandboxSessionUnavailableError):
@@ -947,6 +980,7 @@ def mount_sandbox_routes(
             "expireAt": session.expire_at,
             "toolType": session.tool_type,
             "region": session.region,
+            "displayName": session.display_name,
         }
 
     @app.get("/web/sandbox/capabilities")
@@ -964,8 +998,21 @@ def mount_sandbox_routes(
 
     @app.post("/web/sandbox/sessions")
     async def _start_sandbox_session(request: Request) -> dict[str, str]:
+        owner_id = owner_resolver(request)
         try:
-            session = await service.create(owner_resolver(request))
+            body = await request.body()
+            if body:
+                try:
+                    data = json.loads(body)
+                except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                    raise SandboxValidationError(
+                        "创建智能体的请求不是有效 JSON。"
+                    ) from error
+                if not isinstance(data, dict):
+                    raise SandboxValidationError("创建智能体的请求格式无效。")
+            else:
+                data = {}
+            session = await service.create(owner_id, data.get("displayName", ""))
         except SandboxError as error:
             raise _http_error(error) from error
         return {

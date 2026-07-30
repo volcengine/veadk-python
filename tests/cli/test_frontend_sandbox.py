@@ -37,6 +37,7 @@ from veadk.cli.frontend_sandbox import (
     SandboxProvisioningError,
     SandboxSessionNotFoundError,
     SandboxStreamEvent,
+    STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH,
     mount_sandbox_routes,
 )
 
@@ -45,6 +46,7 @@ class _FakeGateway:
     def __init__(self) -> None:
         self.created = 0
         self.tool_ids: list[str] = []
+        self.display_names: list[str] = []
         self.deleted: list[SandboxCloudSession] = []
         self.thread_ids: list[str | None] = []
         self.sessions: dict[str, SandboxCloudSession] = {
@@ -74,9 +76,12 @@ class _FakeGateway:
             raise SandboxSessionNotFoundError("AgentKit Session 不存在或已过期。")
         return session
 
-    async def create_session(self, tool_id: str) -> SandboxCloudSession:
+    async def create_session(
+        self, tool_id: str, display_name: str = ""
+    ) -> SandboxCloudSession:
         self.created += 1
         self.tool_ids.append(tool_id)
+        self.display_names.append(display_name)
         session = SandboxCloudSession(
             tool_id=tool_id,
             instance_id=f"remote-{self.created}",
@@ -87,6 +92,7 @@ class _FakeGateway:
             created_at="2026-07-30T09:00:00Z",
             expire_at="2026-07-30T17:00:00Z",
             tool_type="CodeEnv",
+            display_name=display_name,
         )
         self.sessions[session.instance_id] = session
         return session
@@ -142,7 +148,11 @@ def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
     gateway = _FakeGateway()
     with TestClient(_app(gateway)) as client:
         listed = client.get("/web/sandbox/sessions", headers={"X-Test-User": "alice"})
-        create = client.post("/web/sandbox/sessions", headers={"X-Test-User": "alice"})
+        create = client.post(
+            "/web/sandbox/sessions",
+            headers={"X-Test-User": "alice"},
+            json={"displayName": "  我的智能体  "},
+        )
 
         assert create.status_code == 200
         assert create.json()["status"] == "Ready"
@@ -185,9 +195,12 @@ def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
                 "expireAt": "2026-07-30T16:00:00Z",
                 "toolType": "CodeEnv",
                 "region": "cn-beijing",
+                "displayName": "",
             }
         ]
     }
+    assert create.json()["displayName"] == "我的智能体"
+    assert gateway.display_names == ["我的智能体"]
     assert connected.status_code == 200
     assert connected.json()["sessionId"] == "remote-existing"
     assert "endpoint" not in connected.json()
@@ -205,6 +218,26 @@ def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
     assert disconnected.json() == {"disconnected": True}
     assert gateway.deleted == []
     assert session_id == "remote-1"
+
+
+def test_sandbox_create_rejects_invalid_display_names() -> None:
+    gateway = _FakeGateway()
+    with TestClient(_app(gateway)) as client:
+        too_long = client.post(
+            "/web/sandbox/sessions",
+            headers={"X-Test-User": "alice"},
+            json={"displayName": "名" * (STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH + 1)},
+        )
+        wrong_type = client.post(
+            "/web/sandbox/sessions",
+            headers={"X-Test-User": "alice"},
+            json={"displayName": 42},
+        )
+
+    assert too_long.status_code == 422
+    assert "40" in too_long.text
+    assert wrong_type.status_code == 422
+    assert gateway.display_names == []
 
 
 def test_sandbox_capabilities_report_configured_tool(
