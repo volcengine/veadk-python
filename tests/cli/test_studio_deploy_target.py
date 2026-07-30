@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -182,19 +183,38 @@ def test_studio_deploy_surfaces_redacted_provisioning_error_chain(
 
 
 @pytest.mark.parametrize(
-    ("target_args", "expected_region", "expected_identity_region", "expected_project"),
+    (
+        "target_args",
+        "expected_region",
+        "expected_identity_region",
+        "expected_project",
+        "expected_update_bucket",
+        "update_bucket_env",
+    ),
     [
-        ([], "cn-beijing", "cn-beijing", "default"),
+        ([], "cn-beijing", "cn-beijing", "default", "veadk-studio", None),
         (
             [
                 "--region",
                 "cn-shanghai",
                 "--project",
                 "studio-project",
+                "--studio-update-bucket",
+                "custom-studio-releases",
             ],
             "cn-shanghai",
             "cn-beijing",
             "studio-project",
+            "custom-studio-releases",
+            "environment-studio-releases",
+        ),
+        (
+            [],
+            "cn-beijing",
+            "cn-beijing",
+            "default",
+            "environment-studio-releases",
+            "environment-studio-releases",
         ),
     ],
 )
@@ -204,9 +224,16 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     expected_region: str,
     expected_identity_region: str,
     expected_project: str,
+    expected_update_bucket: str,
+    update_bucket_env: str | None,
 ) -> None:
     captured: dict[str, object] = {}
     credential_tool_ids: list[str] = []
+
+    if update_bucket_env is None:
+        monkeypatch.delenv("VEADK_STUDIO_UPDATE_BUCKET", raising=False)
+    else:
+        monkeypatch.setenv("VEADK_STUDIO_UPDATE_BUCKET", update_bucket_env)
 
     class _FakeCloudAgentEngine:
         def __init__(self, **kwargs: object) -> None:
@@ -277,6 +304,10 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert veadk_environments["SANDBOX_CHAT_CODEX"] == "chat-code-env-id"
     assert veadk_environments["SANDBOX_SKILL_CREATOR"] == "skill-code-env-id"
     assert veadk_environments["AGENTKIT_SANDBOX_REGION"] == expected_region
+    assert veadk_environments["VEADK_STUDIO_UPDATE_BUCKET"] == expected_update_bucket
+    assert veadk_environments["VEADK_STUDIO_UPDATE_REGION"] == expected_region
+    assert veadk_environments["VEADK_STUDIO_UPDATE_PREFIX"] == "veadk/studio/main"
+    assert veadk_environments["VEADK_STUDIO_PROJECT"] == expected_project
     assert credential_tool_ids == [
         "chat-code-env-id",
         "skill-code-env-id",
@@ -294,8 +325,12 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
 def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("SANDBOX_CHAT_CODEX", raising=False)
+    monkeypatch.delenv("SANDBOX_SKILL_CREATOR", raising=False)
     created_names: list[str] = []
     credential_tool_ids: list[str] = []
+    creation_barrier = threading.Barrier(2)
+    created_names_lock = threading.Lock()
 
     class _FakeCloudAgentEngine:
         def __init__(self, **_: object) -> None:
@@ -310,8 +345,10 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
 
     def _ensure_tool(**kwargs: object) -> str:
         name = str(kwargs["name"])
-        created_names.append(name)
-        return f"tool-{len(created_names)}"
+        creation_barrier.wait(timeout=5)
+        with created_names_lock:
+            created_names.append(name)
+        return "chat-tool" if "-chat-" in name else "skill-tool"
 
     monkeypatch.setattr(
         "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
@@ -351,12 +388,11 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
 
     assert result.exit_code == 0, result.output
     assert len(created_names) == 2
-    assert created_names[0] != created_names[1]
-    assert "chat" in created_names[0]
-    assert "skill" in created_names[1]
-    assert veadk_environments["SANDBOX_CHAT_CODEX"] == "tool-1"
-    assert veadk_environments["SANDBOX_SKILL_CREATOR"] == "tool-2"
-    assert credential_tool_ids == ["tool-1", "tool-2"]
+    assert any("chat" in name for name in created_names)
+    assert any("skill" in name for name in created_names)
+    assert veadk_environments["SANDBOX_CHAT_CODEX"] == "chat-tool"
+    assert veadk_environments["SANDBOX_SKILL_CREATOR"] == "skill-tool"
+    assert credential_tool_ids == ["chat-tool", "skill-tool"]
 
 
 @pytest.mark.parametrize(

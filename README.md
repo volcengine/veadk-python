@@ -125,6 +125,11 @@ When a cloud image build fails from the bundled Web UI, the deployment error
 includes a credential-safe excerpt from the build log so dependency and
 Dockerfile failures can be diagnosed directly.
 
+When Studio connects to an AgentKit Runtime, users can rate completed answers
+with like/dislike controls. Feedback is written server-side to per-Agent
+`{agent_name}_good_case` and `{agent_name}_bad_case` evaluation sets, with
+stable item keys so repeated clicks and rating changes remain idempotent.
+
 ## Feishu bot channel
 
 VeADK now provides `veadk.extensions.FeishuChannelExtension` for bridging a Feishu bot with a `Runner`. It maps `union_id` to `user_id`, and `thread_id` / `chat_id` to `session_id`, so VeADK memory and tracing can work directly in Feishu conversations.
@@ -139,123 +144,6 @@ channel = FeishuChannelExtension(runner=runner)
 ```
 
 Configure credentials with `TOOL_FEISHU_CHANNEL_APP_ID` and `TOOL_FEISHU_CHANNEL_APP_SECRET`, or in `config.yaml` under `tool.feishu_channel`.
-
-## A2UI (agent-driven UI)
-
-VeADK integrates Google's [A2UI](https://a2ui.org), letting an agent reply with
-declarative UI (cards, rows, forms) instead of plain text. A client renders the
-UI with native components. Enable it with a single flag (requires the optional
-`a2ui-agent-sdk` dependency: `pip install veadk-python[a2ui]`):
-
-```python
-from veadk import Agent
-
-agent = Agent(enable_a2ui=True)  # uses the bundled "basic" component catalog
-```
-
-A bundled React web UI renders A2UI over the standard ADK API server. The built
-UI ships inside the package (`veadk/webui`, produced by `npm run build`), so
-installed users can launch it directly. Its custom-agent workbench supports
-in-page debugging followed by source review and AgentKit deployment
-configuration. Knowledge-base, memory, tool, and tracing components request only
-settings that cannot be derived automatically. Studio forwards its server-side
-Volcengine credentials and lets VeADK resolve Ark, embedding, media, speech,
-VeSearch, and APMPlus keys for debug runs and deployed runtimes:
-
-```bash
-veadk frontend --agents-dir examples           # serve UI + API on http://127.0.0.1:8000
-```
-
-To rebuild the UI from source (output goes to `veadk/webui`, which is committed
-so it ships with the wheel):
-
-```bash
-cd frontend && npm install && npm run build
-```
-
-Point the agent at a custom component catalog (relative paths resolve against the
-agent's directory; absolute paths work too). With no argument it auto-discovers a
-`catalog.json` next to the agent, falling back to the bundled basic catalog:
-
-```python
-Agent(enable_a2ui=True, a2ui_catalog="catalog.json")  # beside the agent
-```
-
-Enterprises extend the component set in two matching halves: a backend catalog
-(a `catalog.json` or a `veadk.a2ui.BaseA2UICatalog` subclass) and a frontend
-renderer directory (`frontend/src/a2ui/components/<Name>/`). See
-[`frontend/README.md`](frontend/README.md).
-
-## Command line tools
-
-`veadk studio deploy` automatically provisions `ServerlessApplicationRole`
-when the required VeFaaS role is missing.
-
-VeADK provides several useful command line tools for faster deployment and optimization, such as:
-
-- `veadk deploy`: deploy your project to [Volcengine VeFaaS platform](https://www.volcengine.com/product/vefaas) (you can use `veadk init` to init a demo project first)
-- `veadk prompt`: otpimize the system prompt of your agent by [PromptPilot](https://promptpilot.volcengine.com)
-- `veadk frontend`: serve the A2UI web UI together with the ADK agent API server
-  and forward its validated OAuth access token when connecting to an AgentKit
-  runtime protected by `custom_jwt`; the login footer uses AgentKit product
-  branding, and you can customize the browser/sidebar branding with `--site-title`
-  and `--site-logo` (omitting the title keeps `VeADK Studio`)
-- `veadk studio deploy`: deploy Studio and ensure its default IAM role has the
-  required model, observability, search, security, memory, and identity system
-  policies; target `cn-beijing` (default) or `cn-shanghai` with
-  `--region`, automatically locate the Identity user pool across Beijing and
-  Shanghai, and select the VeFaaS project with `--project` (default `default`);
-  deployment credentials can come from explicit CLI options, the
-  `VOLCENGINE_ACCESS_KEY` / `VOLCENGINE_SECRET_KEY` environment variables, or
-  the `[default]` profile in `~/.volc/credentials`;
-  Shanghai Functions, gateways, and AgentKit resources stay in Shanghai while
-  VeFaaS Application operations use its Beijing control-plane endpoint; the
-  selected region is also used for temporary-chat and Skill-creation sessions;
-  custom local or remote logo images are bundled into the deployment; the
-  deployed client skips the second OAuth consent confirmation after login;
-  two dedicated AgentKit CodeEnv Tools are created automatically for temporary
-  chats and Skill creation unless their IDs are supplied with
-  `--sandbox-chat-codex-tool-id` and `--sandbox-skill-creator-tool-id`; Tool or
-  model-credential provisioning failures print the underlying error verbatim
-  after credential values are redacted
-- `veadk studio update --vefaas-app-name <app-name>`: build the frontend from a
-  local VeADK source checkout and release it through the existing VeFaaS
-  Application and Function. Omit `--region` and `--project` to search Beijing,
-  Shanghai, and all visible projects. Existing URL, SSO, IAM, gateway,
-  environment variables, title, and logo are preserved; pass `--site-title` or
-  `--site-logo` only when those branding values should be replaced. Sandbox Tool
-  IDs are also preserved unless the corresponding deploy option is supplied
-
-Studio can assign comma-separated local usernames or OAuth emails to the
-`admin` and `developer` roles:
-
-```bash
-veadk studio \
-  --admin "admin,admin@example.com" \
-  --developer "alice,alice@example.com"
-
-veadk studio deploy \
-  --user-pool-id <pool-id> \
-  --allowed-client-id <client-id> \
-  --vefaas-app-name <app-name> \
-  --admin "admin@example.com" \
-  --developer "alice@example.com,bob@example.com"
-```
-
-Omitting both role lists makes every signed-in user an `admin`. Supplying
-either list enables role-based access control; users not in a list are regular
-users, and `admin` wins when an identity appears in both lists. Admins have all
-Studio capabilities and can see every Runtime.
-Developers can add and manage agents but can see and manage only their own
-Runtimes. Regular users can see only their own Runtimes; the add/manage-agent
-sidebar items are hidden. The sidebar account footer shows the OAuth email
-beneath the display name and identifies the current role with a color-coded
-badge. The manage-agent view defaults to Beijing and can be switched to
-Shanghai. A new conversation renders the first message immediately while its
-server session initializes in the background. Existing Runtimes without owner metadata are visible
-only to admins unless they carry the legacy-compatible `veadk:author`
-ownership tag. Local usernames are browser-provided and can be impersonated, so
-use OAuth or gateway authentication for production authorization.
 
 ## Contribution
 

@@ -78,6 +78,12 @@ def _get_backend_cls(backend: str) -> type[BaseLongTermMemoryBackend]:
                 )
 
                 return OpenVikingLTMBackend
+            case "tos_context":
+                from veadk.memory.long_term_memory_backends.tos_context_bucket_backend import (
+                    TosContextBucketLTMBackend,
+                )
+
+                return TosContextBucketLTMBackend
             case _:
                 raise ValueError(f"Unsupported long term memory backend: {backend}")
     except ImportError as e:
@@ -97,7 +103,7 @@ class LongTermMemory(BaseMemoryService, BaseModel):
     It supports configuration of the backend service and retrieval behavior.
 
     Attributes:
-        backend (Union[Literal["local", "opensearch", "redis", "viking", "viking_mem", "mem0", "openviking"], BaseLongTermMemoryBackend]):
+        backend (Union[Literal["local", "opensearch", "redis", "viking", "viking_mem", "mem0", "openviking", "tos_context"], BaseLongTermMemoryBackend]):
             The type or instance of the long-term memory backend. Defaults to "opensearch".
 
         backend_config (dict):
@@ -128,6 +134,7 @@ class LongTermMemory(BaseMemoryService, BaseModel):
             "viking_mem",
             "mem0",
             "openviking",
+            "tos_context",
         ],
         BaseLongTermMemoryBackend,
     ] = "opensearch"

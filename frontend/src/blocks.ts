@@ -15,6 +15,7 @@ import type {
   AgentSkill,
   AgentTarget,
   FrontendInvocation,
+  MessageFeedbackState,
 } from "./adk/client";
 import type { A2uiMessage } from "./a2ui/types";
 
@@ -22,6 +23,7 @@ const A2UI_TOOL = "send_a2ui_json_to_client";
 const VALIDATED_JSON_KEY = "validated_a2ui_json";
 /** ADK's special function call that requests OAuth/credentials for a tool. */
 const REQUEST_EUC = "adk_request_credential";
+const TRANSFER_AGENT_TOOL = "transfer_to_agent";
 
 /** Pull the OAuth2 authorize URL out of an ADK AuthConfig (camelCase over
  *  /run_sse, snake_case in stored history — handle both). */
@@ -48,8 +50,13 @@ export type Block =
   | { kind: "thinking"; text: string; done: boolean }
   | { kind: "text"; text: string }
   | { kind: "tool"; name: string; args?: unknown; response?: unknown; done: boolean }
+  | { kind: "agent-transfer"; agentName: string; done: boolean }
   | { kind: "a2ui"; messages: A2uiMessage[] }
   | { kind: "attachment"; files: AttachmentView[] }
+  | {
+      kind: "artifact";
+      files: { filename: string; version: number }[];
+    }
   | { kind: "invocation"; value: FrontendInvocation }
   | {
       kind: "auth";
@@ -69,8 +76,12 @@ export interface Acc {
 }
 
 export interface TurnMeta {
+  author?: string;
   tokens?: number;
   ts?: number; // epoch seconds
+  eventId?: string;
+  invocationId?: string;
+  feedback?: MessageFeedbackState;
 }
 
 export interface Turn {
@@ -85,6 +96,13 @@ export function emptyAcc(): Acc {
 
 const fnCall = (p: AdkPart) => p.functionCall ?? p.function_call;
 const fnResp = (p: AdkPart) => p.functionResponse ?? p.function_response;
+
+function transferAgentName(args: unknown): string {
+  if (!args || typeof args !== "object") return "";
+  const record = args as Record<string, unknown>;
+  const name = record.agentName ?? record.agent_name;
+  return typeof name === "string" ? name : "";
+}
 
 /** ADK/genai serialises inline_data bytes as URL-safe base64 (-_), but a
  *  `data:` URI requires standard base64 (+/). Convert so reloaded images
@@ -203,6 +221,20 @@ function appendAttachments(blocks: Block[], files: AttachmentView[]) {
   else blocks.push({ kind: "attachment", files });
 }
 
+function appendArtifacts(blocks: Block[], files: { filename: string; version: number }[]) {
+  if (!files.length) return;
+  const last = blocks[blocks.length - 1];
+  if (last?.kind === "artifact") {
+    for (const file of files) {
+      if (!last.files.some((item) =>
+        item.filename === file.filename && item.version === file.version
+      )) last.files.push(file);
+    }
+    return;
+  }
+  blocks.push({ kind: "artifact", files });
+}
+
 function appendText(blocks: Block[], kind: "thinking" | "text", text: string) {
   const last = blocks[blocks.length - 1];
   if (last && last.kind === kind) last.text += text;
@@ -245,7 +277,14 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
       appendAttachments(blocks, files);
     } else if (fc) {
       closeThinking(blocks);
-      if (fc.name === REQUEST_EUC) {
+      if (fc.name === TRANSFER_AGENT_TOOL) {
+        const agentName =
+          transferAgentName(fc.args) ||
+          ev.actions?.transferToAgent ||
+          ev.actions?.transfer_to_agent ||
+          "未知 Agent";
+        blocks.push({ kind: "agent-transfer", agentName, done: false });
+      } else if (fc.name === REQUEST_EUC) {
         // MCP/tool OAuth: render a dedicated auth card instead of a tool row.
         const args = (fc.args ?? {}) as Record<string, any>;
         const authConfig = args.authConfig ?? args.auth_config ?? args;
@@ -266,6 +305,15 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
       }
     } else if (fr) {
       closeThinking(blocks);
+      if (fr.name === TRANSFER_AGENT_TOOL) {
+        for (let i = blocks.length - 1; i >= 0; i--) {
+          const b = blocks[i];
+          if (b.kind === "agent-transfer" && !b.done) {
+            b.done = true;
+            break;
+          }
+        }
+      }
       // A credential response resolves the matching auth card.
       if (fr.name === REQUEST_EUC) {
         for (let i = blocks.length - 1; i >= 0; i--) {
@@ -294,13 +342,23 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
       }
     }
   }
+  const artifactDelta = ev.actions?.artifactDelta ?? ev.actions?.artifact_delta;
+  if (artifactDelta) {
+    appendArtifacts(
+      blocks,
+      Object.entries(artifactDelta).map(([filename, version]) => ({ filename, version })),
+    );
+  }
   closeThinking(blocks); // a consolidated thinking segment is complete
   liveStart = blocks.length;
   return { blocks, liveStart };
 }
 
 /** Replay stored session events into chat turns (for history). */
-export function eventsToTurns(events: AdkEvent[]): Turn[] {
+export function eventsToTurns(
+  events: AdkEvent[],
+  sessionState: Record<string, unknown> = {},
+): Turn[] {
   const turns: Turn[] = [];
   let acc = emptyAcc();
   for (const ev of events) {
@@ -340,9 +398,14 @@ export function eventsToTurns(events: AdkEvent[]): Turn[] {
       turns.push({ role: "user", blocks, meta: { ts: ev.timestamp } });
       acc = emptyAcc();
     } else {
+      const author = ev.author ?? "";
       let last = turns[turns.length - 1];
-      if (!last || last.role !== "assistant") {
-        last = { role: "assistant", blocks: [], meta: {} };
+      if (
+        !last ||
+        last.role !== "assistant" ||
+        (author && last.meta?.author !== author)
+      ) {
+        last = { role: "assistant", blocks: [], meta: { author: author || undefined } };
         turns.push(last);
         acc = emptyAcc();
       }
@@ -350,9 +413,23 @@ export function eventsToTurns(events: AdkEvent[]): Turn[] {
       last.blocks = acc.blocks;
       const usage = ev.usageMetadata ?? ev.usage_metadata;
       const meta = (last.meta ??= {});
+      if (author) meta.author = author;
       if (usage?.totalTokenCount) meta.tokens = usage.totalTokenCount;
       if (ev.timestamp) meta.ts = ev.timestamp;
+      if (ev.id) meta.eventId = ev.id;
+      const invocationId = ev.invocationId ?? ev.invocation_id;
+      if (invocationId) meta.invocationId = invocationId;
     }
+  }
+  for (const turn of turns) {
+    const meta = turn.meta;
+    const eventId = meta?.eventId;
+    if (!eventId) continue;
+    const feedback = sessionState[`veadk_feedback:${eventId}`];
+    if (!feedback || typeof feedback !== "object") continue;
+    const record = feedback as Record<string, unknown>;
+    if (record.rating !== "good" && record.rating !== "bad") continue;
+    meta.feedback = feedback as MessageFeedbackState;
   }
   return turns;
 }

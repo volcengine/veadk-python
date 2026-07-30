@@ -22,12 +22,16 @@ const {
   A2A_REGISTRY_DEFAULTS,
   A2A_REGISTRY_ENV,
   BUILTIN_TOOLS,
+  DEFAULT_KB_BACKEND,
   KB_BACKENDS,
   LTM_BACKENDS,
   MODEL_ENV,
   STM_BACKENDS,
   TRACING_EXPORTERS,
 } = await loadTypeScriptModule("../src/create/veadkCatalog.ts");
+const { localPickerMatches } = await loadTypeScriptModule(
+  "../src/create/localPickerSearch.ts",
+);
 const customCreateSource = readFileSync(
   new URL("../src/create/CustomCreate.tsx", import.meta.url),
   "utf8",
@@ -48,6 +52,28 @@ const codeBrowserStyles = readFileSync(
   new URL("../src/ui/CodeBrowserDialog.css", import.meta.url),
   "utf8",
 );
+const vikingKnowledgebasesSource = readFileSync(
+  new URL("../src/create/vikingKnowledgebases.ts", import.meta.url),
+  "utf8",
+);
+
+test("defaults knowledgebase creation to VikingDB collections", () => {
+  assert.equal(DEFAULT_KB_BACKEND, "viking");
+  assert.equal(KB_BACKENDS[0].id, "viking");
+  assert.notEqual(KB_BACKENDS.findIndex((item) => item.id === "viking"), -1);
+  assert.match(customCreateSource, /<VikingKnowledgebaseSelect/);
+  assert.match(vikingKnowledgebasesSource, /\/web\/viking-knowledgebases/);
+});
+
+test("filters A2A spaces and Viking knowledgebases locally by name or id", () => {
+  assert.equal(localPickerMatches("客服", ["客服中心", "space-123"]), true);
+  assert.equal(localPickerMatches("SPACE-123", ["客服中心", "space-123"]), true);
+  assert.equal(localPickerMatches("missing", ["客服中心", "space-123"]), false);
+  assert.match(customCreateSource, /filteredSpaces = useMemo/);
+  assert.match(customCreateSource, /filteredItems = useMemo/);
+  assert.match(customCreateSource, /搜索 AgentKit 智能体中心/);
+  assert.match(customCreateSource, /搜索 VikingDB 知识库/);
+});
 
 test("maps active feature settings to VeADK runtime env rows", () => {
   const specs = [
@@ -174,12 +200,16 @@ test("shows configured database and Feishu values in the runtime env summary", (
   ]);
 });
 
-test("regenerates project code when Feishu changes on the deployment page", () => {
+test("keeps the generated project stable when only deployment channel settings change", () => {
   assert.match(
     customCreateSource,
-    /const nextProject = await generateAgentProject\(codegenDraft\(nextDraft\)\)/,
+    /onFeishuEnabledChange=\{\(feishuEnabled\) => \{[\s\S]*?setDraft\(nextDraft\);/,
   );
-  assert.match(customCreateSource, /setProject\(nextProject\)/);
+  assert.doesNotMatch(customCreateSource, /buildPreviewProject/);
+  assert.match(
+    customCreateSource,
+    /generateAgentProject\(codegenDraft\(releaseDraft\)\)/,
+  );
   assert.match(projectPreviewSource, /await onFeishuEnabledChange\(!feishuEnabled\)/);
   assert.match(projectPreviewSource, /deploying \|\| feishuUpdating/);
 });
@@ -208,7 +238,7 @@ test("materializes A2A registry defaults for deployment env", () => {
   assert.equal(
     A2A_REGISTRY_ENV.find((item) => item.key === "REGISTRY_SPACE_ID")
       ?.placeholder,
-    "请输入智能体中心 ID，如 as-yer579143kbrkemozdn6",
+    "请选择智能体中心",
   );
   assert.deepEqual(
     runtimeEnvVars(A2A_REGISTRY_ENV, {
@@ -241,41 +271,28 @@ test("materializes A2A registry defaults for deployment env", () => {
   );
 });
 
-test("keeps deployment configuration primary beside an inspectable Agent topology", () => {
+test("summarizes the Agent above the deployment configuration", () => {
   assert.match(customCreateSource, /agentDraft=\{draft\}/);
-  assert.match(projectPreviewSource, /className="pp-topology-pane"/);
-  assert.match(projectPreviewSource, /onMouseEnter=\{\(\) => onHover\(agent\.id\)\}/);
-  assert.match(projectPreviewSource, /onMouseLeave=\{\(\) => onHover\(null\)\}/);
-  assert.match(projectPreviewSource, /onBlur=\{\(\) => onFocus\(null\)\}/);
-  assert.match(projectPreviewSource, /<ProjectCodeBrowser project=\{project\}/);
-  assert.match(projectPreviewSource, />\s*导出配置\s*</);
-  assert.match(projectPreviewSource, />\s*下载源码\s*</);
+  assert.match(projectPreviewSource, /className="pp-flow-thumbnail"/);
+  assert.match(projectPreviewSource, /<AgentBuildCanvas[\s\S]*?readOnly/);
+  assert.match(projectPreviewSource, /Agent 数量/);
+  assert.match(projectPreviewSource, />\s*导出配置文件\s*</);
+  assert.match(projectPreviewSource, /<ProjectCodeBrowser[\s\S]*?pp-artifact-source/);
+  assert.match(projectPreviewSource, />\s*导出源码\s*</);
   assert.match(
     projectPreviewStyles,
-    /grid-template-columns:\s*minmax\(260px, 3fr\) minmax\(520px, 7fr\)/,
+    /grid-template-rows:\s*auto auto/,
   );
+  assert.match(projectPreviewStyles, /\.pp-release-preview\s*\{[\s\S]*?box-sizing:\s*border-box/);
 });
 
-test("shows concrete Agent configuration only while a topology node is inspected", () => {
+test("enlarges the read-only execution canvas without topology configuration", () => {
   assert.match(
     projectPreviewSource,
-    /\{inspectedAgent && inspectedAgentMeta && InspectedAgentIcon && \(/,
+    /className="pp-flow-dialog"[\s\S]*?interactivePreview/,
   );
-  for (const label of [
-    "模型",
-    "工具",
-    "技能",
-    "知识库",
-    "短期记忆",
-    "长期记忆",
-    "观测",
-  ]) {
-    assert.match(projectPreviewSource, new RegExp(`<dt>${label}</dt>`));
-  }
-  assert.doesNotMatch(projectPreviewSource, /<dt>组件<\/dt>/);
-  assert.match(projectPreviewSource, /findTool\(toolId\)\?\.label/);
-  assert.match(projectPreviewSource, /findKb\(node\.knowledgebaseBackend/);
-  assert.match(projectPreviewSource, /findExporter\(exporterId\)\?\.label/);
+  assert.match(projectPreviewSource, /只读预览，可缩放与拖动画布/);
+  assert.doesNotMatch(projectPreviewSource, /pp-topology-pane|inspectedAgent/);
 });
 
 test("uses an unboxed 查看源码 trigger", () => {

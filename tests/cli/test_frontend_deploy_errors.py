@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from veadk.cli.cli_frontend import _extract_build_error_excerpt
+from veadk.cli.cli_frontend import (
+    _cp_metadata_from_reporter_message,
+    _extract_build_error_excerpt,
+    _sanitize_build_log_snapshot,
+)
 
 
 def test_extract_build_error_excerpt_keeps_dependency_resolution_cause() -> None:
@@ -62,3 +66,36 @@ def test_extract_build_error_excerpt_ignores_successful_logs() -> None:
     ]
 
     assert _extract_build_error_excerpt(lines) == ""
+
+
+def test_sanitize_build_log_snapshot_redacts_and_bounds_logs() -> None:
+    text = """Authorization: Bearer temporary.jwt.token
+installing dependencies
+API_KEY=temporary-api-key
+No solution found when resolving dependencies:
+Because veadk-python>=1.0.5 is unavailable
+Traceback (most recent call last):"""
+
+    snapshot = _sanitize_build_log_snapshot(text, max_chars=500, max_lines=4)
+
+    assert "temporary" not in snapshot["text"]
+    assert "Authorization" not in snapshot["text"]
+    assert "API_KEY" not in snapshot["text"]
+    assert "veadk-python>=1.0.5" in snapshot["text"]
+    assert snapshot["lineCount"] == 4
+    assert snapshot["truncated"] is True
+
+
+def test_cp_metadata_from_reporter_message_extracts_pipeline_and_run_ids() -> None:
+    assert _cp_metadata_from_reporter_message(
+        "Pipeline created successfully: agentkit-cli-demo-abcd (ID: pl-123)"
+    ) == {
+        "pipeline_name": "agentkit-cli-demo-abcd",
+        "pipeline_id": "pl-123",
+    }
+    assert _cp_metadata_from_reporter_message(
+        "Reusing pipeline by name: agentkit-cli-demo-abcd"
+    ) == {"pipeline_name": "agentkit-cli-demo-abcd"}
+    assert _cp_metadata_from_reporter_message(
+        "Pipeline triggered successfully, run ID: pr-456"
+    ) == {"pipeline_run_id": "pr-456"}

@@ -52,6 +52,11 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from veadk.cli.agentkit_sandbox_region import (
+    is_agentkit_resource_not_found,
+    sandbox_region_candidates,
+)
+
 
 _MODELS = (
     ("a", "doubao-seed-2-0-pro-260215", "豆包 Seed 2.0 Pro"),
@@ -702,7 +707,6 @@ def ensure_skill_creator_model_credential(
 ) -> None:
     """Resolve an Ark API key and bind it directly to the CodeEnv Tool."""
     from agentkit.auth._openapi import OpenApiClient
-
     from veadk.auth.veauth.ark_veauth import get_ark_token
 
     api = OpenApiClient(
@@ -758,9 +762,9 @@ class SkillCreatorService:
 
     def __init__(self, tool_id: str | None = None, region: str | None = None) -> None:
         self._configured_tool_id = (tool_id or "").strip()
-        self._region = (
-            region or os.getenv("AGENTKIT_SANDBOX_REGION") or _REGION
-        ).strip()
+        self._region = sandbox_region_candidates(
+            region or os.getenv("AGENTKIT_SANDBOX_REGION")
+        )[0]
 
     def capabilities(self) -> dict[str, Any]:
         """Return fixed model capabilities without exposing server credentials."""
@@ -769,9 +773,7 @@ class SkillCreatorService:
         reason = "管理员未配置"
         if tool_id:
             try:
-                tool = AgentkitToolsClient(region=self._region).get_tool(
-                    tools_types.GetToolRequest(ToolId=tool_id)
-                )
+                tool = self._get_tool(tool_id)
                 envs = {item.key: item.value for item in tool.envs or []}
                 credential_ready = bool(
                     envs.get("CODEX_API_KEY") and envs.get("CODEX_BASE_URL")
@@ -1201,17 +1203,28 @@ class SkillCreatorService:
         return result
 
     def _find_session(self, tool_id: str, user_session_id: str) -> dict[str, str]:
-        response = AgentkitToolsClient(region=self._region).list_sessions(
-            tools_types.ListSessionsRequest(
-                ToolId=tool_id,
-                MaxResults=10,
-                Filters=[
-                    tools_types.FiltersItemForListSessions(
-                        Name="UserSessionId", Values=[user_session_id]
-                    )
-                ],
-            )
+        request = tools_types.ListSessionsRequest(
+            ToolId=tool_id,
+            MaxResults=10,
+            Filters=[
+                tools_types.FiltersItemForListSessions(
+                    Name="UserSessionId", Values=[user_session_id]
+                )
+            ],
         )
+        response = None
+        regions = sandbox_region_candidates(self._region)
+        for index, region in enumerate(regions):
+            try:
+                response = AgentkitToolsClient(region=region).list_sessions(request)
+            except Exception as error:
+                if is_agentkit_resource_not_found(error) and index + 1 < len(regions):
+                    continue
+                raise SkillCreatorError("Skill 创建任务不存在或已过期") from error
+            self._region = region
+            break
+        if response is None:
+            raise SkillCreatorError("Skill 创建任务不存在或已过期")
         for session in response.session_infos or []:
             if (
                 session.user_session_id == user_session_id
@@ -1242,9 +1255,7 @@ class SkillCreatorService:
 
     def _validate_tool(self, tool_id: str) -> str:
         try:
-            tool = AgentkitToolsClient(region=self._region).get_tool(
-                tools_types.GetToolRequest(ToolId=tool_id)
-            )
+            tool = self._get_tool(tool_id)
         except Exception as error:
             raise SkillCreatorError("无法访问配置的 AgentKit Sandbox") from error
         if tool.tool_type != "CodeEnv" or tool.status != "Ready":
@@ -1253,6 +1264,20 @@ class SkillCreatorService:
         if not (envs.get("CODEX_API_KEY") and envs.get("CODEX_BASE_URL")):
             raise SkillCreatorError("Sandbox 尚未绑定模型凭证")
         return _validate_model_base_url(str(envs["CODEX_BASE_URL"]))
+
+    def _get_tool(self, tool_id: str) -> Any:
+        request = tools_types.GetToolRequest(ToolId=tool_id)
+        regions = sandbox_region_candidates(self._region)
+        for index, region in enumerate(regions):
+            try:
+                tool = AgentkitToolsClient(region=region).get_tool(request)
+            except Exception as error:
+                if is_agentkit_resource_not_found(error) and index + 1 < len(regions):
+                    continue
+                raise
+            self._region = region
+            return tool
+        raise SkillCreatorError("无法访问配置的 AgentKit Sandbox")
 
     def _tool_id(self, *, required: bool = True) -> str:
         if self._configured_tool_id:

@@ -21,11 +21,18 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import yaml
 from click.testing import CliRunner
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from veadk.cli.cli_frontend import _run_frontend_server, studio
+from veadk.cli.cli_frontend import (
+    _create_runtime_with_description_fallback,
+    _is_malformed_runtime_description_error,
+    _normalize_runtime_description,
+    _run_frontend_server,
+    studio,
+)
 from veadk.cli.studio_rbac import (
     StudioAccessPolicy,
     StudioPrincipal,
@@ -44,7 +51,7 @@ def _create_studio_app(
     developers: str | None = None,
 ) -> FastAPI:
     captured: dict[str, Any] = {}
-    monkeypatch.setattr("dotenv.find_dotenv", lambda: "")
+    monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
     monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
     monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-sk")
     monkeypatch.setattr(
@@ -102,6 +109,45 @@ def _runtime(
         network_configurations=[],
         authorizer_configuration=None,
     )
+
+
+def test_runtime_description_is_safe_and_bounded() -> None:
+    normalized = _normalize_runtime_description(
+        "  数据\n分析\u0000 Agent 🤖 " + "数" * 100
+    )
+
+    assert normalized.startswith("数据 分析 Agent 数")
+    assert "\n" not in normalized
+    assert "\u0000" not in normalized
+    assert "🤖" not in normalized
+    assert len(normalized.encode("utf-8")) <= 255
+
+
+def test_runtime_description_error_detection_is_specific() -> None:
+    assert _is_malformed_runtime_description_error(
+        "CreateRuntime failed: InvalidDescription.Malformed"
+    )
+    assert not _is_malformed_runtime_description_error(
+        "CreateRuntime failed: AccessDenied"
+    )
+
+
+def test_runtime_creation_retries_without_a_rejected_description() -> None:
+    attempts: list[str | None] = []
+    request = SimpleNamespace(description="bad description")
+
+    def create_runtime(_client: object, current_request: SimpleNamespace):
+        attempts.append(current_request.description)
+        if len(attempts) == 1:
+            raise RuntimeError("InvalidDescription.Malformed")
+        return SimpleNamespace(runtime_id="runtime-1")
+
+    result = _create_runtime_with_description_fallback(
+        create_runtime, object(), request
+    )
+
+    assert result.runtime_id == "runtime-1"
+    assert attempts == ["bad description", None]
 
 
 def test_parse_role_members_normalizes_csv() -> None:
@@ -200,7 +246,7 @@ def test_display_name_cannot_grant_a_role() -> None:
     assert policy.role_for(principal) == StudioRole.USER
 
 
-def test_runtime_owner_tag_takes_precedence_with_author_fallback() -> None:
+def test_runtime_ownership_requires_current_owner_tag() -> None:
     principal = StudioPrincipal.from_claims(
         {"sub": "stable-id", "email": "owner@example.com"}
     )
@@ -214,10 +260,7 @@ def test_runtime_owner_tag_takes_precedence_with_author_fallback() -> None:
         {"veadk:owner": "other", "veadk:author": "owner@example.com"},
         principal,
     )
-    assert runtime_belongs_to(
-        {"veadk:author": "OWNER@EXAMPLE.COM"},
-        principal,
-    )
+    assert not runtime_belongs_to({"veadk:author": "OWNER@EXAMPLE.COM"}, principal)
 
 
 def test_studio_deploy_exposes_role_options() -> None:
@@ -293,7 +336,7 @@ def test_gateway_role_uses_jwt_and_ignores_local_identity_header(
     assert response.json()["role"] == "admin"
 
 
-def test_non_admin_runtime_list_scans_pages_and_ignores_all_scope(
+def test_non_admin_runtime_list_uses_one_owner_filtered_request(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -301,11 +344,19 @@ def test_non_admin_runtime_list_scans_pages_and_ignores_all_scope(
 
     other = _runtime("runtime-other", "someone-else")
     own = _runtime("runtime-own", "developer")
+    developer_tag_filters: list[tuple[str, list[str]]] = []
+
+    runtime_calls = 0
 
     def list_runtimes(_self: Any, request: Any) -> SimpleNamespace:
-        if getattr(request, "next_token", None) == "page-2":
+        nonlocal runtime_calls
+        runtime_calls += 1
+        tag_filters = getattr(request, "tag_filters", None) or []
+        for item in tag_filters:
+            developer_tag_filters.append((item.key, item.values))
+        if tag_filters:
             return SimpleNamespace(agent_kit_runtimes=[own], next_token="")
-        return SimpleNamespace(agent_kit_runtimes=[other], next_token="page-2")
+        return SimpleNamespace(agent_kit_runtimes=[other, own], next_token="")
 
     monkeypatch.setattr(AgentkitRuntimeClient, "list_runtimes", list_runtimes)
     app = _create_studio_app(
@@ -320,6 +371,7 @@ def test_non_admin_runtime_list_scans_pages_and_ignores_all_scope(
             "/web/runtimes?scope=all&page_size=1&region=cn-beijing",
             headers={"X-VeADK-Local-User": "developer"},
         )
+        developer_call_count = runtime_calls
         admin = client.get(
             "/web/runtimes?scope=all&page_size=10&region=cn-beijing",
             headers={"X-VeADK-Local-User": "admin"},
@@ -329,11 +381,16 @@ def test_non_admin_runtime_list_scans_pages_and_ignores_all_scope(
     assert [item["runtimeId"] for item in developer.json()["runtimes"]] == [
         "runtime-own"
     ]
+    assert developer.json()["runtimes"][0]["canDelete"] is True
+    assert ("veadk:owner", ["developer"]) in developer_tag_filters
+    assert developer_call_count == 1
+    assert runtime_calls == 2
     assert admin.status_code == 200
     assert [item["runtimeId"] for item in admin.json()["runtimes"]] == [
         "runtime-other",
         "runtime-own",
     ]
+    assert all(item["canDelete"] is True for item in admin.json()["runtimes"])
 
 
 def test_runtime_detail_proxy_and_delete_enforce_role_and_owner(
@@ -435,3 +492,78 @@ def test_runtime_detail_proxy_and_delete_enforce_role_and_owner(
         )
 
     assert deleted == ["runtime-developer", "runtime-other"]
+
+
+def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    runtime = _runtime("runtime-developer", "developer")
+    runtime.role_name = "runtime-role"
+    runtime.current_version_number = 3
+    captured_config: dict[str, Any] = {}
+    get_calls = 0
+
+    def get_runtime(_self: Any, _request: Any) -> SimpleNamespace:
+        nonlocal get_calls
+        get_calls += 1
+        runtime.current_version_number = 4 if get_calls > 1 else 3
+        return runtime
+
+    def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
+        captured_config.update(yaml.safe_load(Path(config_file).read_text()))
+        return SimpleNamespace(
+            success=True,
+            error=None,
+            deploy_result=SimpleNamespace(
+                endpoint_url="https://runtime.example.com",
+                metadata={
+                    "runtime_id": runtime.runtime_id,
+                    "runtime_name": runtime.name,
+                    "runtime_endpoint": "https://runtime.example.com",
+                    "runtime_apikey": "secret",
+                },
+            ),
+        )
+
+    monkeypatch.setattr(AgentkitRuntimeClient, "get_runtime", get_runtime)
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        admins="admin",
+        developers="developer",
+    )
+
+    with TestClient(app) as client:
+        with client.stream(
+            "POST",
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "updated-agent",
+                "description": "Updated\n description 🤖",
+                "runtimeId": runtime.runtime_id,
+                "files": [{"path": "app.py", "content": "app = object()\n"}],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+            },
+        ) as response:
+            frames = [
+                json.loads(line.removeprefix("data: "))
+                for line in response.iter_lines()
+                if line.startswith("data: ")
+            ]
+
+    assert response.status_code == 200
+    assert frames[-1]["success"] is True
+    assert frames[-1]["runtimeId"] == runtime.runtime_id
+    assert frames[-1]["version"] == 4
+    cloud = captured_config["launch_types"]["cloud"]
+    assert cloud["runtime_id"] == runtime.runtime_id
+    assert cloud["runtime_name"] == runtime.name
+    assert cloud["runtime_role_name"] == "runtime-role"
+    assert cloud["image_tag"] == "veadk-v4"
+    assert "runtime_network" not in cloud
+    assert captured_config["common"]["description"] == "Updated description"

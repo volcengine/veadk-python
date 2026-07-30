@@ -11,6 +11,10 @@ const connectionsSource = read("adk/connections.ts");
 const selectorSource = read("ui/AgentSelector.tsx");
 const sidebarSource = read("ui/Sidebar.tsx");
 const stylesSource = read("styles.css");
+const cliFrontendSource = readFileSync(
+  new URL("../../veadk/cli/cli_frontend.py", import.meta.url),
+  "utf8",
+);
 
 test("Studio access fails closed until the server-derived role is known", () => {
   assert.match(clientSource, /export type StudioRole = "admin" \| "developer" \| "user"/);
@@ -20,13 +24,16 @@ test("Studio access fails closed until the server-derived role is known", () => 
   assert.match(appSource, /setAccess\(DEFAULT_STUDIO_ACCESS\)/);
 });
 
-test("ordinary users cannot render or open Agent creation and management", () => {
-  assert.match(sidebarSource, /access\.capabilities\.createAgents && show\("addAgent"\)/);
-  assert.match(sidebarSource, /access\.capabilities\.manageAgents && show\("manageAgents"\)/);
+test("Agent workspace creation and update actions obey Studio access", () => {
+  assert.doesNotMatch(sidebarSource, /access\.capabilities\.createAgents && show\("addAgent"\)/);
+  assert.doesNotMatch(sidebarSource, /access\.capabilities\.manageAgents && show\("manageAgents"\)/);
+  assert.doesNotMatch(sidebarSource, /onManageAgents/);
   assert.match(appSource, /const visibleCreateView = canCreateAgents \? createView : null/);
-  assert.match(appSource, /const showManageAgents = canManageAgents && manageAgents/);
+  assert.match(appSource, /const showManageAgents = manageAgents/);
+  assert.match(appSource, /if \(!access\.capabilities\.manageAgents\) setManageAgents\(false\)/);
+  assert.match(appSource, /<AgentWorkspace[\s\S]*?canCreate=\{canCreateAgents\}[\s\S]*?canUpdate=\{canCreateAgents \|\| canManageAgents\}/);
   assert.match(appSource, /if \(!canCreateAgents\)[\s\S]*?当前账号没有添加 Agent 的权限/);
-  assert.match(appSource, /if \(!canManageAgents\)[\s\S]*?当前账号没有管理 Agent 的权限/);
+  assert.match(appSource, /if \(!canManageAgents && !canCreateAgents\)[\s\S]*?当前账号没有管理 Agent 的权限/);
 });
 
 test("sidebar shows the OAuth email and translated role badge", () => {
@@ -51,6 +58,16 @@ test("runtime selection obeys the server-granted scope", () => {
 test("runtime authorization failures are not reported as unsupported", () => {
   assert.match(clientSource, /response\.clone\(\)\.json\(\)/);
   assert.match(clientSource, /runtime_access_denied/);
+  assert.match(clientSource, /runtime_private_endpoint_unreachable/);
+  assert.match(clientSource, /Runtime 已部署成功，但当前 Studio 无法访问私网 Runtime/);
+  assert.match(clientSource, /runtime_proxy_connect_error/);
+  assert.match(clientSource, /runtime_proxy_timeout/);
+  assert.match(clientSource, /Runtime 已部署成功，但 Studio 暂时无法连接服务/);
+  assert.match(cliFrontendSource, /endpoint_network_type == "private"[\s\S]*?runtime_private_endpoint_unreachable/);
+  assert.match(cliFrontendSource, /def _runtime_proxy_should_retry_probe[\s\S]*?normalized == "list-apps"[\s\S]*?normalized\.startswith\("web\/agent-info\/"\)/);
+  assert.match(cliFrontendSource, /parts\[0\] == "apps"[\s\S]*?parts\[2\] == "users"[\s\S]*?parts\[4\] == "sessions"/);
+  assert.match(cliFrontendSource, /max_attempts = 10 if retry_probe else 1/);
+  assert.match(cliFrontendSource, /runtime-proxy probe retry/);
   assert.match(clientSource, /res\.status === 404[\s\S]*?RuntimeProbeError/);
   assert.match(clientSource, /res\.status === 401 \|\| res\.status === 403/);
   assert.match(clientSource, /error instanceof RuntimeAccessDeniedError \|\|[\s\S]*?error instanceof RuntimeProbeError/);
@@ -60,8 +77,12 @@ test("runtime authorization failures are not reported as unsupported", () => {
 });
 
 test("selected Agent icons are optically aligned with the label", () => {
-  assert.match(stylesSource, /\.agent-row-lead[^}]*transform: translateY\(3px\)/);
-  assert.match(stylesSource, /\.agent-row-chev\.open[^}]*translateY\(1px\) rotate\(90deg\)/);
+  assert.match(stylesSource, /\.agentsel-item\s*{[^}]*align-items:\s*center/);
+  assert.match(
+    stylesSource,
+    /\.agentsel-item \.icon\s*{[^}]*width:\s*16px;[^}]*height:\s*16px;/,
+  );
+  assert.doesNotMatch(stylesSource, /\.agentsel-item \.icon[^}]*transform:/);
 });
 
 test("deployment and management requests rely on server identity, not author input", () => {

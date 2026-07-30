@@ -27,6 +27,11 @@ VeADK 自带一个 React 前端，用于渲染智能体经由 Google ADK API Ser
   退出后云端 Session 会被删除，内容不会写入普通历史会话；
   页面刷新后可直接新建，遗留 Session 由 AgentKit 在 TTL 到期后自动回收。
 - **智能搜索**：「会话」源在当前 agent 的历史消息中做全文检索；「网页」源调用该 agent 挂载的联网搜索工具实时检索（使用服务端环境变量里的凭据）。
+- **消息反馈回流**：连接云端 AgentKit Runtime 时，回答下方的赞/踩按钮会将
+  当前问题、回答和反馈状态写入 AgentKit 评测集。每个 Agent 自动维护
+  `{agent_name}_good_case` 与 `{agent_name}_bad_case` 两个评测集，切换或取消反馈会
+  幂等更新对应样本。如果标准名称已被云端占用但不可见，Studio 会改用带稳定短后缀的
+  备用名称并在后续反馈中复用；Runtime 不支持 Session 状态更新时，浏览器会保留兼容性缓存。
 - **添加 AgentKit 智能体**：填入访问地址 + API Key，按 ADK 协议接入远程 agent，接入后出现在选择器中。
 - **自定义 Agent 工作台**：系统提示词支持所见即所得的 Markdown
   编辑与标题、列表等快捷输入；本地技能可直接拖入文件夹或 ZIP，格式会自动识别，
@@ -41,6 +46,10 @@ VeADK 自带一个 React 前端，用于渲染智能体经由 Google ADK API Ser
   自定义创建中的“远程 Agent”仅可作为子 Agent，通过 AgentKit 智能体中心 ID、
   召回数量、地域和 OpenAPI 地址配置。名称、描述和能力由中心返回的 Agent Card
   提供；生成的内部代理会在每轮请求中动态发现和挂载匹配的远程 Agent。
+- 在自定义 Agent 的内置工具中选择「代码执行」会生成 `run_code` 工具，并在工具列表
+  下方要求填写 `AGENTKIT_TOOL_ID`（代码执行沙箱 Tool ID），同时可填写
+  `AGENTKIT_TOOL_REGION`（默认 `cn-beijing`）。两个值都会用于本地调试和部署运行时；
+  代码、语言和超时由 Agent 按工具函数签名在运行时传入，`tool_context` 由 ADK 自动注入。
 - **Tracing 观测**：查看本次会话的调用火焰图。
 - **登录**：支持 SSO（VeIdentity / GitHub / Google / 任意 OIDC）或本地用户名。
 
@@ -191,7 +200,7 @@ ZIP 上传到 TOS，再调用 Skills API 创建或更新 Skill；只有用户填
 候选 Session 的 TTL 为 30 分钟，用户重新创建或离开任务时会立即清理。任务状态保存
 在 Sandbox 而非 Frontend 进程内存，因此 FaaS 请求命中不同实例时仍可继续轮询和下载。
 
-云上首次部署时，若没有指定 Tool ID，部署命令会使用部署 AK/SK 自动创建两个独立
+云上首次部署时，若没有指定 Tool ID，部署命令会使用部署 AK/SK 并行创建两个独立
 CodeEnv Tool。也可以分别使用 `--sandbox-chat-codex-tool-id` 和
 `--sandbox-skill-creator-tool-id` 指定已有 Tool。部署命令会通过 AgentKit 凭据托管
 将 Ark 凭据保存到 KMS，并把代理地址和可撤销票据绑定到两个 Tool；VeFaaS Function
@@ -256,6 +265,45 @@ Application。未指定 `--region` 和 `--project` 时，会在北京、上海�
 设置。可用 `--path` 指定源码目录，默认为当前目录；本地需安装 Node.js 与 npm。
 `--sandbox-chat-codex-tool-id` 和 `--sandbox-skill-creator-tool-id` 也只在显式传入时
 更新对应环境变量；未传的 Tool ID 保留云上已有值，不会被清空。
+
+### Studio 一键更新
+
+部署时配置 TOS 发布通道后，管理员可以在导航栏更新 Studio：
+
+```bash
+veadk studio deploy \
+  --user-pool-id <pool-id> \
+  --allowed-client-id <client-id> \
+  --vefaas-app-name <app-name> \
+  --studio-update-bucket <tos-bucket> \
+  --studio-update-region cn-beijing \
+  --studio-update-prefix veadk/studio/main
+```
+
+Studio 每 3 分钟读取一次 `latest.json`，展示新版本的 changelog 和 Git SHA。
+管理员确认后，完整 Bundle 会同时替换 Python 后端和前端资源，再发布原
+Application；访问 URL、SSO Client 和服务端 Secret 保持不变。
+
+`.github/workflows/publish-studio-release.yaml` 不再随源码更新自动运行。每次发版需在
+`main` 分支手动运行 `Publish Studio Release`，并填写面向用户的 changelog。GitHub
+checkout 准确 SHA、构建前端并校验固定的离线 wheel，再通过与任务绑定的短期 TOS
+URL 上传预处理源码。API Key 保护的 VeFaaS Release Server 消费并删除这个私有对象，
+构建和发布不可变 Bundle 与 Manifest，更新有数量上限的 `releases.json`，最后覆盖
+`latest.json`。GitHub Secrets 只需
+`STUDIO_RELEASE_SERVER_URL` 和 `STUDIO_RELEASE_SERVER_API_KEY`，不保存 TOS
+AK/SK。
+
+Release Server 的运行代码和部署资产统一位于
+`frontend/service/studio_release_server/`，不随 `veadk` Python 包发布。修改该目录后，
+在仓库根目录执行以下命令更新现有 VeFaaS Function：
+
+```bash
+frontend/service/studio_release_server/deploy.sh
+```
+
+脚本复用既有 Serverless 网关、检查 `/healthz`、轮换 API Key，并更新仓库中的
+`STUDIO_RELEASE_SERVER_URL` 和 `STUDIO_RELEASE_SERVER_API_KEY` Secrets。执行前需
+配置 `VOLCENGINE_ACCESS_KEY`、`VOLCENGINE_SECRET_KEY`，并确保 GitHub CLI 已登录。
 
 部署注册回调地址时会保留 VeIdentity 登录页，并为该客户端开启跳过授权确认，
 避免用户登录后再次确认授权。

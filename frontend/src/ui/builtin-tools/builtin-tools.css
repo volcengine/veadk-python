@@ -26,12 +26,24 @@
   --builtin-tool-accent: 260 38% 48%;
 }
 
+.builtin-tool-head[data-tool-tone="presentation"] {
+  --builtin-tool-accent: 252 38% 52%;
+}
+
 .builtin-tool-head[data-tool-tone="memory"] {
   --builtin-tool-accent: 174 52% 34%;
 }
 
 .builtin-tool-head[data-tool-tone="knowledge"] {
   --builtin-tool-accent: 225 48% 45%;
+}
+
+.builtin-tool-head[data-tool-tone="skill"] {
+  --builtin-tool-accent: 154 50% 34%;
+}
+
+.builtin-tool-head[data-tool-tone="sandbox"] {
+  --builtin-tool-accent: 32 67% 42%;
 }
 
 .builtin-tool-head:hover {
@@ -54,7 +66,7 @@
 }
 
 .builtin-tool-label {
-  font-size: 13.5px;
+  font-size: 14.5px;
   font-weight: 400;
   line-height: 1.35;
 }

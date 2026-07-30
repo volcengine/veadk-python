@@ -115,6 +115,26 @@ def test_security_rejects_enabled_a2a_registry_without_space_id() -> None:
         validate_project_policy(draft)
 
 
+def test_security_allows_registry_backed_remote_agent_without_url() -> None:
+    draft = AgentDraft(
+        name="demo",
+        instruction="You are helpful.",
+        agentType="sequential",
+        subAgents=[
+            AgentDraft(
+                agentType="a2a",
+                a2aRegistry={
+                    "enabled": True,
+                    "registrySpaceId": "space-test",
+                },
+            )
+        ],
+    )
+
+    validate_project_policy(draft)
+    validate_debug_policy(draft)
+
+
 def test_url_policy_rejects_private_literal_ip() -> None:
     with pytest.raises(DebugPolicyError):
         validate_url_not_private("http://127.0.0.1:8000", field_name="url")
@@ -165,6 +185,35 @@ async def test_local_skill_materialization_accepts_safe_skill() -> None:
 
     assert project.files == [
         GeneratedFile(path="skills/local-skill/SKILL.md", content=skill_md)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_local_skill_materialization_keeps_validation_minimal() -> None:
+    skill_md = "---\nname: Display Skill\n---\n\n# Local\n"
+    draft = AgentDraft(
+        name="demo",
+        instruction="You are helpful.",
+        selectedSkills=[
+            SelectedSkill(
+                source="local",
+                folder="local-folder",
+                name="Display Skill",
+                localFiles=[
+                    GeneratedFile(
+                        path="skills/local-folder/SKILL.md",
+                        content=skill_md,
+                    )
+                ],
+            )
+        ],
+    )
+    project = GeneratedProject(name="demo", files=[])
+
+    await materialize_selected_skills(draft, project)
+
+    assert project.files == [
+        GeneratedFile(path="skills/local-folder/SKILL.md", content=skill_md)
     ]
 
 

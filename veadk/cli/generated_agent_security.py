@@ -44,8 +44,8 @@ MAX_CUSTOM_TOOL_NAME_LEN = 64
 MAX_CUSTOM_TOOL_DESCRIPTION_LEN = 2048
 MAX_MCP_TOOLS = 16
 MAX_MCP_ARG_LEN = 512
-MAX_SELECTED_SKILLS = 16
 MAX_ITERATIONS = 20
+MAX_KNOWLEDGEBASE_INDEX_LEN = 128
 
 _METADATA_HOSTS = {
     "metadata.google.internal",
@@ -93,7 +93,8 @@ def _validate_node(
 ) -> int:
     if depth > MAX_DEPTH:
         raise DebugPolicyError(f"Agent tree is too deep (>{MAX_DEPTH})")
-    if not draft.name.strip():
+    registry_backed_remote = draft.agentType == "a2a" and draft.a2aRegistry.enabled
+    if not registry_backed_remote and not draft.name.strip():
         raise DebugPolicyError("Agent name is required")
     _check_len("name", draft.name, MAX_NAME_LEN)
     _check_len("description", draft.description, MAX_DESCRIPTION_LEN)
@@ -102,9 +103,9 @@ def _validate_node(
     if draft.agentType == "loop" and not (1 <= draft.maxIterations <= MAX_ITERATIONS):
         raise DebugPolicyError(f"maxIterations must be between 1 and {MAX_ITERATIONS}")
     if draft.agentType == "a2a":
-        if not draft.a2aUrl.strip():
+        if not registry_backed_remote and not draft.a2aUrl.strip():
             raise DebugPolicyError("A2A URL is required")
-        if not allow_local_runtime_resources:
+        if not registry_backed_remote and not allow_local_runtime_resources:
             validate_url_not_private(draft.a2aUrl, field_name="a2aUrl")
     if draft.a2aRegistry.enabled and not draft.a2aRegistry.registrySpaceId.strip():
         raise DebugPolicyError("A2A registry space id is required")
@@ -120,6 +121,11 @@ def _validate_node(
         raise DebugPolicyError(
             f"Unsupported knowledgebaseBackend: {draft.knowledgebaseBackend}"
         )
+    _check_len(
+        "knowledgebaseIndex",
+        draft.knowledgebaseIndex,
+        MAX_KNOWLEDGEBASE_INDEX_LEN,
+    )
     _validate_catalog_ids("tracingExporters", draft.tracingExporters, EXPORTER_BY_ID)
 
     if len(draft.customTools) > MAX_CUSTOM_TOOLS:
@@ -141,9 +147,6 @@ def _validate_node(
             validate_url_not_private(tool.url, field_name="mcpTools.url")
         for arg in tool.args:
             _check_len("MCP arg", arg, MAX_MCP_ARG_LEN)
-
-    if len(draft.selectedSkills) > MAX_SELECTED_SKILLS:
-        raise DebugPolicyError("Too many selected skills")
 
     total = 1
     for sub in draft.subAgents:

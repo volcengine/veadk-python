@@ -19,8 +19,16 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from google.adk.skills import Frontmatter, Skill as ADKSkill, SkillRegistry
-from google.adk.skills import load_skill_from_dir
+from google.adk.skills import Frontmatter, load_skill_from_dir
+from google.adk.skills import Skill as ADKSkill
+
+try:
+    from google.adk.skills import SkillRegistry
+except ImportError:  # google-adk 1.32 does not export the registry base yet.
+
+    class SkillRegistry:  # type: ignore[no-redef]
+        pass
+
 
 from veadk.skills.materializer import materialize_remote_skill
 from veadk.skills.skill import Skill as VeADKSkill

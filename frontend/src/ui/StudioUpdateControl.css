@@ -1,0 +1,595 @@
+.studio-update-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 112px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid #1664ff;
+  border-radius: 8px;
+  background: #1664ff;
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    border-color 0.14s ease,
+    background-color 0.14s ease,
+    color 0.14s ease;
+}
+
+.studio-update-trigger.is-idle {
+  gap: 0;
+  width: 32px;
+  min-width: 32px;
+  padding: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  transition:
+    width 0.18s ease,
+    gap 0.18s ease,
+    padding 0.18s ease,
+    border-color 0.14s ease,
+    background-color 0.14s ease,
+    color 0.14s ease;
+}
+
+.studio-update-trigger.is-idle:hover,
+.studio-update-trigger.is-idle:focus-visible {
+  gap: 7px;
+  width: 124px;
+  padding: 0 10px;
+  border-color: #1664ff;
+  background: #1664ff;
+  color: #fff;
+}
+
+.studio-update-trigger.is-idle > span {
+  max-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateX(-4px);
+  transition:
+    max-width 0.18s ease,
+    opacity 0.12s ease,
+    transform 0.18s ease;
+}
+
+.studio-update-trigger.is-idle:hover > span,
+.studio-update-trigger.is-idle:focus-visible > span {
+  max-width: 86px;
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.studio-update-trigger.is-submitting {
+  border-color: hsl(var(--border));
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  cursor: pointer;
+}
+
+.studio-update-trigger.is-error {
+  border-color: hsl(var(--border));
+  background: hsl(var(--background));
+  color: hsl(var(--destructive));
+}
+
+.studio-update-trigger.is-published {
+  border-color: hsl(var(--border));
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+.studio-update-icon {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
+}
+
+.studio-update-dialog {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  column-gap: 10px;
+  width: 500px;
+}
+
+.studio-update-dialog > .studio-update-dialog-mark {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.studio-update-dialog > .confirm-title {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: start;
+  margin: 5px 0 12px;
+}
+
+.studio-update-dialog > :not(.studio-update-dialog-mark, .confirm-title) {
+  grid-column: 1 / -1;
+}
+
+.studio-update-field {
+  position: relative;
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+.studio-update-version-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  height: 36px;
+  padding: 0 10px 0 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    box-shadow 0.12s ease,
+    background-color 0.12s ease;
+}
+
+.studio-update-version-trigger:hover {
+  border-color: hsl(var(--foreground) / 0.24);
+  background: hsl(var(--muted) / 0.18);
+}
+
+.studio-update-version-trigger[aria-expanded="true"] {
+  border-color: hsl(var(--ring) / 0.42);
+  background: hsl(var(--background));
+  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.1);
+}
+
+.studio-update-version-trigger:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.12);
+}
+
+.studio-update-version-trigger > svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  color: hsl(var(--muted-foreground));
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.16s ease;
+}
+
+.studio-update-version-trigger[aria-expanded="true"] > svg {
+  transform: rotate(180deg);
+}
+
+.studio-update-version-menu {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 100%;
+  max-height: 190px;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--panel, var(--background)));
+  box-shadow:
+    0 12px 28px hsl(var(--foreground) / 0.1),
+    0 2px 8px hsl(var(--foreground) / 0.05);
+  overscroll-behavior: contain;
+}
+
+.studio-update-version-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.studio-update-version-option:hover,
+.studio-update-version-option:focus-visible {
+  outline: none;
+  background: hsl(var(--muted) / 0.5);
+}
+
+.studio-update-version-option.is-selected {
+  background: hsl(var(--primary) / 0.08);
+}
+
+.studio-update-version-option > svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  color: hsl(var(--primary));
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.studio-update-dialog-mark {
+  display: inline-grid;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  margin-bottom: 12px;
+  place-items: center;
+  border-radius: 8px;
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+}
+
+.studio-update-dialog-mark svg {
+  width: 18px;
+  height: 18px;
+}
+
+.studio-update-versions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 16px;
+  margin: 0 0 18px;
+  padding: 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 9px;
+  background: hsl(var(--canvas) / 0.5);
+}
+
+.studio-update-versions div:last-child {
+  grid-column: 1 / -1;
+}
+
+.studio-update-versions dt {
+  margin-bottom: 3px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+}
+
+.studio-update-versions dd {
+  margin: 0;
+  overflow: hidden;
+  color: hsl(var(--foreground));
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-update-changelog {
+  margin: 0 0 18px;
+  padding: 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 9px;
+}
+
+.studio-update-changelog > div {
+  margin-bottom: 7px;
+  color: hsl(var(--foreground));
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.studio-update-changelog ul {
+  display: grid;
+  gap: 5px;
+  max-height: min(180px, 25vh);
+  margin: 0;
+  padding: 0 6px 0 18px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.studio-update-changelog li,
+.studio-update-changelog p {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.studio-update-confirm {
+  border-color: transparent;
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+
+.studio-update-confirm:hover {
+  background: hsl(var(--primary) / 0.88);
+}
+
+.studio-update-error {
+  margin-bottom: 12px;
+  color: hsl(var(--destructive));
+}
+
+.studio-update-error-panel {
+  min-width: 0;
+}
+
+.studio-update-error-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 12px;
+}
+
+.studio-update-error-meta > div {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--canvas) / 0.5);
+}
+
+.studio-update-error-meta dt {
+  margin-bottom: 3px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+}
+
+.studio-update-error-meta dd {
+  margin: 0;
+  overflow: hidden;
+  color: hsl(var(--foreground));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-update-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid hsl(var(--border));
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: hsl(var(--muted) / 0.28);
+  color: hsl(var(--foreground));
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.studio-update-log-header > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.studio-update-log-header i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: hsl(var(--muted-foreground));
+}
+
+.studio-update-log-header i.is-active {
+  background: #1664ff;
+  box-shadow: 0 0 0 3px rgb(22 100 255 / 11%);
+}
+
+.studio-update-log-header i.is-complete {
+  background: hsl(145 62% 42%);
+}
+
+.studio-update-log-header i.is-error {
+  background: hsl(var(--destructive));
+}
+
+.studio-update-log-header small {
+  color: hsl(var(--muted-foreground));
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.studio-update-log-header button {
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: hsl(var(--primary));
+  font: inherit;
+  cursor: pointer;
+}
+
+.studio-update-log-header button:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.studio-update-log-header button:disabled {
+  color: hsl(var(--muted-foreground));
+  cursor: default;
+  text-decoration: none;
+}
+
+.studio-update-log-lines {
+  min-height: 92px;
+  max-height: min(210px, 29vh);
+  padding: 11px 12px;
+  overflow-y: auto;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0 0 8px 8px;
+  background: hsl(var(--foreground) / 0.035);
+  color: hsl(var(--foreground));
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.studio-update-log-lines:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.35);
+  outline-offset: -2px;
+}
+
+.studio-update-log-lines > div + div {
+  margin-top: 3px;
+}
+
+.studio-update-log-lines p {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+}
+
+.studio-update-console-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 10px;
+  color: hsl(var(--primary));
+  font-size: 11px;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.studio-update-console-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.studio-update-progress-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0 18px;
+}
+
+.studio-update-progress-summary > div {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--canvas) / 0.5);
+}
+
+.studio-update-progress-summary span {
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+}
+
+.studio-update-progress-summary strong {
+  overflow: hidden;
+  color: hsl(var(--foreground));
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-update-progress {
+  display: grid;
+  gap: 0;
+  margin: 0 0 14px;
+  padding: 0;
+  list-style: none;
+}
+
+.studio-update-progress li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 9px;
+  min-height: 38px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+.studio-update-progress li:not(:last-child)::after {
+  position: absolute;
+  top: 14px;
+  bottom: -2px;
+  left: 5px;
+  width: 1px;
+  background: hsl(var(--border));
+  content: "";
+}
+
+.studio-update-progress li.is-complete:not(:last-child)::after {
+  background: #1664ff;
+}
+
+.studio-update-progress-dot {
+  position: relative;
+  z-index: 1;
+  width: 11px;
+  height: 11px;
+  margin-top: 2px;
+  border: 2px solid hsl(var(--border));
+  border-radius: 50%;
+  background: hsl(var(--background));
+}
+
+.studio-update-progress li.is-active,
+.studio-update-progress li.is-complete {
+  color: hsl(var(--foreground));
+}
+
+.studio-update-progress li.is-active .studio-update-progress-dot {
+  border-color: #1664ff;
+  box-shadow: 0 0 0 3px rgb(22 100 255 / 12%);
+}
+
+.studio-update-progress li.is-complete .studio-update-progress-dot {
+  border-color: #1664ff;
+  background: #1664ff;
+}
+
+.studio-update-progress li > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.studio-update-progress small {
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+}
+
+.studio-update-progress-note {
+  margin: 12px 0 18px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+@media (max-width: 720px) {
+  .studio-update-dialog {
+    width: calc(100vw - 32px);
+  }
+}

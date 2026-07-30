@@ -198,6 +198,14 @@ database:
     region: cn-beijing                  # default Volcengine TOS Vector region
     bucket:
     account_id:
+  # [optional] for long-term memory backend="tos_context" (TOS ContextBucket). Requires tos>=2.9.4b1.
+  # Note: distinct from `tos` (object storage) and `tos_vector` (vector store); this is the ContextBucket memory service.
+  tos_context:
+    account_id:                                 # [required] account ID for ContextBucket control-plane
+    control_endpoint:                           # [required] ContextBucket controller (control-plane) endpoint
+    bucket_name:                                # ContextBucket name; falls back to LongTermMemory `index`/`app_name`
+    endpoint: tos-cn-beijing.volces.com         # default Volcengine TOS data-plane endpoint
+    region: cn-beijing                          # default Volcengine TOS region
 
 # Dynamic config
 nacos:

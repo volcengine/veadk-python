@@ -31,6 +31,17 @@ This page collects common issues you may hit when using VeADK, grouped by setup,
 ## Development
 
 <Accordions>
+  <Accordion title="ruff or pyright is not found locally">
+    Your local development environment may include the test dependencies but not the static-checking tools. Install them into the current project virtual environment:
+
+    ```bash
+    uv pip install ruff pyright
+    uv run ruff --version
+    uv run pyright --version
+    ```
+
+    After installation, use `uv run ruff check ...` and `uv run pyright ...`. If checking historical files reports many existing issues, separate problems introduced by the current change from the repository's existing baseline so a feature branch does not mix in a large unrelated cleanup.
+  </Accordion>
   <Accordion title="After setting the Volcengine AK/SK, fetching the model API Key fails">
     VeADK does not automatically create a Volcengine Ark platform API Key for you. Please create your API Key on the Volcengine Ark platform. For detailed steps, see the [documentation](https://www.volcengine.com/docs/82379/1361424), or go directly to the [console entry](https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey?apikey=%7B%7D).
   </Accordion>

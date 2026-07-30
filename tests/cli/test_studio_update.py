@@ -147,7 +147,7 @@ def test_find_studio_deployments_searches_regions_and_filters_project(
     ]
 
 
-def test_list_applications_uses_application_control_plane_region(
+def test_list_applications_uses_deployment_region(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     requested_regions: list[str] = []
@@ -160,10 +160,32 @@ def test_list_applications_uses_application_control_plane_region(
     service.ak = "ak"
     service.sk = "sk"
     service.region = "cn-shanghai"
+    service.session_token = ""
     monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.ve_request", _request)
 
     assert service._list_application(app_name="studio-app") == []
-    assert requested_regions == ["cn-beijing"]
+    assert requested_regions == ["cn-shanghai"]
+
+
+def test_application_template_matches_deployment_region(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "veadk.integrations.ve_faas.ve_faas.volcenginesdkcore.ApiClient",
+        lambda _: object(),
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_faas.ve_faas.volcenginesdkvefaas.VEFAASApi",
+        lambda _: object(),
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_faas.ve_faas.APIGateway",
+        lambda *_: object(),
+    )
+
+    service = VeFaaS("ak", "sk", region="cn-shanghai")
+
+    assert service.template_id == "6a685988162bcd00083c9001"
 
 
 def test_load_deployed_site_logo_uses_current_branding_url(
@@ -485,6 +507,7 @@ def test_update_application_code_bundle_merges_only_explicit_environment(
 ) -> None:
     updated_requests: list[Any] = []
     service = object.__new__(VeFaaS)
+    service.session_token = ""
     cast(Any, service).client = SimpleNamespace(
         get_function=lambda _: SimpleNamespace(
             envs=[
@@ -513,34 +536,95 @@ def test_update_application_code_bundle_merges_only_explicit_environment(
     }
 
 
-def test_application_control_plane_uses_beijing_for_shanghai_deployment(
+def test_application_operations_use_deployment_region(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, str]] = []
     service = object.__new__(VeFaaS)
+    service.session_token = ""
     cast(Any, service).ak = "ak"
     cast(Any, service).sk = "sk"
     cast(Any, service).region = "cn-shanghai"
+    cast(Any, service).template_id = "template-id"
 
     def _ve_request(**kwargs: object) -> dict[str, object]:
         action = cast(str, kwargs["action"])
         region = cast(str, kwargs["region"])
         calls.append((action, region))
+        if action == "CreateApplication":
+            request_body = cast(dict[str, Any], kwargs["request_body"])
+            config = cast(dict[str, Any], request_body["Config"])
+            assert config["Region"] == "cn-shanghai"
+            return {"Result": {"Status": "create_success", "Id": "application-id"}}
         if action == "GetApplication":
             return {"Result": {"Status": "create_success"}}
-        return {"Result": {"Items": [], "Total": 0}}
+        if action == "ListApplications":
+            return {"Result": {"Items": [], "Total": 0}}
+        if action == "GetApplicationRevisionLog":
+            return {"Result": {"LogLines": []}}
+        return {}
 
     monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.ve_request", _ve_request)
 
+    application_id = service._create_application(
+        "studio-app",
+        "studio-function",
+        "gateway",
+        "upstream",
+        "service",
+    )
+    service._start_application_release(application_id)
     status, _ = service._get_application_status("application-id")
     applications = service._list_application(app_name="studio-app")
+    service.delete("application-id")
+    logs = service._get_application_logs("application-id", revision_number=1)
 
+    assert application_id == "application-id"
     assert status == "create_success"
     assert applications == []
+    assert logs == []
     assert calls == [
-        ("GetApplication", "cn-beijing"),
-        ("ListApplications", "cn-beijing"),
+        ("CreateApplication", "cn-shanghai"),
+        ("ReleaseApplication", "cn-shanghai"),
+        ("GetApplication", "cn-shanghai"),
+        ("ListApplications", "cn-shanghai"),
+        ("DeleteApplication", "cn-shanghai"),
+        ("GetApplicationRevisionLog", "cn-shanghai"),
     ]
+
+
+def test_application_logs_use_latest_revision_and_bounded_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[dict[str, Any]] = []
+    service = object.__new__(VeFaaS)
+    service.session_token = ""
+    cast(Any, service).ak = "ak"
+    cast(Any, service).sk = "sk"
+    cast(Any, service).region = "cn-beijing"
+    monkeypatch.setattr(
+        service,
+        "_get_application_status",
+        lambda _app_id: (
+            "deploying",
+            {"Result": {"NewRevisionNumber": 8, "StableRevisionNumber": 7}},
+        ),
+    )
+
+    def _ve_request(**kwargs: Any) -> dict[str, Any]:
+        requests.append(kwargs)
+        return {"Result": {"LogLines": ["building", "published"]}}
+
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.ve_request", _ve_request)
+
+    logs = service._get_application_logs("application-id", limit=99_999)
+
+    assert logs == ["building", "published"]
+    assert requests[0]["request_body"] == {
+        "Id": "application-id",
+        "Limit": 500,
+        "RevisionNumber": 8,
+    }
 
 
 def test_update_application_code_bundle_preserves_unspecified_sandbox_tool(
@@ -549,6 +633,7 @@ def test_update_application_code_bundle_preserves_unspecified_sandbox_tool(
 ) -> None:
     updated_requests: list[Any] = []
     service = object.__new__(VeFaaS)
+    service.session_token = ""
     cast(Any, service).client = SimpleNamespace(
         get_function=lambda _: SimpleNamespace(
             envs=[
@@ -581,6 +666,7 @@ def test_update_application_code_bundle_does_not_read_or_replace_environment(
 ) -> None:
     updated_requests: list[Any] = []
     service = object.__new__(VeFaaS)
+    service.session_token = ""
     cast(Any, service).client = SimpleNamespace(
         get_function=lambda _: pytest.fail("environment should not be read"),
         update_function=updated_requests.append,

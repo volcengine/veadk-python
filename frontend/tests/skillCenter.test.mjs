@@ -48,6 +48,14 @@ test("space and skill requests are paged server-side without exposing credential
   assert.doesNotMatch(skillCenterSource, /VOLCENGINE_ACCESS_KEY|VOLCENGINE_SECRET_KEY/);
 });
 
+test("SkillSpace downloads prefer full package files over SKILL.md only", () => {
+  assert.match(skillspaceSource, /files\?: ProjectFile\[\]/);
+  assert.match(
+    skillspaceSource,
+    /Array\.isArray\(d\.files\) && d\.files\.length > 0\) return d\.files/,
+  );
+});
+
 test("skill details render external markdown with raw HTML disabled", () => {
   assert.match(markdownSource, /allowRawHtml = true/);
   assert.match(

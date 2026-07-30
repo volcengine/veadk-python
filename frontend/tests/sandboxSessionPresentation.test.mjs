@@ -49,17 +49,17 @@ test("sandbox access is isolated behind a reusable typed client", () => {
   assert.doesNotMatch(sandboxClientSource, /setTimeout|crypto\.randomUUID/);
 });
 
-test("new-chat temporary mode launches the AgentKit sandbox", () => {
-  assert.match(modeSelectorSource, /value: "temporary"[\s\S]*?AgentKit 沙箱/);
+test("new-chat built-in agent mode launches the AgentKit sandbox", () => {
+  assert.match(modeSelectorSource, /value: "temporary"[\s\S]*?label: "内置智能体"/);
   assert.match(appSource, /mode === "temporary"[\s\S]*?openSandboxLaunch\(\)/);
   assert.doesNotMatch(appSource, /<SandboxEntryButton/);
 });
 
 test("sandbox launch dialog covers confirmation loading failure and retry", () => {
   assert.match(dialogSource, /role="dialog"/);
-  assert.match(dialogSource, /启用临时会话/);
-  assert.match(dialogSource, /将启动 AgentKit 沙箱与 Codex Agent 开启临时会话/);
-  assert.match(dialogSource, /您的会话将不会被持久化保存/);
+  assert.match(dialogSource, /启用 Codex 智能体/);
+  assert.match(dialogSource, /将启动 AgentKit 沙箱与 Codex 智能体/);
+  assert.match(dialogSource, /本次对话不会被持久化保存/);
   assert.match(dialogSource, /正在初始化沙箱/);
   assert.match(dialogSource, /启动失败/);
   assert.match(dialogSource, /重新尝试/);
@@ -68,8 +68,8 @@ test("sandbox launch dialog covers confirmation loading failure and retry", () =
 });
 
 test("active sandbox conversation is visibly temporary and never uses normal sessions", () => {
-  assert.match(sandboxSessionSource, /当前为临时会话，退出后对话内容消失/);
-  assert.match(sandboxSessionSource, /退出临时会话/);
+  assert.match(sandboxSessionSource, /当前为 Codex 智能体会话，退出后对话内容消失/);
+  assert.match(sandboxSessionSource, /退出内置智能体/);
   assert.match(appSource, /sandboxClient\.sendMessage/);
   assert.doesNotMatch(sandboxClientSource, /runSSE|listSessions/);
   assert.match(stylesSource, /\.main\.is-sandbox-session::before/);
@@ -85,6 +85,21 @@ test("active sandbox conversation is visibly temporary and never uses normal ses
   assert.match(
     stylesSource,
     /\.main\.is-sandbox-session[\s\S]*linear-gradient\([\s\S]*to bottom/,
+  );
+});
+
+test("normal session refresh cannot close a newly launched sandbox session", () => {
+  assert.match(
+    appSource,
+    /if \(myAgents \|\| agentDetailTarget \|\| sandboxSession \|\| !appName \|\| !userId\)/,
+  );
+  assert.match(
+    appSource,
+    /let cancelled = false;[\s\S]*?await refreshSessions\(appName\);[\s\S]*?if \(cancelled\) return;[\s\S]*?startNewChat\(\);[\s\S]*?cancelled = true;/,
+  );
+  assert.match(
+    appSource,
+    /\[agentDetailTarget, appName, myAgents, sandboxSession, userId\]/,
   );
 });
 

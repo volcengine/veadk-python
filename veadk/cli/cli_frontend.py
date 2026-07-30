@@ -28,12 +28,19 @@ import json
 import os
 import re
 import sys
+import tempfile
+import unicodedata
+import zipfile
 
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from time import monotonic
+from typing import Any, Literal
+from urllib.parse import urlparse
 
 import click
+from pydantic import BaseModel, Field
 
 from veadk.cli.frontend_branding import normalize_site_title, resolve_site_logo
 from veadk.utils.logger import get_logger
@@ -67,6 +74,53 @@ _SENSITIVE_LOG_PATTERNS = (
         r"[A-Za-z0-9_-]{10,}\b"
     ),
 )
+_CP_BUILD_LOG_MAX_CHARS = 16000
+_CP_BUILD_LOG_MAX_LINES = 260
+_CP_PIPELINE_CREATED_RE = re.compile(
+    r"Pipeline created successfully:\s*(?P<name>.*?)\s*\(ID:\s*(?P<id>[^)]+)\)"
+)
+_CP_PIPELINE_REUSED_RE = re.compile(r"Reusing pipeline by name:\s*(?P<name>.+)$")
+_CP_PIPELINE_CREATING_RE = re.compile(r"Creating new pipeline:\s*(?P<name>.+)$")
+_CP_PIPELINE_RUN_RE = re.compile(
+    r"Pipeline triggered successfully,\s*run ID:\s*(?P<id>\S+)"
+)
+_RUNTIME_DESCRIPTION_MAX_BYTES = 255
+
+
+def _normalize_runtime_description(value: object) -> str:
+    """Return a conservative AgentKit Runtime description."""
+    single_line = re.sub(
+        r"\s+", " ", unicodedata.normalize("NFKC", str(value or ""))
+    ).strip()
+    normalized: list[str] = []
+    byte_length = 0
+    for character in single_line:
+        category = unicodedata.category(character)
+        if category[0] not in {"L", "M", "N", "P"} and category != "Zs":
+            continue
+        character_bytes = len(character.encode("utf-8"))
+        if byte_length + character_bytes > _RUNTIME_DESCRIPTION_MAX_BYTES:
+            break
+        normalized.append(character)
+        byte_length += character_bytes
+    return re.sub(r" +", " ", "".join(normalized)).rstrip()
+
+
+def _is_malformed_runtime_description_error(error: object) -> bool:
+    return "invaliddescription.malformed" in str(error or "").lower()
+
+
+def _create_runtime_with_description_fallback(
+    create_runtime, client: object, request: Any
+):
+    try:
+        return create_runtime(client, request)
+    except Exception as create_error:
+        if not _is_malformed_runtime_description_error(create_error):
+            raise
+        logger.warning("Runtime description was rejected; retrying without it")
+        request.description = None
+        return create_runtime(client, request)
 
 
 def _extract_build_error_excerpt(
@@ -101,6 +155,67 @@ def _extract_build_error_excerpt(
     )
 
 
+def _sanitize_build_log_snapshot(
+    text: object,
+    *,
+    max_chars: int = _CP_BUILD_LOG_MAX_CHARS,
+    max_lines: int = _CP_BUILD_LOG_MAX_LINES,
+) -> dict[str, Any]:
+    """Return a redacted, bounded tail of build logs for browser display."""
+    if max_chars <= 0 or max_lines <= 0:
+        return {"text": "", "lineCount": 0, "truncated": False}
+    raw_text = str(text or "")
+    raw_lines = raw_text.splitlines()
+    clean_lines: list[str] = []
+    skipped = 0
+    for raw_line in raw_lines:
+        line = _ANSI_ESCAPE_RE.sub("", str(raw_line)).rstrip()
+        line = _redact_debug_text(line)
+        if any(pattern.search(line) for pattern in _SENSITIVE_LOG_PATTERNS):
+            skipped += 1
+            continue
+        clean_lines.append(line[:1200])
+
+    selected = clean_lines[-max_lines:]
+    body = "\n".join(selected)
+    char_truncated = len(body) > max_chars
+    if char_truncated:
+        body = body[-max_chars:]
+        first_newline = body.find("\n")
+        if first_newline >= 0:
+            body = body[first_newline + 1 :]
+    truncated = (
+        skipped > 0
+        or len(clean_lines) > len(selected)
+        or char_truncated
+        or len(raw_lines) != len(clean_lines)
+    )
+    return {
+        "text": body,
+        "lineCount": len(clean_lines),
+        "truncated": truncated,
+    }
+
+
+def _cp_metadata_from_reporter_message(message: object) -> dict[str, str]:
+    """Extract Code Pipeline identifiers from AgentKit reporter messages."""
+    text = _ANSI_ESCAPE_RE.sub("", str(message or "")).strip()
+    if not text:
+        return {}
+    if match := _CP_PIPELINE_CREATED_RE.search(text):
+        return {
+            "pipeline_name": match.group("name").strip(),
+            "pipeline_id": match.group("id").strip(),
+        }
+    if match := _CP_PIPELINE_REUSED_RE.search(text):
+        return {"pipeline_name": match.group("name").strip()}
+    if match := _CP_PIPELINE_CREATING_RE.search(text):
+        return {"pipeline_name": match.group("name").strip()}
+    if match := _CP_PIPELINE_RUN_RE.search(text):
+        return {"pipeline_run_id": match.group("id").strip()}
+    return {}
+
+
 def _redact_debug_text(text: str) -> str:
     """Redact credentials before debug details leave the server process."""
     redacted = text
@@ -118,8 +233,10 @@ def _redact_debug_text(text: str) -> str:
         redacted,
     )
     return re.sub(
-        r"(?i)((?:api[_-]?key|auth[_-]?token|access[_-]?token|secret|"
-        r"password|token)\s*[:=]\s*)(?:[\"'][^\"']*[\"']|[^\s,;]+)",
+        r"(?i)((?:api[_-]?key|access[_-]?key(?:[_-]?id)?|secret[_-]?key|"
+        r"auth[_-]?token|access[_-]?token|client[_-]?secret|credential|"
+        r"signature|secret|password|token)\s*[:=]\s*)"
+        r"(?:[\"'][^\"']*[\"']|[^\s,;]+)",
         r"\1***",
         redacted,
     )
@@ -178,17 +295,46 @@ def _claims_from_forwarded_jwt(authorization: str | None) -> dict | None:
 
 DEV_SERVER_ORIGIN = "http://localhost:5173"
 DEV_SERVER_LOOPBACK_ORIGIN = "http://127.0.0.1:5173"
+DEV_SERVER_FALLBACK_ORIGIN = "http://localhost:5174"
+DEV_SERVER_FALLBACK_LOOPBACK_ORIGIN = "http://127.0.0.1:5174"
 
 
 def _frontend_allow_origins(vite: bool) -> list[str]:
     """Return browser origins accepted by the local Vite development server."""
     if not vite:
         return []
-    return [DEV_SERVER_ORIGIN, DEV_SERVER_LOOPBACK_ORIGIN]
+    return [
+        DEV_SERVER_ORIGIN,
+        DEV_SERVER_LOOPBACK_ORIGIN,
+        DEV_SERVER_FALLBACK_ORIGIN,
+        DEV_SERVER_FALLBACK_LOOPBACK_ORIGIN,
+    ]
 
 
 # Built UI shipped inside the package (output of `npm run build`).
 PACKAGED_WEBUI = Path(__file__).resolve().parent.parent / "webui"
+
+
+class _MessageFeedbackRequest(BaseModel):
+    """One rating change for a persisted assistant Event."""
+
+    runtime_id: str = Field(alias="runtimeId", min_length=1)
+    region: str = Field(default="cn-beijing", min_length=1)
+    app_name: str = Field(alias="appName", min_length=1)
+    user_id: str = Field(alias="userId", min_length=1)
+    session_id: str = Field(alias="sessionId", min_length=1)
+    event_id: str = Field(alias="eventId", min_length=1)
+    rating: Literal["good", "bad"] | None
+    comment: str = Field(default="", max_length=2000)
+
+
+class _DeleteFeedbackCasesRequest(BaseModel):
+    """Feedback-derived evaluation cases to remove from AgentKit."""
+
+    runtime_id: str = Field(alias="runtimeId", min_length=1)
+    region: str = Field(default="cn-beijing", min_length=1)
+    app_name: str = Field(alias="appName", min_length=1)
+    item_ids: list[str] = Field(alias="itemIds", min_length=1, max_length=100)
 
 
 def _mount_session_trace_route(app: Any, memory_exporter: Any) -> None:
@@ -504,6 +650,21 @@ def _serve_options(f):
             help="Seconds before a generated-agent debug runner is cleaned up.",
         ),
         click.option(
+            "--sandbox-chat-codex-tool-id",
+            default=None,
+            envvar="SANDBOX_CHAT_CODEX",
+            help="AgentKit CodeEnv Tool ID used by temporary chats "
+            "(env: SANDBOX_CHAT_CODEX).",
+        ),
+        click.option(
+            "--sandbox-skill-creator-tool-id",
+            "--skill-creator-tool-id",
+            default=None,
+            envvar="SANDBOX_SKILL_CREATOR",
+            help="AgentKit CodeEnv Tool ID used by Skill creation mode "
+            "(env: SANDBOX_SKILL_CREATOR).",
+        ),
+        click.option(
             "--admin",
             "studio_admins",
             default=None,
@@ -557,6 +718,8 @@ def frontend(
     oauth2_provider_label: str | None,
     auth_mode: str,
     generated_agent_test_run_ttl: int,
+    sandbox_chat_codex_tool_id: str | None,
+    sandbox_skill_creator_tool_id: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
     open_browser: bool,
@@ -582,6 +745,8 @@ def frontend(
         oauth2_provider_label=oauth2_provider_label,
         auth_mode=auth_mode,
         generated_agent_test_run_ttl=generated_agent_test_run_ttl,
+        sandbox_chat_codex_tool_id=sandbox_chat_codex_tool_id,
+        sandbox_skill_creator_tool_id=sandbox_skill_creator_tool_id,
         studio_admins=studio_admins,
         studio_developers=studio_developers,
         open_browser=open_browser,
@@ -611,6 +776,8 @@ def studio(
     oauth2_provider_label: str | None,
     auth_mode: str,
     generated_agent_test_run_ttl: int,
+    sandbox_chat_codex_tool_id: str | None,
+    sandbox_skill_creator_tool_id: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
     open_browser: bool,
@@ -641,6 +808,8 @@ def studio(
         oauth2_provider_label=oauth2_provider_label,
         auth_mode=auth_mode,
         generated_agent_test_run_ttl=generated_agent_test_run_ttl,
+        sandbox_chat_codex_tool_id=sandbox_chat_codex_tool_id,
+        sandbox_skill_creator_tool_id=sandbox_skill_creator_tool_id,
         studio_admins=studio_admins,
         studio_developers=studio_developers,
         open_browser=open_browser,
@@ -667,6 +836,8 @@ def _run_frontend_server(
     oauth2_provider_label: str | None,
     auth_mode: str,
     generated_agent_test_run_ttl: int,
+    sandbox_chat_codex_tool_id: str | None = None,
+    sandbox_skill_creator_tool_id: str | None = None,
     studio_admins: str | None = None,
     studio_developers: str | None = None,
     open_browser: bool,
@@ -691,6 +862,11 @@ def _run_frontend_server(
     else:
         logger.warning("No .env file found in current directory or parent directories")
 
+    if sandbox_chat_codex_tool_id:
+        os.environ["SANDBOX_CHAT_CODEX"] = sandbox_chat_codex_tool_id
+    if sandbox_skill_creator_tool_id:
+        os.environ["SANDBOX_SKILL_CREATOR"] = sandbox_skill_creator_tool_id
+
     from google.adk.cli.fast_api import get_fast_api_app
 
     agents_dir = os.path.abspath(agents_dir)
@@ -705,6 +881,35 @@ def _run_frontend_server(
         ],
         web=False,  # we serve our own UI, not the bundled ADK dev UI
     )
+
+    adk_server = None
+    for route in app.routes:
+        if getattr(route, "path", "") != "/run_sse":
+            continue
+        endpoint = getattr(route, "endpoint", None)
+        for cell in getattr(endpoint, "__closure__", None) or ():
+            candidate = cell.cell_contents
+            if all(
+                hasattr(candidate, attr)
+                for attr in (
+                    "agent_loader",
+                    "session_service",
+                    "artifact_service",
+                    "get_runner_async",
+                )
+            ):
+                adk_server = candidate
+                break
+        if adk_server is not None:
+            break
+    if adk_server is None:
+        raise RuntimeError("Unable to access the ADK API server services")
+
+    from veadk.integrations.agentkit.app import (
+        configure_multi_app_session_capability_routes,
+    )
+
+    configure_multi_app_session_capability_routes(app, adk_server)
 
     # ``web=False`` deliberately keeps ADK's full development API disabled,
     # but the VeADK trace drawer needs this one read-only endpoint. Register a
@@ -852,14 +1057,39 @@ def _run_frontend_server(
             "SECRET_KEY, or run inside a VeFaaS function with an IAM role)",
         )
 
+    def _require_studio_admin(request: Request) -> None:
+        if _request_role(request) != StudioRole.ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail="Only Studio administrators can update Studio",
+            )
+
+    from veadk.cli.studio_self_update import (
+        StudioSelfUpdater,
+        StudioUpdateSettings,
+        current_studio_display_version,
+        mount_studio_update_routes,
+    )
+
+    mount_studio_update_routes(
+        app,
+        StudioSelfUpdater(
+            settings=StudioUpdateSettings.from_env(),
+            credential_resolver=_resolve_ve_credentials,
+            branding_logo=branding_logo,
+        ),
+        _require_studio_admin,
+    )
+
     from veadk.cli.frontend_sandbox import (
         AgentkitSandboxGateway,
         SandboxConfigurationError,
         SandboxConversationService,
         mount_sandbox_routes,
     )
+    from veadk.cli.agentkit_sandbox_region import sandbox_region_candidates
 
-    def _sandbox_client():
+    def _sandbox_client(region: str):
         from agentkit.sdk.tools.client import AgentkitToolsClient
 
         try:
@@ -869,7 +1099,7 @@ def _run_frontend_server(
         return AgentkitToolsClient(
             access_key=access_key,
             secret_key=secret_key,
-            region=os.getenv("AGENTKIT_SANDBOX_REGION", "cn-beijing"),
+            region=region,
             session_token=session_token or "",
         )
 
@@ -881,7 +1111,14 @@ def _run_frontend_server(
 
     mount_sandbox_routes(
         app,
-        SandboxConversationService(AgentkitSandboxGateway(_sandbox_client)),
+        SandboxConversationService(
+            AgentkitSandboxGateway(
+                _sandbox_client,
+                region_candidates=sandbox_region_candidates(
+                    os.getenv("AGENTKIT_SANDBOX_REGION")
+                ),
+            )
+        ),
         _sandbox_owner,
     )
 
@@ -1026,10 +1263,12 @@ def _run_frontend_server(
                 for s in getattr(agent, "sub_agents", []) or []
             ]
         mode = getattr(agent, "mode", None)
+        instruction = getattr(agent, "instruction", "")
         return {
             "id": name,
             "name": name,
             "description": getattr(agent, "description", "") or "",
+            "instruction": instruction if isinstance(instruction, str) else "",
             "type": _agent_type(agent),
             "model": _model_name(getattr(agent, "model", "")),
             "tools": [_tool_label(t) for t in getattr(agent, "tools", []) or []],
@@ -1058,6 +1297,7 @@ def _run_frontend_server(
         is informational."""
         return {
             "studio": studio,
+            "version": current_studio_display_version(),
             "branding": {
                 "title": branding_title,
                 "logoUrl": "/web/site-logo" if branding_logo is not None else "",
@@ -1303,11 +1543,11 @@ def _run_frontend_server(
     # This replaces the old in-process temp-agent loader. Generated Python code
     # is only loaded by a short-lived subprocess runner.
     import atexit
+    import importlib.util
     import secrets
     import shutil
     import socket
     import subprocess
-    import tempfile
     import threading as _test_threading
     import time
     from dataclasses import dataclass
@@ -1319,7 +1559,9 @@ def _run_frontend_server(
         AgentDraft,
         GeneratedAgentProjectRequest,
         GeneratedAgentTestRunRequest,
+        GeneratedFile,
         GeneratedProject,
+        debug_runtime_env_from_draft,
         generate_project_from_draft,
         normalize_and_validate_draft,
     )
@@ -1328,9 +1570,16 @@ def _run_frontend_server(
         validate_debug_policy,
         validate_project_policy,
     )
-    from veadk.cli.generated_agent_skills import materialize_selected_skills
+    from veadk.cli.generated_agent_planner import (
+        GeneratedAgentDraftRequest,
+        generate_agent_draft,
+    )
+    from veadk.cli.generated_agent_skills import (
+        _files_from_zip,
+        materialize_selected_skills,
+    )
 
-    _TEST_RUN_MAX_FILES = 100
+    _TEST_RUN_MAX_FILES = 300
     _TEST_RUN_MAX_FILE_BYTES = 256 * 1024
     _TEST_RUN_MAX_TOTAL_BYTES = 2 * 1024 * 1024
     _TEST_RUN_MAX_ACTIVE = 3
@@ -1347,7 +1596,7 @@ def _run_frontend_server(
         owner_id: str
 
     _test_runs: dict[str, _GeneratedAgentTestRun] = {}
-    _test_runs_creating = {"count": 0}
+    _test_runs_creating: dict[str, int] = {}
     _test_runs_lock = _test_threading.Lock()
 
     def _terminate_test_run(run: _GeneratedAgentTestRun) -> None:
@@ -1419,7 +1668,7 @@ def _run_frontend_server(
         tool calls during local debugging.
         """
         env: dict[str, str] = {
-            "OTEL_SDK_DISABLED": "true",
+            "OTEL_SDK_DISABLED": "false",
             "VEADK_DISABLE_EXPIRE_AT": "true",
             "ENABLE_APMPLUS": "false",
             "ENABLE_COZELOOP": "false",
@@ -1476,28 +1725,6 @@ def _run_frontend_server(
         env["PYTHONPATH"] = (
             f"{repo_root}{os.pathsep}{pythonpath}" if pythonpath else repo_root
         )
-        return env
-
-    def _a2a_registry_env_from_draft(draft: AgentDraft) -> dict[str, str]:
-        env: dict[str, str] = {}
-
-        def visit(node: AgentDraft) -> None:
-            registry = node.a2aRegistry
-            if registry.enabled:
-                env.update(
-                    {
-                        "REGISTRY_SPACE_ID": registry.registrySpaceId.strip(),
-                        "REGISTRY_TOP_K": registry.registryTopK.strip() or "3",
-                        "REGISTRY_REGION": registry.registryRegion.strip()
-                        or "cn-beijing",
-                        "REGISTRY_ENDPOINT": registry.registryEndpoint.strip()
-                        or "https://open.volcengineapi.com/",
-                    }
-                )
-            for sub_agent in node.subAgents:
-                visit(sub_agent)
-
-        visit(draft)
         return env
 
     def _read_runner_log_tail(path: PathlibPath, max_chars: int = 6000) -> str:
@@ -1566,32 +1793,191 @@ def _run_frontend_server(
     def _http_policy_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=400, detail=str(exc))
 
-    async def _resolve_skillspace_skill_md(
+    def _skill_version_attr(resp: object, *names: str) -> str:
+        for name in names:
+            value = getattr(resp, name, None)
+            if value:
+                return str(value)
+        return ""
+
+    def _read_skill_md_from_zip(zip_path: Path, skill_id: str) -> str:
+        try:
+            with zipfile.ZipFile(zip_path, "r") as archive:
+                candidates = [
+                    info
+                    for info in archive.infolist()
+                    if (
+                        not info.is_dir()
+                        and info.filename.lower().endswith("skill.md")
+                        and not info.filename.startswith(("/", "\\"))
+                        and ".." not in Path(info.filename).parts
+                    )
+                ]
+                if not candidates:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="Skill version package has no SKILL.md content",
+                    )
+                chosen = sorted(
+                    candidates,
+                    key=lambda info: (len(Path(info.filename).parts), info.filename),
+                )[0]
+                raw = archive.read(chosen)
+        except HTTPException:
+            raise
+        except zipfile.BadZipFile as e:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Skill version package for {skill_id} is not a valid zip",
+            ) from e
+        for encoding in ("utf-8-sig", "gb18030"):
+            try:
+                return raw.decode(encoding)
+            except UnicodeDecodeError:
+                pass
+        raise HTTPException(
+            status_code=502,
+            detail=f"Skill version package for {skill_id} has unsupported encoding",
+        )
+
+    def _skill_md_from_version_response(
+        *,
+        space_id: str,
+        skill_id: str,
+        version: str | None,
+        resp: object,
+    ) -> str:
+        skill_md = _skill_version_attr(resp, "skill_md", "skillMd")
+        if skill_md:
+            return skill_md
+        bucket_name = _skill_version_attr(resp, "bucket_name", "bucketName")
+        tos_path = _skill_version_attr(resp, "tos_path", "tosPath", "path")
+        if not bucket_name or not tos_path:
+            raise HTTPException(
+                status_code=404, detail="Skill version has no SKILL.md content"
+            )
+        from veadk.skills.materializer import _download_legacy_skill_space_skill
+        from veadk.skills.skill import Skill as VeADKSkill
+
+        remote_skill = VeADKSkill(
+            name=_skill_version_attr(resp, "name") or skill_id,
+            description=_skill_version_attr(resp, "description"),
+            path=tos_path,
+            skill_space_id=space_id,
+            bucket_name=bucket_name,
+            id=skill_id,
+            version_id=version or _skill_version_attr(resp, "version"),
+        )
+        with tempfile.TemporaryDirectory(prefix="veadk_skillspace_") as temp_dir:
+            zip_path = Path(temp_dir) / "skill.zip"
+            if not _download_legacy_skill_space_skill(remote_skill, zip_path):
+                raise HTTPException(
+                    status_code=502,
+                    detail="Failed to download SkillSpace skill package",
+                )
+            return _read_skill_md_from_zip(zip_path, skill_id)
+
+    def _skill_files_from_version_response(
+        *,
+        space_id: str,
+        skill_id: str,
+        version: str | None,
+        resp: object,
+        folder: str,
+    ) -> str | list[GeneratedFile]:
+        skill_md = _skill_version_attr(resp, "skill_md", "skillMd")
+        bucket_name = _skill_version_attr(resp, "bucket_name", "bucketName")
+        tos_path = _skill_version_attr(resp, "tos_path", "tosPath", "path")
+        if not bucket_name or not tos_path:
+            if skill_md:
+                return skill_md
+            raise HTTPException(
+                status_code=404, detail="Skill version has no SKILL.md content"
+            )
+        from veadk.skills.materializer import _download_legacy_skill_space_skill
+        from veadk.skills.skill import Skill as VeADKSkill
+
+        remote_skill = VeADKSkill(
+            name=_skill_version_attr(resp, "name") or skill_id,
+            description=_skill_version_attr(resp, "description"),
+            path=tos_path,
+            skill_space_id=space_id,
+            bucket_name=bucket_name,
+            id=skill_id,
+            version_id=version or _skill_version_attr(resp, "version"),
+        )
+        with tempfile.TemporaryDirectory(prefix="veadk_skillspace_") as temp_dir:
+            zip_path = Path(temp_dir) / "skill.zip"
+            if not _download_legacy_skill_space_skill(remote_skill, zip_path):
+                if skill_md:
+                    return skill_md
+                raise HTTPException(
+                    status_code=502,
+                    detail="Failed to download SkillSpace skill package",
+                )
+            return _files_from_zip(
+                zip_path.read_bytes(),
+                folder,
+                f"SkillSpace skill {skill_id}",
+            )
+
+    async def _resolve_skillspace_skill_materialization(
         space_id: str,
         skill_id: str,
         version: str | None,
         region: str | None = None,
-    ) -> str:
-        from agentkit.sdk.skills.types import GetSkillVersionRequest
+        *,
+        skill_space_name: str | None = None,
+        skill_name: str | None = None,
+    ) -> str | list[GeneratedFile]:
+        from agentkit.sdk.skills.types import (
+            GetSkillInfoRequest,
+            GetSkillVersionRequest,
+        )
 
+        client = _skills_client(region or "cn-beijing")
         try:
-            client = _skills_client(region or "cn-beijing")
             resp = client.get_skill_version(
                 GetSkillVersionRequest(id=skill_id, skill_version=version)
             )
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(
-                f"GetSkillVersion({skill_id}@{version}) error for region {region or 'cn-beijing'}: {e}",
-                exc_info=True,
-            )
-            raise HTTPException(status_code=502, detail=f"SkillSpaces API error: {e}")
-        if not resp.skill_md:
-            raise HTTPException(
-                status_code=404, detail="Skill version has no SKILL.md content"
-            )
-        return str(resp.skill_md)
+        except Exception as version_error:
+            if skill_space_name and skill_name:
+                try:
+                    resp = client.get_skill_info(
+                        GetSkillInfoRequest(
+                            SkillName=skill_name,
+                            SkillSpaceName=skill_space_name,
+                            SkillSpaceId=space_id,
+                        )
+                    )
+                except Exception:
+                    logger.error(
+                        f"GetSkillVersion({skill_id}@{version}) error for region "
+                        f"{region or 'cn-beijing'}: {version_error}",
+                        exc_info=True,
+                    )
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"SkillSpaces API error: {version_error}",
+                    ) from version_error
+            else:
+                logger.error(
+                    f"GetSkillVersion({skill_id}@{version}) error for region "
+                    f"{region or 'cn-beijing'}: {version_error}",
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"SkillSpaces API error: {version_error}",
+                ) from version_error
+        return await asyncio.to_thread(
+            _skill_files_from_version_response,
+            space_id=space_id,
+            skill_id=skill_id,
+            version=version,
+            resp=resp,
+            folder=skill_name or skill_id,
+        )
 
     def _draft_for_debug_run(draft: AgentDraft) -> AgentDraft:
         """Return a debug-safe draft by omitting stdio MCP tools recursively."""
@@ -1632,7 +2018,7 @@ def _run_frontend_server(
             await materialize_selected_skills(
                 draft,
                 project,
-                resolve_skillspace_detail=_resolve_skillspace_skill_md,
+                resolve_skillspace_detail=_resolve_skillspace_skill_materialization,
             )
             return project, draft
         except ValidationError as e:
@@ -1658,7 +2044,10 @@ def _run_frontend_server(
         if not files:
             raise HTTPException(status_code=400, detail="No files provided")
         if len(files) > _TEST_RUN_MAX_FILES:
-            raise HTTPException(status_code=400, detail="Too many files")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Too many files ({len(files)} > {_TEST_RUN_MAX_FILES})",
+            )
 
         base = PathlibPath(temp_dir).resolve()
         total = 0
@@ -1709,13 +2098,27 @@ def _run_frontend_server(
             else []
         )
         if project.name in apps:
-            return project.name
-        if len(apps) == 1:
-            return apps[0]
-        raise HTTPException(
-            status_code=400,
-            detail="Generated project must contain exactly one agents/<name>/agent.py",
-        )
+            app_name = project.name
+        elif len(apps) == 1:
+            app_name = apps[0]
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Generated project must contain exactly one agents/<name>/agent.py",
+            )
+
+        # ADK imports an app as ``<app_name>.agent``. Names such as ``abc``
+        # collide with already-importable Python modules and are then reported
+        # by ADK as if the generated root_agent did not exist.
+        try:
+            conflicts_with_module = importlib.util.find_spec(app_name) is not None
+        except (ImportError, AttributeError, ValueError):
+            conflicts_with_module = app_name in sys.modules
+        if conflicts_with_module:
+            debug_app_name = f"veadk_debug_{app_name}"
+            (agents_dir / app_name).rename(agents_dir / debug_app_name)
+            return debug_app_name
+        return app_name
 
     def _free_local_port() -> int:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -1769,15 +2172,40 @@ def _run_frontend_server(
         project = await _generate_project_from_request(data, debug=False)
         return project.model_dump()
 
+    @app.post("/web/generated-agent-drafts")
+    async def _generate_agent_draft(request: Request):
+        _require_agent_management(request)
+        try:
+            payload = GeneratedAgentDraftRequest.model_validate(await request.json())
+        except ValidationError as error:
+            raise HTTPException(status_code=422, detail=error.errors()) from error
+
+        try:
+            return await generate_agent_draft(payload.requirement)
+        except TimeoutError as error:
+            raise HTTPException(
+                status_code=504,
+                detail="生成配置超时，请稍后重试。",
+            ) from error
+        except Exception as error:
+            logger.exception("Failed to generate Agent draft from requirement")
+            raise HTTPException(
+                status_code=502,
+                detail=_safe_exception_detail(error),
+            ) from error
+
     @app.post("/web/generated-agent-test-runs")
     async def _create_generated_agent_test_run(request: Request):
         principal = _require_agent_management(request)
+        owner_id = principal.owner_id if principal else ""
         _cleanup_expired_test_runs()
         data = await request.json()
 
         reserved = False
         with _test_runs_lock:
-            active_count = len(_test_runs) + _test_runs_creating["count"]
+            active_count = sum(
+                1 for run in _test_runs.values() if run.owner_id == owner_id
+            ) + _test_runs_creating.get(owner_id, 0)
             if active_count >= _TEST_RUN_MAX_ACTIVE:
                 raise HTTPException(
                     status_code=429,
@@ -1787,7 +2215,7 @@ def _run_frontend_server(
                         "请稍后重试或关闭不再使用的调试页面。"
                     ),
                 )
-            _test_runs_creating["count"] += 1
+            _test_runs_creating[owner_id] = _test_runs_creating.get(owner_id, 0) + 1
             reserved = True
 
         temp_dir = ""
@@ -1815,7 +2243,7 @@ def _run_frontend_server(
                 str(port),
             ]
             runner_env = _safe_runner_env()
-            runner_env.update(_a2a_registry_env_from_draft(draft))
+            runner_env.update(debug_runtime_env_from_draft(draft))
             with stdout_path.open("w", encoding="utf-8") as stdout_file:
                 with stderr_path.open("w", encoding="utf-8") as stderr_file:
                     proc = subprocess.Popen(
@@ -1842,7 +2270,7 @@ def _run_frontend_server(
                 base_url=base_url,
                 process=proc,
                 expires_at=expires_at,
-                owner_id=principal.owner_id if principal else "",
+                owner_id=owner_id,
             )
             with _test_runs_lock:
                 _test_runs[run_id] = run
@@ -1871,10 +2299,14 @@ def _run_frontend_server(
         finally:
             if reserved:
                 with _test_runs_lock:
-                    _test_runs_creating["count"] = max(
+                    creating_count = max(
                         0,
-                        _test_runs_creating["count"] - 1,
+                        _test_runs_creating.get(owner_id, 0) - 1,
                     )
+                    if creating_count:
+                        _test_runs_creating[owner_id] = creating_count
+                    else:
+                        _test_runs_creating.pop(owner_id, None)
 
     @app.post("/web/generated-agent-test-runs/{run_id}/sessions")
     async def _create_generated_agent_test_session(run_id: str, request: Request):
@@ -1974,6 +2406,54 @@ def _run_frontend_server(
 
         return StreamingResponse(_stream(), media_type="text/event-stream")
 
+    @app.get("/web/generated-agent-test-runs/{run_id}/trace/session/{session_id}")
+    async def _get_generated_agent_test_trace(
+        run_id: str,
+        session_id: str,
+        request: Request,
+    ):
+        run = _get_test_run(run_id, request)
+        url = (
+            f"{run.base_url}/dev/apps/{quote(run.app_name, safe='')}"
+            f"/debug/trace/session/{quote(session_id, safe='')}"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                res = await client.get(url)
+        except httpx.HTTPError as exc:
+            detail = _unexpected_debug_error_detail(
+                "连接临时运行环境以读取调用链路时失败",
+                exc,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=_test_run_log_detail(run, detail),
+            ) from exc
+        if res.status_code >= 400:
+            raise HTTPException(
+                status_code=res.status_code,
+                detail=_runner_response_error_detail(
+                    run,
+                    "读取调用链路",
+                    res.status_code,
+                    res.text,
+                ),
+            )
+        try:
+            spans = res.json()
+        except ValueError as exc:
+            detail = _unexpected_debug_error_detail(
+                "解析临时运行环境的调用链路响应时失败",
+                exc,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=_test_run_log_detail(run, detail),
+            ) from exc
+        if not isinstance(spans, list):
+            raise HTTPException(status_code=502, detail="调用链路响应格式无效")
+        return spans
+
     @app.delete("/web/generated-agent-test-runs/{run_id}")
     async def _delete_generated_agent_test_run(run_id: str, request: Request):
         _get_test_run(run_id, request)
@@ -2006,6 +2486,8 @@ def _run_frontend_server(
     def _destroy_deploy_task_runtime(task: dict[str, Any]) -> bool:
         """Destroy a task's Runtime once, if creation has reached that stage."""
         with _deploy_tasks_lock:
+            if not task.get("destroy_on_cancel", True):
+                return False
             runtime_id = str(task.get("runtime_id") or "")
             if not runtime_id or task.get("destroyed") or task.get("destroying"):
                 return False
@@ -2076,6 +2558,7 @@ def _run_frontend_server(
         principal = _require_agent_management(request)
         data = await request.json()
         agent_name = (data.get("name") or "").strip()
+        runtime_id = (data.get("runtimeId") or "").strip()
         files = data.get("files", [])
         config = data.get("config", {})
         task_id = str(data.get("taskId") or f"deploy-{id(request)}").strip()
@@ -2088,6 +2571,20 @@ def _run_frontend_server(
 
         region = config.get("region", "cn-beijing")
         project_name = config.get("projectName", "default")
+        existing_runtime = None
+        if runtime_id:
+            try:
+                existing_runtime = _authorized_runtime(
+                    request,
+                    runtime_id,
+                    region,
+                    managed_only=True,
+                )
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error("resolve update runtime failed: %s", e, exc_info=True)
+                raise HTTPException(status_code=502, detail=str(e)) from e
         # Network config (advanced): optional VPC/private networking.
         # Shape: { mode: "public"|"private"|"both", vpc_id?, subnet_ids?, enable_shared_internet_access? }
         # When absent or mode=public, use the default public endpoint.
@@ -2099,9 +2596,12 @@ def _run_frontend_server(
             mode = str(net_cfg.get("mode") or "").strip().lower()
             if mode and mode != "public":
                 runtime_network = dict(net_cfg)
-        im_config = data.get("im") if isinstance(data.get("im"), dict) else {}
-        feishu_config = (
-            im_config.get("feishu") if isinstance(im_config.get("feishu"), dict) else {}
+        im_config: dict[str, Any] = (
+            data.get("im") if isinstance(data.get("im"), dict) else {}
+        )
+        raw_feishu_config = im_config.get("feishu")
+        feishu_config: dict[str, Any] = (
+            raw_feishu_config if isinstance(raw_feishu_config, dict) else {}
         )
         feishu_enabled = bool(feishu_config.get("enabled"))
         requested_envs = data.get("envs") if isinstance(data.get("envs"), list) else []
@@ -2186,11 +2686,24 @@ def _run_frontend_server(
         cloud_config: dict = {
             "region": region,
             "project_name": project_name,
-            "image_tag": "latest",
+            "image_tag": (
+                f"veadk-v{(getattr(existing_runtime, 'current_version_number', 0) or 0) + 1}"
+                if existing_runtime is not None
+                else "latest"
+            ),
             "runtime_envs": runtime_envs,
             "python_version": "3.12",
         }
-        if runtime_network:
+        if existing_runtime is not None:
+            cloud_config.update(
+                {
+                    "runtime_id": runtime_id,
+                    "runtime_name": getattr(existing_runtime, "name", "") or agent_name,
+                    "runtime_role_name": getattr(existing_runtime, "role_name", "")
+                    or "Auto",
+                }
+            )
+        elif runtime_network:
             cloud_config["runtime_network"] = runtime_network
         if region and region != "cn-beijing":
             region_suffix = region.split("-")[-1]  # "shanghai" from "cn-shanghai"
@@ -2212,6 +2725,7 @@ def _run_frontend_server(
             "common": {
                 "agent_name": agent_name,
                 "entry_point": "app.py",
+                "description": _normalize_runtime_description(data.get("description")),
                 "python_version": "3.12",
                 "launch_type": "cloud",
             },
@@ -2223,17 +2737,24 @@ def _run_frontend_server(
 
         task_state: dict[str, Any] = {
             "cancel_event": _threading.Event(),
-            "runtime_id": "",
-            "runtime_name": "",
+            "runtime_id": runtime_id,
+            "runtime_name": (
+                getattr(existing_runtime, "name", "") if existing_runtime else ""
+            ),
             "region": region,
             "destroyed": False,
             "destroying": False,
+            "destroy_on_cancel": not bool(runtime_id),
             "owner_id": owner_id,
         }
-        events: "_queue.Queue" = _queue.Queue()
+        events: _queue.Queue = _queue.Queue()
         state = {"phase": "build", "build_error_excerpt": ""}
+        cp_log_stop_event = _threading.Event()
+        task_state["cp_log_stop_event"] = cp_log_stop_event
 
         _PHASE_ORDER = {"build": 0, "deploy": 1, "publish": 2}
+        _CP_WORKSPACE_NAME = "agentkit-cli-workspace"
+        _CP_LOG_POLL_INTERVAL = 5.0
 
         def _result_error_text(result) -> str:
             parts = []
@@ -2303,7 +2824,246 @@ def _run_frontend_server(
 
         from agentkit.toolkit.reporter import Reporter, TaskHandle
 
+        def _update_cp_metadata(message: object) -> None:
+            metadata = _cp_metadata_from_reporter_message(message)
+            if not metadata:
+                return
+            with _deploy_tasks_lock:
+                if metadata.get("pipeline_name"):
+                    task_state["cp_pipeline_name"] = metadata["pipeline_name"]
+                if metadata.get("pipeline_id"):
+                    task_state["cp_pipeline_id"] = metadata["pipeline_id"]
+                if metadata.get("pipeline_run_id"):
+                    task_state["cp_pipeline_run_id"] = metadata["pipeline_run_id"]
+            if metadata.get("pipeline_run_id"):
+                _ensure_cp_log_thread()
+
+        def _cp_log_event(
+            *,
+            status: str,
+            message: str,
+            snapshot: dict[str, Any] | None = None,
+            error: str = "",
+        ) -> dict[str, Any]:
+            import time as _time
+
+            with _deploy_tasks_lock:
+                pipeline_id = str(task_state.get("cp_pipeline_id") or "")
+                pipeline_name = str(task_state.get("cp_pipeline_name") or "")
+                pipeline_run_id = str(task_state.get("cp_pipeline_run_id") or "")
+                workspace_id = str(task_state.get("cp_workspace_id") or "")
+                runtime_name = str(task_state.get("runtime_name") or "")
+            payload = {
+                "source": "code-pipeline",
+                "status": status,
+                "text": (snapshot or {}).get("text", ""),
+                "lineCount": int((snapshot or {}).get("lineCount", 0) or 0),
+                "truncated": bool((snapshot or {}).get("truncated", False)),
+                "updatedAt": int(_time.time() * 1000),
+                "pipelineId": pipeline_id,
+                "pipelineName": pipeline_name,
+                "pipelineRunId": pipeline_run_id,
+                "workspaceId": workspace_id,
+                "workspaceName": _CP_WORKSPACE_NAME,
+            }
+            if error:
+                payload["error"] = _safe_exception_detail(Exception(error))
+            event = {
+                "level": "warning" if status == "error" else "info",
+                "phase": "build",
+                "message": message,
+                "buildLog": payload,
+            }
+            if runtime_name:
+                event["runtimeName"] = runtime_name
+            return event
+
+        def _resolve_cp_workspace_id(cp_client) -> str:
+            with _deploy_tasks_lock:
+                cached = str(task_state.get("cp_workspace_id") or "")
+            if cached:
+                return cached
+            result = cp_client.get_workspaces_by_name(_CP_WORKSPACE_NAME, page_size=5)
+            items = result.get("Items", [])
+            workspace = next(
+                (
+                    item
+                    for item in items
+                    if str(item.get("Name") or "") == _CP_WORKSPACE_NAME
+                ),
+                items[0] if items else None,
+            )
+            workspace_id = str((workspace or {}).get("Id") or "")
+            if not workspace_id:
+                raise RuntimeError("Code Pipeline workspace not found")
+            with _deploy_tasks_lock:
+                task_state["cp_workspace_id"] = workspace_id
+            return workspace_id
+
+        def _resolve_cp_pipeline_id(cp_client, workspace_id: str) -> str:
+            with _deploy_tasks_lock:
+                pipeline_id = str(task_state.get("cp_pipeline_id") or "")
+                pipeline_name = str(task_state.get("cp_pipeline_name") or "")
+            if pipeline_id:
+                return pipeline_id
+            if not pipeline_name:
+                raise RuntimeError("Code Pipeline id is not available yet")
+            result = cp_client.list_pipelines(
+                workspace_id=workspace_id,
+                name_filter=pipeline_name,
+                page_size=10,
+            )
+            items = result.get("Items", [])
+            pipeline = next(
+                (
+                    item
+                    for item in items
+                    if str(item.get("Name") or "") == pipeline_name
+                ),
+                items[0] if items else None,
+            )
+            pipeline_id = str((pipeline or {}).get("Id") or "")
+            if not pipeline_id:
+                raise RuntimeError("Code Pipeline id could not be resolved")
+            with _deploy_tasks_lock:
+                task_state["cp_pipeline_id"] = pipeline_id
+            return pipeline_id
+
+        def _download_cp_build_log_text(
+            cp_client,
+            *,
+            workspace_id: str,
+            pipeline_id: str,
+            pipeline_run_id: str,
+        ) -> str:
+            import requests
+
+            stages_data = cp_client.list_pipeline_run_stages_inner(
+                workspace_id=workspace_id,
+                pipeline_id=pipeline_id,
+                pipeline_run_id=pipeline_run_id,
+            )
+            parts: list[str] = []
+            for stage in stages_data.get("Items", []):
+                stage_name = str(
+                    stage.get("DisplayName") or stage.get("Name") or "stage"
+                )
+                for task in stage.get("Tasks", []):
+                    task_id = str(task.get("Id") or "")
+                    task_run_id = str(task.get("TaskRunID") or "")
+                    task_name = str(
+                        task.get("DisplayName") or task.get("Name") or "task"
+                    )
+                    if not task_id or not task_run_id:
+                        continue
+                    for step in task.get("Steps", []):
+                        step_name = str(step.get("Name") or "")
+                        if not step_name:
+                            continue
+                        try:
+                            log_url = cp_client.get_task_run_log_download_uri(
+                                workspace_id=workspace_id,
+                                pipeline_id=pipeline_id,
+                                pipeline_run_id=pipeline_run_id,
+                                task_run_id=task_run_id,
+                                task_id=task_id,
+                                step_name=step_name,
+                            )
+                            response = requests.get(log_url, timeout=20)
+                            response.raise_for_status()
+                        except requests.RequestException as log_error:
+                            logger.debug(
+                                "skip Code Pipeline step log download %s/%s/%s: %s",
+                                stage_name,
+                                task_name,
+                                step_name,
+                                log_error,
+                            )
+                            continue
+                        content = response.text.strip("\n")
+                        if content:
+                            parts.append(
+                                f"[{stage_name} / {task_name} / {step_name}]\n{content}"
+                            )
+            return "\n\n".join(parts)
+
+        def _poll_cp_build_logs() -> None:
+            last_text = ""
+            try:
+                from agentkit.toolkit.volcengine.code_pipeline import VeCodePipeline
+
+                ak, sk, token = _resolve_ve_credentials()
+                cp_client = VeCodePipeline(
+                    access_key=ak,
+                    secret_key=sk,
+                    session_token=token or "",
+                    region="cn-beijing",
+                )
+                workspace_id = _resolve_cp_workspace_id(cp_client)
+                pipeline_id = _resolve_cp_pipeline_id(cp_client, workspace_id)
+                with _deploy_tasks_lock:
+                    pipeline_run_id = str(task_state.get("cp_pipeline_run_id") or "")
+                if not pipeline_run_id:
+                    raise RuntimeError("Code Pipeline run id is not available yet")
+
+                while not cp_log_stop_event.is_set():
+                    text = _download_cp_build_log_text(
+                        cp_client,
+                        workspace_id=workspace_id,
+                        pipeline_id=pipeline_id,
+                        pipeline_run_id=pipeline_run_id,
+                    )
+                    snapshot = _sanitize_build_log_snapshot(text)
+                    current_text = str(snapshot.get("text") or "")
+                    if current_text and current_text != last_text:
+                        last_text = current_text
+                        with _deploy_tasks_lock:
+                            task_state["cp_build_log"] = snapshot
+                        events.put(
+                            _cp_log_event(
+                                status="running",
+                                message="正在构建镜像，已同步构建日志。",
+                                snapshot=snapshot,
+                            )
+                        )
+                    cp_log_stop_event.wait(_CP_LOG_POLL_INTERVAL)
+
+                if last_text:
+                    events.put(
+                        _cp_log_event(
+                            status="complete",
+                            message="构建日志同步完成。",
+                            snapshot=_sanitize_build_log_snapshot(last_text),
+                        )
+                    )
+            except Exception as log_error:
+                if cp_log_stop_event.is_set():
+                    return
+                logger.warning(
+                    "Code Pipeline build log polling failed: %s",
+                    log_error,
+                    exc_info=True,
+                )
+                events.put(
+                    _cp_log_event(
+                        status="error",
+                        message="暂时无法读取构建日志。",
+                        error=_safe_exception_detail(log_error),
+                    )
+                )
+
+        def _ensure_cp_log_thread() -> None:
+            with _deploy_tasks_lock:
+                thread = task_state.get("cp_log_thread")
+                if thread is not None and thread.is_alive():
+                    return
+                thread = _threading.Thread(target=_poll_cp_build_logs, daemon=True)
+                task_state["cp_log_thread"] = thread
+            thread.start()
+
         def _emit(level: str, message: str, pct=None):
+            message = str(message)
+            _update_cp_metadata(message)
             state["phase"] = _classify(message)
             ev = {"level": level, "phase": state["phase"], "message": message}
             for marker in ("Generated Runtime name:", "Creating Runtime:"):
@@ -2407,7 +3167,9 @@ def _run_frontend_server(
                         # try to fetch an APMPlus app-key with the deployer's
                         # AK/SK at boot (breaks for STS temp credentials).
                         req.apmplus_enable = False
-                        created = _orig(self, req)
+                        created = _create_runtime_with_description_fallback(
+                            _orig, self, req
+                        )
                         runtime_id = str(
                             getattr(created, "runtime_id", "")
                             or getattr(
@@ -2473,6 +3235,14 @@ def _run_frontend_server(
                                 e,
                                 exc_info=True,
                             )
+                    cp_log_stop_event.set()
+                    cp_log_thread = task_state.get("cp_log_thread")
+                    if (
+                        cp_log_thread is not None
+                        and cp_log_thread.is_alive()
+                        and cp_log_thread is not _threading.current_thread()
+                    ):
+                        cp_log_thread.join(timeout=1.0)
                     with _deploy_tasks_lock:
                         _deploy_tasks.pop(task_id, None)
                     events.put(None)  # sentinel: launch finished
@@ -2496,7 +3266,7 @@ def _run_frontend_server(
                         break
                     yield f"data: {_json.dumps(ev, ensure_ascii=False)}\n\n"
 
-                final = {"done": True}
+                final: dict[str, Any] = {"done": True}
                 if result_box.get("error"):
                     error_text = str(result_box["error"])
                     final.update(
@@ -2539,6 +3309,22 @@ def _run_frontend_server(
                                 "region": region,
                             }
                         )
+                        if runtime_id:
+                            _rt_conn_cache.pop((region, runtime_id), None)
+                        try:
+                            refreshed_runtime = _get_runtime(
+                                str(meta.get("runtime_id") or runtime_id),
+                                region,
+                            )
+                            final["version"] = getattr(
+                                refreshed_runtime,
+                                "current_version_number",
+                                None,
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "read deployed runtime version failed: %s", e
+                            )
                     else:
                         err = getattr(res, "error", None) if res else None
                         err_text = (
@@ -2650,6 +3436,9 @@ def _run_frontend_server(
                             "runtimeId": r.runtime_id,
                             "status": r.status,
                             "createdAt": r.created_at,
+                            "currentVersion": getattr(
+                                r, "current_version_number", None
+                            ),
                             "author": tags.get("veadk:author", ""),
                             "region": reg,
                         }
@@ -2746,12 +3535,21 @@ def _run_frontend_server(
                 "mcpToolsetId": getattr(r, "mcp_toolset_id", "") or "",
                 "artifactUrl": getattr(r, "artifact_url", "") or "",
                 "artifactType": getattr(r, "artifact_type", "") or "",
+                "networkTypes": [
+                    getattr(item, "network_type", "") or ""
+                    for item in (getattr(r, "network_configurations", None) or [])
+                    if getattr(item, "network_type", "")
+                ],
             }
         except HTTPException:
             raise
         except Exception as e:
             logger.error(f"get runtime detail failed: {e}", exc_info=True)
             raise HTTPException(status_code=502, detail=str(e))
+
+    _runtime_list_cache_ttl_seconds = 30.0
+    _runtime_list_cache: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
+    _runtime_list_locks: dict[tuple[Any, ...], asyncio.Lock] = {}
 
     @app.get("/web/runtimes")
     async def _web_runtimes(
@@ -2773,10 +3571,30 @@ def _run_frontend_server(
             ["cn-beijing", "cn-shanghai"] if region in {"all", "", "*"} else [region]
         )
         page_size = max(1, min(page_size, 100))
+        restrict_to_owner = scope == "mine" or role != StudioRole.ADMIN
+        principal_key = (
+            getattr(principal, "owner_id", ""),
+            getattr(principal, "display_name", ""),
+        )
+        cache_key = (
+            principal_key,
+            role,
+            scope,
+            page_size,
+            next_token,
+            region,
+        )
+        cached = _runtime_list_cache.get(cache_key)
+        if cached and monotonic() - cached[0] < _runtime_list_cache_ttl_seconds:
+            return cached[1]
+        list_lock = _runtime_list_locks.setdefault(cache_key, asyncio.Lock())
 
         # next_token format for cross-region mode: "all:<offset>".
         async def _list_region(
-            reg: str, tok: str, max_results: int = page_size
+            reg: str,
+            tok: str,
+            max_results: int = page_size,
+            tag_filter: tuple[str, str] | None = None,
         ) -> tuple[list[dict], str]:
             from agentkit.sdk.runtime.client import AgentkitRuntimeClient
             from agentkit.sdk.runtime import types as _rt
@@ -2793,6 +3611,12 @@ def _run_frontend_server(
             target_size = max(1, min(max_results, 100))
             for _ in range(20):
                 kw: dict = {"max_results": max(1, target_size - len(out))}
+                if tag_filter is not None:
+                    kw["tag_filters"] = [
+                        _rt.TagFiltersItemForListRuntimes.model_validate(
+                            {"Key": tag_filter[0], "Values": [tag_filter[1]]}
+                        )
+                    ]
                 if current_token:
                     kw["next_token"] = current_token
                 request = _rt.ListRuntimesRequest(**kw)
@@ -2802,15 +3626,24 @@ def _run_frontend_server(
                     is_mine = runtime_belongs_to(tags, principal)
                     if (scope == "mine" or role != StudioRole.ADMIN) and not is_mine:
                         continue
+                    can_delete = (
+                        role != StudioRole.USER
+                        and tags.get("veadk:managed") == "true"
+                        and (role == StudioRole.ADMIN or is_mine)
+                    )
                     out.append(
                         {
                             "name": runtime.name,
                             "runtimeId": runtime.runtime_id,
                             "status": runtime.status,
                             "createdAt": runtime.created_at,
+                            "currentVersion": getattr(
+                                runtime, "current_version_number", None
+                            ),
                             "region": reg,
                             "author": tags.get("veadk:author", ""),
                             "isMine": is_mine,
+                            "canDelete": can_delete,
                         }
                     )
                     if len(out) >= target_size:
@@ -2821,10 +3654,55 @@ def _run_frontend_server(
                 current_token = next_page_token
             return out[:target_size], next_page_token
 
+        await list_lock.acquire()
+        cached = _runtime_list_cache.get(cache_key)
+        if cached and monotonic() - cached[0] < _runtime_list_cache_ttl_seconds:
+            list_lock.release()
+            return cached[1]
+
+        def _cache_result(payload: dict[str, Any]) -> dict[str, Any]:
+            _runtime_list_cache[cache_key] = (monotonic(), payload)
+            return payload
+
         try:
+            if restrict_to_owner and principal is not None:
+                if next_token:
+                    match = re.fullmatch(r"mine:(\d+)", next_token)
+                    if match is None:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="invalid owned runtime page token",
+                        )
+                    offset = int(match.group(1))
+                else:
+                    offset = 0
+                window_end = offset + page_size
+                owned_by_id: dict[str, dict] = {}
+                owned_has_more = False
+                for reg in regions:
+                    items, following_token = await _list_region(
+                        reg,
+                        "",
+                        window_end,
+                        ("veadk:owner", principal.owner_id),
+                    )
+                    for item in items:
+                        owned_by_id[item["runtimeId"]] = item
+                    owned_has_more = owned_has_more or bool(following_token)
+                owned_runtimes = sorted(
+                    owned_by_id.values(),
+                    key=lambda item: item.get("createdAt") or "",
+                    reverse=True,
+                )
+                page_end = min(window_end, len(owned_runtimes))
+                page = owned_runtimes[offset:page_end]
+                has_more = page_end < len(owned_runtimes) or owned_has_more
+                following_token = f"mine:{page_end}" if has_more else ""
+                return _cache_result({"runtimes": page, "nextToken": following_token})
+
             if len(regions) == 1:
                 out, nxt = await _list_region(regions[0], next_token)
-                return {"runtimes": out, "nextToken": nxt}
+                return _cache_result({"runtimes": out, "nextToken": nxt})
 
             if next_token:
                 match = re.fullmatch(r"all:(\d+)", next_token)
@@ -2864,16 +3742,16 @@ def _run_frontend_server(
                 return items, bool(following_token)
 
             all_runtimes: list[dict] = []
-            region_results = await asyncio.gather(
-                *(_list_region_window(reg) for reg in regions),
-                return_exceptions=True,
-            )
             regional_has_more = False
-            for reg, result in zip(regions, region_results, strict=True):
-                if isinstance(result, BaseException):
-                    logger.warning(f"list runtimes [{reg}] failed: {result}")
+            # The AgentKit SDK runtime client shares transport state internally;
+            # concurrent regional ListRuntimes calls can block each other for
+            # tens of seconds. Regions are few, so query them sequentially.
+            for reg in regions:
+                try:
+                    items, has_more = await _list_region_window(reg)
+                except Exception as exc:
+                    logger.warning(f"list runtimes [{reg}] failed: {exc}")
                     continue
-                items, has_more = result
                 all_runtimes.extend(items)
                 regional_has_more = regional_has_more or has_more
             all_runtimes.sort(
@@ -2884,35 +3762,99 @@ def _run_frontend_server(
             page = all_runtimes[offset:page_end]
             has_more = page_end < len(all_runtimes) or regional_has_more
             following_token = f"all:{page_end}" if has_more else ""
-            return {"runtimes": page, "nextToken": following_token}
+            return _cache_result({"runtimes": page, "nextToken": following_token})
         except HTTPException:
             raise
         except Exception as e:
             logger.error(f"list runtimes failed: {e}", exc_info=True)
             raise HTTPException(status_code=502, detail=str(e))
+        finally:
+            list_lock.release()
 
     # Cache resolved (endpoint, apikey, auth type) per runtime so the data-plane
     # proxy does not call GetRuntime on every request. Short TTL; cleared on a 401.
-    _rt_conn_cache: dict[tuple[str, str], tuple[str, str, str, float]] = {}
+    _rt_conn_cache: dict[tuple[str, str], tuple[str, str, str, str, float]] = {}
+
+    def _runtime_endpoint_host(endpoint: str) -> str:
+        parsed = urlparse(endpoint or "")
+        return parsed.hostname or parsed.netloc or ""
+
+    def _runtime_proxy_should_retry_probe(method: str, path: str) -> bool:
+        if method.upper() != "GET":
+            return False
+        normalized = path.strip("/")
+        if normalized == "list-apps" or normalized.startswith("web/agent-info/"):
+            return True
+        parts = normalized.split("/")
+        return (
+            len(parts) == 5
+            and parts[0] == "apps"
+            and parts[2] == "users"
+            and parts[4] == "sessions"
+        )
+
+    def _runtime_proxy_retry_delay(attempt: int) -> float:
+        return min(5.0, float(2 ** max(0, attempt - 1)))
+
+    def _runtime_network_error_detail(
+        endpoint_network_type: str,
+        *,
+        timeout: bool,
+        json_request: bool = False,
+    ) -> str:
+        if endpoint_network_type == "private":
+            return "runtime_private_endpoint_unreachable"
+        if json_request:
+            return "runtime_json_timeout" if timeout else "runtime_json_connect_error"
+        return "runtime_proxy_timeout" if timeout else "runtime_proxy_connect_error"
+
+    def _runtime_network_log_items(runtime: Any) -> list[dict[str, Any]]:
+        items = []
+        for index, nc in enumerate(
+            getattr(runtime, "network_configurations", None) or []
+        ):
+            endpoint = getattr(nc, "endpoint", "") or ""
+            items.append(
+                {
+                    "index": index,
+                    "network_type": getattr(nc, "network_type", "") or "",
+                    "endpoint_present": bool(endpoint),
+                    "endpoint_host": _runtime_endpoint_host(endpoint),
+                }
+            )
+        return items
 
     def _resolve_runtime_conn(
         runtime_id: str,
         region: str,
         runtime: Any | None = None,
-    ) -> tuple[str, str, str]:
+    ) -> tuple[str, str, str, str]:
         import time as _time
 
         cache_key = (region, runtime_id)
         cached = _rt_conn_cache.get(cache_key)
-        if cached and cached[3] > _time.time():
-            return cached[0], cached[1], cached[2]
+        if cached and cached[4] > _time.time():
+            logger.info(
+                "runtime conn cache hit runtime_id=%s region=%s endpoint_host=%s "
+                "auth_type=%s network_type=%s",
+                runtime_id,
+                region,
+                _runtime_endpoint_host(cached[0]),
+                cached[2],
+                cached[3],
+            )
+            return cached[0], cached[1], cached[2], cached[3]
         r = runtime if runtime is not None else _get_runtime(runtime_id, region)
         endpoint = ""
+        endpoint_source = ""
+        endpoint_network_type = ""
         for nc in getattr(r, "network_configurations", None) or []:
             ep = getattr(nc, "endpoint", "") or ""
             if ep:
+                endpoint_network_type = getattr(nc, "network_type", "") or ""
                 endpoint = ep
-                if getattr(nc, "network_type", "") == "public":
+                endpoint_source = f"network_config:{endpoint_network_type or 'unknown'}"
+                if endpoint_network_type == "public":
                     break
         apikey = ""
         auth = getattr(r, "authorizer_configuration", None)
@@ -2924,7 +3866,36 @@ def _run_frontend_server(
             auth_type = "key_auth"
         elif custom_jwt_auth:
             auth_type = "custom_jwt"
+        top_level_endpoint = getattr(r, "endpoint", "") or ""
+        logger.info(
+            "resolved runtime metadata runtime_id=%s region=%s runtime_name=%s "
+            "status=%s version=%s top_endpoint_present=%s top_endpoint_host=%s "
+            "network_configs=%s selected_endpoint_source=%s "
+            "selected_endpoint_host=%s auth_type=%s",
+            runtime_id,
+            region,
+            getattr(r, "name", "") or "",
+            getattr(r, "status", "") or "",
+            getattr(r, "current_version_number", "") or "",
+            bool(top_level_endpoint),
+            _runtime_endpoint_host(top_level_endpoint),
+            _runtime_network_log_items(r),
+            endpoint_source or "none",
+            _runtime_endpoint_host(endpoint),
+            auth_type,
+        )
         if not endpoint:
+            logger.warning(
+                "runtime has no selected endpoint runtime_id=%s region=%s "
+                "status=%s top_endpoint_present=%s top_endpoint_host=%s "
+                "network_configs=%s",
+                runtime_id,
+                region,
+                getattr(r, "status", "") or "",
+                bool(top_level_endpoint),
+                _runtime_endpoint_host(top_level_endpoint),
+                _runtime_network_log_items(r),
+            )
             raise HTTPException(
                 status_code=502, detail="runtime has no public endpoint"
             )
@@ -2932,44 +3903,18 @@ def _run_frontend_server(
             endpoint,
             apikey,
             auth_type,
+            endpoint_network_type,
             _time.time() + 300,
         )
-        return endpoint, apikey, auth_type
+        return endpoint, apikey, auth_type, endpoint_network_type
 
-    @app.api_route(
-        "/web/runtime-proxy/{runtime_id}/{path:path}",
-        methods=["GET", "POST", "DELETE"],
-    )
-    async def _runtime_proxy(runtime_id: str, path: str, request: Request):
-        """Proxy a data-plane call with its runtime credential injected server-side.
-
-        The browser never sees an API key. Streams the response so /run_sse works.
-        """
-        region = request.query_params.get("region", "cn-beijing")
-        try:
-            runtime = _authorized_runtime(
-                request,
-                runtime_id,
-                region,
-                coded_access_error=True,
-            )
-            endpoint, apikey, auth_type = _resolve_runtime_conn(
-                runtime_id,
-                region,
-                runtime,
-            )
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"resolve runtime conn failed: {e}", exc_info=True)
-            raise HTTPException(status_code=502, detail=str(e))
-
-        # Drop the SSO gateway querystring; keep any real API query params.
-        qs = {k: v for k, v in request.query_params.items() if k != "region"}
-        target = f"{endpoint.rstrip('/')}/{path}"
-        # Use the shared proxy header builder so Origin/Referer and other
-        # browser-only headers are stripped (the ADK server rejects them with
-        # "origin not allowed" / 403 otherwise).
+    def _runtime_request_headers(
+        request: Request,
+        *,
+        apikey: str,
+        auth_type: str,
+    ) -> dict[str, str]:
+        """Build data-plane headers without exposing Runtime credentials."""
         validated_authorization = None
         if auth_type == "custom_jwt":
             access_token = getattr(request.state, "oauth2_access_token", None)
@@ -2987,8 +3932,60 @@ def _run_frontend_server(
                     status_code=401,
                     detail="OAuth runtime requires an authenticated frontend session",
                 )
-        headers = _build_agentkit_proxy_headers(
+        return _build_agentkit_proxy_headers(
             dict(request.headers), apikey, validated_authorization
+        )
+
+    @app.api_route(
+        "/web/runtime-proxy/{runtime_id}/{path:path}",
+        methods=["GET", "POST", "PATCH", "DELETE"],
+    )
+    async def _runtime_proxy(runtime_id: str, path: str, request: Request):
+        """Proxy a data-plane call with its runtime credential injected server-side.
+
+        The browser never sees an API key. Streams the response so /run_sse works.
+        """
+        region = request.query_params.get("region", "cn-beijing")
+        try:
+            runtime = _authorized_runtime(
+                request,
+                runtime_id,
+                region,
+                coded_access_error=True,
+            )
+            endpoint, apikey, auth_type, endpoint_network_type = _resolve_runtime_conn(
+                runtime_id,
+                region,
+                runtime,
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"resolve runtime conn failed: {e}", exc_info=True)
+            raise HTTPException(status_code=502, detail=str(e))
+
+        # Drop the SSO gateway querystring; keep any real API query params.
+        qs = {k: v for k, v in request.query_params.items() if k != "region"}
+        target = f"{endpoint.rstrip('/')}/{path}"
+        target_host = _runtime_endpoint_host(target)
+        logger.info(
+            "runtime-proxy upstream request runtime_id=%s region=%s method=%s "
+            "path=%s target_host=%s query_keys=%s auth_type=%s",
+            runtime_id,
+            region,
+            request.method,
+            path,
+            target_host,
+            sorted(qs.keys()),
+            auth_type,
+        )
+        # Use the shared proxy header builder so Origin/Referer and other
+        # browser-only headers are stripped (the ADK server rejects them with
+        # "origin not allowed" / 403 otherwise).
+        headers = _runtime_request_headers(
+            request,
+            apikey=apikey,
+            auth_type=auth_type,
         )
         body = await request.body()
         if request.method == "POST" and path == "run_sse":
@@ -3015,14 +4012,110 @@ def _run_frontend_server(
 
         from fastapi.responses import StreamingResponse
 
+        retry_probe = _runtime_proxy_should_retry_probe(request.method, path)
+        max_attempts = 10 if retry_probe else 1
+        timeout = httpx.Timeout(10.0, connect=5.0) if retry_probe else None
+
         # Open the upstream stream so we can forward status + body incrementally.
-        client = httpx.AsyncClient(timeout=None)
-        req = client.build_request(
-            request.method, target, params=qs, headers=headers, content=body
-        )
-        upstream = await client.send(req, stream=True)
+        client = httpx.AsyncClient(timeout=timeout)
+        upstream = None
+        for attempt in range(1, max_attempts + 1):
+            req = client.build_request(
+                request.method, target, params=qs, headers=headers, content=body
+            )
+            try:
+                upstream = await client.send(req, stream=True)
+                if attempt > 1:
+                    logger.info(
+                        "runtime-proxy probe succeeded after retry "
+                        "runtime_id=%s region=%s path=%s target_host=%s "
+                        "attempt=%s max_attempts=%s",
+                        runtime_id,
+                        region,
+                        path,
+                        target_host,
+                        attempt,
+                        max_attempts,
+                    )
+                break
+            except (httpx.ConnectError, httpx.TimeoutException) as error:
+                timed_out = isinstance(error, httpx.TimeoutException)
+                if attempt < max_attempts:
+                    delay = _runtime_proxy_retry_delay(attempt)
+                    logger.warning(
+                        "runtime-proxy probe retry runtime_id=%s region=%s "
+                        "method=%s path=%s target_host=%s network_type=%s "
+                        "attempt=%s max_attempts=%s delay=%.1fs error=%s",
+                        runtime_id,
+                        region,
+                        request.method,
+                        path,
+                        target_host,
+                        endpoint_network_type,
+                        attempt,
+                        max_attempts,
+                        delay,
+                        error,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                await client.aclose()
+                logger.error(
+                    "runtime-proxy %s runtime_id=%s region=%s method=%s "
+                    "path=%s target_host=%s query_keys=%s network_type=%s "
+                    "attempt=%s max_attempts=%s error=%s",
+                    "timeout" if timed_out else "connect failed",
+                    runtime_id,
+                    region,
+                    request.method,
+                    path,
+                    target_host,
+                    sorted(qs.keys()),
+                    endpoint_network_type,
+                    attempt,
+                    max_attempts,
+                    error,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=504 if timed_out else 502,
+                    detail=_runtime_network_error_detail(
+                        endpoint_network_type,
+                        timeout=timed_out,
+                    ),
+                ) from error
+            except httpx.HTTPError as error:
+                await client.aclose()
+                logger.error(
+                    "runtime-proxy request failed runtime_id=%s region=%s "
+                    "method=%s path=%s target_host=%s query_keys=%s error=%s",
+                    runtime_id,
+                    region,
+                    request.method,
+                    path,
+                    target_host,
+                    sorted(qs.keys()),
+                    error,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=502, detail="runtime_proxy_request_error"
+                ) from error
+        if upstream is None:
+            await client.aclose()
+            raise HTTPException(status_code=502, detail="runtime_proxy_request_error")
         if upstream.status_code == 401:
             _rt_conn_cache.pop((region, runtime_id), None)
+        logger.info(
+            "runtime-proxy upstream response runtime_id=%s region=%s method=%s "
+            "path=%s target_host=%s status=%s",
+            runtime_id,
+            region,
+            request.method,
+            path,
+            target_host,
+            upstream.status_code,
+        )
         if upstream.status_code >= 400:
             # Buffer error responses so we can log the body and still forward it.
             body_chunks = []
@@ -3189,13 +4282,885 @@ def _run_frontend_server(
         ) or os.path.exists("/var/run/secrets/iam/credential")
         return {"credentials": has_creds}
 
-    # ---- SkillSpace proxy (AgentKit account-scoped skills) ----------------
+    # ---- AgentKit account-scoped resources (A2A Spaces / Skills) ----------
     # These routes sign requests with the SERVER's Volcengine credentials (same
     # chain /web/deploy-agentkit uses) and sit under /web/* so the OAuth2
     # middleware gates them by SSO session when SSO is enabled. The browser
-    # never sees AK/SK. v1 only returns SKILL.md (SkillMd) content, not the
-    # full TOS zip; that keeps the surface small and mirrors how the public
-    # Skill Hub picker only needs markdown for basic skills.
+    # never sees AK/SK.
+
+    def _agentkit_openapi_endpoint(region: str) -> str:
+        host = os.getenv("AGENTKIT_OPENAPI_HOST", "").strip()
+        endpoint = os.getenv("AGENTKIT_OPENAPI_ENDPOINT", "").strip()
+        if endpoint:
+            return endpoint.rstrip("/")
+        if host:
+            return "https://" + host.removeprefix("https://").removeprefix(
+                "http://"
+            ).rstrip("/")
+        return f"https://agentkit.{region}.volcengineapi.com"
+
+    def _agentkit_openapi_headers(
+        *,
+        region: str,
+        action: str,
+        body: str,
+        endpoint: str,
+        query: dict[str, str] | None = None,
+    ) -> dict[str, str]:
+        from veadk.a2a.registry_client import _volc_sign_v4
+
+        ak, sk, token = _resolve_ve_credentials()
+        parsed = urlparse(endpoint)
+        host = parsed.netloc
+        content_type = "application/json; charset=UTF-8"
+        headers_to_sign = {
+            "Host": host,
+            "Content-Type": content_type,
+        }
+        signed_query = {
+            "Action": action,
+            "Version": "2025-10-30",
+            **(query or {}),
+        }
+        signed_headers = _volc_sign_v4(
+            access_key=ak,
+            secret_key=sk,
+            service="agentkit",
+            region=region,
+            method="POST",
+            path=parsed.path or "/",
+            query=signed_query,
+            headers=headers_to_sign,
+            body=body,
+        )
+        headers = {
+            "Content-Type": content_type,
+            "Host": host,
+            **signed_headers,
+        }
+        if token:
+            headers["X-Security-Token"] = token
+        return headers
+
+    async def _agentkit_openapi_post(
+        *,
+        region: str,
+        action: str,
+        payload: dict[str, Any],
+        query: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        endpoint = _agentkit_openapi_endpoint(region)
+        body = json.dumps(payload, ensure_ascii=False)
+        request_query = {
+            "Action": action,
+            "Version": "2025-10-30",
+            **(query or {}),
+        }
+        headers = _agentkit_openapi_headers(
+            region=region,
+            action=action,
+            body=body,
+            endpoint=endpoint,
+            query=query,
+        )
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    endpoint,
+                    params=request_query,
+                    headers=headers,
+                    content=body.encode("utf-8"),
+                )
+        except HTTPException:
+            raise
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"AgentKit OpenAPI request failed: {exc}") from exc
+
+        if response.status_code >= 400:
+            request_id = ""
+            try:
+                metadata = response.json().get("ResponseMetadata") or {}
+                request_id = metadata.get("RequestId") or ""
+            except ValueError:
+                pass
+            suffix = f" request_id={request_id}" if request_id else ""
+            raise RuntimeError(
+                f"AgentKit OpenAPI returned HTTP {response.status_code}{suffix}"
+            )
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise RuntimeError("AgentKit OpenAPI returned non-JSON response") from exc
+        error = data.get("ResponseMetadata", {}).get("Error") or data.get("Error")
+        if error:
+            from veadk.integrations.agentkit.evaluation import AgentKitOpenApiError
+
+            if isinstance(error, dict):
+                code = str(error.get("Code") or "unknown")
+                message = str(error.get("Message") or "")
+            else:
+                code = str(error)
+                message = ""
+            raise AgentKitOpenApiError(code, message)
+        return data
+
+    async def _runtime_json_request(
+        request: Request,
+        *,
+        runtime: Any,
+        runtime_id: str,
+        region: str,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Call one authorized Runtime JSON endpoint from the Studio server."""
+        endpoint, apikey, auth_type, endpoint_network_type = _resolve_runtime_conn(
+            runtime_id,
+            region,
+            runtime,
+        )
+        headers = _runtime_request_headers(
+            request,
+            apikey=apikey,
+            auth_type=auth_type,
+        )
+        headers["Accept"] = "application/json"
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
+        target = f"{endpoint.rstrip('/')}/{path.lstrip('/')}"
+        target_host = _runtime_endpoint_host(target)
+        logger.info(
+            "runtime json request runtime_id=%s region=%s method=%s path=%s "
+            "target_host=%s payload_present=%s auth_type=%s",
+            runtime_id,
+            region,
+            method,
+            path,
+            target_host,
+            payload is not None,
+            auth_type,
+        )
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                response = await client.request(
+                    method,
+                    target,
+                    headers=headers,
+                    json=payload,
+                )
+            except httpx.ConnectError as error:
+                logger.error(
+                    "runtime json connect failed runtime_id=%s region=%s "
+                    "method=%s path=%s target_host=%s error=%s",
+                    runtime_id,
+                    region,
+                    method,
+                    path,
+                    target_host,
+                    error,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail=_runtime_network_error_detail(
+                        endpoint_network_type,
+                        timeout=False,
+                        json_request=True,
+                    ),
+                ) from error
+            except httpx.TimeoutException as error:
+                logger.error(
+                    "runtime json timeout runtime_id=%s region=%s method=%s "
+                    "path=%s target_host=%s error=%s",
+                    runtime_id,
+                    region,
+                    method,
+                    path,
+                    target_host,
+                    error,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=504,
+                    detail=_runtime_network_error_detail(
+                        endpoint_network_type,
+                        timeout=True,
+                        json_request=True,
+                    ),
+                ) from error
+            except httpx.HTTPError as error:
+                logger.error(
+                    "runtime json request failed runtime_id=%s region=%s "
+                    "method=%s path=%s target_host=%s error=%s",
+                    runtime_id,
+                    region,
+                    method,
+                    path,
+                    target_host,
+                    error,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=502, detail="runtime_json_request_error"
+                ) from error
+        if response.status_code >= 400:
+            detail = response.text.strip()[:2000]
+            logger.warning(
+                "runtime json upstream error runtime_id=%s region=%s method=%s "
+                "path=%s target_host=%s status=%s body=%s",
+                runtime_id,
+                region,
+                method,
+                path,
+                target_host,
+                response.status_code,
+                detail[:500],
+            )
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=detail or f"Runtime returned HTTP {response.status_code}",
+            )
+        try:
+            data = response.json()
+        except ValueError as error:
+            content_type = response.headers.get("content-type", "unknown")
+            raise RuntimeError(
+                "Runtime returned a non-JSON response "
+                f"(HTTP {response.status_code}, Content-Type: {content_type})"
+            ) from error
+        if not isinstance(data, dict):
+            raise RuntimeError("Runtime returned an invalid JSON response")
+        return data
+
+    @app.post("/web/evaluation/feedback")
+    async def _web_message_feedback(
+        feedback: _MessageFeedbackRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        """Persist one message rating in ADK state and AgentKit evaluation sets."""
+        principal = _current_principal(request)
+        if (
+            principal is None
+            or feedback.user_id.casefold() not in principal.identifiers
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Feedback can only be submitted for the current user",
+            )
+        runtime = _authorized_runtime(
+            request,
+            feedback.runtime_id,
+            feedback.region,
+            coded_access_error=True,
+        )
+        session_path = (
+            f"apps/{quote(feedback.app_name, safe='')}/users/"
+            f"{quote(feedback.user_id, safe='')}/sessions/"
+            f"{quote(feedback.session_id, safe='')}"
+        )
+        agent_info_path = f"web/agent-info/{quote(feedback.app_name, safe='')}"
+        try:
+            session, agent_info = await asyncio.gather(
+                _runtime_json_request(
+                    request,
+                    runtime=runtime,
+                    runtime_id=feedback.runtime_id,
+                    region=feedback.region,
+                    method="GET",
+                    path=session_path,
+                ),
+                _runtime_json_request(
+                    request,
+                    runtime=runtime,
+                    runtime_id=feedback.runtime_id,
+                    region=feedback.region,
+                    method="GET",
+                    path=agent_info_path,
+                ),
+            )
+            from veadk.integrations.agentkit.evaluation import (
+                AgentKitEvaluationDatasetsClient,
+            )
+            from veadk.integrations.agentkit.evaluation.feedback import (
+                extract_feedback_sample,
+                feedback_item_key,
+                feedback_state_key,
+            )
+
+            agent_name = str(agent_info.get("name") or feedback.app_name)
+            project_name = str(getattr(runtime, "project_name", "") or "default")
+            sample = extract_feedback_sample(
+                session,
+                target_event_id=feedback.event_id,
+                runtime_id=feedback.runtime_id,
+                agent_name=agent_name,
+                user_id=feedback.user_id,
+            )
+            state_key = feedback_state_key(feedback.event_id)
+            session_state = session.get("state")
+            previous_value = (
+                session_state.get(state_key)
+                if isinstance(session_state, dict)
+                else None
+            )
+            previous: dict[str, Any] = (
+                previous_value if isinstance(previous_value, dict) else {}
+            )
+
+            async def _evaluation_post(
+                *,
+                action: str,
+                payload: dict[str, Any],
+                query: dict[str, str] | None = None,
+            ) -> dict[str, Any]:
+                return await _agentkit_openapi_post(
+                    region=feedback.region,
+                    action=action,
+                    payload=payload,
+                    query=query,
+                )
+
+            evaluation = AgentKitEvaluationDatasetsClient(
+                _evaluation_post,
+                project_name=project_name,
+            )
+            item_key = feedback_item_key(
+                project_name=project_name,
+                runtime_id=feedback.runtime_id,
+                session_id=feedback.session_id,
+                message_id=feedback.event_id,
+            )
+            deleted_previous_item_ids: set[str] = set()
+            evaluation_set = None
+            evaluation_item = None
+            if feedback.rating is not None:
+                evaluation_set = await evaluation.ensure_feedback_set(
+                    agent_name,
+                    feedback.rating,
+                )
+                evaluation_item = await evaluation.upsert_item(
+                    evaluation_set_id=evaluation_set.id,
+                    workspace_id=evaluation_set.workspace_id,
+                    item_key=item_key,
+                    fields=sample.fields(
+                        rating=feedback.rating,
+                        comment=feedback.comment,
+                    ),
+                )
+
+            previous_rating = str(previous.get("rating") or "")
+            previous_item_id = str(previous.get("evaluationItemId") or "")
+            previous_set_id = str(previous.get("evaluationSetId") or "")
+            previous_workspace_id = str(previous.get("workspaceId") or "")
+            replacing_previous = previous_item_id and (
+                feedback.rating is None or previous_rating != feedback.rating
+            )
+            if replacing_previous and previous_set_id and previous_workspace_id:
+                await evaluation.delete_item(
+                    evaluation_set_id=previous_set_id,
+                    workspace_id=previous_workspace_id,
+                    item_id=previous_item_id,
+                )
+                deleted_previous_item_ids.add(previous_item_id)
+
+            fallback_delete_ratings: tuple[str, ...] = ()
+            if feedback.rating is None:
+                fallback_delete_ratings = ("good", "bad")
+            elif feedback.rating == "good":
+                fallback_delete_ratings = ("bad",)
+            elif feedback.rating == "bad":
+                fallback_delete_ratings = ("good",)
+            for stale_rating in fallback_delete_ratings:
+                stale_set, stale_items = await evaluation.list_feedback_items(
+                    agent_name=agent_name,
+                    rating=stale_rating,
+                    page_size=200,
+                )
+                if stale_set is None:
+                    continue
+                for stale_item in stale_items:
+                    if (
+                        stale_item.item_key != item_key
+                        or stale_item.id in deleted_previous_item_ids
+                    ):
+                        continue
+                    await evaluation.delete_item(
+                        evaluation_set_id=stale_set.id,
+                        workspace_id=stale_set.workspace_id,
+                        item_id=stale_item.id,
+                    )
+                    deleted_previous_item_ids.add(stale_item.id)
+
+            feedback_state = {
+                "rating": feedback.rating,
+                "evaluationSetId": evaluation_set.id if evaluation_set else None,
+                "evaluationSetName": evaluation_set.name if evaluation_set else None,
+                "workspaceId": (
+                    evaluation_set.workspace_id if evaluation_set else None
+                ),
+                "evaluationItemId": evaluation_item.id if evaluation_item else None,
+                "syncStatus": "synced",
+                "statePersistence": "runtime",
+                "updatedAt": time.time(),
+            }
+            try:
+                await _runtime_json_request(
+                    request,
+                    runtime=runtime,
+                    runtime_id=feedback.runtime_id,
+                    region=feedback.region,
+                    method="PATCH",
+                    path=session_path,
+                    payload={"state_delta": {state_key: feedback_state}},
+                )
+            except HTTPException as error:
+                if error.status_code != 404:
+                    raise
+                feedback_state["statePersistence"] = "browser"
+                logger.warning(
+                    "Runtime %s does not expose Session PATCH through its gateway; "
+                    "feedback state will use the browser compatibility cache",
+                    feedback.runtime_id,
+                )
+            return feedback_state
+        except HTTPException:
+            raise
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "同步反馈到 AgentKit 评测集失败：" + _safe_exception_detail(error)
+                ),
+            ) from error
+
+    @app.get("/web/evaluation/feedback-cases")
+    async def _web_feedback_cases(
+        request: Request,
+        runtimeId: str = Query(..., min_length=1),
+        appName: str = Query(..., min_length=1),
+        region: str = Query(default="cn-beijing", min_length=1),
+        page_size: int = Query(default=100, ge=1, le=200),
+    ) -> dict[str, Any]:
+        """List AgentKit evaluation-set items created from message feedback."""
+        runtime = _authorized_runtime(
+            request,
+            runtimeId,
+            region,
+            coded_access_error=True,
+        )
+        agent_info_path = f"web/agent-info/{quote(appName, safe='')}"
+        try:
+            agent_info = await _runtime_json_request(
+                request,
+                runtime=runtime,
+                runtime_id=runtimeId,
+                region=region,
+                method="GET",
+                path=agent_info_path,
+            )
+            from veadk.integrations.agentkit.evaluation import (
+                AgentKitEvaluationDatasetsClient,
+            )
+
+            agent_name = str(agent_info.get("name") or appName)
+            project_name = str(getattr(runtime, "project_name", "") or "default")
+
+            async def _evaluation_post(
+                *,
+                action: str,
+                payload: dict[str, Any],
+                query: dict[str, str] | None = None,
+            ) -> dict[str, Any]:
+                return await _agentkit_openapi_post(
+                    region=region,
+                    action=action,
+                    payload=payload,
+                    query=query,
+                )
+
+            evaluation = AgentKitEvaluationDatasetsClient(
+                _evaluation_post,
+                project_name=project_name,
+            )
+            response_sets: list[dict[str, Any]] = []
+            response_items: list[dict[str, Any]] = []
+            for rating in ("good", "bad"):
+                evaluation_set, items = await evaluation.list_feedback_items(
+                    agent_name=agent_name,
+                    rating=rating,
+                    page_size=page_size,
+                )
+                if evaluation_set is None:
+                    response_sets.append(
+                        {
+                            "kind": rating,
+                            "evaluationSetId": None,
+                            "evaluationSetName": None,
+                            "workspaceId": None,
+                            "itemCount": 0,
+                        }
+                    )
+                    continue
+                response_sets.append(
+                    {
+                        "kind": rating,
+                        "evaluationSetId": evaluation_set.id,
+                        "evaluationSetName": evaluation_set.name,
+                        "workspaceId": evaluation_set.workspace_id,
+                        "itemCount": len(items),
+                    }
+                )
+                for item in items:
+                    fields = item.fields
+                    response_items.append(
+                        {
+                            "id": item.id or item.item_key,
+                            "itemKey": item.item_key,
+                            "kind": rating,
+                            "input": fields.get("input", ""),
+                            "output": fields.get("output", ""),
+                            "referenceOutput": fields.get("reference_output", ""),
+                            "comment": fields.get("feedback_comment", ""),
+                            "agentName": fields.get("agent_name", agent_name),
+                            "sessionId": fields.get("session_id", ""),
+                            "messageId": fields.get("message_id", ""),
+                            "runtimeId": fields.get("runtime_id", runtimeId),
+                            "invocationId": fields.get("invocation_id", ""),
+                            "userId": fields.get("user_id", ""),
+                            "createdAt": fields.get("created_at", ""),
+                            "evaluationSetId": evaluation_set.id,
+                            "evaluationSetName": evaluation_set.name,
+                            "workspaceId": evaluation_set.workspace_id,
+                        }
+                    )
+            return {
+                "agentName": agent_name,
+                "runtimeId": runtimeId,
+                "region": region,
+                "projectName": project_name,
+                "sets": response_sets,
+                "items": response_items,
+            }
+        except HTTPException:
+            raise
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(
+                status_code=502,
+                detail="读取 AgentKit 评测集失败：" + _safe_exception_detail(error),
+            ) from error
+
+    @app.post("/web/evaluation/feedback-cases/delete")
+    async def _web_delete_feedback_cases(
+        deletion: _DeleteFeedbackCasesRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        """Remove feedback cases and clear their thumbs state without deleting chat."""
+        requested_ids = {
+            item_id.strip()
+            for item_id in deletion.item_ids
+            if item_id and item_id.strip()
+        }
+        if not requested_ids:
+            raise HTTPException(status_code=400, detail="No feedback cases selected")
+        runtime = _authorized_runtime(
+            request,
+            deletion.runtime_id,
+            deletion.region,
+            coded_access_error=True,
+        )
+        agent_info_path = f"web/agent-info/{quote(deletion.app_name, safe='')}"
+        try:
+            agent_info = await _runtime_json_request(
+                request,
+                runtime=runtime,
+                runtime_id=deletion.runtime_id,
+                region=deletion.region,
+                method="GET",
+                path=agent_info_path,
+            )
+            from veadk.integrations.agentkit.evaluation import (
+                AgentKitEvaluationDatasetsClient,
+            )
+            from veadk.integrations.agentkit.evaluation.feedback import (
+                feedback_state_key,
+            )
+
+            agent_name = str(agent_info.get("name") or deletion.app_name)
+            project_name = str(getattr(runtime, "project_name", "") or "default")
+
+            async def _evaluation_post(
+                *,
+                action: str,
+                payload: dict[str, Any],
+                query: dict[str, str] | None = None,
+            ) -> dict[str, Any]:
+                return await _agentkit_openapi_post(
+                    region=deletion.region,
+                    action=action,
+                    payload=payload,
+                    query=query,
+                )
+
+            evaluation = AgentKitEvaluationDatasetsClient(
+                _evaluation_post,
+                project_name=project_name,
+            )
+            matched: list[tuple[str, str, dict[str, str]]] = []
+            for rating in ("good", "bad"):
+                evaluation_set, items = await evaluation.list_feedback_items(
+                    agent_name=agent_name,
+                    rating=rating,
+                    page_size=200,
+                )
+                if evaluation_set is None:
+                    continue
+                for item in items:
+                    if item.id not in requested_ids:
+                        continue
+                    matched.append(
+                        (evaluation_set.id, evaluation_set.workspace_id, item.fields)
+                    )
+                    await evaluation.delete_item(
+                        evaluation_set_id=evaluation_set.id,
+                        workspace_id=evaluation_set.workspace_id,
+                        item_id=item.id,
+                    )
+
+            for _set_id, _workspace_id, fields in matched:
+                session_id = str(fields.get("session_id") or "")
+                message_id = str(fields.get("message_id") or "")
+                user_id = str(fields.get("user_id") or "")
+                if not session_id or not message_id or not user_id:
+                    continue
+                session_path = (
+                    f"apps/{quote(deletion.app_name, safe='')}/users/"
+                    f"{quote(user_id, safe='')}/sessions/"
+                    f"{quote(session_id, safe='')}"
+                )
+                feedback_state = {
+                    "rating": None,
+                    "evaluationSetId": None,
+                    "evaluationSetName": None,
+                    "workspaceId": None,
+                    "evaluationItemId": None,
+                    "syncStatus": "synced",
+                    "statePersistence": "runtime",
+                    "updatedAt": time.time(),
+                }
+                try:
+                    await _runtime_json_request(
+                        request,
+                        runtime=runtime,
+                        runtime_id=deletion.runtime_id,
+                        region=deletion.region,
+                        method="PATCH",
+                        path=session_path,
+                        payload={
+                            "state_delta": {
+                                feedback_state_key(message_id): feedback_state,
+                            }
+                        },
+                    )
+                except HTTPException as error:
+                    if error.status_code != 404:
+                        raise
+                    logger.warning(
+                        "Runtime %s does not expose Session PATCH; feedback case "
+                        "was deleted but message state could not be cleared",
+                        deletion.runtime_id,
+                    )
+            return {"deletedCount": len(matched)}
+        except HTTPException:
+            raise
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(
+                status_code=502,
+                detail="删除 AgentKit 评测案例失败：" + _safe_exception_detail(error),
+            ) from error
+
+    @app.get("/web/a2a-spaces")
+    async def _web_list_a2a_spaces(
+        region: str = "cn-beijing",
+        page_size: int = Query(default=100, ge=1, le=100),
+        project: str | None = None,
+    ):
+        """List all AgentKit A2A Spaces visible to server credentials."""
+        try:
+            _resolve_ve_credentials()
+        except HTTPException:
+            raise HTTPException(
+                status_code=409,
+                detail="Server Volcengine credentials not configured "
+                "(set VOLCENGINE_ACCESS_KEY/SECRET_KEY).",
+            )
+
+        all_items: list[dict[str, Any]] = []
+        total_count = 0
+        page = 1
+        project_name = (project or "").strip() or None
+
+        try:
+            while True:
+                payload: dict[str, Any] = {
+                    "PageNumber": page,
+                    "PageSize": page_size,
+                }
+                if project_name:
+                    payload["ProjectName"] = project_name
+                data = await _agentkit_openapi_post(
+                    region=region,
+                    action="ListA2aSpaces",
+                    payload=payload,
+                )
+                result = data.get("Result") or {}
+                total_count = int(result.get("TotalCount") or 0)
+                items = result.get("Items") or []
+                item_count = len(items)
+                for space in items:
+                    if not isinstance(space, dict):
+                        continue
+                    all_items.append(
+                        {
+                            "id": space.get("Id") or "",
+                            "name": space.get("Name") or "",
+                            "intentEnabled": bool(space.get("IntentEnabled")),
+                            "projectName": space.get("ProjectName") or "",
+                            "tags": [
+                                {
+                                    "key": tag.get("Key") or "",
+                                    "value": tag.get("Value") or "",
+                                }
+                                for tag in space.get("Tags") or []
+                                if isinstance(tag, dict)
+                            ],
+                            "isDefault": bool(space.get("IsDefault")),
+                            "region": region,
+                        }
+                    )
+                if (
+                    item_count == 0
+                    or (total_count > 0 and len(all_items) >= total_count)
+                    or (total_count <= 0 and item_count < page_size)
+                ):
+                    break
+                page += 1
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"ListA2aSpaces error for {region}: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=502,
+                detail="暂时无法加载 AgentKit 智能体中心，请稍后重试。",
+            )
+
+        return {
+            "items": all_items,
+            "totalCount": total_count or len(all_items),
+            "page": 1,
+            "pageSize": page_size,
+        }
+
+    def _viking_knowledgebase_host(region: str) -> tuple[str, str]:
+        cloud_provider = os.getenv("CLOUD_PROVIDER", "volces").lower()
+        if cloud_provider == "byteplus":
+            return (
+                f"api-knowledgebase.mlp.{region}.bytepluses.com",
+                "https",
+            )
+        return (f"api-knowledgebase.mlp.{region}.volces.com", "https")
+
+    def _collection_attr(collection: Any, name: str, fallback: Any = "") -> Any:
+        value = getattr(collection, name, None)
+        if value is not None:
+            return value
+        data = getattr(collection, "__dict__", {})
+        if isinstance(data, dict):
+            return data.get(name, fallback)
+        return fallback
+
+    @app.get("/web/viking-knowledgebases")
+    async def _web_list_viking_knowledgebases(
+        region: str = "cn-beijing",
+        project: str = "default",
+    ):
+        """List VikingDB KnowledgeBase collections visible to server creds."""
+        from volcengine.viking_knowledgebase import VikingKnowledgeBaseService
+
+        try:
+            ak, sk, token = _resolve_ve_credentials()
+        except HTTPException:
+            raise HTTPException(
+                status_code=409,
+                detail="Server Volcengine credentials not configured "
+                "(set VOLCENGINE_ACCESS_KEY/SECRET_KEY).",
+            )
+
+        project_name = (project or "").strip() or "default"
+        host, scheme = _viking_knowledgebase_host(region)
+        try:
+            client = VikingKnowledgeBaseService(
+                host=host,
+                region=region,
+                ak=ak,
+                sk=sk,
+                sts_token=token or "",
+                scheme=scheme,
+            )
+            collections = await asyncio.to_thread(
+                client.list_collections,
+                project=project_name,
+                brief=True,
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(
+                f"List VikingDB knowledgebases error for {region}: {e}",
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="暂时无法加载 VikingDB 知识库，请稍后重试。",
+            )
+
+        items: list[dict[str, Any]] = []
+        for collection in collections or []:
+            name = str(_collection_attr(collection, "collection_name", "") or "")
+            if not name:
+                continue
+            items.append(
+                {
+                    "id": name,
+                    "name": name,
+                    "description": str(
+                        _collection_attr(collection, "description", "") or ""
+                    ),
+                    "projectName": str(
+                        _collection_attr(collection, "project", project_name)
+                        or project_name
+                    ),
+                    "region": region,
+                    "docCount": _collection_attr(collection, "doc_num", None),
+                    "updatedAt": str(
+                        _collection_attr(collection, "update_time", "") or ""
+                    ),
+                    "resourceId": str(
+                        _collection_attr(collection, "resource_id", "") or ""
+                    ),
+                }
+            )
+
+        return {"items": items, "totalCount": len(items)}
+
+    # SkillSpace routes run sync SDK calls in worker threads. Detail responses
+    # include full package files when the version exposes a TOS zip.
 
     def _skills_client(region: str):
         """Build an AgentkitSkillsClient using server-side creds, or raise
@@ -3342,9 +5307,7 @@ def _run_frontend_server(
         version: str | None = None,
         region: str = "cn-beijing",
     ):
-        """Fetch a specific skill version's SKILL.md content (SkillMd) plus
-        metadata. v1 returns SkillMd only; the TOS zip (scripts/assets) is a
-        follow-up."""
+        """Fetch a specific skill version's SKILL.md content plus package files."""
         from agentkit.sdk.skills.types import GetSkillVersionRequest
 
         try:
@@ -3364,9 +5327,26 @@ def _run_frontend_server(
                 detail="暂时无法加载该技能详情，请稍后重试。",
             )
 
-        if not resp.skill_md:
-            raise HTTPException(
-                status_code=404, detail="Skill version has no SKILL.md content"
+        resolved = await asyncio.to_thread(
+            _skill_files_from_version_response,
+            space_id=space_id,
+            skill_id=skill_id,
+            version=version,
+            resp=resp,
+            folder=resp.name or skill_id,
+        )
+        if isinstance(resolved, str):
+            skill_md = resolved
+            files = []
+        else:
+            files = [{"path": file.path, "content": file.content} for file in resolved]
+            skill_md = next(
+                (
+                    file.content
+                    for file in resolved
+                    if file.path.lower().endswith("/skill.md")
+                ),
+                "",
             )
 
         return {
@@ -3375,7 +5355,8 @@ def _run_frontend_server(
             "name": resp.name or "",
             "description": resp.description or "",
             "version": resp.version or version or "",
-            "skillMd": resp.skill_md,
+            "skillMd": skill_md,
+            "files": files,
             "bucketName": resp.bucket_name or "",
             "tosPath": resp.tos_path or "",
         }
@@ -3650,6 +5631,26 @@ def _resolve_studio_cloud_credentials(
     help="Dedicated ready AgentKit CodeEnv Tool ID used by Skill creation mode. "
     "Default: create one during deployment.",
 )
+@click.option(
+    "--studio-update-bucket",
+    default="veadk-studio",
+    show_default=True,
+    envvar="VEADK_STUDIO_UPDATE_BUCKET",
+    help="TOS bucket containing immutable Studio release bundles.",
+)
+@click.option(
+    "--studio-update-region",
+    default=None,
+    envvar="VEADK_STUDIO_UPDATE_REGION",
+    help="TOS region for Studio release bundles. Defaults to --region.",
+)
+@click.option(
+    "--studio-update-prefix",
+    default="veadk/studio/main",
+    show_default=True,
+    envvar="VEADK_STUDIO_UPDATE_PREFIX",
+    help="TOS object prefix for the Studio main release channel.",
+)
 def frontend_deploy(
     user_pool_id: str,
     allowed_client_id: str,
@@ -3671,6 +5672,9 @@ def frontend_deploy(
     studio_developers: str | None,
     sandbox_chat_codex_tool_id: str | None,
     sandbox_skill_creator_tool_id: str | None,
+    studio_update_bucket: str,
+    studio_update_region: str | None,
+    studio_update_prefix: str,
 ) -> None:
     """Deploy the SSO web frontend to VeFaaS.
 
@@ -3679,7 +5683,6 @@ def frontend_deploy(
     the public URL. Inside the function the frontend uses the bound IAM role's
     STS credentials to manage AgentKit runtimes.
     """
-    import tempfile
     import shutil
 
     from veadk.config import veadk_environments
@@ -3744,29 +5747,40 @@ def frontend_deploy(
         studio_sandbox_tool_name,
     )
 
+    missing_sandbox_tools: dict[str, str] = {}
     for purpose, tool_id in sandbox_tool_ids.items():
         if tool_id:
             continue
         tool_name = studio_sandbox_tool_name(vefaas_app_name, purpose)
         click.echo(f"Ensuring AgentKit {purpose} CodeEnv Tool '{tool_name}'…")
-        try:
-            sandbox_tool_ids[purpose] = ensure_studio_code_env_tool(
-                name=tool_name,
-                region=region,
-                access_key=ak,
-                secret_key=sk,
-                session_token=session_token or "",
-            )
-        except Exception as error:
-            detail = _safe_exception_detail(
-                error,
-                secrets=(ak, sk, session_token),
-            )
-            raise click.ClickException(
-                f"Failed to provision the AgentKit {purpose} CodeEnv Tool. "
-                f"Underlying error:\n{detail}"
-            ) from error
-        click.echo(f"AgentKit {purpose} CodeEnv Tool is ready.")
+        missing_sandbox_tools[purpose] = tool_name
+
+    if missing_sandbox_tools:
+        with ThreadPoolExecutor(max_workers=len(missing_sandbox_tools)) as executor:
+            tool_futures = {
+                purpose: executor.submit(
+                    ensure_studio_code_env_tool,
+                    name=tool_name,
+                    region=region,
+                    access_key=ak,
+                    secret_key=sk,
+                    session_token=session_token or "",
+                )
+                for purpose, tool_name in missing_sandbox_tools.items()
+            }
+            for purpose, future in tool_futures.items():
+                try:
+                    sandbox_tool_ids[purpose] = future.result()
+                except Exception as error:
+                    detail = _safe_exception_detail(
+                        error,
+                        secrets=(ak, sk, session_token),
+                    )
+                    raise click.ClickException(
+                        f"Failed to provision the AgentKit {purpose} CodeEnv Tool. "
+                        f"Underlying error:\n{detail}"
+                    ) from error
+                click.echo(f"AgentKit {purpose} CodeEnv Tool is ready.")
 
     from veadk.cli.frontend_skill_creator import (
         ensure_skill_creator_model_credential,
@@ -3828,6 +5842,10 @@ def frontend_deploy(
     veadk_environments["SANDBOX_CHAT_CODEX"] = chat_codex_tool_id
     veadk_environments["SANDBOX_SKILL_CREATOR"] = skill_creator_tool_id
     veadk_environments["AGENTKIT_SANDBOX_REGION"] = region
+    veadk_environments["VEADK_STUDIO_UPDATE_BUCKET"] = studio_update_bucket
+    veadk_environments["VEADK_STUDIO_UPDATE_REGION"] = studio_update_region or region
+    veadk_environments["VEADK_STUDIO_UPDATE_PREFIX"] = studio_update_prefix
+    veadk_environments["VEADK_STUDIO_PROJECT"] = project
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
 
@@ -3937,8 +5955,18 @@ def frontend_deploy(
         function_id = getattr(app, "vefaas_function_id", "")
         if url and function_id:
             click.echo(f"Setting OAUTH2_REDIRECT_URI={redirect_uri} and re-releasing…")
+            release_environment = {"OAUTH2_REDIRECT_URI": redirect_uri}
+            if studio_update_bucket:
+                release_environment.update(
+                    {
+                        "VEADK_STUDIO_APPLICATION_ID": app.vefaas_application_id,
+                        "VEADK_STUDIO_FUNCTION_ID": function_id,
+                        "VEADK_STUDIO_RELEASE_VERSION": veadk_version or "bundled",
+                    }
+                )
             engine._vefaas_service.update_function_envs_and_release(
-                function_id, {"OAUTH2_REDIRECT_URI": redirect_uri}
+                function_id,
+                release_environment,
             )
 
         click.echo("")
@@ -4012,7 +6040,6 @@ def frontend_update(
 ) -> None:
     """Build local Studio sources and update an existing VeFaaS Application."""
     import shutil
-    import tempfile
 
     from veadk.cli.studio_package import (
         build_frontend_assets,

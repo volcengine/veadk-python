@@ -39,7 +39,7 @@ def _create_frontend_app(
     site_title: str | None = None,
 ) -> FastAPI:
     captured: dict[str, Any] = {}
-    monkeypatch.setattr("dotenv.find_dotenv", lambda: "")
+    monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
     monkeypatch.setattr(
         "uvicorn.run",
         lambda app, **kwargs: captured.setdefault("app", app),
@@ -87,6 +87,8 @@ def test_vite_allows_both_loopback_browser_origins() -> None:
     assert _frontend_allow_origins(vite=True) == [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
     ]
     assert _frontend_allow_origins(vite=False) == []
 
@@ -94,6 +96,7 @@ def test_vite_allows_both_loopback_browser_origins() -> None:
 def test_ui_config_serves_custom_branding(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "20260726093000")
     logo = base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8A"
         "AQUBAScY42YAAAAASUVORK5CYII="
@@ -116,6 +119,7 @@ def test_ui_config_serves_custom_branding(
         "title": "火山助手",
         "logoUrl": "/web/site-logo",
     }
+    assert config_response.json()["version"] == "20260726093000"
     assert logo_response.status_code == 200
     assert logo_response.headers["content-type"].startswith("image/png")
     assert logo_response.content == logo
@@ -170,6 +174,10 @@ def test_runtime_list_paginates_across_regions(
     with TestClient(app) as client:
         first = client.get("/web/runtimes", params={"region": "all", "page_size": 2})
         first_calls = list(calls)
+        cached_first = client.get(
+            "/web/runtimes", params={"region": "all", "page_size": 2}
+        )
+        cached_first_calls = list(calls)
         second = client.get(
             "/web/runtimes",
             params={
@@ -195,6 +203,8 @@ def test_runtime_list_paginates_across_regions(
         ("cn-beijing", "0", 2),
         ("cn-shanghai", "0", 2),
     ]
+    assert cached_first.json() == first.json()
+    assert cached_first_calls == first_calls
     assert first.json()["nextToken"] == "all:2"
     assert [item["name"] for item in second.json()["runtimes"]] == [
         "beijing-mid",

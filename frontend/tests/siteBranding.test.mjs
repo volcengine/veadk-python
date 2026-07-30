@@ -10,6 +10,14 @@ const sidebarSource = readFileSync(
   new URL("../src/ui/Sidebar.tsx", import.meta.url),
   "utf8",
 );
+const navbarSource = readFileSync(
+  new URL("../src/ui/Navbar.tsx", import.meta.url),
+  "utf8",
+);
+const agentSelectorSource = readFileSync(
+  new URL("../src/ui/AgentSelector.tsx", import.meta.url),
+  "utf8",
+);
 const loginSource = readFileSync(
   new URL("../src/ui/LoginPage.tsx", import.meta.url),
   "utf8",
@@ -33,6 +41,10 @@ test("applies configured branding to the UI, document title, and favicon", () =>
   assert.match(sidebarSource, /\{branding\.title\}/);
   assert.match(sidebarSource, /branding\.logoUrl \|\| volcengineLogo/);
   assert.match(sidebarSource, /width=\{20\}\s*height=\{20\}/);
+  assert.match(
+    sidebarSource,
+    /className="brand"[\s\S]*?onClick=\{onNewChat\}[\s\S]*?aria-label="返回首页"/,
+  );
   assert.match(loginSource, /width=\{20\}\s*height=\{20\}/);
   assert.match(
     loginSource,
@@ -47,7 +59,11 @@ test("applies configured branding to the UI, document title, and favicon", () =>
   assert.match(stylesSource, /object-fit: contain/);
   assert.match(
     stylesSource,
-    /\.brand-logo,[\s\S]*?\.brand-title,[\s\S]*?\.login-brand-logo,[\s\S]*?\.login-brand,[\s\S]*?\.login-title\s*\{[\s\S]*?cursor:\s*text;/,
+    /\.brand-logo,[\s\S]*?\.brand-title,[\s\S]*?\.brand\s*\{[\s\S]*?cursor:\s*pointer;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.login-brand-logo,[\s\S]*?\.login-brand,[\s\S]*?\.login-title\s*\{[\s\S]*?cursor:\s*text;/,
   );
   assert.match(htmlSource, /<link rel="icon"/);
   assert.match(htmlSource, /<title>VeADK Studio<\/title>/);
@@ -67,12 +83,11 @@ test("global sidebar can collapse to a compact icon rail", () => {
   );
 });
 
-test("connected cloud Agent uses a calm green selector icon", () => {
-  assert.match(sidebarSource, /agent-row--connected/);
-  assert.match(
-    stylesSource,
-    /\.agent-row--connected \.agent-row-lead\s*\{[^}]*color:\s*hsl\(142 48% 38%\);/,
-  );
+test("the main navbar owns the complete Agent selector", () => {
+  assert.match(navbarSource, /<AgentSelector[\s\S]*?variant="navbar"/);
+  assert.doesNotMatch(sidebarSource, /<AgentSelector/);
+  assert.match(agentSelectorSource, /const active = currentRuntime\?\.runtimeId === rt\.runtimeId/);
+  assert.match(agentSelectorSource, /<RuntimeIdentityIcon \/>/);
 });
 
 test("history header offers a borderless new-session action", () => {
@@ -84,7 +99,10 @@ test("history header offers a borderless new-session action", () => {
     stylesSource,
     /\.history-new-chat\s*\{[\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;/,
   );
-  assert.match(stylesSource, /\.history-head\s*\{[\s\S]*?padding:\s*8px 10px 6px 20px;/);
+  assert.match(
+    stylesSource,
+    /\.history-head\s*\{[\s\S]*?padding:\s*8px 10px 6px 20px;[\s\S]*?font-size:\s*13px;[\s\S]*?font-weight:\s*600;[\s\S]*?color:\s*hsl\(var\(--foreground\)\);/,
+  );
   assert.match(
     stylesSource,
     /\.history-new-chat:hover\s*\{[\s\S]*?background:\s*transparent;[\s\S]*?color:\s*hsl\(var\(--foreground\)\);/,
@@ -100,8 +118,10 @@ test("sidebar brand row aligns with the main header", () => {
     stylesSource,
     /\.navbar\s*\{[\s\S]*?flex:\s*0 0 54px;[\s\S]*?padding:\s*0 10px;/,
   );
-  assert.match(sidebarSource, /const MAIN_PANEL_TOP_PX = 54;/);
-  assert.match(sidebarSource, /anchorTop=\{MAIN_PANEL_TOP_PX\}/);
+  assert.match(
+    stylesSource,
+    /\.agentsel--navbar\s*\{[\s\S]*?top:\s*calc\(100% \+ 7px\);/,
+  );
 });
 
 test("welcome headings share the neutral TextShimmer and stable smoke avatars", () => {

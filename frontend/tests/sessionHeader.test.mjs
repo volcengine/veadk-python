@@ -12,17 +12,69 @@ const stylesSource = readFileSync(
   "utf8",
 );
 
-test("uses the active session name in the conversation header", () => {
-  assert.match(appSource, /function activeSessionTitle/);
-  assert.match(appSource, /sessionTitle\(session\?\.events\)/);
-  assert.match(appSource, /turn\.role !== "user"/);
-  assert.match(appSource, /: conversationTitle/);
+test("uses the selected Agent in new-chat, search, and conversation headers", () => {
+  assert.doesNotMatch(appSource, /function activeSessionTitle|conversationTitle/);
+  assert.match(appSource, /agentLabel=\{labelOf\}/);
+  assert.match(appSource, /agentsSource=\{agentsSource\}/);
+  assert.match(appSource, /void refreshAgentLibrary\(\)/);
+  assert.match(
+    appSource,
+    /if \(agentsSource === "cloud"\) \{[\s\S]*?remoteIds[\s\S]*?remoteIds\.includes\(saved\)[\s\S]*?remoteIds\[0\] \?\? ""/,
+  );
+  assert.doesNotMatch(appSource, /if \(agentsSource === "cloud"\) \{\s*setAppName\(""\)/);
+  assert.match(navbarSource, /appName \? label\(appName\) : "选择 Agent"/);
+  assert.match(navbarSource, /agentsSource === "cloud"[\s\S]*?aria-label="切换智能体"/);
+  assert.match(navbarSource, /<ArrowLeftRight aria-hidden="true"/);
+  assert.match(appSource, /onBrowseAgents=\{openMyAgentsPage\}/);
 });
 
-test("keeps long session names inside the available header width", () => {
-  assert.match(navbarSource, /className="navbar-title" title=\{title\}/);
+test("shows the Codex identity instead of the Agent picker in sandbox sessions", () => {
+  assert.match(
+    appSource,
+    /title=\{[\s\S]*?sandboxSession[\s\S]*?\? "Codex 智能体"[\s\S]*?: myAgents/,
+  );
+});
+
+test("redirects new chat to Agent selection when no Agent is active", () => {
+  assert.match(
+    appSource,
+    /function openNewChat\(\)[\s\S]*?if \(!appName && !sandboxSession\)[\s\S]*?setMyAgents\(true\)[\s\S]*?showToast\("请先选择 agent"\)[\s\S]*?return;/,
+  );
+  assert.match(appSource, /onNewChat=\{openNewChat\}/);
+  assert.match(appSource, /className="app-toast" role="status" aria-live="polite"/);
+  assert.match(stylesSource, /\.app-toast\s*\{[\s\S]*?position:\s*fixed;/);
+});
+
+test("only using an Agent selects it for the main conversation", () => {
+  assert.match(
+    appSource,
+    /const connectMyAgent[\s\S]*?connectRuntime[\s\S]*?setAppName\(agentId\)/,
+  );
+  const detailHandlerStart = appSource.indexOf("const openMyAgentDetails");
+  const detailHandlerEnd = appSource.indexOf("\n  };", detailHandlerStart);
+  assert.ok(detailHandlerStart >= 0 && detailHandlerEnd > detailHandlerStart);
+  assert.doesNotMatch(
+    appSource.slice(detailHandlerStart, detailHandlerEnd),
+    /setAppName\(/,
+  );
+});
+
+test("keeps the Agent trigger visually aligned with the previous title", () => {
   assert.match(
     stylesSource,
-    /\.navbar-title\s*\{[^}]*max-width:\s*min\(60vw, 640px\)[^}]*text-overflow:\s*ellipsis[^}]*white-space:\s*nowrap/,
+    /\.agent-dd-trigger\s*\{[\s\S]*?font-size:\s*16px;[\s\S]*?font-weight:\s*650;/,
+  );
+  assert.match(stylesSource, /\.agent-dd-current\s*\{[\s\S]*?text-overflow:\s*ellipsis;/);
+  assert.match(
+    stylesSource,
+    /\.navbar-left\s*\{[\s\S]*?container-type:\s*inline-size;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.agent-dd\s*\{[\s\S]*?max-width:\s*33\.333cqw;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.agent-dd-trigger\s*\{[\s\S]*?max-width:\s*100%;/,
   );
 });

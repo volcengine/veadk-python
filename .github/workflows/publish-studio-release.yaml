@@ -1,0 +1,267 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Publish Studio Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      changelog:
+        description: User-facing Studio release summary
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - '.github/workflows/publish-studio-release.yaml'
+      - 'frontend/**'
+      - 'veadk/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'README.md'
+      - 'LICENSE'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: studio-release-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    if: >-
+      github.repository == 'volcengine/veadk-python' &&
+      (github.event_name == 'pull_request' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.17.0
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Build and validate Studio bundle
+        env:
+          PIP_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
+          UV_DEFAULT_INDEX: https://mirrors.aliyun.com/pypi/simple/
+          npm_config_registry: https://registry.npmmirror.com
+          npm_config_replace_registry_host: always
+        run: |
+          set -euo pipefail
+          output_dir="$RUNNER_TEMP/studio-release-output"
+          version="$(TZ=Asia/Shanghai date +%Y%m%d%H%M%S)"
+          export output_dir version
+          uv run --group dev python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from veadk.cli.studio_release import build_studio_release
+
+          source_root = Path(os.environ["GITHUB_WORKSPACE"])
+          output_dir = Path(os.environ["output_dir"])
+          bundle, manifest = build_studio_release(
+              source_root=source_root,
+              output_dir=output_dir,
+              version=os.environ["version"],
+              git_sha=os.environ["GITHUB_SHA"],
+              changelog=("Pull request release validation",),
+          )
+          print(
+              json.dumps(
+                  {
+                      "bundle": str(bundle),
+                      "version": manifest.version,
+                      "gitSha": manifest.git_sha,
+                      "sha256": manifest.sha256,
+                      "size": manifest.size,
+                  }
+              )
+          )
+          PY
+          bundles=("$output_dir"/studio-bundle-*.zip)
+          manifests=("$output_dir"/manifest-*.json)
+          test "${#bundles[@]}" -eq 1
+          test "${#manifests[@]}" -eq 1
+          unzip -t "${bundles[0]}"
+
+  publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'volcengine/veadk-python' &&
+      github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: studio-release
+    env:
+      RELEASE_SERVER_URL: ${{ secrets.STUDIO_RELEASE_SERVER_URL }}
+      RELEASE_SERVER_API_KEY: ${{ secrets.STUDIO_RELEASE_SERVER_API_KEY }}
+
+    steps:
+      - name: Validate release server configuration
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_SERVER_URL" || {
+            echo "STUDIO_RELEASE_SERVER_URL is not configured." >&2
+            exit 1
+          }
+          release_server_url="${RELEASE_SERVER_URL%/}"
+          if [[ ! "$release_server_url" =~ ^https://[^[:space:]/]+(/[^[:space:]]*)?$ ]]; then
+            echo "STUDIO_RELEASE_SERVER_URL must be an absolute HTTPS URL." >&2
+            exit 1
+          fi
+          if (( ${#RELEASE_SERVER_API_KEY} < 32 )); then
+            echo "STUDIO_RELEASE_SERVER_API_KEY must contain at least 32 characters." >&2
+            exit 1
+          fi
+          echo "RELEASE_SERVER_URL=$release_server_url" >> "$GITHUB_ENV"
+
+      - name: Request Studio release
+        env:
+          STUDIO_CHANGELOG: ${{ inputs.changelog }}
+        run: |
+          set -euo pipefail
+          test -n "$STUDIO_CHANGELOG" || {
+            echo "Studio release changelog is empty." >&2
+            exit 1
+          }
+          python - <<'PY'
+          import http.client
+          import json
+          import os
+          import sys
+          import time
+          import urllib.error
+          import urllib.request
+
+          job_id = (
+              f"{os.environ['GITHUB_RUN_ID']}-"
+              f"{os.environ['GITHUB_RUN_ATTEMPT']}"
+          )
+          payload = json.dumps(
+              {
+                  "repository": os.environ["GITHUB_REPOSITORY"],
+                  "gitSha": os.environ["GITHUB_SHA"],
+                  "requestId": job_id,
+                  "changelog": [os.environ["STUDIO_CHANGELOG"]],
+              }
+          ).encode()
+          request = urllib.request.Request(
+              f"{os.environ['RELEASE_SERVER_URL']}/release",
+              data=payload,
+              headers={
+                  "Accept": "text/event-stream",
+                  "Content-Type": "application/json",
+                  "X-API-Key": os.environ["RELEASE_SERVER_API_KEY"],
+              },
+              method="POST",
+          )
+          def report(current):
+              print(
+                  "Studio release "
+                  f"state={current['state']} stage={current['stage']} "
+                  f"message={current['message']}",
+                  flush=True,
+              )
+
+          terminal = None
+          stream_error = None
+          for attempt in range(1, 4):
+              try:
+                  with urllib.request.urlopen(request, timeout=1800) as response:
+                      for raw_line in response:
+                          line = raw_line.decode().strip()
+                          if not line.startswith("data: "):
+                              continue
+                          terminal = json.loads(line.removeprefix("data: "))
+                          report(terminal)
+                  stream_error = None
+                  break
+              except (
+                  OSError,
+                  urllib.error.URLError,
+                  http.client.HTTPException,
+              ) as error:
+                  stream_error = error
+                  print(
+                      f"Studio release stream interrupted (attempt {attempt}/3): "
+                      f"{error}",
+                      file=sys.stderr,
+                      flush=True,
+                  )
+                  if attempt < 3:
+                      time.sleep(2 * attempt)
+
+          deadline = time.monotonic() + 1800
+          missing_status = 0
+          while terminal is None or terminal["state"] not in {
+              "succeeded",
+              "failed",
+          }:
+              if time.monotonic() >= deadline:
+                  raise RuntimeError(
+                      "Studio release did not reach a terminal state."
+                  ) from stream_error
+              status_request = urllib.request.Request(
+                  f"{os.environ['RELEASE_SERVER_URL']}/status/{job_id}",
+                  headers={
+                      "X-API-Key": os.environ["RELEASE_SERVER_API_KEY"],
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(
+                      status_request,
+                      timeout=60,
+                  ) as response:
+                      terminal = json.load(response)
+                  missing_status = 0
+                  report(terminal)
+              except urllib.error.HTTPError as error:
+                  if error.code != 404:
+                      print(f"Status check failed: {error}", file=sys.stderr)
+                  else:
+                      missing_status += 1
+                      if missing_status >= 3 and terminal is None:
+                          raise RuntimeError(
+                              "Studio release request was not accepted."
+                          ) from stream_error
+              except (OSError, urllib.error.URLError) as error:
+                  print(f"Status check interrupted: {error}", file=sys.stderr)
+              if terminal is None or terminal["state"] not in {
+                  "succeeded",
+                  "failed",
+              }:
+                  time.sleep(2)
+          if terminal["state"] != "succeeded":
+              print(json.dumps(terminal, ensure_ascii=False), file=sys.stderr)
+              raise SystemExit(1)
+          print(json.dumps(terminal["result"], ensure_ascii=False, indent=2))
+          PY

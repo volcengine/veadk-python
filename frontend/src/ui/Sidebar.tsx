@@ -1,13 +1,15 @@
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import {
-  ChevronRight,
+  Info,
   LogOut,
   MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
   Trash2,
+  X,
 } from "lucide-react";
+import { createPortal } from "react-dom";
 import type {
   AdkSession,
   SiteBranding,
@@ -16,52 +18,27 @@ import type {
 } from "../adk/client";
 import { sessionTitle } from "../blocks";
 import { displayName, profilePictureUrl } from "../adk/identity";
-import { SkillCenterButton } from "./SkillCenter";
 import { SearchButton } from "./Search";
-import { AgentSelector, type SelectedRuntime } from "./AgentSelector";
-import { AgentIdentityIcon } from "./AgentIdentityIcon";
 import volcengineLogo from "../assets/volcengine.svg";
 
 const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
-const MAIN_PANEL_TOP_PX = 54;
 
-/** Hand-drawn "quick create" mark: a lightning bolt (speed) with a spark. */
-function QuickCreateIcon() {
-  return (
-    <svg
-      className="icon"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <path d="M12.5 3 5.5 13h5l-1 8 8-11h-5l.5-7z" fill="currentColor" stroke="none" />
-      <path d="M19 4.5v3M17.5 6h3" opacity="0.85" />
-    </svg>
-  );
-}
-
-/** Agent roster with two compact tuning rails — management without a generic cube. */
+/** A minimal Agent face that stays friendly and legible at sidebar-icon size. */
 function ManageAgentsIcon() {
   return (
     <svg
-      className="icon"
+      className="icon sidebar-agent-face"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.8"
+      strokeWidth="1.7"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden
     >
-      <circle cx="8.25" cy="7.75" r="3.15" />
-      <path d="M2.9 19.2c.45-3.45 2.48-5.35 5.35-5.35 2.4 0 4.2 1.28 4.98 3.66" />
-      <path d="M17.4 4.5v15M14.8 9h5.2M14.8 15.3h5.2" />
-      <circle cx="17.4" cy="9" r="1.15" fill="currentColor" stroke="none" />
-      <circle cx="17.4" cy="15.3" r="1.15" fill="currentColor" stroke="none" />
+      <rect x="4.25" y="5.25" width="15.5" height="13.5" rx="4.75" />
+      <path className="sidebar-agent-face__eye sidebar-agent-face__eye--left" d="M8.5 10.7v2" />
+      <path className="sidebar-agent-face__eye sidebar-agent-face__eye--right" d="M15.5 10.7v2" />
     </svg>
   );
 }
@@ -76,23 +53,16 @@ export interface SidebarProps {
   access: StudioAccess;
   /** Session ids that are currently streaming a reply (shows a live dot). */
   streamingSids?: Set<string>;
-  /** Agent picker: source, local app list, current selection + label. */
-  agentsSource?: "local" | "cloud";
-  localApps?: string[];
-  currentAgentId?: string;
-  currentAgentLabel?: string;
-  /** The connected runtime (drives the picker's detail panel). */
-  currentRuntime?: SelectedRuntime;
-  onSelectAgent?: (id: string) => void;
   onNewChat: () => void;
   onSearch: () => void;
   onQuickCreate: () => void;
   onSkillCenter: () => void;
   onAddAgent: () => void;
-  onManageAgents: () => void;
+  onMyAgents: () => void;
   onPickSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
   userInfo?: Record<string, unknown>;
+  version: string;
   onLogout: () => void;
 }
 
@@ -128,14 +98,64 @@ function StudioRoleBadge({ role }: { role: StudioAccess["role"] }) {
   );
 }
 
+function SystemInfoDialog({
+  version,
+  onClose,
+}: {
+  version: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  return createPortal(
+    <div className="confirm-scrim" onMouseDown={onClose}>
+      <section
+        className="confirm-box system-info-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="system-info-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="system-info-head">
+          <h2 id="system-info-title">系统信息</h2>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={onClose}
+            aria-label="关闭系统信息"
+            autoFocus
+          >
+            <X className="icon" aria-hidden="true" />
+          </button>
+        </header>
+        <dl className="system-info-meta">
+          <div>
+            <dt>当前版本</dt>
+            <dd>{version || "—"}</dd>
+          </div>
+        </dl>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
 /** Account block pinned at the bottom of the sidebar: avatar + name, with a
- *  popover (opening upward) holding the full identity + logout. */
+ *  popover (opening upward) holding the full identity and account actions. */
 function SidebarUser({
   access,
   userInfo,
+  version,
   onLogout,
-}: Pick<SidebarProps, "access" | "userInfo" | "onLogout">) {
+}: Pick<SidebarProps, "access" | "userInfo" | "version" | "onLogout">) {
   const [open, setOpen] = useState(false);
+  const [systemInfoOpen, setSystemInfoOpen] = useState(false);
   const [failedAvatarUrl, setFailedAvatarUrl] = useState("");
   if (!userInfo) return null;
   const name = displayName(userInfo);
@@ -209,7 +229,18 @@ function SidebarUser({
               </div>
             </div>
             <button
-              className="account-logout"
+              type="button"
+              className="account-action"
+              onClick={() => {
+                setOpen(false);
+                setSystemInfoOpen(true);
+              }}
+            >
+              <Info className="icon" /> 系统信息
+            </button>
+            <button
+              type="button"
+              className="account-action"
               onClick={() => {
                 setOpen(false);
                 onLogout();
@@ -220,6 +251,9 @@ function SidebarUser({
           </div>
         </>
       )}
+      {systemInfoOpen ? (
+        <SystemInfoDialog version={version} onClose={() => setSystemInfoOpen(false)} />
+      ) : null}
     </div>
   );
 }
@@ -231,45 +265,36 @@ export function Sidebar({
   features,
   access,
   streamingSids,
-  agentsSource = "local",
-  localApps = [],
-  currentAgentId = "",
-  currentAgentLabel = "",
-  currentRuntime,
-  onSelectAgent,
   onNewChat,
   onSearch,
   onQuickCreate,
   onSkillCenter,
   onAddAgent,
-  onManageAgents,
+  onMyAgents,
   onPickSession,
   onDeleteSession,
   userInfo,
+  version,
   onLogout,
 }: SidebarProps) {
-  // onAddAgent is now reached through the "添加 Agent" chooser, not a direct
-  // sidebar button; kept in the props contract for the App-level handler.
+  // Creation and Skill Center live outside the #748-style sidebar.
+  void onQuickCreate;
+  void onSkillCenter;
   void onAddAgent;
   // Per-module feature gates; a missing flag defaults to shown.
   const show = (k: keyof NonNullable<typeof features>) => features?.[k] !== false;
   const [menuFor, setMenuFor] = useState<string | null>(null);
-  const [selectorOpen, setSelectorOpen] = useState(false);
   const autoCollapsedRef = useRef(
     typeof window !== "undefined" &&
       window.matchMedia(SIDEBAR_AUTO_COLLAPSE_QUERY).matches,
   );
   const [collapsed, setCollapsed] = useState(autoCollapsedRef.current);
-  const toggleSelector = () => {
-    setSelectorOpen((o) => !o);
-  };
   const sorted = [...sessions].sort(
     (a, b) => (b.lastUpdateTime ?? 0) - (a.lastUpdateTime ?? 0),
   );
   const toggleCollapsed = () => {
     autoCollapsedRef.current = false;
     setCollapsed((value) => !value);
-    setSelectorOpen(false);
     setMenuFor(null);
   };
   useEffect(() => {
@@ -294,7 +319,13 @@ export function Sidebar({
     <aside className={`sidebar ${collapsed ? "is-collapsed" : ""}`}>
       <div className="sidebar-top">
         <div className="sidebar-brand-row">
-          <div className="brand">
+          <button
+            type="button"
+            className="brand"
+            onClick={onNewChat}
+            aria-label="返回首页"
+            title="返回首页"
+          >
             <img
               className="brand-logo"
               src={branding.logoUrl || volcengineLogo}
@@ -304,7 +335,7 @@ export function Sidebar({
               aria-hidden
             />
             <span className="brand-title">{branding.title}</span>
-          </div>
+          </button>
           <button
             type="button"
             className="sidebar-collapse-toggle"
@@ -319,55 +350,9 @@ export function Sidebar({
             )}
           </button>
         </div>
-        {onSelectAgent &&
-          (() => {
-            // Cloud mode with nothing connected: a red prompt so the default
-            // isn't mistaken for a real agent.
-            const needsPick = agentsSource === "cloud" && !currentAgentId;
-            const isConnected =
-              agentsSource === "cloud" && !needsPick && Boolean(currentRuntime);
-            const selectedRegion =
-              agentsSource === "cloud" && !needsPick && currentRuntime?.region
-                ? currentRuntime.region === "cn-beijing"
-                  ? "北京"
-                  : currentRuntime.region === "cn-shanghai"
-                    ? "上海"
-                    : currentRuntime.region
-                : "";
-            return (
-              <button
-                className={`agent-row ${needsPick ? "agent-row--empty" : ""} ${isConnected ? "agent-row--connected" : ""}`}
-                onClick={toggleSelector}
-                aria-label={needsPick ? "请选择 Agent" : currentAgentLabel || "选择 Agent"}
-                title="切换 Agent"
-              >
-                <AgentIdentityIcon className="icon agent-row-lead" />
-                <span className="agent-row-name">
-                  {needsPick ? "请选择 Agent" : currentAgentLabel || "选择 Agent"}
-                </span>
-                {selectedRegion && (
-                  <span className="agent-row-region">{selectedRegion}</span>
-                )}
-                <ChevronRight className={`icon agent-row-chev ${selectorOpen ? "open" : ""}`} />
-              </button>
-            );
-          })()}
-        {onSelectAgent && (
-          <AgentSelector
-            open={selectorOpen}
-            onClose={() => setSelectorOpen(false)}
-            anchorTop={MAIN_PANEL_TOP_PX}
-            agentsSource={agentsSource}
-            localApps={localApps}
-            currentId={currentAgentId}
-            currentRuntime={currentRuntime}
-            runtimeScope={access.capabilities.runtimeScope}
-            onSelect={onSelectAgent}
-          />
-        )}
         {show("newChat") && (
           <button
-            className="new-chat"
+            className="new-chat new-chat--conversation"
             onClick={onNewChat}
             aria-label="新会话"
             title="新会话"
@@ -376,30 +361,16 @@ export function Sidebar({
             <span className="sidebar-nav-label">新会话</span>
           </button>
         )}
+        <button
+          className="new-chat new-chat--agents"
+          onClick={onMyAgents}
+          aria-label="智能体"
+          title="智能体"
+        >
+          <ManageAgentsIcon />
+          <span className="sidebar-nav-label">智能体</span>
+        </button>
         {show("search") && <SearchButton onClick={onSearch} />}
-        {show("skillCenter") && <SkillCenterButton onClick={onSkillCenter} />}
-        {access.capabilities.createAgents && show("addAgent") && (
-          <button
-            className="new-chat"
-            onClick={onQuickCreate}
-            aria-label="添加 Agent"
-            title="添加 Agent"
-          >
-            <QuickCreateIcon />
-            <span className="sidebar-nav-label">添加 Agent</span>
-          </button>
-        )}
-        {access.capabilities.manageAgents && show("manageAgents") && (
-          <button
-            className="new-chat"
-            onClick={onManageAgents}
-            aria-label="管理 Agent"
-            title="管理 Agent"
-          >
-            <ManageAgentsIcon />
-            <span className="sidebar-nav-label">管理 Agent</span>
-          </button>
-        )}
       </div>
 
       {show("history") && (
@@ -469,7 +440,11 @@ export function Sidebar({
       </div>
       )}
 
-      <SidebarUser access={access} userInfo={userInfo} onLogout={onLogout} />
+      <SidebarUser access={access}
+        userInfo={userInfo}
+        version={version}
+        onLogout={onLogout}
+      />
     </aside>
   );
 }

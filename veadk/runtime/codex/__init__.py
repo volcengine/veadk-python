@@ -12,8 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""OpenAI Codex SDK runtime."""
+"""OpenAI Codex SDK runtime.
 
-from veadk.runtime.codex.runtime import CodexRuntime
+The implementation is imported lazily so configuration, translation, and tool
+bridge helpers remain usable when the optional ``openai-codex`` SDK is absent.
+"""
 
-__all__ = ["CodexRuntime"]
+from __future__ import annotations
+
+from typing import Any
+
+from veadk.runtime.codex.config import CodexRuntimeConfig
+
+__all__ = ["CodexRuntime", "CodexRuntimeConfig"]
+
+
+def __getattr__(name: str) -> Any:
+    if name != "CodexRuntime":
+        raise AttributeError(name)
+    from veadk.runtime.codex.runtime import CodexRuntime
+
+    return CodexRuntime

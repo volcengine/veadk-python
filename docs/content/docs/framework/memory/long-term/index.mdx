@@ -25,7 +25,7 @@ ltm = LongTermMemory(backend="viking", app_name="ltm_demo")
 
 | 参数 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `backend` | `"local" \| "opensearch" \| "redis" \| "viking" \| "mem0"` 或后端实例 | `"opensearch"` | 选择后端实现，也可直接传入一个 `BaseLongTermMemoryBackend` 实例。`viking_mem` 已废弃，自动转为 `viking`。 |
+| `backend` | `"local" \| "opensearch" \| "redis" \| "viking" \| "mem0" \| "tos_context"` 或后端实例 | `"opensearch"` | 选择后端实现，也可直接传入一个 `BaseLongTermMemoryBackend` 实例。`viking_mem` 已废弃，自动转为 `viking`。 |
 | `backend_config` | `dict` | `{}` | 传给后端构造函数的配置；若不含 `index`，会用 `index` 或 `app_name` 补齐。 |
 | `top_k` | `int` | `5` | 检索时返回最相似的片段数量。 |
 | `index` | `str` | `""` | 存储记忆所用的索引/集合名。为空时回退到 `app_name`，再为空则用 `default_app`。 |
@@ -33,7 +33,7 @@ ltm = LongTermMemory(backend="viking", app_name="ltm_demo")
 | `user_id` | `str` | `""` | **已废弃**，仅为向后兼容保留。 |
 
 <Callout type="info">
-向量类后端（`local`、`opensearch`、`redis`）会对记忆做向量化（embedding），需要安装扩展依赖：`pip install "veadk-python[extensions]"`，并配置 embedding 模型（环境变量前缀 `MODEL_EMBEDDING_`，缺省时复用 `MODEL_AGENT_API_KEY`）。`viking` 与 `mem0` 是托管服务，无需本地 embedding。
+向量类后端（`local`、`opensearch`、`redis`）会对记忆做向量化（embedding），需要安装扩展依赖：`pip install "veadk-python[extensions]"`，并配置 embedding 模型（环境变量前缀 `MODEL_EMBEDDING_`，缺省时复用 `MODEL_AGENT_API_KEY`）。`viking`、`mem0` 与 `tos_context` 是托管服务，无需本地 embedding。
 </Callout>
 
 ## 后端契约：`BaseLongTermMemoryBackend`
@@ -70,6 +70,7 @@ class BaseLongTermMemoryBackend(ABC, BaseModel):
 | `mem0` | Mem0 记忆库（托管） | Mem0 API Key | 生产推荐 | [Mem0](/cn/docs/framework/memory/long-term/mem0) |
 | `opensearch` | OpenSearch 向量库 | OpenSearch + embedding | 自建向量检索 | [OpenSearch](/cn/docs/framework/memory/long-term/opensearch) |
 | `redis` | Redis 向量库 | Redis(RediSearch) + embedding | 自建向量检索 | [Redis](/cn/docs/framework/memory/long-term/redis) |
+| `tos_context` | TOS ContextBucket（托管） | 火山引擎账号（AK/SK，临时凭证另需 `VOLCENGINE_SESSION_TOKEN`）+ `tos>=2.9.4b1` | 服务端推理与检索、按用户隔离 | [TOS ContextBucket](/cn/docs/framework/memory/long-term/tos-context#配置) |
 
 ## 绑定到 Agent
 

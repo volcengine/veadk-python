@@ -18,8 +18,13 @@ server that `veadk frontend` launches — no separate backend.
   a real two-model A/B run in independent AgentKit CodeEnv sessions. Skill
   progress resumes from Sandbox state if the creation stream is interrupted;
   completed candidates can be compared, downloaded as ZIP files, and added to
-  AgentKit.
+  AgentKit. Connected Harness agents expose supported image, video, and
+  presentation task types; Studio mounts only missing task tools for the
+  current session and preserves tools already supplied by the Agent.
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
+- **Agent context rail** keeps the selected Agent's description, model, tools,
+  skills, and optional live multi-Agent topology together in the conversation's
+  right workspace, with the transcript protected from overlap on narrower screens.
 - **Built-in tool activity** gives web search, image/video generation, memory,
   and knowledge-base retrieval their own repository-drawn icons and concise
   Chinese running/completed labels. Active work uses the shared Prompt Kit-style
@@ -41,6 +46,14 @@ server that `veadk frontend` launches — no separate backend.
 - **AgentKit Skill center**: browse Skill Spaces and their skills with
   server-side pagination by region, then inspect the selected Skill content.
 - **Tracing viewer**: a span tree + detail panel from the ADK debug trace.
+- **Message feedback**: rate persisted Runtime replies with accessible,
+  repository-drawn like/dislike controls. Studio identifies the final ADK Event,
+  stores the latest rating through the existing Session state-delta API, and
+  idempotently syncs the server-derived question and answer to per-Agent
+  `{agent_name}_good_case` or `{agent_name}_bad_case` AgentKit evaluation sets.
+  Studio creates regular evaluation sets and confirms they are list-visible
+  before writing feedback items.
+  Runtime credentials and Volcengine credentials remain server-side.
 - **Smart search**: search sessions, the network through `web_search`, and a
   selected Agent's KnowledgeBase or long-term memory when mounted. The source
   picker follows live Agent metadata and disables unavailable sources before a
@@ -48,13 +61,17 @@ server that `veadk frontend` launches — no separate backend.
 - **Runtime management**: inspect or delete deployed runtimes, or connect one
   directly so the global Agent selector switches to that Runtime. The cloud
   selector gives each two-line Runtime row explicit connect and info actions;
-  the info action opens a tabbed Agent/Runtime panel. Studio distinguishes its
+  the info action opens a tabbed Agent/Runtime panel. The Agent directory loads
+  one selected region at a time, defaults to Beijing, and carries the Runtime's
+  region through details, connection, update, evaluation, and deletion. Studio
+  distinguishes its
   own ownership checks from Agent Server compatibility and authentication
   failures when a connection cannot be established. Long descriptions, names,
   component summaries, IDs, and environment values stay inside the scrollable panel.
 - **Custom-agent workbench**: configure an agent with a rich Markdown
   system-prompt editor (including heading and list shortcuts), then debug with
-  expandable, copyable runner error details and review. Long descriptions and
+  expandable, copyable runner error details, per-result Trace inspection, and
+  review. Long descriptions and
   prompts scroll within bounded editors, while the sidebar stays pinned to the
   viewport. On narrow desktop windows, the structure, configuration, and debug
   panels stack vertically instead of squeezing the form. The deployment page
@@ -71,6 +88,17 @@ server that `veadk frontend` launches — no separate backend.
   its generated internal proxy mounts AgentKit A2A center agents dynamically
   from the center ID, recall count, region, and OpenAPI endpoint. Remote names,
   descriptions, and capabilities come from the returned Agent Cards.
+- **Code-package deployment**: upload a ZIP project from the add-Agent menu,
+  inspect or edit its files in the existing code browser, then choose the
+  region and public/VPC network before deploying it to AgentKit. The package
+  must contain a root `app.py`; Studio removes a single wrapping directory,
+  rejects unsafe paths, and shows upload, image build, Runtime creation, and
+  service publishing as separate deployment stages.
+- **Built-in code execution**: selecting `代码执行` adds VeADK's `run_code`
+  tool to generated Python and reveals the required `AGENTKIT_TOOL_ID` sandbox
+  field and optional `AGENTKIT_TOOL_REGION` field below the built-in tool list.
+  The region defaults to `cn-beijing`. Studio applies both fields to local debug
+  runs and deployments, and generated `.env.example` contains both.
 - **Auth**: optional VeIdentity SSO, or a local username for dev.
 - **Agent-driven UI (A2UI)**: when an agent emits A2UI, it renders as native
   components (one feature among the above — not required).
@@ -97,7 +125,8 @@ for VeADK Studio, including these non-negotiable rules:
 - New or updated product icons must be repository-owned, hand-drawn SVG React
   components. Do not add generic icon-library, emoji, or remote-icon usage.
 - Reuse the existing semantic color tokens, restrained enterprise-workbench
-  visual language, bounded scrolling regions, and accessible interaction states.
+  visual language, component inventory, typography and control-size scale,
+  bounded scrolling regions, and accessible interaction states.
 - Feature configuration must remain explicit in its domain section and runtime
   environment summary; secrets must never enter generated source, browser
   persistence, logs, documentation, or committed files.
@@ -148,6 +177,58 @@ Supported logo formats are PNG, JPEG, GIF, WebP, AVIF, and ICO, up to 5 MB.
 `VEADK_SITE_TITLE` and `VEADK_SITE_LOGO` provide equivalent environment-variable
 configuration. `veadk studio deploy` accepts the same flags and copies either a
 local image or a downloaded network image into the VeFaaS deployment package.
+
+## In-app Studio updates
+
+Studio deployments use the `veadk-studio` TOS bucket in the deployment region
+as their immutable release channel by default, so administrators can update the
+frontend and Python backend together from the navbar without extra options:
+
+```bash
+veadk studio deploy \
+  --user-pool-id <pool-id> \
+  --allowed-client-id <client-id> \
+  --vefaas-app-name <app-name>
+```
+
+Use `--studio-update-bucket`, `--studio-update-region`, and
+`--studio-update-prefix` (or their `VEADK_STUDIO_UPDATE_*` environment
+variables) to override the default release channel.
+
+Studio checks `latest.json` every three minutes and lists newer releases with
+their changelog and Git SHA. An accepted update verifies the selected complete
+Bundle, replaces the current Function code, and releases the existing
+Application without changing its URL or SSO configuration.
+
+When an update fails, the administrator dialog shows the failed stage, a
+searchable error ID, the complete diagnostic timeline and exception chain, and
+a direct link to the deployed Function in the VeFaaS console. The log can be
+copied in full for support, and retrying starts a fresh diagnostic record.
+
+`.github/workflows/publish-studio-release.yaml` runs only when it is manually
+dispatched on `main`. Enter the user-facing changelog when starting the
+workflow. GitHub builds the frontend and verifies the fixed offline wheels for
+the exact checkout, uploads the prepared source through a short-lived job-bound
+URL, and calls the API-key-protected release server. The server builds and
+publishes the immutable Bundle and Manifest before replacing `releases.json`
+and `latest.json`. Configure only
+`STUDIO_RELEASE_SERVER_URL` and `STUDIO_RELEASE_SERVER_API_KEY` as GitHub
+Secrets; GitHub receives no TOS credentials.
+
+The Release Server runtime and deployment assets are isolated from the public
+Python package under `frontend/service/studio_release_server`. After changing
+the service, deploy it from the repository root:
+
+```bash
+frontend/service/studio_release_server/deploy.sh
+```
+
+The script updates the existing VeFaaS Function, verifies `/readyz`, rotates
+the API key, and updates the two GitHub Secrets. It requires
+`VOLCENGINE_ACCESS_KEY`, `VOLCENGINE_SECRET_KEY`, and an authenticated GitHub
+CLI session with permission to update Actions Secrets in the upstream repository.
+It validates that permission before changing any cloud resources and verifies the
+new revision with the rotated API key before updating the Secrets.
 
 ## Authentication
 
@@ -289,8 +370,8 @@ memory, so polling and downloads continue to work when FaaS requests reach a
 different instance.
 
 For local Studio, run the AgentKit `credential-hosting` command and bind its
-result to both CodeEnv Tools. A cloud deployment creates both Tools when their
-IDs are omitted. Alternatively, select existing Tools with
+result to both CodeEnv Tools. A cloud deployment creates both Tools in parallel
+when their IDs are omitted. Alternatively, select existing Tools with
 `--sandbox-chat-codex-tool-id` and `--sandbox-skill-creator-tool-id`. The deploy
 command obtains the Ark key with the deployer's Volcengine credentials, stores
 it through AgentKit credential hosting, and binds only the returned ticket and

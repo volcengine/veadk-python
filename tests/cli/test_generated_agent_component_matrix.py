@@ -33,8 +33,10 @@ from veadk.cli.generated_agent_catalog import (
 from veadk.cli.generated_agent_codegen import (
     A2ARegistryConfig,
     AgentDraft,
+    DeploymentConfig,
     GeneratedProject,
     MemoryConfig,
+    debug_runtime_env_from_draft,
     generate_project_from_draft,
 )
 
@@ -87,6 +89,101 @@ def test_component_catalog_does_not_request_auto_resolved_credentials() -> None:
     assert "MODEL_AGENT_API_KEY" not in _catalog_env_keys(MODEL_ENV)
 
 
+@pytest.mark.parametrize(
+    ("draft_updates", "env"),
+    [({"builtinTools": [option.id]}, option.env) for option in BUILTIN_TOOLS]
+    + [
+        (
+            {
+                "memory": MemoryConfig(shortTerm=True),
+                "shortTermBackend": option.id,
+            },
+            option.env,
+        )
+        for option in STM_BACKENDS
+    ]
+    + [
+        (
+            {
+                "memory": MemoryConfig(longTerm=True),
+                "longTermBackend": option.id,
+            },
+            option.env,
+        )
+        for option in LTM_BACKENDS
+    ]
+    + [
+        (
+            {"knowledgebase": True, "knowledgebaseBackend": option.id},
+            option.env,
+        )
+        for option in KB_BACKENDS
+    ],
+)
+def test_debug_runtime_forwards_active_component_env(
+    draft_updates: dict[str, object],
+    env: tuple[EnvVar, ...],
+) -> None:
+    env_values = {item.key: f"configured-{item.key.lower()}" for item in env}
+    env_values["UNSELECTED_COMPONENT_ENV"] = "blocked"
+    draft = AgentDraft.model_validate(
+        {
+            "name": "debug-env",
+            "deployment": DeploymentConfig(envValues=env_values),
+            **draft_updates,
+        }
+    )
+
+    result = debug_runtime_env_from_draft(draft)
+
+    assert result == {
+        key: value
+        for key, value in env_values.items()
+        if key != "UNSELECTED_COMPONENT_ENV"
+    }
+
+
+@pytest.mark.parametrize("exporter", TRACING_EXPORTERS, ids=lambda item: item.id)
+def test_debug_runtime_forwards_active_tracing_env_and_enable_flag(
+    exporter: ExporterOption,
+) -> None:
+    env_values = {item.key: f"configured-{item.key.lower()}" for item in exporter.env}
+    draft = AgentDraft(
+        name="debug-tracing-env",
+        tracing=True,
+        tracingExporters=[exporter.id],
+        deployment=DeploymentConfig(envValues=env_values),
+    )
+
+    assert debug_runtime_env_from_draft(draft) == {
+        **env_values,
+        exporter.enable_flag: "true",
+    }
+
+
+def test_debug_runtime_materializes_nested_a2a_registry_defaults() -> None:
+    draft = AgentDraft(
+        name="debug-a2a-env",
+        subAgents=[
+            AgentDraft(
+                name="remote-agent",
+                agentType="a2a",
+                a2aRegistry=A2ARegistryConfig(
+                    enabled=True,
+                    registrySpaceId="space-debug",
+                ),
+            )
+        ],
+    )
+
+    assert debug_runtime_env_from_draft(draft) == {
+        "REGISTRY_SPACE_ID": "space-debug",
+        "REGISTRY_TOP_K": "3",
+        "REGISTRY_REGION": "cn-beijing",
+        "REGISTRY_ENDPOINT": "https://open.volcengineapi.com/",
+    }
+
+
 def test_managed_components_keep_only_component_specific_env() -> None:
     project = generate_project_from_draft(
         AgentDraft(
@@ -126,6 +223,26 @@ def test_managed_components_keep_only_component_specific_env() -> None:
     assert "TOOL_VESPEECH_API_KEY" not in env_keys
     assert "TOOL_VESEARCH_API_KEY" not in env_keys
     assert "OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY" not in env_keys
+
+
+def test_run_code_generates_tool_import_and_sandbox_env() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="code-agent",
+            instruction="Execute code when it helps answer the request.",
+            builtinTools=["run_code"],
+        )
+    )
+    files = _files(project)
+    agent_py = files["agents/code_agent/agent.py"]
+    env_example = files[".env.example"]
+
+    assert "from veadk.tools.builtin_tools.run_code import run_code" in agent_py
+    assert "tools=[run_code]" in agent_py
+    assert "AGENTKIT_TOOL_ID=" in env_example
+    assert "AGENTKIT_TOOL_REGION=cn-beijing" in env_example
+    assert "AGENTKIT_TOOL_ID_SCRIPT=" not in env_example
+    _assert_python_files_compile(project)
 
 
 @pytest.mark.parametrize("backend", STM_BACKENDS, ids=lambda item: item.id)
@@ -189,6 +306,21 @@ def test_every_knowledgebase_backend_generates_code_env_and_dependency(
     _assert_python_files_compile(project)
 
 
+def test_viking_knowledgebase_uses_selected_index() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="kb-viking",
+            knowledgebase=True,
+            knowledgebaseBackend="viking",
+            knowledgebaseIndex="existing_kb",
+        )
+    )
+    agent_py = _files(project)["agents/kb_viking/agent.py"]
+
+    assert 'KnowledgeBase(backend="viking", index="existing_kb"' in agent_py
+    _assert_python_files_compile(project)
+
+
 @pytest.mark.parametrize("exporter", TRACING_EXPORTERS, ids=lambda item: item.id)
 def test_every_tracing_exporter_generates_code_and_env(
     exporter: ExporterOption,
@@ -208,6 +340,44 @@ def test_every_tracing_exporter_generates_code_and_env(
     assert _env_keys(files[".env.example"]) == (
         _catalog_env_keys(MODEL_ENV, exporter.env) | {exporter.enable_flag}
     )
+    _assert_python_files_compile(project)
+
+
+def test_a2a_registry_child_attaches_tools_to_llm_parent() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="root-agent",
+            instruction="Use available tools to answer user requests.",
+            subAgents=[
+                AgentDraft(
+                    name="Reliability Review Remote Agent",
+                    description="ignored remote description",
+                    instruction="ignored remote instruction",
+                    agentType="a2a",
+                    a2aRegistry=A2ARegistryConfig(
+                        enabled=True,
+                        registrySpaceId="space-test",
+                    ),
+                )
+            ],
+        )
+    )
+    files = _files(project)
+    agent_py = files["agents/root_agent/agent.py"]
+
+    assert "a2a_registry_config_agent_sub_1 = registry_config_from_env()" in agent_py
+    assert "tools=[*a2a_registry_tools_agent_sub_1]" in agent_py
+    assert (
+        'setattr(agent, "_veadk_a2a_registry_config", '
+        "a2a_registry_config_agent_sub_1)" in agent_py
+    )
+    assert "agent_sub_1 = Agent(" not in agent_py
+    assert "sub_agents=[agent_sub_1]" not in agent_py
+    runtime_agent_py = agent_py.split("AGENT_DRAFT =", 1)[0]
+    assert "Reliability Review Remote Agent" not in runtime_agent_py
+    assert "ignored remote description" not in runtime_agent_py
+    assert "ignored remote instruction" not in runtime_agent_py
+    assert "REGISTRY_SPACE_ID=space-test" in files[".env.example"]
     _assert_python_files_compile(project)
 
 
@@ -247,9 +417,10 @@ def test_a2a_registry_center_generates_tools_and_env() -> None:
         "a2a_registry_config_agent_sub_1)" in agent_py
     )
     assert 'name="agent_sub_1"' in agent_py
-    assert "ignored-remote-name" not in agent_py
-    assert "ignored remote description" not in agent_py
-    assert "ignored remote instruction" not in agent_py
+    runtime_agent_py = agent_py.split("AGENT_DRAFT =", 1)[0]
+    assert "ignored-remote-name" not in runtime_agent_py
+    assert "ignored remote description" not in runtime_agent_py
+    assert "ignored remote instruction" not in runtime_agent_py
     assert "build_remote_a2a_agent_tools(prompt, registry_config)" in dynamic_py
     assert "def _run_request_custom_metadata(" in dynamic_py
     assert 'getattr(req, "custom_metadata", None)' in dynamic_py
@@ -328,7 +499,8 @@ def test_nested_a2a_registry_agent_generates_dynamic_helper() -> None:
     agent_py = files["agents/root_sequential/agent.py"]
     assert "agent_sub_1 = Agent(" in agent_py
     assert 'name="agent_sub_1"' in agent_py
-    assert "registry-worker" not in agent_py
+    runtime_agent_py = agent_py.split("AGENT_DRAFT =", 1)[0]
+    assert "registry-worker" not in runtime_agent_py
     assert "REGISTRY_SPACE_ID=space-test" in files[".env.example"]
     assert (
         "_has_a2a_registry_config(child)"

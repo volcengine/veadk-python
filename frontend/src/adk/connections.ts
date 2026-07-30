@@ -20,6 +20,7 @@ export interface RemoteConnection {
    *  set, `base`/`apiKey` are unused and the apikey stays server-side. */
   runtimeId?: string;
   region?: string;
+  currentVersion?: number | null;
   apps: string[];
   /** Optional app ID -> friendly name mapping (e.g., "a_1" -> "a_1-4zkzsezc") */
   appLabels?: Record<string, string>;
@@ -30,8 +31,14 @@ export interface AgentEntry {
   id: string; // selection id passed to the ADK client
   label: string; // shown in the dropdown
   app: string; // real ADK app name
+  runtimeApp?: string; // known Runtime app name, when already connected
   remote: boolean;
   host?: string; // remote host, for display
+  runtimeId?: string;
+  region?: string;
+  currentVersion?: number | null;
+  /** Server-authorized permission for Studio-managed Runtime deletion. */
+  canDelete?: boolean;
 }
 
 const STORAGE_KEY = "veadk_agentkit_connections";
@@ -39,7 +46,8 @@ const STORAGE_KEY = "veadk_agentkit_connections";
 export function loadConnections(): RemoteConnection[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as RemoteConnection[]) : [];
+    const parsed = raw ? (JSON.parse(raw) as RemoteConnection[]) : [];
+    return parsed.filter((connection) => !connection.runtimeId || !!connection.region);
   } catch {
     return [];
   }
@@ -70,11 +78,12 @@ function hostOf(base: string): string {
 export function registerConnections(conns: RemoteConnection[]): void {
   clearRemoteApps();
   for (const c of conns) {
+    if (c.runtimeId && !c.region) continue;
     for (const app of c.apps) {
       registerRemoteApp(
         remoteAppId(c.id, app),
         c.runtimeId
-          ? { app, runtimeId: c.runtimeId, region: c.region }
+          ? { app, runtimeId: c.runtimeId, region: c.region! }
           : { app, base: c.base, apiKey: c.apiKey },
       );
     }
@@ -91,6 +100,7 @@ export function addRuntimeConnection(
   region: string,
   apps: string[],
   appLabels?: Record<string, string>,
+  currentVersion?: number | null,
 ): RemoteConnection {
   const conn: RemoteConnection = {
     id: `rt_${runtimeId}`,
@@ -99,8 +109,12 @@ export function addRuntimeConnection(
     region,
     apps,
     appLabels,
+    currentVersion,
   };
-  const list = [...loadConnections().filter((c) => c.runtimeId !== runtimeId), conn];
+  const list = loadConnections();
+  const existingIndex = list.findIndex((item) => item.runtimeId === runtimeId);
+  if (existingIndex === -1) list.push(conn);
+  else list[existingIndex] = conn;
   persist(list);
   registerConnections(list);
   return conn;
@@ -111,6 +125,7 @@ export async function connectRuntime(
   runtimeId: string,
   name: string,
   region: string,
+  currentVersion?: number | null,
 ): Promise<string> {
   let apps: string[] | null;
   try {
@@ -126,7 +141,14 @@ export async function connectRuntime(
     throw new Error("该 Runtime 暂不支持连接，请确认服务已正常运行。");
   }
   const labels = Object.fromEntries(apps.map((app) => [app, name]));
-  const connection = addRuntimeConnection(runtimeId, name, region, apps, labels);
+  const connection = addRuntimeConnection(
+    runtimeId,
+    name,
+    region,
+    apps,
+    labels,
+    currentVersion,
+  );
   return remoteAppId(connection.id, apps[0]);
 }
 
@@ -188,6 +210,9 @@ export function buildAgentEntries(
         app,
         remote: true,
         host: c.runtimeId ? c.name : hostOf(c.base ?? ""),
+        runtimeId: c.runtimeId,
+        region: c.region,
+        currentVersion: c.currentVersion,
       };
     }),
   );

@@ -21,15 +21,17 @@ import secrets
 import socket
 import zipfile
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from veadk.cli.cli_frontend import (
     _redact_debug_text,
     _run_frontend_server,
+    _safe_exception_detail,
     _studio_deploy_run_script,
 )
 from veadk.cli.generated_agent_codegen import (
@@ -61,20 +63,22 @@ from veadk.cli.generated_agent_skills import (
 # These hashes lock the complete generated project contents, not just Python
 # syntax or selected snippets.
 _MINIMAL_FRONTEND_GOLDEN = {
-    "app.py": "c7807c570167793fc8c5a8a72e9f3c32aac0820db3098cb52edb1488c34a8e5f",
+    "app.py": "3a5838b3c702202c0a26d8560e396e3c3c46e223b99e2e1d74eb434d653474df",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
-    "agents/demo_agent/agent.py": "b2d22094a8ea61e8ab6e2b633d7695c5fa5e883f03516cb8771e7ec00be0fe1f",
-    "agents/demo_agent/__init__.py": "62d651c229ddd771cf0cc0a8b0e05e96b739a737fe71e41fe8bf1df484150c36",
+    "agents/demo_agent/agent.py": "f4867047f9cb0e700a7c3e1b1ef5c6376af6637855f49d846b47d42cb253a63b",
+    "agents/demo_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
+    "agents/demo_agent/dynamic_a2a.py": "d4ba7d6b28ba4f6091ea06d3896225386c90d99d4b3172216a0e4235744e6323",
     ".env.example": "ec3258da9bef4e74333376d8554c265ccb12a4a1e5d4e1e1b0acdf5c9ae93ab6",
     "requirements.txt": "9a04e5f16e94d5e751681082776f1c99f13da7a577c8753c3835e0ea507245e4",
     "README.md": "a34208314cf9061c02662028d7a9dd97448e6b73c1d732cb4aeaa8f70dbbc684",
 }
 
 _FULL_FRONTEND_GOLDEN = {
-    "app.py": "a9903cf7e095733e9b8658182a0954a81d8a98b431f8ab995ce3818950127006",
+    "app.py": "56183a125e505c543294356fc9c7662a5eedb3b8661070f6be1df9b579e35ed4",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
-    "agents/full_agent/agent.py": "72af9cb24761f83ddc20951706ba3c154b65423cc35962131aefb55fe7c3d8fe",
-    "agents/full_agent/__init__.py": "62d651c229ddd771cf0cc0a8b0e05e96b739a737fe71e41fe8bf1df484150c36",
+    "agents/full_agent/agent.py": "1b706ef02dfbe38620fc242cf46e7e8af645c3758f8425f42a8ad56b22e5c031",
+    "agents/full_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
+    "agents/full_agent/dynamic_a2a.py": "d4ba7d6b28ba4f6091ea06d3896225386c90d99d4b3172216a0e4235744e6323",
     ".env.example": "054a10f8bc0e046158349ebccdc67a1182c22c4c63ee5b51bf7c2c1674abe052",
     "requirements.txt": "4a941e1bf7efb43d57f608649ac238f2e5ea833f9e0aae92f8bc3fef67b8874e",
     "README.md": "1bf4dc889c7d1076f50784d253b53412ba7c49bcb69a5d948f9092dbbecb18ac",
@@ -180,10 +184,18 @@ def test_full_project_matches_frontend_codegen_golden() -> None:
     draft = _full_draft()
     project = generate_project_from_draft(draft)
     files = _file_map(project)
+    agent_py = files["agents/full_agent/agent.py"]
 
     assert project.name == "full_agent"
     assert "enableA2ui" not in draft.model_dump()
-    assert "enable_a2ui" not in files["agents/full_agent/agent.py"]
+    assert "enable_a2ui" not in agent_py
+    assert "skills_agent = SkillToolset(skills=[" in agent_py
+    root_agent_block = agent_py.rsplit("agent = Agent(", 1)[1].split(
+        "\n)\n\nAGENT_DISPLAY_NAMES",
+        1,
+    )[0]
+    assert "tools=[" in root_agent_block
+    assert "skills_agent" in root_agent_block.split("tools=[", 1)[1].split("]", 1)[0]
     assert "[a2ui]" not in files["requirements.txt"]
     assert _content_hashes(project) == _FULL_FRONTEND_GOLDEN
 
@@ -212,8 +224,11 @@ def test_codegen_preserves_agent_display_names_for_topology() -> None:
     assert "'agent_sub_1': '订单助手'" in agent_py
     assert "create_agentkit_app(" in app_py
     assert "AGENT_DISPLAY_NAMES" in app_py
-    assert 'app.get("/web/agent-info' not in app_py
-    assert len(app_py.splitlines()) == 25
+    assert "AGENT_DRAFT" in app_py
+    assert '"agent_draft" in signature(create_agentkit_app).parameters' in app_py
+    assert '_app_options["agent_draft"] = AGENT_DRAFT' in app_py
+    assert '@app.get("/web/agent-info/{app_name}")' in app_py
+    assert '"draft": AGENT_DRAFT' in app_py
 
 
 def test_codegen_enables_feishu_without_exposing_lifecycle_code() -> None:
@@ -226,7 +241,7 @@ def test_codegen_enables_feishu_without_exposing_lifecycle_code() -> None:
     files = _file_map(project)
     app_py = files["app.py"]
 
-    assert "enable_feishu=True" in app_py
+    assert '"enable_feishu": True' in app_py
     assert "FeishuChannelExtension" not in app_py
     assert "asynccontextmanager" not in app_py
     assert "veadk-python[extensions]" in files["requirements.txt"]
@@ -373,6 +388,25 @@ def test_project_allows_stdio_mcp_but_debug_rejects_it() -> None:
     validate_debug_policy(debug_draft, allow_local_runtime_resources=True)
 
 
+def test_policy_allows_many_selected_skills() -> None:
+    draft = AgentDraft(
+        name="many-skills",
+        instruction="Use the selected skills.",
+        selectedSkills=[
+            SelectedSkill(
+                source="skillhub",
+                folder=f"skill-{idx}",
+                name=f"skill-{idx}",
+                slug=f"skill-{idx}",
+            )
+            for idx in range(20)
+        ],
+    )
+
+    validate_project_policy(draft)
+    validate_debug_policy(draft)
+
+
 @pytest.mark.asyncio
 async def test_skillspace_materialization_deduplicates_nested_selection() -> None:
     skill = SelectedSkill(
@@ -405,6 +439,192 @@ async def test_skillspace_materialization_deduplicates_nested_selection() -> Non
     assert [file.path for file in project.files] == ["skills/shared-skill/SKILL.md"]
 
 
+@pytest.mark.asyncio
+async def test_skillspace_materialization_passes_names_to_resolver() -> None:
+    skill = SelectedSkill(
+        source="skillspace",
+        folder="display-skill",
+        name="Display Skill",
+        skillSpaceId="space-1",
+        skillSpaceName="Demo Space",
+        skillSpaceRegion="cn-shanghai",
+        skillId="skill-1",
+        version="v1",
+    )
+    draft = AgentDraft(name="root", selectedSkills=[skill])
+    project = GeneratedProject(name="root", files=[])
+    call: dict[str, object] = {}
+
+    async def resolve(
+        space_id: str,
+        skill_id: str,
+        version: str | None,
+        region: str | None,
+        *,
+        skill_space_name: str | None = None,
+        skill_name: str | None = None,
+    ) -> str:
+        call.update(
+            {
+                "space_id": space_id,
+                "skill_id": skill_id,
+                "version": version,
+                "region": region,
+                "skill_space_name": skill_space_name,
+                "skill_name": skill_name,
+            }
+        )
+        return "---\nname: display-skill\ndescription: Shared.\n---\n"
+
+    await materialize_selected_skills(
+        draft,
+        project,
+        resolve_skillspace_detail=resolve,
+    )
+
+    assert call == {
+        "space_id": "space-1",
+        "skill_id": "skill-1",
+        "version": "v1",
+        "region": "cn-shanghai",
+        "skill_space_name": "Demo Space",
+        "skill_name": "Display Skill",
+    }
+
+
+@pytest.mark.asyncio
+async def test_skillspace_materialization_aligns_folder_with_skill_md_name() -> None:
+    skill = SelectedSkill(
+        source="skillspace",
+        folder="intelligent-diagnosis-report",
+        name="intelligent-diagnosis-report",
+        skillSpaceId="space-1",
+        skillSpaceName="Demo Space",
+        skillId="skill-1",
+        version="v1",
+    )
+    draft = AgentDraft(name="car", selectedSkills=[skill])
+    project = generate_project_from_draft(draft)
+
+    async def resolve(
+        space_id: str,
+        skill_id: str,
+        version: str | None,
+        region: str | None = None,
+        **_: object,
+    ) -> str:
+        del space_id, skill_id, version, region
+        return "---\nname: domain-test-skill\ndescription: Shared.\n---\n"
+
+    await materialize_selected_skills(
+        draft,
+        project,
+        resolve_skillspace_detail=resolve,
+    )
+
+    files = _file_map(project)
+    agent_py = files["agents/car/agent.py"]
+    assert (
+        'load_skill_from_dir(_Path(__file__).parent.parent.parent / "skills" / '
+        '"domain-test-skill")'
+    ) in agent_py
+    assert "'folder': 'domain-test-skill'" in agent_py
+    assert ' / "skills" / "intelligent-diagnosis-report")' not in agent_py
+    assert files["skills/domain-test-skill/SKILL.md"].startswith(
+        "---\nname: domain-test-skill\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_skillspace_materialization_keeps_full_package_files() -> None:
+    skill = SelectedSkill(
+        source="skillspace",
+        folder="intelligent-diagnosis-report",
+        name="intelligent-diagnosis-report",
+        skillSpaceId="space-1",
+        skillSpaceName="Demo Space",
+        skillId="skill-1",
+        version="v1",
+    )
+    draft = AgentDraft(name="car", selectedSkills=[skill])
+    project = generate_project_from_draft(draft)
+
+    async def resolve(
+        space_id: str,
+        skill_id: str,
+        version: str | None,
+        region: str | None = None,
+        **_: object,
+    ) -> list[GeneratedFile]:
+        del space_id, skill_id, version, region
+        return _files_from_zip(
+            _skill_zip(
+                {
+                    "cloud-package/SKILL.md": (
+                        "---\nname: domain-test-skill\ndescription: Shared.\n---\n"
+                    ),
+                    "cloud-package/helpers/report.py": "REPORT = 'ok'\n",
+                }
+            ),
+            "intelligent-diagnosis-report",
+            "SkillSpace skill skill-1",
+        )
+
+    await materialize_selected_skills(
+        draft,
+        project,
+        resolve_skillspace_detail=resolve,
+    )
+
+    files = _file_map(project)
+    assert (
+        'load_skill_from_dir(_Path(__file__).parent.parent.parent / "skills" / '
+        '"domain-test-skill")'
+    ) in files["agents/car/agent.py"]
+    assert files["skills/domain-test-skill/SKILL.md"].startswith(
+        "---\nname: domain-test-skill\n"
+    )
+    assert files["skills/domain-test-skill/helpers/report.py"] == "REPORT = 'ok'\n"
+    assert "skills/domain-test-skill/cloud-package/SKILL.md" not in files
+
+
+@pytest.mark.asyncio
+async def test_skillspace_materialization_normalizes_legacy_frontmatter() -> None:
+    skill = SelectedSkill(
+        source="skillspace",
+        folder="gate-info-web3",
+        name="gate-info-web3",
+        skillSpaceId="space-1",
+        skillId="skill-1",
+        version="v1",
+    )
+    draft = AgentDraft(name="root", selectedSkills=[skill])
+    project = GeneratedProject(name="root", files=[])
+
+    async def resolve(space_id: str, skill_id: str, version: str | None) -> str:
+        del space_id, skill_id, version
+        return (
+            "---\n"
+            "name: gate-info-web3\n"
+            "description: Fetch market facts. Legacy alias: gate-info-defianalysis.\n"
+            "---\n"
+            "Use this skill for market analysis.\n"
+        )
+
+    await materialize_selected_skills(
+        draft,
+        project,
+        resolve_skillspace_detail=resolve,
+    )
+
+    assert [file.path for file in project.files] == ["skills/gate-info-web3/SKILL.md"]
+    frontmatter = project.files[0].content.split("---", 2)[1]
+    parsed = yaml.safe_load(frontmatter)
+    assert parsed["description"] == (
+        "Fetch market facts. Legacy alias: gate-info-defianalysis."
+    )
+
+
 def _skill_zip(files: dict[str, str]) -> bytes:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:
@@ -413,17 +633,23 @@ def _skill_zip(files: dict[str, str]) -> bytes:
     return output.getvalue()
 
 
-def test_skillhub_zip_accepts_safe_files_and_rejects_path_escape() -> None:
-    skill_md = "---\nname: demo-skill\ndescription: Demo.\n---\n"
+def test_skillhub_zip_accepts_safe_files_without_metadata_validation() -> None:
+    skill_md = "---\nname: clawhub/534422530/89d9f5\n---\n"
     files = _files_from_zip(
         _skill_zip({"SKILL.md": skill_md, "scripts/run.py": "print('ok')\n"}),
         "demo-skill",
         "test skill",
     )
     assert [file.path for file in files] == [
-        "skills/demo-skill/SKILL.md",
-        "skills/demo-skill/scripts/run.py",
+        "skills/clawhub-534422530-89d9f5/SKILL.md",
+        "skills/clawhub-534422530-89d9f5/scripts/run.py",
     ]
+    assert files[0].content == (
+        "---\n"
+        "name: clawhub-534422530-89d9f5\n"
+        "description: clawhub-534422530-89d9f5 skill\n"
+        "---\n"
+    )
 
     with pytest.raises(DebugPolicyError, match="Illegal skill file path"):
         _files_from_zip(
@@ -431,6 +657,25 @@ def test_skillhub_zip_accepts_safe_files_and_rejects_path_escape() -> None:
             "demo-skill",
             "test skill",
         )
+
+
+def test_remote_skill_zip_accepts_existing_skills_wrapper() -> None:
+    skill_md = "---\nname: wrapped-skill\ndescription: Wrapped.\n---\n"
+    files = _files_from_zip(
+        _skill_zip(
+            {
+                "skills/wrapped-skill/SKILL.md": skill_md,
+                "skills/wrapped-skill/scripts/run.py": "print('ok')\n",
+            }
+        ),
+        "display name with spaces",
+        "Skill Hub skill wrapped-skill",
+    )
+
+    assert [file.path for file in files] == [
+        "skills/wrapped-skill/SKILL.md",
+        "skills/wrapped-skill/scripts/run.py",
+    ]
 
 
 def test_skillhub_zip_accepts_gb18030_text_files() -> None:
@@ -445,6 +690,53 @@ def test_skillhub_zip_accepts_gb18030_text_files() -> None:
     assert files[0].content.startswith("---")
     assert "数据处理" in files[0].content
     assert "说明：￥" in files[1].content
+
+
+def test_remote_skill_zip_normalizes_malformed_frontmatter() -> None:
+    skill_md = (
+        "---\n"
+        "name: superpowers-writing-plans\n"
+        "description: Write practical plans.\n"
+        "metadata: ''\n"
+        "use_cases:\n"
+        "  - User has an approved design or product brief\n"
+        '  - "write a plan" / "make a plan" / "implementation plan": now\n'
+        "---\n"
+        "Plan writing instructions.\n"
+    )
+
+    files = _files_from_zip(
+        _skill_zip({"SKILL.md": skill_md}),
+        "superpowers-writing-plans",
+        "Skill Hub skill superpowers-writing-plans",
+    )
+
+    frontmatter = files[0].content.split("---", 2)[1]
+    parsed = yaml.safe_load(frontmatter)
+    assert parsed["name"] == "superpowers-writing-plans"
+    assert parsed["description"] == "Write practical plans."
+    assert parsed["metadata"] == {}
+
+
+def test_remote_skill_zip_normalizes_adk_incompatible_name() -> None:
+    skill_md = (
+        "---\n"
+        "name: stock_analyzer\n"
+        "description: Stock analysis.\n"
+        "---\n"
+        "Analyze stocks.\n"
+    )
+
+    files = _files_from_zip(
+        _skill_zip({"SKILL.md": skill_md}),
+        "stock_analyzer",
+        "Skill Hub skill stock_analyzer",
+    )
+
+    frontmatter = files[0].content.split("---", 2)[1]
+    parsed = yaml.safe_load(frontmatter)
+    assert parsed["name"] == "stock-analyzer"
+    assert [file.path for file in files] == ["skills/stock-analyzer/SKILL.md"]
 
 
 class _FakeResponse:
@@ -478,6 +770,8 @@ class _FakeResponse:
 
 class _FakeAsyncClient:
     streamed_payloads: list[dict[str, Any]] = []
+    trace_requests: ClassVar[list[str]] = []
+    listed_apps: ClassVar[list[str]] = ["demo_agent"]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         pass
@@ -489,8 +783,23 @@ class _FakeAsyncClient:
         return None
 
     async def get(self, url: str) -> _FakeResponse:
-        assert url.endswith("/list-apps")
-        return _FakeResponse(json_data=["demo_agent"])
+        if url.endswith("/list-apps"):
+            return _FakeResponse(json_data=self.listed_apps)
+        assert url.endswith("/dev/apps/demo_agent/debug/trace/session/session-1")
+        self.trace_requests.append(url)
+        return _FakeResponse(
+            json_data=[
+                {
+                    "name": "call_llm",
+                    "span_id": 2,
+                    "trace_id": 1,
+                    "start_time": 10,
+                    "end_time": 20,
+                    "attributes": {},
+                    "parent_span_id": None,
+                }
+            ]
+        )
 
     async def post(self, url: str, json: Any) -> _FakeResponse:
         assert "/sessions" in url
@@ -577,6 +886,27 @@ def test_debug_text_redacts_environment_and_inline_markers(
     assert "Bearer ***" in redacted
 
 
+def test_model_error_detail_preserves_cause_and_redacts_credentials() -> None:
+    api_key = "model-api-key-123456"
+    access_key = "model-access-key-123456"
+    try:
+        try:
+            raise RuntimeError(
+                "Ark request failed: model access denied; "
+                f"api_key={api_key}; access_key={access_key}"
+            )
+        except RuntimeError as cause:
+            raise ValueError("模型请求失败") from cause
+    except ValueError as error:
+        detail = _safe_exception_detail(error)
+
+    assert "模型请求失败" in detail
+    assert "model access denied" in detail
+    assert api_key not in detail
+    assert access_key not in detail
+    assert detail.count("***") == 2
+
+
 def test_generated_project_and_debug_run_api_lifecycle(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -584,10 +914,12 @@ def test_generated_project_and_debug_run_api_lifecycle(
     captured: dict[str, Any] = {}
     _FakeProcess.created.clear()
     _FakeAsyncClient.streamed_payloads.clear()
+    _FakeAsyncClient.trace_requests.clear()
+    _FakeAsyncClient.listed_apps = ["demo_agent"]
     monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
     monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-sk")
 
-    monkeypatch.setattr("dotenv.find_dotenv", lambda: "")
+    monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
     monkeypatch.setattr(
         "uvicorn.run",
         lambda app, **kwargs: captured.setdefault("app", app),
@@ -630,6 +962,14 @@ def test_generated_project_and_debug_run_api_lifecycle(
         "name": "demo-agent",
         "description": "Demo agent",
         "instruction": "Always answer with hello.",
+        "builtinTools": ["run_code"],
+        "deployment": {
+            "envValues": {
+                "AGENTKIT_TOOL_ID": "t-debug",
+                "AGENTKIT_TOOL_REGION": "cn-shanghai",
+                "DATABASE_MYSQL_PASSWORD": "not-selected",
+            }
+        },
     }
     with TestClient(captured["app"]) as client:
         project_response = client.post(
@@ -654,9 +994,30 @@ def test_generated_project_and_debug_run_api_lifecycle(
         assert run["appName"] == "demo_agent"
         assert run["runId"].startswith("tr_")
 
-        process = _FakeProcess.created[-1]
+        _FakeAsyncClient.listed_apps = ["veadk_debug_abc"]
+        try:
+            reserved_name_response = client.post(
+                "/web/generated-agent-test-runs",
+                json={"draft": {**draft, "name": "abc"}},
+            )
+        finally:
+            _FakeAsyncClient.listed_apps = ["demo_agent"]
+        assert reserved_name_response.status_code == 200
+        reserved_name_run = reserved_name_response.json()
+        assert reserved_name_run["appName"] == "veadk_debug_abc"
+        reserved_process = _FakeProcess.created[-1]
+        assert (
+            Path(reserved_process.cwd) / "agents/veadk_debug_abc/agent.py"
+        ).is_file()
+        assert not (Path(reserved_process.cwd) / "agents/abc").exists()
+
+        process = _FakeProcess.created[-2]
         assert process.env["VOLCENGINE_ACCESS_KEY"] == "test-ak"
         assert process.env["VOLCENGINE_SECRET_KEY"] == "test-sk"
+        assert process.env["AGENTKIT_TOOL_ID"] == "t-debug"
+        assert process.env["AGENTKIT_TOOL_REGION"] == "cn-shanghai"
+        assert process.env["OTEL_SDK_DISABLED"] == "false"
+        assert "DATABASE_MYSQL_PASSWORD" not in process.env
         generated_files = {
             str(path.relative_to(process.cwd)): path.read_text(encoding="utf-8")
             for path in Path(process.cwd).rglob("*")
@@ -685,6 +1046,13 @@ def test_generated_project_and_debug_run_api_lifecycle(
         assert sse_response.status_code == 200
         assert '"text":"hello"' in sse_response.text
         assert _FakeAsyncClient.streamed_payloads[-1]["app_name"] == "demo_agent"
+
+        trace_response = client.get(
+            f"/web/generated-agent-test-runs/{run['runId']}/trace/session/session-1"
+        )
+        assert trace_response.status_code == 200
+        assert trace_response.json()[0]["name"] == "call_llm"
+        assert len(_FakeAsyncClient.trace_requests) == 1
 
         runner_error = "RuntimeError: tenant model credential is unavailable"
         runner_marker = secrets.token_urlsafe(24)
@@ -758,7 +1126,7 @@ def test_generated_agent_debug_omits_stdio_mcp_on_remote_bind(
 ) -> None:
     captured: dict[str, Any] = {}
     _FakeProcess.created.clear()
-    monkeypatch.setattr("dotenv.find_dotenv", lambda: "")
+    monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
     monkeypatch.setattr(
         "uvicorn.run",
         lambda app, **kwargs: captured.setdefault("app", app),
@@ -844,6 +1212,94 @@ def test_generated_agent_debug_omits_stdio_mcp_on_remote_bind(
         assert delete_response.status_code == 200
 
 
+def test_generated_agent_debug_allows_large_skill_projects(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, Any] = {}
+    _FakeProcess.created.clear()
+    _FakeAsyncClient.listed_apps = ["large_skill_project"]
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-sk")
+    monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
+    monkeypatch.setattr(
+        "uvicorn.run",
+        lambda app, **kwargs: captured.setdefault("app", app),
+    )
+
+    _run_frontend_server(
+        agents_dir=str(tmp_path),
+        frontend_dir=None,
+        site_logo=None,
+        site_title=None,
+        host="127.0.0.1",
+        port=8765,
+        dev=True,
+        vite=True,
+        oauth2_user_pool=None,
+        oauth2_user_pool_client=None,
+        oauth2_user_pool_uid=None,
+        oauth2_user_pool_client_uid=None,
+        oauth2_redirect_uri=None,
+        oauth2_provider=None,
+        oauth2_provider_label=None,
+        auth_mode="frontend",
+        generated_agent_test_run_ttl=60,
+        open_browser=False,
+    )
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProcess)
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+    real_socket = socket.socket
+    monkeypatch.setattr(
+        "socket.socket",
+        lambda *args, **kwargs: (
+            real_socket(*args, **kwargs)
+            if len(args) >= 4 or "fileno" in kwargs
+            else _FakeSocket(*args, **kwargs)
+        ),
+    )
+
+    draft = {
+        "name": "large-skill-project",
+        "instruction": "Use all selected skills.",
+        "selectedSkills": [
+            {
+                "source": "local",
+                "folder": f"skill-{idx}",
+                "name": f"skill-{idx}",
+                "localFiles": [
+                    {
+                        "path": f"skills/skill-{idx}/SKILL.md",
+                        "content": (
+                            f"---\nname: skill-{idx}\ndescription: Skill {idx}.\n---\n"
+                        ),
+                    },
+                    {
+                        "path": f"skills/skill-{idx}/helper.py",
+                        "content": f"VALUE = {idx}\n",
+                    },
+                    {
+                        "path": f"skills/skill-{idx}/README.md",
+                        "content": f"# Skill {idx}\n",
+                    },
+                ],
+            }
+            for idx in range(40)
+        ],
+    }
+
+    with TestClient(captured["app"]) as client:
+        run_response = client.post(
+            "/web/generated-agent-test-runs",
+            json={"draft": draft},
+        )
+
+    assert run_response.status_code == 200
+    assert run_response.json()["appName"] == "large_skill_project"
+    assert _FakeProcess.created[-1].cmd
+
+
 def test_studio_deploy_run_script_allows_generated_agent_debug() -> None:
     run_script = _studio_deploy_run_script("site-logo.png")
 
@@ -861,11 +1317,27 @@ def test_agentkit_app_adds_dynamic_a2a_tools_per_run() -> None:
     assert "def _configure_dynamic_a2a_routes(" in source
     assert "def _run_request_custom_metadata(" in source
     assert 'getattr(req, "custom_metadata", None)' in source
+    assert "plugins=[FrontendInvocationPlugin()]" in source
+    assert "session_service is None or not _has_a2a_registry_config" not in source
     assert "req.custom_metadata" not in source
     assert '@app.post("/run_sse")' in source
     assert '@app.post("/invoke")' in source
     assert "types.UserContent" in source
     assert '@app.post("/run", response_model=None)' in source
+
+
+def test_generated_agent_always_enables_per_invocation_metadata() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(name="demo-agent", description="Demo agent")
+    )
+    files = _file_map(project)
+
+    assert "agents/demo_agent/dynamic_a2a.py" in files
+    assert "enable_dynamic_a2a_tools(app, root_agent)" in files["app.py"]
+    assert (
+        "plugins=[FrontendInvocationPlugin()]"
+        in files["agents/demo_agent/dynamic_a2a.py"]
+    )
 
 
 def test_frontend_deploy_forwards_a2a_registry_runtime_env_keys() -> None:
@@ -879,6 +1351,17 @@ def test_frontend_deploy_forwards_a2a_registry_runtime_env_keys() -> None:
     assert '"A2A_REGISTRY_ACCESS_KEY",' in source
 
 
+def test_generated_agent_test_run_limit_is_owner_scoped() -> None:
+    source = Path("veadk/cli/cli_frontend.py").read_text()
+
+    assert "_test_runs_creating: dict[str, int]" in source
+    assert 'owner_id = principal.owner_id if principal else ""' in source
+    assert "active_count = sum(" in source
+    assert "1 for run in _test_runs.values() if run.owner_id == owner_id" in source
+    assert "_test_runs_creating.get(owner_id, 0)" in source
+    assert "owner_id=owner_id" in source
+
+
 def test_generated_agent_test_runner_enables_dynamic_a2a_helper() -> None:
     source = Path("veadk/cli/generated_agent_test_runner.py").read_text()
 
@@ -887,6 +1370,14 @@ def test_generated_agent_test_runner_enables_dynamic_a2a_helper() -> None:
     assert "_veadk_adk_server" in source
     assert "dynamic_a2a" in source
     assert "helper.enable_dynamic_a2a_tools(app, root_agent)" in source
+
+
+def test_generated_agent_test_runner_mounts_session_trace_exporter() -> None:
+    source = Path("veadk/cli/generated_agent_test_runner.py").read_text()
+
+    assert "SessionTraceExporter" in source
+    assert "SimpleSpanProcessor" in source
+    assert "_mount_session_trace_route(app, trace_exporter)" in source
 
 
 def test_agentkit_dynamic_a2a_tools_use_user_prompt_once(monkeypatch) -> None:

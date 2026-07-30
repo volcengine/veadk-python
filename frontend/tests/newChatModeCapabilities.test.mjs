@@ -25,11 +25,25 @@ test("loads temporary-session and Skill-creation capabilities independently", ()
   assert.match(appSource, /getSandboxCapability/);
   assert.match(appSource, /getSkillCreatorCapability/);
   assert.match(appSource, /Promise\.allSettled/);
+  assert.match(appSource, /listSessionBuiltinTools\(agentId\)/);
+  assert.match(appSource, /harnessEnabled:\s*harnessResult\.status === "fulfilled"/);
+  assert.match(appSource, /newChatCapabilities\.agentId === appName/);
+  assert.match(appSource, /ready:\s*true/);
+  assert.match(appSource, /正在检查 Agent 能力/);
   assert.match(appSource, /temporaryEnabled/);
   assert.match(appSource, /skillCreateEnabled/);
+  assert.match(
+    appSource,
+    /const connectMyAgent[\s\S]*?await probeNewChatCapabilities\(agentId\)[\s\S]*?setAppName\(agentId\)/,
+  );
+  assert.match(
+    appSource,
+    /const selectAgent = async[\s\S]*?await probeNewChatCapabilities\(id\)[\s\S]*?setAppName\(id\)/,
+  );
+  assert.match(appSource, /newChatCapabilitiesCacheRef/);
 });
 
-test("disables only the unavailable mode and explains that an administrator must configure it", () => {
+test("disables built-in Agents and Skill creation until configured", () => {
   assert.match(composerSource, /temporaryEnabled\?: boolean/);
   assert.match(composerSource, /skillCreateEnabled\?: boolean/);
   assert.match(composerSource, /temporaryEnabled=\{temporaryEnabled\}/);
@@ -37,8 +51,16 @@ test("disables only the unavailable mode and explains that an administrator must
   assert.match(selectorSource, /temporaryEnabled\?: boolean/);
   assert.match(selectorSource, /skillCreateEnabled\?: boolean/);
   assert.match(selectorSource, /管理员未配置/);
+  assert.match(selectorSource, /if \(mode\.value === "temporary"\) return temporaryEnabled/);
+  assert.match(selectorSource, /if \(mode\.value === "skill-create"\) return skillCreateEnabled/);
+  assert.match(selectorSource, /return modeEnabled\(mode\) !== true/);
   assert.match(selectorSource, /if \(modeDisabled\(mode\)\) return/);
   assert.match(selectorSource, /disabled=\{modeDisabled\(mode\)\}/);
+  assert.match(
+    appSource,
+    /mode === "temporary" && !newChatCapabilities\.temporaryEnabled/,
+  );
+  assert.doesNotMatch(selectorSource, /启动时检查运行环境/);
   assert.doesNotMatch(selectorSource, /value:\s*"agent"[\s\S]*?disabled:\s*true/);
 });
 

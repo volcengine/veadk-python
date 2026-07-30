@@ -1,0 +1,149 @@
+.package-create {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  color: hsl(var(--foreground));
+}
+
+.package-create-preview {
+  height: 100%;
+}
+
+.package-create-preview > * {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.package-source-pane {
+  padding: 16px 18px 18px;
+}
+
+.package-source-label {
+  margin-bottom: 10px;
+  color: hsl(var(--foreground));
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.package-dropzone {
+  min-height: 152px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 20px;
+  border: 1px dashed hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--secondary) / 0.16);
+  text-align: center;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease;
+}
+
+.package-dropzone:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.55);
+  outline-offset: 3px;
+}
+
+.package-dropzone.is-dragging {
+  border-color: hsl(var(--primary) / 0.62);
+  background: hsl(var(--primary) / 0.045);
+}
+
+.package-dropzone.is-ready {
+  background: hsl(var(--background));
+}
+
+.package-dropzone > strong {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.package-dropzone > span {
+  max-width: 420px;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.package-upload-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 5px;
+}
+
+.package-upload-actions button {
+  min-height: 36px;
+  padding: 0 16px;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease;
+}
+
+.package-upload-secondary {
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+.package-upload-secondary:hover:not(:disabled) {
+  border-color: hsl(var(--foreground) / 0.24);
+  background: hsl(var(--secondary));
+}
+
+.package-upload-actions button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.package-upload-actions button:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.55);
+  outline-offset: 2px;
+}
+
+.package-dropzone input {
+  display: none;
+}
+
+.package-create-error {
+  flex: 0 0 auto;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid hsl(var(--destructive) / 0.2);
+  border-radius: 8px;
+  background: hsl(var(--destructive) / 0.07);
+  color: hsl(var(--destructive));
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+@media (max-width: 860px) {
+  .package-dropzone {
+    min-height: 140px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .package-dropzone,
+  .package-upload-actions button {
+    transition: none;
+  }
+
+}

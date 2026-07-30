@@ -35,6 +35,14 @@ VeADK ships a React frontend that renders [A2UI](/en/docs/framework/a2ui) (agent
   after a reload, users can start another session and AgentKit reclaims the
   abandoned session automatically when its TTL ends.
 - **Smart search**: the *Session* source full-text-searches the current agent's history; the *Web* source calls the agent's mounted web-search tool live (using credentials from the server's environment variables).
+- **Message feedback**: when connected to a cloud AgentKit Runtime, the
+  like/dislike controls below each answer write the question, answer, and
+  feedback state to AgentKit evaluation sets. Each Agent gets stable
+  `{agent_name}_good_case` and `{agent_name}_bad_case` sets; changing or
+  cancelling a rating updates the item idempotently. If the standard name is
+  reserved but hidden by the service, Studio uses and reuses a deterministic
+  suffixed name. If a Runtime does not expose Session state updates, the browser
+  keeps a compatibility cache.
 - **Add an AgentKit agent**: paste a URL + API key to connect a remote agent over the ADK protocol; it then appears in the picker.
 - **Custom-agent workbench**: author system prompts in a rich Markdown editor
   with heading and list shortcuts. Local skills accept a dropped folder or ZIP
@@ -46,6 +54,12 @@ VeADK ships a React frontend that renders [A2UI](/en/docs/framework/a2ui) (agent
   names, descriptions, and capabilities come from Agent Cards returned by the
   center. The generated internal proxy discovers and mounts matching remote
   Agents dynamically for each request.
+- Selecting **Code execution** in the custom Agent's built-in tools adds the
+  `run_code` tool and reveals the required `AGENTKIT_TOOL_ID` sandbox field
+  and optional `AGENTKIT_TOOL_REGION` field below the built-in tool list. The
+  region defaults to `cn-beijing`. Studio applies both fields to local debug runs
+  and deployed runtimes. The Agent supplies code, language, and timeout at runtime
+  from the tool signature, while ADK injects `tool_context`.
   Initialization, session, and conversation failures show credential-redacted
   error details and Runner logs that can be expanded and copied. The deployment
   page shows the Agent topology on the left, with hover details, configuration
@@ -223,8 +237,8 @@ frontend-process memory, so polling and downloads continue to work when FaaS
 requests reach different instances.
 
 On the first cloud deployment, the command creates two independent CodeEnv
-Tools with the deployer's AK/SK when Tool IDs are omitted. Existing Tools can be
-selected with `--sandbox-chat-codex-tool-id` and
+Tools in parallel with the deployer's AK/SK when Tool IDs are omitted. Existing
+Tools can be selected with `--sandbox-chat-codex-tool-id` and
 `--sandbox-skill-creator-tool-id`. The Ark credential is resolved with the
 deployer's AK/SK and written directly to both Tools as model environment
 variables. Sandbox sessions inherit those Tool variables. The browser and
@@ -282,9 +296,8 @@ veadk studio deploy \
 also supports `cn-shanghai`. Deployment checks the deployment region first and
 then searches the Beijing and Shanghai Identity regions. A cross-region match
 emits a warning and continues. `--project` selects the VeFaaS function project
-and defaults to `default`. For Shanghai deployments, the Function, APIG, and
-AgentKit resources remain in Shanghai while VeFaaS Application operations use
-the service's Beijing control-plane endpoint. The deployed Function records the
+and defaults to `default`. The VeFaaS Application, Function, APIG, and AgentKit
+resources use the selected deployment region. The deployed Function records the
 selected AgentKit Sandbox region so temporary chat and Skill-creation sessions
 query the same region as their CodeEnv Tools.
 
@@ -308,6 +321,52 @@ installed locally.
 `--sandbox-chat-codex-tool-id` and `--sandbox-skill-creator-tool-id` likewise
 replace only the explicitly supplied environment value. Omitting either option
 keeps that Tool ID from the deployed Function instead of clearing it.
+
+### One-click Studio updates
+
+Configure a release channel during deployment:
+
+```bash
+veadk studio deploy \
+  --user-pool-id <pool-id> \
+  --allowed-client-id <client-id> \
+  --vefaas-app-name <app-name> \
+  --studio-update-bucket <tos-bucket> \
+  --studio-update-region cn-beijing \
+  --studio-update-prefix veadk/studio/main
+```
+
+Studio reads `latest.json` every three minutes. Administrators can inspect each
+newer release's changelog and Git SHA and update the current Function without
+changing its Application, URL, SSO client, or server-side secrets. The complete
+Bundle replaces the Python backend and frontend assets together.
+
+`.github/workflows/publish-studio-release.yaml` does not run automatically on
+source changes. Manually dispatch `Publish Studio Release` on `main` and enter
+the user-facing changelog for every release. GitHub checks out the exact SHA,
+builds the frontend, verifies the fixed offline wheels, and uploads a prepared
+source archive through a short-lived job-bound TOS URL. The API-key-protected
+VeFaaS release server consumes and deletes that private object, builds and
+publishes the immutable Bundle and Manifest, updates the bounded
+`releases.json` catalog, and replaces `latest.json` last. Store only
+`STUDIO_RELEASE_SERVER_URL` and
+`STUDIO_RELEASE_SERVER_API_KEY` as GitHub Secrets; GitHub receives no TOS
+AK/SK.
+
+The Release Server runtime and deployment assets live together under
+`frontend/service/studio_release_server/` and are not shipped in the `veadk`
+Python package. After changing that directory, update the existing VeFaaS
+Function from the repository root:
+
+```bash
+frontend/service/studio_release_server/deploy.sh
+```
+
+The script reuses the existing Serverless gateway, checks `/healthz`, rotates
+the API key, and updates the `STUDIO_RELEASE_SERVER_URL` and
+`STUDIO_RELEASE_SERVER_API_KEY` repository Secrets. Set
+`VOLCENGINE_ACCESS_KEY` and `VOLCENGINE_SECRET_KEY`, and authenticate GitHub CLI
+before running it.
 
 When deployment registers the callback URL, it keeps the VeIdentity login page
 enabled and enables skip-consent for that client. This avoids showing a second

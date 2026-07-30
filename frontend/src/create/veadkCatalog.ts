@@ -93,8 +93,8 @@ export const A2A_REGISTRY_ENV: EnvVar[] = [
   {
     key: "REGISTRY_SPACE_ID",
     required: true,
-    placeholder: "请输入智能体中心 ID，如 as-yer579143kbrkemozdn6",
-    comment: "AgentKit 智能体中心 ID",
+    placeholder: "请选择智能体中心",
+    comment: "AgentKit 智能体中心",
   },
   {
     key: "REGISTRY_TOP_K",
@@ -188,6 +188,27 @@ export const BUILTIN_TOOLS: ToolOption[] = [
     env: [
       { key: "TOOL_VESPEECH_APP_ID", required: true },
       { key: "TOOL_VESPEECH_SPEAKER", required: false, placeholder: "zh_female_vv_uranus_bigtts" },
+    ],
+  },
+  {
+    id: "run_code",
+    label: "代码执行",
+    desc: "在沙箱中执行代码",
+    importLine: "from veadk.tools.builtin_tools.run_code import run_code",
+    toolNames: ["run_code"],
+    env: [
+      {
+        key: "AGENTKIT_TOOL_ID",
+        required: true,
+        placeholder: "t-xxxx",
+        comment: "代码执行沙箱 ID",
+      },
+      {
+        key: "AGENTKIT_TOOL_REGION",
+        required: false,
+        placeholder: "cn-beijing",
+        comment: "AgentKit Tools 地域",
+      },
     ],
   },
   {
@@ -289,8 +310,15 @@ export const LTM_BACKENDS: BackendOption[] = [
 /* ------------------------------------------------------------------ *
  * Knowledgebase backends.
  * ------------------------------------------------------------------ */
+export const DEFAULT_KB_BACKEND = "viking";
+
 export const KB_BACKENDS: BackendOption[] = [
-  { id: "local", label: "本地向量库", desc: "进程内 llama-index 向量库。", env: EMBEDDING_ENV, pipExtra: "extensions", needsEmbedding: true },
+  {
+    id: "viking",
+    label: "VikingDB Knowledge",
+    desc: "火山 VikingDB 知识库。",
+    env: VOLC_ENV,
+  },
   {
     id: "opensearch",
     label: "OpenSearch",
@@ -304,12 +332,6 @@ export const KB_BACKENDS: BackendOption[] = [
     ],
     pipExtra: "extensions",
     needsEmbedding: true,
-  },
-  {
-    id: "viking",
-    label: "VikingDB Knowledge",
-    desc: "火山 VikingDB 知识库。",
-    env: VOLC_ENV,
   },
   {
     id: "context_search",

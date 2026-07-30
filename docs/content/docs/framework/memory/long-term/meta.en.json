@@ -1,4 +1,4 @@
 {
   "title": "Long-term memory",
-  "pages": ["index", "local", "vikingdb", "mem0", "opensearch", "redis"]
+  "pages": ["index", "local", "vikingdb", "mem0", "opensearch", "redis", "tos-context"]
 }

@@ -42,6 +42,8 @@ export interface SelectedRuntime {
 export interface AgentSelectorProps {
   open: boolean;
   onClose: () => void;
+  /** Render beside another popover instead of beside the sidebar. */
+  variant?: "drawer" | "navbar";
   /** Top offset (px) so the drawer aligns with the sidebar picker row. */
   anchorTop?: number;
   /** local = pick a local app (`--dev`); cloud = pick a runtime. */
@@ -55,7 +57,7 @@ export interface AgentSelectorProps {
   /** Maximum runtime scope granted by the server. */
   runtimeScope: RuntimeScope;
   /** Called with the picker id once an agent is chosen. */
-  onSelect: (id: string) => void;
+  onSelect: (id: string) => void | Promise<void>;
 }
 
 const PAGE_SIZE = 15;
@@ -123,6 +125,7 @@ function withTimeout<T>(p: Promise<T>, ms = LOAD_TIMEOUT_MS): Promise<T> {
 export function AgentSelector({
   open,
   onClose,
+  variant = "drawer",
   anchorTop = 0,
   agentsSource,
   localApps,
@@ -300,8 +303,8 @@ export function AgentSelector({
   function connect(rt: CloudRuntime) {
     setConnecting(rt.runtimeId);
     connectRuntime(rt.runtimeId, rt.name, rt.region)
-      .then((agentId) => {
-        onSelect(agentId);
+      .then(async (agentId) => {
+        await onSelect(agentId);
         onClose();
       })
       .catch((error) => {
@@ -332,15 +335,15 @@ export function AgentSelector({
 
   return (
     <>
-      <div className="menu-scrim" onClick={onClose} />
+      {variant === "drawer" ? <div className="menu-scrim" onClick={onClose} /> : null}
       <div
-        className={`agentsel ${previewed ? "has-detail" : ""}`}
+        className={`agentsel agentsel--${variant}${previewed && variant === "drawer" ? " has-detail" : ""}`}
         role="dialog"
         aria-label="选择 Agent"
-        style={{
+        style={variant === "drawer" ? {
           top: anchorTop,
           height: `min(640px, calc(100dvh - ${anchorTop}px - 10px))`,
-        }}
+        } : undefined}
       >
         <div className="agentsel-main">
           <div className="agentsel-head">
@@ -472,16 +475,18 @@ export function AgentSelector({
                               >
                                 {connectingThis ? "连接中…" : active ? "已连接" : bad ? "重试" : "连接"}
                               </button>
-                              <button
-                                type="button"
-                                className={`agentsel-info ${isPreviewed ? "active" : ""}`}
-                                aria-label={`查看 ${rt.name} 信息`}
-                                aria-pressed={isPreviewed}
-                                title="查看信息"
-                                onClick={() => togglePreview(rt)}
-                              >
-                                <Info className="icon" />
-                              </button>
+                              {variant === "drawer" ? (
+                                <button
+                                  type="button"
+                                  className={`agentsel-info ${isPreviewed ? "active" : ""}`}
+                                  aria-label={`查看 ${rt.name} 信息`}
+                                  aria-pressed={isPreviewed}
+                                  title="查看信息"
+                                  onClick={() => togglePreview(rt)}
+                                >
+                                  <Info className="icon" />
+                                </button>
+                              ) : null}
                             </div>
                           </div>
                         </li>
@@ -519,7 +524,7 @@ export function AgentSelector({
           )}
         </div>
 
-        {agentsSource === "cloud" && previewed && (
+        {variant === "drawer" && agentsSource === "cloud" && previewed && (
           <RuntimePreviewPanel
             runtime={previewed}
             tab={detailTab}
@@ -702,23 +707,29 @@ function AgentInfoContent({ runtime }: { runtime: SelectedRuntime }) {
               />
             )}
 
-          {info.skills.length > 0 && (
-              <section className="agentsel-info-section">
-                <h3>
-                  <SkillCapabilityIcon /> 技能
-                </h3>
-              <div className="agentsel-info-list">
-                {info.skills.map((skill) => (
-                  <div key={skill.name} className="agentsel-info-list-item">
-                    <strong title={skill.name}>{skill.name}</strong>
-                    {skill.description && (
-                      <span title={skill.description}>{skill.description}</span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
+          <section className="agentsel-info-section">
+            <h3>
+              <SkillCapabilityIcon /> 技能
+            </h3>
+            {info.skillsPreviewSupported ? (
+              info.skills.length > 0 ? (
+                <div className="agentsel-info-list">
+                  {info.skills.map((skill) => (
+                    <div key={skill.name} className="agentsel-info-list-item">
+                      <strong title={skill.name}>{skill.name}</strong>
+                      {skill.description && (
+                        <span title={skill.description}>{skill.description}</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="agentsel-info-empty">未配置</div>
+              )
+            ) : (
+              <div className="agentsel-info-empty">暂不支持预览</div>
+            )}
+          </section>
 
           {components.length > 0 && (
             <section className="agentsel-info-section">
@@ -754,6 +765,7 @@ function AgentInfoContent({ runtime }: { runtime: SelectedRuntime }) {
           {!info.description &&
             info.subAgents.length === 0 &&
             info.tools.length === 0 &&
+            info.skillsPreviewSupported &&
             info.skills.length === 0 &&
             components.length === 0 && (
               <div className="agentsel-panel-empty">

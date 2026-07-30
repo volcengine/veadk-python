@@ -1,40 +1,63 @@
-import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type WheelEvent,
+} from "react";
+import {
+  ArrowLeft,
   Check,
   ChevronDown,
   CircleAlert,
   CircleCheck,
   CircleX,
   Copy,
+  CornerDownRight,
   ListTodo,
   Loader2,
 } from "lucide-react";
 import { motion } from "motion/react";
 import {
   cancelAgentkitDeployment,
+  addSessionCapability,
+  clearMessageFeedbackCache,
   createSession,
   DEFAULT_STUDIO_ACCESS,
   DEFAULT_SITE_BRANDING,
+  deleteRuntime,
   deleteMedia,
   deleteSessionMedia,
   deleteSession,
+  downloadArtifact,
+  previewArtifact,
   getAgentInfo,
+  getSessionCapabilities,
   getSession,
   getStudioAccess,
+  getRuntimes,
   listApps,
+  listSessionBuiltinTools,
   listSessions,
+  removeSessionCapability,
   runSSE,
+  submitMessageFeedback,
   uploadMedia,
   getUiConfig,
   type AdkEvent,
   type AgentInfo,
   type AgentNode,
   type AgentTarget,
+  type AgentFeedbackCase,
   type AdkSession,
+  type AddSessionCapability,
   type Attachment,
   type FrontendInvocation,
-  type ManagedRuntime,
+  type CloudRuntime,
+  type MessageFeedbackRating,
   type SiteBranding,
+  type SessionCapabilities,
   type StudioAccess,
   type UiFeatures,
 } from "./adk/client";
@@ -42,23 +65,29 @@ import {
   applyEvent,
   emptyAcc,
   eventsToTurns,
-  sessionTitle,
   type Block,
   type Turn,
 } from "./blocks";
 import { Sidebar } from "./ui/Sidebar";
 import { Navbar } from "./ui/Navbar";
-import { AgentTopology } from "./ui/AgentTopology";
+import { AgentInfoDrawer, AgentInfoPanel } from "./ui/AgentTopology";
+import { AgentIdentityIcon } from "./ui/AgentIdentityIcon";
 import { SkillCenterView } from "./ui/SkillCenter";
 import { AddAgentKitView } from "./ui/AddAgentKit";
-import { ManageAgentsView } from "./ui/ManageAgents";
+import {
+  AgentWorkspace,
+  type WorkspaceAgentDraft,
+} from "./ui/AgentWorkspace";
+import { MyAgents, type MyAgentCardData } from "./ui/MyAgents";
 import { SearchView } from "./ui/Search";
 import {
   buildAgentEntries,
   connectRuntime,
   loadConnections,
   registerConnections,
+  removeRuntimeConnection,
   remoteAppId,
+  type AgentEntry,
   type RemoteConnection,
 } from "./adk/connections";
 import { Blocks, ThinkingPlaceholder } from "./ui/Blocks";
@@ -71,14 +100,21 @@ import { IntelligentCreate } from "./create/IntelligentCreate";
 import { CustomCreate } from "./create/CustomCreate";
 import { TemplateCreate } from "./create/TemplateCreate";
 import { WorkflowCreate } from "./create/WorkflowCreate";
+import { CodePackageCreate } from "./create/CodePackageCreate";
+import { FileArchive } from "lucide-react";
 import type { AgentDraft } from "./create/types";
-import type { DeploymentTaskUpdate } from "./ui/ProjectPreview";
+import type { DeployResult, DeploymentTaskUpdate } from "./ui/ProjectPreview";
 import { DeploymentErrorMessage } from "./ui/DeploymentErrorMessage";
 import { TextShimmer } from "./ui/text-shimmer/TextShimmer";
+import { StudioUpdateControl } from "./ui/StudioUpdateControl";
 import { createSkillJob, deleteSkillJob } from "./ui/skill-create/api";
 import { SkillCreateWorkspace } from "./ui/skill-create/SkillCreateWorkspace";
 import { SKILL_MODELS, type SkillCreationJob } from "./ui/skill-create/types";
-import type { NewChatMode } from "./ui/new-chat-modes/types";
+import type { NewChatMode, NewChatTask } from "./ui/new-chat-modes/types";
+import {
+  NEW_CHAT_TASK_OPTIONAL_TOOLS,
+  NEW_CHAT_TASK_TOOLS,
+} from "./ui/new-chat-modes/taskTools";
 import {
   sandboxClient,
   type SandboxSession as SandboxSessionInfo,
@@ -95,17 +131,53 @@ import {
   SandboxSessionWarning,
 } from "./ui/SandboxSession";
 import defaultSiteLogo from "./assets/volcengine.svg";
+import {
+  FeedbackDownIcon,
+  FeedbackUpIcon,
+} from "./ui/icons/FeedbackIcons";
+
+interface NewChatCapabilitiesState {
+  agentId?: string;
+  ready?: boolean;
+  harnessEnabled?: boolean;
+  builtinTools?: string[];
+  temporaryEnabled?: boolean;
+  skillCreateEnabled?: boolean;
+}
+
+async function probeNewChatCapabilities(
+  agentId: string,
+): Promise<NewChatCapabilitiesState> {
+  const [sandboxResult, skillResult, harnessResult] = await Promise.allSettled([
+    getSandboxCapability(),
+    getSkillCreatorCapability(),
+    listSessionBuiltinTools(agentId),
+  ]);
+  return {
+    agentId,
+    ready: true,
+    harnessEnabled: harnessResult.status === "fulfilled",
+    builtinTools: harnessResult.status === "fulfilled" ? harnessResult.value : [],
+    temporaryEnabled:
+      sandboxResult.status === "fulfilled" && sandboxResult.value.enabled,
+    skillCreateEnabled:
+      skillResult.status === "fulfilled" && skillResult.value.enabled,
+  };
+}
 
 // Breadcrumb root label for the create flow and the per-mode leaf labels.
 const CREATE_ROOT = "创建 Agent";
-const MODE_LABEL: Record<QuickCreateKind, string> = {
+type CreateMode = QuickCreateKind | "package";
+
+const MODE_LABEL: Record<CreateMode, string> = {
   intelligent: "智能模式",
   custom: "自定义",
   template: "从模板新建",
   workflow: "工作流",
+  package: "代码包部署",
 };
 
-type CreateView = "menu" | QuickCreateKind | null;
+type CreateView = "menu" | CreateMode | null;
 
 // Persist the last view so a page refresh restores where the user was.
 const LS = { app: "veadk.appName", view: "veadk.view", session: "veadk.sessionId" } as const;
@@ -116,19 +188,42 @@ function emptyInvocation(): FrontendInvocation {
   return { skills: [] };
 }
 
-function activeSessionTitle(session: AdkSession | undefined, turns: Turn[]): string {
-  const persistedTitle = sessionTitle(session?.events);
-  if (persistedTitle !== "新会话") return persistedTitle;
-  for (const turn of turns) {
-    if (turn.role !== "user") continue;
-    const text = turn.blocks.find((block) => block.kind === "text")?.text.trim();
-    if (text) return text;
+function workspaceDraftsKey(userId: string): string {
+  return `veadk.agentDrafts.${encodeURIComponent(userId)}`;
+}
+
+function activeWorkspaceDraftKey(userId: string): string {
+  return `${workspaceDraftsKey(userId)}.active`;
+}
+
+function workspaceAgentOrderKey(userId: string): string {
+  return `veadk.agentOrder.${encodeURIComponent(userId)}`;
+}
+
+function loadWorkspaceDrafts(userId: string): WorkspaceAgentDraft[] {
+  if (!userId) return [];
+  try {
+    const value = JSON.parse(localStorage.getItem(workspaceDraftsKey(userId)) || "[]");
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
   }
-  return "新会话";
+}
+
+function loadWorkspaceAgentOrder(userId: string): string[] {
+  if (!userId) return [];
+  try {
+    const value = JSON.parse(localStorage.getItem(workspaceAgentOrderKey(userId)) || "[]");
+    return Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string")
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 function findAgentNode(node: AgentNode, name: string): AgentNode | undefined {
-  if (node.name === name) return node;
+  if (node.name === name || node.id === name) return node;
   for (const child of node.children) {
     const found = findAgentNode(child, name);
     if (found) return found;
@@ -159,15 +254,21 @@ function loadView(): CreateView {
 }
 import { TraceDrawer } from "./ui/TraceDrawer";
 import { LoginPage } from "./ui/LoginPage";
+import { AuthExpiredDialog } from "./ui/AuthExpiredDialog";
 import { Markdown } from "./ui/Markdown";
-import { useStickToBottom } from "./ui/useStickToBottom";
 import {
   clearLocalUser,
   logout,
+  openLoginWindow,
   resolveIdentity,
   setLocalUser,
   type AuthStatus,
 } from "./adk/identity";
+import {
+  AUTHENTICATION_REQUIRED_EVENT,
+  authenticationRestored,
+  isAuthenticationPending,
+} from "./adk/authSession";
 import type { A2uiAction, A2uiComponent } from "./a2ui/types";
 import { buildSurfaces } from "./a2ui/Surface";
 
@@ -232,7 +333,9 @@ function turnHasVisibleContent(turn: Turn): boolean {
   return turn.blocks.some((b) => {
     if (b.kind === "text") return b.text.trim().length > 0;
     if (b.kind === "attachment") return b.files.length > 0;
+    if (b.kind === "artifact") return b.files.length > 0;
     if (b.kind === "tool") return !(b.name === A2UI_TOOL_NAME && b.done);
+    if (b.kind === "agent-transfer") return false;
     if (b.kind === "a2ui") return buildSurfaces(b.messages).some((s) => s.components[s.rootId]);
     if (b.kind === "auth") return true; // the OAuth card counts as content
     return false; // thinking is not an answer
@@ -577,12 +680,6 @@ export default function App() {
     ? turnsBySession[sessionId] ?? []
     : pendingTurns;
   const turns = sandboxSession ? sandboxTurns : persistentTurns;
-  const conversationTitle = sandboxSession
-    ? "灵光一现"
-    : activeSessionTitle(
-        sessions.find((session) => session.id === sessionId),
-        turns,
-      );
   const setTurnsFor = (
     sid: string,
     updater: Turn[] | ((prev: Turn[]) => Turn[]),
@@ -593,17 +690,29 @@ export default function App() {
     }));
   const [input, setInput] = useState("");
   const [newChatMode, setNewChatMode] = useState<NewChatMode>("agent");
-  const [newChatCapabilities, setNewChatCapabilities] = useState<{
-    temporaryEnabled?: boolean;
-    skillCreateEnabled?: boolean;
-  }>({});
+  const [newChatTask, setNewChatTask] = useState<NewChatTask | null>(null);
+  const [newChatCapabilities, setNewChatCapabilities] =
+    useState<NewChatCapabilitiesState>({});
+  const newChatCapabilitiesCacheRef = useRef(
+    new Map<string, NewChatCapabilitiesState>(),
+  );
+  const newChatCapabilitiesReady =
+    newChatCapabilities.ready === true && newChatCapabilities.agentId === appName;
   const [skillJob, setSkillJob] = useState<SkillCreationJob | null>(null);
   const [skillCreating, setSkillCreating] = useState(false);
   const skillCreationRunRef = useRef(0);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [invocation, setInvocation] = useState<FrontendInvocation>(emptyInvocation);
   const [agentInfo, setAgentInfo] = useState<AgentInfo | null>(null);
+  const [agentInfoRefreshKey, setAgentInfoRefreshKey] = useState(0);
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
+  const [sessionCapabilities, setSessionCapabilities] =
+    useState<SessionCapabilities | null>(null);
+  const [sessionCapabilitiesLoading, setSessionCapabilitiesLoading] =
+    useState(false);
+  const [sessionBuiltinTools, setSessionBuiltinTools] = useState<string[]>([]);
+  const [sessionCapabilityMutating, setSessionCapabilityMutating] =
+    useState(false);
   const removedAttachmentIdsRef = useRef<Set<string>>(new Set());
   // Streaming state is PER SESSION so multiple sessions can stream at once
   // (each /run_sse is an independent request). `streamingSids` = which sessions
@@ -613,7 +722,11 @@ export default function App() {
   const [streamingSids, setStreamingSids] = useState<Set<string>>(
     () => new Set(),
   );
+  const [streamPresentationSids, setStreamPresentationSids] = useState<Set<string>>(
+    () => new Set(),
+  );
   const streamAbortsRef = useRef<Map<string, AbortController>>(new Map());
+  const streamPresentationTimersRef = useRef<Map<string, number>>(new Map());
   const setStreaming = (sid: string, on: boolean) =>
     setStreamingSids((s) => {
       const n = new Set(s);
@@ -621,13 +734,47 @@ export default function App() {
       else n.delete(sid);
       return n;
     });
+  const startStreamPresentation = (sid: string) => {
+    const timer = streamPresentationTimersRef.current.get(sid);
+    if (timer !== undefined) window.clearTimeout(timer);
+    streamPresentationTimersRef.current.delete(sid);
+    setStreamPresentationSids((current) => new Set(current).add(sid));
+  };
+  const finishStreamPresentation = (sid: string) => {
+    const previousTimer = streamPresentationTimersRef.current.get(sid);
+    if (previousTimer !== undefined) window.clearTimeout(previousTimer);
+    const timer = window.setTimeout(() => {
+      streamPresentationTimersRef.current.delete(sid);
+      setStreamPresentationSids((current) => {
+        const next = new Set(current);
+        next.delete(sid);
+        return next;
+      });
+    }, 2400);
+    streamPresentationTimersRef.current.set(sid, timer);
+  };
   // The session currently on screen — used to gate the single global error
   // banner (per-session transcripts/topology don't need it).
   const viewSidRef = useRef("");
   const [error, setError] = useState("");
+  const [toast, setToast] = useState("");
+  const toastTimerRef = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
+  }, []);
+  const [feedbackPendingIds, setFeedbackPendingIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [traceOpen, setTraceOpen] = useState(false);
+  const [agentInfoOpen, setAgentInfoOpen] = useState(false);
+  const agentInfoTriggerRef = useRef<HTMLButtonElement>(null);
+  const closeAgentInfo = useCallback(() => setAgentInfoOpen(false), []);
   const [greeting, setGreeting] = useState(pickGreeting);
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  const [authExpired, setAuthExpired] = useState(false);
+  const [authRecoveryChecking, setAuthRecoveryChecking] = useState(false);
+  const [authRecoveryError, setAuthRecoveryError] = useState("");
+  const authRecoveryActiveRef = useRef(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [userId, setUserId] = useState("");
   const [userInfo, setUserInfo] = useState<Record<string, unknown> | undefined>();
@@ -647,6 +794,7 @@ export default function App() {
   });
   const [agentsSource, setAgentsSource] = useState<"local" | "cloud">("cloud");
   const [siteBranding, setSiteBranding] = useState<SiteBranding>(DEFAULT_SITE_BRANDING);
+  const [version, setVersion] = useState("");
   const [defaultView, setDefaultView] = useState<"chat" | "addAgent">("chat");
   const [uiConfigLoaded, setUiConfigLoaded] = useState(false);
   const [localMode, setLocalMode] = useState(false);
@@ -668,14 +816,23 @@ export default function App() {
   // Everything the view needs for the ACTIVE session, derived from the
   // per-session maps above.
   const busy = streamingSids.has(sessionId);
+  const presentingStream = streamPresentationSids.has(sessionId);
   const conversationBusy = busy || initializingSession;
+  const sessionConfigurationBusy = !!sessionId && sessionCapabilitiesLoading;
   const activeConversationBusy = sandboxSession
     ? sandboxBusy
     : conversationBusy;
+  const activeConversationPresenting =
+    activeConversationBusy || (!sandboxSession && presentingStream);
   const activeAgent = activeAgentBySession[sessionId] ?? "";
   const seenAgents = seenAgentsBySession[sessionId] ?? EMPTY_STRING_SET;
   const execPath = execPathBySession[sessionId] ?? EMPTY_STRING_ARR;
   const rootCapabilityNode = agentInfo?.graph;
+  const rootAgentNames = [
+    agentInfo?.name,
+    rootCapabilityNode?.name,
+    rootCapabilityNode?.id,
+  ].filter((name): name is string => Boolean(name));
   const skillCapabilityNode = invocation.targetAgent && rootCapabilityNode
     ? findAgentNode(rootCapabilityNode, invocation.targetAgent.name)
     : rootCapabilityNode;
@@ -830,9 +987,22 @@ export default function App() {
   const [addMenu, setAddMenu] = useState(false);
   // A draft imported from YAML, used to pre-fill the custom wizard once.
   const [importedDraft, setImportedDraft] = useState<AgentDraft | null>(null);
+  const [savedAgentDrafts, setSavedAgentDrafts] = useState<WorkspaceAgentDraft[]>([]);
+  const [workspaceAgentOrder, setWorkspaceAgentOrder] = useState<string[]>([]);
+  const [editingDraftId, setEditingDraftId] = useState("");
+  const editingDraftBaselineRef = useRef<WorkspaceAgentDraft | null>(null);
   const [searchView, setSearchView] = useState(false);
-  // The "管理 Agent" view: lists/deletes the current user's AgentKit runtimes.
+  // The #748 Agent workspace: library, evaluation groups, and draft management.
   const [manageAgents, setManageAgents] = useState(false);
+  const [feedbackCaseReturnAgentId, setFeedbackCaseReturnAgentId] = useState("");
+  const [feedbackCaseReturnKind, setFeedbackCaseReturnKind] =
+    useState<"good" | "bad">("good");
+  const [focusedWorkspaceAgentSection, setFocusedWorkspaceAgentSection] =
+    useState<"basic" | "evaluations">("basic");
+  const [focusedWorkspaceCaseKind, setFocusedWorkspaceCaseKind] =
+    useState<"good" | "bad">("good");
+  const [feedbackTargetEventId, setFeedbackTargetEventId] = useState("");
+  const [myAgents, setMyAgents] = useState(false);
   // A search result may belong to a different agent; remember it so the
   // agent-switch effect opens it instead of resetting to a fresh chat.
   const pendingOpenRef = useRef<{ app: string; sid: string } | null>(null);
@@ -843,12 +1013,231 @@ export default function App() {
     registerConnections(c);
     return c;
   });
+  const [agentLibraryLoading, setAgentLibraryLoading] = useState(false);
+  const [agentLibraryError, setAgentLibraryError] = useState("");
+  const [libraryRuntimeIds, setLibraryRuntimeIds] = useState<Set<string> | null>(
+    null,
+  );
+  const [libraryRuntimePermissions, setLibraryRuntimePermissions] = useState<
+    Record<string, { canDelete: boolean }>
+  >({});
+  const [runtimeUpdateTarget, setRuntimeUpdateTarget] = useState<{
+    runtimeId: string;
+    name: string;
+    region: string;
+    currentVersion?: number | null;
+  } | null>(null);
+  const [newRuntimeRegion, setNewRuntimeRegion] = useState("cn-beijing");
+  const [focusedDeploymentTaskId, setFocusedDeploymentTaskId] = useState("");
+  const [focusedWorkspaceAgentId, setFocusedWorkspaceAgentId] = useState("");
+  const [agentDetailTarget, setAgentDetailTarget] =
+    useState<MyAgentCardData | null>(null);
   // Shown when the user clicks the breadcrumb root to leave a create mode;
   // warns that the in-progress draft will be discarded.
   const [confirmLeave, setConfirmLeave] = useState(false);
   // Restore the previously-open session only once, after apps/user resolve.
   const restoredRef = useRef(false);
   const defaultViewAppliedRef = useRef(false);
+
+  const saveWorkspaceDraft = useCallback(
+    (
+      id: string,
+      draft: AgentDraft,
+      deploymentTarget?: WorkspaceAgentDraft["deploymentTarget"],
+    ) => {
+      if (!id || !userId) return;
+      setSavedAgentDrafts((current) => {
+        const nextItem: WorkspaceAgentDraft = {
+          id,
+          draft,
+          updatedAt: Date.now(),
+          deploymentTarget,
+        };
+        const next = [nextItem, ...current.filter((item) => item.id !== id)];
+        localStorage.setItem(workspaceDraftsKey(userId), JSON.stringify(next));
+        return next;
+      });
+    },
+    [userId],
+  );
+
+  const removeWorkspaceDraft = useCallback((id: string) => {
+    if (!id || !userId) return;
+    setSavedAgentDrafts((current) => {
+      const next = current.filter((item) => item.id !== id);
+      localStorage.setItem(workspaceDraftsKey(userId), JSON.stringify(next));
+      return next;
+    });
+  }, [userId]);
+
+  const deleteWorkspaceDrafts = useCallback((draftsToDelete: WorkspaceAgentDraft[]) => {
+    if (!userId || draftsToDelete.length === 0) return;
+    const deletedDraftIds = new Set(draftsToDelete.map((item) => item.id));
+    setSavedAgentDrafts((current) => {
+      const next = current.filter((item) => !deletedDraftIds.has(item.id));
+      localStorage.setItem(workspaceDraftsKey(userId), JSON.stringify(next));
+      return next;
+    });
+    if (deletedDraftIds.has(editingDraftId)) {
+      setEditingDraftId("");
+      setImportedDraft(null);
+      setRuntimeUpdateTarget(null);
+      editingDraftBaselineRef.current = null;
+      localStorage.removeItem(activeWorkspaceDraftKey(userId));
+    }
+  }, [editingDraftId, userId]);
+
+  const restoreWorkspaceDraftBaseline = useCallback((id: string) => {
+    if (!id || !userId) return;
+    const baseline = editingDraftBaselineRef.current;
+    setSavedAgentDrafts((current) => {
+      const remaining = current.filter((item) => item.id !== id);
+      const next = baseline?.id === id ? [baseline, ...remaining] : remaining;
+      localStorage.setItem(workspaceDraftsKey(userId), JSON.stringify(next));
+      return next;
+    });
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId) {
+      setSavedAgentDrafts([]);
+      setWorkspaceAgentOrder([]);
+      setEditingDraftId("");
+      editingDraftBaselineRef.current = null;
+      return;
+    }
+    const nextDrafts = loadWorkspaceDrafts(userId);
+    setSavedAgentDrafts(nextDrafts);
+    setWorkspaceAgentOrder(loadWorkspaceAgentOrder(userId));
+    const activeId = localStorage.getItem(activeWorkspaceDraftKey(userId)) || "";
+    const activeDraft = nextDrafts.find((item) => item.id === activeId);
+    editingDraftBaselineRef.current = activeDraft ?? null;
+    if (createView === "custom" && activeDraft) {
+      setEditingDraftId(activeDraft.id);
+      setImportedDraft(activeDraft.draft);
+      setRuntimeUpdateTarget(activeDraft.deploymentTarget ?? null);
+    }
+    // Restore only when identity changes; later edits are already in state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId) return;
+    const key = activeWorkspaceDraftKey(userId);
+    if (createView === "custom" && editingDraftId) {
+      localStorage.setItem(key, editingDraftId);
+    } else {
+      localStorage.removeItem(key);
+    }
+  }, [createView, editingDraftId, userId]);
+
+  const saveWorkspaceAgentOrder = useCallback((nextOrder: string[]) => {
+    if (!userId) return;
+    const deduped = [...new Set(nextOrder.filter(Boolean))];
+    setWorkspaceAgentOrder(deduped);
+    localStorage.setItem(workspaceAgentOrderKey(userId), JSON.stringify(deduped));
+  }, [userId]);
+
+  const deleteWorkspaceAgents = useCallback(async (agentsToDelete: AgentEntry[]) => {
+    const targets = agentsToDelete.filter(
+      (agent): agent is AgentEntry & { runtimeId: string } =>
+        Boolean(agent.runtimeId) && agent.canDelete === true,
+    );
+    if (targets.length === 0) return;
+
+    const deletedRuntimeIds = new Set<string>();
+    const deletedAgentIds = new Set<string>();
+    const failures: string[] = [];
+    for (const agent of targets) {
+      try {
+        if (!agent.region) throw new Error("Runtime 缺少地域信息，无法删除");
+        await deleteRuntime(agent.runtimeId, agent.region);
+        removeRuntimeConnection(agent.runtimeId);
+        deletedRuntimeIds.add(agent.runtimeId);
+        deletedAgentIds.add(agent.id);
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        failures.push(`${agent.label}: ${message}`);
+      }
+    }
+
+    if (deletedRuntimeIds.size > 0) {
+      setConnections(loadConnections());
+      setLibraryRuntimeIds((current) => {
+        if (!current) return current;
+        const next = new Set(current);
+        for (const runtimeId of deletedRuntimeIds) next.delete(runtimeId);
+        return next;
+      });
+      setLibraryRuntimePermissions((current) =>
+        Object.fromEntries(
+          Object.entries(current).filter(([runtimeId]) => !deletedRuntimeIds.has(runtimeId)),
+        ),
+      );
+      setWorkspaceAgentOrder((current) => {
+        const next = current.filter((id) => !deletedAgentIds.has(id));
+        if (userId) {
+          localStorage.setItem(workspaceAgentOrderKey(userId), JSON.stringify(next));
+        }
+        return next;
+      });
+      setSavedAgentDrafts((current) => {
+        const next = current.filter(
+          (item) =>
+            !item.deploymentTarget?.runtimeId ||
+            !deletedRuntimeIds.has(item.deploymentTarget.runtimeId),
+        );
+        if (userId) {
+          localStorage.setItem(workspaceDraftsKey(userId), JSON.stringify(next));
+        }
+        return next;
+      });
+      if (targets.some((agent) => agent.id === appName)) {
+        viewSidRef.current = "";
+        setSessionId("");
+        setAppName("");
+      }
+    }
+
+    if (failures.length > 0) {
+      const shown = failures.slice(0, 3).join("；");
+      const suffix = failures.length > 3 ? `；另有 ${failures.length - 3} 个失败` : "";
+      throw new Error(`${failures.length} 个 Agent 删除失败：${shown}${suffix}`);
+    }
+  }, [appName, userId]);
+
+  const refreshAgentLibrary = useCallback(async () => {
+    setAgentLibraryLoading(true);
+    setAgentLibraryError("");
+    try {
+      const runtimes: CloudRuntime[] = [];
+      let nextToken = "";
+      do {
+        const page = await getRuntimes({
+          scope: "mine",
+          region: "all",
+          pageSize: 100,
+          nextToken,
+        });
+        runtimes.push(...page.runtimes);
+        nextToken = page.nextToken;
+      } while (nextToken && runtimes.length < 2000);
+
+      setLibraryRuntimeIds(new Set(runtimes.map((runtime) => runtime.runtimeId)));
+      setLibraryRuntimePermissions(
+        Object.fromEntries(
+          runtimes.map((runtime) => [
+            runtime.runtimeId,
+            { canDelete: runtime.canDelete },
+          ]),
+        ),
+      );
+    } catch (cause) {
+      setAgentLibraryError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setAgentLibraryLoading(false);
+    }
+  }, []);
 
   // Placeholder: persisting/registering the created agent is a follow-up.
   function onCreate(draft: AgentDraft) {
@@ -861,11 +1250,151 @@ export default function App() {
   function onAgentAdded(agentId: string, agentName: string) {
     console.log("Agent added, navigating to:", agentId, agentName);
     setConnections(loadConnections()); // Refresh connections to pick up the new agent
+    setLibraryRuntimeIds(null);
+    removeWorkspaceDraft(editingDraftId);
+    setEditingDraftId("");
+    editingDraftBaselineRef.current = null;
+    setRuntimeUpdateTarget(null);
+    setFocusedDeploymentTaskId("");
+    setFocusedWorkspaceAgentId(agentId);
+    setFocusedWorkspaceAgentSection("basic");
     setCreateView(null);
+    setManageAgents(true);
     setAppName(agentId);
     // startNewChat will be called automatically by the appName change effect
   }
-  const { ref: scrollRef, onScroll } = useStickToBottom<HTMLDivElement>(turns);
+
+  const openDeploymentDetail = useCallback((task: DeploymentTaskUpdate) => {
+    setCreateView(null);
+    setAddMenu(false);
+    setAgentDetailTarget(null);
+    setManageAgents(true);
+    setFocusedWorkspaceAgentId("");
+    setFocusedWorkspaceAgentSection("basic");
+    setFocusedDeploymentTaskId(task.id);
+    setError("");
+  }, []);
+
+  const finishDeployment = useCallback(
+    async (result: DeployResult) => {
+      if (!result.runtimeId) throw new Error("部署完成，但未返回 Runtime ID。");
+      const fallbackRegion = runtimeUpdateTarget?.region ?? newRuntimeRegion;
+      const agentId = await connectRuntime(
+        result.runtimeId,
+        result.agentName,
+        result.region ?? fallbackRegion,
+        result.version,
+      );
+      setConnections(loadConnections());
+      setAgentInfoRefreshKey((key) => key + 1);
+      const capabilities = await probeNewChatCapabilities(agentId);
+      newChatCapabilitiesCacheRef.current.set(agentId, capabilities);
+      setNewChatCapabilities(capabilities);
+      setLibraryRuntimeIds((current) => {
+        const next = new Set(current ?? []);
+        next.add(result.runtimeId!);
+        return next;
+      });
+      setRuntimeUpdateTarget(null);
+      removeWorkspaceDraft(editingDraftId);
+      setEditingDraftId("");
+      editingDraftBaselineRef.current = null;
+      setFocusedWorkspaceAgentId(agentId);
+      setFocusedWorkspaceAgentSection("basic");
+      setCreateView(null);
+      setManageAgents(true);
+      setAppName(agentId);
+    },
+    [editingDraftId, newRuntimeRegion, removeWorkspaceDraft, runtimeUpdateTarget],
+  );
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const turnNodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const conversationAutoFollowRef = useRef(true);
+  const conversationSmoothScrollRef = useRef(false);
+  const conversationSmoothTimerRef = useRef<number | null>(null);
+  const conversationScrollStateRef = useRef({ key: "", turnCount: 0 });
+  const conversationScrollKey = sandboxSession?.id ?? sessionId;
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const previous = conversationScrollStateRef.current;
+    const conversationChanged = previous.key !== conversationScrollKey;
+    const turnAppended = !conversationChanged && turns.length > previous.turnCount;
+    conversationScrollStateRef.current = {
+      key: conversationScrollKey,
+      turnCount: turns.length,
+    };
+    if (!el || turns.length === 0 || (!conversationChanged && !turnAppended)) return;
+
+    conversationAutoFollowRef.current = true;
+    conversationSmoothScrollRef.current = false;
+    if (conversationSmoothTimerRef.current !== null) {
+      window.clearTimeout(conversationSmoothTimerRef.current);
+      conversationSmoothTimerRef.current = null;
+    }
+
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (conversationChanged || reduceMotion) {
+      el.scrollTop = el.scrollHeight;
+      return;
+    }
+
+    conversationSmoothScrollRef.current = true;
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    conversationSmoothTimerRef.current = window.setTimeout(() => {
+      conversationSmoothScrollRef.current = false;
+      conversationSmoothTimerRef.current = null;
+    }, 450);
+  }, [conversationScrollKey, turns.length]);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (
+      !el ||
+      !conversationAutoFollowRef.current ||
+      conversationSmoothScrollRef.current
+    ) return;
+    el.scrollTop = el.scrollHeight;
+  }, [activeConversationBusy, turns]);
+  useEffect(() => {
+    if (!feedbackTargetEventId || manageAgents || turns.length === 0) return;
+    const node = turnNodeRefs.current.get(feedbackTargetEventId);
+    if (!node) return;
+    conversationAutoFollowRef.current = false;
+    node.scrollIntoView({ behavior: "smooth", block: "center" });
+    const timer = window.setTimeout(() => {
+      setFeedbackTargetEventId("");
+    }, 2600);
+    return () => window.clearTimeout(timer);
+  }, [feedbackTargetEventId, manageAgents, turns]);
+  useEffect(() => () => {
+    if (conversationSmoothTimerRef.current !== null) {
+      window.clearTimeout(conversationSmoothTimerRef.current);
+    }
+  }, []);
+  const onConversationScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || conversationSmoothScrollRef.current) return;
+    conversationAutoFollowRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 32;
+  }, []);
+  const onConversationWheel = useCallback((event: WheelEvent<HTMLDivElement>) => {
+    if (event.deltaY < 0) {
+      conversationSmoothScrollRef.current = false;
+      conversationAutoFollowRef.current = false;
+    }
+  }, []);
+  const onConversationTouchMove = useCallback(() => {
+    conversationSmoothScrollRef.current = false;
+    conversationAutoFollowRef.current = false;
+  }, []);
+  const followConversationStreamFrame = useCallback(() => {
+    const el = scrollRef.current;
+    if (
+      !el ||
+      !conversationAutoFollowRef.current ||
+      conversationSmoothScrollRef.current
+    ) return;
+    el.scrollTop = el.scrollHeight;
+  }, []);
 
   // Resolve SSO identity first; it provides the ADK user_id.
   const resolveAuth = useCallback(() => {
@@ -876,6 +1405,15 @@ export default function App() {
         setUserInfo(id.info);
         setLocalMode(!!id.local);
         setAuthStatus(id.status);
+        if (id.status === "authenticated") {
+          setCreateView(null);
+          setSkillCenter(false);
+          setAddAgent(false);
+          setAddMenu(false);
+          setSearchView(false);
+          setManageAgents(false);
+          setMyAgents(true);
+        }
       })
       .catch((error) => {
         setAuthError(error instanceof Error ? error.message : String(error));
@@ -886,31 +1424,84 @@ export default function App() {
   }, [resolveAuth]);
 
   useEffect(() => {
+    const showExpiredDialog = () => {
+      setAuthRecoveryError("");
+      setAuthExpired(true);
+    };
+    window.addEventListener(AUTHENTICATION_REQUIRED_EVENT, showExpiredDialog);
+    if (isAuthenticationPending()) showExpiredDialog();
+    return () =>
+      window.removeEventListener(
+        AUTHENTICATION_REQUIRED_EVENT,
+        showExpiredDialog,
+      );
+  }, []);
+
+  const recoverAuthentication = useCallback(async () => {
+    if (authRecoveryActiveRef.current) return;
+    authRecoveryActiveRef.current = true;
+    const loginWindow = openLoginWindow();
+    if (!loginWindow) {
+      authRecoveryActiveRef.current = false;
+      setAuthRecoveryError("登录窗口被浏览器拦截，请允许弹出窗口后重试。");
+      return;
+    }
+    setAuthRecoveryChecking(true);
+    setAuthRecoveryError("");
+    try {
+      while (true) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        try {
+          const identity = await resolveIdentity();
+          if (identity.status === "authenticated") {
+            setUserId(identity.userId);
+            setUserInfo(identity.info);
+            setLocalMode(!!identity.local);
+            setAuthStatus(identity.status);
+            setAuthExpired(false);
+            authenticationRestored();
+            loginWindow.close();
+            return;
+          }
+        } catch {
+          // The gateway may return its login page until the popup completes.
+        }
+        if (loginWindow.closed) {
+          setAuthRecoveryError("登录窗口已关闭，请重新登录以继续当前操作。");
+          return;
+        }
+      }
+    } finally {
+      authRecoveryActiveRef.current = false;
+      setAuthRecoveryChecking(false);
+    }
+  }, []);
+
+  useEffect(() => {
     if (localMode && userId) setLocalUser(userId);
   }, [localMode, userId]);
 
   useEffect(() => {
-    if (authStatus !== "authenticated" || !userId) {
+    if (authStatus !== "authenticated" || !userId || !appName) {
       setNewChatCapabilities({});
       return;
     }
+    const cached = newChatCapabilitiesCacheRef.current.get(appName);
+    if (cached) {
+      setNewChatCapabilities(cached);
+      return;
+    }
     let cancelled = false;
-    void Promise.allSettled([
-      getSandboxCapability(),
-      getSkillCreatorCapability(),
-    ]).then(([sandboxResult, skillResult]) => {
+    setNewChatCapabilities({});
+    void probeNewChatCapabilities(appName).then((capabilities) => {
       if (cancelled) return;
-      setNewChatCapabilities({
-        temporaryEnabled:
-          sandboxResult.status === "fulfilled" && sandboxResult.value.enabled,
-        skillCreateEnabled:
-          skillResult.status === "fulfilled" && skillResult.value.enabled,
-      });
+      newChatCapabilitiesCacheRef.current.set(appName, capabilities);
+      setNewChatCapabilities(capabilities);
     });
     return () => {
       cancelled = true;
     };
-  }, [authStatus, userId]);
+  }, [appName, authStatus, userId]);
 
   useEffect(() => {
     if (authStatus !== "authenticated" || !userId) {
@@ -939,13 +1530,14 @@ export default function App() {
       setFeatures(cfg.features);
       setAgentsSource(cfg.agentsSource);
       setSiteBranding(cfg.branding);
+      setVersion(cfg.version);
       setDefaultView(cfg.defaultView);
       setUiConfigLoaded(true);
     });
   }, []);
 
   useEffect(() => {
-    if (!access || !uiConfigLoaded || defaultViewAppliedRef.current) return;
+    if (!access || !uiConfigLoaded || defaultViewAppliedRef.current || myAgents) return;
     defaultViewAppliedRef.current = true;
     if (defaultView === "addAgent" && access.capabilities.createAgents) {
       setCreateView(null);
@@ -955,7 +1547,7 @@ export default function App() {
       setAddAgent(false);
       setAddMenu(true);
     }
-  }, [access, defaultView, uiConfigLoaded]);
+  }, [access, defaultView, myAgents, uiConfigLoaded]);
 
   useEffect(() => {
     if (!access) return;
@@ -968,6 +1560,19 @@ export default function App() {
     }
     if (!access.capabilities.manageAgents) setManageAgents(false);
   }, [access]);
+
+  useEffect(() => {
+    if (
+      authStatus !== "authenticated" ||
+      agentsSource !== "cloud" ||
+      !uiConfigLoaded ||
+      !manageAgents ||
+      agentDetailTarget
+    ) {
+      return;
+    }
+    void refreshAgentLibrary();
+  }, [agentDetailTarget, agentsSource, authStatus, manageAgents, refreshAgentLibrary, uiConfigLoaded]);
 
   useEffect(() => {
     document.title = siteBranding.title;
@@ -1008,6 +1613,7 @@ export default function App() {
     setSearchView(false);
     setManageAgents(false);
     startNewChat();
+    setMyAgents(true);
     setUserId(name);
     setUserInfo({ name });
     setLocalMode(true);
@@ -1028,19 +1634,25 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (authStatus === "unauthenticated") return; // login page is shown instead
+    if (authStatus !== "authenticated") return;
+    if (agentsSource === "cloud") {
+      const saved = localStorage.getItem(LS.app);
+      const remoteIds = connections.flatMap((c) =>
+        c.apps.map((a) => remoteAppId(c.id, a)),
+      );
+      setAppName((current) => {
+        if (current && remoteIds.includes(current)) return current;
+        if (saved && remoteIds.includes(saved)) return saved;
+        return remoteIds[0] ?? "";
+      });
+      return;
+    }
     listApps()
       .then((list) => {
         setApps(list);
         // Restore the last-used agent; otherwise land on a known-good default
         // (prefer a servable, conversational agent — numbered examples like
         // 01_quickstart are standalone scripts with no root_agent and can't load).
-        // Cloud mode: nothing is selected by default — the user picks a runtime
-        // each session (the sidebar shows the red "请选择 Agent" prompt until then).
-        if (agentsSource === "cloud") {
-          setAppName("");
-          return;
-        }
         // Local mode: restore the last-used agent, else a known-good default
         // (prefer a servable, conversational agent — numbered examples like
         // 01_quickstart are standalone scripts with no root_agent and can't load).
@@ -1054,7 +1666,7 @@ export default function App() {
         setAppName(valid ? saved : fallback || "");
       })
       .catch((e) => setError(String(e)));
-  }, [authStatus, agentsSource]);
+  }, [authStatus, agentsSource, connections]);
 
   // Persist the current view/agent/session so a refresh restores them.
   useEffect(() => {
@@ -1062,9 +1674,40 @@ export default function App() {
   }, [appName]);
   useEffect(() => {
     let cancelled = false;
+    setSessionCapabilities(null);
+    setSessionBuiltinTools([]);
+    if (myAgents || agentDetailTarget || !appName || !userId || !sessionId) {
+      setSessionCapabilitiesLoading(false);
+      return;
+    }
+    setSessionCapabilitiesLoading(true);
+    getSessionCapabilities(appName, userId, sessionId)
+      .then((capabilities) => {
+        if (cancelled) return;
+        setSessionCapabilities(capabilities);
+        void listSessionBuiltinTools(appName)
+          .then((tools) => {
+            if (!cancelled) setSessionBuiltinTools(tools);
+          })
+          .catch(() => {
+            if (!cancelled) setSessionBuiltinTools([]);
+          });
+      })
+      .catch(() => {
+        if (!cancelled) setSessionCapabilities(null);
+      })
+      .finally(() => {
+        if (!cancelled) setSessionCapabilitiesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentDetailTarget, appName, myAgents, userId, sessionId]);
+  useEffect(() => {
+    let cancelled = false;
     setAgentInfo(null);
     setInvocation(emptyInvocation());
-    if (!appName) {
+    if (authStatus !== "authenticated" || myAgents || agentDetailTarget || !appName) {
       setCapabilitiesLoading(false);
       return;
     }
@@ -1082,7 +1725,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [appName]);
+  }, [agentDetailTarget, appName, agentInfoRefreshKey, authStatus, myAgents]);
   useEffect(() => {
     if (!access) return;
     localStorage.setItem(
@@ -1102,6 +1745,12 @@ export default function App() {
     [],
   );
   useEffect(
+    () => () => streamPresentationTimersRef.current.forEach((timer) => {
+      window.clearTimeout(timer);
+    }),
+    [],
+  );
+  useEffect(
     () => () => {
       sandboxLaunchAbortRef.current?.abort();
       sandboxMessageAbortRef.current?.abort();
@@ -1113,9 +1762,13 @@ export default function App() {
   // very first resolve, restore the previously-open session (if it still
   // exists and we weren't on a create view); otherwise start a fresh chat.
   useEffect(() => {
-    if (!appName || !userId) return;
+    if (myAgents || agentDetailTarget || sandboxSession || !appName || !userId) {
+      return;
+    }
+    let cancelled = false;
     (async () => {
       const list = await refreshSessions(appName);
+      if (cancelled) return;
       if (!restoredRef.current) {
         restoredRef.current = true;
         const savedId = localStorage.getItem(LS.session) || "";
@@ -1126,8 +1779,11 @@ export default function App() {
       }
       startNewChat();
     })();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appName, userId]);
+  }, [agentDetailTarget, appName, myAgents, sandboxSession, userId]);
 
   // After switching agent from a search result, open the target session (runs
   // after the agent-switch effect above, so it wins over its startNewChat()).
@@ -1216,6 +1872,8 @@ export default function App() {
       setAddMenu(false);
       setSearchView(false);
       setManageAgents(false);
+      setAgentDetailTarget(null);
+      setMyAgents(false);
       setSandboxLaunchOpen(false);
       setSandboxLaunchState("confirm");
     } catch (launchError) {
@@ -1305,7 +1963,7 @@ export default function App() {
       setSandboxTurns((current) => current.slice(0, -2));
       setInput(text);
       setError(
-        `临时会话发送失败：${
+        `内置智能体发送失败：${
           messageError instanceof Error
             ? messageError.message
             : String(messageError)
@@ -1325,8 +1983,10 @@ export default function App() {
   function startNewChat() {
     exitSandboxSession();
     setError("");
+    setAgentInfoOpen(false);
     setGreeting(pickGreeting());
     setNewChatMode("agent");
+    setNewChatTask(null);
     discardSkillCreation();
     setSkillCreating(false);
     const abandonedSession = sessionId && persistentTurns.length === 0 && attachments.length > 0
@@ -1334,6 +1994,8 @@ export default function App() {
       : "";
     viewSidRef.current = "";
     setSessionId("");
+    setSessionCapabilities(null);
+    setSessionBuiltinTools([]);
     setInitializingSession(false);
     setPendingTurns([]);
     setInvocation(emptyInvocation());
@@ -1342,12 +2004,47 @@ export default function App() {
     if (abandonedSession) void abandonDraftSession(abandonedSession);
   }
 
+  function showToast(message: string) {
+    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
+    setToast(message);
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast("");
+      toastTimerRef.current = null;
+    }, 3000);
+  }
+
+  function openNewChat() {
+    setCreateView(null);
+    setSkillCenter(false);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSearchView(false);
+    setManageAgents(false);
+    setAgentDetailTarget(null);
+    if (!appName && !sandboxSession) {
+      setMyAgents(true);
+      showToast("请先选择 agent");
+      return;
+    }
+    setMyAgents(false);
+    startNewChat();
+  }
+
   async function removeSession(id: string) {
     try {
       // Deleting a session with a running stream — abort just that one.
       streamAbortsRef.current.get(id)?.abort();
       await deleteSessionMedia(appName, userId, id);
       await deleteSession(appName, userId, id);
+      const presentationTimer = streamPresentationTimersRef.current.get(id);
+      if (presentationTimer !== undefined) window.clearTimeout(presentationTimer);
+      streamPresentationTimersRef.current.delete(id);
+      setStreamPresentationSids((current) => {
+        if (!current.has(id)) return current;
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
       setTurnsBySession((m) => {
         const { [id]: _drop, ...rest } = m;
         return rest;
@@ -1367,8 +2064,11 @@ export default function App() {
     setInitializingSession(false);
     setPendingTurns([]);
     setNewChatMode("agent");
+    setNewChatTask(null);
     discardSkillCreation();
     setInvocation(emptyInvocation());
+    setSessionCapabilities(null);
+    setSessionBuiltinTools([]);
     setSessionId(id);
     // Already have this session's turns (it's cached, or streaming in the
     // background)? Show them instantly and let any live stream keep updating —
@@ -1377,11 +2077,117 @@ export default function App() {
     setLoadingSession(true);
     try {
       const s = await getSession(appName, userId, id);
-      setTurnsFor(id, eventsToTurns(s.events ?? []));
+      setTurnsFor(id, eventsToTurns(s.events ?? [], s.state));
     } catch (e) {
       setError(String(e));
     } finally {
       setLoadingSession(false);
+    }
+  }
+
+  async function openFeedbackCaseInStudio(item: AgentFeedbackCase) {
+    if (!item.sessionId || !item.messageId) {
+      setError("这条案例缺少会话定位信息，无法跳转。");
+      return;
+    }
+    setSearchView(false);
+    setCreateView(null);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSkillCenter(false);
+    setManageAgents(false);
+    setFeedbackCaseReturnAgentId(appName);
+    setFeedbackCaseReturnKind(item.kind);
+    setFeedbackTargetEventId(item.messageId);
+    await pickSession(item.sessionId);
+  }
+
+  function returnToFeedbackCases() {
+    const agentId = feedbackCaseReturnAgentId || appName;
+    setSearchView(false);
+    setCreateView(null);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSkillCenter(false);
+    setFocusedDeploymentTaskId("");
+    setFocusedWorkspaceAgentId(agentId);
+    setFocusedWorkspaceAgentSection("evaluations");
+    setFocusedWorkspaceCaseKind(feedbackCaseReturnKind);
+    setManageAgents(true);
+    setFeedbackCaseReturnAgentId("");
+    setFeedbackTargetEventId("");
+  }
+
+  function clearDeletedFeedbackCases(items: AgentFeedbackCase[]) {
+    const clearBySession = new Map<string, Set<string>>();
+    const clearByCacheScope = new Map<string, {
+      runtimeId: string;
+      appName: string;
+      userId: string;
+      sessionId: string;
+      eventIds: Set<string>;
+    }>();
+    for (const item of items) {
+      if (!item.sessionId || !item.messageId) continue;
+      const sessionEvents = clearBySession.get(item.sessionId) ?? new Set<string>();
+      sessionEvents.add(item.messageId);
+      clearBySession.set(item.sessionId, sessionEvents);
+      if (item.runtimeId && item.userId) {
+        const key = [
+          item.runtimeId,
+          appName,
+          item.userId,
+          item.sessionId,
+        ].join(":");
+        const scope = clearByCacheScope.get(key) ?? {
+          runtimeId: item.runtimeId,
+          appName,
+          userId: item.userId,
+          sessionId: item.sessionId,
+          eventIds: new Set<string>(),
+        };
+        scope.eventIds.add(item.messageId);
+        clearByCacheScope.set(key, scope);
+      }
+    }
+    if (clearBySession.size === 0) return;
+    setTurnsBySession((current) => {
+      const next = { ...current };
+      for (const [sid, eventIds] of clearBySession) {
+        const existing = next[sid];
+        if (!existing) continue;
+        next[sid] = existing.map((turn) =>
+          turn.meta?.eventId && eventIds.has(turn.meta.eventId)
+            ? { ...turn, meta: { ...turn.meta, feedback: undefined } }
+            : turn,
+        );
+      }
+      return next;
+    });
+    setSessions((current) =>
+      current.map((session) => {
+        const eventIds = clearBySession.get(session.id);
+        if (!eventIds || !session.state) return session;
+        const state = { ...session.state };
+        for (const eventId of eventIds) delete state[`veadk_feedback:${eventId}`];
+        return { ...session, state };
+      }),
+    );
+    setFeedbackPendingIds((current) => {
+      const next = new Set(current);
+      for (const eventIds of clearBySession.values()) {
+        for (const eventId of eventIds) next.delete(eventId);
+      }
+      return next;
+    });
+    for (const scope of clearByCacheScope.values()) {
+      clearMessageFeedbackCache({
+        runtimeId: scope.runtimeId,
+        appName: scope.appName,
+        userId: scope.userId,
+        sessionId: scope.sessionId,
+        eventIds: [...scope.eventIds],
+      });
     }
   }
 
@@ -1400,6 +2206,48 @@ export default function App() {
       return sid;
     } finally {
       if (creatingSessionRef.current === pending) creatingSessionRef.current = null;
+    }
+  }
+
+  async function addCapability(capability: AddSessionCapability): Promise<boolean> {
+    if (!appName || !userId || !sessionId || !sessionCapabilities) return false;
+    setSessionCapabilityMutating(true);
+    setError("");
+    try {
+      const updated = await addSessionCapability(
+        appName,
+        userId,
+        sessionId,
+        capability,
+        sessionCapabilities.revision,
+      );
+      setSessionCapabilities(updated);
+      return true;
+    } catch (e) {
+      setError(String(e));
+      return false;
+    } finally {
+      setSessionCapabilityMutating(false);
+    }
+  }
+
+  async function removeCapability(capabilityId: string) {
+    if (!appName || !userId || !sessionId || !sessionCapabilities) return;
+    setSessionCapabilityMutating(true);
+    setError("");
+    try {
+      const updated = await removeSessionCapability(
+        appName,
+        userId,
+        sessionId,
+        capabilityId,
+        sessionCapabilities.revision,
+      );
+      setSessionCapabilities(updated);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSessionCapabilityMutating(false);
     }
   }
 
@@ -1458,6 +2306,7 @@ export default function App() {
     if (
       (!text.trim() && atts.length === 0) ||
       conversationBusy ||
+      sessionConfigurationBusy ||
       !appName ||
       !userId
     ) return;
@@ -1490,6 +2339,7 @@ export default function App() {
       setInitializingSession(true);
     }
 
+    const selectedTask = newChatTask;
     let sid: string;
     try {
       sid = await ensureSession(!createsSession);
@@ -1502,6 +2352,40 @@ export default function App() {
       }
       setError(String(e));
       return;
+    }
+
+    let runWithSessionCapabilities = sessionCapabilities !== null;
+    if (selectedTask) {
+      try {
+        let updated = await getSessionCapabilities(appName, userId, sid);
+        const optionalTools = NEW_CHAT_TASK_OPTIONAL_TOOLS[selectedTask].filter(
+          (toolName) => newChatCapabilities.builtinTools?.includes(toolName),
+        );
+        for (const toolName of [
+          ...NEW_CHAT_TASK_TOOLS[selectedTask],
+          ...optionalTools,
+        ]) {
+          if (updated.tools.some((tool) => tool.name === toolName)) continue;
+          updated = await addSessionCapability(
+              appName,
+              userId,
+              sid,
+              { kind: "tool", name: toolName },
+              updated.revision,
+            );
+        }
+        setSessionCapabilities(updated);
+        runWithSessionCapabilities = true;
+      } catch (e) {
+        if (createsSession) {
+          setPendingTurns([]);
+          setInitializingSession(false);
+          setInput(text);
+          setInvocation(selectedInvocation);
+        }
+        setError(`任务能力挂载失败：${String(e)}`);
+        return;
+      }
     }
 
     setTurnsFor(sid, (current) =>
@@ -1518,6 +2402,7 @@ export default function App() {
     const ctrl = new AbortController();
     streamAbortsRef.current.set(sid, ctrl);
     setStreaming(sid, true);
+    startStreamPresentation(sid);
     viewSidRef.current = sid;
 
     setActiveAgentBySession((m) => ({ ...m, [sid]: "" }));
@@ -1526,8 +2411,11 @@ export default function App() {
 
     try {
       let acc = emptyAcc();
+      let currentStreamAuthor = "";
       let tokens = 0;
       let ts = Date.now() / 1000;
+      let eventId = "";
+      let invocationId = "";
       for await (const event of runSSE({
         appName,
         userId,
@@ -1536,6 +2424,7 @@ export default function App() {
         attachments: atts,
         invocation: selectedInvocation,
         signal: ctrl.signal,
+        sessionCapabilities: runWithSessionCapabilities,
       })) {
         if (ctrl.signal.aborted) break;
         const errMsg = event.error ?? event.errorMessage ?? event.error_message;
@@ -1545,16 +2434,39 @@ export default function App() {
         }
         // Live topology: author + transfer/end signals, keyed by session.
         applyStreamSignals(sid, event);
+        const eventAuthor = event.author && event.author !== "user"
+          ? event.author
+          : "";
+        if (eventAuthor && eventAuthor !== currentStreamAuthor) {
+          currentStreamAuthor = eventAuthor;
+          acc = emptyAcc();
+        }
         acc = applyEvent(acc, event);
         const usage = event.usageMetadata ?? event.usage_metadata;
         if (usage?.totalTokenCount) tokens = usage.totalTokenCount;
         if (event.timestamp) ts = event.timestamp;
+        if (event.id) eventId = event.id;
+        const nextInvocationId = event.invocationId ?? event.invocation_id;
+        if (nextInvocationId) invocationId = nextInvocationId;
         const blocks = acc.blocks;
-        const meta = { tokens: tokens || undefined, ts };
+        const meta = {
+          author: currentStreamAuthor || undefined,
+          tokens: tokens || undefined,
+          ts,
+          eventId: eventId || undefined,
+          invocationId: invocationId || undefined,
+        };
         setTurnsFor(sid, (t) => {
           const next = t.slice();
           const last = next[next.length - 1];
-          if (last?.role === "assistant") next[next.length - 1] = { ...last, blocks, meta };
+          if (
+            last?.role === "assistant" &&
+            (!last.meta?.author || last.meta.author === currentStreamAuthor)
+          ) {
+            next[next.length - 1] = { ...last, blocks, meta };
+          } else {
+            next.push({ role: "assistant", blocks, meta });
+          }
           return next;
         });
       }
@@ -1572,6 +2484,7 @@ export default function App() {
     } finally {
       if (streamAbortsRef.current.get(sid) === ctrl) streamAbortsRef.current.delete(sid);
       setStreaming(sid, false);
+      finishStreamPresentation(sid);
       setActiveAgentBySession((m) => ({ ...m, [sid]: "" }));
       setExecPathBySession((m) => ({ ...m, [sid]: [] }));
     }
@@ -1618,10 +2531,15 @@ export default function App() {
     const ctrl = new AbortController();
     streamAbortsRef.current.set(sid, ctrl);
     setStreaming(sid, true);
+    startStreamPresentation(sid);
     try {
       let acc = emptyAcc();
+      let currentStreamAuthor = lastTurn?.meta?.author ?? "";
+      let currentBase = base;
       let tokens = 0;
       let ts = Date.now() / 1000;
+      let eventId = lastTurn?.meta?.eventId ?? "";
+      let invocationId = lastTurn?.meta?.invocationId ?? "";
       for await (const event of runSSE({
         appName,
         userId,
@@ -1631,23 +2549,47 @@ export default function App() {
           { id: block.callId, name: "adk_request_credential", response },
         ],
         signal: ctrl.signal,
+        sessionCapabilities: sessionCapabilities !== null,
       })) {
         if (ctrl.signal.aborted) break;
         applyStreamSignals(sid, event);
+        const eventAuthor = event.author && event.author !== "user"
+          ? event.author
+          : "";
+        if (eventAuthor && eventAuthor !== currentStreamAuthor) {
+          currentStreamAuthor = eventAuthor;
+          currentBase = [];
+          acc = emptyAcc();
+        }
         acc = applyEvent(acc, event);
         const usage = event.usageMetadata ?? event.usage_metadata;
         if (usage?.totalTokenCount) tokens = usage.totalTokenCount;
         if (event.timestamp) ts = event.timestamp;
-        const blocks = [...base, ...acc.blocks];
+        if (event.id) eventId = event.id;
+        const nextInvocationId = event.invocationId ?? event.invocation_id;
+        if (nextInvocationId) invocationId = nextInvocationId;
+        const blocks = [...currentBase, ...acc.blocks];
         setTurnsFor(sid, (t) => {
           const next = t.slice();
           const last = next[next.length - 1];
-          if (last?.role === "assistant") {
+          const meta = {
+            author: currentStreamAuthor || last?.meta?.author,
+            tokens: tokens || last?.meta?.tokens,
+            ts,
+            eventId: eventId || last?.meta?.eventId,
+            invocationId: invocationId || last?.meta?.invocationId,
+          };
+          if (
+            last?.role === "assistant" &&
+            (!last.meta?.author || last.meta.author === currentStreamAuthor)
+          ) {
             next[next.length - 1] = {
               ...last,
               blocks,
-              meta: { tokens: tokens || last.meta?.tokens, ts },
+              meta,
             };
+          } else {
+            next.push({ role: "assistant", blocks, meta });
           }
           return next;
         });
@@ -1664,6 +2606,7 @@ export default function App() {
     } finally {
       if (streamAbortsRef.current.get(sid) === ctrl) streamAbortsRef.current.delete(sid);
       setStreaming(sid, false);
+      finishStreamPresentation(sid);
       setActiveAgentBySession((m) => ({ ...m, [sid]: "" }));
       setExecPathBySession((m) => ({ ...m, [sid]: [] }));
     }
@@ -1694,8 +2637,32 @@ export default function App() {
   const visibleCreateView = canCreateAgents ? createView : null;
   const showAddMenu = canCreateAgents && addMenu;
   const showAddAgent = canCreateAgents && addAgent;
-  const showManageAgents = canManageAgents && manageAgents;
+  const showManageAgents = manageAgents;
   const agentEntries = buildAgentEntries(apps, connections);
+  const workspaceAgentEntries: AgentEntry[] = agentEntries
+    .filter(
+      (entry) =>
+        entry.runtimeId &&
+        (libraryRuntimeIds === null || libraryRuntimeIds.has(entry.runtimeId)),
+    )
+    .map((entry) => ({
+      ...entry,
+      canDelete: entry.runtimeId
+        ? libraryRuntimePermissions[entry.runtimeId]?.canDelete === true
+        : false,
+    }));
+  const orderedWorkspaceAgentEntries: AgentEntry[] = (() => {
+    if (workspaceAgentEntries.length === 0) return workspaceAgentEntries;
+    const orderIndex = new Map(workspaceAgentOrder.map((id, index) => [id, index]));
+    return [...workspaceAgentEntries].sort((left, right) => {
+      const leftIndex = orderIndex.get(left.id);
+      const rightIndex = orderIndex.get(right.id);
+      if (leftIndex != null && rightIndex != null) return leftIndex - rightIndex;
+      if (leftIndex != null) return -1;
+      if (rightIndex != null) return 1;
+      return workspaceAgentEntries.indexOf(left) - workspaceAgentEntries.indexOf(right);
+    });
+  })();
   const labelOf = (id: string) => agentEntries.find((e) => e.id === id)?.label ?? id;
   // The runtime backing the current selection (if it's a cloud runtime app) —
   // drives the picker's side detail panel.
@@ -1703,54 +2670,226 @@ export default function App() {
     (c) => c.runtimeId && c.apps.some((a) => remoteAppId(c.id, a) === appName),
   );
   const currentRuntime =
-    currentConn && currentConn.runtimeId
+    currentConn && currentConn.runtimeId && currentConn.region
       ? {
           runtimeId: currentConn.runtimeId,
           name: currentConn.name,
-          region: currentConn.region ?? "cn-beijing",
+          region: currentConn.region,
         }
       : undefined;
-  // Selecting an agent (from the sidebar picker) starts a fresh chat; any
+  const connectedRuntimeId =
+    currentRuntime?.runtimeId ??
+    connections.reduce(
+      (runtimeId, connection) => connection.runtimeId ?? runtimeId,
+      "",
+    );
+
+  const rateAssistantTurn = async (
+    turn: Turn,
+    rating: MessageFeedbackRating | null,
+  ) => {
+    const eventId = turn.meta?.eventId;
+    const sid = sessionId;
+    if (!eventId || !sid || !currentRuntime) return;
+    const previousFeedback = turn.meta?.feedback;
+    const optimisticFeedback = {
+      ...previousFeedback,
+      rating,
+      syncStatus: "syncing" as const,
+      updatedAt: Date.now() / 1000,
+    };
+    setTurnsFor(sid, (current) =>
+      current.map((item) =>
+        item.meta?.eventId === eventId
+          ? { ...item, meta: { ...item.meta, feedback: optimisticFeedback } }
+          : item,
+      ),
+    );
+    setFeedbackPendingIds((current) => new Set(current).add(eventId));
+    try {
+      const feedback = await submitMessageFeedback({
+        appName,
+        userId,
+        sessionId: sid,
+        eventId,
+        rating,
+      });
+      setTurnsFor(sid, (current) =>
+        current.map((item) =>
+          item.meta?.eventId === eventId
+            ? { ...item, meta: { ...item.meta, feedback } }
+            : item,
+        ),
+      );
+      setSessions((current) =>
+        current.map((item) =>
+          item.id === sid
+            ? {
+                ...item,
+                state: {
+                  ...(item.state ?? {}),
+                  [`veadk_feedback:${eventId}`]: feedback,
+                },
+              }
+            : item,
+        ),
+      );
+    } catch (feedbackError) {
+      setTurnsFor(sid, (current) =>
+        current.map((item) =>
+          item.meta?.eventId === eventId
+            ? { ...item, meta: { ...item.meta, feedback: previousFeedback } }
+            : item,
+        ),
+      );
+      if (viewSidRef.current === sid) {
+        setError(
+          feedbackError instanceof Error
+            ? feedbackError.message
+            : String(feedbackError),
+        );
+      }
+    } finally {
+      setFeedbackPendingIds((current) => {
+        const next = new Set(current);
+        next.delete(eventId);
+        return next;
+      });
+    }
+  };
+
+  // Selecting an agent starts a fresh chat; any
   // background stream keeps persisting to its own (old) session.
-  const selectAgent = (id: string) => {
+  const selectAgent = async (id: string) => {
     setConnections(loadConnections());
+    let capabilities = newChatCapabilitiesCacheRef.current.get(id);
+    if (!capabilities) {
+      capabilities = await probeNewChatCapabilities(id);
+      newChatCapabilitiesCacheRef.current.set(id, capabilities);
+    }
+    setNewChatCapabilities(capabilities);
+    if (id === appName) setAgentInfoRefreshKey((key) => key + 1);
     viewSidRef.current = "";
     setSessionId("");
+    setMyAgents(false);
     setAppName(id);
   };
-  const connectManagedRuntime = async (runtime: ManagedRuntime) => {
-    const agentId = await connectRuntime(
-      runtime.runtimeId,
-      runtime.name,
-      runtime.region,
-    );
-    selectAgent(agentId);
+
+  const openAgentCreateFromMyAgents = (region: string) => {
+    if (!canCreateAgents) {
+      setError("当前账号没有添加 Agent 的权限。");
+      return;
+    }
+    setMyAgents(false);
+    setManageAgents(false);
+    setNewRuntimeRegion(region);
+    setImportedDraft(null);
+    setCreateView(null);
+    setAddMenu(true);
+    setError("");
   };
+
+  const connectMyAgent = async (agent: MyAgentCardData) => {
+    if (!agent.runtime) return;
+    try {
+      const agentId = await connectRuntime(
+        agent.runtime.runtimeId,
+        agent.name,
+        agent.runtime.region,
+        agent.runtime.currentVersion,
+      );
+      setConnections(loadConnections());
+      setAgentInfoRefreshKey((key) => key + 1);
+      const capabilities = await probeNewChatCapabilities(agentId);
+      newChatCapabilitiesCacheRef.current.set(agentId, capabilities);
+      setNewChatCapabilities(capabilities);
+      setAgentDetailTarget(null);
+      setMyAgents(false);
+      setManageAgents(false);
+      startNewChat();
+      setAppName(agentId);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const openMyAgentDetails = (agent: MyAgentCardData) => {
+    if (!agent.runtime) return;
+    setAgentDetailTarget(agent);
+    setFocusedDeploymentTaskId("");
+    setFocusedWorkspaceAgentId("");
+    setMyAgents(false);
+    setManageAgents(true);
+    setError("");
+  };
+
+  const openMyAgentsPage = () => {
+    if (sandboxSession) exitSandboxSession();
+    viewSidRef.current = "";
+    setSessionId("");
+    setCreateView(null);
+    setSkillCenter(false);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSearchView(false);
+    setManageAgents(false);
+    setAgentDetailTarget(null);
+    setFocusedDeploymentTaskId("");
+    setFocusedWorkspaceAgentId("");
+    setMyAgents(true);
+    setError("");
+  };
+
+  const talkToWorkspaceAgent = (id: string) => {
+    setFeedbackCaseReturnAgentId("");
+    setFeedbackTargetEventId("");
+    if (agentDetailTarget) {
+      void connectMyAgent(agentDetailTarget);
+      return;
+    }
+    setFocusedDeploymentTaskId("");
+    setFocusedWorkspaceAgentId("");
+    setManageAgents(false);
+    void selectAgent(id);
+  };
+
+  const selectWorkspaceAgentFromNavbar = (id: string) => {
+    setFocusedDeploymentTaskId("");
+    setFocusedWorkspaceAgentId(id);
+    setFocusedWorkspaceAgentSection("basic");
+    return selectAgent(id);
+  };
+
+  const detailConnection = agentDetailTarget?.runtime
+    ? connections.find(
+        (connection) =>
+          connection.runtimeId === agentDetailTarget.runtime?.runtimeId,
+      )
+    : undefined;
+  const detailAgentEntry: AgentEntry | null = agentDetailTarget?.runtime
+    ? {
+        id: `detail:${agentDetailTarget.runtime.runtimeId}`,
+        label: agentDetailTarget.name,
+        app: agentDetailTarget.name,
+        remote: true,
+        runtimeApp: detailConnection?.apps[0],
+        runtimeId: agentDetailTarget.runtime.runtimeId,
+        region: agentDetailTarget.runtime.region,
+        currentVersion: agentDetailTarget.runtime.currentVersion,
+        canDelete: agentDetailTarget.runtime.canDelete,
+      }
+    : null;
 
   return (
     <div className="layout">
       <Sidebar
         branding={siteBranding}
         access={access}
-        agentsSource={agentsSource}
-        localApps={apps}
-        currentAgentId={appName}
-        currentAgentLabel={appName ? labelOf(appName) : ""}
-        currentRuntime={currentRuntime}
-        onSelectAgent={selectAgent}
         features={features}
         sessions={sessions}
         currentSessionId={sessionId}
         streamingSids={streamingSids}
-        onNewChat={() => {
-          setCreateView(null);
-          setSkillCenter(false);
-          setAddAgent(false);
-          setAddMenu(false);
-          setSearchView(false);
-          setManageAgents(false);
-          startNewChat();
-        }}
+        onNewChat={openNewChat}
         onSearch={() => {
           if (sandboxSession) exitSandboxSession();
           setCreateView(null);
@@ -1758,6 +2897,8 @@ export default function App() {
           setAddAgent(false);
           setAddMenu(false);
           setManageAgents(false);
+          setAgentDetailTarget(null);
+          setMyAgents(false);
           setSearchView(true);
           setError("");
         }}
@@ -1774,8 +2915,11 @@ export default function App() {
           setAddAgent(false);
           setSearchView(false);
           setManageAgents(false);
+          setAgentDetailTarget(null);
+          setMyAgents(false);
           setCreateView(null);
           setImportedDraft(null);
+          setNewRuntimeRegion("cn-beijing");
           setAddMenu(true);
           setError("");
         }}
@@ -1786,6 +2930,8 @@ export default function App() {
           setAddMenu(false);
           setSearchView(false);
           setManageAgents(false);
+          setAgentDetailTarget(null);
+          setMyAgents(false);
           setSkillCenter(true);
           setError("");
         }}
@@ -1800,27 +2946,14 @@ export default function App() {
           setSkillCenter(false);
           setSearchView(false);
           setManageAgents(false);
+          setAgentDetailTarget(null);
+          setMyAgents(false);
           setSessionId("");
           setAddMenu(false);
           setAddAgent(true);
           setError("");
         }}
-        onManageAgents={() => {
-          if (!canManageAgents) {
-            setError("当前账号没有管理 Agent 的权限。");
-            return;
-          }
-          if (sandboxSession) exitSandboxSession();
-          viewSidRef.current = "";
-          setSessionId("");
-          setCreateView(null);
-          setSkillCenter(false);
-          setAddAgent(false);
-          setAddMenu(false);
-          setSearchView(false);
-          setManageAgents(true);
-          setError("");
-        }}
+        onMyAgents={openMyAgentsPage}
         onPickSession={(id) => {
           setCreateView(null);
           setSkillCenter(false);
@@ -1828,11 +2961,14 @@ export default function App() {
           setAddMenu(false);
           setSearchView(false);
           setManageAgents(false);
+          setAgentDetailTarget(null);
+          setMyAgents(false);
           setError("");
           pickSession(id);
         }}
         onDeleteSession={removeSession}
         userInfo={userInfo}
+        version={version}
         onLogout={onLogout}
       />
 
@@ -1947,26 +3083,28 @@ export default function App() {
               onAddFiles={addFiles}
               onRemoveAttachment={removeDraftAttachment}
               newChatMode={sandboxSession ? "agent" : newChatMode}
+              newChatTask={sandboxSession ? null : newChatTask}
               newChatLayout={!sandboxSession && turns.length === 0 && skillJob === null}
-              showModeSelector={
-                !sandboxSession &&
-                turns.length === 0 &&
-                skillJob === null &&
-                canCreateAgents
+              showModeSelector={false}
+              temporaryEnabled={newChatCapabilitiesReady && newChatCapabilities.temporaryEnabled}
+              skillCreateEnabled={newChatCapabilitiesReady && newChatCapabilities.skillCreateEnabled}
+              harnessEnabled={newChatCapabilitiesReady && newChatCapabilities.harnessEnabled}
+              builtinTools={
+                newChatCapabilitiesReady ? newChatCapabilities.builtinTools : []
               }
-              temporaryEnabled={newChatCapabilities.temporaryEnabled}
-              skillCreateEnabled={newChatCapabilities.skillCreateEnabled}
               onModeChange={(mode) => {
                 if (
                   (mode === "temporary" && !newChatCapabilities.temporaryEnabled) ||
                   (mode === "skill-create" && !newChatCapabilities.skillCreateEnabled)
                 ) return;
                 if (mode === "temporary") {
+                  setNewChatTask(null);
                   setNewChatMode(mode);
                   openSandboxLaunch();
                   return;
                 }
                 setNewChatMode(mode);
+                if (mode !== "agent") setNewChatTask(null);
                 setError("");
                 if (mode === "skill-create") {
                   setInvocation(emptyInvocation());
@@ -1983,30 +3121,62 @@ export default function App() {
                   }
                 }
               }}
+              onTaskChange={setNewChatTask}
             />
           </div>
         );
         return (
           <section className="main-shell">
             <Navbar
-              apps={agentEntries.map((e) => e.id)}
               appName={appName}
-              onAppChange={selectAgent}
+              onAppChange={showManageAgents ? selectWorkspaceAgentFromNavbar : selectAgent}
               agentLabel={labelOf}
+              agentsSource={agentsSource}
+              localApps={apps}
+              currentRuntime={currentRuntime}
+              runtimeScope={access.capabilities.runtimeScope}
+              onBrowseAgents={openMyAgentsPage}
               title={
-                showAddMenu
+                sandboxSession
+                  ? "Codex 智能体"
+                  : myAgents
+                  ? "智能体"
+                  : showAddMenu
                   ? "添加 Agent"
                   : showAddAgent
                     ? "添加 AgentKit 智能体"
-                    : skillCenter
-                      ? undefined
-                      : searchView
-                        ? "搜索"
-                        : showManageAgents
-                          ? "管理 Agent"
-                          : visibleCreateView
-                            ? undefined
-                            : conversationTitle
+                    : showManageAgents
+                      ? agentDetailTarget
+                        ? agentDetailTarget.name
+                        : focusedWorkspaceAgentId
+                        ? labelOf(focusedWorkspaceAgentId)
+                        : "智能体详情"
+                      : undefined
+              }
+              titleLeading={
+                turns.length > 0 &&
+                !sandboxSession &&
+                newChatMode === "agent" &&
+                !showAddMenu &&
+                !showAddAgent &&
+                !skillCenter &&
+                !searchView &&
+                !showManageAgents &&
+                !myAgents &&
+                visibleCreateView === null &&
+                appName ? (
+                  <button
+                    ref={agentInfoTriggerRef}
+                    type="button"
+                    className="agent-info-trigger"
+                    aria-label="查看 Agent 信息"
+                    title="Agent 信息"
+                    aria-expanded={agentInfoOpen}
+                    onClick={() => setAgentInfoOpen(true)}
+                  >
+                    <AgentIdentityIcon />
+                  </button>
+                ) : undefined
               }
               crumbs={
                 skillCenter
@@ -2031,10 +3201,13 @@ export default function App() {
                       ]
               }
               rightContent={
-                <DeploymentTaskStatus
-                  tasks={canCreateAgents ? deploymentTasks : []}
-                  onCancel={cancelDeploymentTask}
-                />
+                <>
+                  {access.role === "admin" && <StudioUpdateControl />}
+                  <DeploymentTaskStatus
+                    tasks={canCreateAgents ? deploymentTasks : []}
+                    onCancel={cancelDeploymentTask}
+                  />
+                </>
               }
             />
             <main className={`main${sandboxSession ? " is-sandbox-session" : ""}`}>
@@ -2044,11 +3217,115 @@ export default function App() {
                 <Loader2 className="icon spin" /> 加载会话…
               </div>
             )}
+            {feedbackCaseReturnAgentId &&
+              !showManageAgents &&
+              !showAddMenu &&
+              !showAddAgent &&
+              !searchView &&
+              !skillCenter &&
+              visibleCreateView === null && (
+                <div className="case-return-bar">
+                  <button type="button" onClick={returnToFeedbackCases}>
+                    <ArrowLeft aria-hidden />
+                    <span>返回评测案例</span>
+                  </button>
+                </div>
+              )}
 
-            {showManageAgents ? (
-              <ManageAgentsView
-                currentRuntimeId={currentRuntime?.runtimeId}
-                onConnect={connectManagedRuntime}
+            {myAgents ? (
+              <MyAgents
+                onCreateAgent={openAgentCreateFromMyAgents}
+                onCreateCodexAgent={openSandboxLaunch}
+                onUseAgent={connectMyAgent}
+                onViewAgentDetails={openMyAgentDetails}
+                connectedRuntimeId={connectedRuntimeId}
+              />
+            ) : showManageAgents ? (
+              <AgentWorkspace
+                key={detailAgentEntry?.id ?? "workspace"}
+                agents={detailAgentEntry ? [detailAgentEntry] : orderedWorkspaceAgentEntries}
+                drafts={savedAgentDrafts}
+                agentOrder={workspaceAgentOrder}
+                selectedAgentId={appName}
+                agentInfo={agentInfo}
+                agentInfoAgentId={appName}
+                loadingAgentInfo={capabilitiesLoading}
+                canCreate={canCreateAgents}
+                canUpdate={canCreateAgents || canManageAgents}
+                loadingAgents={agentLibraryLoading}
+                agentsError={agentLibraryError}
+                deploymentTasks={deploymentTasks}
+                focusedDeploymentTaskId={focusedDeploymentTaskId}
+                focusedAgentId={detailAgentEntry?.id ?? focusedWorkspaceAgentId}
+                focusedAgentSection={focusedWorkspaceAgentSection}
+                focusedCaseKind={focusedWorkspaceCaseKind}
+                detailOnly={!!detailAgentEntry || !!focusedDeploymentTaskId}
+                onRetryAgents={() => void refreshAgentLibrary()}
+                onAgentOrderChange={saveWorkspaceAgentOrder}
+                onDeleteAgents={deleteWorkspaceAgents}
+                onDeleteDrafts={deleteWorkspaceDrafts}
+                onSelectAgent={selectAgent}
+                onTalkAgent={talkToWorkspaceAgent}
+                onOpenFeedbackCase={(item) => void openFeedbackCaseInStudio(item)}
+                onFeedbackCasesDeleted={clearDeletedFeedbackCases}
+                onCreateAgent={() => {
+                  if (!canCreateAgents) {
+                    setError("当前账号没有添加 Agent 的权限。");
+                    return;
+                  }
+                  setManageAgents(false);
+                  setAddMenu(true);
+                  setCreateView(null);
+                  setImportedDraft(null);
+                  setRuntimeUpdateTarget(null);
+                  setNewRuntimeRegion("cn-beijing");
+                  setEditingDraftId("");
+                  editingDraftBaselineRef.current = null;
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId("");
+                  setError("");
+                }}
+                onUpdateAgent={(nextDraft) => {
+                  if (!canManageAgents && !canCreateAgents) {
+                    setError("当前账号没有管理 Agent 的权限。");
+                    return;
+                  }
+                  if (!currentConn?.runtimeId) {
+                    setError("仅支持更新已部署的云端智能体。");
+                    return;
+                  }
+                  if (!currentConn.region) {
+                    setError("Runtime 缺少地域信息，无法更新。");
+                    return;
+                  }
+                  setManageAgents(false);
+                  setImportedDraft(nextDraft);
+                  const nextDraftId = `runtime-${currentConn.runtimeId}`;
+                  setEditingDraftId(nextDraftId);
+                  editingDraftBaselineRef.current =
+                    savedAgentDrafts.find((item) => item.id === nextDraftId) ?? null;
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId("");
+                  setRuntimeUpdateTarget({
+                    runtimeId: currentConn.runtimeId,
+                    name: currentConn.name,
+                    region: currentConn.region,
+                    currentVersion: currentConn.currentVersion,
+                  });
+                  setCreateView("custom");
+                  setError("");
+                }}
+                onEditDraft={(item) => {
+                  setManageAgents(false);
+                  setImportedDraft(item.draft);
+                  setEditingDraftId(item.id);
+                  editingDraftBaselineRef.current = item;
+                  setRuntimeUpdateTarget(item.deploymentTarget ?? null);
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId("");
+                  setCreateView("custom");
+                  setError("");
+                }}
               />
             ) : showAddMenu ? (
               <StackCards
@@ -2064,6 +3341,17 @@ export default function App() {
                       setAddMenu(false);
                       setImportedDraft(null);
                       setCreateView("menu");
+                    },
+                  },
+                  {
+                    key: "package",
+                    icon: FileArchive,
+                    title: "从代码包添加和部署",
+                    desc: "上传 Agent 项目压缩包，查看代码并直接部署到 AgentKit Runtime。",
+                    onClick: () => {
+                      setAddMenu(false);
+                      setImportedDraft(null);
+                      setCreateView("package");
                     },
                   },
                 ]}
@@ -2116,10 +3404,22 @@ export default function App() {
               <QuickCreate
                 onSelect={(k) => {
                   setImportedDraft(null);
+                  setRuntimeUpdateTarget(null);
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId("");
+                  setEditingDraftId(
+                    k === "custom" ? `draft-${Date.now().toString(36)}` : "",
+                  );
+                  editingDraftBaselineRef.current = null;
                   setCreateView(k);
                 }}
                 onImport={(d) => {
                   setImportedDraft(d);
+                  setRuntimeUpdateTarget(null);
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId("");
+                  setEditingDraftId(`draft-${Date.now().toString(36)}`);
+                  editingDraftBaselineRef.current = null;
                   setCreateView("custom");
                 }}
               />
@@ -2133,45 +3433,85 @@ export default function App() {
               />
             ) : visibleCreateView === "custom" ? (
               <CustomCreate
+                key={editingDraftId || "custom"}
                 initialDraft={importedDraft ?? undefined}
                 onBack={() => setCreateView("menu")}
                 onCreate={onCreate}
                 onAgentAdded={onAgentAdded}
                 features={features}
                 onDeploymentTaskChange={updateDeploymentTask}
+                deploymentTarget={runtimeUpdateTarget ?? undefined}
+                initialDeployRegion={newRuntimeRegion}
+                onDraftChange={(draft, dirty) => {
+                  if (!editingDraftId) return;
+                  if (dirty) {
+                    saveWorkspaceDraft(
+                      editingDraftId,
+                      draft,
+                      runtimeUpdateTarget ?? undefined,
+                    );
+                  } else {
+                    restoreWorkspaceDraftBaseline(editingDraftId);
+                  }
+                }}
+                onDiscard={editingDraftId ? () => {
+                  restoreWorkspaceDraftBaseline(editingDraftId);
+                  setEditingDraftId("");
+                  editingDraftBaselineRef.current = null;
+                  setImportedDraft(null);
+                  setRuntimeUpdateTarget(null);
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId(appName);
+                  setCreateView(null);
+                  setAddMenu(false);
+                  setManageAgents(true);
+                  setError("");
+                } : undefined}
+                onDeploymentStarted={openDeploymentDetail}
+                onDeploymentComplete={finishDeployment}
               />
             ) : visibleCreateView === "template" ? (
               <TemplateCreate onBack={() => setCreateView("menu")} onCreate={onCreate} />
             ) : visibleCreateView === "workflow" ? (
               <WorkflowCreate onBack={() => setCreateView("menu")} onCreate={onCreate} />
+            ) : visibleCreateView === "package" ? (
+              <CodePackageCreate
+                onBack={() => {
+                  setCreateView(null);
+                  setAddMenu(true);
+                }}
+                onAgentAdded={onAgentAdded}
+                onDeploymentTaskChange={updateDeploymentTask}
+                onDeploymentStarted={openDeploymentDetail}
+                onDeploymentComplete={finishDeployment}
+                initialDeployRegion={newRuntimeRegion}
+              />
             ) : turns.length === 0 && skillJob ? (
               <SkillCreateWorkspace initialJob={skillJob} />
+            ) : turns.length === 0 && !newChatCapabilitiesReady ? (
+              <div className="session-loading">
+                <Loader2 className="icon spin" /> 正在检查 Agent 能力…
+              </div>
             ) : turns.length === 0 ? (
-              <>
-                <div className="welcome">
-                  <TextShimmer as="h1" className="welcome-title" duration={4.8} spread={22}>
-                    {sandboxSession
-                      ? "让灵感在临时空间里自由生长"
-                      : newChatMode === "skill-create"
-                        ? "想创建一个什么 Skill？"
-                        : greeting}
-                  </TextShimmer>
-                  {composer}
-                </div>
-                {/* Show the agent's structure as soon as it's selected, before
-                    any conversation — only renders when it has sub-agents. */}
-                {!sandboxSession && newChatMode === "agent" ? (
-                  <AgentTopology
-                    appName={appName}
-                    activeAgent={activeAgent}
-                    seenAgents={seenAgents}
-                    execPath={execPath}
-                  />
-                ) : null}
-              </>
+              <div className="welcome">
+                <TextShimmer as="h1" className="welcome-title" duration={4.8} spread={22}>
+                  {sandboxSession
+                    ? "让灵感在临时空间里自由生长"
+                    : newChatMode === "skill-create"
+                      ? "想创建一个什么 Skill？"
+                      : greeting}
+                </TextShimmer>
+                {composer}
+              </div>
             ) : (
               <>
-                <div className="transcript" ref={scrollRef} onScroll={onScroll}>
+                <div
+                  className={`transcript${activeConversationPresenting ? " is-streaming" : ""}`}
+                  ref={scrollRef}
+                  onScroll={onConversationScroll}
+                  onWheel={onConversationWheel}
+                  onTouchMove={onConversationTouchMove}
+                >
                   {turns.map((turn, i) => {
             const isLast = i === turns.length - 1;
             if (turn.role === "user") {
@@ -2206,20 +3546,81 @@ export default function App() {
                 </motion.div>
               );
             }
+            const agentAuthor = turn.meta?.author ?? "";
+            const agentNode = agentAuthor && rootCapabilityNode
+              ? findAgentNode(rootCapabilityNode, agentAuthor)
+              : undefined;
+            const isSubAgent = Boolean(
+              agentAuthor &&
+              rootAgentNames.length > 0 &&
+              !rootAgentNames.includes(agentAuthor),
+            );
+            const agentDisplayName = agentNode?.name || agentAuthor;
+            const agentDescription = agentNode?.description ||
+              (isSubAgent ? "正在执行主 Agent 移交的任务。" : "");
+            if (
+              turn.blocks.length > 0 &&
+              turn.blocks.every((block) => block.kind === "agent-transfer")
+            ) return null;
             const pending = turn.blocks.length === 0;
+            const feedbackRating = turn.meta?.feedback?.rating ?? null;
+            const feedbackEventId = turn.meta?.eventId ?? "";
+            const feedbackPending = feedbackPendingIds.has(feedbackEventId);
+            const canRate = Boolean(
+              currentRuntime && feedbackEventId && turnText(turn),
+            );
             return (
               <motion.div
                 key={i}
-                className="turn turn--assistant"
+                ref={(node) => {
+                  if (!feedbackEventId) return;
+                  if (node) {
+                    turnNodeRefs.current.set(feedbackEventId, node);
+                  } else {
+                    turnNodeRefs.current.delete(feedbackEventId);
+                  }
+                }}
+                className={[
+                  "turn turn--assistant",
+                  isSubAgent ? "turn--subagent" : "",
+                  feedbackTargetEventId === feedbackEventId ? "is-feedback-target" : "",
+                ].filter(Boolean).join(" ")}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.2, ease: "easeOut" }}
               >
+                {isSubAgent && (
+                  <>
+                    <div className="subagent-run-label">
+                      <span className="subagent-run-handoff">
+                        <CornerDownRight />
+                        <span>智能体移交</span>
+                      </span>
+                      <span className="subagent-run-title">{agentDisplayName}</span>
+                    </div>
+                    <p className="subagent-run-description" title={agentDescription}>
+                      {agentDescription}
+                    </p>
+                  </>
+                )}
                 {pending ? (
                   isLast && activeConversationBusy ? <ThinkingPlaceholder /> : null
                 ) : (
                   <>
-                    <Blocks appName={appName} blocks={turn.blocks} onAction={onAction} onAuth={onAuth} />
+                    <Blocks
+                      appName={appName}
+                      blocks={turn.blocks}
+                      streaming={isLast && (activeConversationBusy || presentingStream)}
+                      onStreamFrame={isLast ? followConversationStreamFrame : undefined}
+                      onAction={onAction}
+                      onAuth={onAuth}
+                      onArtifactDownload={(filename, version) =>
+                        downloadArtifact(appName, userId, sessionId, filename, version)
+                      }
+                      onArtifactPreview={(filename, version) =>
+                        previewArtifact(appName, userId, sessionId, filename, version)
+                      }
+                    />
                     {/* Finalized turn that produced no visible answer (e.g. only
                         thinking + an empty A2UI surface) — show a fallback note. */}
                     {!(isLast && activeConversationBusy) && !turnHasVisibleContent(turn) && (
@@ -2231,6 +3632,54 @@ export default function App() {
                     {!(isLast && activeConversationBusy) && !turnAwaitingAuth(turn) && (
                       <div className="turn-meta">
                         <div className="turn-actions">
+                          {canRate && (
+                            <>
+                              <button
+                                type="button"
+                                className={`icon-btn feedback-btn${
+                                  feedbackRating === "good"
+                                    ? " feedback-btn--good"
+                                    : ""
+                                }`}
+                                aria-label="赞"
+                                aria-pressed={feedbackRating === "good"}
+                                aria-busy={feedbackPending}
+                                title={feedbackRating === "good" ? "取消点赞" : "赞"}
+                                disabled={feedbackPending}
+                                onClick={() => void rateAssistantTurn(
+                                  turn,
+                                  feedbackRating === "good" ? null : "good",
+                                )}
+                              >
+                                <FeedbackUpIcon
+                                  className="icon"
+                                  filled={feedbackRating === "good"}
+                                />
+                              </button>
+                              <button
+                                type="button"
+                                className={`icon-btn feedback-btn${
+                                  feedbackRating === "bad"
+                                    ? " feedback-btn--bad"
+                                    : ""
+                                }`}
+                                aria-label="踩"
+                                aria-pressed={feedbackRating === "bad"}
+                                aria-busy={feedbackPending}
+                                title={feedbackRating === "bad" ? "取消点踩" : "踩"}
+                                disabled={feedbackPending}
+                                onClick={() => void rateAssistantTurn(
+                                  turn,
+                                  feedbackRating === "bad" ? null : "bad",
+                                )}
+                              >
+                                <FeedbackDownIcon
+                                  className="icon"
+                                  filled={feedbackRating === "bad"}
+                                />
+                              </button>
+                            </>
+                          )}
                           {!sandboxSession && (
                             <button
                               className="icon-btn"
@@ -2252,14 +3701,24 @@ export default function App() {
           })}
                 </div>
                 {!sandboxSession && (
-                  <AgentTopology
+                  <AgentInfoPanel
                     appName={appName}
+                    info={agentInfo}
+                    loading={capabilitiesLoading}
                     activeAgent={activeAgent}
                     seenAgents={seenAgents}
                     execPath={execPath}
+                    capabilities={sessionCapabilities}
+                    capabilityLoading={sessionCapabilitiesLoading}
+                    capabilityMutating={sessionCapabilityMutating}
+                    builtinTools={sessionBuiltinTools}
+                    onAddCapability={addCapability}
+                    onRemoveCapability={(id) => void removeCapability(id)}
                   />
                 )}
-                {composer}
+                <div className="conversation-composer-slot">
+                  {composer}
+                </div>
               </>
             )}
             </main>
@@ -2275,12 +3734,44 @@ export default function App() {
         />
       )}
 
+      {agentInfoOpen && turns.length > 0 && (
+        <AgentInfoDrawer
+          appName={appName}
+          info={agentInfo}
+          loading={capabilitiesLoading}
+          activeAgent={activeAgent}
+          seenAgents={seenAgents}
+          execPath={execPath}
+          capabilities={sessionCapabilities}
+          capabilityLoading={sessionCapabilitiesLoading}
+          capabilityMutating={sessionCapabilityMutating}
+          builtinTools={sessionBuiltinTools}
+          onAddCapability={addCapability}
+          onRemoveCapability={(id) => void removeCapability(id)}
+          onClose={closeAgentInfo}
+          returnFocusRef={agentInfoTriggerRef}
+        />
+      )}
+
       <SandboxLaunchDialog
         open={sandboxLaunchOpen}
         state={sandboxLaunchState}
         error={sandboxLaunchError}
         onCancel={cancelSandboxLaunch}
         onConfirm={() => void launchSandboxSession()}
+      />
+
+      {toast && (
+        <div className="app-toast" role="status" aria-live="polite">
+          {toast}
+        </div>
+      )}
+
+      <AuthExpiredDialog
+        open={authExpired}
+        checking={authRecoveryChecking}
+        error={authRecoveryError}
+        onLogin={() => void recoverAuthentication()}
       />
 
       {confirmLeave && (

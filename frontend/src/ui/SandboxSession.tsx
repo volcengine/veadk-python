@@ -18,10 +18,10 @@ export function SandboxEntryButton({
       className={`sandbox-entry sandbox-entry--${variant}${active ? " is-active" : ""}`}
       onClick={onClick}
       disabled={active}
-      aria-label={active ? "灵光一现临时会话已开启" : "开启灵光一现临时会话"}
+      aria-label={active ? "Codex 智能体会话已开启" : "开启 Codex 智能体会话"}
     >
       <InsightIcon />
-      <span>{active ? "临时会话中" : "灵光一现"}</span>
+      <span>{active ? "Codex 智能体会话中" : "灵光一现"}</span>
     </button>
   );
 }
@@ -31,10 +31,10 @@ export function SandboxSessionWarning({ onExit }: { onExit: () => void }) {
     <div className="sandbox-session-warning" role="status">
       <span className="sandbox-session-warning-dot" aria-hidden="true" />
       <span className="sandbox-session-warning-copy">
-        当前为临时会话，退出后对话内容消失
+        当前为 Codex 智能体会话，退出后对话内容消失
       </span>
       <button type="button" onClick={onExit}>
-        退出临时会话
+        退出内置智能体
       </button>
     </div>
   );

@@ -3,8 +3,15 @@
 // the Vite dev proxy in development.
 
 import { withAuth } from "./auth";
+import { isOAuthLoginRequired, withLocalUser } from "./identity";
+import {
+  isAuthenticationRedirect,
+  waitForAuthentication,
+} from "./authSession";
+import { parseJsonResponse } from "./jsonResponse";
 import { formatRunSseError } from "./runSseError";
 import { parseSSE } from "./sse";
+import { normalizeRuntimeDescription } from "./runtimeDescription";
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   requestSignal,
@@ -12,7 +19,6 @@ import {
 } from "./timeout";
 import type { AgentProject } from "../create/project";
 import type { AgentDraft } from "../create/types";
-import { withLocalUser } from "./identity";
 
 /** An ADK event as serialised over `/run_sse` (camelCase, by_alias=True). */
 export interface AdkUsage {
@@ -24,6 +30,9 @@ export interface AdkUsage {
 }
 
 export interface AdkEvent {
+  id?: string;
+  invocationId?: string;
+  invocation_id?: string;
   author?: string;
   partial?: boolean;
   timestamp?: number;
@@ -68,7 +77,124 @@ export interface AdkSession {
   id: string;
   lastUpdateTime?: number;
   events?: AdkEvent[];
+  state?: Record<string, unknown>;
   [k: string]: unknown;
+}
+
+export type MessageFeedbackRating = "good" | "bad";
+
+export interface MessageFeedbackState {
+  rating: MessageFeedbackRating | null;
+  evaluationSetId?: string | null;
+  evaluationSetName?: string | null;
+  workspaceId?: string | null;
+  evaluationItemId?: string | null;
+  syncStatus: "syncing" | "synced";
+  statePersistence?: "runtime" | "browser";
+  updatedAt: number;
+}
+
+export interface AgentFeedbackSetSummary {
+  kind: MessageFeedbackRating;
+  evaluationSetId: string | null;
+  evaluationSetName: string | null;
+  workspaceId: string | null;
+  itemCount: number;
+}
+
+export interface AgentFeedbackCase {
+  id: string;
+  itemKey: string;
+  kind: MessageFeedbackRating;
+  input: string;
+  output: string;
+  referenceOutput: string;
+  comment: string;
+  agentName: string;
+  sessionId: string;
+  messageId: string;
+  runtimeId: string;
+  invocationId: string;
+  userId: string;
+  createdAt: string;
+  evaluationSetId: string;
+  evaluationSetName: string;
+  workspaceId: string;
+}
+
+export interface AgentFeedbackCasesResponse {
+  agentName: string;
+  runtimeId: string;
+  region: string;
+  projectName: string;
+  sets: AgentFeedbackSetSummary[];
+  items: AgentFeedbackCase[];
+}
+
+const MESSAGE_FEEDBACK_CACHE_KEY = "veadk.messageFeedback.v1";
+
+function feedbackCacheScope(
+  runtimeId: string,
+  appName: string,
+  userId: string,
+  sessionId: string,
+): string {
+  return [runtimeId, appName, userId, sessionId].join(":");
+}
+
+function readMessageFeedbackCache(): Record<
+  string,
+  Record<string, MessageFeedbackState>
+> {
+  if (typeof window === "undefined") return {};
+  try {
+    const value = JSON.parse(localStorage.getItem(MESSAGE_FEEDBACK_CACHE_KEY) ?? "{}");
+    return value && typeof value === "object" ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function storeMessageFeedback(
+  scope: string,
+  eventId: string,
+  feedback: MessageFeedbackState,
+): void {
+  if (typeof window === "undefined") return;
+  const cache = readMessageFeedbackCache();
+  cache[scope] = {
+    ...(cache[scope] ?? {}),
+    [`veadk_feedback:${eventId}`]: feedback,
+  };
+  localStorage.setItem(MESSAGE_FEEDBACK_CACHE_KEY, JSON.stringify(cache));
+}
+
+export function clearMessageFeedbackCache(args: {
+  runtimeId: string;
+  appName: string;
+  userId: string;
+  sessionId: string;
+  eventIds: string[];
+}): void {
+  if (typeof window === "undefined") return;
+  const scope = feedbackCacheScope(
+    args.runtimeId,
+    args.appName,
+    args.userId,
+    args.sessionId,
+  );
+  const cache = readMessageFeedbackCache();
+  const scoped = cache[scope];
+  if (!scoped) return;
+  for (const eventId of args.eventIds) {
+    delete scoped[`veadk_feedback:${eventId}`];
+  }
+  if (Object.keys(scoped).length === 0) {
+    delete cache[scope];
+  } else {
+    cache[scope] = scoped;
+  }
+  localStorage.setItem(MESSAGE_FEEDBACK_CACHE_KEY, JSON.stringify(cache));
 }
 
 export interface AdkInlineData {
@@ -171,29 +297,59 @@ function resolve(appName: string): { app: string; ep: AdkEndpoint } {
  *     the apikey; apikey never reaches the browser).
  *  2. `base` + `apiKey` → backend `/agentkit-proxy` (legacy, key in header).
  *  3. neither → the local same-origin server. */
-function apiFetch(
+async function apiFetch(
   path: string,
   init: RequestInit = {},
   ep: AdkEndpoint = {},
   timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
 ): Promise<Response> {
-  const opts = {
+  const baseOpts = {
     ...init,
     headers: withLocalUser(init.headers),
-    signal: requestSignal(init.signal, timeoutMs),
   };
-  if (ep.runtimeId) {
-    const rq = ep.region ? `${path.includes("?") ? "&" : "?"}region=${encodeURIComponent(ep.region)}` : "";
-    return fetch(withAuth(`${API_BASE}/web/runtime-proxy/${ep.runtimeId}${path}${rq}`), opts);
+  const send = () => {
+    const opts = {
+      ...baseOpts,
+      signal: requestSignal(init.signal, timeoutMs),
+    };
+    if (ep.runtimeId) {
+      const rq = ep.region
+        ? `${path.includes("?") ? "&" : "?"}region=${encodeURIComponent(ep.region)}`
+        : "";
+      return fetch(
+        withAuth(`${API_BASE}/web/runtime-proxy/${ep.runtimeId}${path}${rq}`),
+        opts,
+      );
+    }
+    if (ep.base) {
+      // Use backend proxy to avoid CORS issues with remote AgentKit
+      const headers = new Headers(opts.headers);
+      headers.set("X-AgentKit-Base", ep.base);
+      if (ep.apiKey) headers.set("X-AgentKit-Key", ep.apiKey);
+      return fetch(withAuth(`${API_BASE}/agentkit-proxy${path}`), {
+        ...opts,
+        headers,
+      });
+    }
+    return fetch(withAuth(`${API_BASE}${path}`), opts);
+  };
+
+  const requiresLogin = async (response: Response) => {
+    if (isAuthenticationRedirect(response)) return true;
+    if (response.status !== 401) return false;
+    try {
+      return await isOAuthLoginRequired();
+    } catch {
+      return false;
+    }
+  };
+
+  let response = await send();
+  while (await requiresLogin(response)) {
+    await waitForAuthentication(init.signal);
+    response = await send();
   }
-  if (ep.base) {
-    // Use backend proxy to avoid CORS issues with remote AgentKit
-    const headers = new Headers(opts.headers);
-    headers.set("X-AgentKit-Base", ep.base);
-    if (ep.apiKey) headers.set("X-AgentKit-Key", ep.apiKey);
-    return fetch(withAuth(`${API_BASE}/agentkit-proxy${path}`), { ...opts, headers });
-  }
-  return fetch(withAuth(`${API_BASE}${path}`), opts);
+  return response;
 }
 
 function formatErrorDetail(detail: unknown): string {
@@ -254,6 +410,20 @@ export class RuntimeProbeError extends Error {
   }
 }
 
+const PRIVATE_RUNTIME_UNREACHABLE_MESSAGE =
+  "Runtime 已部署成功，但当前 Studio 无法访问私网 Runtime。请使用已绑定相同 VPC 的 Studio 访问，或改用公网 / 公网+VPC 部署。";
+const RUNTIME_ENDPOINT_UNREACHABLE_MESSAGE =
+  "Runtime 已部署成功，但 Studio 暂时无法连接服务。网关域名可能仍在生效，或当前网络/DNS 无法访问该 Runtime，请稍后在智能体管理页重试连接。";
+const RUNTIME_APPS_CACHE_TTL_MS = 30_000;
+const runtimeAppsCache = new Map<
+  string,
+  { apps: string[]; expiresAt: number }
+>();
+
+function runtimeAppsCacheKey(runtimeId: string, region: string): string {
+  return `${region}:${runtimeId}`;
+}
+
 async function runtimeProxyErrorCode(response: Response): Promise<string> {
   try {
     const payload = (await response.clone().json()) as {
@@ -279,6 +449,23 @@ export async function fetchRemoteApps(
   if (ep?.runtimeId && runtimeErrorCode === "runtime_access_denied") {
     throw new RuntimeAccessDeniedError();
   }
+  if (
+    ep?.runtimeId &&
+    runtimeErrorCode === "runtime_private_endpoint_unreachable"
+  ) {
+    throw new RuntimeProbeError(PRIVATE_RUNTIME_UNREACHABLE_MESSAGE);
+  }
+  if (
+    ep?.runtimeId &&
+    [
+      "runtime_proxy_connect_error",
+      "runtime_proxy_timeout",
+      "runtime_json_connect_error",
+      "runtime_json_timeout",
+    ].includes(runtimeErrorCode)
+  ) {
+    throw new RuntimeProbeError(RUNTIME_ENDPOINT_UNREACHABLE_MESSAGE);
+  }
   if (ep?.runtimeId && res.status === 404) {
     throw new RuntimeProbeError(
       "该 Runtime 的 Agent Server 未提供连接接口，请确认 Runtime 已就绪且版本兼容。",
@@ -293,7 +480,14 @@ export async function fetchRemoteApps(
   if (!res.ok) {
     throw new Error(await httpErrorMessage(res, "读取 Agent 列表失败"));
   }
-  return res.json();
+  const apps = (await res.json()) as string[];
+  if (ep?.runtimeId) {
+    runtimeAppsCache.set(runtimeAppsCacheKey(ep.runtimeId, ep.region ?? ""), {
+      apps,
+      expiresAt: Date.now() + RUNTIME_APPS_CACHE_TTL_MS,
+    });
+  }
+  return apps;
 }
 
 export async function createSession(
@@ -306,7 +500,11 @@ export async function createSession(
     { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
     ep,
   );
-  if (!res.ok) throw new Error(`create session failed: ${res.status}`);
+  if (!res.ok) {
+    const fallback = `创建会话失败 (${res.status})`;
+    const detail = await httpErrorMessage(res, "创建会话失败");
+    throw new Error(detail === fallback ? fallback : `${fallback}：${detail}`);
+  }
   const session = await res.json();
   return session.id;
 }
@@ -333,6 +531,106 @@ export async function getSession(
     ep,
   );
   if (!res.ok) throw new Error(`get session failed: ${res.status}`);
+  const session = (await res.json()) as AdkSession;
+  if (ep.runtimeId) {
+    const scope = feedbackCacheScope(ep.runtimeId, app, userId, sessionId);
+    session.state = {
+      ...(readMessageFeedbackCache()[scope] ?? {}),
+      ...(session.state ?? {}),
+    };
+  }
+  return session;
+}
+
+export async function submitMessageFeedback(args: {
+  appName: string;
+  userId: string;
+  sessionId: string;
+  eventId: string;
+  rating: MessageFeedbackRating | null;
+  comment?: string;
+}): Promise<MessageFeedbackState> {
+  const { app, ep } = resolve(args.appName);
+  if (!ep.runtimeId) {
+    throw new Error("只有连接到 AgentKit Runtime 的会话支持反馈回流");
+  }
+  if (!ep.region) throw new Error("Runtime 缺少地域信息，无法提交反馈");
+  const res = await apiFetch(
+    "/web/evaluation/feedback",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runtimeId: ep.runtimeId,
+        region: ep.region,
+        appName: app,
+        userId: args.userId,
+        sessionId: args.sessionId,
+        eventId: args.eventId,
+        rating: args.rating,
+        comment: args.comment ?? "",
+      }),
+    },
+    {},
+    TRANSFER_REQUEST_TIMEOUT_MS,
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "提交反馈失败"));
+  }
+  const feedback = (await res.json()) as MessageFeedbackState;
+  const scope = feedbackCacheScope(
+    ep.runtimeId,
+    app,
+    args.userId,
+    args.sessionId,
+  );
+  storeMessageFeedback(scope, args.eventId, feedback);
+  return feedback;
+}
+
+export async function getAgentFeedbackCases(args: {
+  runtimeId: string;
+  region: string;
+  appName: string;
+  pageSize?: number;
+}): Promise<AgentFeedbackCasesResponse> {
+  const query = new URLSearchParams({
+    runtimeId: args.runtimeId,
+    region: args.region,
+    appName: args.appName,
+    page_size: String(args.pageSize ?? 100),
+  });
+  const res = await apiFetch(`/web/evaluation/feedback-cases?${query.toString()}`);
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "读取评测集失败"));
+  }
+  return res.json();
+}
+
+export async function deleteAgentFeedbackCases(args: {
+  runtimeId: string;
+  region: string;
+  appName: string;
+  itemIds: string[];
+}): Promise<{ deletedCount: number }> {
+  const res = await apiFetch(
+    "/web/evaluation/feedback-cases/delete",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runtimeId: args.runtimeId,
+        region: args.region,
+        appName: args.appName,
+        itemIds: args.itemIds,
+      }),
+    },
+    {},
+    TRANSFER_REQUEST_TIMEOUT_MS,
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "删除评测案例失败"));
+  }
   return res.json();
 }
 
@@ -348,6 +646,87 @@ export async function deleteSession(
     ep,
   );
   if (!res.ok && res.status !== 404) throw new Error(`delete session failed: ${res.status}`);
+}
+
+function decodeArtifactData(value: string): Uint8Array {
+  const standard = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = standard.padEnd(Math.ceil(standard.length / 4) * 4, "=");
+  const binary = window.atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+export async function downloadArtifact(
+  appName: string,
+  userId: string,
+  sessionId: string,
+  filename: string,
+  version?: number,
+): Promise<void> {
+  const { blob, downloadName } = await fetchArtifactBlob(
+    appName,
+    userId,
+    sessionId,
+    filename,
+    version,
+  );
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = downloadName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+async function fetchArtifactBlob(
+  appName: string,
+  userId: string,
+  sessionId: string,
+  filename: string,
+  version?: number,
+): Promise<{ blob: Blob; downloadName: string }> {
+  const { app, ep } = resolve(appName);
+  const params = version == null ? "" : `?version=${encodeURIComponent(version)}`;
+  const path = `/apps/${encodeURIComponent(app)}/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/artifacts/${encodeURIComponent(filename)}${params}`;
+  const res = await apiFetch(path, {}, ep, TRANSFER_REQUEST_TIMEOUT_MS);
+  if (!res.ok) throw new Error(await httpErrorMessage(res, "下载文件失败"));
+  const part = (await res.json()) as AdkPart;
+  const inline = part.inlineData ?? part.inline_data;
+  if (!inline?.data) throw new Error("文件内容不可用");
+  const bytes = decodeArtifactData(inline.data);
+  const buffer = bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer;
+  const blob = new Blob([buffer], {
+    type: inline.mimeType ?? inline.mime_type ?? "application/octet-stream",
+  });
+  return {
+    blob,
+    downloadName: inline.displayName ?? inline.display_name ?? filename,
+  };
+}
+
+export async function previewArtifact(
+  appName: string,
+  userId: string,
+  sessionId: string,
+  filename: string,
+  version?: number,
+): Promise<string> {
+  const { blob } = await fetchArtifactBlob(
+    appName,
+    userId,
+    sessionId,
+    filename,
+    version,
+  );
+  return URL.createObjectURL(blob);
 }
 
 export interface MediaCapabilities {
@@ -475,6 +854,7 @@ export interface AgentNode {
   id?: string;
   name: string;
   description: string;
+  instruction?: string;
   type: AgentNodeType;
   model: string;
   tools: string[];
@@ -519,6 +899,8 @@ export interface AgentInfo {
   model: string;
   tools: string[];
   skills: AgentSkill[];
+  /** False when an older Agent Server omits Skill introspection entirely. */
+  skillsPreviewSupported: boolean;
   subAgents: string[];
   /** Optional for compatibility with Agent Servers released before this field. */
   components?: AgentComponent[];
@@ -526,39 +908,259 @@ export interface AgentInfo {
   searchSources?: AgentSearchCapability[];
   /** Recursive typed tree; only the local server provides it. */
   graph?: AgentNode;
+  /** Complete sanitized builder state exposed by newly generated Agents. */
+  draft?: AgentDraft;
 }
 
-async function fetchAgentInfo(app: string, ep: AdkEndpoint): Promise<AgentInfo> {
+export interface SessionCapabilityItem {
+  id: string;
+  kind: "tool" | "skill";
+  name: string;
+  custom: boolean;
+  description?: string;
+  skillSourceId?: string;
+  version?: string;
+}
+
+export interface SessionCapabilities {
+  schemaVersion: number;
+  revision: number;
+  tools: SessionCapabilityItem[];
+  skills: SessionCapabilityItem[];
+}
+
+export interface AddSessionCapability {
+  kind: "tool" | "skill";
+  name: string;
+  skillSourceId?: string;
+  description?: string;
+  version?: string;
+}
+
+export interface SessionSkillSpace {
+  id: string;
+  name: string;
+  description: string;
+  status: string;
+  region?: string;
+  projectName?: string;
+  skillCount?: number;
+}
+
+export interface SessionSkillCatalogItem {
+  skillId: string;
+  skillName: string;
+  skillDescription: string;
+  version: string;
+  skillStatus: string;
+}
+
+export interface SessionPublicSkill {
+  slug: string;
+  name: string;
+  description: string;
+  sourceType: string;
+  sourceRepo: string;
+  downloadCount: number;
+  evaluationScore: number;
+  version: string;
+  updatedAt: string;
+}
+
+export interface SessionPublicSkillSearchResult {
+  items: SessionPublicSkill[];
+  totalCount: number;
+}
+
+function normalizeSessionCapabilities(payload: Record<string, unknown>): SessionCapabilities {
+  const normalizeItem = (item: Record<string, unknown>): SessionCapabilityItem => ({
+    id: String(item.id ?? ""),
+    kind: item.kind === "skill" ? "skill" : "tool",
+    name: String(item.name ?? ""),
+    custom: item.custom === true,
+    description: typeof item.description === "string" ? item.description : undefined,
+    skillSourceId: typeof item.skill_source_id === "string" ? item.skill_source_id : undefined,
+    version: typeof item.version === "string" ? item.version : undefined,
+  });
+  return {
+    schemaVersion: Number(payload.schema_version ?? 1),
+    revision: Number(payload.revision ?? 0),
+    tools: Array.isArray(payload.tools)
+      ? payload.tools.map((item) => normalizeItem(item as Record<string, unknown>))
+      : [],
+    skills: Array.isArray(payload.skills)
+      ? payload.skills.map((item) => normalizeItem(item as Record<string, unknown>))
+      : [],
+  };
+}
+
+function sessionCapabilitiesPath(
+  app: string,
+  userId: string,
+  sessionId: string,
+): string {
+  return `/harness/apps/${encodeURIComponent(app)}/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/capabilities`;
+}
+
+export async function getSessionCapabilities(
+  appName: string,
+  userId: string,
+  sessionId: string,
+): Promise<SessionCapabilities> {
+  const { app, ep } = resolve(appName);
+  const res = await apiFetch(sessionCapabilitiesPath(app, userId, sessionId), {}, ep);
+  if (!res.ok) throw new Error(await httpErrorMessage(res, "读取会话能力失败"));
+  return normalizeSessionCapabilities(await res.json());
+}
+
+export async function listSessionBuiltinTools(appName: string): Promise<string[]> {
+  const { ep } = resolve(appName);
+  const res = await apiFetch("/harness/capabilities/tools", {}, ep);
+  if (!res.ok) throw new Error(await httpErrorMessage(res, "读取内置工具失败"));
+  const payload = (await res.json()) as { tools?: { name?: string }[] };
+  return (payload.tools ?? [])
+    .map((tool) => tool.name?.trim() ?? "")
+    .filter(Boolean);
+}
+
+export async function listSessionSkillSpaces(
+  appName: string,
+): Promise<SessionSkillSpace[]> {
+  const { ep } = resolve(appName);
+  const res = await apiFetch("/harness/skills/spaces?region=all", {}, ep);
+  if (!res.ok) throw new Error(await httpErrorMessage(res, "读取 Skill Space 失败"));
+  const payload = (await res.json()) as { items?: SessionSkillSpace[] };
+  return payload.items ?? [];
+}
+
+export async function listSessionSkillsInSpace(
+  appName: string,
+  spaceId: string,
+  region?: string,
+): Promise<SessionSkillCatalogItem[]> {
+  const { ep } = resolve(appName);
+  const params = new URLSearchParams({ region: region || "cn-beijing" });
+  const path = `/harness/skills/spaces/${encodeURIComponent(spaceId)}/skills?${params.toString()}`;
+  const res = await apiFetch(path, {}, ep);
+  if (!res.ok) throw new Error(await httpErrorMessage(res, "读取 Skill 列表失败"));
+  const payload = (await res.json()) as { items?: SessionSkillCatalogItem[] };
+  return payload.items ?? [];
+}
+
+export async function searchSessionPublicSkills(
+  appName: string,
+  query: string,
+  pageNumber = 1,
+  pageSize = 20,
+): Promise<SessionPublicSkillSearchResult> {
+  const { ep } = resolve(appName);
+  const params = new URLSearchParams({
+    query,
+    page_number: String(pageNumber),
+    page_size: String(pageSize),
+  });
+  const res = await apiFetch(`/harness/skills/findskill?${params.toString()}`, {}, ep);
+  if (!res.ok) throw new Error(await httpErrorMessage(res, "搜索 Skill Hub 失败"));
+  const payload = (await res.json()) as Partial<SessionPublicSkillSearchResult>;
+  return {
+    items: payload.items ?? [],
+    totalCount: Number(payload.totalCount ?? 0),
+  };
+}
+
+export async function addSessionCapability(
+  appName: string,
+  userId: string,
+  sessionId: string,
+  capability: AddSessionCapability,
+  expectedRevision: number,
+): Promise<SessionCapabilities> {
+  const { app, ep } = resolve(appName);
+  const res = await apiFetch(
+    sessionCapabilitiesPath(app, userId, sessionId),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        kind: capability.kind,
+        name: capability.name,
+        skill_source_id: capability.skillSourceId,
+        description: capability.description,
+        version: capability.version,
+        expected_revision: expectedRevision,
+      }),
+    },
+    ep,
+  );
+  if (!res.ok) throw new Error(await httpErrorMessage(res, "添加会话能力失败"));
+  return normalizeSessionCapabilities(await res.json());
+}
+
+export async function removeSessionCapability(
+  appName: string,
+  userId: string,
+  sessionId: string,
+  capabilityId: string,
+  expectedRevision: number,
+): Promise<SessionCapabilities> {
+  const { app, ep } = resolve(appName);
+  const path = `${sessionCapabilitiesPath(app, userId, sessionId)}/${encodeURIComponent(capabilityId)}?expected_revision=${expectedRevision}`;
+  const res = await apiFetch(path, { method: "DELETE" }, ep);
+  if (!res.ok) throw new Error(await httpErrorMessage(res, "移除会话能力失败"));
+  return normalizeSessionCapabilities(await res.json());
+}
+
+async function fetchAgentInfo(
+  app: string,
+  ep: AdkEndpoint,
+  loadDraft = true,
+): Promise<AgentInfo> {
   const res = await apiFetch(`/web/agent-info/${app}`, {}, ep);
   if (!res.ok) throw new Error(`agent-info failed: ${res.status}`);
   const info = (await res.json()) as Partial<AgentInfo>;
+  if (loadDraft && !info.draft) {
+    try {
+      const draftRes = await apiFetch(`/web/agent-draft/${app}`, {}, ep);
+      if (draftRes.ok) {
+        const payload = (await draftRes.json()) as { draft?: AgentDraft };
+        info.draft = payload.draft;
+      }
+    } catch {
+      // Older or non-Studio Agents do not expose editable builder metadata.
+    }
+  }
   return {
     name: info.name ?? app,
     description: info.description ?? "",
     type: info.type,
     model: info.model ?? "",
     tools: info.tools ?? [],
+    skillsPreviewSupported: Array.isArray(info.skills),
     skills: info.skills ?? [],
     subAgents: info.subAgents ?? [],
     components: info.components ?? [],
     searchSources: info.searchSources ?? [],
     graph: info.graph,
+    draft: info.draft,
   };
 }
 
 export async function getAgentInfo(appName: string): Promise<AgentInfo> {
   const { app, ep } = resolve(appName);
-  return fetchAgentInfo(app, ep);
+  return fetchAgentInfo(app, ep, false);
 }
 
 /** Read Agent metadata for a Runtime without connecting or persisting it. */
 export async function getRuntimeAgentInfo(
   runtimeId: string,
   region: string,
+  knownApp?: string,
 ): Promise<AgentInfo> {
   const ep = { runtimeId, region };
-  const apps = await fetchRemoteApps("", "", ep);
-  const app = apps[0];
+  const cacheKey = runtimeAppsCacheKey(runtimeId, region);
+  const cached = runtimeAppsCache.get(cacheKey);
+  if (cached && cached.expiresAt <= Date.now()) runtimeAppsCache.delete(cacheKey);
+  const app = knownApp || cached?.apps[0] || (await fetchRemoteApps("", "", ep))[0];
   if (!app) throw new Error("该 Runtime 未提供可预览的 Agent。");
   return fetchAgentInfo(app, ep);
 }
@@ -636,6 +1238,8 @@ export interface RunArgs {
   functionResponses?: { id: string; name: string; response: unknown }[];
   /** Abort the stream (e.g. when the user switches to another session). */
   signal?: AbortSignal;
+  /** Use the session-aware harness runner when the server exposes it. */
+  sessionCapabilities?: boolean;
 }
 
 /** Stream agent events for one user turn. */
@@ -648,6 +1252,7 @@ export async function* runSSE({
   invocation,
   functionResponses = [],
   signal,
+  sessionCapabilities = false,
 }: RunArgs): AsyncGenerator<AdkEvent, void, unknown> {
   const { app, ep } = resolve(appName);
   const attachmentParts = attachments.flatMap<Record<string, unknown>>((a) => {
@@ -693,7 +1298,7 @@ export async function* runSSE({
     };
   }
   const res = await apiFetch(
-    `/run_sse`,
+    sessionCapabilities ? `/harness/run_sse` : `/run_sse`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -733,11 +1338,30 @@ export interface DeployAgentkitResult {
   runtimeId?: string;
   consoleUrl?: string;
   region?: string;
+  version?: number | null;
   feishuChannel?: {
     enabled: boolean;
     transport: string;
     runtimeId?: string;
   };
+}
+
+export interface DeployBuildLogSnapshot {
+  source: "code-pipeline";
+  status: "running" | "complete" | "error";
+  text: string;
+  lineCount: number;
+  truncated: boolean;
+  omittedEarly?: boolean;
+  snapshotTruncated?: boolean;
+  updatedAt: number;
+  pipelineId?: string;
+  pipelineName?: string;
+  pipelineRunId?: string;
+  workspaceId?: string;
+  workspaceName?: string;
+  error?: string;
+  pendingMessage?: string;
 }
 
 /** One live progress frame streamed during a deployment. */
@@ -747,6 +1371,7 @@ export interface DeployStage {
   message: string;
   pct?: number;
   runtimeName?: string;
+  buildLog?: DeployBuildLogSnapshot;
 }
 
 interface DeployFrame extends Partial<DeployAgentkitResult> {
@@ -776,6 +1401,8 @@ export async function deployAgentkitProject(
   },
   opts?: {
     taskId?: string;
+    runtimeId?: string;
+    description?: string;
     onStage?: (s: DeployStage) => void;
     im?: {
       feishu?: {
@@ -796,6 +1423,12 @@ export async function deployAgentkitProject(
 
   let res: Response;
   try {
+    opts?.onStage?.({
+      level: "info",
+      phase: "upload",
+      message: "正在上传代码包",
+      pct: 0,
+    });
     res = await apiFetch(
       "/web/deploy-agentkit",
       {
@@ -807,6 +1440,8 @@ export async function deployAgentkitProject(
           files,
           config,
           taskId,
+          runtimeId: opts?.runtimeId,
+          description: normalizeRuntimeDescription(opts?.description ?? ""),
           im: opts?.im,
           envs: opts?.envs,
         }),
@@ -814,6 +1449,12 @@ export async function deployAgentkitProject(
       {},
       0,
     );
+    opts?.onStage?.({
+      level: "success",
+      phase: "upload",
+      message: "代码包上传完成",
+      pct: 100,
+    });
   } catch (error) {
     clearController();
     throw error;
@@ -858,6 +1499,7 @@ export async function deployAgentkitProject(
     runtimeId: final.runtimeId,
     consoleUrl: final.consoleUrl,
     region: final.region,
+    version: final.version,
     feishuChannel: final.feishuChannel,
   };
 }
@@ -885,6 +1527,7 @@ export interface ManagedRuntime {
   createdAt: string;
   author?: string;
   region: string;
+  currentVersion?: number | null;
 }
 
 /** List AgentKit runtimes the server authorizes this user to manage. */
@@ -918,6 +1561,7 @@ export interface SiteBranding {
 
 export interface UiConfig {
   studio: boolean;
+  version: string;
   branding: SiteBranding;
   features: UiFeatures;
   defaultView: "chat" | "addAgent";
@@ -933,6 +1577,7 @@ export const DEFAULT_SITE_BRANDING: SiteBranding = {
 
 const DEFAULT_UI_CONFIG: UiConfig = {
   studio: false,
+  version: "",
   branding: DEFAULT_SITE_BRANDING,
   features: {
     newChat: true,
@@ -961,6 +1606,7 @@ export async function getUiConfig(): Promise<UiConfig> {
       : DEFAULT_SITE_BRANDING.logoUrl;
     return {
       studio: d.studio ?? false,
+      version: typeof d.version === "string" ? d.version : "",
       branding: {
         title: typeof d.branding?.title === "string"
           ? d.branding.title
@@ -1014,6 +1660,80 @@ export async function getStudioAccess(): Promise<StudioAccess> {
   return access;
 }
 
+export interface StudioReleaseOption {
+  version: string;
+  gitSha: string;
+  createdAt: string;
+  changelog: string[];
+}
+
+export interface StudioUpdateStatus {
+  enabled: boolean;
+  currentVersion: string;
+  latestVersion: string;
+  latestGitSha: string;
+  releases: StudioReleaseOption[];
+  available: boolean;
+  state: "disabled" | "idle" | "updating" | "error";
+  message: string;
+  progressStage:
+    | "idle"
+    | "resolving"
+    | "downloading"
+    | "preparing"
+    | "submitting"
+    | "publishing"
+    | "complete"
+    | "error";
+  progressMessage: string;
+  targetVersion: string;
+  startedAt: number;
+  errorId: string;
+  errorStage: string;
+  errorLog: string;
+  updateLogs: string[];
+  consoleUrl: string;
+}
+
+/** Check the configured immutable Studio main release channel. */
+export async function getStudioUpdateStatus(
+  targetVersion?: string,
+  startedAt?: number,
+): Promise<StudioUpdateStatus> {
+  const params = new URLSearchParams();
+  if (targetVersion) params.set("targetVersion", targetVersion);
+  if (startedAt) params.set("startedAt", String(startedAt));
+  const query = params.size ? `?${params.toString()}` : "";
+  const res = await apiFetch(`/web/studio-update${query}`);
+  if (!res.ok) throw new Error(`检查 Studio 更新失败 (${res.status})`);
+  return (await res.json()) as StudioUpdateStatus;
+}
+
+/** Stage the latest full Studio bundle and submit a VeFaaS release. */
+export async function startStudioUpdate(
+  version: string,
+): Promise<{ version: string }> {
+  const res = await apiFetch("/web/studio-update", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-VeADK-Studio-Update": "1",
+    },
+    body: JSON.stringify({ version }),
+  }, {}, TRANSFER_REQUEST_TIMEOUT_MS);
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const payload = (await res.json()) as { detail?: unknown };
+      detail = typeof payload.detail === "string" ? payload.detail : "";
+    } catch {
+      detail = "";
+    }
+    throw new Error(detail || `提交 Studio 更新失败 (${res.status})`);
+  }
+  return (await res.json()) as { version: string };
+}
+
 /** One AgentKit runtime as listed by `/web/runtimes` (control-plane). */
 export interface CloudRuntime {
   name: string;
@@ -1021,8 +1741,12 @@ export interface CloudRuntime {
   status: string;
   region: string;
   author: string;
+  createdAt?: string;
+  currentVersion?: number | null;
   /** True when this runtime was deployed by the current user (veadk:author). */
   isMine: boolean;
+  /** Server-authorized deletion capability for this managed Runtime. */
+  canDelete: boolean;
 }
 
 /** One page of cloud runtimes plus the token to fetch the next page. */
@@ -1058,7 +1782,7 @@ export async function getRuntimes(
  *  the runtime does not support it (non-200 / not an ADK server). */
 export async function probeRuntimeApps(
   runtimeId: string,
-  region = "cn-beijing",
+  region: string,
 ): Promise<string[] | null> {
   try {
     const res = await fetchRemoteApps("", "", { runtimeId, region });
@@ -1077,7 +1801,7 @@ export async function probeRuntimeApps(
 /** Delete a deployed runtime by id. */
 export async function deleteRuntime(
   runtimeId: string,
-  region = "cn-beijing",
+  region: string,
 ): Promise<void> {
   const res = await apiFetch("/web/delete-runtime", {
     method: "POST",
@@ -1117,12 +1841,13 @@ export interface RuntimeDetail {
   mcpToolsetId: string;
   artifactUrl: string;
   artifactType: string;
+  networkTypes: string[];
 }
 
 /** Fetch a runtime's control-plane detail (config/status/envs). */
 export async function getRuntimeDetail(
   runtimeId: string,
-  region = "cn-beijing",
+  region: string,
 ): Promise<RuntimeDetail> {
   const res = await apiFetch(
     `/web/runtime-detail?runtimeId=${encodeURIComponent(runtimeId)}&region=${encodeURIComponent(region)}`,
@@ -1153,6 +1878,33 @@ export async function generateAgentProject(
   return res.json();
 }
 
+export interface GeneratedAgentDraftResult {
+  draft: AgentDraft;
+  summary: string;
+  unresolvedItems: string[];
+}
+
+const GENERATED_AGENT_DRAFT_TIMEOUT_MS = 190_000;
+
+export async function generateAgentDraftFromRequirement(
+  requirement: string,
+): Promise<GeneratedAgentDraftResult> {
+  const res = await apiFetch(
+    "/web/generated-agent-drafts",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ requirement }),
+    },
+    {},
+    GENERATED_AGENT_DRAFT_TIMEOUT_MS,
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "生成 Agent 配置失败"));
+  }
+  return parseJsonResponse<GeneratedAgentDraftResult>(res, "生成 Agent 配置失败");
+}
+
 export async function createGeneratedAgentTestRun(
   draft: AgentDraft,
 ): Promise<GeneratedAgentTestRun> {
@@ -1164,7 +1916,7 @@ export async function createGeneratedAgentTestRun(
   if (!res.ok) {
     throw new Error(await httpErrorMessage(res, "创建调试运行失败"));
   }
-  return res.json();
+  return parseJsonResponse<GeneratedAgentTestRun>(res, "创建调试运行失败");
 }
 
 export async function createGeneratedAgentTestSession(
@@ -1179,8 +1931,23 @@ export async function createGeneratedAgentTestSession(
   if (!res.ok) {
     throw new Error(await httpErrorMessage(res, "创建调试会话失败"));
   }
-  const session = await res.json();
+  const session = await parseJsonResponse<{ id: string }>(res, "创建调试会话失败");
   return session.id;
+}
+
+export async function getGeneratedAgentTestTrace(
+  runId: string,
+  sessionId: string,
+): Promise<TraceSpan[]> {
+  const res = await apiFetch(
+    `/web/generated-agent-test-runs/${encodeURIComponent(runId)}/trace/session/${encodeURIComponent(sessionId)}`,
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "加载调试调用链路失败"));
+  }
+  const spans = await parseJsonResponse<unknown>(res, "加载调试调用链路失败");
+  if (!Array.isArray(spans)) throw new Error("加载调试调用链路失败：返回格式无效");
+  return spans as TraceSpan[];
 }
 
 export async function* runGeneratedAgentTestSSE({

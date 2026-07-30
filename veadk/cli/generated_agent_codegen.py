@@ -194,7 +194,8 @@ class AgentDraft(BaseModel):
     shortTermBackend: str = "local"
     longTermBackend: str = "local"
     autoSaveSession: bool = False
-    knowledgebaseBackend: str = "local"
+    knowledgebaseBackend: str = "viking"
+    knowledgebaseIndex: str = ""
     tracingExporters: list[str] = Field(default_factory=list)
     selectedSkills: list[SelectedSkill] = Field(default_factory=list)
     workflow: WorkflowConfig | None = None
@@ -348,6 +349,31 @@ def _build_a2a(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
     return var_name
 
 
+def _is_registry_backed_a2a(draft: AgentDraft) -> bool:
+    return draft.agentType == "a2a" and draft.a2aRegistry.enabled
+
+
+def _append_a2a_registry_tools(acc: _Acc, var_name: str) -> tuple[str, str]:
+    _add_import(acc, "from veadk.a2a.registry_client import registry_config_from_env")
+    _add_import(
+        acc,
+        "from veadk.tools.builtin_tools.a2a_registry import build_a2a_registry_tools",
+    )
+    registry_var = _unique_ident(
+        acc,
+        f"a2a_registry_config_{var_name}",
+        "a2a_registry_config",
+    )
+    tools_var = _unique_ident(
+        acc,
+        f"a2a_registry_tools_{var_name}",
+        "a2a_registry_tools",
+    )
+    acc.pre_lines.append(f"{registry_var} = registry_config_from_env()")
+    acc.pre_lines.append(f"{tools_var} = build_a2a_registry_tools({registry_var})")
+    return registry_var, tools_var
+
+
 def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
     if draft.agentType == "a2a":
         if draft.a2aRegistry.enabled:
@@ -420,28 +446,19 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
             tool_exprs.append(v)
 
     registry_var = ""
+    registry_source_var = ""
     if draft.a2aRegistry.enabled:
-        _add_import(
-            acc, "from veadk.a2a.registry_client import registry_config_from_env"
+        registry_source_var = var_name
+    else:
+        for idx, sub in enumerate(draft.subAgents):
+            if _is_registry_backed_a2a(sub):
+                registry_source_var = f"{var_name}_sub_{idx + 1}"
+                break
+    if registry_source_var:
+        registry_var, registry_tools_var = _append_a2a_registry_tools(
+            acc, registry_source_var
         )
-        _add_import(
-            acc,
-            "from veadk.tools.builtin_tools.a2a_registry import "
-            "build_a2a_registry_tools",
-        )
-        registry_var = _unique_ident(
-            acc,
-            f"a2a_registry_config_{var_name}",
-            "a2a_registry_config",
-        )
-        tools_var = _unique_ident(
-            acc,
-            f"a2a_registry_tools_{var_name}",
-            "a2a_registry_tools",
-        )
-        acc.pre_lines.append(f"{registry_var} = registry_config_from_env()")
-        acc.pre_lines.append(f"{tools_var} = build_a2a_registry_tools({registry_var})")
-        tool_exprs.append(f"*{tools_var}")
+        tool_exprs.append(f"*{registry_tools_var}")
         _add_env(acc, A2A_REGISTRY_ENV)
 
     for name in draft.tools:
@@ -518,10 +535,12 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
                 acc.extras.add(backend.pip_extra)
 
     if draft.knowledgebase:
-        backend = KB_BY_ID.get(draft.knowledgebaseBackend or "local")
+        backend = KB_BY_ID.get(draft.knowledgebaseBackend or "viking")
         if backend:
             _add_import(acc, "from veadk.knowledgebase import KnowledgeBase")
-            idx = ident(f"{draft.name}_kb", f"{var_name}_kb")
+            idx = draft.knowledgebaseIndex.strip() or ident(
+                f"{draft.name}_kb", f"{var_name}_kb"
+            )
             v = f"kb_{var_name}"
             acc.pre_lines.append(
                 f"{v} = KnowledgeBase(backend={_py_str(backend.id)}, "
@@ -551,6 +570,8 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
 
     sub_vars: list[str] = []
     for idx, sub in enumerate(draft.subAgents):
+        if _is_registry_backed_a2a(sub):
+            continue
         child_var = f"{var_name}_sub_{idx + 1}"
         _build_agent(acc, sub, child_var)
         sub_vars.append(child_var)
@@ -559,7 +580,7 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
 
     joined_kwargs = ",\n    ".join(kwargs)
     acc.pre_lines.append(f"{var_name} = Agent(\n    {joined_kwargs},\n)")
-    if draft.a2aRegistry.enabled:
+    if registry_var:
         acc.pre_lines.append(
             f'setattr({var_name}, "_veadk_a2a_registry_config", {registry_var})'
         )
@@ -647,28 +668,47 @@ def render_readme(name: str, draft: AgentDraft) -> str:
 def _render_app_py(
     pkg: str,
     feishu_channel_enabled: bool,
-    a2a_registry_enabled: bool,
 ) -> str:
     lines = [
         _PYTHON_LICENSE_HEADER.rstrip(),
         "",
-        f"from agents.{pkg}.agent import AGENT_DISPLAY_NAMES, root_agent",
+        "from inspect import signature",
+        "",
+        f"from agents.{pkg}.agent import AGENT_DISPLAY_NAMES, AGENT_DRAFT, root_agent",
     ]
-    if a2a_registry_enabled:
-        lines.append(f"from agents.{pkg}.dynamic_a2a import enable_dynamic_a2a_tools")
+    lines.append(f"from agents.{pkg}.dynamic_a2a import enable_dynamic_a2a_tools")
     lines.extend(
         [
             "from veadk.integrations.agentkit import create_agentkit_app, run_agentkit_app",
             "",
+            "_app_options = {",
+            f'    "enable_feishu": {feishu_channel_enabled!r},',
+            "}",
+            'if "agent_draft" in signature(create_agentkit_app).parameters:',
+            '    _app_options["agent_draft"] = AGENT_DRAFT',
+            "",
             "app = create_agentkit_app(",
             "    root_agent,",
             "    AGENT_DISPLAY_NAMES,",
-            f"    enable_feishu={feishu_channel_enabled!r},",
+            "    **_app_options,",
             ")",
+            "",
+            "_agent_info_index = next(",
+            "    index",
+            "    for index, route in enumerate(app.router.routes)",
+            '    if getattr(route, "path", "") == "/web/agent-info/{app_name}"',
+            ")",
+            "_agent_info_route = app.router.routes.pop(_agent_info_index)",
+            "_agent_info_handler = _agent_info_route.endpoint",
+            "",
+            '@app.get("/web/agent-info/{app_name}")',
+            "def agent_info_with_draft(app_name: str):",
+            '    return {**_agent_info_handler(app_name), "draft": AGENT_DRAFT}',
+            "",
+            "app.router.routes.insert(_agent_info_index, app.router.routes.pop())",
         ]
     )
-    if a2a_registry_enabled:
-        lines.extend(["", "enable_dynamic_a2a_tools(app, root_agent)"])
+    lines.extend(["", "enable_dynamic_a2a_tools(app, root_agent)"])
     lines.extend(["", 'if __name__ == "__main__":', "    run_agentkit_app(app)", ""])
     return "\n".join(lines)
 
@@ -693,6 +733,7 @@ from google.adk.cli.adk_web_server import RunAgentRequest
 from google.adk.runners import Runner as AdkRunner
 from google.adk.utils.context_utils import Aclosing
 from google.genai import types
+from veadk.cli.frontend_invocation import FrontendInvocationPlugin
 
 
 _SERVER_STATE_KEY = "_veadk_agentkit_server"
@@ -820,7 +861,11 @@ def _dynamic_runner(services: _RuntimeServices, *, app_name: str, root_agent: Ba
     if services.session_service is None:
         raise RuntimeError("ADK session service is unavailable")
     run_agent = _spawn_dynamic_a2a_agent(root_agent, prompt)
-    agent_app = App(name=app_name, root_agent=run_agent, plugins=[])
+    agent_app = App(
+        name=app_name,
+        root_agent=run_agent,
+        plugins=[FrontendInvocationPlugin()],
+    )
     return AdkRunner(
         app=agent_app,
         artifact_service=services.artifact_service,
@@ -887,7 +932,7 @@ def enable_dynamic_a2a_tools(app: FastAPI, root_agent: BaseAgent) -> None:
 
     services = _RuntimeServices(app)
     session_service = services.session_service
-    if session_service is None or not _has_a2a_registry_config(root_agent):
+    if session_service is None:
         return
 
     @app.post("/run", response_model=None)
@@ -1076,12 +1121,6 @@ def enable_dynamic_a2a_tools(app: FastAPI, root_agent: BaseAgent) -> None:
     )
 
 
-def _draft_has_a2a_registry(draft: AgentDraft) -> bool:
-    if draft.a2aRegistry.enabled:
-        return True
-    return any(_draft_has_a2a_registry(sub_agent) for sub_agent in draft.subAgents)
-
-
 def _a2a_registry_env_values(draft: AgentDraft) -> dict[str, str]:
     if draft.a2aRegistry.enabled:
         registry = draft.a2aRegistry
@@ -1097,6 +1136,61 @@ def _a2a_registry_env_values(draft: AgentDraft) -> dict[str, str]:
         if values:
             return values
     return {}
+
+
+def debug_runtime_env_from_draft(draft: AgentDraft) -> dict[str, str]:
+    """Return runtime env values allowed by active components in a debug draft."""
+    allowed_keys: set[str] = set()
+    fixed_values: dict[str, str] = {}
+
+    def allow_env(items: tuple[EnvVar, ...]) -> None:
+        allowed_keys.update(item.key for item in items)
+
+    def visit(node: AgentDraft) -> None:
+        for tool_id in node.builtinTools:
+            tool = TOOL_BY_ID.get(tool_id)
+            if tool:
+                allow_env(tool.env)
+        if node.a2aRegistry.enabled:
+            registry = node.a2aRegistry
+            fixed_values.update(
+                {
+                    "REGISTRY_SPACE_ID": registry.registrySpaceId.strip(),
+                    "REGISTRY_TOP_K": registry.registryTopK.strip() or "3",
+                    "REGISTRY_REGION": registry.registryRegion.strip() or "cn-beijing",
+                    "REGISTRY_ENDPOINT": registry.registryEndpoint.strip()
+                    or "https://open.volcengineapi.com/",
+                }
+            )
+        if node.memory.shortTerm:
+            backend = STM_BY_ID.get(node.shortTermBackend)
+            if backend:
+                allow_env(backend.env)
+        if node.memory.longTerm:
+            backend = LTM_BY_ID.get(node.longTermBackend)
+            if backend:
+                allow_env(backend.env)
+        if node.knowledgebase:
+            backend = KB_BY_ID.get(node.knowledgebaseBackend)
+            if backend:
+                allow_env(backend.env)
+        if node.tracing:
+            for exporter_id in node.tracingExporters:
+                exporter = EXPORTER_BY_ID.get(exporter_id)
+                if exporter:
+                    allow_env(exporter.env)
+                    fixed_values[exporter.enable_flag] = "true"
+        for sub_agent in node.subAgents:
+            visit(sub_agent)
+
+    visit(draft)
+    env = {
+        key: value
+        for key, value in draft.deployment.envValues.items()
+        if key in allowed_keys and value.strip()
+    }
+    env.update(fixed_values)
+    return env
 
 
 def _materialize_a2a_registry_env(env: list[EnvVar], draft: AgentDraft) -> list[EnvVar]:
@@ -1145,12 +1239,12 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
     agent_definition = (
         "\n\n".join(acc.pre_lines)
         + f"\n\nAGENT_DISPLAY_NAMES = {acc.agent_display_names!r}\n"
+        + f"AGENT_DRAFT = {draft.model_dump(mode='json', by_alias=True)!r}\n"
         + "\n# ADK 加载器要求：顶层 agent 必须命名为 root_agent\nroot_agent = agent\n"
     )
     agent_py = f"{_PYTHON_LICENSE_HEADER}\n{import_block}\n\n{agent_definition}"
 
-    a2a_registry_enabled = _draft_has_a2a_registry(draft)
-    app_py = _render_app_py(pkg, feishu_channel_enabled, a2a_registry_enabled)
+    app_py = _render_app_py(pkg, feishu_channel_enabled)
     files = [
         GeneratedFile(path="app.py", content=app_py),
         # Top-level agents package marker so `from agents.<pkg>.agent import
@@ -1161,19 +1255,13 @@ def generate_project_from_draft(draft: AgentDraft) -> GeneratedProject:
             path=f"agents/{pkg}/__init__.py",
             content=(
                 f"{_PYTHON_LICENSE_HEADER}\n"
-                "from .agent import AGENT_DISPLAY_NAMES, root_agent\n\n"
-                '__all__ = ["AGENT_DISPLAY_NAMES", "root_agent"]\n'
+                "from .agent import AGENT_DISPLAY_NAMES, AGENT_DRAFT, root_agent\n\n"
+                '__all__ = ["AGENT_DISPLAY_NAMES", "AGENT_DRAFT", "root_agent"]\n'
             ),
         ),
-        *(
-            [
-                GeneratedFile(
-                    path=f"agents/{pkg}/dynamic_a2a.py",
-                    content=_render_dynamic_a2a_py(),
-                )
-            ]
-            if a2a_registry_enabled
-            else []
+        GeneratedFile(
+            path=f"agents/{pkg}/dynamic_a2a.py",
+            content=_render_dynamic_a2a_py(),
         ),
         GeneratedFile(
             path=".env.example",
