@@ -409,6 +409,117 @@
   opacity: 1;
 }
 
+.codex-session-card {
+  width: 100%;
+  min-height: 118px;
+  grid-template-columns: minmax(0, 1fr) 76px;
+  gap: 12px;
+  padding: 15px 14px 14px 16px;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.codex-session-card:disabled {
+  cursor: default;
+}
+
+.codex-session-card:disabled:hover {
+  border-color: hsl(var(--border));
+  background: hsl(var(--panel));
+  box-shadow: 0 1px 2px hsl(var(--foreground) / 0.025);
+}
+
+.codex-session-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.codex-session-title h3 {
+  min-width: 0;
+  flex: 1;
+}
+
+.codex-session-status {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: hsl(var(--secondary));
+  color: hsl(var(--muted-foreground));
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.codex-session-status.is-ready {
+  background: hsl(142 55% 94%);
+  color: hsl(142 62% 30%);
+}
+
+.codex-session-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 12px;
+}
+
+.codex-session-id {
+  display: block;
+  margin-top: 5px;
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: 10.5px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-session-enter {
+  align-self: center;
+  justify-self: end;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+.codex-session-card:not(:disabled):hover .codex-session-enter {
+  color: hsl(var(--foreground));
+}
+
+.my-agent-inline-error {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 7px 10px;
+  border: 1px solid hsl(var(--destructive) / 0.22);
+  border-radius: 8px;
+  background: hsl(var(--destructive) / 0.05);
+  color: hsl(var(--destructive));
+  font-size: 12px;
+}
+
+.my-agent-inline-error button {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+}
+
+.my-agent-inline-error button:hover {
+  background: hsl(var(--destructive) / 0.08);
+}
+
 .my-agent-loading-mark {
   box-sizing: border-box;
   border: 1.5px solid currentColor;
@@ -491,6 +602,7 @@
 
 .my-agent-card-main:focus-visible,
 .my-agent-connect:focus-visible,
+.codex-session-card:focus-visible,
 .my-agent-type-pill:focus-visible,
 .my-agent-add:focus-visible,
 .my-agent-empty button:focus-visible {

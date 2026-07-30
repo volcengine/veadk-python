@@ -13,8 +13,8 @@ server that `veadk frontend` launches — no separate backend.
 - **Composer invocations**: type `/` to select a mounted skill or `@` to route
   the turn to a mentionable sub-agent. New conversations address the selected
   Agent by its display name in the composer placeholder.
-- **New-chat modes**: keep the existing Agent conversation path, start a
-  temporary Codex conversation in an AgentKit Sandbox, or create a Skill with
+- **New-chat modes**: keep the existing Agent conversation path, connect a
+  reusable Codex AgentKit Sandbox Session, or create a Skill with
   a real two-model A/B run in independent AgentKit CodeEnv sessions. Skill
   progress resumes from Sandbox state if the creation stream is interrupted;
   completed candidates can be compared, downloaded as ZIP files, and added to
@@ -36,13 +36,13 @@ server that `veadk frontend` launches — no separate backend.
   Session IDs use normal text with a copy action, and sidebar title tooltips show
   the full conversation name. Long Agent lists stay within the viewport and
   scroll independently.
-- **Insight Sandbox**: start an isolated, temporary AgentKit CodeEnv session
-  from the new-chat composer or global header. Studio reuses its dedicated
-  Sandbox tool, creates a fresh user-owned session, streams Codex reasoning,
-  tool activity, and replies into the normal conversation renderer, and deletes
-  the cloud session on exit without adding it to normal chat history.
-  Reloading can create another session; AgentKit reclaims abandoned sessions
-  automatically when their TTL ends.
+- **Codex Sandbox agents**: the Codex directory lists the configured AgentKit
+  CodeEnv Tool's Sessions and treats each Session as a reusable Agent. Creating
+  an Agent provisions a new Sandbox Session; selecting a Ready item resolves its
+  Endpoint on the server and streams Codex reasoning, tool activity, and replies
+  into the normal conversation renderer. Returning to the directory disconnects
+  only the local conversation bridge and never deletes the cloud Session.
+  New Sessions use an eight-hour TTL, after which AgentKit reclaims them.
 - **AgentKit Skill center**: browse Skill Spaces and their skills with
   server-side pagination by region, then inspect the selected Skill content.
 - **Tracing viewer**: a span tree + detail panel from the ADK debug trace.
@@ -112,9 +112,10 @@ Insight Sandbox requires server-side `VOLCENGINE_ACCESS_KEY`,
 These credentials and the AgentKit session endpoint remain on the Studio server
 and are never returned to the browser.
 
-Temporary Sandbox state is process-local. Run Studio with one server worker, or
-configure session affinity so create, message, and delete requests from the same
-browser reach the same instance.
+Sandbox discovery and creation use the AgentKit control plane, so the Session
+directory survives Studio restarts. Active conversation bridge state and the
+current Codex thread ID remain process-local; keep one server worker or configure
+session affinity while a conversation is active.
 
 ## Development specification
 
@@ -351,7 +352,7 @@ assistant messages returned by the generator. Private chain-of-thought and
 credentials never enter the UI. Completed candidates still support preview,
 ZIP download, and AgentKit publish.
 
-Configure separate ready AgentKit `CodeEnv` Tools for temporary chats and Skill
+Configure separate ready AgentKit `CodeEnv` Tools for Codex agents and Skill
 creation before starting the server. The Tool IDs are intentionally server-only
 and cannot be supplied by the browser:
 

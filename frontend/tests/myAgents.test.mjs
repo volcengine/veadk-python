@@ -165,6 +165,38 @@ test("hides deleted Runtime cards and invalidates stale Runtime pages", () => {
   assert.match(appSource, /hiddenRuntimeIds=\{hiddenRuntimeIds\}/);
 });
 
+test("loads configured Codex Sessions as reusable agents", () => {
+  assert.match(
+    pageSource,
+    /import \{ sandboxClient, type SandboxSession \} from "\.\.\/adk\/sandbox"/,
+  );
+  assert.match(pageSource, /sandboxClient\s*\.listSessions/);
+  assert.match(pageSource, /activeType !== "codex"/);
+  assert.match(pageSource, /codexRefreshKey/);
+  assert.match(pageSource, /function CodexSessionCard/);
+  assert.match(pageSource, /session\.userSessionId/);
+  assert.match(pageSource, /session\.status\.toLowerCase\(\) === "ready"/);
+  assert.match(pageSource, /<dt>到期时间<\/dt>/);
+  assert.match(pageSource, /进入对话/);
+  assert.match(pageSource, /await onOpenCodexSession\(session\)/);
+  assert.match(pageSource, /重新加载/);
+  assert.match(pageSource, /正在加载 Codex 智能体/);
+});
+
+test("keeps the Codex filter selected across conversation navigation", () => {
+  assert.match(pageSource, /activeType: AgentType/);
+  assert.match(pageSource, /onActiveTypeChange: \(type: AgentType\) => void/);
+  assert.match(
+    pageSource,
+    /aria-pressed=\{activeType === type\.id\}[\s\S]*?onClick=\{\(\) => onActiveTypeChange\(type\.id\)\}/,
+  );
+  assert.match(appSource, /const \[agentDirectoryType, setAgentDirectoryType\]/);
+  assert.match(
+    appSource,
+    /<MyAgents[\s\S]*?activeType=\{agentDirectoryType\}[\s\S]*?onActiveTypeChange=\{setAgentDirectoryType\}/,
+  );
+});
+
 test("loads more Runtime cards at the scroll sentinel with accessible animation", () => {
   assert.match(pageSource, /new IntersectionObserver/);
   assert.match(pageSource, /loadMoreRef/);

@@ -59,10 +59,10 @@ export function SandboxLaunchDialog({
 
   const loading = state === "loading";
   const title = loading
-    ? "正在初始化沙箱"
+    ? "正在创建沙箱"
     : state === "error"
       ? "启动失败"
-      : "启用 Codex 智能体";
+      : "创建 Codex 智能体";
 
   return createPortal(
     <div
@@ -93,21 +93,21 @@ export function SandboxLaunchDialog({
             </p>
           ) : loading ? (
             <p id="sandbox-dialog-description" aria-live="polite">
-              正在寻找可用工具并创建内置智能体会话，通常需要一点时间。
+              正在创建 AgentKit Session 并等待沙箱就绪，通常需要一点时间。
             </p>
           ) : (
             <p id="sandbox-dialog-description">
-              将启动 AgentKit 沙箱与 Codex 智能体，本次对话不会被持久化保存。
+              创建一个可重复进入的 AgentKit 沙箱，并将它作为 Codex 智能体显示在列表中。
             </p>
           )}
         </div>
         <footer className="sandbox-dialog-actions">
           <button ref={cancelButtonRef} type="button" onClick={onCancel}>
-            {loading ? "取消启动" : "取消"}
+            {loading ? "取消创建" : "取消"}
           </button>
           {!loading && (
             <button type="button" className="is-primary" onClick={onConfirm}>
-              {state === "error" ? "重新尝试" : "确认开启"}
+              {state === "error" ? "重新尝试" : "确认创建"}
             </button>
           )}
         </footer>
