@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { ComponentType, SVGProps } from "react";
 import {
   ArrowUp,
   AtSign,
@@ -9,8 +10,10 @@ import {
   FileVideo2,
   ImageIcon,
   Loader2,
+  MonitorPlay,
   Plus,
   Sparkles,
+  X,
 } from "lucide-react";
 import { motion } from "motion/react";
 import type {
@@ -23,8 +26,29 @@ import { InvocationChips } from "./InvocationChips";
 import { MediaGroup } from "./Media";
 import { isImeCompositionEvent } from "./composerKeyboard";
 import { NewChatModeSelector } from "./new-chat-modes/NewChatModeSelector";
-import type { NewChatMode } from "./new-chat-modes/types";
+import type { NewChatMode, NewChatTask } from "./new-chat-modes/types";
+import { NEW_CHAT_TASK_TOOLS } from "./new-chat-modes/taskTools";
 import { SKILL_MODELS } from "./skill-create/types";
+import { VideoGenerateIcon } from "./builtin-tools/icons";
+
+function SkillCreateIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <rect x="4.25" y="6.25" width="13.5" height="13.5" rx="2.5" />
+      <path d="M11 10v6M8 13h6" />
+      <path d="m19.25 2.75.53 1.47 1.47.53-1.47.53-.53 1.47-.53-1.47-1.47-.53 1.47-.53.53-1.47Z" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
 
 interface CompletionTrigger {
   kind: "skill" | "agent";
@@ -70,19 +94,51 @@ function RewritePromptIcon() {
 }
 
 const STARTER_PROMPTS = [
-  {
-    icon: AnalyzePromptIcon,
-    text: "帮我分析一个问题，并给出清晰的解决思路",
-  },
-  {
-    icon: PlanPromptIcon,
-    text: "根据我的目标，制定一份可执行的行动计划",
-  },
-  {
-    icon: RewritePromptIcon,
-    text: "帮我整理并润色一段内容，让表达更清晰",
-  },
+  { icon: AnalyzePromptIcon, text: "帮我分析一个问题，并给出清晰的解决思路" },
+  { icon: PlanPromptIcon, text: "根据我的目标，制定一份可执行的行动计划" },
+  { icon: RewritePromptIcon, text: "帮我整理并润色一段内容，让表达更清晰" },
 ] as const;
+
+const TASK_SHORTCUTS = [
+  {
+    value: "ppt",
+    label: "PPT",
+    icon: MonitorPlay,
+    prompts: [
+      "复盘【季度】经营表现，提炼指标差距、原因与行动建议",
+      "汇报【项目名称】进展：里程碑、风险、预算和资源诉求",
+      "为【客户行业】输出解决方案：痛点、架构、实施路径与收益",
+      "分析【行业主题】趋势，给出竞争格局、机会与战略建议",
+    ],
+  },
+  {
+    value: "image",
+    label: "图片生成",
+    icon: ImageIcon,
+    prompts: [
+      "为【品牌或产品】设计【高级科技】风格的发布会主视觉",
+      "生成【产品名称】电商海报，突出【核心卖点】与品牌色",
+      "呈现【产品或空间】在【使用场景】中的写实概念效果图",
+      "围绕【传播主题】制作简洁专业的企业社媒配图",
+    ],
+  },
+  {
+    value: "video",
+    label: "视频生成",
+    icon: VideoGenerateIcon,
+    prompts: [
+      "制作【品牌名称】30 秒宣传片，突出【品牌价值】",
+      "为【产品名称】制作 45 秒发布视频：痛点、功能、场景与行动号召",
+      "制作【培训主题】企业培训视频，讲清【关键操作或规范】",
+      "生成【活动名称】20 秒预热视频，包含亮点、时间地点和报名信息",
+    ],
+  },
+] as const satisfies ReadonlyArray<{
+  value: NewChatTask;
+  label: string;
+  icon: ComponentType<SVGProps<SVGSVGElement>>;
+  prompts: readonly string[];
+}>;
 
 export interface ComposerProps {
   sessionId: string;
@@ -105,11 +161,15 @@ export interface ComposerProps {
   onAddFiles: (files: FileList | File[]) => void;
   onRemoveAttachment: (id: string) => void;
   newChatMode?: NewChatMode;
+  newChatTask?: NewChatTask | null;
   newChatLayout?: boolean;
   showModeSelector?: boolean;
   onModeChange?: (value: NewChatMode) => void;
+  onTaskChange?: (value: NewChatTask | null) => void;
   temporaryEnabled?: boolean;
   skillCreateEnabled?: boolean;
+  harnessEnabled?: boolean;
+  builtinTools?: readonly string[];
 }
 
 export function Composer({
@@ -133,11 +193,15 @@ export function Composer({
   onAddFiles,
   onRemoveAttachment,
   newChatMode = "agent",
+  newChatTask = null,
   newChatLayout = false,
   showModeSelector = false,
   onModeChange,
+  onTaskChange,
   temporaryEnabled,
   skillCreateEnabled,
+  harnessEnabled = false,
+  builtinTools = [],
 }: ComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
@@ -205,6 +269,48 @@ export function Composer({
     });
   }
 
+  function applyTaskShortcut(task: (typeof TASK_SHORTCUTS)[number]) {
+    onTaskChange?.(task.value);
+    setMenuOpen(false);
+    setTrigger(null);
+    requestAnimationFrame(() => {
+      ref.current?.focus();
+      ref.current?.setSelectionRange(value.length, value.length);
+    });
+  }
+
+  function applyTaskPrompt(prompt: string) {
+    onChange(prompt);
+    setMenuOpen(false);
+    setTrigger(null);
+    requestAnimationFrame(() => {
+      ref.current?.focus();
+      const placeholderStart = prompt.indexOf("【");
+      const placeholderEnd = prompt.indexOf("】", placeholderStart + 1);
+      if (placeholderStart >= 0 && placeholderEnd > placeholderStart) {
+        ref.current?.setSelectionRange(placeholderStart + 1, placeholderEnd);
+      } else {
+        ref.current?.setSelectionRange(prompt.length, prompt.length);
+      }
+    });
+  }
+
+  function clearTask() {
+    onTaskChange?.(null);
+    onChange("");
+    setMenuOpen(false);
+    setTrigger(null);
+    requestAnimationFrame(() => {
+      ref.current?.focus();
+      ref.current?.setSelectionRange(0, 0);
+    });
+  }
+
+  const selectedTask = TASK_SHORTCUTS.find((task) => task.value === newChatTask);
+  const availableTaskShortcuts = TASK_SHORTCUTS.filter((task) =>
+    NEW_CHAT_TASK_TOOLS[task.value].every((tool) => builtinTools.includes(tool)),
+  );
+
   function updateCompletion(nextValue: string, cursor: number) {
     const prefix = nextValue.slice(0, cursor);
     const match = /(^|\s)([/@])([^\s/@]*)$/.exec(prefix);
@@ -266,7 +372,7 @@ export function Composer({
   }
 
   return (
-    <div className={`composer${newChatLayout ? " composer--new-chat" : ""}${skillMode ? " composer--skill-mode" : ""}`}>
+    <div className={`composer${newChatLayout ? " composer--new-chat" : ""}${skillMode ? " composer--skill-mode" : ""}${selectedTask ? ` composer--has-task composer--task-${selectedTask.value}` : ""}`}>
       {!skillMode ? (
         <InvocationChips
           value={invocation}
@@ -386,6 +492,38 @@ export function Composer({
           />
         ) : null}
 
+        {newChatLayout && newChatMode === "agent" && selectedTask && onTaskChange ? (
+          <button
+            type="button"
+            className={`new-chat-task-chip new-chat-task-chip--${selectedTask.value}`}
+            aria-label={`取消${selectedTask.label}任务`}
+            disabled={busy}
+            onClick={clearTask}
+          >
+            <span className="new-chat-task-chip__icon" aria-hidden="true">
+              <selectedTask.icon className="new-chat-task-chip__task-icon" />
+              <X className="new-chat-task-chip__remove-icon" />
+            </span>
+            <span>{selectedTask.label}</span>
+          </button>
+        ) : null}
+
+        {newChatLayout && skillMode && onModeChange ? (
+          <button
+            type="button"
+            className="new-chat-task-chip new-chat-task-chip--skill"
+            aria-label="退出创建 Skill"
+            disabled={busy}
+            onClick={() => onModeChange("agent")}
+          >
+            <span className="new-chat-task-chip__icon" aria-hidden="true">
+              <SkillCreateIcon className="new-chat-task-chip__task-icon" />
+              <X className="new-chat-task-chip__remove-icon" />
+            </span>
+            <span>Skill</span>
+          </button>
+        ) : null}
+
         <div className="composer-input-stack">
           <textarea
             ref={ref}
@@ -458,7 +596,58 @@ export function Composer({
         </motion.button>
       </div>
 
-      {newChatLayout && newChatMode === "agent" && !value.trim() ? (
+      {newChatLayout && newChatMode === "agent" && harnessEnabled && !selectedTask ? (
+        <div className="task-shortcuts" aria-label="选择任务类型">
+          {availableTaskShortcuts.map((task) => {
+            const TaskIcon = task.icon;
+            return (
+              <button
+                key={task.value}
+                type="button"
+                className="task-shortcut"
+                disabled={disabled || busy}
+                onClick={() => applyTaskShortcut(task)}
+              >
+                <TaskIcon />
+                <span>{task.label}</span>
+              </button>
+            );
+          })}
+          {skillCreateEnabled === true ? (
+            <button
+              type="button"
+              className="task-shortcut"
+              disabled={busy}
+              onClick={() => onModeChange?.("skill-create")}
+            >
+              <SkillCreateIcon />
+              <span>创建 Skill</span>
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {newChatLayout && newChatMode === "agent" && selectedTask ? (
+        <div className="prompt-suggestions" aria-label={`${selectedTask.label}企业提示词`}>
+          {selectedTask.prompts.map((prompt) => {
+            const PromptIcon = selectedTask.icon;
+            return (
+              <button
+                key={prompt}
+                type="button"
+                className="prompt-suggestion"
+                disabled={disabled || busy}
+                onClick={() => applyTaskPrompt(prompt)}
+              >
+                <PromptIcon />
+                <span>{prompt}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {newChatLayout && newChatMode === "agent" && !harnessEnabled && !value.trim() ? (
         <div className="prompt-suggestions" aria-label="快捷提示">
           {STARTER_PROMPTS.map((prompt) => {
             const PromptIcon = prompt.icon;

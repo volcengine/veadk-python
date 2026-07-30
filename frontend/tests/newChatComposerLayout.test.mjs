@@ -31,11 +31,15 @@ const stylesSource = readFileSync(
   new URL("../src/styles.css", import.meta.url),
   "utf8",
 );
+const taskToolsSource = readFileSync(
+  new URL("../src/ui/new-chat-modes/taskTools.ts", import.meta.url),
+  "utf8",
+);
 
 test("expands only the new-chat composer into a multiline input", () => {
   assert.match(
     composerSource,
-    /className=\{`composer\$\{newChatLayout \? " composer--new-chat" : ""\}\$\{skillMode \? " composer--skill-mode" : ""\}`\}/,
+    /className=\{`composer\$\{newChatLayout \? " composer--new-chat" : ""\}\$\{skillMode \? " composer--skill-mode" : ""\}\$\{selectedTask \? ` composer--has-task composer--task-\$\{selectedTask\.value\}` : ""\}`\}/,
   );
   assert.match(composerSource, /rows=\{newChatLayout \? 4 : 1\}/);
   assert.match(
@@ -94,52 +98,69 @@ test("keeps alternate chat modes hidden from the new-chat composer", () => {
   );
 });
 
-test("shows animated starter prompts below the empty new-chat composer", () => {
-  assert.match(composerSource, /const STARTER_PROMPTS = \[/);
-  assert.match(composerSource, /function AnalyzePromptIcon\(\)/);
-  assert.match(composerSource, /function PlanPromptIcon\(\)/);
-  assert.match(composerSource, /function RewritePromptIcon\(\)/);
-  assert.doesNotMatch(composerSource, /\bLightbulb\b|\bListChecks\b|\bPencilLine\b/);
-  assert.match(
-    composerSource,
-    /newChatLayout && newChatMode === "agent" && !value\.trim\(\)/,
-  );
+test("shows task capsules for Harness agents and restores starter prompts otherwise", () => {
+  assert.match(composerSource, /STARTER_PROMPTS|AnalyzePromptIcon|PlanPromptIcon|RewritePromptIcon/);
+  assert.match(composerSource, /const TASK_SHORTCUTS = \[/);
+  assert.match(taskToolsSource, /ppt:\s*\["ppt_generate"\]/);
+  assert.match(taskToolsSource, /image:\s*\["image_generate"\]/);
+  assert.match(taskToolsSource, /video:\s*\["video_generate"\]/);
+  assert.match(taskToolsSource, /video:\s*\["video_task_query"\]/);
+  assert.match(composerSource, /availableTaskShortcuts/);
+  assert.match(composerSource, /value: "ppt"[\s\S]*?label: "PPT"[\s\S]*?经营表现[\s\S]*?项目名称】进展[\s\S]*?输出解决方案[\s\S]*?行业主题】趋势/);
+  assert.match(composerSource, /value: "image"[\s\S]*?label: "图片生成"[\s\S]*?发布会主视觉[\s\S]*?电商海报[\s\S]*?概念效果图[\s\S]*?企业社媒配图/);
+  assert.match(composerSource, /value: "video"[\s\S]*?label: "视频生成"[\s\S]*?30 秒宣传片[\s\S]*?45 秒发布视频[\s\S]*?企业培训视频[\s\S]*?20 秒预热视频/);
+  assert.match(composerSource, /skillCreateEnabled === true \? \([\s\S]*?onClick=\{\(\) => onModeChange\?\.\("skill-create"\)\}/);
+  assert.doesNotMatch(composerSource, /disabled=\{busy \|\| skillCreateEnabled !== true\}/);
+  assert.match(composerSource, /<SkillCreateIcon \/>[\s\S]*?<span>创建 Skill<\/span>/);
+  assert.match(composerSource, /className="task-shortcuts"/);
+  assert.match(composerSource, /harnessEnabled && !selectedTask/);
+  assert.match(composerSource, /!harnessEnabled && !value\.trim\(\)/);
   assert.match(composerSource, /className="prompt-suggestions"/);
   assert.match(composerSource, /onClick=\{\(\) => applyStarterPrompt\(prompt\.text\)\}/);
-  assert.match(composerSource, /ref\.current\?\.focus\(\)/);
-  assert.match(stylesSource, /\.prompt-suggestion\s*\{[\s\S]*?font-size:\s*15px;/);
-  assert.match(stylesSource, /\.comp-input\s*\{[\s\S]*?font-size:\s*15px;/);
-  assert.match(
-    stylesSource,
-    /\.composer--new-chat\s*\{[\s\S]*?position:\s*relative;/,
-  );
-  assert.match(
-    stylesSource,
-    /\.prompt-suggestions\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?top:\s*calc\(100% \+ 18px\);/,
-  );
-  assert.match(stylesSource, /@keyframes prompt-suggestion-enter/);
-  assert.match(
-    stylesSource,
-    /\.prompt-suggestion > svg\s*\{[\s\S]*?stroke:\s*currentColor;/,
-  );
-  assert.match(
-    stylesSource,
-    /\.prompt-suggestion:nth-child\(1\):hover > svg\s*\{[\s\S]*?transform:/,
-  );
-  assert.match(
-    stylesSource,
-    /\.prompt-suggestion:nth-child\(2\):hover > svg\s*\{[\s\S]*?transform:/,
-  );
-  assert.match(
-    stylesSource,
-    /\.prompt-suggestion:nth-child\(3\):hover > svg\s*\{[\s\S]*?transform:/,
-  );
-  assert.match(
-    stylesSource,
-    /\.prompt-suggestion:nth-child\(2\)[\s\S]*?animation-delay:/,
-  );
-  assert.match(
-    stylesSource,
-    /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.prompt-suggestion[\s\S]*?animation: none/,
-  );
+  assert.match(composerSource, /onClick=\{\(\) => applyTaskShortcut\(task\)\}/);
+  assert.match(composerSource, /function applyTaskShortcut[\s\S]*?onTaskChange\?\.\(task\.value\)[\s\S]*?setSelectionRange\(value\.length, value\.length\)/);
+  assert.doesNotMatch(composerSource, /function applyTaskShortcut[\s\S]*?onChange\(task\.prompt\)/);
+  assert.match(composerSource, /selectedTask\.prompts\.map\(\(prompt\) =>/);
+  assert.match(composerSource, /aria-label=\{`\$\{selectedTask\.label\}企业提示词`\}/);
+  assert.match(composerSource, /onClick=\{\(\) => applyTaskPrompt\(prompt\)\}/);
+  assert.match(composerSource, /setSelectionRange\(placeholderStart \+ 1, placeholderEnd\)/);
+  assert.match(stylesSource, /\.task-shortcuts\s*\{[\s\S]*?justify-content:\s*center;/);
+  assert.match(stylesSource, /\.task-shortcut\s*\{[\s\S]*?border-radius:\s*999px;/);
+  assert.match(stylesSource, /\.task-shortcut\s*\{[\s\S]*?font-size:\s*15px;/);
+  assert.match(stylesSource, /\.task-shortcut\s*\{[\s\S]*?flex:\s*0 0 auto;/);
+  assert.match(stylesSource, /\.task-shortcut\s*\{[\s\S]*?white-space:\s*nowrap;/);
+  assert.match(stylesSource, /\.prompt-suggestion > span\s*\{[\s\S]*?white-space:\s*nowrap;[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?transition:\s*max-height/);
+  assert.match(stylesSource, /\.prompt-suggestion:hover > span,[\s\S]*?max-height:\s*4\.5em;[\s\S]*?white-space:\s*normal;/);
+});
+
+test("shows the selected task between add and Agent and reveals cancel on hover", () => {
+  assert.match(composerSource, /className=\{`new-chat-task-chip new-chat-task-chip--\$\{selectedTask\.value\}`\}/);
+  assert.match(composerSource, /aria-label=\{`取消\$\{selectedTask\.label\}任务`\}/);
+  assert.match(composerSource, /onClick=\{clearTask\}/);
+  assert.match(composerSource, /function clearTask\(\)[\s\S]*?onTaskChange\?\.\(null\)[\s\S]*?onChange\(""\)/);
+  assert.match(composerSource, /new-chat-task-chip__task-icon/);
+  assert.match(composerSource, /new-chat-task-chip__remove-icon/);
+  assert.match(stylesSource, /\.new-chat-task-chip\s*\{[\s\S]*?left:\s*52px;[\s\S]*?background:\s*transparent;/);
+  assert.match(stylesSource, /\.composer--new-chat\.composer--has-task \.new-chat-mode\s*\{\s*left:\s*138px;/);
+  assert.match(stylesSource, /\.composer--new-chat\.composer--task-image \.new-chat-mode,[\s\S]*?left:\s*176px;/);
+  assert.match(stylesSource, /\.new-chat-task-chip--image,[\s\S]*?width:\s*116px;/);
+  assert.match(stylesSource, /\.new-chat-task-chip > span:last-child[\s\S]*?white-space:\s*nowrap;/);
+  assert.match(stylesSource, /\.new-chat-task-chip\s*\{[\s\S]*?color:\s*hsl\(262 34% 52%\)/);
+  assert.match(stylesSource, /\.new-chat-task-chip:hover,[\s\S]*?background:\s*hsl\(260 36% 96%\)/);
+  assert.match(stylesSource, /\.new-chat-task-chip__remove-icon\s*\{[\s\S]*?opacity:\s*0;/);
+  assert.match(stylesSource, /\.new-chat-task-chip:hover \.new-chat-task-chip__remove-icon,[\s\S]*?opacity:\s*1;/);
+  assert.match(appSource, /const \[newChatTask, setNewChatTask\] = useState<NewChatTask \| null>\(null\)/);
+  assert.match(appSource, /newChatTask=\{sandboxSession \? null : newChatTask\}/);
+  assert.match(appSource, /onTaskChange=\{setNewChatTask\}/);
+  assert.match(appSource, /function startNewChat\(\)[\s\S]*?setNewChatTask\(null\)/);
+});
+
+test("shows a removable Skill label inside the composer", () => {
+  assert.match(composerSource, /newChatLayout && skillMode && onModeChange/);
+  assert.match(composerSource, /className="new-chat-task-chip new-chat-task-chip--skill"/);
+  assert.match(composerSource, /aria-label="退出创建 Skill"/);
+  assert.match(composerSource, /onClick=\{\(\) => onModeChange\("agent"\)\}/);
+  assert.match(composerSource, /<SkillCreateIcon className="new-chat-task-chip__task-icon"/);
+  assert.match(composerSource, /<span>Skill<\/span>/);
+  assert.match(stylesSource, /\.new-chat-task-chip--skill\s*\{[\s\S]*?left:\s*10px;[\s\S]*?width:\s*86px;/);
 });

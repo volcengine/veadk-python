@@ -32,6 +32,17 @@ test("shows only the Agent navigation in the sidebar", () => {
 
 test("shows the requested title, search, and agent type pills", () => {
   assert.match(pageSource, /<h1>智能体<\/h1>/);
+  assert.match(pageSource, /aria-label="Runtime 地域"/);
+  assert.doesNotMatch(pageSource, />Runtime 地域<\/span>/);
+  assert.match(pageSource, /className="my-agents-region"/);
+  assert.match(pageSource, /aria-haspopup="listbox"/);
+  assert.match(pageSource, /className="my-agents-region-menu" role="listbox"/);
+  assert.match(pageSource, /\{ value: "cn-beijing", label: "北京" \}/);
+  assert.match(pageSource, /\{ value: "cn-shanghai", label: "上海" \}/);
+  assert.doesNotMatch(pageSource, /<select/);
+  assert.match(pageStyles, /\.my-agents-region\s*\{[\s\S]*?gap:\s*4px;[\s\S]*?height:\s*24px;[\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;[\s\S]*?font-size:\s*13px;/);
+  assert.match(pageStyles, /\.my-agents-region-chevron\s*\{[\s\S]*?width:\s*12px;[\s\S]*?height:\s*12px;/);
+  assert.match(pageStyles, /\.my-agents-region-menu\s*\{[\s\S]*?position:\s*absolute;/);
   assert.match(pageSource, /在此处浏览您的所有智能体/);
   assert.match(pageSource, /placeholder="搜索所有类型智能体名称"/);
   assert.match(pageSource, /aria-label="搜索智能体"/);
@@ -94,6 +105,9 @@ test("creation time remains compact without data-plane metadata", () => {
 test("loads owned runtimes into the general agents section", () => {
   assert.match(pageSource, /getRuntimes/);
   assert.match(pageSource, /scope: "mine"/);
+  assert.match(pageSource, /const \[region, setRegion\] = useState<RuntimeRegion>\("cn-beijing"\)/);
+  assert.match(pageSource, /region,\s*pageSize: RUNTIME_PAGE_SIZE/);
+  assert.doesNotMatch(pageSource, /region: "all"/);
   assert.doesNotMatch(pageSource, /getRuntimeAgentInfo/);
   assert.match(pageSource, /id: runtime\.runtimeId/);
   assert.match(pageSource, /name: runtime\.name/);
@@ -101,10 +115,11 @@ test("loads owned runtimes into the general agents section", () => {
   assert.match(pageSource, /runtimeId: runtime\.runtimeId/);
   assert.match(pageSource, /region: runtime\.region/);
   assert.match(pageSource, /<AgentCard[\s\S]*?key=\{agent\.id\}/);
-  assert.match(pageSource, /const RUNTIME_PAGE_SIZE = 24/);
+  assert.match(pageSource, /const RUNTIME_PAGE_SIZE = 100/);
   assert.match(pageSource, /onList\(page\.runtimes\.map\(runtimeToAgent\)\)/);
   assert.match(pageSource, /runtimeRequestRef\.current !== requestId/);
   assert.match(pageSource, /const runtimePageRequests = new Map/);
+  assert.match(pageSource, /const requestKey = `\$\{region\}:\$\{nextToken\}`/);
   assert.match(pageSource, /runtimePageRequests\.get\(requestKey\)/);
   assert.match(pageSource, /runtimePageRequests\.set\(requestKey, request\)/);
   assert.match(pageSource, /const RUNTIME_PAGE_CACHE_TTL_MS = 30_000/);
@@ -185,6 +200,9 @@ test("wires card details and connect actions into App navigation", () => {
   assert.doesNotMatch(appSource, /const openMyAgentDetails[\s\S]*?connectRuntime\(/);
   assert.match(appSource, /const detailAgentEntry:[\s\S]*?id: `detail:\$\{agentDetailTarget\.runtime\.runtimeId\}`/);
   assert.match(appSource, /<MyAgents[\s\S]*?onCreateAgent=\{openAgentCreateFromMyAgents\}[\s\S]*?onUseAgent=/);
+  assert.match(appSource, /const openAgentCreateFromMyAgents = \(region: string\)[\s\S]*?setNewRuntimeRegion\(region\)/);
+  assert.match(appSource, /<CustomCreate[\s\S]*?initialDeployRegion=\{newRuntimeRegion\}/);
+  assert.match(appSource, /<CodePackageCreate[\s\S]*?initialDeployRegion=\{newRuntimeRegion\}/);
 });
 
 test("keeps all requested type filters without nested category sections", () => {

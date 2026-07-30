@@ -37,6 +37,8 @@ _BUILTIN_TOOLS: dict[str, str] = {
     "image_generate": "veadk.tools.builtin_tools.image_generate:image_generate",
     "image_edit": "veadk.tools.builtin_tools.image_edit:image_edit",
     "video_generate": "veadk.tools.builtin_tools.video_generate:video_generate",
+    "video_task_query": "veadk.tools.builtin_tools.video_generate:video_task_query",
+    "ppt_generate": "veadk.tools.builtin_tools.ppt_generate:ppt_generate",
     "text_to_speech": "veadk.tools.builtin_tools.tts:text_to_speech",
     # Demo / example tools
     "get_city_weather": "veadk.tools.demo_tools:get_city_weather",

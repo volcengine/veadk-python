@@ -57,7 +57,7 @@ export interface AgentSelectorProps {
   /** Maximum runtime scope granted by the server. */
   runtimeScope: RuntimeScope;
   /** Called with the picker id once an agent is chosen. */
-  onSelect: (id: string) => void;
+  onSelect: (id: string) => void | Promise<void>;
 }
 
 const PAGE_SIZE = 15;
@@ -303,8 +303,8 @@ export function AgentSelector({
   function connect(rt: CloudRuntime) {
     setConnecting(rt.runtimeId);
     connectRuntime(rt.runtimeId, rt.name, rt.region)
-      .then((agentId) => {
-        onSelect(agentId);
+      .then(async (agentId) => {
+        await onSelect(agentId);
         onClose();
       })
       .catch((error) => {

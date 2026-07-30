@@ -26,6 +26,10 @@
   --builtin-tool-accent: 260 38% 48%;
 }
 
+.builtin-tool-head[data-tool-tone="presentation"] {
+  --builtin-tool-accent: 252 38% 52%;
+}
+
 .builtin-tool-head[data-tool-tone="memory"] {
   --builtin-tool-accent: 174 52% 34%;
 }

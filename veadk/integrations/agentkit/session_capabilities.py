@@ -20,6 +20,7 @@ import asyncio
 import hashlib
 import os
 import tempfile
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
@@ -446,6 +447,40 @@ class SessionCapabilityService:
                 agent_tools.append(get_builtin_tool(name))
                 existing_tools.add(name)
 
+        generation_hints = []
+        if "ppt_generate" in existing_tools:
+            generation_hints.append(
+                "A PowerPoint generation tool is mounted for this session. "
+                "When the user requests a presentation, plan concise "
+                "audience-facing slide content and call `ppt_generate`; do "
+                "not merely describe the deck. Include source URLs per slide "
+                "when external claims or assets are used."
+            )
+        if "image_generate" in existing_tools:
+            generation_hints.append(
+                "An image generation tool is mounted for this session. When "
+                "the user requests an image, call `image_generate`; do not "
+                "claim that image generation is unavailable."
+            )
+        if "video_generate" in existing_tools:
+            generation_hints.append(
+                "Video generation tools are mounted for this session. When "
+                "the user requests a video, call `video_generate` and use "
+                "`video_task_query` when the result requires status polling; "
+                "do not claim that video generation is unavailable."
+            )
+        if generation_hints:
+            instruction = getattr(agent, "instruction", None)
+            if isinstance(instruction, str):
+                hint = "\n\n".join(generation_hints)
+                setattr(
+                    agent,
+                    "instruction",
+                    f"{instruction.rstrip()}\n\n{hint}"
+                    if instruction.strip()
+                    else hint,
+                )
+
         loaded_skills = []
         for stored_skill in overlay.skills:
             loaded_skills.append(
@@ -469,10 +504,12 @@ class SessionCapabilityService:
                     "and pass the exact skill name it returns; do not abbreviate "
                     "or translate the name."
                 )
-                agent.instruction = (
+                setattr(
+                    agent,
+                    "instruction",
                     f"{instruction.rstrip()}\n\n{skill_hint}"
                     if instruction.strip()
-                    else skill_hint
+                    else skill_hint,
                 )
         return agent
 
@@ -601,9 +638,20 @@ class SessionCapabilityService:
 def mount_session_capability_routes(
     *,
     app: FastAPI,
-    service: SessionCapabilityService,
+    service: SessionCapabilityService | None = None,
+    service_resolver: Callable[[str], Awaitable[SessionCapabilityService]]
+    | None = None,
 ) -> None:
     """Mount the capability management API under the reserved harness prefix."""
+
+    if service is None and service_resolver is None:
+        raise ValueError("service or service_resolver is required")
+
+    async def resolve_service(app_name: str) -> SessionCapabilityService:
+        if service is not None:
+            return service
+        assert service_resolver is not None
+        return await service_resolver(app_name)
 
     router = APIRouter(prefix="/harness")
 
@@ -676,8 +724,9 @@ def mount_session_capability_routes(
         user_id: str,
         session_id: str,
     ) -> SessionCapabilitiesResponse:
+        resolved_service = await resolve_service(app_name)
         return await _translate_errors(
-            service.get_capabilities(
+            resolved_service.get_capabilities(
                 app_name=app_name,
                 user_id=user_id,
                 session_id=session_id,
@@ -691,8 +740,9 @@ def mount_session_capability_routes(
         session_id: str,
         request: AddCapabilityRequest,
     ) -> SessionCapabilitiesResponse:
+        resolved_service = await resolve_service(app_name)
         return await _translate_errors(
-            service.add_capability(
+            resolved_service.add_capability(
                 app_name=app_name,
                 user_id=user_id,
                 session_id=session_id,
@@ -710,8 +760,9 @@ def mount_session_capability_routes(
         capability_id: str,
         expected_revision: int | None = Query(default=None),
     ) -> SessionCapabilitiesResponse:
+        resolved_service = await resolve_service(app_name)
         return await _translate_errors(
-            service.remove_capability(
+            resolved_service.remove_capability(
                 app_name=app_name,
                 user_id=user_id,
                 session_id=session_id,

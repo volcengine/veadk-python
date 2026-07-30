@@ -102,9 +102,22 @@ def main() -> None:
 
     import uvicorn
     from google.adk.cli.fast_api import get_fast_api_app
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+    from veadk.cli.cli_frontend import _mount_session_trace_route
+    from veadk.cli.frontend_trace import SessionTraceExporter
 
     app = get_fast_api_app(agents_dir=args.agents_dir, web=False)
     _bind_adk_server_services(app)
+
+    tracer_provider = trace.get_tracer_provider()
+    if not isinstance(tracer_provider, TracerProvider):
+        raise RuntimeError("ADK did not initialize an SDK tracer provider")
+    trace_exporter = SessionTraceExporter()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(trace_exporter))
+    _mount_session_trace_route(app, trace_exporter)
 
     # Generated projects with A2A center include a helper that overrides /run and
     # /run_sse so each debug turn gets registry-discovered remote_a2a_* tools.

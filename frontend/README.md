@@ -18,7 +18,9 @@ server that `veadk frontend` launches — no separate backend.
   a real two-model A/B run in independent AgentKit CodeEnv sessions. Skill
   progress resumes from Sandbox state if the creation stream is interrupted;
   completed candidates can be compared, downloaded as ZIP files, and added to
-  AgentKit.
+  AgentKit. Connected Harness agents expose supported image, video, and
+  presentation task types; Studio mounts only missing task tools for the
+  current session and preserves tools already supplied by the Agent.
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
 - **Agent context rail** keeps the selected Agent's description, model, tools,
   skills, and optional live multi-Agent topology together in the conversation's
@@ -59,13 +61,17 @@ server that `veadk frontend` launches — no separate backend.
 - **Runtime management**: inspect or delete deployed runtimes, or connect one
   directly so the global Agent selector switches to that Runtime. The cloud
   selector gives each two-line Runtime row explicit connect and info actions;
-  the info action opens a tabbed Agent/Runtime panel. Studio distinguishes its
+  the info action opens a tabbed Agent/Runtime panel. The Agent directory loads
+  one selected region at a time, defaults to Beijing, and carries the Runtime's
+  region through details, connection, update, evaluation, and deletion. Studio
+  distinguishes its
   own ownership checks from Agent Server compatibility and authentication
   failures when a connection cannot be established. Long descriptions, names,
   component summaries, IDs, and environment values stay inside the scrollable panel.
 - **Custom-agent workbench**: configure an agent with a rich Markdown
   system-prompt editor (including heading and list shortcuts), then debug with
-  expandable, copyable runner error details and review. Long descriptions and
+  expandable, copyable runner error details, per-result Trace inspection, and
+  review. Long descriptions and
   prompts scroll within bounded editors, while the sidebar stays pinned to the
   viewport. On narrow desktop windows, the structure, configuration, and debug
   panels stack vertically instead of squeezing the form. The deployment page

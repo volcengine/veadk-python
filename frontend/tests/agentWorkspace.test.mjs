@@ -235,10 +235,14 @@ test("deployed agent detail can jump directly to chat", () => {
   assert.match(appSource, /const talkToWorkspaceAgent = \(id: string\) => \{/);
   assert.match(
     appSource,
-    /setManageAgents\(false\)[\s\S]*?selectAgent\(id\)/,
+    /const talkToWorkspaceAgent = \(id: string\) => \{[\s\S]*?if \(agentDetailTarget\) \{[\s\S]*?void connectMyAgent\(agentDetailTarget\)[\s\S]*?return;[\s\S]*?setManageAgents\(false\)[\s\S]*?selectAgent\(id\)[\s\S]*?\n  \};/,
   );
   assert.match(appSource, /onTalkAgent=\{talkToWorkspaceAgent\}/);
   assert.match(workspaceStyles, /\.aw-talk svg/);
+  assert.match(
+    workspaceStyles,
+    /\.aw-root\.is-detail-only \.aw-agent-head\s*\{[\s\S]*?padding-top:\s*24px;/,
+  );
 });
 
 test("workspace agents can be reordered by drag or keyboard", () => {
@@ -293,7 +297,7 @@ test("runtime refresh preserves agent order and detail loading uses an overlay",
   assert.match(workspaceStyles, /\.aw-detail-loading\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?inset:\s*0;/);
 });
 
-test("workspace supports deleting individual authorized agents", () => {
+test("workspace keeps agent deletion in selection mode and the floating detail actions", () => {
   assert.match(appSource, /deleteRuntime/);
   assert.match(appSource, /removeRuntimeConnection/);
   assert.match(appSource, /libraryRuntimePermissions/);
@@ -304,7 +308,8 @@ test("workspace supports deleting individual authorized agents", () => {
     /const detailAgentEntry:[\s\S]*?canDelete: agentDetailTarget\.runtime\.canDelete/,
   );
   assert.match(appSource, /const deleteWorkspaceAgents = useCallback/);
-  assert.match(appSource, /await deleteRuntime\(agent\.runtimeId, agent\.region \?\? "cn-beijing"\)/);
+  assert.match(appSource, /await deleteRuntime\(agent\.runtimeId, agent\.region\)/);
+  assert.doesNotMatch(appSource, /agent\.region \?\? "cn-beijing"/);
   assert.match(appSource, /onDeleteAgents=\{deleteWorkspaceAgents\}/);
   assert.match(appSource, /const deleteWorkspaceDrafts = useCallback/);
   assert.match(appSource, /onDeleteDrafts=\{deleteWorkspaceDrafts\}/);
@@ -323,7 +328,7 @@ test("workspace supports deleting individual authorized agents", () => {
   assert.match(workspaceSource, /删除所选/);
   assert.match(workspaceSource, /const deleteSingleAgent = async/);
   assert.match(workspaceSource, /const deleteSingleDraft = /);
-  assert.match(workspaceSource, /删除 Agent/);
+  assert.equal(workspaceSource.match(/aria-label="删除 Agent"/g)?.length, 1);
   assert.match(workspaceSource, /删除草稿/);
   assert.match(workspaceStyles, /\.aw-selection-toolbar/);
   assert.match(workspaceStyles, /\.aw-select-marker\.is-checked/);

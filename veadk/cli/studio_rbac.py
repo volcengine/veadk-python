@@ -188,7 +188,4 @@ def runtime_belongs_to(
     if principal is None:
         return False
     owner = str(tags.get("veadk:owner") or "").strip().casefold()
-    if owner:
-        return owner in principal.identifiers
-    author = str(tags.get("veadk:author") or "").strip().casefold()
-    return bool(author and author in principal.identifiers)
+    return bool(owner and owner in principal.identifiers)

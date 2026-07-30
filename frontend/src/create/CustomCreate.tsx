@@ -89,6 +89,7 @@ import {
 } from "../ui/ProjectPreview";
 import { Blocks, ThinkingPlaceholder } from "../ui/Blocks";
 import { DeploymentErrorMessage } from "../ui/DeploymentErrorMessage";
+import { TraceDrawer } from "../ui/TraceDrawer";
 import { isImeCompositionEvent } from "../ui/composerKeyboard";
 import {
   createGeneratedAgentTestRun,
@@ -1745,6 +1746,12 @@ interface DebugVariant {
   error: string | null;
 }
 
+interface DebugTraceTarget {
+  runId: string;
+  sessionId: string;
+  variantName: string;
+}
+
 function codegenDraft(draft: AgentDraft): AgentDraft {
   return {
     ...draft,
@@ -1830,6 +1837,7 @@ function DebugComparisonWorkspace({
   onToggleConfig,
   onCompleteConfig,
   onConfigChange,
+  onOpenTrace,
 }: {
   enabled: boolean;
   disabledReason: string;
@@ -1849,6 +1857,7 @@ function DebugComparisonWorkspace({
     field: "modelName" | "description" | "instruction",
     value: string,
   ) => void;
+  onOpenTrace: (id: string) => void;
 }) {
   const runningVariants = variants.filter((variant) => {
     if (variant.phase !== "ready") return false;
@@ -1888,6 +1897,10 @@ function DebugComparisonWorkspace({
               const starting = variant.phase === "starting";
               const ready = variant.phase === "ready" && !stale;
               const busy = starting || variant.phase === "sending";
+              const traceAvailable =
+                ready &&
+                variant.phase !== "sending" &&
+                variant.messages.some((message) => message.role === "assistant");
               const startDisabled =
                 busy || variant.configOpen || configurationUnavailable;
               const disabledReason = !modelName
@@ -2007,6 +2020,19 @@ function DebugComparisonWorkspace({
                       </div>
 
                       <footer className="cw-ab-deploy-footer">
+                        <button
+                          type="button"
+                          className="cw-ab-trace"
+                          disabled={!traceAvailable}
+                          title={
+                            traceAvailable
+                              ? `查看${variant.name}调用链路`
+                              : "完成一次调试后可查看调用链路"
+                          }
+                          onClick={() => onOpenTrace(variant.id)}
+                        >
+                          调用链路
+                        </button>
                         <button
                           type="button"
                           className="cw-ab-start cw-ab-footer-start"
@@ -2289,6 +2315,8 @@ interface CustomCreateProps extends CreateModeProps {
     region: string;
     currentVersion?: number | null;
   };
+  /** Region selected before entering the create flow. */
+  initialDeployRegion?: string;
   /** Called after an existing Runtime has been updated and released. */
   onDeploymentComplete?: (result: DeployResult) => void | Promise<void>;
   /** Called once the persistent deployment task has been created. */
@@ -2307,6 +2335,7 @@ export function CustomCreate({
   features,
   onDeploymentTaskChange,
   deploymentTarget,
+  initialDeployRegion = "cn-beijing",
   onDeploymentComplete,
   onDeploymentStarted,
   onDraftChange,
@@ -2341,7 +2370,7 @@ export function CustomCreate({
   const [project, setProject] = useState<AgentProject | null>(null);
   const [building, setBuilding] = useState(false);
   const [deployRegion, setDeployRegion] = useState<string>(
-    deploymentTarget?.region ?? "cn-beijing",
+    deploymentTarget?.region ?? initialDeployRegion,
   );
   const debugEnabled = features?.generatedAgentTestRun === true;
   const debugDisabledReason =
@@ -2369,6 +2398,8 @@ export function CustomCreate({
   );
   const [activeDebugRunCount, setActiveDebugRunCount] = useState(0);
   const [debugInput, setDebugInput] = useState("");
+  const [debugTraceTarget, setDebugTraceTarget] =
+    useState<DebugTraceTarget | null>(null);
   // The section nearest the top of the scroll container (scroll-spy) — drives
   // the right-hand step nav highlight.
   const [activeId, setActiveId] = useState<StepId>("basic");
@@ -2776,6 +2807,7 @@ export function CustomCreate({
   };
 
   const cleanupDebugRuns = async () => {
+    setDebugTraceTarget(null);
     const runs = [...debugRunsRef.current.values()];
     debugRunsRef.current.clear();
     setActiveDebugRunCount(0);
@@ -2811,6 +2843,17 @@ export function CustomCreate({
     } catch (err) {
       console.warn("清理调试运行失败", err);
     }
+  };
+
+  const openDebugTrace = (id: string) => {
+    const runtime = debugRunsRef.current.get(id);
+    const variant = debugVariants.find((item) => item.id === id);
+    if (!runtime || !variant) return;
+    setDebugTraceTarget({
+      runId: runtime.run.runId,
+      sessionId: runtime.sessionId,
+      variantName: variant.name,
+    });
   };
 
   const confirmLeaveDebug = async () => {
@@ -4040,6 +4083,7 @@ export function CustomCreate({
               }}
               onCompleteConfig={completeDebugVariantConfig}
               onConfigChange={updateDebugVariantConfig}
+              onOpenTrace={openDebugTrace}
             />
           </div>
         </div>
@@ -4129,6 +4173,14 @@ export function CustomCreate({
         </div>
       )}
       </main>
+      {debugTraceTarget && (
+        <TraceDrawer
+          testRunId={debugTraceTarget.runId}
+          sessionId={debugTraceTarget.sessionId}
+          title={`调用链路 · ${debugTraceTarget.variantName}`}
+          onClose={() => setDebugTraceTarget(null)}
+        />
+      )}
       {discardConfirmOpen && (
         <div className="confirm-scrim" onClick={() => setDiscardConfirmOpen(false)}>
           <div

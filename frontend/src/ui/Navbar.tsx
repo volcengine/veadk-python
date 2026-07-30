@@ -11,7 +11,7 @@ export interface Crumb {
 
 export interface NavbarProps {
   appName: string;
-  onAppChange: (app: string) => void;
+  onAppChange: (app: string) => void | Promise<void>;
   /** Map a picker id to its display label (e.g. remote AgentKit apps). */
   agentLabel?: (id: string) => string;
   agentsSource: "local" | "cloud";
@@ -161,8 +161,8 @@ function AgentSelect({
             currentId={appName}
             currentRuntime={currentRuntime}
             runtimeScope={runtimeScope}
-            onSelect={(id) => {
-              onAppChange(id);
+            onSelect={async (id) => {
+              await onAppChange(id);
               close();
             }}
             onClose={close}

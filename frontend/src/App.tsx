@@ -30,6 +30,8 @@ import {
   deleteMedia,
   deleteSessionMedia,
   deleteSession,
+  downloadArtifact,
+  previewArtifact,
   getAgentInfo,
   getSessionCapabilities,
   getSession,
@@ -108,7 +110,11 @@ import { StudioUpdateControl } from "./ui/StudioUpdateControl";
 import { createSkillJob, deleteSkillJob } from "./ui/skill-create/api";
 import { SkillCreateWorkspace } from "./ui/skill-create/SkillCreateWorkspace";
 import { SKILL_MODELS, type SkillCreationJob } from "./ui/skill-create/types";
-import type { NewChatMode } from "./ui/new-chat-modes/types";
+import type { NewChatMode, NewChatTask } from "./ui/new-chat-modes/types";
+import {
+  NEW_CHAT_TASK_OPTIONAL_TOOLS,
+  NEW_CHAT_TASK_TOOLS,
+} from "./ui/new-chat-modes/taskTools";
 import {
   sandboxClient,
   type SandboxSession as SandboxSessionInfo,
@@ -129,6 +135,35 @@ import {
   FeedbackDownIcon,
   FeedbackUpIcon,
 } from "./ui/icons/FeedbackIcons";
+
+interface NewChatCapabilitiesState {
+  agentId?: string;
+  ready?: boolean;
+  harnessEnabled?: boolean;
+  builtinTools?: string[];
+  temporaryEnabled?: boolean;
+  skillCreateEnabled?: boolean;
+}
+
+async function probeNewChatCapabilities(
+  agentId: string,
+): Promise<NewChatCapabilitiesState> {
+  const [sandboxResult, skillResult, harnessResult] = await Promise.allSettled([
+    getSandboxCapability(),
+    getSkillCreatorCapability(),
+    listSessionBuiltinTools(agentId),
+  ]);
+  return {
+    agentId,
+    ready: true,
+    harnessEnabled: harnessResult.status === "fulfilled",
+    builtinTools: harnessResult.status === "fulfilled" ? harnessResult.value : [],
+    temporaryEnabled:
+      sandboxResult.status === "fulfilled" && sandboxResult.value.enabled,
+    skillCreateEnabled:
+      skillResult.status === "fulfilled" && skillResult.value.enabled,
+  };
+}
 
 // Breadcrumb root label for the create flow and the per-mode leaf labels.
 const CREATE_ROOT = "创建 Agent";
@@ -298,6 +333,7 @@ function turnHasVisibleContent(turn: Turn): boolean {
   return turn.blocks.some((b) => {
     if (b.kind === "text") return b.text.trim().length > 0;
     if (b.kind === "attachment") return b.files.length > 0;
+    if (b.kind === "artifact") return b.files.length > 0;
     if (b.kind === "tool") return !(b.name === A2UI_TOOL_NAME && b.done);
     if (b.kind === "agent-transfer") return false;
     if (b.kind === "a2ui") return buildSurfaces(b.messages).some((s) => s.components[s.rootId]);
@@ -654,10 +690,14 @@ export default function App() {
     }));
   const [input, setInput] = useState("");
   const [newChatMode, setNewChatMode] = useState<NewChatMode>("agent");
-  const [newChatCapabilities, setNewChatCapabilities] = useState<{
-    temporaryEnabled?: boolean;
-    skillCreateEnabled?: boolean;
-  }>({});
+  const [newChatTask, setNewChatTask] = useState<NewChatTask | null>(null);
+  const [newChatCapabilities, setNewChatCapabilities] =
+    useState<NewChatCapabilitiesState>({});
+  const newChatCapabilitiesCacheRef = useRef(
+    new Map<string, NewChatCapabilitiesState>(),
+  );
+  const newChatCapabilitiesReady =
+    newChatCapabilities.ready === true && newChatCapabilities.agentId === appName;
   const [skillJob, setSkillJob] = useState<SkillCreationJob | null>(null);
   const [skillCreating, setSkillCreating] = useState(false);
   const skillCreationRunRef = useRef(0);
@@ -987,6 +1027,7 @@ export default function App() {
     region: string;
     currentVersion?: number | null;
   } | null>(null);
+  const [newRuntimeRegion, setNewRuntimeRegion] = useState("cn-beijing");
   const [focusedDeploymentTaskId, setFocusedDeploymentTaskId] = useState("");
   const [focusedWorkspaceAgentId, setFocusedWorkspaceAgentId] = useState("");
   const [agentDetailTarget, setAgentDetailTarget] =
@@ -1109,7 +1150,8 @@ export default function App() {
     const failures: string[] = [];
     for (const agent of targets) {
       try {
-        await deleteRuntime(agent.runtimeId, agent.region ?? "cn-beijing");
+        if (!agent.region) throw new Error("Runtime 缺少地域信息，无法删除");
+        await deleteRuntime(agent.runtimeId, agent.region);
         removeRuntimeConnection(agent.runtimeId);
         deletedRuntimeIds.add(agent.runtimeId);
         deletedAgentIds.add(agent.id);
@@ -1236,7 +1278,7 @@ export default function App() {
   const finishDeployment = useCallback(
     async (result: DeployResult) => {
       if (!result.runtimeId) throw new Error("部署完成，但未返回 Runtime ID。");
-      const fallbackRegion = runtimeUpdateTarget?.region ?? "cn-beijing";
+      const fallbackRegion = runtimeUpdateTarget?.region ?? newRuntimeRegion;
       const agentId = await connectRuntime(
         result.runtimeId,
         result.agentName,
@@ -1245,6 +1287,9 @@ export default function App() {
       );
       setConnections(loadConnections());
       setAgentInfoRefreshKey((key) => key + 1);
+      const capabilities = await probeNewChatCapabilities(agentId);
+      newChatCapabilitiesCacheRef.current.set(agentId, capabilities);
+      setNewChatCapabilities(capabilities);
       setLibraryRuntimeIds((current) => {
         const next = new Set(current ?? []);
         next.add(result.runtimeId!);
@@ -1260,7 +1305,7 @@ export default function App() {
       setManageAgents(true);
       setAppName(agentId);
     },
-    [editingDraftId, removeWorkspaceDraft, runtimeUpdateTarget],
+    [editingDraftId, newRuntimeRegion, removeWorkspaceDraft, runtimeUpdateTarget],
   );
   const scrollRef = useRef<HTMLDivElement>(null);
   const turnNodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -1437,27 +1482,26 @@ export default function App() {
   }, [localMode, userId]);
 
   useEffect(() => {
-    if (authStatus !== "authenticated" || !userId) {
+    if (authStatus !== "authenticated" || !userId || !appName) {
       setNewChatCapabilities({});
       return;
     }
+    const cached = newChatCapabilitiesCacheRef.current.get(appName);
+    if (cached) {
+      setNewChatCapabilities(cached);
+      return;
+    }
     let cancelled = false;
-    void Promise.allSettled([
-      getSandboxCapability(),
-      getSkillCreatorCapability(),
-    ]).then(([sandboxResult, skillResult]) => {
+    setNewChatCapabilities({});
+    void probeNewChatCapabilities(appName).then((capabilities) => {
       if (cancelled) return;
-      setNewChatCapabilities({
-        temporaryEnabled:
-          sandboxResult.status === "fulfilled" && sandboxResult.value.enabled,
-        skillCreateEnabled:
-          skillResult.status === "fulfilled" && skillResult.value.enabled,
-      });
+      newChatCapabilitiesCacheRef.current.set(appName, capabilities);
+      setNewChatCapabilities(capabilities);
     });
     return () => {
       cancelled = true;
     };
-  }, [authStatus, userId]);
+  }, [appName, authStatus, userId]);
 
   useEffect(() => {
     if (authStatus !== "authenticated" || !userId) {
@@ -1935,6 +1979,7 @@ export default function App() {
     setAgentInfoOpen(false);
     setGreeting(pickGreeting());
     setNewChatMode("agent");
+    setNewChatTask(null);
     discardSkillCreation();
     setSkillCreating(false);
     const abandonedSession = sessionId && persistentTurns.length === 0 && attachments.length > 0
@@ -2012,6 +2057,7 @@ export default function App() {
     setInitializingSession(false);
     setPendingTurns([]);
     setNewChatMode("agent");
+    setNewChatTask(null);
     discardSkillCreation();
     setInvocation(emptyInvocation());
     setSessionCapabilities(null);
@@ -2286,6 +2332,7 @@ export default function App() {
       setInitializingSession(true);
     }
 
+    const selectedTask = newChatTask;
     let sid: string;
     try {
       sid = await ensureSession(!createsSession);
@@ -2298,6 +2345,40 @@ export default function App() {
       }
       setError(String(e));
       return;
+    }
+
+    let runWithSessionCapabilities = sessionCapabilities !== null;
+    if (selectedTask) {
+      try {
+        let updated = await getSessionCapabilities(appName, userId, sid);
+        const optionalTools = NEW_CHAT_TASK_OPTIONAL_TOOLS[selectedTask].filter(
+          (toolName) => newChatCapabilities.builtinTools?.includes(toolName),
+        );
+        for (const toolName of [
+          ...NEW_CHAT_TASK_TOOLS[selectedTask],
+          ...optionalTools,
+        ]) {
+          if (updated.tools.some((tool) => tool.name === toolName)) continue;
+          updated = await addSessionCapability(
+              appName,
+              userId,
+              sid,
+              { kind: "tool", name: toolName },
+              updated.revision,
+            );
+        }
+        setSessionCapabilities(updated);
+        runWithSessionCapabilities = true;
+      } catch (e) {
+        if (createsSession) {
+          setPendingTurns([]);
+          setInitializingSession(false);
+          setInput(text);
+          setInvocation(selectedInvocation);
+        }
+        setError(`任务能力挂载失败：${String(e)}`);
+        return;
+      }
     }
 
     setTurnsFor(sid, (current) =>
@@ -2336,7 +2417,7 @@ export default function App() {
         attachments: atts,
         invocation: selectedInvocation,
         signal: ctrl.signal,
-        sessionCapabilities: sessionCapabilities !== null,
+        sessionCapabilities: runWithSessionCapabilities,
       })) {
         if (ctrl.signal.aborted) break;
         const errMsg = event.error ?? event.errorMessage ?? event.error_message;
@@ -2582,11 +2663,11 @@ export default function App() {
     (c) => c.runtimeId && c.apps.some((a) => remoteAppId(c.id, a) === appName),
   );
   const currentRuntime =
-    currentConn && currentConn.runtimeId
+    currentConn && currentConn.runtimeId && currentConn.region
       ? {
           runtimeId: currentConn.runtimeId,
           name: currentConn.name,
-          region: currentConn.region ?? "cn-beijing",
+          region: currentConn.region,
         }
       : undefined;
   const connectedRuntimeId =
@@ -2672,8 +2753,14 @@ export default function App() {
 
   // Selecting an agent starts a fresh chat; any
   // background stream keeps persisting to its own (old) session.
-  const selectAgent = (id: string) => {
+  const selectAgent = async (id: string) => {
     setConnections(loadConnections());
+    let capabilities = newChatCapabilitiesCacheRef.current.get(id);
+    if (!capabilities) {
+      capabilities = await probeNewChatCapabilities(id);
+      newChatCapabilitiesCacheRef.current.set(id, capabilities);
+    }
+    setNewChatCapabilities(capabilities);
     if (id === appName) setAgentInfoRefreshKey((key) => key + 1);
     viewSidRef.current = "";
     setSessionId("");
@@ -2681,13 +2768,14 @@ export default function App() {
     setAppName(id);
   };
 
-  const openAgentCreateFromMyAgents = () => {
+  const openAgentCreateFromMyAgents = (region: string) => {
     if (!canCreateAgents) {
       setError("当前账号没有添加 Agent 的权限。");
       return;
     }
     setMyAgents(false);
     setManageAgents(false);
+    setNewRuntimeRegion(region);
     setImportedDraft(null);
     setCreateView(null);
     setAddMenu(true);
@@ -2705,6 +2793,9 @@ export default function App() {
       );
       setConnections(loadConnections());
       setAgentInfoRefreshKey((key) => key + 1);
+      const capabilities = await probeNewChatCapabilities(agentId);
+      newChatCapabilitiesCacheRef.current.set(agentId, capabilities);
+      setNewChatCapabilities(capabilities);
       setAgentDetailTarget(null);
       setMyAgents(false);
       setManageAgents(false);
@@ -2745,14 +2836,21 @@ export default function App() {
   const talkToWorkspaceAgent = (id: string) => {
     setFeedbackCaseReturnAgentId("");
     setFeedbackTargetEventId("");
-    selectAgent(id);
+    if (agentDetailTarget) {
+      void connectMyAgent(agentDetailTarget);
+      return;
+    }
+    setFocusedDeploymentTaskId("");
+    setFocusedWorkspaceAgentId("");
+    setManageAgents(false);
+    void selectAgent(id);
   };
 
   const selectWorkspaceAgentFromNavbar = (id: string) => {
     setFocusedDeploymentTaskId("");
     setFocusedWorkspaceAgentId(id);
     setFocusedWorkspaceAgentSection("basic");
-    selectAgent(id);
+    return selectAgent(id);
   };
 
   const detailConnection = agentDetailTarget?.runtime
@@ -2814,6 +2912,7 @@ export default function App() {
           setMyAgents(false);
           setCreateView(null);
           setImportedDraft(null);
+          setNewRuntimeRegion("cn-beijing");
           setAddMenu(true);
           setError("");
         }}
@@ -2977,21 +3076,28 @@ export default function App() {
               onAddFiles={addFiles}
               onRemoveAttachment={removeDraftAttachment}
               newChatMode={sandboxSession ? "agent" : newChatMode}
+              newChatTask={sandboxSession ? null : newChatTask}
               newChatLayout={!sandboxSession && turns.length === 0 && skillJob === null}
               showModeSelector={false}
-              temporaryEnabled={newChatCapabilities.temporaryEnabled}
-              skillCreateEnabled={newChatCapabilities.skillCreateEnabled}
+              temporaryEnabled={newChatCapabilitiesReady && newChatCapabilities.temporaryEnabled}
+              skillCreateEnabled={newChatCapabilitiesReady && newChatCapabilities.skillCreateEnabled}
+              harnessEnabled={newChatCapabilitiesReady && newChatCapabilities.harnessEnabled}
+              builtinTools={
+                newChatCapabilitiesReady ? newChatCapabilities.builtinTools : []
+              }
               onModeChange={(mode) => {
                 if (
                   (mode === "temporary" && !newChatCapabilities.temporaryEnabled) ||
                   (mode === "skill-create" && !newChatCapabilities.skillCreateEnabled)
                 ) return;
                 if (mode === "temporary") {
+                  setNewChatTask(null);
                   setNewChatMode(mode);
                   openSandboxLaunch();
                   return;
                 }
                 setNewChatMode(mode);
+                if (mode !== "agent") setNewChatTask(null);
                 setError("");
                 if (mode === "skill-create") {
                   setInvocation(emptyInvocation());
@@ -3008,6 +3114,7 @@ export default function App() {
                   }
                 }
               }}
+              onTaskChange={setNewChatTask}
             />
           </div>
         );
@@ -3164,6 +3271,7 @@ export default function App() {
                   setCreateView(null);
                   setImportedDraft(null);
                   setRuntimeUpdateTarget(null);
+                  setNewRuntimeRegion("cn-beijing");
                   setEditingDraftId("");
                   editingDraftBaselineRef.current = null;
                   setFocusedDeploymentTaskId("");
@@ -3179,6 +3287,10 @@ export default function App() {
                     setError("仅支持更新已部署的云端智能体。");
                     return;
                   }
+                  if (!currentConn.region) {
+                    setError("Runtime 缺少地域信息，无法更新。");
+                    return;
+                  }
                   setManageAgents(false);
                   setImportedDraft(nextDraft);
                   const nextDraftId = `runtime-${currentConn.runtimeId}`;
@@ -3190,7 +3302,7 @@ export default function App() {
                   setRuntimeUpdateTarget({
                     runtimeId: currentConn.runtimeId,
                     name: currentConn.name,
-                    region: currentConn.region ?? "cn-beijing",
+                    region: currentConn.region,
                     currentVersion: currentConn.currentVersion,
                   });
                   setCreateView("custom");
@@ -3322,6 +3434,7 @@ export default function App() {
                 features={features}
                 onDeploymentTaskChange={updateDeploymentTask}
                 deploymentTarget={runtimeUpdateTarget ?? undefined}
+                initialDeployRegion={newRuntimeRegion}
                 onDraftChange={(draft, dirty) => {
                   if (!editingDraftId) return;
                   if (dirty) {
@@ -3364,9 +3477,14 @@ export default function App() {
                 onDeploymentTaskChange={updateDeploymentTask}
                 onDeploymentStarted={openDeploymentDetail}
                 onDeploymentComplete={finishDeployment}
+                initialDeployRegion={newRuntimeRegion}
               />
             ) : turns.length === 0 && skillJob ? (
               <SkillCreateWorkspace initialJob={skillJob} />
+            ) : turns.length === 0 && !newChatCapabilitiesReady ? (
+              <div className="session-loading">
+                <Loader2 className="icon spin" /> 正在检查 Agent 能力…
+              </div>
             ) : turns.length === 0 ? (
               <div className="welcome">
                 <TextShimmer as="h1" className="welcome-title" duration={4.8} spread={22}>
@@ -3489,6 +3607,12 @@ export default function App() {
                       onStreamFrame={isLast ? followConversationStreamFrame : undefined}
                       onAction={onAction}
                       onAuth={onAuth}
+                      onArtifactDownload={(filename, version) =>
+                        downloadArtifact(appName, userId, sessionId, filename, version)
+                      }
+                      onArtifactPreview={(filename, version) =>
+                        previewArtifact(appName, userId, sessionId, filename, version)
+                      }
                     />
                     {/* Finalized turn that produced no visible answer (e.g. only
                         thinking + an empty A2UI surface) — show a fallback note. */}

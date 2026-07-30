@@ -38,3 +38,10 @@ test("does not append the guidance twice", () => {
   const formatted = formatRunSseError("run_sse failed: 404");
   assert.equal(formatRunSseError(formatted), formatted);
 });
+
+test("translates malformed tool arguments into an actionable message", () => {
+  assert.equal(
+    formatRunSseError("Expecting ',' delimiter: line 1 column 169 (char 168)"),
+    "模型生成的工具参数格式不完整，请重新发送一次。",
+  );
+});

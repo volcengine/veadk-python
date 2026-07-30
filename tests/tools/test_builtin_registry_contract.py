@@ -46,6 +46,8 @@ _EXPECTED_NAMES = {
     "image_generate",
     "image_edit",
     "video_generate",
+    "video_task_query",
+    "ppt_generate",
     "text_to_speech",
 }
 

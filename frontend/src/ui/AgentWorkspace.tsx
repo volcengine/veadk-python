@@ -852,11 +852,13 @@ export function AgentWorkspace({
   useEffect(() => {
     let cancelled = false;
     setDetailAgentInfo(null);
-    setDetailAgentInfoResolved(!detailOnly || !selectedAgent?.runtimeId);
-    if (!detailOnly || !selectedAgent?.runtimeId) return;
+    setDetailAgentInfoResolved(
+      !detailOnly || !selectedAgent?.runtimeId || !selectedAgent.region,
+    );
+    if (!detailOnly || !selectedAgent?.runtimeId || !selectedAgent.region) return;
     void getRuntimeAgentInfo(
       selectedAgent.runtimeId,
-      selectedAgent.region ?? "cn-beijing",
+      selectedAgent.region,
       selectedAgent.runtimeApp,
     )
       .then((info) => {
@@ -882,10 +884,10 @@ export function AgentWorkspace({
   useEffect(() => {
     let cancelled = false;
     setRuntimeDetail(null);
-    if (!selectedAgent?.runtimeId) return;
+    if (!selectedAgent?.runtimeId || !selectedAgent.region) return;
     void getRuntimeDetail(
       selectedAgent.runtimeId,
-      selectedAgent.region ?? "cn-beijing",
+      selectedAgent.region,
     )
       .then((detail) => {
         if (!cancelled) setRuntimeDetail(detail);
@@ -907,14 +909,14 @@ export function AgentWorkspace({
     setFeedbackCases([]);
     setFeedbackSets([]);
     setFeedbackCasesError("");
-    if (section !== "evaluations" || !selectedAgent?.runtimeId) {
+    if (section !== "evaluations" || !selectedAgent?.runtimeId || !selectedAgent.region) {
       setFeedbackCasesLoading(false);
       return;
     }
     setFeedbackCasesLoading(true);
     void getAgentFeedbackCases({
       runtimeId: selectedAgent.runtimeId,
-      region: selectedAgent.region ?? "cn-beijing",
+      region: selectedAgent.region,
       appName: selectedAgent.app,
       pageSize: 100,
     })
@@ -1067,7 +1069,12 @@ export function AgentWorkspace({
   };
 
   const deleteCases = async (items: AgentCase[]) => {
-    if (!selectedAgent?.runtimeId || deletingCases || items.length === 0) return;
+    if (
+      !selectedAgent?.runtimeId ||
+      !selectedAgent.region ||
+      deletingCases ||
+      items.length === 0
+    ) return;
     const confirmText = items.length === 1
       ? "确定删除这条反馈案例？原始聊天记录不会被删除。"
       : `确定删除选中的 ${items.length} 条反馈案例？原始聊天记录不会被删除。`;
@@ -1079,7 +1086,7 @@ export function AgentWorkspace({
     try {
       await deleteAgentFeedbackCases({
         runtimeId: selectedAgent.runtimeId,
-        region: selectedAgent.region ?? "cn-beijing",
+        region: selectedAgent.region,
         appName: selectedAgent.app,
         itemIds: ids,
       });
@@ -1672,7 +1679,7 @@ export function AgentWorkspace({
                 </div>
                 <p>{draft.description || (loadingAgentInfo || (detailOnly && !detailAgentInfoResolved) ? "正在读取智能体信息…" : "暂无描述")}</p>
               </div>
-              {(selectedAgent?.canDelete || selectedDraft || selectedAgentUpdateDraft) && (
+              {(selectedDraft || selectedAgentUpdateDraft) && (
                 <div className="aw-head-actions">
                   {(selectedDraft || selectedAgentUpdateDraft) && (
                     <button
@@ -1688,19 +1695,6 @@ export function AgentWorkspace({
                     >
                       <Trash2 aria-hidden />
                       <span>删除草稿</span>
-                    </button>
-                  )}
-                  {selectedAgent?.canDelete && (
-                    <button
-                      type="button"
-                      className="aw-head-delete"
-                      onClick={() => void deleteSingleAgent(selectedAgent)}
-                      disabled={deletingAgents}
-                      aria-label="删除 Agent"
-                      title="删除 Agent"
-                    >
-                      <Trash2 aria-hidden />
-                      <span>{deletingAgents ? "删除中…" : "删除 Agent"}</span>
                     </button>
                   )}
                 </div>

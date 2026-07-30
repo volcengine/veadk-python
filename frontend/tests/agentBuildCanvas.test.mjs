@@ -158,6 +158,19 @@ test("supports a read-only preview without mutation affordances", () => {
   assert.match(source, /panOnDrag=\{!readOnly \|\| interactivePreview\}/);
 });
 
+test("collapses empty agent groups to their information header in read-only previews", () => {
+  assert.match(
+    source,
+    /compactEmptyGroups && agent\.subAgents\.length === 0[\s\S]*?height: GROUP_HEADER_HEIGHT/,
+  );
+  assert.match(source, /compactEmptyGroup: compactEmptyGroups && agent\.subAgents\.length === 0/);
+  assert.match(source, /data\.compactEmptyGroup \? " is-compact-empty" : ""/);
+  assert.match(
+    cssSource,
+    /\.abc-group\.is-compact-empty \.abc-group-head\s*\{[\s\S]*?border-bottom:\s*0;/,
+  );
+});
+
 test("lays out creation vertically while keeping detail and deployment previews horizontal", () => {
   assert.match(source, /direction\?: CanvasDirection/);
   assert.match(source, /rankdir: direction === "vertical" \? "TB" : "LR"/);
