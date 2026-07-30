@@ -1574,6 +1574,10 @@ def _run_frontend_server(
         GeneratedAgentDraftRequest,
         generate_agent_draft,
     )
+    from veadk.cli.generated_agent_mcp import (
+        McpDebugConnectionError,
+        resolve_debug_mcp_endpoints,
+    )
     from veadk.cli.generated_agent_skills import (
         _files_from_zip,
         materialize_selected_skills,
@@ -2012,6 +2016,7 @@ def _run_frontend_server(
                         generated_agent_test_run_allows_local_resources
                     ),
                 )
+                draft = await resolve_debug_mcp_endpoints(draft)
             else:
                 validate_project_policy(draft)
             project = generate_project_from_draft(draft)
@@ -2025,6 +2030,8 @@ def _run_frontend_server(
             raise HTTPException(status_code=422, detail=e.errors()) from e
         except DebugPolicyError as e:
             raise _http_policy_error(e) from e
+        except McpDebugConnectionError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from None
 
     async def _generate_project_from_request(
         data: dict,
