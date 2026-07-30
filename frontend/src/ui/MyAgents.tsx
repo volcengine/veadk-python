@@ -18,6 +18,7 @@ export interface MyAgentCardData {
 }
 
 type AgentType = "general" | "codex" | "openclaw" | "hermes";
+type RuntimeRegion = "cn-beijing" | "cn-shanghai";
 
 const AGENT_TYPES: Array<{ id: AgentType; label: string; createLabel: string }> = [
   { id: "general", label: "通用智能体", createLabel: "添加通用智能体" },
@@ -25,7 +26,7 @@ const AGENT_TYPES: Array<{ id: AgentType; label: string; createLabel: string }> 
   { id: "openclaw", label: "OpenClaw 智能体", createLabel: "添加 OpenClaw 智能体" },
   { id: "hermes", label: "Hermes 智能体", createLabel: "添加 Hermes 智能体" },
 ];
-const RUNTIME_PAGE_SIZE = 24;
+const RUNTIME_PAGE_SIZE = 100;
 const RUNTIME_PAGE_CACHE_TTL_MS = 30_000;
 const runtimePageRequests = new Map<
   string,
@@ -49,6 +50,34 @@ function AddIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
       <path d="M8 3.25v9.5M3.25 8h9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ChevronDownIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
+      <path
+        d="m4.25 6.25 3.75 3.5 3.75-3.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function CheckIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
+      <path
+        d="m3.5 8.25 2.75 2.75 6.25-6.25"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -80,10 +109,11 @@ function runtimeToAgent(runtime: CloudRuntime): MyAgentCardData {
 }
 
 async function loadRuntimeAgents(
+  region: RuntimeRegion,
   nextToken: string,
   onList: (agents: MyAgentCardData[]) => void,
 ): Promise<string> {
-  const requestKey = nextToken;
+  const requestKey = `${region}:${nextToken}`;
   const cached = runtimePageCache.get(requestKey);
   if (cached && cached.expiresAt > Date.now()) {
     onList(cached.page.runtimes.map(runtimeToAgent));
@@ -94,7 +124,7 @@ async function loadRuntimeAgents(
   if (!request) {
     request = getRuntimes({
       scope: "mine",
-      region: "all",
+      region,
       pageSize: RUNTIME_PAGE_SIZE,
       nextToken,
     });
@@ -161,7 +191,7 @@ function AgentCard({
 }
 
 export interface MyAgentsProps {
-  onCreateAgent: () => void;
+  onCreateAgent: (region: RuntimeRegion) => void;
   onCreateCodexAgent: () => void;
   onUseAgent: (agent: MyAgentCardData) => Promise<void>;
   onViewAgentDetails: (agent: MyAgentCardData) => void;
@@ -179,6 +209,8 @@ export function MyAgents({
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const runtimeRequestRef = useRef(0);
   const [activeType, setActiveType] = useState<AgentType>("general");
+  const [region, setRegion] = useState<RuntimeRegion>("cn-beijing");
+  const [regionMenuOpen, setRegionMenuOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [runtimeAgents, setRuntimeAgents] = useState<MyAgentCardData[]>([]);
   const [runtimeNextToken, setRuntimeNextToken] = useState("");
@@ -190,7 +222,7 @@ export function MyAgents({
     const requestId = ++runtimeRequestRef.current;
     setLoadingRuntimes(true);
     setRuntimeError("");
-    return loadRuntimeAgents(token, (agents) => {
+    return loadRuntimeAgents(region, token, (agents) => {
       if (runtimeRequestRef.current !== requestId) return;
       setRuntimeAgents((current) => reset ? agents : [...current, ...agents]);
     })
@@ -204,9 +236,11 @@ export function MyAgents({
       .finally(() => {
         if (runtimeRequestRef.current === requestId) setLoadingRuntimes(false);
       });
-  }, []);
+  }, [region]);
 
   useEffect(() => {
+    setRuntimeAgents([]);
+    setRuntimeNextToken("");
     void fetchRuntimePage("", true);
     return () => {
       runtimeRequestRef.current += 1;
@@ -268,14 +302,65 @@ export function MyAgents({
     ? "暂未开放"
     : query.trim() ? "没有匹配的智能体" : `${activeLabel}暂无内容`;
   const createAgent = activeType === "general"
-    ? onCreateAgent
+    ? () => onCreateAgent(region)
     : activeType === "codex" ? onCreateCodexAgent : undefined;
 
   return (
     <div className="my-agents-page">
       <header className="my-agents-header">
         <div className="my-agents-heading">
-          <h1>智能体</h1>
+          <div className="my-agents-title-row">
+            <h1>智能体</h1>
+            <div
+              className="my-agents-region-picker"
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setRegionMenuOpen(false);
+              }}
+            >
+              <button
+                type="button"
+                className="my-agents-region"
+                aria-label="Runtime 地域"
+                aria-haspopup="listbox"
+                aria-expanded={regionMenuOpen}
+                onClick={() => setRegionMenuOpen((open) => !open)}
+              >
+                <span>{region === "cn-beijing" ? "北京" : "上海"}</span>
+                <ChevronDownIcon
+                  className={`my-agents-region-chevron${regionMenuOpen ? " is-open" : ""}`}
+                />
+              </button>
+              {regionMenuOpen && (
+                <>
+                  <div className="menu-scrim" onClick={() => setRegionMenuOpen(false)} />
+                  <div className="my-agents-region-menu" role="listbox" aria-label="Runtime 地域">
+                    {[
+                      { value: "cn-beijing", label: "北京" },
+                      { value: "cn-shanghai", label: "上海" },
+                    ].map((item) => {
+                      const selected = item.value === region;
+                      return (
+                        <button
+                          key={item.value}
+                          type="button"
+                          role="option"
+                          aria-selected={selected}
+                          className={`my-agents-region-option${selected ? " is-selected" : ""}`}
+                          onClick={() => {
+                            setRegion(item.value as RuntimeRegion);
+                            setRegionMenuOpen(false);
+                          }}
+                        >
+                          <span>{item.label}</span>
+                          {selected && <CheckIcon />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
           <p>在此处浏览您的所有智能体</p>
         </div>
         <label className="my-agent-search">

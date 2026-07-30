@@ -27,6 +27,7 @@ interface CodePackageCreateProps {
   onDeploymentTaskChange?: (task: DeploymentTaskUpdate) => void;
   onDeploymentStarted?: (task: DeploymentTaskUpdate) => void;
   onDeploymentComplete?: (result: DeployResult) => void | Promise<void>;
+  initialDeployRegion?: string;
 }
 
 function packageProjectName(fileName: string): string {
@@ -87,6 +88,7 @@ export function CodePackageCreate({
   onDeploymentTaskChange,
   onDeploymentStarted,
   onDeploymentComplete,
+  initialDeployRegion = "cn-beijing",
 }: CodePackageCreateProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const loadRunRef = useRef(0);
@@ -96,7 +98,7 @@ export function CodePackageCreate({
   const [reading, setReading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState("");
-  const [deployRegion, setDeployRegion] = useState("cn-beijing");
+  const [deployRegion, setDeployRegion] = useState(initialDeployRegion);
   const [network, setNetwork] = useState<NetworkConfig | undefined>();
 
   useEffect(

@@ -52,9 +52,28 @@ export function VideoGenerateIcon(props: ToolIconProps) {
       aria-hidden="true"
       {...props}
     >
-      <rect x="3.25" y="5.5" width="16.25" height="13" rx="2.4" />
-      <path d="m10.2 9.2 4.4 2.8-4.4 2.8V9.2Z" />
-      <path d="m19.25 2.5.42 1.2 1.2.42-1.2.42-.42 1.2-.42-1.2-1.2-.42 1.2-.42.42-1.2Z" fill="currentColor" stroke="none" />
+      <rect x="3.25" y="5.25" width="17.5" height="13.5" rx="2.4" />
+      <path d="M3.25 9h17.5M6.75 5.25 9.3 9M12 5.25 14.55 9M17.25 5.25 19.8 9" />
+      <path d="m10.25 11.45 4 2.55-4 2.55v-5.1Z" />
+    </svg>
+  );
+}
+
+export function PresentationGenerateIcon(props: ToolIconProps) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <path d="M4.25 5.25h15.5v10.5H4.25zM8.25 19.75h7.5M12 15.75v4" />
+      <path d="m7.25 12.75 2.35-2.4 2.15 1.65 3.4-3.6 1.6 1.55" />
+      <circle cx="7.25" cy="8.4" r=".7" fill="currentColor" stroke="none" />
     </svg>
   );
 }

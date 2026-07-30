@@ -1666,6 +1666,32 @@
   gap: 8px;
   padding: 0 12px 12px;
 }
+.cw-ab-trace {
+  min-height: 32px;
+  margin-right: auto;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+.cw-ab-trace:hover:not(:disabled) {
+  background: hsl(var(--secondary) / 0.58);
+  color: hsl(var(--foreground));
+}
+.cw-ab-trace:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.55);
+  outline-offset: 2px;
+}
+.cw-ab-trace:disabled {
+  color: hsl(var(--muted-foreground) / 0.48);
+  cursor: not-allowed;
+}
 .cw-ab-footer-start {
   min-width: 0;
   background: hsl(var(--secondary) / 0.58);

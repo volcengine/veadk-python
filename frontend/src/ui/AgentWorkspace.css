@@ -137,6 +137,10 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
+.aw-root.is-detail-only .aw-agent-head {
+  padding-top: 24px;
+}
+
 .aw-sidebar {
   min-width: 0;
   min-height: 0;

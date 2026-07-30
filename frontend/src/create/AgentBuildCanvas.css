@@ -140,6 +140,10 @@
   border-bottom: 1px solid hsl(var(--border) / 0.75);
 }
 
+.abc-group.is-compact-empty .abc-group-head {
+  border-bottom: 0;
+}
+
 .abc-group-head > span:first-child {
   width: 100%;
   min-width: 0;

@@ -612,6 +612,21 @@ def _serve_options(f):
             help="Seconds before a generated-agent debug runner is cleaned up.",
         ),
         click.option(
+            "--sandbox-chat-codex-tool-id",
+            default=None,
+            envvar="SANDBOX_CHAT_CODEX",
+            help="AgentKit CodeEnv Tool ID used by temporary chats "
+            "(env: SANDBOX_CHAT_CODEX).",
+        ),
+        click.option(
+            "--sandbox-skill-creator-tool-id",
+            "--skill-creator-tool-id",
+            default=None,
+            envvar="SANDBOX_SKILL_CREATOR",
+            help="AgentKit CodeEnv Tool ID used by Skill creation mode "
+            "(env: SANDBOX_SKILL_CREATOR).",
+        ),
+        click.option(
             "--admin",
             "studio_admins",
             default=None,
@@ -665,6 +680,8 @@ def frontend(
     oauth2_provider_label: str | None,
     auth_mode: str,
     generated_agent_test_run_ttl: int,
+    sandbox_chat_codex_tool_id: str | None,
+    sandbox_skill_creator_tool_id: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
     open_browser: bool,
@@ -690,6 +707,8 @@ def frontend(
         oauth2_provider_label=oauth2_provider_label,
         auth_mode=auth_mode,
         generated_agent_test_run_ttl=generated_agent_test_run_ttl,
+        sandbox_chat_codex_tool_id=sandbox_chat_codex_tool_id,
+        sandbox_skill_creator_tool_id=sandbox_skill_creator_tool_id,
         studio_admins=studio_admins,
         studio_developers=studio_developers,
         open_browser=open_browser,
@@ -719,6 +738,8 @@ def studio(
     oauth2_provider_label: str | None,
     auth_mode: str,
     generated_agent_test_run_ttl: int,
+    sandbox_chat_codex_tool_id: str | None,
+    sandbox_skill_creator_tool_id: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
     open_browser: bool,
@@ -749,6 +770,8 @@ def studio(
         oauth2_provider_label=oauth2_provider_label,
         auth_mode=auth_mode,
         generated_agent_test_run_ttl=generated_agent_test_run_ttl,
+        sandbox_chat_codex_tool_id=sandbox_chat_codex_tool_id,
+        sandbox_skill_creator_tool_id=sandbox_skill_creator_tool_id,
         studio_admins=studio_admins,
         studio_developers=studio_developers,
         open_browser=open_browser,
@@ -775,6 +798,8 @@ def _run_frontend_server(
     oauth2_provider_label: str | None,
     auth_mode: str,
     generated_agent_test_run_ttl: int,
+    sandbox_chat_codex_tool_id: str | None = None,
+    sandbox_skill_creator_tool_id: str | None = None,
     studio_admins: str | None = None,
     studio_developers: str | None = None,
     open_browser: bool,
@@ -799,6 +824,11 @@ def _run_frontend_server(
     else:
         logger.warning("No .env file found in current directory or parent directories")
 
+    if sandbox_chat_codex_tool_id:
+        os.environ["SANDBOX_CHAT_CODEX"] = sandbox_chat_codex_tool_id
+    if sandbox_skill_creator_tool_id:
+        os.environ["SANDBOX_SKILL_CREATOR"] = sandbox_skill_creator_tool_id
+
     from google.adk.cli.fast_api import get_fast_api_app
 
     agents_dir = os.path.abspath(agents_dir)
@@ -813,6 +843,35 @@ def _run_frontend_server(
         ],
         web=False,  # we serve our own UI, not the bundled ADK dev UI
     )
+
+    adk_server = None
+    for route in app.routes:
+        if getattr(route, "path", "") != "/run_sse":
+            continue
+        endpoint = getattr(route, "endpoint", None)
+        for cell in getattr(endpoint, "__closure__", None) or ():
+            candidate = cell.cell_contents
+            if all(
+                hasattr(candidate, attr)
+                for attr in (
+                    "agent_loader",
+                    "session_service",
+                    "artifact_service",
+                    "get_runner_async",
+                )
+            ):
+                adk_server = candidate
+                break
+        if adk_server is not None:
+            break
+    if adk_server is None:
+        raise RuntimeError("Unable to access the ADK API server services")
+
+    from veadk.integrations.agentkit.app import (
+        configure_multi_app_session_capability_routes,
+    )
+
+    configure_multi_app_session_capability_routes(app, adk_server)
 
     # ``web=False`` deliberately keeps ADK's full development API disabled,
     # but the VeADK trace drawer needs this one read-only endpoint. Register a
@@ -1563,7 +1622,7 @@ def _run_frontend_server(
         tool calls during local debugging.
         """
         env: dict[str, str] = {
-            "OTEL_SDK_DISABLED": "true",
+            "OTEL_SDK_DISABLED": "false",
             "VEADK_DISABLE_EXPIRE_AT": "true",
             "ENABLE_APMPLUS": "false",
             "ENABLE_COZELOOP": "false",
@@ -2300,6 +2359,54 @@ def _run_frontend_server(
                 yield f"data: {err}\n\n"
 
         return StreamingResponse(_stream(), media_type="text/event-stream")
+
+    @app.get("/web/generated-agent-test-runs/{run_id}/trace/session/{session_id}")
+    async def _get_generated_agent_test_trace(
+        run_id: str,
+        session_id: str,
+        request: Request,
+    ):
+        run = _get_test_run(run_id, request)
+        url = (
+            f"{run.base_url}/dev/apps/{quote(run.app_name, safe='')}"
+            f"/debug/trace/session/{quote(session_id, safe='')}"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                res = await client.get(url)
+        except httpx.HTTPError as exc:
+            detail = _unexpected_debug_error_detail(
+                "连接临时运行环境以读取调用链路时失败",
+                exc,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=_test_run_log_detail(run, detail),
+            ) from exc
+        if res.status_code >= 400:
+            raise HTTPException(
+                status_code=res.status_code,
+                detail=_runner_response_error_detail(
+                    run,
+                    "读取调用链路",
+                    res.status_code,
+                    res.text,
+                ),
+            )
+        try:
+            spans = res.json()
+        except ValueError as exc:
+            detail = _unexpected_debug_error_detail(
+                "解析临时运行环境的调用链路响应时失败",
+                exc,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=_test_run_log_detail(run, detail),
+            ) from exc
+        if not isinstance(spans, list):
+            raise HTTPException(status_code=502, detail="调用链路响应格式无效")
+        return spans
 
     @app.delete("/web/generated-agent-test-runs/{run_id}")
     async def _delete_generated_agent_test_run(run_id: str, request: Request):
@@ -3524,21 +3631,16 @@ def _run_frontend_server(
                 window_end = offset + page_size
                 owned_by_id: dict[str, dict] = {}
                 owned_has_more = False
-                ownership_filters = {
-                    ("veadk:owner", principal.owner_id),
-                    ("veadk:author", principal.display_name),
-                }
                 for reg in regions:
-                    for tag_filter in ownership_filters:
-                        items, following_token = await _list_region(
-                            reg,
-                            "",
-                            window_end,
-                            tag_filter,
-                        )
-                        for item in items:
-                            owned_by_id[item["runtimeId"]] = item
-                        owned_has_more = owned_has_more or bool(following_token)
+                    items, following_token = await _list_region(
+                        reg,
+                        "",
+                        window_end,
+                        ("veadk:owner", principal.owner_id),
+                    )
+                    for item in items:
+                        owned_by_id[item["runtimeId"]] = item
+                    owned_has_more = owned_has_more or bool(following_token)
                 owned_runtimes = sorted(
                     owned_by_id.values(),
                     key=lambda item: item.get("createdAt") or "",

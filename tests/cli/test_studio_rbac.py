@@ -45,7 +45,7 @@ def _create_studio_app(
     developers: str | None = None,
 ) -> FastAPI:
     captured: dict[str, Any] = {}
-    monkeypatch.setattr("dotenv.find_dotenv", lambda: "")
+    monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
     monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
     monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-sk")
     monkeypatch.setattr(
@@ -201,7 +201,7 @@ def test_display_name_cannot_grant_a_role() -> None:
     assert policy.role_for(principal) == StudioRole.USER
 
 
-def test_runtime_owner_tag_takes_precedence_with_author_fallback() -> None:
+def test_runtime_ownership_requires_current_owner_tag() -> None:
     principal = StudioPrincipal.from_claims(
         {"sub": "stable-id", "email": "owner@example.com"}
     )
@@ -215,10 +215,7 @@ def test_runtime_owner_tag_takes_precedence_with_author_fallback() -> None:
         {"veadk:owner": "other", "veadk:author": "owner@example.com"},
         principal,
     )
-    assert runtime_belongs_to(
-        {"veadk:author": "OWNER@EXAMPLE.COM"},
-        principal,
-    )
+    assert not runtime_belongs_to({"veadk:author": "OWNER@EXAMPLE.COM"}, principal)
 
 
 def test_studio_deploy_exposes_role_options() -> None:
@@ -294,7 +291,7 @@ def test_gateway_role_uses_jwt_and_ignores_local_identity_header(
     assert response.json()["role"] == "admin"
 
 
-def test_non_admin_runtime_list_scans_pages_and_ignores_all_scope(
+def test_non_admin_runtime_list_uses_one_owner_filtered_request(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -304,12 +301,17 @@ def test_non_admin_runtime_list_scans_pages_and_ignores_all_scope(
     own = _runtime("runtime-own", "developer")
     developer_tag_filters: list[tuple[str, list[str]]] = []
 
+    runtime_calls = 0
+
     def list_runtimes(_self: Any, request: Any) -> SimpleNamespace:
-        for item in getattr(request, "tag_filters", None) or []:
+        nonlocal runtime_calls
+        runtime_calls += 1
+        tag_filters = getattr(request, "tag_filters", None) or []
+        for item in tag_filters:
             developer_tag_filters.append((item.key, item.values))
-        if getattr(request, "next_token", None) == "page-2":
+        if tag_filters:
             return SimpleNamespace(agent_kit_runtimes=[own], next_token="")
-        return SimpleNamespace(agent_kit_runtimes=[other], next_token="page-2")
+        return SimpleNamespace(agent_kit_runtimes=[other, own], next_token="")
 
     monkeypatch.setattr(AgentkitRuntimeClient, "list_runtimes", list_runtimes)
     app = _create_studio_app(
@@ -324,6 +326,7 @@ def test_non_admin_runtime_list_scans_pages_and_ignores_all_scope(
             "/web/runtimes?scope=all&page_size=1&region=cn-beijing",
             headers={"X-VeADK-Local-User": "developer"},
         )
+        developer_call_count = runtime_calls
         admin = client.get(
             "/web/runtimes?scope=all&page_size=10&region=cn-beijing",
             headers={"X-VeADK-Local-User": "admin"},
@@ -335,6 +338,8 @@ def test_non_admin_runtime_list_scans_pages_and_ignores_all_scope(
     ]
     assert developer.json()["runtimes"][0]["canDelete"] is True
     assert ("veadk:owner", ["developer"]) in developer_tag_filters
+    assert developer_call_count == 1
+    assert runtime_calls == 2
     assert admin.status_code == 200
     assert [item["runtimeId"] for item in admin.json()["runtimes"]] == [
         "runtime-other",

@@ -967,7 +967,7 @@ export function ProjectPreview({
       if (deployResult.runtimeId) {
         // Preferred: server-side proxy — data-plane apikey never reaches
         // the browser; /web/runtime-proxy injects it.
-        const region = deployResult.region ?? "cn-beijing";
+        const region = deployResult.region ?? deployRegion;
         const apps =
           (await probeRuntimeApps(deployResult.runtimeId, region)) ?? [];
         conn = addRuntimeConnection(

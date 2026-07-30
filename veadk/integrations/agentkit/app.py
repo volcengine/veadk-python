@@ -25,7 +25,7 @@ import traceback
 from collections.abc import Callable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from agentkit.apps import AgentkitAgentServerApp
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -57,6 +57,20 @@ from veadk.memory.short_term_memory import ShortTermMemory
 
 if TYPE_CHECKING:
     from veadk.runner import Runner
+
+
+class _MultiAppAdkServer(Protocol):
+    """ADK services recovered from the multi-app server route closure."""
+
+    session_service: Any
+    artifact_service: Any
+    memory_service: Any
+    credential_service: Any
+    auto_create_session: bool
+    default_app_name: str | None
+
+    async def get_runner_async(self, app_name: str) -> Any: ...
+
 
 _MAX_AGENT_GRAPH_DEPTH = 8
 _SERVER_STATE_KEY = "_veadk_agentkit_server"
@@ -915,6 +929,107 @@ def _configure_session_capability_routes(
         return StreamingResponse(event_generator(), media_type="text/event-stream")
 
     _promote_route(app, run_agent_sse_with_session_capabilities)
+
+
+def configure_multi_app_session_capability_routes(
+    app: FastAPI,
+    adk_server: _MultiAppAdkServer,
+) -> None:
+    """Enable session capability overlays on an ADK multi-app dev server."""
+
+    async def service_for(app_name: str) -> SessionCapabilityService:
+        source_runner = await adk_server.get_runner_async(app_name)
+        source_app = getattr(source_runner, "app", None)
+        root_agent = getattr(source_app, "root_agent", None)
+        if not isinstance(root_agent, BaseAgent):
+            raise HTTPException(status_code=404, detail=f"Agent not found: {app_name}")
+        return SessionCapabilityService(
+            root_agent=root_agent,
+            session_service=adk_server.session_service,
+        )
+
+    mount_session_capability_routes(
+        app=app,
+        service_resolver=service_for,
+    )
+
+    @app.post("/harness/run_sse")
+    async def run_multi_app_with_session_capabilities(
+        req: RunAgentRequest,
+    ):
+        app_name = req.app_name or getattr(adk_server, "default_app_name", None)
+        if not app_name:
+            raise HTTPException(status_code=400, detail="app_name is required")
+        req.app_name = app_name
+        try:
+            capability_service = await service_for(app_name)
+            run_agent = await capability_service.build_agent(
+                app_name=app_name,
+                user_id=req.user_id,
+                session_id=req.session_id,
+            )
+        except CapabilityError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+        _add_dynamic_a2a_agent_tools(run_agent, _content_text(req.new_message))
+        source_runner = await adk_server.get_runner_async(app_name)
+        source_app = getattr(source_runner, "app", None)
+        plugins = list(getattr(source_app, "plugins", None) or [])
+        runner = AdkRunner(
+            app=App(name=app_name, root_agent=run_agent, plugins=plugins),
+            artifact_service=adk_server.artifact_service,
+            session_service=adk_server.session_service,
+            memory_service=adk_server.memory_service,
+            credential_service=adk_server.credential_service,
+            auto_create_session=adk_server.auto_create_session,
+        )
+        stream_mode = StreamingMode.SSE if req.streaming else StreamingMode.NONE
+        custom_metadata = _run_request_custom_metadata(req)
+
+        async def event_generator():
+            try:
+                async with Aclosing(
+                    runner.run_async(
+                        user_id=req.user_id,
+                        session_id=req.session_id,
+                        new_message=req.new_message,
+                        state_delta=req.state_delta,
+                        run_config=RunConfig(
+                            streaming_mode=stream_mode,
+                            custom_metadata=custom_metadata,
+                        ),
+                        invocation_id=req.invocation_id,
+                    )
+                ) as agen:
+                    async for event in agen:
+                        events_to_stream = [event]
+                        if (
+                            not req.function_call_event_id
+                            and event.actions.artifact_delta
+                            and event.content
+                            and event.content.parts
+                        ):
+                            content_event = event.model_copy(deep=True)
+                            content_event.actions.artifact_delta = {}
+                            artifact_event = event.model_copy(deep=True)
+                            artifact_event.content = None
+                            events_to_stream = [content_event, artifact_event]
+
+                        for event_to_stream in events_to_stream:
+                            yield (
+                                "data: "
+                                + event_to_stream.model_dump_json(
+                                    exclude_none=True,
+                                    by_alias=True,
+                                )
+                                + "\n\n"
+                            )
+            except Exception as exc:  # noqa: BLE001 - SSE surfaces errors as data.
+                yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+
+        return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+    _promote_route(app, run_multi_app_with_session_capabilities)
 
 
 def create_agentkit_app(
