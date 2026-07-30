@@ -89,6 +89,7 @@ import {
 } from "../ui/ProjectPreview";
 import { Blocks, ThinkingPlaceholder } from "../ui/Blocks";
 import { DeploymentErrorMessage } from "../ui/DeploymentErrorMessage";
+import { StudioConfirmDialog } from "../ui/StudioConfirmDialog";
 import { TraceDrawer } from "../ui/TraceDrawer";
 import { isImeCompositionEvent } from "../ui/composerKeyboard";
 import {
@@ -1439,6 +1440,7 @@ function nodeProblem(
 interface TreeProblem {
   path: NodePath;
   name: string;
+  typeLabel: string;
   problem: string;
 }
 
@@ -1455,6 +1457,7 @@ function treeProblems(
     out.push({
       path,
       name: remote ? "远程 Agent" : root.name.trim() || "未命名",
+      typeLabel: agentTypeMeta(root.agentType).label,
       problem: p,
     });
   }
@@ -1464,6 +1467,13 @@ function treeProblems(
     );
   }
   return out;
+}
+
+function validationProblemMessage(problem: TreeProblem): string {
+  if (problem.problem === "缺少子 Agent") {
+    return `${problem.typeLabel}至少需要添加一个子 Agent 后才能调试或发布。`;
+  }
+  return `${problem.name}：${problem.problem}`;
 }
 
 /** Count the root Agent and every nested sub-Agent in the draft. */
@@ -2400,6 +2410,10 @@ export function CustomCreate({
   const [debugInput, setDebugInput] = useState("");
   const [debugTraceTarget, setDebugTraceTarget] =
     useState<DebugTraceTarget | null>(null);
+  const [debugLeaveConfirmOpen, setDebugLeaveConfirmOpen] = useState(false);
+  const [debugLeaveCleaning, setDebugLeaveCleaning] = useState(false);
+  const debugLeaveConfirmResolverRef =
+    useRef<((confirmed: boolean) => void) | null>(null);
   // The section nearest the top of the scroll container (scroll-spy) — drives
   // the right-hand step nav highlight.
   const [activeId, setActiveId] = useState<StepId>("basic");
@@ -2445,6 +2459,13 @@ export function CustomCreate({
           .catch((err) => console.warn("清理调试运行失败", err));
       }
       debugRunsRef.current.clear();
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      debugLeaveConfirmResolverRef.current?.(false);
+      debugLeaveConfirmResolverRef.current = null;
     };
   }, []);
 
@@ -2801,7 +2822,9 @@ export function CustomCreate({
     setValidationPulse((pulse) => pulse + 1);
     if (problems[0]) {
       setSelectedPath(problems[0].path);
-      window.requestAnimationFrame(() => scrollToSection("basic"));
+      window.requestAnimationFrame(() =>
+        scrollToSection(problems[0].problem === "缺少子 Agent" ? "type" : "basic"),
+      );
     }
     return false;
   };
@@ -2856,14 +2879,37 @@ export function CustomCreate({
     });
   };
 
+  const resolveDebugLeaveConfirm = (confirmed: boolean) => {
+    const resolve = debugLeaveConfirmResolverRef.current;
+    debugLeaveConfirmResolverRef.current = null;
+    resolve?.(confirmed);
+  };
+
+  const cancelDebugLeaveConfirm = () => {
+    if (debugLeaveCleaning) return;
+    setDebugLeaveConfirmOpen(false);
+    resolveDebugLeaveConfirm(false);
+  };
+
+  const acceptDebugLeaveConfirm = async () => {
+    if (debugLeaveCleaning) return;
+    setDebugLeaveCleaning(true);
+    try {
+      await cleanupDebugRuns();
+      setDebugLeaveConfirmOpen(false);
+      resolveDebugLeaveConfirm(true);
+    } finally {
+      setDebugLeaveCleaning(false);
+    }
+  };
+
   const confirmLeaveDebug = async () => {
     if (workspaceMode !== "validate" || activeDebugRunCount === 0) return true;
-    const confirmed = window.confirm(
-      "离开调试页面后，当前环境将被清理。您可以通过重新启动环境进行新的测试。",
-    );
-    if (!confirmed) return false;
-    await cleanupDebugRuns();
-    return true;
+    if (debugLeaveConfirmResolverRef.current) return false;
+    return new Promise<boolean>((resolve) => {
+      debugLeaveConfirmResolverRef.current = resolve;
+      setDebugLeaveConfirmOpen(true);
+    });
   };
 
   const openPublishPreview = async (variantId?: string) => {
@@ -3195,6 +3241,7 @@ export function CustomCreate({
 
   const handleWorkspaceChange = async (nextMode: WorkspaceMode) => {
     if (nextMode === "publish") {
+      if (!requireCompleteDraft()) return;
       if (project) setWorkspaceMode("publish");
       else openPublishPreview();
       return;
@@ -3327,7 +3374,11 @@ export function CustomCreate({
             <div className="cw-lower">
             <div className="cw-form-col">
             <Section meta={metaOf("type")}>
-              <div className="cw-agent-type-options" role="radiogroup" aria-label="Agent 类型">
+              <div
+                className="cw-agent-type-options"
+                role="radiogroup"
+                aria-label="Agent 类型"
+              >
                 {AGENT_TYPES.map((t) => {
                   const on = (node.agentType ?? "llm") === t.id;
                   const remoteTypeDisabled = isRootAgent && t.id === "a2a";
@@ -3374,6 +3425,16 @@ export function CustomCreate({
                   );
                 })}
               </div>
+              {showErrors && orchestrator && node.subAgents.length === 0 && (
+                <span className="cw-error-text">
+                  {validationProblemMessage({
+                    path: safePath,
+                    name: node.name.trim() || "未命名",
+                    typeLabel: agentTypeMeta(node.agentType).label,
+                    problem: "缺少子 Agent",
+                  })}
+                </span>
+              )}
             </Section>
             <Section meta={metaOf("basic")}>
                 <div className="cw-form">
@@ -4181,6 +4242,18 @@ export function CustomCreate({
           sessionId={debugTraceTarget.sessionId}
           title={`调用链路 · ${debugTraceTarget.variantName}`}
           onClose={() => setDebugTraceTarget(null)}
+        />
+      )}
+      {debugLeaveConfirmOpen && (
+        <StudioConfirmDialog
+          variant="warning"
+          title="离开调试？"
+          description="离开调试页面后，当前环境将被清理。您可以通过重新启动环境进行新的测试。"
+          confirmLabel={debugLeaveCleaning ? "清理中..." : "确定离开"}
+          closeLabel="关闭离开调试确认"
+          busy={debugLeaveCleaning}
+          onCancel={cancelDebugLeaveConfirm}
+          onConfirm={() => void acceptDebugLeaveConfirm()}
         />
       )}
       {discardConfirmOpen && (

@@ -36,6 +36,23 @@ const runtimePageCache = new Map<
   string,
   { page: { runtimes: CloudRuntime[]; nextToken: string }; expiresAt: number }
 >();
+const EMPTY_RUNTIME_IDS = new Set<string>();
+
+export function invalidateRuntimeAgentCache(runtimeIds?: Iterable<string>) {
+  if (!runtimeIds) {
+    runtimePageRequests.clear();
+    runtimePageCache.clear();
+    return;
+  }
+  const targetRuntimeIds = new Set(runtimeIds);
+  if (targetRuntimeIds.size === 0) return;
+  for (const [key, cached] of runtimePageCache) {
+    if (cached.page.runtimes.some((runtime) => targetRuntimeIds.has(runtime.runtimeId))) {
+      runtimePageCache.delete(key);
+    }
+  }
+  runtimePageRequests.clear();
+}
 
 function SearchIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -196,6 +213,7 @@ export interface MyAgentsProps {
   onUseAgent: (agent: MyAgentCardData) => Promise<void>;
   onViewAgentDetails: (agent: MyAgentCardData) => void;
   connectedRuntimeId?: string;
+  hiddenRuntimeIds?: ReadonlySet<string>;
 }
 
 export function MyAgents({
@@ -204,6 +222,7 @@ export function MyAgents({
   onUseAgent,
   onViewAgentDetails,
   connectedRuntimeId = "",
+  hiddenRuntimeIds = EMPTY_RUNTIME_IDS,
 }: MyAgentsProps) {
   const resultsRef = useRef<HTMLElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
@@ -282,16 +301,21 @@ export function MyAgents({
           agent.name.toLocaleLowerCase().includes(normalizedQuery),
         )
       : runtimeAgents;
-    const connectedIndex = matchingAgents.findIndex(
+    const availableAgents = hiddenRuntimeIds.size > 0
+      ? matchingAgents.filter((agent) =>
+          !agent.runtime || !hiddenRuntimeIds.has(agent.runtime.runtimeId),
+        )
+      : matchingAgents;
+    const connectedIndex = availableAgents.findIndex(
       (agent) => agent.runtime?.runtimeId === connectedRuntimeId,
     );
-    if (connectedIndex <= 0) return matchingAgents;
+    if (connectedIndex <= 0) return availableAgents;
     return [
-      matchingAgents[connectedIndex],
-      ...matchingAgents.slice(0, connectedIndex),
-      ...matchingAgents.slice(connectedIndex + 1),
+      availableAgents[connectedIndex],
+      ...availableAgents.slice(0, connectedIndex),
+      ...availableAgents.slice(connectedIndex + 1),
     ];
-  }, [activeType, connectedRuntimeId, query, runtimeAgents]);
+  }, [activeType, connectedRuntimeId, hiddenRuntimeIds, query, runtimeAgents]);
 
   const activeTypeInfo = AGENT_TYPES.find((type) => type.id === activeType);
   const activeLabel = activeTypeInfo?.label ?? "智能体";

@@ -78,7 +78,11 @@ import {
   AgentWorkspace,
   type WorkspaceAgentDraft,
 } from "./ui/AgentWorkspace";
-import { MyAgents, type MyAgentCardData } from "./ui/MyAgents";
+import {
+  MyAgents,
+  invalidateRuntimeAgentCache,
+  type MyAgentCardData,
+} from "./ui/MyAgents";
 import { SearchView } from "./ui/Search";
 import {
   buildAgentEntries,
@@ -651,6 +655,37 @@ function browserMimeType(file: File) {
   return "application/octet-stream";
 }
 
+function remoteSelectionIds(connections: RemoteConnection[]) {
+  return connections.flatMap((connection) =>
+    connection.apps.map((app) => remoteAppId(connection.id, app)),
+  );
+}
+
+function runtimeIdForSelection(
+  connections: RemoteConnection[],
+  selectedAppName: string,
+) {
+  return connections.find(
+    (connection) =>
+      connection.runtimeId &&
+      connection.apps.some(
+        (app) => remoteAppId(connection.id, app) === selectedAppName,
+      ),
+  )?.runtimeId ?? "";
+}
+
+function hasAgentSelection(
+  selectedAppName: string,
+  localApps: string[],
+  connections: RemoteConnection[],
+) {
+  if (!selectedAppName) return false;
+  return (
+    localApps.includes(selectedAppName) ||
+    remoteSelectionIds(connections).includes(selectedAppName)
+  );
+}
+
 export default function App() {
   const [apps, setApps] = useState<string[]>([]);
   const [appName, setAppName] = useState("");
@@ -1021,6 +1056,9 @@ export default function App() {
   const [libraryRuntimePermissions, setLibraryRuntimePermissions] = useState<
     Record<string, { canDelete: boolean }>
   >({});
+  const [hiddenRuntimeIds, setHiddenRuntimeIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [runtimeUpdateTarget, setRuntimeUpdateTarget] = useState<{
     runtimeId: string;
     name: string;
@@ -1038,6 +1076,7 @@ export default function App() {
   // Restore the previously-open session only once, after apps/user resolve.
   const restoredRef = useRef(false);
   const defaultViewAppliedRef = useRef(false);
+  const agentSelectionClearedRef = useRef(false);
 
   const saveWorkspaceDraft = useCallback(
     (
@@ -1145,8 +1184,18 @@ export default function App() {
     );
     if (targets.length === 0) return;
 
+    const selectedRuntimeId = runtimeIdForSelection(connections, appName);
+    const pendingRuntimeIds = new Set(targets.map((agent) => agent.runtimeId));
+    setHiddenRuntimeIds((current) => {
+      const next = new Set(current);
+      for (const runtimeId of pendingRuntimeIds) next.add(runtimeId);
+      return next;
+    });
+    invalidateRuntimeAgentCache(pendingRuntimeIds);
+
     const deletedRuntimeIds = new Set<string>();
     const deletedAgentIds = new Set<string>();
+    const failedRuntimeIds = new Set<string>();
     const failures: string[] = [];
     for (const agent of targets) {
       try {
@@ -1157,11 +1206,13 @@ export default function App() {
         deletedAgentIds.add(agent.id);
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause);
+        failedRuntimeIds.add(agent.runtimeId);
         failures.push(`${agent.label}: ${message}`);
       }
     }
 
     if (deletedRuntimeIds.size > 0) {
+      invalidateRuntimeAgentCache(deletedRuntimeIds);
       setConnections(loadConnections());
       setLibraryRuntimeIds((current) => {
         if (!current) return current;
@@ -1192,11 +1243,47 @@ export default function App() {
         }
         return next;
       });
-      if (targets.some((agent) => agent.id === appName)) {
-        viewSidRef.current = "";
-        setSessionId("");
-        setAppName("");
+      const deletedCurrentSelection = selectedRuntimeId
+        ? deletedRuntimeIds.has(selectedRuntimeId)
+        : targets.some((agent) => agent.id === appName);
+      if (deletedCurrentSelection) {
+        clearSelectedAgentAfterRemoval();
+        setCreateView(null);
+        setSkillCenter(false);
+        setAddAgent(false);
+        setAddMenu(false);
+        setSearchView(false);
+        setManageAgents(false);
+        setAgentDetailTarget(null);
+        setFocusedDeploymentTaskId("");
+        setFocusedWorkspaceAgentId("");
+        setMyAgents(true);
+        setError("");
       }
+      if (
+        agentDetailTarget?.runtime &&
+        deletedRuntimeIds.has(agentDetailTarget.runtime.runtimeId)
+      ) {
+        setCreateView(null);
+        setSkillCenter(false);
+        setAddAgent(false);
+        setAddMenu(false);
+        setSearchView(false);
+        setManageAgents(false);
+        setAgentDetailTarget(null);
+        setFocusedDeploymentTaskId("");
+        setFocusedWorkspaceAgentId("");
+        setMyAgents(true);
+        setError("");
+      }
+    }
+
+    if (failedRuntimeIds.size > 0) {
+      setHiddenRuntimeIds((current) => {
+        const next = new Set(current);
+        for (const runtimeId of failedRuntimeIds) next.delete(runtimeId);
+        return next;
+      });
     }
 
     if (failures.length > 0) {
@@ -1204,7 +1291,7 @@ export default function App() {
       const suffix = failures.length > 3 ? `；另有 ${failures.length - 3} 个失败` : "";
       throw new Error(`${failures.length} 个 Agent 删除失败：${shown}${suffix}`);
     }
-  }, [appName, userId]);
+  }, [agentDetailTarget, appName, connections, userId]);
 
   const refreshAgentLibrary = useCallback(async () => {
     setAgentLibraryLoading(true);
@@ -1637,13 +1724,17 @@ export default function App() {
     if (authStatus !== "authenticated") return;
     if (agentsSource === "cloud") {
       const saved = localStorage.getItem(LS.app);
-      const remoteIds = connections.flatMap((c) =>
-        c.apps.map((a) => remoteAppId(c.id, a)),
-      );
+      const remoteIds = remoteSelectionIds(connections);
       setAppName((current) => {
         if (current && remoteIds.includes(current)) return current;
+        if (current) {
+          agentSelectionClearedRef.current = true;
+          localStorage.removeItem(LS.app);
+          return "";
+        }
+        if (agentSelectionClearedRef.current) return "";
         if (saved && remoteIds.includes(saved)) return saved;
-        return remoteIds[0] ?? "";
+        return "";
       });
       return;
     }
@@ -1657,7 +1748,7 @@ export default function App() {
         // (prefer a servable, conversational agent — numbered examples like
         // 01_quickstart are standalone scripts with no root_agent and can't load).
         const saved = localStorage.getItem(LS.app);
-        const remoteIds = connections.flatMap((c) => c.apps.map((a) => remoteAppId(c.id, a)));
+        const remoteIds = remoteSelectionIds(connections);
         const valid = saved && (list.includes(saved) || remoteIds.includes(saved));
         const fallback =
           ["web_search_agent", "web_demo"].find((a) => list.includes(a)) ??
@@ -1670,7 +1761,12 @@ export default function App() {
 
   // Persist the current view/agent/session so a refresh restores them.
   useEffect(() => {
-    if (appName) localStorage.setItem(LS.app, appName);
+    if (appName) {
+      agentSelectionClearedRef.current = false;
+      localStorage.setItem(LS.app, appName);
+    } else {
+      localStorage.removeItem(LS.app);
+    }
   }, [appName]);
   useEffect(() => {
     let cancelled = false;
@@ -2004,6 +2100,17 @@ export default function App() {
     if (abandonedSession) void abandonDraftSession(abandonedSession);
   }
 
+  function clearSelectedAgentAfterRemoval() {
+    agentSelectionClearedRef.current = true;
+    localStorage.removeItem(LS.app);
+    if (sessionId) streamAbortsRef.current.get(sessionId)?.abort();
+    creatingSessionRef.current = null;
+    startNewChat();
+    setAppName("");
+    setNewChatCapabilities({});
+    setAgentInfo(null);
+  }
+
   function showToast(message: string) {
     if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
     setToast(message);
@@ -2021,9 +2128,10 @@ export default function App() {
     setSearchView(false);
     setManageAgents(false);
     setAgentDetailTarget(null);
-    if (!appName && !sandboxSession) {
+    if (!sandboxSession && !hasAgentSelection(appName, apps, connections)) {
+      if (appName) clearSelectedAgentAfterRemoval();
       setMyAgents(true);
-      showToast("请先选择 agent");
+      showToast("请先选择 Agent 后再开始新会话");
       return;
     }
     setMyAgents(false);
@@ -2677,12 +2785,7 @@ export default function App() {
           region: currentConn.region,
         }
       : undefined;
-  const connectedRuntimeId =
-    currentRuntime?.runtimeId ??
-    connections.reduce(
-      (runtimeId, connection) => connection.runtimeId ?? runtimeId,
-      "",
-    );
+  const connectedRuntimeId = currentRuntime?.runtimeId ?? "";
 
   const rateAssistantTurn = async (
     turn: Turn,
@@ -3239,6 +3342,7 @@ export default function App() {
                 onUseAgent={connectMyAgent}
                 onViewAgentDetails={openMyAgentDetails}
                 connectedRuntimeId={connectedRuntimeId}
+                hiddenRuntimeIds={hiddenRuntimeIds}
               />
             ) : showManageAgents ? (
               <AgentWorkspace

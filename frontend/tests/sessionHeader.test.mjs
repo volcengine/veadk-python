@@ -19,8 +19,9 @@ test("uses the selected Agent in new-chat, search, and conversation headers", ()
   assert.match(appSource, /void refreshAgentLibrary\(\)/);
   assert.match(
     appSource,
-    /if \(agentsSource === "cloud"\) \{[\s\S]*?remoteIds[\s\S]*?remoteIds\.includes\(saved\)[\s\S]*?remoteIds\[0\] \?\? ""/,
+    /if \(agentsSource === "cloud"\) \{[\s\S]*?remoteSelectionIds\(connections\)[\s\S]*?if \(saved && remoteIds\.includes\(saved\)\) return saved;[\s\S]*?return "";/,
   );
+  assert.doesNotMatch(appSource, /remoteIds\[0\] \?\? ""/);
   assert.doesNotMatch(appSource, /if \(agentsSource === "cloud"\) \{\s*setAppName\(""\)/);
   assert.match(navbarSource, /appName \? label\(appName\) : "选择 Agent"/);
   assert.match(navbarSource, /agentsSource === "cloud"[\s\S]*?aria-label="切换智能体"/);
@@ -38,11 +39,14 @@ test("shows the Codex identity instead of the Agent picker in sandbox sessions",
 test("redirects new chat to Agent selection when no Agent is active", () => {
   assert.match(
     appSource,
-    /function openNewChat\(\)[\s\S]*?if \(!appName && !sandboxSession\)[\s\S]*?setMyAgents\(true\)[\s\S]*?showToast\("请先选择 agent"\)[\s\S]*?return;/,
+    /function openNewChat\(\)[\s\S]*?!hasAgentSelection\(appName, apps, connections\)[\s\S]*?setMyAgents\(true\)[\s\S]*?showToast\("请先选择 Agent 后再开始新会话"\)[\s\S]*?return;/,
   );
+  assert.match(appSource, /if \(appName\) clearSelectedAgentAfterRemoval\(\)/);
   assert.match(appSource, /onNewChat=\{openNewChat\}/);
   assert.match(appSource, /className="app-toast" role="status" aria-live="polite"/);
-  assert.match(stylesSource, /\.app-toast\s*\{[\s\S]*?position:\s*fixed;/);
+  assert.match(stylesSource, /\.app-toast\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?border:\s*1px solid hsl\(var\(--border\)\);[\s\S]*?background:\s*hsl\(var\(--panel\)\);/);
+  assert.match(stylesSource, /\.app-toast::before\s*\{[\s\S]*?background:\s*hsl\(var\(--primary\)\);/);
+  assert.doesNotMatch(stylesSource, /\.app-toast\s*\{[\s\S]*?background:\s*hsl\(var\(--foreground\)\);/);
 });
 
 test("only using an Agent selects it for the main conversation", () => {
