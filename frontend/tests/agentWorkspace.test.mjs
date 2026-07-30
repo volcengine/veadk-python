@@ -11,8 +11,16 @@ const workspaceStyles = readFileSync(
   new URL("../src/ui/AgentWorkspace.css", import.meta.url),
   "utf8",
 );
+const appStyles = readFileSync(
+  new URL("../src/styles.css", import.meta.url),
+  "utf8",
+);
 const customCreateSource = readFileSync(
   new URL("../src/create/CustomCreate.tsx", import.meta.url),
+  "utf8",
+);
+const studioConfirmSource = readFileSync(
+  new URL("../src/ui/StudioConfirmDialog.tsx", import.meta.url),
   "utf8",
 );
 const projectPreviewSource = readFileSync(
@@ -310,6 +318,16 @@ test("workspace keeps agent deletion in selection mode and the floating detail a
   assert.match(appSource, /const deleteWorkspaceAgents = useCallback/);
   assert.match(appSource, /await deleteRuntime\(agent\.runtimeId, agent\.region\)/);
   assert.doesNotMatch(appSource, /agent\.region \?\? "cn-beijing"/);
+  assert.match(appSource, /const selectedRuntimeId = runtimeIdForSelection\(connections, appName\)/);
+  assert.match(appSource, /deletedCurrentSelection[\s\S]*?deletedRuntimeIds\.has\(selectedRuntimeId\)/);
+  assert.doesNotMatch(
+    appSource,
+    /if \(targets\.some\(\(agent\) => agent\.id === appName\)\) \{[\s\S]*?setAppName\(""\)[\s\S]*?\}/,
+  );
+  assert.match(
+    appSource,
+    /deletedRuntimeIds\.has\(agentDetailTarget\.runtime\.runtimeId\)[\s\S]*?setManageAgents\(false\)[\s\S]*?setAgentDetailTarget\(null\)[\s\S]*?setMyAgents\(true\)/,
+  );
   assert.match(appSource, /onDeleteAgents=\{deleteWorkspaceAgents\}/);
   assert.match(appSource, /const deleteWorkspaceDrafts = useCallback/);
   assert.match(appSource, /onDeleteDrafts=\{deleteWorkspaceDrafts\}/);
@@ -321,25 +339,81 @@ test("workspace keeps agent deletion in selection mode and the floating detail a
   assert.match(workspaceSource, /const \[selectedDraftIds, setSelectedDraftIds\] = useState<Set<string>>/);
   assert.match(workspaceSource, /selectedDeletableAgents/);
   assert.match(workspaceSource, /selectedDeletableDrafts/);
-  assert.match(workspaceSource, /window\.confirm\(confirmText\)/);
-  assert.match(workspaceSource, /await onDeleteAgents\(selectedDeletableAgents\)/);
-  assert.match(workspaceSource, /onDeleteDrafts\?\.\(selectedDeletableDrafts\)/);
+  const deleteSelectedStart = workspaceSource.indexOf("const deleteSelectedItems");
+  const deleteSingleAgentStart = workspaceSource.indexOf("const deleteSingleAgent");
+  const deleteSingleDraftStart = workspaceSource.indexOf("const deleteSingleDraft");
+  const createEvaluationGroupStart = workspaceSource.indexOf("const createEvaluationGroup");
+  assert.ok(deleteSelectedStart >= 0 && deleteSingleAgentStart > deleteSelectedStart);
+  assert.ok(deleteSingleDraftStart > deleteSingleAgentStart);
+  assert.ok(createEvaluationGroupStart > deleteSingleDraftStart);
+  assert.doesNotMatch(
+    workspaceSource.slice(deleteSelectedStart, createEvaluationGroupStart),
+    /window\.confirm/,
+  );
+  assert.match(workspaceSource, /const \[deleteConfirmTarget, setDeleteConfirmTarget\]/);
+  assert.match(workspaceSource, /import \{ StudioConfirmDialog \} from "\.\/StudioConfirmDialog"/);
+  assert.match(workspaceSource, /<StudioConfirmDialog[\s\S]*?variant="danger"/);
+  assert.match(workspaceSource, /closeLabel="关闭删除确认"/);
+  assert.match(studioConfirmSource, /createPortal\(/);
+  assert.match(studioConfirmSource, /function ConfirmWarningIcon\(props: SVGProps<SVGSVGElement>\)/);
+  assert.match(studioConfirmSource, /function ConfirmCloseIcon\(props: SVGProps<SVGSVGElement>\)/);
+  assert.doesNotMatch(
+    workspaceSource.slice(0, workspaceSource.indexOf("} from \"lucide-react\"")),
+    /\bAlertTriangle\b|^\s*X,\s*$/m,
+  );
+  assert.match(studioConfirmSource, /role="alertdialog"/);
+  assert.match(studioConfirmSource, /aria-modal="true"/);
+  assert.match(studioConfirmSource, /aria-labelledby=\{titleId\}/);
+  assert.match(studioConfirmSource, /aria-describedby=\{descriptionId\}/);
+  assert.match(studioConfirmSource, /className="studio-confirm-backdrop"/);
+  assert.match(studioConfirmSource, /studio-confirm-dialog--\$\{variant\}/);
+  assert.match(studioConfirmSource, /className="studio-confirm-head"/);
+  assert.match(studioConfirmSource, /className="studio-confirm-body"/);
+  assert.match(studioConfirmSource, /className="studio-confirm-actions"/);
+  assert.match(studioConfirmSource, /className="studio-confirm-primary"/);
+  assert.match(appStyles, /\.studio-confirm-dialog--warning \.studio-confirm-title-icon/);
+  assert.match(appStyles, /\.studio-confirm-dialog--danger \.studio-confirm-title-icon/);
+  assert.doesNotMatch(
+    studioConfirmSource,
+    /pp-confirm|code-browser/,
+  );
+  assert.match(workspaceSource, /setDeleteConfirmTarget\(\{[\s\S]*?kind: "selection"/);
+  assert.match(workspaceSource, /setDeleteConfirmTarget\(\{[\s\S]*?kind: "agent"/);
+  assert.match(workspaceSource, /setDeleteConfirmTarget\(\{[\s\S]*?kind: "draft"/);
+  assert.match(workspaceSource, /onConfirm=\{\(\) => void confirmDeleteTarget\(\)\}/);
+  assert.match(workspaceSource, /await onDeleteAgents\(agentsToDelete\)/);
+  assert.match(workspaceSource, /onDeleteDrafts\?\.\(draftsToDelete\)/);
   assert.match(workspaceSource, /aria-pressed=\{selectionMode \? isSelectedForDelete : undefined\}/);
   assert.match(workspaceSource, /删除所选/);
-  assert.match(workspaceSource, /const deleteSingleAgent = async/);
+  assert.match(workspaceSource, /const deleteSingleAgent = \(agent: AgentEntry\) =>/);
   assert.match(workspaceSource, /const deleteSingleDraft = /);
   assert.equal(workspaceSource.match(/aria-label="删除 Agent"/g)?.length, 1);
   assert.match(workspaceSource, /删除草稿/);
   assert.match(workspaceStyles, /\.aw-selection-toolbar/);
   assert.match(workspaceStyles, /\.aw-select-marker\.is-checked/);
   assert.match(workspaceStyles, /\.aw-head-delete/);
+  assert.doesNotMatch(workspaceStyles, /\.aw-delete-confirm/);
+  assert.match(appStyles, /\.studio-confirm-dialog\s*\{[\s\S]*?width:\s*min\(420px, calc\(100vw - 40px\)\)/);
+  assert.match(appStyles, /\.studio-confirm-head\s*\{[\s\S]*?flex:\s*0 0 58px/);
+  assert.match(appStyles, /\.studio-confirm-head\s*\{[\s\S]*?padding:\s*0 16px 0 18px/);
+  assert.match(appStyles, /\.studio-confirm-body\s*\{[\s\S]*?padding:\s*24px 20px/);
+  assert.match(
+    appStyles,
+    /\.studio-confirm-actions\s*\{[\s\S]*?padding:\s*12px 16px;[\s\S]*?border-top:\s*1px solid hsl\(var\(--border\)\)/,
+  );
+  assert.match(appStyles, /\.studio-confirm-close:focus-visible/);
+  assert.match(appStyles, /\.studio-confirm-dialog--danger \.studio-confirm-actions \.studio-confirm-primary/);
   assert.match(
     workspaceStyles,
     /\.aw-head-delete\.studio-update-action:hover:not\(:disabled\)[\s\S]*?color:\s*#fff;/,
   );
   assert.match(
     workspaceSource,
-    /className="aw-basic-actions"[\s\S]*?className="aw-update studio-update-action"[\s\S]*?className="aw-head-delete studio-update-action"/,
+    /className="aw-head-delete"[\s\S]*?aria-label="删除 Agent"/,
+  );
+  assert.doesNotMatch(
+    workspaceSource,
+    /className="aw-basic-actions"[\s\S]*?className="aw-head-delete studio-update-action"/,
   );
 });
 

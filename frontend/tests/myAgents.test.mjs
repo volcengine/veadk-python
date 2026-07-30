@@ -128,6 +128,26 @@ test("loads owned runtimes into the general agents section", () => {
   assert.match(pageSource, /setRuntimeAgents\(\(current\) => reset \? agents : \[\.\.\.current, \.\.\.agents\]\)/);
 });
 
+test("hides deleted Runtime cards and invalidates stale Runtime pages", () => {
+  assert.match(pageSource, /export function invalidateRuntimeAgentCache/);
+  assert.match(pageSource, /runtimePageRequests\.clear\(\)/);
+  assert.match(pageSource, /runtimePageCache\.clear\(\)/);
+  assert.match(pageSource, /runtimePageCache\.delete\(key\)/);
+  assert.match(pageSource, /hiddenRuntimeIds\?: ReadonlySet<string>/);
+  assert.match(
+    pageSource,
+    /!agent\.runtime \|\| !hiddenRuntimeIds\.has\(agent\.runtime\.runtimeId\)/,
+  );
+  assert.match(appSource, /const \[hiddenRuntimeIds, setHiddenRuntimeIds\] = useState<Set<string>>/);
+  assert.match(appSource, /invalidateRuntimeAgentCache\(pendingRuntimeIds\)/);
+  assert.match(appSource, /invalidateRuntimeAgentCache\(deletedRuntimeIds\)/);
+  assert.match(appSource, /const selectedRuntimeId = runtimeIdForSelection\(connections, appName\)/);
+  assert.match(appSource, /deletedCurrentSelection[\s\S]*?deletedRuntimeIds\.has\(selectedRuntimeId\)/);
+  assert.match(appSource, /clearSelectedAgentAfterRemoval\(\)/);
+  assert.match(appSource, /agentSelectionClearedRef\.current = true/);
+  assert.match(appSource, /hiddenRuntimeIds=\{hiddenRuntimeIds\}/);
+});
+
 test("loads more Runtime cards at the scroll sentinel with accessible animation", () => {
   assert.match(pageSource, /new IntersectionObserver/);
   assert.match(pageSource, /loadMoreRef/);
@@ -256,9 +276,10 @@ test("shows connecting progress and preserves the connected Runtime state", () =
 test("uses connected Runtime state only for the card action", () => {
   assert.doesNotMatch(pageSource, /my-agents-connect-banner|请选择一个智能体以对话/);
   assert.match(pageSource, /agent\.runtime\?\.runtimeId === connectedRuntimeId/);
-  assert.match(pageSource, /const connectedIndex = matchingAgents\.findIndex/);
-  assert.match(pageSource, /matchingAgents\[connectedIndex\][\s\S]*?matchingAgents\.slice\(0, connectedIndex\)/);
-  assert.match(appSource, /const connectedRuntimeId =[\s\S]*?currentRuntime\?\.runtimeId \?\?[\s\S]*?connections\.reduce/);
+  assert.match(pageSource, /const connectedIndex = availableAgents\.findIndex/);
+  assert.match(pageSource, /availableAgents\[connectedIndex\][\s\S]*?availableAgents\.slice\(0, connectedIndex\)/);
+  assert.match(appSource, /const connectedRuntimeId = currentRuntime\?\.runtimeId \?\? ""/);
+  assert.doesNotMatch(appSource, /const connectedRuntimeId =[\s\S]*?connections\.reduce/);
   assert.match(appSource, /connectedRuntimeId=\{connectedRuntimeId\}/);
 });
 
