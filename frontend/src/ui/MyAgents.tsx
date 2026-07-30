@@ -417,7 +417,20 @@ export function MyAgents({
           </div>
         ) : showEmpty ? (
           <div className="my-agent-empty">
-            <p>{emptyMessage}</p>
+            {!query.trim() && activeType === "general" ? (
+              <p>
+                暂无智能体，
+                <button
+                  type="button"
+                  className="my-agent-empty-create"
+                  onClick={() => onCreateAgent(region)}
+                >
+                  点此创建
+                </button>
+              </p>
+            ) : (
+              <p>{emptyMessage}</p>
+            )}
             {query.trim() && activeType !== "openclaw" && activeType !== "hermes" && (
               <span>请尝试搜索其他名称</span>
             )}

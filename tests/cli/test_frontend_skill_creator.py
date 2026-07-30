@@ -483,3 +483,35 @@ def test_skill_creator_uses_configured_sandbox_region(monkeypatch) -> None:
         SkillCreatorService(tool_id="tool-id")._validate_tool("tool-id")
 
     client_class.assert_called_once_with(region="cn-shanghai")
+
+
+def test_skill_creator_retries_tool_lookup_in_shanghai() -> None:
+    regions: list[str] = []
+    tool = SimpleNamespace(
+        tool_type="CodeEnv",
+        status="Ready",
+        envs=[
+            SimpleNamespace(key="CODEX_API_KEY", value=os.urandom(24).hex()),
+            SimpleNamespace(key="CODEX_BASE_URL", value=_MODEL_BASE_URL),
+        ],
+    )
+
+    class FakeClient:
+        def __init__(self, region: str) -> None:
+            self.region = region
+
+        def get_tool(self, _request: object) -> SimpleNamespace:
+            regions.append(self.region)
+            if self.region == "cn-beijing":
+                raise RuntimeError("InvalidResource.NotFound")
+            return tool
+
+    service = SkillCreatorService(tool_id="tool-id", region="cn-beijing")
+    with patch(
+        "veadk.cli.frontend_skill_creator.AgentkitToolsClient",
+        side_effect=FakeClient,
+    ):
+        service._validate_tool("tool-id")
+
+    assert regions == ["cn-beijing", "cn-shanghai"]
+    assert service._region == "cn-shanghai"

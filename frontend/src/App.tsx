@@ -1762,9 +1762,13 @@ export default function App() {
   // very first resolve, restore the previously-open session (if it still
   // exists and we weren't on a create view); otherwise start a fresh chat.
   useEffect(() => {
-    if (myAgents || agentDetailTarget || !appName || !userId) return;
+    if (myAgents || agentDetailTarget || sandboxSession || !appName || !userId) {
+      return;
+    }
+    let cancelled = false;
     (async () => {
       const list = await refreshSessions(appName);
+      if (cancelled) return;
       if (!restoredRef.current) {
         restoredRef.current = true;
         const savedId = localStorage.getItem(LS.session) || "";
@@ -1775,8 +1779,11 @@ export default function App() {
       }
       startNewChat();
     })();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentDetailTarget, appName, myAgents, userId]);
+  }, [agentDetailTarget, appName, myAgents, sandboxSession, userId]);
 
   // After switching agent from a search result, open the target session (runs
   // after the agent-switch effect above, so it wins over its startNewChat()).

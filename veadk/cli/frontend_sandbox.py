@@ -33,6 +33,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import Request
 
+from veadk.cli.agentkit_sandbox_region import is_agentkit_resource_not_found
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -153,6 +154,7 @@ class SandboxCloudSession:
     instance_id: str
     user_session_id: str
     endpoint: str
+    region: str = ""
 
 
 @dataclass
@@ -220,9 +222,12 @@ class AgentkitSandboxGateway:
 
     def __init__(
         self,
-        client: Any | Callable[[], Any],
+        client: Any | Callable[..., Any],
+        *,
+        region_candidates: tuple[str, ...] = (),
     ) -> None:
         self._client = client
+        self._region_candidates = region_candidates
         self._background_tasks: set[asyncio.Task[None]] = set()
 
     def _track_cleanup(self, coroutine: Any) -> None:
@@ -230,13 +235,16 @@ class AgentkitSandboxGateway:
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
 
-    async def _call(self, method_name: str, request: Any) -> Any:
-        client = self._client() if callable(self._client) else self._client
+    async def _call(self, method_name: str, request: Any, *, region: str = "") -> Any:
+        if callable(self._client):
+            client = self._client(region) if self._region_candidates else self._client()
+        else:
+            client = self._client
         method = getattr(client, method_name)
         return await asyncio.to_thread(method, request)
 
     async def _reconcile_created_session(
-        self, tool_id: str, user_session_id: str
+        self, tool_id: str, user_session_id: str, region: str = ""
     ) -> SandboxCloudSession | None:
         from agentkit.sdk.tools import types as tools_types
 
@@ -252,6 +260,7 @@ class AgentkitSandboxGateway:
                         )
                     ],
                 ),
+                region=region,
             )
             for session in response.session_infos or []:
                 if session.user_session_id != user_session_id:
@@ -264,6 +273,7 @@ class AgentkitSandboxGateway:
                         instance_id=session.session_id,
                         user_session_id=user_session_id,
                         endpoint=session.endpoint,
+                        region=region,
                     )
             if attempt < 5:
                 await asyncio.sleep(5)
@@ -273,46 +283,59 @@ class AgentkitSandboxGateway:
         from agentkit.sdk.tools import types as tools_types
 
         user_session_id = f"studio-{uuid.uuid4()}"
-        request = tools_types.CreateSessionRequest(
-            ToolId=tool_id,
-            Ttl=STUDIO_SANDBOX_TTL_SECONDS,
-            TtlUnit="second",
-            UserSessionId=user_session_id,
-        )
-        create_task = asyncio.create_task(self._call("create_session", request))
-        try:
-            response = await asyncio.shield(create_task)
-        except asyncio.CancelledError:
-            self._track_cleanup(
-                self._cleanup_cancelled_create(
-                    create_task, tool_id=tool_id, user_session_id=user_session_id
+        regions = self._region_candidates or ("",)
+        for index, region in enumerate(regions):
+            request = tools_types.CreateSessionRequest(
+                ToolId=tool_id,
+                Ttl=STUDIO_SANDBOX_TTL_SECONDS,
+                TtlUnit="second",
+                UserSessionId=user_session_id,
+            )
+            create_task = asyncio.create_task(
+                self._call("create_session", request, region=region)
+            )
+            try:
+                response = await asyncio.shield(create_task)
+            except asyncio.CancelledError:
+                self._track_cleanup(
+                    self._cleanup_cancelled_create(
+                        create_task,
+                        tool_id=tool_id,
+                        user_session_id=user_session_id,
+                        region=region,
+                    )
                 )
-            )
-            raise
-        except Exception as error:
-            if _CREATE_SESSION_START_FAIL_CODE not in str(error):
+                raise
+            except Exception as error:
+                if is_agentkit_resource_not_found(error) and index + 1 < len(regions):
+                    continue
+                if _CREATE_SESSION_START_FAIL_CODE not in str(error):
+                    raise SandboxProvisioningError(
+                        f"创建 AgentKit 沙箱会话失败：{_safe_error_message(error)}"
+                    ) from error
+                reconciled = await self._reconcile_created_session(
+                    tool_id, user_session_id, region
+                )
+                if reconciled is not None:
+                    return reconciled
                 raise SandboxProvisioningError(
-                    f"创建 AgentKit 沙箱会话失败：{_safe_error_message(error)}"
+                    "AgentKit 返回会话启动失败，且未找到已就绪的会话。"
                 ) from error
-            reconciled = await self._reconcile_created_session(tool_id, user_session_id)
-            if reconciled is not None:
-                return reconciled
-            raise SandboxProvisioningError(
-                "AgentKit 返回会话启动失败，且未找到已就绪的会话。"
-            ) from error
 
-        instance_id = (response.session_id or "").strip()
-        endpoint = (response.endpoint or "").strip()
-        if not instance_id or not endpoint:
-            raise SandboxProvisioningError(
-                "AgentKit 创建会话响应缺少 SessionId 或 Endpoint。"
+            instance_id = (response.session_id or "").strip()
+            endpoint = (response.endpoint or "").strip()
+            if not instance_id or not endpoint:
+                raise SandboxProvisioningError(
+                    "AgentKit 创建会话响应缺少 SessionId 或 Endpoint。"
+                )
+            return SandboxCloudSession(
+                tool_id=tool_id,
+                instance_id=instance_id,
+                user_session_id=response.user_session_id or user_session_id,
+                endpoint=endpoint,
+                region=region,
             )
-        return SandboxCloudSession(
-            tool_id=tool_id,
-            instance_id=instance_id,
-            user_session_id=response.user_session_id or user_session_id,
-            endpoint=endpoint,
-        )
+        raise SandboxProvisioningError("无法在支持的地域创建 AgentKit 沙箱会话。")
 
     async def _cleanup_cancelled_create(
         self,
@@ -320,6 +343,7 @@ class AgentkitSandboxGateway:
         *,
         tool_id: str,
         user_session_id: str,
+        region: str = "",
     ) -> None:
         """Delete a cloud session whose synchronous create outlived its request."""
         cloud: SandboxCloudSession | None = None
@@ -331,10 +355,13 @@ class AgentkitSandboxGateway:
                     instance_id=response.session_id,
                     user_session_id=response.user_session_id or user_session_id,
                     endpoint=response.endpoint,
+                    region=region,
                 )
         except Exception as error:
             if _CREATE_SESSION_START_FAIL_CODE in str(error):
-                cloud = await self._reconcile_created_session(tool_id, user_session_id)
+                cloud = await self._reconcile_created_session(
+                    tool_id, user_session_id, region
+                )
             else:
                 logger.warning(
                     "Cancelled Sandbox create failed before cleanup: %s",
@@ -359,6 +386,7 @@ class AgentkitSandboxGateway:
                     ToolId=session.tool_id,
                     SessionId=session.instance_id,
                 ),
+                region=session.region,
             )
         except Exception as error:
             if _SESSION_NOT_FOUND_CODE in str(error):

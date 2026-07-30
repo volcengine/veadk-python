@@ -465,6 +465,22 @@
   font-size: 12px;
 }
 
+.my-agent-empty .my-agent-empty-create {
+  height: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: hsl(var(--primary));
+  font-size: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.my-agent-empty .my-agent-empty-create:hover {
+  color: hsl(var(--primary) / 0.78);
+}
+
 .my-agent-card-main:focus-visible,
 .my-agent-connect:focus-visible,
 .my-agent-type-pill:focus-visible,

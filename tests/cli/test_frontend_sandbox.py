@@ -356,6 +356,67 @@ async def test_gateway_accepts_an_already_expired_session_as_deleted() -> None:
 
 
 @pytest.mark.asyncio
+async def test_gateway_retries_session_creation_in_shanghai_and_deletes_there() -> None:
+    created_regions: list[str] = []
+    deleted_regions: list[str] = []
+
+    class _Client:
+        def __init__(self, region: str) -> None:
+            self.region = region
+
+        def create_session(self, request: object) -> SimpleNamespace:
+            del request
+            created_regions.append(self.region)
+            if self.region == "cn-beijing":
+                raise RuntimeError("InvalidResource.NotFound")
+            return SimpleNamespace(
+                session_id="remote-1",
+                user_session_id="user-1",
+                endpoint="https://sandbox.example",
+            )
+
+        def delete_session(self, request: object) -> None:
+            del request
+            deleted_regions.append(self.region)
+
+    gateway = AgentkitSandboxGateway(
+        _Client,
+        region_candidates=("cn-beijing", "cn-shanghai"),
+    )
+
+    session = await gateway.create_session("tool-1")
+    await gateway.delete_session(session)
+
+    assert created_regions == ["cn-beijing", "cn-shanghai"]
+    assert session.region == "cn-shanghai"
+    assert deleted_regions == ["cn-shanghai"]
+
+
+@pytest.mark.asyncio
+async def test_gateway_does_not_retry_non_not_found_creation_errors() -> None:
+    regions: list[str] = []
+
+    class _Client:
+        def __init__(self, region: str) -> None:
+            self.region = region
+
+        def create_session(self, request: object) -> None:
+            del request
+            regions.append(self.region)
+            raise RuntimeError("AccessDenied")
+
+    gateway = AgentkitSandboxGateway(
+        _Client,
+        region_candidates=("cn-beijing", "cn-shanghai"),
+    )
+
+    with pytest.raises(SandboxProvisioningError, match="AccessDenied"):
+        await gateway.create_session("tool-1")
+
+    assert regions == ["cn-beijing"]
+
+
+@pytest.mark.asyncio
 async def test_delete_failure_keeps_session_for_cleanup_retry() -> None:
     class _FailDeleteGateway(_FakeGateway):
         async def delete_session(self, session: SandboxCloudSession) -> None:

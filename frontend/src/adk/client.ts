@@ -11,6 +11,7 @@ import {
 import { parseJsonResponse } from "./jsonResponse";
 import { formatRunSseError } from "./runSseError";
 import { parseSSE } from "./sse";
+import { normalizeRuntimeDescription } from "./runtimeDescription";
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   requestSignal,
@@ -1440,7 +1441,7 @@ export async function deployAgentkitProject(
           config,
           taskId,
           runtimeId: opts?.runtimeId,
-          description: opts?.description,
+          description: normalizeRuntimeDescription(opts?.description ?? ""),
           im: opts?.im,
           envs: opts?.envs,
         }),
