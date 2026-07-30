@@ -66,11 +66,16 @@ import {
   runtimeEnvDisplayRows,
   runtimeEnvVars,
 } from "../create/deploymentEnv";
-import { RuntimeProbeError, type DeployStage } from "../adk/client";
+import {
+  RuntimeProbeError,
+  type DeployBuildLogSnapshot,
+  type DeployStage,
+} from "../adk/client";
 import feishuLogo from "../assets/feishu-logo.svg";
 import { buildZip } from "./zip";
 import { ProjectCodeBrowser } from "./CodeBrowserDialog";
 import { DeploymentErrorMessage } from "./DeploymentErrorMessage";
+import { mergeDeployBuildLog } from "./deployBuildLog";
 import "./ProjectPreview.css";
 
 const CodeEditor = lazy(() => import("./CodeEditor"));
@@ -294,6 +299,7 @@ export interface DeploymentTaskUpdate {
   label: string;
   message?: string;
   pct?: number;
+  buildLog?: DeployBuildLogSnapshot;
   /** Draft used to render the Agent detail while its Runtime is still publishing. */
   agentDraft?: AgentDraft;
   /** Re-runs the same project/config as a new deployment task. */
@@ -783,11 +789,58 @@ export function ProjectPreview({
     };
     onDeploymentTaskChange?.(initialTask);
     onDeploymentStarted?.(initialTask);
+    let latestBuildLog: DeployBuildLogSnapshot | undefined;
+    let latestPhase = initialTask.phase ?? "prepare";
+    const terminalBuildLog = (
+      status: DeployBuildLogSnapshot["status"],
+    ): DeployBuildLogSnapshot | undefined => (
+      latestBuildLog
+        ? { ...latestBuildLog, status, updatedAt: Date.now() }
+        : undefined
+    );
+    const terminalBuildLogUpdate = (
+      status: DeployBuildLogSnapshot["status"],
+    ): { buildLog?: DeployBuildLogSnapshot } => {
+      const buildLog = terminalBuildLog(status);
+      return buildLog ? { buildLog } : {};
+    };
+    const pendingBuildLog = (): DeployBuildLogSnapshot => ({
+      source: "code-pipeline",
+      status: "running",
+      text: "",
+      lineCount: 0,
+      truncated: false,
+      updatedAt: Date.now(),
+      pendingMessage: "正在等待构建日志…",
+    });
+    const mergeBuildFailureLog = (message: string): DeployBuildLogSnapshot | undefined => {
+      if (latestPhase !== "build") return undefined;
+      const failureText = [
+        "",
+        "----- 构建失败 -----",
+        message,
+      ].join("\n");
+      latestBuildLog = mergeDeployBuildLog(latestBuildLog, {
+        source: "code-pipeline",
+        status: "error",
+        text: failureText,
+        lineCount: failureText.split("\n").length,
+        truncated: false,
+        updatedAt: Date.now(),
+      });
+      return latestBuildLog;
+    };
     try {
       const result = await onDeploy(
         project,
         (s) => {
           if (s.runtimeName) taskRuntimeName = s.runtimeName;
+          latestPhase = s.phase;
+          if (s.buildLog) {
+            latestBuildLog = mergeDeployBuildLog(latestBuildLog, s.buildLog);
+          } else if (s.phase === "build" && !latestBuildLog) {
+            latestBuildLog = pendingBuildLog();
+          }
           if (mountedRef.current) {
             setStageMap((prev) => ({ ...prev, [s.phase]: s }));
             setActivePhase(s.phase);
@@ -805,6 +858,7 @@ export function ProjectPreview({
               s.phase,
             message: s.message,
             pct: s.pct,
+            ...(latestBuildLog ? { buildLog: latestBuildLog } : {}),
           });
         },
         feishuEnabled
@@ -832,6 +886,7 @@ export function ProjectPreview({
         status: "success",
         phase: "complete",
         label: "部署完成",
+        ...terminalBuildLogUpdate("complete"),
       });
       try {
         await onDeploymentComplete?.(result);
@@ -847,6 +902,7 @@ export function ProjectPreview({
           phase: "complete",
           label: "部署完成，暂未连接",
           message: error.message,
+          ...terminalBuildLogUpdate("complete"),
         });
       }
     } catch (err) {
@@ -865,10 +921,13 @@ export function ProjectPreview({
           status: "cancelled",
           label: "已取消",
           message: "部署已取消，相关 Runtime 资源已请求销毁。",
+          ...terminalBuildLogUpdate("complete"),
         });
         return;
       }
       if (mountedRef.current) setDeployError(message);
+      const buildLog = mergeBuildFailureLog(message);
+      const failedInBuild = Boolean(buildLog);
       onDeploymentTaskChange?.({
         id: taskId,
         runtimeName: taskRuntimeName,
@@ -876,8 +935,10 @@ export function ProjectPreview({
         region: deployRegion,
         startedAt: taskStartedAt,
         status: "error",
+        phase: latestPhase,
         label: "部署失败",
-        message,
+        message: failedInBuild ? "构建镜像失败，详见构建日志。" : message,
+        ...(buildLog ? { buildLog } : terminalBuildLogUpdate("complete")),
         retry: requestDeploymentConfirmation,
       });
     } finally {

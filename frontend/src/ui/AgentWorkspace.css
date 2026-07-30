@@ -1047,6 +1047,126 @@
   color: hsl(var(--foreground) / 0.78);
 }
 
+.aw-deploy-step-log {
+  min-width: 0;
+  margin-top: 10px;
+}
+
+.aw-deploy-log {
+  min-width: 0;
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+  background: hsl(var(--canvas));
+  overflow: hidden;
+}
+
+.aw-deploy-log header,
+.aw-deploy-log header > div,
+.aw-deploy-log-actions,
+.aw-deploy-log-actions button {
+  display: flex;
+  align-items: center;
+}
+
+.aw-deploy-log header {
+  min-width: 0;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid hsl(var(--border));
+  background: hsl(var(--panel));
+}
+
+.aw-deploy-log.is-collapsed header {
+  border-bottom: 0;
+}
+
+.aw-deploy-log header > div:first-child {
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.aw-deploy-log strong {
+  color: hsl(var(--foreground));
+  font-size: 12.5px;
+  font-weight: 640;
+  line-height: 1.35;
+}
+
+.aw-deploy-log span {
+  min-width: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.aw-deploy-log-actions {
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.aw-deploy-log-actions button {
+  min-height: 28px;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--panel));
+  color: hsl(var(--foreground));
+  font-size: 11.5px;
+  font-weight: 560;
+  cursor: pointer;
+}
+
+.aw-deploy-log-actions button:hover {
+  background: hsl(var(--muted));
+}
+
+.aw-deploy-log-actions button span {
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.aw-deploy-log-actions button:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 1px;
+}
+
+.aw-deploy-log-actions svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+}
+
+.aw-deploy-log pre {
+  max-height: 260px;
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  color: hsl(var(--foreground) / 0.86);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.aw-deploy-log-empty {
+  padding: 12px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.aw-deploy-log.is-error {
+  border-color: hsl(6 32% 80%);
+}
+
 .aw-card-head {
   justify-content: space-between;
   gap: 12px;

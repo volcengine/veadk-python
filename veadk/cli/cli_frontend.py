@@ -73,6 +73,16 @@ _SENSITIVE_LOG_PATTERNS = (
         r"[A-Za-z0-9_-]{10,}\b"
     ),
 )
+_CP_BUILD_LOG_MAX_CHARS = 16000
+_CP_BUILD_LOG_MAX_LINES = 260
+_CP_PIPELINE_CREATED_RE = re.compile(
+    r"Pipeline created successfully:\s*(?P<name>.*?)\s*\(ID:\s*(?P<id>[^)]+)\)"
+)
+_CP_PIPELINE_REUSED_RE = re.compile(r"Reusing pipeline by name:\s*(?P<name>.+)$")
+_CP_PIPELINE_CREATING_RE = re.compile(r"Creating new pipeline:\s*(?P<name>.+)$")
+_CP_PIPELINE_RUN_RE = re.compile(
+    r"Pipeline triggered successfully,\s*run ID:\s*(?P<id>\S+)"
+)
 
 
 def _extract_build_error_excerpt(
@@ -105,6 +115,67 @@ def _extract_build_error_excerpt(
     return "\n".join(
         clean_lines[index] for index in sorted(selected_indexes)[:max_lines]
     )
+
+
+def _sanitize_build_log_snapshot(
+    text: object,
+    *,
+    max_chars: int = _CP_BUILD_LOG_MAX_CHARS,
+    max_lines: int = _CP_BUILD_LOG_MAX_LINES,
+) -> dict[str, Any]:
+    """Return a redacted, bounded tail of build logs for browser display."""
+    if max_chars <= 0 or max_lines <= 0:
+        return {"text": "", "lineCount": 0, "truncated": False}
+    raw_text = str(text or "")
+    raw_lines = raw_text.splitlines()
+    clean_lines: list[str] = []
+    skipped = 0
+    for raw_line in raw_lines:
+        line = _ANSI_ESCAPE_RE.sub("", str(raw_line)).rstrip()
+        line = _redact_debug_text(line)
+        if any(pattern.search(line) for pattern in _SENSITIVE_LOG_PATTERNS):
+            skipped += 1
+            continue
+        clean_lines.append(line[:1200])
+
+    selected = clean_lines[-max_lines:]
+    body = "\n".join(selected)
+    char_truncated = len(body) > max_chars
+    if char_truncated:
+        body = body[-max_chars:]
+        first_newline = body.find("\n")
+        if first_newline >= 0:
+            body = body[first_newline + 1 :]
+    truncated = (
+        skipped > 0
+        or len(clean_lines) > len(selected)
+        or char_truncated
+        or len(raw_lines) != len(clean_lines)
+    )
+    return {
+        "text": body,
+        "lineCount": len(clean_lines),
+        "truncated": truncated,
+    }
+
+
+def _cp_metadata_from_reporter_message(message: object) -> dict[str, str]:
+    """Extract Code Pipeline identifiers from AgentKit reporter messages."""
+    text = _ANSI_ESCAPE_RE.sub("", str(message or "")).strip()
+    if not text:
+        return {}
+    if match := _CP_PIPELINE_CREATED_RE.search(text):
+        return {
+            "pipeline_name": match.group("name").strip(),
+            "pipeline_id": match.group("id").strip(),
+        }
+    if match := _CP_PIPELINE_REUSED_RE.search(text):
+        return {"pipeline_name": match.group("name").strip()}
+    if match := _CP_PIPELINE_CREATING_RE.search(text):
+        return {"pipeline_name": match.group("name").strip()}
+    if match := _CP_PIPELINE_RUN_RE.search(text):
+        return {"pipeline_run_id": match.group("id").strip()}
+    return {}
 
 
 def _redact_debug_text(text: str) -> str:
@@ -2372,9 +2443,12 @@ def _run_frontend_server(
             mode = str(net_cfg.get("mode") or "").strip().lower()
             if mode and mode != "public":
                 runtime_network = dict(net_cfg)
-        im_config = data.get("im") if isinstance(data.get("im"), dict) else {}
-        feishu_config = (
-            im_config.get("feishu") if isinstance(im_config.get("feishu"), dict) else {}
+        im_config: dict[str, Any] = (
+            data.get("im") if isinstance(data.get("im"), dict) else {}
+        )
+        raw_feishu_config = im_config.get("feishu")
+        feishu_config: dict[str, Any] = (
+            raw_feishu_config if isinstance(raw_feishu_config, dict) else {}
         )
         feishu_enabled = bool(feishu_config.get("enabled"))
         requested_envs = data.get("envs") if isinstance(data.get("envs"), list) else []
@@ -2520,10 +2594,14 @@ def _run_frontend_server(
             "destroy_on_cancel": not bool(runtime_id),
             "owner_id": owner_id,
         }
-        events: "_queue.Queue" = _queue.Queue()
+        events: _queue.Queue = _queue.Queue()
         state = {"phase": "build", "build_error_excerpt": ""}
+        cp_log_stop_event = _threading.Event()
+        task_state["cp_log_stop_event"] = cp_log_stop_event
 
         _PHASE_ORDER = {"build": 0, "deploy": 1, "publish": 2}
+        _CP_WORKSPACE_NAME = "agentkit-cli-workspace"
+        _CP_LOG_POLL_INTERVAL = 5.0
 
         def _result_error_text(result) -> str:
             parts = []
@@ -2593,7 +2671,246 @@ def _run_frontend_server(
 
         from agentkit.toolkit.reporter import Reporter, TaskHandle
 
+        def _update_cp_metadata(message: object) -> None:
+            metadata = _cp_metadata_from_reporter_message(message)
+            if not metadata:
+                return
+            with _deploy_tasks_lock:
+                if metadata.get("pipeline_name"):
+                    task_state["cp_pipeline_name"] = metadata["pipeline_name"]
+                if metadata.get("pipeline_id"):
+                    task_state["cp_pipeline_id"] = metadata["pipeline_id"]
+                if metadata.get("pipeline_run_id"):
+                    task_state["cp_pipeline_run_id"] = metadata["pipeline_run_id"]
+            if metadata.get("pipeline_run_id"):
+                _ensure_cp_log_thread()
+
+        def _cp_log_event(
+            *,
+            status: str,
+            message: str,
+            snapshot: dict[str, Any] | None = None,
+            error: str = "",
+        ) -> dict[str, Any]:
+            import time as _time
+
+            with _deploy_tasks_lock:
+                pipeline_id = str(task_state.get("cp_pipeline_id") or "")
+                pipeline_name = str(task_state.get("cp_pipeline_name") or "")
+                pipeline_run_id = str(task_state.get("cp_pipeline_run_id") or "")
+                workspace_id = str(task_state.get("cp_workspace_id") or "")
+                runtime_name = str(task_state.get("runtime_name") or "")
+            payload = {
+                "source": "code-pipeline",
+                "status": status,
+                "text": (snapshot or {}).get("text", ""),
+                "lineCount": int((snapshot or {}).get("lineCount", 0) or 0),
+                "truncated": bool((snapshot or {}).get("truncated", False)),
+                "updatedAt": int(_time.time() * 1000),
+                "pipelineId": pipeline_id,
+                "pipelineName": pipeline_name,
+                "pipelineRunId": pipeline_run_id,
+                "workspaceId": workspace_id,
+                "workspaceName": _CP_WORKSPACE_NAME,
+            }
+            if error:
+                payload["error"] = _safe_exception_detail(Exception(error))
+            event = {
+                "level": "warning" if status == "error" else "info",
+                "phase": "build",
+                "message": message,
+                "buildLog": payload,
+            }
+            if runtime_name:
+                event["runtimeName"] = runtime_name
+            return event
+
+        def _resolve_cp_workspace_id(cp_client) -> str:
+            with _deploy_tasks_lock:
+                cached = str(task_state.get("cp_workspace_id") or "")
+            if cached:
+                return cached
+            result = cp_client.get_workspaces_by_name(_CP_WORKSPACE_NAME, page_size=5)
+            items = result.get("Items", [])
+            workspace = next(
+                (
+                    item
+                    for item in items
+                    if str(item.get("Name") or "") == _CP_WORKSPACE_NAME
+                ),
+                items[0] if items else None,
+            )
+            workspace_id = str((workspace or {}).get("Id") or "")
+            if not workspace_id:
+                raise RuntimeError("Code Pipeline workspace not found")
+            with _deploy_tasks_lock:
+                task_state["cp_workspace_id"] = workspace_id
+            return workspace_id
+
+        def _resolve_cp_pipeline_id(cp_client, workspace_id: str) -> str:
+            with _deploy_tasks_lock:
+                pipeline_id = str(task_state.get("cp_pipeline_id") or "")
+                pipeline_name = str(task_state.get("cp_pipeline_name") or "")
+            if pipeline_id:
+                return pipeline_id
+            if not pipeline_name:
+                raise RuntimeError("Code Pipeline id is not available yet")
+            result = cp_client.list_pipelines(
+                workspace_id=workspace_id,
+                name_filter=pipeline_name,
+                page_size=10,
+            )
+            items = result.get("Items", [])
+            pipeline = next(
+                (
+                    item
+                    for item in items
+                    if str(item.get("Name") or "") == pipeline_name
+                ),
+                items[0] if items else None,
+            )
+            pipeline_id = str((pipeline or {}).get("Id") or "")
+            if not pipeline_id:
+                raise RuntimeError("Code Pipeline id could not be resolved")
+            with _deploy_tasks_lock:
+                task_state["cp_pipeline_id"] = pipeline_id
+            return pipeline_id
+
+        def _download_cp_build_log_text(
+            cp_client,
+            *,
+            workspace_id: str,
+            pipeline_id: str,
+            pipeline_run_id: str,
+        ) -> str:
+            import requests
+
+            stages_data = cp_client.list_pipeline_run_stages_inner(
+                workspace_id=workspace_id,
+                pipeline_id=pipeline_id,
+                pipeline_run_id=pipeline_run_id,
+            )
+            parts: list[str] = []
+            for stage in stages_data.get("Items", []):
+                stage_name = str(
+                    stage.get("DisplayName") or stage.get("Name") or "stage"
+                )
+                for task in stage.get("Tasks", []):
+                    task_id = str(task.get("Id") or "")
+                    task_run_id = str(task.get("TaskRunID") or "")
+                    task_name = str(
+                        task.get("DisplayName") or task.get("Name") or "task"
+                    )
+                    if not task_id or not task_run_id:
+                        continue
+                    for step in task.get("Steps", []):
+                        step_name = str(step.get("Name") or "")
+                        if not step_name:
+                            continue
+                        try:
+                            log_url = cp_client.get_task_run_log_download_uri(
+                                workspace_id=workspace_id,
+                                pipeline_id=pipeline_id,
+                                pipeline_run_id=pipeline_run_id,
+                                task_run_id=task_run_id,
+                                task_id=task_id,
+                                step_name=step_name,
+                            )
+                            response = requests.get(log_url, timeout=20)
+                            response.raise_for_status()
+                        except requests.RequestException as log_error:
+                            logger.debug(
+                                "skip Code Pipeline step log download %s/%s/%s: %s",
+                                stage_name,
+                                task_name,
+                                step_name,
+                                log_error,
+                            )
+                            continue
+                        content = response.text.strip("\n")
+                        if content:
+                            parts.append(
+                                f"[{stage_name} / {task_name} / {step_name}]\n{content}"
+                            )
+            return "\n\n".join(parts)
+
+        def _poll_cp_build_logs() -> None:
+            last_text = ""
+            try:
+                from agentkit.toolkit.volcengine.code_pipeline import VeCodePipeline
+
+                ak, sk, token = _resolve_ve_credentials()
+                cp_client = VeCodePipeline(
+                    access_key=ak,
+                    secret_key=sk,
+                    session_token=token or "",
+                    region="cn-beijing",
+                )
+                workspace_id = _resolve_cp_workspace_id(cp_client)
+                pipeline_id = _resolve_cp_pipeline_id(cp_client, workspace_id)
+                with _deploy_tasks_lock:
+                    pipeline_run_id = str(task_state.get("cp_pipeline_run_id") or "")
+                if not pipeline_run_id:
+                    raise RuntimeError("Code Pipeline run id is not available yet")
+
+                while not cp_log_stop_event.is_set():
+                    text = _download_cp_build_log_text(
+                        cp_client,
+                        workspace_id=workspace_id,
+                        pipeline_id=pipeline_id,
+                        pipeline_run_id=pipeline_run_id,
+                    )
+                    snapshot = _sanitize_build_log_snapshot(text)
+                    current_text = str(snapshot.get("text") or "")
+                    if current_text and current_text != last_text:
+                        last_text = current_text
+                        with _deploy_tasks_lock:
+                            task_state["cp_build_log"] = snapshot
+                        events.put(
+                            _cp_log_event(
+                                status="running",
+                                message="正在构建镜像，已同步构建日志。",
+                                snapshot=snapshot,
+                            )
+                        )
+                    cp_log_stop_event.wait(_CP_LOG_POLL_INTERVAL)
+
+                if last_text:
+                    events.put(
+                        _cp_log_event(
+                            status="complete",
+                            message="构建日志同步完成。",
+                            snapshot=_sanitize_build_log_snapshot(last_text),
+                        )
+                    )
+            except Exception as log_error:
+                if cp_log_stop_event.is_set():
+                    return
+                logger.warning(
+                    "Code Pipeline build log polling failed: %s",
+                    log_error,
+                    exc_info=True,
+                )
+                events.put(
+                    _cp_log_event(
+                        status="error",
+                        message="暂时无法读取构建日志。",
+                        error=_safe_exception_detail(log_error),
+                    )
+                )
+
+        def _ensure_cp_log_thread() -> None:
+            with _deploy_tasks_lock:
+                thread = task_state.get("cp_log_thread")
+                if thread is not None and thread.is_alive():
+                    return
+                thread = _threading.Thread(target=_poll_cp_build_logs, daemon=True)
+                task_state["cp_log_thread"] = thread
+            thread.start()
+
         def _emit(level: str, message: str, pct=None):
+            message = str(message)
+            _update_cp_metadata(message)
             state["phase"] = _classify(message)
             ev = {"level": level, "phase": state["phase"], "message": message}
             for marker in ("Generated Runtime name:", "Creating Runtime:"):
@@ -2763,6 +3080,14 @@ def _run_frontend_server(
                                 e,
                                 exc_info=True,
                             )
+                    cp_log_stop_event.set()
+                    cp_log_thread = task_state.get("cp_log_thread")
+                    if (
+                        cp_log_thread is not None
+                        and cp_log_thread.is_alive()
+                        and cp_log_thread is not _threading.current_thread()
+                    ):
+                        cp_log_thread.join(timeout=1.0)
                     with _deploy_tasks_lock:
                         _deploy_tasks.pop(task_id, None)
                     events.put(None)  # sentinel: launch finished
@@ -2786,7 +3111,7 @@ def _run_frontend_server(
                         break
                     yield f"data: {_json.dumps(ev, ensure_ascii=False)}\n\n"
 
-                final = {"done": True}
+                final: dict[str, Any] = {"done": True}
                 if result_box.get("error"):
                     error_text = str(result_box["error"])
                     final.update(
