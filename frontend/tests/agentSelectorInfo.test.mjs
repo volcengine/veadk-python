@@ -36,8 +36,11 @@ test("each Runtime row has two-line metadata and explicit actions", () => {
   assert.match(selectorSource, /Agent 信息[\s\S]*?Runtime 信息/);
   assert.match(
     selectorSource,
-    /getRuntimeAgentInfo\(runtimeId, runtimeRegion\)/,
+    /getCachedRuntimeAgentInfo\(runtimeId, runtimeRegion\)/,
   );
+  assert.match(selectorSource, /getRuntimeAgentInfo\(runtimeId, runtimeRegion, \{ force: Boolean\(cached\) \}\)/);
+  assert.match(selectorSource, /getCachedRuntimeDetail\(runtimeId, runtimeRegion\)/);
+  assert.match(selectorSource, /getRuntimeDetail\(runtimeId, runtimeRegion, \{ force: Boolean\(cached\) \}\)/);
   assert.match(clientSource, /fetchRemoteApps\("", "", ep\)/);
 });
 

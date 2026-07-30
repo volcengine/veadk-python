@@ -8,6 +8,7 @@ import {
   probeRuntimeApps,
   registerRemoteApp,
   RuntimeAccessDeniedError,
+  RuntimeProbeError,
 } from "./client";
 
 export interface RemoteConnection {
@@ -42,6 +43,15 @@ export interface AgentEntry {
 }
 
 const STORAGE_KEY = "veadk_agentkit_connections";
+const RUNTIME_REGION_FALLBACKS = ["cn-beijing", "cn-shanghai"] as const;
+
+function runtimeRegionCandidates(region: string): string[] {
+  const primary = region || "cn-beijing";
+  return [
+    primary,
+    ...RUNTIME_REGION_FALLBACKS.filter((candidate) => candidate !== primary),
+  ];
+}
 
 export function loadConnections(): RemoteConnection[] {
   try {
@@ -127,24 +137,39 @@ export async function connectRuntime(
   region: string,
   currentVersion?: number | null,
 ): Promise<string> {
-  let apps: string[] | null;
-  try {
-    apps = await probeRuntimeApps(runtimeId, region);
-  } catch (error) {
-    if (error instanceof RuntimeAccessDeniedError) {
-      removeRuntimeConnection(runtimeId);
+  let apps: string[] | null = null;
+  let resolvedRegion = region || "cn-beijing";
+  let unsupportedError: RuntimeProbeError | null = null;
+  for (const candidate of runtimeRegionCandidates(region)) {
+    try {
+      const probedApps = await probeRuntimeApps(runtimeId, candidate);
+      if (probedApps && probedApps.length > 0) {
+        apps = probedApps;
+        resolvedRegion = candidate;
+        break;
+      }
+    } catch (error) {
+      if (error instanceof RuntimeAccessDeniedError) {
+        removeRuntimeConnection(runtimeId);
+        throw error;
+      }
+      if (error instanceof RuntimeProbeError && error.unsupported) {
+        unsupportedError = error;
+        continue;
+      }
+      throw error;
     }
-    throw error;
   }
   if (!apps || apps.length === 0) {
     removeRuntimeConnection(runtimeId);
+    if (unsupportedError) throw unsupportedError;
     throw new Error("该 Runtime 暂不支持连接，请确认服务已正常运行。");
   }
   const labels = Object.fromEntries(apps.map((app) => [app, name]));
   const connection = addRuntimeConnection(
     runtimeId,
     name,
-    region,
+    resolvedRegion,
     apps,
     labels,
     currentVersion,

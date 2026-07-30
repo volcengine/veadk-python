@@ -90,7 +90,7 @@ test("focused agent details can render without the workspace tabs or list sideba
     /focusedAgentId=\{detailAgentEntry\?\.id \?\? focusedWorkspaceAgentId\}[\s\S]*?detailOnly=\{!!detailAgentEntry \|\| !!focusedDeploymentTaskId\}/,
   );
   assert.match(appSource, /runtimeApp: detailConnection\?\.apps\[0\]/);
-  assert.match(workspaceSource, /getRuntimeAgentInfo\([\s\S]*?selectedAgent\.runtimeApp/);
+  assert.match(workspaceSource, /const knownApp = selectedAgent\?\.runtimeApp \?\? ""[\s\S]*?getRuntimeAgentInfo\([\s\S]*?knownApp/);
   assert.match(clientSource, /loadDraft = true/);
   assert.match(clientSource, /return fetchAgentInfo\(app, ep, false\)/);
 });
@@ -112,11 +112,11 @@ test("agent details show capability badges and deployment state before the flow"
   assert.match(workspaceSource, /const runtimeVersionKey =[\s\S]*?displayCurrentVersion \?\? selectedPendingTask\?\.startedAt/);
   assert.match(workspaceSource, /<span>v\{displayCurrentVersion\}<\/span>/);
   assert.match(workspaceSource, /\? `v\$\{displayCurrentVersion\}`[\s\S]*?: "暂未提供"/);
-  assert.match(workspaceSource, /detailOnly && selectedAgent\?\.runtimeId && !detailAgentInfoResolved/);
   assert.match(
     workspaceSource,
-    /loadingExecutionFlow \? \([\s\S]*?className="aw-canvas-loading"[\s\S]*?正在加载执行流程[\s\S]*?<AgentBuildCanvas[\s\S]*?key=\{executionFlowKey\}/,
+    /className="aw-canvas"[\s\S]*?<AgentBuildCanvas[\s\S]*?key=\{executionFlowKey\}/,
   );
+  assert.doesNotMatch(workspaceSource, /loadingExecutionFlow/);
   assert.match(
     workspaceSource,
     /`runtime:\$\{selectedAgent\?\.runtimeId \?\? selectedAgentInfo\.name\}:v\$\{runtimeVersionKey\}:\$\{draftFlowKey\}`/,
@@ -126,6 +126,34 @@ test("agent details show capability badges and deployment state before the flow"
     /selectedAgent\?\.currentVersion,[\s\S]*?selectedAgent\?\.region,[\s\S]*?selectedAgent\?\.runtimeId/,
   );
   assert.match(workspaceStyles, /\.aw-canvas-loading\s*\{[\s\S]*?align-items:\s*center;/);
+});
+
+test("workspace uses cached runtime data and prefetches likely next views", () => {
+  assert.match(clientSource, /const RUNTIME_METADATA_CACHE_TTL_MS = 5 \* 60 \* 1000/);
+  assert.match(clientSource, /const FEEDBACK_CASES_CACHE_TTL_MS = 60 \* 1000/);
+  assert.match(clientSource, /export function getCachedRuntimeAgentInfo/);
+  assert.match(clientSource, /export function getCachedRuntimeDetail/);
+  assert.match(clientSource, /export function getCachedAgentFeedbackCases/);
+  assert.match(clientSource, /export function prefetchRuntimeAgentInfo/);
+  assert.match(clientSource, /export function prefetchRuntimeDetail/);
+  assert.match(clientSource, /export function prefetchAgentFeedbackCases/);
+  assert.match(clientSource, /export function refreshAgentFeedbackCases/);
+  assert.match(clientSource, /export function upsertCachedAgentFeedbackCase/);
+  assert.match(clientSource, /const withoutCurrent = value\.items\.filter/);
+  assert.match(clientSource, /sets: feedbackSetsWithCounts\(value\.sets, items\)/);
+  assert.match(clientSource, /getAgentFeedbackCases\(args, \{ force: true \}\)/);
+  assert.match(workspaceSource, /getCachedRuntimeAgentInfo\(runtimeId, region, knownApp\)/);
+  assert.match(workspaceSource, /getRuntimeAgentInfo\([\s\S]*?\{ force: true \}/);
+  assert.match(workspaceSource, /getCachedRuntimeDetail\(runtimeId, region\)/);
+  assert.match(workspaceSource, /getRuntimeDetail\([\s\S]*?\{ force: true \}/);
+  assert.match(workspaceSource, /getCachedAgentFeedbackCases\(\{/);
+  assert.match(workspaceSource, /getAgentFeedbackCases\(\{[\s\S]*?\}, \{ force: true \}\)/);
+  assert.match(workspaceSource, /item\.id !== previewCase\.id/);
+  assert.match(workspaceSource, /item\.messageId !== previewCase\.messageId/);
+  assert.match(workspaceSource, /for \(const agent of listedAgents\.slice\(0, 8\)\)/);
+  assert.match(workspaceSource, /prefetchRuntimeDetail\(agent\.runtimeId, region\)/);
+  assert.match(workspaceSource, /prefetchRuntimeAgentInfo\(agent\.runtimeId, region, agent\.runtimeApp \?\? ""\)/);
+  assert.match(workspaceSource, /prefetchAgentFeedbackCases\(\{/);
 });
 
 test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => {
@@ -237,14 +265,15 @@ test("runtime update deployments stay on the existing agent row", () => {
 });
 
 test("deployed agent detail can jump directly to chat", () => {
-  assert.match(workspaceSource, /onTalkAgent\?: \(id: string\) => void/);
+  assert.match(workspaceSource, /onTalkAgent\?: \(agent: AgentEntry\) => void/);
   assert.match(workspaceSource, /className="aw-talk studio-update-action"[\s\S]*?去对话/);
-  assert.match(workspaceSource, /onClick=\{\(\) => onTalkAgent\?\.\(selectedAgent\.id\)\}/);
-  assert.match(appSource, /const talkToWorkspaceAgent = \(id: string\) => \{/);
+  assert.match(workspaceSource, /onClick=\{\(\) => onTalkAgent\?\.\(selectedAgent\)\}/);
+  assert.match(appSource, /const talkToWorkspaceAgent = async \(agent: AgentEntry\) => \{/);
   assert.match(
     appSource,
-    /const talkToWorkspaceAgent = \(id: string\) => \{[\s\S]*?if \(agentDetailTarget\) \{[\s\S]*?void connectMyAgent\(agentDetailTarget\)[\s\S]*?return;[\s\S]*?setManageAgents\(false\)[\s\S]*?selectAgent\(id\)[\s\S]*?\n  \};/,
+    /agent\.id\.startsWith\("detail:"\)[\s\S]*?connectRuntime\([\s\S]*?agent\.runtimeId[\s\S]*?selectAgent\(agentId\)/,
   );
+  assert.match(appSource, /setManageAgents\(false\)[\s\S]*?selectAgent\(agent\.id\)/);
   assert.match(appSource, /onTalkAgent=\{talkToWorkspaceAgent\}/);
   assert.match(workspaceStyles, /\.aw-talk svg/);
   assert.match(
@@ -317,7 +346,6 @@ test("workspace keeps agent deletion in selection mode and the floating detail a
   );
   assert.match(appSource, /const deleteWorkspaceAgents = useCallback/);
   assert.match(appSource, /await deleteRuntime\(agent\.runtimeId, agent\.region\)/);
-  assert.doesNotMatch(appSource, /agent\.region \?\? "cn-beijing"/);
   assert.match(appSource, /const selectedRuntimeId = runtimeIdForSelection\(connections, appName\)/);
   assert.match(appSource, /deletedCurrentSelection[\s\S]*?deletedRuntimeIds\.has\(selectedRuntimeId\)/);
   assert.doesNotMatch(
@@ -421,11 +449,22 @@ test("agent detail evaluation tab reads feedback datasets", () => {
   assert.match(clientSource, /export interface AgentFeedbackCase/);
   assert.match(clientSource, /export async function getAgentFeedbackCases/);
   assert.match(clientSource, /export async function deleteAgentFeedbackCases/);
+  assert.match(clientSource, /appName\?: string/);
+  assert.match(clientSource, /appName: app/);
   assert.match(clientSource, /export function clearMessageFeedbackCache/);
   assert.match(clientSource, /\/web\/evaluation\/feedback-cases\?\$\{query\.toString\(\)\}/);
   assert.match(clientSource, /\/web\/evaluation\/feedback-cases\/delete/);
   assert.match(workspaceSource, /getAgentFeedbackCases\(\{/);
   assert.match(workspaceSource, /deleteAgentFeedbackCases\(\{/);
+  assert.match(
+    workspaceSource,
+    /const selectedAgentAppName =[\s\S]*?selectedAgentInfo\?\.appName \|\| selectedAgent\?\.runtimeApp \|\| selectedAgent\?\.app \|\| ""/,
+  );
+  assert.match(
+    workspaceSource,
+    /if \(detailOnly && !selectedAgentAppName\)[\s\S]*?setFeedbackCasesLoading\(!detailAgentInfoResolved\)/,
+  );
+  assert.match(workspaceSource, /appName: selectedAgentAppName/);
   assert.match(workspaceSource, /setFeedbackSets\(response\.sets\)/);
   assert.match(workspaceSource, /setFeedbackCases\(/);
   assert.match(workspaceSource, /focusCaseKind\(kind\)/);
@@ -436,6 +475,9 @@ test("agent detail evaluation tab reads feedback datasets", () => {
   assert.match(workspaceSource, /onFeedbackCasesDeleted/);
   assert.match(workspaceSource, /focusedAgentSection/);
   assert.match(workspaceSource, /focusedCaseKind/);
+  assert.match(workspaceSource, /feedbackCasePreview/);
+  assert.match(workspaceSource, /const previewCase = useMemo<AgentCase \| null>/);
+  assert.match(workspaceSource, /\.\.\.feedbackCases\.filter\(\(item\) =>/);
   assert.match(workspaceSource, /appliedFocusKeyRef/);
   assert.match(workspaceSource, /if \(appliedFocusKeyRef\.current === focusKey\) return/);
   assert.match(workspaceSource, /onToggleExpanded/);
@@ -456,11 +498,16 @@ test("agent detail evaluation tab reads feedback datasets", () => {
   assert.match(appSource, /turnNodeRefs/);
   assert.match(appSource, /is-feedback-target/);
   assert.match(workspaceSource, /feedbackSetFor\(feedbackSets, kind\)/);
+  assert.match(workspaceSource, /cases\.filter\(\(item\) => item\.kind === kind\)\.length/);
+  assert.match(workspaceSource, /const count = previewCase \? localCount : set\?\.itemCount \?\? localCount/);
+  assert.doesNotMatch(workspaceSource, /Math\.max\(\s*set\?\.itemCount/);
+  assert.match(workspaceSource, /loading=\{feedbackCasesLoading && visibleCases\.length === 0\}/);
   assert.match(workspaceSource, /Good cases/);
   assert.match(workspaceSource, /Bad cases/);
   assert.match(workspaceSource, /AgentKit 评测集/);
   assert.match(workspaceStyles, /\.aw-case-summary/);
   assert.match(appSource, /case-return-bar/);
+  assert.match(appSource, /app: agentDetailTarget\.appName \?\? agentDetailTarget\.name/);
   assert.match(workspaceStyles, /\.aw-case-toolbar/);
   assert.match(workspaceStyles, /\.aw-case-delete/);
   assert.match(workspaceStyles, /\.aw-case-output-preview/);

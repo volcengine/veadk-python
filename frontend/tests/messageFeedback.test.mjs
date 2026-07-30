@@ -40,6 +40,7 @@ test("assistant feedback is tied to the final ADK event", () => {
 test("feedback controls are accessible hand-drawn SVG buttons", () => {
   assert.match(appSource, /aria-label="赞"/);
   assert.match(appSource, /aria-label="踩"/);
+  assert.match(appSource, /aria-label="查看评测案例"/);
   assert.match(appSource, /aria-pressed=/);
   assert.match(appSource, /filled=\{feedbackRating === "good"\}/);
   assert.match(appSource, /filled=\{feedbackRating === "bad"\}/);
@@ -59,8 +60,40 @@ test("feedback selection updates immediately and uses a neutral solid icon", () 
     handler.indexOf('syncStatus: "syncing"') <
       handler.indexOf("await submitMessageFeedback"),
   );
+  assert.ok(
+    handler.indexOf("upsertCachedAgentFeedbackCase") <
+      handler.indexOf("await submitMessageFeedback"),
+  );
   assert.match(handler, /feedback: previousFeedback/);
+  assert.match(handler, /upsertCachedAgentFeedbackCase\(\{/);
+  assert.match(handler, /rating,/);
+  assert.match(handler, /rating: feedback\.rating/);
+  assert.match(handler, /rating: previousFeedback\?\.rating \?\? null/);
+  assert.match(handler, /input,/);
+  assert.match(handler, /output,/);
+  assert.match(handler, /refreshAgentFeedbackCases\(\{/);
+  assert.match(handler, /appName: currentRuntimeAppName/);
   assert.match(stylesSource, /\.feedback-btn--good,[\s\S]*color: hsl\(var\(--foreground\)\)/);
   assert.doesNotMatch(stylesSource, /\.feedback-btn--good[\s\S]{0,120}142/);
   assert.doesNotMatch(stylesSource, /\.feedback-btn--bad[\s\S]{0,120}destructive/);
+});
+
+test("chat feedback row can jump to the current agent cases", () => {
+  const handler = appSource.slice(
+    appSource.indexOf("const openCurrentAgentCases"),
+    appSource.indexOf("const selectAgent"),
+  );
+  assert.match(handler, /const openCurrentAgentCases = \(\s*kind\?: MessageFeedbackRating \| null,\s*turn\?: Turn,\s*input = "",\s*\) => \{/);
+  assert.match(handler, /setFeedbackCasePreview\(\{/);
+  assert.match(handler, /messageId: eventId/);
+  assert.match(handler, /setAgentDetailTarget\(\{[\s\S]*?appName: realApp[\s\S]*?runtimeId: currentConn\.runtimeId/);
+  assert.match(handler, /setFocusedWorkspaceAgentId\(""\)/);
+  assert.doesNotMatch(handler, /setFocusedWorkspaceAgentId\(appName\)/);
+  assert.match(handler, /setFocusedWorkspaceAgentSection\("evaluations"\)/);
+  assert.match(handler, /setFocusedWorkspaceCaseKind\(caseKind\)/);
+  assert.match(appSource, /feedbackCasePreview=\{feedbackCasePreview\}/);
+  assert.match(appSource, /previousUserTurnText\(turns, i\)/);
+  assert.match(appSource, /rateAssistantTurn\(\s*turn,\s*feedbackRating === "good" \? null : "good",\s*feedbackInput,\s*\)/);
+  assert.match(appSource, /rateAssistantTurn\(\s*turn,\s*feedbackRating === "bad" \? null : "bad",\s*feedbackInput,\s*\)/);
+  assert.match(appSource, /openCurrentAgentCases\(\s*feedbackRating,\s*turn,\s*feedbackInput,\s*\)/);
 });

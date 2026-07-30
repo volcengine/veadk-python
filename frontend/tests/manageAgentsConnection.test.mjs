@@ -38,8 +38,12 @@ test("managed runtimes connect through the Agent page", () => {
 
 test("runtime connection probing is shared with the Agent selector", () => {
   assert.match(connectionsSource, /export async function connectRuntime/);
-  assert.match(connectionsSource, /probeRuntimeApps\(runtimeId, region\)/);
+  assert.match(connectionsSource, /RUNTIME_REGION_FALLBACKS = \["cn-beijing", "cn-shanghai"\]/);
+  assert.match(connectionsSource, /for \(const candidate of runtimeRegionCandidates\(region\)\)/);
+  assert.match(connectionsSource, /probeRuntimeApps\(runtimeId, candidate\)/);
+  assert.match(connectionsSource, /resolvedRegion = candidate/);
   assert.match(connectionsSource, /addRuntimeConnection\(/);
+  assert.match(connectionsSource, /resolvedRegion,[\s\S]*?apps,[\s\S]*?labels/);
   assert.match(connectionsSource, /return remoteAppId\(connection\.id, apps\[0\]\)/);
 });
 

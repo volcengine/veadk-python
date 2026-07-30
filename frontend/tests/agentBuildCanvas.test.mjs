@@ -196,6 +196,13 @@ test("lays out creation vertically while keeping detail and deployment previews 
   );
 });
 
+test("read-only canvas retries fitting until it has dimensions", () => {
+  assert.match(source, /container\.clientWidth === 0 \|\| container\.clientHeight === 0/);
+  assert.match(source, /attempt < 8/);
+  assert.match(source, /fitAfterLayout\(attempt \+ 1\)/);
+  assert.match(source, /onInit=\{\(\) => fitAfterLayout\(\)\}/);
+});
+
 test("uses concise labels for child agent basics", () => {
   assert.match(customCreateSource, /\{isRootAgent \? "Agent 名称" : "名称"\}/);
   assert.match(customCreateSource, /\{isRootAgent \? "描述" : "智能体描述"\}/);

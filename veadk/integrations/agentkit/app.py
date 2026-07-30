@@ -728,9 +728,10 @@ def _configure_dynamic_a2a_routes(
                 session_id=req.session_id,
             )
             if not session:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Session not found: {req.session_id}",
+                await session_service.create_session(
+                    app_name=app_name,
+                    user_id=req.user_id,
+                    session_id=req.session_id,
                 )
 
         async def event_generator():

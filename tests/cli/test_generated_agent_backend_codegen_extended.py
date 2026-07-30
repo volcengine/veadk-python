@@ -67,7 +67,7 @@ _MINIMAL_FRONTEND_GOLDEN = {
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
     "agents/demo_agent/agent.py": "f4867047f9cb0e700a7c3e1b1ef5c6376af6637855f49d846b47d42cb253a63b",
     "agents/demo_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
-    "agents/demo_agent/dynamic_a2a.py": "d4ba7d6b28ba4f6091ea06d3896225386c90d99d4b3172216a0e4235744e6323",
+    "agents/demo_agent/dynamic_a2a.py": "d136f27d6a77439708c415686a3d167f2ad2fb9a96a5f8a0751916b09d46e364",
     ".env.example": "ec3258da9bef4e74333376d8554c265ccb12a4a1e5d4e1e1b0acdf5c9ae93ab6",
     "requirements.txt": "9a04e5f16e94d5e751681082776f1c99f13da7a577c8753c3835e0ea507245e4",
     "README.md": "a34208314cf9061c02662028d7a9dd97448e6b73c1d732cb4aeaa8f70dbbc684",
@@ -78,7 +78,7 @@ _FULL_FRONTEND_GOLDEN = {
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
     "agents/full_agent/agent.py": "1b706ef02dfbe38620fc242cf46e7e8af645c3758f8425f42a8ad56b22e5c031",
     "agents/full_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
-    "agents/full_agent/dynamic_a2a.py": "d4ba7d6b28ba4f6091ea06d3896225386c90d99d4b3172216a0e4235744e6323",
+    "agents/full_agent/dynamic_a2a.py": "d136f27d6a77439708c415686a3d167f2ad2fb9a96a5f8a0751916b09d46e364",
     ".env.example": "054a10f8bc0e046158349ebccdc67a1182c22c4c63ee5b51bf7c2c1674abe052",
     "requirements.txt": "4a941e1bf7efb43d57f608649ac238f2e5ea833f9e0aae92f8bc3fef67b8874e",
     "README.md": "1bf4dc889c7d1076f50784d253b53412ba7c49bcb69a5d948f9092dbbecb18ac",
@@ -1324,6 +1324,13 @@ def test_agentkit_app_adds_dynamic_a2a_tools_per_run() -> None:
     assert '@app.post("/invoke")' in source
     assert "types.UserContent" in source
     assert '@app.post("/run", response_model=None)' in source
+    run_sse_body = source[
+        source.index('@app.post("/run_sse")') : source.index(
+            "async def event_generator"
+        )
+    ]
+    assert "await session_service.create_session(" in run_sse_body
+    assert "Session not found" not in run_sse_body
 
 
 def test_generated_agent_always_enables_per_invocation_metadata() -> None:
@@ -1338,6 +1345,14 @@ def test_generated_agent_always_enables_per_invocation_metadata() -> None:
         "plugins=[FrontendInvocationPlugin()]"
         in files["agents/demo_agent/dynamic_a2a.py"]
     )
+    dynamic_source = files["agents/demo_agent/dynamic_a2a.py"]
+    run_sse_body = dynamic_source[
+        dynamic_source.index('@app.post("/run_sse")') : dynamic_source.index(
+            "async def event_generator"
+        )
+    ]
+    assert "await session_service.create_session(" in run_sse_body
+    assert "Session not found" not in run_sse_body
 
 
 def test_frontend_deploy_forwards_a2a_registry_runtime_env_keys() -> None:
