@@ -10,15 +10,22 @@ const CONNECT_TIMEOUT_MS = 60_000;
 const MESSAGE_TIMEOUT_MS = 600_000;
 const CLOSE_TIMEOUT_MS = 15_000;
 
+export const SANDBOX_DISPLAY_NAME_MAX_LENGTH = 40;
+
 export interface SandboxRequestOptions {
   signal?: AbortSignal;
   onBlocks?: (blocks: Block[]) => void;
+}
+
+export interface SandboxStartOptions extends SandboxRequestOptions {
+  displayName?: string;
 }
 
 export interface SandboxSession {
   id: string;
   toolName: "codex";
   userSessionId: string;
+  displayName: string;
   status: string;
   createdAt: string;
   expireAt: string;
@@ -38,7 +45,7 @@ export interface SandboxReply {
 
 export interface AgentKitSandboxClient {
   listSessions(options?: SandboxRequestOptions): Promise<SandboxSession[]>;
-  startSession(options?: SandboxRequestOptions): Promise<SandboxSession>;
+  startSession(options?: SandboxStartOptions): Promise<SandboxSession>;
   connectSession(
     sessionId: string,
     options?: SandboxRequestOptions,
@@ -56,6 +63,7 @@ export interface AgentKitSandboxClient {
 interface SessionResponse {
   sessionId: string;
   userSessionId?: string;
+  displayName?: string;
   status: string;
   createdAt?: string;
   expireAt?: string;
@@ -112,6 +120,7 @@ function parseSession(data: SessionResponse): SandboxSession {
     id: data.sessionId,
     toolName: "codex",
     userSessionId: data.userSessionId ?? "",
+    displayName: data.displayName ?? "",
     status: data.status,
     createdAt: data.createdAt ?? "",
     expireAt: data.expireAt ?? "",
@@ -241,6 +250,7 @@ export const sandboxClient: AgentKitSandboxClient = {
     const response = await fetch(withAuth(SANDBOX_API), {
       method: "POST",
       headers: sandboxHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ displayName: options.displayName?.trim() ?? "" }),
       signal: requestSignal(options.signal, START_TIMEOUT_MS),
     });
     if (!response.ok) {

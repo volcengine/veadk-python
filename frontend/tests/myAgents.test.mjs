@@ -174,13 +174,27 @@ test("loads configured Codex Sessions as reusable agents", () => {
   assert.match(pageSource, /activeType !== "codex"/);
   assert.match(pageSource, /codexRefreshKey/);
   assert.match(pageSource, /function CodexSessionCard/);
-  assert.match(pageSource, /session\.userSessionId/);
+  assert.match(
+    pageSource,
+    /session\.displayName\s*\|\|\s*session\.userSessionId/,
+  );
+  assert.match(
+    pageSource,
+    /session\.displayName && session\.userSessionId[\s\S]*codex-session-user-id/,
+  );
+  assert.match(pageSource, /User Session · \{userSessionSubtitle\}/);
+  assert.doesNotMatch(pageSource, /Session \{session\.id\}/);
+  assert.doesNotMatch(pageSource, /session\.id\.slice/);
   assert.match(pageSource, /session\.status\.toLowerCase\(\) === "ready"/);
   assert.match(pageSource, /<dt>到期时间<\/dt>/);
   assert.match(pageSource, /进入对话/);
   assert.match(pageSource, /await onOpenCodexSession\(session\)/);
   assert.match(pageSource, /重新加载/);
   assert.match(pageSource, /正在加载 Codex 智能体/);
+  assert.match(
+    pageSource,
+    /\[session\.displayName, session\.userSessionId, session\.status\]/,
+  );
 });
 
 test("keeps the Codex filter selected across conversation navigation", () => {

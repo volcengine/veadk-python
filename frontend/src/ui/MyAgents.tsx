@@ -240,7 +240,12 @@ function CodexSessionCard({
   onOpen: (session: SandboxSession) => Promise<void>;
 }) {
   const ready = session.status.toLowerCase() === "ready";
-  const name = session.userSessionId || `Codex 智能体 ${session.id.slice(0, 8)}`;
+  const name =
+    session.displayName ||
+    session.userSessionId ||
+    "Codex 智能体";
+  const userSessionSubtitle =
+    session.displayName && session.userSessionId ? session.userSessionId : "";
   return (
     <button
       type="button"
@@ -261,6 +266,14 @@ function CodexSessionCard({
             {session.status}
           </span>
         </span>
+        {userSessionSubtitle && (
+          <span
+            className="codex-session-user-id"
+            title={userSessionSubtitle}
+          >
+            User Session · {userSessionSubtitle}
+          </span>
+        )}
         <dl className="my-agent-meta codex-session-meta">
           <div className="my-agent-created-at">
             <dt>创建时间</dt>
@@ -271,9 +284,6 @@ function CodexSessionCard({
             <dd>{formatCreatedAt(session.expireAt)}</dd>
           </div>
         </dl>
-        <span className="codex-session-id" title={session.id}>
-          Session {session.id}
-        </span>
       </span>
       <span className="codex-session-enter">
         {connecting ? "连接中" : ready ? "进入对话" : "等待就绪"}
@@ -481,7 +491,7 @@ export function MyAgents({
     const normalizedQuery = query.trim().toLocaleLowerCase();
     if (!normalizedQuery) return codexSessions;
     return codexSessions.filter((session) =>
-      [session.userSessionId, session.id, session.status]
+      [session.displayName, session.userSessionId, session.status]
         .some((value) => value.toLocaleLowerCase().includes(normalizedQuery)),
     );
   }, [activeType, codexSessions, query]);

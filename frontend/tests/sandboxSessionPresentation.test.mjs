@@ -38,7 +38,7 @@ const modeSelectorSource = readFileSync(
 test("sandbox access is isolated behind a reusable typed client", () => {
   assert.match(sandboxClientSource, /export interface AgentKitSandboxClient/);
   assert.match(sandboxClientSource, /listSessions\(options\?: SandboxRequestOptions\)/);
-  assert.match(sandboxClientSource, /startSession\(options\?: SandboxRequestOptions\)/);
+  assert.match(sandboxClientSource, /startSession\(options\?: SandboxStartOptions\)/);
   assert.match(
     sandboxClientSource,
     /connectSession\([\s\S]*options\?: SandboxRequestOptions/,
@@ -70,6 +70,16 @@ test("sandbox launch dialog covers confirmation loading failure and retry", () =
   assert.match(dialogSource, /role="dialog"/);
   assert.match(dialogSource, /创建 Codex 智能体/);
   assert.match(dialogSource, /创建一个可重复进入的 AgentKit 沙箱/);
+  assert.match(dialogSource, /DEFAULT_SANDBOX_DISPLAY_NAME = "我的智能体"/);
+  assert.match(dialogSource, /useState\(DEFAULT_SANDBOX_DISPLAY_NAME\)/);
+  assert.match(
+    dialogSource,
+    /maxLength=\{SANDBOX_DISPLAY_NAME_MAX_LENGTH\}/,
+  );
+  assert.match(dialogSource, /智能体名称（可选）/);
+  assert.match(dialogSource, /onCompositionStart/);
+  assert.match(dialogSource, /nativeEvent\.isComposing/);
+  assert.match(dialogSource, /keyCode === 229/);
   assert.match(dialogSource, /正在创建沙箱/);
   assert.match(dialogSource, /启动失败/);
   assert.match(dialogSource, /重新尝试/);
@@ -105,7 +115,17 @@ test("creating a sandbox refreshes the list while opening an item connects it", 
   assert.ok(launchStart >= 0 && connectStart > launchStart);
   assert.match(
     launchSource,
-    /const nextSession = await sandboxClient\.startSession[\s\S]*?setCodexSessionsRefreshKey/,
+    /const nextSession = await sandboxClient\.startSession\(\{[\s\S]*?displayName[\s\S]*?setCodexSessionsRefreshKey/,
+  );
+  assert.match(sandboxClientSource, /body: JSON\.stringify\(\{ displayName:/);
+  assert.match(
+    sandboxClientSource,
+    /SANDBOX_DISPLAY_NAME_MAX_LENGTH = 40/,
+  );
+  assert.match(sandboxClientSource, /displayName: data\.displayName \?\? ""/);
+  assert.match(
+    appSource,
+    /nextSession\.displayName\s*\|\|\s*nextSession\.userSessionId/,
   );
   assert.doesNotMatch(
     launchSource,
