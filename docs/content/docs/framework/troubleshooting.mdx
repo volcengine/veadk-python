@@ -31,6 +31,17 @@ title: "常见问题"
 ## 开发环节
 
 <Accordions>
+  <Accordion title="本地运行 ruff 或 pyright 时提示命令不存在">
+    当前开发环境可能只安装了测试依赖，未安装静态检查工具。可将工具安装到当前项目虚拟环境：
+
+    ```bash
+    uv pip install ruff pyright
+    uv run ruff --version
+    uv run pyright --version
+    ```
+
+    安装后即可使用 `uv run ruff check ...` 和 `uv run pyright ...`。如果检查历史文件时出现大量既有问题，请优先区分当前改动引入的问题和仓库已有基线问题，避免在功能分支中混入大规模无关修复。
+  </Accordion>
   <Accordion title="设置火山引擎 AK/SK 后，提示获取模型 API Key 失败">
     VeADK 不会帮助您自动创建火山引擎方舟平台 API Key，请您在火山方舟平台创建您的 API Key。具体步骤可见[文档](https://www.volcengine.com/docs/82379/1361424)，或直接进入[控制台入口](https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey?apikey=%7B%7D)。
   </Accordion>

@@ -1263,6 +1263,24 @@ export interface DeployAgentkitResult {
   };
 }
 
+export interface DeployBuildLogSnapshot {
+  source: "code-pipeline";
+  status: "running" | "complete" | "error";
+  text: string;
+  lineCount: number;
+  truncated: boolean;
+  omittedEarly?: boolean;
+  snapshotTruncated?: boolean;
+  updatedAt: number;
+  pipelineId?: string;
+  pipelineName?: string;
+  pipelineRunId?: string;
+  workspaceId?: string;
+  workspaceName?: string;
+  error?: string;
+  pendingMessage?: string;
+}
+
 /** One live progress frame streamed during a deployment. */
 export interface DeployStage {
   level: "info" | "success" | "warning" | "error";
@@ -1270,6 +1288,7 @@ export interface DeployStage {
   message: string;
   pct?: number;
   runtimeName?: string;
+  buildLog?: DeployBuildLogSnapshot;
 }
 
 interface DeployFrame extends Partial<DeployAgentkitResult> {
