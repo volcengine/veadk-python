@@ -4,6 +4,7 @@ import {
   LoadKnowledgebaseIcon,
   LoadMemoryIcon,
   LoadSkillIcon,
+  PresentationGenerateIcon,
   RunCodeIcon,
   VideoGenerateIcon,
   WebSearchIcon,
@@ -13,6 +14,7 @@ export type BuiltinToolTone =
   | "search"
   | "image"
   | "video"
+  | "presentation"
   | "memory"
   | "knowledge"
   | "skill"
@@ -54,6 +56,13 @@ const BUILTIN_TOOLS: Readonly<Record<string, BuiltinToolDefinition>> = {
     doneLabel: "已完成视频生成",
     tone: "video",
     icon: VideoGenerateIcon,
+  },
+  ppt_generate: {
+    name: "ppt_generate",
+    runningLabel: "正在生成 PPT",
+    doneLabel: "已完成 PPT 生成",
+    tone: "presentation",
+    icon: PresentationGenerateIcon,
   },
   load_memory: {
     name: "load_memory",

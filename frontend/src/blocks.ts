@@ -53,6 +53,10 @@ export type Block =
   | { kind: "agent-transfer"; agentName: string; done: boolean }
   | { kind: "a2ui"; messages: A2uiMessage[] }
   | { kind: "attachment"; files: AttachmentView[] }
+  | {
+      kind: "artifact";
+      files: { filename: string; version: number }[];
+    }
   | { kind: "invocation"; value: FrontendInvocation }
   | {
       kind: "auth";
@@ -217,6 +221,20 @@ function appendAttachments(blocks: Block[], files: AttachmentView[]) {
   else blocks.push({ kind: "attachment", files });
 }
 
+function appendArtifacts(blocks: Block[], files: { filename: string; version: number }[]) {
+  if (!files.length) return;
+  const last = blocks[blocks.length - 1];
+  if (last?.kind === "artifact") {
+    for (const file of files) {
+      if (!last.files.some((item) =>
+        item.filename === file.filename && item.version === file.version
+      )) last.files.push(file);
+    }
+    return;
+  }
+  blocks.push({ kind: "artifact", files });
+}
+
 function appendText(blocks: Block[], kind: "thinking" | "text", text: string) {
   const last = blocks[blocks.length - 1];
   if (last && last.kind === kind) last.text += text;
@@ -323,6 +341,13 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
         }
       }
     }
+  }
+  const artifactDelta = ev.actions?.artifactDelta ?? ev.actions?.artifact_delta;
+  if (artifactDelta) {
+    appendArtifacts(
+      blocks,
+      Object.entries(artifactDelta).map(([filename, version]) => ({ filename, version })),
+    );
   }
   closeThinking(blocks); // a consolidated thinking segment is complete
   liveStart = blocks.length;

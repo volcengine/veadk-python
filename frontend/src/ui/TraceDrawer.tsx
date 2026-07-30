@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronRight, Loader2, X } from "lucide-react";
-import { getSessionTrace, type TraceSpan } from "../adk/client";
+import {
+  getGeneratedAgentTestTrace,
+  getSessionTrace,
+  type TraceSpan,
+} from "../adk/client";
 
 // Softer, cohesive palette that sits better on the neutral UI than the old
 // saturated primaries.
@@ -83,13 +87,23 @@ function attrs(span: TraceSpan): Attr[] {
     .sort((a, b) => Number(a.long) - Number(b.long)); // short props first
 }
 
-export interface TraceDrawerProps {
-  appName: string;
+type TraceSource =
+  | { appName: string; testRunId?: never }
+  | { appName?: never; testRunId: string };
+
+export type TraceDrawerProps = TraceSource & {
   sessionId: string;
   onClose: () => void;
-}
+  title?: string;
+};
 
-export function TraceDrawer({ appName, sessionId, onClose }: TraceDrawerProps) {
+export function TraceDrawer({
+  appName,
+  testRunId,
+  sessionId,
+  onClose,
+  title = "调用链路观测",
+}: TraceDrawerProps) {
   const [spans, setSpans] = useState<TraceSpan[] | null>(null);
   const [err, setErr] = useState("");
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
@@ -98,13 +112,22 @@ export function TraceDrawer({ appName, sessionId, onClose }: TraceDrawerProps) {
   useEffect(() => {
     setSpans(null);
     setErr("");
-    getSessionTrace(appName, sessionId)
+    let request: Promise<TraceSpan[]>;
+    if (testRunId) {
+      request = getGeneratedAgentTestTrace(testRunId, sessionId);
+    } else if (appName) {
+      request = getSessionTrace(appName, sessionId);
+    } else {
+      setErr("缺少调用链路来源");
+      return;
+    }
+    request
       .then((s) => {
         setSpans(s);
         setSelectedId(s.length ? s.reduce((a, b) => (a.start_time <= b.start_time ? a : b)).span_id : null);
       })
       .catch((e) => setErr(String(e)));
-  }, [appName, sessionId]);
+  }, [appName, sessionId, testRunId]);
 
   const { rootNodes, min, total } = useMemo(() => buildTree(spans ?? []), [spans]);
   const rows = useMemo(() => flatten(rootNodes, collapsed), [rootNodes, collapsed]);
@@ -124,7 +147,7 @@ export function TraceDrawer({ appName, sessionId, onClose }: TraceDrawerProps) {
       <aside className="drawer drawer--trace">
         <header className="drawer-head">
           <div>
-            <div className="drawer-title">调用链路观测</div>
+            <div className="drawer-title">{title}</div>
             <div className="drawer-sub">
               {spans ? `${spans.length} 个调用 · ${totalMs.toFixed(1)} ms` : "加载中"}
             </div>

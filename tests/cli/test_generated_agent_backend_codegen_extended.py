@@ -770,6 +770,7 @@ class _FakeResponse:
 
 class _FakeAsyncClient:
     streamed_payloads: list[dict[str, Any]] = []
+    trace_requests: ClassVar[list[str]] = []
     listed_apps: ClassVar[list[str]] = ["demo_agent"]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -782,8 +783,23 @@ class _FakeAsyncClient:
         return None
 
     async def get(self, url: str) -> _FakeResponse:
-        assert url.endswith("/list-apps")
-        return _FakeResponse(json_data=self.listed_apps)
+        if url.endswith("/list-apps"):
+            return _FakeResponse(json_data=self.listed_apps)
+        assert url.endswith("/dev/apps/demo_agent/debug/trace/session/session-1")
+        self.trace_requests.append(url)
+        return _FakeResponse(
+            json_data=[
+                {
+                    "name": "call_llm",
+                    "span_id": 2,
+                    "trace_id": 1,
+                    "start_time": 10,
+                    "end_time": 20,
+                    "attributes": {},
+                    "parent_span_id": None,
+                }
+            ]
+        )
 
     async def post(self, url: str, json: Any) -> _FakeResponse:
         assert "/sessions" in url
@@ -898,6 +914,7 @@ def test_generated_project_and_debug_run_api_lifecycle(
     captured: dict[str, Any] = {}
     _FakeProcess.created.clear()
     _FakeAsyncClient.streamed_payloads.clear()
+    _FakeAsyncClient.trace_requests.clear()
     _FakeAsyncClient.listed_apps = ["demo_agent"]
     monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
     monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-sk")
@@ -999,6 +1016,7 @@ def test_generated_project_and_debug_run_api_lifecycle(
         assert process.env["VOLCENGINE_SECRET_KEY"] == "test-sk"
         assert process.env["AGENTKIT_TOOL_ID"] == "t-debug"
         assert process.env["AGENTKIT_TOOL_REGION"] == "cn-shanghai"
+        assert process.env["OTEL_SDK_DISABLED"] == "false"
         assert "DATABASE_MYSQL_PASSWORD" not in process.env
         generated_files = {
             str(path.relative_to(process.cwd)): path.read_text(encoding="utf-8")
@@ -1028,6 +1046,13 @@ def test_generated_project_and_debug_run_api_lifecycle(
         assert sse_response.status_code == 200
         assert '"text":"hello"' in sse_response.text
         assert _FakeAsyncClient.streamed_payloads[-1]["app_name"] == "demo_agent"
+
+        trace_response = client.get(
+            f"/web/generated-agent-test-runs/{run['runId']}/trace/session/session-1"
+        )
+        assert trace_response.status_code == 200
+        assert trace_response.json()[0]["name"] == "call_llm"
+        assert len(_FakeAsyncClient.trace_requests) == 1
 
         runner_error = "RuntimeError: tenant model credential is unavailable"
         runner_marker = secrets.token_urlsafe(24)
@@ -1345,6 +1370,14 @@ def test_generated_agent_test_runner_enables_dynamic_a2a_helper() -> None:
     assert "_veadk_adk_server" in source
     assert "dynamic_a2a" in source
     assert "helper.enable_dynamic_a2a_tools(app, root_agent)" in source
+
+
+def test_generated_agent_test_runner_mounts_session_trace_exporter() -> None:
+    source = Path("veadk/cli/generated_agent_test_runner.py").read_text()
+
+    assert "SessionTraceExporter" in source
+    assert "SimpleSpanProcessor" in source
+    assert "_mount_session_trace_route(app, trace_exporter)" in source
 
 
 def test_agentkit_dynamic_a2a_tools_use_user_prompt_once(monkeypatch) -> None:

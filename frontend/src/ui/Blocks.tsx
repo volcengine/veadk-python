@@ -1,5 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ChevronRight, Loader2, ShieldCheck } from "lucide-react";
+import { ChevronRight, Download, Eye, FileText, Loader2, ShieldCheck, X } from "lucide-react";
 import { motion } from "motion/react";
 import type { Block } from "../blocks";
 import { buildSurfaces, SurfaceView } from "../a2ui/Surface";
@@ -299,6 +299,110 @@ function ToolBlock({
 }
 
 type AuthBlock = Extract<Block, { kind: "auth" }>;
+type ArtifactBlock = Extract<Block, { kind: "artifact" }>;
+
+function ArtifactCard({
+  block,
+  onDownload,
+  onPreview,
+}: {
+  block: ArtifactBlock;
+  onDownload?: (filename: string, version: number) => Promise<void>;
+  onPreview?: (filename: string, version: number) => Promise<string>;
+}) {
+  const [pending, setPending] = useState("");
+  const [error, setError] = useState("");
+  const [preview, setPreview] = useState<{ name: string; url: string } | null>(null);
+  useEffect(() => () => {
+    if (preview) URL.revokeObjectURL(preview.url);
+  }, [preview]);
+
+  const closePreview = () => setPreview(null);
+  const download = async (filename: string, version: number) => {
+    if (!onDownload) return;
+    setPending(`download:${filename}`);
+    setError("");
+    try {
+      await onDownload(filename, version);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setPending("");
+    }
+  };
+  const openPreview = async (filename: string, version: number, name: string) => {
+    if (!onPreview) return;
+    setPending(`preview:${name}`);
+    setError("");
+    try {
+      const url = await onPreview(filename, version);
+      setPreview({ name, url });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setPending("");
+    }
+  };
+  const files = block.files.filter((file) => !file.filename.endsWith(".preview.webp"));
+  return (
+    <div className="artifact-list">
+      {files.map((file) => {
+        const previewName = `${file.filename.replace(/\.pptx$/i, "")}.preview.webp`;
+        const previewFile = block.files.find((item) => item.filename === previewName);
+        return (
+        <div
+          className="artifact-card"
+          key={`${file.filename}:${file.version}`}
+        >
+          <span className="artifact-card__icon" aria-hidden="true">
+            <FileText />
+          </span>
+          <span className="artifact-card__copy">
+            <span className="artifact-card__name">{file.filename}</span>
+            <span className="artifact-card__hint">PowerPoint 演示文稿</span>
+          </span>
+          <span className="artifact-card__actions">
+            {previewFile && (
+              <button
+                className="artifact-card__action"
+                type="button"
+                disabled={!onPreview || pending !== ""}
+                onClick={() => void openPreview(previewFile.filename, previewFile.version, file.filename)}
+              >
+                {pending === `preview:${file.filename}` ? <Loader2 className="spin" /> : <Eye />}
+                预览
+              </button>
+            )}
+            <button
+              className="artifact-card__action artifact-card__action--primary"
+              type="button"
+              disabled={!onDownload || pending !== ""}
+              onClick={() => void download(file.filename, file.version)}
+            >
+              {pending === `download:${file.filename}` ? <Loader2 className="spin" /> : <Download />}
+              下载
+            </button>
+          </span>
+        </div>
+      )})}
+      {error && <div className="artifact-card__error">{error}</div>}
+      {preview && (
+        <div className="artifact-preview" role="dialog" aria-modal="true" aria-label={`${preview.name} 预览`}>
+          <button className="artifact-preview__backdrop" type="button" aria-label="关闭预览" onClick={closePreview} />
+          <div className="artifact-preview__panel">
+            <div className="artifact-preview__header">
+              <span>{preview.name}</span>
+              <button type="button" aria-label="关闭预览" onClick={closePreview}><X /></button>
+            </div>
+            <div className="artifact-preview__canvas">
+              <img src={preview.url} alt={`${preview.name} 幻灯片预览`} />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** OAuth authorization card for an `adk_request_credential` request (MCP/tool
  *  OAuth). Clicking runs the app's onAuth handler (popup + callback + resume). */
@@ -404,6 +508,8 @@ export interface BlocksProps {
   onAction: (action: A2uiAction | undefined, node: A2uiComponent) => void;
   /** Handle an MCP/tool OAuth request (opens auth URL, resumes the run). */
   onAuth?: (block: AuthBlock) => Promise<void>;
+  onArtifactDownload?: (filename: string, version: number) => Promise<void>;
+  onArtifactPreview?: (filename: string, version: number) => Promise<string>;
 }
 
 export function Blocks({
@@ -413,6 +519,8 @@ export function Blocks({
   onStreamFrame,
   onAction,
   onAuth,
+  onArtifactDownload,
+  onArtifactPreview,
 }: BlocksProps) {
   return (
     <>
@@ -441,6 +549,8 @@ export function Blocks({
           }
           case "attachment":
             return <MediaGroup key={i} appName={appName} items={b.files} />;
+          case "artifact":
+            return <ArtifactCard key={i} block={b} onDownload={onArtifactDownload} onPreview={onArtifactPreview} />;
           case "invocation":
             return <InvocationChips key={i} value={b.value} />;
           case "tool":

@@ -553,6 +553,7 @@ export async function submitMessageFeedback(args: {
   if (!ep.runtimeId) {
     throw new Error("只有连接到 AgentKit Runtime 的会话支持反馈回流");
   }
+  if (!ep.region) throw new Error("Runtime 缺少地域信息，无法提交反馈");
   const res = await apiFetch(
     "/web/evaluation/feedback",
     {
@@ -560,7 +561,7 @@ export async function submitMessageFeedback(args: {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         runtimeId: ep.runtimeId,
-        region: ep.region ?? "cn-beijing",
+        region: ep.region,
         appName: app,
         userId: args.userId,
         sessionId: args.sessionId,
@@ -588,13 +589,13 @@ export async function submitMessageFeedback(args: {
 
 export async function getAgentFeedbackCases(args: {
   runtimeId: string;
-  region?: string;
+  region: string;
   appName: string;
   pageSize?: number;
 }): Promise<AgentFeedbackCasesResponse> {
   const query = new URLSearchParams({
     runtimeId: args.runtimeId,
-    region: args.region ?? "cn-beijing",
+    region: args.region,
     appName: args.appName,
     page_size: String(args.pageSize ?? 100),
   });
@@ -607,7 +608,7 @@ export async function getAgentFeedbackCases(args: {
 
 export async function deleteAgentFeedbackCases(args: {
   runtimeId: string;
-  region?: string;
+  region: string;
   appName: string;
   itemIds: string[];
 }): Promise<{ deletedCount: number }> {
@@ -618,7 +619,7 @@ export async function deleteAgentFeedbackCases(args: {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         runtimeId: args.runtimeId,
-        region: args.region ?? "cn-beijing",
+        region: args.region,
         appName: args.appName,
         itemIds: args.itemIds,
       }),
@@ -644,6 +645,87 @@ export async function deleteSession(
     ep,
   );
   if (!res.ok && res.status !== 404) throw new Error(`delete session failed: ${res.status}`);
+}
+
+function decodeArtifactData(value: string): Uint8Array {
+  const standard = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = standard.padEnd(Math.ceil(standard.length / 4) * 4, "=");
+  const binary = window.atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+export async function downloadArtifact(
+  appName: string,
+  userId: string,
+  sessionId: string,
+  filename: string,
+  version?: number,
+): Promise<void> {
+  const { blob, downloadName } = await fetchArtifactBlob(
+    appName,
+    userId,
+    sessionId,
+    filename,
+    version,
+  );
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = downloadName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+async function fetchArtifactBlob(
+  appName: string,
+  userId: string,
+  sessionId: string,
+  filename: string,
+  version?: number,
+): Promise<{ blob: Blob; downloadName: string }> {
+  const { app, ep } = resolve(appName);
+  const params = version == null ? "" : `?version=${encodeURIComponent(version)}`;
+  const path = `/apps/${encodeURIComponent(app)}/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/artifacts/${encodeURIComponent(filename)}${params}`;
+  const res = await apiFetch(path, {}, ep, TRANSFER_REQUEST_TIMEOUT_MS);
+  if (!res.ok) throw new Error(await httpErrorMessage(res, "下载文件失败"));
+  const part = (await res.json()) as AdkPart;
+  const inline = part.inlineData ?? part.inline_data;
+  if (!inline?.data) throw new Error("文件内容不可用");
+  const bytes = decodeArtifactData(inline.data);
+  const buffer = bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer;
+  const blob = new Blob([buffer], {
+    type: inline.mimeType ?? inline.mime_type ?? "application/octet-stream",
+  });
+  return {
+    blob,
+    downloadName: inline.displayName ?? inline.display_name ?? filename,
+  };
+}
+
+export async function previewArtifact(
+  appName: string,
+  userId: string,
+  sessionId: string,
+  filename: string,
+  version?: number,
+): Promise<string> {
+  const { blob } = await fetchArtifactBlob(
+    appName,
+    userId,
+    sessionId,
+    filename,
+    version,
+  );
+  return URL.createObjectURL(blob);
 }
 
 export interface MediaCapabilities {
@@ -1699,7 +1781,7 @@ export async function getRuntimes(
  *  the runtime does not support it (non-200 / not an ADK server). */
 export async function probeRuntimeApps(
   runtimeId: string,
-  region = "cn-beijing",
+  region: string,
 ): Promise<string[] | null> {
   try {
     const res = await fetchRemoteApps("", "", { runtimeId, region });
@@ -1718,7 +1800,7 @@ export async function probeRuntimeApps(
 /** Delete a deployed runtime by id. */
 export async function deleteRuntime(
   runtimeId: string,
-  region = "cn-beijing",
+  region: string,
 ): Promise<void> {
   const res = await apiFetch("/web/delete-runtime", {
     method: "POST",
@@ -1764,7 +1846,7 @@ export interface RuntimeDetail {
 /** Fetch a runtime's control-plane detail (config/status/envs). */
 export async function getRuntimeDetail(
   runtimeId: string,
-  region = "cn-beijing",
+  region: string,
 ): Promise<RuntimeDetail> {
   const res = await apiFetch(
     `/web/runtime-detail?runtimeId=${encodeURIComponent(runtimeId)}&region=${encodeURIComponent(region)}`,
@@ -1850,6 +1932,21 @@ export async function createGeneratedAgentTestSession(
   }
   const session = await parseJsonResponse<{ id: string }>(res, "创建调试会话失败");
   return session.id;
+}
+
+export async function getGeneratedAgentTestTrace(
+  runId: string,
+  sessionId: string,
+): Promise<TraceSpan[]> {
+  const res = await apiFetch(
+    `/web/generated-agent-test-runs/${encodeURIComponent(runId)}/trace/session/${encodeURIComponent(sessionId)}`,
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, "加载调试调用链路失败"));
+  }
+  const spans = await parseJsonResponse<unknown>(res, "加载调试调用链路失败");
+  if (!Array.isArray(spans)) throw new Error("加载调试调用链路失败：返回格式无效");
+  return spans as TraceSpan[];
 }
 
 export async function* runGeneratedAgentTestSSE({

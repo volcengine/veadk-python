@@ -46,7 +46,8 @@ const STORAGE_KEY = "veadk_agentkit_connections";
 export function loadConnections(): RemoteConnection[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as RemoteConnection[]) : [];
+    const parsed = raw ? (JSON.parse(raw) as RemoteConnection[]) : [];
+    return parsed.filter((connection) => !connection.runtimeId || !!connection.region);
   } catch {
     return [];
   }
@@ -77,11 +78,12 @@ function hostOf(base: string): string {
 export function registerConnections(conns: RemoteConnection[]): void {
   clearRemoteApps();
   for (const c of conns) {
+    if (c.runtimeId && !c.region) continue;
     for (const app of c.apps) {
       registerRemoteApp(
         remoteAppId(c.id, app),
         c.runtimeId
-          ? { app, runtimeId: c.runtimeId, region: c.region }
+          ? { app, runtimeId: c.runtimeId, region: c.region! }
           : { app, base: c.base, apiKey: c.apiKey },
       );
     }

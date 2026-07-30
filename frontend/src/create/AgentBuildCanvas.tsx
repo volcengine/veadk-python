@@ -88,6 +88,7 @@ type CanvasNodeData = {
   containedIn?: AgentType;
   layoutWidth?: number;
   layoutHeight?: number;
+  compactEmptyGroup?: boolean;
 };
 
 type CanvasNode = Node<CanvasNodeData>;
@@ -123,13 +124,17 @@ function measureAgent(
   agent: AgentDraft,
   path: NodePath = [],
   direction: CanvasDirection = "horizontal",
+  compactEmptyGroups = false,
 ): { width: number; height: number } {
   const type = agent.agentType ?? "llm";
   if (!rendersAsGroup(agent, path)) {
     return { width: NODE_WIDTH, height: NODE_HEIGHT };
   }
+  if (compactEmptyGroups && agent.subAgents.length === 0) {
+    return { width: GROUP_MIN_WIDTH, height: GROUP_HEADER_HEIGHT };
+  }
   const sizes = agent.subAgents.map((child, index) =>
-    measureAgent(child, [...path, index], direction),
+    measureAgent(child, [...path, index], direction, compactEmptyGroups),
   );
   const widestChild = sizes.length
     ? Math.max(...sizes.map((size) => size.width))
@@ -262,6 +267,7 @@ function makeEdge(
 function buildCanvasGraph(
   root: AgentDraft,
   direction: CanvasDirection,
+  compactEmptyGroups = false,
 ): {
   nodes: CanvasNode[];
   edges: CanvasEdge[];
@@ -331,7 +337,7 @@ function buildCanvasGraph(
   ): string {
     const type = agent.agentType ?? "sequential";
     const id = pathId(path);
-    const size = measureAgent(agent, path, direction);
+    const size = measureAgent(agent, path, direction, compactEmptyGroups);
     nodes.push({
       id,
       type: "group",
@@ -352,11 +358,12 @@ function buildCanvasGraph(
         containedIn,
         layoutWidth: size.width,
         layoutHeight: size.height,
+        compactEmptyGroup: compactEmptyGroups && agent.subAgents.length === 0,
       },
     });
 
     const childSizes = agent.subAgents.map((child, index) =>
-      measureAgent(child, [...path, index], direction),
+      measureAgent(child, [...path, index], direction, compactEmptyGroups),
     );
     const flowPadding = childSizes.length && type !== "parallel"
       ? GROUP_BOUNDARY_PADDING
@@ -676,7 +683,11 @@ function AgentGroupNode({ data, selected }: NodeProps<CanvasNode>) {
         ? "添加循环步骤"
         : "添加下一个步骤";
   return (
-    <div className={`abc-group is-${type}${selected ? " is-selected" : ""}`}>
+    <div
+      className={`abc-group is-${type}${
+        data.compactEmptyGroup ? " is-compact-empty" : ""
+      }${selected ? " is-selected" : ""}`}
+    >
       <Handle type="target" position={targetPosition} className="abc-handle" />
       <header className="abc-group-head">
         <span>
@@ -1000,18 +1011,23 @@ function AgentBuildCanvasInner({
   interactivePreview = false,
   direction = "horizontal",
 }: AgentBuildCanvasProps) {
-  const initialGraph = useMemo(() => buildCanvasGraph(draft, direction), []);
+  const initialGraph = useMemo(
+    () => buildCanvasGraph(draft, direction, readOnly),
+    [],
+  );
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(
     initialGraph.nodes,
   );
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialGraph.edges);
   const nodesInitialized = useNodesInitialized();
-  const lastStructure = useRef(`${direction}:${structureKey(draft)}`);
+  const lastStructure = useRef(
+    `${direction}:${readOnly ? "readonly" : "editable"}:${structureKey(draft)}`,
+  );
   const canvasRef = useRef<HTMLDivElement>(null);
   const { fitView } = useReactFlow<CanvasNode, CanvasEdge>();
   const currentGraph = useMemo(
-    () => buildCanvasGraph(draft, direction),
-    [direction, draft],
+    () => buildCanvasGraph(draft, direction, readOnly),
+    [direction, draft, readOnly],
   );
   const [compactCanvas, setCompactCanvas] = useState(() =>
     window.matchMedia("(max-width: 860px)").matches,
@@ -1040,7 +1056,9 @@ function AgentBuildCanvasInner({
   }, []);
 
   useEffect(() => {
-    const nextStructure = `${direction}:${structureKey(draft)}`;
+    const nextStructure = `${direction}:${
+      readOnly ? "readonly" : "editable"
+    }:${structureKey(draft)}`;
     const structureChanged = nextStructure !== lastStructure.current;
     lastStructure.current = nextStructure;
     setEdges(currentGraph.edges);
