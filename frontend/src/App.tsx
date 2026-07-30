@@ -825,6 +825,7 @@ export default function App() {
   // Null while the server-derived role is unresolved. Privileged UI remains
   // hidden until this has loaded; failures fall back to the ordinary user.
   const [access, setAccess] = useState<StudioAccess | null>(null);
+  const grantedRuntimeScope = access?.capabilities.runtimeScope ?? "mine";
   // Per-module feature gates (studio mode disables chat-centric modules).
   // Defaults to all-enabled until /web/ui-config resolves.
   const [features, setFeatures] = useState<UiFeatures>({
@@ -1312,7 +1313,7 @@ export default function App() {
       let nextToken = "";
       do {
         const page = await getRuntimes({
-          scope: "mine",
+          scope: grantedRuntimeScope,
           region: "all",
           pageSize: 100,
           nextToken,
@@ -1335,7 +1336,7 @@ export default function App() {
     } finally {
       setAgentLibraryLoading(false);
     }
-  }, []);
+  }, [grantedRuntimeScope]);
 
   // Placeholder: persisting/registering the created agent is a follow-up.
   function onCreate(draft: AgentDraft) {
@@ -3506,6 +3507,8 @@ export default function App() {
 
             {myAgents ? (
               <MyAgents
+                canCreate={canCreateAgents}
+                runtimeScope={access.capabilities.runtimeScope}
                 onCreateAgent={openAgentCreateFromMyAgents}
                 onCreateCodexAgent={openSandboxLaunch}
                 onUseAgent={connectMyAgent}

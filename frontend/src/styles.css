@@ -805,7 +805,7 @@ body {
 .agentsel-rt-row:hover { background: hsl(var(--foreground) / 0.05); }
 .agentsel-rt-row .icon { width: 15px; height: 15px; color: hsl(var(--muted-foreground)); flex-shrink: 0; }
 .agentsel-rt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agentsel-badge {
+.runtime-owner-badge {
   flex-shrink: 0; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 999px;
   background: hsl(211 100% 50% / 0.12); color: hsl(211 90% 42%);
 }
