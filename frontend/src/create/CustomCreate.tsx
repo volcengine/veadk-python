@@ -3421,7 +3421,9 @@ export function CustomCreate({
                               </span>
                       ) : (
                         <span className="cw-help">
-                          描述会显示在 Agent 列表与选择器中。
+                          {isRootAgent
+                            ? "完整描述会保留；部署时会自动整理为符合 Runtime 规范的单行描述。"
+                            : "描述会显示在 Agent 列表与选择器中。"}
                         </span>
                       )}
                     </div>

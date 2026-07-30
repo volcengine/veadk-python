@@ -88,6 +88,21 @@ test("active sandbox conversation is visibly temporary and never uses normal ses
   );
 });
 
+test("normal session refresh cannot close a newly launched sandbox session", () => {
+  assert.match(
+    appSource,
+    /if \(myAgents \|\| agentDetailTarget \|\| sandboxSession \|\| !appName \|\| !userId\)/,
+  );
+  assert.match(
+    appSource,
+    /let cancelled = false;[\s\S]*?await refreshSessions\(appName\);[\s\S]*?if \(cancelled\) return;[\s\S]*?startNewChat\(\);[\s\S]*?cancelled = true;/,
+  );
+  assert.match(
+    appSource,
+    /\[agentDetailTarget, appName, myAgents, sandboxSession, userId\]/,
+  );
+});
+
 test("sandbox visuals use repository-owned icons and reduced motion", () => {
   assert.match(iconSource, /export function InsightIcon/);
   assert.match(iconSource, /viewBox="0 0 24 24"/);

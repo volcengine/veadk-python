@@ -26,7 +26,13 @@ from click.testing import CliRunner
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from veadk.cli.cli_frontend import _run_frontend_server, studio
+from veadk.cli.cli_frontend import (
+    _create_runtime_with_description_fallback,
+    _is_malformed_runtime_description_error,
+    _normalize_runtime_description,
+    _run_frontend_server,
+    studio,
+)
 from veadk.cli.studio_rbac import (
     StudioAccessPolicy,
     StudioPrincipal,
@@ -103,6 +109,45 @@ def _runtime(
         network_configurations=[],
         authorizer_configuration=None,
     )
+
+
+def test_runtime_description_is_safe_and_bounded() -> None:
+    normalized = _normalize_runtime_description(
+        "  数据\n分析\u0000 Agent 🤖 " + "数" * 100
+    )
+
+    assert normalized.startswith("数据 分析 Agent 数")
+    assert "\n" not in normalized
+    assert "\u0000" not in normalized
+    assert "🤖" not in normalized
+    assert len(normalized.encode("utf-8")) <= 255
+
+
+def test_runtime_description_error_detection_is_specific() -> None:
+    assert _is_malformed_runtime_description_error(
+        "CreateRuntime failed: InvalidDescription.Malformed"
+    )
+    assert not _is_malformed_runtime_description_error(
+        "CreateRuntime failed: AccessDenied"
+    )
+
+
+def test_runtime_creation_retries_without_a_rejected_description() -> None:
+    attempts: list[str | None] = []
+    request = SimpleNamespace(description="bad description")
+
+    def create_runtime(_client: object, current_request: SimpleNamespace):
+        attempts.append(current_request.description)
+        if len(attempts) == 1:
+            raise RuntimeError("InvalidDescription.Malformed")
+        return SimpleNamespace(runtime_id="runtime-1")
+
+    result = _create_runtime_with_description_fallback(
+        create_runtime, object(), request
+    )
+
+    assert result.runtime_id == "runtime-1"
+    assert attempts == ["bad description", None]
 
 
 def test_parse_role_members_normalizes_csv() -> None:
@@ -499,7 +544,7 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
             headers={"X-VeADK-Local-User": "developer"},
             json={
                 "name": "updated-agent",
-                "description": "Updated description",
+                "description": "Updated\n description 🤖",
                 "runtimeId": runtime.runtime_id,
                 "files": [{"path": "app.py", "content": "app = object()\n"}],
                 "config": {"region": "cn-beijing", "projectName": "default"},

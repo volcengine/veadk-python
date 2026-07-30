@@ -29,6 +29,7 @@ import os
 import re
 import sys
 import tempfile
+import unicodedata
 import zipfile
 
 from collections.abc import Iterable
@@ -83,6 +84,43 @@ _CP_PIPELINE_CREATING_RE = re.compile(r"Creating new pipeline:\s*(?P<name>.+)$")
 _CP_PIPELINE_RUN_RE = re.compile(
     r"Pipeline triggered successfully,\s*run ID:\s*(?P<id>\S+)"
 )
+_RUNTIME_DESCRIPTION_MAX_BYTES = 255
+
+
+def _normalize_runtime_description(value: object) -> str:
+    """Return a conservative AgentKit Runtime description."""
+    single_line = re.sub(
+        r"\s+", " ", unicodedata.normalize("NFKC", str(value or ""))
+    ).strip()
+    normalized: list[str] = []
+    byte_length = 0
+    for character in single_line:
+        category = unicodedata.category(character)
+        if category[0] not in {"L", "M", "N", "P"} and category != "Zs":
+            continue
+        character_bytes = len(character.encode("utf-8"))
+        if byte_length + character_bytes > _RUNTIME_DESCRIPTION_MAX_BYTES:
+            break
+        normalized.append(character)
+        byte_length += character_bytes
+    return re.sub(r" +", " ", "".join(normalized)).rstrip()
+
+
+def _is_malformed_runtime_description_error(error: object) -> bool:
+    return "invaliddescription.malformed" in str(error or "").lower()
+
+
+def _create_runtime_with_description_fallback(
+    create_runtime, client: object, request: Any
+):
+    try:
+        return create_runtime(client, request)
+    except Exception as create_error:
+        if not _is_malformed_runtime_description_error(create_error):
+            raise
+        logger.warning("Runtime description was rejected; retrying without it")
+        request.description = None
+        return create_runtime(client, request)
 
 
 def _extract_build_error_excerpt(
@@ -1049,8 +1087,9 @@ def _run_frontend_server(
         SandboxConversationService,
         mount_sandbox_routes,
     )
+    from veadk.cli.agentkit_sandbox_region import sandbox_region_candidates
 
-    def _sandbox_client():
+    def _sandbox_client(region: str):
         from agentkit.sdk.tools.client import AgentkitToolsClient
 
         try:
@@ -1060,7 +1099,7 @@ def _run_frontend_server(
         return AgentkitToolsClient(
             access_key=access_key,
             secret_key=secret_key,
-            region=os.getenv("AGENTKIT_SANDBOX_REGION", "cn-beijing"),
+            region=region,
             session_token=session_token or "",
         )
 
@@ -1072,7 +1111,14 @@ def _run_frontend_server(
 
     mount_sandbox_routes(
         app,
-        SandboxConversationService(AgentkitSandboxGateway(_sandbox_client)),
+        SandboxConversationService(
+            AgentkitSandboxGateway(
+                _sandbox_client,
+                region_candidates=sandbox_region_candidates(
+                    os.getenv("AGENTKIT_SANDBOX_REGION")
+                ),
+            )
+        ),
         _sandbox_owner,
     )
 
@@ -2679,7 +2725,7 @@ def _run_frontend_server(
             "common": {
                 "agent_name": agent_name,
                 "entry_point": "app.py",
-                "description": str(data.get("description") or ""),
+                "description": _normalize_runtime_description(data.get("description")),
                 "python_version": "3.12",
                 "launch_type": "cloud",
             },
@@ -3121,7 +3167,9 @@ def _run_frontend_server(
                         # try to fetch an APMPlus app-key with the deployer's
                         # AK/SK at boot (breaks for STS temp credentials).
                         req.apmplus_enable = False
-                        created = _orig(self, req)
+                        created = _create_runtime_with_description_fallback(
+                            _orig, self, req
+                        )
                         runtime_id = str(
                             getattr(created, "runtime_id", "")
                             or getattr(

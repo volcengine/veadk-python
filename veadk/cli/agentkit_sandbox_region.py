@@ -1,0 +1,21 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+
+"""Shared AgentKit Sandbox region selection."""
+
+_SANDBOX_REGIONS = ("cn-beijing", "cn-shanghai")
+_RESOURCE_NOT_FOUND_CODE = "InvalidResource.NotFound"
+
+
+def sandbox_region_candidates(preferred: str | None = None) -> tuple[str, ...]:
+    first = (preferred or _SANDBOX_REGIONS[0]).strip() or _SANDBOX_REGIONS[0]
+    return (first, *tuple(region for region in _SANDBOX_REGIONS if region != first))
+
+
+def is_agentkit_resource_not_found(error: object) -> bool:
+    return _RESOURCE_NOT_FOUND_CODE.lower() in str(error or "").lower()
