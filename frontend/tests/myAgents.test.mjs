@@ -184,7 +184,7 @@ test("defers conversation data-plane requests until leaving the Agent list", () 
   );
   assert.match(
     appSource,
-    /if \(myAgents \|\| agentDetailTarget \|\| !appName \|\| !userId\) return;[\s\S]*?refreshSessions/,
+    /if \(myAgents \|\| agentDetailTarget \|\| sandboxSession \|\| !appName \|\| !userId\)[\s\S]*?return;[\s\S]*?refreshSessions/,
   );
   assert.match(
     appSource,
@@ -222,6 +222,17 @@ test("keeps all requested type filters without nested category sections", () => 
   );
   assert.match(pageStyles, /\.my-agent-empty p\s*\{[\s\S]*?color: inherit;[\s\S]*?font-size: inherit/);
   assert.match(pageStyles, /\.my-agent-empty p\s*\{[\s\S]*?font-weight: 400/);
+});
+
+test("offers a link-styled create action when the Runtime list is empty", () => {
+  assert.match(
+    pageSource,
+    /!query\.trim\(\) && activeType === "general"[\s\S]*?暂无智能体，[\s\S]*?className="my-agent-empty-create"[\s\S]*?onClick=\{\(\) => onCreateAgent\(region\)\}[\s\S]*?点此创建/,
+  );
+  assert.match(
+    pageStyles,
+    /\.my-agent-empty \.my-agent-empty-create\s*\{[\s\S]*?border: 0;[\s\S]*?background: transparent;[\s\S]*?text-decoration: underline/,
+  );
 });
 
 test("shows connecting progress and preserves the connected Runtime state", () => {
