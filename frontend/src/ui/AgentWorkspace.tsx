@@ -21,9 +21,16 @@ import {
 } from "lucide-react";
 import {
   deleteAgentFeedbackCases,
+  getCachedAgentFeedbackCases,
+  getCachedRuntimeAgentInfo,
+  getCachedRuntimeDetail,
   getAgentFeedbackCases,
   getRuntimeAgentInfo,
   getRuntimeDetail,
+  prefetchAgentFeedbackCases,
+  prefetchRuntimeAgentInfo,
+  prefetchRuntimeDetail,
+  type AgentFeedbackCasesResponse,
   type AgentFeedbackCase,
   type AgentFeedbackSetSummary,
   type AgentInfo,
@@ -286,6 +293,19 @@ function feedbackSetFor(
   return sets.find((set) => set.kind === kind);
 }
 
+function feedbackCasesFromResponse(
+  response: AgentFeedbackCasesResponse,
+): AgentCase[] {
+  return response.items
+    .map((item) => ({
+      ...item,
+      tag: item.kind === "good" ? "Good case" : "Bad case",
+    }))
+    .sort((left, right) => (
+      caseTimeValue(right.createdAt) - caseTimeValue(left.createdAt)
+    ));
+}
+
 function canvasDraftKey(draft: AgentDraft): string {
   const visit = (node: AgentDraft): unknown => [
     node.name,
@@ -545,13 +565,14 @@ export interface AgentWorkspaceProps {
   focusedAgentId?: string;
   focusedAgentSection?: AgentSection;
   focusedCaseKind?: CaseKind;
+  feedbackCasePreview?: AgentFeedbackCase | null;
   detailOnly?: boolean;
   onRetryAgents?: () => void;
   onAgentOrderChange?: (agentIds: string[]) => void;
   onDeleteAgents?: (agents: AgentEntry[]) => Promise<void>;
   onDeleteDrafts?: (drafts: WorkspaceAgentDraft[]) => void;
   onSelectAgent: (id: string) => void;
-  onTalkAgent?: (id: string) => void;
+  onTalkAgent?: (agent: AgentEntry) => void;
   onOpenFeedbackCase?: (item: AgentFeedbackCase) => void | Promise<void>;
   onFeedbackCasesDeleted?: (items: AgentFeedbackCase[]) => void;
   onCreateAgent: () => void;
@@ -575,6 +596,7 @@ export function AgentWorkspace({
   focusedAgentId = "",
   focusedAgentSection = "basic",
   focusedCaseKind = "good",
+  feedbackCasePreview = null,
   detailOnly = false,
   onRetryAgents,
   onAgentOrderChange,
@@ -723,6 +745,8 @@ export function AgentWorkspace({
     : activeAgentId && agentInfoAgentId === activeAgentId
       ? agentInfo
       : null;
+  const selectedAgentAppName =
+    selectedAgentInfo?.appName || selectedAgent?.runtimeApp || selectedAgent?.app || "";
   const listedAgents = useMemo(() => {
     const originalOrder = new Map(agents.map((agent, index) => [agent.id, index]));
     const savedOrder = new Map(agentOrder.map((id, index) => [id, index]));
@@ -841,9 +865,6 @@ export function AgentWorkspace({
   const executionFlowKey = selectedAgentInfo
     ? `runtime:${selectedAgent?.runtimeId ?? selectedAgentInfo.name}:v${runtimeVersionKey}:${draftFlowKey}`
     : `draft:${selectedPendingTask?.id ?? selectedDraft?.id ?? selectedAgent?.id ?? selectedName}:${draftFlowKey}`;
-  const loadingExecutionFlow = Boolean(
-    detailOnly && selectedAgent?.runtimeId && !detailAgentInfoResolved,
-  );
   useEffect(() => {
     if (!focusedDeploymentTaskId) return;
     const focusedTask = deploymentTasks.find(
@@ -882,22 +903,62 @@ export function AgentWorkspace({
   }, [agents, focusedAgentId, focusedAgentSection, focusedCaseKind]);
 
   useEffect(() => {
+    for (const agent of listedAgents.slice(0, 8)) {
+      if (!agent.runtimeId) continue;
+      const region = agent.region ?? "cn-beijing";
+      prefetchRuntimeDetail(agent.runtimeId, region);
+      prefetchRuntimeAgentInfo(agent.runtimeId, region, agent.runtimeApp ?? "");
+      void getRuntimeAgentInfo(agent.runtimeId, region, agent.runtimeApp ?? "")
+        .then((info) => {
+          const appName = info.appName || agent.app;
+          if (!appName) return;
+          prefetchAgentFeedbackCases({
+            runtimeId: agent.runtimeId ?? "",
+            region,
+            appName,
+            pageSize: 100,
+          });
+        })
+        .catch(() => {});
+    }
+  }, [listedAgents]);
+
+  useEffect(() => {
+    if (!selectedAgent?.runtimeId || !selectedAgentAppName) return;
+    prefetchAgentFeedbackCases({
+      runtimeId: selectedAgent.runtimeId,
+      region: selectedAgent.region ?? "cn-beijing",
+      appName: selectedAgentAppName,
+      pageSize: 100,
+    });
+  }, [
+    selectedAgentAppName,
+    selectedAgent?.region,
+    selectedAgent?.runtimeId,
+  ]);
+
+  useEffect(() => {
     let cancelled = false;
-    setDetailAgentInfo(null);
-    setDetailAgentInfoResolved(
-      !detailOnly || !selectedAgent?.runtimeId || !selectedAgent.region,
-    );
-    if (!detailOnly || !selectedAgent?.runtimeId || !selectedAgent.region) return;
+    const runtimeId = selectedAgent?.runtimeId ?? "";
+    const region = selectedAgent?.region ?? "cn-beijing";
+    const knownApp = selectedAgent?.runtimeApp ?? "";
+    const cached = runtimeId
+      ? getCachedRuntimeAgentInfo(runtimeId, region, knownApp)
+      : null;
+    setDetailAgentInfo(cached);
+    setDetailAgentInfoResolved(Boolean(cached) || !detailOnly || !runtimeId);
+    if (!detailOnly || !runtimeId) return;
     void getRuntimeAgentInfo(
-      selectedAgent.runtimeId,
-      selectedAgent.region,
-      selectedAgent.runtimeApp,
+      runtimeId,
+      region,
+      knownApp,
+      { force: true },
     )
       .then((info) => {
         if (!cancelled) setDetailAgentInfo(info);
       })
       .catch(() => {
-        if (!cancelled) setDetailAgentInfo(null);
+        if (!cancelled && !cached) setDetailAgentInfo(null);
       })
       .finally(() => {
         if (!cancelled) setDetailAgentInfoResolved(true);
@@ -915,17 +976,23 @@ export function AgentWorkspace({
 
   useEffect(() => {
     let cancelled = false;
-    setRuntimeDetail(null);
-    if (!selectedAgent?.runtimeId || !selectedAgent.region) return;
+    const runtimeId = selectedAgent?.runtimeId ?? "";
+    const region = selectedAgent?.region ?? "cn-beijing";
+    const cached = runtimeId
+      ? getCachedRuntimeDetail(runtimeId, region)
+      : null;
+    setRuntimeDetail(cached);
+    if (!runtimeId) return;
     void getRuntimeDetail(
-      selectedAgent.runtimeId,
-      selectedAgent.region,
+      runtimeId,
+      region,
+      { force: true },
     )
       .then((detail) => {
         if (!cancelled) setRuntimeDetail(detail);
       })
       .catch(() => {
-        if (!cancelled) setRuntimeDetail(null);
+        if (!cancelled && !cached) setRuntimeDetail(null);
       });
     return () => {
       cancelled = true;
@@ -938,33 +1005,38 @@ export function AgentWorkspace({
 
   useEffect(() => {
     let cancelled = false;
-    setFeedbackCases([]);
-    setFeedbackSets([]);
+    const runtimeId = selectedAgent?.runtimeId ?? "";
+    const region = selectedAgent?.region ?? "cn-beijing";
+    const cached = runtimeId && selectedAgentAppName
+      ? getCachedAgentFeedbackCases({
+          runtimeId,
+          region,
+          appName: selectedAgentAppName,
+          pageSize: 100,
+        })
+      : null;
+    setFeedbackCases(cached ? feedbackCasesFromResponse(cached) : []);
+    setFeedbackSets(cached?.sets ?? []);
     setFeedbackCasesError("");
-    if (section !== "evaluations" || !selectedAgent?.runtimeId || !selectedAgent.region) {
+    if (section !== "evaluations" || !runtimeId) {
       setFeedbackCasesLoading(false);
       return;
     }
-    setFeedbackCasesLoading(true);
+    if (detailOnly && !selectedAgentAppName) {
+      setFeedbackCasesLoading(!detailAgentInfoResolved);
+      return;
+    }
+    setFeedbackCasesLoading(!cached);
     void getAgentFeedbackCases({
-      runtimeId: selectedAgent.runtimeId,
-      region: selectedAgent.region,
-      appName: selectedAgent.app,
+      runtimeId,
+      region,
+      appName: selectedAgentAppName,
       pageSize: 100,
-    })
+    }, { force: true })
       .then((response) => {
         if (cancelled) return;
         setFeedbackSets(response.sets);
-        setFeedbackCases(
-          response.items
-            .map((item) => ({
-              ...item,
-              tag: item.kind === "good" ? "Good case" : "Bad case",
-            }))
-            .sort((left, right) => (
-              caseTimeValue(right.createdAt) - caseTimeValue(left.createdAt)
-            )),
-        );
+        setFeedbackCases(feedbackCasesFromResponse(response));
       })
       .catch((cause) => {
         if (!cancelled) {
@@ -978,9 +1050,12 @@ export function AgentWorkspace({
       cancelled = true;
     };
   }, [
+    detailAgentInfoResolved,
+    detailOnly,
     feedbackReloadToken,
     section,
-    selectedAgent?.app,
+    selectedAgentAppName,
+    selectedAgentInfo?.appName,
     selectedAgent?.region,
     selectedAgent?.runtimeId,
   ]);
@@ -1026,7 +1101,30 @@ export function AgentWorkspace({
     });
   }, [filteredDrafts]);
 
-  const cases = selectedAgent?.runtimeId ? feedbackCases : DEFAULT_CASES;
+  const previewCase = useMemo<AgentCase | null>(() => {
+    if (!feedbackCasePreview || !selectedAgent?.runtimeId) return null;
+    if (feedbackCasePreview.runtimeId !== selectedAgent.runtimeId) return null;
+    if (
+      selectedAgentAppName &&
+      feedbackCasePreview.agentName &&
+      feedbackCasePreview.agentName !== selectedAgentAppName
+    ) return null;
+    return {
+      ...feedbackCasePreview,
+      tag: feedbackCasePreview.kind === "good" ? "Good case" : "Bad case",
+    };
+  }, [feedbackCasePreview, selectedAgent?.runtimeId, selectedAgentAppName]);
+  const cases = useMemo(() => {
+    if (!selectedAgent?.runtimeId) return DEFAULT_CASES;
+    if (!previewCase) return feedbackCases;
+    return [
+      previewCase,
+      ...feedbackCases.filter((item) =>
+        item.id !== previewCase.id &&
+        (!item.messageId || item.messageId !== previewCase.messageId)
+      ),
+    ];
+  }, [feedbackCases, previewCase, selectedAgent?.runtimeId]);
   const visibleCases = cases.filter((item) => {
     if (item.kind !== caseFilter) return false;
     const keyword = caseQuery.trim().toLowerCase();
@@ -1103,7 +1201,7 @@ export function AgentWorkspace({
   const deleteCases = async (items: AgentCase[]) => {
     if (
       !selectedAgent?.runtimeId ||
-      !selectedAgent.region ||
+      !selectedAgentAppName ||
       deletingCases ||
       items.length === 0
     ) return;
@@ -1118,8 +1216,8 @@ export function AgentWorkspace({
     try {
       await deleteAgentFeedbackCases({
         runtimeId: selectedAgent.runtimeId,
-        region: selectedAgent.region,
-        appName: selectedAgent.app,
+        region: selectedAgent.region ?? "cn-beijing",
+        appName: selectedAgentAppName,
         itemIds: ids,
       });
       const deletedByKind = new Map<CaseKind, number>();
@@ -1825,25 +1923,18 @@ export function AgentWorkspace({
                       <strong>执行流程</strong>
                     </div>
                     <div className="aw-canvas">
-                      {loadingExecutionFlow ? (
-                        <div className="aw-canvas-loading" role="status" aria-live="polite">
-                          <span className="loading-gap-spinner" aria-hidden="true" />
-                          <span>正在加载执行流程</span>
-                        </div>
-                      ) : (
-                        <AgentBuildCanvas
-                          key={executionFlowKey}
-                          draft={draft}
-                          direction="horizontal"
-                          selectedPath={[]}
-                          onSelect={() => undefined}
-                          onAdd={() => undefined}
-                          onInsert={() => undefined}
-                          onDelete={() => undefined}
-                          readOnly
-                          interactivePreview
-                        />
-                      )}
+                      <AgentBuildCanvas
+                        key={executionFlowKey}
+                        draft={draft}
+                        direction="horizontal"
+                        selectedPath={[]}
+                        onSelect={() => undefined}
+                        onAdd={() => undefined}
+                        onInsert={() => undefined}
+                        onDelete={() => undefined}
+                        readOnly
+                        interactivePreview
+                      />
                     </div>
                   </section>
                   <section className="aw-details-card">
@@ -1924,8 +2015,8 @@ export function AgentWorkspace({
                     <div className="aw-case-summary">
                       {(["good", "bad"] as const).map((kind) => {
                         const set = feedbackSetFor(feedbackSets, kind);
-                        const count = set?.itemCount ??
-                          feedbackCases.filter((item) => item.kind === kind).length;
+                        const localCount = cases.filter((item) => item.kind === kind).length;
+                        const count = previewCase ? localCount : set?.itemCount ?? localCount;
                         return (
                           <button
                             type="button"
@@ -2016,7 +2107,7 @@ export function AgentWorkspace({
                   <div ref={caseTableRef}>
                     <CaseTable
                       cases={visibleCases}
-                      loading={feedbackCasesLoading}
+                      loading={feedbackCasesLoading && visibleCases.length === 0}
                       error={feedbackCasesError}
                       runtimeBacked={Boolean(selectedAgent?.runtimeId)}
                       selectionMode={caseSelectionMode}
@@ -2041,7 +2132,7 @@ export function AgentWorkspace({
                   <button
                     type="button"
                     className="aw-talk studio-update-action"
-                    onClick={() => onTalkAgent?.(selectedAgent.id)}
+                    onClick={() => onTalkAgent?.(selectedAgent)}
                   >
                     <MessageCircle aria-hidden />
                     <span>去对话</span>
@@ -2142,11 +2233,13 @@ function CaseTable({
         </div>
       ) : (
         cases.map((item) => {
+          const isLocalPreview = item.id.startsWith("local:");
           const isSelected = selectedCaseIds?.has(item.id) ?? false;
           const isExpanded = expandedCaseIds?.has(item.id) ?? false;
           const outputLength =
             item.output.length + item.referenceOutput.length;
           const canExpand = outputLength > 220;
+          const canDeleteCase = canDelete && !isLocalPreview;
           return (
             <div
               className={[
@@ -2161,7 +2254,7 @@ function CaseTable({
               aria-selected={selectionMode ? isSelected : undefined}
               onClick={() => {
                 if (selectionMode) {
-                  onToggleCase?.(item);
+                  if (canDeleteCase) onToggleCase?.(item);
                   return;
                 }
                 onOpenCase?.(item);
@@ -2171,7 +2264,7 @@ function CaseTable({
                 if (event.key !== "Enter" && event.key !== " ") return;
                 event.preventDefault();
                 if (selectionMode) {
-                  onToggleCase?.(item);
+                  if (canDeleteCase) onToggleCase?.(item);
                 } else {
                   onOpenCase?.(item);
                 }
@@ -2179,7 +2272,7 @@ function CaseTable({
             >
               <div className="aw-case-text">
                 <span className="aw-case-title-line">
-                  {selectionMode && (
+                  {selectionMode && canDeleteCase && (
                     <span
                       className={`aw-select-marker${isSelected ? " is-checked" : ""}`}
                       aria-hidden="true"
@@ -2219,7 +2312,7 @@ function CaseTable({
                   <span className={`aw-case-tag is-${item.kind}`}>
                     {item.kind === "good" ? "Good case" : "Bad case"}
                   </span>
-                  {canDelete && (
+                  {canDeleteCase && (
                     <button
                       type="button"
                       className="aw-case-delete"

@@ -17,6 +17,8 @@ import {
   X,
 } from "lucide-react";
 import {
+  getCachedRuntimeAgentInfo,
+  getCachedRuntimeDetail,
   getRuntimeAgentInfo,
   getRuntimeDetail,
   getRuntimes,
@@ -635,21 +637,27 @@ function RuntimePreviewPanel({
 /** Agent Server metadata for a hovered Runtime. This request is intentionally
  *  isolated from Runtime detail: either may fail without hiding the other. */
 function AgentInfoContent({ runtime }: { runtime: SelectedRuntime }) {
-  const [info, setInfo] = useState<AgentInfo | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [info, setInfo] = useState<AgentInfo | null>(() =>
+    getCachedRuntimeAgentInfo(runtime.runtimeId, runtime.region),
+  );
+  const [loading, setLoading] = useState(() =>
+    !getCachedRuntimeAgentInfo(runtime.runtimeId, runtime.region),
+  );
   const [error, setError] = useState("");
   const runtimeId = runtime.runtimeId;
   const runtimeRegion = runtime.region;
 
   useEffect(() => {
     let alive = true;
-    setInfo(null);
-    setLoading(true);
+    const cached = getCachedRuntimeAgentInfo(runtimeId, runtimeRegion);
+    setInfo(cached);
+    setLoading(!cached);
     setError("");
-    getRuntimeAgentInfo(runtimeId, runtimeRegion)
+    getRuntimeAgentInfo(runtimeId, runtimeRegion, { force: Boolean(cached) })
       .then((nextInfo) => alive && setInfo(nextInfo))
       .catch((e) => {
         if (!alive) return;
+        if (cached) return;
         const message = e instanceof Error ? e.message : String(e);
         setError(runtimeMetadataErrorMessage(message));
       })
@@ -810,22 +818,28 @@ function InfoChipSection({
 
 /** Control-plane detail for the hovered Runtime. */
 function RuntimeDetailContent({ runtime }: { runtime: SelectedRuntime }) {
-  const [detail, setDetail] = useState<RuntimeDetail | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [detail, setDetail] = useState<RuntimeDetail | null>(() =>
+    getCachedRuntimeDetail(runtime.runtimeId, runtime.region),
+  );
+  const [loading, setLoading] = useState(() =>
+    !getCachedRuntimeDetail(runtime.runtimeId, runtime.region),
+  );
   const [error, setError] = useState("");
   const runtimeId = runtime.runtimeId;
   const runtimeRegion = runtime.region;
 
   useEffect(() => {
     let alive = true;
-    setLoading(true);
+    const cached = getCachedRuntimeDetail(runtimeId, runtimeRegion);
+    setDetail(cached);
+    setLoading(!cached);
     setError("");
-    setDetail(null);
-    getRuntimeDetail(runtimeId, runtimeRegion)
+    getRuntimeDetail(runtimeId, runtimeRegion, { force: Boolean(cached) })
       .then((d) => alive && setDetail(d))
       .catch(
         (e) =>
           alive &&
+          !cached &&
           setError(
             runtimeMetadataErrorMessage(
               e instanceof Error ? e.message : String(e),

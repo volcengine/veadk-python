@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SVGProps } from "react";
 
-import { getRuntimes, type CloudRuntime } from "../adk/client";
+import { getRuntimeAgentInfo, getRuntimes, type CloudRuntime } from "../adk/client";
 import "./MyAgents.css";
 
 export interface MyAgentCardData {
   id: string;
+  appName?: string;
   name: string;
   description: string;
   createdAt: string;
@@ -157,6 +158,29 @@ async function loadRuntimeAgents(
     expiresAt: Date.now() + RUNTIME_PAGE_CACHE_TTL_MS,
   });
   onList(page.runtimes.map(runtimeToAgent));
+  void Promise.all(
+    page.runtimes.map(async (runtime) => {
+      try {
+        const info = await getRuntimeAgentInfo(runtime.runtimeId, runtime.region);
+        const agent = {
+          id: runtime.runtimeId,
+          appName: info.appName,
+          name: info.name || runtime.name,
+          description: info.description || runtime.name,
+          createdAt: formatCreatedAt(runtime.createdAt ?? ""),
+          runtime: {
+            runtimeId: runtime.runtimeId,
+            region: runtime.region,
+            currentVersion: runtime.currentVersion,
+            canDelete: runtime.canDelete,
+          },
+        };
+        onList([agent]);
+      } catch {
+        // Keep the Runtime fallback card already rendered above.
+      }
+    }),
+  );
   return page.nextToken;
 }
 

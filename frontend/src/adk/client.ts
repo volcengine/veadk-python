@@ -414,14 +414,63 @@ const PRIVATE_RUNTIME_UNREACHABLE_MESSAGE =
   "Runtime 已部署成功，但当前 Studio 无法访问私网 Runtime。请使用已绑定相同 VPC 的 Studio 访问，或改用公网 / 公网+VPC 部署。";
 const RUNTIME_ENDPOINT_UNREACHABLE_MESSAGE =
   "Runtime 已部署成功，但 Studio 暂时无法连接服务。网关域名可能仍在生效，或当前网络/DNS 无法访问该 Runtime，请稍后在智能体管理页重试连接。";
+const RUNTIME_REGION_FALLBACKS = ["cn-beijing", "cn-shanghai"] as const;
 const RUNTIME_APPS_CACHE_TTL_MS = 30_000;
+const RUNTIME_METADATA_CACHE_TTL_MS = 5 * 60 * 1000;
+const FEEDBACK_CASES_CACHE_TTL_MS = 60 * 1000;
+
+interface ClientCacheEntry<T> {
+  value?: T;
+  promise?: Promise<T>;
+  updatedAt: number;
+}
+
+interface ClientCacheOptions {
+  force?: boolean;
+}
+
 const runtimeAppsCache = new Map<
   string,
   { apps: string[]; expiresAt: number }
 >();
+const runtimeAgentInfoCache = new Map<string, ClientCacheEntry<AgentInfo>>();
+const runtimeDetailCache = new Map<string, ClientCacheEntry<RuntimeDetail>>();
+const feedbackCasesCache =
+  new Map<string, ClientCacheEntry<AgentFeedbackCasesResponse>>();
 
 function runtimeAppsCacheKey(runtimeId: string, region: string): string {
   return `${region}:${runtimeId}`;
+}
+
+function runtimeRegionCandidates(region?: string): string[] {
+  const primary = region || "cn-beijing";
+  return [
+    primary,
+    ...RUNTIME_REGION_FALLBACKS.filter((candidate) => candidate !== primary),
+  ];
+}
+
+function cacheKey(...parts: Array<string | number | undefined>): string {
+  return parts.map((part) => String(part ?? "")).join("\u0001");
+}
+
+function freshCacheValue<T>(
+  cache: Map<string, ClientCacheEntry<T>>,
+  key: string,
+  ttlMs: number,
+): T | null {
+  const entry = cache.get(key);
+  if (!entry?.value) return null;
+  return Date.now() - entry.updatedAt <= ttlMs ? entry.value : null;
+}
+
+function rememberClientCache<T>(
+  cache: Map<string, ClientCacheEntry<T>>,
+  key: string,
+  value: T,
+): T {
+  cache.set(key, { value, updatedAt: Date.now() });
+  return value;
 }
 
 async function runtimeProxyErrorCode(response: Response): Promise<string> {
@@ -590,21 +639,173 @@ export async function submitMessageFeedback(args: {
 
 export async function getAgentFeedbackCases(args: {
   runtimeId: string;
-  region: string;
+  region?: string;
   appName: string;
   pageSize?: number;
-}): Promise<AgentFeedbackCasesResponse> {
-  const query = new URLSearchParams({
-    runtimeId: args.runtimeId,
-    region: args.region,
-    appName: args.appName,
-    page_size: String(args.pageSize ?? 100),
+}, options: ClientCacheOptions = {}): Promise<AgentFeedbackCasesResponse> {
+  const key = cacheKey(
+    args.runtimeId,
+    args.region || "cn-beijing",
+    args.appName,
+    args.pageSize ?? 100,
+  );
+  const cached = freshCacheValue(
+    feedbackCasesCache,
+    key,
+    FEEDBACK_CASES_CACHE_TTL_MS,
+  );
+  if (!options.force && cached) return cached;
+  const existing = feedbackCasesCache.get(key);
+  if (!options.force && existing?.promise) return existing.promise;
+  let lastError: Error | null = null;
+  const promise = (async () => {
+    for (const region of runtimeRegionCandidates(args.region)) {
+      const query = new URLSearchParams({
+        runtimeId: args.runtimeId,
+        region,
+        appName: args.appName,
+        page_size: String(args.pageSize ?? 100),
+      });
+      const res = await apiFetch(`/web/evaluation/feedback-cases?${query.toString()}`);
+      if (res.ok) {
+        return rememberClientCache(
+          feedbackCasesCache,
+          key,
+          await res.json() as AgentFeedbackCasesResponse,
+        );
+      }
+      lastError = new Error(await httpErrorMessage(res, "读取评测集失败"));
+    }
+    throw lastError ?? new Error("读取评测集失败");
+  })();
+  feedbackCasesCache.set(key, {
+    ...existing,
+    promise,
+    updatedAt: existing?.updatedAt ?? 0,
   });
-  const res = await apiFetch(`/web/evaluation/feedback-cases?${query.toString()}`);
-  if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "读取评测集失败"));
+  try {
+    return await promise;
+  } finally {
+    const current = feedbackCasesCache.get(key);
+    if (current?.promise === promise) {
+      feedbackCasesCache.set(key, {
+        value: current.value,
+        updatedAt: current.updatedAt,
+      });
+    }
   }
-  return res.json();
+}
+
+export function getCachedAgentFeedbackCases(args: {
+  runtimeId: string;
+  region?: string;
+  appName: string;
+  pageSize?: number;
+}): AgentFeedbackCasesResponse | null {
+  return freshCacheValue(
+    feedbackCasesCache,
+    cacheKey(
+      args.runtimeId,
+      args.region || "cn-beijing",
+      args.appName,
+      args.pageSize ?? 100,
+    ),
+    FEEDBACK_CASES_CACHE_TTL_MS,
+  );
+}
+
+export function prefetchAgentFeedbackCases(args: {
+  runtimeId: string;
+  region?: string;
+  appName: string;
+  pageSize?: number;
+}): void {
+  void getAgentFeedbackCases(args).catch(() => {});
+}
+
+export function refreshAgentFeedbackCases(args: {
+  runtimeId: string;
+  region?: string;
+  appName: string;
+  pageSize?: number;
+}): void {
+  void getAgentFeedbackCases(args, { force: true }).catch(() => {});
+}
+
+function feedbackSetsWithCounts(
+  sets: AgentFeedbackSetSummary[],
+  items: AgentFeedbackCase[],
+): AgentFeedbackSetSummary[] {
+  return (["good", "bad"] as const).map((kind) => {
+    const current = sets.find((set) => set.kind === kind);
+    return {
+      kind,
+      evaluationSetId: current?.evaluationSetId ?? null,
+      evaluationSetName: current?.evaluationSetName ?? null,
+      workspaceId: current?.workspaceId ?? null,
+      itemCount: items.filter((item) => item.kind === kind).length,
+    };
+  });
+}
+
+export function upsertCachedAgentFeedbackCase(args: {
+  runtimeId: string;
+  region?: string;
+  appName: string;
+  userId: string;
+  sessionId: string;
+  messageId: string;
+  invocationId?: string;
+  rating: MessageFeedbackRating | null;
+  input: string;
+  output: string;
+  referenceOutput?: string;
+  createdAt?: string;
+}): void {
+  for (const [key, entry] of feedbackCasesCache.entries()) {
+    const value = entry.value;
+    if (
+      !value ||
+      value.runtimeId !== args.runtimeId ||
+      value.agentName !== args.appName
+    ) continue;
+    const withoutCurrent = value.items.filter((item) =>
+      item.sessionId !== args.sessionId || item.messageId !== args.messageId
+    );
+    const items = args.rating
+      ? [
+          {
+            id: `local:${args.runtimeId}:${args.sessionId}:${args.messageId}`,
+            itemKey: `local:${args.messageId}`,
+            kind: args.rating,
+            input: args.input,
+            output: args.output,
+            referenceOutput: args.referenceOutput ?? args.output,
+            comment: "",
+            agentName: args.appName,
+            sessionId: args.sessionId,
+            messageId: args.messageId,
+            runtimeId: args.runtimeId,
+            invocationId: args.invocationId ?? "",
+            userId: args.userId,
+            createdAt: args.createdAt ?? new Date().toISOString(),
+            evaluationSetId: "",
+            evaluationSetName: "",
+            workspaceId: "",
+          },
+          ...withoutCurrent,
+        ]
+      : withoutCurrent;
+    feedbackCasesCache.set(key, {
+      value: {
+        ...value,
+        sets: feedbackSetsWithCounts(value.sets, items),
+        items,
+      },
+      updatedAt: Date.now(),
+      promise: entry.promise,
+    });
+  }
 }
 
 export async function deleteAgentFeedbackCases(args: {
@@ -613,25 +814,48 @@ export async function deleteAgentFeedbackCases(args: {
   appName: string;
   itemIds: string[];
 }): Promise<{ deletedCount: number }> {
-  const res = await apiFetch(
-    "/web/evaluation/feedback-cases/delete",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        runtimeId: args.runtimeId,
-        region: args.region,
-        appName: args.appName,
-        itemIds: args.itemIds,
-      }),
-    },
-    {},
-    TRANSFER_REQUEST_TIMEOUT_MS,
-  );
-  if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "删除评测案例失败"));
+  let lastError: Error | null = null;
+  for (const region of runtimeRegionCandidates(args.region)) {
+    const res = await apiFetch(
+      "/web/evaluation/feedback-cases/delete",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          runtimeId: args.runtimeId,
+          region,
+          appName: args.appName,
+          itemIds: args.itemIds,
+        }),
+      },
+      {},
+      TRANSFER_REQUEST_TIMEOUT_MS,
+    );
+    if (res.ok) {
+      const response = await res.json() as { deletedCount: number };
+      const deletedIds = new Set(args.itemIds);
+      for (const [key, entry] of feedbackCasesCache.entries()) {
+        const value = entry.value;
+        if (
+          !value ||
+          value.runtimeId !== args.runtimeId ||
+          value.agentName !== args.appName
+        ) continue;
+        const items = value.items.filter((item) => !deletedIds.has(item.id));
+        feedbackCasesCache.set(key, {
+          value: {
+            ...value,
+            sets: feedbackSetsWithCounts(value.sets, items),
+            items,
+          },
+          updatedAt: Date.now(),
+        });
+      }
+      return response;
+    }
+    lastError = new Error(await httpErrorMessage(res, "删除评测案例失败"));
   }
-  return res.json();
+  throw lastError ?? new Error("删除评测案例失败");
 }
 
 export async function deleteSession(
@@ -893,6 +1117,8 @@ export interface FrontendInvocation {
 
 /** Introspected metadata for an agent app, served locally or by Agent Server. */
 export interface AgentInfo {
+  /** Real ADK app id used in runtime proxy paths; display names may differ. */
+  appName?: string;
   name: string;
   description: string;
   type?: AgentNodeType;
@@ -1130,6 +1356,7 @@ async function fetchAgentInfo(
     }
   }
   return {
+    appName: app,
     name: info.name ?? app,
     description: info.description ?? "",
     type: info.type,
@@ -1151,18 +1378,101 @@ export async function getAgentInfo(appName: string): Promise<AgentInfo> {
 }
 
 /** Read Agent metadata for a Runtime without connecting or persisting it. */
-export async function getRuntimeAgentInfo(
+async function fetchRuntimeAgentInfo(
   runtimeId: string,
   region: string,
   knownApp?: string,
 ): Promise<AgentInfo> {
-  const ep = { runtimeId, region };
-  const cacheKey = runtimeAppsCacheKey(runtimeId, region);
-  const cached = runtimeAppsCache.get(cacheKey);
-  if (cached && cached.expiresAt <= Date.now()) runtimeAppsCache.delete(cacheKey);
-  const app = knownApp || cached?.apps[0] || (await fetchRemoteApps("", "", ep))[0];
-  if (!app) throw new Error("该 Runtime 未提供可预览的 Agent。");
-  return fetchAgentInfo(app, ep);
+  let lastError: Error | null = null;
+  for (const candidate of runtimeRegionCandidates(region)) {
+    const ep = { runtimeId, region: candidate };
+    try {
+      const appCacheKey = runtimeAppsCacheKey(runtimeId, candidate);
+      const cached = runtimeAppsCache.get(appCacheKey);
+      if (cached && cached.expiresAt <= Date.now()) {
+        runtimeAppsCache.delete(appCacheKey);
+      }
+      const freshCached = runtimeAppsCache.get(appCacheKey);
+      const app =
+        knownApp ||
+        freshCached?.apps[0] ||
+        (await fetchRemoteApps("", "", ep))[0];
+      if (!app) throw new Error("该 Runtime 未提供可预览的 Agent。");
+      return fetchAgentInfo(app, ep);
+    } catch (error) {
+      if (
+        error instanceof RuntimeAccessDeniedError ||
+        (error instanceof RuntimeProbeError && !error.unsupported)
+      ) {
+        throw error;
+      }
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+  }
+  throw lastError ?? new Error("该 Runtime 未提供可预览的 Agent。");
+}
+
+/** Read Agent metadata for a Runtime without connecting or persisting it. */
+export async function getRuntimeAgentInfo(
+  runtimeId: string,
+  region: string,
+  knownAppOrOptions: string | ClientCacheOptions = {},
+  maybeOptions: ClientCacheOptions = {},
+): Promise<AgentInfo> {
+  const knownApp = typeof knownAppOrOptions === "string"
+    ? knownAppOrOptions
+    : undefined;
+  const options = typeof knownAppOrOptions === "string"
+    ? maybeOptions
+    : knownAppOrOptions;
+  const key = cacheKey(runtimeId, region || "cn-beijing", knownApp ?? "");
+  const cached = freshCacheValue(
+    runtimeAgentInfoCache,
+    key,
+    RUNTIME_METADATA_CACHE_TTL_MS,
+  );
+  if (!options.force && cached) return cached;
+  const existing = runtimeAgentInfoCache.get(key);
+  if (!options.force && existing?.promise) return existing.promise;
+  const promise = fetchRuntimeAgentInfo(runtimeId, region, knownApp).then((info) =>
+    rememberClientCache(runtimeAgentInfoCache, key, info),
+  );
+  runtimeAgentInfoCache.set(key, {
+    ...existing,
+    promise,
+    updatedAt: existing?.updatedAt ?? 0,
+  });
+  try {
+    return await promise;
+  } finally {
+    const current = runtimeAgentInfoCache.get(key);
+    if (current?.promise === promise) {
+      runtimeAgentInfoCache.set(key, {
+        value: current.value,
+        updatedAt: current.updatedAt,
+      });
+    }
+  }
+}
+
+export function getCachedRuntimeAgentInfo(
+  runtimeId: string,
+  region: string,
+  knownApp = "",
+): AgentInfo | null {
+  return freshCacheValue(
+    runtimeAgentInfoCache,
+    cacheKey(runtimeId, region || "cn-beijing", knownApp),
+    RUNTIME_METADATA_CACHE_TTL_MS,
+  );
+}
+
+export function prefetchRuntimeAgentInfo(
+  runtimeId: string,
+  region: string,
+  knownApp = "",
+): void {
+  void getRuntimeAgentInfo(runtimeId, region, knownApp).catch(() => {});
 }
 
 /** One web-search hit (Volcengine WebSearch WebItem, trimmed for the UI). */
@@ -1845,17 +2155,73 @@ export interface RuntimeDetail {
 }
 
 /** Fetch a runtime's control-plane detail (config/status/envs). */
-export async function getRuntimeDetail(
+async function fetchRuntimeDetail(
   runtimeId: string,
   region: string,
 ): Promise<RuntimeDetail> {
-  const res = await apiFetch(
-    `/web/runtime-detail?runtimeId=${encodeURIComponent(runtimeId)}&region=${encodeURIComponent(region)}`,
-  );
-  if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "加载 Runtime 详情失败"));
+  let lastError: Error | null = null;
+  for (const candidate of runtimeRegionCandidates(region)) {
+    const res = await apiFetch(
+      `/web/runtime-detail?runtimeId=${encodeURIComponent(runtimeId)}&region=${encodeURIComponent(candidate)}`,
+    );
+    if (res.ok) return res.json();
+    lastError = new Error(await httpErrorMessage(res, "加载 Runtime 详情失败"));
   }
-  return res.json();
+  throw lastError ?? new Error("加载 Runtime 详情失败");
+}
+
+/** Fetch a runtime's control-plane detail (config/status/envs). */
+export async function getRuntimeDetail(
+  runtimeId: string,
+  region = "cn-beijing",
+  options: ClientCacheOptions = {},
+): Promise<RuntimeDetail> {
+  const key = cacheKey(runtimeId, region || "cn-beijing");
+  const cached = freshCacheValue(
+    runtimeDetailCache,
+    key,
+    RUNTIME_METADATA_CACHE_TTL_MS,
+  );
+  if (!options.force && cached) return cached;
+  const existing = runtimeDetailCache.get(key);
+  if (!options.force && existing?.promise) return existing.promise;
+  const promise = fetchRuntimeDetail(runtimeId, region).then((detail) =>
+    rememberClientCache(runtimeDetailCache, key, detail),
+  );
+  runtimeDetailCache.set(key, {
+    ...existing,
+    promise,
+    updatedAt: existing?.updatedAt ?? 0,
+  });
+  try {
+    return await promise;
+  } finally {
+    const current = runtimeDetailCache.get(key);
+    if (current?.promise === promise) {
+      runtimeDetailCache.set(key, {
+        value: current.value,
+        updatedAt: current.updatedAt,
+      });
+    }
+  }
+}
+
+export function getCachedRuntimeDetail(
+  runtimeId: string,
+  region = "cn-beijing",
+): RuntimeDetail | null {
+  return freshCacheValue(
+    runtimeDetailCache,
+    cacheKey(runtimeId, region || "cn-beijing"),
+    RUNTIME_METADATA_CACHE_TTL_MS,
+  );
+}
+
+export function prefetchRuntimeDetail(
+  runtimeId: string,
+  region = "cn-beijing",
+): void {
+  void getRuntimeDetail(runtimeId, region).catch(() => {});
 }
 
 export interface GeneratedAgentTestRun {

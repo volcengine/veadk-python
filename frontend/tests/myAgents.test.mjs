@@ -108,7 +108,6 @@ test("loads owned runtimes into the general agents section", () => {
   assert.match(pageSource, /const \[region, setRegion\] = useState<RuntimeRegion>\("cn-beijing"\)/);
   assert.match(pageSource, /region,\s*pageSize: RUNTIME_PAGE_SIZE/);
   assert.doesNotMatch(pageSource, /region: "all"/);
-  assert.doesNotMatch(pageSource, /getRuntimeAgentInfo/);
   assert.match(pageSource, /id: runtime\.runtimeId/);
   assert.match(pageSource, /name: runtime\.name/);
   assert.match(pageSource, /description: runtime\.name/);
@@ -217,8 +216,15 @@ test("wires card details and connect actions into App navigation", () => {
   assert.match(pageSource, /onClick=\{\(\) => onViewDetails\?\.\(agent\)\}/);
   assert.match(appSource, /const connectMyAgent[\s\S]*?connectRuntime[\s\S]*?startNewChat\(\)[\s\S]*?setAppName\(agentId\)/);
   assert.match(appSource, /const openMyAgentDetails[\s\S]*?setAgentDetailTarget\(agent\)[\s\S]*?setManageAgents\(true\)/);
-  assert.doesNotMatch(appSource, /const openMyAgentDetails[\s\S]*?connectRuntime\(/);
+  const detailHandler = appSource.slice(
+    appSource.indexOf("const openMyAgentDetails"),
+    appSource.indexOf("const openMyAgentsPage"),
+  );
+  assert.doesNotMatch(detailHandler, /connectRuntime\(/);
   assert.match(appSource, /const detailAgentEntry:[\s\S]*?id: `detail:\$\{agentDetailTarget\.runtime\.runtimeId\}`/);
+  assert.match(appSource, /app: agentDetailTarget\.appName \?\? agentDetailTarget\.name/);
+  assert.match(pageSource, /appName\?: string/);
+  assert.match(pageSource, /appName: info\.appName/);
   assert.match(appSource, /<MyAgents[\s\S]*?onCreateAgent=\{openAgentCreateFromMyAgents\}[\s\S]*?onUseAgent=/);
   assert.match(appSource, /const openAgentCreateFromMyAgents = \(region: string\)[\s\S]*?setNewRuntimeRegion\(region\)/);
   assert.match(appSource, /<CustomCreate[\s\S]*?initialDeployRegion=\{newRuntimeRegion\}/);
@@ -278,8 +284,7 @@ test("uses connected Runtime state only for the card action", () => {
   assert.match(pageSource, /agent\.runtime\?\.runtimeId === connectedRuntimeId/);
   assert.match(pageSource, /const connectedIndex = availableAgents\.findIndex/);
   assert.match(pageSource, /availableAgents\[connectedIndex\][\s\S]*?availableAgents\.slice\(0, connectedIndex\)/);
-  assert.match(appSource, /const connectedRuntimeId = currentRuntime\?\.runtimeId \?\? ""/);
-  assert.doesNotMatch(appSource, /const connectedRuntimeId =[\s\S]*?connections\.reduce/);
+  assert.match(appSource, /const connectedRuntimeId =[\s\S]*?currentRuntime\?\.runtimeId \?\?[\s\S]*?connections\.reduce/);
   assert.match(appSource, /connectedRuntimeId=\{connectedRuntimeId\}/);
 });
 
