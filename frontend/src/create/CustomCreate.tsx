@@ -1976,6 +1976,7 @@ function DebugComparisonWorkspace({
                           <DeploymentErrorMessage
                             message={variant.error}
                             className="cw-debug-error-detail"
+                            defaultExpanded
                           />
                         ) : starting ? (
                           <div className="cw-ab-empty cw-ab-starting">
@@ -2014,6 +2015,7 @@ function DebugComparisonWorkspace({
                                   <DeploymentErrorMessage
                                     message={message.error}
                                     className="cw-debug-msg-error"
+                                    defaultExpanded
                                   />
                                 ) : message.blocks && message.blocks.length > 0 ? (
                                   <Blocks blocks={message.blocks} onAction={() => {}} />
@@ -3273,9 +3275,10 @@ export function CustomCreate({
           : undefined}
       />
       {buildErr && (
-        <div className="cw-workspace-alert" role="alert">
-          {buildErr}
-        </div>
+        <DeploymentErrorMessage
+          className="cw-workspace-alert"
+          message={buildErr}
+        />
       )}
       <main className="cw-workspace-main" id="cw-workspace-main">
       {workspaceMode === "build" && (
