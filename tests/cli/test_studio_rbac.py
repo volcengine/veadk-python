@@ -344,6 +344,7 @@ def test_non_admin_runtime_list_uses_one_owner_filtered_request(
 
     other = _runtime("runtime-other", "someone-else")
     own = _runtime("runtime-own", "developer")
+    reader_own = _runtime("runtime-reader", "reader")
     developer_tag_filters: list[tuple[str, list[str]]] = []
 
     runtime_calls = 0
@@ -355,7 +356,9 @@ def test_non_admin_runtime_list_uses_one_owner_filtered_request(
         for item in tag_filters:
             developer_tag_filters.append((item.key, item.values))
         if tag_filters:
-            return SimpleNamespace(agent_kit_runtimes=[own], next_token="")
+            owner = tag_filters[0].values[0]
+            owned = reader_own if owner == "reader" else own
+            return SimpleNamespace(agent_kit_runtimes=[owned], next_token="")
         return SimpleNamespace(agent_kit_runtimes=[other, own], next_token="")
 
     monkeypatch.setattr(AgentkitRuntimeClient, "list_runtimes", list_runtimes)
@@ -372,6 +375,10 @@ def test_non_admin_runtime_list_uses_one_owner_filtered_request(
             headers={"X-VeADK-Local-User": "developer"},
         )
         developer_call_count = runtime_calls
+        reader = client.get(
+            "/web/runtimes?scope=all&page_size=10&region=cn-beijing",
+            headers={"X-VeADK-Local-User": "reader"},
+        )
         admin = client.get(
             "/web/runtimes?scope=all&page_size=10&region=cn-beijing",
             headers={"X-VeADK-Local-User": "admin"},
@@ -384,7 +391,11 @@ def test_non_admin_runtime_list_uses_one_owner_filtered_request(
     assert developer.json()["runtimes"][0]["canDelete"] is True
     assert ("veadk:owner", ["developer"]) in developer_tag_filters
     assert developer_call_count == 1
-    assert runtime_calls == 2
+    assert reader.status_code == 200
+    assert [item["runtimeId"] for item in reader.json()["runtimes"]] == [
+        "runtime-reader"
+    ]
+    assert runtime_calls == 3
     assert admin.status_code == 200
     assert [item["runtimeId"] for item in admin.json()["runtimes"]] == [
         "runtime-other",

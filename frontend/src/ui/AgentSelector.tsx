@@ -464,7 +464,7 @@ export function AgentSelector({
                                   {bad ? "不支持" : runtimeStatusLabel(rt.status)}
                                 </span>
                                 {rt.isMine && (
-                                  <span className="agentsel-badge">我创建的</span>
+                                  <span className="runtime-owner-badge">我创建的</span>
                                 )}
                               </div>
                             </div>

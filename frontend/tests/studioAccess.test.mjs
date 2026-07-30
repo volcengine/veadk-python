@@ -9,6 +9,7 @@ const appSource = read("App.tsx");
 const clientSource = read("adk/client.ts");
 const connectionsSource = read("adk/connections.ts");
 const selectorSource = read("ui/AgentSelector.tsx");
+const myAgentsSource = read("ui/MyAgents.tsx");
 const sidebarSource = read("ui/Sidebar.tsx");
 const stylesSource = read("styles.css");
 const cliFrontendSource = readFileSync(
@@ -52,7 +53,15 @@ test("runtime selection obeys the server-granted scope", () => {
   assert.match(selectorSource, /setMineOnly\(runtimeScope === "mine"\)/);
   assert.match(selectorSource, /\{runtimeScope === "all" && \(/);
   assert.match(selectorSource, /getRuntimes\(\{[\s\S]*?scope: "mine"/);
+  assert.match(myAgentsSource, /getRuntimes\(\{[\s\S]*?scope: runtimeScope/);
+  assert.match(appSource, /<MyAgents[\s\S]*?runtimeScope=\{access\.capabilities\.runtimeScope\}/);
   assert.doesNotMatch(clientSource, /new URLSearchParams\(\{\s*author,/);
+});
+
+test("only administrators and developers receive Agent deployment controls", () => {
+  assert.match(appSource, /<MyAgents[\s\S]*?canCreate=\{canCreateAgents\}/);
+  assert.match(myAgentsSource, /\{canCreate && \([\s\S]*?className="my-agent-add"/);
+  assert.match(myAgentsSource, /!query\.trim\(\) && activeType === "general" && canCreate/);
 });
 
 test("runtime authorization failures are not reported as unsupported", () => {
