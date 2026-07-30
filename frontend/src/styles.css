@@ -6159,15 +6159,31 @@ a.search-result { text-decoration: none; color: inherit; }
 
 .app-toast {
   position: fixed;
-  top: 20px;
+  top: 16px;
   left: 50%;
   z-index: 120;
-  padding: 9px 14px;
-  border-radius: 8px;
-  background: hsl(var(--foreground));
-  color: hsl(var(--background));
-  box-shadow: 0 8px 24px hsl(var(--foreground) / 0.18);
-  font-size: 13px;
-  font-weight: 400;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  max-width: min(360px, calc(100vw - 48px));
+  padding: 8px 13px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+  background: hsl(var(--panel));
+  color: hsl(var(--foreground));
+  box-shadow: 0 12px 30px hsl(var(--foreground) / 0.12);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.45;
   transform: translateX(-50%);
+}
+
+.app-toast::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: hsl(var(--primary));
 }

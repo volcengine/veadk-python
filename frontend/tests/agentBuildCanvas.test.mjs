@@ -140,7 +140,10 @@ test("uses distinct restrained type colors and removes the LLM node icon", () =>
   assert.match(source, /loop:\s*\{[\s\S]*?label:\s*"循环执行"/);
   assert.match(source, /\{type !== "llm" && \(/);
   assert.match(customCreateSource, /<Section meta=\{metaOf\("type"\)\}>/);
-  assert.match(customCreateSource, /role="radiogroup" aria-label="Agent 类型"/);
+  assert.match(
+    customCreateSource,
+    /role="radiogroup"[\s\S]*?aria-label="Agent 类型"/,
+  );
   assert.match(customCreateSource, /className="cw-agent-type-radio"/);
   assert.match(customCreateSource, /data-agent-type=\{t\.id\}/);
 });

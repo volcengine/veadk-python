@@ -217,7 +217,10 @@ test("leaving debug mode uses the shared Studio confirm dialog", () => {
 
 test("agent type is a form section with radio choices", () => {
   assert.match(createSource, /<Section meta=\{metaOf\("type"\)\}>/);
-  assert.match(createSource, /role="radiogroup" aria-label="Agent 类型"/);
+  assert.match(
+    createSource,
+    /role="radiogroup"[\s\S]*?aria-label="Agent 类型"/,
+  );
   assert.match(createSource, /type="radio"[\s\S]*?className="cw-agent-type-radio"/);
   assert.match(createStyles, /\.cw-agent-type-options\s*\{[\s\S]*?display:\s*grid/);
   assert.match(createStyles, /\.cw-agent-type-option\.is-on\s*\{/);
@@ -246,6 +249,38 @@ test("build workspace has a validated primary path into debugging", () => {
     /\.cw-build-next\.studio-update-action:not\(:disabled\):hover\s*\{[\s\S]*?background:\s*#29292b;[\s\S]*?box-shadow:\s*0 7px 18px hsl\(0 0% 0% \/ 0\.16\);[\s\S]*?transform:\s*translateX\(-50%\);/,
   );
   assert.doesNotMatch(createSource, /下一步：开始调试|<ArrowRight/);
+});
+
+test("container agents require child agents before debug or publish", () => {
+  assert.match(
+    createSource,
+    /if \(isOrchestratorType\(n\.agentType\)\)[\s\S]*?return n\.subAgents\.length === 0 \? "缺少子 Agent" : null;/,
+  );
+  assert.match(createSource, /typeLabel: agentTypeMeta\(root\.agentType\)\.label/);
+  assert.match(
+    createSource,
+    /function validationProblemMessage\(problem: TreeProblem\): string \{[\s\S]*?problem\.problem === "缺少子 Agent"[\s\S]*?`\$\{problem\.typeLabel\}至少需要添加一个子 Agent 后才能调试或发布。`/,
+  );
+  assert.match(
+    createSource,
+    /scrollToSection\(problems\[0\]\.problem === "缺少子 Agent" \? "type" : "basic"\)/,
+  );
+  assert.match(
+    createSource,
+    /<Section meta=\{metaOf\("type"\)\}>[\s\S]*?className="cw-agent-type-options"[\s\S]*?\{showErrors && orchestrator && node\.subAgents\.length === 0 && \([\s\S]*?<span className="cw-error-text">[\s\S]*?validationProblemMessage\(\{[\s\S]*?typeLabel: agentTypeMeta\(node\.agentType\)\.label,[\s\S]*?problem: "缺少子 Agent"/,
+  );
+  assert.match(
+    createSource,
+    /\{buildErr && \([\s\S]*?className="cw-workspace-alert" role="alert"[\s\S]*?\{buildErr\}/,
+  );
+  assert.doesNotMatch(
+    createSource,
+    /buildErr \|\| validationMessage|const validationMessage/,
+  );
+  assert.match(
+    createSource,
+    /if \(nextMode === "publish"\) \{[\s\S]*?if \(!requireCompleteDraft\(\)\) return;[\s\S]*?if \(project\) setWorkspaceMode\("publish"\);/,
+  );
 });
 
 test("debug workspace compares multiple configurations behind one shared input", () => {

@@ -1440,6 +1440,7 @@ function nodeProblem(
 interface TreeProblem {
   path: NodePath;
   name: string;
+  typeLabel: string;
   problem: string;
 }
 
@@ -1456,6 +1457,7 @@ function treeProblems(
     out.push({
       path,
       name: remote ? "远程 Agent" : root.name.trim() || "未命名",
+      typeLabel: agentTypeMeta(root.agentType).label,
       problem: p,
     });
   }
@@ -1465,6 +1467,13 @@ function treeProblems(
     );
   }
   return out;
+}
+
+function validationProblemMessage(problem: TreeProblem): string {
+  if (problem.problem === "缺少子 Agent") {
+    return `${problem.typeLabel}至少需要添加一个子 Agent 后才能调试或发布。`;
+  }
+  return `${problem.name}：${problem.problem}`;
 }
 
 /** Count the root Agent and every nested sub-Agent in the draft. */
@@ -2813,7 +2822,9 @@ export function CustomCreate({
     setValidationPulse((pulse) => pulse + 1);
     if (problems[0]) {
       setSelectedPath(problems[0].path);
-      window.requestAnimationFrame(() => scrollToSection("basic"));
+      window.requestAnimationFrame(() =>
+        scrollToSection(problems[0].problem === "缺少子 Agent" ? "type" : "basic"),
+      );
     }
     return false;
   };
@@ -3230,6 +3241,7 @@ export function CustomCreate({
 
   const handleWorkspaceChange = async (nextMode: WorkspaceMode) => {
     if (nextMode === "publish") {
+      if (!requireCompleteDraft()) return;
       if (project) setWorkspaceMode("publish");
       else openPublishPreview();
       return;
@@ -3362,7 +3374,11 @@ export function CustomCreate({
             <div className="cw-lower">
             <div className="cw-form-col">
             <Section meta={metaOf("type")}>
-              <div className="cw-agent-type-options" role="radiogroup" aria-label="Agent 类型">
+              <div
+                className="cw-agent-type-options"
+                role="radiogroup"
+                aria-label="Agent 类型"
+              >
                 {AGENT_TYPES.map((t) => {
                   const on = (node.agentType ?? "llm") === t.id;
                   const remoteTypeDisabled = isRootAgent && t.id === "a2a";
@@ -3409,6 +3425,16 @@ export function CustomCreate({
                   );
                 })}
               </div>
+              {showErrors && orchestrator && node.subAgents.length === 0 && (
+                <span className="cw-error-text">
+                  {validationProblemMessage({
+                    path: safePath,
+                    name: node.name.trim() || "未命名",
+                    typeLabel: agentTypeMeta(node.agentType).label,
+                    problem: "缺少子 Agent",
+                  })}
+                </span>
+              )}
             </Section>
             <Section meta={metaOf("basic")}>
                 <div className="cw-form">

@@ -39,12 +39,14 @@ test("shows the Codex identity instead of the Agent picker in sandbox sessions",
 test("redirects new chat to Agent selection when no Agent is active", () => {
   assert.match(
     appSource,
-    /function openNewChat\(\)[\s\S]*?!hasAgentSelection\(appName, apps, connections\)[\s\S]*?setMyAgents\(true\)[\s\S]*?showToast\("请先选择 agent"\)[\s\S]*?return;/,
+    /function openNewChat\(\)[\s\S]*?!hasAgentSelection\(appName, apps, connections\)[\s\S]*?setMyAgents\(true\)[\s\S]*?showToast\("请先选择 Agent 后再开始新会话"\)[\s\S]*?return;/,
   );
   assert.match(appSource, /if \(appName\) clearSelectedAgentAfterRemoval\(\)/);
   assert.match(appSource, /onNewChat=\{openNewChat\}/);
   assert.match(appSource, /className="app-toast" role="status" aria-live="polite"/);
-  assert.match(stylesSource, /\.app-toast\s*\{[\s\S]*?position:\s*fixed;/);
+  assert.match(stylesSource, /\.app-toast\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?border:\s*1px solid hsl\(var\(--border\)\);[\s\S]*?background:\s*hsl\(var\(--panel\)\);/);
+  assert.match(stylesSource, /\.app-toast::before\s*\{[\s\S]*?background:\s*hsl\(var\(--primary\)\);/);
+  assert.doesNotMatch(stylesSource, /\.app-toast\s*\{[\s\S]*?background:\s*hsl\(var\(--foreground\)\);/);
 });
 
 test("only using an Agent selects it for the main conversation", () => {

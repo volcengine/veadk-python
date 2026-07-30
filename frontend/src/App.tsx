@@ -2131,7 +2131,7 @@ export default function App() {
     if (!sandboxSession && !hasAgentSelection(appName, apps, connections)) {
       if (appName) clearSelectedAgentAfterRemoval();
       setMyAgents(true);
-      showToast("请先选择 agent");
+      showToast("请先选择 Agent 后再开始新会话");
       return;
     }
     setMyAgents(false);
