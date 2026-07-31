@@ -92,8 +92,9 @@ test("new-chat built-in agent mode opens the AgentKit sandbox creator", () => {
 
 test("sandbox launch dialog covers confirmation loading failure and retry", () => {
   assert.match(dialogSource, /role="dialog"/);
-  assert.match(dialogSource, /创建 Codex 智能体/);
-  assert.match(dialogSource, /创建一个可重复进入的 AgentKit 沙箱/);
+  assert.match(dialogSource, /agentLabel = "Codex"/);
+  assert.match(dialogSource, /`创建 \$\{agentLabel\} 智能体`/);
+  assert.match(dialogSource, /`创建一个可重复进入的 \$\{agentLabel\} AgentKit Session/);
   assert.match(dialogSource, /DEFAULT_SANDBOX_DISPLAY_NAME = "我的智能体"/);
   assert.match(dialogSource, /useState\(DEFAULT_SANDBOX_DISPLAY_NAME\)/);
   assert.match(
@@ -104,7 +105,7 @@ test("sandbox launch dialog covers confirmation loading failure and retry", () =
   assert.match(dialogSource, /onCompositionStart/);
   assert.match(dialogSource, /nativeEvent\.isComposing/);
   assert.match(dialogSource, /keyCode === 229/);
-  assert.match(dialogSource, /正在创建沙箱/);
+  assert.match(dialogSource, /`正在创建 \$\{agentLabel\} 智能体`/);
   assert.match(dialogSource, /启动失败/);
   assert.match(dialogSource, /重新尝试/);
   assert.match(dialogSource, /if \(event\.key === "Escape"/);

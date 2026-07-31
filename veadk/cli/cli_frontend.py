@@ -1146,18 +1146,17 @@ def _run_frontend_server(
         return principal.owner_id
 
     def _sandbox_proxy_owner(request: Request) -> str | None:
-        """Allow a scoped capability to carry local iframe identity.
+        """Let the scoped iframe capability carry identity on subrequests.
 
-        Browser iframe and WebSocket navigation cannot attach the local-only
-        ``X-VeADK-Local-User`` header. OAuth sessions and gateway JWTs are sent
-        automatically, so those deployment modes must still present a trusted
-        principal in addition to the iframe capability cookie.
+        Embedded runtimes issue relative HTTP and WebSocket requests which keep
+        the HttpOnly capability cookie but don't repeat Studio's gateway query
+        or OAuth bootstrap credentials. A present principal is still matched
+        against the signed capability; otherwise that capability supplies the
+        session owner.
         """
         principal = _current_principal(request)
         if principal is not None:
             return principal.owner_id
-        if auth_mode == "gateway" or getattr(app.state, "oauth2_handler", None):
-            raise HTTPException(status_code=401, detail="Studio identity is required")
         return None
 
     sandbox_gateway = AgentkitSandboxGateway(

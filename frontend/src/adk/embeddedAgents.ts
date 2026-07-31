@@ -31,6 +31,11 @@ export interface EmbeddedAgentCloudSession {
   expireAt: string;
 }
 
+export interface EmbeddedAgentStartOptions {
+  displayName?: string;
+  signal?: AbortSignal;
+}
+
 interface EmbeddedAgentSessionResponse {
   kind?: unknown;
   sessionId?: unknown;
@@ -56,8 +61,10 @@ const LIST_TIMEOUT_MS = 30_000;
 const START_TIMEOUT_MS = 330_000;
 const DISCONNECT_TIMEOUT_MS = 15_000;
 
-function headers(): Headers {
-  return withLocalUser({ Accept: "application/json" });
+function headers(initial?: HeadersInit): Headers {
+  const next = withLocalUser(initial);
+  if (!next.has("Accept")) next.set("Accept", "application/json");
+  return next;
 }
 
 async function responseError(response: Response, fallback: string): Promise<Error> {
@@ -97,8 +104,11 @@ function parseSession(value: EmbeddedAgentSessionResponse): EmbeddedAgentSession
   return {
     kind: value.kind,
     id: value.sessionId,
-    webuiUrl: withAuth(value.webuiUrl),
-    terminalUrl: withAuth(value.terminalUrl),
+    // Iframe subrequests authenticate with the scoped HttpOnly capability
+    // cookie. Appending Studio's gateway token here pollutes the sandbox app's
+    // own query parameters and is especially harmful to Terminal WebSockets.
+    webuiUrl: value.webuiUrl,
+    terminalUrl: value.terminalUrl,
     createdAt: typeof value.createdAt === "number" ? value.createdAt : 0,
     expiresAt: typeof value.expiresAt === "number" ? value.expiresAt : 0,
     ttlSeconds: typeof value.ttlSeconds === "number" ? value.ttlSeconds : 0,
@@ -179,12 +189,13 @@ export const embeddedAgentClient = {
 
   async start(
     kind: EmbeddedAgentKind,
-    signal?: AbortSignal,
+    options: EmbeddedAgentStartOptions = {},
   ): Promise<EmbeddedAgentSession> {
     const response = await fetch(withAuth(`${api(kind)}/sessions`), {
       method: "POST",
-      headers: headers(),
-      signal: requestSignal(signal, START_TIMEOUT_MS),
+      headers: headers({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ displayName: options.displayName?.trim() ?? "" }),
+      signal: requestSignal(options.signal, START_TIMEOUT_MS),
     });
     if (!response.ok) {
       throw await responseError(response, `无法启动 ${kind} 智能体。`);

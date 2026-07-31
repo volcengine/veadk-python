@@ -363,7 +363,7 @@ export interface MyAgentsProps {
   onActiveTypeChange: (type: AgentType) => void;
   onCreateAgent: (region: RuntimeRegion) => void;
   onCreateCodexAgent: () => void;
-  onCreateEmbeddedAgent: (kind: EmbeddedAgentKind) => Promise<void>;
+  onCreateEmbeddedAgent: (kind: EmbeddedAgentKind) => void;
   onOpenEmbeddedSession: (
     session: EmbeddedAgentCloudSession,
   ) => Promise<void>;
@@ -415,7 +415,6 @@ export function MyAgents({
     useState<EmbeddedAgentCloudSession[]>([]);
   const [embeddedLoading, setEmbeddedLoading] = useState(false);
   const [embeddedError, setEmbeddedError] = useState("");
-  const [launchingEmbedded, setLaunchingEmbedded] = useState(false);
   const [connectingEmbeddedSessionId, setConnectingEmbeddedSessionId] =
     useState("");
 
@@ -610,19 +609,6 @@ export function MyAgents({
     }
   }, [connectingCodexSessionId, onOpenCodexSession]);
 
-  const launchEmbeddedAgent = useCallback(async (kind: EmbeddedAgentKind) => {
-    if (launchingEmbedded) return;
-    setLaunchingEmbedded(true);
-    setEmbeddedError("");
-    try {
-      await onCreateEmbeddedAgent(kind);
-    } catch (cause) {
-      setEmbeddedError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setLaunchingEmbedded(false);
-    }
-  }, [launchingEmbedded, onCreateEmbeddedAgent]);
-
   const openEmbeddedSession = useCallback(
     async (session: EmbeddedAgentCloudSession) => {
       if (
@@ -721,7 +707,7 @@ export function MyAgents({
       : activeType === "codex"
         ? onCreateCodexAgent
         : embeddedCapability?.enabled
-          ? () => void launchEmbeddedAgent(activeType)
+          ? () => onCreateEmbeddedAgent(activeType)
           : undefined;
 
   return (
@@ -818,12 +804,11 @@ export function MyAgents({
           <button
             type="button"
             className="my-agent-add"
-            disabled={!createAgent || launchingEmbedded}
-            aria-busy={launchingEmbedded || undefined}
+            disabled={!createAgent}
             onClick={() => createAgent?.()}
           >
             <AddIcon />
-            {launchingEmbedded ? "正在启动" : createLabel}
+            {createLabel}
           </button>
         )}
       </div>

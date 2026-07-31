@@ -37,6 +37,7 @@ import httpx
 from fastapi import HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+from veadk.cli.agentkit_session_metadata import SESSION_DISPLAY_NAME_MAX_LENGTH
 from veadk.cli.frontend_sandbox import (
     STUDIO_SANDBOX_TTL_SECONDS,
     SandboxCloudGateway,
@@ -68,8 +69,11 @@ _TEXT_TYPES = (
     "image/svg+xml",
 )
 _GATEWAY_QUERY_KEYS = frozenset({"authorization", "faasinstancename"})
+_STUDIO_COOKIE_PREFIX = "veadk_"
 _PROXY_SECRET_ENV = "VEADK_EMBEDDED_PROXY_SECRET"
 _PROXY_CAPABILITY_VERSION = 1
+_OPENCLAW_QR_COMMAND = "openclaw qr --json --no-ascii --url wss://localhost"
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 @dataclass(frozen=True)
@@ -110,6 +114,7 @@ class EmbeddedAgentSession:
     cloud: SandboxCloudSession
     webui_target: str
     terminal_target: str
+    openclaw_bootstrap_token: str
     proxy_token: str
     expires_at: float
 
@@ -162,7 +167,13 @@ def _valid_target(value: str) -> str:
 def _target_from_endpoint(endpoint: str, path: str) -> str:
     parsed = urlsplit(_valid_target(endpoint))
     endpoint_path = parsed.path.rstrip("/")
-    target_path = f"{endpoint_path}/{path.lstrip('/')}"
+    requested_path = f"/{path.lstrip('/')}"
+    if endpoint_path == requested_path or endpoint_path.startswith(
+        f"{requested_path}/"
+    ):
+        target_path = endpoint_path
+    else:
+        target_path = f"{endpoint_path}{requested_path}"
     return urlunsplit((parsed.scheme, parsed.netloc, target_path, parsed.query, ""))
 
 
@@ -170,9 +181,12 @@ def _target_from_session_meta(endpoint: str, value: str) -> str:
     if not value:
         return ""
     parsed_value = urlsplit(value)
-    if parsed_value.scheme:
-        return _valid_target(value)
-    return _target_from_endpoint(endpoint, parsed_value.path)
+    if parsed_value.scheme and parsed_value.scheme not in {"http", "https"}:
+        raise SandboxProvisioningError("AgentKit Session 返回了无效的页面地址。")
+    target = urlsplit(_target_from_endpoint(endpoint, parsed_value.path))
+    query = dict(parse_qsl(parsed_value.query, keep_blank_values=True))
+    query.update(parse_qsl(target.query, keep_blank_values=True))
+    return urlunsplit((target.scheme, target.netloc, target.path, urlencode(query), ""))
 
 
 def _terminal_target(cloud: SandboxCloudSession) -> str:
@@ -187,6 +201,106 @@ def _terminal_target(cloud: SandboxCloudSession) -> str:
     if candidates:
         return candidates[0]
     return _target_from_endpoint(cloud.endpoint, "/terminal")
+
+
+async def _resolve_terminal_target(cloud: SandboxCloudSession) -> str:
+    """Create a native shell session and keep its ID with Endpoint auth."""
+    candidate = _terminal_target(cloud)
+    if dict(parse_qsl(urlsplit(candidate).query, keep_blank_values=True)).get(
+        "session_id"
+    ):
+        return candidate
+
+    terminal_url_endpoint = _target_from_endpoint(
+        cloud.endpoint,
+        "/v1/shell/terminal-url",
+    )
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.get(
+                terminal_url_endpoint,
+                headers={"accept": "application/json"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        value = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(value, str) or not value:
+            raise ValueError("missing terminal URL")
+        terminal = urlsplit(value)
+        if terminal.path.rstrip("/") != "/terminal":
+            raise ValueError("unexpected terminal path")
+        shell_session_id = (
+            dict(parse_qsl(terminal.query, keep_blank_values=True))
+            .get("session_id", "")
+            .strip()
+        )
+        if not shell_session_id:
+            raise ValueError("missing shell session ID")
+    except (httpx.HTTPError, TypeError, ValueError) as error:
+        raise SandboxProvisioningError("无法创建 Terminal 会话。") from error
+
+    target = urlsplit(_target_from_endpoint(cloud.endpoint, terminal.path))
+    query = {"session_id": shell_session_id}
+    query.update(parse_qsl(target.query, keep_blank_values=True))
+    return urlunsplit((target.scheme, target.netloc, target.path, urlencode(query), ""))
+
+
+def _first_json_object(value: str) -> dict[str, object]:
+    clean = _ANSI_ESCAPE_RE.sub("", value)
+    decoder = json.JSONDecoder()
+    for index, character in enumerate(clean):
+        if character != "{":
+            continue
+        try:
+            decoded, _end = decoder.raw_decode(clean[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(decoded, dict):
+            return cast(dict[str, object], decoded)
+    raise ValueError("missing JSON object")
+
+
+async def _resolve_openclaw_bootstrap_token(cloud: SandboxCloudSession) -> str:
+    """Read the Session's Control UI bootstrap token through the data plane."""
+    shell_endpoint = _target_from_endpoint(cloud.endpoint, "/v1/shell/exec")
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(
+                shell_endpoint,
+                json={"command": _OPENCLAW_QR_COMMAND},
+                headers={"accept": "application/json"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict) or data.get("exit_code") not in {0, "0"}:
+            raise ValueError("OpenClaw QR command failed")
+        output = data.get("output")
+        if not isinstance(output, str):
+            raise TypeError("OpenClaw QR output is missing")
+        setup_code = _first_json_object(output).get("setupCode")
+        if not isinstance(setup_code, str) or not setup_code:
+            raise ValueError("OpenClaw setup code is missing")
+        setup = json.loads(_base64url_decode(setup_code))
+        token = setup.get("bootstrapToken") if isinstance(setup, dict) else None
+        if (
+            not isinstance(token, str)
+            or not token.strip()
+            or len(token) > 4_096
+            or "\r" in token
+            or "\n" in token
+        ):
+            raise ValueError("OpenClaw bootstrap token is invalid")
+        return token.strip()
+    except (
+        binascii.Error,
+        httpx.HTTPError,
+        json.JSONDecodeError,
+        TypeError,
+        UnicodeDecodeError,
+        ValueError,
+    ) as error:
+        raise SandboxProvisioningError("无法初始化 OpenClaw 页面鉴权。") from error
 
 
 def _epoch(value: str, fallback: float) -> float:
@@ -209,6 +323,11 @@ class EmbeddedAgentService:
         poll_interval_seconds: float = 2,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         endpoint_probe: Callable[[str], Awaitable[int]] | None = None,
+        terminal_target_resolver: Callable[[SandboxCloudSession], Awaitable[str]]
+        | None = None,
+        openclaw_bootstrap_resolver: Callable[[SandboxCloudSession], Awaitable[str]]
+        | None = None,
+        openclaw_gateway_token_factory: Callable[[], str] | None = None,
         session_env_resolver: Callable[[], dict[str, str]] | None = None,
         capability_secret: str | None = None,
     ) -> None:
@@ -217,6 +336,15 @@ class EmbeddedAgentService:
         self._poll_interval_seconds = poll_interval_seconds
         self._sleep = sleep
         self._endpoint_probe = endpoint_probe or self._probe_endpoint
+        self._terminal_target_resolver = (
+            terminal_target_resolver or _resolve_terminal_target
+        )
+        self._openclaw_bootstrap_resolver = (
+            openclaw_bootstrap_resolver or _resolve_openclaw_bootstrap_token
+        )
+        self._openclaw_gateway_token_factory = openclaw_gateway_token_factory or (
+            lambda: secrets.token_urlsafe(32)
+        )
         self._session_env_resolver = session_env_resolver
         resolved_secret = (
             capability_secret
@@ -281,8 +409,21 @@ class EmbeddedAgentService:
             if not session.tool_type or session.tool_type == definition.tool_type
         ]
 
-    async def start(self, kind: str, owner_id: str) -> EmbeddedAgentSession:
+    async def start(
+        self,
+        kind: str,
+        owner_id: str,
+        display_name: object = "",
+    ) -> EmbeddedAgentSession:
         definition = _definition(kind)
+        if not isinstance(display_name, str):
+            raise SandboxValidationError("智能体名称必须是文本。")
+        display_name = display_name.strip()
+        if len(display_name) > SESSION_DISPLAY_NAME_MAX_LENGTH:
+            raise SandboxValidationError(
+                f"智能体名称不能超过 {SESSION_DISPLAY_NAME_MAX_LENGTH} 个字符。"
+            )
+        display_name = display_name or f"{definition.label} 智能体"
         tool_id = self._tool_id(definition)
         await self._discard_expired()
         async with self._lock:
@@ -292,14 +433,25 @@ class EmbeddedAgentService:
             if active >= _MAX_ACTIVE_SESSIONS:
                 raise SandboxProvisioningError("当前智能体连接数量已达上限。")
 
+        creation_envs = await self._creation_envs()
+        if definition.kind == "openclaw":
+            creation_envs.setdefault(
+                "OPENCLAW_GATEWAY_TOKEN",
+                self._openclaw_gateway_token_factory(),
+            )
         cloud = await self._gateway.create_session(
             tool_id,
-            display_name=f"{definition.label} 智能体",
-            envs=await self._creation_envs(),
+            display_name=display_name,
+            envs=creation_envs,
         )
         try:
             cloud = await self._wait_until_ready(definition, cloud)
-            return await self._register(definition, cloud, owner_id)
+            return await self._register(
+                definition,
+                cloud,
+                owner_id,
+                require_openclaw_bootstrap=True,
+            )
         except BaseException:
             with contextlib.suppress(SandboxError):
                 await self._gateway.delete_session(cloud)
@@ -327,6 +479,8 @@ class EmbeddedAgentService:
         *,
         proxy_token: str | None = None,
         capability_expires_at: float | None = None,
+        issue_openclaw_bootstrap: bool = True,
+        require_openclaw_bootstrap: bool = False,
     ) -> EmbeddedAgentSession:
         expires_at_epoch = capability_expires_at or _epoch(
             cloud.expire_at,
@@ -340,12 +494,23 @@ class EmbeddedAgentService:
             owner_id=owner_id,
             expires_at=expires_at_epoch,
         )
+        terminal_target = await self._terminal_target_resolver(cloud)
+        openclaw_bootstrap_token = ""
+        if definition.kind == "openclaw" and issue_openclaw_bootstrap:
+            try:
+                openclaw_bootstrap_token = await self._openclaw_bootstrap_resolver(
+                    cloud
+                )
+            except SandboxProvisioningError:
+                if require_openclaw_bootstrap:
+                    raise
         session = EmbeddedAgentSession(
             kind=definition.kind,
             owner_id=owner_id,
             cloud=cloud,
             webui_target=_target_from_endpoint(cloud.endpoint, definition.webui_path),
-            terminal_target=_terminal_target(cloud),
+            terminal_target=terminal_target,
+            openclaw_bootstrap_token=openclaw_bootstrap_token,
             proxy_token=token,
             expires_at=(time.monotonic() + max(0.0, expires_at_epoch - time.time())),
         )
@@ -548,6 +713,7 @@ class EmbeddedAgentService:
                 capability.owner_id,
                 proxy_token=token,
                 capability_expires_at=capability.expires_at,
+                issue_openclaw_bootstrap=False,
             )
         if time.monotonic() >= session.expires_at:
             raise SandboxSessionNotFoundError("智能体连接已过期。")
@@ -577,13 +743,44 @@ def _public_session(session: EmbeddedAgentSession) -> dict[str, object]:
         created_at + STUDIO_SANDBOX_TTL_SECONDS,
     )
     session_id = session.cloud.instance_id
+    webui_url = f"{_proxy_prefix(session_id, session.kind, 'webui')}/"
+    terminal_url = f"{_proxy_prefix(session_id, session.kind, 'terminal')}/"
+    webui_query = urlencode(
+        [
+            (key, value)
+            for key, value in parse_qsl(
+                urlsplit(session.webui_target).query,
+                keep_blank_values=True,
+            )
+            if key.lower() in {"session", "session_id"}
+        ]
+    )
+    terminal_query = urlencode(
+        [
+            (key, value)
+            for key, value in parse_qsl(
+                urlsplit(session.terminal_target).query,
+                keep_blank_values=True,
+            )
+            if key.lower() == "session_id"
+        ]
+    )
+    webui_fragment = (
+        f"#token={quote(session.openclaw_bootstrap_token, safe='')}"
+        if session.openclaw_bootstrap_token
+        else ""
+    )
     return {
         "kind": session.kind,
         "status": "ready",
         "sessionId": session_id,
         "sandboxId": session_id,
-        "webuiUrl": f"{_proxy_prefix(session_id, session.kind, 'webui')}/",
-        "terminalUrl": f"{_proxy_prefix(session_id, session.kind, 'terminal')}/",
+        "webuiUrl": (
+            f"{webui_url}{'?' + webui_query if webui_query else ''}{webui_fragment}"
+        ),
+        "terminalUrl": (
+            f"{terminal_url}{'?' + terminal_query if terminal_query else ''}"
+        ),
         "createdAt": created_at,
         "expiresAt": expires_at,
         "ttlSeconds": STUDIO_SANDBOX_TTL_SECONDS,
@@ -772,6 +969,49 @@ def _proxy_headers(content_type: str) -> dict[str, str]:
     }
 
 
+def _upstream_cookie_header(value: str) -> str:
+    """Keep runtime cookies while withholding Studio identity capabilities."""
+    cookies = []
+    for part in value.split(";"):
+        cookie = part.strip()
+        name, separator, _value = cookie.partition("=")
+        if (
+            separator
+            and name.strip()
+            and not name.strip().lower().startswith(_STUDIO_COOKIE_PREFIX)
+        ):
+            cookies.append(cookie)
+    return "; ".join(cookies)
+
+
+def _local_set_cookie(value: str, prefix: str, *, secure: bool) -> str:
+    """Scope an upstream runtime cookie to its same-origin iframe proxy."""
+    value = re.sub(r";\s*Domain=[^;]*", "", value, flags=re.IGNORECASE)
+    if not secure:
+        value = re.sub(r";\s*Secure(?=;|$)", "", value, flags=re.IGNORECASE)
+    if re.search(r";\s*Path=", value, flags=re.IGNORECASE):
+        return re.sub(
+            r";\s*Path=[^;]*",
+            f"; Path={prefix}",
+            value,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return f"{value}; Path={prefix}"
+
+
+def _append_upstream_cookies(
+    response: Response,
+    headers: httpx.Headers,
+    prefix: str,
+    *,
+    secure: bool,
+) -> None:
+    for value in headers.get_list("set-cookie"):
+        cookie = _local_set_cookie(value, prefix, secure=secure)
+        response.raw_headers.append((b"set-cookie", cookie.encode("latin-1")))
+
+
 async def _proxy_http(
     request: Request,
     *,
@@ -788,13 +1028,19 @@ async def _proxy_http(
         for name in (
             "accept",
             "accept-language",
+            "authorization",
             "content-type",
             "if-none-match",
             "if-modified-since",
+            "range",
             "user-agent",
+            "x-hermes-session-token",
         )
         if name in request.headers
     }
+    upstream_cookie = _upstream_cookie_header(request.headers.get("cookie", ""))
+    if upstream_cookie:
+        headers["cookie"] = upstream_cookie
     headers.update(
         {
             "x-forwarded-host": request.headers.get("host", ""),
@@ -845,12 +1091,19 @@ async def _proxy_http(
                 await upstream.aclose()
                 await client.aclose()
 
-        return StreamingResponse(
+        response = StreamingResponse(
             _event_stream(),
             status_code=upstream.status_code,
             headers=response_headers,
             media_type=None,
         )
+        _append_upstream_cookies(
+            response,
+            upstream.headers,
+            prefix,
+            secure=_secure_cookie(request),
+        )
+        return response
     try:
         content = await upstream.aread()
     finally:
@@ -887,60 +1140,136 @@ async def _proxy_http(
             response_headers["location"] = (
                 f"{prefix}{suffix or '/'}{'?' + public_query if public_query else ''}"
             )
-    return Response(
+    response = Response(
         content=content if request.method != "HEAD" else b"",
         status_code=upstream.status_code,
         headers=response_headers,
     )
+    _append_upstream_cookies(
+        response,
+        upstream.headers,
+        prefix,
+        secure=_secure_cookie(request),
+    )
+    return response
 
 
 async def _relay_websocket(
     websocket: WebSocket,
     upstream_url: str,
+    cookie: str = "",
+    user_agent: str = "",
 ) -> None:
     import websockets
+    from websockets.exceptions import ConnectionClosed
 
+    requested_protocols = [
+        value.strip()
+        for value in websocket.headers.get("sec-websocket-protocol", "").split(",")
+        if value.strip()
+    ]
+    await websocket.accept(
+        subprotocol=requested_protocols[0] if requested_protocols else None
+    )
     try:
         parsed_upstream = urlsplit(upstream_url)
         upstream_origin = (
             f"{'https' if parsed_upstream.scheme == 'wss' else 'http'}"
             f"://{parsed_upstream.netloc}"
         )
-        requested_protocols = [
-            value.strip()
-            for value in websocket.headers.get("sec-websocket-protocol", "").split(",")
-            if value.strip()
-        ]
+        additional_headers = {}
+        if cookie:
+            additional_headers["cookie"] = cookie
+        if user_agent:
+            additional_headers["user-agent"] = user_agent
         upstream = await websockets.connect(
             upstream_url,
             origin=cast(Any, upstream_origin),
             subprotocols=cast(Any, requested_protocols or None),
+            additional_headers=additional_headers or None,
             open_timeout=_PROXY_TIMEOUT_SECONDS,
             close_timeout=5,
             max_size=_MAX_WEBSOCKET_MESSAGE_BYTES,
         )
     except Exception:  # noqa: BLE001 - WebSocket transport boundary
-        await websocket.close(code=1011, reason="agent connection failed")
+        with contextlib.suppress(RuntimeError):
+            await websocket.close(code=1011, reason="sandbox websocket unavailable")
         return
-    await websocket.accept(subprotocol=upstream.subprotocol)
 
-    async def _browser_to_upstream() -> None:
-        while True:
-            message = await websocket.receive()
-            if message["type"] == "websocket.disconnect":
-                return
-            value = message.get("bytes")
-            if value is None:
-                value = message.get("text")
-            if value is not None:
-                await upstream.send(value)
+    def _safe_close_code(value: object) -> int:
+        try:
+            code = int(value)
+        except (TypeError, ValueError):
+            return 1011
+        if code < 1000 or code >= 5000 or code in {1005, 1006, 1015}:
+            return 1011
+        return code
 
-    async def _upstream_to_browser() -> None:
-        async for value in upstream:
-            if isinstance(value, bytes):
-                await websocket.send_bytes(value)
-            else:
-                await websocket.send_text(value)
+    def _safe_close_reason(value: object) -> str:
+        reason = str(value or "")
+        for key, secret in parse_qsl(
+            urlsplit(upstream_url).query,
+            keep_blank_values=True,
+        ):
+            if secret and key.lower() in _GATEWAY_QUERY_KEYS:
+                reason = reason.replace(secret, "***")
+        return reason.encode("utf-8")[:120].decode("utf-8", errors="ignore")
+
+    def _connection_close(error: ConnectionClosed) -> tuple[int, str]:
+        frame = error.rcvd or error.sent
+        return (
+            _safe_close_code(frame.code if frame is not None else 1011),
+            _safe_close_reason(frame.reason if frame is not None else ""),
+        )
+
+    async def _browser_to_upstream() -> tuple[str, int, str]:
+        try:
+            while True:
+                message = await websocket.receive()
+                if message["type"] == "websocket.disconnect":
+                    return (
+                        "browser",
+                        _safe_close_code(message.get("code", 1000)),
+                        "",
+                    )
+                value = message.get("bytes")
+                if value is None:
+                    value = message.get("text")
+                if value is not None:
+                    await upstream.send(value)
+        except WebSocketDisconnect as error:
+            return ("browser", _safe_close_code(error.code), "")
+        except RuntimeError:
+            return ("browser", 1000, "")
+        except ConnectionClosed as error:
+            code, reason = _connection_close(error)
+            return (
+                "upstream",
+                code,
+                reason,
+            )
+
+    async def _upstream_to_browser() -> tuple[str, int, str]:
+        try:
+            async for value in upstream:
+                if isinstance(value, bytes):
+                    await websocket.send_bytes(value)
+                else:
+                    await websocket.send_text(value)
+        except ConnectionClosed as error:
+            code, reason = _connection_close(error)
+            return (
+                "upstream",
+                code,
+                reason,
+            )
+        except (WebSocketDisconnect, RuntimeError):
+            return ("browser", 1000, "")
+        return (
+            "upstream",
+            _safe_close_code(upstream.close_code or 1000),
+            _safe_close_reason(upstream.close_reason),
+        )
 
     tasks = {
         asyncio.create_task(_browser_to_upstream()),
@@ -948,19 +1277,23 @@ async def _relay_websocket(
     }
     try:
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        for task in done:
-            with contextlib.suppress(
-                WebSocketDisconnect, RuntimeError, ConnectionError
-            ):
-                task.result()
+        closures = [task.result() for task in done]
+        closure = next(
+            (value for value in closures if value[0] == "upstream"),
+            closures[0],
+        )
         for task in pending:
             task.cancel()
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
+        source, code, reason = closure
+        if source == "upstream":
+            with contextlib.suppress(RuntimeError):
+                await websocket.close(code=code, reason=reason)
+        else:
+            await upstream.close(code=code)
     finally:
         await upstream.close()
-        with contextlib.suppress(RuntimeError):
-            await websocket.close()
 
 
 def mount_embedded_agent_routes(
@@ -1001,7 +1334,23 @@ def mount_embedded_agent_routes(
     async def _start(kind: str, request: Request) -> Response:
         owner_id = owner_resolver(request)
         try:
-            session = await service.start(kind, owner_id)
+            body = await request.body()
+            if body:
+                try:
+                    data = json.loads(body)
+                except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                    raise SandboxValidationError(
+                        "创建智能体的请求不是有效 JSON。"
+                    ) from error
+                if not isinstance(data, dict):
+                    raise SandboxValidationError("创建智能体的请求格式无效。")
+            else:
+                data = {}
+            session = await service.start(
+                kind,
+                owner_id,
+                data.get("displayName", ""),
+            )
         except SandboxError as error:
             raise _http_error(error) from error
         return _session_response(session, request)
@@ -1140,7 +1489,12 @@ def mount_embedded_agent_routes(
                 "",
             )
         )
-        await _relay_websocket(websocket, upstream)
+        await _relay_websocket(
+            websocket,
+            upstream,
+            _upstream_cookie_header(websocket.headers.get("cookie", "")),
+            websocket.headers.get("user-agent", ""),
+        )
 
     app.router.on_shutdown.append(service.close_all)
 

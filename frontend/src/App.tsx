@@ -801,6 +801,13 @@ export default function App() {
   const [embeddedAgentClosing, setEmbeddedAgentClosing] = useState(false);
   const embeddedAgentSessionRef = useRef<EmbeddedAgentSession | null>(null);
   const embeddedAgentLaunchAbortRef = useRef<AbortController | null>(null);
+  const [embeddedAgentLaunchKind, setEmbeddedAgentLaunchKind] =
+    useState<EmbeddedAgentKind | null>(null);
+  const [embeddedAgentLaunchState, setEmbeddedAgentLaunchState] =
+    useState<SandboxLaunchState>("confirm");
+  const [embeddedAgentLaunchError, setEmbeddedAgentLaunchError] = useState("");
+  const embeddedAgentLaunchLabel =
+    embeddedAgentLaunchKind === "openclaw" ? "OpenClaw" : "Hermes";
   const [sandboxTurns, setSandboxTurns] = useState<Turn[]>([]);
   const [sandboxBusy, setSandboxBusy] = useState(false);
   const [sandboxSettingsBusy, setSandboxSettingsBusy] = useState(false);
@@ -2275,6 +2282,9 @@ export default function App() {
   function leaveEmbeddedAgent() {
     embeddedAgentLaunchAbortRef.current?.abort();
     embeddedAgentLaunchAbortRef.current = null;
+    setEmbeddedAgentLaunchKind(null);
+    setEmbeddedAgentLaunchState("confirm");
+    setEmbeddedAgentLaunchError("");
     const active = embeddedAgentSessionRef.current;
     embeddedAgentSessionRef.current = null;
     setEmbeddedAgentSession(null);
@@ -2320,14 +2330,45 @@ export default function App() {
     }
     if (embeddedAgentLaunchAbortRef.current !== controller) {
       void embeddedAgentClient.disconnect(nextSession);
-      return;
+      return false;
     }
     embeddedAgentLaunchAbortRef.current = null;
     enterEmbeddedAgent(nextSession);
+    return true;
   }
 
-  async function createEmbeddedAgent(kind: EmbeddedAgentKind) {
-    await openEmbeddedAgent((signal) => embeddedAgentClient.start(kind, signal));
+  function openEmbeddedAgentLaunch(kind: EmbeddedAgentKind) {
+    setEmbeddedAgentLaunchKind(kind);
+    setEmbeddedAgentLaunchState("confirm");
+    setEmbeddedAgentLaunchError("");
+  }
+
+  function cancelEmbeddedAgentLaunch() {
+    embeddedAgentLaunchAbortRef.current?.abort();
+    embeddedAgentLaunchAbortRef.current = null;
+    setEmbeddedAgentLaunchKind(null);
+    setEmbeddedAgentLaunchState("confirm");
+    setEmbeddedAgentLaunchError("");
+  }
+
+  async function launchEmbeddedAgentSession(displayName: string) {
+    const kind = embeddedAgentLaunchKind;
+    if (!kind) return;
+    setEmbeddedAgentLaunchState("loading");
+    setEmbeddedAgentLaunchError("");
+    try {
+      const opened = await openEmbeddedAgent((signal) =>
+        embeddedAgentClient.start(kind, { displayName, signal }));
+      if (!opened) return;
+      setEmbeddedAgentLaunchKind(null);
+      setEmbeddedAgentLaunchState("confirm");
+    } catch (cause) {
+      if ((cause as Error)?.name === "AbortError") return;
+      setEmbeddedAgentLaunchError(
+        cause instanceof Error ? cause.message : String(cause),
+      );
+      setEmbeddedAgentLaunchState("error");
+    }
   }
 
   async function connectEmbeddedAgent(session: EmbeddedAgentCloudSession) {
@@ -4327,7 +4368,7 @@ export default function App() {
                 onActiveTypeChange={setAgentDirectoryType}
                 onCreateAgent={openAgentCreateFromMyAgents}
                 onCreateCodexAgent={openSandboxLaunch}
-                onCreateEmbeddedAgent={createEmbeddedAgent}
+                onCreateEmbeddedAgent={openEmbeddedAgentLaunch}
                 onOpenEmbeddedSession={connectEmbeddedAgent}
                 onOpenCodexSession={connectSandboxSession}
                 onUseAgent={connectMyAgent}
@@ -4891,6 +4932,15 @@ export default function App() {
         error={sandboxLaunchError}
         onCancel={cancelSandboxLaunch}
         onConfirm={(displayName) => void launchSandboxSession(displayName)}
+      />
+
+      <SandboxLaunchDialog
+        open={embeddedAgentLaunchKind !== null}
+        state={embeddedAgentLaunchState}
+        agentLabel={embeddedAgentLaunchLabel}
+        error={embeddedAgentLaunchError}
+        onCancel={cancelEmbeddedAgentLaunch}
+        onConfirm={(displayName) => void launchEmbeddedAgentSession(displayName)}
       />
 
       {sandboxSession ? (

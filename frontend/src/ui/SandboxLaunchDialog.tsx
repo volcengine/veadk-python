@@ -9,6 +9,7 @@ const DEFAULT_SANDBOX_DISPLAY_NAME = "我的智能体";
 export interface SandboxLaunchDialogProps {
   open: boolean;
   state: SandboxLaunchState;
+  agentLabel?: string;
   error?: string;
   onCancel: () => void;
   onConfirm: (displayName: string) => void;
@@ -17,6 +18,7 @@ export interface SandboxLaunchDialogProps {
 export function SandboxLaunchDialog({
   open,
   state,
+  agentLabel = "Codex",
   error,
   onCancel,
   onConfirm,
@@ -71,10 +73,10 @@ export function SandboxLaunchDialog({
 
   const loading = state === "loading";
   const title = loading
-    ? "正在创建沙箱"
+    ? `正在创建 ${agentLabel} 智能体`
     : state === "error"
       ? "启动失败"
-      : "创建 Codex 智能体";
+      : `创建 ${agentLabel} 智能体`;
 
   return createPortal(
     <div
@@ -113,7 +115,7 @@ export function SandboxLaunchDialog({
             </p>
           ) : (
             <p id="sandbox-dialog-description">
-              创建一个可重复进入的 AgentKit 沙箱，并将它作为 Codex 智能体显示在列表中。
+              {`创建一个可重复进入的 ${agentLabel} AgentKit Session，并将它作为智能体显示在列表中。`}
             </p>
           )}
           <label className="sandbox-dialog-field">

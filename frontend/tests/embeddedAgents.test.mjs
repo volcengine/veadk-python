@@ -31,8 +31,20 @@ test("lists, creates, and connects Hermes and OpenClaw AgentKit sessions", () =>
   assert.match(clientSource, /method: "POST"/);
   assert.match(directorySource, /embeddedAgentClient\.listSessions/);
   assert.match(directorySource, /EmbeddedSessionCard/);
-  assert.match(directorySource, /onCreateEmbeddedAgent\(kind\)/);
-  assert.match(appSource, /embeddedAgentClient\.start\(kind, signal\)/);
+  assert.match(directorySource, /onCreateEmbeddedAgent\(activeType\)/);
+  assert.match(
+    clientSource,
+    /body: JSON\.stringify\(\{ displayName: options\.displayName\?\.trim\(\) \?\? "" \}\)/,
+  );
+  assert.match(
+    appSource,
+    /embeddedAgentClient\.start\(kind, \{ displayName, signal \}\)/,
+  );
+  assert.match(appSource, /function openEmbeddedAgentLaunch\(kind: EmbeddedAgentKind\)/);
+  assert.match(
+    appSource,
+    /<SandboxLaunchDialog[\s\S]*?agentLabel=\{embeddedAgentLaunchLabel\}/,
+  );
   assert.match(appSource, /embeddedAgentClient\.connect\(session, signal\)/);
   assert.match(appSource, /embeddedAgentClient\.disconnect\(active\)/);
 });
@@ -46,6 +58,13 @@ test("shows same-origin WebUI and Terminal iframe tabs without refresh or extern
   assert.match(workspaceSource, /<iframe/);
   assert.doesNotMatch(workspaceSource, /刷新|reload|window\.open|target="_blank"|新窗口/);
   assert.match(workspaceSource, /aria-label=\{`关闭 \$\{detail\.label\} 工作区`\}/);
+});
+
+test("keeps Studio auth out of sandbox iframe and terminal URLs", () => {
+  assert.match(clientSource, /webuiUrl: value\.webuiUrl/);
+  assert.match(clientSource, /terminalUrl: value\.terminalUrl/);
+  assert.doesNotMatch(clientSource, /webuiUrl: withAuth\(/);
+  assert.doesNotMatch(clientSource, /terminalUrl: withAuth\(/);
 });
 
 test("mounts each iframe once and preserves its connection while switching tabs", () => {

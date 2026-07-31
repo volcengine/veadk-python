@@ -58,7 +58,9 @@ server that `veadk frontend` launches — no separate backend.
   keeping the Session Endpoint and its authorization query on the server.
   WebUI and Terminal are each mounted at most once, so tab switching preserves
   the Terminal WebSocket. The workspace intentionally has no refresh or
-  new-window action; closing or leaving it deletes the disposable Session.
+  new-window action. Creation accepts a display name stored in AgentKit Session
+  Metadata and shown in the Agent directory; leaving the workspace disconnects
+  only the local proxy, so the Session remains reusable until its TTL expires.
 - **AgentKit Skill center**: browse Skill Spaces and their skills with
   server-side pagination by region, then inspect the selected Skill content.
 - **Tracing viewer**: a span tree + detail panel from the ADK debug trace.

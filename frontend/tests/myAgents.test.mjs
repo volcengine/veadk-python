@@ -68,7 +68,7 @@ test("offers the existing create action for the active agent type", () => {
   assert.match(pageSource, /\{canCreate && \(/);
   assert.match(pageSource, /activeType === "general"[\s\S]*?onCreateAgent/);
   assert.match(pageSource, /activeType === "codex"[\s\S]*?\? onCreateCodexAgent/);
-  assert.match(pageSource, /embeddedCapability\?\.enabled[\s\S]*?launchEmbeddedAgent/);
+  assert.match(pageSource, /embeddedCapability\?\.enabled[\s\S]*?onCreateEmbeddedAgent/);
   assert.match(pageSource, /className="my-agent-add"/);
   assert.match(pageSource, /createLabel: "添加通用智能体"/);
   assert.match(pageSource, /createLabel: "添加 Codex 智能体"/);
@@ -77,7 +77,7 @@ test("offers the existing create action for the active agent type", () => {
   assert.match(pageSource, /visibleEmbeddedSessions\.map/);
   assert.match(pageSource, /<EmbeddedSessionCard/);
   assert.match(pageSource, /<AddIcon \/>[\s\S]*?createLabel/);
-  assert.match(pageSource, /disabled=\{!createAgent \|\| launchingEmbedded\}/);
+  assert.match(pageSource, /disabled=\{!createAgent\}/);
   assert.match(pageStyles, /\.my-agent-type-bar\s*\{[\s\S]*?justify-content: space-between/);
   assert.match(pageStyles, /\.my-agent-add\s*\{[\s\S]*?background: hsl\(var\(--foreground\)\)[\s\S]*?color: hsl\(var\(--background\)\)/);
   assert.match(pageStyles, /@media \(max-width: 720px\)[\s\S]*?\.my-agent-add\s*\{[\s\S]*?align-self: flex-end/);
