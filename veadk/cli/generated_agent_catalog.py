@@ -229,6 +229,7 @@ LTM_BACKENDS = (
             EnvVar("DATABASE_MEM0_API_KEY", True),
             EnvVar("DATABASE_MEM0_BASE_URL", False),
         ),
+        pip_extra="database",
     ),
 )
 
