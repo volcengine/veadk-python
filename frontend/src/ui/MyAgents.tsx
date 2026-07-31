@@ -6,6 +6,11 @@ import {
   type CloudRuntime,
   type RuntimeScope,
 } from "../adk/client";
+import {
+  embeddedAgentClient,
+  type EmbeddedAgentCapability,
+  type EmbeddedAgentKind,
+} from "../adk/embeddedAgents";
 import { sandboxClient, type SandboxSession } from "../adk/sandbox";
 import "./MyAgents.css";
 
@@ -37,8 +42,8 @@ const CODEX_TRANSITIONAL_STATUSES = new Set([
 const AGENT_TYPES: Array<{ id: AgentType; label: string; createLabel: string }> = [
   { id: "general", label: "通用智能体", createLabel: "添加通用智能体" },
   { id: "codex", label: "Codex 智能体", createLabel: "添加 Codex 智能体" },
-  { id: "openclaw", label: "OpenClaw 智能体", createLabel: "添加 OpenClaw 智能体" },
-  { id: "hermes", label: "Hermes 智能体", createLabel: "添加 Hermes 智能体" },
+  { id: "openclaw", label: "OpenClaw 智能体", createLabel: "启动 OpenClaw" },
+  { id: "hermes", label: "Hermes 智能体", createLabel: "启动 Hermes" },
 ];
 const RUNTIME_PAGE_SIZE = 24;
 const RUNTIME_PAGE_CACHE_TTL_MS = 30_000;
@@ -299,6 +304,7 @@ export interface MyAgentsProps {
   onActiveTypeChange: (type: AgentType) => void;
   onCreateAgent: (region: RuntimeRegion) => void;
   onCreateCodexAgent: () => void;
+  onLaunchEmbeddedAgent: (kind: EmbeddedAgentKind) => Promise<void>;
   onOpenCodexSession: (session: SandboxSession) => Promise<void>;
   onUseAgent: (agent: MyAgentCardData) => Promise<void>;
   onViewAgentDetails: (agent: MyAgentCardData) => void;
@@ -314,6 +320,7 @@ export function MyAgents({
   onActiveTypeChange,
   onCreateAgent,
   onCreateCodexAgent,
+  onLaunchEmbeddedAgent,
   onOpenCodexSession,
   onUseAgent,
   onViewAgentDetails,
@@ -326,6 +333,7 @@ export function MyAgents({
   const runtimeRequestRef = useRef(0);
   const codexRequestRef = useRef(0);
   const codexAbortRef = useRef<AbortController | null>(null);
+  const embeddedAbortRef = useRef<AbortController | null>(null);
   const [region, setRegion] = useState<RuntimeRegion>("cn-beijing");
   const [regionMenuOpen, setRegionMenuOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -338,6 +346,11 @@ export function MyAgents({
   const [codexLoading, setCodexLoading] = useState(false);
   const [codexError, setCodexError] = useState("");
   const [connectingCodexSessionId, setConnectingCodexSessionId] = useState("");
+  const [embeddedCapability, setEmbeddedCapability] =
+    useState<EmbeddedAgentCapability | null>(null);
+  const [embeddedLoading, setEmbeddedLoading] = useState(false);
+  const [embeddedError, setEmbeddedError] = useState("");
+  const [launchingEmbedded, setLaunchingEmbedded] = useState(false);
 
   const fetchRuntimePage = useCallback((token: string, reset: boolean) => {
     const requestId = ++runtimeRequestRef.current;
@@ -406,6 +419,44 @@ export function MyAgents({
     };
   }, [activeType, codexRefreshKey, fetchCodexSessions]);
 
+  const fetchEmbeddedCapability = useCallback((kind: EmbeddedAgentKind) => {
+    embeddedAbortRef.current?.abort();
+    const controller = new AbortController();
+    embeddedAbortRef.current = controller;
+    setEmbeddedCapability(null);
+    setEmbeddedLoading(true);
+    setEmbeddedError("");
+    return embeddedAgentClient
+      .capabilities(kind, controller.signal)
+      .then((capability) => {
+        if (embeddedAbortRef.current === controller) {
+          setEmbeddedCapability(capability);
+        }
+      })
+      .catch((cause) => {
+        if ((cause as Error)?.name === "AbortError") return;
+        if (embeddedAbortRef.current !== controller) return;
+        setEmbeddedError(cause instanceof Error ? cause.message : String(cause));
+      })
+      .finally(() => {
+        if (embeddedAbortRef.current === controller) {
+          embeddedAbortRef.current = null;
+          setEmbeddedLoading(false);
+        }
+      });
+  }, []);
+
+  useEffect(() => {
+    if (activeType !== "openclaw" && activeType !== "hermes") {
+      embeddedAbortRef.current?.abort();
+      setEmbeddedCapability(null);
+      setEmbeddedError("");
+      return;
+    }
+    void fetchEmbeddedCapability(activeType);
+    return () => embeddedAbortRef.current?.abort();
+  }, [activeType, fetchEmbeddedCapability]);
+
   useEffect(() => {
     if (
       activeType !== "codex" ||
@@ -462,6 +513,19 @@ export function MyAgents({
     }
   }, [connectingCodexSessionId, onOpenCodexSession]);
 
+  const launchEmbeddedAgent = useCallback(async (kind: EmbeddedAgentKind) => {
+    if (launchingEmbedded) return;
+    setLaunchingEmbedded(true);
+    setEmbeddedError("");
+    try {
+      await onLaunchEmbeddedAgent(kind);
+    } catch (cause) {
+      setEmbeddedError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setLaunchingEmbedded(false);
+    }
+  }, [launchingEmbedded, onLaunchEmbeddedAgent]);
+
   const visibleAgents = useMemo(() => {
     if (activeType !== "general") return [];
     const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -501,7 +565,9 @@ export function MyAgents({
   const createLabel = activeTypeInfo?.createLabel ?? "添加智能体";
   const showInitialLoading =
     (activeType === "general" && loadingRuntimes && runtimeAgents.length === 0) ||
-    (activeType === "codex" && codexLoading && codexSessions.length === 0);
+    (activeType === "codex" && codexLoading && codexSessions.length === 0) ||
+    ((activeType === "openclaw" || activeType === "hermes") &&
+      embeddedLoading);
   const visibleCount =
     activeType === "general"
       ? visibleAgents.length
@@ -510,11 +576,19 @@ export function MyAgents({
         : 0;
   const showEmpty = !showInitialLoading && visibleCount === 0;
   const emptyMessage = activeType === "openclaw" || activeType === "hermes"
-    ? "暂未开放"
+    ? embeddedCapability?.enabled
+      ? `启动 ${embeddedCapability.label} 后，可在主页面与 Terminal 之间切换`
+      : embeddedCapability?.reason || `${activeLabel}尚未配置`
     : query.trim() ? "没有匹配的智能体" : `${activeLabel}暂无内容`;
-  const createAgent = canCreate && activeType === "general"
-    ? () => onCreateAgent(region)
-    : canCreate && activeType === "codex" ? onCreateCodexAgent : undefined;
+  const createAgent = !canCreate
+    ? undefined
+    : activeType === "general"
+      ? () => onCreateAgent(region)
+      : activeType === "codex"
+        ? onCreateCodexAgent
+        : embeddedCapability?.enabled
+          ? () => void launchEmbeddedAgent(activeType)
+          : undefined;
 
   return (
     <div className="my-agents-page">
@@ -610,11 +684,12 @@ export function MyAgents({
           <button
             type="button"
             className="my-agent-add"
-            disabled={!createAgent}
+            disabled={!createAgent || launchingEmbedded}
+            aria-busy={launchingEmbedded || undefined}
             onClick={() => createAgent?.()}
           >
             <AddIcon />
-            {createLabel}
+            {launchingEmbedded ? "正在启动" : createLabel}
           </button>
         )}
       </div>
@@ -628,17 +703,32 @@ export function MyAgents({
           <div className="my-agent-initial-loading" role="status" aria-live="polite">
             <span className="my-agent-loading-mark" aria-hidden="true" />
             <span>
-              {activeType === "codex" ? "正在加载 Codex 智能体" : "正在加载智能体"}
+              {activeType === "codex"
+                ? "正在加载 Codex 智能体"
+                : activeType === "openclaw" || activeType === "hermes"
+                  ? `正在读取 ${activeLabel} 配置`
+                  : "正在加载智能体"}
             </span>
           </div>
         ) : (runtimeError && activeType === "general") ||
-          (codexError && activeType === "codex" && codexSessions.length === 0) ? (
+          (codexError && activeType === "codex" && codexSessions.length === 0) ||
+          (embeddedError &&
+            (activeType === "openclaw" || activeType === "hermes")) ? (
           <div className="my-agent-empty" role="alert">
-            <p>{activeType === "codex" ? codexError : runtimeError}</p>
+            <p>
+              {activeType === "codex"
+                ? codexError
+                : activeType === "openclaw" || activeType === "hermes"
+                  ? embeddedError
+                  : runtimeError}
+            </p>
             <button
               type="button"
               onClick={() => {
                 if (activeType === "codex") void fetchCodexSessions();
+                else if (activeType === "openclaw" || activeType === "hermes") {
+                  void fetchEmbeddedCapability(activeType);
+                }
                 else void fetchRuntimePage("", true);
               }}
             >

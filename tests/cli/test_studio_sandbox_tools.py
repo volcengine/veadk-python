@@ -14,9 +14,16 @@
 
 """Tests for deploy-time Studio Sandbox Tool provisioning."""
 
+from collections.abc import Callable
 from types import SimpleNamespace
 
-from veadk.cli.studio_sandbox_tools import ensure_studio_code_env_tool
+import pytest
+
+from veadk.cli.studio_sandbox_tools import (
+    ensure_studio_arkclaw_tool,
+    ensure_studio_code_env_tool,
+    ensure_studio_hermes_tool,
+)
 
 
 def test_ensure_studio_code_env_tool_reuses_ready_exact_name() -> None:
@@ -70,9 +77,75 @@ def test_ensure_studio_code_env_tool_creates_ready_code_env() -> None:
         == "tool-created"
     )
     request = requests[0]
-    assert getattr(request, "name") == "veadk-studio-demo-skill-12345678"
-    assert getattr(request, "tool_type") == "CodeEnv"
-    assert getattr(request, "project_name") == "default"
-    assert getattr(request, "cpu_milli") == 4000
-    assert getattr(request, "memory_mb") == 8192
-    assert getattr(request, "envs") is None
+    assert request.name == "veadk-studio-demo-skill-12345678"
+    assert request.tool_type == "CodeEnv"
+    assert request.project_name == "default"
+    assert request.cpu_milli == 4000
+    assert request.memory_mb == 8192
+    assert request.envs is None
+
+
+@pytest.mark.parametrize(
+    ("ensure_tool", "tool_type"),
+    [
+        (ensure_studio_arkclaw_tool, "ArkClawEnv"),
+        (ensure_studio_hermes_tool, "HermesEnv"),
+    ],
+)
+def test_ensure_studio_preset_tool_uses_only_preset_fields(
+    ensure_tool: Callable[..., str],
+    tool_type: str,
+) -> None:
+    requests: list[object] = []
+
+    client = SimpleNamespace(
+        list_tools=lambda _: SimpleNamespace(tools=[], next_token=None),
+        get_tool=lambda _: SimpleNamespace(status="Ready", tool_type=tool_type),
+        create_tool=lambda request: (
+            requests.append(request) or SimpleNamespace(tool_id="tool-created")
+        ),
+    )
+
+    assert (
+        ensure_tool(
+            name=f"veadk-studio-demo-{tool_type.lower()}-12345678",
+            client=client,
+            timeout_seconds=0,
+        )
+        == "tool-created"
+    )
+    request = requests[0]
+    assert request.tool_type == tool_type
+    assert request.image_url is None
+    assert request.command is None
+    assert request.port is None
+    assert request.envs is None
+    assert request.cpu_milli is None
+    assert request.memory_mb is None
+
+
+def test_ensure_studio_preset_tool_rejects_same_name_with_wrong_type() -> None:
+    client = SimpleNamespace(
+        list_tools=lambda _: SimpleNamespace(
+            tools=[
+                SimpleNamespace(
+                    name="veadk-studio-demo-openclaw-12345678",
+                    project_name="default",
+                    tool_type="Private",
+                    tool_id="wrong-tool",
+                )
+            ],
+            next_token=None,
+        ),
+        get_tool=lambda _: SimpleNamespace(status="Ready"),
+        create_tool=lambda _: (_ for _ in ()).throw(
+            AssertionError("a conflicting Tool must not be created")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="expected ArkClawEnv"):
+        ensure_studio_arkclaw_tool(
+            name="veadk-studio-demo-openclaw-12345678",
+            client=client,
+            timeout_seconds=0,
+        )

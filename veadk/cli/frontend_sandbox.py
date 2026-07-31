@@ -208,6 +208,8 @@ class SandboxCloudSession:
     expire_at: str = ""
     tool_type: str = ""
     display_name: str = ""
+    webshell_url: str = ""
+    vnc_url: str = ""
 
 
 @dataclass
@@ -463,6 +465,7 @@ class AgentkitSandboxGateway:
         instance_id = str(getattr(value, "session_id", "") or "").strip()
         if not instance_id:
             raise SandboxProvisioningError("AgentKit Session 响应缺少 SessionId。")
+        session_meta = getattr(value, "session_meta", None)
         return SandboxCloudSession(
             tool_id=tool_id,
             instance_id=instance_id,
@@ -476,6 +479,8 @@ class AgentkitSandboxGateway:
             expire_at=str(getattr(value, "expire_at", "") or "").strip(),
             tool_type=str(getattr(value, "tool_type", "") or "").strip(),
             display_name=session_display_name(value),
+            webshell_url=str(getattr(session_meta, "webshell_url", "") or "").strip(),
+            vnc_url=str(getattr(session_meta, "vnc_url", "") or "").strip(),
         )
 
     async def list_sessions(self, tool_id: str) -> list[SandboxCloudSession]:

@@ -1,0 +1,208 @@
+.embedded-agent-workspace {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: hsl(var(--background));
+}
+
+.embedded-agent-toolbar {
+  flex: 0 0 60px;
+  display: grid;
+  grid-template-columns: minmax(170px, 1fr) auto minmax(170px, 1fr);
+  align-items: center;
+  gap: 16px;
+  padding: 0 16px 0 18px;
+  border-bottom: 1px solid hsl(var(--border));
+  background: hsl(var(--panel));
+}
+
+.embedded-agent-identity {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.embedded-agent-identity img {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 10px;
+  object-fit: cover;
+}
+
+.embedded-agent-identity div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.embedded-agent-identity strong {
+  overflow: hidden;
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.embedded-agent-identity span {
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+}
+
+.embedded-agent-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 9px;
+  background: hsl(var(--muted) / 0.55);
+}
+
+.embedded-agent-tabs button {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.embedded-agent-tabs button:hover {
+  color: hsl(var(--foreground));
+}
+
+.embedded-agent-tabs button.is-active {
+  background: hsl(var(--panel));
+  color: hsl(var(--foreground));
+  box-shadow: 0 1px 3px hsl(var(--foreground) / 0.1);
+}
+
+.embedded-agent-tabs button:focus-visible,
+.embedded-agent-close:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.65);
+  outline-offset: 2px;
+}
+
+.embedded-agent-tabs svg {
+  width: 15px;
+  height: 15px;
+}
+
+.embedded-agent-close {
+  justify-self: end;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+}
+
+.embedded-agent-close:hover:not(:disabled) {
+  border-color: hsl(var(--border));
+  background: hsl(var(--muted) / 0.6);
+  color: hsl(var(--foreground));
+}
+
+.embedded-agent-close:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.embedded-agent-close svg {
+  width: 19px;
+  height: 19px;
+}
+
+.embedded-agent-stage,
+.embedded-agent-panel {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.embedded-agent-panel {
+  display: none;
+}
+
+.embedded-agent-panel.is-active {
+  display: flex;
+}
+
+.embedded-agent-panel iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.embedded-agent-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  background: hsl(var(--background));
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+}
+
+.embedded-agent-spinner {
+  width: 15px;
+  height: 15px;
+  display: inline-block;
+  border: 2px solid hsl(var(--foreground) / 0.18);
+  border-top-color: hsl(var(--foreground) / 0.72);
+  border-radius: 50%;
+  animation: embedded-agent-spin 0.75s linear infinite;
+}
+
+@keyframes embedded-agent-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 720px) {
+  .embedded-agent-toolbar {
+    grid-template-columns: 1fr auto;
+    height: auto;
+    min-height: 96px;
+    padding: 9px 12px;
+  }
+
+  .embedded-agent-tabs {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    justify-self: stretch;
+  }
+
+  .embedded-agent-tabs button {
+    flex: 1;
+    justify-content: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .embedded-agent-spinner {
+    animation-duration: 1.5s;
+  }
+}

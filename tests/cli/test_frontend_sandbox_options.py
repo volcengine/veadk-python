@@ -31,6 +31,8 @@ def test_sandbox_tool_options_are_shared_by_local_serve_commands(
     captured: dict[str, Any] = {}
     monkeypatch.setenv("SANDBOX_CHAT_CODEX", "chat-from-env")
     monkeypatch.setenv("SANDBOX_SKILL_CREATOR", "skill-from-env")
+    monkeypatch.setenv("SANDBOX_OPENCLAW_TOOL", "openclaw-from-env")
+    monkeypatch.setenv("SANDBOX_HERMES_TOOL", "hermes-from-env")
     monkeypatch.setattr(
         "veadk.cli.cli_frontend._run_frontend_server",
         lambda **kwargs: captured.update(kwargs),
@@ -43,12 +45,18 @@ def test_sandbox_tool_options_are_shared_by_local_serve_commands(
             "chat-from-cli",
             "--sandbox-skill-creator-tool-id",
             "skill-from-cli",
+            "--sandbox-openclaw-tool-id",
+            "openclaw-from-cli",
+            "--sandbox-hermes-tool-id",
+            "hermes-from-cli",
         ],
     )
 
     assert result.exit_code == 0, result.output
     assert captured["sandbox_chat_codex_tool_id"] == "chat-from-cli"
     assert captured["sandbox_skill_creator_tool_id"] == "skill-from-cli"
+    assert captured["sandbox_openclaw_tool_id"] == "openclaw-from-cli"
+    assert captured["sandbox_hermes_tool_id"] == "hermes-from-cli"
 
 
 def test_local_sandbox_tool_options_fall_back_to_environment(
@@ -57,6 +65,8 @@ def test_local_sandbox_tool_options_fall_back_to_environment(
     captured: dict[str, Any] = {}
     monkeypatch.setenv("SANDBOX_CHAT_CODEX", "chat-from-env")
     monkeypatch.setenv("SANDBOX_SKILL_CREATOR", "skill-from-env")
+    monkeypatch.setenv("SANDBOX_OPENCLAW_TOOL", "openclaw-from-env")
+    monkeypatch.setenv("SANDBOX_HERMES_TOOL", "hermes-from-env")
     monkeypatch.setattr(
         "veadk.cli.cli_frontend._run_frontend_server",
         lambda **kwargs: captured.update(kwargs),
@@ -67,3 +77,5 @@ def test_local_sandbox_tool_options_fall_back_to_environment(
     assert result.exit_code == 0, result.output
     assert captured["sandbox_chat_codex_tool_id"] == "chat-from-env"
     assert captured["sandbox_skill_creator_tool_id"] == "skill-from-env"
+    assert captured["sandbox_openclaw_tool_id"] == "openclaw-from-env"
+    assert captured["sandbox_hermes_tool_id"] == "hermes-from-env"

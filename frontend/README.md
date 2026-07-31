@@ -52,6 +52,13 @@ server that `veadk frontend` launches — no separate backend.
   reload and new-window controls. Returning to the directory disconnects only
   the local conversation bridge and never deletes the cloud Session. New
   Sessions use an eight-hour TTL, after which AgentKit reclaims them.
+- **Hermes and OpenClaw workspaces**: their Agent directory tabs start
+  disposable Sessions from preset AgentKit `HermesEnv` and `ArkClawEnv` Tools.
+  Studio exposes the agent WebUI and Terminal through same-origin iframes while
+  keeping the Session Endpoint and its authorization query on the server.
+  WebUI and Terminal are each mounted at most once, so tab switching preserves
+  the Terminal WebSocket. The workspace intentionally has no refresh or
+  new-window action; closing or leaving it deletes the disposable Session.
 - **AgentKit Skill center**: browse Skill Spaces and their skills with
   server-side pagination by region, then inspect the selected Skill content.
 - **Tracing viewer**: a span tree + detail panel from the ADK debug trace.
@@ -373,6 +380,19 @@ export SANDBOX_CHAT_CODEX=<chat-code-env-tool-id>
 export SANDBOX_SKILL_CREATOR=<skill-code-env-tool-id>
 veadk frontend --agents-dir examples
 ```
+
+Hermes and OpenClaw use AgentKit's preset Tool types rather than custom images.
+For local serving, provide their Tool IDs through server-side configuration:
+
+```bash
+export SANDBOX_OPENCLAW_TOOL=<arkclaw-env-tool-id>
+export SANDBOX_HERMES_TOOL=<hermes-env-tool-id>
+veadk studio
+```
+
+`veadk studio deploy` creates or reuses both preset Tools when these IDs are
+omitted. Existing Tools can be selected with `--sandbox-openclaw-tool-id` and
+`--sandbox-hermes-tool-id`; `veadk studio update` accepts the same overrides.
 
 Publishing a generated Skill uses TOS and the AgentKit Skills API. Set
 `VEADK_SKILL_CREATOR_TOS_BUCKET`, `VEADK_SKILL_CREATOR_TOS_PREFIX`, and

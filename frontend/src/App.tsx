@@ -87,6 +87,12 @@ import {
   type AgentType,
   type MyAgentCardData,
 } from "./ui/MyAgents";
+import {
+  embeddedAgentClient,
+  type EmbeddedAgentKind,
+  type EmbeddedAgentSession,
+} from "./adk/embeddedAgents";
+import { EmbeddedAgentWorkspace } from "./ui/EmbeddedAgentWorkspace";
 import { SearchView } from "./ui/Search";
 import {
   buildAgentEntries,
@@ -789,6 +795,11 @@ export default function App() {
   const [pendingTurns, setPendingTurns] = useState<Turn[]>([]);
   const [sandboxSession, setSandboxSession] =
     useState<SandboxSessionInfo | null>(null);
+  const [embeddedAgentSession, setEmbeddedAgentSession] =
+    useState<EmbeddedAgentSession | null>(null);
+  const [embeddedAgentClosing, setEmbeddedAgentClosing] = useState(false);
+  const embeddedAgentSessionRef = useRef<EmbeddedAgentSession | null>(null);
+  const embeddedAgentLaunchAbortRef = useRef<AbortController | null>(null);
   const [sandboxTurns, setSandboxTurns] = useState<Turn[]>([]);
   const [sandboxBusy, setSandboxBusy] = useState(false);
   const [sandboxSettingsBusy, setSandboxSettingsBusy] = useState(false);
@@ -816,6 +827,7 @@ export default function App() {
   const sandboxActiveAssistantTurnIdRef = useRef("");
   const sandboxUploadRunRef = useRef(0);
   sandboxSessionIdRef.current = sandboxSession?.id ?? "";
+  embeddedAgentSessionRef.current = embeddedAgentSession;
   // Turns are stored PER SESSION, so a background stream can keep updating its
   // own session's transcript while you view another one — no cross-session
   // leak, no data loss, and no re-fetch when you switch back (its entry is
@@ -2049,7 +2061,14 @@ export default function App() {
   // very first resolve, restore the previously-open session (if it still
   // exists and we weren't on a create view); otherwise start a fresh chat.
   useEffect(() => {
-    if (myAgents || agentDetailTarget || sandboxSession || !appName || !userId) {
+    if (
+      myAgents ||
+      agentDetailTarget ||
+      sandboxSession ||
+      embeddedAgentSession ||
+      !appName ||
+      !userId
+    ) {
       return;
     }
     let cancelled = false;
@@ -2070,7 +2089,14 @@ export default function App() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentDetailTarget, appName, myAgents, sandboxSession, userId]);
+  }, [
+    agentDetailTarget,
+    appName,
+    embeddedAgentSession,
+    myAgents,
+    sandboxSession,
+    userId,
+  ]);
 
   // After switching agent from a search result, open the target session (runs
   // after the agent-switch effect above, so it wins over its startNewChat()).
@@ -2242,6 +2268,72 @@ export default function App() {
       void sandboxClient
         .closeSession(closingSession.id)
         .catch((closeError) => setError(String(closeError)));
+    }
+  }
+
+  function leaveEmbeddedAgent() {
+    embeddedAgentLaunchAbortRef.current?.abort();
+    embeddedAgentLaunchAbortRef.current = null;
+    const active = embeddedAgentSessionRef.current;
+    embeddedAgentSessionRef.current = null;
+    setEmbeddedAgentSession(null);
+    setEmbeddedAgentClosing(false);
+    if (active) {
+      void embeddedAgentClient.close(active).catch(() => {
+        // The disposable cloud Session expires independently if cleanup fails.
+      });
+    }
+  }
+
+  async function launchEmbeddedAgent(kind: EmbeddedAgentKind) {
+    embeddedAgentLaunchAbortRef.current?.abort();
+    const controller = new AbortController();
+    embeddedAgentLaunchAbortRef.current = controller;
+    let nextSession: EmbeddedAgentSession;
+    try {
+      nextSession = await embeddedAgentClient.start(kind, controller.signal);
+    } catch (cause) {
+      if (embeddedAgentLaunchAbortRef.current === controller) {
+        embeddedAgentLaunchAbortRef.current = null;
+      }
+      throw cause;
+    }
+    if (embeddedAgentLaunchAbortRef.current !== controller) {
+      void embeddedAgentClient.close(nextSession);
+      return;
+    }
+    embeddedAgentLaunchAbortRef.current = null;
+    if (sandboxSession) exitSandboxSession();
+    embeddedAgentSessionRef.current = nextSession;
+    setEmbeddedAgentSession(nextSession);
+    setEmbeddedAgentClosing(false);
+    setAgentDirectoryType(kind);
+    setMyAgents(false);
+    setManageAgents(false);
+    setAgentDetailTarget(null);
+    setCreateView(null);
+    setSkillCenter(false);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSearchView(false);
+    setError("");
+  }
+
+  async function closeEmbeddedAgent() {
+    const active = embeddedAgentSessionRef.current;
+    if (!active || embeddedAgentClosing) return;
+    setEmbeddedAgentClosing(true);
+    try {
+      await embeddedAgentClient.close(active);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (embeddedAgentSessionRef.current !== active) return;
+      embeddedAgentSessionRef.current = null;
+      setEmbeddedAgentSession(null);
+      setEmbeddedAgentClosing(false);
+      setAgentDirectoryType(active.kind);
+      setMyAgents(true);
     }
   }
 
@@ -2735,6 +2827,7 @@ export default function App() {
   // lazily on the first message (see send()). A background stream (if any)
   // keeps running and persisting — its writes are suppressed here by viewSidRef.
   function startNewChat() {
+    if (embeddedAgentSessionRef.current) leaveEmbeddedAgent();
     const leavingSandbox = sandboxSession !== null;
     if (leavingSandbox) exitSandboxSession();
     setError("");
@@ -2781,6 +2874,7 @@ export default function App() {
   }
 
   function openNewChat() {
+    if (embeddedAgentSessionRef.current) leaveEmbeddedAgent();
     setCreateView(null);
     setSkillCenter(false);
     setAddAgent(false);
@@ -2825,6 +2919,7 @@ export default function App() {
   }
 
   async function pickSession(id: string) {
+    if (embeddedAgentSessionRef.current) leaveEmbeddedAgent();
     if (sandboxSession) exitSandboxSession();
     if (id === sessionId) return;
     viewSidRef.current = id;
@@ -3670,6 +3765,7 @@ export default function App() {
   // Selecting an agent starts a fresh chat; any
   // background stream keeps persisting to its own (old) session.
   const selectAgent = async (id: string) => {
+    if (embeddedAgentSessionRef.current) leaveEmbeddedAgent();
     setConnections(loadConnections());
     let capabilities = newChatCapabilitiesCacheRef.current.get(id);
     if (!capabilities) {
@@ -3689,6 +3785,7 @@ export default function App() {
       setError("当前账号没有添加 Agent 的权限。");
       return;
     }
+    if (embeddedAgentSessionRef.current) leaveEmbeddedAgent();
     setMyAgents(false);
     setManageAgents(false);
     setNewRuntimeRegion(region);
@@ -3724,6 +3821,7 @@ export default function App() {
 
   const openMyAgentDetails = (agent: MyAgentCardData) => {
     if (!agent.runtime) return;
+    if (embeddedAgentSessionRef.current) leaveEmbeddedAgent();
     setAgentDetailTarget(agent);
     setFocusedDeploymentTaskId("");
     setFocusedWorkspaceAgentId("");
@@ -3733,6 +3831,7 @@ export default function App() {
   };
 
   const openMyAgentsPage = () => {
+    if (embeddedAgentSessionRef.current) leaveEmbeddedAgent();
     if (sandboxSession) exitSandboxSession();
     viewSidRef.current = "";
     setSessionId("");
@@ -3812,6 +3911,7 @@ export default function App() {
         streamingSids={streamingSids}
         onNewChat={openNewChat}
         onSearch={() => {
+          if (embeddedAgentSessionRef.current) leaveEmbeddedAgent();
           if (sandboxSession) exitSandboxSession();
           setCreateView(null);
           setSkillCenter(false);
@@ -3828,6 +3928,7 @@ export default function App() {
             setError("当前账号没有添加 Agent 的权限。");
             return;
           }
+          if (embeddedAgentSessionRef.current) leaveEmbeddedAgent();
           if (sandboxSession) exitSandboxSession();
           // "添加 Agent" — open the two-card chooser. Drop any selected session.
           viewSidRef.current = "";
@@ -3845,6 +3946,7 @@ export default function App() {
           setError("");
         }}
         onSkillCenter={() => {
+          if (embeddedAgentSessionRef.current) leaveEmbeddedAgent();
           if (sandboxSession) exitSandboxSession();
           setCreateView(null);
           setAddAgent(false);
@@ -3861,6 +3963,7 @@ export default function App() {
             setError("当前账号没有添加 Agent 的权限。");
             return;
           }
+          if (embeddedAgentSessionRef.current) leaveEmbeddedAgent();
           if (sandboxSession) exitSandboxSession();
           viewSidRef.current = "";
           setCreateView(null);
@@ -4090,7 +4193,11 @@ export default function App() {
               runtimeScope={access.capabilities.runtimeScope}
               onBrowseAgents={openMyAgentsPage}
               title={
-                sandboxSession
+                embeddedAgentSession
+                  ? embeddedAgentSession.kind === "openclaw"
+                    ? "OpenClaw 智能体"
+                    : "Hermes 智能体"
+                  : sandboxSession
                   ? "Codex 智能体"
                   : myAgents
                   ? "智能体"
@@ -4108,6 +4215,7 @@ export default function App() {
               }
               titleLeading={
                 turns.length > 0 &&
+                !embeddedAgentSession &&
                 !sandboxSession &&
                 newChatMode === "agent" &&
                 !showAddMenu &&
@@ -4163,7 +4271,11 @@ export default function App() {
                 </>
               }
             />
-            <main className={`main${sandboxSession ? " is-sandbox-session" : ""}`}>
+            <main
+              className={`main${sandboxSession ? " is-sandbox-session" : ""}${
+                embeddedAgentSession ? " is-embedded-agent" : ""
+              }`}
+            >
             {error && <div className="error">{error}</div>}
             {loadingSession && (
               <div className="session-loading">
@@ -4185,7 +4297,13 @@ export default function App() {
                 </div>
               )}
 
-            {myAgents ? (
+            {embeddedAgentSession ? (
+              <EmbeddedAgentWorkspace
+                session={embeddedAgentSession}
+                closing={embeddedAgentClosing}
+                onClose={() => void closeEmbeddedAgent()}
+              />
+            ) : myAgents ? (
               <MyAgents
                 canCreate={canCreateAgents}
                 runtimeScope={access.capabilities.runtimeScope}
@@ -4193,6 +4311,7 @@ export default function App() {
                 onActiveTypeChange={setAgentDirectoryType}
                 onCreateAgent={openAgentCreateFromMyAgents}
                 onCreateCodexAgent={openSandboxLaunch}
+                onLaunchEmbeddedAgent={launchEmbeddedAgent}
                 onOpenCodexSession={connectSandboxSession}
                 onUseAgent={connectMyAgent}
                 onViewAgentDetails={openMyAgentDetails}

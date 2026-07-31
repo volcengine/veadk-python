@@ -151,6 +151,14 @@ def test_studio_deploy_bundles_logo_and_optional_title(
         lambda **kwargs: f"auto-{kwargs['name']}",
     )
     monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_arkclaw_tool",
+        lambda **kwargs: f"auto-{kwargs['name']}",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_hermes_tool",
+        lambda **kwargs: f"auto-{kwargs['name']}",
+    )
+    monkeypatch.setattr(
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
         lambda **_: None,
     )

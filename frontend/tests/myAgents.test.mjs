@@ -67,12 +67,15 @@ test("offers the existing create action for the active agent type", () => {
   assert.match(pageSource, /canCreate: boolean/);
   assert.match(pageSource, /\{canCreate && \(/);
   assert.match(pageSource, /activeType === "general"[\s\S]*?onCreateAgent/);
-  assert.match(pageSource, /activeType === "codex" \? onCreateCodexAgent : undefined/);
+  assert.match(pageSource, /activeType === "codex"[\s\S]*?\? onCreateCodexAgent/);
+  assert.match(pageSource, /embeddedCapability\?\.enabled[\s\S]*?launchEmbeddedAgent/);
   assert.match(pageSource, /className="my-agent-add"/);
   assert.match(pageSource, /createLabel: "添加通用智能体"/);
   assert.match(pageSource, /createLabel: "添加 Codex 智能体"/);
-  assert.match(pageSource, /<AddIcon \/>[\s\S]*?\{createLabel\}/);
-  assert.match(pageSource, /disabled=\{!createAgent\}/);
+  assert.match(pageSource, /createLabel: "启动 OpenClaw"/);
+  assert.match(pageSource, /createLabel: "启动 Hermes"/);
+  assert.match(pageSource, /<AddIcon \/>[\s\S]*?createLabel/);
+  assert.match(pageSource, /disabled=\{!createAgent \|\| launchingEmbedded\}/);
   assert.match(pageStyles, /\.my-agent-type-bar\s*\{[\s\S]*?justify-content: space-between/);
   assert.match(pageStyles, /\.my-agent-add\s*\{[\s\S]*?background: hsl\(var\(--foreground\)\)[\s\S]*?color: hsl\(var\(--background\)\)/);
   assert.match(pageStyles, /@media \(max-width: 720px\)[\s\S]*?\.my-agent-add\s*\{[\s\S]*?align-self: flex-end/);
@@ -267,7 +270,7 @@ test("defers conversation data-plane requests until leaving the Agent list", () 
   );
   assert.match(
     appSource,
-    /if \(myAgents \|\| agentDetailTarget \|\| sandboxSession \|\| !appName \|\| !userId\)[\s\S]*?return;[\s\S]*?refreshSessions/,
+    /myAgents[\s\S]*?agentDetailTarget[\s\S]*?sandboxSession[\s\S]*?embeddedAgentSession[\s\S]*?!appName[\s\S]*?!userId[\s\S]*?return;[\s\S]*?refreshSessions/,
   );
   assert.match(
     appSource,
@@ -303,7 +306,10 @@ test("keeps all requested type filters without nested category sections", () => 
   assert.match(pageSource, /label: "Hermes 智能体"/);
   assert.doesNotMatch(pageSource, /AgentSection|my-agents-section|comingSoon/);
   assert.match(pageSource, /\$\{activeLabel\}暂无内容/);
-  assert.match(pageSource, /activeType === "openclaw" \|\| activeType === "hermes"[\s\S]*?"暂未开放"/);
+  assert.match(
+    pageSource,
+    /activeType === "openclaw" \|\| activeType === "hermes"[\s\S]*?embeddedCapability\?\.enabled/,
+  );
   assert.doesNotMatch(pageStyles, /\.my-agent-empty\s*\{[^}]*border:/);
   assert.doesNotMatch(pageStyles, /\.my-agent-empty\s*\{[^}]*background:/);
   assert.match(

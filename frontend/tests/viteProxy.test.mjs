@@ -14,3 +14,10 @@ test("proxies the session trace API in development", () => {
 test("proxies session capability APIs in development", () => {
   assert.match(source, /["']\/harness["']\s*:\s*API_TARGET/);
 });
+
+test("proxies embedded agent HTTP and WebSocket traffic in development", () => {
+  assert.match(
+    source,
+    /["']\/web["']\s*:\s*\{[\s\S]*?target:\s*API_TARGET,[\s\S]*?ws:\s*true/,
+  );
+});

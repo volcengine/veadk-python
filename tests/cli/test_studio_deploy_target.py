@@ -45,6 +45,14 @@ def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda **kwargs: f"auto-{kwargs['name']}",
     )
     monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_arkclaw_tool",
+        lambda **kwargs: f"auto-{kwargs['name']}",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_hermes_tool",
+        lambda **kwargs: f"auto-{kwargs['name']}",
+    )
+    monkeypatch.setattr(
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
         lambda **_: None,
     )
@@ -107,6 +115,10 @@ def test_studio_deploy_surfaces_redacted_provisioning_error_chain(
     stage: str,
     expected_prefix: str,
 ) -> None:
+    monkeypatch.delenv("SANDBOX_CHAT_CODEX", raising=False)
+    monkeypatch.delenv("SANDBOX_SKILL_CREATOR", raising=False)
+    monkeypatch.delenv("SANDBOX_OPENCLAW_TOOL", raising=False)
+    monkeypatch.delenv("SANDBOX_HERMES_TOOL", raising=False)
     access_key = uuid4().hex
     bearer_value = uuid4().hex
     model_key = uuid4().hex
@@ -327,9 +339,12 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
 ) -> None:
     monkeypatch.delenv("SANDBOX_CHAT_CODEX", raising=False)
     monkeypatch.delenv("SANDBOX_SKILL_CREATOR", raising=False)
+    monkeypatch.delenv("SANDBOX_OPENCLAW_TOOL", raising=False)
+    monkeypatch.delenv("SANDBOX_HERMES_TOOL", raising=False)
     created_names: list[str] = []
+    created_types: dict[str, str] = {}
     credential_tool_ids: list[str] = []
-    creation_barrier = threading.Barrier(2)
+    creation_barrier = threading.Barrier(4)
     created_names_lock = threading.Lock()
 
     class _FakeCloudAgentEngine:
@@ -343,12 +358,16 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
                 vefaas_function_id="",
             )
 
-    def _ensure_tool(**kwargs: object) -> str:
+    def _ensure_tool(tool_type: str, **kwargs: object) -> str:
         name = str(kwargs["name"])
         creation_barrier.wait(timeout=5)
         with created_names_lock:
             created_names.append(name)
-        return "chat-tool" if "-chat-" in name else "skill-tool"
+            created_types[name] = tool_type
+        for purpose in ("chat", "skill", "openclaw", "hermes"):
+            if f"-{purpose}-" in name:
+                return f"{purpose}-tool"
+        raise AssertionError(f"unexpected Tool name: {name}")
 
     monkeypatch.setattr(
         "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
@@ -358,7 +377,16 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
         lambda **_: "cn-beijing",
     )
     monkeypatch.setattr(
-        "veadk.cli.studio_sandbox_tools.ensure_studio_code_env_tool", _ensure_tool
+        "veadk.cli.studio_sandbox_tools.ensure_studio_code_env_tool",
+        lambda **kwargs: _ensure_tool("CodeEnv", **kwargs),
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_arkclaw_tool",
+        lambda **kwargs: _ensure_tool("ArkClawEnv", **kwargs),
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_sandbox_tools.ensure_studio_hermes_tool",
+        lambda **kwargs: _ensure_tool("HermesEnv", **kwargs),
     )
     monkeypatch.setattr(
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
@@ -387,11 +415,21 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
     )
 
     assert result.exit_code == 0, result.output
-    assert len(created_names) == 2
+    assert len(created_names) == 4
     assert any("chat" in name for name in created_names)
     assert any("skill" in name for name in created_names)
+    assert any("openclaw" in name for name in created_names)
+    assert any("hermes" in name for name in created_names)
+    assert {
+        tool_type for name, tool_type in created_types.items() if "-openclaw-" in name
+    } == {"ArkClawEnv"}
+    assert {
+        tool_type for name, tool_type in created_types.items() if "-hermes-" in name
+    } == {"HermesEnv"}
     assert veadk_environments["SANDBOX_CHAT_CODEX"] == "chat-tool"
     assert veadk_environments["SANDBOX_SKILL_CREATOR"] == "skill-tool"
+    assert veadk_environments["SANDBOX_OPENCLAW_TOOL"] == "openclaw-tool"
+    assert veadk_environments["SANDBOX_HERMES_TOOL"] == "hermes-tool"
     assert credential_tool_ids == ["chat-tool", "skill-tool"]
 
 

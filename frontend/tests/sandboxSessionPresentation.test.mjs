@@ -186,7 +186,7 @@ test("active sandbox conversation does not wait for normal Agent capabilities", 
 test("normal session refresh cannot close a newly launched sandbox session", () => {
   assert.match(
     appSource,
-    /if \(myAgents \|\| agentDetailTarget \|\| sandboxSession \|\| !appName \|\| !userId\)/,
+    /myAgents[\s\S]*?agentDetailTarget[\s\S]*?sandboxSession[\s\S]*?embeddedAgentSession[\s\S]*?!appName[\s\S]*?!userId/,
   );
   assert.match(
     appSource,
@@ -194,7 +194,7 @@ test("normal session refresh cannot close a newly launched sandbox session", () 
   );
   assert.match(
     appSource,
-    /\[agentDetailTarget, appName, myAgents, sandboxSession, userId\]/,
+    /\[[\s\S]*?agentDetailTarget,[\s\S]*?appName,[\s\S]*?embeddedAgentSession,[\s\S]*?myAgents,[\s\S]*?sandboxSession,[\s\S]*?userId,[\s\S]*?\]/,
   );
 });
 

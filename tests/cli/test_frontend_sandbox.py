@@ -334,6 +334,24 @@ def _app(gateway: _FakeGateway, tool_id: str | None = "tool-studio") -> FastAPI:
     return app
 
 
+def test_agentkit_session_meta_keeps_server_side_iframe_urls() -> None:
+    cloud = AgentkitSandboxGateway._cloud_session(
+        "tool-studio",
+        SimpleNamespace(
+            session_id="session-with-meta",
+            endpoint="https://sandbox.example?Authorization=private",
+            status="Ready",
+            session_meta=SimpleNamespace(
+                webshell_url="/vnc/index.html",
+                vnc_url="/terminal",
+            ),
+        ),
+    )
+
+    assert cloud.webshell_url == "/vnc/index.html"
+    assert cloud.vnc_url == "/terminal"
+
+
 def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
     gateway = _FakeGateway()
     with TestClient(_app(gateway)) as client:

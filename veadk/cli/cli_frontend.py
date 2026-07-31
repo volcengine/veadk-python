@@ -665,6 +665,20 @@ def _serve_options(f):
             "(env: SANDBOX_SKILL_CREATOR).",
         ),
         click.option(
+            "--sandbox-openclaw-tool-id",
+            default=None,
+            envvar="SANDBOX_OPENCLAW_TOOL",
+            help="AgentKit ArkClawEnv Tool ID used by the OpenClaw iframe "
+            "(env: SANDBOX_OPENCLAW_TOOL).",
+        ),
+        click.option(
+            "--sandbox-hermes-tool-id",
+            default=None,
+            envvar="SANDBOX_HERMES_TOOL",
+            help="AgentKit HermesEnv Tool ID used by the Hermes iframe "
+            "(env: SANDBOX_HERMES_TOOL).",
+        ),
+        click.option(
             "--admin",
             "studio_admins",
             default=None,
@@ -720,6 +734,8 @@ def frontend(
     generated_agent_test_run_ttl: int,
     sandbox_chat_codex_tool_id: str | None,
     sandbox_skill_creator_tool_id: str | None,
+    sandbox_openclaw_tool_id: str | None,
+    sandbox_hermes_tool_id: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
     open_browser: bool,
@@ -747,6 +763,8 @@ def frontend(
         generated_agent_test_run_ttl=generated_agent_test_run_ttl,
         sandbox_chat_codex_tool_id=sandbox_chat_codex_tool_id,
         sandbox_skill_creator_tool_id=sandbox_skill_creator_tool_id,
+        sandbox_openclaw_tool_id=sandbox_openclaw_tool_id,
+        sandbox_hermes_tool_id=sandbox_hermes_tool_id,
         studio_admins=studio_admins,
         studio_developers=studio_developers,
         open_browser=open_browser,
@@ -778,6 +796,8 @@ def studio(
     generated_agent_test_run_ttl: int,
     sandbox_chat_codex_tool_id: str | None,
     sandbox_skill_creator_tool_id: str | None,
+    sandbox_openclaw_tool_id: str | None,
+    sandbox_hermes_tool_id: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
     open_browser: bool,
@@ -810,6 +830,8 @@ def studio(
         generated_agent_test_run_ttl=generated_agent_test_run_ttl,
         sandbox_chat_codex_tool_id=sandbox_chat_codex_tool_id,
         sandbox_skill_creator_tool_id=sandbox_skill_creator_tool_id,
+        sandbox_openclaw_tool_id=sandbox_openclaw_tool_id,
+        sandbox_hermes_tool_id=sandbox_hermes_tool_id,
         studio_admins=studio_admins,
         studio_developers=studio_developers,
         open_browser=open_browser,
@@ -838,6 +860,8 @@ def _run_frontend_server(
     generated_agent_test_run_ttl: int,
     sandbox_chat_codex_tool_id: str | None = None,
     sandbox_skill_creator_tool_id: str | None = None,
+    sandbox_openclaw_tool_id: str | None = None,
+    sandbox_hermes_tool_id: str | None = None,
     studio_admins: str | None = None,
     studio_developers: str | None = None,
     open_browser: bool,
@@ -866,6 +890,10 @@ def _run_frontend_server(
         os.environ["SANDBOX_CHAT_CODEX"] = sandbox_chat_codex_tool_id
     if sandbox_skill_creator_tool_id:
         os.environ["SANDBOX_SKILL_CREATOR"] = sandbox_skill_creator_tool_id
+    if sandbox_openclaw_tool_id:
+        os.environ["SANDBOX_OPENCLAW_TOOL"] = sandbox_openclaw_tool_id
+    if sandbox_hermes_tool_id:
+        os.environ["SANDBOX_HERMES_TOOL"] = sandbox_hermes_tool_id
 
     from google.adk.cli.fast_api import get_fast_api_app
 
@@ -1109,16 +1137,26 @@ def _run_frontend_server(
             raise HTTPException(status_code=401, detail="Studio identity is required")
         return principal.owner_id
 
+    sandbox_gateway = AgentkitSandboxGateway(
+        _sandbox_client,
+        region_candidates=sandbox_region_candidates(
+            os.getenv("AGENTKIT_SANDBOX_REGION")
+        ),
+    )
     mount_sandbox_routes(
         app,
-        SandboxConversationService(
-            AgentkitSandboxGateway(
-                _sandbox_client,
-                region_candidates=sandbox_region_candidates(
-                    os.getenv("AGENTKIT_SANDBOX_REGION")
-                ),
-            )
-        ),
+        SandboxConversationService(sandbox_gateway),
+        _sandbox_owner,
+    )
+
+    from veadk.cli.frontend_embedded_agents import (
+        EmbeddedAgentService,
+        mount_embedded_agent_routes,
+    )
+
+    mount_embedded_agent_routes(
+        app,
+        EmbeddedAgentService(sandbox_gateway),
         _sandbox_owner,
     )
 
@@ -5659,6 +5697,22 @@ def _resolve_studio_cloud_credentials(
     "Default: create one during deployment.",
 )
 @click.option(
+    "--sandbox-openclaw-tool-id",
+    "sandbox_openclaw_tool_id",
+    default=None,
+    envvar="SANDBOX_OPENCLAW_TOOL",
+    help="Dedicated ready AgentKit ArkClawEnv Tool ID used by OpenClaw. "
+    "Default: create one during deployment.",
+)
+@click.option(
+    "--sandbox-hermes-tool-id",
+    "sandbox_hermes_tool_id",
+    default=None,
+    envvar="SANDBOX_HERMES_TOOL",
+    help="Dedicated ready AgentKit HermesEnv Tool ID used by Hermes. "
+    "Default: create one during deployment.",
+)
+@click.option(
     "--studio-update-bucket",
     default="veadk-studio",
     show_default=True,
@@ -5699,6 +5753,8 @@ def frontend_deploy(
     studio_developers: str | None,
     sandbox_chat_codex_tool_id: str | None,
     sandbox_skill_creator_tool_id: str | None,
+    sandbox_openclaw_tool_id: str | None,
+    sandbox_hermes_tool_id: str | None,
     studio_update_bucket: str,
     studio_update_region: str | None,
     studio_update_prefix: str,
@@ -5768,34 +5824,50 @@ def frontend_deploy(
     sandbox_tool_ids = {
         "chat": sandbox_chat_codex_tool_id,
         "skill": sandbox_skill_creator_tool_id,
+        "openclaw": sandbox_openclaw_tool_id,
+        "hermes": sandbox_hermes_tool_id,
     }
     from veadk.cli.studio_sandbox_tools import (
+        ensure_studio_arkclaw_tool,
         ensure_studio_code_env_tool,
+        ensure_studio_hermes_tool,
         studio_sandbox_tool_name,
     )
 
-    missing_sandbox_tools: dict[str, str] = {}
+    sandbox_tool_specs = {
+        "chat": ("CodeEnv", ensure_studio_code_env_tool),
+        "skill": ("CodeEnv", ensure_studio_code_env_tool),
+        "openclaw": ("ArkClawEnv", ensure_studio_arkclaw_tool),
+        "hermes": ("HermesEnv", ensure_studio_hermes_tool),
+    }
+    missing_sandbox_tools: dict[str, tuple[str, str, Any]] = {}
     for purpose, tool_id in sandbox_tool_ids.items():
         if tool_id:
             continue
         tool_name = studio_sandbox_tool_name(vefaas_app_name, purpose)
-        click.echo(f"Ensuring AgentKit {purpose} CodeEnv Tool '{tool_name}'…")
-        missing_sandbox_tools[purpose] = tool_name
+        tool_type, ensure_tool = sandbox_tool_specs[purpose]
+        click.echo(f"Ensuring AgentKit {purpose} {tool_type} Tool '{tool_name}'…")
+        missing_sandbox_tools[purpose] = (tool_name, tool_type, ensure_tool)
 
     if missing_sandbox_tools:
         with ThreadPoolExecutor(max_workers=len(missing_sandbox_tools)) as executor:
             tool_futures = {
                 purpose: executor.submit(
-                    ensure_studio_code_env_tool,
+                    ensure_tool,
                     name=tool_name,
                     region=region,
                     access_key=ak,
                     secret_key=sk,
                     session_token=session_token or "",
                 )
-                for purpose, tool_name in missing_sandbox_tools.items()
+                for purpose, (
+                    tool_name,
+                    _tool_type,
+                    ensure_tool,
+                ) in missing_sandbox_tools.items()
             }
             for purpose, future in tool_futures.items():
+                _tool_name, tool_type, _ensure_tool = missing_sandbox_tools[purpose]
                 try:
                     sandbox_tool_ids[purpose] = future.result()
                 except Exception as error:
@@ -5804,16 +5876,17 @@ def frontend_deploy(
                         secrets=(ak, sk, session_token),
                     )
                     raise click.ClickException(
-                        f"Failed to provision the AgentKit {purpose} CodeEnv Tool. "
+                        f"Failed to provision the AgentKit {purpose} {tool_type} Tool. "
                         f"Underlying error:\n{detail}"
                     ) from error
-                click.echo(f"AgentKit {purpose} CodeEnv Tool is ready.")
+                click.echo(f"AgentKit {purpose} {tool_type} Tool is ready.")
 
     from veadk.cli.frontend_skill_creator import (
         ensure_skill_creator_model_credential,
     )
 
-    for purpose, tool_id in sandbox_tool_ids.items():
+    for purpose in ("chat", "skill"):
+        tool_id = sandbox_tool_ids[purpose]
         if not tool_id:
             raise click.ClickException(
                 f"AgentKit {purpose} CodeEnv Tool did not return a Tool ID."
@@ -5840,8 +5913,17 @@ def frontend_deploy(
 
     chat_codex_tool_id = sandbox_tool_ids["chat"]
     skill_creator_tool_id = sandbox_tool_ids["skill"]
-    if not chat_codex_tool_id or not skill_creator_tool_id:
-        raise click.ClickException("AgentKit CodeEnv Tool provisioning was incomplete.")
+    openclaw_tool_id = sandbox_tool_ids["openclaw"]
+    hermes_tool_id = sandbox_tool_ids["hermes"]
+    if not all(
+        (
+            chat_codex_tool_id,
+            skill_creator_tool_id,
+            openclaw_tool_id,
+            hermes_tool_id,
+        )
+    ):
+        raise click.ClickException("AgentKit Tool provisioning was incomplete.")
 
     # SECURITY: VeFaaS._create_function uploads *everything* in veadk_environments
     # (i.e. the deployer's whole .env) as function env vars. The frontend must
@@ -5868,6 +5950,8 @@ def frontend_deploy(
         veadk_environments["VEADK_STUDIO_DEVELOPERS"] = studio_developers
     veadk_environments["SANDBOX_CHAT_CODEX"] = chat_codex_tool_id
     veadk_environments["SANDBOX_SKILL_CREATOR"] = skill_creator_tool_id
+    veadk_environments["SANDBOX_OPENCLAW_TOOL"] = openclaw_tool_id
+    veadk_environments["SANDBOX_HERMES_TOOL"] = hermes_tool_id
     veadk_environments["AGENTKIT_SANDBOX_REGION"] = region
     veadk_environments["VEADK_STUDIO_UPDATE_BUCKET"] = studio_update_bucket
     veadk_environments["VEADK_STUDIO_UPDATE_REGION"] = studio_update_region or region
@@ -6051,6 +6135,18 @@ def frontend_deploy(
     default=None,
     help="Replace the Skill Creator AgentKit CodeEnv Tool ID.",
 )
+@click.option(
+    "--sandbox-openclaw-tool-id",
+    "sandbox_openclaw_tool_id",
+    default=None,
+    help="Replace the OpenClaw AgentKit ArkClawEnv Tool ID.",
+)
+@click.option(
+    "--sandbox-hermes-tool-id",
+    "sandbox_hermes_tool_id",
+    default=None,
+    help="Replace the Hermes AgentKit HermesEnv Tool ID.",
+)
 @click.option("--volcengine-access-key", default=None)
 @click.option("--volcengine-secret-key", default=None)
 def frontend_update(
@@ -6062,6 +6158,8 @@ def frontend_update(
     site_title: str | None,
     sandbox_chat_codex_tool_id: str | None,
     sandbox_skill_creator_tool_id: str | None,
+    sandbox_openclaw_tool_id: str | None,
+    sandbox_hermes_tool_id: str | None,
     volcengine_access_key: str | None,
     volcengine_secret_key: str | None,
 ) -> None:
@@ -6164,6 +6262,10 @@ def frontend_update(
             environment_overrides["SANDBOX_SKILL_CREATOR"] = (
                 sandbox_skill_creator_tool_id
             )
+        if sandbox_openclaw_tool_id is not None:
+            environment_overrides["SANDBOX_OPENCLAW_TOOL"] = sandbox_openclaw_tool_id
+        if sandbox_hermes_tool_id is not None:
+            environment_overrides["SANDBOX_HERMES_TOOL"] = sandbox_hermes_tool_id
         url = service.update_application_code_bundle(
             application_id=target.application_id,
             function_id=target.function_id,

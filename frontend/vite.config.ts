@@ -22,7 +22,10 @@ export default defineConfig({
       "/debug": API_TARGET,
       "/dev": API_TARGET,
       "/oauth2": API_TARGET,
-      "/web": API_TARGET,
+      "/web": {
+        target: API_TARGET,
+        ws: true,
+      },
       "/skillhub": {
         target: SKILLHUB_TARGET,
         changeOrigin: true,
