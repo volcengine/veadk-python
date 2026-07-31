@@ -1137,6 +1137,21 @@ def _run_frontend_server(
             raise HTTPException(status_code=401, detail="Studio identity is required")
         return principal.owner_id
 
+    def _sandbox_proxy_owner(request: Request) -> str | None:
+        """Allow a scoped capability to carry local iframe identity.
+
+        Browser iframe and WebSocket navigation cannot attach the local-only
+        ``X-VeADK-Local-User`` header. OAuth sessions and gateway JWTs are sent
+        automatically, so those deployment modes must still present a trusted
+        principal in addition to the iframe capability cookie.
+        """
+        principal = _current_principal(request)
+        if principal is not None:
+            return principal.owner_id
+        if auth_mode == "gateway" or getattr(app.state, "oauth2_handler", None):
+            raise HTTPException(status_code=401, detail="Studio identity is required")
+        return None
+
     sandbox_gateway = AgentkitSandboxGateway(
         _sandbox_client,
         region_candidates=sandbox_region_candidates(
@@ -1158,6 +1173,7 @@ def _run_frontend_server(
         app,
         EmbeddedAgentService(sandbox_gateway),
         _sandbox_owner,
+        _sandbox_proxy_owner,
     )
 
     # Prefixes (and a few exact keys) we copy from the server's environment

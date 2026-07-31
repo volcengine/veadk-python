@@ -306,7 +306,7 @@ class EmbeddedAgentService:
         self,
         kind: str,
         session_id: str,
-        owner_id: str,
+        owner_id: str | None,
         token: str,
         surface: str,
     ) -> str:
@@ -317,7 +317,7 @@ class EmbeddedAgentService:
         if (
             session is None
             or session.kind != definition.kind
-            or session.owner_id != owner_id
+            or (owner_id is not None and session.owner_id != owner_id)
         ):
             raise SandboxSessionNotFoundError("临时智能体 Session 不存在。")
         if time.monotonic() >= session.expires_at:
@@ -615,8 +615,7 @@ async def _proxy_http(
                 suffix = f"/__root__{suffix}"
             public_query = _public_query(resolved.query, target)
             response_headers["location"] = (
-                f"{prefix}{suffix or '/'}"
-                f"{'?' + public_query if public_query else ''}"
+                f"{prefix}{suffix or '/'}{'?' + public_query if public_query else ''}"
             )
     return Response(
         content=content if request.method != "HEAD" else b"",
@@ -645,7 +644,7 @@ async def _relay_websocket(
         upstream = await websockets.connect(
             upstream_url,
             origin=cast(Any, upstream_origin),
-            subprotocols=requested_protocols or None,
+            subprotocols=cast(Any, requested_protocols or None),
             open_timeout=_PROXY_TIMEOUT_SECONDS,
             close_timeout=5,
             max_size=_MAX_WEBSOCKET_MESSAGE_BYTES,
@@ -698,8 +697,10 @@ def mount_embedded_agent_routes(
     app: Any,
     service: EmbeddedAgentService,
     owner_resolver: Callable[[Any], str],
+    proxy_owner_resolver: Callable[[Any], str | None] | None = None,
 ) -> None:
     """Mount Session lifecycle and same-origin iframe proxy routes."""
+    resolve_proxy_owner = proxy_owner_resolver or owner_resolver
 
     @app.get("/web/{kind}/capabilities")
     async def _capabilities(kind: str, request: Request) -> dict[str, object]:
@@ -755,7 +756,7 @@ def mount_embedded_agent_routes(
         request: Request,
     ) -> Response:
         try:
-            owner_id = owner_resolver(request)
+            owner_id = resolve_proxy_owner(request)
             token = request.cookies.get(_proxy_cookie_name(session_id), "")
             target = service.resolve(kind, session_id, owner_id, token, surface)
         except PermissionError:
@@ -785,7 +786,7 @@ def mount_embedded_agent_routes(
             await websocket.close(code=1008, reason="untrusted origin")
             return
         try:
-            owner_id = owner_resolver(websocket)
+            owner_id = resolve_proxy_owner(websocket)
             token = websocket.cookies.get(_proxy_cookie_name(session_id), "")
             target = service.resolve(kind, session_id, owner_id, token, surface)
         except (HTTPException, PermissionError, SandboxError):

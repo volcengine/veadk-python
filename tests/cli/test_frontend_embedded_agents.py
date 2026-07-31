@@ -17,11 +17,14 @@
 from __future__ import annotations
 
 import asyncio
+from typing import cast
 
 import pytest
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import Response
 from fastapi.testclient import TestClient
 
+import veadk.cli.frontend_embedded_agents as embedded_agents
 from veadk.cli.frontend_embedded_agents import (
     EmbeddedAgentService,
     _rewrite_text,
@@ -29,6 +32,7 @@ from veadk.cli.frontend_embedded_agents import (
     mount_embedded_agent_routes,
 )
 from veadk.cli.frontend_sandbox import (
+    SandboxCloudGateway,
     SandboxCloudSession,
     SandboxProvisioningError,
 )
@@ -80,7 +84,7 @@ async def _no_wait(_: float) -> None:
     return None
 
 
-def _app(gateway: _Gateway) -> FastAPI:
+def _app(gateway: _Gateway, *, allow_local_iframe: bool = False) -> FastAPI:
     app = FastAPI()
 
     def _owner(request: Request) -> str:
@@ -89,10 +93,19 @@ def _app(gateway: _Gateway) -> FastAPI:
             raise HTTPException(status_code=401, detail="identity required")
         return owner
 
+    def _proxy_owner(request: Request) -> str | None:
+        owner = request.headers.get("X-Test-User", "")
+        if owner:
+            return owner
+        if allow_local_iframe:
+            return None
+        raise HTTPException(status_code=401, detail="identity required")
+
     mount_embedded_agent_routes(
         app,
-        EmbeddedAgentService(gateway, sleep=_no_wait),
+        EmbeddedAgentService(cast(SandboxCloudGateway, gateway), sleep=_no_wait),
         _owner,
+        _proxy_owner,
     )
     return app
 
@@ -133,6 +146,60 @@ def test_openclaw_session_returns_only_same_origin_iframe_urls(
     assert [session.instance_id for session in gateway.deleted] == ["session-1"]
 
 
+def test_local_iframe_uses_scoped_capability_without_custom_identity_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SANDBOX_OPENCLAW_TOOL", "arkclaw-tool")
+
+    async def _proxy_stub(*args: object, **kwargs: object) -> Response:
+        del args, kwargs
+        return Response("proxied")
+
+    monkeypatch.setattr(embedded_agents, "_proxy_http", _proxy_stub)
+
+    with TestClient(_app(_Gateway(), allow_local_iframe=True)) as client:
+        created = client.post(
+            "/web/openclaw/sessions",
+            headers={"X-Test-User": "alice"},
+        )
+        iframe_url = created.json()["webuiUrl"]
+
+        iframe = client.get(iframe_url)
+        wrong_owner = client.get(
+            iframe_url,
+            headers={"X-Test-User": "bob"},
+        )
+        client.cookies.clear()
+        missing_capability = client.get(iframe_url)
+
+    assert iframe.status_code == 200
+    assert iframe.text == "proxied"
+    assert wrong_owner.status_code == 404
+    assert missing_capability.status_code == 403
+
+
+def test_authenticated_proxy_mode_still_requires_studio_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SANDBOX_OPENCLAW_TOOL", "arkclaw-tool")
+
+    async def _proxy_stub(*args: object, **kwargs: object) -> Response:
+        del args, kwargs
+        return Response("proxied")
+
+    monkeypatch.setattr(embedded_agents, "_proxy_http", _proxy_stub)
+
+    with TestClient(_app(_Gateway())) as client:
+        created = client.post(
+            "/web/openclaw/sessions",
+            headers={"X-Test-User": "alice"},
+        )
+        iframe = client.get(created.json()["webuiUrl"])
+
+    assert iframe.status_code == 401
+    assert iframe.json()["detail"] == "identity required"
+
+
 def test_missing_tool_configuration_disables_capability(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -158,7 +225,10 @@ def test_failed_session_is_deleted(
 ) -> None:
     monkeypatch.setenv("SANDBOX_OPENCLAW_TOOL", "arkclaw-tool")
     gateway = _Gateway(failed=True)
-    service = EmbeddedAgentService(gateway, sleep=_no_wait)
+    service = EmbeddedAgentService(
+        cast(SandboxCloudGateway, gateway),
+        sleep=_no_wait,
+    )
 
     async def _run() -> None:
         try:
@@ -188,9 +258,7 @@ def test_proxy_rewrites_agent_roots_without_exposing_endpoint_query() -> None:
 
     assert f'src="{prefix}/assets/app.js"' in rewritten
     assert f'href="{prefix}/__root__/assets/base.css"' in rewritten
-    assert (
-        f'href="{prefix}/share?view=compact"' in rewritten
-    )
+    assert f'href="{prefix}/share?view=compact"' in rewritten
     assert "sandbox.example" not in rewritten
     assert "private" not in rewritten
     upstream = _upstream_url(
