@@ -54,6 +54,11 @@ from veadk.integrations.agentkit.session_capabilities import (
     mount_session_capability_routes,
 )
 from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.utils.auth import (
+    TIP_TOKEN_KEY_METADATA_KEY,
+    TIP_TOKEN_KEY_STATE_KEY,
+    extract_tip_token_key_from_request_parts,
+)
 
 if TYPE_CHECKING:
     from veadk.runner import Runner
@@ -612,6 +617,34 @@ def _run_request_custom_metadata(req: RunAgentRequest) -> dict[str, Any] | None:
     return metadata if isinstance(metadata, dict) and metadata else None
 
 
+def _custom_metadata_with_tip_token_key(
+    custom_metadata: Mapping[str, Any] | None,
+    tip_token_key: str | None,
+) -> dict[str, Any] | None:
+    metadata = dict(custom_metadata or {})
+    metadata.pop(TIP_TOKEN_KEY_METADATA_KEY, None)
+    metadata.pop(TIP_TOKEN_KEY_STATE_KEY, None)
+    if tip_token_key:
+        metadata[TIP_TOKEN_KEY_METADATA_KEY] = tip_token_key
+    return metadata or None
+
+
+async def _request_json_payload(request: Request) -> Any:
+    try:
+        return await request.json()
+    except Exception:
+        return None
+
+
+async def _request_tip_token_key(request: Request, payload: Any = None) -> str | None:
+    if payload is None:
+        payload = await _request_json_payload(request)
+    return extract_tip_token_key_from_request_parts(
+        headers=request.headers,
+        payload=payload,
+    )
+
+
 def _resolve_invoke_app_name(
     services: _RuntimeServices,
     root_agent: BaseAgent,
@@ -669,7 +702,10 @@ def _configure_dynamic_a2a_routes(
             root_agent=root_agent,
             prompt=_content_text(req.new_message),
         )
-        custom_metadata = _run_request_custom_metadata(req)
+        custom_metadata = _custom_metadata_with_tip_token_key(
+            _run_request_custom_metadata(req),
+            await _request_tip_token_key(request),
+        )
         run_config = (
             RunConfig(custom_metadata=custom_metadata) if custom_metadata else None
         )
@@ -710,7 +746,10 @@ def _configure_dynamic_a2a_routes(
             monitor_task.cancel()
 
     @app.post("/run_sse")
-    async def run_agent_sse_dynamic(req: RunAgentRequest) -> StreamingResponse:
+    async def run_agent_sse_dynamic(
+        req: RunAgentRequest,
+        request: Request,
+    ) -> StreamingResponse:
         app_name = _resolve_run_app_name(services, root_agent, req)
         runner = _dynamic_runner(
             services,
@@ -719,7 +758,10 @@ def _configure_dynamic_a2a_routes(
             prompt=_content_text(req.new_message),
         )
         stream_mode = StreamingMode.SSE if req.streaming else StreamingMode.NONE
-        custom_metadata = _run_request_custom_metadata(req)
+        custom_metadata = _custom_metadata_with_tip_token_key(
+            _run_request_custom_metadata(req),
+            await _request_tip_token_key(request),
+        )
 
         if not runner.auto_create_session:
             session = await session_service.get_session(
@@ -782,6 +824,8 @@ def _configure_dynamic_a2a_routes(
         app_name = _resolve_invoke_app_name(services, root_agent)
         user_id = request.headers.get("user_id") or "agentkit_user"
         session_id = request.headers.get("session_id") or ""
+        payload = await _request_json_payload(request)
+        tip_token_key = await _request_tip_token_key(request, payload)
         prompt = await _invoke_text(request)
         content = types.UserContent(parts=[types.Part(text=prompt or "")])
 
@@ -811,7 +855,13 @@ def _configure_dynamic_a2a_routes(
                         user_id=user_id,
                         session_id=session_id,
                         new_message=content,
-                        run_config=RunConfig(streaming_mode=StreamingMode.SSE),
+                        run_config=RunConfig(
+                            streaming_mode=StreamingMode.SSE,
+                            custom_metadata=_custom_metadata_with_tip_token_key(
+                                None,
+                                tip_token_key,
+                            ),
+                        ),
                     )
                 ) as agen:
                     async for event in agen:

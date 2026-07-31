@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from collections.abc import Iterable
 from typing import Optional
@@ -30,6 +29,10 @@ from veadk.tools.builtin_tools._agentkit import (
     resolve_agentkit_tool_id,
 )
 from veadk.tools.builtin_tools.run_sandbox_agent import run_sandbox_agent
+from veadk.utils.auth import (
+    TIP_TOKEN_KEY_ENV,
+    TIP_TOKEN_KEY_METADATA_KEY,
+)
 
 
 _SKILL_API_UPGRADE_STATUS_CODES = frozenset({404, 405})
@@ -61,13 +64,17 @@ def _tool_user_session_id(tool_context: ToolContext) -> str:
 
 
 def _tip_token_key(tool_context: ToolContext) -> str | None:
-    state = tool_context.state or {}
-    return (
-        state.get("TIP_TOKEN_KEY")
-        or state.get("tip_token_key")
-        or os.getenv("TIP_TOKEN_KEY")
-        or None
-    )
+    run_config = getattr(tool_context, "run_config", None)
+    if run_config is None:
+        invocation_context = getattr(tool_context, "_invocation_context", None)
+        run_config = getattr(invocation_context, "run_config", None)
+    custom_metadata = getattr(run_config, "custom_metadata", None)
+    if isinstance(custom_metadata, dict):
+        value = custom_metadata.get(TIP_TOKEN_KEY_METADATA_KEY)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    return None
 
 
 def _skill_api_url(endpoint: str, path: str) -> str:
@@ -287,6 +294,9 @@ def execute_skills(
     if env_vars:
         account_id = get_agentkit_account_id(tool_context.state)
         extra_env_vars = dict(env_vars)
+        tip_token_key = _tip_token_key(tool_context)
+        if tip_token_key:
+            extra_env_vars[TIP_TOKEN_KEY_ENV] = tip_token_key
         if account_id:
             extra_env_vars.setdefault(
                 "TOS_SKILLS_DIR",

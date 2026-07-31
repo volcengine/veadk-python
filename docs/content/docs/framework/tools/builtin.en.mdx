@@ -530,6 +530,15 @@ Environment variables:
 - `AGENTKIT_TOOL_SERVICE_CODE`: ServiceCode for calling AgentKit Tools
 - `AGENTKIT_TOOL_REGION`: region for calling AgentKit Tools; defaults to `cn-beijing`
 
+TIP token key propagation:
+
+- Runtime requests support the `X-Tip-Token-Key` header, falling back to
+  `auth.tip_token_key`; VeADK forwards it only for the current tool call and
+  does not reuse historical session state.
+- The legacy RunCode path injects `TIP_TOKEN_KEY` for the current execution; do
+  not store token keys in `agentkit.yaml`, `runtime_envs`, or other persistent
+  config. Skill Sandbox does not need to install `agentkit-cli`.
+
 Additional `config.yaml` keys:
 
 ```yaml title="config.yaml"

@@ -15,7 +15,7 @@
 import json
 import os
 import re
-from typing import Optional
+from typing import Any, Optional
 
 from google.adk.tools import ToolContext
 
@@ -26,6 +26,7 @@ logger = get_logger(__name__)
 
 _ENV_VAR_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _PROTECTED_ENV_VARS = frozenset({"TOOL_USER_SESSION_ID", "USER_SESSION_ID"})
+_SENSITIVE_ENV_VARS = frozenset({"TIP_TOKEN_KEY"})
 
 
 def _merge_execution_env_vars(
@@ -53,6 +54,32 @@ def _merge_execution_env_vars(
         merged_env_vars[key] = value
 
     return merged_env_vars
+
+
+def _redact_sensitive_env_values(value: Any, env_vars: dict[str, str]) -> Any:
+    sensitive_values = {
+        env_value
+        for env_name, env_value in env_vars.items()
+        if env_name in _SENSITIVE_ENV_VARS and env_value
+    }
+    if not sensitive_values:
+        return value
+
+    if isinstance(value, str):
+        redacted = value
+        for sensitive_value in sensitive_values:
+            redacted = redacted.replace(sensitive_value, "<redacted>")
+        return redacted
+    if isinstance(value, dict):
+        return {
+            key: _redact_sensitive_env_values(item, env_vars)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_sensitive_env_values(item, env_vars) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_sensitive_env_values(item, env_vars) for item in value)
+    return value
 
 
 def _clean_ansi_codes(text: str) -> str:
@@ -227,9 +254,11 @@ def run_sandbox_agent(
     logger.debug("Invoke run sandbox agent completed")
 
     try:
-        return _format_execution_result(res["Result"]["Result"])
+        result = _format_execution_result(res["Result"]["Result"])
+        return _redact_sensitive_env_values(result, env_vars)
     except KeyError as e:
+        redacted_res = _redact_sensitive_env_values(res, env_vars)
         logger.error(
-            f"Error occurred while running sandbox agent: {e}, response is {res}"
+            f"Error occurred while running sandbox agent: {e}, response is {redacted_res}"
         )
-        return res
+        return redacted_res
