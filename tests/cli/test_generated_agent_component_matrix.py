@@ -63,6 +63,27 @@ def _assert_python_files_compile(project: GeneratedProject) -> None:
             ast.parse(content, filename=path)
 
 
+def _veadk_requirement(extras: set[str]) -> str:
+    extras_str = f"[{','.join(sorted(extras))}]" if extras else ""
+    return f"veadk-python{extras_str}>=1.0.5"
+
+
+EXPECTED_LTM_EXTRAS = {
+    "local": {"extensions"},
+    "opensearch": {"extensions"},
+    "redis": {"extensions"},
+    "viking": set(),
+    "mem0": {"database"},
+}
+
+EXPECTED_KB_EXTRAS = {
+    "local": {"extensions"},
+    "opensearch": {"extensions"},
+    "viking": set(),
+    "context_search": set(),
+}
+
+
 def test_component_catalog_does_not_request_auto_resolved_credentials() -> None:
     component_env_keys = _catalog_env_keys(
         *(item.env for item in BUILTIN_TOOLS),
@@ -282,7 +303,9 @@ def test_every_long_term_memory_backend_generates_code_env_and_dependency(
     assert f'LongTermMemory(backend="{backend.id}"' in agent_py
     assert "auto_save_session=True" in agent_py
     assert _env_keys(files[".env.example"]) == _catalog_env_keys(MODEL_ENV, backend.env)
-    assert ("[extensions]" in files["requirements.txt"]) == bool(backend.pip_extra)
+    assert files["requirements.txt"].splitlines()[0] == _veadk_requirement(
+        EXPECTED_LTM_EXTRAS[backend.id]
+    )
     _assert_python_files_compile(project)
 
 
@@ -302,8 +325,34 @@ def test_every_knowledgebase_backend_generates_code_env_and_dependency(
 
     assert f'KnowledgeBase(backend="{backend.id}"' in agent_py
     assert _env_keys(files[".env.example"]) == _catalog_env_keys(MODEL_ENV, backend.env)
-    assert ("[extensions]" in files["requirements.txt"]) == bool(backend.pip_extra)
+    assert files["requirements.txt"].splitlines()[0] == _veadk_requirement(
+        EXPECTED_KB_EXTRAS[backend.id]
+    )
     _assert_python_files_compile(project)
+
+
+def test_component_dependencies_are_merged_and_deduplicated() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="dependency-combination",
+            memory=MemoryConfig(longTerm=True),
+            longTermBackend="mem0",
+            subAgents=[
+                AgentDraft(
+                    name="opensearch-worker",
+                    memory=MemoryConfig(longTerm=True),
+                    longTermBackend="opensearch",
+                    knowledgebase=True,
+                    knowledgebaseBackend="opensearch",
+                )
+            ],
+        )
+    )
+
+    requirements = _files(project)["requirements.txt"].splitlines()
+
+    assert requirements[0] == _veadk_requirement({"database", "extensions"})
+    assert requirements[0].count("extensions") == 1
 
 
 def test_viking_knowledgebase_uses_selected_index() -> None:
