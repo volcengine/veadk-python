@@ -221,6 +221,15 @@ export const BUILTIN_TOOLS: ToolOption[] = [
   },
 ];
 
+const HIDDEN_CREATE_TOOL_IDS = new Set([
+  "web_scraper",
+  "text_to_speech",
+  "vesearch",
+]);
+export const CREATE_BUILTIN_TOOLS = BUILTIN_TOOLS.filter(
+  (tool) => !HIDDEN_CREATE_TOOL_IDS.has(tool.id),
+);
+
 /* ------------------------------------------------------------------ *
  * Short-term memory backends.
  * ------------------------------------------------------------------ */

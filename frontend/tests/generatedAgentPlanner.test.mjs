@@ -19,32 +19,34 @@ const createStyles = readFileSync(
   "utf8",
 );
 
-test("preserves generated capabilities on every nested Agent", () => {
-  const start = normalizeSource.indexOf("function parseSubAgents");
-  const end = normalizeSource.indexOf("function parseSelectedSkills");
-  const parser = normalizeSource.slice(start, end);
+test("removes hidden capabilities from every generated Agent", () => {
+  const start = normalizeSource.indexOf(
+    "export function sanitizeGeneratedDraftCapabilities",
+  );
+  const sanitizer = normalizeSource.slice(start);
 
-  for (const field of [
-    "modelName",
-    "builtinTools",
-    "memory",
-    "shortTermBackend",
-    "longTermBackend",
-    "autoSaveSession",
-    "knowledgebase",
-    "knowledgebaseBackend",
-    "tracing",
-    "tracingExporters",
-    "subAgents",
-  ]) {
-    assert.match(parser, new RegExp(`\\b${field}:`));
-  }
-  assert.match(parser, /subAgents: parseSubAgents\(so\.subAgents\)/);
+  assert.match(sanitizer, /GENERATED_TOOL_IDS\.has\(toolId\)/);
+  assert.match(sanitizer, /tracing: false/);
+  assert.match(sanitizer, /tracingExporters: \[\]/);
+  assert.match(sanitizer, /memory: \{ shortTerm: false, longTerm: false \}/);
+  assert.match(sanitizer, /shortTermBackend: "local"/);
+  assert.match(sanitizer, /longTermBackend: "local"/);
+  assert.match(sanitizer, /autoSaveSession: false/);
+  assert.match(sanitizer, /knowledgebase: false/);
+  assert.match(sanitizer, /knowledgebaseBackend: DEFAULT_KB_BACKEND/);
+  assert.match(sanitizer, /knowledgebaseIndex: ""/);
+  assert.match(
+    sanitizer,
+    /subAgents: draft\.subAgents\.map\(sanitizeGeneratedDraftCapabilities\)/,
+  );
+  assert.match(
+    createSource,
+    /setDraft\(sanitizeGeneratedDraftCapabilities\(normalizeDraft\(result\.draft\)\)\)/,
+  );
 });
 
-test("feeds normalized generated tool ids into the checklist selection", () => {
-  assert.match(createSource, /setDraft\(normalizeDraft\(result\.draft\)\)/);
-  assert.match(createSource, /items=\{VISIBLE_BUILTIN_TOOLS\}/);
+test("feeds supported generated tool ids into the checklist selection", () => {
+  assert.match(createSource, /items=\{CREATE_BUILTIN_TOOLS\}/);
   assert.match(createSource, /selected=\{builtinTools\}/);
 });
 
