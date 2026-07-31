@@ -14,6 +14,10 @@ const createStyles = readFileSync(
   new URL("../src/create/CustomCreate.css", import.meta.url),
   "utf8",
 );
+const catalogSource = readFileSync(
+  new URL("../src/create/veadkCatalog.ts", import.meta.url),
+  "utf8",
+);
 const localPickerSource = readFileSync(
   new URL("../src/create/LocalPicker.tsx", import.meta.url),
   "utf8",
@@ -175,6 +179,40 @@ test("debug variants configure and deploy their own model, description, and prom
   assert.match(
     createSource,
     /function debugVariantConfigurationKey[\s\S]*?modelName: variant\.modelName\.trim\(\)[\s\S]*?description: variant\.description\.trim\(\)[\s\S]*?instruction: variant\.instruction\.trim\(\)/,
+  );
+});
+
+test("baseline debug config defaults to the first configured Agent model", () => {
+  assert.match(
+    createSource,
+    /function defaultDebugModelName\(draft: AgentDraft\): string \{[\s\S]*?draft\.modelName\?\.trim\(\)[\s\S]*?for \(const child of draft\.subAgents\)[\s\S]*?defaultDebugModelName\(child\)/,
+  );
+  assert.match(
+    createSource,
+    /id: "baseline",[\s\S]*?modelName: defaultDebugModelName\(initialDraft \?\? emptyDraft\(\)\)/,
+  );
+  assert.match(
+    createSource,
+    /if \(id === "baseline" && field === "modelName"\)[\s\S]*?baselineModelEditedRef\.current = true/,
+  );
+  assert.match(
+    createSource,
+    /variant\.id === "baseline"[\s\S]*?modelName: baselineModelEditedRef\.current[\s\S]*?variant\.modelName[\s\S]*?defaultDebugModelName\(draft\)/,
+  );
+});
+
+test("debug streaming applies each event outside the React state updater", () => {
+  const start = createSource.indexOf("const sendDebugMessage = async () =>");
+  const end = createSource.indexOf("const updateDebugVariantConfig", start);
+  const sendDebugMessage = createSource.slice(start, end);
+  const applyIndex = sendDebugMessage.indexOf("acc = applyEvent(acc, event)");
+  const updateIndex = sendDebugMessage.indexOf("setDebugVariants((current) =>", applyIndex);
+
+  assert.ok(applyIndex >= 0);
+  assert.ok(updateIndex > applyIndex);
+  assert.doesNotMatch(
+    sendDebugMessage.slice(updateIndex),
+    /acc = applyEvent\(acc, event\)/,
   );
 });
 
@@ -379,9 +417,9 @@ test("advanced model connection settings use an accessible disclosure", () => {
 });
 
 test("built-in tools adapt columns and scroll after six rows", () => {
-  assert.match(createSource, /items=\{VISIBLE_BUILTIN_TOOLS\}[\s\S]*?scrollRows=\{6\}/);
+  assert.match(createSource, /items=\{CREATE_BUILTIN_TOOLS\}[\s\S]*?scrollRows=\{6\}/);
   assert.match(
-    createSource,
+    catalogSource,
     /HIDDEN_CREATE_TOOL_IDS = new Set\(\[[\s\S]*?"web_scraper"[\s\S]*?"text_to_speech"[\s\S]*?"vesearch"/,
   );
   assert.match(

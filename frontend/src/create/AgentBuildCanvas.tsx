@@ -1074,20 +1074,27 @@ function AgentBuildCanvasInner({
     lastStructure.current = nextStructure;
     setEdges(currentGraph.edges);
     setNodes((current) => {
-      const currentPositions = new Map(
-        current.map((node) => [node.id, node.position] as const),
+      const currentNodes = new Map(
+        current.map((node) => [node.id, node] as const),
       );
-      return currentGraph.nodes.map((node) => ({
-        ...node,
-        position:
-          !structureChanged && currentPositions.get(node.id)
-            ? currentPositions.get(node.id)!
-            : node.position,
-        selected:
-          node.data.kind === "agent" &&
-          !!node.data.path &&
-          samePath(node.data.path, selectedPath),
-      }));
+      return currentGraph.nodes.map((node) => {
+        const currentNode = currentNodes.get(node.id);
+        return {
+          ...node,
+          measured:
+            currentNode && currentNode.type === node.type
+              ? currentNode.measured
+              : undefined,
+          position:
+            !structureChanged && currentNode
+              ? currentNode.position
+              : node.position,
+          selected:
+            node.data.kind === "agent" &&
+            !!node.data.path &&
+            samePath(node.data.path, selectedPath),
+        };
+      });
     });
     if (structureChanged) {
       fitAfterLayout();

@@ -42,6 +42,7 @@ import {
   A2A_REGISTRY_DEFAULTS,
   A2A_REGISTRY_ENV,
   BUILTIN_TOOLS,
+  CREATE_BUILTIN_TOOLS,
   STM_BACKENDS,
   LTM_BACKENDS,
   KB_BACKENDS,
@@ -66,7 +67,10 @@ import {
 import { displayDescription } from "./displayText";
 import { localPickerMatches } from "./localPickerSearch";
 import { draftToYaml } from "./configYaml";
-import { normalizeDraft } from "./normalizeDraft";
+import {
+  normalizeDraft,
+  sanitizeGeneratedDraftCapabilities,
+} from "./normalizeDraft";
 import type { AgentProject } from "./project";
 import { AgentBuildCanvas } from "./AgentBuildCanvas";
 import type { SkillSource } from "./skills/types";
@@ -214,15 +218,6 @@ const STEPS: StepMeta[] = [
   { id: "subagents", label: "子 Agent", hint: "嵌套协作", icon: Boxes },
   { id: "review", label: "完成", hint: "预览并创建", icon: Rocket },
 ];
-
-const HIDDEN_CREATE_TOOL_IDS = new Set([
-  "web_scraper",
-  "text_to_speech",
-  "vesearch",
-]);
-const VISIBLE_BUILTIN_TOOLS = BUILTIN_TOOLS.filter(
-  (tool) => !HIDDEN_CREATE_TOOL_IDS.has(tool.id),
-);
 
 /** Root-only reset mark: a tilted eraser clearing the current draft. */
 function ClearAgentIcon({ className }: { className?: string }) {
@@ -1786,6 +1781,16 @@ function workspaceAgentName(draft: AgentDraft): string {
   return draft.subAgents.find((agent) => agent.name.trim())?.name.trim() ?? "";
 }
 
+function defaultDebugModelName(draft: AgentDraft): string {
+  const modelName = draft.modelName?.trim();
+  if (modelName) return modelName;
+  for (const child of draft.subAgents) {
+    const childModelName = defaultDebugModelName(child);
+    if (childModelName) return childModelName;
+  }
+  return "";
+}
+
 function debugRuntimeDraft(draft: AgentDraft): AgentDraft {
   const runtimeEnv = collectDeploymentEnv(draft);
   const values = {
@@ -2400,7 +2405,7 @@ export function CustomCreate({
     {
       id: "baseline",
       name: "基准组",
-      modelName: (initialDraft ?? emptyDraft()).modelName ?? "",
+      modelName: defaultDebugModelName(initialDraft ?? emptyDraft()),
       description: (initialDraft ?? emptyDraft()).description,
       instruction: (initialDraft ?? emptyDraft()).instruction,
       optimizations: [],
@@ -2413,6 +2418,7 @@ export function CustomCreate({
   ]);
   const [selectedVariantId, setSelectedVariantId] = useState("baseline");
   const debugVariantSequenceRef = useRef(1);
+  const baselineModelEditedRef = useRef(false);
   const debugRunsRef = useRef(
     new Map<string, { run: GeneratedAgentTestRun; sessionId: string }>(),
   );
@@ -2607,7 +2613,7 @@ export function CustomCreate({
     setBuildErr("");
     try {
       const result = await generateAgentDraftFromRequirement(requirement);
-      setDraft(normalizeDraft(result.draft));
+      setDraft(sanitizeGeneratedDraftCapabilities(normalizeDraft(result.draft)));
       setSelectedPath([]);
       setProject(null);
       setShowErrors(false);
@@ -3074,6 +3080,7 @@ export function CustomCreate({
           })) {
             const eventError =
               event.error || event.errorMessage || event.error_message;
+            if (!eventError) acc = applyEvent(acc, event);
             setDebugVariants((current) =>
               current.map((item) => {
                 if (item.id !== variant.id) return item;
@@ -3082,7 +3089,6 @@ export function CustomCreate({
                 if (eventError) {
                   last.error = String(eventError);
                 } else {
-                  acc = applyEvent(acc, event);
                   last.content = acc.blocks
                     .filter((block) => block.kind === "text")
                     .map((block) => (block as { text: string }).text)
@@ -3159,6 +3165,9 @@ export function CustomCreate({
     field: "modelName" | "description" | "instruction",
     value: string,
   ) => {
+    if (id === "baseline" && field === "modelName") {
+      baselineModelEditedRef.current = true;
+    }
     patchDebugVariant(id, { [field]: value });
     if (selectedVariantId !== id || id === "baseline") return;
     setSelectedVariantId("baseline");
@@ -3227,7 +3236,9 @@ export function CustomCreate({
         variant.id === "baseline" && !debugRunsRef.current.has(variant.id)
           ? {
               ...variant,
-              modelName: draft.modelName ?? "",
+              modelName: baselineModelEditedRef.current
+                ? variant.modelName
+                : defaultDebugModelName(draft),
               description: draft.description,
               instruction: draft.instruction,
             }
@@ -3717,7 +3728,7 @@ export function CustomCreate({
                       </span>
                       <div className="cw-tools-list-shell">
                         <Checklist
-                          items={VISIBLE_BUILTIN_TOOLS}
+                          items={CREATE_BUILTIN_TOOLS}
                           selected={builtinTools}
                           onToggle={toggleBuiltin}
                           scrollRows={6}

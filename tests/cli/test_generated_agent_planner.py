@@ -35,22 +35,25 @@ TOOL_IDS = {
     "web_search",
     "parallel_web_search",
     "link_reader",
-    "web_scraper",
     "image_generate",
     "image_edit",
     "video_generate",
-    "text_to_speech",
     "run_code",
-    "vesearch",
+}
+HIDDEN_TOOL_IDS = {"web_scraper", "text_to_speech", "vesearch"}
+HIDDEN_GENERATED_FIELDS = {
+    "memory",
+    "shortTermBackend",
+    "longTermBackend",
+    "autoSaveSession",
+    "knowledgebase",
+    "knowledgebaseBackend",
 }
 
 
 def _leaf(
     name: str,
     tools: list[str],
-    *,
-    short_term: bool = False,
-    tracing_exporters: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
         "name": name,
@@ -61,16 +64,6 @@ def _leaf(
         "modelName": DEFAULT_GENERATED_MODEL_NAME,
         "builtinTools": tools,
         "customTools": [],
-        "memory": {
-            "shortTerm": short_term,
-            "longTerm": False,
-            "autoSaveSession": False,
-        },
-        "shortTermBackend": "local",
-        "longTermBackend": "local",
-        "knowledgebase": False,
-        "knowledgebaseBackend": "viking",
-        "tracingExporters": tracing_exporters or [],
         "subAgents": [],
     }
 
@@ -91,16 +84,6 @@ def _orchestrator(
         "modelName": "",
         "builtinTools": [],
         "customTools": [],
-        "memory": {
-            "shortTerm": False,
-            "longTerm": False,
-            "autoSaveSession": False,
-        },
-        "shortTermBackend": "local",
-        "longTermBackend": "local",
-        "knowledgebase": False,
-        "knowledgebaseBackend": "viking",
-        "tracingExporters": [],
         "subAgents": children,
     }
 
@@ -111,7 +94,7 @@ def _video_plan() -> dict[str, Any]:
         "parallel",
         [
             _leaf("visual_creator", ["image_generate", "image_edit"]),
-            _leaf("voice_creator", ["text_to_speech"]),
+            _leaf("voice_creator", []),
         ],
     )
     review_loop = _orchestrator(
@@ -128,7 +111,7 @@ def _video_plan() -> dict[str, Any]:
         "sequential",
         [
             _leaf("trend_researcher", ["web_search", "link_reader"]),
-            _leaf("script_writer", [], short_term=True),
+            _leaf("script_writer", []),
             media_assets,
             _leaf("video_renderer", ["video_generate"]),
             review_loop,
@@ -174,8 +157,6 @@ def _ops_plan() -> dict[str, Any]:
             _leaf(
                 "incident_triage",
                 ["web_search", "link_reader"],
-                short_term=True,
-                tracing_exporters=["apmplus"],
             ),
             _leaf("diagnostic_runner", ["run_code"]),
             remediation_loop,
@@ -188,7 +169,7 @@ SCENARIOS = [
     (
         "video",
         _video_plan,
-        {"image_generate", "image_edit", "video_generate", "text_to_speech"},
+        {"image_generate", "image_edit", "video_generate"},
     ),
     ("image", _image_plan, {"image_generate", "image_edit"}),
     ("ops", _ops_plan, {"web_search", "link_reader", "run_code"}),
@@ -212,7 +193,6 @@ LIVE_REQUIREMENTS = [
             "image_generate",
             "image_edit",
             "video_generate",
-            "text_to_speech",
         },
     ),
     (
@@ -288,7 +268,7 @@ def test_complex_plans_validate_and_generate_runnable_projects(
         compile(file.content, file.path, "exec")
 
 
-def test_planner_schema_and_frontend_use_the_same_builtin_tool_ids() -> None:
+def test_planner_schema_excludes_hidden_create_capabilities() -> None:
     schema = json.dumps(GeneratedAgentDraftPlan.model_json_schema())
     frontend_catalog = (
         Path(__file__).parents[2] / "frontend/src/create/veadkCatalog.ts"
@@ -296,10 +276,36 @@ def test_planner_schema_and_frontend_use_the_same_builtin_tool_ids() -> None:
     frontend_tool_ids = set(re.findall(r'\bid:\s*"([a-z_]+)"', frontend_catalog))
 
     assert '"$ref"' in schema
-    assert schema.count('"additionalProperties": false') >= 4
+    assert schema.count('"additionalProperties": false') >= 3
     assert TOOL_IDS <= frontend_tool_ids
+    assert all(tool_id not in schema for tool_id in HIDDEN_TOOL_IDS)
+    assert "tracingExporters" not in schema
+    assert all(field not in schema for field in HIDDEN_GENERATED_FIELDS)
     assert all(tool_id in schema for tool_id in TOOL_IDS)
     assert all(tool_id in PLANNER_INSTRUCTION for tool_id in TOOL_IDS)
+    assert all(tool_id not in PLANNER_INSTRUCTION for tool_id in HIDDEN_TOOL_IDS)
+    assert "tracing" not in PLANNER_INSTRUCTION.lower()
+    assert "memory" not in PLANNER_INSTRUCTION.lower()
+    assert "knowledgebase" not in PLANNER_INSTRUCTION.lower()
+
+
+def test_planner_draft_disables_hidden_capabilities() -> None:
+    plan = GeneratedAgentDraftPlan.model_validate(
+        {
+            "summary": "no hidden capabilities",
+            "rootAgent": _leaf("assistant", ["web_search"]),
+            "unresolvedItems": [],
+        }
+    )
+
+    draft = _to_agent_draft(plan.rootAgent)
+
+    assert not draft.tracing
+    assert draft.tracingExporters == []
+    assert not draft.memory.shortTerm
+    assert not draft.memory.longTerm
+    assert not draft.autoSaveSession
+    assert not draft.knowledgebase
 
 
 def test_orchestrator_fields_are_normalized_before_strict_validation() -> None:
@@ -313,9 +319,6 @@ def test_orchestrator_fields_are_normalized_before_strict_validation() -> None:
         modelName=DEFAULT_GENERATED_MODEL_NAME,
         builtinTools=["web_search"],
         customTools=[{"name": "invalid_tool", "description": "invalid"}],
-        memory={"shortTerm": True, "longTerm": True, "autoSaveSession": True},
-        knowledgebase=True,
-        tracingExporters=["apmplus"],
     )
 
     plan = GeneratedAgentDraftPlan.model_validate(
@@ -326,11 +329,6 @@ def test_orchestrator_fields_are_normalized_before_strict_validation() -> None:
     assert plan.rootAgent.modelName == ""
     assert plan.rootAgent.builtinTools == []
     assert plan.rootAgent.customTools == []
-    assert not plan.rootAgent.memory.shortTerm
-    assert not plan.rootAgent.memory.longTerm
-    assert not plan.rootAgent.memory.autoSaveSession
-    assert not plan.rootAgent.knowledgebase
-    assert plan.rootAgent.tracingExporters == []
 
 
 @pytest.mark.asyncio
