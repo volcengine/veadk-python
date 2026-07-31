@@ -27,6 +27,7 @@ import asyncio
 import json
 import os
 import re
+import secrets
 import sys
 import tempfile
 import unicodedata
@@ -85,6 +86,13 @@ _CP_PIPELINE_RUN_RE = re.compile(
     r"Pipeline triggered successfully,\s*run ID:\s*(?P<id>\S+)"
 )
 _RUNTIME_DESCRIPTION_MAX_BYTES = 255
+_EMBEDDED_PROXY_SECRET_ENV = "VEADK_EMBEDDED_PROXY_SECRET"
+
+
+def _embedded_proxy_secret() -> str:
+    """Return one deployment-wide secret for stateless iframe capabilities."""
+    configured = os.getenv(_EMBEDDED_PROXY_SECRET_ENV, "").strip()
+    return configured or secrets.token_urlsafe(32)
 
 
 def _normalize_runtime_description(value: object) -> str:
@@ -6002,6 +6010,7 @@ def frontend_deploy(
     veadk_environments["SANDBOX_SKILL_CREATOR"] = skill_creator_tool_id
     veadk_environments["SANDBOX_OPENCLAW_TOOL"] = openclaw_tool_id
     veadk_environments["SANDBOX_HERMES_TOOL"] = hermes_tool_id
+    veadk_environments[_EMBEDDED_PROXY_SECRET_ENV] = _embedded_proxy_secret()
     veadk_environments["AGENTKIT_SANDBOX_REGION"] = region
     veadk_environments["VEADK_STUDIO_UPDATE_BUCKET"] = studio_update_bucket
     veadk_environments["VEADK_STUDIO_UPDATE_REGION"] = studio_update_region or region
@@ -6303,7 +6312,10 @@ def frontend_update(
             region=target.region,
             project_name=target.project,
         )
-        environment_overrides = {"AGENTKIT_SANDBOX_REGION": target.region}
+        environment_overrides = {
+            "AGENTKIT_SANDBOX_REGION": target.region,
+            _EMBEDDED_PROXY_SECRET_ENV: _embedded_proxy_secret(),
+        }
         if branding_title is not None:
             environment_overrides["VEADK_SITE_TITLE"] = branding_title
         if sandbox_chat_codex_tool_id is not None:

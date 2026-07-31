@@ -291,7 +291,10 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
     assert isinstance(update, dict)
     assert update["application_id"] == "app-id"
     assert update["function_id"] == "function-app-id"
-    assert update["environment_overrides"] == {"AGENTKIT_SANDBOX_REGION": "cn-beijing"}
+    environment_overrides = update["environment_overrides"]
+    assert isinstance(environment_overrides, dict)
+    assert environment_overrides.pop("VEADK_EMBEDDED_PROXY_SECRET")
+    assert environment_overrides == {"AGENTKIT_SANDBOX_REGION": "cn-beijing"}
 
 
 def test_studio_update_rejects_ambiguous_name_before_build(
@@ -438,7 +441,10 @@ def test_studio_update_explicit_branding_overrides_cloud_values(
     assert search["project"] == "default"
     update = captured["update"]
     assert isinstance(update, dict)
-    assert update["environment_overrides"] == {
+    environment_overrides = update["environment_overrides"]
+    assert isinstance(environment_overrides, dict)
+    assert environment_overrides.pop("VEADK_EMBEDDED_PROXY_SECRET")
+    assert environment_overrides == {
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "VEADK_SITE_TITLE": "新标题",
     }
@@ -499,7 +505,10 @@ def test_studio_update_only_overrides_explicit_sandbox_tool_id(
     )
 
     assert result.exit_code == 0, result.output
-    assert captured["environment_overrides"] == {
+    environment_overrides = captured["environment_overrides"]
+    assert isinstance(environment_overrides, dict)
+    assert environment_overrides.pop("VEADK_EMBEDDED_PROXY_SECRET")
+    assert environment_overrides == {
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "SANDBOX_CHAT_CODEX": "chat-tool-new",
         "SANDBOX_OPENCLAW_TOOL": "openclaw-tool-new",

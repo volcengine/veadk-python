@@ -315,6 +315,7 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert "VEADK_STUDIO_DEVELOPERS" not in veadk_environments
     assert veadk_environments["SANDBOX_CHAT_CODEX"] == "chat-code-env-id"
     assert veadk_environments["SANDBOX_SKILL_CREATOR"] == "skill-code-env-id"
+    assert veadk_environments["VEADK_EMBEDDED_PROXY_SECRET"]
     assert veadk_environments["AGENTKIT_SANDBOX_REGION"] == expected_region
     assert veadk_environments["VEADK_STUDIO_UPDATE_BUCKET"] == expected_update_bucket
     assert veadk_environments["VEADK_STUDIO_UPDATE_REGION"] == expected_region
@@ -430,6 +431,7 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
     assert veadk_environments["SANDBOX_SKILL_CREATOR"] == "skill-tool"
     assert veadk_environments["SANDBOX_OPENCLAW_TOOL"] == "openclaw-tool"
     assert veadk_environments["SANDBOX_HERMES_TOOL"] == "hermes-tool"
+    assert veadk_environments["VEADK_EMBEDDED_PROXY_SECRET"]
     assert credential_tool_ids == ["chat-tool", "skill-tool"]
 
 

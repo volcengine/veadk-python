@@ -17,14 +17,18 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import contextlib
 import hashlib
+import hmac
+import json
 import os
 import re
 import secrets
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, cast
 from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsplit
@@ -64,6 +68,8 @@ _TEXT_TYPES = (
     "image/svg+xml",
 )
 _GATEWAY_QUERY_KEYS = frozenset({"authorization", "faasinstancename"})
+_PROXY_SECRET_ENV = "VEADK_EMBEDDED_PROXY_SECRET"
+_PROXY_CAPABILITY_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -104,10 +110,18 @@ class EmbeddedAgentSession:
     cloud: SandboxCloudSession
     webui_target: str
     terminal_target: str
-    proxy_token: str = field(default_factory=lambda: secrets.token_urlsafe(32))
-    expires_at: float = field(
-        default_factory=lambda: time.monotonic() + STUDIO_SANDBOX_TTL_SECONDS
-    )
+    proxy_token: str
+    expires_at: float
+
+
+@dataclass(frozen=True)
+class _ProxyCapability:
+    """Authenticated iframe routing claims shared by every Studio instance."""
+
+    session_id: str
+    kind: EmbeddedAgentKind
+    owner_id: str
+    expires_at: float
 
 
 def _definition(kind: str) -> EmbeddedAgentDefinition:
@@ -119,6 +133,15 @@ def _definition(kind: str) -> EmbeddedAgentDefinition:
 def _proxy_cookie_name(session_id: str) -> str:
     digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:20]
     return f"veadk_embedded_{digest}"
+
+
+def _base64url_encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _base64url_decode(value: str) -> bytes:
+    padding = "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode(f"{value}{padding}")
 
 
 def _proxy_prefix(
@@ -187,6 +210,7 @@ class EmbeddedAgentService:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         endpoint_probe: Callable[[str], Awaitable[int]] | None = None,
         session_env_resolver: Callable[[], dict[str, str]] | None = None,
+        capability_secret: str | None = None,
     ) -> None:
         self._gateway = gateway
         self._ready_timeout_seconds = ready_timeout_seconds
@@ -194,6 +218,12 @@ class EmbeddedAgentService:
         self._sleep = sleep
         self._endpoint_probe = endpoint_probe or self._probe_endpoint
         self._session_env_resolver = session_env_resolver
+        resolved_secret = (
+            capability_secret
+            or os.getenv(_PROXY_SECRET_ENV)
+            or secrets.token_urlsafe(32)
+        )
+        self._capability_secret = resolved_secret.encode("utf-8")
         self._session_envs: dict[str, str] | None = None
         self._session_env_lock = asyncio.Lock()
         self._sessions: dict[tuple[str, str], EmbeddedAgentSession] = {}
@@ -294,17 +324,107 @@ class EmbeddedAgentService:
         definition: EmbeddedAgentDefinition,
         cloud: SandboxCloudSession,
         owner_id: str,
+        *,
+        proxy_token: str | None = None,
+        capability_expires_at: float | None = None,
     ) -> EmbeddedAgentSession:
+        expires_at_epoch = capability_expires_at or _epoch(
+            cloud.expire_at,
+            time.time() + STUDIO_SANDBOX_TTL_SECONDS,
+        )
+        if expires_at_epoch <= time.time():
+            raise SandboxSessionNotFoundError("智能体连接已过期。")
+        token = proxy_token or self._sign_capability(
+            session_id=cloud.instance_id,
+            kind=definition.kind,
+            owner_id=owner_id,
+            expires_at=expires_at_epoch,
+        )
         session = EmbeddedAgentSession(
             kind=definition.kind,
             owner_id=owner_id,
             cloud=cloud,
             webui_target=_target_from_endpoint(cloud.endpoint, definition.webui_path),
             terminal_target=_terminal_target(cloud),
+            proxy_token=token,
+            expires_at=(time.monotonic() + max(0.0, expires_at_epoch - time.time())),
         )
         async with self._lock:
             self._sessions[(cloud.instance_id, owner_id)] = session
         return session
+
+    def _sign_capability(
+        self,
+        *,
+        session_id: str,
+        kind: EmbeddedAgentKind,
+        owner_id: str,
+        expires_at: float,
+    ) -> str:
+        payload = json.dumps(
+            {
+                "exp": int(expires_at),
+                "kind": kind,
+                "owner": owner_id,
+                "sid": session_id,
+                "v": _PROXY_CAPABILITY_VERSION,
+            },
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        encoded_payload = _base64url_encode(payload)
+        signature = hmac.new(
+            self._capability_secret,
+            encoded_payload.encode("ascii"),
+            hashlib.sha256,
+        ).digest()
+        return f"{encoded_payload}.{_base64url_encode(signature)}"
+
+    def _verify_capability(
+        self,
+        *,
+        token: str,
+        session_id: str,
+        kind: EmbeddedAgentKind,
+        owner_id: str | None,
+    ) -> _ProxyCapability:
+        if not token:
+            raise PermissionError("missing iframe capability")
+        try:
+            encoded_payload, encoded_signature = token.split(".", 1)
+            supplied_signature = _base64url_decode(encoded_signature)
+            expected_signature = hmac.new(
+                self._capability_secret,
+                encoded_payload.encode("ascii"),
+                hashlib.sha256,
+            ).digest()
+            if not hmac.compare_digest(supplied_signature, expected_signature):
+                raise ValueError("signature mismatch")
+            payload = json.loads(_base64url_decode(encoded_payload))
+            capability = _ProxyCapability(
+                session_id=str(payload["sid"]),
+                kind=_definition(str(payload["kind"])).kind,
+                owner_id=str(payload["owner"]),
+                expires_at=float(payload["exp"]),
+            )
+            if int(payload["v"]) != _PROXY_CAPABILITY_VERSION:
+                raise ValueError("unsupported capability version")
+        except (
+            binascii.Error,
+            KeyError,
+            TypeError,
+            UnicodeDecodeError,
+            ValueError,
+        ) as error:
+            raise PermissionError("invalid iframe capability") from error
+        if capability.session_id != session_id or capability.kind != kind:
+            raise PermissionError("invalid iframe capability")
+        if owner_id is not None and capability.owner_id != owner_id:
+            raise SandboxSessionNotFoundError("智能体连接不存在。")
+        if capability.expires_at <= time.time():
+            raise SandboxSessionNotFoundError("智能体连接已过期。")
+        return capability
 
     async def _wait_until_ready(
         self,
@@ -368,18 +488,14 @@ class EmbeddedAgentService:
         token: str,
     ) -> None:
         definition = _definition(kind)
+        capability = self._verify_capability(
+            token=token,
+            session_id=session_id,
+            kind=definition.kind,
+            owner_id=owner_id,
+        )
         async with self._lock:
-            key = (session_id, owner_id)
-            session = self._sessions.get(key)
-            if (
-                session is None
-                or session.kind != definition.kind
-                or session.owner_id != owner_id
-                or not token
-                or not secrets.compare_digest(session.proxy_token, token)
-            ):
-                raise SandboxSessionNotFoundError("智能体连接不存在。")
-            self._sessions.pop(key, None)
+            self._sessions.pop((session_id, capability.owner_id), None)
 
     async def delete(
         self,
@@ -399,7 +515,7 @@ class EmbeddedAgentService:
                     self._sessions.pop(key, None)
         await self._gateway.delete_session(cloud)
 
-    def resolve(
+    async def resolve(
         self,
         kind: str,
         session_id: str,
@@ -410,25 +526,29 @@ class EmbeddedAgentService:
         definition = _definition(kind)
         if surface not in {"webui", "terminal"}:
             raise SandboxSessionNotFoundError("智能体页面不存在。")
-        candidates = [
-            session
-            for (candidate_id, candidate_owner), session in self._sessions.items()
-            if candidate_id == session_id
-            and session.kind == definition.kind
-            and (owner_id is None or candidate_owner == owner_id)
-        ]
-        session = next(
-            (
-                candidate
-                for candidate in candidates
-                if token and secrets.compare_digest(candidate.proxy_token, token)
-            ),
-            None,
+        capability = self._verify_capability(
+            token=token,
+            session_id=session_id,
+            kind=definition.kind,
+            owner_id=owner_id,
         )
+        session = self._sessions.get((session_id, capability.owner_id))
         if session is None:
-            if candidates:
-                raise PermissionError("invalid iframe capability")
-            raise SandboxSessionNotFoundError("智能体连接不存在。")
+            cloud = await self._gateway.get_session(
+                self._tool_id(definition),
+                session_id,
+            )
+            if cloud.status.lower() != "ready" or not cloud.endpoint:
+                raise SandboxSessionNotFoundError("智能体 Session 尚未就绪。")
+            if cloud.tool_type and cloud.tool_type != definition.tool_type:
+                raise SandboxSessionNotFoundError("智能体 Session 不存在。")
+            session = await self._register(
+                definition,
+                cloud,
+                capability.owner_id,
+                proxy_token=token,
+                capability_expires_at=capability.expires_at,
+            )
         if time.monotonic() >= session.expires_at:
             raise SandboxSessionNotFoundError("智能体连接已过期。")
         return session.webui_target if surface == "webui" else session.terminal_target
@@ -969,7 +1089,7 @@ def mount_embedded_agent_routes(
         try:
             owner_id = resolve_proxy_owner(request)
             token = request.cookies.get(_proxy_cookie_name(session_id), "")
-            target = service.resolve(kind, session_id, owner_id, token, surface)
+            target = await service.resolve(kind, session_id, owner_id, token, surface)
         except PermissionError:
             return JSONResponse({"detail": "智能体页面授权已失效。"}, status_code=403)
         except SandboxError as error:
@@ -1000,7 +1120,7 @@ def mount_embedded_agent_routes(
         try:
             owner_id = resolve_proxy_owner(websocket)
             token = websocket.cookies.get(_proxy_cookie_name(session_id), "")
-            target = service.resolve(kind, session_id, owner_id, token, surface)
+            target = await service.resolve(kind, session_id, owner_id, token, surface)
         except (HTTPException, PermissionError, SandboxError):
             await websocket.close(code=1008, reason="invalid capability")
             return

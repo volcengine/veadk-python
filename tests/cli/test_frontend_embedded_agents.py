@@ -40,8 +40,14 @@ from veadk.cli.frontend_sandbox import (
 
 
 class _Gateway:
-    def __init__(self, *, failed: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        failed: bool = False,
+        tool_type: str = "ArkClawEnv",
+    ) -> None:
         self.failed = failed
+        self.tool_type = tool_type
         self.deleted: list[SandboxCloudSession] = []
         self.created_tool_ids: list[str] = []
         self.created_envs: list[dict[str, str]] = []
@@ -81,7 +87,7 @@ class _Gateway:
             status="Failed" if self.failed else "Ready",
             created_at="2026-07-31T08:00:00Z",
             expire_at="2026-07-31T16:00:00Z",
-            tool_type="ArkClawEnv",
+            tool_type=self.tool_type,
             webshell_url="/vnc/index.html",
             vnc_url="/terminal",
         )
@@ -101,7 +107,12 @@ async def _ready_probe(_: str) -> int:
     return 200
 
 
-def _app(gateway: _Gateway, *, allow_local_iframe: bool = False) -> FastAPI:
+def _app(
+    gateway: _Gateway,
+    *,
+    allow_local_iframe: bool = False,
+    capability_secret: str = "test-shared-embedded-secret",
+) -> FastAPI:
     app = FastAPI()
 
     def _owner(request: Request) -> str:
@@ -128,6 +139,7 @@ def _app(gateway: _Gateway, *, allow_local_iframe: bool = False) -> FastAPI:
                 "MODEL_AGENT_API_KEY": "test-key",
                 "MODEL_AGENT_NAME": "test-model",
             },
+            capability_secret=capability_secret,
         ),
         _owner,
         _proxy_owner,
@@ -212,6 +224,61 @@ def test_local_iframe_uses_scoped_capability_without_custom_identity_header(
     assert iframe.text == "proxied"
     assert wrong_owner.status_code == 404
     assert missing_capability.status_code == 403
+
+
+def test_iframe_connection_recovers_across_server_instances(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SANDBOX_HERMES_TOOL", "hermes-tool")
+    gateway = _Gateway(tool_type="HermesEnv")
+
+    async def _proxy_stub(*args: object, **kwargs: object) -> Response:
+        del args, kwargs
+        return Response("proxied by second instance")
+
+    monkeypatch.setattr(embedded_agents, "_proxy_http", _proxy_stub)
+
+    with (
+        TestClient(_app(gateway)) as first_instance,
+        TestClient(_app(gateway)) as second_instance,
+    ):
+        connected = first_instance.post(
+            "/web/hermes/sessions",
+            headers={"X-Test-User": "alice"},
+        )
+        second_instance.cookies.update(first_instance.cookies)
+        iframe = second_instance.get(
+            connected.json()["webuiUrl"],
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert connected.status_code == 200
+    assert iframe.status_code == 200
+    assert iframe.text == "proxied by second instance"
+
+
+def test_cross_instance_iframe_rejects_a_different_deployment_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SANDBOX_OPENCLAW_TOOL", "arkclaw-tool")
+    gateway = _Gateway()
+
+    with (
+        TestClient(_app(gateway, capability_secret="first-secret")) as first_instance,
+        TestClient(_app(gateway, capability_secret="second-secret")) as second_instance,
+    ):
+        connected = first_instance.post(
+            "/web/openclaw/sessions",
+            headers={"X-Test-User": "alice"},
+        )
+        second_instance.cookies.update(first_instance.cookies)
+        iframe = second_instance.get(
+            connected.json()["webuiUrl"],
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert iframe.status_code == 403
+    assert iframe.json()["detail"] == "智能体页面授权已失效。"
 
 
 def test_existing_session_is_listed_and_can_be_connected(
