@@ -142,7 +142,9 @@ export async function connectRuntime(
   let unsupportedError: RuntimeProbeError | null = null;
   for (const candidate of runtimeRegionCandidates(region)) {
     try {
-      const probedApps = await probeRuntimeApps(runtimeId, candidate);
+      const probedApps = await probeRuntimeApps(runtimeId, candidate, {
+        retryProbe: true,
+      });
       if (probedApps && probedApps.length > 0) {
         apps = probedApps;
         resolvedRegion = candidate;

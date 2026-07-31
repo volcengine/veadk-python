@@ -75,7 +75,8 @@ test("runtime authorization failures are not reported as unsupported", () => {
   assert.match(cliFrontendSource, /endpoint_network_type == "private"[\s\S]*?runtime_private_endpoint_unreachable/);
   assert.match(cliFrontendSource, /def _runtime_proxy_should_retry_probe[\s\S]*?normalized == "list-apps"[\s\S]*?normalized\.startswith\("web\/agent-info\/"\)/);
   assert.match(cliFrontendSource, /parts\[0\] == "apps"[\s\S]*?parts\[2\] == "users"[\s\S]*?parts\[4\] == "sessions"/);
-  assert.match(cliFrontendSource, /max_attempts = 10 if retry_probe else 1/);
+  assert.match(cliFrontendSource, /endpoint_network_type == "private"[\s\S]*?return 1/);
+  assert.match(cliFrontendSource, /retry_mode == "connect"[\s\S]*?else 1/);
   assert.match(cliFrontendSource, /runtime-proxy probe retry/);
   assert.match(clientSource, /res\.status === 404[\s\S]*?RuntimeProbeError/);
   assert.match(clientSource, /res\.status === 401 \|\| res\.status === 403/);

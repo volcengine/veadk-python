@@ -3803,6 +3803,18 @@ def _run_frontend_server(
     def _runtime_proxy_retry_delay(attempt: int) -> float:
         return min(5.0, float(2 ** max(0, attempt - 1)))
 
+    def _runtime_proxy_probe_attempts(
+        request: Request,
+        path: str,
+        endpoint_network_type: str,
+    ) -> int:
+        if not _runtime_proxy_should_retry_probe(request.method, path):
+            return 1
+        if endpoint_network_type == "private":
+            return 1
+        retry_mode = request.query_params.get("probe_retry", "")
+        return 3 if retry_mode == "connect" else 1
+
     def _runtime_network_error_detail(
         endpoint_network_type: str,
         *,
@@ -3971,8 +3983,12 @@ def _run_frontend_server(
             logger.error(f"resolve runtime conn failed: {e}", exc_info=True)
             raise HTTPException(status_code=502, detail=str(e))
 
-        # Drop the SSO gateway querystring; keep any real API query params.
-        qs = {k: v for k, v in request.query_params.items() if k != "region"}
+        # Drop Studio-only query params; keep any real API query params.
+        qs = {
+            k: v
+            for k, v in request.query_params.items()
+            if k not in {"region", "probe_retry"}
+        }
         target = f"{endpoint.rstrip('/')}/{path}"
         target_host = _runtime_endpoint_host(target)
         logger.info(
@@ -4019,9 +4035,13 @@ def _run_frontend_server(
 
         from fastapi.responses import StreamingResponse
 
-        retry_probe = _runtime_proxy_should_retry_probe(request.method, path)
-        max_attempts = 10 if retry_probe else 1
-        timeout = httpx.Timeout(10.0, connect=5.0) if retry_probe else None
+        is_probe_request = _runtime_proxy_should_retry_probe(request.method, path)
+        max_attempts = _runtime_proxy_probe_attempts(
+            request,
+            path,
+            endpoint_network_type,
+        )
+        timeout = httpx.Timeout(10.0, connect=5.0) if is_probe_request else None
 
         # Open the upstream stream so we can forward status + body incrementally.
         client = httpx.AsyncClient(timeout=timeout)
