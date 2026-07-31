@@ -44,7 +44,7 @@ test("preserves generated capabilities on every nested Agent", () => {
 
 test("feeds normalized generated tool ids into the checklist selection", () => {
   assert.match(createSource, /setDraft\(normalizeDraft\(result\.draft\)\)/);
-  assert.match(createSource, /items=\{BUILTIN_TOOLS\}/);
+  assert.match(createSource, /items=\{VISIBLE_BUILTIN_TOOLS\}/);
   assert.match(createSource, /selected=\{builtinTools\}/);
 });
 
