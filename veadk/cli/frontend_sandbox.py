@@ -43,7 +43,12 @@ from veadk.cli.codex_app_server import (
     CodexAppServerEvent,
     CodexAppServerSession,
     CodexDirectoryListing,
+    CodexModel,
     CodexPermissionSettings,
+    CodexSkill,
+    CodexThreadSnapshot,
+    CodexThreadSummary,
+    CodexTokenUsage,
     approval_decision_from_payload,
     permission_settings_from_payload,
 )
@@ -153,7 +158,7 @@ def _redact_public_text(value: str, *, maximum: int) -> str:
 
 def _safe_public_value(value: object, depth: int = 0) -> object:
     """Return a bounded, credential-safe value for browser-visible events."""
-    if depth >= 4:
+    if depth > 4:
         return "…"
     if isinstance(value, str):
         return _redact_public_text(value, maximum=20_000)
@@ -234,6 +239,10 @@ class SandboxStreamEvent:
     thread_id: str | None = None
     approval: object | None = None
     approval_resolved_id: str = ""
+    turn_id: str = ""
+    usage: CodexTokenUsage | None = None
+    thread_total: CodexTokenUsage | None = None
+    model_context_window: int | None = None
 
 
 class SandboxCodexConnection(Protocol):
@@ -241,6 +250,7 @@ class SandboxCodexConnection(Protocol):
 
     thread_id: str
     cwd: str
+    model: str
     permissions: CodexPermissionSettings
 
     @property
@@ -253,10 +263,64 @@ class SandboxCodexConnection(Protocol):
         """Whether the first turn has already started."""
         raise NotImplementedError
 
-    async def stream_turn(self, prompt: str) -> AsyncIterator[CodexAppServerEvent]:
+    async def stream_turn(
+        self, prompt: str, skill_ids: tuple[str, ...] = ()
+    ) -> AsyncIterator[CodexAppServerEvent]:
         """Run and stream one turn."""
         if False:
             yield CodexAppServerEvent()
+
+    @property
+    def thread_token_total(self) -> CodexTokenUsage | None:
+        """Latest cumulative token usage for the active thread."""
+        raise NotImplementedError
+
+    @property
+    def model_context_window(self) -> int | None:
+        """Current model context window when reported by app-server."""
+        raise NotImplementedError
+
+    async def list_models(self) -> tuple[CodexModel, ...]:
+        """List visible Codex models."""
+        raise NotImplementedError
+
+    async def set_model(self, model: str) -> str:
+        """Change the active thread model."""
+        raise NotImplementedError
+
+    async def list_skills(self, force_reload: bool = False) -> tuple[CodexSkill, ...]:
+        """List browser-safe Skills."""
+        raise NotImplementedError
+
+    async def new_thread(self) -> CodexThreadSnapshot:
+        """Start a fresh thread."""
+        raise NotImplementedError
+
+    async def list_threads(
+        self,
+        *,
+        cursor: str = "",
+        search_term: str = "",
+        archived: bool = False,
+    ) -> tuple[tuple[CodexThreadSummary, ...], str]:
+        """List recent threads."""
+        raise NotImplementedError
+
+    async def resume_thread(self, thread_id: str) -> CodexThreadSnapshot:
+        """Resume an existing thread."""
+        raise NotImplementedError
+
+    async def fork_thread(self) -> CodexThreadSnapshot:
+        """Fork the active thread."""
+        raise NotImplementedError
+
+    async def archive_thread(self, thread_id: str) -> CodexThreadSnapshot | None:
+        """Archive one thread."""
+        raise NotImplementedError
+
+    async def compact_thread(self) -> None:
+        """Compact the active thread."""
+        raise NotImplementedError
 
     async def update_permissions(
         self, settings: CodexPermissionSettings
@@ -735,12 +799,21 @@ class SandboxConversationService:
         self._owned(session_id, owner_id)
 
     async def stream_message(
-        self, session_id: str, owner_id: str, prompt: str
+        self,
+        session_id: str,
+        owner_id: str,
+        prompt: str,
+        skill_ids: tuple[str, ...] = (),
     ) -> AsyncIterator[SandboxStreamEvent]:
         session = self._owned(session_id, owner_id)
         async with session.lock:
             try:
-                async for event in session.codex.stream_turn(prompt):
+                events = (
+                    session.codex.stream_turn(prompt, skill_ids)
+                    if skill_ids
+                    else session.codex.stream_turn(prompt)
+                )
+                async for event in events:
                     if event.kind:
                         yield SandboxStreamEvent(
                             kind=event.kind,
@@ -757,6 +830,10 @@ class SandboxConversationService:
                                 else None
                             ),
                             approval_resolved_id=(event.approval_resolved_id),
+                            turn_id=event.turn_id,
+                            usage=event.usage,
+                            thread_total=event.thread_total,
+                            model_context_window=event.model_context_window,
                         )
             except CodexAppServerError as error:
                 raise SandboxInvocationError(_safe_error_message(error)) from error
@@ -767,10 +844,159 @@ class SandboxConversationService:
         return {
             "threadId": session.codex.thread_id,
             "cwd": session.codex.cwd,
+            **(
+                {"model": session.codex.model}
+                if getattr(session.codex, "model", "")
+                else {}
+            ),
             "workspaceLocked": session.codex.workspace_locked,
             "busy": session.codex.active,
             "permissions": session.codex.permissions.public_dict(),
         }
+
+    def status(self, session_id: str, owner_id: str) -> dict[str, object]:
+        """Return current thread settings and exact usage when available."""
+        session = self._owned(session_id, owner_id)
+        total = getattr(session.codex, "thread_token_total", None)
+        context_window = getattr(session.codex, "model_context_window", None)
+        return {
+            **self.settings(session_id, owner_id),
+            **(
+                {"threadTotal": total.public_dict()}
+                if isinstance(total, CodexTokenUsage)
+                else {}
+            ),
+            **(
+                {"modelContextWindow": context_window}
+                if isinstance(context_window, int)
+                else {}
+            ),
+        }
+
+    async def list_models(
+        self, session_id: str, owner_id: str
+    ) -> tuple[CodexModel, ...]:
+        """List visible models for the connected Codex session."""
+        session = self._owned(session_id, owner_id)
+        try:
+            return await session.codex.list_models()
+        except CodexAppServerError as error:
+            raise SandboxInvocationError(_safe_error_message(error)) from error
+
+    async def set_model(self, session_id: str, owner_id: str, model: str) -> str:
+        """Change the model without forwarding slash syntax as a prompt."""
+        session = self._owned(session_id, owner_id)
+        async with session.lock:
+            try:
+                return await session.codex.set_model(model)
+            except (TypeError, ValueError) as error:
+                raise SandboxValidationError(str(error)) from error
+            except CodexAppServerError as error:
+                raise SandboxInvocationError(_safe_error_message(error)) from error
+
+    async def list_skills(
+        self,
+        session_id: str,
+        owner_id: str,
+        *,
+        force_reload: bool = False,
+    ) -> tuple[CodexSkill, ...]:
+        """List Skills without exposing server-side paths."""
+        session = self._owned(session_id, owner_id)
+        try:
+            return await session.codex.list_skills(force_reload)
+        except CodexAppServerError as error:
+            raise SandboxInvocationError(_safe_error_message(error)) from error
+
+    def _public_snapshot(
+        self, session: SandboxConversation, snapshot: CodexThreadSnapshot
+    ) -> dict[str, object]:
+        value = _safe_public_value(snapshot.public_dict(session.codex.permissions))
+        if not isinstance(value, dict):
+            raise SandboxInvocationError("Codex Thread 响应格式无效。")
+        return value
+
+    async def new_thread(self, session_id: str, owner_id: str) -> dict[str, object]:
+        """Create and activate a fresh Codex thread."""
+        session = self._owned(session_id, owner_id)
+        async with session.lock:
+            try:
+                snapshot = await session.codex.new_thread()
+            except CodexAppServerError as error:
+                raise SandboxInvocationError(_safe_error_message(error)) from error
+        return self._public_snapshot(session, snapshot)
+
+    async def list_threads(
+        self,
+        session_id: str,
+        owner_id: str,
+        *,
+        cursor: str = "",
+        search_term: str = "",
+        archived: bool = False,
+    ) -> tuple[tuple[CodexThreadSummary, ...], str]:
+        """List recent Codex threads."""
+        session = self._owned(session_id, owner_id)
+        try:
+            return await session.codex.list_threads(
+                cursor=cursor,
+                search_term=search_term,
+                archived=archived,
+            )
+        except CodexAppServerError as error:
+            raise SandboxInvocationError(_safe_error_message(error)) from error
+
+    async def resume_thread(
+        self, session_id: str, owner_id: str, thread_id: str
+    ) -> dict[str, object]:
+        """Resume and activate a selected Codex thread."""
+        session = self._owned(session_id, owner_id)
+        async with session.lock:
+            try:
+                snapshot = await session.codex.resume_thread(thread_id)
+            except ValueError as error:
+                raise SandboxValidationError(str(error)) from error
+            except CodexAppServerError as error:
+                raise SandboxInvocationError(_safe_error_message(error)) from error
+        return self._public_snapshot(session, snapshot)
+
+    async def fork_thread(self, session_id: str, owner_id: str) -> dict[str, object]:
+        """Fork and activate the current Codex thread."""
+        session = self._owned(session_id, owner_id)
+        async with session.lock:
+            try:
+                snapshot = await session.codex.fork_thread()
+            except CodexAppServerError as error:
+                raise SandboxInvocationError(_safe_error_message(error)) from error
+        return self._public_snapshot(session, snapshot)
+
+    async def archive_thread(
+        self, session_id: str, owner_id: str, thread_id: str
+    ) -> dict[str, object]:
+        """Archive a thread and return a replacement snapshot when needed."""
+        session = self._owned(session_id, owner_id)
+        async with session.lock:
+            try:
+                snapshot = await session.codex.archive_thread(thread_id)
+            except ValueError as error:
+                raise SandboxValidationError(str(error)) from error
+            except CodexAppServerError as error:
+                raise SandboxInvocationError(_safe_error_message(error)) from error
+        return {
+            "archived": True,
+            **(
+                self._public_snapshot(session, snapshot) if snapshot is not None else {}
+            ),
+        }
+
+    async def compact_thread(self, session_id: str, owner_id: str) -> None:
+        """Start compacting the current Codex thread."""
+        session = self._owned(session_id, owner_id)
+        async with session.lock:
+            try:
+                await session.codex.compact_thread()
+            except CodexAppServerError as error:
+                raise SandboxInvocationError(_safe_error_message(error)) from error
 
     async def update_permissions(
         self,
@@ -979,9 +1205,11 @@ def mount_sandbox_routes(
             "displayName": session.display_name,
         }
 
-    async def _request_object(request: Request) -> dict[str, object]:
+    async def _request_object(
+        request: Request, *, maximum: int = 64 * 1024
+    ) -> dict[str, object]:
         body = await request.body()
-        if len(body) > 64 * 1024:
+        if len(body) > maximum:
             raise SandboxValidationError("请求内容过大。")
         try:
             value = json.loads(body) if body else {}
@@ -1071,6 +1299,135 @@ def mount_sandbox_routes(
             return service.settings(session_id, owner_resolver(request))
         except SandboxError as error:
             raise _http_error(error) from error
+
+    @app.get("/web/sandbox/sessions/{session_id}/status")
+    async def _sandbox_status(session_id: str, request: Request) -> dict[str, object]:
+        try:
+            return service.status(session_id, owner_resolver(request))
+        except SandboxError as error:
+            raise _http_error(error) from error
+
+    @app.get("/web/sandbox/sessions/{session_id}/models")
+    async def _list_sandbox_models(
+        session_id: str, request: Request
+    ) -> dict[str, object]:
+        try:
+            models = await service.list_models(session_id, owner_resolver(request))
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {"models": [model.public_dict() for model in models]}
+
+    @app.put("/web/sandbox/sessions/{session_id}/model")
+    async def _set_sandbox_model(
+        session_id: str, request: Request
+    ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        try:
+            data = await _request_object(request)
+            model = data.get("model")
+            if not isinstance(model, str):
+                raise SandboxValidationError("模型名称必须是文本。")
+            applied = await service.set_model(session_id, owner_id, model)
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {"model": applied}
+
+    @app.get("/web/sandbox/sessions/{session_id}/skills")
+    async def _list_sandbox_skills(
+        session_id: str,
+        request: Request,
+        force_reload: bool = False,
+    ) -> dict[str, object]:
+        try:
+            skills = await service.list_skills(
+                session_id,
+                owner_resolver(request),
+                force_reload=force_reload,
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {"skills": [skill.public_dict() for skill in skills]}
+
+    @app.get("/web/sandbox/sessions/{session_id}/threads")
+    async def _list_sandbox_threads(
+        session_id: str,
+        request: Request,
+        cursor: str = "",
+        search: str = "",
+        archived: bool = False,
+    ) -> dict[str, object]:
+        if len(cursor) > 2_000 or len(search) > 500:
+            raise _http_error(SandboxValidationError("Thread 查询参数过长。"))
+        try:
+            threads, next_cursor = await service.list_threads(
+                session_id,
+                owner_resolver(request),
+                cursor=cursor,
+                search_term=search,
+                archived=archived,
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {
+            "threads": [thread.public_dict() for thread in threads],
+            **({"nextCursor": next_cursor} if next_cursor else {}),
+        }
+
+    @app.post("/web/sandbox/sessions/{session_id}/threads/new")
+    async def _new_sandbox_thread(
+        session_id: str, request: Request
+    ) -> dict[str, object]:
+        try:
+            return await service.new_thread(session_id, owner_resolver(request))
+        except SandboxError as error:
+            raise _http_error(error) from error
+
+    @app.post("/web/sandbox/sessions/{session_id}/threads/resume")
+    async def _resume_sandbox_thread(
+        session_id: str, request: Request
+    ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        try:
+            data = await _request_object(request)
+            thread_id = data.get("threadId")
+            if not isinstance(thread_id, str):
+                raise SandboxValidationError("Thread ID 必须是文本。")
+            return await service.resume_thread(session_id, owner_id, thread_id)
+        except SandboxError as error:
+            raise _http_error(error) from error
+
+    @app.post("/web/sandbox/sessions/{session_id}/threads/fork")
+    async def _fork_sandbox_thread(
+        session_id: str, request: Request
+    ) -> dict[str, object]:
+        try:
+            return await service.fork_thread(session_id, owner_resolver(request))
+        except SandboxError as error:
+            raise _http_error(error) from error
+
+    @app.post("/web/sandbox/sessions/{session_id}/threads/archive")
+    async def _archive_sandbox_thread(
+        session_id: str, request: Request
+    ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        try:
+            data = await _request_object(request)
+            thread_id = data.get("threadId")
+            if not isinstance(thread_id, str):
+                raise SandboxValidationError("Thread ID 必须是文本。")
+            return await service.archive_thread(session_id, owner_id, thread_id)
+        except SandboxError as error:
+            raise _http_error(error) from error
+
+    @app.post("/web/sandbox/sessions/{session_id}/threads/compact")
+    async def _compact_sandbox_thread(
+        session_id: str, request: Request
+    ) -> dict[str, object]:
+        try:
+            await service.compact_thread(session_id, owner_resolver(request))
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {"started": True}
 
     @app.put("/web/sandbox/sessions/{session_id}/permissions")
     async def _update_sandbox_permissions(
@@ -1198,12 +1555,26 @@ def mount_sandbox_routes(
     async def _send_sandbox_message(
         session_id: str, request: Request
     ) -> StreamingResponse:
-        data = await request.json()
-        prompt = data.get("message") if isinstance(data, dict) else None
-        if not isinstance(prompt, str) or not prompt.strip():
-            raise HTTPException(status_code=422, detail="message must not be empty")
-        if len(prompt) > 100_000:
-            raise HTTPException(status_code=413, detail="message is too large")
+        try:
+            data = await _request_object(request, maximum=128 * 1024)
+            prompt = data.get("message")
+            if not isinstance(prompt, str) or not prompt.strip():
+                raise SandboxValidationError("message must not be empty")
+            if len(prompt) > 100_000:
+                raise SandboxValidationError("message is too large")
+            raw_skill_ids = data.get("skillIds", [])
+            if (
+                not isinstance(raw_skill_ids, list)
+                or len(raw_skill_ids) > 20
+                or any(
+                    not isinstance(skill_id, str) or not skill_id or len(skill_id) > 500
+                    for skill_id in raw_skill_ids
+                )
+            ):
+                raise SandboxValidationError("skillIds 格式无效。")
+            skill_ids = tuple(dict.fromkeys(raw_skill_ids))
+        except SandboxError as error:
+            raise _http_error(error) from error
         owner_id = owner_resolver(request)
         try:
             service.require_owned(session_id, owner_id)
@@ -1213,7 +1584,7 @@ def mount_sandbox_routes(
         async def _stream() -> AsyncIterator[str]:
             try:
                 async for event in service.stream_message(
-                    session_id, owner_id, prompt.strip()
+                    session_id, owner_id, prompt.strip(), skill_ids
                 ):
                     if event.kind == "text":
                         payload = {"text": event.text}
@@ -1229,6 +1600,26 @@ def mount_sandbox_routes(
                         payload = {"approvalId": event.approval_resolved_id}
                         yield (
                             "event: approval_resolved\n"
+                            f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                        )
+                        continue
+                    if event.kind == "usage" and event.usage is not None:
+                        payload = {
+                            "turnId": event.turn_id,
+                            "usage": event.usage.public_dict(),
+                            **(
+                                {"threadTotal": event.thread_total.public_dict()}
+                                if event.thread_total is not None
+                                else {}
+                            ),
+                            **(
+                                {"modelContextWindow": (event.model_context_window)}
+                                if event.model_context_window is not None
+                                else {}
+                            ),
+                        }
+                        yield (
+                            "event: usage\n"
                             f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
                         )
                         continue

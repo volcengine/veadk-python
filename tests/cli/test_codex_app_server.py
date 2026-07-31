@@ -94,9 +94,92 @@ class _FakeWebSocket:
                     {"fileName": "notes.txt", "isDirectory": False},
                 ]
             }
+        elif method == "model/list":
+            result = {
+                "data": [
+                    {
+                        "model": "gpt-test",
+                        "displayName": "GPT Test",
+                        "description": "Test model",
+                        "isDefault": True,
+                    }
+                ]
+            }
+        elif method == "skills/list":
+            result = {
+                "data": [
+                    {
+                        "cwd": "/workspace",
+                        "skills": [
+                            {
+                                "name": "review",
+                                "description": "Review code",
+                                "path": "/private/skills/review/SKILL.md",
+                                "enabled": True,
+                            }
+                        ],
+                    }
+                ]
+            }
+        elif method == "thread/list":
+            result = {
+                "data": [
+                    {
+                        "id": "thread-old",
+                        "name": "Older work",
+                        "preview": "hello",
+                        "cwd": "/workspace",
+                        "modelProvider": "openai",
+                        "createdAt": 10,
+                        "updatedAt": 20,
+                        "status": {"type": "idle"},
+                    }
+                ]
+            }
+        elif method in {"thread/resume", "thread/fork"}:
+            thread_id = (
+                message["params"]["threadId"]
+                if method == "thread/resume"
+                else "thread-fork"
+            )
+            result = {
+                "thread": {
+                    "id": thread_id,
+                    "cwd": "/workspace",
+                    "turns": [
+                        {
+                            "startedAt": 20,
+                            "items": [
+                                {
+                                    "id": "user-old",
+                                    "type": "userMessage",
+                                    "content": [
+                                        {
+                                            "type": "text",
+                                            "text": "$review inspect this",
+                                        },
+                                        {"type": "skill", "name": "review"},
+                                    ],
+                                },
+                                {
+                                    "id": "assistant-old",
+                                    "type": "agentMessage",
+                                    "text": "Looks good.",
+                                },
+                            ],
+                        }
+                    ],
+                },
+                "cwd": "/workspace",
+                "model": "gpt-test",
+            }
         elif method == "turn/start":
             prompt = message["params"]["input"][0]["text"]
-            turn_id = "turn-approval" if prompt == "approve" else "turn-1"
+            turn_id = (
+                "turn-approval"
+                if prompt == "approve"
+                else ("turn-2" if prompt == "tokens-2" else "turn-1")
+            )
             result = {"turn": {"id": turn_id}}
         else:
             result = {}
@@ -126,6 +209,33 @@ class _FakeWebSocket:
                     "item/agentMessage/delta",
                     {"itemId": "message-1", "delta": "完成"},
                 )
+                if prompt in {"tokens-1", "tokens-2"}:
+                    total = 100 if prompt == "tokens-1" else 130
+                    last = 10 if prompt == "tokens-1" else 30
+                    await self._notification(
+                        "thread/tokenUsage/updated",
+                        {
+                            "threadId": "thread-1",
+                            "turnId": turn_id,
+                            "tokenUsage": {
+                                "total": {
+                                    "totalTokens": total,
+                                    "inputTokens": total - 4,
+                                    "cachedInputTokens": 2,
+                                    "outputTokens": 4,
+                                    "reasoningOutputTokens": 1,
+                                },
+                                "last": {
+                                    "totalTokens": last,
+                                    "inputTokens": last - 4,
+                                    "cachedInputTokens": 1,
+                                    "outputTokens": 4,
+                                    "reasoningOutputTokens": 1,
+                                },
+                                "modelContextWindow": 200_000,
+                            },
+                        },
+                    )
                 await self._notification(
                     "item/started",
                     {
@@ -153,7 +263,7 @@ class _FakeWebSocket:
                 )
                 await self._notification(
                     "turn/completed",
-                    {"turn": {"id": "turn-1", "status": "completed"}},
+                    {"turn": {"id": turn_id, "status": "completed"}},
                 )
 
     async def _notification(self, method: str, params: dict[str, object]) -> None:
@@ -269,6 +379,111 @@ async def test_clean_socket_close_rejects_pending_requests() -> None:
 
     with pytest.raises(CodexAppServerError, match="连接已断开"):
         await pending
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_models_skills_and_structured_skill_input_keep_paths_private() -> None:
+    websocket = _FakeWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    models = await session.list_models()
+    skills = await session.list_skills()
+    events = [
+        event
+        async for event in session.stream_turn(
+            "$review inspect this",
+            (skills[0].id,),
+        )
+    ]
+
+    assert models[0].public_dict() == {
+        "id": "gpt-test",
+        "displayName": "GPT Test",
+        "description": "Test model",
+        "isDefault": True,
+    }
+    assert skills[0].public_dict() == {
+        "id": skills[0].id,
+        "name": "review",
+        "description": "Review code",
+    }
+    assert "/private/skills" not in json.dumps(
+        skills[0].public_dict(), ensure_ascii=False
+    )
+    turn_start = [
+        message
+        for message in websocket.messages
+        if message.get("method") == "turn/start"
+        and "threadId" in message.get("params", {})
+    ][-1]
+    assert turn_start["params"]["input"] == [
+        {"type": "text", "text": "$review inspect this"},
+        {
+            "type": "skill",
+            "name": "review",
+            "path": "/private/skills/review/SKILL.md",
+        },
+    ]
+    assert events[0].text == "完成"
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_token_usage_is_exact_per_turn_and_thread_total_is_retained() -> None:
+    websocket = _FakeWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    first = [event async for event in session.stream_turn("tokens-1")]
+    second = [event async for event in session.stream_turn("tokens-2")]
+    first_usage = next(event for event in first if event.kind == "usage")
+    second_usage = next(event for event in second if event.kind == "usage")
+
+    assert first_usage.usage is not None
+    assert first_usage.usage.total_tokens == 10
+    assert second_usage.usage is not None
+    assert second_usage.usage.total_tokens == 30
+    assert second_usage.thread_total is not None
+    assert second_usage.thread_total.total_tokens == 130
+    assert second_usage.model_context_window == 200_000
+    assert session.thread_token_total == second_usage.thread_total
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_thread_commands_restore_sanitized_history() -> None:
+    websocket = _FakeWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    threads, cursor = await session.list_threads(search_term="older")
+    snapshot = await session.resume_thread("thread-old")
+    fork = await session.fork_thread()
+    await session.compact_thread()
+
+    assert cursor == ""
+    assert threads[0].public_dict()["status"] == "idle"
+    assert snapshot.thread.id == "thread-old"
+    assert snapshot.workspace_locked is True
+    assert snapshot.messages[0].content == "inspect this"
+    assert snapshot.messages[0].skill_names == ("review",)
+    assert snapshot.messages[1].content == "Looks good."
+    assert fork.thread.id == "thread-fork"
+    assert any(
+        message.get("method") == "thread/compact/start"
+        for message in websocket.messages
+    )
     await session.close()
 
 

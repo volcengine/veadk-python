@@ -1,4 +1,5 @@
 import type { TurnActivity } from "../blocks";
+import type { SandboxTokenUsage } from "../adk/sandbox";
 import { InsightIcon } from "./icons/InsightIcon";
 import "./SandboxSession.css";
 
@@ -73,5 +74,43 @@ export function SandboxActivityRecord({
         </dl>
       ) : null}
     </aside>
+  );
+}
+
+function compactTokenCount(value: number): string {
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}m`;
+  }
+  if (value >= 1_000) {
+    return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}k`;
+  }
+  return String(value);
+}
+
+export function SandboxTokenUsageRow({
+  usage,
+}: {
+  usage: SandboxTokenUsage;
+}) {
+  const entries = [
+    ["Total", usage.totalTokens],
+    ["Input", usage.inputTokens],
+    ...(usage.cachedInputTokens > 0
+      ? [["Cached input", usage.cachedInputTokens] as const]
+      : []),
+    ["Output", usage.outputTokens],
+    ...(usage.reasoningOutputTokens > 0
+      ? [["Reasoning output", usage.reasoningOutputTokens] as const]
+      : []),
+  ] as const;
+  return (
+    <div className="sandbox-token-usage" aria-label="Codex Token 用量">
+      {entries.map(([label, value]) => (
+        <span key={label} title={`${label}: ${value.toLocaleString()} tokens`}>
+          <small>{label}</small>
+          <strong>{compactTokenCount(value)}</strong>
+        </span>
+      ))}
+    </div>
   );
 }

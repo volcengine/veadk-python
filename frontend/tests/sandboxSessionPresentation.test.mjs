@@ -19,7 +19,15 @@ const sandboxSessionSource = readFileSync(
   "utf8",
 );
 const composerSource = readFileSync(
-  new URL("../src/ui/Composer.tsx", import.meta.url),
+  new URL("../src/ui/SandboxComposer.tsx", import.meta.url),
+  "utf8",
+);
+const commandsSource = readFileSync(
+  new URL("../src/ui/sandboxCommands.ts", import.meta.url),
+  "utf8",
+);
+const commandHookSource = readFileSync(
+  new URL("../src/ui/useSandboxCodexCommands.ts", import.meta.url),
   "utf8",
 );
 const controlsSource = readFileSync(
@@ -205,7 +213,7 @@ test("sandbox composer keeps every upload and adds Terminal and Browser", () => 
     composerSource,
     /SandboxTerminalIcon[\s\S]*?Terminal[\s\S]*?SandboxBrowserIcon[\s\S]*?Browser/,
   );
-  assert.match(appSource, /onAddFiles=\{sandboxSession \? addSandboxFiles : addFiles\}/);
+  assert.match(appSource, /onAddFiles=\{addSandboxFiles\}/);
   assert.match(appSource, /sandboxClient\.uploadFile/);
   assert.match(sandboxClientSource, /\/files/);
   assert.match(appSource, /if \(!leavingSandbox\) discardDraftAttachments\(attachments\)/);
@@ -277,7 +285,10 @@ test("sandbox actions render as local system records without entering Codex prom
   );
 
   const sendStart = appSource.indexOf("async function sendSandboxMessage");
-  const nextFunction = appSource.indexOf("\n  function ", sendStart + 1);
+  const nextFunction = appSource.indexOf(
+    "\n  async function submitSandboxInput",
+    sendStart + 1,
+  );
   const sendSource = appSource.slice(
     sendStart,
     nextFunction === -1 ? appSource.length : nextFunction,
@@ -285,4 +296,32 @@ test("sandbox actions render as local system records without entering Codex prom
   assert.ok(sendStart >= 0);
   assert.match(sendSource, /const prompt = uploadedPaths\.length > 0/);
   assert.doesNotMatch(sendSource, /appendSandboxActivity|activity\.title/);
+});
+
+test("sandbox slash commands and Skills stay local until a real turn starts", () => {
+  assert.match(commandsSource, /name: "model"/);
+  assert.match(commandsSource, /name: "skill"/);
+  assert.match(commandsSource, /name: "skills"/);
+  assert.match(commandsSource, /name: "resume"/);
+  assert.match(composerSource, /matchingSandboxCommands/);
+  assert.match(composerSource, /\(\^\|\\s\)\\\$\(\[\^\\s\$\]\*\)\$/);
+  assert.match(appSource, /async function submitSandboxInput/);
+  assert.match(commandHookSource, /if \(!content\.startsWith\("\/"\)\)/);
+  assert.match(commandHookSource, /未知快捷命令/);
+  assert.match(commandHookSource, /sandboxClient\.newThread/);
+  assert.match(commandHookSource, /sandboxClient\.resumeThread/);
+  assert.match(commandHookSource, /sandboxClient\.forkThread/);
+  assert.match(commandHookSource, /sandboxClient\.compactThread/);
+  assert.match(commandHookSource, /sandboxClient\.archiveThread/);
+});
+
+test("sandbox token usage comes from the app-server event and is optional", () => {
+  assert.match(sandboxClientSource, /event === "usage"/);
+  assert.match(sandboxClientSource, /onUsage\?: \(update: SandboxTokenUsageUpdate\)/);
+  assert.match(appSource, /sandboxUsage: update\.usage/);
+  assert.match(appSource, /SandboxTokenUsageRow/);
+  assert.match(sandboxSessionSource, /Cached input/);
+  assert.match(sandboxSessionSource, /Reasoning output/);
+  assert.match(sandboxSessionSource, /usage\.cachedInputTokens > 0/);
+  assert.match(sandboxSessionSource, /usage\.reasoningOutputTokens > 0/);
 });
