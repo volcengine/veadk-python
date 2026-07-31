@@ -1169,9 +1169,43 @@ def _run_frontend_server(
         mount_embedded_agent_routes,
     )
 
+    def _embedded_agent_session_envs() -> dict[str, str]:
+        from veadk.consts import DEFAULT_MODEL_AGENT_NAME
+
+        api_key = (
+            os.getenv("MODEL_AGENT_API_KEY") or os.getenv("MODEL_API_KEY") or ""
+        ).strip()
+        if not api_key:
+            from veadk.auth.veauth.ark_veauth import get_ark_token
+
+            access_key, secret_key, session_token = _resolve_ve_credentials()
+            region = sandbox_region_candidates(os.getenv("AGENTKIT_SANDBOX_REGION"))[0]
+            api_key = get_ark_token(
+                region=region,
+                access_key=access_key,
+                secret_key=secret_key,
+                session_token=session_token,
+            )
+        model_name = (
+            os.getenv("MODEL_AGENT_NAME")
+            or os.getenv("MODEL_NAME")
+            or DEFAULT_MODEL_AGENT_NAME
+        ).strip()
+        envs = {
+            "MODEL_AGENT_API_KEY": api_key,
+            "MODEL_AGENT_NAME": model_name,
+        }
+        ark_base_url = os.getenv("ARK_BASE_URL", "").strip()
+        if ark_base_url:
+            envs["ARK_BASE_URL"] = ark_base_url
+        return envs
+
     mount_embedded_agent_routes(
         app,
-        EmbeddedAgentService(sandbox_gateway),
+        EmbeddedAgentService(
+            sandbox_gateway,
+            session_env_resolver=_embedded_agent_session_envs,
+        ),
         _sandbox_owner,
         _sandbox_proxy_owner,
     )

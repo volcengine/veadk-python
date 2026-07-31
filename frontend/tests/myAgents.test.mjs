@@ -72,8 +72,10 @@ test("offers the existing create action for the active agent type", () => {
   assert.match(pageSource, /className="my-agent-add"/);
   assert.match(pageSource, /createLabel: "添加通用智能体"/);
   assert.match(pageSource, /createLabel: "添加 Codex 智能体"/);
-  assert.match(pageSource, /createLabel: "启动 OpenClaw"/);
-  assert.match(pageSource, /createLabel: "启动 Hermes"/);
+  assert.match(pageSource, /createLabel: "添加 OpenClaw 智能体"/);
+  assert.match(pageSource, /createLabel: "添加 Hermes 智能体"/);
+  assert.match(pageSource, /visibleEmbeddedSessions\.map/);
+  assert.match(pageSource, /<EmbeddedSessionCard/);
   assert.match(pageSource, /<AddIcon \/>[\s\S]*?createLabel/);
   assert.match(pageSource, /disabled=\{!createAgent \|\| launchingEmbedded\}/);
   assert.match(pageStyles, /\.my-agent-type-bar\s*\{[\s\S]*?justify-content: space-between/);

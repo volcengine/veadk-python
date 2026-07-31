@@ -21,6 +21,16 @@ export interface EmbeddedAgentSession {
   ttlSeconds: number;
 }
 
+export interface EmbeddedAgentCloudSession {
+  kind: EmbeddedAgentKind;
+  id: string;
+  userSessionId: string;
+  displayName: string;
+  status: string;
+  createdAt: string;
+  expireAt: string;
+}
+
 interface EmbeddedAgentSessionResponse {
   kind?: unknown;
   sessionId?: unknown;
@@ -31,9 +41,20 @@ interface EmbeddedAgentSessionResponse {
   ttlSeconds?: unknown;
 }
 
+interface EmbeddedAgentCloudSessionResponse {
+  kind?: unknown;
+  sessionId?: unknown;
+  userSessionId?: unknown;
+  displayName?: unknown;
+  status?: unknown;
+  createdAt?: unknown;
+  expireAt?: unknown;
+}
+
 const CAPABILITY_TIMEOUT_MS = 30_000;
+const LIST_TIMEOUT_MS = 30_000;
 const START_TIMEOUT_MS = 330_000;
-const CLOSE_TIMEOUT_MS = 15_000;
+const DISCONNECT_TIMEOUT_MS = 15_000;
 
 function headers(): Headers {
   return withLocalUser({ Accept: "application/json" });
@@ -84,6 +105,31 @@ function parseSession(value: EmbeddedAgentSessionResponse): EmbeddedAgentSession
   };
 }
 
+function parseCloudSession(
+  value: EmbeddedAgentCloudSessionResponse,
+  kind: EmbeddedAgentKind,
+): EmbeddedAgentCloudSession {
+  if (
+    value.kind !== kind ||
+    typeof value.sessionId !== "string" ||
+    !value.sessionId ||
+    typeof value.status !== "string"
+  ) {
+    throw new Error("AgentKit 返回了无效的智能体 Session 列表。");
+  }
+  return {
+    kind,
+    id: value.sessionId,
+    userSessionId:
+      typeof value.userSessionId === "string" ? value.userSessionId : "",
+    displayName:
+      typeof value.displayName === "string" ? value.displayName : "",
+    status: value.status,
+    createdAt: typeof value.createdAt === "string" ? value.createdAt : "",
+    expireAt: typeof value.expireAt === "string" ? value.expireAt : "",
+  };
+}
+
 export const embeddedAgentClient = {
   async capabilities(
     kind: EmbeddedAgentKind,
@@ -112,6 +158,25 @@ export const embeddedAgentClient = {
     };
   },
 
+  async listSessions(
+    kind: EmbeddedAgentKind,
+    signal?: AbortSignal,
+  ): Promise<EmbeddedAgentCloudSession[]> {
+    const response = await fetch(withAuth(`${api(kind)}/sessions`), {
+      headers: headers(),
+      signal: requestSignal(signal, LIST_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      throw await responseError(response, `无法读取 ${kind} 智能体列表。`);
+    }
+    const payload = await response.json() as { sessions?: unknown };
+    if (!Array.isArray(payload.sessions)) {
+      throw new Error("智能体列表服务返回了无效响应。");
+    }
+    return payload.sessions.map((value) =>
+      parseCloudSession(value as EmbeddedAgentCloudSessionResponse, kind));
+  },
+
   async start(
     kind: EmbeddedAgentKind,
     signal?: AbortSignal,
@@ -127,20 +192,42 @@ export const embeddedAgentClient = {
     return parseSession(await response.json() as EmbeddedAgentSessionResponse);
   },
 
-  async close(
+  async connect(
+    session: Pick<EmbeddedAgentCloudSession, "kind" | "id">,
+    signal?: AbortSignal,
+  ): Promise<EmbeddedAgentSession> {
+    const response = await fetch(
+      withAuth(
+        `${api(session.kind)}/sessions/${encodeURIComponent(session.id)}/connect`,
+      ),
+      {
+        method: "POST",
+        headers: headers(),
+        signal: requestSignal(signal, START_TIMEOUT_MS),
+      },
+    );
+    if (!response.ok) {
+      throw await responseError(response, "无法进入智能体 Session。");
+    }
+    return parseSession(await response.json() as EmbeddedAgentSessionResponse);
+  },
+
+  async disconnect(
     session: Pick<EmbeddedAgentSession, "kind" | "id">,
     signal?: AbortSignal,
   ): Promise<void> {
     const response = await fetch(
-      withAuth(`${api(session.kind)}/sessions/${encodeURIComponent(session.id)}`),
+      withAuth(
+        `/web/embedded/${encodeURIComponent(session.id)}/${session.kind}/disconnect`,
+      ),
       {
-        method: "DELETE",
+        method: "POST",
         headers: headers(),
-        signal: requestSignal(signal, CLOSE_TIMEOUT_MS),
+        signal: requestSignal(signal, DISCONNECT_TIMEOUT_MS),
       },
     );
     if (!response.ok && response.status !== 404) {
-      throw await responseError(response, "无法关闭临时智能体 Session。");
+      throw await responseError(response, "无法关闭智能体工作区。");
     }
   },
 };

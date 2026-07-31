@@ -365,7 +365,10 @@ class SandboxCloudGateway(Protocol):
         raise NotImplementedError
 
     async def create_session(
-        self, tool_id: str, display_name: str = ""
+        self,
+        tool_id: str,
+        display_name: str = "",
+        envs: dict[str, str] | None = None,
     ) -> SandboxCloudSession:
         """Create a fresh remote Sandbox session."""
         raise NotImplementedError
@@ -562,7 +565,10 @@ class AgentkitSandboxGateway:
         raise SandboxSessionNotFoundError("AgentKit Session 不存在或已过期。")
 
     async def create_session(
-        self, tool_id: str, display_name: str = ""
+        self,
+        tool_id: str,
+        display_name: str = "",
+        envs: dict[str, str] | None = None,
     ) -> SandboxCloudSession:
         user_session_id = f"studio-{uuid.uuid4()}"
         regions = self._region_candidates or ("",)
@@ -572,6 +578,7 @@ class AgentkitSandboxGateway:
                 ttl_seconds=STUDIO_SANDBOX_TTL_SECONDS,
                 user_session_id=user_session_id,
                 display_name=display_name,
+                envs=envs,
             )
             create_task = asyncio.create_task(
                 self._call("create_session", request, region=region)

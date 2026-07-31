@@ -20,15 +20,21 @@ const workspaceStyles = readFileSync(
   "utf8",
 );
 
-test("starts Hermes and OpenClaw from their configured AgentKit Tool sessions", () => {
+test("lists, creates, and connects Hermes and OpenClaw AgentKit sessions", () => {
   assert.match(clientSource, /export type EmbeddedAgentKind = "openclaw" \| "hermes"/);
   assert.ok(clientSource.includes("return `/web/${kind}`;"));
+  assert.match(clientSource, /async listSessions/);
+  assert.match(clientSource, /async connect/);
+  assert.match(clientSource, /\/connect`/);
+  assert.match(clientSource, /async disconnect/);
+  assert.match(clientSource, /\/web\/embedded\/\$\{encodeURIComponent\(session\.id\)\}/);
   assert.match(clientSource, /method: "POST"/);
-  assert.match(clientSource, /method: "DELETE"/);
-  assert.match(directorySource, /embeddedAgentClient[\s\S]*?capabilities/);
-  assert.match(directorySource, /onLaunchEmbeddedAgent\(kind\)/);
-  assert.match(appSource, /embeddedAgentClient\.start\(kind, controller\.signal\)/);
-  assert.match(appSource, /embeddedAgentClient\.close\(active\)/);
+  assert.match(directorySource, /embeddedAgentClient\.listSessions/);
+  assert.match(directorySource, /EmbeddedSessionCard/);
+  assert.match(directorySource, /onCreateEmbeddedAgent\(kind\)/);
+  assert.match(appSource, /embeddedAgentClient\.start\(kind, signal\)/);
+  assert.match(appSource, /embeddedAgentClient\.connect\(session, signal\)/);
+  assert.match(appSource, /embeddedAgentClient\.disconnect\(active\)/);
 });
 
 test("shows same-origin WebUI and Terminal iframe tabs without refresh or external-open controls", () => {
@@ -49,6 +55,17 @@ test("mounts each iframe once and preserves its connection while switching tabs"
   assert.match(workspaceSource, /current\[next\] \? current : \{ \.\.\.current, \[next\]: true \}/);
   assert.match(workspaceStyles, /\.embedded-agent-panel\s*\{[\s\S]*?display: none/);
   assert.match(workspaceStyles, /\.embedded-agent-panel\.is-active\s*\{[\s\S]*?display: flex/);
+});
+
+test("keeps the iframe height chain anchored to the remaining workspace", () => {
+  assert.match(
+    workspaceStyles,
+    /\.embedded-agent-stage\s*\{[\s\S]*?display:\s*flex;[\s\S]*?overflow:\s*hidden;/,
+  );
+  assert.match(
+    workspaceStyles,
+    /\.embedded-agent-panel iframe\s*\{[\s\S]*?flex:\s*1;[\s\S]*?display:\s*block;[\s\S]*?min-height:\s*0;/,
+  );
 });
 
 test("supports keyboard tab navigation and reduced motion", () => {

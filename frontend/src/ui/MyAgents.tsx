@@ -9,6 +9,7 @@ import {
 import {
   embeddedAgentClient,
   type EmbeddedAgentCapability,
+  type EmbeddedAgentCloudSession,
   type EmbeddedAgentKind,
 } from "../adk/embeddedAgents";
 import { sandboxClient, type SandboxSession } from "../adk/sandbox";
@@ -42,8 +43,8 @@ const CODEX_TRANSITIONAL_STATUSES = new Set([
 const AGENT_TYPES: Array<{ id: AgentType; label: string; createLabel: string }> = [
   { id: "general", label: "通用智能体", createLabel: "添加通用智能体" },
   { id: "codex", label: "Codex 智能体", createLabel: "添加 Codex 智能体" },
-  { id: "openclaw", label: "OpenClaw 智能体", createLabel: "启动 OpenClaw" },
-  { id: "hermes", label: "Hermes 智能体", createLabel: "启动 Hermes" },
+  { id: "openclaw", label: "OpenClaw 智能体", createLabel: "添加 OpenClaw 智能体" },
+  { id: "hermes", label: "Hermes 智能体", createLabel: "添加 Hermes 智能体" },
 ];
 const RUNTIME_PAGE_SIZE = 24;
 const RUNTIME_PAGE_CACHE_TTL_MS = 30_000;
@@ -297,6 +298,64 @@ function CodexSessionCard({
   );
 }
 
+function EmbeddedSessionCard({
+  session,
+  connecting,
+  onOpen,
+}: {
+  session: EmbeddedAgentCloudSession;
+  connecting: boolean;
+  onOpen: (session: EmbeddedAgentCloudSession) => Promise<void>;
+}) {
+  const ready = session.status.toLowerCase() === "ready";
+  const fallbackName =
+    session.kind === "openclaw" ? "OpenClaw 智能体" : "Hermes 智能体";
+  const name = session.displayName || session.userSessionId || fallbackName;
+  const userSessionSubtitle =
+    session.displayName && session.userSessionId ? session.userSessionId : "";
+  return (
+    <button
+      type="button"
+      className="my-agent-card codex-session-card"
+      disabled={!ready || connecting}
+      aria-busy={connecting || undefined}
+      aria-label={
+        ready
+          ? `进入 ${name}`
+          : `${name} 当前状态 ${session.status}`
+      }
+      onClick={() => void onOpen(session)}
+    >
+      <span className="my-agent-card-copy">
+        <span className="codex-session-title">
+          <h3 title={name}>{name}</h3>
+          <span className={`codex-session-status${ready ? " is-ready" : ""}`}>
+            {session.status}
+          </span>
+        </span>
+        {userSessionSubtitle && (
+          <span className="codex-session-user-id" title={userSessionSubtitle}>
+            User Session · {userSessionSubtitle}
+          </span>
+        )}
+        <dl className="my-agent-meta codex-session-meta">
+          <div className="my-agent-created-at">
+            <dt>创建时间</dt>
+            <dd>{formatCreatedAt(session.createdAt)}</dd>
+          </div>
+          <div className="my-agent-created-at">
+            <dt>到期时间</dt>
+            <dd>{formatCreatedAt(session.expireAt)}</dd>
+          </div>
+        </dl>
+      </span>
+      <span className="codex-session-enter">
+        {connecting ? "连接中" : ready ? "进入智能体" : "等待就绪"}
+      </span>
+    </button>
+  );
+}
+
 export interface MyAgentsProps {
   canCreate: boolean;
   runtimeScope: RuntimeScope;
@@ -304,7 +363,10 @@ export interface MyAgentsProps {
   onActiveTypeChange: (type: AgentType) => void;
   onCreateAgent: (region: RuntimeRegion) => void;
   onCreateCodexAgent: () => void;
-  onLaunchEmbeddedAgent: (kind: EmbeddedAgentKind) => Promise<void>;
+  onCreateEmbeddedAgent: (kind: EmbeddedAgentKind) => Promise<void>;
+  onOpenEmbeddedSession: (
+    session: EmbeddedAgentCloudSession,
+  ) => Promise<void>;
   onOpenCodexSession: (session: SandboxSession) => Promise<void>;
   onUseAgent: (agent: MyAgentCardData) => Promise<void>;
   onViewAgentDetails: (agent: MyAgentCardData) => void;
@@ -320,7 +382,8 @@ export function MyAgents({
   onActiveTypeChange,
   onCreateAgent,
   onCreateCodexAgent,
-  onLaunchEmbeddedAgent,
+  onCreateEmbeddedAgent,
+  onOpenEmbeddedSession,
   onOpenCodexSession,
   onUseAgent,
   onViewAgentDetails,
@@ -348,9 +411,13 @@ export function MyAgents({
   const [connectingCodexSessionId, setConnectingCodexSessionId] = useState("");
   const [embeddedCapability, setEmbeddedCapability] =
     useState<EmbeddedAgentCapability | null>(null);
+  const [embeddedSessions, setEmbeddedSessions] =
+    useState<EmbeddedAgentCloudSession[]>([]);
   const [embeddedLoading, setEmbeddedLoading] = useState(false);
   const [embeddedError, setEmbeddedError] = useState("");
   const [launchingEmbedded, setLaunchingEmbedded] = useState(false);
+  const [connectingEmbeddedSessionId, setConnectingEmbeddedSessionId] =
+    useState("");
 
   const fetchRuntimePage = useCallback((token: string, reset: boolean) => {
     const requestId = ++runtimeRequestRef.current;
@@ -419,7 +486,7 @@ export function MyAgents({
     };
   }, [activeType, codexRefreshKey, fetchCodexSessions]);
 
-  const fetchEmbeddedCapability = useCallback((kind: EmbeddedAgentKind) => {
+  const fetchEmbeddedSessions = useCallback((kind: EmbeddedAgentKind) => {
     embeddedAbortRef.current?.abort();
     const controller = new AbortController();
     embeddedAbortRef.current = controller;
@@ -428,9 +495,16 @@ export function MyAgents({
     setEmbeddedError("");
     return embeddedAgentClient
       .capabilities(kind, controller.signal)
-      .then((capability) => {
+      .then(async (capability) => [
+        capability,
+        capability.enabled
+          ? await embeddedAgentClient.listSessions(kind, controller.signal)
+          : [],
+      ] as const)
+      .then(([capability, sessions]) => {
         if (embeddedAbortRef.current === controller) {
           setEmbeddedCapability(capability);
+          setEmbeddedSessions(sessions);
         }
       })
       .catch((cause) => {
@@ -450,12 +524,14 @@ export function MyAgents({
     if (activeType !== "openclaw" && activeType !== "hermes") {
       embeddedAbortRef.current?.abort();
       setEmbeddedCapability(null);
+      setEmbeddedSessions([]);
       setEmbeddedError("");
       return;
     }
-    void fetchEmbeddedCapability(activeType);
+    setEmbeddedSessions([]);
+    void fetchEmbeddedSessions(activeType);
     return () => embeddedAbortRef.current?.abort();
-  }, [activeType, fetchEmbeddedCapability]);
+  }, [activeType, fetchEmbeddedSessions]);
 
   useEffect(() => {
     if (
@@ -472,6 +548,27 @@ export function MyAgents({
     }, 3_000);
     return () => window.clearTimeout(timer);
   }, [activeType, codexLoading, codexSessions, fetchCodexSessions]);
+
+  useEffect(() => {
+    if (
+      (activeType !== "openclaw" && activeType !== "hermes") ||
+      embeddedLoading ||
+      !embeddedSessions.some((session) =>
+        CODEX_TRANSITIONAL_STATUSES.has(session.status.toLowerCase()),
+      )
+    ) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void fetchEmbeddedSessions(activeType);
+    }, 3_000);
+    return () => window.clearTimeout(timer);
+  }, [
+    activeType,
+    embeddedLoading,
+    embeddedSessions,
+    fetchEmbeddedSessions,
+  ]);
 
   useEffect(() => {
     const target = loadMoreRef.current;
@@ -518,13 +615,34 @@ export function MyAgents({
     setLaunchingEmbedded(true);
     setEmbeddedError("");
     try {
-      await onLaunchEmbeddedAgent(kind);
+      await onCreateEmbeddedAgent(kind);
     } catch (cause) {
       setEmbeddedError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setLaunchingEmbedded(false);
     }
-  }, [launchingEmbedded, onLaunchEmbeddedAgent]);
+  }, [launchingEmbedded, onCreateEmbeddedAgent]);
+
+  const openEmbeddedSession = useCallback(
+    async (session: EmbeddedAgentCloudSession) => {
+      if (
+        connectingEmbeddedSessionId ||
+        session.status.toLowerCase() !== "ready"
+      ) {
+        return;
+      }
+      setConnectingEmbeddedSessionId(session.id);
+      setEmbeddedError("");
+      try {
+        await onOpenEmbeddedSession(session);
+      } catch (cause) {
+        setEmbeddedError(cause instanceof Error ? cause.message : String(cause));
+      } finally {
+        setConnectingEmbeddedSessionId("");
+      }
+    },
+    [connectingEmbeddedSessionId, onOpenEmbeddedSession],
+  );
 
   const visibleAgents = useMemo(() => {
     if (activeType !== "general") return [];
@@ -560,6 +678,19 @@ export function MyAgents({
     );
   }, [activeType, codexSessions, query]);
 
+  const visibleEmbeddedSessions = useMemo(() => {
+    if (activeType !== "openclaw" && activeType !== "hermes") return [];
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    if (!normalizedQuery) return embeddedSessions;
+    return embeddedSessions.filter((session) =>
+      [
+        session.displayName,
+        session.userSessionId,
+        session.status,
+      ].some((value) => value.toLocaleLowerCase().includes(normalizedQuery)),
+    );
+  }, [activeType, embeddedSessions, query]);
+
   const activeTypeInfo = AGENT_TYPES.find((type) => type.id === activeType);
   const activeLabel = activeTypeInfo?.label ?? "智能体";
   const createLabel = activeTypeInfo?.createLabel ?? "添加智能体";
@@ -567,17 +698,20 @@ export function MyAgents({
     (activeType === "general" && loadingRuntimes && runtimeAgents.length === 0) ||
     (activeType === "codex" && codexLoading && codexSessions.length === 0) ||
     ((activeType === "openclaw" || activeType === "hermes") &&
-      embeddedLoading);
+      embeddedLoading &&
+      embeddedSessions.length === 0);
   const visibleCount =
     activeType === "general"
       ? visibleAgents.length
       : activeType === "codex"
         ? visibleCodexSessions.length
-        : 0;
+        : visibleEmbeddedSessions.length;
   const showEmpty = !showInitialLoading && visibleCount === 0;
   const emptyMessage = activeType === "openclaw" || activeType === "hermes"
     ? embeddedCapability?.enabled
-      ? `启动 ${embeddedCapability.label} 后，可在主页面与 Terminal 之间切换`
+      ? query.trim()
+        ? "没有匹配的智能体"
+        : `${embeddedCapability.label} 暂无 Session`
       : embeddedCapability?.reason || `${activeLabel}尚未配置`
     : query.trim() ? "没有匹配的智能体" : `${activeLabel}暂无内容`;
   const createAgent = !canCreate
@@ -706,14 +840,15 @@ export function MyAgents({
               {activeType === "codex"
                 ? "正在加载 Codex 智能体"
                 : activeType === "openclaw" || activeType === "hermes"
-                  ? `正在读取 ${activeLabel} 配置`
+                  ? `正在加载 ${activeLabel}`
                   : "正在加载智能体"}
             </span>
           </div>
         ) : (runtimeError && activeType === "general") ||
           (codexError && activeType === "codex" && codexSessions.length === 0) ||
           (embeddedError &&
-            (activeType === "openclaw" || activeType === "hermes")) ? (
+            (activeType === "openclaw" || activeType === "hermes") &&
+            embeddedSessions.length === 0) ? (
           <div className="my-agent-empty" role="alert">
             <p>
               {activeType === "codex"
@@ -727,7 +862,7 @@ export function MyAgents({
               onClick={() => {
                 if (activeType === "codex") void fetchCodexSessions();
                 else if (activeType === "openclaw" || activeType === "hermes") {
-                  void fetchEmbeddedCapability(activeType);
+                  void fetchEmbeddedSessions(activeType);
                 }
                 else void fetchRuntimePage("", true);
               }}
@@ -765,6 +900,18 @@ export function MyAgents({
                 </button>
               </div>
             )}
+            {embeddedError &&
+              (activeType === "openclaw" || activeType === "hermes") && (
+                <div className="my-agent-inline-error" role="alert">
+                  <span>{embeddedError}</span>
+                  <button
+                    type="button"
+                    onClick={() => void fetchEmbeddedSessions(activeType)}
+                  >
+                    重试
+                  </button>
+                </div>
+              )}
             <div className="my-agent-grid">
               {activeType === "general"
                 ? visibleAgents.map((agent) => (
@@ -778,14 +925,23 @@ export function MyAgents({
                       showOwnership={runtimeScope === "all"}
                     />
                   ))
-                : visibleCodexSessions.map((session) => (
-                    <CodexSessionCard
-                      key={session.id}
-                      session={session}
-                      connecting={session.id === connectingCodexSessionId}
-                      onOpen={openCodexSession}
-                    />
-                  ))}
+                : activeType === "codex"
+                  ? visibleCodexSessions.map((session) => (
+                      <CodexSessionCard
+                        key={session.id}
+                        session={session}
+                        connecting={session.id === connectingCodexSessionId}
+                        onOpen={openCodexSession}
+                      />
+                    ))
+                  : visibleEmbeddedSessions.map((session) => (
+                      <EmbeddedSessionCard
+                        key={session.id}
+                        session={session}
+                        connecting={session.id === connectingEmbeddedSessionId}
+                        onOpen={openEmbeddedSession}
+                      />
+                    ))}
             </div>
           </>
         )}
@@ -810,6 +966,14 @@ export function MyAgents({
             <span>正在刷新 Codex 智能体</span>
           </div>
         )}
+        {(activeType === "openclaw" || activeType === "hermes") &&
+          visibleEmbeddedSessions.length > 0 &&
+          embeddedLoading && (
+            <div className="my-agent-load-more" role="status" aria-live="polite">
+              <span className="my-agent-loading-mark" aria-hidden="true" />
+              <span>正在刷新 {activeLabel}</span>
+            </div>
+          )}
       </section>
     </div>
   );

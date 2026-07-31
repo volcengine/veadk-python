@@ -28,6 +28,7 @@ import veadk.cli.frontend_embedded_agents as embedded_agents
 from veadk.cli.frontend_embedded_agents import (
     EmbeddedAgentService,
     _rewrite_text,
+    _target_from_endpoint,
     _upstream_url,
     mount_embedded_agent_routes,
 )
@@ -43,12 +44,24 @@ class _Gateway:
         self.failed = failed
         self.deleted: list[SandboxCloudSession] = []
         self.created_tool_ids: list[str] = []
+        self.created_envs: list[dict[str, str]] = []
+        self.has_session = False
+
+    async def list_sessions(self, tool_id: str) -> list[SandboxCloudSession]:
+        if not self.has_session:
+            return []
+        return [await self.get_session(tool_id, "session-1")]
 
     async def create_session(
-        self, tool_id: str, display_name: str = ""
+        self,
+        tool_id: str,
+        display_name: str = "",
+        envs: dict[str, str] | None = None,
     ) -> SandboxCloudSession:
         del display_name
         self.created_tool_ids.append(tool_id)
+        self.created_envs.append(envs or {})
+        self.has_session = True
         return SandboxCloudSession(
             tool_id=tool_id,
             instance_id="session-1",
@@ -84,6 +97,10 @@ async def _no_wait(_: float) -> None:
     return None
 
 
+async def _ready_probe(_: str) -> int:
+    return 200
+
+
 def _app(gateway: _Gateway, *, allow_local_iframe: bool = False) -> FastAPI:
     app = FastAPI()
 
@@ -103,7 +120,15 @@ def _app(gateway: _Gateway, *, allow_local_iframe: bool = False) -> FastAPI:
 
     mount_embedded_agent_routes(
         app,
-        EmbeddedAgentService(cast(SandboxCloudGateway, gateway), sleep=_no_wait),
+        EmbeddedAgentService(
+            cast(SandboxCloudGateway, gateway),
+            sleep=_no_wait,
+            endpoint_probe=_ready_probe,
+            session_env_resolver=lambda: {
+                "MODEL_AGENT_API_KEY": "test-key",
+                "MODEL_AGENT_NAME": "test-model",
+            },
+        ),
         _owner,
         _proxy_owner,
     )
@@ -136,13 +161,24 @@ def test_openclaw_session_returns_only_same_origin_iframe_urls(
         )
         assert denied.status_code == 404
 
-        closed = client.delete(
+        disconnected = client.post(
+            "/web/embedded/session-1/openclaw/disconnect",
+            headers={"X-Test-User": "alice"},
+        )
+        deleted = client.delete(
             "/web/openclaw/sessions/session-1",
             headers={"X-Test-User": "alice"},
         )
 
-    assert closed.status_code == 204
+    assert disconnected.status_code == 204
+    assert deleted.status_code == 204
     assert gateway.created_tool_ids == ["arkclaw-tool"]
+    assert gateway.created_envs == [
+        {
+            "MODEL_AGENT_API_KEY": "test-key",
+            "MODEL_AGENT_NAME": "test-model",
+        }
+    ]
     assert [session.instance_id for session in gateway.deleted] == ["session-1"]
 
 
@@ -176,6 +212,58 @@ def test_local_iframe_uses_scoped_capability_without_custom_identity_header(
     assert iframe.text == "proxied"
     assert wrong_owner.status_code == 404
     assert missing_capability.status_code == 403
+
+
+def test_existing_session_is_listed_and_can_be_connected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SANDBOX_OPENCLAW_TOOL", "arkclaw-tool")
+    gateway = _Gateway()
+    gateway.has_session = True
+
+    with TestClient(_app(gateway)) as client:
+        listed = client.get(
+            "/web/openclaw/sessions",
+            headers={"X-Test-User": "alice"},
+        )
+        connected = client.post(
+            "/web/openclaw/sessions/session-1/connect",
+            headers={"X-Test-User": "alice"},
+        )
+
+    assert listed.status_code == 200
+    assert listed.json()["sessions"] == [
+        {
+            "kind": "openclaw",
+            "sessionId": "session-1",
+            "userSessionId": "user-session-1",
+            "displayName": "",
+            "status": "Ready",
+            "createdAt": "2026-07-31T08:00:00Z",
+            "expireAt": "2026-07-31T16:00:00Z",
+        }
+    ]
+    assert "sandbox.example" not in listed.text
+    assert "private" not in listed.text
+    assert connected.status_code == 200
+    assert connected.json()["sessionId"] == "session-1"
+    assert gateway.deleted == []
+
+
+def test_leaving_studio_does_not_delete_cloud_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SANDBOX_OPENCLAW_TOOL", "arkclaw-tool")
+    gateway = _Gateway()
+
+    with TestClient(_app(gateway)) as client:
+        created = client.post(
+            "/web/openclaw/sessions",
+            headers={"X-Test-User": "alice"},
+        )
+        assert created.status_code == 200
+
+    assert gateway.deleted == []
 
 
 def test_authenticated_proxy_mode_still_requires_studio_identity(
@@ -228,6 +316,7 @@ def test_failed_session_is_deleted(
     service = EmbeddedAgentService(
         cast(SandboxCloudGateway, gateway),
         sleep=_no_wait,
+        endpoint_probe=_ready_probe,
     )
 
     async def _run() -> None:
@@ -269,3 +358,38 @@ def test_proxy_rewrites_agent_roots_without_exposing_endpoint_query() -> None:
     assert upstream == (
         "https://sandbox.example/openclaw/api/messages?page=1&Authorization=private"
     )
+
+
+def test_endpoint_paths_are_appended_to_agentkit_prefix() -> None:
+    assert _target_from_endpoint(
+        "https://sandbox.example/runtime/root?Authorization=private",
+        "/openclaw",
+    ) == ("https://sandbox.example/runtime/root/openclaw?Authorization=private")
+    assert _upstream_url(
+        "https://sandbox.example/openclaw?Authorization=private",
+        "",
+        "view=compact",
+        trailing_slash=True,
+    ) == ("https://sandbox.example/openclaw/?view=compact&Authorization=private")
+
+
+def test_terminal_rewrites_root_assets_and_websocket_base() -> None:
+    prefix = "/web/embedded/session-1/openclaw/terminal"
+    rewritten = _rewrite_text(
+        (
+            '<link href="static/sandbox/xterm.css">'
+            '<script src="./static/sandbox/xterm.js"></script>'
+            "<script>"
+            "const baseUrl = window.location.origin + basePath;"
+            "this.baseLocation = new URL('.', window.location.href);"
+            "</script>"
+        ),
+        target="https://sandbox.example/terminal?Authorization=private",
+        prefix=prefix,
+        root_relative_assets=True,
+    )
+
+    assert f'href="{prefix}/__root__/static/sandbox/xterm.css"' in rewritten
+    assert f'src="{prefix}/__root__/static/sandbox/xterm.js"' in rewritten
+    assert f"window.location.origin + '{prefix}/__root__'" in rewritten
+    assert "new URL(document.baseURI)" in rewritten

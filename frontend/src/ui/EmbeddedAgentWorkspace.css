@@ -139,6 +139,11 @@
   min-height: 0;
 }
 
+.embedded-agent-stage {
+  display: flex;
+  overflow: hidden;
+}
+
 .embedded-agent-panel {
   display: none;
 }
@@ -148,6 +153,10 @@
 }
 
 .embedded-agent-panel iframe {
+  flex: 1;
+  display: block;
+  min-width: 0;
+  min-height: 0;
   width: 100%;
   height: 100%;
   border: 0;

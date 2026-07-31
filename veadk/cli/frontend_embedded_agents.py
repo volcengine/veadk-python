@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Disposable Hermes and OpenClaw iframe Sessions for Studio."""
+"""Hermes and OpenClaw iframe Sessions for Studio."""
 
 from __future__ import annotations
 
@@ -138,7 +138,9 @@ def _valid_target(value: str) -> str:
 
 def _target_from_endpoint(endpoint: str, path: str) -> str:
     parsed = urlsplit(_valid_target(endpoint))
-    return urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, ""))
+    endpoint_path = parsed.path.rstrip("/")
+    target_path = f"{endpoint_path}/{path.lstrip('/')}"
+    return urlunsplit((parsed.scheme, parsed.netloc, target_path, parsed.query, ""))
 
 
 def _target_from_session_meta(endpoint: str, value: str) -> str:
@@ -147,12 +149,7 @@ def _target_from_session_meta(endpoint: str, value: str) -> str:
     parsed_value = urlsplit(value)
     if parsed_value.scheme:
         return _valid_target(value)
-    parsed_endpoint = urlsplit(_valid_target(endpoint))
-    resolved = urlsplit(urljoin(endpoint, value))
-    query = resolved.query or parsed_endpoint.query
-    return _valid_target(
-        urlunsplit((resolved.scheme, resolved.netloc, resolved.path, query, ""))
-    )
+    return _target_from_endpoint(endpoint, parsed_value.path)
 
 
 def _terminal_target(cloud: SandboxCloudSession) -> str:
@@ -179,7 +176,7 @@ def _epoch(value: str, fallback: float) -> float:
 
 
 class EmbeddedAgentService:
-    """Create, own, and destroy disposable preset AgentKit Sessions."""
+    """List and connect persistent preset AgentKit Sessions."""
 
     def __init__(
         self,
@@ -188,12 +185,18 @@ class EmbeddedAgentService:
         ready_timeout_seconds: float = 300,
         poll_interval_seconds: float = 2,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        endpoint_probe: Callable[[str], Awaitable[int]] | None = None,
+        session_env_resolver: Callable[[], dict[str, str]] | None = None,
     ) -> None:
         self._gateway = gateway
         self._ready_timeout_seconds = ready_timeout_seconds
         self._poll_interval_seconds = poll_interval_seconds
         self._sleep = sleep
-        self._sessions: dict[str, EmbeddedAgentSession] = {}
+        self._endpoint_probe = endpoint_probe or self._probe_endpoint
+        self._session_env_resolver = session_env_resolver
+        self._session_envs: dict[str, str] | None = None
+        self._session_env_lock = asyncio.Lock()
+        self._sessions: dict[tuple[str, str], EmbeddedAgentSession] = {}
         self._lock = asyncio.Lock()
 
     def capabilities(self, kind: str) -> dict[str, object]:
@@ -213,6 +216,41 @@ class EmbeddedAgentService:
             raise SandboxConfigurationError(f"管理员尚未配置 {definition.tool_env}。")
         return tool_id
 
+    @staticmethod
+    async def _probe_endpoint(target: str) -> int:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
+            response = await client.get(target)
+            return response.status_code
+
+    async def _creation_envs(self) -> dict[str, str]:
+        if self._session_env_resolver is None:
+            return {}
+        if self._session_envs is not None:
+            return dict(self._session_envs)
+        async with self._session_env_lock:
+            if self._session_envs is None:
+                try:
+                    resolved = await asyncio.to_thread(self._session_env_resolver)
+                except Exception as error:
+                    raise SandboxConfigurationError(
+                        "无法为嵌入式智能体解析模型配置。"
+                    ) from error
+                self._session_envs = {
+                    str(key): str(value)
+                    for key, value in resolved.items()
+                    if key and value
+                }
+        return dict(self._session_envs)
+
+    async def list(self, kind: str) -> list[SandboxCloudSession]:
+        definition = _definition(kind)
+        sessions = await self._gateway.list_sessions(self._tool_id(definition))
+        return [
+            session
+            for session in sessions
+            if not session.tool_type or session.tool_type == definition.tool_type
+        ]
+
     async def start(self, kind: str, owner_id: str) -> EmbeddedAgentSession:
         definition = _definition(kind)
         tool_id = self._tool_id(definition)
@@ -222,30 +260,51 @@ class EmbeddedAgentService:
                 session.owner_id == owner_id for session in self._sessions.values()
             )
             if active >= _MAX_ACTIVE_SESSIONS:
-                raise SandboxProvisioningError("当前临时智能体 Session 数量已达上限。")
+                raise SandboxProvisioningError("当前智能体连接数量已达上限。")
 
         cloud = await self._gateway.create_session(
             tool_id,
-            display_name=f"{definition.label} iframe",
+            display_name=f"{definition.label} 智能体",
+            envs=await self._creation_envs(),
         )
         try:
             cloud = await self._wait_until_ready(definition, cloud)
-            session = EmbeddedAgentSession(
-                kind=definition.kind,
-                owner_id=owner_id,
-                cloud=cloud,
-                webui_target=_target_from_endpoint(
-                    cloud.endpoint, definition.webui_path
-                ),
-                terminal_target=_terminal_target(cloud),
-            )
-            async with self._lock:
-                self._sessions[cloud.instance_id] = session
-            return session
+            return await self._register(definition, cloud, owner_id)
         except BaseException:
             with contextlib.suppress(SandboxError):
                 await self._gateway.delete_session(cloud)
             raise
+
+    async def connect(
+        self,
+        kind: str,
+        session_id: str,
+        owner_id: str,
+    ) -> EmbeddedAgentSession:
+        definition = _definition(kind)
+        cloud = await self._gateway.get_session(
+            self._tool_id(definition),
+            session_id,
+        )
+        cloud = await self._wait_until_ready(definition, cloud)
+        return await self._register(definition, cloud, owner_id)
+
+    async def _register(
+        self,
+        definition: EmbeddedAgentDefinition,
+        cloud: SandboxCloudSession,
+        owner_id: str,
+    ) -> EmbeddedAgentSession:
+        session = EmbeddedAgentSession(
+            kind=definition.kind,
+            owner_id=owner_id,
+            cloud=cloud,
+            webui_target=_target_from_endpoint(cloud.endpoint, definition.webui_path),
+            terminal_target=_terminal_target(cloud),
+        )
+        async with self._lock:
+            self._sessions[(cloud.instance_id, owner_id)] = session
+        return session
 
     async def _wait_until_ready(
         self,
@@ -273,7 +332,24 @@ class EmbeddedAgentService:
                         f"AgentKit Session ToolType 为 {current.tool_type}，"
                         f"预期为 {definition.tool_type}。"
                     )
-                return current
+                targets = (
+                    _target_from_endpoint(current.endpoint, definition.webui_path),
+                    _terminal_target(current),
+                )
+                statuses: tuple[int, int] | None = None
+                try:
+                    statuses = cast(
+                        tuple[int, int],
+                        tuple(
+                            await asyncio.gather(
+                                *(self._endpoint_probe(target) for target in targets)
+                            )
+                        ),
+                    )
+                except httpx.HTTPError:
+                    pass
+                if statuses and all(200 <= value < 400 for value in statuses):
+                    return current
             if status in _FAILED_STATUSES:
                 raise SandboxProvisioningError(
                     f"{definition.label} Session 启动失败（{current.status}）。"
@@ -284,23 +360,44 @@ class EmbeddedAgentService:
                 )
             await self._sleep(self._poll_interval_seconds)
 
-    async def close(
+    async def disconnect(
         self,
         kind: str,
         session_id: str,
         owner_id: str,
+        token: str,
     ) -> None:
         definition = _definition(kind)
         async with self._lock:
-            session = self._sessions.get(session_id)
+            key = (session_id, owner_id)
+            session = self._sessions.get(key)
             if (
                 session is None
                 or session.kind != definition.kind
                 or session.owner_id != owner_id
+                or not token
+                or not secrets.compare_digest(session.proxy_token, token)
             ):
-                raise SandboxSessionNotFoundError("临时智能体 Session 不存在。")
-            self._sessions.pop(session_id, None)
-        await self._gateway.delete_session(session.cloud)
+                raise SandboxSessionNotFoundError("智能体连接不存在。")
+            self._sessions.pop(key, None)
+
+    async def delete(
+        self,
+        kind: str,
+        session_id: str,
+    ) -> None:
+        definition = _definition(kind)
+        cloud = await self._gateway.get_session(
+            self._tool_id(definition),
+            session_id,
+        )
+        if cloud.tool_type and cloud.tool_type != definition.tool_type:
+            raise SandboxSessionNotFoundError("智能体 Session 不存在。")
+        async with self._lock:
+            for key in tuple(self._sessions):
+                if key[0] == session_id:
+                    self._sessions.pop(key, None)
+        await self._gateway.delete_session(cloud)
 
     def resolve(
         self,
@@ -313,44 +410,43 @@ class EmbeddedAgentService:
         definition = _definition(kind)
         if surface not in {"webui", "terminal"}:
             raise SandboxSessionNotFoundError("智能体页面不存在。")
-        session = self._sessions.get(session_id)
-        if (
-            session is None
-            or session.kind != definition.kind
-            or (owner_id is not None and session.owner_id != owner_id)
-        ):
-            raise SandboxSessionNotFoundError("临时智能体 Session 不存在。")
+        candidates = [
+            session
+            for (candidate_id, candidate_owner), session in self._sessions.items()
+            if candidate_id == session_id
+            and session.kind == definition.kind
+            and (owner_id is None or candidate_owner == owner_id)
+        ]
+        session = next(
+            (
+                candidate
+                for candidate in candidates
+                if token and secrets.compare_digest(candidate.proxy_token, token)
+            ),
+            None,
+        )
+        if session is None:
+            if candidates:
+                raise PermissionError("invalid iframe capability")
+            raise SandboxSessionNotFoundError("智能体连接不存在。")
         if time.monotonic() >= session.expires_at:
-            raise SandboxSessionNotFoundError("临时智能体 Session 已过期。")
-        if not token or not secrets.compare_digest(session.proxy_token, token):
-            raise PermissionError("invalid iframe capability")
+            raise SandboxSessionNotFoundError("智能体连接已过期。")
         return session.webui_target if surface == "webui" else session.terminal_target
 
     async def _discard_expired(self) -> None:
         now = time.monotonic()
         async with self._lock:
             expired = [
-                session
-                for session in self._sessions.values()
+                (key, session)
+                for key, session in self._sessions.items()
                 if now >= session.expires_at
             ]
-            for session in expired:
-                self._sessions.pop(session.cloud.instance_id, None)
-        if expired:
-            await asyncio.gather(
-                *(self._gateway.delete_session(session.cloud) for session in expired),
-                return_exceptions=True,
-            )
+            for key, _session in expired:
+                self._sessions.pop(key, None)
 
     async def close_all(self) -> None:
         async with self._lock:
-            sessions = tuple(self._sessions.values())
             self._sessions.clear()
-        if sessions:
-            await asyncio.gather(
-                *(self._gateway.delete_session(session.cloud) for session in sessions),
-                return_exceptions=True,
-            )
 
 
 def _public_session(session: EmbeddedAgentSession) -> dict[str, object]:
@@ -371,6 +467,21 @@ def _public_session(session: EmbeddedAgentSession) -> dict[str, object]:
         "createdAt": created_at,
         "expiresAt": expires_at,
         "ttlSeconds": STUDIO_SANDBOX_TTL_SECONDS,
+    }
+
+
+def _public_cloud_session(
+    kind: EmbeddedAgentKind,
+    session: SandboxCloudSession,
+) -> dict[str, str]:
+    return {
+        "kind": kind,
+        "sessionId": session.instance_id,
+        "userSessionId": session.user_session_id,
+        "displayName": session.display_name,
+        "status": session.status,
+        "createdAt": session.created_at,
+        "expireAt": session.expire_at,
     }
 
 
@@ -408,7 +519,13 @@ def _trusted_websocket_origin(websocket: WebSocket) -> bool:
     } and parsed.netloc == websocket.headers.get("host")
 
 
-def _upstream_url(target: str, asset_path: str, query: str) -> str:
+def _upstream_url(
+    target: str,
+    asset_path: str,
+    query: str,
+    *,
+    trailing_slash: bool = False,
+) -> str:
     parsed = urlsplit(target)
     base_path = parsed.path.rstrip("/")
     if asset_path.startswith("__root__/"):
@@ -416,7 +533,7 @@ def _upstream_url(target: str, asset_path: str, query: str) -> str:
     elif asset_path:
         path = f"{base_path}/{asset_path}"
     else:
-        path = base_path or "/"
+        path = f"{base_path}/" if base_path and trailing_slash else base_path or "/"
     incoming = {
         key: value
         for key, value in parse_qsl(query, keep_blank_values=True)
@@ -446,6 +563,7 @@ def _rewrite_text(
     *,
     target: str,
     prefix: str,
+    root_relative_assets: bool = False,
 ) -> str:
     target_parts = urlsplit(target)
     upstream_path = target_parts.path.rstrip("/")
@@ -491,6 +609,35 @@ def _rewrite_text(
     for key, value in parse_qsl(target_parts.query, keep_blank_values=True):
         if value and key.lower() in _GATEWAY_QUERY_KEYS:
             text = text.replace(value, "")
+    if root_relative_assets:
+        public_root = f"{prefix}/__root__"
+
+        def _relative_attribute(match: re.Match[str]) -> str:
+            before, quote_char, value = match.groups()
+            if (
+                not value
+                or value.startswith(("/", "//", "#"))
+                or urlsplit(value).scheme
+            ):
+                return match.group(0)
+            normalized = value.removeprefix("./")
+            return f"{before}{quote_char}{public_root}/{normalized}{quote_char}"
+
+        for attribute in ("src", "href", "action"):
+            text = re.sub(
+                rf"({attribute}\s*=\s*)([\"'])([^\"']+)\2",
+                _relative_attribute,
+                text,
+                flags=re.IGNORECASE,
+            )
+        text = text.replace(
+            "const baseUrl = window.location.origin + basePath;",
+            f"const baseUrl = window.location.origin + '{public_root}';",
+        )
+        text = text.replace(
+            "new URL('.', window.location.href)",
+            "new URL(document.baseURI)",
+        )
     return text
 
 
@@ -511,6 +658,7 @@ async def _proxy_http(
     target: str,
     prefix: str,
     asset_path: str,
+    root_relative_assets: bool = False,
 ) -> Response:
     body = await request.body()
     if len(body) > _MAX_REQUEST_BYTES:
@@ -548,7 +696,8 @@ async def _proxy_http(
                 _upstream_url(
                     target,
                     asset_path,
-                    request.url.query if asset_path else "",
+                    request.url.query,
+                    trailing_slash=request.url.path.endswith("/"),
                 ),
                 content=body or None,
                 headers=headers,
@@ -599,6 +748,7 @@ async def _proxy_http(
                 content.decode(upstream.encoding or "utf-8"),
                 target=target,
                 prefix=prefix,
+                root_relative_assets=root_relative_assets,
             ).encode("utf-8")
         except (LookupError, UnicodeDecodeError):
             pass
@@ -702,6 +852,23 @@ def mount_embedded_agent_routes(
     """Mount Session lifecycle and same-origin iframe proxy routes."""
     resolve_proxy_owner = proxy_owner_resolver or owner_resolver
 
+    def _session_response(
+        session: EmbeddedAgentSession,
+        request: Request,
+    ) -> Response:
+        response = JSONResponse(_public_session(session))
+        response.headers["cache-control"] = "no-store"
+        response.set_cookie(
+            _proxy_cookie_name(session.cloud.instance_id),
+            session.proxy_token,
+            max_age=STUDIO_SANDBOX_TTL_SECONDS,
+            httponly=True,
+            secure=_secure_cookie(request),
+            samesite="strict",
+            path=f"/web/embedded/{quote(session.cloud.instance_id, safe='')}",
+        )
+        return response
+
     @app.get("/web/{kind}/capabilities")
     async def _capabilities(kind: str, request: Request) -> dict[str, object]:
         owner_resolver(request)
@@ -717,24 +884,68 @@ def mount_embedded_agent_routes(
             session = await service.start(kind, owner_id)
         except SandboxError as error:
             raise _http_error(error) from error
-        response = JSONResponse(_public_session(session))
+        return _session_response(session, request)
+
+    @app.get("/web/{kind}/sessions")
+    async def _list(kind: str, request: Request) -> Response:
+        owner_resolver(request)
+        try:
+            definition = _definition(kind)
+            sessions = await service.list(kind)
+        except SandboxError as error:
+            raise _http_error(error) from error
+        response = JSONResponse(
+            {
+                "sessions": [
+                    _public_cloud_session(definition.kind, session)
+                    for session in sessions
+                ]
+            }
+        )
         response.headers["cache-control"] = "no-store"
-        response.set_cookie(
-            _proxy_cookie_name(session.cloud.instance_id),
-            session.proxy_token,
-            max_age=STUDIO_SANDBOX_TTL_SECONDS,
-            httponly=True,
-            secure=_secure_cookie(request),
-            samesite="strict",
-            path=f"/web/embedded/{quote(session.cloud.instance_id, safe='')}",
+        return response
+
+    @app.post("/web/{kind}/sessions/{session_id}/connect")
+    async def _connect(
+        kind: str,
+        session_id: str,
+        request: Request,
+    ) -> Response:
+        owner_id = owner_resolver(request)
+        try:
+            session = await service.connect(kind, session_id, owner_id)
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return _session_response(session, request)
+
+    @app.post("/web/embedded/{session_id}/{kind}/disconnect")
+    async def _disconnect(
+        kind: str,
+        session_id: str,
+        request: Request,
+    ) -> Response:
+        owner_id = owner_resolver(request)
+        try:
+            await service.disconnect(
+                kind,
+                session_id,
+                owner_id,
+                request.cookies.get(_proxy_cookie_name(session_id), ""),
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        response = Response(status_code=204)
+        response.delete_cookie(
+            _proxy_cookie_name(session_id),
+            path=f"/web/embedded/{quote(session_id, safe='')}",
         )
         return response
 
     @app.delete("/web/{kind}/sessions/{session_id}")
-    async def _close(kind: str, session_id: str, request: Request) -> Response:
-        owner_id = owner_resolver(request)
+    async def _delete(kind: str, session_id: str, request: Request) -> Response:
+        owner_resolver(request)
         try:
-            await service.close(kind, session_id, owner_id)
+            await service.delete(kind, session_id)
         except SandboxError as error:
             raise _http_error(error) from error
         response = Response(status_code=204)
@@ -772,6 +983,7 @@ def mount_embedded_agent_routes(
             target=target,
             prefix=_proxy_prefix(session_id, typed_kind, typed_surface),
             asset_path=asset_path,
+            root_relative_assets=typed_surface == "terminal",
         )
 
     @app.websocket("/web/embedded/{session_id}/{kind}/{surface}/{asset_path:path}")
@@ -792,7 +1004,12 @@ def mount_embedded_agent_routes(
         except (HTTPException, PermissionError, SandboxError):
             await websocket.close(code=1008, reason="invalid capability")
             return
-        upstream = _upstream_url(target, asset_path, websocket.url.query)
+        upstream = _upstream_url(
+            target,
+            asset_path,
+            websocket.url.query,
+            trailing_slash=websocket.url.path.endswith("/"),
+        )
         parsed = urlsplit(upstream)
         upstream = urlunsplit(
             (

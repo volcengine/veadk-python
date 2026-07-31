@@ -89,6 +89,7 @@ import {
 } from "./ui/MyAgents";
 import {
   embeddedAgentClient,
+  type EmbeddedAgentCloudSession,
   type EmbeddedAgentKind,
   type EmbeddedAgentSession,
 } from "./adk/embeddedAgents";
@@ -2279,35 +2280,18 @@ export default function App() {
     setEmbeddedAgentSession(null);
     setEmbeddedAgentClosing(false);
     if (active) {
-      void embeddedAgentClient.close(active).catch(() => {
-        // The disposable cloud Session expires independently if cleanup fails.
+      void embeddedAgentClient.disconnect(active).catch(() => {
+        // The cloud Session remains available even if local disconnect fails.
       });
     }
   }
 
-  async function launchEmbeddedAgent(kind: EmbeddedAgentKind) {
-    embeddedAgentLaunchAbortRef.current?.abort();
-    const controller = new AbortController();
-    embeddedAgentLaunchAbortRef.current = controller;
-    let nextSession: EmbeddedAgentSession;
-    try {
-      nextSession = await embeddedAgentClient.start(kind, controller.signal);
-    } catch (cause) {
-      if (embeddedAgentLaunchAbortRef.current === controller) {
-        embeddedAgentLaunchAbortRef.current = null;
-      }
-      throw cause;
-    }
-    if (embeddedAgentLaunchAbortRef.current !== controller) {
-      void embeddedAgentClient.close(nextSession);
-      return;
-    }
-    embeddedAgentLaunchAbortRef.current = null;
+  function enterEmbeddedAgent(nextSession: EmbeddedAgentSession) {
     if (sandboxSession) exitSandboxSession();
     embeddedAgentSessionRef.current = nextSession;
     setEmbeddedAgentSession(nextSession);
     setEmbeddedAgentClosing(false);
-    setAgentDirectoryType(kind);
+    setAgentDirectoryType(nextSession.kind);
     setMyAgents(false);
     setManageAgents(false);
     setAgentDetailTarget(null);
@@ -2319,12 +2303,44 @@ export default function App() {
     setError("");
   }
 
+  async function openEmbeddedAgent(
+    load: (signal: AbortSignal) => Promise<EmbeddedAgentSession>,
+  ) {
+    embeddedAgentLaunchAbortRef.current?.abort();
+    const controller = new AbortController();
+    embeddedAgentLaunchAbortRef.current = controller;
+    let nextSession: EmbeddedAgentSession;
+    try {
+      nextSession = await load(controller.signal);
+    } catch (cause) {
+      if (embeddedAgentLaunchAbortRef.current === controller) {
+        embeddedAgentLaunchAbortRef.current = null;
+      }
+      throw cause;
+    }
+    if (embeddedAgentLaunchAbortRef.current !== controller) {
+      void embeddedAgentClient.disconnect(nextSession);
+      return;
+    }
+    embeddedAgentLaunchAbortRef.current = null;
+    enterEmbeddedAgent(nextSession);
+  }
+
+  async function createEmbeddedAgent(kind: EmbeddedAgentKind) {
+    await openEmbeddedAgent((signal) => embeddedAgentClient.start(kind, signal));
+  }
+
+  async function connectEmbeddedAgent(session: EmbeddedAgentCloudSession) {
+    await openEmbeddedAgent((signal) =>
+      embeddedAgentClient.connect(session, signal));
+  }
+
   async function closeEmbeddedAgent() {
     const active = embeddedAgentSessionRef.current;
     if (!active || embeddedAgentClosing) return;
     setEmbeddedAgentClosing(true);
     try {
-      await embeddedAgentClient.close(active);
+      await embeddedAgentClient.disconnect(active);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -4311,7 +4327,8 @@ export default function App() {
                 onActiveTypeChange={setAgentDirectoryType}
                 onCreateAgent={openAgentCreateFromMyAgents}
                 onCreateCodexAgent={openSandboxLaunch}
-                onLaunchEmbeddedAgent={launchEmbeddedAgent}
+                onCreateEmbeddedAgent={createEmbeddedAgent}
+                onOpenEmbeddedSession={connectEmbeddedAgent}
                 onOpenCodexSession={connectSandboxSession}
                 onUseAgent={connectMyAgent}
                 onViewAgentDetails={openMyAgentDetails}

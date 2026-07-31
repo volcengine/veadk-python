@@ -900,6 +900,7 @@ async def test_gateway_gets_an_existing_session_without_exposing_its_region() ->
 @pytest.mark.asyncio
 async def test_gateway_retries_session_creation_in_shanghai_and_deletes_there() -> None:
     created_regions: list[str] = []
+    created_envs: list[dict[str, str]] = []
     deleted_regions: list[str] = []
 
     class _Client:
@@ -907,8 +908,10 @@ async def test_gateway_retries_session_creation_in_shanghai_and_deletes_there() 
             self.region = region
 
         def create_session(self, request: object) -> SimpleNamespace:
-            del request
             created_regions.append(self.region)
+            created_envs.append(
+                {str(item.key): str(item.value) for item in (request.envs or [])}
+            )
             if self.region == "cn-beijing":
                 raise RuntimeError("InvalidResource.NotFound")
             return SimpleNamespace(
@@ -926,10 +929,26 @@ async def test_gateway_retries_session_creation_in_shanghai_and_deletes_there() 
         region_candidates=("cn-beijing", "cn-shanghai"),
     )
 
-    session = await gateway.create_session("tool-1")
+    session = await gateway.create_session(
+        "tool-1",
+        envs={
+            "MODEL_AGENT_API_KEY": "test-key",
+            "MODEL_AGENT_NAME": "test-model",
+        },
+    )
     await gateway.delete_session(session)
 
     assert created_regions == ["cn-beijing", "cn-shanghai"]
+    assert created_envs == [
+        {
+            "MODEL_AGENT_API_KEY": "test-key",
+            "MODEL_AGENT_NAME": "test-model",
+        },
+        {
+            "MODEL_AGENT_API_KEY": "test-key",
+            "MODEL_AGENT_NAME": "test-model",
+        },
+    ]
     assert session.region == "cn-shanghai"
     assert deleted_regions == ["cn-shanghai"]
 

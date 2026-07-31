@@ -31,8 +31,14 @@ class _SessionMetadata(tools_types.ToolsBaseModel):
     value: str = Field(alias="Value")
 
 
+class _SessionEnv(tools_types.ToolsBaseModel):
+    key: str = Field(alias="Key")
+    value: str = Field(alias="Value")
+
+
 class _CreateSessionRequestCompat(tools_types.CreateSessionRequest):
     metadata: list[_SessionMetadata] | None = Field(default=None, alias="Metadata")
+    envs: list[_SessionEnv] | None = Field(default=None, alias="Envs")
 
 
 class _GetSessionResponseCompat(tools_types.ToolsBaseModel):
@@ -70,10 +76,16 @@ def build_create_session_request(
     ttl_seconds: int,
     user_session_id: str,
     display_name: str,
+    envs: dict[str, str] | None = None,
 ) -> Any:
     """Build a native or compatibility CreateSession request."""
     request_type: Any = tools_types.CreateSessionRequest
-    if display_name and not _model_supports_alias(request_type, "Metadata"):
+    if (
+        display_name
+        and not _model_supports_alias(request_type, "Metadata")
+        or envs
+        and not _model_supports_alias(request_type, "Envs")
+    ):
         request_type = _CreateSessionRequestCompat
     request_data: dict[str, Any] = {
         "ToolId": tool_id,
@@ -88,6 +100,10 @@ def build_create_session_request(
                 Type="String",
                 Value=display_name,
             )
+        ]
+    if envs:
+        request_data["Envs"] = [
+            {"Key": key, "Value": value} for key, value in envs.items()
         ]
     return request_type(**request_data)
 
