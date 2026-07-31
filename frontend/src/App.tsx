@@ -69,6 +69,7 @@ import {
   eventsToTurns,
   type Block,
   type Turn,
+  type TurnActivityDetail,
 } from "./blocks";
 import { Sidebar } from "./ui/Sidebar";
 import { Navbar } from "./ui/Navbar";
@@ -124,7 +125,11 @@ import {
 } from "./ui/new-chat-modes/taskTools";
 import {
   sandboxClient,
+  type SandboxApproval,
+  type SandboxApprovalDecision,
+  type SandboxPermissions,
   type SandboxSession as SandboxSessionInfo,
+  type SandboxToolLaunch,
 } from "./adk/sandbox";
 import {
   getSandboxCapability,
@@ -135,8 +140,15 @@ import {
   type SandboxLaunchState,
 } from "./ui/SandboxLaunchDialog";
 import {
+  SandboxActivityRecord,
   SandboxSessionWarning,
 } from "./ui/SandboxSession";
+import {
+  SandboxApprovalDialog,
+  SandboxPermissionsDialog,
+  SandboxToolDialog,
+  SandboxWorkspaceDialog,
+} from "./ui/SandboxControls";
 import defaultSiteLogo from "./assets/volcengine.svg";
 import {
   FeedbackDownIcon,
@@ -696,6 +708,71 @@ function hasAgentSelection(
   );
 }
 
+const SANDBOX_MODE_LABELS: Record<
+  SandboxPermissions["sandboxMode"],
+  string
+> = {
+  "read-only": "只读",
+  "workspace-write": "工作区写入",
+  "danger-full-access": "完全访问",
+};
+
+const SANDBOX_APPROVAL_POLICY_LABELS: Record<
+  SandboxPermissions["approvalPolicy"],
+  string
+> = {
+  untrusted: "仅不可信命令",
+  "on-request": "按需审批",
+  never: "不审批",
+};
+
+const SANDBOX_REVIEWER_LABELS: Record<
+  SandboxPermissions["approvalsReviewer"],
+  string
+> = {
+  user: "由我审批",
+  auto_review: "自动审查",
+};
+
+function approvalActivityTitle(
+  approval: SandboxApproval,
+  decision: SandboxApprovalDecision,
+): string {
+  const subject = approval.kind === "file" ? "文件修改" : "命令执行";
+  if (decision === "accept") return `已允许本次${subject}`;
+  if (decision === "acceptForSession") return `已在本会话中允许${subject}`;
+  if (decision === "decline") return `已拒绝${subject}`;
+  return `已取消${subject}审批`;
+}
+
+function approvalActivityDetails(
+  approval: SandboxApproval,
+): TurnActivityDetail[] {
+  const details: TurnActivityDetail[] = [];
+  if (approval.command?.trim()) {
+    details.push({
+      label: "命令",
+      value: approval.command.trim(),
+      code: true,
+    });
+  }
+  if (approval.grantRoot?.trim()) {
+    details.push({
+      label: "授权路径",
+      value: approval.grantRoot.trim(),
+      code: true,
+    });
+  }
+  if (approval.cwd?.trim()) {
+    details.push({
+      label: "执行目录",
+      value: approval.cwd.trim(),
+      code: true,
+    });
+  }
+  return details;
+}
+
 export default function App() {
   const [apps, setApps] = useState<string[]>([]);
   const [appName, setAppName] = useState("");
@@ -708,12 +785,31 @@ export default function App() {
     useState<SandboxSessionInfo | null>(null);
   const [sandboxTurns, setSandboxTurns] = useState<Turn[]>([]);
   const [sandboxBusy, setSandboxBusy] = useState(false);
+  const [sandboxSettingsBusy, setSandboxSettingsBusy] = useState(false);
+  const [sandboxSettingsError, setSandboxSettingsError] = useState("");
+  const [sandboxPermissionsOpen, setSandboxPermissionsOpen] = useState(false);
+  const [sandboxWorkspaceOpen, setSandboxWorkspaceOpen] = useState(false);
+  const [sandboxToolKind, setSandboxToolKind] =
+    useState<"terminal" | "browser" | null>(null);
+  const [sandboxToolLaunch, setSandboxToolLaunch] =
+    useState<SandboxToolLaunch | null>(null);
+  const [sandboxToolLoading, setSandboxToolLoading] = useState(false);
+  const [sandboxToolError, setSandboxToolError] = useState("");
+  const [sandboxApproval, setSandboxApproval] =
+    useState<SandboxApproval | null>(null);
+  const [sandboxApprovalBusy, setSandboxApprovalBusy] = useState(false);
+  const [sandboxApprovalError, setSandboxApprovalError] = useState("");
+  const [sandboxUploadBusy, setSandboxUploadBusy] = useState(false);
   const [sandboxLaunchOpen, setSandboxLaunchOpen] = useState(false);
   const [sandboxLaunchState, setSandboxLaunchState] =
     useState<SandboxLaunchState>("confirm");
   const [sandboxLaunchError, setSandboxLaunchError] = useState("");
   const sandboxLaunchAbortRef = useRef<AbortController | null>(null);
   const sandboxMessageAbortRef = useRef<AbortController | null>(null);
+  const sandboxSessionIdRef = useRef(sandboxSession?.id ?? "");
+  const sandboxActiveAssistantTurnIdRef = useRef("");
+  const sandboxUploadRunRef = useRef(0);
+  sandboxSessionIdRef.current = sandboxSession?.id ?? "";
   // Turns are stored PER SESSION, so a background stream can keep updating its
   // own session's transcript while you view another one — no cross-session
   // leak, no data loss, and no re-fetch when you switch back (its entry is
@@ -733,6 +829,44 @@ export default function App() {
       ...m,
       [sid]: typeof updater === "function" ? updater(m[sid] ?? []) : updater,
     }));
+
+  // Local transcript-only records. sendSandboxMessage builds the Codex prompt
+  // from its explicit text and attachment arguments, never from sandboxTurns.
+  function appendSandboxActivity(
+    activeSessionId: string,
+    title: string,
+    details: TurnActivityDetail[] = [],
+    beforeTurnId = "",
+  ) {
+    if (sandboxSessionIdRef.current !== activeSessionId) return;
+    const activityId = crypto.randomUUID();
+    const activityTurn: Turn = {
+      role: "system",
+      blocks: [],
+      activity: {
+        id: activityId,
+        title,
+        ...(details.length > 0 ? { details } : {}),
+      },
+      meta: {
+        localId: activityId,
+        ts: Date.now() / 1000,
+      },
+    };
+    setSandboxTurns((current) => {
+      if (!beforeTurnId) return [...current, activityTurn];
+      const beforeIndex = current.findIndex(
+        (turn) => turn.meta?.localId === beforeTurnId,
+      );
+      if (beforeIndex < 0) return [...current, activityTurn];
+      return [
+        ...current.slice(0, beforeIndex),
+        activityTurn,
+        ...current.slice(beforeIndex),
+      ];
+    });
+  }
+
   const [input, setInput] = useState("");
   const [newChatMode, setNewChatMode] = useState<NewChatMode>("agent");
   const [newChatTask, setNewChatTask] = useState<NewChatTask | null>(null);
@@ -1998,6 +2132,8 @@ export default function App() {
 
   async function connectSandboxSession(session: SandboxSessionInfo) {
     const nextSession = await sandboxClient.connectSession(session.id);
+    sandboxSessionIdRef.current = nextSession.id;
+    sandboxActiveAssistantTurnIdRef.current = "";
     viewSidRef.current = "";
     setSessionId("");
     setPendingTurns([]);
@@ -2010,6 +2146,19 @@ export default function App() {
     setAttachments([]);
     setSandboxTurns([]);
     setSandboxSession(nextSession);
+    setSandboxSettingsBusy(false);
+    setSandboxSettingsError("");
+    setSandboxPermissionsOpen(false);
+    setSandboxWorkspaceOpen(false);
+    setSandboxToolKind(null);
+    setSandboxToolLaunch(null);
+    setSandboxToolLoading(false);
+    setSandboxToolError("");
+    setSandboxApproval(null);
+    setSandboxApprovalBusy(false);
+    setSandboxApprovalError("");
+    setSandboxUploadBusy(false);
+    sandboxUploadRunRef.current += 1;
     setCreateView(null);
     setSkillCenter(false);
     setAddAgent(false);
@@ -2024,11 +2173,28 @@ export default function App() {
   function exitSandboxSession() {
     sandboxMessageAbortRef.current?.abort();
     sandboxMessageAbortRef.current = null;
+    sandboxSessionIdRef.current = "";
+    sandboxActiveAssistantTurnIdRef.current = "";
     setSandboxBusy(false);
     setSandboxTurns([]);
+    releaseAttachmentPreviews(attachments);
+    setAttachments([]);
     setInput("");
     setError("");
     setNewChatMode("agent");
+    setSandboxSettingsBusy(false);
+    setSandboxSettingsError("");
+    setSandboxPermissionsOpen(false);
+    setSandboxWorkspaceOpen(false);
+    setSandboxToolKind(null);
+    setSandboxToolLaunch(null);
+    setSandboxToolLoading(false);
+    setSandboxToolError("");
+    setSandboxApproval(null);
+    setSandboxApprovalBusy(false);
+    setSandboxApprovalError("");
+    setSandboxUploadBusy(false);
+    sandboxUploadRunRef.current += 1;
     const closingSession = sandboxSession;
     setSandboxSession(null);
     if (closingSession) {
@@ -2054,35 +2220,342 @@ export default function App() {
     setMyAgents(true);
   }
 
-  async function sendSandboxMessage(text: string) {
+  async function openSandboxTool(kind: "terminal" | "browser") {
     const activeSession = sandboxSession;
-    if (!activeSession || sandboxBusy || !text.trim()) return;
+    if (!activeSession) return;
+    setSandboxToolKind(kind);
+    setSandboxToolLaunch(null);
+    setSandboxToolError("");
+    setSandboxToolLoading(true);
+    try {
+      const launch = kind === "terminal"
+        ? await sandboxClient.launchTerminal(activeSession.id)
+        : await sandboxClient.launchBrowser(activeSession.id);
+      setSandboxToolLaunch(launch);
+    } catch (cause) {
+      setSandboxToolError(
+        cause instanceof Error ? cause.message : String(cause),
+      );
+    } finally {
+      setSandboxToolLoading(false);
+    }
+  }
+
+  async function saveSandboxPermissions(value: SandboxPermissions) {
+    const activeSession = sandboxSession;
+    if (!activeSession || sandboxSettingsBusy) return;
+    setSandboxSettingsBusy(true);
+    setSandboxSettingsError("");
+    try {
+      const permissions = await sandboxClient.updatePermissions(
+        activeSession.id,
+        value,
+      );
+      setSandboxSession((current) =>
+        current?.id === activeSession.id
+          ? { ...current, permissions }
+          : current,
+      );
+      appendSandboxActivity(
+        activeSession.id,
+        "已更新当前 Sandbox Session 的 Codex 权限",
+        [
+          {
+            label: "沙箱模式",
+            value: SANDBOX_MODE_LABELS[permissions.sandboxMode],
+          },
+          {
+            label: "审批策略",
+            value: SANDBOX_APPROVAL_POLICY_LABELS[permissions.approvalPolicy],
+          },
+          {
+            label: "审批方式",
+            value: SANDBOX_REVIEWER_LABELS[permissions.approvalsReviewer],
+          },
+          {
+            label: "网络访问",
+            value: permissions.networkAccess ? "允许" : "关闭",
+          },
+        ],
+      );
+      if (sandboxSessionIdRef.current === activeSession.id) {
+        setSandboxPermissionsOpen(false);
+      }
+    } catch (cause) {
+      setSandboxSettingsError(
+        cause instanceof Error ? cause.message : String(cause),
+      );
+    } finally {
+      setSandboxSettingsBusy(false);
+    }
+  }
+
+  const browseSandboxDirectories = useCallback(
+    async (path: string) => {
+      const activeSessionId = sandboxSession?.id;
+      if (!activeSessionId) throw new Error("当前没有已连接的 Sandbox。");
+      return sandboxClient.listDirectories(activeSessionId, path);
+    },
+    [sandboxSession?.id],
+  );
+
+  async function saveSandboxWorkspace(cwd: string) {
+    const activeSession = sandboxSession;
+    if (
+      !activeSession ||
+      activeSession.workspaceLocked ||
+      sandboxSettingsBusy
+    ) return;
+    setSandboxSettingsBusy(true);
+    setSandboxSettingsError("");
+    try {
+      const applied = await sandboxClient.updateWorkspace(
+        activeSession.id,
+        cwd,
+      );
+      setSandboxSession((current) =>
+        current?.id === activeSession.id
+          ? { ...current, cwd: applied }
+          : current,
+      );
+      appendSandboxActivity(
+        activeSession.id,
+        "已更新工作空间",
+        [{ label: "工作目录", value: applied, code: true }],
+      );
+      if (sandboxSessionIdRef.current === activeSession.id) {
+        setSandboxWorkspaceOpen(false);
+      }
+    } catch (cause) {
+      setSandboxSettingsError(
+        cause instanceof Error ? cause.message : String(cause),
+      );
+    } finally {
+      setSandboxSettingsBusy(false);
+    }
+  }
+
+  async function decideSandboxApproval(
+    decision: SandboxApprovalDecision,
+  ) {
+    const activeSession = sandboxSession;
+    const activeApproval = sandboxApproval;
+    if (!activeSession || !activeApproval || sandboxApprovalBusy) return;
+    setSandboxApprovalBusy(true);
+    setSandboxApprovalError("");
+    try {
+      await sandboxClient.resolveApproval(
+        activeSession.id,
+        activeApproval.id,
+        decision,
+      );
+      appendSandboxActivity(
+        activeSession.id,
+        approvalActivityTitle(activeApproval, decision),
+        approvalActivityDetails(activeApproval),
+        sandboxActiveAssistantTurnIdRef.current,
+      );
+      setSandboxApproval((current) =>
+        current?.id === activeApproval.id ? null : current,
+      );
+    } catch (cause) {
+      setSandboxApprovalError(
+        cause instanceof Error ? cause.message : String(cause),
+      );
+    } finally {
+      setSandboxApprovalBusy(false);
+    }
+  }
+
+  async function addSandboxFiles(files: FileList | File[]) {
+    const activeSession = sandboxSession;
+    if (!activeSession || sandboxUploadBusy) return;
+    const uploadRun = ++sandboxUploadRunRef.current;
     setError("");
+    setSandboxUploadBusy(true);
+    const drafts = Array.from(files).map((file) => {
+      const attachment: Attachment = {
+        id: attachmentDraftId(),
+        mimeType: browserMimeType(file),
+        name: file.name,
+        sizeBytes: file.size,
+        status: "uploading",
+        previewUrl: URL.createObjectURL(file),
+      };
+      return { file, attachment };
+    });
+    setAttachments((current) => [
+      ...current,
+      ...drafts.map(({ attachment }) => attachment),
+    ]);
+    try {
+      const uploadResults = await Promise.all(
+        drafts.map(async ({ file, attachment }) => {
+          try {
+            const uploaded = await sandboxClient.uploadFile(
+              activeSession.id,
+              file,
+            );
+            if (sandboxUploadRunRef.current !== uploadRun) return null;
+            setAttachments((current) =>
+              current.map((item) =>
+                item.id === attachment.id
+                  ? {
+                      ...item,
+                      id: uploaded.id,
+                      uri: uploaded.path,
+                      name: uploaded.name,
+                      mimeType: uploaded.mimeType,
+                      sizeBytes: uploaded.sizeBytes,
+                      status: "ready",
+                    }
+                  : item,
+              ),
+            );
+            return uploaded;
+          } catch (cause) {
+            if (sandboxUploadRunRef.current !== uploadRun) return null;
+            const message =
+              cause instanceof Error ? cause.message : String(cause);
+            setAttachments((current) =>
+              current.map((item) =>
+                item.id === attachment.id
+                  ? { ...item, status: "error", error: message }
+                  : item,
+              ),
+            );
+            setError(message);
+            return null;
+          }
+        }),
+      );
+      const uploadedFiles = uploadResults.filter(
+        (uploaded) => uploaded !== null,
+      );
+      if (
+        sandboxUploadRunRef.current === uploadRun &&
+        uploadedFiles.length > 0
+      ) {
+        appendSandboxActivity(
+          activeSession.id,
+          uploadedFiles.length === 1
+            ? "已上传文件到 Sandbox"
+            : `已上传 ${uploadedFiles.length} 个文件到 Sandbox`,
+          uploadedFiles.map((uploaded, index) => ({
+            label: uploadedFiles.length === 1 ? "文件" : `文件 ${index + 1}`,
+            value: uploaded.path,
+            code: true,
+          })),
+        );
+      }
+    } finally {
+      if (sandboxUploadRunRef.current === uploadRun) {
+        setSandboxUploadBusy(false);
+      } else {
+        releaseAttachmentPreviews(
+          drafts.map(({ attachment }) => attachment),
+        );
+      }
+    }
+  }
+
+  function removeSandboxAttachment(id: string) {
+    const removed = attachments.find((item) => item.id === id);
+    if (!removed) return;
+    releaseAttachmentPreviews([removed]);
+    setAttachments((current) => current.filter((item) => item.id !== id));
+  }
+
+  async function sendSandboxMessage(
+    text: string,
+    messageAttachments: Attachment[] = [],
+  ) {
+    const activeSession = sandboxSession;
+    const readyAttachments = messageAttachments.filter(
+      (attachment) => attachment.status === "ready" && attachment.uri,
+    );
+    if (
+      !activeSession ||
+      sandboxBusy ||
+      (!text.trim() && readyAttachments.length === 0)
+    ) return;
+    setError("");
+    setSandboxApproval(null);
+    setSandboxApprovalError("");
     const controller = new AbortController();
     sandboxMessageAbortRef.current?.abort();
     sandboxMessageAbortRef.current = controller;
+    const userBlocks: Turn["blocks"] = [];
+    if (readyAttachments.length > 0) {
+      userBlocks.push({
+        kind: "attachment",
+        files: readyAttachments.map((attachment) => ({
+          id: attachment.id,
+          mimeType: attachment.mimeType,
+          name: attachment.name,
+          sizeBytes: attachment.sizeBytes,
+        })),
+      });
+    }
+    if (text.trim()) userBlocks.push({ kind: "text", text });
+    const uploadedPaths = readyAttachments
+      .map((attachment) => attachment.uri)
+      .filter((path): path is string => Boolean(path));
+    const prompt = uploadedPaths.length > 0
+      ? [
+          text.trim(),
+          "以下文件已上传到当前 Sandbox 工作空间，请在任务中使用：",
+          ...uploadedPaths.map((path) => `- ${path}`),
+        ].filter(Boolean).join("\n\n")
+      : text.trim();
+    const userTurnId = crypto.randomUUID();
+    const assistantTurnId = crypto.randomUUID();
     const optimisticTurns: Turn[] = [
       {
         role: "user",
-        blocks: [{ kind: "text", text }],
-        meta: { ts: Date.now() / 1000 },
+        blocks: userBlocks,
+        meta: { localId: userTurnId, ts: Date.now() / 1000 },
       },
-      { role: "assistant", blocks: [] },
+      {
+        role: "assistant",
+        blocks: [],
+        meta: { localId: assistantTurnId },
+      },
     ];
+    sandboxActiveAssistantTurnIdRef.current = assistantTurnId;
     setSandboxTurns((current) => [...current, ...optimisticTurns]);
     setSandboxBusy(true);
+    setSandboxSession((current) =>
+      current?.id === activeSession.id
+        ? { ...current, busy: true, workspaceLocked: true }
+        : current,
+    );
     try {
       const reply = await sandboxClient.sendMessage(
-        { sessionId: activeSession.id, text },
+        { sessionId: activeSession.id, text: prompt },
         {
           signal: controller.signal,
+          onApproval: (approval) => {
+            if (sandboxMessageAbortRef.current !== controller) return;
+            setSandboxApprovalError("");
+            setSandboxApproval(approval);
+          },
+          onApprovalResolved: (approvalId) => {
+            if (sandboxMessageAbortRef.current !== controller) return;
+            setSandboxApproval((current) =>
+              current?.id === approvalId ? null : current,
+            );
+          },
           onBlocks: (blocks) => {
             if (sandboxMessageAbortRef.current !== controller) return;
             setSandboxTurns((current) => {
               const next = current.slice();
-              const last = next[next.length - 1];
-              if (last?.role === "assistant") {
-                next[next.length - 1] = { ...last, blocks };
+              const assistantIndex = next.findIndex(
+                (turn) => turn.meta?.localId === assistantTurnId,
+              );
+              const assistantTurn = next[assistantIndex];
+              if (assistantTurn?.role === "assistant") {
+                next[assistantIndex] = { ...assistantTurn, blocks };
               }
               return next;
             });
@@ -2092,32 +2565,71 @@ export default function App() {
       if (sandboxMessageAbortRef.current !== controller) return;
       setSandboxTurns((current) => {
         const next = current.slice();
-        const last = next[next.length - 1];
-        if (last?.role === "assistant") {
-          next[next.length - 1] = {
-            ...last,
+        const assistantIndex = next.findIndex(
+          (turn) => turn.meta?.localId === assistantTurnId,
+        );
+        const assistantTurn = next[assistantIndex];
+        if (assistantTurn?.role === "assistant") {
+          next[assistantIndex] = {
+            ...assistantTurn,
             blocks: reply.blocks,
-            meta: { ts: Date.now() / 1000 },
+            meta: {
+              ...assistantTurn.meta,
+              ts: Date.now() / 1000,
+            },
           };
         }
         return next;
       });
+      releaseAttachmentPreviews(messageAttachments);
     } catch (messageError) {
-      if ((messageError as Error)?.name === "AbortError") return;
-      if (sandboxMessageAbortRef.current !== controller) return;
-      setSandboxTurns((current) => current.slice(0, -2));
+      if ((messageError as Error)?.name === "AbortError") {
+        releaseAttachmentPreviews(messageAttachments);
+        return;
+      }
+      if (sandboxMessageAbortRef.current !== controller) {
+        releaseAttachmentPreviews(messageAttachments);
+        return;
+      }
+      setSandboxTurns((current) =>
+        current.filter(
+          (turn) =>
+            turn.meta?.localId !== userTurnId &&
+            turn.meta?.localId !== assistantTurnId,
+        ),
+      );
       setInput(text);
+      setAttachments(messageAttachments);
       setError(
         `内置智能体发送失败：${
           messageError instanceof Error
             ? messageError.message
             : String(messageError)
-        }`,
+          }`,
       );
+      try {
+        const settings = await sandboxClient.getSettings(activeSession.id);
+        setSandboxSession((current) =>
+          current?.id === activeSession.id
+            ? { ...current, ...settings }
+            : current,
+        );
+      } catch {
+        // Keep the optimistic lock when the connection itself is unavailable.
+      }
     } finally {
       if (sandboxMessageAbortRef.current === controller) {
         sandboxMessageAbortRef.current = null;
+        if (sandboxActiveAssistantTurnIdRef.current === assistantTurnId) {
+          sandboxActiveAssistantTurnIdRef.current = "";
+        }
         setSandboxBusy(false);
+        setSandboxApproval(null);
+        setSandboxSession((current) =>
+          current?.id === activeSession.id
+            ? { ...current, busy: false }
+            : current,
+        );
       }
     }
   }
@@ -2126,7 +2638,8 @@ export default function App() {
   // lazily on the first message (see send()). A background stream (if any)
   // keeps running and persisting — its writes are suppressed here by viewSidRef.
   function startNewChat() {
-    exitSandboxSession();
+    const leavingSandbox = sandboxSession !== null;
+    if (leavingSandbox) exitSandboxSession();
     setError("");
     setAgentInfoOpen(false);
     setGreeting(pickGreeting());
@@ -2134,7 +2647,8 @@ export default function App() {
     setNewChatTask(null);
     discardSkillCreation();
     setSkillCreating(false);
-    const abandonedSession = sessionId && persistentTurns.length === 0 && attachments.length > 0
+    const abandonedSession = !leavingSandbox &&
+      sessionId && persistentTurns.length === 0 && attachments.length > 0
       ? sessionId
       : "";
     viewSidRef.current = "";
@@ -2144,7 +2658,7 @@ export default function App() {
     setInitializingSession(false);
     setPendingTurns([]);
     setInvocation(emptyInvocation());
-    discardDraftAttachments(attachments);
+    if (!leavingSandbox) discardDraftAttachments(attachments);
     setAttachments([]);
     if (abandonedSession) void abandonDraftSession(abandonedSession);
   }
@@ -3358,7 +3872,9 @@ export default function App() {
                 const text = input;
                 setInput("");
                 if (sandboxSession) {
-                  void sendSandboxMessage(text);
+                  const sandboxAttachments = attachments;
+                  setAttachments([]);
+                  void sendSandboxMessage(text, sandboxAttachments);
                   return;
                 }
                 const atts = attachments;
@@ -3383,15 +3899,38 @@ export default function App() {
                     : conversationBusy
               }
               showMeta={turns.length > 0 && !sandboxSession}
-              attachments={sandboxSession ? [] : attachments}
+              attachments={attachments}
               skills={sandboxSession ? [] : availableSkills}
               agents={sandboxSession ? [] : availableAgents}
               invocation={sandboxSession ? emptyInvocation() : invocation}
               capabilitiesLoading={!sandboxSession && capabilitiesLoading}
-              allowAttachments={!sandboxSession}
+              allowAttachments
               onInvocationChange={setInvocation}
-              onAddFiles={addFiles}
-              onRemoveAttachment={removeDraftAttachment}
+              onAddFiles={sandboxSession ? addSandboxFiles : addFiles}
+              onRemoveAttachment={
+                sandboxSession
+                  ? removeSandboxAttachment
+                  : removeDraftAttachment
+              }
+              sandboxActions={
+                sandboxSession
+                  ? {
+                      onOpenTerminal: () => void openSandboxTool("terminal"),
+                      onOpenBrowser: () => void openSandboxTool("browser"),
+                      onOpenPermissions: () => {
+                        setSandboxSettingsError("");
+                        setSandboxPermissionsOpen(true);
+                      },
+                      onOpenWorkspace: () => {
+                        setSandboxSettingsError("");
+                        setSandboxWorkspaceOpen(true);
+                      },
+                      workspaceLocked: sandboxSession.workspaceLocked,
+                      settingsBusy: sandboxSettingsBusy,
+                      uploadBusy: sandboxUploadBusy || sandboxBusy,
+                    }
+                  : undefined
+              }
               newChatMode={sandboxSession ? "agent" : newChatMode}
               newChatTask={sandboxSession ? null : newChatTask}
               newChatLayout={!sandboxSession && turns.length === 0 && skillJob === null}
@@ -3832,6 +4371,20 @@ export default function App() {
                 >
                   {turns.map((turn, i) => {
             const isLast = i === turns.length - 1;
+            if (turn.role === "system") {
+              if (!turn.activity) return null;
+              return (
+                <div
+                  key={turn.activity.id}
+                  className="turn turn--system"
+                >
+                  <SandboxActivityRecord
+                    activity={turn.activity}
+                    time={fmtTime(turn.meta?.ts)}
+                  />
+                </div>
+              );
+            }
             if (turn.role === "user") {
               const text = turn.blocks.map((b) => (b.kind === "text" ? b.text : "")).join("");
               const atts = turn.blocks.flatMap((b) =>
@@ -4094,6 +4647,59 @@ export default function App() {
         onCancel={cancelSandboxLaunch}
         onConfirm={(displayName) => void launchSandboxSession(displayName)}
       />
+
+      {sandboxSession ? (
+        <>
+          <SandboxToolDialog
+            open={sandboxToolKind !== null}
+            kind={sandboxToolKind ?? "terminal"}
+            launch={sandboxToolLaunch}
+            loading={sandboxToolLoading}
+            error={sandboxToolError}
+            onReload={() => {
+              if (sandboxToolKind) void openSandboxTool(sandboxToolKind);
+            }}
+            onClose={() => {
+              setSandboxToolKind(null);
+              setSandboxToolLaunch(null);
+              setSandboxToolLoading(false);
+              setSandboxToolError("");
+            }}
+          />
+          <SandboxPermissionsDialog
+            open={sandboxPermissionsOpen}
+            value={sandboxSession.permissions}
+            busy={sandboxSettingsBusy || sandboxBusy}
+            error={sandboxSettingsError}
+            onSave={(value) => void saveSandboxPermissions(value)}
+            onClose={() => {
+              if (sandboxSettingsBusy) return;
+              setSandboxPermissionsOpen(false);
+              setSandboxSettingsError("");
+            }}
+          />
+          <SandboxWorkspaceDialog
+            open={sandboxWorkspaceOpen}
+            cwd={sandboxSession.cwd}
+            locked={sandboxSession.workspaceLocked}
+            busy={sandboxSettingsBusy}
+            error={sandboxSettingsError}
+            browse={browseSandboxDirectories}
+            onSave={(cwd) => void saveSandboxWorkspace(cwd)}
+            onClose={() => {
+              if (sandboxSettingsBusy) return;
+              setSandboxWorkspaceOpen(false);
+              setSandboxSettingsError("");
+            }}
+          />
+          <SandboxApprovalDialog
+            approval={sandboxApproval}
+            busy={sandboxApprovalBusy}
+            error={sandboxApprovalError}
+            onDecision={(decision) => void decideSandboxApproval(decision)}
+          />
+        </>
+      ) : null}
 
       {toast && (
         <div className="app-toast" role="status" aria-live="polite">

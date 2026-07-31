@@ -17,29 +17,108 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import time
-
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 
 import pytest
-
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
+from veadk.cli.codex_app_server import (
+    CodexAppServerError,
+    CodexAppServerEvent,
+    CodexDirectoryEntry,
+    CodexDirectoryListing,
+    CodexPermissionSettings,
+)
 from veadk.cli.frontend_sandbox import (
+    STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH,
     AgentkitSandboxGateway,
     SandboxCloudSession,
     SandboxConfigurationError,
     SandboxConversationService,
-    SandboxInvocationError,
     SandboxProvisioningError,
     SandboxSessionNotFoundError,
-    SandboxStreamEvent,
-    STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH,
     mount_sandbox_routes,
 )
+
+
+class _FakeCodex:
+    def __init__(self, turns: list[str], *, fail: bool = False) -> None:
+        self.thread_id = "thread-1"
+        self.cwd = "/workspace"
+        self.permissions = CodexPermissionSettings()
+        self.workspace_locked = False
+        self.active = False
+        self.closed = False
+        self.turns = turns
+        self.fail = fail
+        self.approvals: list[tuple[str, str]] = []
+
+    async def stream_turn(self, prompt: str) -> AsyncIterator[CodexAppServerEvent]:
+        self.active = True
+        self.workspace_locked = True
+        self.turns.append(self.thread_id)
+        try:
+            if self.fail:
+                raise CodexAppServerError("failed")
+            yield CodexAppServerEvent(
+                kind="thinking",
+                item_id="reasoning-1",
+                status="done",
+                text="分析请求",
+            )
+            yield CodexAppServerEvent(
+                kind="tool",
+                item_id="command-1",
+                status="done",
+                name="运行命令",
+                arguments={"command": "pwd"},
+                response={"exitCode": 0, "output": "/home/gem"},
+            )
+            yield CodexAppServerEvent(
+                kind="text",
+                text=(
+                    "https://sandbox.example/path?Authorization=secret"
+                    if prompt == "show private endpoint"
+                    else f"reply:{prompt}"
+                ),
+            )
+        finally:
+            self.active = False
+
+    async def update_permissions(
+        self, settings: CodexPermissionSettings
+    ) -> CodexPermissionSettings:
+        self.permissions = settings
+        return settings
+
+    async def apply_session_permissions(
+        self, settings: CodexPermissionSettings
+    ) -> None:
+        self.permissions = settings
+
+    async def update_workspace(self, cwd: str) -> str:
+        if self.workspace_locked:
+            raise CodexAppServerError("workspace locked")
+        self.cwd = cwd
+        return cwd
+
+    async def list_directories(self, path: str) -> CodexDirectoryListing:
+        return CodexDirectoryListing(
+            path=path,
+            parent="/" if path != "/" else None,
+            directories=(
+                CodexDirectoryEntry(name="project", path=f"{path.rstrip('/')}/project"),
+            ),
+        )
+
+    def resolve_approval(self, approval_id: str, decision: str) -> None:
+        self.approvals.append((approval_id, decision))
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 class _FakeGateway:
@@ -48,7 +127,8 @@ class _FakeGateway:
         self.tool_ids: list[str] = []
         self.display_names: list[str] = []
         self.deleted: list[SandboxCloudSession] = []
-        self.thread_ids: list[str | None] = []
+        self.thread_ids: list[str] = []
+        self.connections: list[_FakeCodex] = []
         self.sessions: dict[str, SandboxCloudSession] = {
             "remote-existing": SandboxCloudSession(
                 tool_id="tool-studio",
@@ -100,31 +180,11 @@ class _FakeGateway:
     async def delete_session(self, session: SandboxCloudSession) -> None:
         self.deleted.append(session)
 
-    async def stream_codex(
-        self,
-        session: SandboxCloudSession,
-        prompt: str,
-        thread_id: str | None,
-    ) -> AsyncIterator[SandboxStreamEvent]:
+    async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
         del session
-        self.thread_ids.append(thread_id)
-        if thread_id is None:
-            yield SandboxStreamEvent(thread_id="thread-1")
-        yield SandboxStreamEvent(
-            kind="thinking",
-            item_id="reasoning-1",
-            status="done",
-            text="分析请求",
-        )
-        yield SandboxStreamEvent(
-            kind="tool",
-            item_id="command-1",
-            status="done",
-            name="运行命令",
-            arguments={"command": "pwd"},
-            response={"exitCode": 0, "output": "/home/gem"},
-        )
-        yield SandboxStreamEvent(kind="text", text=f"reply:{prompt}")
+        connection = _FakeCodex(self.thread_ids)
+        self.connections.append(connection)
+        return connection
 
     async def drain(self) -> None:
         return None
@@ -214,10 +274,117 @@ def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
     assert 'data: {"text": "reply:hello"}' in first.text
     assert "event: done" in first.text
     assert second.status_code == 200
-    assert gateway.thread_ids == [None, "thread-1"]
+    assert gateway.thread_ids == ["thread-1", "thread-1"]
     assert disconnected.json() == {"disconnected": True}
     assert gateway.deleted == []
     assert session_id == "remote-1"
+
+
+def test_sandbox_settings_tools_and_first_turn_workspace_lock() -> None:
+    gateway = _FakeGateway()
+    with TestClient(_app(gateway)) as client:
+        connected = client.post(
+            "/web/sandbox/sessions/remote-existing/connect",
+            headers={"X-Test-User": "alice"},
+        )
+        settings = client.get(
+            "/web/sandbox/sessions/remote-existing/settings",
+            headers={"X-Test-User": "alice"},
+        )
+        permissions = client.put(
+            "/web/sandbox/sessions/remote-existing/permissions",
+            headers={"X-Test-User": "alice"},
+            json={
+                "approvalPolicy": "never",
+                "approvalsReviewer": "auto_review",
+                "sandboxMode": "read-only",
+                "networkAccess": True,
+            },
+        )
+        workspace = client.put(
+            "/web/sandbox/sessions/remote-existing/workspace",
+            headers={"X-Test-User": "alice"},
+            json={"cwd": "/workspace/project"},
+        )
+        directories = client.get(
+            "/web/sandbox/sessions/remote-existing/directories",
+            headers={"X-Test-User": "alice"},
+            params={"path": "/workspace"},
+        )
+        browser = client.post(
+            "/web/sandbox/sessions/remote-existing/browser",
+            headers={"X-Test-User": "alice"},
+        )
+        client.post(
+            "/web/sandbox/sessions/remote-existing/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "start"},
+        )
+        locked = client.put(
+            "/web/sandbox/sessions/remote-existing/workspace",
+            headers={"X-Test-User": "alice"},
+            json={"cwd": "/other"},
+        )
+
+    assert connected.status_code == 200
+    assert connected.json()["cwd"] == "/workspace"
+    assert settings.json()["permissions"]["approvalPolicy"] == "on-request"
+    assert permissions.json()["permissions"] == {
+        "approvalPolicy": "never",
+        "approvalsReviewer": "auto_review",
+        "sandboxMode": "read-only",
+        "networkAccess": True,
+    }
+    assert workspace.json() == {
+        "cwd": "/workspace/project",
+        "workspaceLocked": False,
+    }
+    assert directories.json()["directories"] == [
+        {"name": "project", "path": "/workspace/project"}
+    ]
+    assert browser.status_code == 200
+    assert browser.json()["url"].endswith("/remote-existing/browser/browser-ui")
+    assert "Authorization" not in browser.text
+    assert "veadk_sandbox_" in browser.headers["set-cookie"]
+    assert locked.status_code == 409
+
+
+def test_sandbox_stream_redacts_private_endpoint_queries() -> None:
+    gateway = _FakeGateway()
+    with TestClient(_app(gateway)) as client:
+        client.post(
+            "/web/sandbox/sessions/remote-existing/connect",
+            headers={"X-Test-User": "alice"},
+        )
+        response = client.post(
+            "/web/sandbox/sessions/remote-existing/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "show private endpoint"},
+        )
+
+    assert response.status_code == 200
+    assert "Authorization" not in response.text
+    assert "secret" not in response.text
+    assert "[sandbox endpoint]" in response.text
+
+
+@pytest.mark.asyncio
+async def test_permissions_propagate_to_every_thread_in_the_cloud_session() -> None:
+    gateway = _FakeGateway()
+    service = SandboxConversationService(gateway, tool_id="tool-studio")
+    alice = await service.connect("remote-existing", "alice")
+    bob = await service.connect("remote-existing", "bob")
+    settings = CodexPermissionSettings(
+        approval_policy="never",
+        approvals_reviewer="auto_review",
+        sandbox_mode="danger-full-access",
+        network_access=True,
+    )
+
+    applied = await service.update_permissions("remote-existing", "alice", settings)
+
+    assert alice.codex.permissions == applied
+    assert bob.codex.permissions == applied
 
 
 def test_sandbox_create_rejects_invalid_display_names() -> None:
@@ -278,70 +445,6 @@ async def test_sandbox_start_requires_preconfigured_chat_tool(
         await service.create("alice")
 
     assert gateway.created == 0
-
-
-def test_codex_parser_preserves_reasoning_and_tool_lifecycle() -> None:
-    reasoning = AgentkitSandboxGateway._parse_codex_event(
-        json.dumps(
-            {
-                "type": "item.completed",
-                "item": {
-                    "id": "reasoning-1",
-                    "type": "reasoning",
-                    "text": "检查工作区",
-                },
-            }
-        )
-    )
-    command_started = AgentkitSandboxGateway._parse_codex_event(
-        json.dumps(
-            {
-                "type": "item.started",
-                "item": {
-                    "id": "command-1",
-                    "type": "command_execution",
-                    "command": "pwd",
-                },
-            }
-        )
-    )
-    command_completed = AgentkitSandboxGateway._parse_codex_event(
-        json.dumps(
-            {
-                "type": "item.completed",
-                "item": {
-                    "id": "command-1",
-                    "type": "command_execution",
-                    "command": "pwd",
-                    "status": "completed",
-                    "exit_code": 0,
-                    "aggregated_output": "/home/gem",
-                },
-            }
-        )
-    )
-
-    assert reasoning == SandboxStreamEvent(
-        kind="thinking",
-        item_id="reasoning-1",
-        status="done",
-        text="检查工作区",
-    )
-    assert command_started == SandboxStreamEvent(
-        kind="tool",
-        item_id="command-1",
-        status="running",
-        name="运行命令",
-        arguments={"command": "pwd"},
-    )
-    assert command_completed == SandboxStreamEvent(
-        kind="tool",
-        item_id="command-1",
-        status="done",
-        name="运行命令",
-        arguments={"command": "pwd"},
-        response={"status": "completed", "exitCode": 0, "output": "/home/gem"},
-    )
 
 
 def test_sandbox_route_hides_sessions_owned_by_another_user() -> None:
@@ -407,17 +510,6 @@ async def test_service_allows_multiple_sessions_for_the_same_owner() -> None:
     assert gateway.created == 2
 
 
-def test_terminal_completion_ignores_echoed_command_and_prompt_is_not_in_command() -> (
-    None
-):
-    marker = "__VEADK_DONE_test__"
-    command = AgentkitSandboxGateway._command(None, "__VEADK_INPUT_test__", marker)
-
-    assert "private prompt" not in command
-    assert AgentkitSandboxGateway._completion_status(command, marker) is None
-    assert AgentkitSandboxGateway._completion_status(f"{marker}0\r", marker) == 0
-
-
 @pytest.mark.asyncio
 async def test_gateway_accepts_a_lazy_client_factory() -> None:
     class _Client:
@@ -465,7 +557,7 @@ async def test_gateway_lists_all_sessions_from_the_configured_tool_region() -> N
             self.region = region
 
         def list_sessions(self, request: object) -> SimpleNamespace:
-            next_token = getattr(request, "next_token")
+            next_token = request.next_token
             calls.append((self.region, next_token))
             if self.region == "cn-beijing":
                 raise RuntimeError("InvalidResource.NotFound")
@@ -706,15 +798,11 @@ async def test_expiry_and_close_all_only_drop_local_connections() -> None:
 
 def test_sse_error_has_an_explicit_done_frame() -> None:
     class _FailStreamGateway(_FakeGateway):
-        async def stream_codex(
-            self,
-            session: SandboxCloudSession,
-            prompt: str,
-            thread_id: str | None,
-        ) -> AsyncIterator[SandboxStreamEvent]:
-            del session, prompt, thread_id
-            raise SandboxInvocationError("failed")
-            yield SandboxStreamEvent()
+        async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
+            del session
+            connection = _FakeCodex(self.thread_ids, fail=True)
+            self.connections.append(connection)
+            return connection
 
     with TestClient(_app(_FailStreamGateway())) as client:
         created = client.post("/web/sandbox/sessions", headers={"X-Test-User": "alice"})
@@ -750,7 +838,7 @@ async def test_cancelled_create_is_deleted_after_sdk_call_finishes(
             )
 
         def delete_session(self, request: object) -> None:
-            deleted.append(str(getattr(request, "session_id")))
+            deleted.append(str(request.session_id))
 
     gateway = AgentkitSandboxGateway(_Client())
     task = asyncio.create_task(gateway.create_session("tool-1"))
@@ -763,5 +851,5 @@ async def test_cancelled_create_is_deleted_after_sdk_call_finishes(
 
     assert deleted == ["remote-1"]
     assert len(created) == 1
-    assert getattr(created[0], "tool_id") == "tool-1"
-    assert getattr(created[0], "envs") is None
+    assert created[0].tool_id == "tool-1"
+    assert created[0].envs is None

@@ -40,9 +40,18 @@ server that `veadk frontend` launches — no separate backend.
   CodeEnv Tool's Sessions and treats each Session as a reusable Agent. Creating
   an Agent provisions a new Sandbox Session; selecting a Ready item resolves its
   Endpoint on the server and streams Codex reasoning, tool activity, and replies
-  into the normal conversation renderer. Returning to the directory disconnects
-  only the local conversation bridge and never deletes the cloud Session.
-  New Sessions use an eight-hour TTL, after which AgentKit reclaims them.
+  into the normal conversation renderer. The existing image, document/PDF, and
+  video upload entries remain in the composer `+` menu and save files into the
+  current Sandbox workspace; the same menu also opens the Session's Terminal and
+  Browser. Compact permission and workspace controls sit beside `+`. Permission
+  changes persist in the remote Session and are applied to all of its Codex
+  threads, while the workspace can change only before the first turn. Successful
+  uploads, settings changes, and approval decisions render as explicit local
+  operation records; these records are never appended to Codex prompts.
+  Terminal and Browser use one embedded connection each and intentionally omit
+  reload and new-window controls. Returning to the directory disconnects only
+  the local conversation bridge and never deletes the cloud Session. New
+  Sessions use an eight-hour TTL, after which AgentKit reclaims them.
 - **AgentKit Skill center**: browse Skill Spaces and their skills with
   server-side pagination by region, then inspect the selected Skill content.
 - **Tracing viewer**: a span tree + detail panel from the ADK debug trace.
@@ -114,8 +123,11 @@ and are never returned to the browser.
 
 Sandbox discovery and creation use the AgentKit control plane, so the Session
 directory survives Studio restarts. Active conversation bridge state and the
-current Codex thread ID remain process-local; keep one server worker or configure
-session affinity while a conversation is active.
+current Codex thread ID, approval wait, and same-origin Terminal/Browser proxy
+capability remain process-local; keep one server worker or configure session
+affinity while a conversation is active. AgentKit Session Endpoints and their
+authorization queries remain server-side throughout chat, upload, Terminal, and
+Browser operations.
 
 ## Development specification
 
