@@ -17,6 +17,7 @@ import type {
   FrontendInvocation,
   MessageFeedbackState,
 } from "./adk/client";
+import type { SandboxTokenUsage } from "./adk/sandbox";
 import type { A2uiMessage } from "./a2ui/types";
 
 const A2UI_TOOL = "send_a2ui_json_to_client";
@@ -83,6 +84,7 @@ export interface TurnMeta {
   eventId?: string;
   invocationId?: string;
   feedback?: MessageFeedbackState;
+  sandboxUsage?: SandboxTokenUsage;
 }
 
 export interface TurnActivityDetail {

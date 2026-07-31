@@ -129,6 +129,7 @@ import {
   type SandboxApprovalDecision,
   type SandboxPermissions,
   type SandboxSession as SandboxSessionInfo,
+  type SandboxSkill,
   type SandboxToolLaunch,
 } from "./adk/sandbox";
 import {
@@ -142,13 +143,18 @@ import {
 import {
   SandboxActivityRecord,
   SandboxSessionWarning,
+  SandboxTokenUsageRow,
 } from "./ui/SandboxSession";
 import {
   SandboxApprovalDialog,
   SandboxPermissionsDialog,
+  SandboxThreadsDialog,
   SandboxToolDialog,
   SandboxWorkspaceDialog,
 } from "./ui/SandboxControls";
+import { SandboxComposer } from "./ui/SandboxComposer";
+import { sandboxSnapshotTurns } from "./ui/sandboxCommands";
+import { useSandboxCodexCommands } from "./ui/useSandboxCodexCommands";
 import defaultSiteLogo from "./assets/volcengine.svg";
 import {
   FeedbackDownIcon,
@@ -1004,6 +1010,41 @@ export default function App() {
     : conversationBusy;
   const activeConversationPresenting =
     activeConversationBusy || (!sandboxSession && presentingStream);
+  const sandboxCommands = useSandboxCodexCommands({
+    session: sandboxSession,
+    conversationBusy: sandboxBusy,
+    onInputChange: setInput,
+    onSessionPatch: (patch) => {
+      const activeSessionId = sandboxSessionIdRef.current;
+      setSandboxSession((current) =>
+        current?.id === activeSessionId ? { ...current, ...patch } : current
+      );
+    },
+    onSnapshot: (snapshot) => {
+      const activeSessionId = sandboxSessionIdRef.current;
+      setSandboxTurns(sandboxSnapshotTurns(snapshot));
+      setSandboxSession((current) =>
+        current?.id === activeSessionId
+          ? {
+              ...current,
+              threadId: snapshot.threadId,
+              cwd: snapshot.cwd ?? current.cwd,
+              model: snapshot.model ?? current.model,
+              workspaceLocked: snapshot.workspaceLocked,
+              permissions: snapshot.permissions,
+              busy: false,
+            }
+          : current
+      );
+    },
+    onActivity: (title, details = []) => {
+      const activeSessionId = sandboxSessionIdRef.current;
+      if (activeSessionId) {
+        appendSandboxActivity(activeSessionId, title, details);
+      }
+    },
+    onError: setError,
+  });
   const activeAgent = activeAgentBySession[sessionId] ?? "";
   const seenAgents = seenAgentsBySession[sessionId] ?? EMPTY_STRING_SET;
   const execPath = execPathBySession[sessionId] ?? EMPTY_STRING_ARR;
@@ -2318,6 +2359,7 @@ export default function App() {
           ? { ...current, cwd: applied }
           : current,
       );
+      sandboxCommands.invalidateSkills();
       appendSandboxActivity(
         activeSession.id,
         "已更新工作空间",
@@ -2469,6 +2511,7 @@ export default function App() {
   async function sendSandboxMessage(
     text: string,
     messageAttachments: Attachment[] = [],
+    selectedSkills: SandboxSkill[] = [],
   ) {
     const activeSession = sandboxSession;
     const readyAttachments = messageAttachments.filter(
@@ -2486,6 +2529,17 @@ export default function App() {
     sandboxMessageAbortRef.current?.abort();
     sandboxMessageAbortRef.current = controller;
     const userBlocks: Turn["blocks"] = [];
+    if (selectedSkills.length > 0) {
+      userBlocks.push({
+        kind: "invocation",
+        value: {
+          skills: selectedSkills.map(({ name, description }) => ({
+            name,
+            description,
+          })),
+        },
+      });
+    }
     if (readyAttachments.length > 0) {
       userBlocks.push({
         kind: "attachment",
@@ -2501,13 +2555,17 @@ export default function App() {
     const uploadedPaths = readyAttachments
       .map((attachment) => attachment.uri)
       .filter((path): path is string => Boolean(path));
+    const skillPrefix = selectedSkills
+      .map((skill) => `$${skill.name}`)
+      .join(" ");
+    const visiblePrompt = [skillPrefix, text.trim()].filter(Boolean).join(" ");
     const prompt = uploadedPaths.length > 0
       ? [
-          text.trim(),
+          visiblePrompt,
           "以下文件已上传到当前 Sandbox 工作空间，请在任务中使用：",
           ...uploadedPaths.map((path) => `- ${path}`),
         ].filter(Boolean).join("\n\n")
-      : text.trim();
+      : visiblePrompt;
     const userTurnId = crypto.randomUUID();
     const assistantTurnId = crypto.randomUUID();
     const optimisticTurns: Turn[] = [
@@ -2532,7 +2590,11 @@ export default function App() {
     );
     try {
       const reply = await sandboxClient.sendMessage(
-        { sessionId: activeSession.id, text: prompt },
+        {
+          sessionId: activeSession.id,
+          text: prompt,
+          skillIds: selectedSkills.map((skill) => skill.id),
+        },
         {
           signal: controller.signal,
           onApproval: (approval) => {
@@ -2560,6 +2622,26 @@ export default function App() {
               return next;
             });
           },
+          onUsage: (update) => {
+            if (sandboxMessageAbortRef.current !== controller) return;
+            setSandboxTurns((current) => {
+              const next = current.slice();
+              const assistantIndex = next.findIndex(
+                (turn) => turn.meta?.localId === assistantTurnId,
+              );
+              const assistantTurn = next[assistantIndex];
+              if (assistantTurn?.role === "assistant") {
+                next[assistantIndex] = {
+                  ...assistantTurn,
+                  meta: {
+                    ...assistantTurn.meta,
+                    sandboxUsage: update.usage,
+                  },
+                };
+              }
+              return next;
+            });
+          },
         },
       );
       if (sandboxMessageAbortRef.current !== controller) return;
@@ -2576,6 +2658,9 @@ export default function App() {
             meta: {
               ...assistantTurn.meta,
               ts: Date.now() / 1000,
+              ...(reply.usage
+                ? { sandboxUsage: reply.usage.usage }
+                : {}),
             },
           };
         }
@@ -2600,6 +2685,7 @@ export default function App() {
       );
       setInput(text);
       setAttachments(messageAttachments);
+      sandboxCommands.setSelectedSkills(selectedSkills);
       setError(
         `内置智能体发送失败：${
           messageError instanceof Error
@@ -2632,6 +2718,17 @@ export default function App() {
         );
       }
     }
+  }
+
+  async function submitSandboxInput(value: string) {
+    if (await sandboxCommands.executeSlash(value)) return;
+    if (!sandboxSession || sandboxBusy || sandboxCommands.commandBusy) return;
+    const messageAttachments = attachments;
+    const selectedSkills = sandboxCommands.selectedSkills;
+    setInput("");
+    setAttachments([]);
+    sandboxCommands.setSelectedSkills([]);
+    await sendSandboxMessage(value.trim(), messageAttachments, selectedSkills);
   }
 
   // Reset to a fresh, not-yet-created chat. The backend session is created
@@ -3804,9 +3901,48 @@ export default function App() {
             {sandboxSession && (
               <SandboxSessionWarning onExit={returnToCodexAgents} />
             )}
-            <Composer
-              sessionId={sandboxSession ? sandboxSession.id : sessionId}
-              sessionInitializing={!sandboxSession && initializingSession}
+            {sandboxSession ? (
+              <SandboxComposer
+                appName={appName}
+                value={input}
+                onChange={setInput}
+                onSubmit={(value) => void submitSandboxInput(value)}
+                disabled={false}
+                busy={sandboxBusy || sandboxCommands.commandBusy}
+                attachments={attachments}
+                onAddFiles={addSandboxFiles}
+                onRemoveAttachment={removeSandboxAttachment}
+                actions={{
+                  onOpenTerminal: () => void openSandboxTool("terminal"),
+                  onOpenBrowser: () => void openSandboxTool("browser"),
+                  onOpenPermissions: () => {
+                    setSandboxSettingsError("");
+                    setSandboxPermissionsOpen(true);
+                  },
+                  onOpenWorkspace: () => {
+                    setSandboxSettingsError("");
+                    setSandboxWorkspaceOpen(true);
+                  },
+                  workspaceLocked: sandboxSession.workspaceLocked,
+                  settingsBusy: sandboxSettingsBusy,
+                  uploadBusy: sandboxUploadBusy || sandboxBusy,
+                }}
+                models={sandboxCommands.models}
+                modelsLoading={sandboxCommands.modelsLoading}
+                modelsLoaded={sandboxCommands.modelsLoaded}
+                currentModel={sandboxSession.model}
+                onRequestModels={() => void sandboxCommands.loadModels()}
+                skills={sandboxCommands.skills}
+                skillsLoading={sandboxCommands.skillsLoading}
+                skillsLoaded={sandboxCommands.skillsLoaded}
+                selectedSkills={sandboxCommands.selectedSkills}
+                onRequestSkills={() => void sandboxCommands.loadSkills()}
+                onSelectedSkillsChange={sandboxCommands.setSelectedSkills}
+              />
+            ) : (
+              <Composer
+              sessionId={sessionId}
+              sessionInitializing={initializingSession}
               appName={appName}
               agentName={
                 sandboxSession
@@ -3871,12 +4007,6 @@ export default function App() {
                 }
                 const text = input;
                 setInput("");
-                if (sandboxSession) {
-                  const sandboxAttachments = attachments;
-                  setAttachments([]);
-                  void sendSandboxMessage(text, sandboxAttachments);
-                  return;
-                }
                 const atts = attachments;
                 const selectedInvocation = invocation;
                 setAttachments([]);
@@ -3885,53 +4015,26 @@ export default function App() {
                 releaseAttachmentPreviews(atts);
               }}
               disabled={
-                sandboxSession
-                  ? false
-                  : !userId ||
-                    newChatMode === "temporary" ||
-                    (newChatMode === "agent" && !appName)
+                !userId ||
+                newChatMode === "temporary" ||
+                (newChatMode === "agent" && !appName)
               }
               busy={
-                sandboxSession
-                  ? sandboxBusy
-                  : newChatMode === "skill-create"
-                    ? skillCreating
-                    : conversationBusy
+                newChatMode === "skill-create"
+                  ? skillCreating
+                  : conversationBusy
               }
               showMeta={turns.length > 0 && !sandboxSession}
               attachments={attachments}
-              skills={sandboxSession ? [] : availableSkills}
-              agents={sandboxSession ? [] : availableAgents}
-              invocation={sandboxSession ? emptyInvocation() : invocation}
-              capabilitiesLoading={!sandboxSession && capabilitiesLoading}
+              skills={availableSkills}
+              agents={availableAgents}
+              invocation={invocation}
+              capabilitiesLoading={capabilitiesLoading}
               allowAttachments
               onInvocationChange={setInvocation}
-              onAddFiles={sandboxSession ? addSandboxFiles : addFiles}
-              onRemoveAttachment={
-                sandboxSession
-                  ? removeSandboxAttachment
-                  : removeDraftAttachment
-              }
-              sandboxActions={
-                sandboxSession
-                  ? {
-                      onOpenTerminal: () => void openSandboxTool("terminal"),
-                      onOpenBrowser: () => void openSandboxTool("browser"),
-                      onOpenPermissions: () => {
-                        setSandboxSettingsError("");
-                        setSandboxPermissionsOpen(true);
-                      },
-                      onOpenWorkspace: () => {
-                        setSandboxSettingsError("");
-                        setSandboxWorkspaceOpen(true);
-                      },
-                      workspaceLocked: sandboxSession.workspaceLocked,
-                      settingsBusy: sandboxSettingsBusy,
-                      uploadBusy: sandboxUploadBusy || sandboxBusy,
-                    }
-                  : undefined
-              }
-              newChatMode={sandboxSession ? "agent" : newChatMode}
+              onAddFiles={addFiles}
+              onRemoveAttachment={removeDraftAttachment}
+              newChatMode={newChatMode}
               newChatTask={sandboxSession ? null : newChatTask}
               newChatLayout={!sandboxSession && turns.length === 0 && skillJob === null}
               showModeSelector={false}
@@ -3972,6 +4075,7 @@ export default function App() {
               }}
               onTaskChange={setNewChatTask}
             />
+            )}
           </div>
         );
         return (
@@ -4503,6 +4607,11 @@ export default function App() {
                         only once the reply is done. */}
                     {!(isLast && activeConversationBusy) && !turnAwaitingAuth(turn) && (
                       <div className="turn-meta">
+                        {sandboxSession && turn.meta?.sandboxUsage ? (
+                          <SandboxTokenUsageRow
+                            usage={turn.meta.sandboxUsage}
+                          />
+                        ) : null}
                         <div className="turn-actions">
                           {canRate && (
                             <>
@@ -4691,6 +4800,15 @@ export default function App() {
               setSandboxWorkspaceOpen(false);
               setSandboxSettingsError("");
             }}
+          />
+          <SandboxThreadsDialog
+            open={sandboxCommands.threadsOpen}
+            threads={sandboxCommands.threads}
+            currentThreadId={sandboxSession.threadId}
+            loading={sandboxCommands.threadsLoading}
+            error={sandboxCommands.threadsError}
+            onSelect={(threadId) => void sandboxCommands.resumeThread(threadId)}
+            onClose={sandboxCommands.closeThreads}
           />
           <SandboxApprovalDialog
             approval={sandboxApproval}

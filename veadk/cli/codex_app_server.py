@@ -97,6 +97,138 @@ class CodexDirectoryListing:
 
 
 @dataclass(frozen=True)
+class CodexTokenUsage:
+    """One exact token-usage breakdown reported by Codex app-server."""
+
+    total_tokens: int = 0
+    input_tokens: int = 0
+    cached_input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_output_tokens: int = 0
+
+    def public_dict(self) -> dict[str, int]:
+        """Return the browser-facing camelCase representation."""
+        return {
+            "totalTokens": self.total_tokens,
+            "inputTokens": self.input_tokens,
+            "cachedInputTokens": self.cached_input_tokens,
+            "outputTokens": self.output_tokens,
+            "reasoningOutputTokens": self.reasoning_output_tokens,
+        }
+
+
+@dataclass(frozen=True)
+class CodexModel:
+    """One browser-safe model choice returned by ``model/list``."""
+
+    id: str
+    display_name: str
+    description: str = ""
+    is_default: bool = False
+
+    def public_dict(self) -> dict[str, object]:
+        """Return the browser-facing representation."""
+        return {
+            "id": self.id,
+            "displayName": self.display_name,
+            "description": self.description,
+            "isDefault": self.is_default,
+        }
+
+
+@dataclass(frozen=True)
+class CodexSkill:
+    """One browser-safe Skill reference; its filesystem path stays private."""
+
+    id: str
+    name: str
+    description: str = ""
+
+    def public_dict(self) -> dict[str, str]:
+        """Return the browser-facing representation."""
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class _CodexPrivateSkill:
+    id: str
+    name: str
+    description: str
+    path: str
+
+
+@dataclass(frozen=True)
+class CodexThreadMessage:
+    """One sanitized user or assistant message restored from a Codex thread."""
+
+    id: str
+    role: Literal["user", "assistant"]
+    content: str
+    timestamp: int
+    skill_names: tuple[str, ...] = ()
+
+    def public_dict(self) -> dict[str, object]:
+        """Return the browser-facing representation."""
+        return {
+            "id": self.id,
+            "role": self.role,
+            "content": self.content,
+            "timestamp": self.timestamp,
+            **({"skillNames": list(self.skill_names)} if self.skill_names else {}),
+        }
+
+
+@dataclass(frozen=True)
+class CodexThreadSummary:
+    """One browser-safe Codex thread list entry."""
+
+    id: str
+    name: str = ""
+    preview: str = ""
+    cwd: str = ""
+    model_provider: str = ""
+    created_at: int = 0
+    updated_at: int = 0
+    status: str = "unknown"
+
+    def public_dict(self) -> dict[str, object]:
+        """Return the browser-facing representation."""
+        return {
+            "id": self.id,
+            **({"name": self.name} if self.name else {}),
+            "preview": self.preview,
+            "cwd": self.cwd,
+            "modelProvider": self.model_provider,
+            "createdAt": self.created_at,
+            "updatedAt": self.updated_at,
+            "status": self.status,
+        }
+
+
+@dataclass(frozen=True)
+class CodexThreadSnapshot:
+    """The active thread plus its sanitized conversation history."""
+
+    thread: CodexThreadSummary
+    messages: tuple[CodexThreadMessage, ...]
+    model: str = ""
+    cwd: str = ""
+    workspace_locked: bool = False
+
+    def public_dict(self, permissions: CodexPermissionSettings) -> dict[str, object]:
+        """Return the browser-facing representation."""
+        return {
+            "thread": self.thread.public_dict(),
+            "threadId": self.thread.id,
+            "messages": [message.public_dict() for message in self.messages],
+            **({"model": self.model} if self.model else {}),
+            **({"cwd": self.cwd} if self.cwd else {}),
+            "workspaceLocked": self.workspace_locked,
+            "permissions": permissions.public_dict(),
+        }
+
+
+@dataclass(frozen=True)
 class CodexApproval:
     """One command or file approval requested by Codex."""
 
@@ -166,6 +298,10 @@ class CodexAppServerEvent:
     response: object | None = None
     approval: CodexApproval | None = None
     approval_resolved_id: str = ""
+    turn_id: str = ""
+    usage: CodexTokenUsage | None = None
+    thread_total: CodexTokenUsage | None = None
+    model_context_window: int | None = None
 
 
 class CodexAppServerSession:
@@ -193,8 +329,15 @@ class CodexAppServerSession:
         self._workspace_locked = False
         self._agent_message_delta_ids: set[str] = set()
         self._received_unidentified_agent_delta = False
+        self._skills_by_id: dict[str, _CodexPrivateSkill] = {}
+        self._skills_cwd = ""
+        self._skills_loaded = False
+        self._thread_token_total: CodexTokenUsage | None = None
+        self._usage_by_turn_id: dict[str, CodexTokenUsage] = {}
+        self._model_context_window: int | None = None
         self.thread_id = ""
         self.cwd = ""
+        self.model = ""
         self.permissions = CodexPermissionSettings()
 
     @property
@@ -206,6 +349,16 @@ class CodexAppServerSession:
     def workspace_locked(self) -> bool:
         """Whether the current thread already accepted its first turn."""
         return self._workspace_locked
+
+    @property
+    def thread_token_total(self) -> CodexTokenUsage | None:
+        """The latest exact cumulative usage reported for the active thread."""
+        return self._thread_token_total
+
+    @property
+    def model_context_window(self) -> int | None:
+        """The active model context window when app-server reported it."""
+        return self._model_context_window
 
     async def connect(self) -> None:
         """Connect, initialize the app-server, and create a fresh thread."""
@@ -289,7 +442,9 @@ class CodexAppServerSession:
             }
         )
 
-    async def stream_turn(self, prompt: str) -> AsyncIterator[CodexAppServerEvent]:
+    async def stream_turn(
+        self, prompt: str, skill_ids: tuple[str, ...] = ()
+    ) -> AsyncIterator[CodexAppServerEvent]:
         """Start one Codex turn and stream its public events."""
         if self.active:
             raise CodexAppServerError("当前 Codex 任务仍在运行。")
@@ -298,6 +453,7 @@ class CodexAppServerSession:
         prompt = prompt.strip()
         if not prompt:
             raise CodexAppServerError("消息内容不能为空。")
+        skills = await self._resolve_skills(prompt, skill_ids)
 
         queue: asyncio.Queue[CodexAppServerEvent] = asyncio.Queue()
         completion: asyncio.Future[dict[str, object]] = (
@@ -313,7 +469,17 @@ class CodexAppServerSession:
                 "turn/start",
                 {
                     "threadId": self.thread_id,
-                    "input": [{"type": "text", "text": prompt}],
+                    "input": [
+                        {"type": "text", "text": prompt},
+                        *(
+                            {
+                                "type": "skill",
+                                "name": skill.name,
+                                "path": skill.path,
+                            }
+                            for skill in skills
+                        ),
+                    ],
                     **_runtime_permission_params(self.permissions, self.cwd),
                 },
             )
@@ -380,6 +546,198 @@ class CodexAppServerSession:
                 },
                 timeout=10,
             )
+
+    async def list_models(self) -> tuple[CodexModel, ...]:
+        """Return every visible Codex model, following bounded pagination."""
+        models: list[CodexModel] = []
+        cursor = ""
+        seen_cursors: set[str] = set()
+        while len(models) < 500:
+            result = await self.request(
+                "model/list",
+                {
+                    "limit": 100,
+                    "includeHidden": False,
+                    **({"cursor": cursor} if cursor else {}),
+                },
+            )
+            data = result.get("data")
+            if not isinstance(data, list):
+                raise CodexAppServerError("Codex model/list 返回格式无效。")
+            for value in data:
+                if not isinstance(value, dict):
+                    continue
+                model_id = value.get("model")
+                if not isinstance(model_id, str):
+                    model_id = value.get("id")
+                if not isinstance(model_id, str) or not model_id.strip():
+                    continue
+                models.append(
+                    CodexModel(
+                        id=model_id,
+                        display_name=(
+                            value["displayName"]
+                            if isinstance(value.get("displayName"), str)
+                            else model_id
+                        ),
+                        description=_string(value.get("description"), 2_000),
+                        is_default=value.get("isDefault") is True,
+                    )
+                )
+                if len(models) >= 500:
+                    break
+            next_cursor = result.get("nextCursor")
+            if not isinstance(next_cursor, str) or not next_cursor:
+                break
+            if next_cursor in seen_cursors:
+                raise CodexAppServerError("Codex model/list 返回了重复游标。")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+        return tuple(models)
+
+    async def set_model(self, model: str) -> str:
+        """Update the model for the active thread."""
+        self._ensure_thread_idle("切换模型")
+        if not isinstance(model, str) or not model.strip():
+            raise ValueError("模型名称不能为空。")
+        model = model.strip()
+        await self.request(
+            "thread/settings/update",
+            {"threadId": self.thread_id, "model": model},
+        )
+        self.model = model
+        return model
+
+    async def list_skills(self, force_reload: bool = False) -> tuple[CodexSkill, ...]:
+        """List enabled Skills while retaining their private paths server-side."""
+        if not force_reload and self._skills_loaded and self._skills_cwd == self.cwd:
+            return self._public_skills()
+        requested_cwd = self.cwd
+        result = await self.request(
+            "skills/list",
+            {
+                "forceReload": force_reload,
+                **({"cwds": [requested_cwd]} if requested_cwd else {}),
+            },
+        )
+        data = result.get("data")
+        if not isinstance(data, list):
+            raise CodexAppServerError("Codex skills/list 返回格式无效。")
+        previous_ids = {skill.path: skill.id for skill in self._skills_by_id.values()}
+        next_skills: dict[str, _CodexPrivateSkill] = {}
+        for entry in data:
+            if (
+                not isinstance(entry, dict)
+                or not isinstance(entry.get("skills"), list)
+                or (
+                    requested_cwd
+                    and isinstance(entry.get("cwd"), str)
+                    and entry.get("cwd") != requested_cwd
+                )
+            ):
+                continue
+            for value in entry["skills"]:
+                if (
+                    not isinstance(value, dict)
+                    or value.get("enabled") is not True
+                    or not isinstance(value.get("name"), str)
+                    or not value["name"].strip()
+                    or not isinstance(value.get("path"), str)
+                    or not value["path"]
+                ):
+                    continue
+                path = value["path"]
+                skill = _CodexPrivateSkill(
+                    id=previous_ids.get(path) or str(uuid.uuid4()),
+                    name=value["name"],
+                    description=_string(value.get("description"), 1_000),
+                    path=path,
+                )
+                next_skills[skill.id] = skill
+                if len(next_skills) >= 500:
+                    break
+            if len(next_skills) >= 500:
+                break
+        if requested_cwd != self.cwd:
+            return await self.list_skills(force_reload)
+        self._skills_by_id = next_skills
+        self._skills_cwd = requested_cwd
+        self._skills_loaded = True
+        return self._public_skills()
+
+    async def new_thread(self) -> CodexThreadSnapshot:
+        """Start and activate a fresh thread with current runtime settings."""
+        self._ensure_thread_idle("创建新对话")
+        result = await self.request("thread/start", self._thread_options())
+        return self._activate_thread_snapshot("thread/start", result)
+
+    async def list_threads(
+        self,
+        *,
+        cursor: str = "",
+        search_term: str = "",
+        archived: bool = False,
+    ) -> tuple[tuple[CodexThreadSummary, ...], str]:
+        """List recent threads using the same ordering as Codex clients."""
+        result = await self.request(
+            "thread/list",
+            {
+                "limit": 30,
+                "sortKey": "updated_at",
+                "sortDirection": "desc",
+                "archived": archived,
+                **({"cursor": cursor} if cursor else {}),
+                **({"searchTerm": search_term} if search_term else {}),
+            },
+        )
+        data = result.get("data")
+        if not isinstance(data, list):
+            raise CodexAppServerError("Codex thread/list 返回格式无效。")
+        threads: list[CodexThreadSummary] = []
+        for value in data:
+            if not isinstance(value, dict):
+                continue
+            summary = _thread_summary(value)
+            if summary is not None:
+                threads.append(summary)
+        next_cursor = result.get("nextCursor")
+        return tuple(threads), next_cursor if isinstance(next_cursor, str) else ""
+
+    async def resume_thread(self, thread_id: str) -> CodexThreadSnapshot:
+        """Resume and activate one existing thread."""
+        self._ensure_thread_idle("切换对话")
+        thread_id = _required_identifier(thread_id, "Thread ID")
+        result = await self.request(
+            "thread/resume",
+            {"threadId": thread_id, **self._thread_options()},
+        )
+        return self._activate_thread_snapshot("thread/resume", result)
+
+    async def fork_thread(self) -> CodexThreadSnapshot:
+        """Fork and activate the current thread."""
+        self._ensure_thread_idle("分叉对话")
+        result = await self.request(
+            "thread/fork",
+            {"threadId": self.thread_id, **self._thread_options()},
+        )
+        return self._activate_thread_snapshot("thread/fork", result)
+
+    async def archive_thread(self, thread_id: str) -> CodexThreadSnapshot | None:
+        """Archive a thread and create a replacement when it was active."""
+        self._ensure_thread_idle("归档对话")
+        thread_id = _required_identifier(thread_id, "Thread ID")
+        await self.request("thread/archive", {"threadId": thread_id})
+        if thread_id != self.thread_id:
+            return None
+        return await self.new_thread()
+
+    async def compact_thread(self) -> None:
+        """Start app-server compaction for the active thread."""
+        self._ensure_thread_idle("压缩对话")
+        await self.request(
+            "thread/compact/start",
+            {"threadId": self.thread_id},
+        )
 
     async def update_permissions(
         self, settings: CodexPermissionSettings
@@ -601,6 +959,9 @@ class CodexAppServerSession:
         future.set_result(result)
 
     def _handle_notification(self, method: str, params: dict[str, object]) -> None:
+        if method == "thread/tokenUsage/updated":
+            self._handle_token_usage(params)
+            return
         if method == "item/agentMessage/delta":
             delta = params.get("delta")
             if isinstance(delta, str) and delta:
@@ -656,6 +1017,40 @@ class CodexAppServerSession:
                 and not self._turn_completion.done()
             ):
                 self._turn_completion.set_exception(CodexAppServerError(message))
+
+    def _handle_token_usage(self, params: dict[str, object]) -> None:
+        update = _token_usage_update(params)
+        if update is None:
+            return
+        thread_id, turn_id, total, last, context_window = update
+        if thread_id != self.thread_id:
+            return
+        increment = (
+            _subtract_usage(total, self._thread_token_total)
+            if self._thread_token_total is not None
+            else last
+        )
+        if increment is None:
+            increment = last
+        self._thread_token_total = total
+        if context_window is not None:
+            self._model_context_window = context_window
+        current = self._usage_by_turn_id.get(turn_id, CodexTokenUsage())
+        usage = _add_usage(current, increment)
+        self._usage_by_turn_id[turn_id] = usage
+        if self._turn_events is None:
+            return
+        if self._active_turn_id and self._active_turn_id != turn_id:
+            return
+        self._emit(
+            CodexAppServerEvent(
+                kind="usage",
+                turn_id=turn_id,
+                usage=usage,
+                thread_total=total,
+                model_context_window=context_window,
+            )
+        )
 
     async def _handle_server_request(
         self, request_id: object, method: str, raw_params: object
@@ -775,9 +1170,17 @@ class CodexAppServerSession:
             self._turn_events.put_nowait(event)
 
     def _apply_thread_snapshot(self, result: dict[str, object]) -> None:
+        self._activate_thread_snapshot("thread/start", result)
+
+    def _activate_thread_snapshot(
+        self, method: str, result: dict[str, object]
+    ) -> CodexThreadSnapshot:
         thread = result.get("thread")
         if not isinstance(thread, dict) or not isinstance(thread.get("id"), str):
-            raise CodexAppServerError("Codex thread/start 未返回有效的 Thread。")
+            raise CodexAppServerError(f"Codex {method} 未返回有效的 Thread。")
+        summary = _thread_summary(thread)
+        if summary is None:
+            raise CodexAppServerError(f"Codex {method} 未返回有效的 Thread。")
         self.thread_id = thread["id"]
         cwd = result.get("cwd")
         if not isinstance(cwd, str):
@@ -787,6 +1190,73 @@ class CodexAppServerSession:
         turns = thread.get("turns")
         self._workspace_locked = isinstance(turns, list) and bool(turns)
         self._apply_runtime_settings(result)
+        model = result.get("model")
+        if not isinstance(model, str):
+            model = thread.get("model")
+        if isinstance(model, str) and model:
+            self.model = model
+        self._skills_loaded = False
+        self._usage_by_turn_id.clear()
+        self._thread_token_total = None
+        self._model_context_window = None
+        return CodexThreadSnapshot(
+            thread=summary,
+            messages=_thread_messages(turns, summary.updated_at),
+            model=self.model,
+            cwd=self.cwd,
+            workspace_locked=self._workspace_locked,
+        )
+
+    def _ensure_thread_idle(self, action: str) -> None:
+        if self.active:
+            raise CodexAppServerError(f"当前任务运行中，暂时不能{action}。")
+        if not self.thread_id:
+            raise CodexAppServerError("Codex Thread 尚未初始化。")
+
+    def _thread_options(self) -> dict[str, object]:
+        return {
+            **({"cwd": self.cwd} if self.cwd else {}),
+            **({"model": self.model} if self.model else {}),
+            **_runtime_permission_params(self.permissions, self.cwd),
+        }
+
+    def _public_skills(self) -> tuple[CodexSkill, ...]:
+        return tuple(
+            CodexSkill(
+                id=skill.id,
+                name=skill.name,
+                description=skill.description,
+            )
+            for skill in self._skills_by_id.values()
+        )
+
+    async def _resolve_skills(
+        self, prompt: str, skill_ids: tuple[str, ...]
+    ) -> tuple[_CodexPrivateSkill, ...]:
+        if not skill_ids:
+            return ()
+        if len(skill_ids) > 20:
+            raise CodexAppServerError("单次消息最多选择 20 个 Skill。")
+        await self.list_skills()
+        selected_by_name: dict[str, _CodexPrivateSkill] = {}
+        for skill_id in skill_ids:
+            skill = self._skills_by_id.get(skill_id)
+            if skill is None:
+                raise CodexAppServerError("所选 Skill 已不可用，请重新选择。")
+            existing = selected_by_name.get(skill.name)
+            if existing is not None and existing.path != skill.path:
+                raise CodexAppServerError(
+                    f"同一条消息不能选择两个名为 ${skill.name} 的 Skill。"
+                )
+            selected_by_name[skill.name] = skill
+        leading_names = _leading_skill_names(
+            prompt, {skill.name for skill in self._skills_by_id.values()}
+        )
+        if not leading_names:
+            raise CodexAppServerError("所选 Skill 必须位于消息开头。")
+        if set(leading_names) != set(selected_by_name):
+            raise CodexAppServerError("消息开头的 Skill 与所选 Skill 不一致。")
+        return tuple(selected_by_name[name] for name in leading_names)
 
     def _apply_runtime_settings(self, value: dict[str, object]) -> None:
         approval_policy = value.get("approvalPolicy")
@@ -814,6 +1284,9 @@ class CodexAppServerSession:
         cwd = value.get("cwd")
         if isinstance(cwd, str) and cwd:
             self.cwd = cwd
+        model = value.get("model")
+        if isinstance(model, str) and model:
+            self.model = model
 
     async def _sync_current_thread_permissions(self) -> None:
         await self.request(
@@ -1116,6 +1589,260 @@ def _bounded_value(value: object, depth: int = 0) -> object:
     return _string(str(value), 2_000)
 
 
+def _required_identifier(value: object, label: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or len(value) > 500
+        or "\0" in value
+    ):
+        raise ValueError(f"{label} 无效。")
+    return value.strip()
+
+
+def _finite_int(value: object) -> int | None:
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+    ):
+        return None
+    return int(value)
+
+
+def _thread_summary(value: dict[str, object]) -> CodexThreadSummary | None:
+    thread_id = value.get("id")
+    if not isinstance(thread_id, str) or not thread_id:
+        return None
+    created_at = _finite_int(value.get("createdAt")) or 0
+    updated_at = _finite_int(value.get("updatedAt"))
+    raw_status = value.get("status")
+    if isinstance(raw_status, str):
+        status = raw_status
+    elif isinstance(raw_status, dict) and isinstance(raw_status.get("type"), str):
+        status = raw_status["type"]
+    else:
+        status = "unknown"
+    return CodexThreadSummary(
+        id=thread_id,
+        name=_string(value.get("name"), 500),
+        preview=_string(value.get("preview"), 4_000),
+        cwd=_string(value.get("cwd"), 4_096),
+        model_provider=_string(value.get("modelProvider"), 500),
+        created_at=created_at,
+        updated_at=updated_at if updated_at is not None else created_at,
+        status=status,
+    )
+
+
+def _thread_messages(
+    value: object, fallback_seconds: int
+) -> tuple[CodexThreadMessage, ...]:
+    if not isinstance(value, list):
+        return ()
+    messages: list[CodexThreadMessage] = []
+    sequence = 0
+    for turn in value:
+        if not isinstance(turn, dict) or not isinstance(turn.get("items"), list):
+            continue
+        started_at = _finite_int(turn.get("startedAt"))
+        timestamp = (started_at if started_at is not None else fallback_seconds) * 1_000
+        for item in turn["items"]:
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                continue
+            role: Literal["user", "assistant"] | None = None
+            content = ""
+            skill_names: tuple[str, ...] = ()
+            if item.get("type") == "userMessage":
+                role = "user"
+                content, skill_names = _user_message_display(item.get("content"))
+            elif item.get("type") == "agentMessage":
+                role = "assistant"
+                content = _string(item.get("text"), 100_000)
+            if role is None or (not content and not skill_names):
+                continue
+            messages.append(
+                CodexThreadMessage(
+                    id=item["id"],
+                    role=role,
+                    content=content,
+                    timestamp=timestamp + sequence,
+                    skill_names=skill_names,
+                )
+            )
+            sequence += 1
+    return tuple(messages)
+
+
+def _user_message_display(value: object) -> tuple[str, tuple[str, ...]]:
+    if not isinstance(value, list):
+        return "", ()
+    skill_names: list[str] = []
+    visible: list[str] = []
+    mentions: list[str] = []
+    for part in value:
+        if not isinstance(part, dict):
+            continue
+        part_type = part.get("type")
+        if part_type == "skill" and isinstance(part.get("name"), str) and part["name"]:
+            if part["name"] not in skill_names:
+                skill_names.append(part["name"])
+        elif part_type == "text" and isinstance(part.get("text"), str):
+            visible.append(part["text"])
+        elif part_type == "localImage" and isinstance(part.get("path"), str):
+            visible.append(f"[本地图片: {part['path']}]")
+        elif part_type == "image":
+            visible.append("[图片]")
+        elif part_type == "mention" and isinstance(part.get("name"), str):
+            mentions.append(f"@{part['name']}")
+    content = "\n".join(visible) if visible else "\n".join(mentions)
+    leading = _leading_skill_names(content, set(skill_names))
+    for name in leading:
+        marker = f"${name}"
+        if content.startswith(marker):
+            content = content[len(marker) :]
+            if content and content[0].isspace():
+                content = content.lstrip()
+    return content, tuple(leading)
+
+
+def _leading_skill_names(text: str, available_names: set[str]) -> list[str]:
+    remaining = text
+    names: list[str] = []
+    while remaining:
+        matched = _leading_skill_name(remaining, available_names)
+        if matched is None:
+            break
+        if matched not in names:
+            names.append(matched)
+        remaining = remaining[len(matched) + 1 :]
+        if not remaining or not remaining[0].isspace():
+            break
+        remaining = remaining.lstrip()
+    return names
+
+
+def _leading_skill_name(text: str, available_names: set[str]) -> str | None:
+    matched: str | None = None
+    for name in available_names:
+        marker = f"${name}"
+        if not text.startswith(marker):
+            continue
+        next_character = text[len(marker) : len(marker) + 1]
+        if next_character and not (
+            next_character.isspace() or next_character in ")]},.!?;:，。！？；："
+        ):
+            continue
+        if matched is None or len(name) > len(matched):
+            matched = name
+    return matched
+
+
+def _token_usage_update(
+    params: dict[str, object],
+) -> (
+    tuple[
+        str,
+        str,
+        CodexTokenUsage,
+        CodexTokenUsage,
+        int | None,
+    ]
+    | None
+):
+    thread_id = _field_string(params, "threadId", "thread_id")
+    turn_id = _field_string(params, "turnId", "turn_id")
+    token_usage = _field_dict(params, "tokenUsage", "token_usage")
+    if not thread_id or not turn_id or token_usage is None:
+        return None
+    total = _usage_breakdown(_field_dict(token_usage, "total"))
+    last = _usage_breakdown(_field_dict(token_usage, "last"))
+    if total is None or last is None:
+        return None
+    context_window = _field_nonnegative_int(
+        token_usage, "modelContextWindow", "model_context_window"
+    )
+    return thread_id, turn_id, total, last, context_window
+
+
+def _usage_breakdown(value: dict[str, object] | None) -> CodexTokenUsage | None:
+    if value is None:
+        return None
+    total_tokens = _field_nonnegative_int(value, "totalTokens", "total_tokens")
+    if total_tokens is None:
+        return None
+    return CodexTokenUsage(
+        total_tokens=total_tokens,
+        input_tokens=_field_nonnegative_int(value, "inputTokens", "input_tokens") or 0,
+        cached_input_tokens=_field_nonnegative_int(
+            value, "cachedInputTokens", "cached_input_tokens"
+        )
+        or 0,
+        output_tokens=_field_nonnegative_int(value, "outputTokens", "output_tokens")
+        or 0,
+        reasoning_output_tokens=_field_nonnegative_int(
+            value, "reasoningOutputTokens", "reasoning_output_tokens"
+        )
+        or 0,
+    )
+
+
+def _field_string(value: dict[str, object], *keys: str) -> str:
+    for key in keys:
+        candidate = value.get(key)
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    return ""
+
+
+def _field_dict(value: dict[str, object], *keys: str) -> dict[str, object] | None:
+    for key in keys:
+        candidate = value.get(key)
+        if isinstance(candidate, dict):
+            return candidate
+    return None
+
+
+def _field_nonnegative_int(value: dict[str, object], *keys: str) -> int | None:
+    for key in keys:
+        candidate = _finite_int(value.get(key))
+        if candidate is not None and candidate >= 0:
+            return candidate
+    return None
+
+
+def _add_usage(left: CodexTokenUsage, right: CodexTokenUsage) -> CodexTokenUsage:
+    return CodexTokenUsage(
+        total_tokens=left.total_tokens + right.total_tokens,
+        input_tokens=left.input_tokens + right.input_tokens,
+        cached_input_tokens=left.cached_input_tokens + right.cached_input_tokens,
+        output_tokens=left.output_tokens + right.output_tokens,
+        reasoning_output_tokens=(
+            left.reasoning_output_tokens + right.reasoning_output_tokens
+        ),
+    )
+
+
+def _subtract_usage(
+    current: CodexTokenUsage, previous: CodexTokenUsage
+) -> CodexTokenUsage | None:
+    current_values = current.public_dict().values()
+    previous_values = previous.public_dict().values()
+    if any(now < before for now, before in zip(current_values, previous_values)):
+        return None
+    return CodexTokenUsage(
+        total_tokens=current.total_tokens - previous.total_tokens,
+        input_tokens=current.input_tokens - previous.input_tokens,
+        cached_input_tokens=(
+            current.cached_input_tokens - previous.cached_input_tokens
+        ),
+        output_tokens=current.output_tokens - previous.output_tokens,
+        reasoning_output_tokens=(
+            current.reasoning_output_tokens - previous.reasoning_output_tokens
+        ),
+    )
+
+
 __all__ = [
     "APPROVAL_DECISIONS",
     "CodexAppServerError",
@@ -1123,7 +1850,13 @@ __all__ = [
     "CodexAppServerSession",
     "CodexApproval",
     "CodexDirectoryListing",
+    "CodexModel",
     "CodexPermissionSettings",
+    "CodexSkill",
+    "CodexThreadMessage",
+    "CodexThreadSnapshot",
+    "CodexThreadSummary",
+    "CodexTokenUsage",
     "approval_decision_from_payload",
     "permission_settings_from_payload",
     "sandbox_service_url",

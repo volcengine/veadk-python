@@ -30,7 +30,13 @@ from veadk.cli.codex_app_server import (
     CodexAppServerEvent,
     CodexDirectoryEntry,
     CodexDirectoryListing,
+    CodexModel,
     CodexPermissionSettings,
+    CodexSkill,
+    CodexThreadMessage,
+    CodexThreadSnapshot,
+    CodexThreadSummary,
+    CodexTokenUsage,
 )
 from veadk.cli.frontend_sandbox import (
     STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH,
@@ -48,18 +54,25 @@ class _FakeCodex:
     def __init__(self, turns: list[str], *, fail: bool = False) -> None:
         self.thread_id = "thread-1"
         self.cwd = "/workspace"
+        self.model = "gpt-test"
         self.permissions = CodexPermissionSettings()
+        self.thread_token_total: CodexTokenUsage | None = None
+        self.model_context_window: int | None = None
         self.workspace_locked = False
         self.active = False
         self.closed = False
         self.turns = turns
         self.fail = fail
         self.approvals: list[tuple[str, str]] = []
+        self.selected_skill_ids: tuple[str, ...] = ()
 
-    async def stream_turn(self, prompt: str) -> AsyncIterator[CodexAppServerEvent]:
+    async def stream_turn(
+        self, prompt: str, skill_ids: tuple[str, ...] = ()
+    ) -> AsyncIterator[CodexAppServerEvent]:
         self.active = True
         self.workspace_locked = True
         self.turns.append(self.thread_id)
+        self.selected_skill_ids = skill_ids
         try:
             if self.fail:
                 raise CodexAppServerError("failed")
@@ -85,8 +98,125 @@ class _FakeCodex:
                     else f"reply:{prompt}"
                 ),
             )
+            if prompt == "tokens":
+                usage = CodexTokenUsage(
+                    total_tokens=42,
+                    input_tokens=30,
+                    cached_input_tokens=10,
+                    output_tokens=12,
+                    reasoning_output_tokens=3,
+                )
+                self.thread_token_total = CodexTokenUsage(total_tokens=142)
+                self.model_context_window = 200_000
+                yield CodexAppServerEvent(
+                    kind="usage",
+                    turn_id="turn-usage",
+                    usage=usage,
+                    thread_total=self.thread_token_total,
+                    model_context_window=self.model_context_window,
+                )
         finally:
             self.active = False
+
+    async def list_models(self) -> tuple[CodexModel, ...]:
+        return (
+            CodexModel(
+                id="gpt-test",
+                display_name="GPT Test",
+                description="Test model",
+                is_default=True,
+            ),
+        )
+
+    async def set_model(self, model: str) -> str:
+        self.model = model
+        return model
+
+    async def list_skills(self, force_reload: bool = False) -> tuple[CodexSkill, ...]:
+        del force_reload
+        return (
+            CodexSkill(
+                id="skill-public-id",
+                name="review",
+                description="Review code",
+            ),
+        )
+
+    def _snapshot(self, thread_id: str) -> CodexThreadSnapshot:
+        self.thread_id = thread_id
+        self.workspace_locked = True
+        return CodexThreadSnapshot(
+            thread=CodexThreadSummary(
+                id=thread_id,
+                preview="restored",
+                cwd=self.cwd,
+                updated_at=20,
+            ),
+            messages=(
+                CodexThreadMessage(
+                    id="message-user",
+                    role="user",
+                    content="restored",
+                    timestamp=20_000,
+                    skill_names=("review",),
+                ),
+                CodexThreadMessage(
+                    id="message-assistant",
+                    role="assistant",
+                    content="done",
+                    timestamp=20_001,
+                ),
+            ),
+            model=self.model,
+            cwd=self.cwd,
+            workspace_locked=True,
+        )
+
+    async def new_thread(self) -> CodexThreadSnapshot:
+        self.workspace_locked = False
+        snapshot = self._snapshot("thread-new")
+        self.workspace_locked = False
+        return CodexThreadSnapshot(
+            thread=snapshot.thread,
+            messages=(),
+            model=self.model,
+            cwd=self.cwd,
+            workspace_locked=False,
+        )
+
+    async def list_threads(
+        self,
+        *,
+        cursor: str = "",
+        search_term: str = "",
+        archived: bool = False,
+    ) -> tuple[tuple[CodexThreadSummary, ...], str]:
+        del cursor, search_term, archived
+        return (
+            (
+                CodexThreadSummary(
+                    id="thread-old",
+                    preview="old work",
+                    cwd=self.cwd,
+                    updated_at=20,
+                ),
+            ),
+            "",
+        )
+
+    async def resume_thread(self, thread_id: str) -> CodexThreadSnapshot:
+        return self._snapshot(thread_id)
+
+    async def fork_thread(self) -> CodexThreadSnapshot:
+        return self._snapshot("thread-fork")
+
+    async def archive_thread(self, thread_id: str) -> CodexThreadSnapshot | None:
+        if thread_id != self.thread_id:
+            return None
+        return await self.new_thread()
+
+    async def compact_thread(self) -> None:
+        return None
 
     async def update_permissions(
         self, settings: CodexPermissionSettings
@@ -278,6 +408,73 @@ def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
     assert disconnected.json() == {"disconnected": True}
     assert gateway.deleted == []
     assert session_id == "remote-1"
+
+
+def test_sandbox_codex_commands_skills_threads_and_token_usage() -> None:
+    gateway = _FakeGateway()
+    headers = {"X-Test-User": "alice"}
+    root = "/web/sandbox/sessions/remote-existing"
+    with TestClient(_app(gateway)) as client:
+        assert client.post(f"{root}/connect", headers=headers).status_code == 200
+
+        models = client.get(f"{root}/models", headers=headers)
+        skills = client.get(f"{root}/skills", headers=headers)
+        selected = client.post(
+            f"{root}/messages",
+            headers=headers,
+            json={
+                "message": "$review inspect",
+                "skillIds": ["skill-public-id"],
+            },
+        )
+        assert gateway.connections[0].selected_skill_ids == ("skill-public-id",)
+        token_reply = client.post(
+            f"{root}/messages",
+            headers=headers,
+            json={"message": "tokens"},
+        )
+        model = client.put(
+            f"{root}/model",
+            headers=headers,
+            json={"model": "gpt-next"},
+        )
+        threads = client.get(f"{root}/threads", headers=headers)
+        resumed = client.post(
+            f"{root}/threads/resume",
+            headers=headers,
+            json={"threadId": "thread-old"},
+        )
+        forked = client.post(f"{root}/threads/fork", headers=headers)
+        compacted = client.post(f"{root}/threads/compact", headers=headers)
+        archived = client.post(
+            f"{root}/threads/archive",
+            headers=headers,
+            json={"threadId": "thread-fork"},
+        )
+        status = client.get(f"{root}/status", headers=headers)
+
+    assert models.json()["models"][0]["id"] == "gpt-test"
+    assert skills.json()["skills"] == [
+        {
+            "id": "skill-public-id",
+            "name": "review",
+            "description": "Review code",
+        }
+    ]
+    assert "path" not in skills.text.lower()
+    assert selected.status_code == 200
+    assert "event: usage" in token_reply.text
+    assert '"totalTokens": 42' in token_reply.text
+    assert '"modelContextWindow": 200000' in token_reply.text
+    assert model.json() == {"model": "gpt-next"}
+    assert threads.json()["threads"][0]["id"] == "thread-old"
+    assert resumed.json()["messages"][0]["skillNames"] == ["review"]
+    assert forked.json()["threadId"] == "thread-fork"
+    assert compacted.json() == {"started": True}
+    assert archived.json()["archived"] is True
+    assert archived.json()["threadId"] == "thread-new"
+    assert status.json()["model"] == "gpt-next"
+    assert status.json()["threadId"] == "thread-new"
 
 
 def test_sandbox_settings_tools_and_first_turn_workspace_lock() -> None:

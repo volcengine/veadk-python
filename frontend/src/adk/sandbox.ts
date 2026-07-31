@@ -71,11 +71,79 @@ export interface SandboxUploadedFile {
   sizeBytes: number;
 }
 
+export interface SandboxTokenUsage {
+  totalTokens: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+}
+
+export interface SandboxTokenUsageUpdate {
+  turnId: string;
+  usage: SandboxTokenUsage;
+  threadTotal?: SandboxTokenUsage;
+  modelContextWindow?: number;
+}
+
+export interface SandboxModel {
+  id: string;
+  displayName: string;
+  description: string;
+  isDefault: boolean;
+}
+
+export interface SandboxSkill {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface SandboxThreadSummary {
+  id: string;
+  name?: string;
+  preview: string;
+  cwd: string;
+  modelProvider: string;
+  createdAt: number;
+  updatedAt: number;
+  status: string;
+}
+
+export interface SandboxThreadMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  timestamp: number;
+  skillNames?: string[];
+}
+
+export interface SandboxThreadSnapshot {
+  thread: SandboxThreadSummary;
+  threadId: string;
+  messages: SandboxThreadMessage[];
+  model?: string;
+  cwd?: string;
+  workspaceLocked: boolean;
+  permissions: SandboxPermissions;
+}
+
+export interface SandboxThreadPage {
+  threads: SandboxThreadSummary[];
+  nextCursor?: string;
+}
+
+export interface SandboxStatus extends SandboxSessionSettings {
+  threadTotal?: SandboxTokenUsage;
+  modelContextWindow?: number;
+}
+
 export interface SandboxRequestOptions {
   signal?: AbortSignal;
   onBlocks?: (blocks: Block[]) => void;
   onApproval?: (approval: SandboxApproval) => void;
   onApprovalResolved?: (approvalId: string) => void;
+  onUsage?: (update: SandboxTokenUsageUpdate) => void;
 }
 
 export interface SandboxStartOptions extends SandboxRequestOptions {
@@ -96,17 +164,20 @@ export interface SandboxSession {
   cwd: string;
   workspaceLocked: boolean;
   busy: boolean;
+  model?: string;
   permissions: SandboxPermissions;
 }
 
 export interface SandboxMessage {
   sessionId: string;
   text: string;
+  skillIds?: string[];
 }
 
 export interface SandboxReply {
   text: string;
   blocks: Block[];
+  usage?: SandboxTokenUsageUpdate;
 }
 
 export interface AgentKitSandboxClient {
@@ -120,6 +191,51 @@ export interface AgentKitSandboxClient {
     message: SandboxMessage,
     options?: SandboxRequestOptions,
   ): Promise<SandboxReply>;
+  getStatus(
+    sessionId: string,
+    options?: SandboxRequestOptions,
+  ): Promise<SandboxStatus>;
+  listModels(
+    sessionId: string,
+    options?: SandboxRequestOptions,
+  ): Promise<SandboxModel[]>;
+  setModel(
+    sessionId: string,
+    model: string,
+    options?: SandboxRequestOptions,
+  ): Promise<string>;
+  listSkills(
+    sessionId: string,
+    forceReload?: boolean,
+    options?: SandboxRequestOptions,
+  ): Promise<SandboxSkill[]>;
+  listThreads(
+    sessionId: string,
+    query?: { cursor?: string; search?: string; archived?: boolean },
+    options?: SandboxRequestOptions,
+  ): Promise<SandboxThreadPage>;
+  newThread(
+    sessionId: string,
+    options?: SandboxRequestOptions,
+  ): Promise<SandboxThreadSnapshot>;
+  resumeThread(
+    sessionId: string,
+    threadId: string,
+    options?: SandboxRequestOptions,
+  ): Promise<SandboxThreadSnapshot>;
+  forkThread(
+    sessionId: string,
+    options?: SandboxRequestOptions,
+  ): Promise<SandboxThreadSnapshot>;
+  archiveThread(
+    sessionId: string,
+    threadId: string,
+    options?: SandboxRequestOptions,
+  ): Promise<{ archived: true; snapshot?: SandboxThreadSnapshot }>;
+  compactThread(
+    sessionId: string,
+    options?: SandboxRequestOptions,
+  ): Promise<void>;
   getSettings(
     sessionId: string,
     options?: SandboxRequestOptions,
@@ -167,6 +283,7 @@ export interface AgentKitSandboxClient {
 export interface SandboxSessionSettings {
   threadId: string;
   cwd: string;
+  model?: string;
   workspaceLocked: boolean;
   busy: boolean;
   permissions: SandboxPermissions;
@@ -185,6 +302,7 @@ interface SessionResponse {
   cwd?: string;
   workspaceLocked?: boolean;
   busy?: boolean;
+  model?: string;
   permissions?: unknown;
 }
 
@@ -216,6 +334,9 @@ interface SandboxStreamPayload {
   threadId?: unknown;
   turnId?: unknown;
   itemId?: unknown;
+  usage?: unknown;
+  threadTotal?: unknown;
+  modelContextWindow?: unknown;
 }
 
 function sandboxHeaders(headers?: HeadersInit): Headers {
@@ -257,6 +378,7 @@ function parseSession(data: SessionResponse): SandboxSession {
     cwd: data.cwd ?? "",
     workspaceLocked: data.workspaceLocked === true,
     busy: data.busy === true,
+    ...(typeof data.model === "string" ? { model: data.model } : {}),
     permissions: parsePermissions(data.permissions),
   };
 }
@@ -306,9 +428,155 @@ function parseSettings(value: unknown): SandboxSessionSettings {
   return {
     threadId: typeof data.threadId === "string" ? data.threadId : "",
     cwd: typeof data.cwd === "string" ? data.cwd : "",
+    ...(typeof data.model === "string" ? { model: data.model } : {}),
     workspaceLocked: data.workspaceLocked === true,
     busy: data.busy === true,
     permissions: parsePermissions(data.permissions),
+  };
+}
+
+function recordOf(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function parseModel(value: unknown): SandboxModel | undefined {
+  const data = recordOf(value);
+  if (!data || typeof data.id !== "string" || !data.id) return undefined;
+  return {
+    id: data.id,
+    displayName:
+      typeof data.displayName === "string" ? data.displayName : data.id,
+    description:
+      typeof data.description === "string" ? data.description : "",
+    isDefault: data.isDefault === true,
+  };
+}
+
+function parseSkill(value: unknown): SandboxSkill | undefined {
+  const data = recordOf(value);
+  if (
+    !data ||
+    typeof data.id !== "string" ||
+    !data.id ||
+    typeof data.name !== "string" ||
+    !data.name
+  ) return undefined;
+  return {
+    id: data.id,
+    name: data.name,
+    description:
+      typeof data.description === "string" ? data.description : "",
+  };
+}
+
+function parseThreadSummary(value: unknown): SandboxThreadSummary | undefined {
+  const data = recordOf(value);
+  if (!data || typeof data.id !== "string" || !data.id) return undefined;
+  return {
+    id: data.id,
+    ...(typeof data.name === "string" && data.name
+      ? { name: data.name }
+      : {}),
+    preview: typeof data.preview === "string" ? data.preview : "",
+    cwd: typeof data.cwd === "string" ? data.cwd : "",
+    modelProvider:
+      typeof data.modelProvider === "string" ? data.modelProvider : "",
+    createdAt:
+      typeof data.createdAt === "number" && Number.isFinite(data.createdAt)
+        ? data.createdAt
+        : 0,
+    updatedAt:
+      typeof data.updatedAt === "number" && Number.isFinite(data.updatedAt)
+        ? data.updatedAt
+        : 0,
+    status: typeof data.status === "string" ? data.status : "unknown",
+  };
+}
+
+function parseThreadSnapshot(value: unknown): SandboxThreadSnapshot {
+  const data = recordOf(value);
+  const thread = parseThreadSummary(data?.thread);
+  if (
+    !data ||
+    !thread ||
+    typeof data.threadId !== "string" ||
+    !Array.isArray(data.messages)
+  ) {
+    throw new Error("Sandbox 返回了无效 Thread 快照。");
+  }
+  const messages = data.messages.flatMap((value): SandboxThreadMessage[] => {
+    const message = recordOf(value);
+    if (
+      !message ||
+      typeof message.id !== "string" ||
+      (message.role !== "user" && message.role !== "assistant") ||
+      typeof message.content !== "string" ||
+      typeof message.timestamp !== "number"
+    ) return [];
+    const skillNames = Array.isArray(message.skillNames)
+      ? message.skillNames.filter(
+          (name): name is string => typeof name === "string" && Boolean(name),
+        )
+      : [];
+    return [{
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      timestamp: message.timestamp,
+      ...(skillNames.length ? { skillNames } : {}),
+    }];
+  });
+  return {
+    thread,
+    threadId: data.threadId,
+    messages,
+    ...(typeof data.model === "string" ? { model: data.model } : {}),
+    ...(typeof data.cwd === "string" ? { cwd: data.cwd } : {}),
+    workspaceLocked: data.workspaceLocked === true,
+    permissions: parsePermissions(data.permissions),
+  };
+}
+
+function parseTokenUsage(value: unknown): SandboxTokenUsage | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const data = value as Partial<SandboxTokenUsage>;
+  const fields = [
+    data.totalTokens,
+    data.inputTokens,
+    data.cachedInputTokens,
+    data.outputTokens,
+    data.reasoningOutputTokens,
+  ];
+  if (fields.some((field) =>
+    typeof field !== "number" || !Number.isFinite(field) || field < 0
+  )) return undefined;
+  return {
+    totalTokens: Math.trunc(data.totalTokens as number),
+    inputTokens: Math.trunc(data.inputTokens as number),
+    cachedInputTokens: Math.trunc(data.cachedInputTokens as number),
+    outputTokens: Math.trunc(data.outputTokens as number),
+    reasoningOutputTokens: Math.trunc(data.reasoningOutputTokens as number),
+  };
+}
+
+function parseUsageUpdate(
+  payload: SandboxStreamPayload,
+): SandboxTokenUsageUpdate | undefined {
+  const usage = parseTokenUsage(payload.usage);
+  if (!usage || typeof payload.turnId !== "string") return undefined;
+  const threadTotal = parseTokenUsage(payload.threadTotal);
+  const context = payload.modelContextWindow;
+  return {
+    turnId: payload.turnId,
+    usage,
+    ...(threadTotal ? { threadTotal } : {}),
+    ...(typeof context === "number" &&
+      Number.isFinite(context) &&
+      context >= 0
+      ? { modelContextWindow: Math.trunc(context) }
+      : {}),
   };
 }
 
@@ -349,6 +617,7 @@ async function parseSandboxStream(
   let reply = "";
   const blocks: Block[] = [];
   const activityIndexes = new Map<string, number>();
+  let latestUsage: SandboxTokenUsageUpdate | undefined;
 
   function emitBlocks(): void {
     options.onBlocks?.(blocks.map((block) => ({ ...block })));
@@ -420,6 +689,13 @@ async function parseSandboxStream(
       const approval = parseApproval(payload);
       if (approval) options.onApproval?.(approval);
     }
+    if (event === "usage") {
+      const update = parseUsageUpdate(payload);
+      if (update) {
+        latestUsage = update;
+        options.onUsage?.(update);
+      }
+    }
     if (
       event === "approval_resolved" &&
       typeof payload.approvalId === "string"
@@ -444,7 +720,42 @@ async function parseSandboxStream(
   }
   if (buffer.trim()) consumeFrame(buffer);
   if (blocks.length === 0) throw new Error("沙箱未返回有效回复，请重试。");
-  return { text: reply, blocks };
+  return {
+    text: reply,
+    blocks,
+    ...(latestUsage ? { usage: latestUsage } : {}),
+  };
+}
+
+async function sandboxJson(
+  sessionId: string,
+  action: string,
+  {
+    method = "GET",
+    body,
+    options = {},
+    fallback,
+  }: {
+    method?: "GET" | "POST" | "PUT";
+    body?: unknown;
+    options?: SandboxRequestOptions;
+    fallback: string;
+  },
+): Promise<unknown> {
+  if (!sessionId) throw new Error("缺少要操作的 AgentKit Session。");
+  const response = await fetch(
+    withAuth(`${SANDBOX_API}/${encodeURIComponent(sessionId)}/${action}`),
+    {
+      method,
+      headers: sandboxHeaders(
+        body === undefined ? undefined : { "Content-Type": "application/json" },
+      ),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: requestSignal(options.signal, SETTINGS_TIMEOUT_MS),
+    },
+  );
+  if (!response.ok) throw await responseError(response, fallback);
+  return response.json();
 }
 
 export const sandboxClient: AgentKitSandboxClient = {
@@ -509,7 +820,10 @@ export const sandboxClient: AgentKitSandboxClient = {
           Accept: "text/event-stream",
           "Content-Type": "application/json",
         }),
-        body: JSON.stringify({ message: message.text }),
+        body: JSON.stringify({
+          message: message.text,
+          ...(message.skillIds?.length ? { skillIds: message.skillIds } : {}),
+        }),
         signal: requestSignal(options.signal, MESSAGE_TIMEOUT_MS),
       },
     );
@@ -517,6 +831,145 @@ export const sandboxClient: AgentKitSandboxClient = {
       throw await responseError(response, "沙箱对话失败，请稍后重试。");
     }
     return parseSandboxStream(response, options);
+  },
+
+  async getStatus(sessionId, options = {}) {
+    const value = await sandboxJson(sessionId, "status", {
+      options,
+      fallback: "无法读取 Codex 状态。",
+    });
+    const settings = parseSettings(value);
+    const data = recordOf(value);
+    const threadTotal = parseTokenUsage(data?.threadTotal);
+    const context = data?.modelContextWindow;
+    return {
+      ...settings,
+      ...(threadTotal ? { threadTotal } : {}),
+      ...(typeof context === "number" &&
+        Number.isFinite(context) &&
+        context >= 0
+        ? { modelContextWindow: Math.trunc(context) }
+        : {}),
+    };
+  },
+
+  async listModels(sessionId, options = {}) {
+    const value = recordOf(await sandboxJson(sessionId, "models", {
+      options,
+      fallback: "无法读取 Codex 模型列表。",
+    }));
+    if (!Array.isArray(value?.models)) {
+      throw new Error("Sandbox 返回了无效模型列表。");
+    }
+    return value.models.flatMap((model) => {
+      const parsed = parseModel(model);
+      return parsed ? [parsed] : [];
+    });
+  },
+
+  async setModel(sessionId, model, options = {}) {
+    const value = recordOf(await sandboxJson(sessionId, "model", {
+      method: "PUT",
+      body: { model },
+      options,
+      fallback: "无法切换 Codex 模型。",
+    }));
+    if (typeof value?.model !== "string" || !value.model) {
+      throw new Error("Sandbox 返回了无效模型。");
+    }
+    return value.model;
+  },
+
+  async listSkills(sessionId, forceReload = false, options = {}) {
+    const query = forceReload ? "?force_reload=true" : "";
+    const value = recordOf(await sandboxJson(sessionId, `skills${query}`, {
+      options,
+      fallback: "无法读取 Codex Skills。",
+    }));
+    if (!Array.isArray(value?.skills)) {
+      throw new Error("Sandbox 返回了无效 Skill 列表。");
+    }
+    return value.skills.flatMap((skill) => {
+      const parsed = parseSkill(skill);
+      return parsed ? [parsed] : [];
+    });
+  },
+
+  async listThreads(sessionId, query = {}, options = {}) {
+    const search = new URLSearchParams();
+    if (query.cursor) search.set("cursor", query.cursor);
+    if (query.search) search.set("search", query.search);
+    if (query.archived) search.set("archived", "true");
+    const suffix = search.size ? `?${search}` : "";
+    const value = recordOf(await sandboxJson(sessionId, `threads${suffix}`, {
+      options,
+      fallback: "无法读取 Codex Thread 列表。",
+    }));
+    if (!Array.isArray(value?.threads)) {
+      throw new Error("Sandbox 返回了无效 Thread 列表。");
+    }
+    return {
+      threads: value.threads.flatMap((thread) => {
+        const parsed = parseThreadSummary(thread);
+        return parsed ? [parsed] : [];
+      }),
+      ...(typeof value.nextCursor === "string"
+        ? { nextCursor: value.nextCursor }
+        : {}),
+    };
+  },
+
+  async newThread(sessionId, options = {}) {
+    return parseThreadSnapshot(await sandboxJson(sessionId, "threads/new", {
+      method: "POST",
+      options,
+      fallback: "无法创建新的 Codex Thread。",
+    }));
+  },
+
+  async resumeThread(sessionId, threadId, options = {}) {
+    return parseThreadSnapshot(
+      await sandboxJson(sessionId, "threads/resume", {
+        method: "POST",
+        body: { threadId },
+        options,
+        fallback: "无法恢复 Codex Thread。",
+      }),
+    );
+  },
+
+  async forkThread(sessionId, options = {}) {
+    return parseThreadSnapshot(await sandboxJson(sessionId, "threads/fork", {
+      method: "POST",
+      options,
+      fallback: "无法分叉 Codex Thread。",
+    }));
+  },
+
+  async archiveThread(sessionId, threadId, options = {}) {
+    const value = recordOf(
+      await sandboxJson(sessionId, "threads/archive", {
+        method: "POST",
+        body: { threadId },
+        options,
+        fallback: "无法归档 Codex Thread。",
+      }),
+    );
+    if (value?.archived !== true) {
+      throw new Error("Sandbox 返回了无效归档结果。");
+    }
+    return {
+      archived: true,
+      ...(value.thread ? { snapshot: parseThreadSnapshot(value) } : {}),
+    };
+  },
+
+  async compactThread(sessionId, options = {}) {
+    await sandboxJson(sessionId, "threads/compact", {
+      method: "POST",
+      options,
+      fallback: "无法压缩 Codex Thread。",
+    });
   },
 
   async getSettings(sessionId, options = {}) {

@@ -1,5 +1,6 @@
 import {
   ChevronRight,
+  History,
   Loader2,
   X,
 } from "lucide-react";
@@ -16,6 +17,7 @@ import type {
   SandboxApprovalDecision,
   SandboxDirectoryListing,
   SandboxPermissions,
+  SandboxThreadSummary,
   SandboxToolLaunch,
 } from "../adk/sandbox";
 import {
@@ -164,6 +166,81 @@ export function SandboxToolDialog({
             sandbox="allow-downloads allow-forms allow-modals allow-popups allow-pointer-lock allow-same-origin allow-scripts"
           />
         ) : null}
+      </div>
+    </DialogShell>
+  );
+}
+
+export interface SandboxThreadsDialogProps {
+  open: boolean;
+  threads: SandboxThreadSummary[];
+  currentThreadId: string;
+  loading: boolean;
+  error: string;
+  onSelect: (threadId: string) => void;
+  onClose: () => void;
+}
+
+export function SandboxThreadsDialog({
+  open,
+  threads,
+  currentThreadId,
+  loading,
+  error,
+  onSelect,
+  onClose,
+}: SandboxThreadsDialogProps) {
+  return (
+    <DialogShell
+      open={open}
+      title="恢复 Codex 对话"
+      subtitle="选择当前 Sandbox Session 中最近更新的 Thread"
+      icon={<History />}
+      className="sandbox-threads-dialog"
+      onClose={onClose}
+    >
+      <div className="sandbox-thread-list">
+        {loading ? (
+          <div className="sandbox-control-state">
+            <Loader2 className="spin" />
+            <strong>正在读取历史对话</strong>
+          </div>
+        ) : error ? (
+          <div className="sandbox-control-state is-error">
+            <strong>历史对话读取失败</strong>
+            <span>{error}</span>
+          </div>
+        ) : threads.length === 0 ? (
+          <div className="sandbox-control-state">
+            <strong>暂无可恢复的对话</strong>
+          </div>
+        ) : (
+          threads.map((thread) => {
+            const active = thread.id === currentThreadId;
+            const title =
+              thread.name || thread.preview || `Thread ${thread.id.slice(0, 8)}`;
+            return (
+              <button
+                key={thread.id}
+                type="button"
+                className={active ? "is-active" : ""}
+                disabled={active}
+                onClick={() => onSelect(thread.id)}
+              >
+                <span>
+                  <strong>{title}</strong>
+                  <small>{thread.preview || thread.cwd || thread.id}</small>
+                </span>
+                <time>
+                  {thread.updatedAt
+                    ? new Date(thread.updatedAt * 1_000).toLocaleString()
+                    : ""}
+                </time>
+                <ChevronRight />
+              </button>
+            );
+          })
+        )}
       </div>
     </DialogShell>
   );
