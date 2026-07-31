@@ -102,6 +102,9 @@ test("uses a compact three-column directory grid", () => {
 test("creation time remains compact without data-plane metadata", () => {
   assert.doesNotMatch(pageStyles, /\.my-agent-label/);
   assert.match(pageStyles, /\.my-agent-created-at dd\s*\{[\s\S]*?font-weight: 400/);
+  assert.doesNotMatch(pageSource, /getRuntimeAgentInfo/);
+  assert.doesNotMatch(pageSource, /Promise\.all\([\s\S]*?page\.runtimes\.map/);
+  assert.doesNotMatch(pageSource, /appName: info\.appName/);
 });
 
 test("loads the runtime scope granted to the current role", () => {
@@ -117,7 +120,7 @@ test("loads the runtime scope granted to the current role", () => {
   assert.match(pageSource, /runtimeId: runtime\.runtimeId/);
   assert.match(pageSource, /region: runtime\.region/);
   assert.match(pageSource, /<AgentCard[\s\S]*?key=\{agent\.id\}/);
-  assert.match(pageSource, /const RUNTIME_PAGE_SIZE = 100/);
+  assert.match(pageSource, /const RUNTIME_PAGE_SIZE = 24/);
   assert.match(pageSource, /onList\(page\.runtimes\.map\(runtimeToAgent\)\)/);
   assert.match(pageSource, /runtimeRequestRef\.current !== requestId/);
   assert.match(pageSource, /const runtimePageRequests = new Map/);
@@ -239,7 +242,7 @@ test("wires card details and connect actions into App navigation", () => {
   assert.match(appSource, /const detailAgentEntry:[\s\S]*?id: `detail:\$\{agentDetailTarget\.runtime\.runtimeId\}`/);
   assert.match(appSource, /app: agentDetailTarget\.appName \?\? agentDetailTarget\.name/);
   assert.match(pageSource, /appName\?: string/);
-  assert.match(pageSource, /appName: info\.appName/);
+  assert.doesNotMatch(pageSource, /appName: info\.appName/);
   assert.match(appSource, /<MyAgents[\s\S]*?onCreateAgent=\{openAgentCreateFromMyAgents\}[\s\S]*?onUseAgent=/);
   assert.match(appSource, /const openAgentCreateFromMyAgents = \(region: string\)[\s\S]*?setNewRuntimeRegion\(region\)/);
   assert.match(appSource, /<CustomCreate[\s\S]*?initialDeployRegion=\{newRuntimeRegion\}/);

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SVGProps } from "react";
 
 import {
-  getRuntimeAgentInfo,
   getRuntimes,
   type CloudRuntime,
   type RuntimeScope,
@@ -33,7 +32,7 @@ const AGENT_TYPES: Array<{ id: AgentType; label: string; createLabel: string }> 
   { id: "openclaw", label: "OpenClaw 智能体", createLabel: "添加 OpenClaw 智能体" },
   { id: "hermes", label: "Hermes 智能体", createLabel: "添加 Hermes 智能体" },
 ];
-const RUNTIME_PAGE_SIZE = 100;
+const RUNTIME_PAGE_SIZE = 24;
 const RUNTIME_PAGE_CACHE_TTL_MS = 30_000;
 const runtimePageRequests = new Map<
   string,
@@ -166,30 +165,6 @@ async function loadRuntimeAgents(
     expiresAt: Date.now() + RUNTIME_PAGE_CACHE_TTL_MS,
   });
   onList(page.runtimes.map(runtimeToAgent));
-  void Promise.all(
-    page.runtimes.map(async (runtime) => {
-      try {
-        const info = await getRuntimeAgentInfo(runtime.runtimeId, runtime.region);
-        const agent = {
-          id: runtime.runtimeId,
-          appName: info.appName,
-          name: info.name || runtime.name,
-          description: info.description || runtime.name,
-          createdAt: formatCreatedAt(runtime.createdAt ?? ""),
-          isMine: runtime.isMine,
-          runtime: {
-            runtimeId: runtime.runtimeId,
-            region: runtime.region,
-            currentVersion: runtime.currentVersion,
-            canDelete: runtime.canDelete,
-          },
-        };
-        onList([agent]);
-      } catch {
-        // Keep the Runtime fallback card already rendered above.
-      }
-    }),
-  );
   return page.nextToken;
 }
 

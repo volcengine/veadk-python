@@ -254,6 +254,7 @@ export interface AdkEndpoint {
   apiKey?: string;
   runtimeId?: string;
   region?: string;
+  retryProbe?: boolean;
 }
 
 // Routing table for remote AgentKit apps: maps a dropdown id (see
@@ -313,8 +314,11 @@ async function apiFetch(
       signal: requestSignal(init.signal, timeoutMs),
     };
     if (ep.runtimeId) {
-      const rq = ep.region
-        ? `${path.includes("?") ? "&" : "?"}region=${encodeURIComponent(ep.region)}`
+      const runtimeParams = new URLSearchParams();
+      if (ep.region) runtimeParams.set("region", ep.region);
+      if (ep.retryProbe) runtimeParams.set("probe_retry", "connect");
+      const rq = runtimeParams.toString()
+        ? `${path.includes("?") ? "&" : "?"}${runtimeParams.toString()}`
         : "";
       return fetch(
         withAuth(`${API_BASE}/web/runtime-proxy/${ep.runtimeId}${path}${rq}`),
@@ -2093,9 +2097,12 @@ export async function getRuntimes(
 export async function probeRuntimeApps(
   runtimeId: string,
   region: string,
+  options: { retryProbe?: boolean } = {},
 ): Promise<string[] | null> {
   try {
-    const res = await fetchRemoteApps("", "", { runtimeId, region });
+    const endpoint: AdkEndpoint = { runtimeId, region };
+    if (options.retryProbe) endpoint.retryProbe = true;
+    const res = await fetchRemoteApps("", "", endpoint);
     return res;
   } catch (error) {
     if (
