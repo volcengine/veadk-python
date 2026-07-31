@@ -20,6 +20,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
@@ -322,6 +323,93 @@ def test_runtime_proxy_uses_authorizer_credential(
         "https://runtime.example/dev/apps/demo_agent/debug/trace/session/session-1"
     )
     assert upstream_headers["Authorization"] == expected_authorization
+
+
+@pytest.mark.parametrize(
+    ("network_type", "query", "expected_attempts"),
+    [
+        ("private", "?region=cn-beijing&probe_retry=connect", 1),
+        ("public", "?region=cn-beijing&probe_retry=connect", 3),
+        ("public", "?region=cn-beijing", 1),
+    ],
+)
+def test_runtime_proxy_probe_retry_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    network_type: str,
+    query: str,
+    expected_attempts: int,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    async def _noop_sleep(delay: float) -> None:
+        pass
+
+    monkeypatch.setattr("veadk.cli.cli_frontend.asyncio.sleep", _noop_sleep)
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                network_configurations=[
+                    SimpleNamespace(
+                        endpoint="https://runtime.example",
+                        network_type=network_type,
+                    )
+                ],
+                authorizer_configuration=SimpleNamespace(
+                    key_auth=SimpleNamespace(api_key="runtime-api-key"),
+                    custom_jwt_authorizer=None,
+                ),
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+
+    attempts = 0
+    forwarded_params: list[dict[str, str]] = []
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def build_request(
+            self,
+            method: str,
+            url: str,
+            *,
+            params: dict[str, str],
+            headers: dict[str, str],
+            content: bytes,
+        ) -> object:
+            forwarded_params.append(params)
+            return object()
+
+        async def send(self, request: object, *, stream: bool) -> None:
+            nonlocal attempts
+            attempts += 1
+            raise httpx.ConnectError("connect failed")
+
+        async def aclose(self) -> None:
+            pass
+
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+
+    with TestClient(app) as client:
+        response = client.get(f"/web/runtime-proxy/runtime-1/list-apps{query}")
+
+    assert response.status_code == 502
+    assert attempts == expected_attempts
+    assert forwarded_params == [{}] * expected_attempts
+    assert response.json()["detail"] == (
+        "runtime_private_endpoint_unreachable"
+        if network_type == "private"
+        else "runtime_proxy_connect_error"
+    )
 
 
 def test_runtime_proxy_resolves_studio_media_before_forwarding(

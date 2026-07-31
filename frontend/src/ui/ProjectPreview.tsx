@@ -969,7 +969,9 @@ export function ProjectPreview({
         // the browser; /web/runtime-proxy injects it.
         const region = deployResult.region ?? deployRegion;
         const apps =
-          (await probeRuntimeApps(deployResult.runtimeId, region)) ?? [];
+          (await probeRuntimeApps(deployResult.runtimeId, region, {
+            retryProbe: true,
+          })) ?? [];
         conn = addRuntimeConnection(
           deployResult.runtimeId,
           deployResult.agentName,
