@@ -29,14 +29,6 @@ PLANNER_MODEL_NAME = "doubao-seed-2-0-lite-260428"
 DEFAULT_GENERATED_MODEL_NAME = "doubao-seed-2-1-pro-260628"
 
 
-class GeneratedMemoryPlan(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    shortTerm: bool
-    longTerm: bool
-    autoSaveSession: bool
-
-
 class GeneratedCustomToolPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -66,22 +58,13 @@ class GeneratedAgentPlan(BaseModel):
             "web_search",
             "parallel_web_search",
             "link_reader",
-            "web_scraper",
             "image_generate",
             "image_edit",
             "video_generate",
-            "text_to_speech",
             "run_code",
-            "vesearch",
         ]
     ]
     customTools: list[GeneratedCustomToolPlan]
-    memory: GeneratedMemoryPlan
-    shortTermBackend: Literal["local", "sqlite", "mysql", "postgresql"]
-    longTermBackend: Literal["local", "opensearch", "redis", "viking", "mem0"]
-    knowledgebase: bool
-    knowledgebaseBackend: Literal["viking", "opensearch", "context_search"]
-    tracingExporters: list[Literal["apmplus", "cozeloop", "tls"]]
     subAgents: list[GeneratedAgentPlan]
 
     @model_validator(mode="before")
@@ -95,13 +78,6 @@ class GeneratedAgentPlan(BaseModel):
             modelName="",
             builtinTools=[],
             customTools=[],
-            memory={
-                "shortTerm": False,
-                "longTerm": False,
-                "autoSaveSession": False,
-            },
-            knowledgebase=False,
-            tracingExporters=[],
         )
         return normalized
 
@@ -121,14 +97,7 @@ class GeneratedAgentPlan(BaseModel):
                 raise ValueError(
                     f"orchestrator {self.name} contains llm-only configuration"
                 )
-            if (
-                self.customTools
-                or self.memory.shortTerm
-                or self.memory.longTerm
-                or self.memory.autoSaveSession
-                or self.knowledgebase
-                or self.tracingExporters
-            ):
+            if self.customTools:
                 raise ValueError(
                     f"orchestrator {self.name} contains leaf-only capabilities"
                 )
@@ -159,28 +128,20 @@ Rules:
 - Preserve the user's execution order. Use parallel only for work that can run
   concurrently, sequential for ordered stages, and loop for bounded iteration.
 - An llm Agent is always a leaf. Fill its name, description, detailed
-  instruction, model, tools, memory, knowledgebase, and tracing fields.
+  instruction, model, and tools.
 - Every llm Agent uses modelName {DEFAULT_GENERATED_MODEL_NAME}.
 - An orchestrator only schedules subAgents. Its instruction and modelName are
-  empty, its tools and tracing exporters are empty, and memory and knowledgebase
-  are disabled.
+  empty and its tools are empty.
 - Use maxIterations=3 except when the user requests a loop limit.
 - Use globally unique Python snake_case Agent and custom-tool names.
 - web_search and parallel_web_search find public Internet results. link_reader
-  reads the original page. web_scraper extracts public web pages. vesearch also
-  searches the public Internet, social media, and news; it is NOT an enterprise
-  knowledgebase tool.
+  reads the original page.
 - image_generate creates images from text prompts. image_edit modifies an
   existing image. video_generate creates video from text or image inputs.
-  text_to_speech converts text into audio. run_code executes code in a sandbox.
+  run_code executes code in a sandbox.
 - Select only tools the Agent will actually invoke. Media planning or review
   Agents do not need generation tools unless they generate or edit that media.
-- For an enterprise knowledgebase, set knowledgebase=true and choose its
-  backend. Do not add an Internet search tool unless the same Agent explicitly
-  needs public Internet research.
-- Enable memory, tracing, or tools only where the requirement needs them.
-- Backend fields are never empty. When disabled, use local for both memory
-  backends and viking for the knowledgebase backend.
+- Enable tools only where the requirement needs them.
 - Do not invent instance IDs, URLs, credentials, MCP servers, or skill IDs.
   Put real resources that still need user input in unresolvedItems.
 """.strip()
@@ -196,17 +157,14 @@ def _to_agent_draft(plan: GeneratedAgentPlan) -> AgentDraft:
         modelName=plan.modelName,
         builtinTools=list(plan.builtinTools),
         customTools=[CustomTool(**tool.model_dump()) for tool in plan.customTools],
-        memory=MemoryConfig(
-            shortTerm=plan.memory.shortTerm,
-            longTerm=plan.memory.longTerm,
-        ),
-        shortTermBackend=plan.shortTermBackend,
-        longTermBackend=plan.longTermBackend,
-        autoSaveSession=plan.memory.autoSaveSession,
-        knowledgebase=plan.knowledgebase,
-        knowledgebaseBackend=plan.knowledgebaseBackend,
-        tracing=bool(plan.tracingExporters),
-        tracingExporters=list(plan.tracingExporters),
+        memory=MemoryConfig(shortTerm=False, longTerm=False),
+        shortTermBackend="local",
+        longTermBackend="local",
+        autoSaveSession=False,
+        knowledgebase=False,
+        knowledgebaseBackend="viking",
+        tracing=False,
+        tracingExporters=[],
         subAgents=[_to_agent_draft(child) for child in plan.subAgents],
     )
 

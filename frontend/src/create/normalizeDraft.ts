@@ -5,7 +5,7 @@ import {
   type CustomTool,
   type SelectedSkill,
 } from "./types";
-import { DEFAULT_KB_BACKEND } from "./veadkCatalog";
+import { CREATE_BUILTIN_TOOLS, DEFAULT_KB_BACKEND } from "./veadkCatalog";
 
 const STM_IDS = new Set(["local", "sqlite", "mysql", "postgresql"]);
 const LTM_IDS = new Set(["local", "opensearch", "redis", "viking", "mem0"]);
@@ -23,6 +23,7 @@ const TOOL_IDS = new Set([
   "run_code",
   "vesearch",
 ]);
+const GENERATED_TOOL_IDS = new Set(CREATE_BUILTIN_TOOLS.map((tool) => tool.id));
 const AGENT_TYPES = new Set(["llm", "sequential", "parallel", "loop", "a2a"]);
 
 function asString(v: unknown, fallback = ""): string {
@@ -245,5 +246,24 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     deployment: { feishuEnabled: asBool(deployment.feishuEnabled) },
     subAgents: parseSubAgents(o.subAgents),
     selectedSkills: parseSelectedSkills(o),
+  };
+}
+
+export function sanitizeGeneratedDraftCapabilities(draft: AgentDraft): AgentDraft {
+  return {
+    ...draft,
+    builtinTools: (draft.builtinTools ?? []).filter((toolId) =>
+      GENERATED_TOOL_IDS.has(toolId),
+    ),
+    tracing: false,
+    tracingExporters: [],
+    memory: { shortTerm: false, longTerm: false },
+    shortTermBackend: "local",
+    longTermBackend: "local",
+    autoSaveSession: false,
+    knowledgebase: false,
+    knowledgebaseBackend: DEFAULT_KB_BACKEND,
+    knowledgebaseIndex: "",
+    subAgents: draft.subAgents.map(sanitizeGeneratedDraftCapabilities),
   };
 }

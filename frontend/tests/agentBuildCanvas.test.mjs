@@ -213,3 +213,14 @@ test("refits the graph after React Flow finishes measuring its nodes", () => {
   assert.match(source, /const nodesInitialized = useNodesInitialized\(\)/);
   assert.match(source, /if \(!nodesInitialized\) return;[\s\S]*?fitAfterLayout\(\)/);
 });
+
+test("preserves measured node dimensions while synchronizing graph state", () => {
+  assert.match(
+    source,
+    /const currentNodes = new Map\([\s\S]*?current\.map\(\(node\) => \[node\.id, node\] as const\)/,
+  );
+  assert.match(
+    source,
+    /measured:\s*currentNode && currentNode\.type === node\.type[\s\S]*?\? currentNode\.measured[\s\S]*?: undefined/,
+  );
+});
